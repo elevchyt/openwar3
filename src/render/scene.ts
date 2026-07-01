@@ -97,6 +97,7 @@ export class TerrainScene implements Renderer {
   }
 
   start(): void {
+    if (this.raf) return; // idempotent — never run two loops
     const frame = (t: number) => {
       const dt = this.last ? Math.min((t - this.last) / 1000, 0.1) : 0;
       this.last = t;
@@ -110,6 +111,7 @@ export class TerrainScene implements Renderer {
   stop(): void {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
+    this.last = 0; // fresh dt on resume
   }
 
   private draw(): void {

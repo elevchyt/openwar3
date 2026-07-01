@@ -15,14 +15,21 @@ html, body {
   color: #e8e2d0;
 }
 
-/* WebGL background (3D menu model / placeholder primitive) sits behind the UI. */
-#bg {
+/* WebGL background (terrain scene / placeholder primitive) sits behind the UI. */
+#bg,
+#model {
   position: fixed;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   z-index: 0;
+}
+
+/* Toggle between terrain scene and model viewer (Phase 3). */
+#bg[hidden],
+#model[hidden] {
+  display: none;
 }
 
 #ui {

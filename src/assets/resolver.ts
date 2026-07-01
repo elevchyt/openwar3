@@ -18,6 +18,11 @@ export class AssetResolver {
     this.install = source;
   }
 
+  /** The mounted install VFS, or null if none imported yet. */
+  get installSource(): DataSource | null {
+    return this.install;
+  }
+
   /** Resolve a logical asset path to something drawable — always returns a value. */
   resolveModel(path: string): Renderable {
     if (this.install?.exists(path)) {
