@@ -33,6 +33,19 @@ html, body {
   display: none;
 }
 
+/* Selection ring under the selected unit (Phase 5), positioned each frame. */
+.unit-select {
+  position: fixed;
+  width: 46px;
+  height: 46px;
+  border: 2px solid #46e05a;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 0 6px rgba(70, 224, 90, 0.6);
+  z-index: 2;
+}
+
 #ui {
   position: fixed;
   inset: 0;

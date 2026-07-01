@@ -1,6 +1,11 @@
 import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
+import { MpqDataSource } from "../vfs/mpq";
+import { parseW3E } from "../world/terrain";
+import { PathingGrid, parseWpm } from "../sim/pathing";
+import { makeHeightSampler } from "../game/heightmap";
+import { RtsController, type RtsHost } from "../game/rts";
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -48,6 +53,8 @@ interface W3xMap {
   centerOffset: Float32Array;
   mapSize: Int32Array;
   update(): void;
+  units: unknown[];
+  unitsReady: boolean;
 }
 interface W3xViewer {
   loadedBaseFiles: boolean;
@@ -74,8 +81,12 @@ export class MapViewerScene {
   private pitch = 0.95;
   private keys = new Set<string>();
   private dragging = false;
+  private downX = 0;
+  private downY = 0;
+  private moved = false;
   private raf = 0;
   private last = 0;
+  private rts: RtsController | null = null;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -123,13 +134,33 @@ export class MapViewerScene {
     // Drop the previous map's scene so reloading doesn't stack renders.
     const prev = this.viewer.map?.worldScene;
     if (prev) this.viewer.removeScene(prev);
+    this.rts?.dispose();
+    this.rts = null;
+
     this.viewer.loadMap(bytes);
     const map = this.viewer.map;
-    if (map) {
-      const [cols, rows] = map.mapSize;
-      const [ox, oy] = map.centerOffset;
-      this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
-      this.distance = Math.max(cols, rows) * 128 * 0.9;
+    if (!map) return;
+
+    const [cols, rows] = map.mapSize;
+    const [ox, oy] = map.centerOffset;
+    this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
+    this.distance = Math.max(cols, rows) * 128 * 0.9;
+
+    // Stand up the simulation: terrain height + pathing from the map's own files.
+    const archive = new MpqDataSource("map", bytes);
+    const w3e = archive.rawBytes("war3map.w3e");
+    const wpm = archive.rawBytes("war3map.wpm");
+    if (w3e && wpm) {
+      const terrain = parseW3E(w3e);
+      const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
+      const host: RtsHost = {
+        canvas: this.canvas,
+        camera: map.worldScene.camera as unknown as RtsHost["camera"],
+        viewport: () => map.worldScene.viewport,
+        units: () => map.units as ReturnType<RtsHost["units"]>,
+        unitsReady: () => map.unitsReady,
+      };
+      this.rts = new RtsController(grid, makeHeightSampler(terrain), host);
     }
   }
 
@@ -139,6 +170,7 @@ export class MapViewerScene {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
       this.updateCamera();
+      this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       // Advance animations by REAL elapsed time (fixes 2x speed on high-refresh
       // displays), replicating War3MapViewer.update() = super.update() + map.update().
       baseUpdate.call(this.viewer, dt);
@@ -154,11 +186,14 @@ export class MapViewerScene {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.last = 0;
+    this.rts?.pause();
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
   dispose(): void {
     this.stop();
+    this.rts?.dispose();
+    this.rts = null;
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
   }
@@ -206,16 +241,31 @@ export class MapViewerScene {
     window.addEventListener("keydown", (e) => this.keys.add(e.key.toLowerCase()));
     window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
     c.addEventListener("contextmenu", (e) => e.preventDefault());
+    // Left-drag rotates the camera; a left-click (no drag) selects a unit;
+    // right-click issues a move order for the selection.
     c.addEventListener("pointerdown", (e) => {
-      this.dragging = true;
       c.setPointerCapture(e.pointerId);
+      if (e.button === 2) {
+        this.rts?.moveAt(e.offsetX, e.offsetY);
+        return;
+      }
+      if (e.button === 0) {
+        this.dragging = true;
+        this.downX = e.offsetX;
+        this.downY = e.offsetY;
+        this.moved = false;
+      }
     });
     c.addEventListener("pointerup", (e) => {
-      this.dragging = false;
       c.releasePointerCapture(e.pointerId);
+      if (e.button === 0) {
+        this.dragging = false;
+        if (!this.moved) this.rts?.selectAt(e.offsetX, e.offsetY);
+      }
     });
     c.addEventListener("pointermove", (e) => {
       if (!this.dragging) return;
+      if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) this.moved = true;
       this.yaw += e.movementX * 0.005;
       this.pitch = clamp(this.pitch - e.movementY * 0.005, 0.2, 1.5);
     });
