@@ -15,3 +15,27 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
          }
      }
      return offset;
+diff --git a/dist/cjs/viewer/handlers/w3x/unit.js b/dist/cjs/viewer/handlers/w3x/unit.js
+index 741281cf31d2dd6718ea42de52dcc39d3ef45298..997d3e39c49c3ddd61d34b8c65be18ad759b2a87 100644
+--- a/dist/cjs/viewer/handlers/w3x/unit.js
++++ b/dist/cjs/viewer/handlers/w3x/unit.js
+@@ -12,7 +12,18 @@ class Unit extends widget_1.Widget {
+         super(map, model);
+         const instance = this.instance;
+         instance.move(unit.location);
+-        instance.rotateLocal(gl_matrix_1.quat.setAxisAngle(gl_matrix_1.quat.create(), gl_matrix_addon_1.VEC3_UNIT_Z, unit.angle));
++        // OpenWar3 fix: WC3 building models are authored facing 270deg, and the
++        // default building facing is also 270deg, so applying the raw facing
++        // double-rotates them. Buildings are units with no movement type
++        // (movetp "_"/none); render them relative to the 270deg default.
++        let ow3Angle = unit.angle;
++        if (row) {
++            const ow3Move = row.string('movetp');
++            if (!ow3Move || ow3Move === '_' || ow3Move === 'none') {
++                ow3Angle -= Math.PI * 1.5;
++            }
++        }
++        instance.rotateLocal(gl_matrix_1.quat.setAxisAngle(gl_matrix_1.quat.create(), gl_matrix_addon_1.VEC3_UNIT_Z, ow3Angle));
+         instance.scale(unit.scale);
+         instance.setTeamColor(unit.player);
+         instance.setScene(map.worldScene);

@@ -1,5 +1,12 @@
 import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
+import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
+
+// War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
+// animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
+// drive the base scene update with REAL elapsed time (see start()).
+const baseUpdate = (ModelViewer as unknown as { prototype: { update(dt: number): void } })
+  .prototype.update;
 
 // Authentic full-map rendering via mdx-m3-viewer's War3MapViewer (plan §1.1, §2):
 // real terrain textures, cliffs, ramps, water, and doodads/units as MDX models.
@@ -40,6 +47,7 @@ interface W3xMap {
   worldScene: Scene;
   centerOffset: Float32Array;
   mapSize: Int32Array;
+  update(): void;
 }
 interface W3xViewer {
   loadedBaseFiles: boolean;
@@ -48,7 +56,8 @@ interface W3xViewer {
   once(event: string, cb: () => void): void;
   loadMap(buffer: ArrayBuffer | Uint8Array): void;
   removeScene(scene: Scene): boolean;
-  updateAndRender(dt?: number): void;
+  startFrame(): void;
+  render(): void;
 }
 
 const ViewerClass = War3MapViewer as unknown as {
@@ -64,6 +73,7 @@ export class MapViewerScene {
   private keys = new Set<string>();
   private dragging = false;
   private raf = 0;
+  private last = 0;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -123,9 +133,16 @@ export class MapViewerScene {
 
   start(): void {
     if (this.raf) return;
-    const frame = () => {
-      this.update();
-      this.viewer.updateAndRender(); // dt fixed at 1000/60 internally
+    const frame = (t: number) => {
+      const dt = this.last ? t - this.last : 1000 / 60;
+      this.last = t;
+      this.updateCamera();
+      // Advance animations by REAL elapsed time (fixes 2x speed on high-refresh
+      // displays), replicating War3MapViewer.update() = super.update() + map.update().
+      baseUpdate.call(this.viewer, dt);
+      this.viewer.map?.update();
+      this.viewer.startFrame();
+      this.viewer.render();
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -134,6 +151,7 @@ export class MapViewerScene {
   stop(): void {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
+    this.last = 0;
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
@@ -143,7 +161,7 @@ export class MapViewerScene {
     this.blobUrls = [];
   }
 
-  private update(): void {
+  private updateCamera(): void {
     const scene = this.viewer.map?.worldScene;
     if (!scene) return;
 
