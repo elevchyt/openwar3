@@ -18,8 +18,8 @@ const BUTTONS = [
 ] as const;
 
 export interface MenuHandlers {
-  /** Load a .w3x/.w3m map into the scene; returns a status line. */
-  loadMap?: (file: File) => Promise<string>;
+  /** Start the Single Player flow (map picker → game-setup lobby). */
+  onSinglePlayer?: () => void;
 }
 
 export function mountMainMenu(
@@ -77,31 +77,14 @@ async function importInstall(resolver: AssetResolver, status: HTMLElement): Prom
   }
 }
 
-function onSelect(label: string, handlers: MenuHandlers, status: HTMLElement): void {
-  // Single Player currently opens a map picker to show real terrain (Phase 2);
-  // full screens (skirmish setup, lobby, options) arrive with later phases.
-  if (label === "Single Player" && handlers.loadMap) {
-    pickMap(handlers.loadMap, status);
+function onSelect(label: string, handlers: MenuHandlers, _status: HTMLElement): void {
+  // Single Player opens the map picker → game-setup lobby (Phase 5.5). Other
+  // screens (Online lobby, Options...) arrive with later phases.
+  if (label === "Single Player" && handlers.onSinglePlayer) {
+    handlers.onSinglePlayer();
     return;
   }
   console.log(`[OpenWar3] menu: ${label}`);
-}
-
-function pickMap(loadMap: (file: File) => Promise<string>, status: HTMLElement): void {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".w3x,.w3m";
-  input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) return;
-    status.textContent = `Loading ${file.name}…`;
-    try {
-      status.textContent = await loadMap(file);
-    } catch (err) {
-      status.textContent = `Map load failed: ${(err as Error).message}`;
-    }
-  };
-  input.click();
 }
 
 function makeButton(label: string, onClick: () => void): HTMLButtonElement {

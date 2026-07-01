@@ -2,6 +2,8 @@ import "./style.css";
 import { AssetResolver } from "./assets/resolver";
 import { decodeBlp } from "./assets/blp";
 import { mountMainMenu } from "./ui/mainMenu";
+import { showLobby, type MeleeConfig } from "./ui/lobby";
+import { parseMapInfo } from "./world/mapInfo";
 import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
@@ -12,7 +14,7 @@ import { MapViewerScene } from "./render/mapViewer";
 // Entry point (plan §6). Three WebGL scenes, one visible at a time:
 //   #bg    — Phase 2 placeholder terrain (WebGL2), the zero-asset fallback
 //   #model — Phase 3 single animated MDX unit (mdx-m3-viewer)
-//   #map   — authentic full map: terrain/cliffs/water/doodads/units (War3MapViewer)
+//   #map   — authentic full map + our sim (War3MapViewer)
 const bgCanvas = document.getElementById("bg") as HTMLCanvasElement;
 const modelCanvas = document.getElementById("model") as HTMLCanvasElement;
 const mapCanvas = document.getElementById("map") as HTMLCanvasElement;
@@ -27,6 +29,7 @@ terrain.start();
 
 let modelScene: ModelViewerScene | null = null;
 let mapScene: MapViewerScene | null = null;
+let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer (next)
 
 type Which = "bg" | "model" | "map";
 function show(which: Which): void {
@@ -38,25 +41,49 @@ function show(which: Which): void {
   if (which !== "map") mapScene?.stop();
 }
 
-/** Single Player: authentic render with an install, placeholder terrain without. */
-async function loadMap(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
+/** Load a map's bytes into the right scene (authentic with an install, else placeholder). */
+async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
   const vfs = resolver.installSource;
-
   if (vfs) {
     show("map");
     if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs);
     mapScene.loadMap(bytes);
     mapScene.start();
-    return `${file.name} — authentic render (textures & models stream in)`;
+    return `${name} — authentic render (textures & models stream in)`;
   }
-
   show("bg");
-  const { terrain: data, doodads } = loadMapBytes(bytes, file.name);
+  const { terrain: data, doodads } = loadMapBytes(bytes, name);
   terrain.setTerrain(buildTerrainMesh(data));
   terrain.setDoodads(doodads);
   terrain.start();
-  return `${file.name}: ${data.width}×${data.height} corners, ${doodads.length} doodads (placeholder — import an install for authentic assets)`;
+  return `${name}: placeholder terrain (import an install for authentic assets)`;
+}
+
+/** Single Player flow: pick a map → game setup lobby → Start loads the map. */
+async function singlePlayer(): Promise<void> {
+  const file = await pickMapFile();
+  if (!file) return;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const info = parseMapInfo(bytes, file.name.replace(/\.(w3x|w3m)$/i, ""));
+  const teardown = showLobby(ui, info, {
+    onCancel: () => teardown(),
+    onStart: (config) => {
+      meleeConfig = config; // TODO Phase 5.5: spawn each race's starting units
+      teardown();
+      void enterMap(bytes, info.name);
+    },
+  });
+}
+
+function pickMapFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".w3x,.w3m";
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.oncancel = () => resolve(null);
+    input.click();
+  });
 }
 
 /** Enumerable unit models from the mounted install (portraits excluded). */
@@ -69,7 +96,6 @@ function listModels(): string[] {
     .sort();
 }
 
-/** Switch to the model viewer and render an animated MDX by VFS path (Phase 3). */
 async function viewModel(path: string): Promise<SequenceInfo[]> {
   const vfs = resolver.installSource;
   if (!vfs) throw new Error("Import a Warcraft III install first (click the menu status text).");
@@ -85,15 +111,16 @@ function showTerrain(): void {
   terrain.start();
 }
 
-mountMainMenu(ui, resolver, { loadMap });
+mountMainMenu(ui, resolver, { onSinglePlayer: singlePlayer });
 
 // Console hooks for the phase exit criteria (see README "Testing manually").
 (window as unknown as { openwar3: Record<string, unknown> }).openwar3 = {
   resolver,
-  loadMap,
   decodeBlp,
   listModels,
   viewModel,
   setSequence: (index: number) => modelScene?.setSequence(index),
   showTerrain,
+  loadMap: async (file: File) => enterMap(new Uint8Array(await file.arrayBuffer()), file.name),
+  meleeConfig: () => meleeConfig,
 };

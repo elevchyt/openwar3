@@ -33,6 +33,76 @@ html, body {
   display: none;
 }
 
+/* Game-setup lobby (Phase 5.5) — placeholder DOM UI over the menu. */
+.lobby {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 5, 9, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.lobby-panel {
+  width: min(680px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  padding: 24px 28px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.lobby-title {
+  margin: 0 0 4px;
+  color: var(--gold);
+}
+
+.lobby-meta {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: #9aa4b4;
+}
+
+.lobby-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lobby-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.lobby-label {
+  font-size: 14px;
+}
+
+.lobby-select {
+  padding: 8px;
+  font: inherit;
+  color: #f2ecdc;
+  background: #161c28;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.lobby-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 22px;
+  justify-content: flex-end;
+}
+
+.lobby-actions .menu-button {
+  min-width: 140px;
+}
+
 /* Selection ring under the selected unit (Phase 5), positioned each frame. */
 .unit-select {
   position: fixed;
