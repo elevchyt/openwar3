@@ -255,10 +255,26 @@ select which MPQ layers the VFS mounts.
   (stats, model paths, sounds, abilities, icons).
 - **Exit:** load a map and know every unit's real stats/model/icon.
 
-### Phase 5 — Static map load, end to end (small–medium; vertical-slice payoff)
+### Phase 5 — Static map load, end to end (small–medium; vertical-slice payoff) — **DONE**
 - Open `.w3x`; terrain + doodads + pre-placed units; selection, camera, **move order** pathfinding on
   `war3map.wpm`. Works with placeholders too.
-- **Exit:** *the §0 vertical-slice milestone.*
+- **Exit:** *the §0 vertical-slice milestone.* ✅ (real maps render via mdx-m3-viewer's War3MapViewer;
+  our own headless sim handles selection + A* move orders; `war3map.wpm` is terrain-only, so
+  destructible/tree pathing is stamped from `pathTex`.)
+
+### Phase 5.5 — Melee game setup & initialization (medium; makes it a *game*)
+The flow that turns "view a map" into "play a match" — built as **engine logic**, not JASS (WC3 drives
+this from `blizzard.j` melee triggers; we reimplement it natively):
+- **Lobby / game-setup screen** (see the WC3 game-setup reference): player + computer slots, **race**
+  (Human / Orc / Undead / Night Elf / Random), **team**, color, handicap; map preview (players, size,
+  tileset from `war3map.w3i`); Start / Cancel.
+- **Melee init on Start:** for each player, at the map's **start location** (`sloc` start-location
+  units in `war3mapUnits.doo` / `war3map.w3i` start positions), spawn that race's **starting units**
+  (main hall + workers, starting gold/lumber), remove the neutral start markers, set initial vision.
+  Uses the **unit data registry** (§4, **DONE**: merged unit SLKs → stats/model/race/cost, 836 units)
+  for rosters and stats.
+- **Exit:** pick a map → configure players/races/teams → **Start** spawns each race correctly at its
+  start location, controllable via the §5 selection/move.
 
 ### Phase 6 — Simulation & gameplay (very large; server-authoritative-ready)
 - Pathfinding (ground + air), circle/grid collision, steering; orders + unit state machines; combat

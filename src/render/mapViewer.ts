@@ -10,6 +10,7 @@ import { PathingGrid, parseWpm } from "../sim/pathing";
 import { stampDestructibles } from "../sim/destructibles";
 import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
+import { loadUnitRegistry, type UnitRegistry } from "../data/units";
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -97,6 +98,7 @@ export class MapViewerScene {
     private viewer: W3xViewer,
     private blobUrls: string[],
     private vfs: DataSource,
+    private registry: UnitRegistry,
   ) {
     this.attachControls();
   }
@@ -130,7 +132,7 @@ export class MapViewerScene {
       else viewer.once("loadedbasefiles", resolve);
     });
 
-    return new MapViewerScene(canvas, viewer, created, vfs);
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs));
   }
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
@@ -166,7 +168,7 @@ export class MapViewerScene {
         units: () => map.units as ReturnType<RtsHost["units"]>,
         unitsReady: () => map.unitsReady,
       };
-      this.rts = new RtsController(grid, makeHeightSampler(terrain), host);
+      this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry);
     }
   }
 

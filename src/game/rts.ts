@@ -1,6 +1,7 @@
 import { SimWorld } from "../sim/world";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
+import type { UnitRegistry } from "../data/units";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -58,7 +59,12 @@ export class RtsController {
   private screen = new Float32Array(2);
   private ray = new Float32Array(6);
 
-  constructor(grid: PathingGrid, private heightAt: HeightSampler, private host: RtsHost) {
+  constructor(
+    grid: PathingGrid,
+    private heightAt: HeightSampler,
+    private host: RtsHost,
+    private registry: UnitRegistry,
+  ) {
     this.sim = new SimWorld(grid);
     this.marker = document.createElement("div");
     this.marker.className = "unit-select";
@@ -86,14 +92,15 @@ export class RtsController {
       if (walk < 0) continue; // no walk animation → treat as static
       const stand = seqs.findIndex((s) => /^stand/i.test(s.name));
       const loc = unit.instance.localLocation;
+      const def = this.registry.get(unit.row?.string("unitid") ?? "");
       const simId = this.nextId++;
       this.sim.add({
         id: simId,
         x: loc[0],
         y: loc[1],
         facing: quatToZ(unit.instance.localRotation),
-        speed: unit.row?.number("spd") || 270,
-        radius: 16,
+        speed: def?.speed || 270, // real movement speed from UnitBalance.slk
+        radius: def?.collision || 16,
       });
       const entry: Entry = { simId, unit, walk, stand: stand < 0 ? walk : stand };
       this.entries.push(entry);
