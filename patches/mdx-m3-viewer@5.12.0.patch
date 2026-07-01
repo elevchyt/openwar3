@@ -1,0 +1,17 @@
+diff --git a/dist/cjs/parsers/mpq/isarchive.js b/dist/cjs/parsers/mpq/isarchive.js
+index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa082810df 100644
+--- a/dist/cjs/parsers/mpq/isarchive.js
++++ b/dist/cjs/parsers/mpq/isarchive.js
+@@ -11,7 +11,11 @@ function searchHeader(bytes) {
+         const base = i * 512;
+         // Test 'MPQ\x1A'.
+         if (bytes[base] === 77 && bytes[base + 1] === 80 && bytes[base + 2] === 81 && bytes[base + 3] === 26) {
+-            offset = base;
++            // OpenWar3 fix: return the FIRST header, not the last. WC3's main MPQs
++            // (e.g. War3.mpq) embed maps whose own MPQ headers appear later in the
++            // file; keeping the last match read an 18-file stub instead of the real
++            // archive. Maps (HM3W at 0) still resolve to their MPQ header at 512.
++            return base;
+         }
+     }
+     return offset;

@@ -23,6 +23,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ]
+    ],
+    "patchedDependencies": {
+      "mdx-m3-viewer@5.12.0": "patches/mdx-m3-viewer@5.12.0.patch"
+    }
   }
 }
