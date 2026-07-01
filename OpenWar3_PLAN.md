@@ -1,0 +1,407 @@
+# OpenWar3 — Build Plan
+
+A browser-first, asset-compatible re-creation of the Warcraft III engine, in **TypeScript**.
+**Base version: 1.27a**, **The Frozen Throne first** (Reign of Chaos supported later as a content
+profile, not a fork). Players supply their own legally-owned game files; **OpenWar3 ships and hosts no
+Blizzard assets** — and is **playable with zero assets** via placeholders (see §2). The UI is a
+**faithful, asset-driven recreation** of the original menus and HUD (see §10).
+
+> **Status: finalized — ready for Claude Code.** Start at **Phase 0 (§6)**. The canonical main-menu
+> reference and the FDF-usage approval are in **§10**.
+
+---
+
+## Decided technology stack
+
+| Concern | Decision |
+|---|---|
+| Language | **TypeScript** |
+| Build / dev server | **Vite** |
+| Rendering | **mdx-m3-viewer's WebGL renderer** (behind a thin interface) |
+| Asset parsing (MPQ/MDX/BLP/W3X/SLK/INI) | **mdx-m3-viewer** parsers |
+| Base game version | **1.27a** (format-identical to 1.27b) |
+| Game scope | **Frozen Throne first**; RoC later as a **content profile** |
+| Client hosting | **Vercel** — static build, **engine code only, no assets** |
+| Server hosting | **Render** — paid persistent web service (not free tier) |
+| Netcode transport | **WebSocket via Socket.IO** |
+| Netcode model | **Server-authoritative** sim + delta snapshots + area-of-interest culling |
+| Asset source | **User's own local install** (imported once) — never uploaded or hosted |
+| Asset persistence | **OPFS** (import once, cached across sessions) + `navigator.storage.persist()` |
+| Asset fallback | **Placeholder chain**: user install → CC0 pack (later) → built-in primitives |
+| UI system | **Themeable** (DOM/CSS menus + WebGL 3D background + canvas HUD); visuals via the asset resolver; **FDF files (e.g. `MainMenu.fdf`) approved as ground-truth layout** once assets load |
+| Heavy compute | **Web Workers** (no SharedArrayBuffer needed) |
+| Later native app | **Electron** wrapper (removes storage/permission friction) |
+
+---
+
+## 0. Guiding principles & scope reality
+
+**This is a multi-year effort if taken to completion.** Treat "full engine" as the *north star*, not
+the first milestone. The plan is organized as **thin vertical slices**: each phase ends with something
+runnable.
+
+**First real milestone (the "vertical slice"):**
+> Import a legally-owned **1.27a Frozen Throne** install → load one real melee `.w3x` map → render its
+> terrain, tiles, cliffs, and doodads with real models → place one unit that can be selected and given
+> a move order that respects pathing. **(And: the same map is playable with placeholder primitives
+> before any assets are imported.)**
+
+### Why 1.27a / Frozen Throne
+- **MPQ only** — no CASC (`war3.mpq` = RoC base, `war3x.mpq` = TFT expansion, `war3xlocal.mpq`,
+  `war3patch.mpq`).
+- **TFT is a superset of RoC**, layered: a Frozen Throne install already contains RoC's data under the
+  expansion data. Mounting the full stack gives you TFT; that's the default.
+- **Pre-Reforged / pre-FLAC**, best-documented era. 1.27a ≡ 1.27b in file formats.
+
+### Content profiles (how RoC and TFT coexist — one engine, not two)
+A **content profile** declares: which MPQ layers to mount + which ruleset/roster/balance is active +
+which campaign set. Profiles, not forks:
+- **TFT (default):** mount `war3.mpq` + `war3x.mpq`; TFT roster/balance; TFT + bonus campaigns.
+- **RoC (later):** mount `war3.mpq` only; RoC roster/balance; RoC campaigns.
+- **Campaign nuances** live in map data + **JASS triggers** (Phase 7), not the core engine. The engine
+  loads a campaign archive and runs its scripts; RoC/TFT campaign differences are data/script, not
+  structural. So targeting TFT now costs you nothing toward RoC later.
+
+### Legal framing — the rule that keeps OpenWar3 alive
+Follows the OpenMW / OpenRA / Warsmash model: **OpenWar3 is original code containing zero copyrighted
+assets.**
+- **Never bundle, upload, host, or serve Blizzard's assets** — not from Vercel, Render, S3, a CDN, or
+  anywhere you control, **and not behind an "ownership verification" gate.** Ownership does not grant
+  *you* a distribution license; hosting the files is redistribution and gets projects taken down.
+- **Assets come only from the user's own local install**, read client-side and cached in OPFS.
+  Copyrighted bytes never touch your servers.
+- Legitimacy check is **local** (hash `war3.mpq` etc. against known-good 1.27a checksums), not a server
+  unlock. Largely self-enforcing: no assets, nothing renders.
+- The engine itself is your code and can be fully public. *(Not legal advice — but this is the
+  well-trodden safe path.)*
+
+---
+
+## 1. The stack: "a game engine" vs "from scratch" (both — here's the split)
+
+You **assemble a stack of libraries, one per layer**. You use a rendering engine (won't build one),
+reuse WC3 parsers (won't build those), and build the simulation/pathfinding/netcode yourself — that
+layer is custom in *any* engine.
+
+| Layer | Build or borrow | OpenWar3 choice |
+|---|---|---|
+| 3D rendering | **borrow** | mdx-m3-viewer renderer (thin interface in front) |
+| Asset parsing | **borrow** | mdx-m3-viewer parsers |
+| Math / ECS / audio / UI | **borrow** | gl-matrix; bitECS/miniplex (opt); Web Audio; HTML/CSS/Canvas |
+| Asset persistence | **borrow** | OPFS + IndexedDB |
+| Network transport | **borrow** | Socket.IO / WebSocket |
+| Game loop | build (tiny) | requestAnimationFrame + fixed-step sim |
+| **Simulation, pathfinding, collision, fog of war** | **build** | custom (WC3-specific; no physics engine) |
+| **Server-authoritative netcode** | **build** | custom over Socket.IO |
+| **Asset resolver + placeholder fallback** | **build** | custom (§2) |
+
+### 1.1 Rendering (decided)
+Build on **mdx-m3-viewer's WebGL renderer** behind a thin interface, so migration to Three.js/Babylon
+later stays possible without touching sim or asset code.
+
+### 1.2 Asset persistence — solving "don't make users re-upload" (the OPFS answer)
+localStorage caps at ~5 MB — useless here. Use **OPFS** (real sandboxed browser filesystem; multi-GB;
+Chrome/Edge/Firefox/Safari incl. iOS; fast sync access inside Web Workers — ideal for the MPQ reader):
+
+- **Import once → copy into OPFS → later sessions read from OPFS. No re-upload.**
+- Call **`navigator.storage.persist()`** so the cache isn't evicted under storage pressure (Safari
+  evicts unused site data after ~7 days otherwise). Check **`navigator.storage.estimate()`** for quota
+  before importing a multi-GB install.
+- **Import UX (cross-browser):**
+  - **Chromium (Chrome/Edge/Opera):** `showDirectoryPicker` grabs the whole WC3 folder at once.
+    Optionally store the **directory handle** in IndexedDB to re-read the real folder later (avoids
+    copying), but you must `requestPermission` again each session (one click).
+  - **Firefox/Safari (no disk picker):** `<input type="file" webkitdirectory>` → copy into OPFS.
+  - Feature-detect and pick the path; the OPFS copy is the robust default that works identically
+    everywhere.
+- **Electron (later)** removes all of this: native filesystem, no quota, no permission dance.
+
+### 1.3 Browser constraints
+- **Memory:** load/convert on demand, cache in OPFS keyed by file hash, evict.
+- **Threads without headache:** heavy parsing/pathfinding in **Web Workers** (postMessage +
+  transferables). No **SharedArrayBuffer** → no COOP/COEP headers → Vercel stays simple.
+
+### 1.4 Determinism (relaxed by the authoritative choice)
+Because the **server** is the single source of truth (§7), you **no longer need cross-machine
+deterministic floating-point** — the hardest part of lockstep is gone. Still keep the sim
+**headless-runnable** and clean (ideally deterministic) for **replays, debugging, and tests**. Fixed
+timestep either way.
+
+---
+
+## 2. Placeholder / no-asset mode (a first-class feature, and your hostable demo)
+
+Make the engine **asset-source-agnostic** via an **asset resolver with a fallback chain**:
+
+> **user's install (OPFS)  →  CC0 asset pack (later)  →  built-in primitives**
+
+Resolution always returns *something*: a capsule/box for a missing unit model, a flat-color quad for a
+tile, a generated icon, a beep for a sound. Benefits:
+- **Build/test the engine before parsers are done** — units as capsules on real (or placeholder) terrain.
+- **Graceful degradation** if a specific asset is missing or corrupt.
+- **The no-Blizzard-assets build is a legal, instantly-playable public demo** hostable on Vercel. The
+  "bring your own install" mode is the upgrade that swaps in authentic visuals.
+
+CC0 sources for the later pack: **Kenney**, **Quaternius**, **Poly Haven**, **OpenGameArt (CC0 filter)**
+— models, textures, UI. Ship these freely; they're CC0.
+
+Design rule: **nothing in the engine hard-references a Blizzard asset path**; everything goes through
+the resolver, which decides install vs CC0 vs primitive.
+
+---
+
+## 3. Reference projects
+
+| Project | Role | License note |
+|---|---|---|
+| **mdx-m3-viewer** (flowtsohg) | Parsing + rendering foundation (MDX/MDL, BLP1, INI, SLK, MPQ1, W3M/W3X/W3N, DDS, TGA + WebGL renderer). | Permissive (verify). |
+| **Warsmash** (Retera) | Clean-room WC3 engine rewrite (Java); best behavioral reference for sim, JASS, netcode. | MIT-intent but **≥1 GPL dep** — study, don't lift blindly. |
+| **war3-model** (4eb0da) | Smaller TS MDX parser/renderer. | Permissive. |
+| **w3x-parser** (voces) | Focused `.w3m/.w3x` parser. | Permissive. |
+| **HiveWE** (stijnherfst) | Best terrain/cliff/ramp rendering reference. | Open source. |
+| **StormLib / CascLib** (Zezula) | MPQ / CASC correctness refs; CASC only for §9. | Permissive. |
+
+**Testing tactic:** treat mdx-m3-viewer as an **oracle** — diff your parser output against it.
+
+---
+
+## 4. File-format map (1.27a)
+
+| Concern | **1.27a (base)** | Changes in 1.30+ / Reforged (later, §9) |
+|---|---|---|
+| Base data container | **MPQ** (`war3.mpq` RoC, `war3x.mpq` TFT, `war3xlocal.mpq`, `war3patch.mpq`) | → **CASC** |
+| Map / campaign | `.w3m`/`.w3x` / `.w3n` = **MPQ** | unchanged |
+| Models | **MDX v800** (+ MDL) | +v1000/1100, HD |
+| Textures | **BLP1** (+TGA) | +BLP2 / DDS |
+| Audio | **WAV/MP3** | +FLAC |
+| Terrain / doodads / pathing | `war3map.w3e` / `war3map.doo` / `war3map.wpm` | unchanged |
+| Object data | **SLK** + **INI**; per-map `w3u/w3t/w3a/w3b/w3d/w3h/w3q` overrides | unchanged |
+| Triggers | `war3map.j` (**JASS2**), `war3map.wtg/wct` | +Lua later |
+
+> WC3 treats every MPQ as **v1**. Support PKWARE implode, zlib, huffman+ADPCM (audio), bzip2.
+
+---
+
+## 5. Architecture
+
+```mermaid
+flowchart TD
+    subgraph Client["CLIENT — Vercel (static, no assets)"]
+        subgraph Import["Import + Persist (once)"]
+            A[Pick WC3 folder<br/>FS Access API / file input] --> HASH[Local hash verify]
+            HASH --> OPFS[(OPFS cache<br/>persist requested)]
+        end
+        subgraph Assets["Asset resolver (fallback chain)"]
+            OPFS --> RES{resolve path}
+            CC0[CC0 pack - later] --> RES
+            PRIM[built-in primitives] --> RES
+            RES --> DEC[mdx-m3-viewer parsers + decoders]
+        end
+        subgraph Runtime["Client runtime (thin)"]
+            DEC --> REND[mdx-m3-viewer renderer]
+            SNAP[apply server delta snapshots] --> REND
+            SNAP --> HUD[HTML/CSS/Canvas HUD]
+            INPUT[send input commands] --> NETC
+            NETC[Netcode client] --> SNAP
+        end
+    end
+
+    subgraph Server["SERVER — Render (paid, persistent)"]
+        SIO[Socket.IO + lobby/matchmaking] --> SIM[AUTHORITATIVE deterministic-ish SIM<br/>full game state = source of truth]
+        SIM --> AOI[Per-client area-of-interest cull<br/>= fog of war = anti-cheat]
+        AOI --> DELTA[Delta snapshots ~10-20Hz]
+    end
+
+    NETC <-->|WebSocket: inputs up / snapshots down| SIO
+    OPFS -.->|later, §9| CASC[CASC layer]
+    CASC -.-> RES
+```
+
+**Interfaces to hold sacred:** the `DataSource` VFS (CASC slots in later), the **renderer interface**
+(Path A swappable), and the **asset resolver** (install/CC0/primitive). Content **profiles** (§0)
+select which MPQ layers the VFS mounts.
+
+---
+
+## 6. Phased roadmap
+
+### Phase 0 — Spikes & setup (small)
+- **TypeScript + Vite**; add mdx-m3-viewer; deploy empty client to **Vercel**.
+- **Import → local hash-verify → OPFS cache → persist()** with one file.
+- **Placeholder renderer:** draw a primitive (capsule/box) via the asset resolver with *no assets
+  loaded*. Render one real MDX model when assets are present.
+- **Menu shell:** a minimal main-menu screen through the UI system, targeting the canonical reference
+  (§10.1) — flat/CC0 skin with no assets; real BLP textures + the `MainMenu3D_Exp` background model
+  when an install is present. Buttons: Single Player, **Online**, Local Area Network, Options, Credits, Quit.
+- **Exit:** with no install, see a primitive on screen; with an install, see a real WC3 model — both
+  through the same resolver.
+
+### Phase 1 — Ingestion / VFS + profiles (medium)
+- mdx-m3-viewer **MPQ v1** reader; `DataSource` layered VFS + path normalization; **content profile**
+  loader (TFT mounts `war3.mpq`+`war3x.mpq`).
+- **Exit:** enumerate/extract any file by path from a real Frozen Throne install.
+
+### Phase 2 — Textures & terrain (medium)
+- **BLP1 → texture**; **`war3map.w3e`** terrain (height, tiles, blending, **cliffs & ramps** — HiveWE
+  ref); **doodads** placed (primitives ok pre-models).
+- **Exit:** render a real map's ground, textured and cliffed; fly the camera.
+
+### Phase 3 — Models & animation (large)
+- MDX v800 units/doodads with materials (team color), animation clips, particles (defer if needed).
+- **Exit:** doodads + a unit render as real animated models (idle/walk).
+
+### Phase 4 — Data layer (medium)
+- **SLK + INI** base tables; **object-editor changeset** parsers merged per map; **data registry**
+  (stats, model paths, sounds, abilities, icons).
+- **Exit:** load a map and know every unit's real stats/model/icon.
+
+### Phase 5 — Static map load, end to end (small–medium; vertical-slice payoff)
+- Open `.w3x`; terrain + doodads + pre-placed units; selection, camera, **move order** pathfinding on
+  `war3map.wpm`. Works with placeholders too.
+- **Exit:** *the §0 vertical-slice milestone.*
+
+### Phase 6 — Simulation & gameplay (very large; server-authoritative-ready)
+- Pathfinding (ground + air), circle/grid collision, steering; orders + unit state machines; combat
+  (attack/armor types, projectiles, cooldowns); resources, building, training/upgrades, tech tree;
+  **fog of war/vision (becomes server-side truth under §7)**. Melee-only, TFT roster first.
+- Sim is **headless-runnable** (no renderer required) so the server can run it.
+- **Exit:** a local melee skirmish vs a dumb AI or a second local player.
+
+### Phase 7 — Triggers / JASS (very large — defer until custom/campaign maps)
+- JASS2 interpreter/VM (or transpile to TS) + WC3 natives. Cost = hundreds of natives, not the
+  language. Warsmash is the reference. **This is where RoC vs TFT campaign nuances live.**
+- **Exit:** a simple triggered custom map runs.
+
+### Phase 8 — Multiplayer (very large; server-authoritative — see §7 detail)
+- **Exit:** two browsers play the same match in sync via the Render server, with working reconnect.
+
+### Phase 9 — Later versions / RoC profile / native (medium, additive)
+- CASC reader as a new VFS layer; MDX v1000/1100, DDS/HD, FLAC. **RoC content profile.** **Electron**
+  wrapper for a native build. All additive behind existing interfaces.
+
+---
+
+## 7. Netcode detail (server-authoritative)
+
+- **Model:** the **Render** server runs the **authoritative** simulation — full game state is the
+  single source of truth. Clients are thin: they **send input commands** and **render server state**.
+- **Downstream = delta snapshots** at a fixed rate (~10–20 Hz): send only what changed, per client,
+  **filtered by area-of-interest** (only units/events in that client's vision). Clients **interpolate**
+  between snapshots for smooth rendering.
+- **Area-of-interest culling doubles as anti-cheat and fog of war:** a client literally never receives
+  data it shouldn't see, so maphacks are impossible by construction.
+- **Reconnect is easy** (your reason for choosing this): on rejoin, the server sends a **full snapshot**
+  and resumes deltas. No client-side authoritative state to rebuild.
+- **Responsiveness:** RTS tolerates command latency, so **skip client-side prediction in v1** — show an
+  instant "order received" indicator while the server processes; add prediction later if wanted.
+- **Determinism** is not required for sync (server is truth), but keep the sim clean/headless for
+  replays and tests.
+- **Transport:** Socket.IO over WebSocket — reliable/ordered, rooms + reconnection for lobbies.
+- **Costs you're accepting:** the server runs a full sim per match (real CPU) → fewer matches per
+  instance; and you must implement snapshot/delta + AoI to keep bandwidth sane. Budget Render capacity
+  accordingly; cap concurrent matches per instance.
+
+---
+
+## 8. Deployment & infrastructure
+
+- **Client → Vercel.** Static Vite build; **engine code only, no assets**. No special headers (no
+  SharedArrayBuffer). Assets imported at runtime, cached in the user's OPFS.
+- **Server → Render.** Node + Socket.IO **authoritative game server** on a **paid persistent instance**
+  (free tier spins down after 15 min + shared CPU — unsuitable for live authoritative matches; and
+  authoritative is heavier than a relay). Add Postgres/Redis for accounts/matchmaking/history.
+- **No copyrighted assets on any server you control** (§0).
+- **Electron (later):** repackage the same TS app; gains native FS (no OPFS/quota/permission), ships as
+  a dedicated game.
+
+---
+
+## 9. Honest risk assessment
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Full engine is multi-year scope | High | Vertical slices; melee-first; JASS/MP as stretch goals |
+| MDX animation/particles intricate | Med–High | Path A covers most; oracle-diff vs mdx-m3-viewer |
+| Cliffs/ramps terrain | Medium | Lean on HiveWE |
+| Browser memory vs multi-GB assets | Medium | OPFS on-demand + eviction + persist() + Web Workers |
+| **Authoritative server CPU/bandwidth** | **Med–High** | Delta snapshots + AoI culling; cap matches/instance; budget Render |
+| Renderer coupling (Path A) | Medium | Keep rendering behind an interface |
+| UI faithfulness / animation feel | Medium | Reference screenshots + recordings per screen (§10); FDF parsing later; glue-model backgrounds render for free |
+| Determinism (relaxed by authoritative) | Low | Headless sim for replays/tests; server is truth |
+| Legal (asset distribution) | **Critical** | **Never host assets — local-only import; placeholder/CC0 build is the hostable one** |
+
+**Bottom line:** asset-compatibility (import a real Frozen Throne install, see real maps/models in the
+browser) is very achievable on top of mdx-m3-viewer. The engine half (RTS sim + triggers +
+authoritative netcode) is where the years go and is custom in any engine. The placeholder chain lets
+you build and even ship a playable demo before touching a single Blizzard asset. Build to the vertical
+slice first.
+
+---
+
+## 10. UI system (menus, HUD, and the reference workflow)
+
+**Key insight: WC3's UI is itself made of game assets in the MPQs**, so the authentic look plugs into
+the asset pipeline rather than being separately hand-crafted:
+- **Layout** is defined in **FDF (Frame Definition Files)** loaded via **TOC** files. Frame types
+  include `BACKDROP`, `BUTTON`, `GLUETEXTBUTTON`, `MODEL`, `TEXT`, `SLIDER`, `EDITBOX`, `LISTBOX`, in a
+  parent/child hierarchy. Menu ("glue") screens live under `UI\FrameDef\Glue\` (e.g. `MainMenu.fdf`).
+- **Visuals** are **BLP textures + fonts** (the chrome, chains, button borders, e.g.
+  `ui\widgets\glues\gluescreen-button1-*`). Backdrops accept BLP/TGA/DDS.
+- **The animated main-menu background is a 3D MDX model, not a video** — RoC:
+  `UI\Glues\MainMenu\MainMenu3d\MainMenu3d.mdx`, TFT: `UI\Glues\MainMenu\MainMenu3D_Exp\...`. The
+  drifting motion, meteors, and their sounds are model animation. **It renders through the MDX pipeline
+  you're already building** — essentially free once models work.
+
+### 10.1 Canonical main-menu reference (provided)
+
+The **primary UI reference** is the developer-provided screenshot of the **TFT main menu**
+(v1.26.0.6401): the icy Frozen Throne spire background with the menu panel on the right.
+
+- **Background:** the `UI\Glues\MainMenu\MainMenu3D_Exp\MainMenu3D_Exp.mdx` animated model, rendered via
+  the MDX pipeline in the WebGL layer behind the menu.
+- **Buttons (top→bottom):** `Single Player`, **`Online`**, `Local Area Network`, `Options`, `Credits`,
+  and a separate framed **`Quit`** below.
+- **Intentional deviation:** the original **"Battle.net" is renamed to "Online"** — OpenWar3's
+  multiplayer targets *your* Render server, not Blizzard's Battle.net (also avoids the trademark).
+- **FDF is approved as the source of truth:** Claude may read the real **`UI\FrameDef\Glue\MainMenu.fdf`**
+  (and referenced templates/textures/fonts) from the user's install to reproduce exact layout, spacing,
+  and styling. Use the screenshot as the quick spec; use the FDF for precision.
+
+### 10.2 Architecture: a themeable UI, visuals via the resolver
+- **Layout/logic is your own code.** Menus as **HTML/CSS/DOM**; the **3D background** in a WebGL layer
+  behind them; the in-game **HUD** as a canvas/DOM overlay. (Web tech is a genuine strength here.)
+- **Every visual asset routes through the asset resolver** (install → CC0 → primitive), exactly like
+  game assets. Same menu code renders **authentic** with a real install (real BLP textures, fonts,
+  `MainMenu3D` background) and a **flat/CC0 skin** with no install. So menus work in no-asset mode too.
+- **FDF is an approved layout source from Phase 1** (once the MPQ reader lands): parse
+  `MainMenu.fdf`/glue FDFs to auto-derive exact frame layouts, Warsmash-style, for pixel-faithful
+  screens. Before assets load (Phase 0), hand-build a shell skinned via the resolver; once assets are
+  available, prefer the FDF as ground truth.
+- **Menus are per content profile.** RoC ("Multiplayer" / "Exit") vs TFT ("Battle.net" / "Local Area
+  Network" / "Quit"), and across versions, differ — the screen set belongs to the profile (§0), not a
+  single fixed UI.
+- **Chain-fold and hover animations** are recreated with CSS/JS timing (or driven from glue models).
+  These are presentation, not gameplay — iterate freely.
+
+### 10.3 Reference workflow (bake this into how you work with Claude)
+Faithful UI reproduction needs visual references; Claude cannot see the game running. Fidelity ladder:
+- **Screenshot** → specifies static layout (frames, positions, proportions, text). One per screen.
+  *(The main menu's canonical screenshot is already provided — see §10.1.)*
+- **Short screen recording (GIF/MP4)** → specifies *animation* (chain fold, hover glow, transitions);
+  timing/easing are invisible in a still, so animated screens need a clip.
+- **Original FDF + BLP assets** → exact ground truth where available.
+- **Label every reference with game + version** (RoC/TFT, patch), since screens differ.
+
+**Rule for Claude:** before building any faithful UI screen, **ask the developer for its
+reference(s)** (screenshot, plus a recording if it animates) and **do not guess at an unseen layout**.
+This is incremental — request references per screen as each is reached, not all upfront.
+
+### 10.4 UI across the phases
+- **Phase 0:** minimal main-menu shell through the UI system, targeting the §10.1 reference (flat skin
+  without assets; real BLP + `MainMenu3D_Exp` background model with an install). Buttons per §10.1
+  (with **Online** in place of Battle.net).
+- **Phase 1:** once the MPQ reader lands, switch the main menu to derive layout from `MainMenu.fdf` for
+  fidelity. Screen set grows as needed (map/skirmish setup, loading screen); provide references per screen.
+- **Phase 5–6:** the in-game **HUD** (command card, minimap, resource bars, portraits, ability
+  buttons) — reimplement skinned via the resolver, or FDF-parse for exactness later.
+- **Phase 7 (JASS):** map-driven custom UI frames (`BlzCreateFrame`-style) if/when custom maps need them.

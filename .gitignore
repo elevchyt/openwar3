@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+.vscode/
+# Never commit Blizzard assets (see plan §0)
+*.mpq
+*.w3x
+*.w3m
+*.w3n
+*.mdx
+*.blp
