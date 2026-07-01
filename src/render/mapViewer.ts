@@ -1,9 +1,13 @@
 import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import type { DataSource } from "../vfs/types";
+import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
+import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E } from "../world/terrain";
+import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm } from "../sim/pathing";
+import { stampDestructibles } from "../sim/destructibles";
 import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
 
@@ -92,6 +96,7 @@ export class MapViewerScene {
     private canvas: HTMLCanvasElement,
     private viewer: W3xViewer,
     private blobUrls: string[],
+    private vfs: DataSource,
   ) {
     this.attachControls();
   }
@@ -125,7 +130,7 @@ export class MapViewerScene {
       else viewer.once("loadedbasefiles", resolve);
     });
 
-    return new MapViewerScene(canvas, viewer, created);
+    return new MapViewerScene(canvas, viewer, created, vfs);
   }
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
@@ -153,6 +158,7 @@ export class MapViewerScene {
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
+      this.stampMapDestructibles(grid, archive);
       const host: RtsHost = {
         canvas: this.canvas,
         camera: map.worldScene.camera as unknown as RtsHost["camera"],
@@ -162,6 +168,30 @@ export class MapViewerScene {
       };
       this.rts = new RtsController(grid, makeHeightSampler(terrain), host);
     }
+  }
+
+  /** Add tree/destructible pathing (from their pathTex) onto the terrain grid. */
+  private stampMapDestructibles(grid: PathingGrid, archive: MpqDataSource): void {
+    const dooBytes = archive.rawBytes("war3map.doo");
+    if (!dooBytes) return;
+    let buildVersion = 0;
+    const w3iBytes = archive.rawBytes("war3map.w3i");
+    if (w3iBytes) {
+      const info = new w3iParser.File();
+      info.load(w3iBytes);
+      buildVersion = info.getBuildVersion();
+    }
+    const doodads = parseDoo(dooBytes, buildVersion);
+    const destr = new MappedData(this.slkText("Units\\DestructableData.slk"));
+    const dood = new MappedData(this.slkText("Doodads\\Doodads.slk"));
+    const pathTexOf = (id: string): string | undefined =>
+      destr.getRow(id)?.string("pathTex") || dood.getRow(id)?.string("pathTex") || undefined;
+    stampDestructibles(grid, doodads, pathTexOf, (p) => this.vfs.rawBytes(p));
+  }
+
+  private slkText(path: string): string {
+    const bytes = this.vfs.rawBytes(path);
+    return bytes ? new TextDecoder("windows-1252").decode(bytes) : "";
   }
 
   start(): void {

@@ -43,6 +43,11 @@ export class PathingGrid {
     return this.inBounds(cx, cy) && (this.flags[cy * this.width + cx] & UNWALKABLE) === 0;
   }
 
+  /** Mark a cell unwalkable — used to stamp destructible (tree) footprints. */
+  block(cx: number, cy: number): void {
+    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= UNWALKABLE;
+  }
+
   worldToCell(wx: number, wy: number): [number, number] {
     return [
       Math.floor((wx - this.originX) / PATHING_CELL),

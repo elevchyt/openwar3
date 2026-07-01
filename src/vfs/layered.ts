@@ -23,6 +23,14 @@ export class LayeredDataSource implements DataSource {
     throw new Error(`Not found in any layer: ${path}`);
   }
 
+  rawBytes(path: string): Uint8Array | null {
+    for (const layer of this.layers) {
+      const bytes = layer.rawBytes(path);
+      if (bytes) return bytes;
+    }
+    return null;
+  }
+
   list(): string[] {
     const all = new Set<string>();
     for (const layer of this.layers) for (const name of layer.list()) all.add(name);

@@ -9,6 +9,8 @@ export interface DataSource {
   exists(path: string): boolean;
   /** Read a file's bytes. Rejects if the path is absent. */
   read(path: string): Promise<Uint8Array>;
+  /** Synchronous read — returns null if absent. */
+  rawBytes(path: string): Uint8Array | null;
   /** Known file paths. Requires a listfile for MPQ sources (WC3's MPQs ship one). */
   list(): string[];
 }
