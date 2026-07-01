@@ -15,9 +15,10 @@ html, body {
   color: #e8e2d0;
 }
 
-/* WebGL background (terrain scene / placeholder primitive) sits behind the UI. */
+/* WebGL scenes (terrain / model / map) sit behind the UI. One shows at a time. */
 #bg,
-#model {
+#model,
+#map {
   position: fixed;
   inset: 0;
   width: 100%;
@@ -26,9 +27,9 @@ html, body {
   z-index: 0;
 }
 
-/* Toggle between terrain scene and model viewer (Phase 3). */
 #bg[hidden],
-#model[hidden] {
+#model[hidden],
+#map[hidden] {
   display: none;
 }
 

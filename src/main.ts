@@ -5,32 +5,58 @@ import { mountMainMenu } from "./ui/mainMenu";
 import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
-import { loadMapFile } from "./world/map";
+import { loadMapBytes } from "./world/map";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
+import { MapViewerScene } from "./render/mapViewer";
 
-// Entry point (plan §6). Boots the Phase 2 terrain scene behind the menu, with a
-// Phase 3 model-viewer mode that renders real animated MDX units on its own
-// canvas. Both work with the user's own imported install (§0).
+// Entry point (plan §6). Three WebGL scenes, one visible at a time:
+//   #bg    — Phase 2 placeholder terrain (WebGL2), the zero-asset fallback
+//   #model — Phase 3 single animated MDX unit (mdx-m3-viewer)
+//   #map   — authentic full map: terrain/cliffs/water/doodads/units (War3MapViewer)
 const bgCanvas = document.getElementById("bg") as HTMLCanvasElement;
 const modelCanvas = document.getElementById("model") as HTMLCanvasElement;
+const mapCanvas = document.getElementById("map") as HTMLCanvasElement;
 const ui = document.getElementById("ui") as HTMLElement;
 
 const resolver = new AssetResolver(null);
 
-// Phase 2 terrain scene (procedural placeholder until a map is loaded).
 const terrain = new TerrainScene(bgCanvas);
 terrain.setTerrain(buildTerrainMesh(makePlaceholderTerrain()));
 terrain.setDoodads([]);
 terrain.start();
 
 let modelScene: ModelViewerScene | null = null;
+let mapScene: MapViewerScene | null = null;
 
+type Which = "bg" | "model" | "map";
+function show(which: Which): void {
+  bgCanvas.hidden = which !== "bg";
+  modelCanvas.hidden = which !== "model";
+  mapCanvas.hidden = which !== "map";
+  if (which !== "bg") terrain.stop();
+  if (which !== "model") modelScene?.stop();
+  if (which !== "map") mapScene?.stop();
+}
+
+/** Single Player: authentic render with an install, placeholder terrain without. */
 async function loadMap(file: File): Promise<string> {
-  showTerrain();
-  const { terrain: data, doodads } = await loadMapFile(file);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const vfs = resolver.installSource;
+
+  if (vfs) {
+    show("map");
+    if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs);
+    mapScene.loadMap(bytes);
+    mapScene.start();
+    return `${file.name} — authentic render (textures & models stream in)`;
+  }
+
+  show("bg");
+  const { terrain: data, doodads } = loadMapBytes(bytes, file.name);
   terrain.setTerrain(buildTerrainMesh(data));
   terrain.setDoodads(doodads);
-  return `${file.name}: ${data.width}×${data.height} corners, ${doodads.length} doodads`;
+  terrain.start();
+  return `${file.name}: ${data.width}×${data.height} corners, ${doodads.length} doodads (placeholder — import an install for authentic assets)`;
 }
 
 /** Enumerable unit models from the mounted install (portraits excluded). */
@@ -47,9 +73,7 @@ function listModels(): string[] {
 async function viewModel(path: string): Promise<SequenceInfo[]> {
   const vfs = resolver.installSource;
   if (!vfs) throw new Error("Import a Warcraft III install first (click the menu status text).");
-  terrain.stop();
-  bgCanvas.hidden = true;
-  modelCanvas.hidden = false;
+  show("model");
   if (!modelScene) modelScene = new ModelViewerScene(modelCanvas, vfs);
   const sequences = await modelScene.load(path);
   modelScene.start();
@@ -57,9 +81,7 @@ async function viewModel(path: string): Promise<SequenceInfo[]> {
 }
 
 function showTerrain(): void {
-  modelScene?.stop();
-  modelCanvas.hidden = true;
-  bgCanvas.hidden = false;
+  show("bg");
   terrain.start();
 }
 

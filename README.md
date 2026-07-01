@@ -38,8 +38,11 @@ No assets are bundled, so you import your own install at runtime. Use **Chrome o
 2. **Import assets:** click the status line at the bottom of the menu and select your
    `Warcraft III` folder (the 1.27a install). It mounts the MPQs; the status shows the
    archives and file count.
-3. **Real terrain:** click **Single Player** and pick a map (`.w3x`/`.w3m`, e.g. from
-   `Warcraft III/Maps/…`). The real terrain and doodads load into the fly-camera view.
+3. **Real map:** click **Single Player** and pick a map (`.w3x`/`.w3m`, e.g. from
+   `Warcraft III/Maps/…`). With an install imported it renders **authentically**
+   (terrain textures, cliffs, water, doodads/units as models) via mdx-m3-viewer's map
+   renderer — assets stream in over a second or two. **Drag** rotate, **wheel** zoom,
+   **WASD** pan. Without an install you get the placeholder terrain instead.
 4. **Animated models (Phase 3):** open the browser devtools console and run:
    ```js
    const models = openwar3.listModels();        // enumerable unit .mdx paths
