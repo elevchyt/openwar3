@@ -15,3 +15,20 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
          }
      }
      return offset;
+diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..f925b2e0fc4dfee63b198f42985272a0f7e89d9c 100644
+--- a/dist/cjs/viewer/handlers/w3x/map.js
++++ b/dist/cjs/viewer/handlers/w3x/map.js
+@@ -168,7 +168,11 @@ class War3MapViewerMap {
+         this.blightTextureIndex = this.tilesetTextures.length;
+         tilesetTextures.push(this.load(`TerrainArt\\Blight\\${blights[tileset]}_Blight${texturesExt}`));
+         for (const cliffTileset of parser.cliffTilesets) {
+-            const row = viewer.cliffTypesData.getRow(cliffTileset);
++            // OpenWar3 fix: some maps reference a cliff type not in CliffTypes.slk
++            // (e.g. "CLno" on HillsOfGlory). The unguarded row.string() below then
++            // threw and the whole terrain failed to load. Fall back to CLdi so
++            // terrain still renders.
++            const row = viewer.cliffTypesData.getRow(cliffTileset) || viewer.cliffTypesData.getRow('CLdi');
+             this.cliffTilesets.push(row);
+             cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
+         }

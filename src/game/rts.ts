@@ -158,9 +158,11 @@ export class RtsController {
   /** Right-click: order the selected unit to the ground point under the cursor. */
   moveAt(cssX: number, cssY: number): void {
     if (this.selected === null) return;
-    const [gx, gy] = this.toGl(cssX, cssY);
-    this.screen[0] = gx;
-    this.screen[1] = gy;
+    // screenToWorldRay/unproject expects window coords with a TOP-LEFT origin
+    // (Y-down) — the opposite of worldToScreen (Y-up) used by selection.
+    const dpr = this.dpr();
+    this.screen[0] = cssX * dpr;
+    this.screen[1] = cssY * dpr;
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
     if (hit) this.sim.issueMove(this.selected, hit[0], hit[1]);
