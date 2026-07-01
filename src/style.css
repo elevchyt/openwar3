@@ -41,8 +41,9 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(3, 5, 9, 0.62);
-  backdrop-filter: blur(2px);
+  /* No backdrop-filter: a full-screen blur over the live WebGL canvas re-blurs
+     it every frame and freezes the compositor. A plain dim layer is cheap. */
+  background: rgba(3, 5, 9, 0.82);
 }
 
 .lobby-panel {

@@ -65,8 +65,16 @@ async function singlePlayer(): Promise<void> {
   if (!file) return;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const info = parseMapInfo(bytes, file.name.replace(/\.(w3x|w3m)$/i, ""));
+  // Pause rendering while the setup modal is open — nothing needs to draw behind
+  // a full-screen overlay, and it keeps the page responsive.
+  terrain.stop();
+  mapScene?.stop();
+  modelScene?.stop();
   const teardown = showLobby(ui, info, {
-    onCancel: () => teardown(),
+    onCancel: () => {
+      teardown();
+      showTerrain();
+    },
     onStart: (config) => {
       meleeConfig = config; // TODO Phase 5.5: spawn each race's starting units
       teardown();
