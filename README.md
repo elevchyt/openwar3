@@ -15,9 +15,9 @@ primitive, no assets) behind a swappable renderer interface, an asset resolver w
 ## Develop
 
 ```bash
-npm install
-npm run dev        # http://localhost:5173
-npm run build      # typecheck + static build to dist/
+pnpm install
+pnpm dev           # http://localhost:5173
+pnpm build         # typecheck + static build to dist/
 ```
 
 ## Legal
