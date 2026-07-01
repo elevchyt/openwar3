@@ -1,5 +1,7 @@
 import type { AssetResolver } from "../assets/resolver";
 import { pickInstall, requestPersistence } from "../assets/opfs";
+import { loadProfile } from "../vfs/loader";
+import { DEFAULT_PROFILE } from "../vfs/profiles";
 
 // Main-menu shell (plan §10.1, §10.4). Layout/logic is our own code as HTML/CSS;
 // the 3D background renders behind it. Flat skin with no assets; once an install
@@ -38,10 +40,22 @@ export function mountMainMenu(root: HTMLElement, resolver: AssetResolver): void 
     ? "Install loaded — authentic assets active."
     : "No install — running on placeholders. Click to import your Warcraft III folder.";
   status.onclick = async () => {
-    const handle = await pickInstall();
-    if (handle) {
+    const files = await pickInstall();
+    if (!files) return;
+    status.textContent = "Loading archives…";
+    try {
       await requestPersistence();
-      status.textContent = `Selected "${handle.name}". MPQ import lands in Phase 1.`;
+      const { vfs, mounted, missing, fileCount } = await loadProfile(files, DEFAULT_PROFILE);
+      resolver.setInstall(vfs);
+      // Expose the mounted VFS so files can be enumerated/extracted by path
+      // from the console — the Phase 1 exit criterion (plan §1).
+      (window as unknown as { openwar3?: unknown }).openwar3 = { resolver, vfs };
+      status.textContent =
+        `${DEFAULT_PROFILE.name}: mounted ${mounted.join(", ")}` +
+        (missing.length ? ` — missing ${missing.join(", ")}` : "") +
+        ` — ${fileCount.toLocaleString()} files. Try openwar3.vfs.list() in the console.`;
+    } catch (err) {
+      status.textContent = `Import failed: ${(err as Error).message}`;
     }
   };
   panel.appendChild(status);

@@ -1,4 +1,4 @@
-import type { DataSource } from "./opfs";
+import type { DataSource } from "../vfs/types";
 import type { Renderable } from "../render/renderer";
 
 // Asset resolver with a fallback chain (plan §2):
