@@ -4,6 +4,7 @@ dist/
 .DS_Store
 .vscode/
 # Never commit Blizzard assets (see plan §0)
+Warcraft III/
 *.mpq
 *.w3x
 *.w3m

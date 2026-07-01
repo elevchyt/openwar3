@@ -20,9 +20,15 @@ export class MpqDataSource implements DataSource {
   }
 
   async read(path: string): Promise<Uint8Array> {
+    const bytes = this.rawBytes(path);
+    if (!bytes) throw new Error(`${this.label}: file not found: ${path}`);
+    return bytes;
+  }
+
+  /** Synchronous read — returns null if absent (MPQ decode is itself sync). */
+  rawBytes(path: string): Uint8Array | null {
     const file = this.archive.get(normalizeMpqPath(path));
-    if (!file) throw new Error(`${this.label}: file not found: ${path}`);
-    return file.bytes(); // decodes + decompresses on demand
+    return file ? file.bytes() : null; // decodes + decompresses on demand
   }
 
   list(): string[] {
