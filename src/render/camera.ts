@@ -6,7 +6,7 @@ import { mat4, vec3 } from "gl-matrix";
 export class FlyCamera {
   private target = vec3.fromValues(0, 0, 0);
   private distance = 3000;
-  private yaw = -Math.PI / 2; // looking toward +Y
+  private yaw = Math.PI / 2; // look from the south toward +Y (north up), WC3-style
   private pitch = 0.9; // radians above the ground plane
   private keys = new Set<string>();
   private dragging = false;

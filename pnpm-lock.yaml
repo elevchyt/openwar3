@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   mdx-m3-viewer@5.12.0:
-    hash: e159aba79e5338ae31ff3692fa284151f5a1d32d622e98818ebbe38e37f6f47d
+    hash: 499a5a649d9df25ee968725d2524b2db7fb858e213efc96ff7a490d1320e086c
     path: patches/mdx-m3-viewer@5.12.0.patch
 
 importers:
@@ -21,7 +21,7 @@ importers:
         version: 3.4.4
       mdx-m3-viewer:
         specifier: ^5.12.0
-        version: 5.12.0(patch_hash=e159aba79e5338ae31ff3692fa284151f5a1d32d622e98818ebbe38e37f6f47d)
+        version: 5.12.0(patch_hash=499a5a649d9df25ee968725d2524b2db7fb858e213efc96ff7a490d1320e086c)
     devDependencies:
       typescript:
         specifier: ^5.6.3
@@ -600,7 +600,7 @@ snapshots:
 
   gl-matrix@3.4.4: {}
 
-  mdx-m3-viewer@5.12.0(patch_hash=e159aba79e5338ae31ff3692fa284151f5a1d32d622e98818ebbe38e37f6f47d):
+  mdx-m3-viewer@5.12.0(patch_hash=499a5a649d9df25ee968725d2524b2db7fb858e213efc96ff7a490d1320e086c):
     dependencies:
       fengari: 0.1.5
       gl-matrix: 3.3.0

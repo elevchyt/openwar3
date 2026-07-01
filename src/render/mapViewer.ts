@@ -68,7 +68,9 @@ export class MapViewerScene {
   // Orbit camera state.
   private target = new Float32Array([0, 0, 0]);
   private distance = 4000;
-  private yaw = -Math.PI / 2;
+  // Look from the south toward +Y (north up), matching WC3's default camera so
+  // units/buildings (which default to facing 270° = south) face the viewer.
+  private yaw = Math.PI / 2;
   private pitch = 0.95;
   private keys = new Set<string>();
   private dragging = false;
