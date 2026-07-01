@@ -8,9 +8,16 @@ See [`OpenWar3_PLAN.md`](./OpenWar3_PLAN.md) for the full plan.
 
 ## Status
 
-**Phase 0 — scaffold.** Vite + TypeScript app with a placeholder WebGL renderer (spinning
-primitive, no assets) behind a swappable renderer interface, an asset resolver with the
-`install → CC0 → primitive` fallback chain, an OPFS import skeleton, and the main-menu shell.
+**Phase 2 — textures & terrain.** Fly-camera view (WASD / drag / wheel) of a heightmap
+terrain — procedural placeholder with zero assets, or a real `.w3x` via **Single Player**.
+Cliffs render as height steps; doodads as placeholder boxes.
+
+- **Phase 0** — Vite + TS scaffold, swappable renderer interface, asset resolver
+  (`install → CC0 → primitive`), OPFS import skeleton, main-menu shell.
+- **Phase 1** — layered MPQ v1 VFS (mdx-m3-viewer parser) + content profiles (TFT/RoC);
+  import a Warcraft III folder and enumerate/extract any file by path.
+- **Phase 2** — `war3map.w3e` terrain parse + mesh, BLP1 decode, `war3map.doo` doodads,
+  RTS fly camera. *(Authentic tile-texture blending and cliff models come with Phase 3.)*
 
 ## Develop
 
