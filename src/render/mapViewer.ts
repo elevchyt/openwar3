@@ -7,7 +7,8 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm } from "../sim/pathing";
-import { stampDestructibles } from "../sim/destructibles";
+import { stampFootprints, stampFootprint, decodePathTex, type Footprint } from "../sim/destructibles";
+import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
 import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
@@ -112,6 +113,8 @@ export class MapViewerScene {
   private raf = 0;
   private last = 0;
   private rts: RtsController | null = null;
+  private grid: PathingGrid | null = null;
+  private footprints = new Map<string, Footprint | null>();
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -196,7 +199,8 @@ export class MapViewerScene {
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
-      this.stampMapDestructibles(grid, archive);
+      this.grid = grid;
+      this.stampMapPathing(grid, archive);
       const host: RtsHost = {
         canvas: this.canvas,
         camera: map.worldScene.camera as unknown as RtsHost["camera"],
@@ -208,10 +212,9 @@ export class MapViewerScene {
     }
   }
 
-  /** Add tree/destructible pathing (from their pathTex) onto the terrain grid. */
-  private stampMapDestructibles(grid: PathingGrid, archive: MpqDataSource): void {
-    const dooBytes = archive.rawBytes("war3map.doo");
-    if (!dooBytes) return;
+  /** Stamp destructible (tree) AND building footprints onto the terrain grid so
+   *  units path around them (war3map.wpm is terrain-only). */
+  private stampMapPathing(grid: PathingGrid, archive: MpqDataSource): void {
     let buildVersion = 0;
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
@@ -219,12 +222,33 @@ export class MapViewerScene {
       info.load(w3iBytes);
       buildVersion = info.getBuildVersion();
     }
-    const doodads = parseDoo(dooBytes, buildVersion);
-    const destr = new MappedData(this.slkText("Units\\DestructableData.slk"));
-    const dood = new MappedData(this.slkText("Doodads\\Doodads.slk"));
-    const pathTexOf = (id: string): string | undefined =>
-      destr.getRow(id)?.string("pathTex") || dood.getRow(id)?.string("pathTex") || undefined;
-    stampDestructibles(grid, doodads, pathTexOf, (p) => this.vfs.rawBytes(p));
+    const readBytes = (p: string): Uint8Array | null => this.vfs.rawBytes(p);
+
+    // Destructibles (trees, rocks) from war3map.doo.
+    const dooBytes = archive.rawBytes("war3map.doo");
+    if (dooBytes) {
+      const doodads = parseDoo(dooBytes, buildVersion);
+      const destr = new MappedData(this.slkText("Units\\DestructableData.slk"));
+      const dood = new MappedData(this.slkText("Doodads\\Doodads.slk"));
+      const pathTexOf = (id: string): string | undefined =>
+        destr.getRow(id)?.string("pathTex") || dood.getRow(id)?.string("pathTex") || undefined;
+      stampFootprints(grid, doodads, pathTexOf, readBytes);
+    }
+
+    // Pre-placed building units (gold mines, neutral buildings) from war3mapUnits.doo.
+    const unitBytes = archive.rawBytes("war3mapUnits.doo");
+    if (unitBytes) {
+      const units = new unitsdoo.File();
+      try {
+        units.load(unitBytes, buildVersion);
+      } catch {
+        return;
+      }
+      const buildings = units.units
+        .filter((u) => this.registry.get(u.id)?.isBuilding)
+        .map((u) => ({ id: u.id, x: u.location[0], y: u.location[1] }));
+      stampFootprints(grid, buildings, (id) => this.registry.get(id)?.pathTex || undefined, readBytes);
+    }
   }
 
   private slkText(path: string): string {
@@ -268,6 +292,22 @@ export class MapViewerScene {
     instance.setScene(map.worldScene);
     instance.setTeamColor(color);
     this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2); // face south (WC3 default)
+
+    // Buildings block pathing: stamp their footprint so units route around them.
+    if (def.isBuilding && def.pathTex && this.grid) {
+      const fp = this.footprintFor(def.pathTex);
+      if (fp) stampFootprint(this.grid, fp, x, y);
+    }
+  }
+
+  private footprintFor(texPath: string): Footprint | null {
+    let fp = this.footprints.get(texPath);
+    if (fp === undefined) {
+      const bytes = this.vfs.rawBytes(texPath);
+      fp = bytes ? decodePathTex(bytes) : null;
+      this.footprints.set(texPath, fp);
+    }
+    return fp;
   }
 
   start(): void {

@@ -103,6 +103,7 @@ export class RtsController {
         speed: def?.speed || 270, // real movement speed from UnitBalance.slk
         turnRate: def?.turnRate ?? 0.5,
         radius: def?.collision || 16,
+        flying: def?.moveType === "fly",
       });
       const entry: Entry = { simId, unit, walk, stand: stand < 0 ? walk : stand, moveHeight: def?.moveHeight ?? 0 };
       this.entries.push(entry);
@@ -126,6 +127,7 @@ export class RtsController {
       speed: def.speed,
       turnRate: def.turnRate,
       radius: def.collision || 16,
+      flying: def.moveType === "fly",
     });
     const entry: Entry = {
       simId,

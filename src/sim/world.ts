@@ -12,7 +12,8 @@ export interface SimUnit {
   facing: number; // radians
   speed: number; // world units / second
   turnRate: number; // UnitData turnrate; scaled to rad/sec below
-  radius: number;
+  radius: number; // collision radius (0 = no unit collision)
+  flying: boolean; // air units ignore ground pathing & collision
   path: Array<[number, number]>; // world waypoints
   waypoint: number;
   moving: boolean;
@@ -36,6 +37,14 @@ export class SimWorld {
   issueMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u) return false;
+    if (u.flying) {
+      // Air units ignore the pathing grid (fly over trees/cliffs/buildings) —
+      // straight line to the target. Height is applied by the renderer.
+      u.path = [[tx, ty]];
+      u.waypoint = 0;
+      u.moving = true;
+      return true;
+    }
     const cells = findPath(this.grid, this.grid.worldToCell(u.x, u.y), this.grid.worldToCell(tx, ty));
     if (!cells || cells.length === 0) {
       this.stop(id);
@@ -91,6 +100,49 @@ export class SimWorld {
         u.moving = false;
         u.path = [];
       }
+    }
+    this.resolveCollisions();
+  }
+
+  // Push overlapping ground units apart so they don't stack (WC3 circle collision).
+  // Air units and footprint-less units (radius 0) are excluded. O(n²) — fine for
+  // melee-scale counts; a spatial grid is the scale-up path.
+  private resolveCollisions(): void {
+    const list: SimUnit[] = [];
+    // Movable ground units only. Buildings (speed 0) block via their stamped grid
+    // footprint, not separation; air units don't collide.
+    for (const u of this.units.values()) if (!u.flying && u.radius > 0 && u.speed > 0) list.push(u);
+    for (let iter = 0; iter < 2; iter++) {
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const a = list[i];
+          const b = list[j];
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          const min = a.radius + b.radius;
+          let d = Math.hypot(dx, dy);
+          if (d >= min) continue;
+          if (d === 0) {
+            dx = 1;
+            dy = 0;
+            d = 1;
+          }
+          const push = (min - d) / 2;
+          this.nudge(a, (-dx / d) * push, (-dy / d) * push);
+          this.nudge(b, (dx / d) * push, (dy / d) * push);
+        }
+      }
+    }
+  }
+
+  // Move a unit, but never onto an unwalkable cell (don't push units into walls).
+  private nudge(u: SimUnit, dx: number, dy: number): void {
+    const nx = u.x + dx;
+    const ny = u.y + dy;
+    const [cx, cy] = this.grid.worldToCell(nx, ny);
+    if (this.grid.walkable(cx, cy)) {
+      u.x = nx;
+      u.y = ny;
     }
   }
 }

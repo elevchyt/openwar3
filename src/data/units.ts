@@ -14,6 +14,7 @@ export interface UnitDef {
   modelScale: number;
   moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
   isBuilding: boolean;
+  pathTex: string; // pathing-footprint texture (buildings); "" for units
   speed: number; // world units / second
   turnRate: number; // radians-ish per second scale (UnitData turnrate)
   moveHeight: number; // fly altitude above ground (0 for ground units)
@@ -96,6 +97,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       modelScale: u ? num(u, "modelScale", 1) : 1,
       moveType: d ? str(d, "movetp") : "",
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
+      pathTex: d ? str(d, "pathTex") : "",
       speed: b ? num(b, "spd", 0) : 0,
       turnRate: d ? num(d, "turnrate", 0.5) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,
