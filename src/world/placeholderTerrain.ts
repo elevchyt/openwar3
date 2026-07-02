@@ -30,6 +30,7 @@ export function makePlaceholderTerrain(cols = 64, rows = 64): TerrainData {
         groundTexture: onPlateau ? 1 : inPool ? 2 : 0,
         cliffTexture: 0,
         ramp: false,
+        rampAdjust: 0,
         water: inPool,
         boundary: x === 0 || y === 0 || x === cols - 1 || y === rows - 1,
       };

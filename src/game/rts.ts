@@ -52,16 +52,38 @@ interface Entry {
 const WALK = 1, IDLE = 0;
 const CORPSE_TIME = 3; // seconds a corpse stays before being hidden
 const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
+const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData moveheight
+const PICK_Z = 60; // aim picking/markers near the unit's body, not its feet
+
+interface Marker {
+  root: HTMLDivElement;
+  fill: HTMLDivElement;
+}
+
+function makeMarker(extraClass: string): Marker {
+  const root = document.createElement("div");
+  root.className = `unit-select ${extraClass}`;
+  root.hidden = true;
+  const track = document.createElement("div");
+  track.className = "unit-hp";
+  const fill = document.createElement("div");
+  fill.className = "unit-hp-fill";
+  track.appendChild(fill);
+  root.appendChild(track);
+  document.body.appendChild(root);
+  return { root, fill };
+}
 
 export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
   private byId = new Map<number, Entry>();
   private selected: number | null = null;
+  private hovered: number | null = null;
   private seeded = false;
   private nextId = 1;
-  private marker: HTMLDivElement;
-  private hpBar: HTMLDivElement;
+  private selectMarker: Marker;
+  private hoverMarker: Marker;
   private corpses: Array<{ instance: Instance; t: number }> = [];
   // scratch buffers to avoid per-frame allocation
   private loc = new Float32Array(3);
@@ -77,25 +99,19 @@ export class RtsController {
     private registry: UnitRegistry,
   ) {
     this.sim = new SimWorld(grid);
-    this.marker = document.createElement("div");
-    this.marker.className = "unit-select";
-    this.marker.hidden = true;
-    const track = document.createElement("div");
-    track.className = "unit-hp";
-    this.hpBar = document.createElement("div");
-    this.hpBar.className = "unit-hp-fill";
-    track.appendChild(this.hpBar);
-    this.marker.appendChild(track);
-    document.body.appendChild(this.marker);
+    this.selectMarker = makeMarker("unit-selected");
+    this.hoverMarker = makeMarker("unit-hovered");
   }
 
   dispose(): void {
-    this.marker.remove();
+    this.selectMarker.root.remove();
+    this.hoverMarker.root.remove();
   }
 
-  /** Hide the selection ring (e.g. when the map view is not active). */
+  /** Hide the selection/hover rings (e.g. when the map view is not active). */
   pause(): void {
-    this.marker.hidden = true;
+    this.selectMarker.root.hidden = true;
+    this.hoverMarker.root.hidden = true;
   }
 
   /** Seed movable units from the map once its units have loaded. */
@@ -134,7 +150,7 @@ export class RtsController {
         stand: stand < 0 ? walk : stand,
         attack: seqs.findIndex((s) => /attack/i.test(s.name)),
         death: seqs.findIndex((s) => /^death/i.test(s.name)),
-        moveHeight: def?.moveHeight ?? 0,
+        moveHeight: lift(def?.moveHeight ?? 0),
         anim: "stand",
       };
       this.entries.push(entry);
@@ -173,7 +189,7 @@ export class RtsController {
       stand: stand < 0 ? (walk < 0 ? 0 : walk) : stand,
       attack: seqs.findIndex((s) => /attack/i.test(s.name)),
       death: seqs.findIndex((s) => /^death/i.test(s.name)),
-      moveHeight: def.moveHeight,
+      moveHeight: lift(def.moveHeight),
       anim: "stand",
     };
     this.entries.push(entry);
@@ -190,6 +206,7 @@ export class RtsController {
     this.sim.tick(dt);
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
     this.tickCorpses(dt);
+    if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       this.loc[0] = u.x;
@@ -207,7 +224,7 @@ export class RtsController {
         e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
       }
     }
-    this.updateMarker();
+    this.updateMarkers();
   }
 
   /** The sim removed this unit: play its death animation, then keep the corpse
@@ -242,7 +259,17 @@ export class RtsController {
   /** Left-click: select the nearest movable unit within a pixel radius. */
   selectAt(cssX: number, cssY: number): void {
     this.selected = this.pickAt(cssX, cssY);
-    this.updateMarker();
+    this.updateMarkers();
+  }
+
+  /** Pointer move: show the ring + HP bar under the unit being hovered. */
+  hoverAt(cssX: number, cssY: number): void {
+    this.hovered = this.pickAt(cssX, cssY);
+  }
+
+  /** Live units, for the metrics overlay. */
+  unitCount(): number {
+    return this.entries.length;
   }
 
   /** Right-click: attack a hostile unit under the cursor, else move to ground. */
@@ -275,7 +302,9 @@ export class RtsController {
       const u = this.sim.units.get(e.simId)!;
       this.world[0] = u.x;
       this.world[1] = u.y;
-      this.world[2] = this.heightAt(u.x, u.y) + 60; // aim near the unit's body
+      // Aim near the unit's body — including fly height, so air units are
+      // picked where they are drawn, not at their ground shadow.
+      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight + PICK_Z;
       this.host.camera.worldToScreen(this.screen, this.world, viewport);
       const d = Math.hypot(this.screen[0] - gx, this.screen[1] - gy);
       if (d < bestDist) {
@@ -313,33 +342,37 @@ export class RtsController {
     return null;
   }
 
-  private updateMarker(): void {
-    if (this.selected === null) {
-      this.marker.hidden = true;
-      return;
-    }
-    const u = this.sim.units.get(this.selected);
-    if (!u) {
-      this.selected = null;
-      this.marker.hidden = true;
+  private updateMarkers(): void {
+    if (this.selected !== null && !this.sim.units.has(this.selected)) this.selected = null;
+    this.placeMarker(this.selectMarker, this.selected);
+    // Don't double up both rings on the same unit.
+    this.placeMarker(this.hoverMarker, this.hovered === this.selected ? null : this.hovered);
+  }
+
+  private placeMarker(marker: Marker, simId: number | null): void {
+    const u = simId !== null ? this.sim.units.get(simId) : undefined;
+    const e = simId !== null ? this.byId.get(simId) : undefined;
+    if (!u || !e) {
+      marker.root.hidden = true;
       return;
     }
     const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
-    this.hpBar.style.width = `${frac * 100}%`;
-    this.hpBar.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+    marker.fill.style.width = `${frac * 100}%`;
+    marker.fill.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
     this.world[0] = u.x;
     this.world[1] = u.y;
-    this.world[2] = this.heightAt(u.x, u.y);
+    // Ring sits at the unit's drawn base — for air units that's their altitude.
+    this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
     this.host.camera.worldToScreen(this.screen, this.world, this.host.viewport());
     const [w, h] = [this.host.canvas.width, this.host.canvas.height];
     if (this.screen[0] < 0 || this.screen[0] > w || this.screen[1] < 0 || this.screen[1] > h) {
-      this.marker.hidden = true;
+      marker.root.hidden = true;
       return;
     }
     const dpr = this.dpr();
-    this.marker.hidden = false;
-    this.marker.style.left = `${this.screen[0] / dpr}px`;
-    this.marker.style.top = `${(h - this.screen[1]) / dpr}px`; // gl y-up → css y-down
+    marker.root.hidden = false;
+    marker.root.style.left = `${this.screen[0] / dpr}px`;
+    marker.root.style.top = `${(h - this.screen[1]) / dpr}px`; // gl y-up → css y-down
   }
 
   private toGl(cssX: number, cssY: number): [number, number] {
@@ -350,6 +383,11 @@ export class RtsController {
   private dpr(): number {
     return this.host.canvas.width / this.host.canvas.clientWidth || 1;
   }
+}
+
+// Air units ride a bit above their UnitData moveheight for a clearer silhouette.
+function lift(moveHeight: number): number {
+  return moveHeight > 0 ? moveHeight + AIR_EXTRA : 0;
 }
 
 // A unit's weapon from its registry stats; null when it can't attack.

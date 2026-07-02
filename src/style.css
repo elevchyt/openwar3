@@ -121,6 +121,24 @@ html, body {
   z-index: 2;
 }
 
+.unit-select.unit-hovered {
+  border-color: rgba(70, 224, 90, 0.55);
+  box-shadow: 0 0 4px rgba(70, 224, 90, 0.35);
+}
+
+.metrics {
+  position: fixed;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 8px;
+  font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  color: #cfe8cf;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 5;
+}
+
 .unit-hp {
   position: absolute;
   left: 50%;

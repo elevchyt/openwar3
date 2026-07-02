@@ -17,6 +17,7 @@ export interface TerrainCorner {
   ramp: boolean;
   water: boolean;
   boundary: boolean;
+  rampAdjust: number; // +0.5 layer on ramp-entrance base corners (HiveWE ref)
 }
 
 export interface TerrainData {
@@ -37,7 +38,7 @@ export function cornerAt(t: TerrainData, x: number, y: number): TerrainCorner {
 
 /** Height of a corner in cell units; multiply by CELL for world Z. */
 export function cornerHeight(c: TerrainCorner): number {
-  return c.groundHeight + c.layerHeight - 2;
+  return c.groundHeight + c.layerHeight - 2 + c.rampAdjust;
 }
 
 /** Parse war3map.w3e bytes into a normalized TerrainData. */
@@ -60,7 +61,25 @@ export function parseW3E(bytes: Uint8Array): TerrainData {
         ramp: !!c.ramp,
         water: !!c.water,
         boundary: !!c.boundary,
+        rampAdjust: 0,
       };
+    }
+  }
+
+  // Ramp entrances (HiveWE ref): where all four tile corners carry the ramp
+  // flag and layers differ non-diagonally, base-layer corners rise half a
+  // layer so units walk a slope that meets the ramp model. Assignment (not
+  // +=) keeps corners shared by multiple ramp tiles idempotent.
+  for (let y = 0; y < height - 1; y++) {
+    for (let x = 0; x < width - 1; x++) {
+      const bl = corners[y * width + x];
+      const br = corners[y * width + x + 1];
+      const tl = corners[(y + 1) * width + x];
+      const tr = corners[(y + 1) * width + x + 1];
+      if (!(bl.ramp && br.ramp && tl.ramp && tr.ramp)) continue;
+      if (bl.layerHeight === tr.layerHeight && tl.layerHeight === br.layerHeight) continue;
+      const base = Math.min(bl.layerHeight, br.layerHeight, tl.layerHeight, tr.layerHeight);
+      for (const c of [bl, br, tl, tr]) if (c.layerHeight === base) c.rampAdjust = 0.5;
     }
   }
 

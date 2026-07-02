@@ -25,6 +25,7 @@ export interface SimUnit {
   x: number;
   y: number;
   facing: number; // radians
+  desiredFacing: number; // turning continues toward this even when standing
   speed: number; // world units / second
   turnRate: number; // UnitData turnrate; scaled to rad/sec below
   radius: number; // collision radius (0 = no unit collision)
@@ -43,6 +44,10 @@ export interface SimUnit {
   chaseX: number; // where the current chase path was aimed (repath when stale)
   chaseY: number;
   acquireT: number; // seconds until the next auto-acquire scan
+  stuckT: number; // seconds spent blocked while trying to move
+  repathT: number; // chase-repath cooldown after getting blocked
+  prevX: number; // position before this tick's movement (stuck detection)
+  prevY: number;
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -50,6 +55,9 @@ const TURN_RATE_SCALE = 8; // turnrate → rad/sec (tunable feel)
 const FACING_EPS = 0.35; // radians — must roughly face the target to swing
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
+const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
+const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
+const REPATH_COOLDOWN = 0.5; // seconds a blocked chaser waits before repathing
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
@@ -63,11 +71,26 @@ export class SimWorld {
   add(
     unit: Omit<
       SimUnit,
-      "path" | "waypoint" | "moving" | "order" | "targetId" | "cooldownLeft" | "inCombat" | "chaseX" | "chaseY" | "acquireT"
+      | "desiredFacing"
+      | "path"
+      | "waypoint"
+      | "moving"
+      | "order"
+      | "targetId"
+      | "cooldownLeft"
+      | "inCombat"
+      | "chaseX"
+      | "chaseY"
+      | "acquireT"
+      | "stuckT"
+      | "repathT"
+      | "prevX"
+      | "prevY"
     >,
   ): SimUnit {
     const u: SimUnit = {
       ...unit,
+      desiredFacing: unit.facing,
       order: "idle",
       targetId: null,
       cooldownLeft: 0,
@@ -78,6 +101,10 @@ export class SimWorld {
       chaseX: 0,
       chaseY: 0,
       acquireT: 0,
+      stuckT: 0,
+      repathT: 0,
+      prevX: unit.x,
+      prevY: unit.y,
     };
     this.units.set(u.id, u);
     return u;
@@ -135,9 +162,12 @@ export class SimWorld {
   tick(dt: number): void {
     for (const u of this.units.values()) {
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
+      if (u.repathT > 0) u.repathT -= dt;
+      u.prevX = u.x;
+      u.prevY = u.y;
       switch (u.order) {
         case "attack":
-          this.tickAttack(u, dt);
+          this.tickAttack(u);
           break;
         case "idle":
           this.tickAcquire(u, dt);
@@ -146,11 +176,45 @@ export class SimWorld {
     }
     this.tickMovement(dt);
     this.resolveCollisions();
+    for (const u of this.units.values()) {
+      // Turning runs every tick, independent of movement: a unit that arrived
+      // (or stands attacking) still finishes rotating to its desired heading.
+      if (u.facing !== u.desiredFacing) {
+        u.facing = turnToward(u.facing, u.desiredFacing, u.turnRate * TURN_RATE_SCALE * dt);
+      }
+      this.checkStuck(u, dt);
+    }
+  }
+
+  // A moving unit that barely progresses (blocked by units it may not push) gives
+  // up after a moment: move orders stop (WC3 units halt when the way is blocked);
+  // chasers pause before repathing so they don't grind against the blocker.
+  private checkStuck(u: SimUnit, dt: number): void {
+    if (!u.moving || u.speed <= 0) {
+      u.stuckT = 0;
+      return;
+    }
+    const actual = Math.hypot(u.x - u.prevX, u.y - u.prevY);
+    if (actual < u.speed * dt * STUCK_RATIO) {
+      u.stuckT += dt;
+      if (u.stuckT >= STUCK_TIME) {
+        u.stuckT = 0;
+        if (u.order === "attack") {
+          u.moving = false;
+          u.path = [];
+          u.repathT = REPATH_COOLDOWN;
+        } else {
+          this.stop(u.id);
+        }
+      }
+    } else {
+      u.stuckT = 0;
+    }
   }
 
   // --- combat -------------------------------------------------------------
 
-  private tickAttack(u: SimUnit, dt: number): void {
+  private tickAttack(u: SimUnit): void {
     const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (!t || !u.weapon) {
       // Target died or vanished — go idle where we stand (auto-acquire resumes).
@@ -163,20 +227,22 @@ export class SimWorld {
       this.chase(u, t);
       return;
     }
-    // In range: halt, face the target, swing when ready.
+    // In range: halt, face the target, swing when ready (rotation itself is
+    // applied by the shared per-tick turning pass).
     u.moving = false;
     u.path = [];
     u.inCombat = true;
-    const want = Math.atan2(t.y - u.y, t.x - u.x);
-    u.facing = turnToward(u.facing, want, u.turnRate * TURN_RATE_SCALE * dt);
-    if (Math.abs(angleDiff(u.facing, want)) > FACING_EPS || u.cooldownLeft > 0) return;
+    u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+    if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_EPS || u.cooldownLeft > 0) return;
     u.cooldownLeft = u.weapon.cooldown;
     this.dealDamage(u, t);
   }
 
   // Path toward the target; repath only when the target strays from the path
-  // goal (A* every tick would be wasteful and jittery).
+  // goal (A* every tick would be wasteful and jittery), and not while cooling
+  // down after being blocked by units we may not push.
   private chase(u: SimUnit, t: SimUnit): void {
+    if (u.repathT > 0) return;
     if (u.moving && Math.hypot(t.x - u.chaseX, t.y - u.chaseY) < CHASE_REPATH) return;
     this.pathTo(u, t.x, t.y);
   }
@@ -269,10 +335,10 @@ export class SimWorld {
         budget -= step;
         if (dist - step <= ARRIVE_EPS) u.waypoint++;
       }
-      // Turn toward the movement direction at the unit's turn rate (WC3 units
-      // don't snap instantly to face a new heading).
+      // Face the movement direction; the shared turning pass rotates at the
+      // unit's turn rate (and keeps rotating after arrival if needed).
       if (dirX || dirY) {
-        u.facing = turnToward(u.facing, Math.atan2(dirY, dirX), u.turnRate * TURN_RATE_SCALE * dt);
+        u.desiredFacing = Math.atan2(dirY, dirX);
       }
       if (u.waypoint >= u.path.length) {
         u.moving = false;
@@ -282,9 +348,13 @@ export class SimWorld {
     }
   }
 
-  // Push overlapping ground units apart so they don't stack (WC3 circle collision).
-  // Air units and footprint-less units (radius 0) are excluded. O(n²) — fine for
-  // melee-scale counts; a spatial grid is the scale-up path.
+  // Keep overlapping ground units apart (WC3 circle collision) WITHOUT pushing:
+  // WC3 units never displace others. A moving unit that runs into a stationary
+  // one is shoved back out itself (net effect: blocked; checkStuck() then makes
+  // it give up). Two moving units split the correction, letting them slide past
+  // each other. Stationary pairs are left alone. Air units and footprint-less
+  // units (radius 0) are excluded. O(n²) — fine for melee-scale counts; a
+  // spatial grid is the scale-up path.
   private resolveCollisions(): void {
     const list: SimUnit[] = [];
     // Movable ground units only. Buildings (speed 0) block via their stamped grid
@@ -295,6 +365,7 @@ export class SimWorld {
         for (let j = i + 1; j < list.length; j++) {
           const a = list[i];
           const b = list[j];
+          if (!a.moving && !b.moving) continue; // nobody to blame — leave them
           let dx = b.x - a.x;
           let dy = b.y - a.y;
           const min = a.radius + b.radius;
@@ -305,9 +376,19 @@ export class SimWorld {
             dy = 0;
             d = 1;
           }
-          const push = (min - d) / 2;
-          this.nudge(a, (-dx / d) * push, (-dy / d) * push);
-          this.nudge(b, (dx / d) * push, (dy / d) * push);
+          const overlap = min - d;
+          if (a.moving && b.moving) {
+            // Split the correction and add a tangential component so head-on
+            // movers spiral around each other instead of deadlocking.
+            const tx = (-dy / d) * (overlap / 2);
+            const ty = (dx / d) * (overlap / 2);
+            this.nudge(a, (-dx / d) * (overlap / 2) + tx, (-dy / d) * (overlap / 2) + ty);
+            this.nudge(b, (dx / d) * (overlap / 2) - tx, (dy / d) * (overlap / 2) - ty);
+          } else if (a.moving) {
+            this.nudge(a, (-dx / d) * overlap, (-dy / d) * overlap);
+          } else {
+            this.nudge(b, (dx / d) * overlap, (dy / d) * overlap);
+          }
         }
       }
     }

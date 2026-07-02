@@ -16,7 +16,7 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
      }
      return offset;
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..f925b2e0fc4dfee63b198f42985272a0f7e89d9c 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..668336a29d17ae50d2291de092f6c006bff84148 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -168,7 +168,11 @@ class War3MapViewerMap {
@@ -32,3 +32,166 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..f925b2e0fc4dfee63b198f42985272a0
              this.cliffTilesets.push(row);
              cliffTextures.push(this.load(`${row.string('texDir')}\\${row.string('texFile')}${texturesExt}`));
          }
+@@ -199,6 +203,99 @@ class War3MapViewerMap {
+         const cliffs = {};
+         this.columns = columns - 1;
+         this.rows = rows - 1;
++        // OpenWar3: cliff ramps (HiveWE reference + verified against 1.27a MPQ
++        // contents). WC3 connects cliff layers with dedicated 2-tile ramp models
++        // from CliffTypes.slk's rampModelDir (CliffTrans/CityCliffTrans) when the
++        // w3e corners carry the ramp flag. Naming follows cliffFileName's corner
++        // order (BL, TL, TR, BR) over the 2-tile span; ramp-flagged corners use
++        // L (low) / H (high) for 1-layer ramps and X (low) / H for 2-layer ramps.
++        // Models anchor at their bottom-right corner: vertical ramps extend north
++        // (place like a cliff at the south tile), horizontal ramps extend west
++        // (place at the EAST tile's right edge). Tiles covered by a ramp mesh
++        // ("romp") render neither cliff nor ground; ramp-entrance tiles render
++        // ground only, with base-level corners raised half a layer to meet the
++        // ramp. The host provides viewer.terrainModelExists to check which ramp
++        // pieces exist (only certain letter combos ship in the MPQs).
++        const romp = new Uint8Array(instanceCount);
++        const modelExists = viewer.terrainModelExists;
++        if (modelExists) {
++            const rampChar = (corner, base, rise) => corner.ramp
++                ? (corner.layerHeight === base ? (rise === 2 ? 'X' : 'L') : 'H')
++                : String.fromCharCode(65 + corner.layerHeight - base);
++            const addRamp = (anchorX, y, name, base, cliffTexture) => {
++                const dir = this.cliffTilesets[cliffTexture].string('rampModelDir');
++                const path = `Doodads\\Terrain\\${dir}\\${dir}${name}0.mdx`;
++                if (!modelExists(path)) {
++                    return false;
++                }
++                if (!cliffs[path]) {
++                    cliffs[path] = { locations: [], textures: [] };
++                }
++                cliffs[path].locations.push(anchorX * 128 + centerOffset[0], y * 128 + centerOffset[1], (base - 2) * 128);
++                cliffs[path].textures.push(cliffTexture);
++                return true;
++            };
++            for (let y = 0; y < rows - 1; y++) {
++                for (let x = 0; x < columns - 1; x++) {
++                    const bl = corners[y][x];
++                    const br = corners[y][x + 1];
++                    const tl = corners[y + 1][x];
++                    const tr = corners[y + 1][x + 1];
++                    let cliffTexture = bl.cliffTexture;
++                    if (cliffTexture === 15) {
++                        cliffTexture = 1;
++                    }
++                    // Vertical ramp spanning this tile and the one above.
++                    if (y < rows - 2) {
++                        const ttl = corners[y + 2][x];
++                        const ttr = corners[y + 2][x + 1];
++                        const leftMin = Math.min(bl.layerHeight, ttl.layerHeight);
++                        const rightMin = Math.min(br.layerHeight, ttr.layerHeight);
++                        if (tl.layerHeight === leftMin && tr.layerHeight === rightMin &&
++                            !bl.ramp === !tl.ramp && !bl.ramp === !ttl.ramp &&
++                            !br.ramp === !tr.ramp && !br.ramp === !ttr.ramp &&
++                            !bl.ramp !== !br.ramp) {
++                            const base = Math.min(leftMin, rightMin);
++                            const rise = bl.ramp
++                                ? Math.abs(ttl.layerHeight - bl.layerHeight)
++                                : Math.abs(ttr.layerHeight - br.layerHeight);
++                            if (rise === 1 || rise === 2) {
++                                const name = rampChar(bl, base, rise) + rampChar(ttl, base, rise) + rampChar(ttr, base, rise) + rampChar(br, base, rise);
++                                if (addRamp(x + 1, y, name, base, cliffTexture)) {
++                                    romp[y * this.columns + x] = 1;
++                                    romp[(y + 1) * this.columns + x] = 1;
++                                    continue;
++                                }
++                            }
++                        }
++                    }
++                    // Horizontal ramp spanning this tile and the one to the right.
++                    if (x < columns - 2) {
++                        const brr = corners[y][x + 2];
++                        const trr = corners[y + 1][x + 2];
++                        const bottomMin = Math.min(bl.layerHeight, brr.layerHeight);
++                        const topMin = Math.min(tl.layerHeight, trr.layerHeight);
++                        if (br.layerHeight === bottomMin && tr.layerHeight === topMin &&
++                            !bl.ramp === !br.ramp && !bl.ramp === !brr.ramp &&
++                            !tl.ramp === !tr.ramp && !tl.ramp === !trr.ramp &&
++                            !bl.ramp !== !tl.ramp) {
++                            const base = Math.min(bottomMin, topMin);
++                            const rise = bl.ramp
++                                ? Math.abs(brr.layerHeight - bl.layerHeight)
++                                : Math.abs(trr.layerHeight - tl.layerHeight);
++                            if (rise === 1 || rise === 2) {
++                                const name = rampChar(bl, base, rise) + rampChar(tl, base, rise) + rampChar(trr, base, rise) + rampChar(brr, base, rise);
++                                if (addRamp(x + 2, y, name, base, cliffTexture)) {
++                                    romp[y * this.columns + x] = 1;
++                                    romp[y * this.columns + x + 1] = 1;
++                                    continue;
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
+         for (let y = 0; y < rows; y++) {
+             for (let x = 0; x < columns; x++) {
+                 const bottomLeft = corners[y][x];
+@@ -209,8 +306,12 @@ class War3MapViewerMap {
+                 if (y < rows - 1 && x < columns - 1) {
+                     // Water can be used with cliffs and normal corners, so store water state regardless.
+                     waterFlags[instance] = this.isWater(x, y);
+-                    // Is this a cliff, or a normal corner?
+-                    if (this.isCliff(x, y)) {
++                    // OpenWar3: tiles covered by a ramp mesh render neither cliff
++                    // nor ground; ramp-entrance tiles render ground, not a cliff.
++                    if (romp[instance]) {
++                        // Covered by a ramp model.
++                    }
++                    else if (this.isCliff(x, y) && !this.isRampEntrance(x, y)) {
+                         const bottomLeftLayer = bottomLeft.layerHeight;
+                         const bottomRightLayer = corners[y][x + 1].layerHeight;
+                         const topLeftLayer = corners[y + 1][x].layerHeight;
+@@ -266,6 +367,22 @@ class War3MapViewerMap {
+                 }
+             }
+         }
++        // OpenWar3: raise ramp-entrance corners at the base layer by half a layer
++        // so the sloped ground meets the ramp model (HiveWE update_ground_heights).
++        // Assignment (not +=) keeps corners shared by multiple ramp tiles correct.
++        for (let y = 0; y < rows - 1; y++) {
++            for (let x = 0; x < columns - 1; x++) {
++                if (this.isRampEntrance(x, y)) {
++                    const base = Math.min(corners[y][x].layerHeight, corners[y][x + 1].layerHeight, corners[y + 1][x].layerHeight, corners[y + 1][x + 1].layerHeight);
++                    for (const [cx, cy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) {
++                        const corner = corners[cy][cx];
++                        if (corner.layerHeight === base) {
++                            cornerHeights[cy * columns + cx] = corner.groundHeight + corner.layerHeight - 2 + 0.5;
++                        }
++                    }
++                }
++            }
++        }
+         const gl = this.viewer.gl;
+         const webgl = this.viewer.webgl;
+         this.vertexBuffer = gl.createBuffer();
+@@ -671,6 +788,24 @@ class War3MapViewerMap {
+         const topRight = corners[row + 1][column + 1].layerHeight;
+         return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
+     }
++    /**
++     * OpenWar3: is the tile at the given column and row a ramp entrance?
++     * All four corners carry the w3e ramp flag and the layers differ
++     * non-diagonally (HiveWE is_corner_ramp_entrance). Such tiles render
++     * sloped ground instead of a cliff mesh.
++     */
++    isRampEntrance(column, row) {
++        if (column < 0 || row < 0 || column >= this.columns || row >= this.rows) {
++            return false;
++        }
++        const corners = this.corners;
++        const bl = corners[row][column];
++        const br = corners[row][column + 1];
++        const tl = corners[row + 1][column];
++        const tr = corners[row + 1][column + 1];
++        return !!(bl.ramp && br.ramp && tl.ramp && tr.ramp)
++            && !(bl.layerHeight === tr.layerHeight && tl.layerHeight === br.layerHeight);
++    }
+     /**
+      * Is the tile at the given column and row water?
+      */

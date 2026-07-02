@@ -14,6 +14,7 @@ import { RtsController, type RtsHost } from "../game/rts";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { STARTING_UNITS, resolveRace } from "../data/races";
 import type { MeleeConfig } from "../ui/lobby";
+import { MetricsOverlay } from "../ui/metrics";
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -67,6 +68,9 @@ interface W3xMap {
 interface W3xViewer {
   loadedBaseFiles: boolean;
   map: W3xMap | null;
+  /** OpenWar3 patch hook: lets the map handler check which cliff-ramp
+   *  (CliffTrans) models exist in the VFS before placing them. */
+  terrainModelExists?: (path: string) => boolean;
   on(event: string, cb: (e: unknown) => void): void;
   once(event: string, cb: () => void): void;
   loadMap(buffer: ArrayBuffer | Uint8Array): void;
@@ -116,6 +120,7 @@ export class MapViewerScene {
   private rts: RtsController | null = null;
   private grid: PathingGrid | null = null;
   private footprints = new Map<string, Footprint | null>();
+  private metrics = new MetricsOverlay();
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -165,6 +170,7 @@ export class MapViewerScene {
     };
 
     const viewer = new ViewerClass(canvas, solver, false);
+    viewer.terrainModelExists = (path) => vfs.exists(path);
     viewer.on("error", (e) => console.error("[mapviewer]", e));
 
     await new Promise<void>((resolve) => {
@@ -317,6 +323,7 @@ export class MapViewerScene {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
       this.updateCamera();
+      this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       // Advance animations by REAL elapsed time (fixes 2x speed on high-refresh
       // displays), replicating War3MapViewer.update() = super.update() + map.update().
@@ -334,6 +341,7 @@ export class MapViewerScene {
     this.raf = 0;
     this.last = 0;
     this.rts?.pause();
+    this.metrics.hide();
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
@@ -341,6 +349,7 @@ export class MapViewerScene {
     this.stop();
     this.rts?.dispose();
     this.rts = null;
+    this.metrics.dispose();
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
   }
@@ -411,7 +420,10 @@ export class MapViewerScene {
       }
     });
     c.addEventListener("pointermove", (e) => {
-      if (!this.dragging) return;
+      if (!this.dragging) {
+        this.rts?.hoverAt(e.offsetX, e.offsetY);
+        return;
+      }
       if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) this.moved = true;
       this.yaw += e.movementX * 0.005;
       this.pitch = clamp(this.pitch - e.movementY * 0.005, 0.2, 1.5);

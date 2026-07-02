@@ -30,6 +30,19 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
 - **Phase 5.5** — game-setup **lobby** (`src/ui/lobby.ts`: per-slot controller/race/team) and
   **melee init** (`mapViewer.startMelee`): spawns each race's starting units (hall + workers) at the
   map's start locations, controllable.
+- **Polish pass (2026-07-02)** — cliff **ramps**: mdx-m3-viewer never implemented them; our patch
+  now ports HiveWE's algorithm (2-tile `CliffTrans`/`CityCliffTrans` models from
+  CliffTypes.slk `rampModelDir`, corner letters L/H + X/H for 2-layer ramps in cliffFileName's
+  BL,TL,TR,BR span order, entrance tiles render sloped ground with base corners +0.5 layer; model
+  anchors verified from geoset extents: bottom-right corner, vertical ramps extend north, horizontal
+  west ⇒ horizontal anchor at (x+2)·128). Names validated: every ramp generated on LostTemple /
+  PlunderIsle / Duskwood exists in War3.mpq. Host injects `viewer.terrainModelExists`. Our height
+  sampler applies the same entrance bump (`rampAdjust`) so units walk the slope. Sim: units **never
+  push** stationary units (WC3 rule) — movers get shoved back, give up after 0.5 s blocked
+  (`stuckT`); moving pairs split the correction plus a tangential slide (head-on deadlock fix);
+  turning decoupled from movement (`desiredFacing`, finishes after arrival). UI: hover ring +
+  HP bar (selection too), air units picked/marked at altitude (moveHeight + 60 lift), metrics
+  overlay (fps / frame ms / unit count / ping placeholder) bottom-left.
 - **Phase 6 (combat slice)** — headless-sim combat in `src/sim/world.ts`: owners/teams (allied =
   same team; creeps = team −1, hostile to players but not each other), HP/armor, weapons from
   UnitWeapons.slk (base + dice damage, cooldown, range, acquire), attack orders with chase/repath,
