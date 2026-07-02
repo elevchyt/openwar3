@@ -186,6 +186,8 @@ export class MapViewerScene {
   // One-shot spawn effects (e.g. the building cancel explosion), cached by path.
   private effectModels = new Map<string, SpawnModel | null>();
   private effects: Array<{ inst: SpawnInstance; t: number }> = [];
+  // Trees briefly tinted yellow when a worker is sent to harvest them.
+  private treePulses: Array<{ inst: { setVertexColor(c: ArrayLike<number>): unknown }; t: number }> = [];
   // Projectile (missile) instances, keyed by the sim projectile id.
   private projectileModels = new Map<string, SpawnModel | null>();
   private projectileInsts = new Map<number, SpawnInstance>();
@@ -633,6 +635,43 @@ export class MapViewerScene {
     }
   }
 
+  private static readonly TREE_PULSE = 0.6; // seconds of the yellow tint
+
+  /** Pulse a harvested tree yellow → back to normal (matches the ring flash). */
+  private updateTreePulses(dt: number): void {
+    const map = this.viewer.map;
+    for (const p of this.rts?.drainTreePulses() ?? []) {
+      const inst = map ? this.nearestDoodad(p.x, p.y, map.doodads) : null;
+      if (inst) this.treePulses.push({ inst, t: MapViewerScene.TREE_PULSE });
+    }
+    for (let i = this.treePulses.length - 1; i >= 0; i--) {
+      const tp = this.treePulses[i];
+      tp.t -= dt;
+      const f = Math.max(0, tp.t / MapViewerScene.TREE_PULSE); // 1 → 0
+      // Lerp normal(white) → yellow by f, so it starts yellow and fades to white.
+      tp.inst.setVertexColor([1, 1 - 0.15 * f, 1 - 0.8 * f, 1]);
+      if (tp.t <= 0) {
+        tp.inst.setVertexColor([1, 1, 1, 1]); // restore
+        this.treePulses.splice(i, 1);
+      }
+    }
+  }
+
+  private nearestDoodad(x: number, y: number, doodads: HideableWidget[]): { setVertexColor(c: ArrayLike<number>): unknown } | null {
+    let best: { setVertexColor(c: ArrayLike<number>): unknown } | null = null;
+    let bestD = 96;
+    for (const d of doodads) {
+      const loc = d.instance?.localLocation;
+      if (!loc) continue;
+      const dist = Math.hypot(loc[0] - x, loc[1] - y);
+      if (dist < bestD) {
+        bestD = dist;
+        best = d.instance as unknown as { setVertexColor(c: ArrayLike<number>): unknown };
+      }
+    }
+    return best;
+  }
+
   private newCircle(): SpawnInstance | null {
     const map = this.viewer.map;
     if (!this.circleModel || !map) return null;
@@ -1069,15 +1108,17 @@ export class MapViewerScene {
     out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: armed === "attack" }));
     out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: armed === "patrol" }));
     if (sel.isWorker) {
-      // Build sits at the bottom-left of a worker's card (developer spec).
+      // Build sits at the bottom-left of a worker's card (developer spec); Repair
+      // next to it. Repair = 35% of build cost / 150% of build time to full HP.
       out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2 }));
+      out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: armed === "repair" }));
     }
     return out;
   }
 
   private runCommand(id: string): void {
     if (!this.rts) return;
-    if (id === "move" || id === "attack" || id === "patrol" || id === "rally") {
+    if (id === "move" || id === "attack" || id === "patrol" || id === "rally" || id === "repair") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
       return;
@@ -1303,6 +1344,7 @@ export class MapViewerScene {
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);
       this.updateEffects(dt / 1000);
+      this.updateTreePulses(dt / 1000);
       this.updateProjectiles();
       const world = this.rts?.simWorld;
       const map = this.viewer.map;

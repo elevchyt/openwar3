@@ -32,7 +32,17 @@ export interface SimProjectile {
   art: string; // missile model path
 }
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "harvest" | "return";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "harvest" | "return" | "repair";
+
+/** Active repair job on a worker: restore a building's HP over time for a
+ *  fraction of its build cost (WC3: 35% of cost, 150% of build time to full). */
+export interface RepairState {
+  targetId: number;
+  hpPerSec: number;
+  goldPerHp: number;
+  lumberPerHp: number;
+  active: boolean; // arrived + hammering (drives the build animation)
+}
 
 /** Harvesting profile + carried load for worker units. */
 export interface WorkerState {
@@ -124,6 +134,7 @@ export interface SimUnit {
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
   constructing: number; // building id this worker is constructing (0 = none)
+  repair: RepairState | null; // active repair job (null = not repairing)
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -330,13 +341,67 @@ export class SimWorld {
     w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x); // face the build site
   }
 
-  /** Stop a worker constructing (manual order, or death); halts progress. */
+  /** Stop a worker constructing/repairing (manual order, or death). Called by
+   *  every re-task path, so it also cancels a repair job. */
   private detachBuilder(workerId: number): void {
     const w = this.units.get(workerId);
-    if (!w || !w.constructing) return;
+    if (!w) return;
+    w.repair = null; // re-tasking cancels a repair
+    if (!w.constructing) return;
     const b = this.units.get(w.constructing)?.building;
     if (b && b.builderId === workerId) b.builderId = 0;
     w.constructing = 0;
+  }
+
+  /** Order a worker to repair a damaged friendly building. Params (rate + cost
+   *  per HP) are computed by the caller from the building's build cost/time. */
+  issueRepair(id: number, buildingId: number, hpPerSec: number, goldPerHp: number, lumberPerHp: number): boolean {
+    const u = this.units.get(id);
+    const b = this.units.get(buildingId);
+    if (!u || !u.worker || !b?.building || b.building.constructionLeft > 0 || b.hp >= b.maxHp) return false;
+    this.detachBuilder(id); // clears any prior repair/build first
+    u.order = "repair";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    u.repair = { targetId: buildingId, hpPerSec, goldPerHp, lumberPerHp, active: false };
+    this.pathTo(u, b.x, b.y);
+    return true;
+  }
+
+  /** Advance a worker's repair: walk to the building, then restore HP over time
+   *  while spending the owner's gold/lumber; stop at full or when out of funds. */
+  private tickRepair(u: SimUnit, dt: number): void {
+    const r = u.repair;
+    if (!r) {
+      this.stop(u.id);
+      return;
+    }
+    const b = this.units.get(r.targetId);
+    if (!b?.building || b.hp >= b.maxHp) {
+      this.stop(u.id); // repaired to full, or the building is gone
+      return;
+    }
+    const gap = Math.max(Math.abs(b.x - u.x), Math.abs(b.y - u.y)) - b.radius - u.radius;
+    if (u.moving && gap > 96) {
+      r.active = false; // still walking to the site
+      return;
+    }
+    this.settle(u);
+    r.active = true;
+    u.desiredFacing = Math.atan2(b.y - u.y, b.x - u.x);
+    const stash = this.stashOf(u.owner);
+    const hpAdd = r.hpPerSec * dt;
+    if (stash.gold < hpAdd * r.goldPerHp || stash.lumber < hpAdd * r.lumberPerHp) {
+      this.stop(u.id); // out of resources
+      return;
+    }
+    stash.gold -= hpAdd * r.goldPerHp;
+    stash.lumber -= hpAdd * r.lumberPerHp;
+    b.hp = Math.min(b.maxHp, b.hp + hpAdd);
+    if (b.hp >= b.maxHp) this.stop(u.id);
   }
 
   /** Advance construction and training queues for all buildings. */
@@ -426,6 +491,7 @@ export class SimWorld {
       | "noCollision"
       | "building"
       | "constructing"
+      | "repair"
     >,
     building?: BuildingState | null,
   ): SimUnit {
@@ -463,6 +529,7 @@ export class SimWorld {
       noCollision: false,
       building: building ?? null,
       constructing: 0,
+      repair: null,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -698,6 +765,9 @@ export class SimWorld {
           break;
         case "return":
           this.tickReturn(u);
+          break;
+        case "repair":
+          this.tickRepair(u, dt);
           break;
         case "attackmove":
         case "patrol":

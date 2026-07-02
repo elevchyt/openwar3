@@ -205,6 +205,7 @@ export class RtsController {
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
   private corpses: Array<{ instance: Instance; t: number }> = [];
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number] }> = [];
+  private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
   private loc = new Float32Array(3);
   private quat = new Float32Array(4);
@@ -467,7 +468,7 @@ export class RtsController {
           ? "lumber"
           : null
       : null;
-    if (u.constructing && !u.moving) return a.build; // hammering at a build site
+    if ((u.constructing || u.repair?.active) && !u.moving) return a.build; // hammering (build/repair)
     if (u.working) return a.chopLumber; // chopping a tree
     if (u.moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
     if (u.inCombat) return a.attack;
@@ -551,8 +552,9 @@ export class RtsController {
   // --- HUD driver surface ---------------------------------------------------
 
   /** Armed command-card order; the next left-click executes it instead of
-   *  selecting. "rally" sets a building's rally point. */
-  orderMode: "move" | "attack" | "patrol" | "rally" | null = null;
+   *  selecting. "rally" sets a building's rally point; "repair" targets a
+   *  damaged friendly building. */
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | null = null;
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
@@ -571,6 +573,10 @@ export class RtsController {
         }
         this.queueArrow(hit[0], hit[1], MOVE_ARROW);
       }
+      return true;
+    }
+    if (mode === "repair") {
+      this.repairAt(this.pickAt(cssX, cssY));
       return true;
     }
     if (mode === "attack") {
@@ -623,6 +629,26 @@ export class RtsController {
 
   stopSelected(): void {
     for (const id of this.selected) this.sim.stop(id);
+  }
+
+  /** Order the selected workers to repair a damaged friendly building. WC3
+   *  rates: 35% of the build cost and 150% of the build time to go 1 HP→full. */
+  private repairAt(picked: number | null): boolean {
+    if (picked === null) return false;
+    const target = this.sim.units.get(picked);
+    if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp || target.owner !== this.localPlayer) return false;
+    const def = this.registry.get(this.byId.get(picked)?.typeId ?? "");
+    if (!def) return false;
+    const maxHp = Math.max(1, target.maxHp);
+    const hpPerSec = maxHp / Math.max(1, (def.buildTime || 60) * 1.5);
+    const goldPerHp = (def.goldCost * 0.35) / maxHp;
+    const lumberPerHp = (def.lumberCost * 0.35) / maxHp;
+    let any = false;
+    for (const id of this.selected) {
+      const w = this.sim.units.get(id);
+      if (w?.worker && this.sim.issueRepair(id, picked, hpPerSec, goldPerHp, lumberPerHp)) any = true;
+    }
+    return any;
   }
 
   selectedInfo(): SelectionInfo | null {
@@ -863,6 +889,10 @@ export class RtsController {
         }
         if (any) return;
       }
+      // Workers right-clicking a friendly DAMAGED (completed) building repair it.
+      if (target && target.building && target.building.constructionLeft <= 0 && target.hp < target.maxHp) {
+        if (this.repairAt(picked)) return;
+      }
     }
     // screenToWorldRay/unproject expects window coords with a TOP-LEFT origin
     // (Y-down) — the opposite of worldToScreen (Y-up) used by selection.
@@ -896,6 +926,7 @@ export class RtsController {
       }
       if (any) {
         this.flashTarget(tree.x, tree.y, 48); // trees ≈ 2×2 cells
+        this.treePulses.push({ x: tree.x, y: tree.y }); // pulse the tree yellow too
         return;
       }
     }
@@ -913,6 +944,14 @@ export class RtsController {
    *  harvest flash, but red) when it's ordered to be attacked. */
   private flashAttack(x: number, y: number, radius: number): void {
     this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color: [1, 0.2, 0.16] });
+  }
+
+  /** Trees to pulse yellow since the last drain (renderer tints the doodad). */
+  drainTreePulses(): Array<{ x: number; y: number }> {
+    if (!this.treePulses.length) return this.treePulses;
+    const out = this.treePulses;
+    this.treePulses = [];
+    return out;
   }
 
   /** Harvest-flash requests since the last drain (renderer renders + times them). */
