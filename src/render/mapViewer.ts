@@ -591,10 +591,12 @@ export class MapViewerScene {
     };
     const consoleY = Math.round(height * 0.352); // ~180/512 — top of the console chrome
     const consoleH = height - consoleY;
-    // Clock medallion: centred blob in the top strip (measured x[710–890] y[0–104]).
-    const clockX = Math.round(width * 0.444);
-    const clockW = Math.round(width * 0.112);
-    const clockH = Math.round(height * 0.205);
+    // Clock medallion: a SQUARE crop centred on the socket so the round frame
+    // isn't distorted (the medallion is circular; a wide crop squished it).
+    const clockSize = Math.round(height * 0.24);
+    const clockX = Math.round(width * 0.5 - clockSize / 2);
+    const clockW = clockSize;
+    const clockH = clockSize;
     // The rotating sun/moon disc that sits inside the clock ring (Blizzard kept
     // the "Human" filename inside every race folder).
     const timeUrl = this.blpIcon(`UI\\Console\\${dir}\\HumanUITile-TimeIndicator.blp`);
@@ -981,17 +983,13 @@ export class MapViewerScene {
       }
     });
     c.addEventListener("pointermove", (e) => {
-      if (this.placement) {
-        this.updateGhost(e.offsetX, e.offsetY);
-        if (!this.dragging) return;
+      if (this.placement) this.updateGhost(e.offsetX, e.offsetY);
+      // WC3 keeps a fixed camera angle — no free rotation. A left-drag is only
+      // used to distinguish a click from a drag (so a drag doesn't select).
+      if (this.dragging && Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) {
+        this.moved = true;
       }
-      if (!this.dragging) {
-        this.rts?.hoverAt(e.offsetX, e.offsetY);
-        return;
-      }
-      if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) this.moved = true;
-      this.yaw += e.movementX * 0.005;
-      this.pitch = clamp(this.pitch - e.movementY * 0.005, 0.2, 1.5);
+      if (!this.dragging) this.rts?.hoverAt(e.offsetX, e.offsetY);
     });
     c.addEventListener(
       "wheel",

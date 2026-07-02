@@ -218,13 +218,15 @@ body.in-game .menu-panel { display: none; }
   background: none;
   pointer-events: none;
 }
-/* Rotating sun/moon disc behind the ring; the ring's transparent centre shows it. */
+/* Rotating sun/moon disc behind the ring; the ring's transparent centre shows
+   it. Kept a true circle (equal width/height) so it isn't squished. */
 .hud-clock-face {
   position: absolute;
   left: 50%;
-  top: 50%;
-  width: 56%;
-  height: 56%;
+  top: 48%;
+  width: 52%;
+  aspect-ratio: 1;
+  height: auto;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   overflow: hidden;
@@ -438,28 +440,28 @@ body.in-game .menu-panel { display: none; }
 .hud-portrait-canvas { width: 100%; height: 100%; display: block; }
 
 /* HP/mana as coloured numbers below the portrait (no bars — like the original),
-   on a subtle dark plate so they stay readable over the console art. */
+   on a SOLID black plate so nothing shows through (matches the reference). */
 .hud-portrait-values {
   text-align: center;
   line-height: 1.3;
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 3px;
+  background: #000;
+  border-radius: 2px;
   padding: 1px 4px;
+  min-height: 1.3em;
 }
-.hud-portrait-values:empty { background: none; }
-.hud-hp-value { font-size: 13px; color: #46e05a; text-shadow: 0 1px 1px #000; }
-.hud-mp-value { font-size: 13px; color: #4a7cff; text-shadow: 0 1px 1px #000; }
-.hud-hp-value:empty, .hud-mp-value:empty { display: none; }
+.hud-hp-value { font-size: 13px; color: #46e05a; }
+.hud-mp-value { font-size: 13px; color: #4a7cff; }
+.hud-mp-value:empty { display: none; }
 
-/* Detail panel: dark rounded backdrop with the unit's name + damage/armor. */
+/* Detail panel: SOLID black backdrop with the unit's name + damage/armor, always
+   present (no grass/console art showing through), even with nothing selected. */
 .hud-info-text {
   flex: 1;
   min-width: 0;
-  padding: 6px 12px;
-  border-radius: 8px;
-  background: rgba(6, 8, 12, 0.72);
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: #000;
 }
-.hud-info-text:not(:has(.hud-sel-name:not(:empty))) { background: none; }
 .hud-sel-name { font-size: 16px; color: #f4e8c8; text-align: center; margin-bottom: 4px; }
 .hud-sel-stats { font-size: 12px; color: #cfc7ab; white-space: pre-line; line-height: 1.4; }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }

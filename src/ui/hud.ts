@@ -77,6 +77,9 @@ const ZONES = {
 
 function place(el: HTMLElement, zone: readonly [number, number, number, number]): void {
   el.classList.add("hud-zone");
+  // Inline position so it wins over any component rule (e.g. .hud-command's
+  // position:relative, which otherwise knocked the command card out of its zone).
+  el.style.position = "absolute";
   el.style.left = `${zone[0]}%`;
   el.style.top = `${zone[1]}%`;
   el.style.width = `${zone[2]}%`;
