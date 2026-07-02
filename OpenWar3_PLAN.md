@@ -17,6 +17,12 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Building cancel explosion (2026-07-02, latest+12)** — the MPQs DO ship dedicated cancel-death
+  effects distinct from the building's Death collapse: `Objects\Spawnmodels\<Race>\…CancelDeath.mdx`
+  (`HCancelDeath`/`UCancelDeath`/`NECancelDeath`; Orc has none → reuse Human's). Added a generic
+  one-shot spawn-effect system (load+cache, play the single "Birth" clip once, detach after ~2.5 s);
+  cancelling a building now plays the race cancel explosion at its site (local race preloaded for
+  no delay). Combat destruction still uses the building's own Death animation.
 - **Real-data stats + mine/rally/cancel pass (2026-07-02, latest+11)** — **inspected the real MPQs**
   (`Warcraft III/`) and fixed unit stats: heroes were 100 HP because the loader used the raw `hp`
   field — now uses the game's precomputed `realhp`/`realm`/`realdef` and adds the **primary

@@ -51,6 +51,15 @@ const BASE_FILES = [
 
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 
+// Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
+// dedicated cancel model, so it reuses the Human one.
+const CANCEL_FX: Record<PlayableRace, string> = {
+  human: "Objects\\Spawnmodels\\Human\\HCancelDeath\\HCancelDeath.mdx",
+  orc: "Objects\\Spawnmodels\\Human\\HCancelDeath\\HCancelDeath.mdx",
+  undead: "Objects\\Spawnmodels\\Undead\\UCancelDeath\\UCancelDeath.mdx",
+  nightelf: "Objects\\Spawnmodels\\NightElf\\NECancelDeath\\NECancelDeath.mdx",
+};
+
 // Minimal local typings (mdx-m3-viewer's exports drag in their own gl-matrix).
 // The viewer calls the solver as (src, solverParams) — params carry the map's
 // tileset letter once war3map.w3i is parsed.
@@ -174,6 +183,9 @@ export class MapViewerScene {
   // Order-feedback arrows (Confirmation.mdx), green=move / red=attack-move.
   private arrowModel: SpawnModel | null = null;
   private orderArrows: Array<{ inst: SpawnInstance; t: number }> = [];
+  // One-shot spawn effects (e.g. the building cancel explosion), cached by path.
+  private effectModels = new Map<string, SpawnModel | null>();
+  private effects: Array<{ inst: SpawnInstance; t: number }> = [];
   // Projectile (missile) instances, keyed by the sim projectile id.
   private projectileModels = new Map<string, SpawnModel | null>();
   private projectileInsts = new Map<number, SpawnInstance>();
@@ -545,6 +557,9 @@ export class MapViewerScene {
     this.hoverCircle = this.newCircle();
     // Move/attack order-confirmation arrows (one model, tinted per order type).
     this.arrowModel = ((await this.viewer.load("UI\\Feedback\\Confirmation\\Confirmation.mdx", this.solver)) as SpawnModel | undefined) ?? null;
+    // Preload the local race's cancel-explosion so the first cancel is instant.
+    const cancelPath = CANCEL_FX[this.localRace];
+    void this.viewer.load(cancelPath, this.solver).then((m) => this.effectModels.set(cancelPath, (m as SpawnModel | undefined) ?? null));
     // Rally flag shown at a selected building's rally point.
     const flag = (await this.viewer.load("UI\\Feedback\\RallyPoint\\RallyPoint.mdx", this.solver)) as SpawnModel | undefined;
     if (flag && map) {
@@ -579,6 +594,40 @@ export class MapViewerScene {
       if (a.t <= 0) {
         a.inst.detach();
         this.orderArrows.splice(i, 1);
+      }
+    }
+  }
+
+  /** Play a one-shot spawn-effect model (its single "Birth" clip) at a point,
+   *  then detach it after `life` seconds. Model is loaded+cached on demand. */
+  private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5): Promise<void> {
+    const map = this.viewer.map;
+    if (!map) return;
+    let model = this.effectModels.get(path);
+    if (model === undefined) {
+      model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
+      this.effectModels.set(path, model);
+    }
+    if (!model || !this.viewer.map) return;
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    this.loc3[0] = x;
+    this.loc3[1] = y;
+    this.loc3[2] = z;
+    inst.setLocation(this.loc3);
+    inst.setSequence(0);
+    inst.setSequenceLoopMode(0); // play once
+    inst.show();
+    this.effects.push({ inst, t: life });
+  }
+
+  private updateEffects(dt: number): void {
+    for (let i = this.effects.length - 1; i >= 0; i--) {
+      const e = this.effects[i];
+      e.t -= dt;
+      if (e.t <= 0) {
+        e.inst.detach();
+        this.effects.splice(i, 1);
       }
     }
   }
@@ -1079,9 +1128,9 @@ export class MapViewerScene {
   }
 
   /** Cancel an under-construction building: refund its cost, free its pathing
-   *  footprint, and remove it (the sim fires a death event so it plays its
-   *  collapse/explosion — the same Death clip the game uses for a destroyed
-   *  building, since building models ship only a "Death" animation). */
+   *  footprint, remove it, and play the race's dedicated **cancel explosion**
+   *  (`<Race>CancelDeath.mdx` — distinct from the building's own Death collapse
+   *  used for combat destruction). */
   private cancelConstruction(buildingId: number, typeId: string): void {
     if (!this.rts) return;
     const def = this.registry.get(typeId);
@@ -1090,12 +1139,16 @@ export class MapViewerScene {
       stash.gold += def.goldCost;
       stash.lumber += def.lumberCost;
     }
+    // Grab the building's position before it's removed, for the explosion.
+    const b = this.rts.simWorld.units.get(buildingId);
+    const fx = b ? { x: b.x, y: b.y, z: this.rts.groundHeightAt(b.x, b.y) } : null;
     const meta = this.buildingFootprints.get(buildingId);
     if (meta && this.grid) {
       unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
       this.buildingFootprints.delete(buildingId);
     }
     this.rts.simWorld.cancelBuilding(buildingId);
+    if (fx) void this.spawnEffect(CANCEL_FX[this.localRace], fx.x, fx.y, fx.z);
   }
 
   private cancelTrain(buildingId: number): void {
@@ -1247,6 +1300,7 @@ export class MapViewerScene {
       }
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);
+      this.updateEffects(dt / 1000);
       this.updateProjectiles();
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
@@ -1307,6 +1361,9 @@ export class MapViewerScene {
     this.buildGhost = null;
     for (const a of this.orderArrows) a.inst.detach();
     this.orderArrows = [];
+    for (const e of this.effects) e.inst.detach();
+    this.effects = [];
+    this.effectModels.clear();
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();
