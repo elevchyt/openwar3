@@ -14,7 +14,8 @@ export interface UnitDef {
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
   icon: string; // command-card BTN icon path (from UnitFunc "art")
-  description: string; // command-card tooltip text (UnitFunc "Ubertip"), cleaned
+  description: string; // command-card tooltip text (UnitStrings "Ubertip"), cleaned
+  hotkey: string; // command hotkey letter (UnitStrings "Hotkey")
   buttonX: number; // command-card grid column (0-3), from "buttonpos"
   buttonY: number; // command-card grid row (0-2)
   isHero: boolean;
@@ -37,6 +38,7 @@ export interface UnitDef {
   attackDice: number; // number of damage dice (dice1)
   attackSides: number; // sides per damage die (sides1)
   attackCooldown: number;
+  attackDamagePoint: number; // dmgpt1: delay from swing start to strike/launch (s)
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   weaponType: string; // weapTp1: "normal"/"instant" = melee, "missile"/… = ranged
@@ -167,7 +169,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
       icon: fn ? str(fn, "art") : "",
-      description: fn ? cleanTip(str(fn, "Ubertip")) : "",
+      // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
+      // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The
+      // description was previously read from `fn` → always empty → generic fallback.
+      description: strings ? cleanTip(str(strings, "Ubertip")) : "",
+      hotkey: strings ? (str(strings, "Hotkey").trim()[0] ?? "").toUpperCase() : "",
       buttonX: bx,
       buttonY: by,
       isHero,
@@ -192,6 +198,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackDice: w ? num(w, "dice1", 0) : 0,
       attackSides: w ? num(w, "sides1", 0) : 0,
       attackCooldown: w ? num(w, "cool1", 0) : 0,
+      attackDamagePoint: w ? num(w, "dmgpt1", 0) : 0,
       attackRange: w ? num(w, "rangeN1", 0) : 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       weaponType: w ? str(w, "weapTp1") : "",
@@ -205,7 +212,10 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       agility: attr.AGI,
       intelligence: attr.INT,
       primaryAttr: isHero ? primary : "",
-      level: b ? num(b, "level", 0) : 0,
+      // Heroes spawn at level 1. UnitBalance's `level` for heroes is 5 (their
+      // creep-threat/bounty level), which wrongly showed newly-trained heroes as
+      // Level 5. With no XP/leveling system yet, pin trained heroes to level 1.
+      level: isHero ? 1 : b ? num(b, "level", 0) : 0,
       abilities: a ? (str(a, "abilList") || "").split(",").filter(Boolean) : [],
     });
   }

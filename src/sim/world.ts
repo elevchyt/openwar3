@@ -12,6 +12,7 @@ export interface SimWeapon {
   dice: number;
   sides: number;
   cooldown: number; // seconds between swings
+  damagePoint: number; // seconds from swing start to the strike/projectile launch
   range: number; // measured between collision hulls, WC3-style
   acquire: number; // auto-acquisition range (0 = never auto-attacks)
   ranged: boolean; // fires a travelling projectile instead of hitting instantly
@@ -108,6 +109,11 @@ export interface SimUnit {
   order: SimOrder;
   targetId: number | null;
   cooldownLeft: number;
+  // A swing is in progress: the strike/projectile lands `swingLeft` seconds after
+  // the attack animation begins (the weapon's damage point), not instantly.
+  swingLeft: number; // -1 = no pending strike
+  swingTargetId: number; // whom the pending strike is aimed at
+  swingSeq: number; // increments each swing start (renderer re-triggers the attack clip)
   inCombat: boolean; // engaging in range this tick (drives the attack animation)
   path: Array<[number, number]>; // world waypoints
   waypoint: number;
@@ -138,6 +144,9 @@ export interface SimUnit {
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
+// A move ordered within this distance of the unit only turns it in place (WC3
+// doesn't shuffle a unit a few pixels — it just pivots to face the point).
+const MOVE_MIN_DIST = 40;
 // WC3 turn rate (hiveworkshop thread 129619): the object-editor value is
 // radians per internal 0.03s frame, capped at ~0.2 rad/frame (≈381.95°/s).
 const TURN_FRAME = 0.03;
@@ -172,6 +181,7 @@ export class SimWorld {
   /** Time of day in game-hours [0,24); advances every tick. */
   timeOfDay = 8;
   private deaths: number[] = [];
+  private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
   private nextProjectileId = 1;
@@ -364,6 +374,7 @@ export class SimWorld {
     u.targetId = null;
     u.inCombat = false;
     u.noCollision = false;
+    this.cancelSwing(u);
     u.stuckT = 0;
     u.stuckRetries = 0;
     u.repair = { targetId: buildingId, hpPerSec, goldPerHp, lumberPerHp, active: false };
@@ -440,14 +451,16 @@ export class SimWorld {
   }
 
   /** Cancel a building (manual cancel of an under-construction structure): free
-   *  its builder and remove it. Fires a death event so the renderer plays the
-   *  collapse/explosion, same as a combat destruction. Returns its type for the
-   *  caller to refund. */
+   *  its builder and remove it WITHOUT a death animation — a cancelled building
+   *  isn't destroyed in combat, it simply vanishes (the caller plays the race's
+   *  cancel-explosion effect over the spot). Returns whether it was removed. */
   cancelBuilding(id: number): boolean {
     const u = this.units.get(id);
     if (!u?.building) return false;
     if (u.building.builderId) this.detachBuilder(u.building.builderId);
-    this.kill(u);
+    this.unsettle(u); // free its reserved cells
+    this.units.delete(u.id);
+    this.removals.push(u.id);
     return true;
   }
 
@@ -467,6 +480,9 @@ export class SimWorld {
       | "order"
       | "targetId"
       | "cooldownLeft"
+      | "swingLeft"
+      | "swingTargetId"
+      | "swingSeq"
       | "inCombat"
       | "chaseX"
       | "chaseY"
@@ -501,6 +517,9 @@ export class SimWorld {
       order: "idle",
       targetId: null,
       cooldownLeft: 0,
+      swingLeft: -1,
+      swingTargetId: 0,
+      swingSeq: 0,
       inCombat: false,
       path: [],
       waypoint: 0,
@@ -576,6 +595,15 @@ export class SimWorld {
     return out;
   }
 
+  /** Sim ids removed WITHOUT a death animation (cancelled buildings) — the
+   *  renderer just hides them (an explosion effect covers the spot instead). */
+  drainRemovals(): number[] {
+    if (!this.removals.length) return this.removals;
+    const out = this.removals;
+    this.removals = [];
+    return out;
+  }
+
   /** Order a unit to a world point via the pathing grid. When no movement is
    *  possible at all (blocked in by units/terrain), the unit stays put and
    *  only turns to face the point — WC3 does exactly this. */
@@ -586,9 +614,17 @@ export class SimWorld {
     u.targetId = null;
     u.inCombat = false;
     u.noCollision = false; // manual control restores collision
+    this.cancelSwing(u);
     this.detachBuilder(id); // wandering off halts the construction
     u.stuckT = 0;
     u.stuckRetries = 0;
+    // Ordered essentially onto our own position: don't shuffle, just pivot.
+    if (Math.hypot(tx - u.x, ty - u.y) <= MOVE_MIN_DIST) {
+      this.settle(u);
+      u.order = "idle";
+      if (Math.hypot(tx - u.x, ty - u.y) > 1) u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      return false;
+    }
     if (!this.pathTo(u, tx, ty)) {
       this.stop(id);
       u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
@@ -606,6 +642,7 @@ export class SimWorld {
     u.targetId = null;
     u.inCombat = false;
     u.noCollision = false;
+    this.cancelSwing(u);
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
@@ -626,6 +663,7 @@ export class SimWorld {
     u.targetId = null;
     u.inCombat = false;
     u.noCollision = false;
+    this.cancelSwing(u);
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
@@ -647,6 +685,7 @@ export class SimWorld {
     u.order = "attack";
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
+    this.cancelSwing(u); // a fresh target starts a fresh swing
     this.detachBuilder(id);
     return true;
   }
@@ -660,6 +699,7 @@ export class SimWorld {
       u.working = false;
       u.atNode = false;
       u.noCollision = false; // manual stop restores collision
+      this.cancelSwing(u);
       this.detachBuilder(id);
       this.settle(u);
     }
@@ -679,6 +719,7 @@ export class SimWorld {
     u.atNode = false;
     u.working = false;
     u.noCollision = false; // manual harvest order restores collision
+    this.cancelSwing(u);
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
@@ -787,6 +828,7 @@ export class SimWorld {
       if (u.facing !== u.desiredFacing) {
         u.facing = turnToward(u.facing, u.desiredFacing, turnSpeed(u.turnRate) * dt);
       }
+      this.tickSwing(u, dt); // land pending strikes at their damage point
       this.checkStuck(u, dt);
     }
   }
@@ -845,12 +887,39 @@ export class SimWorld {
     this.settle(u);
     u.inCombat = true;
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
-    if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_EPS || u.cooldownLeft > 0) return;
+    // Don't start a new swing while facing the wrong way, cooling down, or with a
+    // swing already mid-flight toward its damage point.
+    if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_EPS || u.cooldownLeft > 0 || u.swingLeft >= 0) return;
+    // Begin the attack: the cooldown starts now, but the strike/projectile only
+    // lands at the weapon's damage point (a fraction into the swing animation) —
+    // matching WC3 so e.g. the Archmage's fireball leaves at the right moment.
     u.cooldownLeft = u.weapon.cooldown;
-    // Ranged weapons launch a projectile that deals its damage on arrival;
-    // melee/instant weapons hit immediately.
-    if (u.weapon.ranged) this.spawnProjectile(u, t);
-    else this.dealDamage(u, t);
+    u.swingLeft = Math.max(0, u.weapon.damagePoint);
+    u.swingTargetId = t.id;
+    u.swingSeq++; // renderer restarts the attack animation so the strike lines up
+  }
+
+  /** Advance an in-progress attack swing; when it reaches the weapon's damage
+   *  point, launch the projectile (ranged) or deal the hit (melee). */
+  private tickSwing(u: SimUnit, dt: number): void {
+    if (u.swingLeft < 0 || !u.weapon) return;
+    u.swingLeft -= dt;
+    if (u.swingLeft > 0) return;
+    u.swingLeft = -1;
+    const t = this.units.get(u.swingTargetId);
+    if (!t) return; // target gone before impact — the swing whiffs
+    if (u.weapon.ranged) {
+      this.spawnProjectile(u, t);
+    } else {
+      // Melee only connects if the target is still within reach of the swing.
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap <= u.weapon.range + ARRIVE_EPS) this.dealDamage(u, t);
+    }
+  }
+
+  /** Cancel any pending swing (unit re-tasked away from its attack). */
+  private cancelSwing(u: SimUnit): void {
+    u.swingLeft = -1;
   }
 
   /** Launch a homing projectile from attacker to target. Damage is rolled now

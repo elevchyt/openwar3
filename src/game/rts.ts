@@ -145,6 +145,7 @@ interface Entry {
   birthEnd: number;
   hidden: boolean; // instance hidden (worker inside a gold mine)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
+  lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
 }
 
 /** The "Birth" construction sequence + its frame interval, if the model has one. */
@@ -230,6 +231,7 @@ export class RtsController {
   private selectedMine: number | null = null; // a selected gold mine (resource)
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
+  private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
   private seeded = false;
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
@@ -399,6 +401,7 @@ export class RtsController {
         ...findBirthFields(unit.instance.model.sequences),
         hidden: false,
         curSeq: -1,
+        lastSwingSeq: -1,
       };
       this.entries.push(entry);
       this.byId.set(simId, entry);
@@ -462,6 +465,7 @@ export class RtsController {
       ...findBirthFields(instance.model.sequences),
       hidden: false,
       curSeq: -1,
+      lastSwingSeq: -1,
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
@@ -477,8 +481,10 @@ export class RtsController {
     this.trySeed();
     this.sim.tick(dt);
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
+    for (const id of this.sim.drainRemovals()) this.onRemove(id);
     this.tickCorpses(dt);
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
+    if (this.hoveredMine !== null && !this.sim.mines.has(this.hoveredMine)) this.hoveredMine = null;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       this.loc[0] = u.x;
@@ -532,6 +538,18 @@ export class RtsController {
         e.unit.instance.setSequence(seq);
         e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
       }
+      // Restart the attack clip at the start of each swing so its throw/strike
+      // gesture lines up with the damage-point-timed hit/projectile (else the
+      // looping clip drifts out of sync over repeated attacks).
+      if (u.swingSeq !== e.lastSwingSeq) {
+        e.lastSwingSeq = u.swingSeq;
+        if (u.inCombat && seq === e.anims.attack && e.anims.attack >= 0) {
+          e.unit.instance.setSequence(e.anims.attack);
+          e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
+          e.unit.state = WALK;
+          e.curSeq = e.anims.attack;
+        }
+      }
     }
     this.updateHealthBars();
   }
@@ -554,6 +572,19 @@ export class RtsController {
     }
   }
 
+  /** The sim removed this unit WITHOUT a death (a cancelled building): drop it
+   *  and hide its instance immediately — no death animation, no corpse. The
+   *  renderer plays the cancel-explosion effect over the spot instead. */
+  private onRemove(simId: number): void {
+    const e = this.byId.get(simId);
+    if (!e) return;
+    this.byId.delete(simId);
+    this.entries.splice(this.entries.indexOf(e), 1);
+    this.deselect(simId);
+    if (this.hovered === simId) this.hovered = null;
+    e.unit.instance.hide();
+  }
+
   /** Choose the animation sequence for a unit's current state, using the
    *  worker's carried resource so peasants walk/stand/chop with the right
    *  gold- and lumber-carrying clips. */
@@ -565,9 +596,11 @@ export class RtsController {
           ? "lumber"
           : null
       : null;
-    if ((u.constructing || u.repair?.active) && !u.moving) return a.build; // hammering (build/repair)
-    if (u.working) return a.chopLumber; // chopping a tree
+    // Movement wins over everything: a worker ordered to move mid-harvest walks
+    // (with the right carry clip) instead of staying stuck in the chop pose.
     if (u.moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
+    if (u.constructing || u.repair?.active) return a.build; // hammering (build/repair)
+    if (u.working) return a.chopLumber; // chopping a tree
     if (u.inCombat) return a.attack;
     return carry === "gold" ? a.standGold : carry === "lumber" ? a.standLumber : a.stand;
   }
@@ -636,19 +669,41 @@ export class RtsController {
     this.refocus();
   }
 
-  /** Pointer move: show the ring + HP bar under the unit being hovered. */
+  /** Pointer move: show the ring + HP bar under the unit (or gold mine) being
+   *  hovered. Gold mines aren't sim units, so they're picked from the ground
+   *  point — this is what gives a neutral mine its yellow ring on hover. */
   hoverAt(cssX: number, cssY: number): void {
     this.hovered = this.pickAt(cssX, cssY);
+    this.hoveredMine = null;
+    if (this.hovered === null) {
+      const g = this.groundPoint(cssX, cssY);
+      if (g) {
+        const m = this.sim.nearestMine(g[0], g[1], 300);
+        this.hoveredMine = m ? m.id : null;
+      }
+    }
   }
 
-  /** What the cursor is currently over, for the armed-order reticle: whether a
-   *  unit/building is under it and whether it's hostile to the selection. */
-  hoverTarget(): { has: boolean; hostile: boolean } {
-    if (this.hovered === null) return { has: false, hostile: false };
+  /** Clear the hover state (pointer left the map, e.g. onto the HUD) so the
+   *  targeting reticle hides and the normal cursor returns. */
+  clearHover(): void {
+    this.hovered = null;
+    this.hoveredMine = null;
+  }
+
+  /** What the cursor is over, for the targeting reticle: whether something is
+   *  under it and its allegiance (own/ally = friendly, gold mine / neutral
+   *  passive = neutral, everyone else = enemy). */
+  hoverInfo(): { has: boolean; category: "friendly" | "neutral" | "enemy" } {
+    if (this.hoveredMine !== null) return { has: true, category: "neutral" };
+    if (this.hovered === null) return { has: false, category: "neutral" };
     const u = this.sim.units.get(this.hovered);
-    if (!u) return { has: false, hostile: false };
+    if (!u) return { has: false, category: "neutral" };
+    if (u.owner === this.localPlayer) return { has: true, category: "friendly" };
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-    return { has: true, hostile: prim ? this.sim.hostile(prim, u) : false };
+    const hostile = prim ? this.sim.hostile(prim, u) : u.owner < 0 || u.owner !== this.localPlayer;
+    if (hostile) return { has: true, category: "enemy" };
+    return { has: true, category: u.owner < 0 ? "neutral" : "friendly" };
   }
 
   /** Live units, for the metrics overlay. */
@@ -715,7 +770,7 @@ export class RtsController {
       for (const id of this.selected) this.sim.issueAttackMove(id, hit[0], hit[1]);
       this.queueArrow(hit[0], hit[1], ATTACK_ARROW); // red a-move feedback
     } else {
-      for (const id of this.selected) this.sim.issueMove(id, hit[0], hit[1]);
+      this.groupMove(hit[0], hit[1]); // spread the group into a formation
       this.queueArrow(hit[0], hit[1], MOVE_ARROW);
     }
     return true;
@@ -882,13 +937,20 @@ export class RtsController {
     return out;
   }
 
-  /** Ground-circle for the hovered unit (skipped if it's already selected). */
+  /** Ground-circle for the hovered unit or gold mine (skipped if it's already
+   *  selected). A hovered mine gets a neutral (yellow) ring, exactly like a
+   *  selected one. */
   hoverRing(): RingInfo | null {
-    if (this.hovered === null || this.selected.has(this.hovered)) return null;
-    const u = this.sim.units.get(this.hovered);
-    const e = this.byId.get(this.hovered);
-    if (!u || !e) return null;
-    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building };
+    if (this.hovered !== null && !this.selected.has(this.hovered)) {
+      const u = this.sim.units.get(this.hovered);
+      const e = this.byId.get(this.hovered);
+      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building };
+    }
+    if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
+      const m = this.sim.mines.get(this.hoveredMine);
+      if (m) return { x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius, owner: -1, team: -2, sizeToRadius: true, neutral: true };
+    }
+    return null;
   }
 
   /** Re-pin under-construction buildings' Birth frame to construction progress
@@ -1037,8 +1099,67 @@ export class RtsController {
         return;
       }
     }
-    for (const id of this.selected) this.sim.issueMove(id, hit[0], hit[1]);
+    this.groupMove(hit[0], hit[1]); // spread the group into a formation
     this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move-order feedback
+  }
+
+  /** Spread a group's move destination into a formation: each unit gets its own
+   *  free spot around the target from the start, so they don't all try to squeeze
+   *  onto the same tile. Concentric hex-ish rings, snapped to walkable cells,
+   *  greedily assigned nearest-unit-to-nearest-slot to minimise crossing. */
+  private groupTargets(ids: number[], tx: number, ty: number): Map<number, [number, number]> {
+    const out = new Map<number, [number, number]>();
+    if (ids.length <= 1) {
+      for (const id of ids) out.set(id, [tx, ty]);
+      return out;
+    }
+    const grid = this.sim.grid;
+    // Spacing ≈ two collision diameters so units aren't packed skin-to-skin.
+    let spacing = 64;
+    for (const id of ids) {
+      const u = this.sim.units.get(id);
+      if (u) spacing = Math.max(spacing, u.radius * 2 + 16);
+    }
+    const slots: Array<[number, number]> = [];
+    for (let ring = 0; slots.length < ids.length && ring < 24; ring++) {
+      if (ring === 0) {
+        slots.push([tx, ty]);
+        continue;
+      }
+      const n = ring * 6;
+      for (let i = 0; i < n && slots.length < ids.length; i++) {
+        const a = (i / n) * Math.PI * 2;
+        slots.push([tx + Math.cos(a) * ring * spacing, ty + Math.sin(a) * ring * spacing]);
+      }
+    }
+    // Snap each slot to a reachable cell near it.
+    const snapped = slots.map(([x, y]) => {
+      const [cx, cy] = grid.worldToCell(x, y);
+      const free = grid.nearestWalkable(cx, cy, 4);
+      return (free ? grid.cellToWorld(free[0], free[1]) : [x, y]) as [number, number];
+    });
+    // Greedy nearest assignment (centre-out).
+    const remaining = new Set(ids);
+    for (const slot of snapped) {
+      if (!remaining.size) break;
+      let best: number | null = null;
+      let bestD = Infinity;
+      for (const id of remaining) {
+        const u = this.sim.units.get(id);
+        if (!u) { remaining.delete(id); continue; }
+        const d = Math.hypot(u.x - slot[0], u.y - slot[1]);
+        if (d < bestD) { bestD = d; best = id; }
+      }
+      if (best !== null) { out.set(best, slot); remaining.delete(best); }
+    }
+    for (const id of remaining) out.set(id, [tx, ty]);
+    return out;
+  }
+
+  /** Issue a formation move for the whole selection to a ground point. */
+  private groupMove(tx: number, ty: number): void {
+    const targets = this.groupTargets([...this.selected], tx, ty);
+    for (const [id, [x, y]] of targets) this.sim.issueMove(id, x, y);
   }
 
   /** Queue a yellow harvest-target flash — the renderer draws it as a flat
@@ -1092,10 +1213,12 @@ export class RtsController {
       if (e.hidden) continue;
       if (ground && Math.hypot(u.x - ground[0], u.y - ground[1]) > PICK_WORLD_MAX) continue;
       const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
-      // Project the unit's mid-body (base + ~half its height) to screen.
+      // Project the unit's mid-body (base + ~half its height) to screen. Buildings
+      // sit lower (nearer their base) so their clickable area hugs the footprint
+      // on the ground rather than floating up the tall silhouette.
       this.world[0] = u.x;
       this.world[1] = u.y;
-      this.world[2] = baseZ + Math.max(e.selRadius * 1.2, 60);
+      this.world[2] = baseZ + (u.building ? Math.max(e.selRadius * 0.45, 24) : Math.max(e.selRadius * 1.2, 60));
       this.host.camera.worldToScreen(this.screen, this.world, viewport);
       const cx = this.screen[0];
       const cy = this.screen[1];
@@ -1192,7 +1315,7 @@ export class RtsController {
       // Bar width tracks the unit/building on-screen size (≈ its footprint).
       bar.bars.style.width = `${Math.max(20, Math.min(140, ry * 2))}px`;
       bar.root.style.left = `${sx / dpr}px`;
-      bar.root.style.top = `${(h - sy) / dpr - (ry + 14)}px`; // gl y-up → css y-down
+      bar.root.style.top = `${(h - sy) / dpr - (ry + 24)}px`; // gl y-up → css y-down (floats above the unit)
     }
     for (let k = n; k < this.hpBars.length; k++) this.hpBars[k].root.hidden = true;
   }
@@ -1225,6 +1348,7 @@ function weaponFor(def: UnitDef): SimWeapon | null {
     dice: def.attackDice,
     sides: def.attackSides,
     cooldown: def.attackCooldown,
+    damagePoint: def.attackDamagePoint,
     range: def.attackRange,
     acquire: def.acquireRange,
     ranged,

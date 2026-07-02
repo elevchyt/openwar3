@@ -134,22 +134,22 @@ html, body {
   z-index: 2;
 }
 .unit-hpbar-level {
-  font: 700 9px/1 var(--game-font);
+  font: 700 11px/1 var(--game-font);
   color: #ffe08a;
   background: rgba(0, 0, 0, 0.8);
   border: 1px solid rgba(216, 180, 90, 0.7);
   border-radius: 2px;
-  padding: 1px 2px;
-  min-width: 10px;
+  padding: 1px 3px;
+  min-width: 12px;
   text-align: center;
 }
-.unit-hpbar-bars { display: flex; flex-direction: column; gap: 1px; }
+.unit-hpbar-bars { display: flex; flex-direction: column; gap: 2px; }
 .unit-hpbar-track {
-  height: 4px;
+  height: 7px;
   background: rgba(0, 0, 0, 0.65);
   border: 1px solid rgba(0, 0, 0, 0.85);
 }
-.unit-hpbar-manatrack { height: 3px; }
+.unit-hpbar-manatrack { height: 5px; }
 .unit-hpbar-fill { height: 100%; width: 100%; background: #46e05a; }
 .unit-hpbar-mana { height: 100%; width: 100%; background: #4a7cff; }
 
@@ -488,24 +488,24 @@ body.in-game .menu-panel { display: none; }
   background: rgba(224, 80, 70, 0.2);
 }
 
-/* Armed-order targeting reticle that follows the cursor (replaces the OS cursor
-   while an order is armed). Flashes red over an attack target, pulses yellow
-   over a move target, static green otherwise. */
+/* The real WC3 target reticle (from the race cursor sheet), recoloured per
+   allegiance, that follows the cursor and replaces the OS cursor. Shown when an
+   order is armed OR when hovering a unit/mine: green = friendly, yellow =
+   neutral (gold mine), red = enemy. It pulses (loops) while over a target. */
 .order-reticle {
   position: fixed;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   transform: translate(-50%, -50%);
   background: center / contain no-repeat;
   pointer-events: none;
   z-index: 7;
+  image-rendering: pixelated;
 }
-.order-reticle.flash { animation: reticle-flash 0.35s steps(1) infinite; }
-.order-reticle.pulse { animation: reticle-pulse 0.7s ease-in-out infinite; }
-@keyframes reticle-flash { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.order-reticle.pulse { animation: reticle-pulse 0.8s ease-in-out infinite; }
 @keyframes reticle-pulse {
   0%, 100% { transform: translate(-50%, -50%) scale(1); }
-  50% { transform: translate(-50%, -50%) scale(1.18); }
+  50% { transform: translate(-50%, -50%) scale(1.2); }
 }
 
 /* Drag-box selection rectangle (WC3 green marquee). */

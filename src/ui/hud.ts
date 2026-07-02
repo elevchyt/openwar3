@@ -519,6 +519,10 @@ export class GameHud {
     const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
+    // The card changed (e.g. a building was cancelled and its buttons vanished):
+    // hide any hover tooltip so it doesn't linger over the now-empty slot — a
+    // removed button never fires pointerleave.
+    this.cmdTooltip.hidden = true;
     for (const btn of this.cmdSlots) {
       btn.disabled = true;
       btn.style.backgroundImage = "";

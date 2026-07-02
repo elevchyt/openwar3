@@ -90,8 +90,10 @@ export class ModelViewerScene {
     this.scene = scene;
   }
 
-  /** Load an MDX by VFS path, attach an instance, and play idle/walk. */
-  async load(path: string, teamColor = 0): Promise<SequenceInfo[]> {
+  /** Load an MDX by VFS path, attach an instance, and play idle/walk (or the
+   *  "Portrait" idle clip when `portrait` is set — portrait busts have no
+   *  walk/stand, and a stray Walk clip on some models otherwise wins). */
+  async load(path: string, teamColor = 0, portrait = false): Promise<SequenceInfo[]> {
     const bytes = await this.vfs.read(path);
 
     if (this.instance) {
@@ -110,10 +112,13 @@ export class ModelViewerScene {
     this.instance = instance;
 
     const sequences = this.sequences();
-    const preferred =
-      sequences.find((s) => /walk/i.test(s.name)) ??
-      sequences.find((s) => /stand/i.test(s.name)) ??
-      sequences[0];
+    const preferred = portrait
+      ? sequences.find((s) => /^portrait/i.test(s.name) && !/talk/i.test(s.name)) ??
+        sequences.find((s) => /portrait/i.test(s.name)) ??
+        sequences[0]
+      : sequences.find((s) => /walk/i.test(s.name)) ??
+        sequences.find((s) => /stand/i.test(s.name)) ??
+        sequences[0];
     if (preferred) instance.setSequence(preferred.index);
 
     this.frameCamera();

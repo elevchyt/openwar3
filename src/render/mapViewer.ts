@@ -179,6 +179,8 @@ export class MapViewerScene {
   private selectBoxEl: HTMLDivElement | null = null;
   private cursorStyleEl: HTMLStyleElement | null = null;
   private reticleEl: HTMLDivElement | null = null; // follows the cursor while armed
+  private cursorSheet: HTMLCanvasElement | null = null; // race cursor sprite sheet
+  private reticleUrls = new Map<string, string>(); // tinted WC3 reticle by colour key
   private lastMouse = { x: 0, y: 0 };
   private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
   private flashCircles: Array<{ inst: SpawnInstance; t: number }> = [];
@@ -1035,9 +1037,12 @@ export class MapViewerScene {
     const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
     this.portraitLoading = true;
     const id = sel.id;
-    // Team glow follows the owner; 12 is the classic neutral (black) slot.
+    // Team glow follows the owner; 12 is the classic neutral (black) slot. The
+    // `portrait` flag makes the viewer loop the model's "Portrait" idle clip
+    // instead of walk/stand (portrait models have no walk — a stray one on some
+    // heroes was being picked, so the bust just froze).
     this.portraitViewer
-      .load(path, sel.owner >= 0 ? sel.owner : 12)
+      .load(path, sel.owner >= 0 ? sel.owner : 12, true)
       .then(() => {
         this.portraitFor = id;
         this.portraitViewer!.start();
@@ -1072,17 +1077,21 @@ export class MapViewerScene {
         const stash = this.rts!.stashFor(this.localPlayer);
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
         out.push(this.cmd({
-          id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.name[0]?.toUpperCase() ?? "",
+          id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
           desc: d.description || `Trains a ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: d.foodUsed,
           col: d.buttonX, row: d.buttonY, disabled: !afford,
         }));
       }
-      // Unit-producing buildings get a Set Rally Point button.
+      // Unit-producing buildings get a Set Rally Point button in the bottom-right
+      // slot (WC3 layout) — hero-train buttons occupy the rest of the bottom row,
+      // so (2,2) used to sit on top of a hero (e.g. the Paladin at the Altar).
       if (trainsFor(sel.typeId).length) {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
-        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 2, row: 2, active: this.rts?.orderMode === "rally" }));
+        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 2, active: this.rts?.orderMode === "rally" }));
       }
-      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
+      // Cancel the last queued unit sits just above the rally button (3,1) — no
+      // trainable unit or hero uses that slot, so it never overlaps a train button.
+      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 1 }));
       return out;
     }
 
@@ -1094,7 +1103,7 @@ export class MapViewerScene {
         if (!d) continue;
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
         out.push(this.cmd({
-          id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.name[0]?.toUpperCase() ?? "",
+          id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
           desc: d.description || `Builds ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: 0,
           col: d.buttonX, row: d.buttonY, disabled: !afford,
         }));
@@ -1139,6 +1148,14 @@ export class MapViewerScene {
       return;
     }
     if (id === "cancel") {
+      // In "target mode" (an armed order awaiting a click — e.g. Set Rally Point,
+      // Attack, Repair), Escape cancels that order FIRST, before it would cancel a
+      // building's training queue.
+      if (this.rts.orderMode) {
+        this.rts.orderMode = null;
+        this.hud?.clearOrderMode();
+        return;
+      }
       if (this.placement) {
         this.cancelPlacement();
       } else if (this.cardPage === "build") {
@@ -1283,6 +1300,8 @@ export class MapViewerScene {
     const bytes = this.vfs.rawBytes(`UI\\Cursor\\${dirs[this.localRace]}Cursor.blp`);
     const sheet = bytes ? blpToCanvas(bytes) : null;
     if (!sheet) return;
+    this.cursorSheet = sheet; // reused to build the target reticle (row 2)
+    this.reticleUrls.clear();
     // The sheet is a grid of animation frames; the top-left cell is the idle
     // pointer. Cells are one-eighth of the sheet width.
     const cell = Math.round(sheet.width / 8);
@@ -1301,11 +1320,45 @@ export class MapViewerScene {
       this.cursorStyleEl = document.createElement("style");
       document.head.appendChild(this.cursorStyleEl);
     }
-    // Normal = the WC3 arrow everywhere; when an order is armed, hide the OS
-    // cursor and let the DOM reticle (which can flash/pulse) follow the mouse.
+    // Normal = the WC3 arrow everywhere; whenever the DOM target reticle is shown
+    // over the MAP (an armed order OR hovering a unit), hide the OS cursor there
+    // and let the reticle follow the mouse. Scoped to the map canvas so the
+    // arrow still shows over HUD buttons (whose hover can't reach the reticle).
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
-      `body.in-game.order-armed, body.in-game.order-armed * { cursor: none !important; }`;
+      `body.in-game.reticle-on #map { cursor: none !important; }`;
+  }
+
+  /** The real WC3 target reticle (row 2 of the race cursor sheet: a circle with
+   *  four brackets + centre pip), recoloured to `colorKey` and cached. Replaces
+   *  the old canvas-drawn brackets. Returns "" until the cursor sheet loads. */
+  private reticleUrl(colorKey: "green" | "yellow" | "red"): string {
+    const cached = this.reticleUrls.get(colorKey);
+    if (cached !== undefined) return cached;
+    const sheet = this.cursorSheet;
+    if (!sheet) return "";
+    const color = { green: [72, 255, 72], yellow: [255, 226, 58], red: [255, 64, 64] }[colorKey];
+    const cell = Math.round(sheet.width / 8);
+    const c = document.createElement("canvas");
+    c.width = cell;
+    c.height = cell;
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(sheet, 0, cell * 2, cell, cell, 0, 0, cell, cell); // reticle = row 2, col 0
+    const img = ctx.getImageData(0, 0, cell, cell);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      // Grayscale art → tint by intensity (with a floor so outlines keep colour).
+      const inten = Math.max(d[i], d[i + 1], d[i + 2]) / 255;
+      const f = Math.min(1, 0.45 + 0.75 * inten);
+      d[i] = color[0] * f;
+      d[i + 1] = color[1] * f;
+      d[i + 2] = color[2] * f;
+      // alpha (d[i+3]) preserved — defines the reticle shape
+    }
+    ctx.putImageData(img, 0, 0);
+    const url = c.toDataURL();
+    this.reticleUrls.set(colorKey, url);
+    return url;
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
@@ -1405,6 +1458,8 @@ export class MapViewerScene {
     this.metrics.hide();
     this.hud?.hide();
     this.portraitViewer?.stop();
+    document.body.classList.remove("reticle-on"); // restore the OS/WC3 cursor
+    this.hideReticle();
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
@@ -1437,6 +1492,9 @@ export class MapViewerScene {
     this.projectileModels.clear();
     this.placement = null;
     this.pendingBuilds = [];
+    this.cursorSheet = null;
+    this.reticleUrls.clear();
+    document.body.classList.remove("reticle-on");
     document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
@@ -1510,15 +1568,36 @@ export class MapViewerScene {
     if (this.selectBoxEl) this.selectBoxEl.hidden = true;
   }
 
-  /** Position + colour the armed-order reticle at the cursor. Green normally;
-   *  flashes RED when the Attack order is over a unit, pulses YELLOW when a
-   *  Move-type order is over a unit/building. Hidden when no order is armed. */
+  /** Position + colour the WC3 target reticle at the cursor. It shows either when
+   *  an order is armed OR when simply hovering a unit/mine: pulsing green over
+   *  friendly, yellow over neutral-passive (gold mines), red over enemies. When
+   *  shown it hides the OS cursor (via the `reticle-on` body class). */
   private updateReticle(cssX: number, cssY: number): void {
-    const mode = this.rts?.orderMode ?? null;
-    if (!mode || !this.rts) {
-      if (this.reticleEl) this.reticleEl.hidden = true;
-      return;
+    if (!this.rts) return this.hideReticle();
+    const mode = this.rts.orderMode;
+    const hover = this.rts.hoverInfo();
+    let show = false;
+    let colorKey: "green" | "yellow" | "red" = "green";
+    let pulse = false;
+    if (mode) {
+      show = true;
+      if (mode === "attack") {
+        colorKey = hover.has && hover.category === "enemy" ? "red" : "green";
+      } else {
+        colorKey = hover.has ? "yellow" : "green";
+      }
+      pulse = hover.has;
+    } else if (hover.has) {
+      show = true;
+      colorKey = hover.category === "friendly" ? "green" : hover.category === "enemy" ? "red" : "yellow";
+      pulse = true;
     }
+    const url = show ? this.reticleUrl(colorKey) : "";
+    if (!show || !url) {
+      document.body.classList.remove("reticle-on");
+      return this.hideReticle();
+    }
+    document.body.classList.add("reticle-on");
     if (!this.reticleEl) {
       this.reticleEl = document.createElement("div");
       this.reticleEl.className = "order-reticle";
@@ -1528,18 +1607,12 @@ export class MapViewerScene {
     el.hidden = false;
     el.style.left = `${cssX}px`;
     el.style.top = `${cssY}px`;
-    const hover = this.rts.hoverTarget();
-    let color = "#48ff48"; // green
-    let anim = "";
-    if (mode === "attack" && hover.has) {
-      color = "#ff4040"; // red — attacking a unit
-      anim = "flash";
-    } else if (mode !== "attack" && hover.has) {
-      color = "#ffe23a"; // yellow — moving onto a unit/building
-      anim = "pulse";
-    }
-    el.style.backgroundImage = `url(${targetReticle(color)})`;
-    el.className = `order-reticle${anim ? " " + anim : ""}`;
+    el.style.backgroundImage = `url(${url})`;
+    el.className = `order-reticle${pulse ? " pulse" : ""}`;
+  }
+
+  private hideReticle(): void {
+    if (this.reticleEl) this.reticleEl.hidden = true;
   }
 
   private aspect(): number {
@@ -1602,6 +1675,11 @@ export class MapViewerScene {
       }
       if (!this.dragging) this.rts?.hoverAt(e.offsetX, e.offsetY);
     });
+    // Pointer over an interactive HUD element (which swallows the canvas move
+    // events): clear the hover so the reticle hides and the normal cursor shows.
+    window.addEventListener("pointermove", (e) => {
+      if (e.target !== this.canvas && !this.dragging) this.rts?.clearHover();
+    });
     c.addEventListener(
       "wheel",
       (e) => {
@@ -1632,38 +1710,6 @@ function standSequence(seqs: Array<{ name: string }>): number {
   if (anyStand >= 0) return anyStand;
   const nonBirth = seqs.findIndex((s) => !/birth|death|decay|dissipate/i.test(s.name));
   return nonBirth >= 0 ? nonBirth : seqs.length ? 0 : -1;
-}
-
-// WC3-style targeting reticle (four corner brackets + centre pip) as a 28×28
-// data URL in the given colour. Cached per colour; used by the DOM reticle that
-// follows the cursor while an order is armed (so it can flash/pulse).
-const targetReticleCache: Record<string, string> = {};
-function targetReticle(color: string): string {
-  if (targetReticleCache[color]) return targetReticleCache[color];
-  const s = 28;
-  const c = document.createElement("canvas");
-  c.width = s;
-  c.height = s;
-  const ctx = c.getContext("2d")!;
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 2;
-  ctx.lineCap = "round";
-  const m = 3, len = 8, e = s - m; // margin, bracket length, far edge
-  const corner = (x: number, y: number, dx: number, dy: number) => {
-    ctx.beginPath();
-    ctx.moveTo(x, y + dy * len);
-    ctx.lineTo(x, y);
-    ctx.lineTo(x + dx * len, y);
-    ctx.stroke();
-  };
-  corner(m, m, 1, 1); // top-left
-  corner(e, m, -1, 1); // top-right
-  corner(m, e, 1, -1); // bottom-left
-  corner(e, e, -1, -1); // bottom-right
-  ctx.fillRect(s / 2 - 1, s / 2 - 1, 2, 2); // centre pip
-  targetReticleCache[color] = c.toDataURL();
-  return targetReticleCache[color];
 }
 
 // Quaternion for a rotation `angle` about +Z (WC3 units are Z-up), into `out`.

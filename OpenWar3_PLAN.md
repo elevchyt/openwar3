@@ -11,12 +11,35 @@ Blizzard assets** — and is **playable with zero assets** via placeholders (see
 
 ---
 
-## Progress snapshot (2026-07-02)
+## Progress snapshot (2026-07-03)
 
 Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3-viewer 5.12.0,
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass — reticle/descriptions/timing/formation (2026-07-03, latest+14)** — cleared a
+  14-item feedback list. **Descriptions were empty**: the loader read `Ubertip` from
+  `*UnitFunc.txt` (art/buttonpos/missile only) — the real Name/Tip/**Ubertip**/Hotkey live in
+  `*UnitStrings.txt`; now sourced correctly (+ real command **hotkeys**). **Heroes now spawn
+  level 1** (UnitBalance `level` is 5 = their creep-threat level; no XP system yet → pinned to 1).
+  **Projectile/attack timing**: attacks now strike at the weapon's **damage point** (`dmgpt1`, e.g.
+  Archmage 0.55 s) instead of instantly — added a swing state (`swingLeft`/`swingTargetId`/
+  `swingSeq`) to the sim; the renderer **re-triggers the attack clip each swing** so the throw
+  gesture lines up. **Cancel-construction** now removes the building **silently** (new sim
+  `removals` channel + `onRemove`) so it just vanishes with the race cancel-explosion — no more
+  death/decay collapse. **Group move formation**: `groupTargets()` spreads a selection into
+  concentric hex rings (snapped to walkable cells, greedy nearest assignment) so units don't stack
+  on one tile. **Too-close move** (`< 40` units) only pivots in place. **Gathering→move** now plays
+  the walk clip (moving beats working in the anim picker). **Original WC3 reticle**: extracted from
+  the race cursor sheet (row 2 = the crosshair-in-circle), recoloured green/yellow/red and pulsed;
+  shows on hover too — green friendly / yellow neutral (gold mine) / red enemy — and hides the OS
+  cursor only over the map. **Gold mines** get the yellow ring on **hover** (not just click).
+  **Rally button → bottom-right (3,2)** (was on the Paladin's (2,2) slot); cancel-train → (3,1).
+  **Building click colliders** lowered toward their base. **Portrait animation fixed** (loader
+  preferred a stray `Walk` clip on portrait models → now prefers the `Portrait` idle). **Status
+  bars** raised + thicker. **Escape** cancels an armed target-mode order first (before training
+  cancel). Stuck cancel-tooltip fixed (hidden on command-card change). 15 headless sim checks +
+  a data-registry check pass; `npm run build` clean.
 - **Projectiles/repair/group-select/stat-icons (2026-07-02, latest+13)** — **projectiles fixed**:
   the missile art lives in the per-race `UnitFunc.txt` (as `.mdl`), NOT `UnitWeapons.slk` (which has
   no `Missileart` column) — fireballs/arrows/mortar shells now render. **Worker repair** (per
