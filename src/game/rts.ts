@@ -440,6 +440,11 @@ export class RtsController {
     };
   }
 
+  /** Time of day for the HUD clock: game-hour + day/night flag. */
+  timeOfDay(): { hour: number; isDay: boolean } {
+    return { hour: this.sim.timeOfDay, isDay: this.sim.isDay };
+  }
+
   /** World position of the selected unit (for the portrait-click camera focus). */
   selectedPosition(): [number, number] | null {
     if (this.selected === null) return null;

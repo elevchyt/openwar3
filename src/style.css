@@ -215,10 +215,28 @@ body.in-game .menu-panel { display: none; }
   margin: 0;
   border: none;
   border-radius: 0;
-  background-position: center;
-  background-size: contain;
-  background-repeat: no-repeat;
+  background: none;
   pointer-events: none;
+}
+/* Rotating sun/moon disc behind the ring; the ring's transparent centre shows it. */
+.hud-clock-face {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56%;
+  height: 56%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  overflow: hidden;
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  background-position-y: center;
+  transition: background-position-x 3s linear;
+}
+.hud-clock-frame {
+  position: absolute;
+  inset: 0;
+  background: center / contain no-repeat;
 }
 
 .hud-resources {

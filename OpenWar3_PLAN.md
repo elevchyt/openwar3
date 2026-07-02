@@ -82,6 +82,18 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   (`margin-left:auto`), day/night medallion enlarged (300% of bar height), top menu buttons restyled
   as beveled WC3-ish stone (real `UpperMenuButtonTexture` is an FDF-decorated indirect name — full
   FDF-driven top bar deferred to the §10 UI pass).
+- **Mining behaviour + HUD polish + day/night (2026-07-02, latest+2)** — **mining:** resources
+  return to the *nearest* edge of the depot (worker paths to the building's near side), workers
+  **ghost through each other** for the whole auto gold loop (`noCollision`, cleared by any manual
+  order), entering a mine force-deselects the worker, and a **yellow ring flashes twice** at a
+  tree/mine on a harvest order (sized to the node). **HUD:** selected-unit detail panel has a dark
+  backdrop with name + damage/armor; HP/mana are readable coloured numbers; **portrait click** snaps
+  the camera to the unit and **hold** locks it; command card uses real **BTN\* icons** + hover
+  tooltips (name/hotkey/description). **Day/night cycle** in the sim (480 s = 24 game-h, day
+  06:00–18:00, melee starts 08:00; `SimWorld.timeOfDay`/`isDay`) drives the clock's real sun/moon
+  time-indicator disc (sun by day, moon by night). **Race-specific HUD** confirmed (console skin,
+  time indicator, and now the **cursor** all follow the client's resolved race). Reference
+  screenshots at `~/Downloads/references/` (see [[hud-reference-screenshots]]).
 - **HUD v4 + gather rework (2026-07-02, latest)** — console no longer stretches: it's rendered at
   its **natural aspect** (`aspect-ratio` + `min(26vh, 100vw/aspect)`), centred, letterboxed on
   widescreen (matches the reference). Day/night clock is now its own centred medallion crop

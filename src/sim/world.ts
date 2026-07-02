@@ -114,12 +114,20 @@ const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latc
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
 
+// WC3 day/night: a full cycle is 480 real seconds = 24 game hours (so one game
+// hour = 20 real seconds); daytime is 06:00–18:00. Melee games start at 08:00.
+const GAME_HOURS_PER_SEC = 24 / 480;
+const DAY_START = 6;
+const DAY_END = 18;
+
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
   readonly mines = new Map<number, SimMine>();
   readonly trees = new Map<number, SimTree>();
   /** Per-player resource stash (gold/lumber). */
   readonly stash = new Map<number, { gold: number; lumber: number }>();
+  /** Time of day in game-hours [0,24); advances every tick. */
+  timeOfDay = 8;
   private deaths: number[] = [];
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -426,7 +434,13 @@ export class SimWorld {
     return a.team !== b.team;
   }
 
+  /** True during daylight (06:00–18:00 game time). */
+  get isDay(): boolean {
+    return this.timeOfDay >= DAY_START && this.timeOfDay < DAY_END;
+  }
+
   tick(dt: number): void {
+    this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % 24;
     for (const u of this.units.values()) {
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.repathT > 0) u.repathT -= dt;

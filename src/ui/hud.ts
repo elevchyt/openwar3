@@ -36,10 +36,12 @@ export interface HudDriver {
   icon(kind: "gold" | "lumber" | "supply"): string | null;
   /** Data URL for a command button icon (e.g. "BTNMove"), or null. */
   commandIcon(name: string): string | null;
+  /** Current game time for the clock (hour 0–24, day/night flag). */
+  dayNight(): { hour: number; isDay: boolean };
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
   minimapImage(): HTMLCanvasElement | null;
   /** Race console atlas crops (UI\Console\<Race>UITile01–04) or null. */
-  consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number } | null;
+  consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null } | null;
 }
 
 // Zone rectangles measured from the rendered console atlas (fractions of the
@@ -88,6 +90,7 @@ export class GameHud {
   private dotsCanvas!: HTMLCanvasElement;
   private modeButtons = new Map<string, HTMLButtonElement>();
   private cmdTooltip!: HTMLDivElement;
+  private clockFace?: HTMLDivElement;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
 
@@ -130,6 +133,15 @@ export class GameHud {
       this.dotsT = 0;
       this.drawDots();
     }
+    this.updateClock();
+  }
+
+  /** Sun/moon disc: the indicator texture is sun–moon–sun across its width, so
+   *  showing its left edge reveals the sun (day) and its centre the moon
+   *  (night); a CSS transition eases the dawn/dusk swap. */
+  private updateClock(): void {
+    if (!this.clockFace) return;
+    this.clockFace.style.backgroundPositionX = this.driver.dayNight().isDay ? "0%" : "50%";
   }
 
   private onKey = (e: KeyboardEvent): void => {
@@ -148,7 +160,7 @@ export class GameHud {
 
   // --- construction ---------------------------------------------------------
 
-  private buildTopBar(skin: { clockUrl: string; clockAspect: number } | null): HTMLDivElement {
+  private buildTopBar(skin: { clockUrl: string; clockAspect: number; timeUrl: string | null } | null): HTMLDivElement {
     const bar = document.createElement("div");
     bar.className = "hud-top";
 
@@ -162,15 +174,24 @@ export class GameHud {
       menus.appendChild(b);
     }
 
-    // Day/night clock — the real circular medallion (its own atlas crop so it
-    // isn't cut off), or a plain CSS orb without an install.
+    // Day/night clock — the circular medallion (its own atlas crop) with the
+    // rotating sun/moon disc behind its transparent centre.
     const clock = document.createElement("div");
     clock.className = "hud-clock";
-    clock.title = "Day/night cycle (not simulated yet)";
+    clock.title = "Day/night cycle";
     if (skin) {
       clock.classList.add("hud-clock-skinned");
-      clock.style.backgroundImage = `url(${skin.clockUrl})`;
       clock.style.aspectRatio = String(skin.clockAspect);
+      if (skin.timeUrl) {
+        this.clockFace = document.createElement("div");
+        this.clockFace.className = "hud-clock-face";
+        this.clockFace.style.backgroundImage = `url(${skin.timeUrl})`;
+        clock.appendChild(this.clockFace);
+      }
+      const frame = document.createElement("div");
+      frame.className = "hud-clock-frame";
+      frame.style.backgroundImage = `url(${skin.clockUrl})`;
+      clock.appendChild(frame);
     }
 
     const res = document.createElement("div");

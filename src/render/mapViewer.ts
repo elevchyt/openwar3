@@ -143,7 +143,10 @@ export class MapViewerScene {
   private portraitFor: number | null = null;
   private portraitLoading = false;
   private cameraLock = false; // portrait held → camera follows the selected unit
-  private consoleSkinCache: { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number } | null | undefined;
+  private consoleSkinCache:
+    | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
+    | null
+    | undefined;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -376,6 +379,7 @@ export class MapViewerScene {
     // Resolve "random" once per slot: roster and console skin must agree.
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
     this.localRace = races.get(this.localPlayer) ?? "human";
+    this.applyRaceCursor();
     for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, 500, 150); // WC3 melee start
     this.mountHud();
     for (const slot of config.slots) {
@@ -463,6 +467,7 @@ export class MapViewerScene {
       stopSelected: () => this.rts?.stopSelected(),
       icon: (kind) => this.resourceIcon(kind),
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
+      dayNight: () => this.rts?.timeOfDay() ?? { hour: 8, isDay: true },
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
     };
@@ -475,7 +480,7 @@ export class MapViewerScene {
    *  medallion at the top-centre. Crop the console band (kept at its natural
    *  aspect — never stretched; letterboxed on widescreen) and the clock
    *  separately so the clock isn't cut off by the thin top bar. */
-  private consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number } | null {
+  private consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null } | null {
     if (this.consoleSkinCache !== undefined) return this.consoleSkinCache;
     const dirs: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
     const dir = dirs[this.localRace];
@@ -514,11 +519,15 @@ export class MapViewerScene {
     const clockX = Math.round(width * 0.444);
     const clockW = Math.round(width * 0.112);
     const clockH = Math.round(height * 0.205);
+    // The rotating sun/moon disc that sits inside the clock ring (Blizzard kept
+    // the "Human" filename inside every race folder).
+    const timeUrl = this.blpIcon(`UI\\Console\\${dir}\\HumanUITile-TimeIndicator.blp`);
     this.consoleSkinCache = {
       consoleUrl: crop(0, consoleY, width, consoleH),
       consoleAspect: width / consoleH,
       clockUrl: crop(clockX, 0, clockW, clockH),
       clockAspect: clockW / clockH,
+      timeUrl,
     };
     return this.consoleSkinCache;
   }
@@ -562,6 +571,25 @@ export class MapViewerScene {
       supply: "UI\\Widgets\\ToolTips\\Human\\ToolTipSupplyIcon.blp",
     };
     return this.blpIcon(paths[kind]);
+  }
+
+  /** Set the client's race cursor (the top-left pointer frame of the race
+   *  cursor sprite sheet) as the in-game mouse cursor. */
+  private applyRaceCursor(): void {
+    const dirs: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
+    const bytes = this.vfs.rawBytes(`UI\\Cursor\\${dirs[this.localRace]}Cursor.blp`);
+    const sheet = bytes ? blpToCanvas(bytes) : null;
+    if (!sheet) return;
+    // The sheet is a grid of animation frames; the top-left cell is the idle
+    // pointer. Cells are one-eighth of the sheet width.
+    const cell = Math.round(sheet.width / 8);
+    const frame = document.createElement("canvas");
+    frame.width = cell;
+    frame.height = cell;
+    frame.getContext("2d")!.drawImage(sheet, 0, 0);
+    const url = frame.toDataURL();
+    // Hotspot near the gauntlet's fingertip (top-left).
+    document.body.style.cursor = `url(${url}) 3 3, auto`;
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
@@ -632,6 +660,7 @@ export class MapViewerScene {
     this.metrics.dispose();
     this.hud?.dispose();
     this.hud = null;
+    document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
   }
