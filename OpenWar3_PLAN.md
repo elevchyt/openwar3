@@ -17,6 +17,21 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 2 — neutral passive / cursor / a-move (2026-07-03, latest+15)** — six
+  follow-ups. **Neutral Passive (WC3 player 15)** entities — taverns, marketplaces, goblin
+  labs/merchants, fountains, critters — are now seeded as static, **non-hostile** sim units
+  (`neutralPassive` flag; `hostile()` short-circuits) with the **yellow ring on hover AND click**
+  (positions read from `war3mapUnits.doo`, matched to the rendered units; the renderer keeps
+  drawing them — we don't drive their instances). Player 12 = Neutral Hostile (red) unchanged.
+  **Cursor rework**: the WC3 **target reticle shows only while an order is armed**; plain hover
+  keeps the **race hand cursor** but recoloured (multiply-tinted green/yellow/red) — both **pulse
+  colour only (opacity), not size**. **Attack-move now fights first**: `tickAttackMove` engages and
+  clears every hostile within acquisition range (re-acquiring the instant one dies, no creeping
+  forward) and only advances to the destination when nothing's left to fight (added `amDestX/Y`;
+  `engage()`/`nearestEnemy()` extracted and shared; tickMovement only ends an a-move at its real
+  destination). **Tooltip** anchored to grow upward only (was a height-scaled transform expanding
+  both ways). **Status bars + level badge** enlarged (width + height). 21 headless sim checks +
+  the data-registry check pass; build clean.
 - **Feedback pass — reticle/descriptions/timing/formation (2026-07-03, latest+14)** — cleared a
   14-item feedback list. **Descriptions were empty**: the loader read `Ubertip` from
   `*UnitFunc.txt` (art/buttonpos/missile only) — the real Name/Tip/**Ubertip**/Hotkey live in

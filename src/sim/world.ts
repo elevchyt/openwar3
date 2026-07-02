@@ -88,6 +88,7 @@ export interface SimUnit {
   id: number;
   owner: number; // player slot; -1 = map-neutral
   team: number; // units on the same team are allied; -1 = hostile to everyone
+  neutralPassive: boolean; // Neutral Passive (shops, critters): never hostile, yellow ring
   x: number;
   y: number;
   facing: number; // radians
@@ -120,6 +121,8 @@ export interface SimUnit {
   moving: boolean;
   chaseX: number; // where the current chase path was aimed (repath when stale)
   chaseY: number;
+  amDestX: number; // attack-move final destination (units engage enemies en route)
+  amDestY: number;
   patrolX: number; // the OTHER patrol endpoint (units bounce between the two)
   patrolY: number;
   acquireT: number; // seconds until the next auto-acquire scan
@@ -484,8 +487,11 @@ export class SimWorld {
       | "swingTargetId"
       | "swingSeq"
       | "inCombat"
+      | "neutralPassive"
       | "chaseX"
       | "chaseY"
+      | "amDestX"
+      | "amDestY"
       | "patrolX"
       | "patrolY"
       | "acquireT"
@@ -521,11 +527,14 @@ export class SimWorld {
       swingTargetId: 0,
       swingSeq: 0,
       inCombat: false,
+      neutralPassive: false,
       path: [],
       waypoint: 0,
       moving: false,
       chaseX: 0,
       chaseY: 0,
+      amDestX: unit.x,
+      amDestY: unit.y,
       patrolX: unit.x,
       patrolY: unit.y,
       acquireT: 0,
@@ -646,11 +655,10 @@ export class SimWorld {
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
-    if (!this.pathTo(u, tx, ty)) {
-      this.stop(id);
-      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
-      return false;
-    }
+    u.amDestX = tx; // final destination; tickAttackMove engages enemies en route
+    u.amDestY = ty;
+    u.acquireT = 0; // scan on the very first tick so it fights before advancing
+    this.pathTo(u, tx, ty); // best-effort initial move (re-decided each tick)
     return true;
   }
 
@@ -779,8 +787,10 @@ export class SimWorld {
   }
 
   // Different teams are enemies; creeps all share team -1 (hostile to every
-  // player team but not to each other, like WC3's Neutral Hostile).
+  // player team but not to each other, like WC3's Neutral Hostile). Neutral
+  // Passive entities (shops, critters) are hostile to no one.
   hostile(a: SimUnit, b: SimUnit): boolean {
+    if (a.neutralPassive || b.neutralPassive) return false;
     return a.team !== b.team;
   }
 
@@ -811,6 +821,8 @@ export class SimWorld {
           this.tickRepair(u, dt);
           break;
         case "attackmove":
+          this.tickAttackMove(u, dt); // fight nearby enemies first, then advance
+          break;
         case "patrol":
           this.tickAcquire(u, dt); // engage enemies encountered en route
           break;
@@ -876,8 +888,15 @@ export class SimWorld {
       this.stop(u.id);
       return;
     }
+    this.engage(u, t);
+  }
+
+  /** Close to weapon range, then face + swing at the damage point. Shared by
+   *  direct Attack orders and attack-move engagements. */
+  private engage(u: SimUnit, t: SimUnit): void {
+    const w = u.weapon!;
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    if (gap > u.weapon.range) {
+    if (gap > w.range) {
       u.inCombat = false;
       this.chase(u, t);
       return;
@@ -893,10 +912,66 @@ export class SimWorld {
     // Begin the attack: the cooldown starts now, but the strike/projectile only
     // lands at the weapon's damage point (a fraction into the swing animation) —
     // matching WC3 so e.g. the Archmage's fireball leaves at the right moment.
-    u.cooldownLeft = u.weapon.cooldown;
-    u.swingLeft = Math.max(0, u.weapon.damagePoint);
+    u.cooldownLeft = w.cooldown;
+    u.swingLeft = Math.max(0, w.damagePoint);
     u.swingTargetId = t.id;
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
+  }
+
+  /** Attack-move: fight any hostiles within acquisition range FIRST (chasing +
+   *  attacking, and acquiring the next the moment one dies), advancing toward the
+   *  destination only when nothing is left to fight nearby (WC3 A-move). */
+  private tickAttackMove(u: SimUnit, dt: number): void {
+    const w = u.weapon;
+    if (w && w.acquire > 0) {
+      const hadTarget = u.targetId !== null;
+      let t = hadTarget ? this.units.get(u.targetId!) : undefined;
+      // Drop the target if it died, turned friendly, or fled past the leash.
+      if (t && (!this.hostile(u, t) || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > w.acquire)) t = undefined;
+      if (!t) {
+        if (hadTarget) u.acquireT = 0; // just lost one — re-scan now, don't creep forward
+        u.acquireT -= dt;
+        if (u.acquireT <= 0) {
+          u.acquireT = ACQUIRE_PERIOD;
+          t = this.nearestEnemy(u, w.acquire) ?? undefined;
+        }
+      }
+      if (t) {
+        u.targetId = t.id;
+        this.engage(u, t);
+        return; // an enemy is in range — stand and fight, don't advance
+      }
+    }
+    // Nothing to fight nearby: resume toward the attack-move destination.
+    u.targetId = null;
+    u.inCombat = false;
+    if (Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= ARRIVE_EPS) {
+      this.stop(u.id); // arrived
+      return;
+    }
+    if (!u.moving) {
+      if (!this.pathTo(u, u.amDestX, u.amDestY)) {
+        this.stop(u.id);
+        u.desiredFacing = Math.atan2(u.amDestY - u.y, u.amDestX - u.x);
+      }
+    } else if (Math.hypot(u.chaseX - u.amDestX, u.chaseY - u.amDestY) > CHASE_REPATH) {
+      this.pathTo(u, u.amDestX, u.amDestY); // was chasing an enemy — steer back on course
+    }
+  }
+
+  /** Nearest hostile within `range` (gap measured hull-to-hull), or null. */
+  private nearestEnemy(u: SimUnit, range: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestGap = range;
+    for (const t of this.units.values()) {
+      if (t === u || !this.hostile(u, t)) continue;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = t;
+      }
+    }
+    return best;
   }
 
   /** Advance an in-progress attack swing; when it reaches the weapon's damage
@@ -1181,22 +1256,14 @@ export class SimWorld {
     this.deaths.push(u.id);
   }
 
-  // Idle armed units scan for the nearest enemy in acquisition range.
+  // Idle (or patrolling) armed units scan for the nearest enemy in acquisition
+  // range and turn on it.
   private tickAcquire(u: SimUnit, dt: number): void {
     if (!u.weapon || u.weapon.acquire <= 0) return;
     u.acquireT -= dt;
     if (u.acquireT > 0) return;
     u.acquireT = ACQUIRE_PERIOD;
-    let best: SimUnit | null = null;
-    let bestGap = u.weapon.acquire;
-    for (const t of this.units.values()) {
-      if (t === u || !this.hostile(u, t)) continue;
-      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = t;
-      }
-    }
+    const best = this.nearestEnemy(u, u.weapon.acquire);
     if (best) this.issueAttack(u.id, best.id);
   }
 
@@ -1328,7 +1395,11 @@ export class SimWorld {
           continue;
         }
         this.settle(u); // arrival: snap to the cell grid and reserve
-        if (u.order === "move" || u.order === "attackmove") u.order = "idle"; // auto-acquire resumes
+        // A plain move ends here. An attack-move only ends when it has actually
+        // reached its destination — a path that ended mid-chase (or short of the
+        // goal) stays an attack-move so tickAttackMove keeps fighting/advancing.
+        if (u.order === "move") u.order = "idle";
+        else if (u.order === "attackmove" && Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= PATHING_CELL * 1.5) u.order = "idle";
       }
     }
   }

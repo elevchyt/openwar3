@@ -134,22 +134,22 @@ html, body {
   z-index: 2;
 }
 .unit-hpbar-level {
-  font: 700 11px/1 var(--game-font);
+  font: 700 13px/1 var(--game-font);
   color: #ffe08a;
-  background: rgba(0, 0, 0, 0.8);
-  border: 1px solid rgba(216, 180, 90, 0.7);
-  border-radius: 2px;
-  padding: 1px 3px;
-  min-width: 12px;
+  background: rgba(0, 0, 0, 0.82);
+  border: 1px solid rgba(216, 180, 90, 0.75);
+  border-radius: 3px;
+  padding: 2px 5px;
+  min-width: 17px;
   text-align: center;
 }
 .unit-hpbar-bars { display: flex; flex-direction: column; gap: 2px; }
 .unit-hpbar-track {
-  height: 7px;
+  height: 9px;
   background: rgba(0, 0, 0, 0.65);
   border: 1px solid rgba(0, 0, 0, 0.85);
 }
-.unit-hpbar-manatrack { height: 5px; }
+.unit-hpbar-manatrack { height: 7px; }
 .unit-hpbar-fill { height: 100%; width: 100%; background: #46e05a; }
 .unit-hpbar-mana { height: 100%; width: 100%; background: #4a7cff; }
 
@@ -442,7 +442,10 @@ body.in-game .menu-panel { display: none; }
 .hud-tooltip {
   position: absolute;
   left: -4px;
-  bottom: calc(100% + 6px);
+  /* Anchor the BOTTOM edge a fixed gap above the command card so the tooltip
+     only ever grows UPWARD as its text gets taller (a percentage transform
+     scaled with height, which made it expand in both directions). */
+  bottom: calc(100% + 14px);
   min-width: 210px;
   max-width: 300px;
   padding: 8px 11px;
@@ -453,8 +456,6 @@ body.in-game .menu-panel { display: none; }
   text-align: left;
   pointer-events: none;
   z-index: 6;
-  /* Sit a bit higher above the command card (≈1/3 of its own height). */
-  transform: translateY(-33%);
 }
 .hud-tooltip-title { font-size: 14px; color: #f2f4f8; margin-bottom: 4px; }
 .hud-tooltip-title b { color: #f0c850; font-weight: 400; }
@@ -488,24 +489,27 @@ body.in-game .menu-panel { display: none; }
   background: rgba(224, 80, 70, 0.2);
 }
 
-/* The real WC3 target reticle (from the race cursor sheet), recoloured per
-   allegiance, that follows the cursor and replaces the OS cursor. Shown when an
-   order is armed OR when hovering a unit/mine: green = friendly, yellow =
-   neutral (gold mine), red = enemy. It pulses (loops) while over a target. */
+/* Cursor overlay that follows the mouse and replaces the OS cursor over the map.
+   Two forms, both recoloured per allegiance (green friendly / yellow neutral /
+   red enemy) and pulsing COLOUR ONLY (constant size):
+   - .reticle: the real WC3 target reticle (row 2 of the race cursor sheet),
+     shown only while an order is armed (Move/Attack/Patrol/…).
+   - .hand: the race hand cursor, tinted, shown while merely hovering a unit. */
 .order-reticle {
   position: fixed;
-  width: 30px;
-  height: 30px;
-  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 32px;
   background: center / contain no-repeat;
   pointer-events: none;
   z-index: 7;
   image-rendering: pixelated;
 }
+.order-reticle.reticle { transform: translate(-50%, -50%); } /* centred on the point */
+.order-reticle.hand { transform: translate(-3px, -3px); } /* hotspot near the tip */
 .order-reticle.pulse { animation: reticle-pulse 0.8s ease-in-out infinite; }
 @keyframes reticle-pulse {
-  0%, 100% { transform: translate(-50%, -50%) scale(1); }
-  50% { transform: translate(-50%, -50%) scale(1.2); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* Drag-box selection rectangle (WC3 green marquee). */

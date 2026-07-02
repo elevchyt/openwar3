@@ -50,6 +50,7 @@ const BASE_FILES = [
 ];
 
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
+const NEUTRAL_PASSIVE_PLAYER = 15; // war3mapUnits.doo owner slot for Neutral Passive
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
@@ -181,6 +182,7 @@ export class MapViewerScene {
   private reticleEl: HTMLDivElement | null = null; // follows the cursor while armed
   private cursorSheet: HTMLCanvasElement | null = null; // race cursor sprite sheet
   private reticleUrls = new Map<string, string>(); // tinted WC3 reticle by colour key
+  private handUrls = new Map<string, string>(); // tinted race hand cursor by colour key
   private lastMouse = { x: 0, y: 0 };
   private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
   private flashCircles: Array<{ inst: SpawnInstance; t: number }> = [];
@@ -317,6 +319,7 @@ export class MapViewerScene {
       };
       this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry);
       this.registerResourceNodes(nodes);
+      this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
     }
   }
 
@@ -367,9 +370,10 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }> } {
+  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }> } {
     const trees: Array<{ x: number; y: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
+    const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
     let buildVersion = 0;
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
@@ -403,7 +407,7 @@ export class MapViewerScene {
       try {
         units.load(unitBytes, buildVersion);
       } catch {
-        return { trees, mines };
+        return { trees, mines, neutral };
       }
       const buildings = units.units
         .filter((u) => this.registry.get(u.id)?.isBuilding)
@@ -412,10 +416,14 @@ export class MapViewerScene {
       for (const u of units.units) {
         if (u.id === "ngol") {
           mines.push({ x: u.location[0], y: u.location[1], gold: (u as { goldAmount?: number }).goldAmount ?? 12500 });
+        } else if ((u as { player?: number }).player === NEUTRAL_PASSIVE_PLAYER) {
+          // Shops, taverns, labs, merchants, fountains, critters — anything owned
+          // by Neutral Passive gets the yellow selection/hover ring.
+          neutral.push({ x: u.location[0], y: u.location[1] });
         }
       }
     }
-    return { trees, mines };
+    return { trees, mines, neutral };
   }
 
   private slkText(path: string): string {
@@ -1300,8 +1308,9 @@ export class MapViewerScene {
     const bytes = this.vfs.rawBytes(`UI\\Cursor\\${dirs[this.localRace]}Cursor.blp`);
     const sheet = bytes ? blpToCanvas(bytes) : null;
     if (!sheet) return;
-    this.cursorSheet = sheet; // reused to build the target reticle (row 2)
+    this.cursorSheet = sheet; // reused to build the target reticle (row 2) + tinted hand
     this.reticleUrls.clear();
+    this.handUrls.clear();
     // The sheet is a grid of animation frames; the top-left cell is the idle
     // pointer. Cells are one-eighth of the sheet width.
     const cell = Math.round(sheet.width / 8);
@@ -1358,6 +1367,35 @@ export class MapViewerScene {
     ctx.putImageData(img, 0, 0);
     const url = c.toDataURL();
     this.reticleUrls.set(colorKey, url);
+    return url;
+  }
+
+  /** The race hand cursor (row 0, col 0 of the sheet) multiply-tinted to
+   *  `colorKey` and cached — shown (pulsing) while hovering a unit so the cursor
+   *  "stays the same but pulsates green/yellow/red". Returns "" until it loads. */
+  private handCursorUrl(colorKey: "green" | "yellow" | "red"): string {
+    const cached = this.handUrls.get(colorKey);
+    if (cached !== undefined) return cached;
+    const sheet = this.cursorSheet;
+    if (!sheet) return "";
+    const color = { green: [130, 255, 130], yellow: [255, 235, 110], red: [255, 110, 110] }[colorKey];
+    const cell = Math.round(sheet.width / 8);
+    const c = document.createElement("canvas");
+    c.width = cell;
+    c.height = cell;
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(sheet, 0, 0, cell, cell, 0, 0, cell, cell); // hand pointer = row 0, col 0
+    const img = ctx.getImageData(0, 0, cell, cell);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      // Multiply-tint keeps the gauntlet's shape/shading, just recoloured.
+      d[i] = (d[i] * color[0]) / 255;
+      d[i + 1] = (d[i + 1] * color[1]) / 255;
+      d[i + 2] = (d[i + 2] * color[2]) / 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    const url = c.toDataURL();
+    this.handUrls.set(colorKey, url);
     return url;
   }
 
@@ -1459,7 +1497,7 @@ export class MapViewerScene {
     this.hud?.hide();
     this.portraitViewer?.stop();
     document.body.classList.remove("reticle-on"); // restore the OS/WC3 cursor
-    this.hideReticle();
+    this.hideCursorOverlay();
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
@@ -1494,6 +1532,7 @@ export class MapViewerScene {
     this.pendingBuilds = [];
     this.cursorSheet = null;
     this.reticleUrls.clear();
+    this.handUrls.clear();
     document.body.classList.remove("reticle-on");
     document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
@@ -1568,39 +1607,33 @@ export class MapViewerScene {
     if (this.selectBoxEl) this.selectBoxEl.hidden = true;
   }
 
-  /** Position + colour the WC3 target reticle at the cursor. It shows either when
-   *  an order is armed OR when simply hovering a unit/mine: pulsing green over
-   *  friendly, yellow over neutral-passive (gold mines), red over enemies. When
-   *  shown it hides the OS cursor (via the `reticle-on` body class). */
+  /** Drive the cursor overlay at the mouse. While an order is ARMED (Move/Attack/
+   *  Patrol/Rally/Repair) it shows the WC3 **target reticle**; while merely
+   *  hovering a unit/mine it keeps the race **hand cursor** but recoloured. Both
+   *  pulse (colour only, constant size) — green friendly / yellow neutral / red
+   *  enemy — and hide the OS cursor over the map (via the `reticle-on` class). */
   private updateReticle(cssX: number, cssY: number): void {
-    if (!this.rts) return this.hideReticle();
+    if (!this.rts) return this.hideCursorOverlay();
     const mode = this.rts.orderMode;
     const hover = this.rts.hoverInfo();
-    let show = false;
+    let kind: "reticle" | "hand" | null = null;
     let colorKey: "green" | "yellow" | "red" = "green";
-    let pulse = false;
     if (mode) {
-      show = true;
-      if (mode === "attack") {
-        colorKey = hover.has && hover.category === "enemy" ? "red" : "green";
-      } else {
-        colorKey = hover.has ? "yellow" : "green";
-      }
-      pulse = hover.has;
+      kind = "reticle";
+      if (mode === "attack") colorKey = hover.has && hover.category === "enemy" ? "red" : "green";
+      else colorKey = hover.has ? "yellow" : "green";
     } else if (hover.has) {
-      show = true;
+      kind = "hand";
       colorKey = hover.category === "friendly" ? "green" : hover.category === "enemy" ? "red" : "yellow";
-      pulse = true;
     }
-    const url = show ? this.reticleUrl(colorKey) : "";
-    if (!show || !url) {
+    const url = kind === "reticle" ? this.reticleUrl(colorKey) : kind === "hand" ? this.handCursorUrl(colorKey) : "";
+    if (!kind || !url) {
       document.body.classList.remove("reticle-on");
-      return this.hideReticle();
+      return this.hideCursorOverlay();
     }
     document.body.classList.add("reticle-on");
     if (!this.reticleEl) {
       this.reticleEl = document.createElement("div");
-      this.reticleEl.className = "order-reticle";
       document.body.appendChild(this.reticleEl);
     }
     const el = this.reticleEl;
@@ -1608,10 +1641,10 @@ export class MapViewerScene {
     el.style.left = `${cssX}px`;
     el.style.top = `${cssY}px`;
     el.style.backgroundImage = `url(${url})`;
-    el.className = `order-reticle${pulse ? " pulse" : ""}`;
+    el.className = `order-reticle ${kind} pulse`;
   }
 
-  private hideReticle(): void {
+  private hideCursorOverlay(): void {
     if (this.reticleEl) this.reticleEl.hidden = true;
   }
 

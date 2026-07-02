@@ -173,6 +173,11 @@ const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
 // far/behind-camera units that screen-projection alone would wrongly match.
 const PICK_WORLD_MAX = 700;
 const MAX_SELECT = 24; // WC3 control-group / selection cap
+// Neutral Passive (WC3 player 15): shops, taverns, labs, merchants, fountains,
+// critters. Owner < 0 (grey minimap, never a player), a distinct team, and the
+// sim's `neutralPassive` flag makes them non-hostile with a yellow ring.
+const NEUTRAL_PASSIVE_OWNER = -1;
+const NEUTRAL_PASSIVE_TEAM = -2;
 
 /** One icon in the multi-selection grid. */
 export interface SelIcon {
@@ -232,6 +237,7 @@ export class RtsController {
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
+  private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
   private seeded = false;
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
@@ -264,6 +270,18 @@ export class RtsController {
   /** Which player's units a drag-box selects (set at melee start). */
   setLocalPlayer(id: number): void {
     this.localPlayer = id;
+  }
+
+  /** Register the world positions of Neutral Passive entities (from the map's
+   *  war3mapUnits.doo, player 15). trySeed matches rendered units to these and
+   *  seeds them as non-hostile, yellow-ringed selectables. */
+  setNeutralPassive(positions: Array<{ x: number; y: number }>): void {
+    this.neutralPositions = positions;
+  }
+
+  private isNeutralPassiveAt(x: number, y: number): boolean {
+    for (const p of this.neutralPositions) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return true;
+    return false;
   }
 
   /** Remove a unit from the selection (keeping the primary consistent). */
@@ -353,13 +371,20 @@ export class RtsController {
   private trySeed(): void {
     if (this.seeded || !this.host.unitsReady()) return;
     for (const unit of this.host.units()) {
+      const loc = unit.instance.localLocation;
+      const def = this.registry.get(unit.row?.string("unitid") ?? "");
+      // Neutral Passive (shops/taverns/labs/merchants/fountains/critters): seed
+      // it as a static, non-hostile, yellow-ringed selectable — even though it's
+      // a building with no walk clip.
+      if (this.isNeutralPassiveAt(loc[0], loc[1])) {
+        this.seedNeutral(unit, def, loc);
+        continue;
+      }
       const movetp = unit.row?.string("movetp");
       if (!movetp || movetp === "_" || movetp === "none") continue; // buildings/immovable
       const seqs = unit.instance.model.sequences;
       if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
       const anims = buildAnimSet(seqs);
-      const loc = unit.instance.localLocation;
-      const def = this.registry.get(unit.row?.string("unitid") ?? "");
       const simId = this.nextId++;
       this.sim.add({
         id: simId,
@@ -407,6 +432,69 @@ export class RtsController {
       this.byId.set(simId, entry);
     }
     this.seeded = true;
+  }
+
+  /** Seed a Neutral Passive entity (shop/tavern/lab/merchant/fountain/critter):
+   *  a static, non-hostile sim unit with the yellow ring. We don't drive its
+   *  instance in tick() (the map viewer already renders it) — this record just
+   *  makes it hoverable/selectable and rings it. */
+  private seedNeutral(unit: MapUnit, def: UnitDef | undefined, loc: Float32Array): void {
+    const simId = this.nextId++;
+    const isBuilding = def?.isBuilding ?? false;
+    // Buildings get a (complete) building state so pickAt/rings treat them as
+    // structures (footprint-sized ring, lowered collider); their footprint is
+    // already stamped by the map loader, so speed 0 → no cell reservation here.
+    const building: BuildingState | null = isBuilding
+      ? { constructionLeft: 0, buildTimeTotal: 1, builderId: 0, queue: [], rallyX: loc[0], rallyY: loc[1], producesUnits: false }
+      : null;
+    const u = this.sim.add(
+      {
+        id: simId,
+        owner: NEUTRAL_PASSIVE_OWNER,
+        team: NEUTRAL_PASSIVE_TEAM,
+        x: loc[0],
+        y: loc[1],
+        facing: quatToZ(unit.instance.localRotation),
+        speed: 0, // static (never wanders in our sim)
+        turnRate: def?.turnRate ?? 0.5,
+        radius: def?.collision || 16,
+        flying: false,
+        hp: def?.hitPoints || 100,
+        maxHp: def?.hitPoints || 100,
+        mana: 0,
+        maxMana: 0,
+        armor: def?.armor ?? 0,
+        weapon: null,
+        worker: null,
+        depotGold: false,
+        depotLumber: false,
+      },
+      building,
+    );
+    u.neutralPassive = true;
+    const entry: Entry = {
+      simId,
+      unit,
+      anims: buildAnimSet(unit.instance.model.sequences),
+      moveHeight: 0,
+      selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
+      typeId: def?.id ?? unit.row?.string("unitid") ?? "",
+      race: def?.race ?? "",
+      name: def?.name ?? unit.row?.string("unitid") ?? "Neutral",
+      foodUsed: 0,
+      foodMade: 0,
+      isHero: false,
+      level: 0,
+      modelPath: def?.model ?? "",
+      baseScale: def?.modelScale || 1,
+      curScale: def?.modelScale || 1,
+      ...findBirthFields(unit.instance.model.sequences),
+      hidden: false,
+      curSeq: -1,
+      lastSwingSeq: -1,
+    };
+    this.entries.push(entry);
+    this.byId.set(simId, entry);
   }
 
   /** Add a freshly-spawned unit (instance already attached to the scene) — used
@@ -487,6 +575,7 @@ export class RtsController {
     if (this.hoveredMine !== null && !this.sim.mines.has(this.hoveredMine)) this.hoveredMine = null;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
+      if (u.neutralPassive) continue; // static & viewer-rendered — don't drive its instance
       this.loc[0] = u.x;
       this.loc[1] = u.y;
       this.loc[2] = this.heightAt(u.x, u.y) + e.moveHeight; // fly height for air units
@@ -699,11 +788,11 @@ export class RtsController {
     if (this.hovered === null) return { has: false, category: "neutral" };
     const u = this.sim.units.get(this.hovered);
     if (!u) return { has: false, category: "neutral" };
+    if (u.neutralPassive) return { has: true, category: "neutral" }; // shops, critters
     if (u.owner === this.localPlayer) return { has: true, category: "friendly" };
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-    const hostile = prim ? this.sim.hostile(prim, u) : u.owner < 0 || u.owner !== this.localPlayer;
-    if (hostile) return { has: true, category: "enemy" };
-    return { has: true, category: u.owner < 0 ? "neutral" : "friendly" };
+    const hostile = prim ? this.sim.hostile(prim, u) : u.owner !== this.localPlayer;
+    return { has: true, category: hostile ? "enemy" : "friendly" };
   }
 
   /** Live units, for the metrics overlay. */
@@ -926,8 +1015,9 @@ export class RtsController {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
       // Buildings get a ring sized to their footprint (a constant tiny ring is
-      // hidden under the model); units keep the constant ring.
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building });
+      // hidden under the model); units keep the constant ring. Neutral Passive
+      // entities ring yellow.
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
     }
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
@@ -944,7 +1034,7 @@ export class RtsController {
     if (this.hovered !== null && !this.selected.has(this.hovered)) {
       const u = this.sim.units.get(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building };
+      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive };
     }
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);
@@ -1277,7 +1367,7 @@ export class RtsController {
     let n = 0;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
-      if (!u || e.hidden) continue; // worker inside a mine, etc.
+      if (!u || e.hidden || u.neutralPassive) continue; // mine-worker / neutral structures: no floating bar
       this.world[0] = u.x;
       this.world[1] = u.y;
       // Bar floats at the unit's drawn base — for air units, their altitude.
@@ -1313,7 +1403,7 @@ export class RtsController {
       }
       bar.root.hidden = false;
       // Bar width tracks the unit/building on-screen size (≈ its footprint).
-      bar.bars.style.width = `${Math.max(20, Math.min(140, ry * 2))}px`;
+      bar.bars.style.width = `${Math.max(30, Math.min(170, ry * 2.4))}px`;
       bar.root.style.left = `${sx / dpr}px`;
       bar.root.style.top = `${(h - sy) / dpr - (ry + 24)}px`; // gl y-up → css y-down (floats above the unit)
     }
