@@ -197,8 +197,10 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       weaponType: w ? str(w, "weapTp1") : "",
       attackType: w ? str(w, "atkType1") : "",
       armorType: b ? str(b, "defType") : "",
-      missileArt: w ? missilePath(str(w, "Missileart")) : "",
-      missileSpeed: w ? num(w, "Missilespeed", 900) : 900,
+      // Missile art + speed live in the per-race UnitFunc.txt (NOT UnitWeapons.slk),
+      // as .mdl paths (e.g. Archmage FireBallMissile, Archer ArrowMissile).
+      missileArt: fn ? missilePath(str(fn, "missileart")) : "",
+      missileSpeed: fn ? num(fn, "missilespeed", 900) : 900,
       strength: attr.STR,
       agility: attr.AGI,
       intelligence: attr.INT,
@@ -221,11 +223,15 @@ function cleanTip(v: string): string {
     .trim();
 }
 
-// Weapon "Missileart" is a model path without extension (like unitUI "file");
-// normalize slashes and add ".mdx". Empty when the weapon has no projectile.
+// "missileart" from UnitFunc.txt is a .mdl model path. It may be comma-separated
+// (weapon1,weapon2) — prefer the *Missile* model (vs an *Impact* effect). Strip
+// the .mdl extension and use .mdx (the compiled file the MPQ actually ships).
 function missilePath(v: string): string {
   if (!v) return "";
-  const p = v.replace(/\//g, "\\");
+  const parts = v.split(",").map((s) => s.trim()).filter(Boolean);
+  const pick = parts.find((p) => /missile/i.test(p)) ?? parts[0];
+  if (!pick) return "";
+  const p = pick.replace(/\//g, "\\").replace(/\.mdl$/i, "");
   return /\.mdx$/i.test(p) ? p : `${p}.mdx`;
 }
 
