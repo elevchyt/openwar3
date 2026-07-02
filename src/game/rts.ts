@@ -1,4 +1,4 @@
-import { SimWorld } from "../sim/world";
+import { SimWorld, type SimWeapon } from "../sim/world";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
@@ -16,6 +16,7 @@ interface Instance {
   setRotation(q: ArrayLike<number>): unknown;
   setSequence(i: number): unknown;
   setSequenceLoopMode(m: number): unknown;
+  hide(): void;
   model: { sequences: Array<{ name: string }> };
 }
 interface MapUnit {
@@ -35,15 +36,22 @@ export interface RtsHost {
   unitsReady(): boolean;
 }
 
+type Anim = "stand" | "walk" | "attack";
+
 interface Entry {
   simId: number;
   unit: MapUnit;
   walk: number;
   stand: number;
+  attack: number; // -1 = no attack animation
+  death: number; // -1 = no death animation
   moveHeight: number;
+  anim: Anim;
 }
 
 const WALK = 1, IDLE = 0;
+const CORPSE_TIME = 3; // seconds a corpse stays before being hidden
+const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
 
 export class RtsController {
   private sim: SimWorld;
@@ -53,6 +61,8 @@ export class RtsController {
   private seeded = false;
   private nextId = 1;
   private marker: HTMLDivElement;
+  private hpBar: HTMLDivElement;
+  private corpses: Array<{ instance: Instance; t: number }> = [];
   // scratch buffers to avoid per-frame allocation
   private loc = new Float32Array(3);
   private quat = new Float32Array(4);
@@ -70,6 +80,12 @@ export class RtsController {
     this.marker = document.createElement("div");
     this.marker.className = "unit-select";
     this.marker.hidden = true;
+    const track = document.createElement("div");
+    track.className = "unit-hp";
+    this.hpBar = document.createElement("div");
+    this.hpBar.className = "unit-hp-fill";
+    track.appendChild(this.hpBar);
+    this.marker.appendChild(track);
     document.body.appendChild(this.marker);
   }
 
@@ -97,6 +113,8 @@ export class RtsController {
       const simId = this.nextId++;
       this.sim.add({
         id: simId,
+        owner: -1, // map-placed units are neutral (creeps)
+        team: -1,
         x: loc[0],
         y: loc[1],
         facing: quatToZ(unit.instance.localRotation),
@@ -104,8 +122,21 @@ export class RtsController {
         turnRate: def?.turnRate ?? 0.5,
         radius: def?.collision || 16,
         flying: def?.moveType === "fly",
+        hp: def?.hitPoints || 100,
+        maxHp: def?.hitPoints || 100,
+        armor: def?.armor ?? 0,
+        weapon: def ? weaponFor(def) : null,
       });
-      const entry: Entry = { simId, unit, walk, stand: stand < 0 ? walk : stand, moveHeight: def?.moveHeight ?? 0 };
+      const entry: Entry = {
+        simId,
+        unit,
+        walk,
+        stand: stand < 0 ? walk : stand,
+        attack: seqs.findIndex((s) => /attack/i.test(s.name)),
+        death: seqs.findIndex((s) => /^death/i.test(s.name)),
+        moveHeight: def?.moveHeight ?? 0,
+        anim: "stand",
+      };
       this.entries.push(entry);
       this.byId.set(simId, entry);
     }
@@ -114,13 +145,15 @@ export class RtsController {
 
   /** Add a freshly-spawned unit (instance already attached to the scene) — used
    *  by melee init to place each race's starting units. Returns the sim id. */
-  addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number): number {
+  addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0): number {
     const seqs = instance.model.sequences;
     const walk = seqs.findIndex((s) => /walk/i.test(s.name));
     const stand = seqs.findIndex((s) => /^stand/i.test(s.name));
     const simId = this.nextId++;
     this.sim.add({
       id: simId,
+      owner,
+      team,
       x,
       y,
       facing,
@@ -128,13 +161,20 @@ export class RtsController {
       turnRate: def.turnRate,
       radius: def.collision || 16,
       flying: def.moveType === "fly",
+      hp: def.hitPoints || 100,
+      maxHp: def.hitPoints || 100,
+      armor: def.armor,
+      weapon: weaponFor(def),
     });
     const entry: Entry = {
       simId,
       unit: { instance, state: IDLE },
       walk: walk < 0 ? 0 : walk,
       stand: stand < 0 ? (walk < 0 ? 0 : walk) : stand,
+      attack: seqs.findIndex((s) => /attack/i.test(s.name)),
+      death: seqs.findIndex((s) => /^death/i.test(s.name)),
       moveHeight: def.moveHeight,
+      anim: "stand",
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
@@ -148,6 +188,8 @@ export class RtsController {
   tick(dt: number): void {
     this.trySeed();
     this.sim.tick(dt);
+    for (const id of this.sim.drainDeaths()) this.onDeath(id);
+    this.tickCorpses(dt);
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       this.loc[0] = u.x;
@@ -156,21 +198,75 @@ export class RtsController {
       e.unit.instance.setLocation(this.loc);
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
-      if (u.moving && e.unit.state !== WALK) {
-        e.unit.state = WALK; // prevents mdx-m3-viewer's auto-stand override
-        e.unit.instance.setSequence(e.walk);
-        e.unit.instance.setSequenceLoopMode(2);
-      } else if (!u.moving && e.unit.state !== IDLE) {
-        e.unit.state = IDLE;
-        e.unit.instance.setSequence(e.stand);
-        e.unit.instance.setSequenceLoopMode(2);
+      const anim: Anim = u.moving ? "walk" : u.inCombat && e.attack >= 0 ? "attack" : "stand";
+      if (anim !== e.anim) {
+        e.anim = anim;
+        // Non-IDLE state prevents mdx-m3-viewer's auto-stand override.
+        e.unit.state = anim === "stand" ? IDLE : WALK;
+        e.unit.instance.setSequence(anim === "walk" ? e.walk : anim === "attack" ? e.attack : e.stand);
+        e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
       }
     }
     this.updateMarker();
   }
 
+  /** The sim removed this unit: play its death animation, then keep the corpse
+   *  briefly before hiding the instance. */
+  private onDeath(simId: number): void {
+    const e = this.byId.get(simId);
+    if (!e) return;
+    this.byId.delete(simId);
+    this.entries.splice(this.entries.indexOf(e), 1);
+    if (this.selected === simId) this.selected = null;
+    e.unit.state = WALK; // keep mdx-m3-viewer from overriding the death sequence
+    if (e.death >= 0) {
+      e.unit.instance.setSequence(e.death);
+      e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+      this.corpses.push({ instance: e.unit.instance, t: CORPSE_TIME });
+    } else {
+      e.unit.instance.hide();
+    }
+  }
+
+  private tickCorpses(dt: number): void {
+    for (let i = this.corpses.length - 1; i >= 0; i--) {
+      const c = this.corpses[i];
+      c.t -= dt;
+      if (c.t <= 0) {
+        c.instance.hide();
+        this.corpses.splice(i, 1);
+      }
+    }
+  }
+
   /** Left-click: select the nearest movable unit within a pixel radius. */
   selectAt(cssX: number, cssY: number): void {
+    this.selected = this.pickAt(cssX, cssY);
+    this.updateMarker();
+  }
+
+  /** Right-click: attack a hostile unit under the cursor, else move to ground. */
+  moveAt(cssX: number, cssY: number): void {
+    if (this.selected === null) return;
+    const sel = this.sim.units.get(this.selected);
+    if (!sel) return;
+    const picked = this.pickAt(cssX, cssY);
+    if (picked !== null && picked !== this.selected) {
+      const target = this.sim.units.get(picked);
+      if (target && this.sim.hostile(sel, target) && this.sim.issueAttack(this.selected, picked)) return;
+    }
+    // screenToWorldRay/unproject expects window coords with a TOP-LEFT origin
+    // (Y-down) — the opposite of worldToScreen (Y-up) used by selection.
+    const dpr = this.dpr();
+    this.screen[0] = cssX * dpr;
+    this.screen[1] = cssY * dpr;
+    this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
+    const hit = this.groundHit();
+    if (hit) this.sim.issueMove(this.selected, hit[0], hit[1]);
+  }
+
+  /** Sim id of the unit nearest the cursor within the pick radius, if any. */
+  private pickAt(cssX: number, cssY: number): number | null {
     const [gx, gy] = this.toGl(cssX, cssY);
     const viewport = this.host.viewport();
     let best: number | null = null;
@@ -187,21 +283,7 @@ export class RtsController {
         best = e.simId;
       }
     }
-    this.selected = best;
-    this.updateMarker();
-  }
-
-  /** Right-click: order the selected unit to the ground point under the cursor. */
-  moveAt(cssX: number, cssY: number): void {
-    if (this.selected === null) return;
-    // screenToWorldRay/unproject expects window coords with a TOP-LEFT origin
-    // (Y-down) — the opposite of worldToScreen (Y-up) used by selection.
-    const dpr = this.dpr();
-    this.screen[0] = cssX * dpr;
-    this.screen[1] = cssY * dpr;
-    this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
-    const hit = this.groundHit();
-    if (hit) this.sim.issueMove(this.selected, hit[0], hit[1]);
+    return best;
   }
 
   private groundHit(): [number, number] | null {
@@ -236,7 +318,15 @@ export class RtsController {
       this.marker.hidden = true;
       return;
     }
-    const u = this.sim.units.get(this.selected)!;
+    const u = this.sim.units.get(this.selected);
+    if (!u) {
+      this.selected = null;
+      this.marker.hidden = true;
+      return;
+    }
+    const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
+    this.hpBar.style.width = `${frac * 100}%`;
+    this.hpBar.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
     this.world[0] = u.x;
     this.world[1] = u.y;
     this.world[2] = this.heightAt(u.x, u.y);
@@ -260,6 +350,19 @@ export class RtsController {
   private dpr(): number {
     return this.host.canvas.width / this.host.canvas.clientWidth || 1;
   }
+}
+
+// A unit's weapon from its registry stats; null when it can't attack.
+function weaponFor(def: UnitDef): SimWeapon | null {
+  if (def.attackCooldown <= 0 || def.attackDamage + def.attackDice * def.attackSides <= 0) return null;
+  return {
+    damage: def.attackDamage,
+    dice: def.attackDice,
+    sides: def.attackSides,
+    cooldown: def.attackCooldown,
+    range: def.attackRange,
+    acquire: def.acquireRange,
+  };
 }
 
 // Quaternion for a rotation `angle` about +Z, written into `out`.

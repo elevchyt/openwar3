@@ -27,9 +27,12 @@ export interface UnitDef {
   goldCost: number;
   lumberCost: number;
   buildTime: number;
-  attackDamage: number; // weapon 1 base
+  attackDamage: number; // weapon 1 base (dmgplus1); total = base + dice rolls
+  attackDice: number; // number of damage dice (dice1)
+  attackSides: number; // sides per damage die (sides1)
   attackCooldown: number;
   attackRange: number;
+  acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   abilities: string[];
 }
 
@@ -111,8 +114,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       lumberCost: b ? num(b, "lumbercost", 0) : 0,
       buildTime: b ? num(b, "bldtm", 0) : 0,
       attackDamage: w ? num(w, "dmgplus1", 0) : 0,
+      attackDice: w ? num(w, "dice1", 0) : 0,
+      attackSides: w ? num(w, "sides1", 0) : 0,
       attackCooldown: w ? num(w, "cool1", 0) : 0,
       attackRange: w ? num(w, "rangeN1", 0) : 0,
+      acquireRange: w ? num(w, "acquire", 0) : 0,
       abilities: a ? (str(a, "abilList") || "").split(",").filter(Boolean) : [],
     });
   }

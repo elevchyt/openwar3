@@ -121,6 +121,23 @@ html, body {
   z-index: 2;
 }
 
+.unit-hp {
+  position: absolute;
+  left: 50%;
+  top: -46px;
+  width: 46px;
+  height: 5px;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(0, 0, 0, 0.8);
+}
+
+.unit-hp-fill {
+  height: 100%;
+  width: 100%;
+  background: #46e05a;
+}
+
 #ui {
   position: fixed;
   inset: 0;

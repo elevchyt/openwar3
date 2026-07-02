@@ -5,8 +5,23 @@ import { findPath } from "./pathfind";
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
 // and (later) on the authoritative server.
 
+/** Weapon stats (from UnitWeapons.slk). Damage per swing = damage + dice d sides,
+ *  reduced by the target's armor (WC3 formula). */
+export interface SimWeapon {
+  damage: number;
+  dice: number;
+  sides: number;
+  cooldown: number; // seconds between swings
+  range: number; // measured between collision hulls, WC3-style
+  acquire: number; // auto-acquisition range (0 = never auto-attacks)
+}
+
+export type SimOrder = "idle" | "move" | "attack";
+
 export interface SimUnit {
   id: number;
+  owner: number; // player slot; -1 = map-neutral
+  team: number; // units on the same team are allied; -1 = hostile to everyone
   x: number;
   y: number;
   facing: number; // radians
@@ -14,29 +29,203 @@ export interface SimUnit {
   turnRate: number; // UnitData turnrate; scaled to rad/sec below
   radius: number; // collision radius (0 = no unit collision)
   flying: boolean; // air units ignore ground pathing & collision
+  hp: number;
+  maxHp: number;
+  armor: number;
+  weapon: SimWeapon | null;
+  order: SimOrder;
+  targetId: number | null;
+  cooldownLeft: number;
+  inCombat: boolean; // engaging in range this tick (drives the attack animation)
   path: Array<[number, number]>; // world waypoints
   waypoint: number;
   moving: boolean;
+  chaseX: number; // where the current chase path was aimed (repath when stale)
+  chaseY: number;
+  acquireT: number; // seconds until the next auto-acquire scan
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
 const TURN_RATE_SCALE = 8; // turnrate → rad/sec (tunable feel)
+const FACING_EPS = 0.35; // radians — must roughly face the target to swing
+const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
+const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
+  private deaths: number[] = [];
+  private rng: () => number;
 
-  constructor(readonly grid: PathingGrid) {}
+  constructor(readonly grid: PathingGrid, seed = 1) {
+    this.rng = lcg(seed);
+  }
 
-  add(unit: Omit<SimUnit, "path" | "waypoint" | "moving">): SimUnit {
-    const u: SimUnit = { ...unit, path: [], waypoint: 0, moving: false };
+  add(
+    unit: Omit<
+      SimUnit,
+      "path" | "waypoint" | "moving" | "order" | "targetId" | "cooldownLeft" | "inCombat" | "chaseX" | "chaseY" | "acquireT"
+    >,
+  ): SimUnit {
+    const u: SimUnit = {
+      ...unit,
+      order: "idle",
+      targetId: null,
+      cooldownLeft: 0,
+      inCombat: false,
+      path: [],
+      waypoint: 0,
+      moving: false,
+      chaseX: 0,
+      chaseY: 0,
+      acquireT: 0,
+    };
     this.units.set(u.id, u);
     return u;
+  }
+
+  /** Sim ids of units that died since the last drain (renderer plays deaths). */
+  drainDeaths(): number[] {
+    if (!this.deaths.length) return this.deaths;
+    const out = this.deaths;
+    this.deaths = [];
+    return out;
   }
 
   /** Order a unit to a world point via the pathing grid. False if no path. */
   issueMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u) return false;
+    u.order = "move";
+    u.targetId = null;
+    u.inCombat = false;
+    if (!this.pathTo(u, tx, ty)) {
+      this.stop(id);
+      return false;
+    }
+    return true;
+  }
+
+  /** Order a unit to attack another. False if either is missing or they're allied. */
+  issueAttack(id: number, targetId: number): boolean {
+    const u = this.units.get(id);
+    const t = this.units.get(targetId);
+    if (!u || !t || u === t || !u.weapon || !this.hostile(u, t)) return false;
+    u.order = "attack";
+    u.targetId = targetId;
+    return true;
+  }
+
+  stop(id: number): void {
+    const u = this.units.get(id);
+    if (u) {
+      u.order = "idle";
+      u.targetId = null;
+      u.inCombat = false;
+      u.moving = false;
+      u.path = [];
+    }
+  }
+
+  // Different teams are enemies; creeps all share team -1 (hostile to every
+  // player team but not to each other, like WC3's Neutral Hostile).
+  hostile(a: SimUnit, b: SimUnit): boolean {
+    return a.team !== b.team;
+  }
+
+  tick(dt: number): void {
+    for (const u of this.units.values()) {
+      if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
+      switch (u.order) {
+        case "attack":
+          this.tickAttack(u, dt);
+          break;
+        case "idle":
+          this.tickAcquire(u, dt);
+          break;
+      }
+    }
+    this.tickMovement(dt);
+    this.resolveCollisions();
+  }
+
+  // --- combat -------------------------------------------------------------
+
+  private tickAttack(u: SimUnit, dt: number): void {
+    const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+    if (!t || !u.weapon) {
+      // Target died or vanished — go idle where we stand (auto-acquire resumes).
+      this.stop(u.id);
+      return;
+    }
+    const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    if (gap > u.weapon.range) {
+      u.inCombat = false;
+      this.chase(u, t);
+      return;
+    }
+    // In range: halt, face the target, swing when ready.
+    u.moving = false;
+    u.path = [];
+    u.inCombat = true;
+    const want = Math.atan2(t.y - u.y, t.x - u.x);
+    u.facing = turnToward(u.facing, want, u.turnRate * TURN_RATE_SCALE * dt);
+    if (Math.abs(angleDiff(u.facing, want)) > FACING_EPS || u.cooldownLeft > 0) return;
+    u.cooldownLeft = u.weapon.cooldown;
+    this.dealDamage(u, t);
+  }
+
+  // Path toward the target; repath only when the target strays from the path
+  // goal (A* every tick would be wasteful and jittery).
+  private chase(u: SimUnit, t: SimUnit): void {
+    if (u.moving && Math.hypot(t.x - u.chaseX, t.y - u.chaseY) < CHASE_REPATH) return;
+    this.pathTo(u, t.x, t.y);
+  }
+
+  private dealDamage(attacker: SimUnit, target: SimUnit): void {
+    const w = attacker.weapon!;
+    let dmg = w.damage;
+    for (let i = 0; i < w.dice; i++) dmg += 1 + Math.floor(this.rng() * w.sides);
+    // WC3 armor reduction: each armor point is worth 6% of pre-armor damage.
+    const reduction = (target.armor * 0.06) / (1 + 0.06 * Math.max(0, target.armor));
+    target.hp -= dmg * (1 - reduction);
+    if (target.hp <= 0) {
+      this.kill(target);
+      return;
+    }
+    // Retaliate: an idle armed victim turns on its attacker (WC3 return fire).
+    if (target.order === "idle" && target.weapon) this.issueAttack(target.id, attacker.id);
+  }
+
+  private kill(u: SimUnit): void {
+    this.units.delete(u.id); // Map delete during values() iteration is safe
+    this.deaths.push(u.id);
+  }
+
+  // Idle armed units scan for the nearest enemy in acquisition range.
+  private tickAcquire(u: SimUnit, dt: number): void {
+    if (!u.weapon || u.weapon.acquire <= 0) return;
+    u.acquireT -= dt;
+    if (u.acquireT > 0) return;
+    u.acquireT = ACQUIRE_PERIOD;
+    let best: SimUnit | null = null;
+    let bestGap = u.weapon.acquire;
+    for (const t of this.units.values()) {
+      if (t === u || !this.hostile(u, t)) continue;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = t;
+      }
+    }
+    if (best) this.issueAttack(u.id, best.id);
+  }
+
+  // --- movement -----------------------------------------------------------
+
+  /** Set a path toward a world point (straight line for air units). */
+  private pathTo(u: SimUnit, tx: number, ty: number): boolean {
+    u.chaseX = tx;
+    u.chaseY = ty;
     if (u.flying) {
       // Air units ignore the pathing grid (fly over trees/cliffs/buildings) —
       // straight line to the target. Height is applied by the renderer.
@@ -46,10 +235,7 @@ export class SimWorld {
       return true;
     }
     const cells = findPath(this.grid, this.grid.worldToCell(u.x, u.y), this.grid.worldToCell(tx, ty));
-    if (!cells || cells.length === 0) {
-      this.stop(id);
-      return false;
-    }
+    if (!cells || cells.length === 0) return false;
     // Cell centres as waypoints; append the exact target for precision. Skip the
     // first cell (the unit's current cell) to avoid a backwards initial step.
     const pts = cells.slice(1).map(([cx, cy]) => this.grid.cellToWorld(cx, cy)) as Array<[number, number]>;
@@ -60,15 +246,7 @@ export class SimWorld {
     return true;
   }
 
-  stop(id: number): void {
-    const u = this.units.get(id);
-    if (u) {
-      u.moving = false;
-      u.path = [];
-    }
-  }
-
-  tick(dt: number): void {
+  private tickMovement(dt: number): void {
     for (const u of this.units.values()) {
       if (!u.moving) continue;
       let budget = u.speed * dt;
@@ -99,9 +277,9 @@ export class SimWorld {
       if (u.waypoint >= u.path.length) {
         u.moving = false;
         u.path = [];
+        if (u.order === "move") u.order = "idle"; // arrival; auto-acquire resumes
       }
     }
-    this.resolveCollisions();
   }
 
   // Push overlapping ground units apart so they don't stack (WC3 circle collision).
@@ -149,9 +327,25 @@ export class SimWorld {
 
 // Rotate `from` toward `to` by at most `maxDelta` radians, shortest direction.
 function turnToward(from: number, to: number, maxDelta: number): number {
+  const diff = angleDiff(from, to);
+  if (Math.abs(diff) <= maxDelta) return to;
+  return from + Math.sign(diff) * maxDelta;
+}
+
+// Signed shortest angular distance from `from` to `to`, in (-π, π].
+function angleDiff(from: number, to: number): number {
   let diff = to - from;
   while (diff > Math.PI) diff -= 2 * Math.PI;
   while (diff < -Math.PI) diff += 2 * Math.PI;
-  if (Math.abs(diff) <= maxDelta) return to;
-  return from + Math.sign(diff) * maxDelta;
+  return diff;
+}
+
+// Deterministic RNG (plan §1.4: sim stays replayable) — Park–Miller LCG.
+function lcg(seed: number): () => number {
+  let s = seed % 2147483647;
+  if (s <= 0) s += 2147483646;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
 }

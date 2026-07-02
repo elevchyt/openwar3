@@ -81,6 +81,7 @@ interface W3xViewer {
 interface SpawnInstance {
   setScene(scene: unknown): void;
   setTeamColor(id: number): void;
+  hide(): void;
   setSequence(i: number): void;
   setSequenceLoopMode(m: number): void;
   setLocation(v: ArrayLike<number>): unknown;
@@ -277,21 +278,21 @@ export class MapViewerScene {
             x += Math.cos(a) * 300;
             y += Math.sin(a) * 300;
           }
-          await this.spawnUnit(def, x, y, slot.id);
+          await this.spawnUnit(def, x, y, slot.id, slot.team);
         }
       }
     }
   }
 
-  private async spawnUnit(def: UnitDef, x: number, y: number, color: number): Promise<void> {
+  private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number): Promise<void> {
     const map = this.viewer.map;
     if (!map || !this.rts) return;
     const model = await this.viewer.load(def.model, this.solver);
     if (!model) return;
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
-    instance.setTeamColor(color);
-    this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2); // face south (WC3 default)
+    instance.setTeamColor(owner); // player slot doubles as team color for now
+    this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team); // face south (WC3 default)
 
     // Buildings block pathing: stamp their footprint so units route around them.
     if (def.isBuilding && def.pathTex && this.grid) {

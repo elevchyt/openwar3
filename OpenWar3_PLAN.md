@@ -30,6 +30,14 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
 - **Phase 5.5** — game-setup **lobby** (`src/ui/lobby.ts`: per-slot controller/race/team) and
   **melee init** (`mapViewer.startMelee`): spawns each race's starting units (hall + workers) at the
   map's start locations, controllable.
+- **Phase 6 (combat slice)** — headless-sim combat in `src/sim/world.ts`: owners/teams (allied =
+  same team; creeps = team −1, hostile to players but not each other), HP/armor, weapons from
+  UnitWeapons.slk (base + dice damage, cooldown, range, acquire), attack orders with chase/repath,
+  facing gate before swings, WC3 armor reduction (6%/point), idle auto-acquisition (0.5 s scans),
+  return-fire retaliation, death events; deterministic seeded RNG for damage dice. Controller
+  (`src/game/rts.ts`): right-click a hostile unit → attack order (ground → move), attack/death
+  animations, corpses hidden after 3 s, HP bar on the selection marker. Melee spawns carry
+  slot owner/team; map-seeded units are neutral-hostile creeps.
 
 **Key gotchas (all worked around):** mdx-m3-viewer's MPQ header search took the *last* MPQ magic, so
 War3.mpq read an 18-file stub (patched to first match); its `War3MapViewer` solver has **two
@@ -40,8 +48,11 @@ else takes `Promise<Uint8Array>`; `#ui` is `pointer-events:none` so full-screen 
 types absent from `CliffTypes.slk` (fallback to `CLdi`).
 
 **Next steps (recommended order):**
-1. **Phase 6 — combat/gameplay:** health, attack (data already in registry: dmg/cooldown/range),
-   death, then resources (gold/lumber), building/training, tech tree. Melee-first.
+1. **Phase 6 continued:** projectiles for ranged attacks (currently instant hit), attack-move,
+   multi-unit selection (drag box), then resources (gold/lumber), building/training, tech tree.
+   Known combat gaps: no air/ground target restrictions (`targs1`), no attack/damage-type table,
+   dead buildings keep their stamped pathing footprint, buildings ignore attack orders they can't
+   fulfil.
 2. **Melee refinements:** starting gold/lumber + hero pick; remove `sloc` start-location marker
    props; air-air separation; per-slot colors in the lobby; building placement footprint-aware.
 3. **Authentic menu UI (§10)** — user-deferred: render `MainMenu3D_Exp` background + BLP button
@@ -49,7 +60,9 @@ types absent from `CliffTypes.slk` (fallback to `CLdi`).
 4. Later: **Phase 7** JASS, **Phase 8** server-authoritative multiplayer, **Phase 9** CASC/RoC/Electron.
 
 **Unverified caveat:** all rendering/interaction is authored against the code but confirmed only by
-the developer in-browser (no browser in the build environment); headless tests cover the sim/parsers.
+the developer in-browser (no browser in the build environment). No test runner is set up yet; the sim
+is smoke-tested via ad-hoc esbuild-bundled headless scripts (combat verified that way on 2026-07-02).
+Adding vitest for `src/sim/` is worthwhile once gameplay logic grows.
 
 ---
 
