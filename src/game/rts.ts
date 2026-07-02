@@ -93,6 +93,7 @@ const PICK_Z = 60; // aim picking/markers near the unit's body, not its feet
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
+const HARVEST_FLASH_TIME = 0.7; // seconds — two flashes of the harvest ring
 
 interface Marker {
   root: HTMLDivElement;
@@ -124,6 +125,7 @@ export class RtsController {
   private selectMarker: Marker;
   private hoverMarker: Marker;
   private corpses: Array<{ instance: Instance; t: number }> = [];
+  private flashes: Array<{ el: HTMLDivElement; x: number; y: number; radius: number; t: number }> = [];
   // scratch buffers to avoid per-frame allocation
   private loc = new Float32Array(3);
   private quat = new Float32Array(4);
@@ -147,6 +149,8 @@ export class RtsController {
   dispose(): void {
     this.selectMarker.root.remove();
     this.hoverMarker.root.remove();
+    for (const f of this.flashes) f.el.remove();
+    this.flashes = [];
   }
 
   /** Hide the selection/hover rings (e.g. when the map view is not active). */
@@ -264,6 +268,7 @@ export class RtsController {
     this.sim.tick(dt);
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
     this.tickCorpses(dt);
+    this.tickFlashes(dt);
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
@@ -276,8 +281,13 @@ export class RtsController {
       // Workers inside a gold mine vanish; chopping plays the attack swing.
       if (u.inMine !== e.hidden) {
         e.hidden = u.inMine;
-        if (e.hidden) e.unit.instance.hide();
-        else e.unit.instance.show();
+        if (e.hidden) {
+          e.unit.instance.hide();
+          if (this.selected === e.simId) this.selected = null; // deselect on mine entry
+          if (this.hovered === e.simId) this.hovered = null;
+        } else {
+          e.unit.instance.show();
+        }
       }
       const seq = this.pickSequence(e.anims, u);
       if (seq !== e.curSeq && seq >= 0) {
@@ -476,11 +486,55 @@ export class RtsController {
       // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
       // lands the ground ray well behind the trunk.
       const mine = this.sim.nearestMine(hit[0], hit[1], 320);
-      if (mine && sel.worker.gold && this.sim.issueHarvest(this.selected, "gold", mine.id)) return;
+      if (mine && sel.worker.gold && this.sim.issueHarvest(this.selected, "gold", mine.id)) {
+        this.flashTarget(mine.x, mine.y, mine.radius);
+        return;
+      }
       const tree = this.sim.nearestTree(hit[0], hit[1], 140);
-      if (tree && sel.worker.lumber && this.sim.issueHarvest(this.selected, "lumber", tree.id)) return;
+      if (tree && sel.worker.lumber && this.sim.issueHarvest(this.selected, "lumber", tree.id)) {
+        this.flashTarget(tree.x, tree.y, 48); // trees ≈ 2×2 cells
+        return;
+      }
     }
     this.sim.issueMove(this.selected, hit[0], hit[1]);
+  }
+
+  /** Flash a yellow ring at a harvest target (twice), sized to the node — the
+   *  WC3 acknowledgement when you order a worker onto a tree or gold mine. */
+  private flashTarget(x: number, y: number, radius: number): void {
+    const el = document.createElement("div");
+    el.className = "harvest-flash";
+    document.body.appendChild(el);
+    this.flashes.push({ el, x, y, radius, t: HARVEST_FLASH_TIME });
+  }
+
+  private tickFlashes(dt: number): void {
+    const viewport = this.host.viewport();
+    const [, h] = [this.host.canvas.width, this.host.canvas.height];
+    const dpr = this.dpr();
+    for (let i = this.flashes.length - 1; i >= 0; i--) {
+      const f = this.flashes[i];
+      f.t -= dt;
+      if (f.t <= 0) {
+        f.el.remove();
+        this.flashes.splice(i, 1);
+        continue;
+      }
+      // Project the node's world position + radius to screen each frame so it
+      // stays anchored even if the camera moves during the flash.
+      this.world[0] = f.x;
+      this.world[1] = f.y;
+      this.world[2] = this.heightAt(f.x, f.y);
+      this.host.camera.worldToScreen(this.screen, this.world, viewport);
+      this.world2.set(this.world);
+      this.world2[0] = f.x + f.radius;
+      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+      const rx = Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / dpr;
+      f.el.style.left = `${this.screen[0] / dpr}px`;
+      f.el.style.top = `${(h - this.screen[1]) / dpr}px`;
+      f.el.style.width = `${rx * 2}px`;
+      f.el.style.height = `${rx * 2}px`;
+    }
   }
 
   /** Sim id of the unit nearest the cursor within the pick radius, if any. */

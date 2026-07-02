@@ -92,6 +92,7 @@ export interface SimUnit {
   inMine: boolean; // inside the gold mine (renderer hides the unit)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
+  noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -225,6 +226,7 @@ export class SimWorld {
       | "inMine"
       | "working"
       | "atNode"
+      | "noCollision"
     >,
   ): SimUnit {
     const u: SimUnit = {
@@ -256,6 +258,7 @@ export class SimWorld {
       inMine: false,
       working: false,
       atNode: false,
+      noCollision: false,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -311,6 +314,7 @@ export class SimWorld {
     u.order = "move";
     u.targetId = null;
     u.inCombat = false;
+    u.noCollision = false; // manual control restores collision
     u.stuckT = 0;
     u.stuckRetries = 0;
     if (!this.pathTo(u, tx, ty)) {
@@ -328,6 +332,7 @@ export class SimWorld {
     if (!u || !t || u === t || !u.weapon || !this.hostile(u, t)) return false;
     u.order = "attack";
     u.targetId = targetId;
+    u.noCollision = false; // manual control restores collision
     return true;
   }
 
@@ -339,6 +344,7 @@ export class SimWorld {
       u.inCombat = false;
       u.working = false;
       u.atNode = false;
+      u.noCollision = false; // manual stop restores collision
       this.settle(u);
     }
   }
@@ -356,6 +362,7 @@ export class SimWorld {
     u.resId = nodeId;
     u.atNode = false;
     u.working = false;
+    u.noCollision = false; // manual harvest order restores collision
     u.stuckT = 0;
     u.stuckRetries = 0;
     this.pathToNode(u); // walk toward the node once; arrival latches atNode
@@ -378,7 +385,21 @@ export class SimWorld {
     u.working = false;
     u.atNode = false;
     const depot = this.nearestDepot(u);
-    if (depot) this.pathTo(u, depot.x, depot.y);
+    if (depot) {
+      const [ax, ay] = this.depotApproach(u, depot);
+      this.pathTo(u, ax, ay);
+    }
+  }
+
+  /** A point on the depot's near side (toward the worker) rather than its
+   *  centre, so resources return to the closest edge of the building from
+   *  whatever direction the worker comes — not always the same back corner
+   *  (which is what pathing to the centre + nearest-walkable produced). */
+  private depotApproach(u: SimUnit, depot: SimUnit): [number, number] {
+    const dx = u.x - depot.x;
+    const dy = u.y - depot.y;
+    const d = Math.hypot(dx, dy) || 1;
+    return [depot.x + (dx / d) * depot.radius, depot.y + (dy / d) * depot.radius];
   }
 
   private nearestDepot(u: SimUnit): SimUnit | null {
@@ -533,6 +554,9 @@ export class SimWorld {
             this.depleted.push(mine);
           }
         }
+        // Emerging from the mine with gold: ghost through other units for the
+        // whole auto back-and-forth (WC3), until the player takes manual control.
+        u.noCollision = true;
         this.startReturn(u);
       }
       return;
@@ -626,11 +650,13 @@ export class SimWorld {
       this.stop(u.id); // nowhere to drop off (hall destroyed) — idle
       return;
     }
-    // Deposit once we've reached the depot: within range, or parked as close as
-    // the pathfinder can get us (its footprint blocks the last stretch). The
-    // arrive-then-deposit contract is what keeps workers from getting stuck
-    // circling a town hall they can't quite touch.
-    if (!this.arriveAtNode(u, depot.x, depot.y, u.radius + depot.radius + DEPOSIT_RANGE)) return;
+    // Deposit once we've reached the depot's near edge: within range, or parked
+    // as close as the pathfinder can get us (its footprint blocks the last
+    // stretch). Approaching the near side keeps workers from all funnelling to
+    // one back corner, and the arrive-then-deposit contract stops them circling
+    // a town hall they can't quite touch.
+    const [ax, ay] = this.depotApproach(u, depot);
+    if (!this.arriveAtNode(u, ax, ay, u.radius + DEPOSIT_RANGE)) return;
     const stash = this.stashOf(u.owner);
     stash.gold += w.carryGold;
     stash.lumber += w.carryLumber;
@@ -833,8 +859,10 @@ export class SimWorld {
   private resolveCollisions(): void {
     const list: SimUnit[] = [];
     // Movable ground units only. Buildings (speed 0) block via their stamped grid
-    // footprint, not separation; air units don't collide.
-    for (const u of this.units.values()) if (!u.flying && u.radius > 0 && u.speed > 0) list.push(u);
+    // footprint, not separation; air units don't collide; mining workers ghost
+    // through everything until manually controlled (u.noCollision).
+    for (const u of this.units.values())
+      if (!u.flying && u.radius > 0 && u.speed > 0 && !u.noCollision) list.push(u);
     for (let iter = 0; iter < 2; iter++) {
       for (let i = 0; i < list.length; i++) {
         for (let j = i + 1; j < list.length; j++) {

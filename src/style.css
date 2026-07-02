@@ -416,6 +416,22 @@ body.in-game .menu-panel { display: none; }
 
 body.order-armed #map { cursor: crosshair; }
 
+/* Yellow harvest-order acknowledgement ring: flashes twice, sized to the node. */
+.harvest-flash {
+  position: fixed;
+  border: 2px solid #ffe23a;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 0 8px rgba(255, 226, 58, 0.7);
+  z-index: 2;
+  animation: harvest-flash 0.7s linear;
+}
+@keyframes harvest-flash {
+  0%, 45%, 100% { opacity: 0; }
+  20%, 70% { opacity: 1; }
+}
+
 .unit-select.unit-hovered {
   border-color: rgba(70, 224, 90, 0.55);
   box-shadow: 0 0 4px rgba(70, 224, 90, 0.35);
