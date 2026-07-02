@@ -349,23 +349,34 @@ body.in-game .menu-panel { display: none; }
   border-radius: 45% 45% 0 0 / 28% 28% 0 0;
 }
 .hud-console-skinned .hud-portrait-values { width: auto; }
-.hud-console-skinned .hud-inventory,
-.hud-console-skinned .hud-command {
+.hud-console-skinned .hud-inventory {
   background: none;
   border: none;
   padding: 2px;
 }
-/* The console art already draws the slot frames — our slots just hold the
-   icon/label over them, so drop our own backgrounds and borders when skinned. */
-.hud-console-skinned .hud-slot {
-  background: none;
-  border: none;
+/* Command card: a solid dark backing so no terrain shows through the slot gaps
+   (the console art's command window is see-through). */
+.hud-console-skinned .hud-command {
+  background: #08090c;
+  border: 1px solid rgba(216, 180, 90, 0.25);
+  border-radius: 3px;
+  padding: 3px;
+  gap: 3px;
 }
+/* Slots: dark inset squares holding an icon (like WC3's command grid). */
+.hud-console-skinned .hud-slot {
+  background: #050608;
+  border: 1px solid rgba(216, 180, 90, 0.18);
+  border-radius: 2px;
+  aspect-ratio: 1;
+}
+.hud-console-skinned .hud-inventory .hud-slot { background: none; border: none; }
 .hud-console-skinned .hud-cmd { font-size: 11px; }
 
-/* Command buttons show their BTN icon; the console art draws the frame around. */
+/* Command buttons show their BTN icon fully inside the tile (not cropped). */
 .hud-cmd {
-  background-size: cover;
+  background-size: contain;
+  background-repeat: no-repeat;
   background-position: center;
   color: transparent;
 }
@@ -512,21 +523,6 @@ body.in-game .menu-panel { display: none; }
 
 body.order-armed #map { cursor: crosshair; }
 
-/* Yellow harvest-order acknowledgement ring: flashes twice, sized to the node. */
-.harvest-flash {
-  position: fixed;
-  border: 2px solid #ffe23a;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  box-shadow: 0 0 8px rgba(255, 226, 58, 0.7);
-  z-index: 2;
-  animation: harvest-flash 0.7s linear;
-}
-@keyframes harvest-flash {
-  0%, 45%, 100% { opacity: 0; }
-  20%, 70% { opacity: 1; }
-}
 
 .unit-select.unit-hovered {
   border-color: rgba(70, 224, 90, 0.55);

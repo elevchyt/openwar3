@@ -13,6 +13,7 @@ import { WORKERS, DEPOT_IDS } from "../data/races";
 interface Instance {
   localLocation: Float32Array;
   localRotation: Float32Array;
+  frame: number;
   setLocation(v: ArrayLike<number>): unknown;
   setRotation(q: ArrayLike<number>): unknown;
   setSequence(i: number): unknown;
@@ -20,7 +21,7 @@ interface Instance {
   setUniformScale(s: number): unknown;
   hide(): void;
   show(): void;
-  model: { sequences: Array<{ name: string }> };
+  model: { sequences: Array<{ name: string; interval?: ArrayLike<number> }> };
 }
 interface MapUnit {
   instance: Instance;
@@ -111,8 +112,22 @@ interface Entry {
   modelPath: string; // for the HUD portrait
   baseScale: number; // model scale at full size (buildings scale up while built)
   curScale: number; // last uniform scale applied (avoid redundant sets)
+  birthSeq: number; // "Birth" sequence index (-1 = none → scale-up fallback)
+  birthStart: number; // Birth animation frame interval, for scrubbing
+  birthEnd: number;
   hidden: boolean; // instance hidden (worker inside a gold mine)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
+}
+
+/** The "Birth" construction sequence + its frame interval, if the model has one. */
+function findBirthFields(seqs: Array<{ name: string; interval?: ArrayLike<number> }>): {
+  birthSeq: number;
+  birthStart: number;
+  birthEnd: number;
+} {
+  const birthSeq = seqs.findIndex((s) => /^birth$/i.test(s.name));
+  const iv = birthSeq >= 0 ? seqs[birthSeq].interval : undefined;
+  return { birthSeq, birthStart: iv ? iv[0] : 0, birthEnd: iv ? iv[1] : 0 };
 }
 
 const WALK = 1, IDLE = 0;
@@ -122,7 +137,6 @@ const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData movehe
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
-const HARVEST_FLASH_TIME = 0.7; // seconds — two flashes of the harvest ring
 
 interface Marker {
   root: HTMLDivElement;
@@ -154,7 +168,7 @@ export class RtsController {
   private selectMarker: Marker;
   private hoverMarker: Marker;
   private corpses: Array<{ instance: Instance; t: number }> = [];
-  private flashes: Array<{ el: HTMLDivElement; x: number; y: number; radius: number; t: number }> = [];
+  private flashRequests: Array<{ x: number; y: number; z: number; radius: number }> = [];
   // scratch buffers to avoid per-frame allocation
   private loc = new Float32Array(3);
   private quat = new Float32Array(4);
@@ -178,8 +192,6 @@ export class RtsController {
   dispose(): void {
     this.selectMarker.root.remove();
     this.hoverMarker.root.remove();
-    for (const f of this.flashes) f.el.remove();
-    this.flashes = [];
   }
 
   /** Hide the selection/hover rings (e.g. when the map view is not active). */
@@ -235,6 +247,7 @@ export class RtsController {
         modelPath: def?.model ?? "",
         baseScale: def?.modelScale || 1,
         curScale: def?.modelScale || 1,
+        ...findBirthFields(unit.instance.model.sequences),
         hidden: false,
         curSeq: -1,
       };
@@ -295,6 +308,7 @@ export class RtsController {
       modelPath: def.model,
       baseScale: def.modelScale || 1,
       curScale: def.modelScale || 1,
+      ...findBirthFields(instance.model.sequences),
       hidden: false,
       curSeq: -1,
     };
@@ -313,7 +327,6 @@ export class RtsController {
     this.sim.tick(dt);
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
     this.tickCorpses(dt);
-    this.tickFlashes(dt);
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
@@ -334,16 +347,29 @@ export class RtsController {
           e.unit.instance.show();
         }
       }
-      // A building under construction scales up from ~40% to full size — a
-      // stand-in for WC3's staged construction models (it looks like it rises).
+      // A building under construction: play its own "Birth" animation, scrubbed
+      // to the construction progress so it assembles in sync with the timer.
+      // Models without a Birth clip fall back to scaling up from ~40% to full.
       if (u.building && u.building.constructionLeft > 0) {
         const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
-        const s = e.baseScale * (0.4 + 0.6 * prog);
-        if (Math.abs(s - e.curScale) > 0.005) {
-          e.curScale = s;
-          e.unit.instance.setUniformScale(s);
+        if (e.birthSeq >= 0) {
+          if (e.curSeq !== e.birthSeq) {
+            e.curSeq = e.birthSeq;
+            e.unit.state = WALK; // keep mdx-m3-viewer from auto-standing
+            e.unit.instance.setSequence(e.birthSeq);
+            e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+          }
+          e.unit.instance.frame = e.birthStart + prog * (e.birthEnd - e.birthStart);
+        } else {
+          const s = e.baseScale * (0.4 + 0.6 * prog);
+          if (Math.abs(s - e.curScale) > 0.005) {
+            e.curScale = s;
+            e.unit.instance.setUniformScale(s);
+          }
         }
-      } else if (e.curScale !== e.baseScale) {
+        continue; // don't run the normal animation picker while building
+      }
+      if (e.curScale !== e.baseScale) {
         e.curScale = e.baseScale;
         e.unit.instance.setUniformScale(e.baseScale);
       }
@@ -616,42 +642,18 @@ export class RtsController {
     this.sim.issueMove(this.selected, hit[0], hit[1]);
   }
 
-  /** Flash a yellow ring at a harvest target (twice), sized to the node — the
-   *  WC3 acknowledgement when you order a worker onto a tree or gold mine. */
+  /** Queue a yellow harvest-target flash — the renderer draws it as a flat
+   *  ground circle (twice) like the selection ring, sized to the node. */
   private flashTarget(x: number, y: number, radius: number): void {
-    const el = document.createElement("div");
-    el.className = "harvest-flash";
-    document.body.appendChild(el);
-    this.flashes.push({ el, x, y, radius, t: HARVEST_FLASH_TIME });
+    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius });
   }
 
-  private tickFlashes(dt: number): void {
-    const viewport = this.host.viewport();
-    const [, h] = [this.host.canvas.width, this.host.canvas.height];
-    const dpr = this.dpr();
-    for (let i = this.flashes.length - 1; i >= 0; i--) {
-      const f = this.flashes[i];
-      f.t -= dt;
-      if (f.t <= 0) {
-        f.el.remove();
-        this.flashes.splice(i, 1);
-        continue;
-      }
-      // Project the node's world position + radius to screen each frame so it
-      // stays anchored even if the camera moves during the flash.
-      this.world[0] = f.x;
-      this.world[1] = f.y;
-      this.world[2] = this.heightAt(f.x, f.y);
-      this.host.camera.worldToScreen(this.screen, this.world, viewport);
-      this.world2.set(this.world);
-      this.world2[0] = f.x + f.radius;
-      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-      const rx = Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / dpr;
-      f.el.style.left = `${this.screen[0] / dpr}px`;
-      f.el.style.top = `${(h - this.screen[1]) / dpr}px`;
-      f.el.style.width = `${rx * 2}px`;
-      f.el.style.height = `${rx * 2}px`;
-    }
+  /** Harvest-flash requests since the last drain (renderer renders + times them). */
+  drainFlashes(): Array<{ x: number; y: number; z: number; radius: number }> {
+    if (!this.flashRequests.length) return this.flashRequests;
+    const out = this.flashRequests;
+    this.flashRequests = [];
+    return out;
   }
 
   /** Sim id of the unit whose footprint the cursor is over. Uses each unit's

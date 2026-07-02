@@ -262,10 +262,19 @@ export class SimWorld {
     this.detachBuilder(workerId);
     w.constructing = buildingId;
     b.building.builderId = workerId;
-    // Walk to the building's near edge; construction begins on arrival.
-    const [ax, ay] = this.depotApproach(w, b);
+    // Snap the worker to the nearest free tile outside the building's (now
+    // stamped) footprint, so it stands beside the site hammering rather than
+    // being trapped inside the under-construction model.
+    this.unsettle(w);
+    const [cx, cy] = this.grid.worldToCell(w.x, w.y);
+    const free = this.grid.nearestWalkable(cx, cy, 8);
+    if (free && (free[0] !== cx || free[1] !== cy)) {
+      [w.x, w.y] = this.grid.cellToWorld(free[0], free[1]);
+    }
     w.order = "idle";
-    this.pathTo(w, ax, ay);
+    w.moving = false;
+    w.path = [];
+    this.settle(w);
   }
 
   /** Stop a worker constructing (manual order, or death); halts progress. */

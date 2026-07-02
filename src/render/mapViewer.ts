@@ -96,6 +96,8 @@ interface SpawnInstance {
   setScene(scene: unknown): void;
   setTeamColor(id: number): void;
   setUniformScale(s: number): void;
+  setVertexColor(c: ArrayLike<number>): void;
+  frame: number;
   hide(): void;
   show(): void;
   setSequence(i: number): void;
@@ -155,7 +157,9 @@ export class MapViewerScene {
   // occludes the far side (unlike a DOM overlay drawn on top).
   private selCircle: SpawnInstance | null = null;
   private hoverCircle: SpawnInstance | null = null;
+  private circleModel: SpawnModel | null = null;
   private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
+  private flashCircles: Array<{ inst: SpawnInstance; t: number }> = [];
   private loc3 = new Float32Array(3);
   private consoleSkinCache:
     | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
@@ -495,30 +499,62 @@ export class MapViewerScene {
     if (!map) return;
     const model = (await this.viewer.load("UI\\Feedback\\selectioncircle\\selectioncircle.mdx", this.solver)) as SpawnModel | undefined;
     if (!model) return;
+    this.circleModel = model;
     const seqs = (model as unknown as { sequences?: Array<{ name: string }> }).sequences ?? [];
     const idx = (re: RegExp) => Math.max(0, seqs.findIndex((s) => re.test(s.name)));
     this.circleSeq = { friendly: idx(/^friendly$/i), enemy: idx(/^enemy$/i), neutral: idx(/^neutral$/i) };
-    const mk = (): SpawnInstance => {
-      const inst = model.addInstance();
-      inst.setScene(map.worldScene);
-      inst.setSequenceLoopMode(2);
-      inst.hide();
-      return inst;
-    };
-    this.selCircle = mk();
-    this.hoverCircle = mk();
+    this.selCircle = this.newCircle();
+    this.hoverCircle = this.newCircle();
   }
 
-  /** Position/scale/colour the flat selection + hover rings each frame. */
-  private updateSelectionCircles(): void {
-    this.placeCircle(this.selCircle, this.rts?.ringInfo("sel") ?? null);
-    const hover = this.rts?.ringInfo("hover") ?? null;
+  private newCircle(): SpawnInstance | null {
+    const map = this.viewer.map;
+    if (!this.circleModel || !map) return null;
+    const inst = this.circleModel.addInstance();
+    inst.setScene(map.worldScene);
+    inst.setSequenceLoopMode(2);
+    inst.hide();
+    return inst;
+  }
+
+  /** Position/scale/colour the flat selection + hover rings each frame, plus
+   *  the transient yellow harvest-order flashes. */
+  private updateSelectionCircles(dt: number): void {
     const sel = this.rts?.ringInfo("sel") ?? null;
+    this.placeCircle(this.selCircle, sel, null);
+    const hover = this.rts?.ringInfo("hover") ?? null;
     // Don't double a ring on the same unit.
-    this.placeCircle(this.hoverCircle, hover && (!sel || hover.x !== sel.x || hover.y !== sel.y) ? hover : null);
+    this.placeCircle(this.hoverCircle, hover && (!sel || hover.x !== sel.x || hover.y !== sel.y) ? hover : null, null);
+    this.tickFlashCircles(dt);
   }
 
-  private placeCircle(inst: SpawnInstance | null, info: { x: number; y: number; z: number; radius: number; owner: number } | null): void {
+  /** Draw + time the yellow harvest-order flashes (flat ground rings, twice). */
+  private tickFlashCircles(dt: number): void {
+    for (const req of this.rts?.drainFlashes() ?? []) {
+      const inst = this.newCircle();
+      if (!inst) break;
+      this.flashCircles.push({ inst, t: 0.7 });
+      this.placeCircle(inst, { x: req.x, y: req.y, z: req.z, radius: req.radius, owner: -2 }, [1, 0.88, 0.2]);
+    }
+    for (let i = this.flashCircles.length - 1; i >= 0; i--) {
+      const f = this.flashCircles[i];
+      f.t -= dt;
+      // Two on/off blinks over 0.7s.
+      const on = f.t > 0 && (f.t % 0.35) > 0.12;
+      if (on) f.inst.show();
+      else f.inst.hide();
+      if (f.t <= 0) {
+        f.inst.hide();
+        this.flashCircles.splice(i, 1);
+      }
+    }
+  }
+
+  private placeCircle(
+    inst: SpawnInstance | null,
+    info: { x: number; y: number; z: number; radius: number; owner: number } | null,
+    tint: number[] | null,
+  ): void {
     if (!inst) return;
     if (!info) {
       inst.hide();
@@ -527,9 +563,12 @@ export class MapViewerScene {
     inst.show();
     this.loc3[0] = info.x;
     this.loc3[1] = info.y;
-    this.loc3[2] = info.z;
+    // The ring model sits ~16 units up in model space; drop it so it hugs the
+    // ground (sampled fresh each frame, so it follows terrain like a shadow).
+    this.loc3[2] = info.z - 14;
     inst.setLocation(this.loc3);
     inst.setUniformScale(info.radius / 38); // model ring radius ≈ 38 world units
+    inst.setVertexColor(tint ?? [1, 1, 1]);
     const seq = info.owner < 0 ? this.circleSeq.neutral : info.owner === this.localPlayer ? this.circleSeq.friendly : this.circleSeq.enemy;
     inst.setSequence(seq);
     inst.setSequenceLoopMode(2);
@@ -914,7 +953,7 @@ export class MapViewerScene {
       this.updatePortrait();
       this.tickPendingBuild();
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
-      this.updateSelectionCircles();
+      this.updateSelectionCircles(dt / 1000);
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
