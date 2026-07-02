@@ -536,6 +536,11 @@ export class RtsController {
     if (this.selected !== null) this.sim.issueMove(this.selected, x, y);
   }
 
+  /** Terrain height at a world point (for placing ground-hugging ghosts). */
+  groundHeightAt(x: number, y: number): number {
+    return this.heightAt(x, y);
+  }
+
   /** Convert a CSS click to a world ground point (for build placement). */
   groundPoint(cssX: number, cssY: number): [number, number] | null {
     const dpr = this.dpr();

@@ -82,6 +82,16 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   (`margin-left:auto`), day/night medallion enlarged (300% of bar height), top menu buttons restyled
   as beveled WC3-ish stone (real `UpperMenuButtonTexture` is an FDF-decorated indirect name — full
   FDF-driven top bar deferred to the §10 UI pass).
+- **Feedback pass 2 (2026-07-02, latest+5)** — build **silhouette ghost**: placing a structure now
+  shows the translucent building model (blue tint = valid, red = blocked) following the cursor on the
+  ground, not just the green/red box (kept as a pre-load fallback). Buildings play their real
+  **Birth** construction animation scrubbed to the timer; the worker **snaps to the nearest free
+  tile** when construction starts (no longer trapped inside). Selection/hover rings **hug the ground**
+  (z sampled each frame), and the yellow harvest flash is a matching flat ground ring. Command card
+  got a solid dark backing + dark slots (no terrain showing through) with icons contained in-tile.
+  **Top bar** restyled toward the reference (dark stone strip, beveled tan-bordered menu buttons,
+  rounder resource icons). **Still deferred:** per-tile green/red build grid + auto-move-out of
+  friendly units; true model translucency depends on material blend (vertex-alpha only).
 - **Feedback pass (2026-07-02, latest+4)** — command card was empty because `.hud-command`'s
   `position:relative` (for its tooltip) overrode the zone's `position:absolute` — `place()` now sets
   position inline. Info panel + HP/mana plates are **solid black, always present**. Day/night clock

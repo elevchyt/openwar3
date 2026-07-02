@@ -151,6 +151,9 @@ export class MapViewerScene {
   private lastSelected: number | null = null;
   private placement: { def: UnitDef; fp: Footprint | null; workerId: number } | null = null;
   private ghost: HTMLDivElement | null = null;
+  // Translucent building-silhouette ghost that follows the cursor while placing.
+  private buildGhosts = new Map<string, SpawnInstance>();
+  private buildGhost: SpawnInstance | null = null;
   private pendingBuilds: Array<{ workerId: number; def: UnitDef; x: number; y: number }> = [];
   private meleeTeams = new Map<number, number>(); // owner slot → team
   // Flat selection-circle model instances, rendered on the terrain so geometry
@@ -588,28 +591,44 @@ export class MapViewerScene {
     return true;
   }
 
-  /** Update the build-placement ghost box under the cursor (green = valid site,
-   *  red = blocked). Anchored to the cursor; size scales with the footprint. */
+  /** Update the build-placement ghost under the cursor: the translucent
+   *  building silhouette (blue = valid, red = blocked) positioned on the ground.
+   *  Falls back to a green/red cursor box until the model has loaded. */
   private updateGhost(cssX: number, cssY: number): void {
-    if (!this.placement || !this.rts) {
+    if (!this.placement || !this.rts || !this.grid) {
+      if (this.ghost) this.ghost.hidden = true;
+      this.buildGhost?.hide();
+      return;
+    }
+    const hit = this.rts.groundPoint(cssX, cssY);
+    let x = 0;
+    let y = 0;
+    let valid = false;
+    if (hit) {
+      [x, y] = hit;
+      const fp = this.placement.fp;
+      if (fp) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
+      valid = this.placementValid(x, y);
+    }
+    if (this.buildGhost && hit) {
+      // Position the silhouette on the ground and tint it blue/red.
+      this.buildGhost.show();
+      this.loc3[0] = x;
+      this.loc3[1] = y;
+      this.loc3[2] = this.rts.groundHeightAt(x, y);
+      this.buildGhost.setLocation(this.loc3);
+      this.buildGhost.setVertexColor(valid ? [0.35, 0.55, 1, 0.55] : [1, 0.35, 0.3, 0.55]);
       if (this.ghost) this.ghost.hidden = true;
       return;
     }
+    // Fallback cursor box (until the ghost model loads).
     if (!this.ghost) {
       this.ghost = document.createElement("div");
       this.ghost.className = "build-ghost";
       document.body.appendChild(this.ghost);
     }
-    const hit = this.rts.groundPoint(cssX, cssY);
-    let valid = false;
-    if (hit && this.grid) {
-      let [x, y] = hit;
-      const fp = this.placement.fp;
-      if (fp) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
-      valid = this.placementValid(x, y);
-    }
     const cells = this.placement.fp ? Math.max(this.placement.fp.w, this.placement.fp.h) : 4;
-    const size = cells * 14; // rough on-screen footprint size (px)
+    const size = cells * 14;
     this.ghost.hidden = false;
     this.ghost.classList.toggle("invalid", !valid);
     this.ghost.style.width = `${size}px`;
@@ -856,6 +875,7 @@ export class MapViewerScene {
       const workerId = this.rts.selectedId;
       if (def && workerId !== null) {
         this.placement = { def, fp: def.pathTex ? this.footprintFor(def.pathTex) : null, workerId };
+        void this.showBuildGhost(def);
       }
       return;
     }
@@ -888,8 +908,30 @@ export class MapViewerScene {
 
   private cancelPlacement(): void {
     this.placement = null;
-    if (this.ghost) {
-      this.ghost.hidden = true;
+    if (this.ghost) this.ghost.hidden = true;
+    this.buildGhost?.hide();
+    this.buildGhost = null;
+  }
+
+  /** Load (once per building type) and show the translucent silhouette ghost. */
+  private async showBuildGhost(def: UnitDef): Promise<void> {
+    const map = this.viewer.map;
+    if (!map) return;
+    let inst = this.buildGhosts.get(def.id);
+    if (!inst) {
+      const model = (await this.viewer.load(def.model, this.solver)) as SpawnModel | undefined;
+      if (!model) return;
+      inst = model.addInstance();
+      inst.setScene(map.worldScene);
+      inst.setUniformScale(def.modelScale || 1);
+      this.buildGhosts.set(def.id, inst);
+    }
+    // Only show it if this is still the active placement.
+    if (this.placement?.def.id === def.id) {
+      this.buildGhost = inst;
+      inst.show();
+    } else {
+      inst.hide();
     }
   }
 
@@ -1004,6 +1046,9 @@ export class MapViewerScene {
     this.hud = null;
     this.ghost?.remove();
     this.ghost = null;
+    for (const g of this.buildGhosts.values()) g.hide();
+    this.buildGhosts.clear();
+    this.buildGhost = null;
     this.placement = null;
     this.pendingBuilds = [];
     document.body.style.cursor = ""; // restore the default cursor off the map
