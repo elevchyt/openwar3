@@ -1,7 +1,19 @@
+/* Game font: Nowar Sans (nowar-fonts/Nowar-Sans-War3, OFL 1.1) — the
+   multi-language replacement for WC3's Friz Quadrata TT. If the user has
+   Friz Quadrata installed locally it wins for the authentic latin look;
+   Nowar Sans covers everything else (CJK/Cyrillic/Greek/…). */
+@font-face {
+  font-family: "Nowar Sans";
+  src: url("/fonts/NowarSans.ttf") format("truetype");
+  font-weight: 300 700;
+  font-display: swap;
+}
+
 :root {
   --gold: #d8b45a;
   --panel: rgba(10, 14, 22, 0.72);
   --border: rgba(216, 180, 90, 0.4);
+  --game-font: "Friz Quadrata TT", "Nowar Sans", "Trebuchet MS", system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -10,7 +22,7 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  font-family: "Trebuchet MS", system-ui, sans-serif;
+  font-family: var(--game-font);
   background: #05070c;
   color: #e8e2d0;
 }
@@ -111,6 +123,8 @@ html, body {
 /* Selection ring under the selected unit (Phase 5), positioned each frame. */
 .unit-select {
   position: fixed;
+  /* width/height are set per-frame from the unit's projected world-space
+     selection radius (zoom-agnostic, elliptical on the ground plane). */
   width: 46px;
   height: 46px;
   border: 2px solid #46e05a;

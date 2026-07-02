@@ -43,6 +43,20 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   turning decoupled from movement (`desiredFacing`, finishes after arrival). UI: hover ring +
   HP bar (selection too), air units picked/marked at altitude (moveHeight + 60 lift), metrics
   overlay (fps / frame ms / unit count / ping placeholder) bottom-left.
+- **Polish pass 2 (2026-07-02, afternoon)** — **tileset fidelity:** cliff textures are
+  tileset-prefixed in the MPQs (`W_Cliff0.blp` on winter maps; SLK only says `Cliff0`) — our solver
+  now remaps using the viewer's solverParams.tileset + existence check; destructible trees override
+  their model's replaceable texture per row (`texID`/`texFile` — one LordaeronTree model shows
+  summer/fall/snow/winter canopies; patch adds per-instance `setTexture`). **Turn rate** now
+  authentic (hive thread 129619): editor value = rad per 0.03 s frame, capped 0.2 rad/frame.
+  **Unit-aware pathing:** A* takes an occupancy blocker (stationary ground units, Minkowski-expanded
+  by mover radius; cells adjacent to start stay open so overlapping units can leave), is best-effort
+  (walks as close as possible, WC3-style), search capped at 8192 expansions; a boxed-in unit stands
+  still and only turns to face the ordered point (≤2 stuck-repath attempts). **Selection ring**
+  zoom-agnostic: world-space radius = `selScale` (unitUI `scale`) × 36, projected to screen px per
+  frame as a ground-plane ellipse; HP bar scales with it. **Font:** Nowar Sans bundled
+  (`public/fonts/`, OFL) with Friz Quadrata preferred if installed (§10.1b). `docs/REFERENCES.md`
+  lists reference projects + the "search Hive Workshop for mechanics" guideline.
 - **Phase 6 (combat slice)** — headless-sim combat in `src/sim/world.ts`: owners/teams (allied =
   same team; creeps = team −1, hostile to players but not each other), HP/armor, weapons from
   UnitWeapons.slk (base + dice damage, cooldown, range, acquire), attack orders with chase/repath,
@@ -450,6 +464,21 @@ The **primary UI reference** is the developer-provided screenshot of the **TFT m
 - **FDF is approved as the source of truth:** Claude may read the real **`UI\FrameDef\Glue\MainMenu.fdf`**
   (and referenced templates/textures/fonts) from the user's install to reproduce exact layout, spacing,
   and styling. Use the screenshot as the quick spec; use the FDF for precision.
+
+### 10.1b In-game HUD reference (provided 2026-07-02)
+
+A gameplay screenshot (TFT, Undead vs …) is the canonical in-game HUD reference. Layout:
+- **Top bar:** Quests (F9) / Menu (F10) / Allies (F11) / Chat (F12) buttons left; day-night clock
+  centre; gold / lumber / food counters + upkeep label right.
+- **Bottom console:** ornate stone frame; minimap far left with a vertical strip of minimap buttons;
+  hero/unit **portrait** left-of-centre; selection info panel (name, HP/mana bars, group subicons)
+  centre; **inventory** (2×3) right-of-centre; **command card** (4×3 ability/order buttons) far right.
+- Skinned from real BLPs when an install is present (`UI\Widgets\Console\<race>\...` — the console
+  texture is race-specific), resolver placeholders otherwise.
+- **Font:** original is **Friz Quadrata TT**; OpenWar3 bundles **Nowar Sans**
+  (github.com/nowar-fonts/Nowar-Sans-War3, OFL 1.1, `public/fonts/NowarSans.ttf`) for multi-language
+  coverage — font stack prefers locally-installed Friz Quadrata, falls back to Nowar Sans.
+  (TTF is ~9.7 MB; converting to woff2/subsets is a later optimization.)
 
 ### 10.2 Architecture: a themeable UI, visuals via the resolver
 - **Layout/logic is your own code.** Menus as **HTML/CSS/DOM**; the **3D background** in a WebGL layer

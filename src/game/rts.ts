@@ -46,6 +46,7 @@ interface Entry {
   attack: number; // -1 = no attack animation
   death: number; // -1 = no death animation
   moveHeight: number;
+  selRadius: number; // selection-ring radius in WORLD units (from selScale)
   anim: Anim;
 }
 
@@ -54,6 +55,9 @@ const CORPSE_TIME = 3; // seconds a corpse stays before being hidden
 const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
 const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData moveheight
 const PICK_Z = 60; // aim picking/markers near the unit's body, not its feet
+// WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
+const SEL_RADIUS_PER_SCALE = 36;
+const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 
 interface Marker {
   root: HTMLDivElement;
@@ -90,6 +94,8 @@ export class RtsController {
   private quat = new Float32Array(4);
   private world = new Float32Array(3);
   private screen = new Float32Array(2);
+  private world2 = new Float32Array(3);
+  private screen2 = new Float32Array(2);
   private ray = new Float32Array(6);
 
   constructor(
@@ -151,6 +157,7 @@ export class RtsController {
         attack: seqs.findIndex((s) => /attack/i.test(s.name)),
         death: seqs.findIndex((s) => /^death/i.test(s.name)),
         moveHeight: lift(def?.moveHeight ?? 0),
+        selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
         anim: "stand",
       };
       this.entries.push(entry);
@@ -190,6 +197,7 @@ export class RtsController {
       attack: seqs.findIndex((s) => /attack/i.test(s.name)),
       death: seqs.findIndex((s) => /^death/i.test(s.name)),
       moveHeight: lift(def.moveHeight),
+      selRadius: (def.selScale || 1) * SEL_RADIUS_PER_SCALE,
       anim: "stand",
     };
     this.entries.push(entry);
@@ -359,20 +367,38 @@ export class RtsController {
     const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
     marker.fill.style.width = `${frac * 100}%`;
     marker.fill.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+    const viewport = this.host.viewport();
     this.world[0] = u.x;
     this.world[1] = u.y;
     // Ring sits at the unit's drawn base — for air units that's their altitude.
     this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
-    this.host.camera.worldToScreen(this.screen, this.world, this.host.viewport());
+    this.host.camera.worldToScreen(this.screen, this.world, viewport);
     const [w, h] = [this.host.canvas.width, this.host.canvas.height];
     if (this.screen[0] < 0 || this.screen[0] > w || this.screen[1] < 0 || this.screen[1] > h) {
       marker.root.hidden = true;
       return;
     }
     const dpr = this.dpr();
+    // Project the ring's world-space radius so its on-screen size tracks the
+    // unit's actual footprint regardless of zoom: X offset → ring width,
+    // Y offset → foreshortened ring height (ground-plane ellipse).
+    this.world2.set(this.world);
+    this.world2[0] = u.x + e.selRadius;
+    this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+    const rx = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / dpr);
+    this.world2[0] = u.x;
+    this.world2[1] = u.y + e.selRadius;
+    this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+    const ry = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / dpr);
     marker.root.hidden = false;
+    marker.root.style.width = `${rx * 2}px`;
+    marker.root.style.height = `${ry * 2}px`;
     marker.root.style.left = `${this.screen[0] / dpr}px`;
     marker.root.style.top = `${(h - this.screen[1]) / dpr}px`; // gl y-up → css y-down
+    // Keep the HP bar matched to the ring and floating above the unit.
+    const track = marker.fill.parentElement as HTMLDivElement;
+    track.style.width = `${Math.max(24, rx * 1.6)}px`;
+    track.style.top = `${-(ry + 14)}px`;
   }
 
   private toGl(cssX: number, cssY: number): [number, number] {

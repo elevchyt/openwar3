@@ -1,7 +1,12 @@
 import type { PathingGrid } from "./pathing";
 
-// A* pathfinding on the walkability grid (plan Phase 5). 8-directional, octile
-// heuristic, no cutting across blocked diagonal corners. Pure/headless.
+// A* pathfinding on the walkability grid (plan Phase 5/6). 8-directional,
+// octile heuristic, no cutting across blocked diagonal corners. Pure/headless.
+//
+// Supports dynamic obstacles via `blocked` (unit occupancy stamped by the sim)
+// and is best-effort like WC3: when the goal is unreachable it returns a path
+// to the explored cell closest to the goal — possibly just the start cell,
+// which callers treat as "can't move at all".
 
 type Cell = [number, number];
 
@@ -10,6 +15,11 @@ const NEIGHBORS: Array<[number, number, number]> = [
   [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
 ];
 
+// Search cap: keeps a fully-blocked goal from flooding the whole map. With
+// best-effort return semantics a capped search still yields a useful partial
+// path toward the goal.
+const MAX_EXPANSIONS = 8192;
+
 function octile(ax: number, ay: number, bx: number, by: number): number {
   const dx = Math.abs(ax - bx);
   const dy = Math.abs(ay - by);
@@ -17,45 +27,66 @@ function octile(ax: number, ay: number, bx: number, by: number): number {
 }
 
 /**
- * Find a walkable cell path from start to goal (inclusive). Returns null if
- * unreachable. Snaps start/goal to the nearest walkable cell first.
+ * Find a walkable cell path from start toward goal (inclusive of both ends).
+ * `blocked` marks extra dynamic obstacles (stationary units). Returns null
+ * only when start/goal can't be snapped to the static grid; otherwise returns
+ * the path to the goal or, if unreachable, to the closest explored cell.
  */
-export function findPath(grid: PathingGrid, start: Cell, goal: Cell): Cell[] | null {
+export function findPath(
+  grid: PathingGrid,
+  start: Cell,
+  goal: Cell,
+  blocked?: (cx: number, cy: number) => boolean,
+): Cell[] | null {
   const from = grid.nearestWalkable(start[0], start[1]);
   const to = grid.nearestWalkable(goal[0], goal[1]);
   if (!from || !to) return null;
 
   const key = (x: number, y: number) => y * grid.width + x;
   const goalKey = key(to[0], to[1]);
+  const open = (x: number, y: number) => grid.walkable(x, y) && !(blocked && blocked(x, y));
 
-  const open = new Map<number, { x: number; y: number; g: number; f: number }>();
+  const openSet = new Map<number, { x: number; y: number; g: number; f: number }>();
   const cameFrom = new Map<number, number>();
   const gScore = new Map<number, number>();
   const closed = new Set<number>();
 
   const startKey = key(from[0], from[1]);
   gScore.set(startKey, 0);
-  open.set(startKey, { x: from[0], y: from[1], g: 0, f: octile(from[0], from[1], to[0], to[1]) });
+  openSet.set(startKey, { x: from[0], y: from[1], g: 0, f: octile(from[0], from[1], to[0], to[1]) });
 
-  while (open.size) {
+  let bestKey = startKey;
+  let bestH = octile(from[0], from[1], to[0], to[1]);
+  let bestG = 0;
+  let expansions = 0;
+
+  while (openSet.size) {
     // Pop lowest f. (Linear scan — fine for melee-map A* distances; swap for a
     // binary heap if profiling ever demands it.)
     let currentKey = -1;
     let best = Infinity;
-    for (const [k, n] of open) {
+    for (const [k, n] of openSet) {
       if (n.f < best) { best = n.f; currentKey = k; }
     }
-    const current = open.get(currentKey)!;
+    const current = openSet.get(currentKey)!;
     if (currentKey === goalKey) return reconstruct(cameFrom, currentKey, grid.width);
-    open.delete(currentKey);
+    openSet.delete(currentKey);
     closed.add(currentKey);
+
+    const h = octile(current.x, current.y, to[0], to[1]);
+    if (h < bestH || (h === bestH && current.g < bestG)) {
+      bestH = h;
+      bestG = current.g;
+      bestKey = currentKey;
+    }
+    if (++expansions > MAX_EXPANSIONS) break;
 
     for (const [dx, dy, cost] of NEIGHBORS) {
       const nx = current.x + dx;
       const ny = current.y + dy;
-      if (!grid.walkable(nx, ny)) continue;
+      if (!open(nx, ny)) continue;
       // No corner-cutting through a blocked orthogonal neighbour.
-      if (dx !== 0 && dy !== 0 && (!grid.walkable(current.x + dx, current.y) || !grid.walkable(current.x, current.y + dy))) {
+      if (dx !== 0 && dy !== 0 && (!open(current.x + dx, current.y) || !open(current.x, current.y + dy))) {
         continue;
       }
       const nKey = key(nx, ny);
@@ -64,11 +95,12 @@ export function findPath(grid: PathingGrid, start: Cell, goal: Cell): Cell[] | n
       if (tentative < (gScore.get(nKey) ?? Infinity)) {
         cameFrom.set(nKey, currentKey);
         gScore.set(nKey, tentative);
-        open.set(nKey, { x: nx, y: ny, g: tentative, f: tentative + octile(nx, ny, to[0], to[1]) });
+        openSet.set(nKey, { x: nx, y: ny, g: tentative, f: tentative + octile(nx, ny, to[0], to[1]) });
       }
     }
   }
-  return null;
+  // Goal unreachable (or search capped): walk as close as we got, WC3-style.
+  return reconstruct(cameFrom, bestKey, grid.width);
 }
 
 function reconstruct(cameFrom: Map<number, number>, endKey: number, width: number): Cell[] {

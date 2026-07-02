@@ -12,6 +12,7 @@ export interface UnitDef {
   race: string; // human | orc | undead | nightelf | ...
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
+  selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
   moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
@@ -98,6 +99,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       race: d ? str(d, "race") : "",
       model: `${file.replace(/\//g, "\\")}.mdx`,
       modelScale: u ? num(u, "modelScale", 1) : 1,
+      selScale: u ? num(u, "scale", 1) : 1,
       moveType: d ? str(d, "movetp") : "",
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",

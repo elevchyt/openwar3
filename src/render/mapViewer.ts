@@ -48,7 +48,9 @@ const BASE_FILES = [
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 
 // Minimal local typings (mdx-m3-viewer's exports drag in their own gl-matrix).
-type Solver = (src: unknown) => unknown;
+// The viewer calls the solver as (src, solverParams) — params carry the map's
+// tileset letter once war3map.w3i is parsed.
+type Solver = (src: unknown, params?: { tileset?: string }) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
   moveToAndFace(from: Float32Array, to: Float32Array, up: Float32Array): void;
@@ -151,9 +153,21 @@ export class MapViewerScene {
     // viewer.load(), which takes bytes. Generated cliff-model blob URLs are cached
     // and tracked in `created` for revocation on dispose.
     const cliffUrls = new Map<string, string | null>();
-    const solver: Solver = (src) => {
+    const solver: Solver = (src, params) => {
       if (typeof src !== "string") return src; // in-memory loads pass through
-      const path = src.replace(/\//g, "\\");
+      let path = src.replace(/\//g, "\\");
+      // Tileset-specific cliff textures: CliffTypes.slk just says "Cliff0"/
+      // "Cliff1", but the game prepends the tileset letter (W_Cliff0.blp on
+      // winter maps, …). Not every tileset ships prefixed files — fall back to
+      // the plain (Lordaeron summer) texture when absent.
+      const tileset = params?.tileset?.toUpperCase();
+      if (tileset) {
+        const cliffTex = /^(.*\\cliff\\)(cliff[01]\.(?:blp|dds))$/i.exec(path);
+        if (cliffTex) {
+          const variant = `${cliffTex[1]}${tileset}_${cliffTex[2]}`;
+          if (vfs.exists(variant)) path = variant;
+        }
+      }
       const cached = baseUrls.get(path);
       if (cached) return cached; // preloaded base SLKs
       if (/^doodads\\terrain\\.*\.mdx$/i.test(path)) {

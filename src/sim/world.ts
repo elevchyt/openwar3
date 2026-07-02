@@ -1,4 +1,4 @@
-import type { PathingGrid } from "./pathing";
+import { PATHING_CELL, type PathingGrid } from "./pathing";
 import { findPath } from "./pathfind";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -45,13 +45,17 @@ export interface SimUnit {
   chaseY: number;
   acquireT: number; // seconds until the next auto-acquire scan
   stuckT: number; // seconds spent blocked while trying to move
+  stuckRetries: number; // consecutive stuck-repath attempts without progress
   repathT: number; // chase-repath cooldown after getting blocked
   prevX: number; // position before this tick's movement (stuck detection)
   prevY: number;
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
-const TURN_RATE_SCALE = 8; // turnrate → rad/sec (tunable feel)
+// WC3 turn rate (hiveworkshop thread 129619): the object-editor value is
+// radians per internal 0.03s frame, capped at ~0.2 rad/frame (≈381.95°/s).
+const TURN_FRAME = 0.03;
+const TURN_RATE_CAP = 0.2;
 const FACING_EPS = 0.35; // radians — must roughly face the target to swing
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
@@ -83,6 +87,7 @@ export class SimWorld {
       | "chaseY"
       | "acquireT"
       | "stuckT"
+      | "stuckRetries"
       | "repathT"
       | "prevX"
       | "prevY"
@@ -102,6 +107,7 @@ export class SimWorld {
       chaseY: 0,
       acquireT: 0,
       stuckT: 0,
+      stuckRetries: 0,
       repathT: 0,
       prevX: unit.x,
       prevY: unit.y,
@@ -118,15 +124,20 @@ export class SimWorld {
     return out;
   }
 
-  /** Order a unit to a world point via the pathing grid. False if no path. */
+  /** Order a unit to a world point via the pathing grid. When no movement is
+   *  possible at all (blocked in by units/terrain), the unit stays put and
+   *  only turns to face the point — WC3 does exactly this. */
   issueMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u) return false;
     u.order = "move";
     u.targetId = null;
     u.inCombat = false;
+    u.stuckT = 0;
+    u.stuckRetries = 0;
     if (!this.pathTo(u, tx, ty)) {
       this.stop(id);
+      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
       return false;
     }
     return true;
@@ -180,7 +191,7 @@ export class SimWorld {
       // Turning runs every tick, independent of movement: a unit that arrived
       // (or stands attacking) still finishes rotating to its desired heading.
       if (u.facing !== u.desiredFacing) {
-        u.facing = turnToward(u.facing, u.desiredFacing, u.turnRate * TURN_RATE_SCALE * dt);
+        u.facing = turnToward(u.facing, u.desiredFacing, turnSpeed(u.turnRate) * dt);
       }
       this.checkStuck(u, dt);
     }
@@ -204,11 +215,20 @@ export class SimWorld {
           u.path = [];
           u.repathT = REPATH_COOLDOWN;
         } else {
-          this.stop(u.id);
+          // Blocked mid-move: the blockers may have stopped since the original
+          // path was computed — repath around them. A unit that stays stuck
+          // (boxed in) stands down after a couple of attempts and just faces
+          // where it was ordered — WC3 units never squeeze through crowds.
+          const [tx, ty] = [u.chaseX, u.chaseY];
+          if (++u.stuckRetries > 1 || !this.pathTo(u, tx, ty)) {
+            this.stop(u.id);
+            u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+          }
         }
       }
     } else {
       u.stuckT = 0;
+      u.stuckRetries = 0;
     }
   }
 
@@ -288,7 +308,8 @@ export class SimWorld {
 
   // --- movement -----------------------------------------------------------
 
-  /** Set a path toward a world point (straight line for air units). */
+  /** Set a path toward a world point (straight line for air units). False when
+   *  no movement toward the point is possible at all. */
   private pathTo(u: SimUnit, tx: number, ty: number): boolean {
     u.chaseX = tx;
     u.chaseY = ty;
@@ -300,16 +321,47 @@ export class SimWorld {
       u.moving = true;
       return true;
     }
-    const cells = findPath(this.grid, this.grid.worldToCell(u.x, u.y), this.grid.worldToCell(tx, ty));
-    if (!cells || cells.length === 0) return false;
-    // Cell centres as waypoints; append the exact target for precision. Skip the
-    // first cell (the unit's current cell) to avoid a backwards initial step.
+    const start = this.grid.worldToCell(u.x, u.y);
+    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), this.occupancyBlocker(u, start));
+    // A single-cell (or empty) result means the unit can't get any closer.
+    if (!cells || cells.length <= 1) return false;
+    // Cell centres as waypoints; the exact target is appended only when the
+    // path actually reaches the target cell (best-effort paths stop short).
     const pts = cells.slice(1).map(([cx, cy]) => this.grid.cellToWorld(cx, cy)) as Array<[number, number]>;
-    pts.push([tx, ty]);
+    const [lastX, lastY] = pts[pts.length - 1];
+    if (Math.hypot(tx - lastX, ty - lastY) <= PATHING_CELL) pts.push([tx, ty]);
     u.path = pts;
     u.waypoint = 0;
     u.moving = true;
     return true;
+  }
+
+  /** Dynamic-obstacle test for pathfinding: cells covered by stationary ground
+   *  units, expanded by the mover's own radius (Minkowski) so corridors
+   *  narrower than the mover are rejected instead of "squeezed" through.
+   *  Cells adjacent to the start stay open so overlapping units can leave. */
+  private occupancyBlocker(
+    self: SimUnit,
+    start: [number, number],
+  ): ((cx: number, cy: number) => boolean) | undefined {
+    if (self.flying || self.radius <= 0) return undefined;
+    const occupied = new Set<number>();
+    for (const u of this.units.values()) {
+      if (u === self || u.flying || u.radius <= 0 || u.moving) continue;
+      const clearance = u.radius + self.radius;
+      const [x0, y0] = this.grid.worldToCell(u.x - clearance, u.y - clearance);
+      const [x1, y1] = this.grid.worldToCell(u.x + clearance, u.y + clearance);
+      for (let cy = y0; cy <= y1; cy++) {
+        for (let cx = x0; cx <= x1; cx++) {
+          const [wx, wy] = this.grid.cellToWorld(cx, cy);
+          if (Math.hypot(wx - u.x, wy - u.y) <= clearance) occupied.add(cy * this.grid.width + cx);
+        }
+      }
+    }
+    if (!occupied.size) return undefined;
+    const [sx, sy] = start;
+    return (cx, cy) =>
+      occupied.has(cy * this.grid.width + cx) && (Math.abs(cx - sx) > 1 || Math.abs(cy - sy) > 1);
   }
 
   private tickMovement(dt: number): void {
@@ -404,6 +456,11 @@ export class SimWorld {
       u.y = ny;
     }
   }
+}
+
+// Angular speed in rad/sec from a unit's UnitData turnrate (WC3 semantics).
+function turnSpeed(turnRate: number): number {
+  return Math.min(turnRate, TURN_RATE_CAP) / TURN_FRAME;
 }
 
 // Rotate `from` toward `to` by at most `maxDelta` radians, shortest direction.
