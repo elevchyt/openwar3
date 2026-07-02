@@ -120,18 +120,16 @@ html, body {
   min-width: 140px;
 }
 
-/* Selection ring under the selected unit (Phase 5), positioned each frame. */
+/* Anchor for the floating HP bar over the selected/hovered unit. The visible
+   selection RING is a flat 3D model on the terrain (so geometry occludes it);
+   this element itself is invisible and just carries the HP bar. */
 .unit-select {
   position: fixed;
-  /* width/height are set per-frame from the unit's projected world-space
-     selection radius (zoom-agnostic, elliptical on the ground plane). */
   width: 46px;
   height: 46px;
-  border: 2px solid #46e05a;
-  border-radius: 50%;
+  border: none;
   transform: translate(-50%, -50%);
   pointer-events: none;
-  box-shadow: 0 0 6px rgba(70, 224, 90, 0.6);
   z-index: 2;
 }
 

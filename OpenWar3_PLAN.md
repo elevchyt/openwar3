@@ -82,6 +82,21 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   (`margin-left:auto`), day/night medallion enlarged (300% of bar height), top menu buttons restyled
   as beveled WC3-ish stone (real `UpperMenuButtonTexture` is an FDF-decorated indirect name — full
   FDF-driven top bar deferred to the §10 UI pass).
+- **Feedback pass (2026-07-02, latest+4)** — command card was empty because `.hud-command`'s
+  `position:relative` (for its tooltip) overrode the zone's `position:absolute` — `place()` now sets
+  position inline. Info panel + HP/mana plates are **solid black, always present**. Day/night clock
+  cropped **square** so the sun/moon disc is a true circle (no warp). Removed **left-drag camera
+  rotation** (fixed WC3 angle). **Collider-based selection:** picks by each unit's collision radius
+  projected to screen (buildings selectable on their body, not just centre). **Worker-driven
+  construction:** placing a structure now sends the worker to the site and the building rises **only
+  on arrival** (no instant spawn), scaling 40%→full over the build time while the worker plays its
+  build anim; progress **halts if the worker leaves** (any manual order) and resumes on right-click;
+  verified headlessly. **Selection circles are now flat 3D models** on the terrain
+  (`UI\Feedback\selectioncircle\selectioncircle.mdx`, Friendly/Enemy/Neutral seqs, scaled by
+  selScale) so geometry occludes the far side — the DOM ring is retired (HP bar stays as a DOM
+  overlay). **Deferred (needs a focused 3D pass):** the WC3 build-placement ghost as a translucent
+  building silhouette + per-tile green/red ground grid with auto-move-out — we still use the simpler
+  green/red cursor box for now.
 - **Phase 6 — building & training (2026-07-02, latest+3)** — the economy loop is now a game:
   registry loads command-card **icons** (`art`) + grid positions (`buttonpos`) from the per-race
   `UnitFunc.txt`; a curated melee **tech tree** (`src/data/techtree.ts`) maps each race's worker →

@@ -524,6 +524,17 @@ export class RtsController {
     return { hour: this.sim.timeOfDay, isDay: this.sim.isDay };
   }
 
+  /** Ground-circle info for the selected/hovered unit (the renderer draws the
+   *  ring as a flat model on the terrain so geometry occludes it). */
+  ringInfo(which: "sel" | "hover"): { x: number; y: number; z: number; radius: number; owner: number } | null {
+    const id = which === "sel" ? this.selected : this.hovered;
+    if (id === null) return null;
+    const u = this.sim.units.get(id);
+    const e = this.byId.get(id);
+    if (!u || !e) return null;
+    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner };
+  }
+
   /** World position of the selected unit (for the portrait-click camera focus). */
   selectedPosition(): [number, number] | null {
     if (this.selected === null) return null;

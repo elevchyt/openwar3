@@ -151,6 +151,12 @@ export class MapViewerScene {
   private ghost: HTMLDivElement | null = null;
   private pendingBuilds: Array<{ workerId: number; def: UnitDef; x: number; y: number }> = [];
   private meleeTeams = new Map<number, number>(); // owner slot → team
+  // Flat selection-circle model instances, rendered on the terrain so geometry
+  // occludes the far side (unlike a DOM overlay drawn on top).
+  private selCircle: SpawnInstance | null = null;
+  private hoverCircle: SpawnInstance | null = null;
+  private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
+  private loc3 = new Float32Array(3);
   private consoleSkinCache:
     | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
     | null
@@ -391,6 +397,7 @@ export class MapViewerScene {
     this.applyRaceCursor();
     for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, 500, 150); // WC3 melee start
     this.mountHud();
+    void this.loadSelectionCircles();
     for (const slot of config.slots) {
       const roster = STARTING_UNITS[races.get(slot.id) ?? "human"];
       const workerTotal = roster
@@ -479,6 +486,53 @@ export class MapViewerScene {
 
   private teamOf(owner: number): number {
     return this.meleeTeams.get(owner) ?? owner;
+  }
+
+  // --- selection circles (flat ground models) -------------------------------
+
+  private async loadSelectionCircles(): Promise<void> {
+    const map = this.viewer.map;
+    if (!map) return;
+    const model = (await this.viewer.load("UI\\Feedback\\selectioncircle\\selectioncircle.mdx", this.solver)) as SpawnModel | undefined;
+    if (!model) return;
+    const seqs = (model as unknown as { sequences?: Array<{ name: string }> }).sequences ?? [];
+    const idx = (re: RegExp) => Math.max(0, seqs.findIndex((s) => re.test(s.name)));
+    this.circleSeq = { friendly: idx(/^friendly$/i), enemy: idx(/^enemy$/i), neutral: idx(/^neutral$/i) };
+    const mk = (): SpawnInstance => {
+      const inst = model.addInstance();
+      inst.setScene(map.worldScene);
+      inst.setSequenceLoopMode(2);
+      inst.hide();
+      return inst;
+    };
+    this.selCircle = mk();
+    this.hoverCircle = mk();
+  }
+
+  /** Position/scale/colour the flat selection + hover rings each frame. */
+  private updateSelectionCircles(): void {
+    this.placeCircle(this.selCircle, this.rts?.ringInfo("sel") ?? null);
+    const hover = this.rts?.ringInfo("hover") ?? null;
+    const sel = this.rts?.ringInfo("sel") ?? null;
+    // Don't double a ring on the same unit.
+    this.placeCircle(this.hoverCircle, hover && (!sel || hover.x !== sel.x || hover.y !== sel.y) ? hover : null);
+  }
+
+  private placeCircle(inst: SpawnInstance | null, info: { x: number; y: number; z: number; radius: number; owner: number } | null): void {
+    if (!inst) return;
+    if (!info) {
+      inst.hide();
+      return;
+    }
+    inst.show();
+    this.loc3[0] = info.x;
+    this.loc3[1] = info.y;
+    this.loc3[2] = info.z;
+    inst.setLocation(this.loc3);
+    inst.setUniformScale(info.radius / 38); // model ring radius ≈ 38 world units
+    const seq = info.owner < 0 ? this.circleSeq.neutral : info.owner === this.localPlayer ? this.circleSeq.friendly : this.circleSeq.enemy;
+    inst.setSequence(seq);
+    inst.setSequenceLoopMode(2);
   }
 
   /** All of the building footprint's cells must be walkable and unreserved. */
@@ -860,6 +914,7 @@ export class MapViewerScene {
       this.updatePortrait();
       this.tickPendingBuild();
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
+      this.updateSelectionCircles();
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
