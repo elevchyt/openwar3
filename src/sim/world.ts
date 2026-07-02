@@ -369,6 +369,36 @@ export class SimWorld {
     if (node) this.pathTo(u, node.x, node.y);
   }
 
+  /** Send a loaded worker back to deposit: path to the nearest depot ONCE, then
+   *  tickReturn waits for arrival (same "park where the pathfinder stops"
+   *  contract as harvesting — this is what fixes workers getting stuck at the
+   *  town hall, whose big footprint made a fixed deposit radius unreachable). */
+  private startReturn(u: SimUnit): void {
+    u.order = "return";
+    u.working = false;
+    u.atNode = false;
+    const depot = this.nearestDepot(u);
+    if (depot) this.pathTo(u, depot.x, depot.y);
+  }
+
+  private nearestDepot(u: SimUnit): SimUnit | null {
+    const w = u.worker;
+    if (!w) return null;
+    const wantGold = w.carryGold > 0;
+    let depot: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const d of this.units.values()) {
+      if (d.owner !== u.owner) continue;
+      if (wantGold ? !d.depotGold : !d.depotLumber) continue;
+      const dist = Math.hypot(d.x - u.x, d.y - u.y);
+      if (dist < bestD) {
+        bestD = dist;
+        depot = d;
+      }
+    }
+    return depot;
+  }
+
   // Different teams are enemies; creeps all share team -1 (hostile to every
   // player team but not to each other, like WC3's Neutral Hostile).
   hostile(a: SimUnit, b: SimUnit): boolean {
@@ -503,14 +533,13 @@ export class SimWorld {
             this.depleted.push(mine);
           }
         }
-        u.order = "return";
+        this.startReturn(u);
       }
       return;
     }
     // Carrying a full load already (e.g. re-ordered mid-return): go deposit.
     if (w.carryGold > 0 || (w.lumberCapacity > 0 && w.carryLumber >= w.lumberCapacity)) {
-      u.working = false;
-      u.order = "return";
+      this.startReturn(u);
       return;
     }
 
@@ -569,9 +598,7 @@ export class SimWorld {
       }
     }
     if (w.carryLumber >= w.lumberCapacity) {
-      u.working = false;
-      u.atNode = false;
-      u.order = "return";
+      this.startReturn(u);
     }
   }
 
@@ -594,27 +621,16 @@ export class SimWorld {
       else this.stop(u.id);
       return;
     }
-    const wantGold = w.carryGold > 0;
-    let depot: SimUnit | null = null;
-    let bestD = Infinity;
-    for (const d of this.units.values()) {
-      if (d.owner !== u.owner) continue;
-      if (wantGold ? !d.depotGold : !d.depotLumber) continue;
-      const dist = Math.hypot(d.x - u.x, d.y - u.y);
-      if (dist < bestD) {
-        bestD = dist;
-        depot = d;
-      }
-    }
+    const depot = this.nearestDepot(u);
     if (!depot) {
-      this.stop(u.id);
+      this.stop(u.id); // nowhere to drop off (hall destroyed) — idle
       return;
     }
-    const gap = bestD - u.radius - depot.radius;
-    if (gap > DEPOSIT_RANGE) {
-      this.chasePoint(u, depot.x, depot.y);
-      return;
-    }
+    // Deposit once we've reached the depot: within range, or parked as close as
+    // the pathfinder can get us (its footprint blocks the last stretch). The
+    // arrive-then-deposit contract is what keeps workers from getting stuck
+    // circling a town hall they can't quite touch.
+    if (!this.arriveAtNode(u, depot.x, depot.y, u.radius + depot.radius + DEPOSIT_RANGE)) return;
     const stash = this.stashOf(u.owner);
     stash.gold += w.carryGold;
     stash.lumber += w.carryLumber;

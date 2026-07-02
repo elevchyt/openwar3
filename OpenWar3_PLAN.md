@@ -71,6 +71,17 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   armed order consumes the next left-click). Melee start stash 500 g / 150 w; food live from owned
   units. In-game camera pans with arrow keys (WASD reserved for hotkeys); `src/render/blputil.ts`
   decodes BLPs for DOM use. Next: resource gathering loop (gold/lumber/train) driving these numbers.
+- **Gather polish + carry anims + HUD tweaks (2026-07-02, latest+1)** — fixed workers getting
+  **stuck after depositing gold**: the town hall's collision (176) was used as a Euclidean deposit
+  radius, unreachable given its ~512 footprint, so returns looped forever. Deposits now happen on
+  **arrival** (nearest reachable point to the depot via the shared `arriveAtNode` latch), same
+  contract as harvesting — verified: 17 deposits/120 s, no stall. **Carry animations:** the
+  controller resolves per-unit `AnimSet`s (`buildAnimSet`) and `pickSequence` plays Walk/Stand Gold,
+  Walk/Stand Lumber, and Attack Lumber (chop) from the real peasant/peon clips, falling back to base
+  clips for units without them. **HUD:** resources/food/upkeep pushed to the far right
+  (`margin-left:auto`), day/night medallion enlarged (300% of bar height), top menu buttons restyled
+  as beveled WC3-ish stone (real `UpperMenuButtonTexture` is an FDF-decorated indirect name — full
+  FDF-driven top bar deferred to the §10 UI pass).
 - **HUD v4 + gather rework (2026-07-02, latest)** — console no longer stretches: it's rendered at
   its **natural aspect** (`aspect-ratio` + `min(26vh, 100vw/aspect)`), centred, letterboxed on
   widescreen (matches the reference). Day/night clock is now its own centred medallion crop

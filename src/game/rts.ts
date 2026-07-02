@@ -1,4 +1,4 @@
-import { SimWorld, type SimWeapon, type WorkerState } from "../sim/world";
+import { SimWorld, type SimWeapon, type WorkerState, type SimUnit } from "../sim/world";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
@@ -38,15 +38,43 @@ export interface RtsHost {
   unitsReady(): boolean;
 }
 
-type Anim = "stand" | "walk" | "attack";
+// Resolved animation-sequence indices for a unit. Worker carry/chop variants
+// fall back to the base clip when a model lacks them.
+interface AnimSet {
+  stand: number;
+  walk: number;
+  attack: number;
+  death: number;
+  standGold: number;
+  walkGold: number;
+  standLumber: number;
+  walkLumber: number;
+  chopLumber: number; // "Attack Lumber" — the chopping swing
+}
+
+function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
+  const find = (re: RegExp): number => seqs.findIndex((s) => re.test(s.name));
+  const stand = find(/^stand(\s|$|-)/i) >= 0 ? find(/^stand(\s|$|-)/i) : find(/^stand/i);
+  const walk = find(/^walk\s*$/i) >= 0 ? find(/^walk\s*$/i) : find(/walk/i);
+  const attack = find(/^attack\s*$/i) >= 0 ? find(/^attack\s*$/i) : find(/attack/i);
+  const or = (a: number, b: number) => (a >= 0 ? a : b);
+  return {
+    stand,
+    walk,
+    attack,
+    death: find(/^death/i),
+    standGold: or(find(/stand gold/i), stand),
+    walkGold: or(find(/walk gold/i), walk),
+    standLumber: or(find(/stand lumber/i), stand),
+    walkLumber: or(find(/walk lumber/i), walk),
+    chopLumber: or(find(/attack lumber/i), attack),
+  };
+}
 
 interface Entry {
   simId: number;
   unit: MapUnit;
-  walk: number;
-  stand: number;
-  attack: number; // -1 = no attack animation
-  death: number; // -1 = no death animation
+  anims: AnimSet;
   moveHeight: number;
   selRadius: number; // selection-ring radius in WORLD units (from selScale)
   name: string;
@@ -54,7 +82,7 @@ interface Entry {
   foodMade: number;
   modelPath: string; // for the HUD portrait
   hidden: boolean; // instance hidden (worker inside a gold mine)
-  anim: Anim;
+  curSeq: number; // sequence index currently playing (avoid redundant sets)
 }
 
 const WALK = 1, IDLE = 0;
@@ -134,9 +162,8 @@ export class RtsController {
       const movetp = unit.row?.string("movetp");
       if (!movetp || movetp === "_" || movetp === "none") continue; // buildings/immovable
       const seqs = unit.instance.model.sequences;
-      const walk = seqs.findIndex((s) => /walk/i.test(s.name));
-      if (walk < 0) continue; // no walk animation → treat as static
-      const stand = seqs.findIndex((s) => /^stand/i.test(s.name));
+      if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
+      const anims = buildAnimSet(seqs);
       const loc = unit.instance.localLocation;
       const def = this.registry.get(unit.row?.string("unitid") ?? "");
       const simId = this.nextId++;
@@ -164,10 +191,7 @@ export class RtsController {
       const entry: Entry = {
         simId,
         unit,
-        walk,
-        stand: stand < 0 ? walk : stand,
-        attack: seqs.findIndex((s) => /attack/i.test(s.name)),
-        death: seqs.findIndex((s) => /^death/i.test(s.name)),
+        anims,
         moveHeight: lift(def?.moveHeight ?? 0),
         selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
         name: def?.name ?? unit.row?.string("unitid") ?? "Unit",
@@ -175,7 +199,7 @@ export class RtsController {
         foodMade: def?.foodMade ?? 0,
         modelPath: def?.model ?? "",
         hidden: false,
-        anim: "stand",
+        curSeq: -1,
       };
       this.entries.push(entry);
       this.byId.set(simId, entry);
@@ -187,8 +211,7 @@ export class RtsController {
    *  by melee init to place each race's starting units. Returns the sim id. */
   addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0): number {
     const seqs = instance.model.sequences;
-    const walk = seqs.findIndex((s) => /walk/i.test(s.name));
-    const stand = seqs.findIndex((s) => /^stand/i.test(s.name));
+    const anims = buildAnimSet(seqs);
     const simId = this.nextId++;
     const profile = WORKERS[def.id];
     const worker: WorkerState | null = profile ? { ...profile, carryGold: 0, carryLumber: 0 } : null;
@@ -216,10 +239,7 @@ export class RtsController {
     const entry: Entry = {
       simId,
       unit: { instance, state: IDLE },
-      walk: walk < 0 ? 0 : walk,
-      stand: stand < 0 ? (walk < 0 ? 0 : walk) : stand,
-      attack: seqs.findIndex((s) => /attack/i.test(s.name)),
-      death: seqs.findIndex((s) => /^death/i.test(s.name)),
+      anims,
       moveHeight: lift(def.moveHeight),
       selRadius: (def.selScale || 1) * SEL_RADIUS_PER_SCALE,
       name: def.name,
@@ -227,13 +247,14 @@ export class RtsController {
       foodMade: def.foodMade,
       modelPath: def.model,
       hidden: false,
-      anim: "stand",
+      curSeq: -1,
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
-    if (seqs.length) {
-      instance.setSequence(entry.stand);
-      instance.setSequenceLoopMode(2);
+    if (anims.stand >= 0) {
+      instance.setSequence(anims.stand);
+      instance.setSequenceLoopMode(LOOP_ALWAYS);
+      entry.curSeq = anims.stand;
     }
     return simId;
   }
@@ -258,12 +279,12 @@ export class RtsController {
         if (e.hidden) e.unit.instance.hide();
         else e.unit.instance.show();
       }
-      const anim: Anim = u.moving ? "walk" : (u.inCombat || u.working) && e.attack >= 0 ? "attack" : "stand";
-      if (anim !== e.anim) {
-        e.anim = anim;
-        // Non-IDLE state prevents mdx-m3-viewer's auto-stand override.
-        e.unit.state = anim === "stand" ? IDLE : WALK;
-        e.unit.instance.setSequence(anim === "walk" ? e.walk : anim === "attack" ? e.attack : e.stand);
+      const seq = this.pickSequence(e.anims, u);
+      if (seq !== e.curSeq && seq >= 0) {
+        e.curSeq = seq;
+        // Non-stand state prevents mdx-m3-viewer's auto-stand override.
+        e.unit.state = seq === e.anims.stand ? IDLE : WALK;
+        e.unit.instance.setSequence(seq);
         e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
       }
     }
@@ -279,13 +300,30 @@ export class RtsController {
     this.entries.splice(this.entries.indexOf(e), 1);
     if (this.selected === simId) this.selected = null;
     e.unit.state = WALK; // keep mdx-m3-viewer from overriding the death sequence
-    if (e.death >= 0) {
-      e.unit.instance.setSequence(e.death);
+    if (e.anims.death >= 0) {
+      e.unit.instance.setSequence(e.anims.death);
       e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
       this.corpses.push({ instance: e.unit.instance, t: CORPSE_TIME });
     } else {
       e.unit.instance.hide();
     }
+  }
+
+  /** Choose the animation sequence for a unit's current state, using the
+   *  worker's carried resource so peasants walk/stand/chop with the right
+   *  gold- and lumber-carrying clips. */
+  private pickSequence(a: AnimSet, u: SimUnit): number {
+    const carry = u.worker
+      ? u.worker.carryGold > 0
+        ? "gold"
+        : u.worker.carryLumber > 0
+          ? "lumber"
+          : null
+      : null;
+    if (u.working) return a.chopLumber; // chopping a tree
+    if (u.moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
+    if (u.inCombat) return a.attack;
+    return carry === "gold" ? a.standGold : carry === "lumber" ? a.standLumber : a.stand;
   }
 
   private tickCorpses(dt: number): void {
