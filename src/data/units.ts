@@ -15,6 +15,8 @@ export interface UnitDef {
   moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
   isBuilding: boolean;
   speed: number; // world units / second
+  turnRate: number; // radians-ish per second scale (UnitData turnrate)
+  moveHeight: number; // fly altitude above ground (0 for ground units)
   collision: number;
   hitPoints: number;
   mana: number;
@@ -95,6 +97,8 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       moveType: d ? str(d, "movetp") : "",
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       speed: b ? num(b, "spd", 0) : 0,
+      turnRate: d ? num(d, "turnrate", 0.5) : 0.5,
+      moveHeight: d ? num(d, "moveheight", 0) : 0,
       collision: b ? num(b, "collision", 0) : 0,
       hitPoints: b ? num(b, "hp", 0) : 0,
       mana: b ? num(b, "manaN", 0) : 0,

@@ -10,7 +10,9 @@ import { PathingGrid, parseWpm } from "../sim/pathing";
 import { stampDestructibles } from "../sim/destructibles";
 import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
-import { loadUnitRegistry, type UnitRegistry } from "../data/units";
+import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
+import { STARTING_UNITS, resolveRace } from "../data/races";
+import type { MeleeConfig } from "../ui/lobby";
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -67,9 +69,27 @@ interface W3xViewer {
   on(event: string, cb: (e: unknown) => void): void;
   once(event: string, cb: () => void): void;
   loadMap(buffer: ArrayBuffer | Uint8Array): void;
+  load(src: unknown, solver: Solver): Promise<SpawnModel | undefined>;
   removeScene(scene: Scene): boolean;
   startFrame(): void;
   render(): void;
+}
+
+// The bits of an mdx model/instance the melee spawner drives. A superset of the
+// RtsController's Instance, so a spawned instance is accepted by addUnit().
+interface SpawnInstance {
+  setScene(scene: unknown): void;
+  setTeamColor(id: number): void;
+  setSequence(i: number): void;
+  setSequenceLoopMode(m: number): void;
+  setLocation(v: ArrayLike<number>): unknown;
+  setRotation(q: ArrayLike<number>): unknown;
+  localLocation: Float32Array;
+  localRotation: Float32Array;
+  model: { sequences: Array<{ name: string }> };
+}
+interface SpawnModel {
+  addInstance(): SpawnInstance;
 }
 
 const ViewerClass = War3MapViewer as unknown as {
@@ -99,6 +119,7 @@ export class MapViewerScene {
     private blobUrls: string[],
     private vfs: DataSource,
     private registry: UnitRegistry,
+    private solver: Solver,
   ) {
     this.attachControls();
   }
@@ -147,7 +168,7 @@ export class MapViewerScene {
       else viewer.once("loadedbasefiles", resolve);
     });
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs));
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), solver);
   }
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
@@ -209,6 +230,44 @@ export class MapViewerScene {
   private slkText(path: string): string {
     const bytes = this.vfs.rawBytes(path);
     return bytes ? new TextDecoder("windows-1252").decode(bytes) : "";
+  }
+
+  /** Spawn each player's starting units at their start location (plan Phase 5.5). */
+  async startMelee(config: MeleeConfig): Promise<void> {
+    if (!this.rts || !this.viewer.map) return;
+    for (const slot of config.slots) {
+      const roster = STARTING_UNITS[resolveRace(slot.race)];
+      const workerTotal = roster
+        .filter((r) => !this.registry.get(r.id)?.isBuilding)
+        .reduce((n, r) => n + r.count, 0);
+      let placed = 0;
+      for (const { id, count } of roster) {
+        const def = this.registry.get(id);
+        if (!def) continue;
+        for (let i = 0; i < count; i++) {
+          let x = slot.startX;
+          let y = slot.startY;
+          if (!def.isBuilding) {
+            // Ring the workers around the start location (in front of the hall).
+            const a = (placed++ / Math.max(1, workerTotal)) * Math.PI * 2;
+            x += Math.cos(a) * 300;
+            y += Math.sin(a) * 300;
+          }
+          await this.spawnUnit(def, x, y, slot.id);
+        }
+      }
+    }
+  }
+
+  private async spawnUnit(def: UnitDef, x: number, y: number, color: number): Promise<void> {
+    const map = this.viewer.map;
+    if (!map || !this.rts) return;
+    const model = await this.viewer.load(def.model, this.solver);
+    if (!model) return;
+    const instance = model.addInstance();
+    instance.setScene(map.worldScene);
+    instance.setTeamColor(color);
+    this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2); // face south (WC3 default)
   }
 
   start(): void {

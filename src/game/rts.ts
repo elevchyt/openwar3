@@ -1,7 +1,7 @@
 import { SimWorld } from "../sim/world";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
-import type { UnitRegistry } from "../data/units";
+import type { UnitRegistry, UnitDef } from "../data/units";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -40,6 +40,7 @@ interface Entry {
   unit: MapUnit;
   walk: number;
   stand: number;
+  moveHeight: number;
 }
 
 const WALK = 1, IDLE = 0;
@@ -100,13 +101,46 @@ export class RtsController {
         y: loc[1],
         facing: quatToZ(unit.instance.localRotation),
         speed: def?.speed || 270, // real movement speed from UnitBalance.slk
+        turnRate: def?.turnRate ?? 0.5,
         radius: def?.collision || 16,
       });
-      const entry: Entry = { simId, unit, walk, stand: stand < 0 ? walk : stand };
+      const entry: Entry = { simId, unit, walk, stand: stand < 0 ? walk : stand, moveHeight: def?.moveHeight ?? 0 };
       this.entries.push(entry);
       this.byId.set(simId, entry);
     }
     this.seeded = true;
+  }
+
+  /** Add a freshly-spawned unit (instance already attached to the scene) — used
+   *  by melee init to place each race's starting units. Returns the sim id. */
+  addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number): number {
+    const seqs = instance.model.sequences;
+    const walk = seqs.findIndex((s) => /walk/i.test(s.name));
+    const stand = seqs.findIndex((s) => /^stand/i.test(s.name));
+    const simId = this.nextId++;
+    this.sim.add({
+      id: simId,
+      x,
+      y,
+      facing,
+      speed: def.speed,
+      turnRate: def.turnRate,
+      radius: def.collision || 16,
+    });
+    const entry: Entry = {
+      simId,
+      unit: { instance, state: IDLE },
+      walk: walk < 0 ? 0 : walk,
+      stand: stand < 0 ? (walk < 0 ? 0 : walk) : stand,
+      moveHeight: def.moveHeight,
+    };
+    this.entries.push(entry);
+    this.byId.set(simId, entry);
+    if (seqs.length) {
+      instance.setSequence(entry.stand);
+      instance.setSequenceLoopMode(2);
+    }
+    return simId;
   }
 
   tick(dt: number): void {
@@ -116,7 +150,7 @@ export class RtsController {
       const u = this.sim.units.get(e.simId)!;
       this.loc[0] = u.x;
       this.loc[1] = u.y;
-      this.loc[2] = this.heightAt(u.x, u.y);
+      this.loc[2] = this.heightAt(u.x, u.y) + e.moveHeight; // fly height for air units
       e.unit.instance.setLocation(this.loc);
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);

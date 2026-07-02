@@ -11,6 +11,7 @@ export interface SimUnit {
   y: number;
   facing: number; // radians
   speed: number; // world units / second
+  turnRate: number; // UnitData turnrate; scaled to rad/sec below
   radius: number;
   path: Array<[number, number]>; // world waypoints
   waypoint: number;
@@ -18,6 +19,7 @@ export interface SimUnit {
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
+const TURN_RATE_SCALE = 8; // turnrate → rad/sec (tunable feel)
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
@@ -61,6 +63,8 @@ export class SimWorld {
     for (const u of this.units.values()) {
       if (!u.moving) continue;
       let budget = u.speed * dt;
+      let dirX = 0;
+      let dirY = 0;
       while (budget > 0 && u.waypoint < u.path.length) {
         const [wx, wy] = u.path[u.waypoint];
         const dx = wx - u.x;
@@ -70,12 +74,18 @@ export class SimWorld {
           u.waypoint++;
           continue;
         }
-        u.facing = Math.atan2(dy, dx);
+        dirX = dx / dist;
+        dirY = dy / dist;
         const step = Math.min(budget, dist);
-        u.x += (dx / dist) * step;
-        u.y += (dy / dist) * step;
+        u.x += dirX * step;
+        u.y += dirY * step;
         budget -= step;
         if (dist - step <= ARRIVE_EPS) u.waypoint++;
+      }
+      // Turn toward the movement direction at the unit's turn rate (WC3 units
+      // don't snap instantly to face a new heading).
+      if (dirX || dirY) {
+        u.facing = turnToward(u.facing, Math.atan2(dirY, dirX), u.turnRate * TURN_RATE_SCALE * dt);
       }
       if (u.waypoint >= u.path.length) {
         u.moving = false;
@@ -83,4 +93,13 @@ export class SimWorld {
       }
     }
   }
+}
+
+// Rotate `from` toward `to` by at most `maxDelta` radians, shortest direction.
+function turnToward(from: number, to: number, maxDelta: number): number {
+  let diff = to - from;
+  while (diff > Math.PI) diff -= 2 * Math.PI;
+  while (diff < -Math.PI) diff += 2 * Math.PI;
+  if (Math.abs(diff) <= maxDelta) return to;
+  return from + Math.sign(diff) * maxDelta;
 }

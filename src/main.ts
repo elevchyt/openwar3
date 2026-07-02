@@ -79,10 +79,11 @@ async function singlePlayer(): Promise<void> {
       teardown();
       showTerrain();
     },
-    onStart: (config) => {
-      meleeConfig = config; // TODO Phase 5.5: spawn each race's starting units
+    onStart: async (config) => {
+      meleeConfig = config;
       teardown();
-      void enterMap(bytes, info.name);
+      await enterMap(bytes, info.name);
+      await mapScene?.startMelee(config); // spawn each race's starting units
     },
   });
 }
