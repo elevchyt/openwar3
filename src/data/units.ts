@@ -13,6 +13,9 @@ export interface UnitDef {
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
+  icon: string; // command-card BTN icon path (from UnitFunc "art")
+  buttonX: number; // command-card grid column (0-3), from "buttonpos"
+  buttonY: number; // command-card grid row (0-2)
   moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
@@ -80,6 +83,17 @@ const STRING_FILES = [
   "Units\\CampaignUnitStrings.txt",
 ];
 
+// Command-card icon (`art`) and grid position (`buttonpos`) live in the per-race
+// UnitFunc INI files, not the SLKs.
+const FUNC_FILES = [
+  "Units\\HumanUnitFunc.txt",
+  "Units\\OrcUnitFunc.txt",
+  "Units\\UndeadUnitFunc.txt",
+  "Units\\NightElfUnitFunc.txt",
+  "Units\\NeutralUnitFunc.txt",
+  "Units\\CampaignUnitFunc.txt",
+];
+
 export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
   const table = (path: string): MappedData | null => {
     const bytes = vfs.rawBytes(path);
@@ -96,6 +110,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     const bytes = vfs.rawBytes(path);
     if (bytes) names.load(new TextDecoder("windows-1252").decode(bytes));
   }
+  const funcs = new MappedData();
+  for (const path of FUNC_FILES) {
+    const bytes = vfs.rawBytes(path);
+    if (bytes) funcs.load(new TextDecoder("windows-1252").decode(bytes));
+  }
 
   const defs = new Map<string, UnitDef>();
   if (!data || !ui) return new UnitRegistry(defs);
@@ -111,6 +130,8 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     const a = abilities?.getRow(id) as Row | undefined;
 
     const strings = names.getRow(id) as Row | undefined;
+    const fn = funcs.getRow(id) as Row | undefined;
+    const [bx, by] = fn ? parseButtonPos(str(fn, "buttonpos")) : [0, 0];
     defs.set(id, {
       id,
       name: (strings && str(strings, "Name")) || (u && (str(u, "Name") || str(u, "name"))) || id,
@@ -118,6 +139,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       model: `${file.replace(/\//g, "\\")}.mdx`,
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
+      icon: fn ? str(fn, "art") : "",
+      buttonX: bx,
+      buttonY: by,
       moveType: d ? str(d, "movetp") : "",
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
@@ -145,6 +169,12 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     });
   }
   return new UnitRegistry(defs);
+}
+
+// "buttonpos" is "col,row" on the 4×3 command grid; default top-left.
+function parseButtonPos(v: string): [number, number] {
+  const m = /(\d+)\s*,\s*(\d+)/.exec(v);
+  return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : [0, 0];
 }
 
 // SLK cells use "-" for "none"; treat that (and missing) as empty/default.

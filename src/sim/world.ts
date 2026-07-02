@@ -30,6 +30,15 @@ export interface WorkerState {
   carryLumber: number;
 }
 
+/** Per-building state: construction progress + a unit training queue. */
+export interface BuildingState {
+  constructionLeft: number; // seconds until built (0 = complete)
+  buildTimeTotal: number; // full construction time (for the progress fraction)
+  queue: Array<{ unitId: string; timeLeft: number; buildTime: number }>;
+  rallyX: number; // trained units gather here (default: just south of the hall)
+  rallyY: number;
+}
+
 export interface SimMine {
   id: number;
   x: number;
@@ -65,6 +74,7 @@ export interface SimUnit {
   armor: number;
   weapon: SimWeapon | null;
   worker: WorkerState | null;
+  building: BuildingState | null; // set for structures (construction + training)
   depotGold: boolean; // accepts gold deposits (town halls)
   depotLumber: boolean; // accepts lumber deposits (halls + lumber mill)
   order: SimOrder;
@@ -131,6 +141,8 @@ export class SimWorld {
   private deaths: number[] = [];
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
+  // Trained units ready to spawn: the renderer creates the model + sim unit.
+  private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number }> = [];
   private nextNodeId = 1;
   private rng: () => number;
 
@@ -205,6 +217,67 @@ export class SimWorld {
     return out;
   }
 
+  /** Units finished training since the last drain (renderer spawns them). */
+  drainTrained(): typeof this.trainCompletions {
+    if (!this.trainCompletions.length) return this.trainCompletions;
+    const out = this.trainCompletions;
+    this.trainCompletions = [];
+    return out;
+  }
+
+  /** Queue a unit for training at a building. Timing only — the caller has
+   *  already checked/charged resources and food. */
+  enqueueTrain(buildingId: number, unitId: string, buildTime: number): boolean {
+    const b = this.units.get(buildingId)?.building;
+    if (!b) return false;
+    b.queue.push({ unitId, timeLeft: buildTime, buildTime });
+    return true;
+  }
+
+  /** Cancel the last queued item (returns its unitId for a refund, or null). */
+  cancelLastTrain(buildingId: number): string | null {
+    const b = this.units.get(buildingId)?.building;
+    if (!b || !b.queue.length) return null;
+    return b.queue.pop()!.unitId;
+  }
+
+  setRally(buildingId: number, x: number, y: number): void {
+    const b = this.units.get(buildingId)?.building;
+    if (b) {
+      b.rallyX = x;
+      b.rallyY = y;
+    }
+  }
+
+  /** Advance construction and training queues for all buildings. */
+  private tickBuildings(dt: number): void {
+    for (const u of this.units.values()) {
+      const b = u.building;
+      if (!b) continue;
+      if (b.constructionLeft > 0) {
+        // Construction ramps HP from 10% to full over the build time.
+        b.constructionLeft = Math.max(0, b.constructionLeft - dt);
+        const done = 1 - b.constructionLeft / b.buildTimeTotal;
+        u.hp = u.maxHp * (0.1 + 0.9 * done);
+        continue; // can't train while still being built
+      }
+      const job = b.queue[0];
+      if (job) {
+        job.timeLeft -= dt;
+        if (job.timeLeft <= 0) {
+          b.queue.shift();
+          this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY });
+        }
+      }
+    }
+  }
+
+  /** Whether a building is still under construction (renderer/HUD cue). */
+  isUnderConstruction(id: number): boolean {
+    const b = this.units.get(id)?.building;
+    return !!b && b.constructionLeft > 0;
+  }
+
   add(
     unit: Omit<
       SimUnit,
@@ -235,7 +308,9 @@ export class SimWorld {
       | "working"
       | "atNode"
       | "noCollision"
+      | "building"
     >,
+    building?: BuildingState | null,
   ): SimUnit {
     const u: SimUnit = {
       ...unit,
@@ -267,6 +342,7 @@ export class SimWorld {
       working: false,
       atNode: false,
       noCollision: false,
+      building: building ?? null,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -441,6 +517,7 @@ export class SimWorld {
 
   tick(dt: number): void {
     this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % 24;
+    this.tickBuildings(dt);
     for (const u of this.units.values()) {
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.repathT > 0) u.repathT -= dt;
