@@ -326,6 +326,7 @@ export class SimWorld {
     w.moving = false;
     w.path = [];
     this.settle(w);
+    w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x); // face the build site
   }
 
   /** Stop a worker constructing (manual order, or death); halts progress. */
@@ -352,6 +353,8 @@ export class SimWorld {
           Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96;
         if (!builder) b.builderId = 0;
         if (nearby) {
+          // Face the building while hammering (else the worker swings at the air).
+          builder!.desiredFacing = Math.atan2(u.y - builder!.y, u.x - builder!.x);
           b.constructionLeft = Math.max(0, b.constructionLeft - dt);
           const done = 1 - b.constructionLeft / b.buildTimeTotal;
           u.hp = u.maxHp * (0.1 + 0.9 * done);
@@ -899,9 +902,20 @@ export class SimWorld {
     }
     // Approach until parked next to the tree, then chop in place (never re-path
     // once working — that was the source of the mining "jiggle").
-    if (!this.arriveAtNode(u, tree.x, tree.y, u.radius + TREE_RADIUS + 40)) {
+    const reach = u.radius + TREE_RADIUS + 40;
+    if (!this.arriveAtNode(u, tree.x, tree.y, reach)) {
       u.working = false;
       return;
+    }
+    // Parked. If the clicked tree is out of reach (walled in / deep in the
+    // forest), harvest the nearest tree to where the worker actually stopped —
+    // WC3 gathers from the closest ACCESSIBLE tree to the one you clicked.
+    if (Math.hypot(tree.x - u.x, tree.y - u.y) > reach) {
+      const near = this.nearestTree(u.x, u.y, reach + 48);
+      if (near && near.id !== tree.id) {
+        tree = near;
+        u.resId = near.id;
+      }
     }
     u.working = true;
     u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);

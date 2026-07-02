@@ -39,6 +39,23 @@ Practical notes:
   - [Collision Size](https://www.hiveworkshop.com/threads/collision-size.309631/)
   - [Pathing/collision size values into real values](https://www.hiveworkshop.com/threads/pathing-collision-size-values-into-real-values.271205/)
 - **Orders / command system** overview: [WC3 basic commands & orders (YouTube)](https://www.youtube.com/watch?v=EehNLL7yYng)
+- **Core game rules (buildings, workers, rally, upkeep, etc.)** — the official
+  classic WC3 "basics" pages are the ground truth for how the game actually works;
+  consult them (and update code/docs to match) when building gameplay systems:
+  [Buildings](https://classic.battle.net/war3/basics/buildings.shtml) ·
+  [the whole basics index](https://classic.battle.net/war3/basics/). Notes captured from these:
+  rally points send trained units to a set location (or a resource, for workers);
+  buildings under construction can be paused (Human) by pulling the worker off;
+  the command card's bottom row is reserved for a hero's learned abilities.
+- **Order-feedback + cursor models** (verified via Warsmash + the stock
+  `Scripts\SharedMelee.pld` preload inside War3.mpq): the move/attack-move marker is
+  `UI\Feedback\Confirmation\Confirmation.mdx` (one model, green-tinted for move,
+  red for attack-move); rally flags are `UI\Feedback\RallyPoint\*RallyFlag.mdx`; the
+  cursor is `UI\Cursor\<Race>Cursor.blp/.mdx` with "Normal"/"Target" states. Building
+  models reveal all geometry only at the END of their "Birth" clip (each building has
+  `Birth`[0,60000] then `Stand`) — the build-placement ghost scrubs Birth to its last
+  frame so it shows fully built. Start-location props use `Objects\StartLocation\
+  StartLocation.mdx` and are hard-coded by the viewer with an undefined data row.
 - **Melee tech tree rawcodes** (which building trains/builds what) verified against the
   [wc3edit rawcode list](https://forum.wc3edit.net/viewtopic.php?t=2648) + StrategyWiki building
   pages. Encoded in `src/data/techtree.ts` (curated — WC3 stores these in ability object-data

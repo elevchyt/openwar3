@@ -155,8 +155,10 @@ export class MapViewerScene {
   // Translucent building-silhouette ghost that follows the cursor while placing.
   private buildGhosts = new Map<string, SpawnInstance>();
   private buildGhost: SpawnInstance | null = null;
+  private ghostBirthFrame = -1; // frame to pin the ghost at (Birth end = built)
   private pendingBuilds: Array<{ workerId: number; def: UnitDef; x: number; y: number }> = [];
   private meleeTeams = new Map<number, number>(); // owner slot → team
+  private startMarkersHidden = false; // hide sloc props once units finish loading
   // Flat selection-circle model instances, rendered on the terrain so geometry
   // occludes the far side (unlike a DOM overlay drawn on top).
   private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
@@ -259,6 +261,7 @@ export class MapViewerScene {
     if (prev) this.viewer.removeScene(prev);
     this.rts?.dispose();
     this.rts = null;
+    this.startMarkersHidden = false;
 
     this.viewer.loadMap(bytes);
     const map = this.viewer.map;
@@ -439,17 +442,18 @@ export class MapViewerScene {
         }
       }
     }
-    this.hideStartLocations();
   }
 
-  /** Hide the map's start-location (`sloc`) marker units once players are
-   *  spawned — they're just placement props (not real units) and shouldn't be
-   *  visible or clickable. */
+  /** Hide the map's start-location marker props (the `sloc` StartLocation.mdx
+   *  units). The viewer hard-codes those with an UNDEFINED row (they're not in
+   *  the unit tables), so a rowless rendered unit is a start marker — hide it so
+   *  it isn't visible after players spawn. They're never selectable (not seeded
+   *  into the sim). Runs once the map's units have finished loading (async). */
   private hideStartLocations(): void {
     const map = this.viewer.map;
     if (!map) return;
-    for (const u of map.units as Array<{ row?: { string(k: string): string | undefined }; instance?: { hide(): void } }>) {
-      if (u.row?.string("unitid") === "sloc") u.instance?.hide();
+    for (const u of map.units as Array<{ row?: unknown; instance?: { hide(): void } }>) {
+      if (!u.row) u.instance?.hide();
     }
   }
 
@@ -752,6 +756,7 @@ export class MapViewerScene {
     if (this.buildGhost && hit) {
       // Position the silhouette on the ground and tint it blue/red.
       this.buildGhost.show();
+      if (this.ghostBirthFrame >= 0) this.buildGhost.frame = this.ghostBirthFrame; // keep it fully built
       this.loc3[0] = x;
       this.loc3[1] = y;
       this.loc3[2] = this.rts.groundHeightAt(x, y);
@@ -970,16 +975,17 @@ export class MapViewerScene {
       return out;
     }
 
-    // WC3 layout: the basic orders sit on the bottom row; Patrol above Attack;
-    // a worker's Build button is top-left.
+    // WC3 layout (developer spec): top row = Move, Stop, Hold, Attack; Patrol at
+    // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
+    // is reserved for learned skills/abilities.
     const armed = this.rts?.orderMode ?? null;
-    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 0, row: 2, active: armed === "attack" }));
-    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 1, row: 2, active: armed === "move" }));
-    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 2, row: 2 }));
-    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 3, row: 2 }));
+    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: armed === "move" }));
+    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0 }));
+    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0 }));
+    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: armed === "attack" }));
     out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: armed === "patrol" }));
     if (sel.isWorker) {
-      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 0 }));
+      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 3, row: 1 }));
     }
     return out;
   }
@@ -1056,7 +1062,7 @@ export class MapViewerScene {
     this.buildGhost = null;
   }
 
-  /** Load (once per building type) and show the translucent silhouette ghost. */
+  /** Load (once per building type) and show the finished-building silhouette. */
   private async showBuildGhost(def: UnitDef): Promise<void> {
     const map = this.viewer.map;
     if (!map) return;
@@ -1067,37 +1073,42 @@ export class MapViewerScene {
       inst = model.addInstance();
       inst.setScene(map.worldScene);
       inst.setUniformScale(def.modelScale || 1);
-      // Face south (3π/2) like a placed building — the model defaults to facing
-      // east, which is the "wrong rotation" seen on the ghost.
-      zQuat(this.mq, (3 * Math.PI) / 2);
-      inst.setRotation(this.mq);
-      // Show the FINISHED building. Most building models only reveal their full
-      // geometry at the END of the "Birth" clip (geoset-visibility grows during
-      // construction); jumping to "Stand" leaves those parts hidden, so the ghost
-      // looked half-built. Scrub Birth to its last frame (= fully built); a
-      // LOOP_NEVER sequence clamps there, so it stays complete. Fall back to
-      // "Stand" for models without a Birth clip.
-      const seqs = inst.model.sequences;
-      const birth = seqs.findIndex((s) => /^birth$/i.test(s.name));
-      if (birth >= 0 && seqs[birth].interval) {
-        inst.setSequence(birth);
-        inst.setSequenceLoopMode(0);
-        inst.frame = seqs[birth].interval![1];
-      } else {
-        const stand = standSequence(seqs);
-        if (stand >= 0) {
-          inst.setSequence(stand);
-          inst.setSequenceLoopMode(2);
-        }
-      }
+      inst.setTeamColor(this.localPlayer); // show the team-coloured parts
       this.buildGhosts.set(def.id, inst);
     }
-    // Only show it if this is still the active placement.
+    // (Re)apply the finished-building pose every time it's shown.
+    this.applyGhostPose(inst);
     if (this.placement?.def.id === def.id) {
       this.buildGhost = inst;
       inst.show();
     } else {
       inst.hide();
+    }
+  }
+
+  /** Pose the ghost as a FULLY-BUILT building: face south, and scrub the "Birth"
+   *  clip to its last frame. Building models only reveal all their geometry at
+   *  the end of Birth (geosets grow during construction — verified against the
+   *  real MDX: every building has "Birth"[0,60000] then "Stand"); jumping to
+   *  "Stand" leaves birth-revealed parts hidden, which looked half-built. A
+   *  LOOP_NEVER clip clamps at its end, so it stays complete. */
+  private applyGhostPose(inst: SpawnInstance): void {
+    zQuat(this.mq, (3 * Math.PI) / 2); // face south, like a placed building
+    inst.setRotation(this.mq);
+    const seqs = inst.model.sequences;
+    const birth = seqs.findIndex((s) => /^birth$/i.test(s.name));
+    if (birth >= 0 && seqs[birth].interval) {
+      inst.setSequence(birth);
+      inst.setSequenceLoopMode(0);
+      this.ghostBirthFrame = seqs[birth].interval![1];
+      inst.frame = this.ghostBirthFrame;
+    } else {
+      const stand = standSequence(seqs);
+      if (stand >= 0) {
+        inst.setSequence(stand);
+        inst.setSequenceLoopMode(2);
+      }
+      this.ghostBirthFrame = -1;
     }
   }
 
@@ -1135,7 +1146,12 @@ export class MapViewerScene {
       this.cursorStyleEl = document.createElement("style");
       document.head.appendChild(this.cursorStyleEl);
     }
-    this.cursorStyleEl.textContent = `body.in-game, body.in-game * { cursor: ${rule} !important; }`;
+    // Normal = the WC3 arrow everywhere; when an order is armed (attack-move,
+    // patrol, a skill target, …) show a crosshair like WC3's targeting cursor.
+    // The armed selector is more specific, so it wins while `order-armed` is set.
+    this.cursorStyleEl.textContent =
+      `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
+      `body.in-game.order-armed, body.in-game.order-armed * { cursor: crosshair !important; }`;
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
@@ -1170,6 +1186,11 @@ export class MapViewerScene {
       this.updatePortrait();
       this.tickPendingBuild();
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
+      // Map units load async — hide the start-location props once they're all in.
+      if (!this.startMarkersHidden && this.viewer.map?.unitsReady) {
+        this.hideStartLocations();
+        this.startMarkersHidden = true;
+      }
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);
       this.updateProjectiles();

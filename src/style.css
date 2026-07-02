@@ -284,21 +284,6 @@ body.in-game .menu-panel { display: none; }
 .hud-upkeep[data-level="L"] { color: #e0c146; }
 .hud-upkeep[data-level="H"] { color: #e05046; }
 
-/* Full-width opaque strip behind the console so no terrain shows through the
-   art's transparent regions or the letterbox sides (the skinned console is
-   centred and narrower than the screen). Blocks map clicks in the HUD band. */
-.hud-console-backing {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: min(27vh, 260px);
-  min-height: 150px;
-  background: linear-gradient(rgba(8, 7, 4, 0) 0, #0a0906 20px, #050403);
-  pointer-events: auto;
-  z-index: 0;
-}
-
 .hud-console {
   position: absolute;
   left: 0;
@@ -435,6 +420,8 @@ body.in-game .menu-panel { display: none; }
   text-align: left;
   pointer-events: none;
   z-index: 6;
+  /* Sit a bit higher above the command card (≈1/3 of its own height). */
+  transform: translateY(-33%);
 }
 .hud-tooltip-title { font-size: 14px; color: #f2f4f8; margin-bottom: 4px; }
 .hud-tooltip-title b { color: #f0c850; font-weight: 400; }

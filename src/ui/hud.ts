@@ -139,10 +139,7 @@ export class GameHud {
     this.root = document.createElement("div");
     this.root.className = "hud";
     const skin = driver.consoleSkin();
-    // Opaque strip behind the console (covers grass in the art's gaps/letterbox).
-    const backing = document.createElement("div");
-    backing.className = "hud-console-backing";
-    this.root.append(backing, this.buildTopBar(skin), this.buildConsole(skin));
+    this.root.append(this.buildTopBar(skin), this.buildConsole(skin));
     parent.appendChild(this.root);
     window.addEventListener("keydown", this.onKey);
   }

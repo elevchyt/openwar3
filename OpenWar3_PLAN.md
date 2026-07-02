@@ -17,6 +17,23 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Orders/selection/rally pass (2026-07-02, latest+10)** — used the real MPQs in
+  `Warcraft III/` to verify data (via a throwaway MPQ-reader script): every building has
+  `Birth`[0,60000] then `Stand`, and start-location props are `Objects\StartLocation\
+  StartLocation.mdx` hard-coded with an **undefined row** — so the ghost now scrubs Birth→end
+  (fully built) and start markers are hidden by matching **rowless** rendered units once
+  `unitsReady` (the old `sloc` id check found nothing). **Selection rewritten to a ground-point
+  pick** (nearest unit to the click's world ground point) — fixes far-away creeps being selected
+  when zoomed out (screen projection mis-fired / picked behind-camera units). **No click-to-
+  deselect**: clicking empty ground / an empty drag-box keeps the current selection. **Rally
+  points**: right-clicking with a building selected sets where trained units complete (verified).
+  **Attack-move / patrol / skills show a crosshair cursor** (armed override on the forced WC3
+  cursor). **Command card** reordered to the developer's spec (top row Move/Stop/Hold/Attack,
+  Patrol at (0,1), Build at (3,1), bottom row reserved for hero skills). **Workers face the
+  building** while constructing (was swinging at the air). **Right-clicking an unreachable tree**
+  now harvests the nearest reachable tree where the worker ends up. Removed the full-width black
+  console backing (looked bad); tooltip nudged up ~1/3. Docs: added the classic.battle.net basics
+  reference. 22 headless sim checks pass; build clean.
 - **HUD/ghost bugfix pass (2026-07-02, latest+9)** — fixed the info panel showing a stale
   "Constructing"/"Training" for units and after deselect: `.hud-progress-wrap`/`.hud-queue` used
   `display:flex`, which beat the `hidden` attribute → added a global `[hidden]{display:none

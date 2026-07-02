@@ -457,11 +457,13 @@ export class RtsController {
     }
   }
 
-  /** Left-click: select the single unit under the cursor (empty ground clears). */
+  /** Left-click a unit selects it. Clicking empty ground does NOT deselect (WC3
+   *  has no click-to-deselect — you keep your selection until you pick another). */
   selectAt(cssX: number, cssY: number): void {
     const id = this.pickAt(cssX, cssY);
+    if (id === null) return; // empty ground: keep the current selection
     this.selected.clear();
-    if (id !== null) this.selected.add(id);
+    this.selected.add(id);
     this.primary = id;
   }
 
@@ -486,9 +488,10 @@ export class RtsController {
       const sy = (h - this.screen[1]) / dpr; // gl y-up → css y-down
       if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) picked.push(e.simId);
     }
+    if (picked.length === 0) return; // empty box: keep the current selection
     this.selected.clear();
     for (const id of picked) this.selected.add(id);
-    this.primary = picked[0] ?? null;
+    this.primary = picked[0];
   }
 
   /** Pointer move: show the ring + HP bar under the unit being hovered. */
@@ -709,6 +712,18 @@ export class RtsController {
   moveAt(cssX: number, cssY: number): void {
     if (this.selected.size === 0) return;
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    // A selected building: right-click sets its rally point (where trained units
+    // walk to). Applies to every selected building.
+    if (prim?.building) {
+      const hit = this.groundPoint(cssX, cssY);
+      if (hit) {
+        for (const id of this.selected) {
+          if (this.sim.units.get(id)?.building) this.sim.setRally(id, hit[0], hit[1]);
+        }
+        this.queueArrow(hit[0], hit[1], MOVE_ARROW);
+      }
+      return;
+    }
     const picked = this.pickAt(cssX, cssY);
     if (picked !== null && !this.selected.has(picked)) {
       const target = this.sim.units.get(picked);
@@ -797,11 +812,14 @@ export class RtsController {
    *  buildings are selectable anywhere on their body (not just dead-centre).
    *  Ties break toward the smallest hit (a unit in front of a building wins). */
   private pickAt(cssX: number, cssY: number): number | null {
-    const [gx, gy] = this.toGl(cssX, cssY);
-    const viewport = this.host.viewport();
-    const dpr = this.dpr();
-    // Units win over buildings when both are under the cursor (WC3 behaviour):
-    // track the best hit of each kind and prefer the unit.
+    // Pick by the GROUND point under the cursor (a real world location) rather
+    // than by projecting each unit to screen: the latter mis-fires badly when
+    // zoomed out and can even "select" units behind the camera (the reported
+    // far-away-creep bug). Find the nearest unit whose collision/selection
+    // radius covers the clicked ground point; units win over buildings.
+    const hit = this.groundPoint(cssX, cssY);
+    if (!hit) return null;
+    const [gx, gy] = hit;
     let bestUnit: number | null = null;
     let bestUnitScore = Infinity;
     let bestBldg: number | null = null;
@@ -809,31 +827,13 @@ export class RtsController {
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       if (e.hidden) continue;
-      const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
-      // Base (feet) screen point.
-      this.world[0] = u.x;
-      this.world[1] = u.y;
-      this.world[2] = baseZ;
-      this.host.camera.worldToScreen(this.screen, this.world, viewport);
-      const bx = this.screen[0];
-      const by = this.screen[1];
-      // Generous pick radius from the unit's collision / selection size (the
-      // WC3 click collider) — at least as wide as the drawn selection circle so
-      // anything inside the visible ring is clickable.
-      this.world2.set(this.world);
-      this.world2[0] = u.x + Math.max(u.radius, e.selRadius, 64);
-      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-      const rPx = Math.hypot(this.screen2[0] - bx, this.screen2[1] - by) + 16 * dpr;
-      // Top-of-body screen point: models rise UP from their base, so the click
-      // collider is a vertical capsule from the feet up over the body. Capped so
-      // a tall building doesn't swallow clicks in the empty sky above it.
-      const bodyHeight = Math.min(Math.max(e.selRadius * 2, 130), 220);
-      this.world2.set(this.world);
-      this.world2[2] = baseZ + bodyHeight;
-      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-      const d = distToSegment(gx, gy, bx, by, this.screen2[0], this.screen2[1]);
-      if (d > rPx) continue;
-      const score = d / rPx; // fraction into the collider (smaller = tighter)
+      // Generous world radius (models are viewed at an angle, so the ground
+      // point under a body-click sits a bit behind the unit — the extra reach
+      // keeps body clicks working). Buildings use their large selection radius.
+      const r = Math.max(u.radius, e.selRadius, 80);
+      const d = Math.hypot(u.x - gx, u.y - gy);
+      if (d > r) continue;
+      const score = d / r;
       if (u.building) {
         if (score < bestBldgScore) { bestBldgScore = score; bestBldg = e.simId; }
       } else if (score < bestUnitScore) {
@@ -910,11 +910,6 @@ export class RtsController {
     for (let k = n; k < this.hpBars.length; k++) this.hpBars[k].root.hidden = true;
   }
 
-  private toGl(cssX: number, cssY: number): [number, number] {
-    const dpr = this.dpr();
-    return [cssX * dpr, this.host.canvas.height - cssY * dpr];
-  }
-
   private dpr(): number {
     return this.host.canvas.width / this.host.canvas.clientWidth || 1;
   }
@@ -943,15 +938,6 @@ function weaponFor(def: UnitDef): SimWeapon | null {
     missileArt: def.missileArt,
     missileSpeed: def.missileSpeed,
   };
-}
-
-// Shortest distance from point (px,py) to the segment (ax,ay)-(bx,by).
-function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const vx = bx - ax;
-  const vy = by - ay;
-  const len2 = vx * vx + vy * vy;
-  const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2)) : 0;
-  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
 }
 
 // Quaternion for a rotation `angle` about +Z, written into `out`.
