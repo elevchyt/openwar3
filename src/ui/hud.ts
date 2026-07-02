@@ -34,6 +34,13 @@ export interface HudSelection {
   damageMax: number;
   carryGold: number;
   carryLumber: number;
+  isBuilding: boolean;
+  underConstruction: boolean;
+  buildProgress: number; // 0..1
+  trainProgress: number; // 0..1 (unit currently training)
+  queueLength: number;
+  queue: Array<{ icon: string }>; // icons of queued training units
+  icon: string; // the selected thing's own command icon (BLP path)
 }
 
 export interface HudDriver {
@@ -56,6 +63,8 @@ export interface HudDriver {
   icon(kind: "gold" | "lumber" | "supply"): string | null;
   /** Data URL for a command button icon (e.g. "BTNMove"), or null. */
   commandIcon(name: string): string | null;
+  /** Data URL for an arbitrary BLP path (e.g. a unit's command icon), or null. */
+  blpUrl(path: string): string | null;
   /** Current game time for the clock (hour 0–24, day/night flag). */
   dayNight(): { hour: number; isDay: boolean };
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
@@ -108,6 +117,13 @@ export class GameHud {
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
   private selCarry!: HTMLDivElement;
+  // Construction / training progress display.
+  private progressWrap!: HTMLDivElement;
+  private statusIcon!: HTMLDivElement;
+  private statusLabel!: HTMLDivElement;
+  private progressFill!: HTMLDivElement;
+  private queueRow!: HTMLDivElement;
+  private queueSlots: HTMLDivElement[] = [];
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
@@ -345,11 +361,39 @@ export class GameHud {
     infoText.className = "hud-info-text";
     this.selName = document.createElement("div");
     this.selName.className = "hud-sel-name";
+
+    // Construction / training progress: an icon of what's being made, a gold
+    // status label, a progress bar, and the training queue slots (WC3 layout).
+    this.progressWrap = document.createElement("div");
+    this.progressWrap.className = "hud-progress-wrap";
+    this.progressWrap.hidden = true;
+    const statusLine = document.createElement("div");
+    statusLine.className = "hud-status-line";
+    this.statusIcon = document.createElement("div");
+    this.statusIcon.className = "hud-status-icon";
+    this.statusLabel = document.createElement("div");
+    this.statusLabel.className = "hud-status-label";
+    statusLine.append(this.statusIcon, this.statusLabel);
+    const track = document.createElement("div");
+    track.className = "hud-progress";
+    this.progressFill = document.createElement("div");
+    this.progressFill.className = "hud-progress-fill";
+    track.appendChild(this.progressFill);
+    this.queueRow = document.createElement("div");
+    this.queueRow.className = "hud-queue";
+    for (let i = 0; i < 6; i++) {
+      const slot = document.createElement("div");
+      slot.className = "hud-queue-slot";
+      this.queueSlots.push(slot);
+      this.queueRow.appendChild(slot);
+    }
+    this.progressWrap.append(statusLine, track, this.queueRow);
+
     this.selStats = document.createElement("div");
     this.selStats.className = "hud-sel-stats";
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
-    infoText.append(this.selName, this.selStats, this.selCarry);
+    infoText.append(this.selName, this.progressWrap, this.selStats, this.selCarry);
     return { portraitWrap, infoText };
   }
 
@@ -422,15 +466,22 @@ export class GameHud {
   }
 
   private showTooltip(c: CommandButton): void {
-    const hk = c.hotkey && c.hotkey.length === 1 ? c.name.replace(c.hotkey, `<b>${c.hotkey}</b>`) : c.name;
-    const cost =
-      c.gold || c.lumber || c.food
-        ? `<div class="hud-tooltip-cost">${c.gold ? `<span class="tc-gold">${c.gold}</span>` : ""}${
-            c.lumber ? `<span class="tc-lumber">${c.lumber}</span>` : ""
-          }${c.food ? `<span class="tc-food">${c.food}</span>` : ""}</div>`
-        : "";
+    // Title: "Build " prefix for build orders, with the hotkey letter picked out
+    // in gold inside the name (like the WC3 tooltip).
+    const prefix = c.id.startsWith("build:") ? "Build " : "";
+    const title = highlightHotkey(prefix + c.name, c.hotkey);
+    // Cost: the REAL gold/lumber/food icons (same as the top resource bar) + the
+    // amount, not placeholder glyphs.
+    const costItem = (kind: "gold" | "lumber" | "supply", value: number): string => {
+      if (!value) return "";
+      const url = this.driver.icon(kind);
+      const icon = url ? `<img class="tt-cost-icon" src="${url}" alt="${kind}">` : "";
+      return `<span class="tt-cost-item">${icon}${value}</span>`;
+    };
+    const costs = costItem("gold", c.gold) + costItem("lumber", c.lumber) + costItem("supply", c.food);
+    const cost = costs ? `<div class="hud-tooltip-cost">${costs}</div>` : "";
     this.cmdTooltip.innerHTML =
-      `<div class="hud-tooltip-title">${hk}${c.hotkey ? ` (${c.hotkey})` : ""}</div>${cost}<div class="hud-tooltip-desc">${c.desc}</div>`;
+      `<div class="hud-tooltip-title">${title}</div>${cost}<div class="hud-tooltip-desc">${escapeHtml(c.desc)}</div>`;
     this.cmdTooltip.hidden = false;
   }
 
@@ -452,16 +503,55 @@ export class GameHud {
       this.selName.textContent = sel.name;
       this.selHpText.textContent = `${Math.ceil(sel.hp)} / ${sel.maxHp}`;
       this.selMpText.textContent = sel.maxMana > 0 ? `${Math.floor(sel.mana)} / ${sel.maxMana}` : "";
-      const dmg = sel.damageMax > 0 ? `Damage: ${sel.damageMin} - ${sel.damageMax}` : "";
-      this.selStats.textContent = `${dmg}${dmg ? "\n" : ""}Armor: ${sel.armor}`;
-      this.selCarry.textContent =
-        sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";
+      const constructing = sel.underConstruction;
+      const training = sel.isBuilding && !constructing && sel.queueLength > 0;
+      if (constructing || training) {
+        // Progress display replaces the stat lines.
+        this.progressWrap.hidden = false;
+        this.selStats.hidden = true;
+        this.selCarry.hidden = true;
+        this.statusLabel.textContent = constructing ? "Constructing" : "Training";
+        const frac = Math.max(0, Math.min(1, constructing ? sel.buildProgress : sel.trainProgress));
+        this.progressFill.style.width = `${frac * 100}%`;
+        // Status icon: the building (constructing) or the unit being trained.
+        const iconPath = constructing ? sel.icon : sel.queue[0]?.icon ?? sel.icon;
+        const url = iconPath ? this.driver.blpUrl(iconPath) : null;
+        this.statusIcon.style.backgroundImage = url ? `url(${url})` : "";
+        this.statusIcon.style.visibility = url ? "visible" : "hidden";
+        // Queue slots hold positions 2..7 (the current unit is above the bar).
+        this.queueRow.hidden = !training;
+        if (training) {
+          const rest = sel.queue.slice(1);
+          this.queueSlots.forEach((slot, i) => {
+            const q = rest[i];
+            const qUrl = q?.icon ? this.driver.blpUrl(q.icon) : null;
+            if (qUrl) {
+              slot.style.backgroundImage = `url(${qUrl})`;
+              slot.textContent = "";
+              slot.classList.add("filled");
+            } else {
+              slot.style.backgroundImage = "";
+              slot.textContent = String(i + 2);
+              slot.classList.remove("filled");
+            }
+          });
+        }
+      } else {
+        this.progressWrap.hidden = true;
+        this.selStats.hidden = false;
+        this.selCarry.hidden = false;
+        const dmg = sel.damageMax > 0 ? `Damage: ${sel.damageMin} - ${sel.damageMax}` : "";
+        this.selStats.textContent = `${dmg}${dmg ? "\n" : ""}Armor: ${sel.armor}`;
+        this.selCarry.textContent =
+          sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";
+      }
     } else {
       this.selName.textContent = "";
       this.selHpText.textContent = "";
       this.selMpText.textContent = "";
       this.selStats.textContent = "";
       this.selCarry.textContent = "";
+      this.progressWrap.hidden = true;
     }
   }
 
@@ -477,4 +567,17 @@ export class GameHud {
       ctx.fillRect(u * MINIMAP_SIZE - 2, v * MINIMAP_SIZE - 2, 4, 4);
     }
   }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
+}
+
+// Highlight the hotkey letter (first occurrence, case-insensitive) in gold inside
+// the title, e.g. "Build <b>A</b>ltar of Kings" — the WC3 tooltip convention.
+function highlightHotkey(name: string, hotkey: string): string {
+  if (!hotkey || hotkey.length !== 1) return escapeHtml(name);
+  const idx = name.toUpperCase().indexOf(hotkey.toUpperCase());
+  if (idx < 0) return escapeHtml(name);
+  return escapeHtml(name.slice(0, idx)) + `<b>${escapeHtml(name[idx])}</b>` + escapeHtml(name.slice(idx + 1));
 }

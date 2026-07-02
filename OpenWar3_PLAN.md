@@ -17,6 +17,17 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **HUD info-panel + tooltip pass (2026-07-02, latest+8)** — the selection info panel now matches
+  the WC3 reference screenshots (`~/Downloads/2026-07-02 17_45*.png`): **construction** shows the
+  building icon + "Constructing" + a gold progress bar; **training** shows "Training" + the current
+  unit's icon + a progress bar + the **queue slots** (positions 2–7, filled with unit icons or the
+  slot number); units keep the damage/armor lines. Data flows from the sim (`buildProgress`,
+  `trainProgress`, `queue` icons) through `SelectionInfo`→`HudSelection`; a new `driver.blpUrl(path)`
+  resolves arbitrary BLP icons. **Command tooltips** restyled to the reference (translucent
+  blue-grey slab, white title with the **hotkey letter in gold**, "Build " prefix for build
+  orders) and now use the **real gold/lumber/food BLP icons** (the same ones as the top resource
+  bar) instead of placeholder ◈/❦ glyphs. Still TODO: hero Str/Agi/Int attributes + damage/armor
+  stat icons in the panel.
 - **Orders/feedback/camera pass (2026-07-02, latest+7)** — **Patrol** + **attack-move** orders
   (sim `patrol`/`attackmove`: patrol bounces between two points, a-move engages enemies acquired en
   route; both verified headlessly). **3D order-feedback arrows** at the destination —

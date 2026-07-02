@@ -57,8 +57,11 @@ export interface SelectionInfo {
   isWorker: boolean;
   isBuilding: boolean;
   underConstruction: boolean;
-  buildProgress: number;
+  buildProgress: number; // 0..1 construction completion
+  trainProgress: number; // 0..1 of the unit currently training (queue[0])
   queueLength: number;
+  queue: Array<{ icon: string }>; // icons of the units queued for training
+  icon: string; // the selected thing's own command-card icon (BLP path)
   carryGold: number;
   carryLumber: number;
 }
@@ -576,6 +579,7 @@ export class RtsController {
     if (!u || !e) return null;
     const w = u.weapon;
     const b = u.building;
+    const q = b?.queue ?? [];
     return {
       id: e.simId,
       typeId: e.typeId,
@@ -595,7 +599,10 @@ export class RtsController {
       isBuilding: !!b,
       underConstruction: !!b && b.constructionLeft > 0,
       buildProgress: b && b.buildTimeTotal > 0 ? 1 - b.constructionLeft / b.buildTimeTotal : 1,
-      queueLength: b ? b.queue.length : 0,
+      trainProgress: q.length && q[0].buildTime > 0 ? 1 - q[0].timeLeft / q[0].buildTime : 0,
+      queueLength: q.length,
+      queue: q.map((j) => ({ icon: this.registry.get(j.unitId)?.icon ?? "" })),
+      icon: this.registry.get(e.typeId)?.icon ?? "",
       carryGold: u.worker?.carryGold ?? 0,
       carryLumber: u.worker?.carryLumber ?? 0,
     };

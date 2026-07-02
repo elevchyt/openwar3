@@ -806,6 +806,7 @@ export class MapViewerScene {
       stopSelected: () => this.rts?.stopSelected(),
       icon: (kind) => this.resourceIcon(kind),
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
+      blpUrl: (path) => this.blpIcon(path),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: 8, isDay: true },
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
