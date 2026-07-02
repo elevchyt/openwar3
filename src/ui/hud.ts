@@ -6,9 +6,20 @@
 
 export type OrderMode = "move" | "attack" | null;
 
+export interface HudSelection {
+  id: number;
+  name: string;
+  hp: number;
+  maxHp: number;
+  mana: number;
+  maxMana: number;
+  carryGold: number;
+  carryLumber: number;
+}
+
 export interface HudDriver {
   resources(): { gold: number; lumber: number; foodUsed: number; foodMax: number };
-  selection(): { name: string; hp: number; maxHp: number } | null;
+  selection(): HudSelection | null;
   /** Minimap dots: world positions + owning player (for color). */
   dots(): Array<{ x: number; y: number; owner: number }>;
   /** World rect covered by the map: [originX, originY, width, height]. */
@@ -20,6 +31,8 @@ export interface HudDriver {
   icon(kind: "gold" | "lumber" | "supply"): string | null;
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
   minimapImage(): HTMLCanvasElement | null;
+  /** Stitched race console texture (UI\Console\<Race>UITile01–04) or null. */
+  consoleSkin(): { url: string; aspect: number } | null;
 }
 
 // WC3 player colors by slot.
@@ -42,7 +55,12 @@ export class GameHud {
   private selName!: HTMLDivElement;
   private selHpText!: HTMLDivElement;
   private selHpFill!: HTMLDivElement;
+  private selMpRow!: HTMLDivElement;
+  private selMpText!: HTMLDivElement;
+  private selMpFill!: HTMLDivElement;
+  private selCarry!: HTMLDivElement;
   private portrait!: HTMLDivElement;
+  private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
   private modeButtons = new Map<string, HTMLButtonElement>();
   private dotsT = 0;
@@ -158,9 +176,21 @@ export class GameHud {
     return value;
   }
 
+  /** The canvas inside the portrait frame — the host renders the selected
+   *  unit's animated portrait model into it. */
+  portraitCanvas(): HTMLCanvasElement {
+    return this.portraitCanvasEl;
+  }
+
   private buildConsole(): HTMLDivElement {
     const console_ = document.createElement("div");
     console_.className = "hud-console";
+    const skin = this.driver.consoleSkin();
+    if (skin) {
+      console_.classList.add("hud-console-skinned");
+      console_.style.backgroundImage = `url(${skin.url})`;
+      console_.style.height = `calc(100vw / ${skin.aspect})`;
+    }
     console_.append(this.buildMinimap(), this.buildInfoPanel(), this.buildInventory(), this.buildCommandCard());
     return console_;
   }
@@ -191,21 +221,51 @@ export class GameHud {
   private buildInfoPanel(): HTMLDivElement {
     const panel = document.createElement("div");
     panel.className = "hud-info";
+    // Portrait: an animated 3D bust (the _portrait.mdx model) with the HP and
+    // mana readouts right under it, like the original console.
     this.portrait = document.createElement("div");
     this.portrait.className = "hud-portrait";
-    const text = document.createElement("div");
-    text.className = "hud-info-text";
-    this.selName = document.createElement("div");
-    this.selName.className = "hud-sel-name";
+    this.portraitCanvasEl = document.createElement("canvas");
+    this.portraitCanvasEl.className = "hud-portrait-canvas";
+    this.portrait.appendChild(this.portraitCanvasEl);
+
+    const bars = document.createElement("div");
+    bars.className = "hud-portrait-bars";
+    const hpRow = document.createElement("div");
+    hpRow.className = "hud-bar-row";
     const hpTrack = document.createElement("div");
     hpTrack.className = "hud-sel-hp";
     this.selHpFill = document.createElement("div");
     this.selHpFill.className = "hud-sel-hp-fill";
     hpTrack.appendChild(this.selHpFill);
     this.selHpText = document.createElement("div");
-    this.selHpText.className = "hud-sel-hp-text";
-    text.append(this.selName, hpTrack, this.selHpText);
-    panel.append(this.portrait, text);
+    this.selHpText.className = "hud-bar-text";
+    hpRow.append(hpTrack, this.selHpText);
+
+    this.selMpRow = document.createElement("div");
+    this.selMpRow.className = "hud-bar-row";
+    const mpTrack = document.createElement("div");
+    mpTrack.className = "hud-sel-hp hud-sel-mp";
+    this.selMpFill = document.createElement("div");
+    this.selMpFill.className = "hud-sel-hp-fill hud-sel-mp-fill";
+    mpTrack.appendChild(this.selMpFill);
+    this.selMpText = document.createElement("div");
+    this.selMpText.className = "hud-bar-text";
+    this.selMpRow.append(mpTrack, this.selMpText);
+    bars.append(hpRow, this.selMpRow);
+
+    const portraitWrap = document.createElement("div");
+    portraitWrap.className = "hud-portrait-wrap";
+    portraitWrap.append(this.portrait, bars);
+
+    const text = document.createElement("div");
+    text.className = "hud-info-text";
+    this.selName = document.createElement("div");
+    this.selName.className = "hud-sel-name";
+    this.selCarry = document.createElement("div");
+    this.selCarry.className = "hud-sel-carry";
+    text.append(this.selName, this.selCarry);
+    panel.append(portraitWrap, text);
     return panel;
   }
 
@@ -263,18 +323,26 @@ export class GameHud {
     this.upkeep.dataset.level = upkeep[0];
 
     const sel = this.driver.selection();
+    this.portrait.classList.toggle("empty", !sel);
     if (sel) {
       this.selName.textContent = sel.name;
       const frac = Math.max(0, Math.min(1, sel.hp / sel.maxHp));
       this.selHpFill.style.width = `${frac * 100}%`;
       this.selHpFill.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
       this.selHpText.textContent = `${Math.ceil(sel.hp)} / ${sel.maxHp}`;
-      this.portrait.textContent = sel.name.slice(0, 2).toUpperCase();
+      this.selMpRow.hidden = sel.maxMana <= 0;
+      if (sel.maxMana > 0) {
+        this.selMpFill.style.width = `${Math.max(0, Math.min(1, sel.mana / sel.maxMana)) * 100}%`;
+        this.selMpText.textContent = `${Math.floor(sel.mana)} / ${sel.maxMana}`;
+      }
+      this.selCarry.textContent =
+        sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";
     } else {
       this.selName.textContent = "";
       this.selHpFill.style.width = "0";
       this.selHpText.textContent = "";
-      this.portrait.textContent = "";
+      this.selMpRow.hidden = true;
+      this.selCarry.textContent = "";
     }
   }
 

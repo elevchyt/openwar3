@@ -140,6 +140,9 @@ html, body {
    map's minimap image plug in when an install is mounted. #ui is
    pointer-events:none, so interactive HUD areas re-enable it themselves. */
 
+/* In a match the main-menu panel must not float over the map. */
+body.in-game .menu-panel { display: none; }
+
 .hud {
   position: fixed;
   inset: 0;
@@ -264,31 +267,56 @@ html, body {
   background: rgba(8, 7, 4, 0.6);
 }
 
-.hud-portrait {
-  width: 84px;
-  height: 84px;
+.hud-portrait-wrap {
   flex: none;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 26px;
-  color: var(--gold);
-  background: radial-gradient(circle at 40% 30%, #2c2618, #100d07);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.hud-info-text { flex: 1; min-width: 0; }
+.hud-portrait {
+  width: 96px;
+  height: 82px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.hud-portrait.empty .hud-portrait-canvas { visibility: hidden; }
+.hud-portrait-canvas { width: 100%; height: 100%; display: block; }
+
+.hud-portrait-bars { display: flex; flex-direction: column; gap: 2px; width: 96px; }
+.hud-bar-row { display: flex; flex-direction: column; }
+.hud-bar-text { font-size: 10px; color: #cfc7ab; text-align: center; line-height: 1.2; }
+
+.hud-info-text { flex: 1; min-width: 0; padding-top: 6px; }
 .hud-sel-name { font-size: 16px; color: #f4e8c8; margin-bottom: 6px; }
+.hud-sel-carry { font-size: 12px; color: #d8c88a; }
 .hud-sel-hp {
-  height: 8px;
+  height: 6px;
   background: rgba(0, 0, 0, 0.7);
   border: 1px solid rgba(0, 0, 0, 0.9);
   border-radius: 2px;
   overflow: hidden;
 }
 .hud-sel-hp-fill { height: 100%; width: 0; background: #46e05a; }
-.hud-sel-hp-text { font-size: 12px; color: #cfc7ab; margin-top: 4px; }
+.hud-sel-mp-fill { background: #3f6fe0; width: 100%; }
+
+/* Real console art: the BLP tiles provide all chrome — drop the CSS boxes and
+   let the zones float over the artwork. */
+.hud-console-skinned {
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border-top: none;
+  min-height: 150px;
+  max-height: 28vh;
+}
+.hud-console-skinned .hud-info,
+.hud-console-skinned .hud-inventory,
+.hud-console-skinned .hud-command {
+  background: none;
+  border: none;
+}
 
 .hud-inventory {
   padding: 6px 10px;

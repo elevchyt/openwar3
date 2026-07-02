@@ -69,6 +69,17 @@ const SLK = {
   abilities: "Units\\UnitAbilities.slk",
 };
 
+// Canonical display names ("Great Hall", not the SLK's internal "ogre1") live
+// in per-race INI string files.
+const STRING_FILES = [
+  "Units\\HumanUnitStrings.txt",
+  "Units\\OrcUnitStrings.txt",
+  "Units\\UndeadUnitStrings.txt",
+  "Units\\NightElfUnitStrings.txt",
+  "Units\\NeutralUnitStrings.txt",
+  "Units\\CampaignUnitStrings.txt",
+];
+
 export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
   const table = (path: string): MappedData | null => {
     const bytes = vfs.rawBytes(path);
@@ -79,6 +90,12 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
   const ui = table(SLK.ui);
   const weapons = table(SLK.weapons);
   const abilities = table(SLK.abilities);
+
+  const names = new MappedData();
+  for (const path of STRING_FILES) {
+    const bytes = vfs.rawBytes(path);
+    if (bytes) names.load(new TextDecoder("windows-1252").decode(bytes));
+  }
 
   const defs = new Map<string, UnitDef>();
   if (!data || !ui) return new UnitRegistry(defs);
@@ -93,9 +110,10 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     const w = weapons?.getRow(id) as Row | undefined;
     const a = abilities?.getRow(id) as Row | undefined;
 
+    const strings = names.getRow(id) as Row | undefined;
     defs.set(id, {
       id,
-      name: (u && (str(u, "Name") || str(u, "name"))) || id,
+      name: (strings && str(strings, "Name")) || (u && (str(u, "Name") || str(u, "name"))) || id,
       race: d ? str(d, "race") : "",
       model: `${file.replace(/\//g, "\\")}.mdx`,
       modelScale: u ? num(u, "modelScale", 1) : 1,
@@ -106,7 +124,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       speed: b ? num(b, "spd", 0) : 0,
       turnRate: d ? num(d, "turnrate", 0.5) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,
-      collision: b ? num(b, "collision", 0) : 0,
+      // 1.27 layering quirk: collision lives in UnitBalance.slk in the
+      // expansion/patch MPQs but in UnitData.slk in the RoC base.
+      collision: (b && num(b, "collision", 0)) || (d ? num(d, "collision", 0) : 0),
       hitPoints: b ? num(b, "hp", 0) : 0,
       mana: b ? num(b, "manaN", 0) : 0,
       armor: b ? num(b, "def", 0) : 0,

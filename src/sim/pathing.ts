@@ -115,6 +115,11 @@ export class PathingGrid {
     if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= UNWALKABLE;
   }
 
+  /** Clear a stamped cell (felled tree / collapsed mine footprint). */
+  unblock(cx: number, cy: number): void {
+    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] &= ~UNWALKABLE;
+  }
+
   worldToCell(wx: number, wy: number): [number, number] {
     return [
       Math.floor((wx - this.originX) / PATHING_CELL),

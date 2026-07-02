@@ -16,7 +16,35 @@ export interface SimWeapon {
   acquire: number; // auto-acquisition range (0 = never auto-attacks)
 }
 
-export type SimOrder = "idle" | "move" | "attack";
+export type SimOrder = "idle" | "move" | "attack" | "harvest" | "return";
+
+/** Harvesting profile + carried load for worker units. */
+export interface WorkerState {
+  gold: boolean;
+  lumber: boolean;
+  lumberCapacity: number;
+  lumberPerChop: number;
+  chopPeriod: number; // seconds between chops
+  damagesTree: boolean; // wisps harvest without hurting the tree
+  carryGold: number;
+  carryLumber: number;
+}
+
+export interface SimMine {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  gold: number;
+  busy: boolean; // WC3 classic mines hold one worker at a time
+}
+
+export interface SimTree {
+  id: number;
+  x: number;
+  y: number;
+  lumber: number;
+}
 
 export interface SimUnit {
   id: number;
@@ -32,8 +60,13 @@ export interface SimUnit {
   flying: boolean; // air units ignore ground pathing & collision
   hp: number;
   maxHp: number;
+  mana: number;
+  maxMana: number;
   armor: number;
   weapon: SimWeapon | null;
+  worker: WorkerState | null;
+  depotGold: boolean; // accepts gold deposits (town halls)
+  depotLumber: boolean; // accepts lumber deposits (halls + lumber mill)
   order: SimOrder;
   targetId: number | null;
   cooldownLeft: number;
@@ -53,6 +86,11 @@ export interface SimUnit {
   resX: number; // origin cell of the current reservation
   resY: number;
   hasReservation: boolean;
+  resKind: "gold" | "lumber" | null; // active harvest target kind
+  resId: number; // mine/tree id being harvested
+  workT: number; // chop/mine timer
+  inMine: boolean; // inside the gold mine (renderer hides the unit)
+  working: boolean; // chopping (renderer plays the attack animation)
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -66,14 +104,95 @@ const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
 const REPATH_COOLDOWN = 0.5; // seconds a blocked chaser waits before repathing
+// Resource gathering (community-documented WC3 values; docs/REFERENCES.md).
+const GOLD_PER_TRIP = 10;
+const MINE_TIME = 1.0; // seconds a worker spends inside the mine
+const TREE_LUMBER = 50; // lumber a standard tree yields before falling
+const HARVEST_RANGE = 32; // gap to a tree/mine edge to start working
+const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
+const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
+  readonly mines = new Map<number, SimMine>();
+  readonly trees = new Map<number, SimTree>();
+  /** Per-player resource stash (gold/lumber). */
+  readonly stash = new Map<number, { gold: number; lumber: number }>();
   private deaths: number[] = [];
+  private felled: SimTree[] = [];
+  private depleted: SimMine[] = [];
+  private nextNodeId = 1;
   private rng: () => number;
 
   constructor(readonly grid: PathingGrid, seed = 1) {
     this.rng = lcg(seed);
+  }
+
+  addMine(x: number, y: number, gold: number, radius = 96): SimMine {
+    const mine: SimMine = { id: this.nextNodeId++, x, y, radius, gold, busy: false };
+    this.mines.set(mine.id, mine);
+    return mine;
+  }
+
+  addTree(x: number, y: number, lumber = TREE_LUMBER): SimTree {
+    const tree: SimTree = { id: this.nextNodeId++, x, y, lumber };
+    this.trees.set(tree.id, tree);
+    return tree;
+  }
+
+  initStash(owner: number, gold: number, lumber: number): void {
+    this.stash.set(owner, { gold, lumber });
+  }
+
+  stashOf(owner: number): { gold: number; lumber: number } {
+    let s = this.stash.get(owner);
+    if (!s) {
+      s = { gold: 0, lumber: 0 };
+      this.stash.set(owner, s);
+    }
+    return s;
+  }
+
+  nearestTree(x: number, y: number, maxDist: number): SimTree | null {
+    let best: SimTree | null = null;
+    let bestD = maxDist;
+    for (const t of this.trees.values()) {
+      const d = Math.hypot(t.x - x, t.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = t;
+      }
+    }
+    return best;
+  }
+
+  nearestMine(x: number, y: number, maxDist: number): SimMine | null {
+    let best: SimMine | null = null;
+    let bestD = maxDist;
+    for (const m of this.mines.values()) {
+      const d = Math.hypot(m.x - x, m.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  /** Trees felled since the last drain (renderer hides them + unstamps cells). */
+  drainFelledTrees(): SimTree[] {
+    if (!this.felled.length) return this.felled;
+    const out = this.felled;
+    this.felled = [];
+    return out;
+  }
+
+  /** Mines that ran dry since the last drain. */
+  drainDepletedMines(): SimMine[] {
+    if (!this.depleted.length) return this.depleted;
+    const out = this.depleted;
+    this.depleted = [];
+    return out;
   }
 
   add(
@@ -99,6 +218,11 @@ export class SimWorld {
       | "resX"
       | "resY"
       | "hasReservation"
+      | "resKind"
+      | "resId"
+      | "workT"
+      | "inMine"
+      | "working"
     >,
   ): SimUnit {
     const u: SimUnit = {
@@ -124,6 +248,11 @@ export class SimWorld {
       resX: 0,
       resY: 0,
       hasReservation: false,
+      resKind: null,
+      resId: 0,
+      workT: 0,
+      inMine: false,
+      working: false,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -199,8 +328,25 @@ export class SimWorld {
       u.order = "idle";
       u.targetId = null;
       u.inCombat = false;
+      u.working = false;
       this.settle(u);
     }
+  }
+
+  /** Order a worker to harvest a mine or tree. False if it can't. */
+  issueHarvest(id: number, kind: "gold" | "lumber", nodeId: number): boolean {
+    const u = this.units.get(id);
+    if (!u || !u.worker) return false;
+    if (kind === "gold" && (!u.worker.gold || !this.mines.has(nodeId))) return false;
+    if (kind === "lumber" && (!u.worker.lumber || !this.trees.has(nodeId))) return false;
+    u.order = "harvest";
+    u.targetId = null;
+    u.inCombat = false;
+    u.resKind = kind;
+    u.resId = nodeId;
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    return true;
   }
 
   // Different teams are enemies; creeps all share team -1 (hostile to every
@@ -218,6 +364,12 @@ export class SimWorld {
       switch (u.order) {
         case "attack":
           this.tickAttack(u);
+          break;
+        case "harvest":
+          this.tickHarvest(u, dt);
+          break;
+        case "return":
+          this.tickReturn(u);
           break;
         case "idle":
           this.tickAcquire(u, dt);
@@ -299,9 +451,150 @@ export class SimWorld {
   // goal (A* every tick would be wasteful and jittery), and not while cooling
   // down after being blocked by units we may not push.
   private chase(u: SimUnit, t: SimUnit): void {
+    this.chasePoint(u, t.x, t.y);
+  }
+
+  private chasePoint(u: SimUnit, x: number, y: number): void {
     if (u.repathT > 0) return;
-    if (u.moving && Math.hypot(t.x - u.chaseX, t.y - u.chaseY) < CHASE_REPATH) return;
-    this.pathTo(u, t.x, t.y);
+    if (u.moving && Math.hypot(x - u.chaseX, y - u.chaseY) < CHASE_REPATH) return;
+    this.pathTo(u, x, y);
+  }
+
+  // --- resource gathering ---------------------------------------------------
+
+  private tickHarvest(u: SimUnit, dt: number): void {
+    const w = u.worker;
+    if (!w) {
+      this.stop(u.id);
+      return;
+    }
+    // Inside the mine: wait out the mining time, then emerge with the load.
+    if (u.inMine) {
+      u.workT -= dt;
+      if (u.workT <= 0) {
+        u.inMine = false;
+        const mine = this.mines.get(u.resId);
+        if (mine) {
+          mine.busy = false;
+          w.carryGold = Math.min(GOLD_PER_TRIP, mine.gold);
+          mine.gold -= w.carryGold;
+          if (mine.gold <= 0) {
+            this.mines.delete(mine.id);
+            this.depleted.push(mine);
+          }
+        }
+        u.order = "return";
+      }
+      return;
+    }
+    // Carrying a full load already (e.g. re-ordered mid-return): go deposit.
+    if (w.carryGold > 0 || (w.lumberCapacity > 0 && w.carryLumber >= w.lumberCapacity)) {
+      u.working = false;
+      u.order = "return";
+      return;
+    }
+
+    if (u.resKind === "gold") {
+      const mine = this.mines.get(u.resId);
+      if (!mine) {
+        this.stop(u.id);
+        return;
+      }
+      const gap = Math.hypot(mine.x - u.x, mine.y - u.y) - u.radius - mine.radius;
+      if (gap > HARVEST_RANGE) {
+        this.chasePoint(u, mine.x, mine.y);
+        return;
+      }
+      if (mine.busy) {
+        this.settle(u); // queue at the entrance, WC3-style
+        return;
+      }
+      mine.busy = true;
+      u.inMine = true;
+      u.workT = MINE_TIME;
+      this.unsettle(u); // don't block cells while invisible inside
+      u.moving = false;
+      u.path = [];
+      return;
+    }
+
+    // Lumber.
+    let tree = this.trees.get(u.resId) ?? null;
+    if (!tree) {
+      tree = this.nearestTree(u.x, u.y, RETARGET_RANGE);
+      if (!tree) {
+        if (w.carryLumber > 0) u.order = "return";
+        else this.stop(u.id);
+        return;
+      }
+      u.resId = tree.id;
+    }
+    const gap = Math.hypot(tree.x - u.x, tree.y - u.y) - u.radius - 16; // trees ≈ 2×2 cells
+    if (gap > HARVEST_RANGE) {
+      u.working = false;
+      this.chasePoint(u, tree.x, tree.y);
+      return;
+    }
+    this.settle(u);
+    u.working = true;
+    u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
+    u.workT -= dt;
+    if (u.workT > 0) return;
+    u.workT = w.chopPeriod;
+    w.carryLumber = Math.min(w.lumberCapacity, w.carryLumber + w.lumberPerChop);
+    if (w.damagesTree) {
+      tree.lumber -= w.lumberPerChop;
+      if (tree.lumber <= 0) {
+        this.trees.delete(tree.id);
+        this.felled.push(tree);
+      }
+    }
+    if (w.carryLumber >= w.lumberCapacity) {
+      u.working = false;
+      u.order = "return";
+    }
+  }
+
+  private tickReturn(u: SimUnit): void {
+    const w = u.worker;
+    if (!w || (w.carryGold <= 0 && w.carryLumber <= 0)) {
+      if (w && u.resKind) u.order = "harvest";
+      else this.stop(u.id);
+      return;
+    }
+    const wantGold = w.carryGold > 0;
+    let depot: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const d of this.units.values()) {
+      if (d.owner !== u.owner) continue;
+      if (wantGold ? !d.depotGold : !d.depotLumber) continue;
+      const dist = Math.hypot(d.x - u.x, d.y - u.y);
+      if (dist < bestD) {
+        bestD = dist;
+        depot = d;
+      }
+    }
+    if (!depot) {
+      this.stop(u.id);
+      return;
+    }
+    const gap = bestD - u.radius - depot.radius;
+    if (gap > DEPOSIT_RANGE) {
+      this.chasePoint(u, depot.x, depot.y);
+      return;
+    }
+    const stash = this.stashOf(u.owner);
+    stash.gold += w.carryGold;
+    stash.lumber += w.carryLumber;
+    w.carryGold = 0;
+    w.carryLumber = 0;
+    // Head back to the same node (or the nearest remaining tree), WC3-style.
+    if (u.resKind === "gold" && this.mines.has(u.resId)) u.order = "harvest";
+    else if (u.resKind === "lumber" && (this.trees.has(u.resId) || this.nearestTree(u.x, u.y, RETARGET_RANGE))) {
+      u.order = "harvest";
+    } else {
+      this.stop(u.id);
+    }
   }
 
   private dealDamage(attacker: SimUnit, target: SimUnit): void {
@@ -321,6 +614,10 @@ export class SimWorld {
 
   private kill(u: SimUnit): void {
     this.unsettle(u); // corpses don't block cells
+    if (u.inMine) {
+      const mine = this.mines.get(u.resId);
+      if (mine) mine.busy = false; // don't wedge the mine shut forever
+    }
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
   }

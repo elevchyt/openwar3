@@ -1,7 +1,8 @@
-import { SimWorld, type SimWeapon } from "../sim/world";
+import { SimWorld, type SimWeapon, type WorkerState } from "../sim/world";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
+import { WORKERS, DEPOT_IDS } from "../data/races";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -17,6 +18,7 @@ interface Instance {
   setSequence(i: number): unknown;
   setSequenceLoopMode(m: number): unknown;
   hide(): void;
+  show(): void;
   model: { sequences: Array<{ name: string }> };
 }
 interface MapUnit {
@@ -50,6 +52,8 @@ interface Entry {
   name: string;
   foodUsed: number;
   foodMade: number;
+  modelPath: string; // for the HUD portrait
+  hidden: boolean; // instance hidden (worker inside a gold mine)
   anim: Anim;
 }
 
@@ -149,8 +153,13 @@ export class RtsController {
         flying: def?.moveType === "fly",
         hp: def?.hitPoints || 100,
         maxHp: def?.hitPoints || 100,
+        mana: def?.mana ?? 0,
+        maxMana: def?.mana ?? 0,
         armor: def?.armor ?? 0,
         weapon: def ? weaponFor(def) : null,
+        worker: null,
+        depotGold: false,
+        depotLumber: false,
       });
       const entry: Entry = {
         simId,
@@ -164,6 +173,8 @@ export class RtsController {
         name: def?.name ?? unit.row?.string("unitid") ?? "Unit",
         foodUsed: def?.foodUsed ?? 0,
         foodMade: def?.foodMade ?? 0,
+        modelPath: def?.model ?? "",
+        hidden: false,
         anim: "stand",
       };
       this.entries.push(entry);
@@ -179,6 +190,8 @@ export class RtsController {
     const walk = seqs.findIndex((s) => /walk/i.test(s.name));
     const stand = seqs.findIndex((s) => /^stand/i.test(s.name));
     const simId = this.nextId++;
+    const profile = WORKERS[def.id];
+    const worker: WorkerState | null = profile ? { ...profile, carryGold: 0, carryLumber: 0 } : null;
     this.sim.add({
       id: simId,
       owner,
@@ -192,8 +205,13 @@ export class RtsController {
       flying: def.moveType === "fly",
       hp: def.hitPoints || 100,
       maxHp: def.hitPoints || 100,
+      mana: def.mana,
+      maxMana: def.mana,
       armor: def.armor,
       weapon: weaponFor(def),
+      worker,
+      depotGold: DEPOT_IDS.has(def.id) && def.id !== "hlum", // lumber mill: lumber only
+      depotLumber: DEPOT_IDS.has(def.id),
     });
     const entry: Entry = {
       simId,
@@ -207,6 +225,8 @@ export class RtsController {
       name: def.name,
       foodUsed: def.foodUsed,
       foodMade: def.foodMade,
+      modelPath: def.model,
+      hidden: false,
       anim: "stand",
     };
     this.entries.push(entry);
@@ -232,7 +252,13 @@ export class RtsController {
       e.unit.instance.setLocation(this.loc);
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
-      const anim: Anim = u.moving ? "walk" : u.inCombat && e.attack >= 0 ? "attack" : "stand";
+      // Workers inside a gold mine vanish; chopping plays the attack swing.
+      if (u.inMine !== e.hidden) {
+        e.hidden = u.inMine;
+        if (e.hidden) e.unit.instance.hide();
+        else e.unit.instance.show();
+      }
+      const anim: Anim = u.moving ? "walk" : (u.inCombat || u.working) && e.attack >= 0 ? "attack" : "stand";
       if (anim !== e.anim) {
         e.anim = anim;
         // Non-IDLE state prevents mdx-m3-viewer's auto-stand override.
@@ -326,12 +352,41 @@ export class RtsController {
     if (this.selected !== null) this.sim.stop(this.selected);
   }
 
-  selectedInfo(): { name: string; hp: number; maxHp: number } | null {
+  selectedInfo(): {
+    id: number;
+    name: string;
+    hp: number;
+    maxHp: number;
+    mana: number;
+    maxMana: number;
+    model: string;
+    carryGold: number;
+    carryLumber: number;
+  } | null {
     if (this.selected === null) return null;
     const u = this.sim.units.get(this.selected);
     const e = this.byId.get(this.selected);
     if (!u || !e) return null;
-    return { name: e.name, hp: u.hp, maxHp: u.maxHp };
+    return {
+      id: e.simId,
+      name: e.name,
+      hp: u.hp,
+      maxHp: u.maxHp,
+      mana: u.mana,
+      maxMana: u.maxMana,
+      model: e.modelPath,
+      carryGold: u.worker?.carryGold ?? 0,
+      carryLumber: u.worker?.carryLumber ?? 0,
+    };
+  }
+
+  /** Direct access to the headless sim (map wiring: trees/mines/stash). */
+  get simWorld(): SimWorld {
+    return this.sim;
+  }
+
+  stashFor(owner: number): { gold: number; lumber: number } {
+    return this.sim.stashOf(owner);
   }
 
   /** Food used/made by a player's living units. */
@@ -375,7 +430,15 @@ export class RtsController {
     this.screen[1] = cssY * dpr;
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
-    if (hit) this.sim.issueMove(this.selected, hit[0], hit[1]);
+    if (!hit) return;
+    // Workers right-clicking a resource start harvesting (WC3 smart order).
+    if (sel.worker) {
+      const mine = this.sim.nearestMine(hit[0], hit[1], 160);
+      if (mine && sel.worker.gold && this.sim.issueHarvest(this.selected, "gold", mine.id)) return;
+      const tree = this.sim.nearestTree(hit[0], hit[1], 96);
+      if (tree && sel.worker.lumber && this.sim.issueHarvest(this.selected, "lumber", tree.id)) return;
+    }
+    this.sim.issueMove(this.selected, hit[0], hit[1]);
   }
 
   /** Sim id of the unit nearest the cursor within the pick radius, if any. */

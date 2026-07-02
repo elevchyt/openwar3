@@ -44,6 +44,7 @@ function show(which: Which): void {
 /** Load a map's bytes into the right scene (authentic with an install, else placeholder). */
 async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
   const vfs = resolver.installSource;
+  document.body.classList.add("in-game"); // hide the main-menu panel over the map
   if (vfs) {
     show("map");
     if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs);

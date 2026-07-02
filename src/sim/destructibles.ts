@@ -48,10 +48,22 @@ export function stampFootprints(
 
 /** Stamp one decoded footprint centred on a world position. */
 export function stampFootprint(grid: PathingGrid, fp: Footprint, worldX: number, worldY: number): void {
+  applyFootprint(grid, fp, worldX, worldY, true);
+}
+
+/** Clear a previously-stamped footprint (felled tree, collapsed mine). */
+export function unstampFootprint(grid: PathingGrid, fp: Footprint, worldX: number, worldY: number): void {
+  applyFootprint(grid, fp, worldX, worldY, false);
+}
+
+function applyFootprint(grid: PathingGrid, fp: Footprint, worldX: number, worldY: number, block: boolean): void {
   const [bx, by] = grid.worldToCell(worldX - (fp.w * PATHING_CELL) / 2, worldY - (fp.h * PATHING_CELL) / 2);
   for (let y = 0; y < fp.h; y++) {
     for (let x = 0; x < fp.w; x++) {
-      if (fp.blocked[y * fp.w + x]) grid.block(bx + x, by + y);
+      if (fp.blocked[y * fp.w + x]) {
+        if (block) grid.block(bx + x, by + y);
+        else grid.unblock(bx + x, by + y);
+      }
     }
   }
 }

@@ -71,7 +71,23 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   armed order consumes the next left-click). Melee start stash 500 g / 150 w; food live from owned
   units. In-game camera pans with arrow keys (WASD reserved for hotkeys); `src/render/blputil.ts`
   decodes BLPs for DOM use. Next: resource gathering loop (gold/lumber/train) driving these numbers.
-- **Phase 6 (combat slice)** — headless-sim combat in `src/sim/world.ts`: owners/teams (allied =
+- **Economy + HUD v2 (2026-07-02, night)** — **resource gathering** (community-verified numbers,
+  docs/REFERENCES.md): sim owns mines (from `war3mapUnits.doo` `ngol` + its real goldAmount) and
+  trees (destructibles with `targType=tree`; 50 lumber each). Workers (`WORKERS` in
+  `src/data/races.ts`): peasant/peon 10 gold/trip with 1 s inside the mine (one at a time,
+  queueing), 1 lumber per 1 s chop cap 10; ghoul 20 cap / 2 per chop; wisp 5-per-5 s without tree
+  damage; acolyte gold-only. Deposits at halls (`DEPOT_IDS`; lumber mill lumber-only) into per-player
+  sim stashes (melee init 500 g/150 w); auto return-to-node loop; right-click on a mine/tree =
+  smart harvest order; felled trees/depleted mines fire events → renderer hides the widget and
+  unstamps its footprint cells (grid.unblock). Workers hide inside mines, chop with attack anim,
+  carry shown in HUD. **HUD v2:** canonical names from `Units\*UnitStrings.txt`; animated 3D
+  portrait (own mini-viewer rendering `<model>_Portrait.mdx`, fallback to the unit model) with
+  HP/mana bars + numeric values beneath; real race console skin (stitched `UI\Console\<Race>\
+  <Race>UITile01–04.blp`, cropped to opaque chrome); main-menu panel hidden in-game
+  (body.in-game). Collision now also read from UnitData.slk (1.27 keeps it there in the RoC base
+  layer) so unit cell footprints are real. Known gaps: portrait uses bounds-framing (not the model's
+  own Portrait camera); console zone alignment approximate (FDF later); NE/UD mining is classic-
+  style (entangle/haunt later); no carry-visual on worker models.
   same team; creeps = team −1, hostile to players but not each other), HP/armor, weapons from
   UnitWeapons.slk (base + dice damage, cooldown, range, acquire), attack orders with chase/repath,
   facing gate before swings, WC3 armor reduction (6%/point), idle auto-acquisition (0.5 s scans),

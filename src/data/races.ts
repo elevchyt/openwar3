@@ -28,6 +28,35 @@ export const STARTING_UNITS: Record<PlayableRace, Array<{ id: string; count: num
   nightelf: [{ id: "etol", count: 1 }, { id: "ewsp", count: 5 }],
 };
 
+// Worker harvesting profiles (verified vs community-documented WC3 values:
+// 10 gold/trip; peasant/peon 1 lumber per ~1s chop, capacity 10; ghoul 2/chop
+// capacity 20; wisp 5 per 5s without damaging the tree; acolytes only mine).
+export interface WorkerProfile {
+  gold: boolean;
+  lumber: boolean;
+  lumberCapacity: number;
+  lumberPerChop: number;
+  chopPeriod: number; // seconds between chops
+  damagesTree: boolean;
+}
+
+export const WORKERS: Record<string, WorkerProfile> = {
+  hpea: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true },
+  opeo: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true },
+  uaco: { gold: true, lumber: false, lumberCapacity: 0, lumberPerChop: 0, chopPeriod: 1, damagesTree: false },
+  ugho: { gold: false, lumber: true, lumberCapacity: 20, lumberPerChop: 2, chopPeriod: 1.1, damagesTree: true },
+  ewsp: { gold: true, lumber: true, lumberCapacity: 5, lumberPerChop: 5, chopPeriod: 5, damagesTree: false },
+};
+
+// Buildings that accept resource deposits (town halls + upgrades).
+export const DEPOT_IDS = new Set([
+  "htow", "hkee", "hcas", // Town Hall / Keep / Castle
+  "ogre", "ostr", "ofrt", // Great Hall / Stronghold / Fortress
+  "unpl", "unp1", "unp2", // Necropolis / Halls of the Dead / Black Citadel
+  "etol", "etoa", "etoe", // Tree of Life / Ages / Eternity
+  "hlum", // Lumber Mill (lumber drop-off)
+]);
+
 const POOL: PlayableRace[] = ["human", "orc", "undead", "nightelf"];
 
 export function resolveRace(race: Race): PlayableRace {

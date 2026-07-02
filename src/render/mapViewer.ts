@@ -7,12 +7,13 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm } from "../sim/pathing";
-import { stampFootprints, stampFootprint, decodePathTex, type Footprint } from "../sim/destructibles";
+import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, type Footprint } from "../sim/destructibles";
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
 import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { STARTING_UNITS, resolveRace } from "../data/races";
+import { STARTING_UNITS, resolveRace, type PlayableRace } from "../data/races";
+import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, type HudDriver } from "../ui/hud";
@@ -61,12 +62,16 @@ interface Scene {
   camera: Camera;
   viewport: Float32Array;
 }
+interface HideableWidget {
+  instance: { localLocation: Float32Array; hide(): void };
+}
 interface W3xMap {
   worldScene: Scene;
   centerOffset: Float32Array;
   mapSize: Int32Array;
   update(): void;
   units: unknown[];
+  doodads: HideableWidget[];
   unitsReady: boolean;
 }
 interface W3xViewer {
@@ -90,6 +95,7 @@ interface SpawnInstance {
   setScene(scene: unknown): void;
   setTeamColor(id: number): void;
   hide(): void;
+  show(): void;
   setSequence(i: number): void;
   setSequenceLoopMode(m: number): void;
   setLocation(v: ArrayLike<number>): unknown;
@@ -128,10 +134,15 @@ export class MapViewerScene {
   private hud: GameHud | null = null;
   private minimap: HTMLCanvasElement | null = null;
   private iconCache = new Map<string, string | null>();
-  // Local player's stash (melee start: 500 gold / 150 lumber). Gathering will
-  // make these live (next phase).
-  private resources = { gold: 500, lumber: 150 };
   private localPlayer = 0;
+  private localRace: PlayableRace = "human";
+  // Footprints of registered resource nodes, for unstamping on removal.
+  private nodeFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
+  // Animated portrait of the selected unit (own small viewer + canvas).
+  private portraitViewer: ModelViewerScene | null = null;
+  private portraitFor: number | null = null;
+  private portraitLoading = false;
+  private consoleSkinCache: { url: string; aspect: number } | null | undefined;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -232,7 +243,7 @@ export class MapViewerScene {
       const terrain = parseW3E(w3e);
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
-      this.stampMapPathing(grid, archive);
+      const nodes = this.stampMapPathing(grid, archive);
       const host: RtsHost = {
         canvas: this.canvas,
         camera: map.worldScene.camera as unknown as RtsHost["camera"],
@@ -241,12 +252,60 @@ export class MapViewerScene {
         unitsReady: () => map.unitsReady,
       };
       this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry);
+      this.registerResourceNodes(nodes);
     }
   }
 
+  /** Feed harvestable trees and gold mines into the headless sim, remembering
+   *  each node's stamped footprint so it can be unstamped on removal. */
+  private registerResourceNodes(nodes: { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }> }): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    this.nodeFootprints.clear();
+    for (const t of nodes.trees) {
+      const tree = world.addTree(t.x, t.y);
+      const fp = this.footprintFor(t.pathTex);
+      if (fp) this.nodeFootprints.set(tree.id, { fp, x: t.x, y: t.y });
+    }
+    const minePathTex = this.registry.get("ngol")?.pathTex || "";
+    const mineFp = minePathTex ? this.footprintFor(minePathTex) : null;
+    for (const m of nodes.mines) {
+      const radius = mineFp ? (Math.max(mineFp.w, mineFp.h) * 32) / 2 : 96;
+      const mine = world.addMine(m.x, m.y, m.gold, radius);
+      if (mineFp) this.nodeFootprints.set(mine.id, { fp: mineFp, x: m.x, y: m.y });
+    }
+  }
+
+  /** A tree fell or a mine ran dry: hide its widget and free its cells. */
+  private removeNodeVisual(nodeId: number, x: number, y: number, widgets: HideableWidget[]): void {
+    const meta = this.nodeFootprints.get(nodeId);
+    if (meta && this.grid) {
+      unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
+      this.nodeFootprints.delete(nodeId);
+    }
+    let best: HideableWidget | null = null;
+    let bestD = 128; // match within a tile
+    for (const w of widgets) {
+      const loc = w.instance?.localLocation;
+      if (!loc) continue;
+      const d = Math.hypot(loc[0] - x, loc[1] - y);
+      if (d < bestD) {
+        bestD = d;
+        best = w;
+      }
+    }
+    best?.instance.hide();
+  }
+
   /** Stamp destructible (tree) AND building footprints onto the terrain grid so
-   *  units path around them (war3map.wpm is terrain-only). */
-  private stampMapPathing(grid: PathingGrid, archive: MpqDataSource): void {
+   *  units path around them (war3map.wpm is terrain-only). Also collects the
+   *  harvestable resource nodes (trees + gold mines) for the sim. */
+  private stampMapPathing(
+    grid: PathingGrid,
+    archive: MpqDataSource,
+  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }> } {
+    const trees: Array<{ x: number; y: number; pathTex: string }> = [];
+    const mines: Array<{ x: number; y: number; gold: number }> = [];
     let buildVersion = 0;
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
@@ -265,6 +324,12 @@ export class MapViewerScene {
       const pathTexOf = (id: string): string | undefined =>
         destr.getRow(id)?.string("pathTex") || dood.getRow(id)?.string("pathTex") || undefined;
       stampFootprints(grid, doodads, pathTexOf, readBytes);
+      for (const d of doodads) {
+        const row = destr.getRow(d.id);
+        if (row?.string("targType") === "tree") {
+          trees.push({ x: d.x, y: d.y, pathTex: row.string("pathTex") || "" });
+        }
+      }
     }
 
     // Pre-placed building units (gold mines, neutral buildings) from war3mapUnits.doo.
@@ -274,13 +339,19 @@ export class MapViewerScene {
       try {
         units.load(unitBytes, buildVersion);
       } catch {
-        return;
+        return { trees, mines };
       }
       const buildings = units.units
         .filter((u) => this.registry.get(u.id)?.isBuilding)
         .map((u) => ({ id: u.id, x: u.location[0], y: u.location[1] }));
       stampFootprints(grid, buildings, (id) => this.registry.get(id)?.pathTex || undefined, readBytes);
+      for (const u of units.units) {
+        if (u.id === "ngol") {
+          mines.push({ x: u.location[0], y: u.location[1], gold: (u as { goldAmount?: number }).goldAmount ?? 12500 });
+        }
+      }
     }
+    return { trees, mines };
   }
 
   private slkText(path: string): string {
@@ -292,10 +363,13 @@ export class MapViewerScene {
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
-    this.resources = { gold: 500, lumber: 150 }; // WC3 melee starting stash
+    // Resolve "random" once per slot: roster and console skin must agree.
+    const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
+    this.localRace = races.get(this.localPlayer) ?? "human";
+    for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, 500, 150); // WC3 melee start
     this.mountHud();
     for (const slot of config.slots) {
-      const roster = STARTING_UNITS[resolveRace(slot.race)];
+      const roster = STARTING_UNITS[races.get(slot.id) ?? "human"];
       const workerTotal = roster
         .filter((r) => !this.registry.get(r.id)?.isBuilding)
         .reduce((n, r) => n + r.count, 0);
@@ -344,9 +418,10 @@ export class MapViewerScene {
     const driver: HudDriver = {
       resources: () => {
         const food = this.rts?.foodFor(this.localPlayer) ?? { used: 0, made: 0 };
+        const stash = this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 };
         return {
-          gold: this.resources.gold,
-          lumber: this.resources.lumber,
+          gold: stash.gold,
+          lumber: stash.lumber,
           foodUsed: food.used,
           foodMax: food.made,
         };
@@ -370,8 +445,83 @@ export class MapViewerScene {
       stopSelected: () => this.rts?.stopSelected(),
       icon: (kind) => this.resourceIcon(kind),
       minimapImage: () => this.minimap,
+      consoleSkin: () => this.consoleSkin(),
     };
     this.hud = new GameHud(ui, driver);
+  }
+
+  /** Stitch the race's console tiles into one background texture. */
+  private consoleSkin(): { url: string; aspect: number } | null {
+    if (this.consoleSkinCache !== undefined) return this.consoleSkinCache;
+    const dirs: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
+    const dir = dirs[this.localRace];
+    const tiles: HTMLCanvasElement[] = [];
+    for (let i = 1; i <= 4; i++) {
+      const bytes = this.vfs.rawBytes(`UI\\Console\\${dir}\\${dir}UITile0${i}.blp`);
+      const tile = bytes ? blpToCanvas(bytes) : null;
+      if (!tile) {
+        this.consoleSkinCache = null; // fall back to the CSS skin
+        return null;
+      }
+      tiles.push(tile);
+    }
+    const width = tiles.reduce((sum, t) => sum + t.width, 0);
+    const height = tiles[0].height;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+    let x = 0;
+    for (const tile of tiles) {
+      ctx.drawImage(tile, x, 0);
+      x += tile.width;
+    }
+    // The 512-tall tiles are mostly transparent sky above the stone chrome —
+    // crop to the opaque part so the console doesn't cover half the screen.
+    const data = ctx.getImageData(0, 0, width, height).data;
+    let top = 0;
+    scan: for (; top < height; top++) {
+      for (let px = 3; px < width * 4; px += 64 * 4) {
+        if (data[top * width * 4 + px] > 16) break scan;
+      }
+    }
+    const cropped = document.createElement("canvas");
+    cropped.width = width;
+    cropped.height = height - top;
+    cropped.getContext("2d")!.drawImage(canvas, 0, -top);
+    this.consoleSkinCache = { url: cropped.toDataURL(), aspect: cropped.width / cropped.height };
+    return this.consoleSkinCache;
+  }
+
+  /** Keep the portrait canvas showing the selected unit's animated bust. */
+  private updatePortrait(): void {
+    if (!this.hud || !this.rts) return;
+    const sel = this.rts.selectedInfo();
+    if (!sel) {
+      if (this.portraitFor !== null) {
+        this.portraitFor = null;
+        this.portraitViewer?.stop();
+      }
+      return;
+    }
+    if (sel.id === this.portraitFor || this.portraitLoading || !sel.model) return;
+    const canvas = this.hud.portraitCanvas();
+    if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(canvas, this.vfs);
+    // WC3 ships dedicated talking-head models alongside most units.
+    const portraitPath = sel.model.replace(/\.mdx$/i, "_Portrait.mdx");
+    const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
+    this.portraitLoading = true;
+    const id = sel.id;
+    this.portraitViewer
+      .load(path)
+      .then(() => {
+        this.portraitFor = id;
+        this.portraitViewer!.start();
+      })
+      .catch(() => {})
+      .finally(() => {
+        this.portraitLoading = false;
+      });
   }
 
   private resourceIcon(kind: "gold" | "lumber" | "supply"): string | null {
@@ -408,7 +558,16 @@ export class MapViewerScene {
       this.updateCamera();
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
+      this.updatePortrait();
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
+      const world = this.rts?.simWorld;
+      const map = this.viewer.map;
+      if (world && map) {
+        for (const tree of world.drainFelledTrees()) this.removeNodeVisual(tree.id, tree.x, tree.y, map.doodads);
+        for (const mine of world.drainDepletedMines()) {
+          this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
+        }
+      }
       // Advance animations by REAL elapsed time (fixes 2x speed on high-refresh
       // displays), replicating War3MapViewer.update() = super.update() + map.update().
       baseUpdate.call(this.viewer, dt);
@@ -427,6 +586,7 @@ export class MapViewerScene {
     this.rts?.pause();
     this.metrics.hide();
     this.hud?.hide();
+    this.portraitViewer?.stop();
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
