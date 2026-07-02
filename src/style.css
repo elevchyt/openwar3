@@ -41,6 +41,10 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* #ui is pointer-events:none (so the game canvas behind gets mouse input); the
+     lobby is a child of #ui, so it must re-enable events or its controls are
+     click-through. */
+  pointer-events: auto;
   /* No backdrop-filter: a full-screen blur over the live WebGL canvas re-blurs
      it every frame and freezes the compositor. A plain dim layer is cheap. */
   background: rgba(3, 5, 9, 0.82);
