@@ -65,11 +65,15 @@ async function singlePlayer(): Promise<void> {
   if (!file) return;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const info = parseMapInfo(bytes, file.name.replace(/\.(w3x|w3m)$/i, ""));
-  // Pause rendering while the setup modal is open — nothing needs to draw behind
-  // a full-screen overlay, and it keeps the page responsive.
+  // Fully release the GPU while the setup modal is open: pause every scene AND
+  // hide the canvases, so there's no live WebGL surface for the compositor to
+  // keep blending under a full-screen overlay (the cause of the freeze).
   terrain.stop();
   mapScene?.stop();
   modelScene?.stop();
+  bgCanvas.hidden = true;
+  modelCanvas.hidden = true;
+  mapCanvas.hidden = true;
   const teardown = showLobby(ui, info, {
     onCancel: () => {
       teardown();
