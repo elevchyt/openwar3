@@ -194,6 +194,9 @@ export class SimWorld {
   private nextProjectileId = 1;
   private spawnedProjectiles: Array<{ id: number; art: string; x: number; y: number }> = [];
   private removedProjectiles: number[] = [];
+  // Projectiles that actually HIT (vs fizzled) — the renderer plays the impact
+  // effect (the missile model's Death clip) at the recorded point.
+  private projectileImpacts: Array<{ id: number; x: number; y: number }> = [];
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number }> = [];
   private nextNodeId = 1;
@@ -291,6 +294,15 @@ export class SimWorld {
     if (!this.removedProjectiles.length) return this.removedProjectiles;
     const out = this.removedProjectiles;
     this.removedProjectiles = [];
+    return out;
+  }
+
+  /** Projectiles that HIT their target since the last drain, with the hit point
+   *  (renderer plays the impact effect there). Fizzles are absent. */
+  drainProjectileImpacts(): Array<{ id: number; x: number; y: number }> {
+    if (!this.projectileImpacts.length) return this.projectileImpacts;
+    const out = this.projectileImpacts;
+    this.projectileImpacts = [];
     return out;
   }
 
@@ -1038,6 +1050,7 @@ export class SimWorld {
       const dist = Math.hypot(dx, dy);
       const step = p.speed * dt;
       if (dist <= step + t.radius) {
+        this.projectileImpacts.push({ id: p.id, x: t.x, y: t.y }); // record the hit point
         this.applyDamage(t, p.damage, p.sourceId);
         this.removeProjectile(p.id);
       } else {

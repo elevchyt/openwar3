@@ -95,6 +95,7 @@ interface AnimSet {
   stand: number;
   walk: number;
   attack: number;
+  attackVariants: number[]; // all combat-attack clips; a random one plays per swing
   death: number;
   standGold: number;
   walkGold: number;
@@ -109,11 +110,19 @@ function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
   const stand = find(/^stand(\s|$|-)/i) >= 0 ? find(/^stand(\s|$|-)/i) : find(/^stand/i);
   const walk = find(/^walk\s*$/i) >= 0 ? find(/^walk\s*$/i) : find(/walk/i);
   const attack = find(/^attack\s*$/i) >= 0 ? find(/^attack\s*$/i) : find(/attack/i);
+  // Every combat-attack clip (e.g. "Attack - 1"/"Attack - 2"/"Attack Slam"), so a
+  // random one can play per swing. Excludes the lumber chop, the Defend stance,
+  // and hero Alternate-form attacks.
+  const attackVariants = seqs
+    .map((s, i) => ({ n: s.name, i }))
+    .filter(({ n }) => /attack/i.test(n) && !/lumber|defend|alternate/i.test(n))
+    .map(({ i }) => i);
   const or = (a: number, b: number) => (a >= 0 ? a : b);
   return {
     stand,
     walk,
     attack,
+    attackVariants: attackVariants.length ? attackVariants : attack >= 0 ? [attack] : [],
     death: find(/^death/i),
     standGold: or(find(/stand gold/i), stand),
     walkGold: or(find(/walk gold/i), walk),
@@ -619,26 +628,29 @@ export class RtsController {
         e.curScale = e.baseScale;
         e.unit.instance.setUniformScale(e.baseScale);
       }
-      const seq = this.pickSequence(e.anims, u);
-      const isAttack = seq >= 0 && seq === e.anims.attack;
-      if (seq !== e.curSeq && seq >= 0) {
-        e.curSeq = seq;
-        // Non-stand state prevents mdx-m3-viewer's auto-stand override.
-        e.unit.state = seq === e.anims.stand ? IDLE : WALK;
-        e.unit.instance.setSequence(seq);
-        // The attack clip plays ONCE per swing (handled below); everything loops.
-        e.unit.instance.setSequenceLoopMode(isAttack ? LOOP_NEVER : LOOP_ALWAYS);
-        if (isAttack) e.lastSwingSeq = u.swingSeq; // this play already covers the current swing
-      }
-      // Play the attack animation exactly once per swing — restart it on each new
-      // swing so its throw/strike gesture matches the damage-point-timed hit or
-      // projectile. A free-running LOOP_ALWAYS clip replayed the throw several
-      // times per cooldown (obvious on slow ranged heroes like the Archmage).
-      if (isAttack && u.inCombat && u.swingSeq !== e.lastSwingSeq) {
-        e.lastSwingSeq = u.swingSeq;
-        e.unit.instance.setSequence(e.anims.attack);
-        e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
-        e.unit.state = WALK;
+      // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
+      // the strike gesture matches the damage-point-timed hit/projectile, and
+      // units with several attack animations vary them shot to shot. Between
+      // swings the LOOP_NEVER clip holds; everything else loops normally.
+      const attacking = u.inCombat && !u.moving && e.anims.attack >= 0;
+      if (attacking) {
+        if (u.swingSeq !== e.lastSwingSeq || !e.anims.attackVariants.includes(e.curSeq)) {
+          e.lastSwingSeq = u.swingSeq;
+          const vs = e.anims.attackVariants;
+          const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : e.anims.attack;
+          e.curSeq = pick;
+          e.unit.state = WALK; // non-stand state prevents mdx-m3-viewer's auto-stand
+          e.unit.instance.setSequence(pick);
+          e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+        }
+      } else {
+        const seq = this.pickSequence(e.anims, u);
+        if (seq !== e.curSeq && seq >= 0) {
+          e.curSeq = seq;
+          e.unit.state = seq === e.anims.stand ? IDLE : WALK;
+          e.unit.instance.setSequence(seq);
+          e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
+        }
       }
     }
     this.updateHealthBars();
@@ -1209,10 +1221,11 @@ export class RtsController {
       return out;
     }
     const grid = this.sim.grid;
-    // A small gap on top of the collision diameter: tight, but not overlapping.
+    // A gap on top of the collision diameter: tight formation, but with a little
+    // breathing room so units aren't shoulder-to-shoulder.
     let radius = 16;
     for (const { u } of list) radius = Math.max(radius, u.radius);
-    const spacing = radius * 2 + 20;
+    const spacing = radius * 2 + 36;
 
     // Claim a distinct, walkable cell near a world point (spiral out from it).
     const used = new Set<number>();

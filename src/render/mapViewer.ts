@@ -647,9 +647,10 @@ export class MapViewerScene {
     }
   }
 
-  private static readonly TREE_PULSE = 1.1; // seconds of the yellow tint (longer = more visible)
+  private static readonly TREE_PULSE = 0.7; // two quick blinks over this window
 
-  /** Pulse a harvested tree a bright, saturated yellow → back to normal. */
+  /** Blink a harvested tree a bright, saturated yellow TWICE (abrupt on/off), then
+   *  back to normal — a strong, unmissable "gather here" cue. */
   private updateTreePulses(dt: number): void {
     const map = this.viewer.map;
     for (const p of this.rts?.drainTreePulses() ?? []) {
@@ -659,10 +660,11 @@ export class MapViewerScene {
     for (let i = this.treePulses.length - 1; i >= 0; i--) {
       const tp = this.treePulses[i];
       tp.t -= dt;
-      const f = Math.max(0, tp.t / MapViewerScene.TREE_PULSE); // 1 → 0
-      // Lerp normal(white) → an OVER-BRIGHT saturated yellow by f (starts strong
-      // yellow, fades to white). RGB >1 glows; the blue channel drops near 0.
-      tp.inst.setVertexColor([1 + 0.6 * f, 1 + 0.25 * f, 1 - 0.92 * f, 1]);
+      // Two abrupt on/off blinks across the 0.7s window (period 0.35s, on ~60%).
+      const on = tp.t > 0 && tp.t % 0.35 > 0.14;
+      // OVER-BRIGHT, fully-saturated yellow when on (heavy red so a green canopy
+      // reads as yellow; zero blue; RGB >1 glows).
+      tp.inst.setVertexColor(on ? [3.2, 1.5, 0, 1] : [1, 1, 1, 1]);
       if (tp.t <= 0) {
         tp.inst.setVertexColor([1, 1, 1, 1]); // restore
         this.treePulses.splice(i, 1);
@@ -771,7 +773,15 @@ export class MapViewerScene {
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
-    for (const id of world.drainRemovedProjectiles()) this.detachProjectile(id);
+    // A hit plays the missile's impact (Death) clip at the point of impact; a
+    // fizzle (target vanished mid-flight) just detaches.
+    const impacts = new Map<number, { x: number; y: number }>();
+    for (const im of world.drainProjectileImpacts()) impacts.set(im.id, im);
+    for (const id of world.drainRemovedProjectiles()) {
+      const im = impacts.get(id);
+      if (im) this.impactProjectile(id, im.x, im.y);
+      else this.detachProjectile(id);
+    }
     for (const [id, inst] of this.projectileInsts) {
       const p = world.projectiles.get(id);
       if (!p) {
@@ -796,6 +806,28 @@ export class MapViewerScene {
       inst.detach();
       this.projectileInsts.delete(id);
     }
+  }
+
+  /** A projectile hit: play the missile model's "Death" clip (the impact burst)
+   *  once at the hit point, then detach it after a moment (reusing the timed
+   *  one-shot effect list). Missiles without a Death clip just detach. */
+  private impactProjectile(id: number, x: number, y: number): void {
+    this.projectileLoading.delete(id);
+    const inst = this.projectileInsts.get(id);
+    if (!inst) return;
+    this.projectileInsts.delete(id);
+    const death = inst.model.sequences.findIndex((s) => /death/i.test(s.name));
+    if (death < 0) {
+      inst.detach();
+      return;
+    }
+    this.loc3[0] = x;
+    this.loc3[1] = y;
+    this.loc3[2] = this.rts!.groundHeightAt(x, y) + MapViewerScene.MISSILE_HEIGHT;
+    inst.setLocation(this.loc3);
+    inst.setSequence(death);
+    inst.setSequenceLoopMode(0); // play once, then the effects timer detaches it
+    this.effects.push({ inst, t: 1.0 });
   }
 
   private async loadProjectile(id: number, art: string): Promise<void> {

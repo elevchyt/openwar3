@@ -67,6 +67,7 @@ export class ModelViewerScene {
   private instance: MdxInstance | null = null;
   private raf = 0;
   private last = 0;
+  private camZoom = 1; // <1 dollies the model camera closer (portraits zoom in)
 
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
     // Canvas must have a nonzero size before addScene() (viewport/aspect read here).
@@ -94,6 +95,8 @@ export class ModelViewerScene {
    *  "Portrait" idle clip when `portrait` is set — portrait busts have no
    *  walk/stand, and a stray Walk clip on some models otherwise wins). */
   async load(path: string, teamColor = 0, portrait = false): Promise<SequenceInfo[]> {
+    // Portraits dolly the bust camera in a bit for a tighter close-up.
+    this.camZoom = portrait ? 0.78 : 1;
     const bytes = await this.vfs.read(path);
 
     if (this.instance) {
@@ -159,7 +162,15 @@ export class ModelViewerScene {
     const cam = this.model.cameras?.[0];
     if (cam) {
       this.scene.camera.perspective(cam.fieldOfView, this.aspect(), cam.nearClippingPlane || 1, cam.farClippingPlane || 10000);
-      this.scene.camera.moveToAndFace(cam.position, cam.targetPosition, new Float32Array([0, 0, 1]));
+      // Dolly the eye toward the target by camZoom (<1 = closer) for the portrait
+      // close-up, keeping the model's authored framing/angle.
+      const tgt = cam.targetPosition;
+      const eye = new Float32Array([
+        tgt[0] + (cam.position[0] - tgt[0]) * this.camZoom,
+        tgt[1] + (cam.position[1] - tgt[1]) * this.camZoom,
+        tgt[2] + (cam.position[2] - tgt[2]) * this.camZoom,
+      ]);
+      this.scene.camera.moveToAndFace(eye, tgt, new Float32Array([0, 0, 1]));
       return;
     }
     const b = this.model.bounds;

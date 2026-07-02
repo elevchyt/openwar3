@@ -17,6 +17,16 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 5 — impacts/attack-variants/portraits (2026-07-03, latest+18)** — **On-hit
+  effects** now play: the missile models ship a `Death` clip (FireBall/Arrow impact burst); on hit
+  the sim records the impact point (new `projectileImpacts` channel, hit-only not fizzle) and the
+  renderer plays that Death clip at the target before detaching (reuses the timed effect list).
+  **Alternate attack animations randomised**: `buildAnimSet` collects every combat-attack clip
+  (`Attack - 1`/`Attack - 2`/`Attack Slam`, excluding Lumber/Defend/Alternate) and the swing-driven
+  animator picks a random one each swing (Footman/Grunt/Knight/Archer/Tauren visibly vary). **Tree
+  gather cue**: now blinks the tree a bright, fully-saturated OVER-bright yellow TWICE, abruptly
+  (0.7s window). **Portraits zoom in** (bust camera dollied to 0.78× distance). **Group spacing**
+  loosened a touch (`radius*2+20`→`+36`). 27 headless sim checks pass; build clean.
 - **Feedback pass 4 — formation/spawn/combat/HUD (2026-07-03, latest+17)** — **Bars fixed above
   HUD**: `#ui` was `z-index:1`, trapping the HUD's own `z-index:3` in a low stacking context so the
   floating unit bars (`z-index:2` on body) leaked on top of the console — raised `#ui` to 3 (it's
