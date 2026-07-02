@@ -40,8 +40,16 @@ export interface UnitDef {
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   weaponType: string; // weapTp1: "normal"/"instant" = melee, "missile"/… = ranged
+  attackType: string; // atkType1: normal/pierce/siege/magic/chaos/hero (damage table)
+  armorType: string; // defType: small/medium/large/fort/hero/divine/none
   missileArt: string; // weapon-1 projectile model (MDX path, backslashes) or ""
   missileSpeed: number; // projectile travel speed (world units/sec)
+  // Hero attributes (0 for non-heroes). primaryAttr is "STR"/"AGI"/"INT" or "".
+  strength: number;
+  agility: number;
+  intelligence: number;
+  primaryAttr: string;
+  level: number;
   abilities: string[];
 }
 
@@ -187,8 +195,15 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackRange: w ? num(w, "rangeN1", 0) : 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       weaponType: w ? str(w, "weapTp1") : "",
+      attackType: w ? str(w, "atkType1") : "",
+      armorType: b ? str(b, "defType") : "",
       missileArt: w ? missilePath(str(w, "Missileart")) : "",
       missileSpeed: w ? num(w, "Missilespeed", 900) : 900,
+      strength: attr.STR,
+      agility: attr.AGI,
+      intelligence: attr.INT,
+      primaryAttr: isHero ? primary : "",
+      level: b ? num(b, "level", 0) : 0,
       abilities: a ? (str(a, "abilList") || "").split(",").filter(Boolean) : [],
     });
   }

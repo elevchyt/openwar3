@@ -32,6 +32,14 @@ export interface HudSelection {
   armor: number;
   damageMin: number;
   damageMax: number;
+  attackType: string;
+  armorType: string;
+  isHero: boolean;
+  level: number;
+  strength: number;
+  agility: number;
+  intelligence: number;
+  primaryAttr: string;
   carryGold: number;
   carryLumber: number;
   isBuilding: boolean;
@@ -115,7 +123,14 @@ export class GameHud {
   private food!: HTMLSpanElement;
   private upkeep!: HTMLSpanElement;
   private selName!: HTMLDivElement;
+  private selSub!: HTMLDivElement; // "Level N" (heroes)
   private selStats!: HTMLDivElement;
+  private attackStat!: StatRow;
+  private armorStat!: StatRow;
+  private attrRow!: HTMLDivElement;
+  private attrStr!: AttrItem;
+  private attrAgi!: AttrItem;
+  private attrInt!: AttrItem;
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
   private selCarry!: HTMLDivElement;
@@ -411,11 +426,25 @@ export class GameHud {
     }
     this.progressWrap.append(statusLine, track, this.queueRow);
 
+    // Sub-line (hero level) and the stat rows: attack/armor with their type
+    // icons, and hero STR/AGI/INT with attribute icons — all real WC3 infocard
+    // BLPs from the game data.
+    this.selSub = document.createElement("div");
+    this.selSub.className = "hud-sel-sub";
     this.selStats = document.createElement("div");
     this.selStats.className = "hud-sel-stats";
+    this.attackStat = makeStatRow();
+    this.armorStat = makeStatRow();
+    this.attrRow = document.createElement("div");
+    this.attrRow.className = "hud-sel-attrs";
+    this.attrStr = makeAttrItem();
+    this.attrAgi = makeAttrItem();
+    this.attrInt = makeAttrItem();
+    this.attrRow.append(this.attrStr.wrap, this.attrAgi.wrap, this.attrInt.wrap);
+    this.selStats.append(this.attackStat.row, this.armorStat.row, this.attrRow);
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
-    infoText.append(this.selName, this.progressWrap, this.selStats, this.selCarry);
+    infoText.append(this.selName, this.selSub, this.progressWrap, this.selStats, this.selCarry);
     return { portraitWrap, infoText };
   }
 
@@ -530,14 +559,15 @@ export class GameHud {
       if (sel.isMine) {
         // Gold mine: show its remaining gold, no progress/combat stats.
         this.progressWrap.hidden = true;
-        this.selStats.hidden = false;
+        this.selStats.hidden = true;
+        this.selSub.textContent = "";
         this.selCarry.hidden = false;
-        this.selStats.textContent = `Gold: ${sel.goldRemaining}`;
-        this.selCarry.textContent = "";
+        this.selCarry.textContent = `Gold: ${sel.goldRemaining}`;
       } else if (constructing || training) {
         // Progress display replaces the stat lines.
         this.progressWrap.hidden = false;
         this.selStats.hidden = true;
+        this.selSub.textContent = "";
         this.selCarry.hidden = true;
         this.statusLabel.textContent = constructing ? "Constructing" : "Training";
         const frac = Math.max(0, Math.min(1, constructing ? sel.buildProgress : sel.trainProgress));
@@ -566,22 +596,53 @@ export class GameHud {
           });
         }
       } else {
+        // Unit / hero: attack + armor rows with their real WC3 type icons, and
+        // STR/AGI/INT with attribute icons for heroes.
         this.progressWrap.hidden = true;
         this.selStats.hidden = false;
         this.selCarry.hidden = false;
-        const dmg = sel.damageMax > 0 ? `Damage: ${sel.damageMin} - ${sel.damageMax}` : "";
-        this.selStats.textContent = `${dmg}${dmg ? "\n" : ""}Armor: ${sel.armor}`;
+        this.selSub.textContent = sel.isHero && sel.level > 0 ? `Level ${sel.level}` : "";
+        if (sel.damageMax > 0) {
+          this.attackStat.row.hidden = false;
+          this.setIcon(this.attackStat.icon, infocard("attack", sel.attackType));
+          this.attackStat.text.textContent = `Damage: ${sel.damageMin} - ${sel.damageMax}`;
+        } else {
+          this.attackStat.row.hidden = true;
+        }
+        this.armorStat.row.hidden = false;
+        this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType));
+        this.armorStat.text.textContent = `Armor: ${sel.armor}`;
+        if (sel.isHero) {
+          this.attrRow.hidden = false;
+          this.setAttr(this.attrStr, "str", sel.strength, sel.primaryAttr === "STR");
+          this.setAttr(this.attrAgi, "agi", sel.agility, sel.primaryAttr === "AGI");
+          this.setAttr(this.attrInt, "int", sel.intelligence, sel.primaryAttr === "INT");
+        } else {
+          this.attrRow.hidden = true;
+        }
         this.selCarry.textContent =
           sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";
       }
     } else {
       this.selName.textContent = "";
+      this.selSub.textContent = "";
       this.selHpText.textContent = "";
       this.selMpText.textContent = "";
-      this.selStats.textContent = "";
+      this.selStats.hidden = true;
       this.selCarry.textContent = "";
       this.progressWrap.hidden = true;
     }
+  }
+
+  private setIcon(el: HTMLDivElement, path: string): void {
+    const url = this.driver.blpUrl(path);
+    el.style.backgroundImage = url ? `url(${url})` : "";
+  }
+
+  private setAttr(item: AttrItem, kind: "str" | "agi" | "int", value: number, primary: boolean): void {
+    this.setIcon(item.icon, attrIcon(kind));
+    item.text.textContent = String(value);
+    item.wrap.classList.toggle("primary", primary);
   }
 
   private drawDots(): void {
@@ -596,6 +657,40 @@ export class GameHud {
       ctx.fillRect(u * MINIMAP_SIZE - 2, v * MINIMAP_SIZE - 2, 4, 4);
     }
   }
+}
+
+interface StatRow { row: HTMLDivElement; icon: HTMLDivElement; text: HTMLSpanElement; }
+interface AttrItem { wrap: HTMLDivElement; icon: HTMLDivElement; text: HTMLSpanElement; }
+
+function makeStatRow(): StatRow {
+  const row = document.createElement("div");
+  row.className = "hud-stat-row";
+  const icon = document.createElement("div");
+  icon.className = "hud-stat-icon";
+  const text = document.createElement("span");
+  row.append(icon, text);
+  return { row, icon, text };
+}
+function makeAttrItem(): AttrItem {
+  const wrap = document.createElement("div");
+  wrap.className = "hud-attr";
+  const icon = document.createElement("div");
+  icon.className = "hud-attr-icon";
+  const text = document.createElement("span");
+  wrap.append(icon, text);
+  return { wrap, icon, text };
+}
+
+// WC3 infocard type icons (real BLPs under UI\Widgets\Console\Human\). Attack/
+// armor types map onto the melee/piercing/… and small/medium/… icon set.
+const ATTACK_ICON: Record<string, string> = { normal: "melee", pierce: "piercing", siege: "siege", magic: "magic", chaos: "chaos", hero: "hero", spells: "magic" };
+const ARMOR_ICON: Record<string, string> = { small: "small", medium: "medium", large: "large", fort: "fortified", hero: "hero", divine: "divine", none: "unarmored", unarmored: "unarmored" };
+function infocard(kind: "attack" | "armor", type: string): string {
+  const suffix = (kind === "attack" ? ATTACK_ICON[type] : ARMOR_ICON[type]) ?? (kind === "attack" ? "melee" : "unarmored");
+  return `UI\\Widgets\\Console\\Human\\infocard-${kind}-${suffix}.blp`;
+}
+function attrIcon(kind: "str" | "agi" | "int"): string {
+  return `UI\\Widgets\\Console\\Human\\infocard-heroattributes-${kind}.blp`;
 }
 
 function escapeHtml(s: string): string {

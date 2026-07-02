@@ -517,8 +517,17 @@ body.in-game .menu-panel { display: none; }
   border-radius: 6px;
 }
 .hud-sel-name { font-size: 17px; color: #f4e8c8; text-align: center; margin-bottom: 6px; letter-spacing: 0.3px; }
-.hud-sel-stats { font-size: 12px; color: #cfc7ab; white-space: pre-line; line-height: 1.5; }
+.hud-sel-sub { font-size: 12px; color: #c9a24a; text-align: center; margin: -2px 0 6px; }
+.hud-sel-stats { font-size: 12px; color: #cfc7ab; line-height: 1.5; }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
+/* Attack/armor rows with real WC3 infocard type icons. */
+.hud-stat-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+.hud-stat-icon { width: 24px; height: 24px; flex: none; background-size: 100% 100%; background-repeat: no-repeat; }
+/* Hero STR/AGI/INT with attribute icons; the primary attribute is highlighted. */
+.hud-sel-attrs { display: flex; gap: 16px; margin-top: 5px; }
+.hud-attr { display: flex; align-items: center; gap: 5px; color: #cfc7ab; }
+.hud-attr-icon { width: 20px; height: 20px; background-size: 100% 100%; background-repeat: no-repeat; }
+.hud-attr.primary span { color: #f4e8c8; font-weight: 700; }
 
 /* Construction / training progress (WC3 info panel): status icon + gold label,
    a gold progress bar, and the queue slots. */

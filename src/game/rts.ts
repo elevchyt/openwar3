@@ -3,6 +3,7 @@ import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { WORKERS, DEPOT_IDS } from "../data/races";
+import { trainsFor } from "../data/techtree";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -53,6 +54,14 @@ export interface SelectionInfo {
   armor: number;
   damageMin: number;
   damageMax: number;
+  attackType: string; // normal/pierce/siege/magic/chaos/hero
+  armorType: string; // small/medium/large/fort/hero/divine/none
+  isHero: boolean;
+  level: number;
+  strength: number;
+  agility: number;
+  intelligence: number;
+  primaryAttr: string; // "STR"/"AGI"/"INT" or ""
   model: string;
   isWorker: boolean;
   isBuilding: boolean;
@@ -66,6 +75,18 @@ export interface SelectionInfo {
   carryLumber: number;
   isMine: boolean; // a selected gold mine (resource, not a unit)
   goldRemaining: number; // gold left in the selected mine
+}
+
+// A ground selection/hover ring the renderer draws as a flat model.
+export interface RingInfo {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  owner: number;
+  team: number;
+  sizeToRadius?: boolean; // scale the ring to `radius` (buildings/mines) vs constant
+  neutral?: boolean; // neutral-passive (yellow) ring, e.g. a gold mine
 }
 
 // Resolved animation-sequence indices for a unit. Worker carry/chop variants
@@ -300,7 +321,7 @@ export class RtsController {
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
-      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderId: 0, queue: [], rallyX: x, rallyY: y - 200 }
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderId: 0, queue: [], rallyX: x, rallyY: y - 200, producesUnits: trainsFor(def.id).length > 0 }
       : null;
     this.sim.add(
       {
@@ -546,7 +567,7 @@ export class RtsController {
       const hit = this.groundPoint(cssX, cssY);
       if (hit) {
         for (const id of this.selected) {
-          if (this.sim.units.get(id)?.building) this.sim.setRally(id, hit[0], hit[1]);
+          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, hit[0], hit[1]);
         }
         this.queueArrow(hit[0], hit[1], MOVE_ARROW);
       }
@@ -619,6 +640,8 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, damageMin: 0, damageMax: 0,
+      attackType: "", armorType: "", isHero: false, level: 0, strength: 0,
+      agility: 0, intelligence: 0, primaryAttr: "",
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
@@ -633,6 +656,7 @@ export class RtsController {
     const w = u.weapon;
     const b = u.building;
     const q = b?.queue ?? [];
+    const def = this.registry.get(e.typeId);
     return {
       id: e.simId,
       typeId: e.typeId,
@@ -647,6 +671,14 @@ export class RtsController {
       // WC3 damage display: base + dice (min 1 each) … base + dice×sides.
       damageMin: w ? w.damage + w.dice : 0,
       damageMax: w ? w.damage + w.dice * w.sides : 0,
+      attackType: def?.attackType ?? "",
+      armorType: def?.armorType ?? "",
+      isHero: def?.isHero ?? false,
+      level: def?.level ?? 0,
+      strength: def?.strength ?? 0,
+      agility: def?.agility ?? 0,
+      intelligence: def?.intelligence ?? 0,
+      primaryAttr: def?.primaryAttr ?? "",
       model: e.modelPath,
       isWorker: !!u.worker,
       isBuilding: !!b,
@@ -700,34 +732,52 @@ export class RtsController {
 
   /** Ground-circle info for every selected unit (the renderer draws each ring as
    *  a flat model on the terrain so geometry occludes it). */
-  selectionRings(): Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean }> {
-    const out: Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean }> = [];
+  selectionRings(): RingInfo[] {
+    const out: RingInfo[] = [];
     for (const id of this.selected) {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team });
+      // Buildings get a ring sized to their footprint (a constant tiny ring is
+      // hidden under the model); units keep the constant ring.
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building });
     }
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
-      if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius, owner: -1, team: -2, sizeToRadius: true });
+      // A gold mine is Neutral PASSIVE (yellow ring), not hostile (red).
+      if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius, owner: -1, team: -2, sizeToRadius: true, neutral: true });
     }
     return out;
   }
 
   /** Ground-circle for the hovered unit (skipped if it's already selected). */
-  hoverRing(): { x: number; y: number; z: number; radius: number; owner: number; team: number } | null {
+  hoverRing(): RingInfo | null {
     if (this.hovered === null || this.selected.has(this.hovered)) return null;
     const u = this.sim.units.get(this.hovered);
     const e = this.byId.get(this.hovered);
     if (!u || !e) return null;
-    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team };
+    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building };
   }
 
-  /** Rally point of the primary selected building (for the rally flag), or null. */
+  /** Re-pin under-construction buildings' Birth frame to construction progress
+   *  AFTER the renderer's animation update — otherwise mdx-m3-viewer's per-frame
+   *  frame advance creeps the birth forward, so a HALTED construction still
+   *  looked like it was building. Called each frame post-update; this makes the
+   *  birth freeze when paused and resume exactly with progress. */
+  repinConstructionFrames(): void {
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u?.building || u.building.constructionLeft <= 0 || e.birthSeq < 0) continue;
+      const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
+      e.unit.instance.frame = e.birthStart + prog * (e.birthEnd - e.birthStart);
+    }
+  }
+
+  /** Rally point of the primary selected UNIT-PRODUCING building (for the rally
+   *  flag), or null. Towers/farms/etc. don't produce units, so no rally. */
   selectedRally(): { x: number; y: number; z: number } | null {
     if (this.primary === null) return null;
     const b = this.sim.units.get(this.primary)?.building;
-    return b ? { x: b.rallyX, y: b.rallyY, z: this.heightAt(b.rallyX, b.rallyY) } : null;
+    return b && b.producesUnits ? { x: b.rallyX, y: b.rallyY, z: this.heightAt(b.rallyX, b.rallyY) } : null;
   }
 
   /** World position of the primary selected unit / mine (portrait-click focus). */
@@ -779,13 +829,12 @@ export class RtsController {
   moveAt(cssX: number, cssY: number): void {
     if (this.selected.size === 0) return;
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-    // A selected building: right-click sets its rally point (where trained units
-    // walk to). Applies to every selected building.
-    if (prim?.building) {
+    // A selected unit-producing building: right-click sets its rally point.
+    if (prim?.building?.producesUnits) {
       const hit = this.groundPoint(cssX, cssY);
       if (hit) {
         for (const id of this.selected) {
-          if (this.sim.units.get(id)?.building) this.sim.setRally(id, hit[0], hit[1]);
+          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, hit[0], hit[1]);
         }
         this.queueArrow(hit[0], hit[1], MOVE_ARROW);
       }

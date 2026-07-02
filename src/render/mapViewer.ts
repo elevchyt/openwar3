@@ -565,7 +565,8 @@ export class MapViewerScene {
     if (flag && map) {
       this.rallyFlag = flag.addInstance();
       this.rallyFlag.setScene(map.worldScene);
-      this.rallyFlag.setSequenceLoopMode(2);
+      this.rallyFlag.setSequence(0); // play its waving clip so the flag animates
+      this.rallyFlag.setSequenceLoopMode(2); // loop always
       this.rallyFlag.hide();
     }
   }
@@ -765,7 +766,7 @@ export class MapViewerScene {
 
   private placeCircle(
     inst: SpawnInstance | null,
-    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean } | null,
+    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
     tint: number[] | null,
   ): void {
     if (!inst) return;
@@ -789,7 +790,7 @@ export class MapViewerScene {
     // and allied (same-team) units are green, everyone else — including
     // neutral-hostile creeps — is red.
     let seq: number;
-    if (tint) seq = this.circleSeq.neutral;
+    if (tint || info.neutral) seq = this.circleSeq.neutral; // flashes + neutral-passive (gold mine)
     else {
       const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
       seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;
@@ -1034,7 +1035,8 @@ export class MapViewerScene {
       }
       // Unit-producing buildings get a Set Rally Point button.
       if (trainsFor(sel.typeId).length) {
-        out.push(this.cmd({ id: "rally", icon: btnIcon("BTNRally"), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 2, row: 2, active: this.rts?.orderMode === "rally" }));
+        const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
+        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 2, row: 2, active: this.rts?.orderMode === "rally" }));
       }
       if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
       return out;
@@ -1309,10 +1311,23 @@ export class MapViewerScene {
         for (const mine of world.drainDepletedMines()) {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
         }
-        // Spawn units that finished training, at their building's rally point.
+        // Finished training: spawn the unit on the nearest FREE tile beside the
+        // building (not inside it), then send it to the rally point — WC3-style.
         for (const t of world.drainTrained()) {
           const d = this.registry.get(t.unitId);
-          if (d) void this.spawnUnit(d, t.rallyX, t.rallyY, this.localPlayer, this.teamOf(this.localPlayer));
+          if (!d) continue;
+          let sx = t.x;
+          let sy = t.y;
+          if (this.grid) {
+            const [cx, cy] = this.grid.worldToCell(t.x, t.y);
+            const free = this.grid.nearestWalkable(cx, cy, 10);
+            if (free) [sx, sy] = this.grid.cellToWorld(free[0], free[1]);
+          }
+          const rx = t.rallyX;
+          const ry = t.rallyY;
+          void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
+            if (simId !== null) world.issueMove(simId, rx, ry);
+          });
         }
       }
       // Reset the command page + placement when the selection changes.
@@ -1325,6 +1340,9 @@ export class MapViewerScene {
       // displays), replicating War3MapViewer.update() = super.update() + map.update().
       baseUpdate.call(this.viewer, dt);
       this.viewer.map?.update();
+      // Re-pin under-construction buildings AFTER the animation advance so a
+      // halted build's Birth animation truly freezes (and resumes with progress).
+      this.rts?.repinConstructionFrames();
       this.viewer.startFrame();
       this.viewer.render();
       this.raf = requestAnimationFrame(frame);

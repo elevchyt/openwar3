@@ -54,6 +54,7 @@ export interface BuildingState {
   queue: Array<{ unitId: string; timeLeft: number; buildTime: number }>;
   rallyX: number; // trained units gather here (default: just south of the hall)
   rallyY: number;
+  producesUnits: boolean; // trains units → has a rally point (towers etc. don't)
 }
 
 export interface SimMine {
