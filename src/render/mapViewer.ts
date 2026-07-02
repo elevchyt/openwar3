@@ -15,6 +15,8 @@ import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units
 import { STARTING_UNITS, resolveRace } from "../data/races";
 import type { MeleeConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
+import { GameHud, type HudDriver } from "../ui/hud";
+import { blpToCanvas, blpToDataUrl } from "./blputil";
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -123,6 +125,13 @@ export class MapViewerScene {
   private grid: PathingGrid | null = null;
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
+  private hud: GameHud | null = null;
+  private minimap: HTMLCanvasElement | null = null;
+  private iconCache = new Map<string, string | null>();
+  // Local player's stash (melee start: 500 gold / 150 lumber). Gathering will
+  // make these live (next phase).
+  private resources = { gold: 500, lumber: 150 };
+  private localPlayer = 0;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -215,6 +224,8 @@ export class MapViewerScene {
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
+    const minimapBytes = archive.rawBytes("war3mapMap.blp");
+    this.minimap = minimapBytes ? blpToCanvas(minimapBytes) : null;
     const w3e = archive.rawBytes("war3map.w3e");
     const wpm = archive.rawBytes("war3map.wpm");
     if (w3e && wpm) {
@@ -280,6 +291,9 @@ export class MapViewerScene {
   /** Spawn each player's starting units at their start location (plan Phase 5.5). */
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
+    this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
+    this.resources = { gold: 500, lumber: 150 }; // WC3 melee starting stash
+    this.mountHud();
     for (const slot of config.slots) {
       const roster = STARTING_UNITS[resolveRace(slot.race)];
       const workerTotal = roster
@@ -307,6 +321,11 @@ export class MapViewerScene {
   private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number): Promise<void> {
     const map = this.viewer.map;
     if (!map || !this.rts) return;
+    // Buildings snap to the pathing grid so their stamped footprint lands on
+    // whole cells (WC3 building placement is grid-aligned).
+    const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
+    if (fp && this.grid) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
+
     const model = await this.viewer.load(def.model, this.solver);
     if (!model) return;
     const instance = model.addInstance();
@@ -315,10 +334,60 @@ export class MapViewerScene {
     this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team); // face south (WC3 default)
 
     // Buildings block pathing: stamp their footprint so units route around them.
-    if (def.isBuilding && def.pathTex && this.grid) {
-      const fp = this.footprintFor(def.pathTex);
-      if (fp) stampFootprint(this.grid, fp, x, y);
+    if (fp && this.grid) stampFootprint(this.grid, fp, x, y);
+  }
+
+  /** Build the in-game HUD (plan §10.1b) over the map view. */
+  private mountHud(): void {
+    this.hud?.dispose();
+    const ui = document.getElementById("ui") ?? document.body;
+    const driver: HudDriver = {
+      resources: () => {
+        const food = this.rts?.foodFor(this.localPlayer) ?? { used: 0, made: 0 };
+        return {
+          gold: this.resources.gold,
+          lumber: this.resources.lumber,
+          foodUsed: food.used,
+          foodMax: food.made,
+        };
+      },
+      selection: () => this.rts?.selectedInfo() ?? null,
+      dots: () => this.rts?.dots() ?? [],
+      mapBounds: () => {
+        const map = this.viewer.map;
+        if (!map) return [0, 0, 1, 1];
+        const [cols, rows] = map.mapSize;
+        const [ox, oy] = map.centerOffset;
+        return [ox, oy, (cols - 1) * 128, (rows - 1) * 128];
+      },
+      panTo: (wx, wy) => {
+        this.target[0] = wx;
+        this.target[1] = wy;
+      },
+      setOrderMode: (mode) => {
+        if (this.rts) this.rts.orderMode = mode;
+      },
+      stopSelected: () => this.rts?.stopSelected(),
+      icon: (kind) => this.resourceIcon(kind),
+      minimapImage: () => this.minimap,
+    };
+    this.hud = new GameHud(ui, driver);
+  }
+
+  private resourceIcon(kind: "gold" | "lumber" | "supply"): string | null {
+    const paths = {
+      gold: "UI\\Widgets\\ToolTips\\Human\\ToolTipGoldIcon.blp",
+      lumber: "UI\\Widgets\\ToolTips\\Human\\ToolTipLumberIcon.blp",
+      supply: "UI\\Widgets\\ToolTips\\Human\\ToolTipSupplyIcon.blp",
+    };
+    const path = paths[kind];
+    let url = this.iconCache.get(path);
+    if (url === undefined) {
+      const bytes = this.vfs.rawBytes(path);
+      url = bytes ? blpToDataUrl(bytes) : null;
+      this.iconCache.set(path, url);
     }
+    return url;
   }
 
   private footprintFor(texPath: string): Footprint | null {
@@ -338,6 +407,7 @@ export class MapViewerScene {
       this.last = t;
       this.updateCamera();
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
+      this.hud?.frame(dt);
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       // Advance animations by REAL elapsed time (fixes 2x speed on high-refresh
       // displays), replicating War3MapViewer.update() = super.update() + map.update().
@@ -356,6 +426,7 @@ export class MapViewerScene {
     this.last = 0;
     this.rts?.pause();
     this.metrics.hide();
+    this.hud?.hide();
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
@@ -364,6 +435,8 @@ export class MapViewerScene {
     this.rts?.dispose();
     this.rts = null;
     this.metrics.dispose();
+    this.hud?.dispose();
+    this.hud = null;
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
   }
@@ -372,14 +445,17 @@ export class MapViewerScene {
     const scene = this.viewer.map?.worldScene;
     if (!scene) return;
 
-    // Pan the ground target with WASD, relative to view yaw.
+    // Pan the ground target relative to view yaw. WASD only outside a match —
+    // in-game the letters belong to command hotkeys (M/A/S), WC3 pans with
+    // the arrow keys.
+    const letters = !this.hud;
     const speed = this.distance * 0.9 * (1 / 60);
     const fwd: [number, number] = [Math.cos(this.yaw), Math.sin(this.yaw)];
     const right: [number, number] = [fwd[1], -fwd[0]];
-    if (this.keys.has("w") || this.keys.has("arrowup")) this.pan(fwd, speed);
-    if (this.keys.has("s") || this.keys.has("arrowdown")) this.pan(fwd, -speed);
-    if (this.keys.has("d") || this.keys.has("arrowright")) this.pan(right, speed);
-    if (this.keys.has("a") || this.keys.has("arrowleft")) this.pan(right, -speed);
+    if ((letters && this.keys.has("w")) || this.keys.has("arrowup")) this.pan(fwd, speed);
+    if ((letters && this.keys.has("s")) || this.keys.has("arrowdown")) this.pan(fwd, -speed);
+    if ((letters && this.keys.has("d")) || this.keys.has("arrowright")) this.pan(right, speed);
+    if ((letters && this.keys.has("a")) || this.keys.has("arrowleft")) this.pan(right, -speed);
 
     if (this.canvas.width !== scene.viewport[2] || this.canvas.height !== scene.viewport[3]) {
       syncCanvasSize(this.canvas);
@@ -430,7 +506,14 @@ export class MapViewerScene {
       c.releasePointerCapture(e.pointerId);
       if (e.button === 0) {
         this.dragging = false;
-        if (!this.moved) this.rts?.selectAt(e.offsetX, e.offsetY);
+        if (!this.moved && this.rts) {
+          // An armed command-card order (Move/Attack) consumes the click.
+          if (this.rts.orderMode) {
+            if (this.rts.orderClickAt(e.offsetX, e.offsetY)) this.hud?.clearOrderMode();
+          } else {
+            this.rts.selectAt(e.offsetX, e.offsetY);
+          }
+        }
       }
     });
     c.addEventListener("pointermove", (e) => {

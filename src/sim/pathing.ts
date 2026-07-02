@@ -20,12 +20,26 @@ export function parseWpm(bytes: Uint8Array): PathingData {
   return { width: file.size[0], height: file.size[1], flags: file.pathing };
 }
 
+// WC3 reserves an n×n block of pathing cells per stationary unit, keyed off
+// collision size (hive tutorial 154558: 0–15 → 1×1, 16–31 → 2×2, 32–47 → 3×3,
+// 48+ → 4×4). This is what makes surrounds work: stopped units block cells.
+export function footprintCells(collision: number): number {
+  if (collision <= 0) return 0;
+  if (collision < 16) return 1;
+  if (collision < 32) return 2;
+  if (collision < 48) return 3;
+  return 4;
+}
+
 export class PathingGrid {
   readonly width: number;
   readonly height: number;
   private flags: Uint8Array;
   private originX: number;
   private originY: number;
+  // Dynamic reservation layer (stationary units). Counted, so overlapping
+  // reservations (rare, e.g. spawn overflow) release cleanly.
+  private reservations: Uint16Array | null = null;
 
   constructor(data: PathingData, centerOffset: readonly [number, number]) {
     this.width = data.width;
@@ -33,6 +47,59 @@ export class PathingGrid {
     this.flags = data.flags;
     this.originX = centerOffset[0];
     this.originY = centerOffset[1];
+  }
+
+  /** Reserve an n×n cell block whose origin (low corner) is (cx0, cy0). */
+  reserve(cx0: number, cy0: number, n: number): void {
+    this.reservations ??= new Uint16Array(this.width * this.height);
+    for (let y = cy0; y < cy0 + n; y++) {
+      for (let x = cx0; x < cx0 + n; x++) {
+        if (this.inBounds(x, y)) this.reservations[y * this.width + x]++;
+      }
+    }
+  }
+
+  release(cx0: number, cy0: number, n: number): void {
+    if (!this.reservations) return;
+    for (let y = cy0; y < cy0 + n; y++) {
+      for (let x = cx0; x < cx0 + n; x++) {
+        const i = y * this.width + x;
+        if (this.inBounds(x, y) && this.reservations[i] > 0) this.reservations[i]--;
+      }
+    }
+  }
+
+  isReserved(cx: number, cy: number): boolean {
+    return this.reservations !== null && this.inBounds(cx, cy) && this.reservations[cy * this.width + cx] > 0;
+  }
+
+  /** Snap a world position so an n×n footprint aligns to the cell grid: odd
+   *  footprints centre on a cell centre, even ones on a cell corner (WC3). */
+  snapForFootprint(wx: number, wy: number, n: number): [number, number] {
+    if (n <= 0) return [wx, wy];
+    return this.snapForFootprintRect(wx, wy, n, n);
+  }
+
+  /** Rectangular variant for building footprints (w×h cells). */
+  snapForFootprintRect(wx: number, wy: number, w: number, h: number): [number, number] {
+    const snap = (v: number, origin: number, cells: number) =>
+      cells % 2 === 1
+        ? origin + (Math.floor((v - origin) / PATHING_CELL) + 0.5) * PATHING_CELL
+        : origin + Math.round((v - origin) / PATHING_CELL) * PATHING_CELL;
+    return [snap(wx, this.originX, w), snap(wy, this.originY, h)];
+  }
+
+  /** Origin (low corner) cell of an n×n footprint centred at world (wx, wy).
+   *  Positions should be snapped via snapForFootprint() first. */
+  footprintOrigin(wx: number, wy: number, n: number): [number, number] {
+    if (n % 2 === 1) {
+      const [cx, cy] = this.worldToCell(wx, wy);
+      return [cx - (n - 1) / 2, cy - (n - 1) / 2];
+    }
+    return [
+      Math.round((wx - this.originX) / PATHING_CELL) - n / 2,
+      Math.round((wy - this.originY) / PATHING_CELL) - n / 2,
+    ];
   }
 
   inBounds(cx: number, cy: number): boolean {

@@ -1,4 +1,4 @@
-import { PATHING_CELL, type PathingGrid } from "./pathing";
+import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath } from "./pathfind";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -49,6 +49,10 @@ export interface SimUnit {
   repathT: number; // chase-repath cooldown after getting blocked
   prevX: number; // position before this tick's movement (stuck detection)
   prevY: number;
+  footprint: number; // reserved cells per side when stationary (0 = never)
+  resX: number; // origin cell of the current reservation
+  resY: number;
+  hasReservation: boolean;
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -91,6 +95,10 @@ export class SimWorld {
       | "repathT"
       | "prevX"
       | "prevY"
+      | "footprint"
+      | "resX"
+      | "resY"
+      | "hasReservation"
     >,
   ): SimUnit {
     const u: SimUnit = {
@@ -111,9 +119,41 @@ export class SimWorld {
       repathT: 0,
       prevX: unit.x,
       prevY: unit.y,
+      // Buildings (speed 0) block via their stamped static footprint instead.
+      footprint: unit.flying || unit.speed <= 0 ? 0 : footprintCells(unit.radius),
+      resX: 0,
+      resY: 0,
+      hasReservation: false,
     };
     this.units.set(u.id, u);
+    this.settle(u);
     return u;
+  }
+
+  // --- cell reservation (WC3 pathing grid) ---------------------------------
+
+  /** A unit came to rest: align it to its cell footprint and reserve the cells
+   *  so other units path around it (this is what makes surrounds possible). */
+  private settle(u: SimUnit): void {
+    u.moving = false;
+    u.path = [];
+    if (u.footprint <= 0 || u.hasReservation) return;
+    const [sx, sy] = this.grid.snapForFootprint(u.x, u.y, u.footprint);
+    u.x = sx;
+    u.y = sy;
+    const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, u.footprint);
+    this.grid.reserve(cx0, cy0, u.footprint);
+    u.resX = cx0;
+    u.resY = cy0;
+    u.hasReservation = true;
+  }
+
+  /** A unit is about to move: give its reserved cells back. */
+  private unsettle(u: SimUnit): void {
+    if (u.hasReservation) {
+      this.grid.release(u.resX, u.resY, u.footprint);
+      u.hasReservation = false;
+    }
   }
 
   /** Sim ids of units that died since the last drain (renderer plays deaths). */
@@ -159,8 +199,7 @@ export class SimWorld {
       u.order = "idle";
       u.targetId = null;
       u.inCombat = false;
-      u.moving = false;
-      u.path = [];
+      this.settle(u);
     }
   }
 
@@ -211,8 +250,7 @@ export class SimWorld {
       if (u.stuckT >= STUCK_TIME) {
         u.stuckT = 0;
         if (u.order === "attack") {
-          u.moving = false;
-          u.path = [];
+          this.settle(u);
           u.repathT = REPATH_COOLDOWN;
         } else {
           // Blocked mid-move: the blockers may have stopped since the original
@@ -249,8 +287,7 @@ export class SimWorld {
     }
     // In range: halt, face the target, swing when ready (rotation itself is
     // applied by the shared per-tick turning pass).
-    u.moving = false;
-    u.path = [];
+    this.settle(u);
     u.inCombat = true;
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_EPS || u.cooldownLeft > 0) return;
@@ -283,6 +320,7 @@ export class SimWorld {
   }
 
   private kill(u: SimUnit): void {
+    this.unsettle(u); // corpses don't block cells
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
   }
@@ -321,47 +359,74 @@ export class SimWorld {
       u.moving = true;
       return true;
     }
+    // Release our own cells while pathing so they don't block us, but re-settle
+    // if no path exists (position/reservation must stay consistent).
+    const wasReserved = u.hasReservation;
+    this.unsettle(u);
     const start = this.grid.worldToCell(u.x, u.y);
-    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), this.occupancyBlocker(u, start));
+    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), this.clearanceBlocker(u, start));
     // A single-cell (or empty) result means the unit can't get any closer.
-    if (!cells || cells.length <= 1) return false;
-    // Cell centres as waypoints; the exact target is appended only when the
-    // path actually reaches the target cell (best-effort paths stop short).
+    if (!cells || cells.length <= 1) {
+      if (wasReserved) this.settle(u);
+      return false;
+    }
+    // Cell centres as waypoints. When the path actually reaches the target cell
+    // (best-effort paths stop short), finish on the footprint-aligned point so
+    // the unit settles exactly onto the cells it will reserve.
     const pts = cells.slice(1).map(([cx, cy]) => this.grid.cellToWorld(cx, cy)) as Array<[number, number]>;
     const [lastX, lastY] = pts[pts.length - 1];
-    if (Math.hypot(tx - lastX, ty - lastY) <= PATHING_CELL) pts.push([tx, ty]);
+    if (Math.hypot(tx - lastX, ty - lastY) <= PATHING_CELL) {
+      pts.push(this.grid.snapForFootprint(tx, ty, u.footprint));
+    }
     u.path = pts;
     u.waypoint = 0;
     u.moving = true;
     return true;
   }
 
-  /** Dynamic-obstacle test for pathfinding: cells covered by stationary ground
-   *  units, expanded by the mover's own radius (Minkowski) so corridors
-   *  narrower than the mover are rejected instead of "squeezed" through.
-   *  Cells adjacent to the start stay open so overlapping units can leave. */
-  private occupancyBlocker(
-    self: SimUnit,
-    start: [number, number],
-  ): ((cx: number, cy: number) => boolean) | undefined {
-    if (self.flying || self.radius <= 0) return undefined;
-    const occupied = new Set<number>();
-    for (const u of this.units.values()) {
-      if (u === self || u.flying || u.radius <= 0 || u.moving) continue;
-      const clearance = u.radius + self.radius;
-      const [x0, y0] = this.grid.worldToCell(u.x - clearance, u.y - clearance);
-      const [x1, y1] = this.grid.worldToCell(u.x + clearance, u.y + clearance);
-      for (let cy = y0; cy <= y1; cy++) {
-        for (let cx = x0; cx <= x1; cx++) {
-          const [wx, wy] = this.grid.cellToWorld(cx, cy);
-          if (Math.hypot(wx - u.x, wy - u.y) <= clearance) occupied.add(cy * this.grid.width + cx);
+  /** After finishing a path that stopped short of the ordered point, try again
+   *  when the goal's cells have been vacated in the meantime. */
+  private retryFreedGoal(u: SimUnit): boolean {
+    if (u.stuckRetries >= 2) return false;
+    if (Math.hypot(u.chaseX - u.x, u.chaseY - u.y) <= PATHING_CELL * 1.5) return false;
+    const n = u.footprint;
+    if (n > 0) {
+      const [sx, sy] = this.grid.snapForFootprint(u.chaseX, u.chaseY, n);
+      const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+      for (let y = cy0; y < cy0 + n; y++) {
+        for (let x = cx0; x < cx0 + n; x++) {
+          if (!this.grid.walkable(x, y) || this.grid.isReserved(x, y)) return false;
         }
       }
     }
-    if (!occupied.size) return undefined;
+    u.stuckRetries++;
+    return this.pathTo(u, u.chaseX, u.chaseY);
+  }
+
+  /** WC3-style clearance test for pathfinding: the mover's own n×n cell
+   *  footprint must fit on statically-walkable, unreserved cells at every path
+   *  node. Cells adjacent to the start stay exempt from reservations so a unit
+   *  overlapping others (spawn overflow) can still leave. */
+  private clearanceBlocker(
+    self: SimUnit,
+    start: [number, number],
+  ): ((cx: number, cy: number) => boolean) | undefined {
+    const n = self.footprint;
+    if (n <= 0) return undefined;
     const [sx, sy] = start;
-    return (cx, cy) =>
-      occupied.has(cy * this.grid.width + cx) && (Math.abs(cx - sx) > 1 || Math.abs(cy - sy) > 1);
+    const half = n >> 1;
+    return (cx, cy) => {
+      const nearStart = Math.abs(cx - sx) <= 1 && Math.abs(cy - sy) <= 1;
+      const cx0 = cx - half;
+      const cy0 = cy - half;
+      for (let y = cy0; y < cy0 + n; y++) {
+        for (let x = cx0; x < cx0 + n; x++) {
+          if (!this.grid.walkable(x, y)) return true;
+          if (!nearStart && this.grid.isReserved(x, y)) return true;
+        }
+      }
+      return false;
+    };
   }
 
   private tickMovement(dt: number): void {
@@ -393,9 +458,12 @@ export class SimWorld {
         u.desiredFacing = Math.atan2(dirY, dirX);
       }
       if (u.waypoint >= u.path.length) {
-        u.moving = false;
-        u.path = [];
-        if (u.order === "move") u.order = "idle"; // arrival; auto-acquire resumes
+        // A best-effort path may have stopped short because the goal cells
+        // were reserved when it was computed; if the blocker has since left,
+        // continue to the real goal (bounded retries).
+        if (u.order === "move" && this.retryFreedGoal(u)) continue;
+        this.settle(u); // arrival: snap to the cell grid and reserve
+        if (u.order === "move") u.order = "idle"; // auto-acquire resumes
       }
     }
   }

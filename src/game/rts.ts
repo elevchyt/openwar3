@@ -47,6 +47,9 @@ interface Entry {
   death: number; // -1 = no death animation
   moveHeight: number;
   selRadius: number; // selection-ring radius in WORLD units (from selScale)
+  name: string;
+  foodUsed: number;
+  foodMade: number;
   anim: Anim;
 }
 
@@ -158,6 +161,9 @@ export class RtsController {
         death: seqs.findIndex((s) => /^death/i.test(s.name)),
         moveHeight: lift(def?.moveHeight ?? 0),
         selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
+        name: def?.name ?? unit.row?.string("unitid") ?? "Unit",
+        foodUsed: def?.foodUsed ?? 0,
+        foodMade: def?.foodMade ?? 0,
         anim: "stand",
       };
       this.entries.push(entry);
@@ -198,6 +204,9 @@ export class RtsController {
       death: seqs.findIndex((s) => /^death/i.test(s.name)),
       moveHeight: lift(def.moveHeight),
       selRadius: (def.selScale || 1) * SEL_RADIUS_PER_SCALE,
+      name: def.name,
+      foodUsed: def.foodUsed,
+      foodMade: def.foodMade,
       anim: "stand",
     };
     this.entries.push(entry);
@@ -278,6 +287,75 @@ export class RtsController {
   /** Live units, for the metrics overlay. */
   unitCount(): number {
     return this.entries.length;
+  }
+
+  // --- HUD driver surface ---------------------------------------------------
+
+  /** Armed command-card order ("move"/"attack"); the next left-click executes
+   *  it instead of selecting. */
+  orderMode: "move" | "attack" | null = null;
+
+  /** Execute the armed order at a screen point. Returns true when consumed
+   *  (the caller should then clear the HUD's armed state). */
+  orderClickAt(cssX: number, cssY: number): boolean {
+    if (!this.orderMode || this.selected === null) {
+      this.orderMode = null;
+      return false;
+    }
+    const mode = this.orderMode;
+    this.orderMode = null;
+    if (mode === "attack") {
+      const picked = this.pickAt(cssX, cssY);
+      const sel = this.sim.units.get(this.selected);
+      if (picked !== null && picked !== this.selected && sel) {
+        const target = this.sim.units.get(picked);
+        if (target && this.sim.hostile(sel, target) && this.sim.issueAttack(this.selected, picked)) return true;
+      }
+      // No hostile under the cursor: fall through to a move (attack-move later).
+    }
+    const dpr = this.dpr();
+    this.screen[0] = cssX * dpr;
+    this.screen[1] = cssY * dpr;
+    this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
+    const hit = this.groundHit();
+    if (hit) this.sim.issueMove(this.selected, hit[0], hit[1]);
+    return true;
+  }
+
+  stopSelected(): void {
+    if (this.selected !== null) this.sim.stop(this.selected);
+  }
+
+  selectedInfo(): { name: string; hp: number; maxHp: number } | null {
+    if (this.selected === null) return null;
+    const u = this.sim.units.get(this.selected);
+    const e = this.byId.get(this.selected);
+    if (!u || !e) return null;
+    return { name: e.name, hp: u.hp, maxHp: u.maxHp };
+  }
+
+  /** Food used/made by a player's living units. */
+  foodFor(owner: number): { used: number; made: number } {
+    let used = 0;
+    let made = 0;
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (u && u.owner === owner) {
+        used += e.foodUsed;
+        made += e.foodMade;
+      }
+    }
+    return { used, made };
+  }
+
+  /** Minimap dots: world positions + owners of all living units. */
+  dots(): Array<{ x: number; y: number; owner: number }> {
+    const out: Array<{ x: number; y: number; owner: number }> = [];
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (u) out.push({ x: u.x, y: u.y, owner: u.owner });
+    }
+    return out;
   }
 
   /** Right-click: attack a hostile unit under the cursor, else move to ground. */

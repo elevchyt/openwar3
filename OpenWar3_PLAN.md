@@ -57,6 +57,20 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   frame as a ground-plane ellipse; HP bar scales with it. **Font:** Nowar Sans bundled
   (`public/fonts/`, OFL) with Friz Quadrata preferred if installed (§10.1b). `docs/REFERENCES.md`
   lists reference projects + the "search Hive Workshop for mechanics" guideline.
+- **Grid-reservation pathing + in-game HUD (2026-07-02, evening)** — pathing is now WC3-true
+  (hive tutorial 154558 + surround mechanics): stationary units **reserve n×n cells** on the
+  32-unit pathing grid (collision 0–15→1×1, 16–31→2×2, 32–47→3×3, 48+→4×4); stopping units snap to
+  footprint alignment (odd→cell centre, even→cell corner); movers need their own footprint's
+  clearance at every A* node; reservations release while moving and on death. Surrounds work by
+  construction. Best-effort arrivals retry once if the ordered goal's cells free up mid-walk.
+  Buildings snap to the grid before their pathTex stamp (`snapForFootprintRect`). **In-game HUD v1**
+  (`src/ui/hud.ts`, per §10.1b): top bar (menu placeholders, clock placeholder, gold/lumber/food with
+  real BLP tooltip icons + WC3 upkeep brackets), bottom console (real `war3mapMap.blp` minimap with
+  live player-colored unit dots + click-to-pan, portrait/info panel with selected unit name + HP,
+  inventory placeholder, 4×3 command card with Move/Stop/Attack — M/S/A hotkeys, Esc cancels,
+  armed order consumes the next left-click). Melee start stash 500 g / 150 w; food live from owned
+  units. In-game camera pans with arrow keys (WASD reserved for hotkeys); `src/render/blputil.ts`
+  decodes BLPs for DOM use. Next: resource gathering loop (gold/lumber/train) driving these numbers.
 - **Phase 6 (combat slice)** — headless-sim combat in `src/sim/world.ts`: owners/teams (allied =
   same team; creeps = team −1, hostile to players but not each other), HP/armor, weapons from
   UnitWeapons.slk (base + dice damage, cooldown, range, acquire), attack orders with chase/repath,

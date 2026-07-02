@@ -135,6 +135,208 @@ html, body {
   z-index: 2;
 }
 
+/* ---------------------------------------------------------------------------
+   In-game HUD (plan §10.1b). Placeholder skin via CSS; real BLP icons and the
+   map's minimap image plug in when an install is mounted. #ui is
+   pointer-events:none, so interactive HUD areas re-enable it themselves. */
+
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  font-family: var(--game-font);
+  user-select: none;
+}
+
+.hud-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  background: linear-gradient(#1b1912, #0c0b07 85%, rgba(12, 11, 7, 0));
+  border-bottom: 1px solid rgba(216, 180, 90, 0.25);
+  pointer-events: auto;
+}
+
+.hud-menus {
+  display: flex;
+  gap: 6px;
+}
+
+.hud-menu-btn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--gold);
+  background: linear-gradient(#2a2417, #171208);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.hud-menu-btn:disabled { opacity: 0.55; cursor: default; }
+
+.hud-clock {
+  width: 22px;
+  height: 22px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #cfe4ff, #274a86 65%, #101d38);
+  border: 1px solid var(--border);
+}
+
+.hud-resources {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+  color: #f4e8c8;
+}
+
+.hud-res { display: flex; align-items: center; gap: 5px; }
+.hud-res-icon { width: 16px; height: 16px; image-rendering: pixelated; }
+.hud-res-value { min-width: 42px; text-align: left; }
+
+.hud-res-tag {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  color: #111;
+}
+.hud-res-gold { background: #e8c04a; }
+.hud-res-lumber { background: #3f9c35; }
+.hud-res-supply { background: #c7a26a; }
+
+.hud-upkeep { font-size: 12px; color: #5be05a; }
+.hud-upkeep[data-level="L"] { color: #e0c146; }
+.hud-upkeep[data-level="H"] { color: #e05046; }
+
+.hud-console {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 172px;
+  display: grid;
+  grid-template-columns: 190px 1fr 170px 240px;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(rgba(20, 17, 10, 0) 0, #14110a 14px, #0c0a06);
+  border-top: 2px solid rgba(216, 180, 90, 0.35);
+  pointer-events: auto;
+}
+
+.hud-minimap {
+  position: relative;
+  width: 168px;
+  height: 156px;
+  align-self: center;
+  border: 1px solid var(--border);
+  background: #060806;
+  overflow: hidden;
+  cursor: crosshair;
+}
+.hud-minimap-img,
+.hud-minimap-dots {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.hud-minimap-img { image-rendering: pixelated; }
+
+.hud-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid rgba(216, 180, 90, 0.2);
+  border-radius: 4px;
+  background: rgba(8, 7, 4, 0.6);
+}
+
+.hud-portrait {
+  width: 84px;
+  height: 84px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  color: var(--gold);
+  background: radial-gradient(circle at 40% 30%, #2c2618, #100d07);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.hud-info-text { flex: 1; min-width: 0; }
+.hud-sel-name { font-size: 16px; color: #f4e8c8; margin-bottom: 6px; }
+.hud-sel-hp {
+  height: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.9);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.hud-sel-hp-fill { height: 100%; width: 0; background: #46e05a; }
+.hud-sel-hp-text { font-size: 12px; color: #cfc7ab; margin-top: 4px; }
+
+.hud-inventory {
+  padding: 6px 10px;
+  border: 1px solid rgba(216, 180, 90, 0.2);
+  border-radius: 4px;
+  background: rgba(8, 7, 4, 0.6);
+}
+.hud-inv-title { font-size: 12px; color: var(--gold); margin-bottom: 6px; text-align: center; }
+.hud-inv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+
+.hud-command {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid rgba(216, 180, 90, 0.2);
+  border-radius: 4px;
+  background: rgba(8, 7, 4, 0.6);
+}
+
+.hud-slot {
+  min-height: 34px;
+  background: linear-gradient(#221d12, #12100a);
+  border: 1px solid rgba(216, 180, 90, 0.25);
+  border-radius: 3px;
+}
+
+.hud-cmd {
+  font: inherit;
+  font-size: 12px;
+  color: #e8dcb8;
+  cursor: pointer;
+}
+.hud-cmd:disabled { opacity: 0.35; cursor: default; }
+.hud-cmd:not(:disabled):hover { border-color: var(--gold); }
+.hud-cmd.armed {
+  border-color: #6fe06a;
+  box-shadow: 0 0 6px rgba(70, 224, 90, 0.5) inset;
+  color: #bff3b8;
+}
+
+body.order-armed #map { cursor: crosshair; }
+
 .unit-select.unit-hovered {
   border-color: rgba(70, 224, 90, 0.55);
   box-shadow: 0 0 4px rgba(70, 224, 90, 0.35);
