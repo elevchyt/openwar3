@@ -11,6 +11,48 @@ Blizzard assets** — and is **playable with zero assets** via placeholders (see
 
 ---
 
+## Progress snapshot (2026-07-02)
+
+Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3-viewer 5.12.0,
+patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
+
+**Done:**
+- **Phase 0** — Vite+TS scaffold, asset resolver (install→CC0→primitive), OPFS import, menu shell.
+- **Phase 1** — layered MPQ VFS + content profiles (TFT default). Import a WC3 folder, read any file.
+- **Phase 2** — placeholder heightmap terrain + fly camera (zero-asset fallback).
+- **Phase 3** — animated MDX unit rendering (dedicated `#model` canvas).
+- **Authentic maps** — `War3MapViewer` renders real terrain/textures/cliffs/water/doodads/units.
+- **Phase 4** — unit data registry (`src/data/units.ts`): merges the unit SLKs → 836 units.
+- **Phase 5 (vertical slice)** — our own headless sim (`src/sim/`): pathing grid (war3map.wpm +
+  stamped destructible/building footprints), A* move orders, unit movement with turn rate, circle
+  collision between ground units; air units ignore the grid and hold a fixed altitude; selection +
+  right-click move via `src/game/rts.ts`. Real unit stats (speed/collision/turnrate/moveheight).
+- **Phase 5.5** — game-setup **lobby** (`src/ui/lobby.ts`: per-slot controller/race/team) and
+  **melee init** (`mapViewer.startMelee`): spawns each race's starting units (hall + workers) at the
+  map's start locations, controllable.
+
+**Key gotchas (all worked around):** mdx-m3-viewer's MPQ header search took the *last* MPQ magic, so
+War3.mpq read an 18-file stub (patched to first match); its `War3MapViewer` solver has **two
+contracts** — base SLKs *and* cliff models load via `fetch()` so need **string URLs**, everything
+else takes `Promise<Uint8Array>`; `#ui` is `pointer-events:none` so full-screen overlays must set
+`pointer-events:auto`; a full-screen `backdrop-filter` over the live canvas freezes the compositor;
+`war3map.wpm` is terrain-only (trees/buildings block via their `pathTex`); maps may reference cliff
+types absent from `CliffTypes.slk` (fallback to `CLdi`).
+
+**Next steps (recommended order):**
+1. **Phase 6 — combat/gameplay:** health, attack (data already in registry: dmg/cooldown/range),
+   death, then resources (gold/lumber), building/training, tech tree. Melee-first.
+2. **Melee refinements:** starting gold/lumber + hero pick; remove `sloc` start-location marker
+   props; air-air separation; per-slot colors in the lobby; building placement footprint-aware.
+3. **Authentic menu UI (§10)** — user-deferred: render `MainMenu3D_Exp` background + BLP button
+   chrome/fonts (all readable now).
+4. Later: **Phase 7** JASS, **Phase 8** server-authoritative multiplayer, **Phase 9** CASC/RoC/Electron.
+
+**Unverified caveat:** all rendering/interaction is authored against the code but confirmed only by
+the developer in-browser (no browser in the build environment); headless tests cover the sim/parsers.
+
+---
+
 ## Decided technology stack
 
 | Concern | Decision |
