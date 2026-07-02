@@ -135,6 +135,8 @@ interface Entry {
   name: string;
   foodUsed: number;
   foodMade: number;
+  isHero: boolean;
+  level: number;
   modelPath: string; // for the HUD portrait
   baseScale: number; // model scale at full size (buildings scale up while built)
   curScale: number; // last uniform scale applied (avoid redundant sets)
@@ -180,23 +182,40 @@ export interface SelIcon {
   owner: number;
 }
 
-// A floating health bar drawn above a unit. One is pooled per visible unit so
-// HP bars are always on screen (WC3's "always show health bars"), not only for
-// the selected/hovered unit.
+// A floating status bar drawn above a unit: a hero level badge (left), an HP bar,
+// and a mana bar below it (for units with mana). Pooled, one per visible unit, so
+// bars are always on screen (WC3's "always show health bars").
 interface HpBar {
   root: HTMLDivElement;
-  fill: HTMLDivElement;
+  bars: HTMLDivElement;
+  level: HTMLDivElement;
+  hp: HTMLDivElement;
+  manaTrack: HTMLDivElement;
+  mana: HTMLDivElement;
 }
 
 function makeHpBar(): HpBar {
   const root = document.createElement("div");
   root.className = "unit-hpbar";
   root.hidden = true;
-  const fill = document.createElement("div");
-  fill.className = "unit-hpbar-fill";
-  root.appendChild(fill);
+  const level = document.createElement("div");
+  level.className = "unit-hpbar-level";
+  const bars = document.createElement("div");
+  bars.className = "unit-hpbar-bars";
+  const hpTrack = document.createElement("div");
+  hpTrack.className = "unit-hpbar-track";
+  const hp = document.createElement("div");
+  hp.className = "unit-hpbar-fill";
+  hpTrack.appendChild(hp);
+  const manaTrack = document.createElement("div");
+  manaTrack.className = "unit-hpbar-track unit-hpbar-manatrack";
+  const mana = document.createElement("div");
+  mana.className = "unit-hpbar-mana";
+  manaTrack.appendChild(mana);
+  bars.append(hpTrack, manaTrack);
+  root.append(level, bars);
   document.body.appendChild(root);
-  return { root, fill };
+  return { root, bars, level, hp, manaTrack, mana };
 }
 
 export class RtsController {
@@ -372,6 +391,8 @@ export class RtsController {
         name: def?.name ?? unit.row?.string("unitid") ?? "Unit",
         foodUsed: def?.foodUsed ?? 0,
         foodMade: def?.foodMade ?? 0,
+        isHero: def?.isHero ?? false,
+        level: def?.level ?? 0,
         modelPath: def?.model ?? "",
         baseScale: def?.modelScale || 1,
         curScale: def?.modelScale || 1,
@@ -433,6 +454,8 @@ export class RtsController {
       name: def.name,
       foodUsed: def.foodUsed,
       foodMade: def.foodMade,
+      isHero: def.isHero,
+      level: def.level,
       modelPath: def.model,
       baseScale: def.modelScale || 1,
       curScale: def.modelScale || 1,
@@ -1139,10 +1162,25 @@ export class RtsController {
       const bar = this.hpBars[n] ?? (this.hpBars[n] = makeHpBar());
       n++;
       const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
-      bar.fill.style.width = `${frac * 100}%`;
-      bar.fill.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+      bar.hp.style.width = `${frac * 100}%`;
+      bar.hp.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+      // Mana bar (units/heroes with a mana pool).
+      if (u.maxMana > 0) {
+        bar.manaTrack.hidden = false;
+        bar.mana.style.width = `${Math.max(0, Math.min(1, u.mana / u.maxMana)) * 100}%`;
+      } else {
+        bar.manaTrack.hidden = true;
+      }
+      // Hero level badge to the left of the bars.
+      if (e.isHero && e.level > 0) {
+        bar.level.hidden = false;
+        bar.level.textContent = String(e.level);
+      } else {
+        bar.level.hidden = true;
+      }
       bar.root.hidden = false;
-      bar.root.style.width = `${Math.max(22, Math.min(64, ry * 1.7))}px`;
+      // Bar width tracks the unit/building on-screen size (≈ its footprint).
+      bar.bars.style.width = `${Math.max(20, Math.min(140, ry * 2))}px`;
       bar.root.style.left = `${sx / dpr}px`;
       bar.root.style.top = `${(h - sy) / dpr - (ry + 14)}px`; // gl y-up → css y-down
     }

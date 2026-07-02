@@ -1300,11 +1300,12 @@ export class MapViewerScene {
       document.head.appendChild(this.cursorStyleEl);
     }
     // Normal = the WC3 arrow everywhere; when an order is armed (attack-move,
-    // patrol, a skill target, …) show a crosshair like WC3's targeting cursor.
+    // patrol, a skill/rally/repair target, …) show WC3's green targeting reticle.
     // The armed selector is more specific, so it wins while `order-armed` is set.
+    const target = targetReticle();
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
-      `body.in-game.order-armed, body.in-game.order-armed * { cursor: crosshair !important; }`;
+      `body.in-game.order-armed, body.in-game.order-armed * { cursor: url(${target}) 14 14, crosshair !important; }`;
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
@@ -1594,6 +1595,37 @@ function standSequence(seqs: Array<{ name: string }>): number {
   if (anyStand >= 0) return anyStand;
   const nonBirth = seqs.findIndex((s) => !/birth|death|decay|dissipate/i.test(s.name));
   return nonBirth >= 0 ? nonBirth : seqs.length ? 0 : -1;
+}
+
+// WC3-style green targeting reticle (four corner brackets + centre pip) as a
+// 28×28 data URL, used as the mouse cursor while an order is armed. Cached.
+let targetReticleCache: string | null = null;
+function targetReticle(): string {
+  if (targetReticleCache) return targetReticleCache;
+  const s = 28;
+  const c = document.createElement("canvas");
+  c.width = s;
+  c.height = s;
+  const ctx = c.getContext("2d")!;
+  ctx.strokeStyle = "#48ff48";
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  const m = 3, len = 8, e = s - m; // margin, bracket length, far edge
+  const corner = (x: number, y: number, dx: number, dy: number) => {
+    ctx.beginPath();
+    ctx.moveTo(x, y + dy * len);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x + dx * len, y);
+    ctx.stroke();
+  };
+  corner(m, m, 1, 1); // top-left
+  corner(e, m, -1, 1); // top-right
+  corner(m, e, 1, -1); // bottom-left
+  corner(e, e, -1, -1); // bottom-right
+  ctx.fillStyle = "#48ff48";
+  ctx.fillRect(s / 2 - 1, s / 2 - 1, 2, 2); // centre pip
+  targetReticleCache = c.toDataURL();
+  return targetReticleCache;
 }
 
 // Quaternion for a rotation `angle` about +Z (WC3 units are Z-up), into `out`.
