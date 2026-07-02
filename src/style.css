@@ -506,10 +506,12 @@ body.in-game .menu-panel { display: none; }
 }
 .order-reticle.reticle { transform: translate(-50%, -50%); } /* centred on the point */
 .order-reticle.hand { transform: translate(-3px, -3px); } /* hotspot near the tip */
+/* Pulse the COLOUR intensity only — never opacity, never size. brightness()
+   glows the tint brighter and back; opacity stays 1 the whole time. */
 .order-reticle.pulse { animation: reticle-pulse 0.8s ease-in-out infinite; }
 @keyframes reticle-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.85); }
 }
 
 /* Drag-box selection rectangle (WC3 green marquee). */

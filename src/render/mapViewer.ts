@@ -752,7 +752,7 @@ export class MapViewerScene {
   // Uniform size for ALL selection/hover/order circles (constant width + ring
   // thickness), and a tiny lift so they sit just above the terrain.
   private static readonly CIRCLE_SCALE = 1.2;
-  private static readonly CIRCLE_LIFT = 3;
+  private static readonly CIRCLE_LIFT = 13; // sit the rings a bit higher (units + buildings)
   // Camera zoom limits (world units of camera distance), WC3-like — not the huge
   // free range we had. MELEE_START opens a touch more zoomed out than before.
   private static readonly ZOOM_MIN = 1500;
@@ -1620,7 +1620,9 @@ export class MapViewerScene {
     let colorKey: "green" | "yellow" | "red" = "green";
     if (mode) {
       kind = "reticle";
-      if (mode === "attack") colorKey = hover.has && hover.category === "enemy" ? "red" : "green";
+      // The Attack order shows a RED reticle (WC3), the other armed orders green
+      // (yellow while hovering a unit for a move-type order).
+      if (mode === "attack") colorKey = "red";
       else colorKey = hover.has ? "yellow" : "green";
     } else if (hover.has) {
       kind = "hand";

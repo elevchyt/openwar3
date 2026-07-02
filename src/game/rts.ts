@@ -620,24 +620,25 @@ export class RtsController {
         e.unit.instance.setUniformScale(e.baseScale);
       }
       const seq = this.pickSequence(e.anims, u);
+      const isAttack = seq >= 0 && seq === e.anims.attack;
       if (seq !== e.curSeq && seq >= 0) {
         e.curSeq = seq;
         // Non-stand state prevents mdx-m3-viewer's auto-stand override.
         e.unit.state = seq === e.anims.stand ? IDLE : WALK;
         e.unit.instance.setSequence(seq);
-        e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
+        // The attack clip plays ONCE per swing (handled below); everything loops.
+        e.unit.instance.setSequenceLoopMode(isAttack ? LOOP_NEVER : LOOP_ALWAYS);
+        if (isAttack) e.lastSwingSeq = u.swingSeq; // this play already covers the current swing
       }
-      // Restart the attack clip at the start of each swing so its throw/strike
-      // gesture lines up with the damage-point-timed hit/projectile (else the
-      // looping clip drifts out of sync over repeated attacks).
-      if (u.swingSeq !== e.lastSwingSeq) {
+      // Play the attack animation exactly once per swing — restart it on each new
+      // swing so its throw/strike gesture matches the damage-point-timed hit or
+      // projectile. A free-running LOOP_ALWAYS clip replayed the throw several
+      // times per cooldown (obvious on slow ranged heroes like the Archmage).
+      if (isAttack && u.inCombat && u.swingSeq !== e.lastSwingSeq) {
         e.lastSwingSeq = u.swingSeq;
-        if (u.inCombat && seq === e.anims.attack && e.anims.attack >= 0) {
-          e.unit.instance.setSequence(e.anims.attack);
-          e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
-          e.unit.state = WALK;
-          e.curSeq = e.anims.attack;
-        }
+        e.unit.instance.setSequence(e.anims.attack);
+        e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+        e.unit.state = WALK;
       }
     }
     this.updateHealthBars();
@@ -1193,56 +1194,83 @@ export class RtsController {
     this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move-order feedback
   }
 
-  /** Spread a group's move destination into a formation: each unit gets its own
-   *  free spot around the target from the start, so they don't all try to squeeze
-   *  onto the same tile. Concentric hex-ish rings, snapped to walkable cells,
-   *  greedily assigned nearest-unit-to-nearest-slot to minimise crossing. */
+  /** Give each unit in the group its OWN destination tile so they don't pile onto
+   *  one spot. Two strategies: a spread-out group keeps its shape (the whole
+   *  formation is translated so its centroid lands on the target — units move in
+   *  parallel and don't cross/bump); a tightly-packed group fans out into
+   *  concentric rings. Every target is claimed as a distinct walkable cell. */
   private groupTargets(ids: number[], tx: number, ty: number): Map<number, [number, number]> {
     const out = new Map<number, [number, number]>();
-    if (ids.length <= 1) {
-      for (const id of ids) out.set(id, [tx, ty]);
+    const list = ids
+      .map((id) => ({ id, u: this.sim.units.get(id), e: this.byId.get(id) }))
+      .filter((x): x is { id: number; u: SimUnit; e: Entry | undefined } => !!x.u);
+    if (list.length <= 1) {
+      for (const { id } of list) out.set(id, [tx, ty]);
       return out;
     }
     const grid = this.sim.grid;
-    // Spacing ≈ two collision diameters so units aren't packed skin-to-skin.
-    let spacing = 64;
-    for (const id of ids) {
-      const u = this.sim.units.get(id);
-      if (u) spacing = Math.max(spacing, u.radius * 2 + 16);
-    }
-    const slots: Array<[number, number]> = [];
-    for (let ring = 0; slots.length < ids.length && ring < 24; ring++) {
-      if (ring === 0) {
-        slots.push([tx, ty]);
-        continue;
+    // Slot spacing ≈ the largest member's DRAWN footprint (selection radius), so
+    // models don't visually overlap — not merely their collision hulls.
+    let spacing = 80;
+    for (const { u, e } of list) spacing = Math.max(spacing, (e?.selRadius ?? u.radius) * 2 + 24);
+
+    // Claim a distinct, walkable cell near a world point (spiral out from it).
+    const used = new Set<number>();
+    const claim = (wx: number, wy: number): [number, number] => {
+      const [c0x, c0y] = grid.worldToCell(wx, wy);
+      for (let r = 0; r <= 12; r++) {
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring perimeter only
+            const gx = c0x + dx, gy = c0y + dy;
+            const key = gy * grid.width + gx;
+            if (used.has(key) || !grid.walkable(gx, gy)) continue;
+            used.add(key);
+            return grid.cellToWorld(gx, gy);
+          }
+        }
       }
+      return [wx, wy];
+    };
+
+    // Group centroid + how spread out it currently is.
+    let cx = 0, cy = 0;
+    for (const { u } of list) { cx += u.x; cy += u.y; }
+    cx /= list.length;
+    cy /= list.length;
+    const spread = Math.max(...list.map(({ u }) => Math.hypot(u.x - cx, u.y - cy)));
+
+    if (spread >= spacing * 0.6) {
+      // Spread group: preserve its shape, just translate onto the target. Assign
+      // nearest-to-target first so inner members take the inner cells.
+      const ordered = list.slice().sort((a, b) => Math.hypot(a.u.x - tx, a.u.y - ty) - Math.hypot(b.u.x - tx, b.u.y - ty));
+      for (const { id, u } of ordered) out.set(id, claim(tx + (u.x - cx), ty + (u.y - cy)));
+      return out;
+    }
+
+    // Packed group: fan out into concentric rings, nearest unit to nearest slot.
+    const slots: Array<[number, number]> = [];
+    for (let ring = 0; slots.length < list.length && ring < 24; ring++) {
+      if (ring === 0) { slots.push([tx, ty]); continue; }
       const n = ring * 6;
-      for (let i = 0; i < n && slots.length < ids.length; i++) {
+      for (let i = 0; i < n && slots.length < list.length; i++) {
         const a = (i / n) * Math.PI * 2;
         slots.push([tx + Math.cos(a) * ring * spacing, ty + Math.sin(a) * ring * spacing]);
       }
     }
-    // Snap each slot to a reachable cell near it.
-    const snapped = slots.map(([x, y]) => {
-      const [cx, cy] = grid.worldToCell(x, y);
-      const free = grid.nearestWalkable(cx, cy, 4);
-      return (free ? grid.cellToWorld(free[0], free[1]) : [x, y]) as [number, number];
-    });
-    // Greedy nearest assignment (centre-out).
-    const remaining = new Set(ids);
-    for (const slot of snapped) {
+    const remaining = new Set(list.map((x) => x.id));
+    for (const slot of slots) {
       if (!remaining.size) break;
       let best: number | null = null;
       let bestD = Infinity;
       for (const id of remaining) {
-        const u = this.sim.units.get(id);
-        if (!u) { remaining.delete(id); continue; }
+        const u = this.sim.units.get(id)!;
         const d = Math.hypot(u.x - slot[0], u.y - slot[1]);
         if (d < bestD) { bestD = d; best = id; }
       }
-      if (best !== null) { out.set(best, slot); remaining.delete(best); }
+      if (best !== null) { out.set(best, claim(slot[0], slot[1])); remaining.delete(best); }
     }
-    for (const id of remaining) out.set(id, [tx, ty]);
+    for (const id of remaining) out.set(id, claim(tx, ty));
     return out;
   }
 

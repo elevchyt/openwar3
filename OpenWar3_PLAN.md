@@ -17,6 +17,16 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 3 — reticle/anim/formation polish (2026-07-03, latest+16)** — the **Attack**
+  order's reticle is now always **red** (was green off-target). Cursor/reticle pulse **changes colour
+  intensity only** (`filter: brightness`) — never opacity, never size. **Ranged attack animation
+  fixed**: the attack clip now plays **once per swing** (LOOP_NEVER, restarted on each `swingSeq`
+  bump) instead of free-running LOOP_ALWAYS, so the Archmage's throw matches its projectile 1:1
+  (verified headlessly: swingSeq increments once per shot). **Group move formation** reworked: a
+  spread-out group keeps its shape (translated so its centroid lands on the target → parallel
+  movement, no crossing/bumping), a packed group fans into rings; every target is a **distinct
+  walkable cell**. Selection/hover/order **rings raised** a bit (CIRCLE_LIFT 3→13). 23 headless sim
+  checks pass; build clean.
 - **Feedback pass 2 — neutral passive / cursor / a-move (2026-07-03, latest+15)** — six
   follow-ups. **Neutral Passive (WC3 player 15)** entities — taverns, marketplaces, goblin
   labs/merchants, fountains, critters — are now seeded as static, **non-hostile** sim units
