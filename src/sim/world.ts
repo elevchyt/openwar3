@@ -34,6 +34,7 @@ export interface WorkerState {
 export interface BuildingState {
   constructionLeft: number; // seconds until built (0 = complete)
   buildTimeTotal: number; // full construction time (for the progress fraction)
+  builderId: number; // worker currently constructing (0 = none → progress halts)
   queue: Array<{ unitId: string; timeLeft: number; buildTime: number }>;
   rallyX: number; // trained units gather here (default: just south of the hall)
   rallyY: number;
@@ -103,6 +104,7 @@ export interface SimUnit {
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
+  constructing: number; // building id this worker is constructing (0 = none)
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -249,16 +251,52 @@ export class SimWorld {
     }
   }
 
+  /** Assign a worker to construct a building (walk there; progress advances
+   *  once it arrives). Called when the building is first placed and when a
+   *  worker is ordered to resume a halted construction. */
+  assignBuilder(workerId: number, buildingId: number): void {
+    const w = this.units.get(workerId);
+    const b = this.units.get(buildingId);
+    if (!w || !b?.building) return;
+    // Release any previous builder cleanly.
+    this.detachBuilder(workerId);
+    w.constructing = buildingId;
+    b.building.builderId = workerId;
+    // Walk to the building's near edge; construction begins on arrival.
+    const [ax, ay] = this.depotApproach(w, b);
+    w.order = "idle";
+    this.pathTo(w, ax, ay);
+  }
+
+  /** Stop a worker constructing (manual order, or death); halts progress. */
+  private detachBuilder(workerId: number): void {
+    const w = this.units.get(workerId);
+    if (!w || !w.constructing) return;
+    const b = this.units.get(w.constructing)?.building;
+    if (b && b.builderId === workerId) b.builderId = 0;
+    w.constructing = 0;
+  }
+
   /** Advance construction and training queues for all buildings. */
   private tickBuildings(dt: number): void {
     for (const u of this.units.values()) {
       const b = u.building;
       if (!b) continue;
       if (b.constructionLeft > 0) {
-        // Construction ramps HP from 10% to full over the build time.
-        b.constructionLeft = Math.max(0, b.constructionLeft - dt);
-        const done = 1 - b.constructionLeft / b.buildTimeTotal;
-        u.hp = u.maxHp * (0.1 + 0.9 * done);
+        // Only advance while a builder is assigned AND standing next to the
+        // site (WC3: construction halts if the worker wanders off). Progress
+        // resumes when a worker is re-tasked to build/repair it.
+        const builder = b.builderId ? this.units.get(b.builderId) : undefined;
+        const nearby =
+          builder && !builder.moving &&
+          Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96;
+        if (!builder) b.builderId = 0;
+        if (nearby) {
+          b.constructionLeft = Math.max(0, b.constructionLeft - dt);
+          const done = 1 - b.constructionLeft / b.buildTimeTotal;
+          u.hp = u.maxHp * (0.1 + 0.9 * done);
+          if (b.constructionLeft === 0) this.detachBuilder(b.builderId); // free the worker
+        }
         continue; // can't train while still being built
       }
       const job = b.queue[0];
@@ -309,6 +347,7 @@ export class SimWorld {
       | "atNode"
       | "noCollision"
       | "building"
+      | "constructing"
     >,
     building?: BuildingState | null,
   ): SimUnit {
@@ -343,6 +382,7 @@ export class SimWorld {
       atNode: false,
       noCollision: false,
       building: building ?? null,
+      constructing: 0,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -399,6 +439,7 @@ export class SimWorld {
     u.targetId = null;
     u.inCombat = false;
     u.noCollision = false; // manual control restores collision
+    this.detachBuilder(id); // wandering off halts the construction
     u.stuckT = 0;
     u.stuckRetries = 0;
     if (!this.pathTo(u, tx, ty)) {
@@ -417,6 +458,7 @@ export class SimWorld {
     u.order = "attack";
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
+    this.detachBuilder(id);
     return true;
   }
 
@@ -429,6 +471,7 @@ export class SimWorld {
       u.working = false;
       u.atNode = false;
       u.noCollision = false; // manual stop restores collision
+      this.detachBuilder(id);
       this.settle(u);
     }
   }
@@ -447,6 +490,7 @@ export class SimWorld {
     u.atNode = false;
     u.working = false;
     u.noCollision = false; // manual harvest order restores collision
+    this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
     this.pathToNode(u); // walk toward the node once; arrival latches atNode
@@ -793,6 +837,7 @@ export class SimWorld {
       const mine = this.mines.get(u.resId);
       if (mine) mine.busy = false; // don't wedge the mine shut forever
     }
+    if (u.constructing) this.detachBuilder(u.id); // free the halted construction
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
   }

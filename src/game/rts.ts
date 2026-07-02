@@ -17,6 +17,7 @@ interface Instance {
   setRotation(q: ArrayLike<number>): unknown;
   setSequence(i: number): unknown;
   setSequenceLoopMode(m: number): unknown;
+  setUniformScale(s: number): unknown;
   hide(): void;
   show(): void;
   model: { sequences: Array<{ name: string }> };
@@ -73,6 +74,7 @@ interface AnimSet {
   standLumber: number;
   walkLumber: number;
   chopLumber: number; // "Attack Lumber" — the chopping swing
+  build: number; // "Stand Work" — the hammering pose while constructing
 }
 
 function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
@@ -91,6 +93,7 @@ function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
     standLumber: or(find(/stand lumber/i), stand),
     walkLumber: or(find(/walk lumber/i), walk),
     chopLumber: or(find(/attack lumber/i), attack),
+    build: or(find(/stand work(?! gold| lumber)/i), or(find(/^stand work/i), attack)),
   };
 }
 
@@ -106,6 +109,8 @@ interface Entry {
   foodUsed: number;
   foodMade: number;
   modelPath: string; // for the HUD portrait
+  baseScale: number; // model scale at full size (buildings scale up while built)
+  curScale: number; // last uniform scale applied (avoid redundant sets)
   hidden: boolean; // instance hidden (worker inside a gold mine)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
 }
@@ -114,7 +119,6 @@ const WALK = 1, IDLE = 0;
 const CORPSE_TIME = 3; // seconds a corpse stays before being hidden
 const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
 const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData moveheight
-const PICK_Z = 60; // aim picking/markers near the unit's body, not its feet
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
@@ -229,6 +233,8 @@ export class RtsController {
         foodUsed: def?.foodUsed ?? 0,
         foodMade: def?.foodMade ?? 0,
         modelPath: def?.model ?? "",
+        baseScale: def?.modelScale || 1,
+        curScale: def?.modelScale || 1,
         hidden: false,
         curSeq: -1,
       };
@@ -249,7 +255,7 @@ export class RtsController {
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
-      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, queue: [], rallyX: x, rallyY: y - 200 }
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderId: 0, queue: [], rallyX: x, rallyY: y - 200 }
       : null;
     this.sim.add(
       {
@@ -287,6 +293,8 @@ export class RtsController {
       foodUsed: def.foodUsed,
       foodMade: def.foodMade,
       modelPath: def.model,
+      baseScale: def.modelScale || 1,
+      curScale: def.modelScale || 1,
       hidden: false,
       curSeq: -1,
     };
@@ -325,6 +333,19 @@ export class RtsController {
         } else {
           e.unit.instance.show();
         }
+      }
+      // A building under construction scales up from ~40% to full size — a
+      // stand-in for WC3's staged construction models (it looks like it rises).
+      if (u.building && u.building.constructionLeft > 0) {
+        const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
+        const s = e.baseScale * (0.4 + 0.6 * prog);
+        if (Math.abs(s - e.curScale) > 0.005) {
+          e.curScale = s;
+          e.unit.instance.setUniformScale(s);
+        }
+      } else if (e.curScale !== e.baseScale) {
+        e.curScale = e.baseScale;
+        e.unit.instance.setUniformScale(e.baseScale);
       }
       const seq = this.pickSequence(e.anims, u);
       if (seq !== e.curSeq && seq >= 0) {
@@ -367,6 +388,7 @@ export class RtsController {
           ? "lumber"
           : null
       : null;
+    if (u.constructing && !u.moving) return a.build; // hammering at a build site
     if (u.working) return a.chopLumber; // chopping a tree
     if (u.moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
     if (u.inCombat) return a.attack;
@@ -551,6 +573,11 @@ export class RtsController {
     if (picked !== null && picked !== this.selected) {
       const target = this.sim.units.get(picked);
       if (target && this.sim.hostile(sel, target) && this.sim.issueAttack(this.selected, picked)) return;
+      // Worker right-clicking a friendly under-construction building resumes it.
+      if (target && sel.worker && target.building && target.building.constructionLeft > 0 && target.owner === sel.owner) {
+        this.sim.assignBuilder(this.selected, picked);
+        return;
+      }
     }
     // screenToWorldRay/unproject expects window coords with a TOP-LEFT origin
     // (Y-down) — the opposite of worldToScreen (Y-up) used by selection.
@@ -616,24 +643,39 @@ export class RtsController {
     }
   }
 
-  /** Sim id of the unit nearest the cursor within the pick radius, if any. */
+  /** Sim id of the unit whose footprint the cursor is over. Uses each unit's
+   *  world-space collision radius projected to screen, so large units and
+   *  buildings are selectable anywhere on their body (not just dead-centre).
+   *  Ties break toward the smallest hit (a unit in front of a building wins). */
   private pickAt(cssX: number, cssY: number): number | null {
     const [gx, gy] = this.toGl(cssX, cssY);
     const viewport = this.host.viewport();
+    const dpr = this.dpr();
     let best: number | null = null;
-    let bestDist = 42 * this.dpr(); // pick radius in backing px
+    let bestScore = Infinity; // prefer the unit whose footprint we're most inside
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       this.world[0] = u.x;
       this.world[1] = u.y;
-      // Aim near the unit's body — including fly height, so air units are
-      // picked where they are drawn, not at their ground shadow.
-      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight + PICK_Z;
+      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
       this.host.camera.worldToScreen(this.screen, this.world, viewport);
-      const d = Math.hypot(this.screen[0] - gx, this.screen[1] - gy);
-      if (d < bestDist) {
-        bestDist = d;
-        best = e.simId;
+      const cx = this.screen[0];
+      const cy = this.screen[1];
+      // Project the unit's collision radius (world) to screen pixels.
+      this.world2.set(this.world);
+      this.world2[0] = u.x + Math.max(u.radius, e.selRadius * 0.5, 40);
+      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+      const rPx = Math.hypot(this.screen2[0] - cx, this.screen2[1] - cy) + 10 * dpr;
+      const dx = gx - cx;
+      // Models rise up from their base, so shift the hit-test up toward the body.
+      const dy = gy - cy + rPx * 0.6;
+      const d = Math.hypot(dx, dy);
+      if (d <= rPx) {
+        const score = d / rPx; // fraction into the footprint (smaller = better)
+        if (score < bestScore) {
+          bestScore = score;
+          best = e.simId;
+        }
       }
     }
     return best;

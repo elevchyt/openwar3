@@ -95,6 +95,7 @@ interface W3xViewer {
 interface SpawnInstance {
   setScene(scene: unknown): void;
   setTeamColor(id: number): void;
+  setUniformScale(s: number): void;
   hide(): void;
   show(): void;
   setSequence(i: number): void;
@@ -148,6 +149,7 @@ export class MapViewerScene {
   private lastSelected: number | null = null;
   private placement: { def: UnitDef; fp: Footprint | null; workerId: number } | null = null;
   private ghost: HTMLDivElement | null = null;
+  private pendingBuilds: Array<{ workerId: number; def: UnitDef; x: number; y: number }> = [];
   private meleeTeams = new Map<number, number>(); // owner slot → team
   private consoleSkinCache:
     | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
@@ -413,26 +415,29 @@ export class MapViewerScene {
     }
   }
 
-  private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<void> {
+  private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<number | null> {
     const map = this.viewer.map;
-    if (!map || !this.rts) return;
+    if (!map || !this.rts) return null;
     // Buildings snap to the pathing grid so their stamped footprint lands on
     // whole cells (WC3 building placement is grid-aligned).
     const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
     if (fp && this.grid) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
 
     const model = await this.viewer.load(def.model, this.solver);
-    if (!model) return;
+    if (!model) return null;
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
     instance.setTeamColor(owner); // player slot doubles as team color for now
-    this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team, constructionTime); // face south
+    const simId = this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team, constructionTime); // face south
 
     // Buildings block pathing: stamp their footprint so units route around them.
     if (fp && this.grid) stampFootprint(this.grid, fp, x, y);
+    return simId;
   }
 
-  /** Place the building being positioned at the cursor, if valid and affordable. */
+  /** Place the building being positioned at the cursor, if valid and affordable.
+   *  The structure is NOT spawned yet — the worker walks to the site and the
+   *  building rises only once it arrives (see tickPendingBuild). */
   private placeBuilding(cssX: number, cssY: number): void {
     const p = this.placement;
     if (!p || !this.rts || !this.grid) return;
@@ -445,10 +450,31 @@ export class MapViewerScene {
     if (stash.gold < p.def.goldCost || stash.lumber < p.def.lumberCost) return;
     stash.gold -= p.def.goldCost;
     stash.lumber -= p.def.lumberCost;
-    void this.spawnUnit(p.def, x, y, this.localPlayer, this.teamOf(this.localPlayer), p.def.buildTime || 60);
     this.rts.moveSelectedTo(x, y); // send the worker to the site
+    this.pendingBuilds.push({ workerId: p.workerId, def: p.def, x, y });
     this.cardPage = "root";
     this.cancelPlacement();
+  }
+
+  /** When a pending-build worker reaches its site, raise the building (under
+   *  construction) and attach the worker as its builder. */
+  private tickPendingBuild(): void {
+    if (!this.rts || !this.pendingBuilds.length) return;
+    const world = this.rts.simWorld;
+    for (let i = this.pendingBuilds.length - 1; i >= 0; i--) {
+      const pb = this.pendingBuilds[i];
+      const w = world.units.get(pb.workerId);
+      if (!w) {
+        this.pendingBuilds.splice(i, 1); // worker died en route
+        continue;
+      }
+      const near = Math.hypot(w.x - pb.x, w.y - pb.y) < 160 && !w.moving;
+      if (!near) continue;
+      this.pendingBuilds.splice(i, 1);
+      void this.spawnUnit(pb.def, pb.x, pb.y, this.localPlayer, this.teamOf(this.localPlayer), pb.def.buildTime || 60).then((simId) => {
+        if (simId !== null) world.assignBuilder(pb.workerId, simId);
+      });
+    }
   }
 
   private teamOf(owner: number): number {
@@ -832,6 +858,7 @@ export class MapViewerScene {
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
       this.updatePortrait();
+      this.tickPendingBuild();
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
@@ -884,6 +911,7 @@ export class MapViewerScene {
     this.ghost?.remove();
     this.ghost = null;
     this.placement = null;
+    this.pendingBuilds = [];
     document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
