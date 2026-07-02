@@ -142,7 +142,7 @@ export class MapViewerScene {
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
   private portraitLoading = false;
-  private consoleSkinCache: { url: string; aspect: number } | null | undefined;
+  private consoleSkinCache: { consoleUrl: string; consoleAspect: number; topUrl: string } | null | undefined;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -231,7 +231,9 @@ export class MapViewerScene {
     const [cols, rows] = map.mapSize;
     const [ox, oy] = map.centerOffset;
     this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
-    this.distance = Math.max(cols, rows) * 128 * 0.9;
+    // Start near gameplay zoom rather than a whole-map overview — far better
+    // draw performance and closer to WC3's default camera.
+    this.distance = 2600;
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
@@ -363,6 +365,13 @@ export class MapViewerScene {
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
+    // Open on the local player's base at gameplay zoom.
+    const home = config.slots.find((s) => s.id === this.localPlayer);
+    if (home) {
+      this.target[0] = home.startX;
+      this.target[1] = home.startY;
+      this.distance = 1750;
+    }
     // Resolve "random" once per slot: roster and console skin must agree.
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
     this.localRace = races.get(this.localPlayer) ?? "human";
@@ -450,8 +459,11 @@ export class MapViewerScene {
     this.hud = new GameHud(ui, driver);
   }
 
-  /** Stitch the race's console tiles into one background texture. */
-  private consoleSkin(): { url: string; aspect: number } | null {
+  /** The console tiles are a texture ATLAS (verified by rendering it out):
+   *  the top ~55px strip is the resource-bar chrome with the clock socket, and
+   *  y≈160–512 is the bottom console (minimap frame, portrait arch, inventory,
+   *  command card). Crop the two pieces separately. */
+  private consoleSkin(): { consoleUrl: string; consoleAspect: number; topUrl: string } | null {
     if (this.consoleSkinCache !== undefined) return this.consoleSkinCache;
     const dirs: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
     const dir = dirs[this.localRace];
@@ -467,29 +479,28 @@ export class MapViewerScene {
     }
     const width = tiles.reduce((sum, t) => sum + t.width, 0);
     const height = tiles[0].height;
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d")!;
+    const atlas = document.createElement("canvas");
+    atlas.width = width;
+    atlas.height = height;
+    const ctx = atlas.getContext("2d")!;
     let x = 0;
     for (const tile of tiles) {
       ctx.drawImage(tile, x, 0);
       x += tile.width;
     }
-    // The 512-tall tiles are mostly transparent sky above the stone chrome —
-    // crop to the opaque part so the console doesn't cover half the screen.
-    const data = ctx.getImageData(0, 0, width, height).data;
-    let top = 0;
-    scan: for (; top < height; top++) {
-      for (let px = 3; px < width * 4; px += 64 * 4) {
-        if (data[top * width * 4 + px] > 16) break scan;
-      }
-    }
-    const cropped = document.createElement("canvas");
-    cropped.width = width;
-    cropped.height = height - top;
-    cropped.getContext("2d")!.drawImage(canvas, 0, -top);
-    this.consoleSkinCache = { url: cropped.toDataURL(), aspect: cropped.width / cropped.height };
+    const crop = (y0: number, h: number): string => {
+      const c = document.createElement("canvas");
+      c.width = width;
+      c.height = h;
+      c.getContext("2d")!.drawImage(atlas, 0, -y0);
+      return c.toDataURL();
+    };
+    const consoleY = Math.round(height * 0.3125); // 160/512
+    this.consoleSkinCache = {
+      topUrl: crop(0, Math.round(height * 0.107)), // 55/512
+      consoleUrl: crop(consoleY, height - consoleY),
+      consoleAspect: width / (height - consoleY),
+    };
     return this.consoleSkinCache;
   }
 
@@ -512,8 +523,9 @@ export class MapViewerScene {
     const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
     this.portraitLoading = true;
     const id = sel.id;
+    // Team glow follows the owner; 12 is the classic neutral (black) slot.
     this.portraitViewer
-      .load(path)
+      .load(path, sel.owner >= 0 ? sel.owner : 12)
       .then(() => {
         this.portraitFor = id;
         this.portraitViewer!.start();

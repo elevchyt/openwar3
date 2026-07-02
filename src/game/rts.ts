@@ -355,6 +355,7 @@ export class RtsController {
   selectedInfo(): {
     id: number;
     name: string;
+    owner: number;
     hp: number;
     maxHp: number;
     mana: number;
@@ -370,6 +371,7 @@ export class RtsController {
     return {
       id: e.simId,
       name: e.name,
+      owner: u.owner,
       hp: u.hp,
       maxHp: u.maxHp,
       mana: u.mana,
@@ -433,9 +435,11 @@ export class RtsController {
     if (!hit) return;
     // Workers right-clicking a resource start harvesting (WC3 smart order).
     if (sel.worker) {
-      const mine = this.sim.nearestMine(hit[0], hit[1], 160);
+      // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
+      // lands the ground ray well behind the trunk.
+      const mine = this.sim.nearestMine(hit[0], hit[1], 320);
       if (mine && sel.worker.gold && this.sim.issueHarvest(this.selected, "gold", mine.id)) return;
-      const tree = this.sim.nearestTree(hit[0], hit[1], 96);
+      const tree = this.sim.nearestTree(hit[0], hit[1], 140);
       if (tree && sel.worker.lumber && this.sim.issueHarvest(this.selected, "lumber", tree.id)) return;
     }
     this.sim.issueMove(this.selected, hit[0], hit[1]);

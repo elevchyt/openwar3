@@ -108,7 +108,14 @@ const REPATH_COOLDOWN = 0.5; // seconds a blocked chaser waits before repathing
 const GOLD_PER_TRIP = 10;
 const MINE_TIME = 1.0; // seconds a worker spends inside the mine
 const TREE_LUMBER = 50; // lumber a standard tree yields before falling
-const HARVEST_RANGE = 32; // gap to a tree/mine edge to start working
+// Trees block a 2×2-cell footprint and movers keep their own clearance, so the
+// closest reachable spot is ~2–3 cells from the trunk — the chop reach must
+// cover that or workers orbit forever without chopping.
+const TREE_RANGE = 72;
+const TREE_RADIUS = 16;
+// Workers enter the mine when they reach its footprint EDGE (Chebyshev — the
+// footprint is square; a circular test fires way too early on diagonals).
+const MINE_ENTER = 48;
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
 
@@ -500,8 +507,10 @@ export class SimWorld {
         this.stop(u.id);
         return;
       }
-      const gap = Math.hypot(mine.x - u.x, mine.y - u.y) - u.radius - mine.radius;
-      if (gap > HARVEST_RANGE) {
+      // Distance to the square footprint edge, not the bounding circle. The
+      // extra slack once stopped prevents flapping after the settle-snap.
+      const edgeGap = Math.max(Math.abs(mine.x - u.x), Math.abs(mine.y - u.y)) - mine.radius - u.radius;
+      if (edgeGap > (u.moving ? MINE_ENTER : MINE_ENTER + 32)) {
         this.chasePoint(u, mine.x, mine.y);
         return;
       }
@@ -529,8 +538,10 @@ export class SimWorld {
       }
       u.resId = tree.id;
     }
-    const gap = Math.hypot(tree.x - u.x, tree.y - u.y) - u.radius - 16; // trees ≈ 2×2 cells
-    if (gap > HARVEST_RANGE) {
+    const gap = Math.hypot(tree.x - u.x, tree.y - u.y) - u.radius - TREE_RADIUS;
+    // Hysteresis: settling snaps the worker up to ~22 units, so once chopping
+    // it keeps chopping — otherwise it flaps between walk and swing forever.
+    if (gap > (u.working ? TREE_RANGE + 32 : TREE_RANGE)) {
       u.working = false;
       this.chasePoint(u, tree.x, tree.y);
       return;

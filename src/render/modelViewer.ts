@@ -38,8 +38,16 @@ interface MdxInstance {
   setSequenceLoopMode(mode: number): void;
   setTeamColor(id: number): void;
 }
+interface MdxCamera {
+  position: Float32Array;
+  targetPosition: Float32Array;
+  fieldOfView: number;
+  nearClippingPlane: number;
+  farClippingPlane: number;
+}
 interface MdxModel {
   sequences: MdxSequence[];
+  cameras: MdxCamera[];
   bounds: { x: number; y: number; z: number; r: number };
   addInstance(): MdxInstance;
 }
@@ -83,7 +91,7 @@ export class ModelViewerScene {
   }
 
   /** Load an MDX by VFS path, attach an instance, and play idle/walk. */
-  async load(path: string): Promise<SequenceInfo[]> {
+  async load(path: string, teamColor = 0): Promise<SequenceInfo[]> {
     const bytes = await this.vfs.read(path);
 
     if (this.instance) {
@@ -98,7 +106,7 @@ export class ModelViewerScene {
     const instance = model.addInstance();
     instance.setScene(this.scene);
     instance.setSequenceLoopMode(2); // always loop
-    instance.setTeamColor(0);
+    instance.setTeamColor(teamColor);
     this.instance = instance;
 
     const sequences = this.sequences();
@@ -141,6 +149,14 @@ export class ModelViewerScene {
 
   private frameCamera(): void {
     if (!this.model) return;
+    // Portrait (and many unit) models ship their own camera aimed at the face —
+    // using it gives the authentic close-up instead of a distant bounds view.
+    const cam = this.model.cameras?.[0];
+    if (cam) {
+      this.scene.camera.perspective(cam.fieldOfView, this.aspect(), cam.nearClippingPlane || 1, cam.farClippingPlane || 10000);
+      this.scene.camera.moveToAndFace(cam.position, cam.targetPosition, new Float32Array([0, 0, 1]));
+      return;
+    }
     const b = this.model.bounds;
     const r = Math.max(b.r, 1);
     const to = new Float32Array([b.x, b.y, b.z]);

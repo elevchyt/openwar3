@@ -31,8 +31,27 @@ export interface HudDriver {
   icon(kind: "gold" | "lumber" | "supply"): string | null;
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
   minimapImage(): HTMLCanvasElement | null;
-  /** Stitched race console texture (UI\Console\<Race>UITile01–04) or null. */
-  consoleSkin(): { url: string; aspect: number } | null;
+  /** Race console atlas crops (UI\Console\<Race>UITile01–04) or null. */
+  consoleSkin(): { consoleUrl: string; consoleAspect: number; topUrl: string } | null;
+}
+
+// Zone rectangles measured from the rendered console atlas (fractions of the
+// cropped console art, 1600×352): minimap frame, portrait arch, info area,
+// inventory, command card. FDF parsing will make this exact later.
+const ZONES = {
+  minimap: [1.1, 16.5, 17.4, 82.0],
+  portrait: [26.9, 30.5, 9.9, 68.0],
+  info: [38.4, 34.0, 24.5, 60.0],
+  inventory: [64.1, 29.0, 9.9, 69.0],
+  command: [76.4, 19.0, 22.4, 79.0],
+} as const;
+
+function place(el: HTMLElement, zone: readonly [number, number, number, number]): void {
+  el.classList.add("hud-zone");
+  el.style.left = `${zone[0]}%`;
+  el.style.top = `${zone[1]}%`;
+  el.style.width = `${zone[2]}%`;
+  el.style.height = `${zone[3]}%`;
 }
 
 // WC3 player colors by slot.
@@ -69,7 +88,8 @@ export class GameHud {
   constructor(parent: HTMLElement, private driver: HudDriver) {
     this.root = document.createElement("div");
     this.root.className = "hud";
-    this.root.append(this.buildTopBar(), this.buildConsole());
+    const skin = driver.consoleSkin();
+    this.root.append(this.buildTopBar(skin), this.buildConsole(skin));
     parent.appendChild(this.root);
     window.addEventListener("keydown", this.onKey);
   }
@@ -122,9 +142,13 @@ export class GameHud {
 
   // --- construction ---------------------------------------------------------
 
-  private buildTopBar(): HTMLDivElement {
+  private buildTopBar(skin: { topUrl: string } | null): HTMLDivElement {
     const bar = document.createElement("div");
     bar.className = "hud-top";
+    if (skin) {
+      bar.classList.add("hud-top-skinned");
+      bar.style.backgroundImage = `url(${skin.topUrl})`;
+    }
 
     const menus = document.createElement("div");
     menus.className = "hud-menus";
@@ -182,16 +206,26 @@ export class GameHud {
     return this.portraitCanvasEl;
   }
 
-  private buildConsole(): HTMLDivElement {
+  private buildConsole(skin: { consoleUrl: string; consoleAspect: number } | null): HTMLDivElement {
     const console_ = document.createElement("div");
     console_.className = "hud-console";
-    const skin = this.driver.consoleSkin();
+    const minimap = this.buildMinimap();
+    const { portraitWrap, infoText } = this.buildInfoPanel();
+    const inventory = this.buildInventory(!!skin);
+    const command = this.buildCommandCard();
+    console_.append(minimap, portraitWrap, infoText, inventory, command);
     if (skin) {
       console_.classList.add("hud-console-skinned");
-      console_.style.backgroundImage = `url(${skin.url})`;
-      console_.style.height = `calc(100vw / ${skin.aspect})`;
+      console_.style.backgroundImage = `url(${skin.consoleUrl})`;
+      // Natural height at full width, capped like WC3-on-widescreen (the art
+      // squishes vertically a little, exactly as the original did).
+      console_.style.height = `min(${(100 / skin.consoleAspect).toFixed(2)}vw, 31vh)`;
+      place(minimap, ZONES.minimap);
+      place(portraitWrap, ZONES.portrait);
+      place(infoText, ZONES.info);
+      place(inventory, ZONES.inventory);
+      place(command, ZONES.command);
     }
-    console_.append(this.buildMinimap(), this.buildInfoPanel(), this.buildInventory(), this.buildCommandCard());
     return console_;
   }
 
@@ -218,9 +252,7 @@ export class GameHud {
     return box;
   }
 
-  private buildInfoPanel(): HTMLDivElement {
-    const panel = document.createElement("div");
-    panel.className = "hud-info";
+  private buildInfoPanel(): { portraitWrap: HTMLDivElement; infoText: HTMLDivElement } {
     // Portrait: an animated 3D bust (the _portrait.mdx model) with the HP and
     // mana readouts right under it, like the original console.
     this.portrait = document.createElement("div");
@@ -258,24 +290,26 @@ export class GameHud {
     portraitWrap.className = "hud-portrait-wrap";
     portraitWrap.append(this.portrait, bars);
 
-    const text = document.createElement("div");
-    text.className = "hud-info-text";
+    const infoText = document.createElement("div");
+    infoText.className = "hud-info-text";
     this.selName = document.createElement("div");
     this.selName.className = "hud-sel-name";
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
-    text.append(this.selName, this.selCarry);
-    panel.append(portraitWrap, text);
-    return panel;
+    infoText.append(this.selName, this.selCarry);
+    return { portraitWrap, infoText };
   }
 
-  private buildInventory(): HTMLDivElement {
+  private buildInventory(skinned: boolean): HTMLDivElement {
     const inv = document.createElement("div");
     inv.className = "hud-inventory";
-    const title = document.createElement("div");
-    title.className = "hud-inv-title";
-    title.textContent = "Inventory";
-    inv.appendChild(title);
+    if (!skinned) {
+      // The console art draws its own inventory title.
+      const title = document.createElement("div");
+      title.className = "hud-inv-title";
+      title.textContent = "Inventory";
+      inv.appendChild(title);
+    }
     const grid = document.createElement("div");
     grid.className = "hud-inv-grid";
     for (let i = 0; i < 6; i++) grid.appendChild(document.createElement("div")).className = "hud-slot";
