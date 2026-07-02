@@ -6,7 +6,7 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
-import { PathingGrid, parseWpm } from "../sim/pathing";
+import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, type Footprint } from "../sim/destructibles";
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
 import { makeHeightSampler } from "../game/heightmap";
@@ -647,9 +647,9 @@ export class MapViewerScene {
     }
   }
 
-  private static readonly TREE_PULSE = 0.6; // seconds of the yellow tint
+  private static readonly TREE_PULSE = 1.1; // seconds of the yellow tint (longer = more visible)
 
-  /** Pulse a harvested tree yellow → back to normal (matches the ring flash). */
+  /** Pulse a harvested tree a bright, saturated yellow → back to normal. */
   private updateTreePulses(dt: number): void {
     const map = this.viewer.map;
     for (const p of this.rts?.drainTreePulses() ?? []) {
@@ -660,8 +660,9 @@ export class MapViewerScene {
       const tp = this.treePulses[i];
       tp.t -= dt;
       const f = Math.max(0, tp.t / MapViewerScene.TREE_PULSE); // 1 → 0
-      // Lerp normal(white) → yellow by f, so it starts yellow and fades to white.
-      tp.inst.setVertexColor([1, 1 - 0.15 * f, 1 - 0.8 * f, 1]);
+      // Lerp normal(white) → an OVER-BRIGHT saturated yellow by f (starts strong
+      // yellow, fades to white). RGB >1 glows; the blue channel drops near 0.
+      tp.inst.setVertexColor([1 + 0.6 * f, 1 + 0.25 * f, 1 - 0.92 * f, 1]);
       if (tp.t <= 0) {
         tp.inst.setVertexColor([1, 1, 1, 1]); // restore
         this.treePulses.splice(i, 1);
@@ -1458,8 +1459,12 @@ export class MapViewerScene {
           let sy = t.y;
           if (this.grid) {
             const [cx, cy] = this.grid.worldToCell(t.x, t.y);
-            const free = this.grid.nearestWalkable(cx, cy, 10);
-            if (free) [sx, sy] = this.grid.cellToWorld(free[0], free[1]);
+            // Place the unit on the nearest tile its OWN footprint fits on (a
+            // Knight needs more room than a Footman), not just any single free
+            // cell — otherwise big units spawned clipping the building/each other.
+            const n = footprintCells(d.collision || 16);
+            const spot = this.grid.nearestFit(cx, cy, n, 16) ?? this.grid.nearestWalkable(cx, cy, 16);
+            if (spot) [sx, sy] = this.grid.cellToWorld(spot[0], spot[1]);
           }
           const rx = t.rallyX;
           const ry = t.rallyY;

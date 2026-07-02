@@ -17,6 +17,20 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 4 — formation/spawn/combat/HUD (2026-07-03, latest+17)** — **Bars fixed above
+  HUD**: `#ui` was `z-index:1`, trapping the HUD's own `z-index:3` in a low stacking context so the
+  floating unit bars (`z-index:2` on body) leaked on top of the console — raised `#ui` to 3 (it's
+  transparent, so bars still show over the map). **Group move tightened**: the formation is now a
+  COMPACT ring centred on the click with collision-based spacing (`radius*2+20`) — units converge on
+  the target instead of fanning out wide (the previous `selRadius`-based spacing was way too big).
+  **Trained units spawn to fit their size**: new `grid.nearestFit(cx,cy,n)` finds the nearest tile
+  an n×n footprint fits on (`footprintCells(collision)`), so a Knight no longer clips the building.
+  **Melee jiggle fixed**: added attack hysteresis (`ATTACK_LEASH=48`) — once in range a unit won't
+  re-chase until the target moves well past weapon range, killing the walk↔attack flip-flop at the
+  boundary. **Tree feedback louder**: harvest ring bigger (48→76) and the tree pulse is a brighter,
+  more saturated over-bright yellow held longer (0.6s→1.1s). **Worker lumber retarget** made
+  immediate on felling its own tree (verified it already retargeted next-tick; now no idle frame).
+  23 sim + 5 tree/fit headless checks pass; build clean.
 - **Feedback pass 3 — reticle/anim/formation polish (2026-07-03, latest+16)** — the **Attack**
   order's reticle is now always **red** (was green off-target). Cursor/reticle pulse **changes colour
   intensity only** (`filter: brightness`) — never opacity, never size. **Ranged attack animation

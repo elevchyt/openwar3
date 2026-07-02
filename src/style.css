@@ -709,7 +709,11 @@ body.in-game .menu-panel { display: none; }
 #ui {
   position: fixed;
   inset: 0;
-  z-index: 1;
+  /* Above the floating unit bars (z-index 2) so the opaque HUD console occludes
+     them — they were leaking on top of the console because #ui was at z-index 1,
+     trapping the HUD's own z-index:3 inside a lower stacking context. #ui itself
+     is transparent, so bars still show through over the map. */
+  z-index: 3;
   display: flex;
   justify-content: flex-end;
   align-items: center;

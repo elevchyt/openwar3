@@ -1185,7 +1185,7 @@ export class RtsController {
         if (w?.worker?.lumber && this.sim.issueHarvest(id, "lumber", tree.id)) any = true;
       }
       if (any) {
-        this.flashTarget(tree.x, tree.y, 48); // trees ≈ 2×2 cells
+        this.flashTarget(tree.x, tree.y, 76); // a bigger ring around the tree
         this.treePulses.push({ x: tree.x, y: tree.y }); // pulse the tree yellow too
         return;
       }
@@ -1195,24 +1195,24 @@ export class RtsController {
   }
 
   /** Give each unit in the group its OWN destination tile so they don't pile onto
-   *  one spot. Two strategies: a spread-out group keeps its shape (the whole
-   *  formation is translated so its centroid lands on the target — units move in
-   *  parallel and don't cross/bump); a tightly-packed group fans out into
-   *  concentric rings. Every target is claimed as a distinct walkable cell. */
+   *  one spot — a COMPACT concentric-ring formation centred on the clicked point,
+   *  spaced just enough that collision hulls don't overlap (so the group converges
+   *  on the target rather than fanning out wide). Every slot is a distinct
+   *  walkable cell; nearest unit takes the nearest slot to minimise crossing. */
   private groupTargets(ids: number[], tx: number, ty: number): Map<number, [number, number]> {
     const out = new Map<number, [number, number]>();
     const list = ids
-      .map((id) => ({ id, u: this.sim.units.get(id), e: this.byId.get(id) }))
-      .filter((x): x is { id: number; u: SimUnit; e: Entry | undefined } => !!x.u);
+      .map((id) => ({ id, u: this.sim.units.get(id) }))
+      .filter((x): x is { id: number; u: SimUnit } => !!x.u);
     if (list.length <= 1) {
       for (const { id } of list) out.set(id, [tx, ty]);
       return out;
     }
     const grid = this.sim.grid;
-    // Slot spacing ≈ the largest member's DRAWN footprint (selection radius), so
-    // models don't visually overlap — not merely their collision hulls.
-    let spacing = 80;
-    for (const { u, e } of list) spacing = Math.max(spacing, (e?.selRadius ?? u.radius) * 2 + 24);
+    // A small gap on top of the collision diameter: tight, but not overlapping.
+    let radius = 16;
+    for (const { u } of list) radius = Math.max(radius, u.radius);
+    const spacing = radius * 2 + 20;
 
     // Claim a distinct, walkable cell near a world point (spiral out from it).
     const used = new Set<number>();
@@ -1233,22 +1233,7 @@ export class RtsController {
       return [wx, wy];
     };
 
-    // Group centroid + how spread out it currently is.
-    let cx = 0, cy = 0;
-    for (const { u } of list) { cx += u.x; cy += u.y; }
-    cx /= list.length;
-    cy /= list.length;
-    const spread = Math.max(...list.map(({ u }) => Math.hypot(u.x - cx, u.y - cy)));
-
-    if (spread >= spacing * 0.6) {
-      // Spread group: preserve its shape, just translate onto the target. Assign
-      // nearest-to-target first so inner members take the inner cells.
-      const ordered = list.slice().sort((a, b) => Math.hypot(a.u.x - tx, a.u.y - ty) - Math.hypot(b.u.x - tx, b.u.y - ty));
-      for (const { id, u } of ordered) out.set(id, claim(tx + (u.x - cx), ty + (u.y - cy)));
-      return out;
-    }
-
-    // Packed group: fan out into concentric rings, nearest unit to nearest slot.
+    // Concentric hex rings around the target (centre-out), just big enough.
     const slots: Array<[number, number]> = [];
     for (let ring = 0; slots.length < list.length && ring < 24; ring++) {
       if (ring === 0) { slots.push([tx, ty]); continue; }
@@ -1258,6 +1243,7 @@ export class RtsController {
         slots.push([tx + Math.cos(a) * ring * spacing, ty + Math.sin(a) * ring * spacing]);
       }
     }
+    // Nearest unit → nearest slot (centre-out), each on its own claimed cell.
     const remaining = new Set(list.map((x) => x.id));
     for (const slot of slots) {
       if (!remaining.size) break;

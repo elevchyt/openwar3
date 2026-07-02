@@ -144,4 +144,31 @@ export class PathingGrid {
     }
     return null;
   }
+
+  /** True if an n×n unit footprint centred on (cx,cy) fits entirely on walkable,
+   *  unreserved cells. */
+  footprintFits(cx: number, cy: number, n: number): boolean {
+    if (n <= 1) return this.walkable(cx, cy) && !this.isReserved(cx, cy);
+    const half = n >> 1;
+    for (let y = cy - half; y < cy - half + n; y++) {
+      for (let x = cx - half; x < cx - half + n; x++) {
+        if (!this.walkable(x, y) || this.isReserved(x, y)) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Nearest cell (spiralling out from cx,cy) where an n×n footprint fits — for
+   *  placing a freshly-trained unit on empty tiles it actually fits on. */
+  nearestFit(cx: number, cy: number, n: number, maxRadius = 24): [number, number] | null {
+    for (let r = 0; r <= maxRadius; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          if (this.footprintFits(cx + dx, cy + dy, n)) return [cx + dx, cy + dy];
+        }
+      }
+    }
+    return null;
+  }
 }

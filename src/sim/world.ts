@@ -155,6 +155,10 @@ const MOVE_MIN_DIST = 40;
 const TURN_FRAME = 0.03;
 const TURN_RATE_CAP = 0.2;
 const FACING_EPS = 0.35; // radians — must roughly face the target to swing
+// Hysteresis: once a unit is attacking in range, the target must move this much
+// FURTHER than weapon range before it gives chase again — stops the walk/attack
+// animation flip-flop (and position jiggle) at the range boundary.
+const ATTACK_LEASH = 48;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
@@ -896,7 +900,11 @@ export class SimWorld {
   private engage(u: SimUnit, t: SimUnit): void {
     const w = u.weapon!;
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    if (gap > w.range) {
+    // Hysteresis: while already in combat, tolerate a little extra distance before
+    // re-chasing, so a target that jostles across the range edge doesn't make the
+    // unit oscillate walk↔attack (the "jiggling" between animations).
+    const chaseGap = u.inCombat ? w.range + ATTACK_LEASH : w.range;
+    if (gap > chaseGap) {
       u.inCombat = false;
       this.chase(u, t);
       return;
@@ -1155,6 +1163,18 @@ export class SimWorld {
       if (tree.lumber <= 0) {
         this.trees.delete(tree.id);
         this.felled.push(tree);
+        // The tree we were chopping just fell. If we aren't full yet, walk to the
+        // nearest remaining tree straight away and keep gathering (no idle frame).
+        if (w.carryLumber < w.lumberCapacity) {
+          const next = this.nearestTree(u.x, u.y, RETARGET_RANGE);
+          if (next) {
+            u.resId = next.id;
+            u.atNode = false;
+            u.working = false;
+            this.pathTo(u, next.x, next.y);
+            return;
+          }
+        }
       }
     }
     if (w.carryLumber >= w.lumberCapacity) {
