@@ -65,6 +65,12 @@ export interface HudDriver {
   focusSelected(lock: boolean): void;
   setOrderMode(mode: OrderMode): void;
   stopSelected(): void;
+  /** Icons for a multi-unit selection grid (empty for a single unit / mine). */
+  selectionIcons(): Array<{ simId: number; icon: string; hpFrac: number; focused: boolean; owner: number }>;
+  /** Focus the sub-group containing a unit (grid icon click). */
+  focusUnit(simId: number): void;
+  /** Cycle focus to the next sub-group (Tab). */
+  cycleFocus(): void;
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
   /** Run a command-card button by id. */
@@ -134,6 +140,8 @@ export class GameHud {
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
   private selCarry!: HTMLDivElement;
+  private selGrid!: HTMLDivElement; // multi-selection icon grid
+  private selGridSlots: HTMLButtonElement[] = [];
   // Construction / training progress display.
   private progressWrap!: HTMLDivElement;
   private statusIcon!: HTMLDivElement;
@@ -212,6 +220,11 @@ export class GameHud {
 
   private onKey = (e: KeyboardEvent): void => {
     if (this.root.hidden) return;
+    if (e.key === "Tab") {
+      e.preventDefault(); // cycle the focused sub-group of a multi-selection
+      this.driver.cycleFocus();
+      return;
+    }
     if (e.key === "Escape") {
       this.driver.runCommand("cancel");
       return;
@@ -444,7 +457,21 @@ export class GameHud {
     this.selStats.append(this.attackStat.row, this.armorStat.row, this.attrRow);
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
-    infoText.append(this.selName, this.selSub, this.progressWrap, this.selStats, this.selCarry);
+    // Multi-selection grid: up to 24 unit icons (grouped by type), each with an
+    // HP bar; the focused sub-group is highlighted. Clicking focuses that group.
+    this.selGrid = document.createElement("div");
+    this.selGrid.className = "hud-sel-grid";
+    this.selGrid.hidden = true;
+    for (let i = 0; i < 24; i++) {
+      const slot = document.createElement("button");
+      slot.className = "hud-sel-icon";
+      const bar = document.createElement("div");
+      bar.className = "hud-sel-icon-hp";
+      slot.appendChild(bar);
+      this.selGridSlots.push(slot);
+      this.selGrid.appendChild(slot);
+    }
+    infoText.append(this.selName, this.selSub, this.progressWrap, this.selStats, this.selCarry, this.selGrid);
     return { portraitWrap, infoText };
   }
 
@@ -554,6 +581,12 @@ export class GameHud {
       this.selName.textContent = sel.name;
       this.selHpText.textContent = sel.maxHp > 0 ? `${Math.ceil(sel.hp)} / ${sel.maxHp}` : "";
       this.selMpText.textContent = sel.maxMana > 0 ? `${Math.floor(sel.mana)} / ${sel.maxMana}` : "";
+      const icons = this.driver.selectionIcons();
+      if (icons.length > 0) {
+        this.showSelectionGrid(icons);
+        return;
+      }
+      this.selGrid.hidden = true;
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
       if (sel.isMine) {
@@ -631,7 +664,34 @@ export class GameHud {
       this.selStats.hidden = true;
       this.selCarry.textContent = "";
       this.progressWrap.hidden = true;
+      this.selGrid.hidden = true;
     }
+  }
+
+  /** Render the multi-selection grid; the focused sub-group is highlighted. */
+  private showSelectionGrid(icons: ReturnType<HudDriver["selectionIcons"]>): void {
+    this.selGrid.hidden = false;
+    this.selStats.hidden = true;
+    this.selSub.textContent = "";
+    this.progressWrap.hidden = true;
+    this.selCarry.hidden = true;
+    this.selGridSlots.forEach((slot, i) => {
+      const ic = icons[i];
+      if (!ic) {
+        slot.hidden = true;
+        slot.onclick = null;
+        return;
+      }
+      slot.hidden = false;
+      const url = ic.icon ? this.driver.blpUrl(ic.icon) : null;
+      slot.style.backgroundImage = url ? `url(${url})` : "";
+      slot.classList.toggle("focused", ic.focused);
+      const frac = Math.max(0, Math.min(1, ic.hpFrac));
+      const bar = slot.firstElementChild as HTMLDivElement;
+      bar.style.width = `${frac * 100}%`;
+      bar.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+      slot.onclick = () => this.driver.focusUnit(ic.simId);
+    });
   }
 
   private setIcon(el: HTMLDivElement, path: string): void {

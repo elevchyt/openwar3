@@ -169,6 +169,16 @@ const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
 // Max world distance from the click's ground point to a pickable unit. Gates out
 // far/behind-camera units that screen-projection alone would wrongly match.
 const PICK_WORLD_MAX = 700;
+const MAX_SELECT = 24; // WC3 control-group / selection cap
+
+/** One icon in the multi-selection grid. */
+export interface SelIcon {
+  simId: number;
+  icon: string; // BLP command icon path
+  hpFrac: number;
+  focused: boolean; // part of the currently-focused sub-group
+  owner: number;
+}
 
 // A floating health bar drawn above a unit. One is pooled per visible unit so
 // HP bars are always on screen (WC3's "always show health bars"), not only for
@@ -197,6 +207,7 @@ export class RtsController {
   // leader that drives the HUD (portrait, info panel, command card).
   private selected = new Set<number>();
   private primary: number | null = null;
+  private focusedKey = ""; // sub-group (type, or hero id) currently focused
   private selectedMine: number | null = null; // a selected gold mine (resource)
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
@@ -237,15 +248,78 @@ export class RtsController {
   /** Remove a unit from the selection (keeping the primary consistent). */
   private deselect(id: number): void {
     this.selected.delete(id);
-    if (this.primary === id) this.primary = this.selected.values().next().value ?? null;
+    if (this.primary === id) this.refocus(this.focusedKey);
+  }
+
+  // --- sub-group focus (multi-unit selection) -------------------------------
+
+  /** Grouping key: units group by type; each hero is its own group. */
+  private groupKeyOf(id: number): string {
+    const e = this.byId.get(id);
+    if (!e) return "";
+    return this.registry.get(e.typeId)?.isHero ? `h${id}` : e.typeId;
+  }
+
+  /** Distinct group keys in selection order (stable). */
+  private orderedGroups(): string[] {
+    const keys: string[] = [];
+    for (const id of this.selected) {
+      const k = this.groupKeyOf(id);
+      if (k && !keys.includes(k)) keys.push(k);
+    }
+    return keys;
+  }
+
+  private firstOfGroup(key: string): number | null {
+    for (const id of this.selected) if (this.groupKeyOf(id) === key) return id;
+    return null;
+  }
+
+  /** Recompute the focused group + primary from the current selection, keeping
+   *  `preferKey` focused if it still exists. */
+  private refocus(preferKey = ""): void {
+    const groups = this.orderedGroups();
+    this.focusedKey = preferKey && groups.includes(preferKey) ? preferKey : groups[0] ?? "";
+    this.primary = this.firstOfGroup(this.focusedKey);
+  }
+
+  /** Icons for the multi-selection grid (empty for a single unit / mine). */
+  selectionIcons(): SelIcon[] {
+    if (this.selected.size <= 1) return [];
+    const out: SelIcon[] = [];
+    for (const key of this.orderedGroups()) {
+      for (const id of this.selected) {
+        if (this.groupKeyOf(id) !== key) continue;
+        const u = this.sim.units.get(id);
+        const e = this.byId.get(id);
+        if (!u || !e) continue;
+        out.push({ simId: id, icon: this.registry.get(e.typeId)?.icon ?? "", hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1, focused: key === this.focusedKey, owner: u.owner });
+      }
+    }
+    return out;
+  }
+
+  /** Focus the sub-group containing a unit (grid click). */
+  focusUnit(simId: number): void {
+    if (!this.selected.has(simId)) return;
+    this.focusedKey = this.groupKeyOf(simId);
+    this.primary = this.firstOfGroup(this.focusedKey);
+  }
+
+  /** Cycle focus to the next sub-group (Tab). */
+  cycleFocus(): void {
+    const groups = this.orderedGroups();
+    if (groups.length <= 1) return;
+    const i = groups.indexOf(this.focusedKey);
+    this.focusedKey = groups[(i + 1) % groups.length];
+    this.primary = this.firstOfGroup(this.focusedKey);
   }
 
   /** Drop dead units from the selection and repoint the primary if it died. */
   private pruneSelection(): void {
-    for (const id of this.selected) if (!this.sim.units.has(id)) this.selected.delete(id);
-    if (this.primary !== null && !this.sim.units.has(this.primary)) {
-      this.primary = this.selected.values().next().value ?? null;
-    }
+    let changed = false;
+    for (const id of this.selected) if (!this.sim.units.has(id)) { this.selected.delete(id); changed = true; }
+    if (changed || (this.primary !== null && !this.sim.units.has(this.primary))) this.refocus(this.focusedKey);
     if (this.selectedMine !== null && !this.sim.mines.has(this.selectedMine)) this.selectedMine = null;
   }
 
@@ -493,8 +567,8 @@ export class RtsController {
     if (id !== null) {
       this.selected.clear();
       this.selected.add(id);
-      this.primary = id;
       this.selectedMine = null;
+      this.refocus();
       return;
     }
     // No unit under the cursor — a gold mine is clickable too (shows its gold).
@@ -534,9 +608,9 @@ export class RtsController {
     }
     if (picked.length === 0) return; // empty box: keep the current selection
     this.selected.clear();
-    for (const id of picked) this.selected.add(id);
-    this.primary = picked[0];
+    for (const id of picked.slice(0, MAX_SELECT)) this.selected.add(id); // WC3 cap
     this.selectedMine = null;
+    this.refocus();
   }
 
   /** Pointer move: show the ring + HP bar under the unit being hovered. */

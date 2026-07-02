@@ -529,6 +529,29 @@ body.in-game .menu-panel { display: none; }
 .hud-attr-icon { width: 20px; height: 20px; background-size: 100% 100%; background-repeat: no-repeat; }
 .hud-attr.primary span { color: #f4e8c8; font-weight: 700; }
 
+/* Multi-selection grid: up to 24 unit icons (8 per row), grouped by type, each
+   with an HP bar; the focused sub-group has a gold outline. */
+.hud-sel-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+  padding: 2px;
+  align-content: start;
+}
+.hud-sel-icon {
+  position: relative;
+  aspect-ratio: 1;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-color: #07080b;
+  border: 1px solid rgba(216, 180, 90, 0.3);
+  border-radius: 2px;
+  padding: 0;
+  cursor: pointer;
+}
+.hud-sel-icon.focused { border-color: #f0c850; box-shadow: 0 0 5px rgba(240, 200, 80, 0.8); }
+.hud-sel-icon-hp { position: absolute; left: 1px; right: 1px; bottom: 1px; height: 3px; background: #46e05a; }
+
 /* Construction / training progress (WC3 info panel): status icon + gold label,
    a gold progress bar, and the queue slots. */
 .hud-progress-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 4px; }

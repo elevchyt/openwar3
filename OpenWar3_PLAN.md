@@ -17,6 +17,20 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Projectiles/repair/group-select/stat-icons (2026-07-02, latest+13)** — **projectiles fixed**:
+  the missile art lives in the per-race `UnitFunc.txt` (as `.mdl`), NOT `UnitWeapons.slk` (which has
+  no `Missileart` column) — fireballs/arrows/mortar shells now render. **Worker repair** (per
+  classic.battle.net: 35% of build cost over 150% of build time to full): sim `repair` order +
+  `RepairState`, Repair command button + smart right-click, spends gold/lumber over time (verified:
+  800 HP on a 100g building = 28g). **Multi-unit selection UI**: cap 24; the info panel shows a grid
+  of unit icons grouped by type (heroes unique) with HP bars; a focused sub-group (gold outline)
+  drives the portrait/stats/command-card; Tab cycles, click focuses. **Info-panel stat icons**: real
+  WC3 infocard BLPs for attack/armor type + hero STR/AGI/INT (primary highlighted) + level. **Tree
+  pulse**: harvesting lumber briefly tints the tree yellow. **Rally**: per-race `BTNRallyPoint` icon,
+  animated flag, only on unit-producing buildings; trained units spawn on a free tile beside the
+  building and walk to the rally. **Gold mine** selectable (neutral/yellow ring, gold shown). Sized
+  building selection rings (were invisible). Birth animation re-pinned post-update so a halted build
+  truly freezes. 32 sim checks pass; build clean. (User's manual HUD CSS preserved.)
 - **Building cancel explosion (2026-07-02, latest+12)** — the MPQs DO ship dedicated cancel-death
   effects distinct from the building's Death collapse: `Objects\Spawnmodels\<Race>\…CancelDeath.mdx`
   (`HCancelDeath`/`UCancelDeath`/`NECancelDeath`; Orc has none → reuse Human's). Added a generic
