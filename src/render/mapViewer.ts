@@ -142,6 +142,7 @@ export class MapViewerScene {
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
   private portraitLoading = false;
+  private cameraLock = false; // portrait held → camera follows the selected unit
   private consoleSkinCache: { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number } | null | undefined;
 
   private constructor(
@@ -448,11 +449,20 @@ export class MapViewerScene {
         this.target[0] = wx;
         this.target[1] = wy;
       },
+      focusSelected: (lock) => {
+        this.cameraLock = lock;
+        const pos = this.rts?.selectedPosition();
+        if (pos) {
+          this.target[0] = pos[0];
+          this.target[1] = pos[1];
+        }
+      },
       setOrderMode: (mode) => {
         if (this.rts) this.rts.orderMode = mode;
       },
       stopSelected: () => this.rts?.stopSelected(),
       icon: (kind) => this.resourceIcon(kind),
+      commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
     };
@@ -551,7 +561,11 @@ export class MapViewerScene {
       lumber: "UI\\Widgets\\ToolTips\\Human\\ToolTipLumberIcon.blp",
       supply: "UI\\Widgets\\ToolTips\\Human\\ToolTipSupplyIcon.blp",
     };
-    const path = paths[kind];
+    return this.blpIcon(paths[kind]);
+  }
+
+  /** Decode a BLP to a cached data URL for DOM use (icons). */
+  private blpIcon(path: string): string | null {
     let url = this.iconCache.get(path);
     if (url === undefined) {
       const bytes = this.vfs.rawBytes(path);
@@ -625,6 +639,17 @@ export class MapViewerScene {
   private updateCamera(): void {
     const scene = this.viewer.map?.worldScene;
     if (!scene) return;
+
+    // Portrait held: keep the camera locked onto the selected unit as it moves.
+    if (this.cameraLock) {
+      const pos = this.rts?.selectedPosition();
+      if (pos) {
+        this.target[0] = pos[0];
+        this.target[1] = pos[1];
+      } else {
+        this.cameraLock = false;
+      }
+    }
 
     // Pan the ground target relative to view yaw. WASD only outside a match —
     // in-game the letters belong to command hotkeys (M/A/S), WC3 pans with

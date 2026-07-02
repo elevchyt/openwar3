@@ -408,7 +408,11 @@ export class RtsController {
     maxHp: number;
     mana: number;
     maxMana: number;
+    armor: number;
+    damageMin: number;
+    damageMax: number;
     model: string;
+    isWorker: boolean;
     carryGold: number;
     carryLumber: number;
   } | null {
@@ -416,6 +420,7 @@ export class RtsController {
     const u = this.sim.units.get(this.selected);
     const e = this.byId.get(this.selected);
     if (!u || !e) return null;
+    const w = u.weapon;
     return {
       id: e.simId,
       name: e.name,
@@ -424,10 +429,22 @@ export class RtsController {
       maxHp: u.maxHp,
       mana: u.mana,
       maxMana: u.maxMana,
+      armor: u.armor,
+      // WC3 damage display: base + dice (min 1 each) … base + dice×sides.
+      damageMin: w ? w.damage + w.dice : 0,
+      damageMax: w ? w.damage + w.dice * w.sides : 0,
       model: e.modelPath,
+      isWorker: !!u.worker,
       carryGold: u.worker?.carryGold ?? 0,
       carryLumber: u.worker?.carryLumber ?? 0,
     };
+  }
+
+  /** World position of the selected unit (for the portrait-click camera focus). */
+  selectedPosition(): [number, number] | null {
+    if (this.selected === null) return null;
+    const u = this.sim.units.get(this.selected);
+    return u ? [u.x, u.y] : null;
   }
 
   /** Direct access to the headless sim (map wiring: trees/mines/stash). */

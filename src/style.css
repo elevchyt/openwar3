@@ -344,9 +344,34 @@ body.in-game .menu-panel { display: none; }
   border: none;
 }
 .hud-console-skinned .hud-cmd { font-size: 11px; }
-.hud-console-skinned .hud-info-text {
-  padding: 4px 8px;
+
+/* Command buttons show their BTN icon; the console art draws the frame around. */
+.hud-cmd {
+  background-size: cover;
+  background-position: center;
+  color: transparent;
 }
+.hud-cmd:not([style*="background-image"]) { color: #e8dcb8; }
+
+/* Ability tooltip floating above the command card. */
+.hud-command { position: relative; }
+.hud-tooltip {
+  position: absolute;
+  left: -4px;
+  bottom: calc(100% + 6px);
+  min-width: 190px;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: rgba(6, 8, 12, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  text-align: left;
+  pointer-events: none;
+  z-index: 6;
+}
+.hud-tooltip-title { font-size: 13px; color: #f4e8c8; margin-bottom: 3px; }
+.hud-tooltip-title b { color: var(--gold); font-weight: 700; }
+.hud-tooltip-desc { font-size: 12px; color: #c8c0a8; line-height: 1.35; }
 
 .hud-portrait {
   width: 96px;
@@ -355,18 +380,38 @@ body.in-game .menu-panel { display: none; }
   border: 1px solid var(--border);
   border-radius: 3px;
   overflow: hidden;
+  cursor: pointer;
 }
+.hud-portrait.empty { cursor: default; }
 .hud-portrait.empty .hud-portrait-canvas { visibility: hidden; }
 .hud-portrait-canvas { width: 100%; height: 100%; display: block; }
 
-/* HP/mana as coloured numbers below the portrait (no bars — like the original). */
-.hud-portrait-values { text-align: center; line-height: 1.25; }
-.hud-hp-value { font-size: 13px; color: #46e05a; }
-.hud-mp-value { font-size: 13px; color: #4a7cff; }
+/* HP/mana as coloured numbers below the portrait (no bars — like the original),
+   on a subtle dark plate so they stay readable over the console art. */
+.hud-portrait-values {
+  text-align: center;
+  line-height: 1.3;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.hud-portrait-values:empty { background: none; }
+.hud-hp-value { font-size: 13px; color: #46e05a; text-shadow: 0 1px 1px #000; }
+.hud-mp-value { font-size: 13px; color: #4a7cff; text-shadow: 0 1px 1px #000; }
+.hud-hp-value:empty, .hud-mp-value:empty { display: none; }
 
-.hud-info-text { flex: 1; min-width: 0; padding-top: 6px; }
-.hud-sel-name { font-size: 16px; color: #f4e8c8; margin-bottom: 6px; }
-.hud-sel-carry { font-size: 12px; color: #d8c88a; }
+/* Detail panel: dark rounded backdrop with the unit's name + damage/armor. */
+.hud-info-text {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(6, 8, 12, 0.72);
+}
+.hud-info-text:not(:has(.hud-sel-name:not(:empty))) { background: none; }
+.hud-sel-name { font-size: 16px; color: #f4e8c8; text-align: center; margin-bottom: 4px; }
+.hud-sel-stats { font-size: 12px; color: #cfc7ab; white-space: pre-line; line-height: 1.4; }
+.hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
 
 
 .hud-inventory {

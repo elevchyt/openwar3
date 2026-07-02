@@ -13,6 +13,9 @@ export interface HudSelection {
   maxHp: number;
   mana: number;
   maxMana: number;
+  armor: number;
+  damageMin: number;
+  damageMax: number;
   carryGold: number;
   carryLumber: number;
 }
@@ -25,10 +28,14 @@ export interface HudDriver {
   /** World rect covered by the map: [originX, originY, width, height]. */
   mapBounds(): [number, number, number, number];
   panTo(wx: number, wy: number): void;
+  /** Portrait clicked: snap the camera to the selected unit; `lock` follows it. */
+  focusSelected(lock: boolean): void;
   setOrderMode(mode: OrderMode): void;
   stopSelected(): void;
   /** Data URL for a resource icon, or null to use the text fallback. */
   icon(kind: "gold" | "lumber" | "supply"): string | null;
+  /** Data URL for a command button icon (e.g. "BTNMove"), or null. */
+  commandIcon(name: string): string | null;
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
   minimapImage(): HTMLCanvasElement | null;
   /** Race console atlas crops (UI\Console\<Race>UITile01–04) or null. */
@@ -72,6 +79,7 @@ export class GameHud {
   private food!: HTMLSpanElement;
   private upkeep!: HTMLSpanElement;
   private selName!: HTMLDivElement;
+  private selStats!: HTMLDivElement;
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
   private selCarry!: HTMLDivElement;
@@ -79,6 +87,7 @@ export class GameHud {
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
   private modeButtons = new Map<string, HTMLButtonElement>();
+  private cmdTooltip!: HTMLDivElement;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
 
@@ -262,6 +271,12 @@ export class GameHud {
     this.portraitCanvasEl = document.createElement("canvas");
     this.portraitCanvasEl.className = "hud-portrait-canvas";
     this.portrait.appendChild(this.portraitCanvasEl);
+    // Clicking the portrait snaps the camera to the unit; holding locks onto it.
+    this.portrait.addEventListener("pointerdown", (e) => {
+      this.portrait.setPointerCapture(e.pointerId);
+      this.driver.focusSelected(true);
+    });
+    this.portrait.addEventListener("pointerup", () => this.driver.focusSelected(false));
 
     const values = document.createElement("div");
     values.className = "hud-portrait-values";
@@ -275,13 +290,17 @@ export class GameHud {
     portraitWrap.className = "hud-portrait-wrap";
     portraitWrap.append(this.portrait, values);
 
+    // Info panel: dark rounded backdrop with the unit's name and its
+    // damage / armor stats, like the original console detail area.
     const infoText = document.createElement("div");
     infoText.className = "hud-info-text";
     this.selName = document.createElement("div");
     this.selName.className = "hud-sel-name";
+    this.selStats = document.createElement("div");
+    this.selStats.className = "hud-sel-stats";
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
-    infoText.append(this.selName, this.selCarry);
+    infoText.append(this.selName, this.selStats, this.selCarry);
     return { portraitWrap, infoText };
   }
 
@@ -305,28 +324,53 @@ export class GameHud {
   private buildCommandCard(): HTMLDivElement {
     const card = document.createElement("div");
     card.className = "hud-command";
-    const commands: Array<[string, string, () => void] | null> = [
-      ["Move", "M", () => this.setMode("move")],
-      ["Stop", "S", () => { this.driver.stopSelected(); this.setMode(null); }],
-      ["Attack", "A", () => this.setMode("attack")],
+    // Tooltip shown above the card on hover (name + hotkey + description).
+    this.cmdTooltip = document.createElement("div");
+    this.cmdTooltip.className = "hud-tooltip";
+    this.cmdTooltip.hidden = true;
+    card.appendChild(this.cmdTooltip);
+
+    interface Cmd {
+      label: string;
+      hotkey: string;
+      icon: string;
+      desc: string;
+      run: () => void;
+      mode?: OrderMode;
+    }
+    const commands: Cmd[] = [
+      { label: "Move", hotkey: "M", icon: "BTNMove", desc: "Orders the unit to move to a target point.", run: () => this.setMode("move"), mode: "move" },
+      { label: "Stop", hotkey: "S", icon: "BTNStop", desc: "Halts the unit's current order.", run: () => { this.driver.stopSelected(); this.setMode(null); } },
+      { label: "Attack", hotkey: "A", icon: "BTNAttack", desc: "Orders the unit to attack a target.", run: () => this.setMode("attack"), mode: "attack" },
     ];
     for (let i = 0; i < 12; i++) {
-      const cmd = commands[i] ?? null;
+      const cmd = commands[i];
       const btn = document.createElement("button");
       btn.className = "hud-slot hud-cmd";
       if (cmd) {
-        const [label, hotkey, action] = cmd;
-        btn.textContent = label;
-        btn.title = `${label} (${hotkey})`;
-        btn.onclick = action;
-        if (label === "Move") this.modeButtons.set("move", btn);
-        if (label === "Attack") this.modeButtons.set("attack", btn);
+        const url = this.driver.commandIcon(cmd.icon);
+        if (url) {
+          btn.style.backgroundImage = `url(${url})`;
+        } else {
+          btn.textContent = cmd.label;
+        }
+        btn.onclick = cmd.run;
+        const hk = cmd.hotkey;
+        const label = cmd.label.replace(hk, `<b>${hk}</b>`);
+        btn.addEventListener("pointerenter", () => this.showTooltip(`${label} (${hk})`, cmd.desc));
+        btn.addEventListener("pointerleave", () => (this.cmdTooltip.hidden = true));
+        if (cmd.mode) this.modeButtons.set(cmd.mode, btn);
       } else {
         btn.disabled = true;
       }
       card.appendChild(btn);
     }
     return card;
+  }
+
+  private showTooltip(titleHtml: string, desc: string): void {
+    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${titleHtml}</div><div class="hud-tooltip-desc">${desc}</div>`;
+    this.cmdTooltip.hidden = false;
   }
 
   // --- per-frame updates ----------------------------------------------------
@@ -347,12 +391,15 @@ export class GameHud {
       this.selName.textContent = sel.name;
       this.selHpText.textContent = `${Math.ceil(sel.hp)} / ${sel.maxHp}`;
       this.selMpText.textContent = sel.maxMana > 0 ? `${Math.floor(sel.mana)} / ${sel.maxMana}` : "";
+      const dmg = sel.damageMax > 0 ? `Damage: ${sel.damageMin} - ${sel.damageMax}` : "";
+      this.selStats.textContent = `${dmg}${dmg ? "\n" : ""}Armor: ${sel.armor}`;
       this.selCarry.textContent =
         sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";
     } else {
       this.selName.textContent = "";
       this.selHpText.textContent = "";
       this.selMpText.textContent = "";
+      this.selStats.textContent = "";
       this.selCarry.textContent = "";
     }
   }
