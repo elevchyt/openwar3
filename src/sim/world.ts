@@ -32,7 +32,7 @@ export interface SimProjectile {
   art: string; // missile model path
 }
 
-export type SimOrder = "idle" | "move" | "attack" | "harvest" | "return";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "harvest" | "return";
 
 /** Harvesting profile + carried load for worker units. */
 export interface WorkerState {
@@ -103,6 +103,8 @@ export interface SimUnit {
   moving: boolean;
   chaseX: number; // where the current chase path was aimed (repath when stale)
   chaseY: number;
+  patrolX: number; // the OTHER patrol endpoint (units bounce between the two)
+  patrolY: number;
   acquireT: number; // seconds until the next auto-acquire scan
   stuckT: number; // seconds spent blocked while trying to move
   stuckRetries: number; // consecutive stuck-repath attempts without progress
@@ -387,6 +389,8 @@ export class SimWorld {
       | "inCombat"
       | "chaseX"
       | "chaseY"
+      | "patrolX"
+      | "patrolY"
       | "acquireT"
       | "stuckT"
       | "stuckRetries"
@@ -421,6 +425,8 @@ export class SimWorld {
       moving: false,
       chaseX: 0,
       chaseY: 0,
+      patrolX: unit.x,
+      patrolY: unit.y,
       acquireT: 0,
       stuckT: 0,
       stuckRetries: 0,
@@ -500,6 +506,48 @@ export class SimWorld {
     this.detachBuilder(id); // wandering off halts the construction
     u.stuckT = 0;
     u.stuckRetries = 0;
+    if (!this.pathTo(u, tx, ty)) {
+      this.stop(id);
+      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      return false;
+    }
+    return true;
+  }
+
+  /** Attack-move to a point: walk there but engage any enemies acquired en
+   *  route (WC3 A-click). Behaves like a move for pathing/arrival. */
+  issueAttackMove(id: number, tx: number, ty: number): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    u.order = "attackmove";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.detachBuilder(id);
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    if (!this.pathTo(u, tx, ty)) {
+      this.stop(id);
+      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      return false;
+    }
+    return true;
+  }
+
+  /** Order a unit to patrol between its current position and a point (bounces
+   *  back and forth; combat units acquire enemies along the way). */
+  issuePatrol(id: number, tx: number, ty: number): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    u.order = "patrol";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.detachBuilder(id);
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    u.patrolX = u.x; // the return endpoint is where the patrol was issued
+    u.patrolY = u.y;
     if (!this.pathTo(u, tx, ty)) {
       this.stop(id);
       u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
@@ -634,6 +682,10 @@ export class SimWorld {
           break;
         case "return":
           this.tickReturn(u);
+          break;
+        case "attackmove":
+        case "patrol":
+          this.tickAcquire(u, dt); // engage enemies encountered en route
           break;
         case "idle":
           this.tickAcquire(u, dt);
@@ -1099,9 +1151,18 @@ export class SimWorld {
         // A best-effort path may have stopped short because the goal cells
         // were reserved when it was computed; if the blocker has since left,
         // continue to the real goal (bounded retries).
-        if (u.order === "move" && this.retryFreedGoal(u)) continue;
+        if ((u.order === "move" || u.order === "attackmove") && this.retryFreedGoal(u)) continue;
+        // Patrol: reached one endpoint — turn around and head to the other.
+        if (u.order === "patrol") {
+          const nx = u.patrolX;
+          const ny = u.patrolY;
+          u.patrolX = u.chaseX; // the endpoint just reached becomes the return point
+          u.patrolY = u.chaseY;
+          if (!this.pathTo(u, nx, ny)) this.stop(u.id);
+          continue;
+        }
         this.settle(u); // arrival: snap to the cell grid and reserve
-        if (u.order === "move") u.order = "idle"; // auto-acquire resumes
+        if (u.order === "move" || u.order === "attackmove") u.order = "idle"; // auto-acquire resumes
       }
     }
   }

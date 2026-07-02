@@ -386,12 +386,12 @@ body.in-game .menu-panel { display: none; }
 .hud-console-skinned .hud-inventory .hud-slot { background: none; border: none; }
 .hud-console-skinned .hud-cmd { font-size: 11px; }
 
-/* Command buttons: the BTN icon fills (covers) the whole square tile like the
-   original command card — no letterbox gaps, no bottom/right cropping. The tile
-   is forced square so a square icon covers it exactly. */
+/* Command buttons: the BTN icon fills the whole tile like the original command
+   card. background-size: 100% 100% stretches the (square) icon to exactly the
+   slot — no letterbox gaps and no bottom/right cropping (cover was cropping the
+   overflow on non-square slots). */
 .hud-cmd {
-  aspect-ratio: 1;
-  background-size: cover;
+  background-size: 100% 100%;
   background-repeat: no-repeat;
   background-position: center;
   color: transparent;
@@ -546,7 +546,8 @@ body.in-game .menu-panel { display: none; }
   color: #bff3b8;
 }
 
-body.order-armed #map { cursor: crosshair; }
+/* No crosshair when an order is armed — the WC3 cursor is forced everywhere
+   in-game (see applyRaceCursor), so we never override it here. */
 
 
 .metrics {

@@ -137,6 +137,9 @@ const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData movehe
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
+// Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
+const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
+const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
 
 // A floating health bar drawn above a unit. One is pooled per visible unit so
 // HP bars are always on screen (WC3's "always show health bars"), not only for
@@ -497,9 +500,9 @@ export class RtsController {
 
   // --- HUD driver surface ---------------------------------------------------
 
-  /** Armed command-card order ("move"/"attack"); the next left-click executes
-   *  it instead of selecting. */
-  orderMode: "move" | "attack" | null = null;
+  /** Armed command-card order ("move"/"attack"/"patrol"); the next left-click
+   *  executes it instead of selecting. */
+  orderMode: "move" | "attack" | "patrol" | null = null;
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
@@ -524,15 +527,38 @@ export class RtsController {
           }
         }
       }
-      // No hostile under the cursor: fall through to a move (attack-move later).
+      // No hostile under the cursor: attack-MOVE to the ground point (below).
     }
     const dpr = this.dpr();
     this.screen[0] = cssX * dpr;
     this.screen[1] = cssY * dpr;
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
-    if (hit) for (const id of this.selected) this.sim.issueMove(id, hit[0], hit[1]);
+    if (!hit) return true;
+    if (mode === "patrol") {
+      for (const id of this.selected) this.sim.issuePatrol(id, hit[0], hit[1]);
+      this.queueArrow(hit[0], hit[1], MOVE_ARROW);
+    } else if (mode === "attack") {
+      for (const id of this.selected) this.sim.issueAttackMove(id, hit[0], hit[1]);
+      this.queueArrow(hit[0], hit[1], ATTACK_ARROW); // red a-move feedback
+    } else {
+      for (const id of this.selected) this.sim.issueMove(id, hit[0], hit[1]);
+      this.queueArrow(hit[0], hit[1], MOVE_ARROW);
+    }
     return true;
+  }
+
+  /** Order-feedback arrows (Confirmation.mdx) at a destination: green for a
+   *  move/patrol, red for an attack-move. Drained + rendered by the host. */
+  private orderArrows: Array<{ x: number; y: number; z: number; color: [number, number, number] }> = [];
+  private queueArrow(x: number, y: number, color: [number, number, number]): void {
+    this.orderArrows.push({ x, y, z: this.heightAt(x, y), color });
+  }
+  drainOrderArrows(): Array<{ x: number; y: number; z: number; color: [number, number, number] }> {
+    if (!this.orderArrows.length) return this.orderArrows;
+    const out = this.orderArrows;
+    this.orderArrows = [];
+    return out;
   }
 
   stopSelected(): void {
@@ -736,6 +762,7 @@ export class RtsController {
       }
     }
     for (const id of this.selected) this.sim.issueMove(id, hit[0], hit[1]);
+    this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move-order feedback
   }
 
   /** Queue a yellow harvest-target flash — the renderer draws it as a flat
@@ -766,34 +793,47 @@ export class RtsController {
     const [gx, gy] = this.toGl(cssX, cssY);
     const viewport = this.host.viewport();
     const dpr = this.dpr();
-    let best: number | null = null;
-    let bestScore = Infinity; // prefer the unit whose footprint we're most inside
+    // Units win over buildings when both are under the cursor (WC3 behaviour):
+    // track the best hit of each kind and prefer the unit.
+    let bestUnit: number | null = null;
+    let bestUnitScore = Infinity;
+    let bestBldg: number | null = null;
+    let bestBldgScore = Infinity;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
+      if (e.hidden) continue;
+      const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
+      // Base (feet) screen point.
       this.world[0] = u.x;
       this.world[1] = u.y;
-      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
+      this.world[2] = baseZ;
       this.host.camera.worldToScreen(this.screen, this.world, viewport);
-      const cx = this.screen[0];
-      const cy = this.screen[1];
-      // Project the unit's collision radius (world) to screen pixels.
+      const bx = this.screen[0];
+      const by = this.screen[1];
+      // Generous pick radius from the unit's collision / selection size (the
+      // WC3 click collider). Uses the FULL selection radius, not half.
       this.world2.set(this.world);
-      this.world2[0] = u.x + Math.max(u.radius, e.selRadius * 0.5, 40);
+      this.world2[0] = u.x + Math.max(u.radius, e.selRadius, 48);
       this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-      const rPx = Math.hypot(this.screen2[0] - cx, this.screen2[1] - cy) + 10 * dpr;
-      const dx = gx - cx;
-      // Models rise up from their base, so shift the hit-test up toward the body.
-      const dy = gy - cy + rPx * 0.6;
-      const d = Math.hypot(dx, dy);
-      if (d <= rPx) {
-        const score = d / rPx; // fraction into the footprint (smaller = better)
-        if (score < bestScore) {
-          bestScore = score;
-          best = e.simId;
-        }
+      const rPx = Math.hypot(this.screen2[0] - bx, this.screen2[1] - by) + 12 * dpr;
+      // Top-of-body screen point: models rise UP from their base, so the click
+      // collider is a vertical capsule from the feet up over the body (bigger
+      // units/buildings are taller). This is the "raise it towards up" fix.
+      const bodyHeight = Math.max(e.selRadius * 2.5, 140);
+      this.world2.set(this.world);
+      this.world2[2] = baseZ + bodyHeight;
+      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+      const d = distToSegment(gx, gy, bx, by, this.screen2[0], this.screen2[1]);
+      if (d > rPx) continue;
+      const score = d / rPx; // fraction into the collider (smaller = tighter)
+      if (u.building) {
+        if (score < bestBldgScore) { bestBldgScore = score; bestBldg = e.simId; }
+      } else if (score < bestUnitScore) {
+        bestUnitScore = score;
+        bestUnit = e.simId;
       }
     }
-    return best;
+    return bestUnit ?? bestBldg;
   }
 
   private groundHit(): [number, number] | null {
@@ -895,6 +935,15 @@ function weaponFor(def: UnitDef): SimWeapon | null {
     missileArt: def.missileArt,
     missileSpeed: def.missileSpeed,
   };
+}
+
+// Shortest distance from point (px,py) to the segment (ax,ay)-(bx,by).
+function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const len2 = vx * vx + vy * vy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2)) : 0;
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
 }
 
 // Quaternion for a rotation `angle` about +Z, written into `out`.

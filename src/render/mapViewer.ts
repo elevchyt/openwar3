@@ -163,8 +163,12 @@ export class MapViewerScene {
   private hoverCircle: SpawnInstance | null = null;
   private circleModel: SpawnModel | null = null;
   private selectBoxEl: HTMLDivElement | null = null;
+  private cursorStyleEl: HTMLStyleElement | null = null;
   private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
   private flashCircles: Array<{ inst: SpawnInstance; t: number }> = [];
+  // Order-feedback arrows (Confirmation.mdx), green=move / red=attack-move.
+  private arrowModel: SpawnModel | null = null;
+  private orderArrows: Array<{ inst: SpawnInstance; t: number }> = [];
   // Projectile (missile) instances, keyed by the sim projectile id.
   private projectileModels = new Map<string, SpawnModel | null>();
   private projectileInsts = new Map<number, SpawnInstance>();
@@ -403,7 +407,7 @@ export class MapViewerScene {
     if (home) {
       this.target[0] = home.startX;
       this.target[1] = home.startY;
-      this.distance = 1750;
+      this.distance = MapViewerScene.MELEE_START;
     }
     // Resolve "random" once per slot: roster and console skin must agree.
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
@@ -515,6 +519,36 @@ export class MapViewerScene {
     const idx = (re: RegExp) => Math.max(0, seqs.findIndex((s) => re.test(s.name)));
     this.circleSeq = { friendly: idx(/^friendly$/i), enemy: idx(/^enemy$/i), neutral: idx(/^neutral$/i) };
     this.hoverCircle = this.newCircle();
+    // Move/attack order-confirmation arrows (one model, tinted per order type).
+    this.arrowModel = ((await this.viewer.load("UI\\Feedback\\Confirmation\\Confirmation.mdx", this.solver)) as SpawnModel | undefined) ?? null;
+  }
+
+  /** Spawn a converging-arrows marker for each new move/attack-move order and
+   *  time out the live ones (the model plays once, then we detach it). */
+  private updateOrderArrows(dt: number): void {
+    const map = this.viewer.map;
+    for (const req of this.rts?.drainOrderArrows() ?? []) {
+      if (!map || !this.arrowModel) continue; // drained regardless, drawn if ready
+      const inst = this.arrowModel.addInstance();
+      inst.setScene(map.worldScene);
+      this.loc3[0] = req.x;
+      this.loc3[1] = req.y;
+      this.loc3[2] = req.z + 4; // just above the ground
+      inst.setLocation(this.loc3);
+      inst.setVertexColor(req.color);
+      inst.setSequence(0); // single-shot "converge" clip
+      inst.setSequenceLoopMode(0); // play once
+      inst.show();
+      this.orderArrows.push({ inst, t: 0.9 });
+    }
+    for (let i = this.orderArrows.length - 1; i >= 0; i--) {
+      const a = this.orderArrows[i];
+      a.t -= dt;
+      if (a.t <= 0) {
+        a.inst.detach();
+        this.orderArrows.splice(i, 1);
+      }
+    }
   }
 
   private newCircle(): SpawnInstance | null {
@@ -569,6 +603,15 @@ export class MapViewerScene {
   // --- projectiles (missile models) -----------------------------------------
 
   private static readonly MISSILE_HEIGHT = 60; // launch/flight height above ground
+  // Uniform size for ALL selection/hover/order circles (constant width + ring
+  // thickness), and a tiny lift so they sit just above the terrain.
+  private static readonly CIRCLE_SCALE = 1.2;
+  private static readonly CIRCLE_LIFT = 3;
+  // Camera zoom limits (world units of camera distance), WC3-like — not the huge
+  // free range we had. MELEE_START opens a touch more zoomed out than before.
+  private static readonly ZOOM_MIN = 1500;
+  private static readonly ZOOM_MAX = 3600;
+  private static readonly MELEE_START = 2400;
 
   /** Create missile instances for freshly-launched projectiles, move live ones
    *  to their current sim position each frame, and detach ones that landed. */
@@ -639,14 +682,13 @@ export class MapViewerScene {
     inst.show();
     this.loc3[0] = info.x;
     this.loc3[1] = info.y;
-    const scale = info.radius / 38; // model ring radius ≈ 38 world units
-    // The ring model's geometry sits ~14 units up in model space, and that
-    // offset is multiplied by the uniform scale — so a big (mine-sized) ring
-    // floated well above the terrain. Drop it by the *scaled* offset so every
-    // ring hugs the ground regardless of size (sampled fresh each frame).
-    this.loc3[2] = info.z - 14 * scale;
+    // Every indicator circle is drawn at the SAME uniform scale so its width and
+    // ring thickness are constant (previously scaled with the unit/target size,
+    // which made big circles look thick). Raised a hair off the terrain so it
+    // reads as an on-ground decal without z-fighting.
+    this.loc3[2] = info.z - 14 * MapViewerScene.CIRCLE_SCALE + MapViewerScene.CIRCLE_LIFT;
     inst.setLocation(this.loc3);
-    inst.setUniformScale(scale);
+    inst.setUniformScale(MapViewerScene.CIRCLE_SCALE);
     inst.setVertexColor(tint ?? [1, 1, 1]);
     // Flashes (tinted) use the neutral (white) base so the tint carries the
     // colour cleanly. Real selection/hover rings colour by alliance: your own
@@ -915,20 +957,23 @@ export class MapViewerScene {
       return out;
     }
 
+    // WC3 layout: the basic orders sit on the bottom row; Patrol above Attack;
+    // a worker's Build button is top-left.
     const armed = this.rts?.orderMode ?? null;
-    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: armed === "move" }));
-    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0 }));
-    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0 }));
-    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit or point.", col: 3, row: 0, active: armed === "attack" }));
+    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 0, row: 2, active: armed === "attack" }));
+    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 1, row: 2, active: armed === "move" }));
+    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 2, row: 2 }));
+    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 3, row: 2 }));
+    out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: armed === "patrol" }));
     if (sel.isWorker) {
-      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2 }));
+      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 0 }));
     }
     return out;
   }
 
   private runCommand(id: string): void {
     if (!this.rts) return;
-    if (id === "move" || id === "attack") {
+    if (id === "move" || id === "attack" || id === "patrol") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
       return;
@@ -1057,7 +1102,16 @@ export class MapViewerScene {
     frame.getContext("2d")!.drawImage(sheet, 0, 0);
     const url = frame.toDataURL();
     // Hotspot near the gauntlet's fingertip (top-left).
-    document.body.style.cursor = `url(${url}) 3 3, auto`;
+    const rule = `url(${url}) 3 3, auto`;
+    document.body.style.cursor = rule;
+    // Force the WC3 cursor over the ENTIRE in-game UI — buttons, the map, the
+    // minimap, everything — overriding the default pointer/crosshair cursors so
+    // only the original WC3 cursor is ever shown (per feedback).
+    if (!this.cursorStyleEl) {
+      this.cursorStyleEl = document.createElement("style");
+      document.head.appendChild(this.cursorStyleEl);
+    }
+    this.cursorStyleEl.textContent = `body.in-game, body.in-game * { cursor: ${rule} !important; }`;
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
@@ -1093,6 +1147,7 @@ export class MapViewerScene {
       this.tickPendingBuild();
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       this.updateSelectionCircles(dt / 1000);
+      this.updateOrderArrows(dt / 1000);
       this.updateProjectiles();
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
@@ -1146,9 +1201,13 @@ export class MapViewerScene {
     this.ghost = null;
     this.selectBoxEl?.remove();
     this.selectBoxEl = null;
+    this.cursorStyleEl?.remove();
+    this.cursorStyleEl = null;
     for (const g of this.buildGhosts.values()) g.hide();
     this.buildGhosts.clear();
     this.buildGhost = null;
+    for (const a of this.orderArrows) a.inst.detach();
+    this.orderArrows = [];
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();
@@ -1290,7 +1349,7 @@ export class MapViewerScene {
       "wheel",
       (e) => {
         e.preventDefault();
-        this.distance = clamp(this.distance * (1 + Math.sign(e.deltaY) * 0.1), 500, 40000);
+        this.distance = clamp(this.distance * (1 + Math.sign(e.deltaY) * 0.1), MapViewerScene.ZOOM_MIN, MapViewerScene.ZOOM_MAX);
       },
       { passive: false },
     );

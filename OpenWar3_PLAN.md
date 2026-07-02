@@ -17,6 +17,20 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Orders/feedback/camera pass (2026-07-02, latest+7)** — **Patrol** + **attack-move** orders
+  (sim `patrol`/`attackmove`: patrol bounces between two points, a-move engages enemies acquired en
+  route; both verified headlessly). **3D order-feedback arrows** at the destination —
+  `UI\Feedback\Confirmation\Confirmation.mdx` tinted **green** for move/patrol, **red** for
+  attack-move (path confirmed via Warsmash + the stock `SharedMelee.pld` preload). **WC3 cursor
+  forced everywhere in-game** (injected `body.in-game *` rule with `!important`) — no more
+  pointer/crosshair. **Bigger click colliders:** picking is now a vertical **capsule** from the
+  unit's feet up over its body (using the full selection radius, not half), with units preferred
+  over buildings — fixes "hard to click". **Camera zoom clamped** to a WC3-like range (1500–3600)
+  and melee opens a touch more zoomed out (2400). **Indicator circles** now draw at a **constant
+  size/thickness** (was scaling with the unit) and sit a hair off the ground. **Command card**:
+  icons `background-size:100% 100%` (no crop), added **Patrol**, WC3-authentic bottom-row order
+  layout. Birth animation already freezes with construction (renderer scrubs it to progress). 20
+  headless sim checks green; `npm run build` clean.
 - **Combat/selection/data pass (2026-07-02, latest+6)** — **projectiles**: ranged weapons
   (`weapTp1` = missile/artillery, or a `Missileart`) now launch a homing missile model that travels
   and deals its pre-rolled damage on *impact* (armor applied then), fizzling if the target dies
@@ -216,16 +230,23 @@ else takes `Promise<Uint8Array>`; `#ui` is `pointer-events:none` so full-screen 
 types absent from `CliffTypes.slk` (fallback to `CLdi`).
 
 **Next steps (recommended order):**
-1. **Phase 6 continued:** projectiles for ranged attacks (currently instant hit), attack-move,
-   multi-unit selection (drag box), then resources (gold/lumber), building/training, tech tree.
-   Known combat gaps: no air/ground target restrictions (`targs1`), no attack/damage-type table,
-   dead buildings keep their stamped pathing footprint, buildings ignore attack orders they can't
-   fulfil.
+1. **Phase 6 continued:** ~~projectiles~~ (done), ~~attack-move~~ (done), ~~multi-unit selection~~
+   (done), patrol (done) → resources/building/training (done). Remaining combat gaps: no air/ground
+   target restrictions (`targs1`), no attack/damage-type table, dead buildings keep their stamped
+   pathing footprint, buildings ignore attack orders they can't fulfil.
 2. **Melee refinements:** starting gold/lumber + hero pick; remove `sloc` start-location marker
    props; air-air separation; per-slot colors in the lobby; building placement footprint-aware.
 3. **Authentic menu UI (§10)** — user-deferred: render `MainMenu3D_Exp` background + BLP button
    chrome/fonts (all readable now).
 4. Later: **Phase 7** JASS, **Phase 8** server-authoritative multiplayer, **Phase 9** CASC/RoC/Electron.
+
+**Final polish milestones (deferred to late in the project, by developer request):**
+- **Animation blending** — a tiny, discrete default cross-fade between ALL unit animation
+  sequences (walk↔stand↔attack, etc.). mdx-m3-viewer plays sequences as hard cuts with no blend
+  hook, so this needs a `patches/` change to its per-frame `updateNodes` node-pose path (snapshot
+  each node's TRS on `setSequence`, then lerp/slerp toward the new sequence's pose over ~150 ms).
+  Large blast radius (a mistake breaks all animation) → do it last, verified in-browser. The
+  developer intends to implement this themselves later.
 
 **Unverified caveat:** all rendering/interaction is authored against the code but confirmed only by
 the developer in-browser (no browser in the build environment). No test runner is set up yet; the sim
