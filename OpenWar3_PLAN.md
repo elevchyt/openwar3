@@ -71,6 +71,17 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   armed order consumes the next left-click). Melee start stash 500 g / 150 w; food live from owned
   units. In-game camera pans with arrow keys (WASD reserved for hotkeys); `src/render/blputil.ts`
   decodes BLPs for DOM use. Next: resource gathering loop (gold/lumber/train) driving these numbers.
+- **HUD v3 + gather fixes (2026-07-02, late)** — the console UITiles are a texture ATLAS (top
+  ~55 px = resource-bar chrome with clock socket; y≈160–512 = console with minimap frame, portrait
+  arch, inventory, command card) — verified by rendering the atlas to PNG and inspecting it. HUD
+  crops both pieces, skins the top bar, and absolutely positions its five zones over the art's
+  measured sockets (`ZONES` in hud.ts; FDF parsing later for exactness). Portraits use the model's
+  built-in camera (real close-up) and the owner's team color (12 = neutral black). Camera starts at
+  gameplay zoom (2600; 1750 centered on the local base at melee start). Gathering fixes: tree chop
+  reach 72 (32 was unreachable past blocked cells + mover clearance — the "lumber doesn't work"
+  bug), work-state hysteresis kills animation flapping, mine entry measured to the square footprint
+  edge (Chebyshev — the circular test fired early on diagonals), bigger resource click radii. All
+  verified headlessly against stamped footprints.
 - **Economy + HUD v2 (2026-07-02, night)** — **resource gathering** (community-verified numbers,
   docs/REFERENCES.md): sim owns mines (from `war3mapUnits.doo` `ngol` + its real goldAmount) and
   trees (destructibles with `targType=tree`; 50 lumber each). Workers (`WORKERS` in
