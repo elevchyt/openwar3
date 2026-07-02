@@ -29,3 +29,19 @@ Practical notes:
 - Warsmash's source is the next stop: it encodes many of these findings as code.
 - When a mechanic matters for gameplay feel, write the source (thread/repo) next to the constant in
   the code.
+
+### Specific threads / videos used
+
+- **Unit selection = collision shapes, not the mesh.** WC3 picks a unit by its model's
+  **CollisionShape** (box/sphere), sized from the pathing/collision value — clicking the mesh is
+  wrong. Our picker uses the unit's collision + selection-scale radius projected to screen.
+  - [Collision Shapes — how to make your model selectable](https://www.hiveworkshop.com/threads/collision-shapes-how-to-make-your-model-selectable.156930/)
+  - [Collision Size](https://www.hiveworkshop.com/threads/collision-size.309631/)
+  - [Pathing/collision size values into real values](https://www.hiveworkshop.com/threads/pathing-collision-size-values-into-real-values.271205/)
+- **Orders / command system** overview: [WC3 basic commands & orders (YouTube)](https://www.youtube.com/watch?v=EehNLL7yYng)
+- **Melee tech tree rawcodes** (which building trains/builds what) verified against the
+  [wc3edit rawcode list](https://forum.wc3edit.net/viewtopic.php?t=2648) + StrategyWiki building
+  pages. Encoded in `src/data/techtree.ts` (curated — WC3 stores these in ability object-data
+  that's costly to parse). Corrections found: Human Workshop is `harm` (trains hmtm/hgyr/hmtt), Orc
+  Raider `orai` is at the Beastiary, the NE hero altar is `eate` (Ancient of War `eaom` trains
+  archer/huntress/glaive).

@@ -17,6 +17,32 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Combat/selection/data pass (2026-07-02, latest+6)** — **projectiles**: ranged weapons
+  (`weapTp1` = missile/artillery, or a `Missileart`) now launch a homing missile model that travels
+  and deals its pre-rolled damage on *impact* (armor applied then), fizzling if the target dies
+  mid-flight; melee stays instant. Sim owns `projectiles`; the renderer loads+moves the
+  `Missileart` MDX and `detach()`es it on landing (mdx-m3-viewer has no missile system — we drive
+  it). **Multi-unit selection:** left-drag draws a green marquee that selects the local player's
+  mobile units; the controller holds a selection `Set` + a `primary` leader (drives HUD/portrait/
+  command card); move/attack/stop/harvest/resume-build orders apply to the whole group; a
+  selection-circle pool rings each member. **Always-on health bars** float over every visible unit
+  (pooled DOM), replacing the selected/hovered-only bars. **Enemy circles are red:** ring colour is
+  now by alliance (own+ally = green, everyone else incl. neutral-hostile = red); right-click-attack
+  flashes a **red** ground ring at the target (twin-blink, like the yellow harvest flash).
+  **Yellow/all flash+selection circles hug the ground** at any size (the ring model's vertical
+  offset scales with the circle, so big mine-sized rings no longer float). **Tech-tree data fixed:**
+  the curated build/train table had the barracks training Mortar Teams and the NE Ancient of War
+  as the hero altar — rewrote all four races' rosters against verified rawcodes (Human Workshop
+  `harm`; Orc Raider at Beastiary; NE altar `eate`), see docs/REFERENCES.md. **Build-ghost:** the
+  placement silhouette now faces south and plays its finished "Stand" clip (was showing the default
+  first sequence — often the "Birth" scaffold, the "preview/wrong-rotation" look). **Construction
+  pause/resume** re-verified headlessly (freezes when the worker leaves, resumes — walking back if
+  far — when reassigned). *Deferred:* true animation-blend cross-fades (mdx-m3-viewer plays
+  sequences as hard cuts; adding blending means patching its per-frame `updateNodes` node-pose
+  path — large blast radius, needs in-browser verification); build-ghost translucency (vertex-alpha
+  is ignored on opaque building geosets — the ghost is solid-tinted). All sim logic verified via a
+  headless esbuild script (15 checks: projectiles, melee, construction pause/resume); `npm run
+  build` clean.
 - **Phase 0** — Vite+TS scaffold, asset resolver (install→CC0→primitive), OPFS import, menu shell.
 - **Phase 1** — layered MPQ VFS + content profiles (TFT default). Import a WC3 folder, read any file.
 - **Phase 2** — placeholder heightmap terrain + fly camera (zero-asset fallback).

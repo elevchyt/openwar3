@@ -14,6 +14,22 @@ export interface SimWeapon {
   cooldown: number; // seconds between swings
   range: number; // measured between collision hulls, WC3-style
   acquire: number; // auto-acquisition range (0 = never auto-attacks)
+  ranged: boolean; // fires a travelling projectile instead of hitting instantly
+  missileArt: string; // projectile model path (renderer), "" = invisible
+  missileSpeed: number; // projectile travel speed (world units/sec)
+}
+
+/** An in-flight projectile: homes on its target's current position, dealing its
+ *  pre-rolled damage on arrival (the renderer draws + moves the missile model). */
+export interface SimProjectile {
+  id: number;
+  x: number;
+  y: number;
+  sourceId: number; // attacker (for retaliation on hit); may have died mid-flight
+  targetId: number;
+  speed: number;
+  damage: number; // pre-armor damage rolled at launch (armor applied on impact)
+  art: string; // missile model path
 }
 
 export type SimOrder = "idle" | "move" | "attack" | "harvest" | "return";
@@ -136,6 +152,7 @@ export class SimWorld {
   readonly units = new Map<number, SimUnit>();
   readonly mines = new Map<number, SimMine>();
   readonly trees = new Map<number, SimTree>();
+  readonly projectiles = new Map<number, SimProjectile>();
   /** Per-player resource stash (gold/lumber). */
   readonly stash = new Map<number, { gold: number; lumber: number }>();
   /** Time of day in game-hours [0,24); advances every tick. */
@@ -143,6 +160,9 @@ export class SimWorld {
   private deaths: number[] = [];
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
+  private nextProjectileId = 1;
+  private spawnedProjectiles: Array<{ id: number; art: string; x: number; y: number }> = [];
+  private removedProjectiles: number[] = [];
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number }> = [];
   private nextNodeId = 1;
@@ -227,6 +247,22 @@ export class SimWorld {
     return out;
   }
 
+  /** Projectiles launched since the last drain (renderer creates missile models). */
+  drainSpawnedProjectiles(): Array<{ id: number; art: string; x: number; y: number }> {
+    if (!this.spawnedProjectiles.length) return this.spawnedProjectiles;
+    const out = this.spawnedProjectiles;
+    this.spawnedProjectiles = [];
+    return out;
+  }
+
+  /** Projectiles that hit/fizzled since the last drain (renderer detaches them). */
+  drainRemovedProjectiles(): number[] {
+    if (!this.removedProjectiles.length) return this.removedProjectiles;
+    const out = this.removedProjectiles;
+    this.removedProjectiles = [];
+    return out;
+  }
+
   /** Queue a unit for training at a building. Timing only — the caller has
    *  already checked/charged resources and food. */
   enqueueTrain(buildingId: number, unitId: string, buildTime: number): boolean {
@@ -262,7 +298,20 @@ export class SimWorld {
     this.detachBuilder(workerId);
     w.constructing = buildingId;
     b.building.builderId = workerId;
-    // Snap the worker to the nearest free tile outside the building's (now
+    w.noCollision = false;
+    w.stuckT = 0;
+    w.stuckRetries = 0;
+    const gap = Math.max(Math.abs(w.x - b.x), Math.abs(w.y - b.y)) - b.radius - w.radius;
+    if (gap >= 96) {
+      // Far from the site (e.g. resuming a halted build): walk there. Progress
+      // stays paused until the worker arrives (tickBuildings' nearby check).
+      w.order = "move";
+      if (!this.pathTo(w, b.x, b.y)) {
+        w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x);
+      }
+      return;
+    }
+    // Adjacent: snap to the nearest free tile outside the building's (now
     // stamped) footprint, so it stands beside the site hammering rather than
     // being trapped inside the under-construction model.
     this.unsettle(w);
@@ -593,6 +642,7 @@ export class SimWorld {
     }
     this.tickMovement(dt);
     this.resolveCollisions();
+    this.tickProjectiles(dt);
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
       // (or stands attacking) still finishes rotating to its desired heading.
@@ -659,7 +709,56 @@ export class SimWorld {
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_EPS || u.cooldownLeft > 0) return;
     u.cooldownLeft = u.weapon.cooldown;
-    this.dealDamage(u, t);
+    // Ranged weapons launch a projectile that deals its damage on arrival;
+    // melee/instant weapons hit immediately.
+    if (u.weapon.ranged) this.spawnProjectile(u, t);
+    else this.dealDamage(u, t);
+  }
+
+  /** Launch a homing projectile from attacker to target. Damage is rolled now
+   *  and applied when it lands (armor is applied at impact). */
+  private spawnProjectile(u: SimUnit, t: SimUnit): void {
+    const w = u.weapon!;
+    const id = this.nextProjectileId++;
+    const proj: SimProjectile = {
+      id,
+      x: u.x,
+      y: u.y,
+      sourceId: u.id,
+      targetId: t.id,
+      speed: w.missileSpeed > 0 ? w.missileSpeed : 900,
+      damage: this.rollDamage(w),
+      art: w.missileArt,
+    };
+    this.projectiles.set(id, proj);
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y });
+  }
+
+  /** Advance in-flight projectiles toward their (moving) targets; deal damage on
+   *  arrival, and fizzle harmlessly if the target died before impact. */
+  private tickProjectiles(dt: number): void {
+    for (const p of this.projectiles.values()) {
+      const t = this.units.get(p.targetId);
+      if (!t) {
+        this.removeProjectile(p.id);
+        continue;
+      }
+      const dx = t.x - p.x;
+      const dy = t.y - p.y;
+      const dist = Math.hypot(dx, dy);
+      const step = p.speed * dt;
+      if (dist <= step + t.radius) {
+        this.applyDamage(t, p.damage, p.sourceId);
+        this.removeProjectile(p.id);
+      } else {
+        p.x += (dx / dist) * step;
+        p.y += (dy / dist) * step;
+      }
+    }
+  }
+
+  private removeProjectile(id: number): void {
+    if (this.projectiles.delete(id)) this.removedProjectiles.push(id);
   }
 
   // Path toward the target; repath only when the target strays from the path
@@ -825,19 +924,32 @@ export class SimWorld {
     }
   }
 
-  private dealDamage(attacker: SimUnit, target: SimUnit): void {
-    const w = attacker.weapon!;
+  /** Roll a weapon's pre-armor damage: base + dice×(1..sides). */
+  private rollDamage(w: SimWeapon): number {
     let dmg = w.damage;
     for (let i = 0; i < w.dice; i++) dmg += 1 + Math.floor(this.rng() * w.sides);
+    return dmg;
+  }
+
+  private dealDamage(attacker: SimUnit, target: SimUnit): void {
+    this.applyDamage(target, this.rollDamage(attacker.weapon!), attacker.id);
+  }
+
+  /** Apply already-rolled damage to a target (armor reduction, death, return
+   *  fire). Shared by melee (instant) and projectile (on-impact) hits. */
+  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number): void {
     // WC3 armor reduction: each armor point is worth 6% of pre-armor damage.
     const reduction = (target.armor * 0.06) / (1 + 0.06 * Math.max(0, target.armor));
-    target.hp -= dmg * (1 - reduction);
+    target.hp -= rawDamage * (1 - reduction);
     if (target.hp <= 0) {
       this.kill(target);
       return;
     }
-    // Retaliate: an idle armed victim turns on its attacker (WC3 return fire).
-    if (target.order === "idle" && target.weapon) this.issueAttack(target.id, attacker.id);
+    // Retaliate: an idle armed victim turns on its attacker (WC3 return fire),
+    // unless the attacker has since died mid-flight.
+    if (target.order === "idle" && target.weapon && this.units.has(attackerId)) {
+      this.issueAttack(target.id, attackerId);
+    }
   }
 
   private kill(u: SimUnit): void {

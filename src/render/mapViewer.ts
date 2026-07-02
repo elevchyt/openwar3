@@ -104,6 +104,7 @@ interface SpawnInstance {
   setSequenceLoopMode(m: number): void;
   setLocation(v: ArrayLike<number>): unknown;
   setRotation(q: ArrayLike<number>): unknown;
+  detach(): boolean; // remove from the scene (projectiles on impact)
   localLocation: Float32Array;
   localRotation: Float32Array;
   model: { sequences: Array<{ name: string }> };
@@ -158,11 +159,17 @@ export class MapViewerScene {
   private meleeTeams = new Map<number, number>(); // owner slot → team
   // Flat selection-circle model instances, rendered on the terrain so geometry
   // occludes the far side (unlike a DOM overlay drawn on top).
-  private selCircle: SpawnInstance | null = null;
+  private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
   private hoverCircle: SpawnInstance | null = null;
   private circleModel: SpawnModel | null = null;
+  private selectBoxEl: HTMLDivElement | null = null;
   private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
   private flashCircles: Array<{ inst: SpawnInstance; t: number }> = [];
+  // Projectile (missile) instances, keyed by the sim projectile id.
+  private projectileModels = new Map<string, SpawnModel | null>();
+  private projectileInsts = new Map<number, SpawnInstance>();
+  private projectileLoading = new Set<number>();
+  private mq = new Float32Array(4);
   private loc3 = new Float32Array(3);
   private consoleSkinCache:
     | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
@@ -390,6 +397,7 @@ export class MapViewerScene {
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
+    this.rts.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
     // Open on the local player's base at gameplay zoom.
     const home = config.slots.find((s) => s.id === this.localPlayer);
     if (home) {
@@ -506,7 +514,6 @@ export class MapViewerScene {
     const seqs = (model as unknown as { sequences?: Array<{ name: string }> }).sequences ?? [];
     const idx = (re: RegExp) => Math.max(0, seqs.findIndex((s) => re.test(s.name)));
     this.circleSeq = { friendly: idx(/^friendly$/i), enemy: idx(/^enemy$/i), neutral: idx(/^neutral$/i) };
-    this.selCircle = this.newCircle();
     this.hoverCircle = this.newCircle();
   }
 
@@ -523,21 +530,27 @@ export class MapViewerScene {
   /** Position/scale/colour the flat selection + hover rings each frame, plus
    *  the transient yellow harvest-order flashes. */
   private updateSelectionCircles(dt: number): void {
-    const sel = this.rts?.ringInfo("sel") ?? null;
-    this.placeCircle(this.selCircle, sel, null);
-    const hover = this.rts?.ringInfo("hover") ?? null;
-    // Don't double a ring on the same unit.
-    this.placeCircle(this.hoverCircle, hover && (!sel || hover.x !== sel.x || hover.y !== sel.y) ? hover : null, null);
+    const rings = this.rts?.selectionRings() ?? [];
+    for (let i = 0; i < rings.length; i++) {
+      // Retry while null (the circle model may not have loaded yet); newCircle
+      // is a no-op returning null until then, so this doesn't leak.
+      if (!this.selCircles[i]) this.selCircles[i] = this.newCircle();
+      this.placeCircle(this.selCircles[i], rings[i], null);
+    }
+    for (let i = rings.length; i < this.selCircles.length; i++) this.selCircles[i]?.hide();
+    // hoverRing() already returns null when the hovered unit is selected.
+    this.placeCircle(this.hoverCircle, this.rts?.hoverRing() ?? null, null);
     this.tickFlashCircles(dt);
   }
 
-  /** Draw + time the yellow harvest-order flashes (flat ground rings, twice). */
+  /** Draw + time the harvest-/attack-order flashes (flat ground rings, twice):
+   *  yellow for a harvest target, red for an attack target (colour per request). */
   private tickFlashCircles(dt: number): void {
     for (const req of this.rts?.drainFlashes() ?? []) {
       const inst = this.newCircle();
       if (!inst) break;
       this.flashCircles.push({ inst, t: 0.7 });
-      this.placeCircle(inst, { x: req.x, y: req.y, z: req.z, radius: req.radius, owner: -2 }, [1, 0.88, 0.2]);
+      this.placeCircle(inst, { x: req.x, y: req.y, z: req.z, radius: req.radius, owner: -2, team: -2 }, req.color);
     }
     for (let i = this.flashCircles.length - 1; i >= 0; i--) {
       const f = this.flashCircles[i];
@@ -553,9 +566,69 @@ export class MapViewerScene {
     }
   }
 
+  // --- projectiles (missile models) -----------------------------------------
+
+  private static readonly MISSILE_HEIGHT = 60; // launch/flight height above ground
+
+  /** Create missile instances for freshly-launched projectiles, move live ones
+   *  to their current sim position each frame, and detach ones that landed. */
+  private updateProjectiles(): void {
+    const world = this.rts?.simWorld;
+    const map = this.viewer.map;
+    if (!world || !map) return;
+    for (const p of world.drainSpawnedProjectiles()) {
+      if (!p.art) continue; // no missile model (still deals delayed damage)
+      this.projectileLoading.add(p.id);
+      void this.loadProjectile(p.id, p.art);
+    }
+    for (const id of world.drainRemovedProjectiles()) this.detachProjectile(id);
+    for (const [id, inst] of this.projectileInsts) {
+      const p = world.projectiles.get(id);
+      if (!p) {
+        this.detachProjectile(id); // landed before its model finished loading
+        continue;
+      }
+      const t = world.units.get(p.targetId);
+      this.loc3[0] = p.x;
+      this.loc3[1] = p.y;
+      this.loc3[2] = this.rts!.groundHeightAt(p.x, p.y) + MapViewerScene.MISSILE_HEIGHT;
+      inst.setLocation(this.loc3);
+      const ang = t ? Math.atan2(t.y - p.y, t.x - p.x) : 0;
+      zQuat(this.mq, ang);
+      inst.setRotation(this.mq);
+    }
+  }
+
+  private detachProjectile(id: number): void {
+    this.projectileLoading.delete(id);
+    const inst = this.projectileInsts.get(id);
+    if (inst) {
+      inst.detach();
+      this.projectileInsts.delete(id);
+    }
+  }
+
+  private async loadProjectile(id: number, art: string): Promise<void> {
+    const map = this.viewer.map;
+    if (!map) return;
+    let model = this.projectileModels.get(art);
+    if (model === undefined) {
+      model = ((await this.viewer.load(art, this.solver)) as SpawnModel | undefined) ?? null;
+      this.projectileModels.set(art, model);
+    }
+    // The projectile may have landed (id removed from `loading`) while it loaded.
+    if (!model || !this.projectileLoading.has(id) || !this.viewer.map) return;
+    this.projectileLoading.delete(id);
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    inst.setSequence(0);
+    inst.setSequenceLoopMode(2);
+    this.projectileInsts.set(id, inst);
+  }
+
   private placeCircle(
     inst: SpawnInstance | null,
-    info: { x: number; y: number; z: number; radius: number; owner: number } | null,
+    info: { x: number; y: number; z: number; radius: number; owner: number; team: number } | null,
     tint: number[] | null,
   ): void {
     if (!inst) return;
@@ -566,13 +639,25 @@ export class MapViewerScene {
     inst.show();
     this.loc3[0] = info.x;
     this.loc3[1] = info.y;
-    // The ring model sits ~16 units up in model space; drop it so it hugs the
-    // ground (sampled fresh each frame, so it follows terrain like a shadow).
-    this.loc3[2] = info.z - 14;
+    const scale = info.radius / 38; // model ring radius ≈ 38 world units
+    // The ring model's geometry sits ~14 units up in model space, and that
+    // offset is multiplied by the uniform scale — so a big (mine-sized) ring
+    // floated well above the terrain. Drop it by the *scaled* offset so every
+    // ring hugs the ground regardless of size (sampled fresh each frame).
+    this.loc3[2] = info.z - 14 * scale;
     inst.setLocation(this.loc3);
-    inst.setUniformScale(info.radius / 38); // model ring radius ≈ 38 world units
+    inst.setUniformScale(scale);
     inst.setVertexColor(tint ?? [1, 1, 1]);
-    const seq = info.owner < 0 ? this.circleSeq.neutral : info.owner === this.localPlayer ? this.circleSeq.friendly : this.circleSeq.enemy;
+    // Flashes (tinted) use the neutral (white) base so the tint carries the
+    // colour cleanly. Real selection/hover rings colour by alliance: your own
+    // and allied (same-team) units are green, everyone else — including
+    // neutral-hostile creeps — is red.
+    let seq: number;
+    if (tint) seq = this.circleSeq.neutral;
+    else {
+      const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
+      seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;
+    }
     inst.setSequence(seq);
     inst.setSequenceLoopMode(2);
   }
@@ -924,6 +1009,18 @@ export class MapViewerScene {
       inst = model.addInstance();
       inst.setScene(map.worldScene);
       inst.setUniformScale(def.modelScale || 1);
+      // Face south (3π/2) like a placed building — the model defaults to facing
+      // east, which is the "wrong rotation" seen on the ghost.
+      zQuat(this.mq, (3 * Math.PI) / 2);
+      inst.setRotation(this.mq);
+      // Show the FINISHED building: play its idle "Stand" clip, not the default
+      // first sequence (often "Birth", the construction scaffold — that's why the
+      // ghost looked like an unfinished preview).
+      const stand = standSequence(inst.model.sequences);
+      if (stand >= 0) {
+        inst.setSequence(stand);
+        inst.setSequenceLoopMode(2);
+      }
       this.buildGhosts.set(def.id, inst);
     }
     // Only show it if this is still the active placement.
@@ -996,6 +1093,7 @@ export class MapViewerScene {
       this.tickPendingBuild();
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       this.updateSelectionCircles(dt / 1000);
+      this.updateProjectiles();
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
@@ -1046,9 +1144,15 @@ export class MapViewerScene {
     this.hud = null;
     this.ghost?.remove();
     this.ghost = null;
+    this.selectBoxEl?.remove();
+    this.selectBoxEl = null;
     for (const g of this.buildGhosts.values()) g.hide();
     this.buildGhosts.clear();
     this.buildGhost = null;
+    for (const inst of this.projectileInsts.values()) inst.detach();
+    this.projectileInsts.clear();
+    this.projectileLoading.clear();
+    this.projectileModels.clear();
     this.placement = null;
     this.pendingBuilds = [];
     document.body.style.cursor = ""; // restore the default cursor off the map
@@ -1104,6 +1208,26 @@ export class MapViewerScene {
     this.target[1] += dir[1] * amount;
   }
 
+  /** Draw the drag-selection rectangle (canvas fills the page, so offset coords
+   *  are page coords). */
+  private updateSelectBox(x: number, y: number): void {
+    if (!this.selectBoxEl) {
+      this.selectBoxEl = document.createElement("div");
+      this.selectBoxEl.className = "select-box";
+      document.body.appendChild(this.selectBoxEl);
+    }
+    const el = this.selectBoxEl;
+    el.hidden = false;
+    el.style.left = `${Math.min(this.downX, x)}px`;
+    el.style.top = `${Math.min(this.downY, y)}px`;
+    el.style.width = `${Math.abs(x - this.downX)}px`;
+    el.style.height = `${Math.abs(y - this.downY)}px`;
+  }
+
+  private hideSelectBox(): void {
+    if (this.selectBoxEl) this.selectBoxEl.hidden = true;
+  }
+
   private aspect(): number {
     return this.canvas.width / this.canvas.height || 1;
   }
@@ -1137,24 +1261,28 @@ export class MapViewerScene {
       c.releasePointerCapture(e.pointerId);
       if (e.button === 0) {
         this.dragging = false;
-        if (!this.moved && this.rts) {
-          if (this.placement) {
-            this.placeBuilding(e.offsetX, e.offsetY);
-          } else if (this.rts.orderMode) {
-            // An armed command-card order (Move/Attack) consumes the click.
-            if (this.rts.orderClickAt(e.offsetX, e.offsetY)) this.hud?.clearOrderMode();
-          } else {
-            this.rts.selectAt(e.offsetX, e.offsetY);
-          }
+        this.hideSelectBox();
+        if (!this.rts) return;
+        if (this.placement) {
+          if (!this.moved) this.placeBuilding(e.offsetX, e.offsetY);
+        } else if (this.rts.orderMode) {
+          // An armed command-card order (Move/Attack) consumes the click.
+          if (!this.moved && this.rts.orderClickAt(e.offsetX, e.offsetY)) this.hud?.clearOrderMode();
+        } else if (this.moved) {
+          // A left-drag is a rectangle selection of the player's own units.
+          this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY);
+        } else {
+          this.rts.selectAt(e.offsetX, e.offsetY);
         }
       }
     });
     c.addEventListener("pointermove", (e) => {
       if (this.placement) this.updateGhost(e.offsetX, e.offsetY);
-      // WC3 keeps a fixed camera angle — no free rotation. A left-drag is only
-      // used to distinguish a click from a drag (so a drag doesn't select).
-      if (this.dragging && Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) {
-        this.moved = true;
+      // WC3 keeps a fixed camera angle — no free rotation. A left-drag draws a
+      // selection rectangle (unless placing a building or holding an armed order).
+      if (this.dragging) {
+        if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) this.moved = true;
+        if (this.moved && !this.placement && !this.rts?.orderMode) this.updateSelectBox(e.offsetX, e.offsetY);
       }
       if (!this.dragging) this.rts?.hoverAt(e.offsetX, e.offsetY);
     });
@@ -1176,4 +1304,25 @@ function syncCanvasSize(canvas: HTMLCanvasElement): void {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// The finished-building idle sequence: the plain "Stand" clip, skipping the
+// "Birth" construction scaffold, "Death"/"Decay", and work variants. Falls back
+// to the first non-birth/non-death sequence, then to 0.
+function standSequence(seqs: Array<{ name: string }>): number {
+  const plain = seqs.findIndex((s) => /^stand(\s|$|-)/i.test(s.name) && !/work|birth/i.test(s.name));
+  if (plain >= 0) return plain;
+  const anyStand = seqs.findIndex((s) => /^stand/i.test(s.name));
+  if (anyStand >= 0) return anyStand;
+  const nonBirth = seqs.findIndex((s) => !/birth|death|decay|dissipate/i.test(s.name));
+  return nonBirth >= 0 ? nonBirth : seqs.length ? 0 : -1;
+}
+
+// Quaternion for a rotation `angle` about +Z (WC3 units are Z-up), into `out`.
+function zQuat(out: Float32Array, angle: number): void {
+  const half = angle / 2;
+  out[0] = 0;
+  out[1] = 0;
+  out[2] = Math.sin(half);
+  out[3] = Math.cos(half);
 }

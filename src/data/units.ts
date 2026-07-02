@@ -37,6 +37,9 @@ export interface UnitDef {
   attackCooldown: number;
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
+  weaponType: string; // weapTp1: "normal"/"instant" = melee, "missile"/… = ranged
+  missileArt: string; // weapon-1 projectile model (MDX path, backslashes) or ""
+  missileSpeed: number; // projectile travel speed (world units/sec)
   abilities: string[];
 }
 
@@ -165,10 +168,21 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackCooldown: w ? num(w, "cool1", 0) : 0,
       attackRange: w ? num(w, "rangeN1", 0) : 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
+      weaponType: w ? str(w, "weapTp1") : "",
+      missileArt: w ? missilePath(str(w, "Missileart")) : "",
+      missileSpeed: w ? num(w, "Missilespeed", 900) : 900,
       abilities: a ? (str(a, "abilList") || "").split(",").filter(Boolean) : [],
     });
   }
   return new UnitRegistry(defs);
+}
+
+// Weapon "Missileart" is a model path without extension (like unitUI "file");
+// normalize slashes and add ".mdx". Empty when the weapon has no projectile.
+function missilePath(v: string): string {
+  if (!v) return "";
+  const p = v.replace(/\//g, "\\");
+  return /\.mdx$/i.test(p) ? p : `${p}.mdx`;
 }
 
 // "buttonpos" is "col,row" on the 4×3 command grid; default top-left.

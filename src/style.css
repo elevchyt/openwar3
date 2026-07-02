@@ -120,17 +120,21 @@ html, body {
   min-width: 140px;
 }
 
-/* Anchor for the floating HP bar over the selected/hovered unit. The visible
-   selection RING is a flat 3D model on the terrain (so geometry occludes it);
-   this element itself is invisible and just carries the HP bar. */
-.unit-select {
+/* Floating health bar, drawn above EVERY visible unit (always-on, WC3-style).
+   The selection/hover RING is a separate flat 3D model on the terrain. */
+.unit-hpbar {
   position: fixed;
-  width: 46px;
-  height: 46px;
-  border: none;
+  height: 5px;
   transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(0, 0, 0, 0.85);
   pointer-events: none;
   z-index: 2;
+}
+.unit-hpbar-fill {
+  height: 100%;
+  width: 100%;
+  background: #46e05a;
 }
 
 /* ---------------------------------------------------------------------------
@@ -382,9 +386,12 @@ body.in-game .menu-panel { display: none; }
 .hud-console-skinned .hud-inventory .hud-slot { background: none; border: none; }
 .hud-console-skinned .hud-cmd { font-size: 11px; }
 
-/* Command buttons show their BTN icon fully inside the tile (not cropped). */
+/* Command buttons: the BTN icon fills (covers) the whole square tile like the
+   original command card — no letterbox gaps, no bottom/right cropping. The tile
+   is forced square so a square icon covers it exactly. */
 .hud-cmd {
-  background-size: contain;
+  aspect-ratio: 1;
+  background-size: cover;
   background-repeat: no-repeat;
   background-position: center;
   color: transparent;
@@ -442,6 +449,15 @@ body.in-game .menu-panel { display: none; }
 .build-ghost.invalid {
   border-color: #e05046;
   background: rgba(224, 80, 70, 0.2);
+}
+
+/* Drag-box selection rectangle (WC3 green marquee). */
+.select-box {
+  position: fixed;
+  border: 1px solid rgba(120, 235, 130, 0.9);
+  background: rgba(90, 224, 110, 0.12);
+  pointer-events: none;
+  z-index: 4;
 }
 
 .hud-portrait {
@@ -533,11 +549,6 @@ body.in-game .menu-panel { display: none; }
 body.order-armed #map { cursor: crosshair; }
 
 
-.unit-select.unit-hovered {
-  border-color: rgba(70, 224, 90, 0.55);
-  box-shadow: 0 0 4px rgba(70, 224, 90, 0.35);
-}
-
 .metrics {
   position: fixed;
   left: 10px;
@@ -549,23 +560,6 @@ body.order-armed #map { cursor: crosshair; }
   border-radius: 4px;
   pointer-events: none;
   z-index: 5;
-}
-
-.unit-hp {
-  position: absolute;
-  left: 50%;
-  top: -46px;
-  width: 46px;
-  height: 5px;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.6);
-  border: 1px solid rgba(0, 0, 0, 0.8);
-}
-
-.unit-hp-fill {
-  height: 100%;
-  width: 100%;
-  background: #46e05a;
 }
 
 #ui {

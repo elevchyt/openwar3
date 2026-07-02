@@ -138,21 +138,21 @@ const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData movehe
 const SEL_RADIUS_PER_SCALE = 36;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 
-interface Marker {
+// A floating health bar drawn above a unit. One is pooled per visible unit so
+// HP bars are always on screen (WC3's "always show health bars"), not only for
+// the selected/hovered unit.
+interface HpBar {
   root: HTMLDivElement;
   fill: HTMLDivElement;
 }
 
-function makeMarker(extraClass: string): Marker {
+function makeHpBar(): HpBar {
   const root = document.createElement("div");
-  root.className = `unit-select ${extraClass}`;
+  root.className = "unit-hpbar";
   root.hidden = true;
-  const track = document.createElement("div");
-  track.className = "unit-hp";
   const fill = document.createElement("div");
-  fill.className = "unit-hp-fill";
-  track.appendChild(fill);
-  root.appendChild(track);
+  fill.className = "unit-hpbar-fill";
+  root.appendChild(fill);
   document.body.appendChild(root);
   return { root, fill };
 }
@@ -161,14 +161,17 @@ export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
   private byId = new Map<number, Entry>();
-  private selected: number | null = null;
+  // Multi-unit selection: `selected` holds the whole group, `primary` is the
+  // leader that drives the HUD (portrait, info panel, command card).
+  private selected = new Set<number>();
+  private primary: number | null = null;
+  private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
   private seeded = false;
   private nextId = 1;
-  private selectMarker: Marker;
-  private hoverMarker: Marker;
+  private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
   private corpses: Array<{ instance: Instance; t: number }> = [];
-  private flashRequests: Array<{ x: number; y: number; z: number; radius: number }> = [];
+  private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number] }> = [];
   // scratch buffers to avoid per-frame allocation
   private loc = new Float32Array(3);
   private quat = new Float32Array(4);
@@ -185,19 +188,35 @@ export class RtsController {
     private registry: UnitRegistry,
   ) {
     this.sim = new SimWorld(grid);
-    this.selectMarker = makeMarker("unit-selected");
-    this.hoverMarker = makeMarker("unit-hovered");
   }
 
   dispose(): void {
-    this.selectMarker.root.remove();
-    this.hoverMarker.root.remove();
+    for (const b of this.hpBars) b.root.remove();
+    this.hpBars = [];
   }
 
-  /** Hide the selection/hover rings (e.g. when the map view is not active). */
+  /** Which player's units a drag-box selects (set at melee start). */
+  setLocalPlayer(id: number): void {
+    this.localPlayer = id;
+  }
+
+  /** Remove a unit from the selection (keeping the primary consistent). */
+  private deselect(id: number): void {
+    this.selected.delete(id);
+    if (this.primary === id) this.primary = this.selected.values().next().value ?? null;
+  }
+
+  /** Drop dead units from the selection and repoint the primary if it died. */
+  private pruneSelection(): void {
+    for (const id of this.selected) if (!this.sim.units.has(id)) this.selected.delete(id);
+    if (this.primary !== null && !this.sim.units.has(this.primary)) {
+      this.primary = this.selected.values().next().value ?? null;
+    }
+  }
+
+  /** Hide the floating health bars (e.g. when the map view is not active). */
   pause(): void {
-    this.selectMarker.root.hidden = true;
-    this.hoverMarker.root.hidden = true;
+    for (const b of this.hpBars) b.root.hidden = true;
   }
 
   /** Seed movable units from the map once its units have loaded. */
@@ -341,7 +360,7 @@ export class RtsController {
         e.hidden = u.inMine;
         if (e.hidden) {
           e.unit.instance.hide();
-          if (this.selected === e.simId) this.selected = null; // deselect on mine entry
+          this.deselect(e.simId); // deselect on mine entry
           if (this.hovered === e.simId) this.hovered = null;
         } else {
           e.unit.instance.show();
@@ -382,7 +401,7 @@ export class RtsController {
         e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
       }
     }
-    this.updateMarkers();
+    this.updateHealthBars();
   }
 
   /** The sim removed this unit: play its death animation, then keep the corpse
@@ -392,7 +411,7 @@ export class RtsController {
     if (!e) return;
     this.byId.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
-    if (this.selected === simId) this.selected = null;
+    this.deselect(simId);
     e.unit.state = WALK; // keep mdx-m3-viewer from overriding the death sequence
     if (e.anims.death >= 0) {
       e.unit.instance.setSequence(e.anims.death);
@@ -432,10 +451,38 @@ export class RtsController {
     }
   }
 
-  /** Left-click: select the nearest movable unit within a pixel radius. */
+  /** Left-click: select the single unit under the cursor (empty ground clears). */
   selectAt(cssX: number, cssY: number): void {
-    this.selected = this.pickAt(cssX, cssY);
-    this.updateMarkers();
+    const id = this.pickAt(cssX, cssY);
+    this.selected.clear();
+    if (id !== null) this.selected.add(id);
+    this.primary = id;
+  }
+
+  /** Drag-box: select all of the local player's mobile units whose on-screen
+   *  position falls inside the rectangle (CSS px). Empty box clears the group. */
+  selectBox(x0: number, y0: number, x1: number, y1: number): void {
+    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+    const viewport = this.host.viewport();
+    const dpr = this.dpr();
+    const h = this.host.canvas.height;
+    const picked: number[] = [];
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u || e.hidden) continue;
+      if (u.owner !== this.localPlayer || u.building) continue; // own mobile units only
+      this.world[0] = u.x;
+      this.world[1] = u.y;
+      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
+      this.host.camera.worldToScreen(this.screen, this.world, viewport);
+      const sx = this.screen[0] / dpr;
+      const sy = (h - this.screen[1]) / dpr; // gl y-up → css y-down
+      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) picked.push(e.simId);
+    }
+    this.selected.clear();
+    for (const id of picked) this.selected.add(id);
+    this.primary = picked[0] ?? null;
   }
 
   /** Pointer move: show the ring + HP bar under the unit being hovered. */
@@ -457,7 +504,7 @@ export class RtsController {
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
   orderClickAt(cssX: number, cssY: number): boolean {
-    if (!this.orderMode || this.selected === null) {
+    if (!this.orderMode || this.selected.size === 0) {
       this.orderMode = null;
       return false;
     }
@@ -465,10 +512,17 @@ export class RtsController {
     this.orderMode = null;
     if (mode === "attack") {
       const picked = this.pickAt(cssX, cssY);
-      const sel = this.sim.units.get(this.selected);
-      if (picked !== null && picked !== this.selected && sel) {
+      const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+      if (picked !== null && prim) {
         const target = this.sim.units.get(picked);
-        if (target && this.sim.hostile(sel, target) && this.sim.issueAttack(this.selected, picked)) return true;
+        if (target && this.sim.hostile(prim, target)) {
+          let any = false;
+          for (const id of this.selected) if (id !== picked && this.sim.issueAttack(id, picked)) any = true;
+          if (any) {
+            this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius);
+            return true;
+          }
+        }
       }
       // No hostile under the cursor: fall through to a move (attack-move later).
     }
@@ -477,17 +531,17 @@ export class RtsController {
     this.screen[1] = cssY * dpr;
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
-    if (hit) this.sim.issueMove(this.selected, hit[0], hit[1]);
+    if (hit) for (const id of this.selected) this.sim.issueMove(id, hit[0], hit[1]);
     return true;
   }
 
   stopSelected(): void {
-    if (this.selected !== null) this.sim.stop(this.selected);
+    for (const id of this.selected) this.sim.stop(id);
   }
 
   selectedInfo(): SelectionInfo | null {
-    if (this.selected === null) return null;
-    return this.infoFor(this.selected);
+    if (this.primary === null) return null;
+    return this.infoFor(this.primary);
   }
 
   private infoFor(id: number): SelectionInfo | null {
@@ -521,19 +575,20 @@ export class RtsController {
     };
   }
 
-  /** Owner of the selected unit (for build/train ownership checks). */
+  /** Owner of the primary selected unit (for build/train ownership checks). */
   selectedOwner(): number | null {
-    if (this.selected === null) return null;
-    return this.sim.units.get(this.selected)?.owner ?? null;
+    if (this.primary === null) return null;
+    return this.sim.units.get(this.primary)?.owner ?? null;
   }
 
+  /** The primary (leader) selected unit id — drives the HUD and build placement. */
   get selectedId(): number | null {
-    return this.selected;
+    return this.primary;
   }
 
-  /** Order the selected worker to walk to a build site. */
+  /** Order the primary worker to walk to a build site (only the builder goes). */
   moveSelectedTo(x: number, y: number): void {
-    if (this.selected !== null) this.sim.issueMove(this.selected, x, y);
+    if (this.primary !== null) this.sim.issueMove(this.primary, x, y);
   }
 
   /** Terrain height at a world point (for placing ground-hugging ghosts). */
@@ -555,21 +610,31 @@ export class RtsController {
     return { hour: this.sim.timeOfDay, isDay: this.sim.isDay };
   }
 
-  /** Ground-circle info for the selected/hovered unit (the renderer draws the
-   *  ring as a flat model on the terrain so geometry occludes it). */
-  ringInfo(which: "sel" | "hover"): { x: number; y: number; z: number; radius: number; owner: number } | null {
-    const id = which === "sel" ? this.selected : this.hovered;
-    if (id === null) return null;
-    const u = this.sim.units.get(id);
-    const e = this.byId.get(id);
-    if (!u || !e) return null;
-    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner };
+  /** Ground-circle info for every selected unit (the renderer draws each ring as
+   *  a flat model on the terrain so geometry occludes it). */
+  selectionRings(): Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number }> {
+    const out: Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number }> = [];
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      const e = this.byId.get(id);
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team });
+    }
+    return out;
   }
 
-  /** World position of the selected unit (for the portrait-click camera focus). */
+  /** Ground-circle for the hovered unit (skipped if it's already selected). */
+  hoverRing(): { x: number; y: number; z: number; radius: number; owner: number; team: number } | null {
+    if (this.hovered === null || this.selected.has(this.hovered)) return null;
+    const u = this.sim.units.get(this.hovered);
+    const e = this.byId.get(this.hovered);
+    if (!u || !e) return null;
+    return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team };
+  }
+
+  /** World position of the primary selected unit (portrait-click camera focus). */
   selectedPosition(): [number, number] | null {
-    if (this.selected === null) return null;
-    const u = this.sim.units.get(this.selected);
+    if (this.primary === null) return null;
+    const u = this.sim.units.get(this.primary);
     return u ? [u.x, u.y] : null;
   }
 
@@ -606,19 +671,33 @@ export class RtsController {
     return out;
   }
 
-  /** Right-click: attack a hostile unit under the cursor, else move to ground. */
+  /** Right-click: order the whole selection. Attack a hostile under the cursor;
+   *  workers resume a friendly build or harvest a resource; else move to ground. */
   moveAt(cssX: number, cssY: number): void {
-    if (this.selected === null) return;
-    const sel = this.sim.units.get(this.selected);
-    if (!sel) return;
+    if (this.selected.size === 0) return;
+    const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
     const picked = this.pickAt(cssX, cssY);
-    if (picked !== null && picked !== this.selected) {
+    if (picked !== null && !this.selected.has(picked)) {
       const target = this.sim.units.get(picked);
-      if (target && this.sim.hostile(sel, target) && this.sim.issueAttack(this.selected, picked)) return;
-      // Worker right-clicking a friendly under-construction building resumes it.
-      if (target && sel.worker && target.building && target.building.constructionLeft > 0 && target.owner === sel.owner) {
-        this.sim.assignBuilder(this.selected, picked);
-        return;
+      if (target && prim && this.sim.hostile(prim, target)) {
+        let any = false;
+        for (const id of this.selected) if (this.sim.issueAttack(id, picked)) any = true;
+        if (any) {
+          this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius);
+          return;
+        }
+      }
+      // Workers right-clicking a friendly under-construction building resume it.
+      if (target && target.building && target.building.constructionLeft > 0) {
+        let any = false;
+        for (const id of this.selected) {
+          const w = this.sim.units.get(id);
+          if (w?.worker && target.owner === w.owner) {
+            this.sim.assignBuilder(id, picked);
+            any = true;
+          }
+        }
+        if (any) return;
       }
     }
     // screenToWorldRay/unproject expects window coords with a TOP-LEFT origin
@@ -629,32 +708,50 @@ export class RtsController {
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
     if (!hit) return;
-    // Workers right-clicking a resource start harvesting (WC3 smart order).
-    if (sel.worker) {
-      // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
-      // lands the ground ray well behind the trunk.
-      const mine = this.sim.nearestMine(hit[0], hit[1], 320);
-      if (mine && sel.worker.gold && this.sim.issueHarvest(this.selected, "gold", mine.id)) {
+    // Workers in the selection right-clicking a resource start harvesting.
+    // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
+    // lands the ground ray well behind the trunk.
+    const mine = this.sim.nearestMine(hit[0], hit[1], 320);
+    if (mine) {
+      let any = false;
+      for (const id of this.selected) {
+        const w = this.sim.units.get(id);
+        if (w?.worker?.gold && this.sim.issueHarvest(id, "gold", mine.id)) any = true;
+      }
+      if (any) {
         this.flashTarget(mine.x, mine.y, mine.radius);
         return;
       }
-      const tree = this.sim.nearestTree(hit[0], hit[1], 140);
-      if (tree && sel.worker.lumber && this.sim.issueHarvest(this.selected, "lumber", tree.id)) {
+    }
+    const tree = this.sim.nearestTree(hit[0], hit[1], 140);
+    if (tree) {
+      let any = false;
+      for (const id of this.selected) {
+        const w = this.sim.units.get(id);
+        if (w?.worker?.lumber && this.sim.issueHarvest(id, "lumber", tree.id)) any = true;
+      }
+      if (any) {
         this.flashTarget(tree.x, tree.y, 48); // trees ≈ 2×2 cells
         return;
       }
     }
-    this.sim.issueMove(this.selected, hit[0], hit[1]);
+    for (const id of this.selected) this.sim.issueMove(id, hit[0], hit[1]);
   }
 
   /** Queue a yellow harvest-target flash — the renderer draws it as a flat
    *  ground circle (twice) like the selection ring, sized to the node. */
   private flashTarget(x: number, y: number, radius: number): void {
-    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius });
+    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color: [1, 0.88, 0.2] });
+  }
+
+  /** Queue a red attack-target flash at a hostile unit (same twin-blink as the
+   *  harvest flash, but red) when it's ordered to be attacked. */
+  private flashAttack(x: number, y: number, radius: number): void {
+    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color: [1, 0.2, 0.16] });
   }
 
   /** Harvest-flash requests since the last drain (renderer renders + times them). */
-  drainFlashes(): Array<{ x: number; y: number; z: number; radius: number }> {
+  drainFlashes(): Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number] }> {
     if (!this.flashRequests.length) return this.flashRequests;
     const out = this.flashRequests;
     this.flashRequests = [];
@@ -726,55 +823,43 @@ export class RtsController {
     return null;
   }
 
-  private updateMarkers(): void {
-    if (this.selected !== null && !this.sim.units.has(this.selected)) this.selected = null;
-    this.placeMarker(this.selectMarker, this.selected);
-    // Don't double up both rings on the same unit.
-    this.placeMarker(this.hoverMarker, this.hovered === this.selected ? null : this.hovered);
-  }
-
-  private placeMarker(marker: Marker, simId: number | null): void {
-    const u = simId !== null ? this.sim.units.get(simId) : undefined;
-    const e = simId !== null ? this.byId.get(simId) : undefined;
-    if (!u || !e) {
-      marker.root.hidden = true;
-      return;
-    }
-    const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
-    marker.fill.style.width = `${frac * 100}%`;
-    marker.fill.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+  /** Draw a floating HP bar above every visible unit each frame (always-on),
+   *  reusing a pool of DOM elements. Off-screen / hidden units release theirs. */
+  private updateHealthBars(): void {
+    this.pruneSelection();
     const viewport = this.host.viewport();
-    this.world[0] = u.x;
-    this.world[1] = u.y;
-    // Ring sits at the unit's drawn base — for air units that's their altitude.
-    this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
-    this.host.camera.worldToScreen(this.screen, this.world, viewport);
-    const [w, h] = [this.host.canvas.width, this.host.canvas.height];
-    if (this.screen[0] < 0 || this.screen[0] > w || this.screen[1] < 0 || this.screen[1] > h) {
-      marker.root.hidden = true;
-      return;
-    }
     const dpr = this.dpr();
-    // Project the ring's world-space radius so its on-screen size tracks the
-    // unit's actual footprint regardless of zoom: X offset → ring width,
-    // Y offset → foreshortened ring height (ground-plane ellipse).
-    this.world2.set(this.world);
-    this.world2[0] = u.x + e.selRadius;
-    this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-    const rx = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / dpr);
-    this.world2[0] = u.x;
-    this.world2[1] = u.y + e.selRadius;
-    this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-    const ry = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / dpr);
-    marker.root.hidden = false;
-    marker.root.style.width = `${rx * 2}px`;
-    marker.root.style.height = `${ry * 2}px`;
-    marker.root.style.left = `${this.screen[0] / dpr}px`;
-    marker.root.style.top = `${(h - this.screen[1]) / dpr}px`; // gl y-up → css y-down
-    // Keep the HP bar matched to the ring and floating above the unit.
-    const track = marker.fill.parentElement as HTMLDivElement;
-    track.style.width = `${Math.max(24, rx * 1.6)}px`;
-    track.style.top = `${-(ry + 14)}px`;
+    const w = this.host.canvas.width;
+    const h = this.host.canvas.height;
+    let n = 0;
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u || e.hidden) continue; // worker inside a mine, etc.
+      this.world[0] = u.x;
+      this.world[1] = u.y;
+      // Bar floats at the unit's drawn base — for air units, their altitude.
+      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
+      this.host.camera.worldToScreen(this.screen, this.world, viewport);
+      const sx = this.screen[0];
+      const sy = this.screen[1];
+      if (sx < 0 || sx > w || sy < 0 || sy > h) continue;
+      // Foreshortened selection radius → how far above the base to float the bar
+      // and how wide to draw it, so both track zoom.
+      this.world2.set(this.world);
+      this.world2[1] = u.y + e.selRadius;
+      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+      const ry = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - sx, this.screen2[1] - sy) / dpr);
+      const bar = this.hpBars[n] ?? (this.hpBars[n] = makeHpBar());
+      n++;
+      const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
+      bar.fill.style.width = `${frac * 100}%`;
+      bar.fill.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+      bar.root.hidden = false;
+      bar.root.style.width = `${Math.max(22, Math.min(64, ry * 1.7))}px`;
+      bar.root.style.left = `${sx / dpr}px`;
+      bar.root.style.top = `${(h - sy) / dpr - (ry + 14)}px`; // gl y-up → css y-down
+    }
+    for (let k = n; k < this.hpBars.length; k++) this.hpBars[k].root.hidden = true;
   }
 
   private toGl(cssX: number, cssY: number): [number, number] {
@@ -792,9 +877,13 @@ function lift(moveHeight: number): number {
   return moveHeight > 0 ? moveHeight + AIR_EXTRA : 0;
 }
 
+// Weapon types that fire a travelling projectile (vs. instant melee).
+const RANGED_WEAPON_TYPES = new Set(["missile", "msplash", "mbounce", "artillery"]);
+
 // A unit's weapon from its registry stats; null when it can't attack.
 function weaponFor(def: UnitDef): SimWeapon | null {
   if (def.attackCooldown <= 0 || def.attackDamage + def.attackDice * def.attackSides <= 0) return null;
+  const ranged = RANGED_WEAPON_TYPES.has(def.weaponType.toLowerCase()) || def.missileArt !== "";
   return {
     damage: def.attackDamage,
     dice: def.attackDice,
@@ -802,6 +891,9 @@ function weaponFor(def: UnitDef): SimWeapon | null {
     cooldown: def.attackCooldown,
     range: def.attackRange,
     acquire: def.acquireRange,
+    ranged,
+    missileArt: def.missileArt,
+    missileSpeed: def.missileSpeed,
   };
 }
 
