@@ -7,6 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
+import type { QueuedOrder, RallyKind } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, type Footprint } from "../sim/destructibles";
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
 import { makeHeightSampler } from "../game/heightmap";
@@ -51,6 +52,7 @@ const BASE_FILES = [
 
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const NEUTRAL_PASSIVE_PLAYER = 15; // war3mapUnits.doo owner slot for Neutral Passive
+const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
@@ -168,7 +170,9 @@ export class MapViewerScene {
   private buildGhosts = new Map<string, SpawnInstance>();
   private buildGhost: SpawnInstance | null = null;
   private ghostBirthFrame = -1; // frame to pin the ghost at (Birth end = built)
-  private pendingBuilds: Array<{ workerId: number; def: UnitDef; x: number; y: number }> = [];
+  // Workers whose build foundation is mid-spawn (async model load), so
+  // tickPendingBuild doesn't raise the same building twice.
+  private buildSpawning = new Set<number>();
   private meleeTeams = new Map<number, number>(); // owner slot → team
   private startMarkersHidden = false; // hide sloc props once units finish loading
   // Flat selection-circle model instances, rendered on the terrain so geometry
@@ -177,6 +181,8 @@ export class MapViewerScene {
   private hoverCircle: SpawnInstance | null = null;
   private circleModel: SpawnModel | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
+  private rallyFlagModel: SpawnModel | null = null; // reused for the smaller queue flags
+  private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
   private selectBoxEl: HTMLDivElement | null = null;
   private cursorStyleEl: HTMLStyleElement | null = null;
   private reticleEl: HTMLDivElement | null = null; // follows the cursor while armed
@@ -287,6 +293,8 @@ export class MapViewerScene {
     this.startMarkersHidden = false;
     this.buildingFootprints.clear();
     this.rallyFlag = null;
+    this.rallyFlagModel = null;
+    this.queueFlags = [];
 
     this.viewer.loadMap(bytes);
     const map = this.viewer.map;
@@ -512,9 +520,10 @@ export class MapViewerScene {
   }
 
   /** Place the building being positioned at the cursor, if valid and affordable.
-   *  The structure is NOT spawned yet — the worker walks to the site and the
-   *  building rises only once it arrives (see tickPendingBuild). */
-  private placeBuilding(cssX: number, cssY: number): void {
+   *  The structure is NOT spawned yet — the worker walks to the site (tracked by
+   *  the sim as `buildPending`) and the building rises once it arrives (see
+   *  tickPendingBuild). Shift queues the build after the worker's current orders. */
+  private placeBuilding(cssX: number, cssY: number, queued = false): void {
     const p = this.placement;
     if (!p || !this.rts || !this.grid) return;
     const hit = this.rts.groundPoint(cssX, cssY);
@@ -526,35 +535,59 @@ export class MapViewerScene {
     if (stash.gold < p.def.goldCost || stash.lumber < p.def.lumberCost) return;
     stash.gold -= p.def.goldCost;
     stash.lumber -= p.def.lumberCost;
-    this.rts.moveSelectedTo(x, y); // send the worker to the site
-    this.pendingBuilds.push({ workerId: p.workerId, def: p.def, x, y });
+    const order: QueuedOrder = { kind: "buildnew", defId: p.def.id, x, y };
+    if (queued) this.rts.simWorld.queueOrder(p.workerId, order);
+    else this.rts.simWorld.issueOrder(p.workerId, order); // walk there now
     this.cardPage = "root";
     this.cancelPlacement();
   }
 
-  /** When a pending-build worker reaches its site, raise the building (under
-   *  construction) and attach the worker as its builder. */
+  /** When a worker walking to raise a new building (`buildPending`) reaches its
+   *  site, spawn the foundation (under construction) and attach it as builder.
+   *  A guard set prevents a double-spawn during the async model load — the
+   *  worker keeps its `buildPending` (so the sim holds any queued follow-ups)
+   *  until assignBuilder clears it. */
   private tickPendingBuild(): void {
-    if (!this.rts || !this.pendingBuilds.length) return;
+    if (!this.rts) return;
     const world = this.rts.simWorld;
-    for (let i = this.pendingBuilds.length - 1; i >= 0; i--) {
-      const pb = this.pendingBuilds[i];
-      const w = world.units.get(pb.workerId);
-      if (!w) {
-        this.pendingBuilds.splice(i, 1); // worker died en route
-        continue;
-      }
-      const near = Math.hypot(w.x - pb.x, w.y - pb.y) < 160 && !w.moving;
-      if (!near) continue;
-      this.pendingBuilds.splice(i, 1);
-      void this.spawnUnit(pb.def, pb.x, pb.y, this.localPlayer, this.teamOf(this.localPlayer), pb.def.buildTime || 60).then((simId) => {
-        if (simId !== null) world.assignBuilder(pb.workerId, simId);
+    for (const w of world.units.values()) {
+      const pb = w.buildPending;
+      if (!pb || w.owner !== this.localPlayer || this.buildSpawning.has(w.id)) continue;
+      if (Math.hypot(w.x - pb.x, w.y - pb.y) >= 160 || w.moving) continue; // not there yet
+      const def = this.registry.get(pb.defId);
+      if (!def) { w.buildPending = null; continue; }
+      const workerId = w.id;
+      this.buildSpawning.add(workerId);
+      void this.spawnUnit(def, pb.x, pb.y, this.localPlayer, this.teamOf(this.localPlayer), def.buildTime || 60).then((simId) => {
+        this.buildSpawning.delete(workerId);
+        if (simId !== null) world.assignBuilder(workerId, simId); // clears buildPending
+        else { const wk = world.units.get(workerId); if (wk) wk.buildPending = null; }
       });
     }
   }
 
   private teamOf(owner: number): number {
     return this.meleeTeams.get(owner) ?? owner;
+  }
+
+  /** Send a freshly-produced unit to its building's rally target: harvest a
+   *  rallied mine/tree (workers only), move to a rallied unit's current spot, or
+   *  move to a plain point. Falls back to the stored point when a smart target
+   *  is gone (mine mined out, tree felled, unit dead — WC3's "last spot"). */
+  private applyRally(simId: number, rally: { kind: RallyKind; targetId: number; x: number; y: number }): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    const u = world.units.get(simId);
+    if (!u) return;
+    if (rally.kind === "mine" && u.worker?.gold && world.mines.has(rally.targetId)) {
+      if (world.issueHarvest(simId, "gold", rally.targetId)) return;
+    } else if (rally.kind === "tree" && u.worker?.lumber && world.trees.has(rally.targetId)) {
+      if (world.issueHarvest(simId, "lumber", rally.targetId)) return;
+    } else if (rally.kind === "unit") {
+      const t = world.units.get(rally.targetId);
+      if (t) { world.issueMove(simId, t.x, t.y); return; } // move to its current position
+    }
+    world.issueMove(simId, rally.x, rally.y);
   }
 
   // --- selection circles (flat ground models) -------------------------------
@@ -577,12 +610,30 @@ export class MapViewerScene {
     // Rally flag shown at a selected building's rally point.
     const flag = (await this.viewer.load("UI\\Feedback\\RallyPoint\\RallyPoint.mdx", this.solver)) as SpawnModel | undefined;
     if (flag && map) {
+      this.rallyFlagModel = flag; // reused to spawn the small queue-flag pool
       this.rallyFlag = flag.addInstance();
       this.rallyFlag.setScene(map.worldScene);
       this.rallyFlag.setSequence(0); // play its waving clip so the flag animates
       this.rallyFlag.setSequenceLoopMode(2); // loop always
       this.rallyFlag.hide();
     }
+  }
+
+  /** Get (or lazily create) the i-th small queue flag — the rally-point model at
+   *  a reduced scale, one per queued order of the current selection. */
+  private queueFlag(i: number): SpawnInstance | null {
+    const scene = this.viewer.map?.worldScene;
+    if (!this.rallyFlagModel || !scene) return null;
+    while (this.queueFlags.length <= i) {
+      const inst = this.rallyFlagModel.addInstance();
+      inst.setScene(scene);
+      inst.setSequence(0);
+      inst.setSequenceLoopMode(2); // loop the waving clip
+      inst.setUniformScale(0.6); // smaller than the full rally flag
+      inst.hide();
+      this.queueFlags.push(inst);
+    }
+    return this.queueFlags[i];
   }
 
   /** Spawn a converging-arrows marker for each new move/attack-move order and
@@ -723,6 +774,18 @@ export class MapViewerScene {
         this.rallyFlag.hide();
       }
     }
+    // Small queue flags at each selected unit's shift-queued order positions.
+    const markers = this.rts?.queueMarkers() ?? [];
+    for (let i = 0; i < markers.length; i++) {
+      const inst = this.queueFlag(i);
+      if (!inst) break;
+      this.loc3[0] = markers[i].x;
+      this.loc3[1] = markers[i].y;
+      this.loc3[2] = markers[i].z;
+      inst.setLocation(this.loc3);
+      inst.show();
+    }
+    for (let i = markers.length; i < this.queueFlags.length; i++) this.queueFlags[i].hide();
     this.tickFlashCircles(dt);
   }
 
@@ -1123,16 +1186,14 @@ export class MapViewerScene {
           col: d.buttonX, row: d.buttonY, disabled: !afford,
         }));
       }
-      // Unit-producing buildings get a Set Rally Point button in the bottom-right
-      // slot (WC3 layout) — hero-train buttons occupy the rest of the bottom row,
-      // so (2,2) used to sit on top of a hero (e.g. the Paladin at the Altar).
+      // Cancel always owns the bottom-right slot (3,2) — the canonical WC3 spot.
+      // The Set Rally Point button sits one above it, at center-right (3,1), so it
+      // never shares the cancel slot. Neither collides with a train/hero button.
       if (trainsFor(sel.typeId).length) {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
-        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 2, active: this.rts?.orderMode === "rally" }));
+        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1, active: this.rts?.orderMode === "rally" }));
       }
-      // Cancel the last queued unit sits just above the rally button (3,1) — no
-      // trainable unit or hero uses that slot, so it never overlaps a train button.
-      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 1 }));
+      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
       return out;
     }
 
@@ -1233,17 +1294,17 @@ export class MapViewerScene {
     this.rts.simWorld.enqueueTrain(buildingId, unitId, d.buildTime || 15);
   }
 
-  /** Cancel an under-construction building: refund its cost, free its pathing
-   *  footprint, remove it, and play the race's dedicated **cancel explosion**
-   *  (`<Race>CancelDeath.mdx` — distinct from the building's own Death collapse
-   *  used for combat destruction). */
+  /** Cancel an under-construction building: refund **75%** of its cost (WC3
+   *  cancelled-construction rate), free its pathing footprint, remove it, and
+   *  play the race's dedicated **cancel explosion** (`<Race>CancelDeath.mdx` —
+   *  distinct from the building's own Death collapse used for combat). */
   private cancelConstruction(buildingId: number, typeId: string): void {
     if (!this.rts) return;
     const def = this.registry.get(typeId);
     if (def) {
       const stash = this.rts.stashFor(this.localPlayer);
-      stash.gold += def.goldCost;
-      stash.lumber += def.lumberCost;
+      stash.gold += Math.round(def.goldCost * CANCEL_BUILDING_REFUND);
+      stash.lumber += Math.round(def.lumberCost * CANCEL_BUILDING_REFUND);
     }
     // Grab the building's position before it's removed, for the explosion.
     const b = this.rts.simWorld.units.get(buildingId);
@@ -1299,30 +1360,22 @@ export class MapViewerScene {
     }
   }
 
-  /** Pose the ghost as a FULLY-BUILT building: face south, and scrub the "Birth"
-   *  clip to its last frame. Building models only reveal all their geometry at
-   *  the end of Birth (geosets grow during construction — verified against the
-   *  real MDX: every building has "Birth"[0,60000] then "Stand"); jumping to
-   *  "Stand" leaves birth-revealed parts hidden, which looked half-built. A
-   *  LOOP_NEVER clip clamps at its end, so it stays complete. */
+  /** Pose the ghost as a FULLY-BUILT building — face south and play "Stand",
+   *  exactly like a completed structure renders (which looks correct). Pinning
+   *  the end of the "Birth" clip instead left most models partly assembled:
+   *  their final geometry only appears in "Stand", so scrubbing Birth showed
+   *  just the construction geosets (only models whose Birth-end already matches
+   *  Stand — e.g. the Altar — looked whole). Stand loops harmlessly. */
   private applyGhostPose(inst: SpawnInstance): void {
     zQuat(this.mq, (3 * Math.PI) / 2); // face south, like a placed building
     inst.setRotation(this.mq);
     const seqs = inst.model.sequences;
-    const birth = seqs.findIndex((s) => /^birth$/i.test(s.name));
-    if (birth >= 0 && seqs[birth].interval) {
-      inst.setSequence(birth);
-      inst.setSequenceLoopMode(0);
-      this.ghostBirthFrame = seqs[birth].interval![1];
-      inst.frame = this.ghostBirthFrame;
-    } else {
-      const stand = standSequence(seqs);
-      if (stand >= 0) {
-        inst.setSequence(stand);
-        inst.setSequenceLoopMode(2);
-      }
-      this.ghostBirthFrame = -1;
+    const stand = standSequence(seqs);
+    if (stand >= 0) {
+      inst.setSequence(stand);
+      inst.setSequenceLoopMode(2);
     }
+    this.ghostBirthFrame = -1; // no birth-frame pinning; let Stand play
   }
 
   private resourceIcon(kind: "gold" | "lumber" | "supply"): string | null {
@@ -1498,10 +1551,9 @@ export class MapViewerScene {
             const spot = this.grid.nearestFit(cx, cy, n, 16) ?? this.grid.nearestWalkable(cx, cy, 16);
             if (spot) [sx, sy] = this.grid.cellToWorld(spot[0], spot[1]);
           }
-          const rx = t.rallyX;
-          const ry = t.rallyY;
+          const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
           void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
-            if (simId !== null) world.issueMove(simId, rx, ry);
+            if (simId !== null) this.applyRally(simId, rally);
           });
         }
       }
@@ -1566,7 +1618,7 @@ export class MapViewerScene {
     this.projectileLoading.clear();
     this.projectileModels.clear();
     this.placement = null;
-    this.pendingBuilds = [];
+    this.buildSpawning.clear();
     this.cursorSheet = null;
     this.reticleUrls.clear();
     this.handUrls.clear();
@@ -1701,12 +1753,13 @@ export class MapViewerScene {
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
       if (e.button === 2) {
-        // Right-click cancels build placement / an armed order, else moves.
+        // Right-click cancels build placement / an armed order, else moves
+        // (Shift held → append to the unit's order queue instead of replacing).
         if (this.placement) this.cancelPlacement();
         else if (this.rts?.orderMode) {
           this.rts.orderMode = null;
           this.hud?.clearOrderMode();
-        } else this.rts?.moveAt(e.offsetX, e.offsetY);
+        } else this.rts?.moveAt(e.offsetX, e.offsetY, e.shiftKey);
         return;
       }
       if (e.button === 0) {
@@ -1723,10 +1776,10 @@ export class MapViewerScene {
         this.hideSelectBox();
         if (!this.rts) return;
         if (this.placement) {
-          if (!this.moved) this.placeBuilding(e.offsetX, e.offsetY);
+          if (!this.moved) this.placeBuilding(e.offsetX, e.offsetY, e.shiftKey);
         } else if (this.rts.orderMode) {
           // An armed command-card order (Move/Attack) consumes the click.
-          if (!this.moved && this.rts.orderClickAt(e.offsetX, e.offsetY)) this.hud?.clearOrderMode();
+          if (!this.moved && this.rts.orderClickAt(e.offsetX, e.offsetY, e.shiftKey)) this.hud?.clearOrderMode();
         } else if (this.moved) {
           // A left-drag is a rectangle selection of the player's own units.
           this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY);

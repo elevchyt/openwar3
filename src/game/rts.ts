@@ -1,4 +1,4 @@
-import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type BuildingState } from "../sim/world";
+import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind } from "../sim/world";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
@@ -155,6 +155,7 @@ interface Entry {
   hidden: boolean; // instance hidden (worker inside a gold mine)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
+  moveEma: number; // smoothed actual/expected displacement — gates the walk clip
 }
 
 /** The "Birth" construction sequence + its frame interval, if the model has one. */
@@ -169,6 +170,12 @@ function findBirthFields(seqs: Array<{ name: string; interval?: ArrayLike<number
 }
 
 const WALK = 1, IDLE = 0;
+// A unit ordered to move but pinned in place by the crowd (actual displacement
+// far below what its speed would cover) shouldn't run the walk clip — it just
+// jogs on the spot, awkwardly. Below this share of expected displacement (EMA-
+// smoothed to avoid flicker), fall back to the stand pose instead.
+const MOVE_ANIM_MIN_RATIO = 0.2;
+const MOVE_EMA_ALPHA = 0.25; // per-tick blend toward the current ratio
 const CORPSE_TIME = 3; // seconds a corpse stays before being hidden
 const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
 const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData moveheight
@@ -178,6 +185,12 @@ const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 // Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
 const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
 const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
+// Target-circle flash tints (the twin-blink ring, like the gold mine): green for
+// a friendly/own building, yellow for allied or neutral, red for a hostile one.
+const FLASH_GREEN: [number, number, number] = [0.3, 1, 0.3];
+const FLASH_YELLOW: [number, number, number] = [1, 0.88, 0.2];
+const FLASH_RED: [number, number, number] = [1, 0.2, 0.16];
+const TREE_FLAG_HEIGHT = 150; // lift a queue flag to a tree's canopy top
 // Max world distance from the click's ground point to a pickable unit. Gates out
 // far/behind-camera units that screen-projection alone would wrongly match.
 const PICK_WORLD_MAX = 700;
@@ -436,6 +449,7 @@ export class RtsController {
         hidden: false,
         curSeq: -1,
         lastSwingSeq: -1,
+        moveEma: 1,
       };
       this.entries.push(entry);
       this.byId.set(simId, entry);
@@ -454,7 +468,7 @@ export class RtsController {
     // structures (footprint-sized ring, lowered collider); their footprint is
     // already stamped by the map loader, so speed 0 → no cell reservation here.
     const building: BuildingState | null = isBuilding
-      ? { constructionLeft: 0, buildTimeTotal: 1, builderId: 0, queue: [], rallyX: loc[0], rallyY: loc[1], producesUnits: false }
+      ? { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: loc[0], rallyY: loc[1], rallyKind: "point", rallyTargetId: 0, producesUnits: false }
       : null;
     const u = this.sim.add(
       {
@@ -501,6 +515,7 @@ export class RtsController {
       hidden: false,
       curSeq: -1,
       lastSwingSeq: -1,
+      moveEma: 1,
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
@@ -517,7 +532,7 @@ export class RtsController {
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
-      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderId: 0, queue: [], rallyX: x, rallyY: y - 200, producesUnits: trainsFor(def.id).length > 0 }
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: trainsFor(def.id).length > 0 }
       : null;
     this.sim.add(
       {
@@ -563,6 +578,7 @@ export class RtsController {
       hidden: false,
       curSeq: -1,
       lastSwingSeq: -1,
+      moveEma: 1,
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
@@ -644,7 +660,14 @@ export class RtsController {
           e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
         }
       } else {
-        const seq = this.pickSequence(e.anims, u);
+        // Smooth the actual/expected displacement so the walk clip only plays
+        // when the unit is really making progress — a unit wedged in a crowd
+        // (moving ordered, but barely inching) stands instead of jogging in place.
+        const expected = u.speed * dt;
+        const ratio = expected > 1e-3 ? Math.hypot(u.x - u.prevX, u.y - u.prevY) / expected : 1;
+        e.moveEma += (Math.min(ratio, 1) - e.moveEma) * MOVE_EMA_ALPHA;
+        const effMoving = u.moving && e.moveEma >= MOVE_ANIM_MIN_RATIO;
+        const seq = this.pickSequence(e.anims, u, effMoving);
         if (seq !== e.curSeq && seq >= 0) {
           e.curSeq = seq;
           e.unit.state = seq === e.anims.stand ? IDLE : WALK;
@@ -690,7 +713,7 @@ export class RtsController {
   /** Choose the animation sequence for a unit's current state, using the
    *  worker's carried resource so peasants walk/stand/chop with the right
    *  gold- and lumber-carrying clips. */
-  private pickSequence(a: AnimSet, u: SimUnit): number {
+  private pickSequence(a: AnimSet, u: SimUnit, moving: boolean): number {
     const carry = u.worker
       ? u.worker.carryGold > 0
         ? "gold"
@@ -700,7 +723,9 @@ export class RtsController {
       : null;
     // Movement wins over everything: a worker ordered to move mid-harvest walks
     // (with the right carry clip) instead of staying stuck in the chop pose.
-    if (u.moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
+    // `moving` is the *effective* move flag — a unit inching along in a crowd
+    // reads as standing so it doesn't run in place (see the tick loop).
+    if (moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
     if (u.constructing || u.repair?.active) return a.build; // hammering (build/repair)
     if (u.working) return a.chopLumber; // chopping a tree
     if (u.inCombat) return a.attack;
@@ -822,7 +847,7 @@ export class RtsController {
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
-  orderClickAt(cssX: number, cssY: number): boolean {
+  orderClickAt(cssX: number, cssY: number, queued = false): boolean {
     if (!this.orderMode || this.selected.size === 0) {
       this.orderMode = null;
       return false;
@@ -830,17 +855,17 @@ export class RtsController {
     const mode = this.orderMode;
     this.orderMode = null;
     if (mode === "rally") {
-      const hit = this.groundPoint(cssX, cssY);
-      if (hit) {
+      const r = this.resolveRally(cssX, cssY);
+      if (r) {
         for (const id of this.selected) {
-          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, hit[0], hit[1]);
+          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
-        this.queueArrow(hit[0], hit[1], MOVE_ARROW);
+        this.queueArrow(r.x, r.y, MOVE_ARROW);
       }
       return true;
     }
     if (mode === "repair") {
-      this.repairAt(this.pickAt(cssX, cssY));
+      this.repairAt(this.pickAt(cssX, cssY), queued);
       return true;
     }
     if (mode === "attack") {
@@ -850,7 +875,7 @@ export class RtsController {
         const target = this.sim.units.get(picked);
         if (target && this.sim.hostile(prim, target)) {
           let any = false;
-          for (const id of this.selected) if (id !== picked && this.sim.issueAttack(id, picked)) any = true;
+          for (const id of this.selected) if (id !== picked && this.order(id, { kind: "attack", targetId: picked }, queued)) any = true;
           if (any) {
             this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius);
             return true;
@@ -866,13 +891,13 @@ export class RtsController {
     const hit = this.groundHit();
     if (!hit) return true;
     if (mode === "patrol") {
-      for (const id of this.selected) this.sim.issuePatrol(id, hit[0], hit[1]);
+      for (const id of this.selected) this.order(id, { kind: "patrol", x: hit[0], y: hit[1] }, queued);
       this.queueArrow(hit[0], hit[1], MOVE_ARROW);
     } else if (mode === "attack") {
-      for (const id of this.selected) this.sim.issueAttackMove(id, hit[0], hit[1]);
+      for (const id of this.selected) this.order(id, { kind: "attackmove", x: hit[0], y: hit[1] }, queued);
       this.queueArrow(hit[0], hit[1], ATTACK_ARROW); // red a-move feedback
     } else {
-      this.groupMove(hit[0], hit[1]); // spread the group into a formation
+      this.groupMove(hit[0], hit[1], queued); // spread the group into a formation
       this.queueArrow(hit[0], hit[1], MOVE_ARROW);
     }
     return true;
@@ -891,13 +916,18 @@ export class RtsController {
     return out;
   }
 
+  /** Stop halts the selection AND clears their shift-queues (WC3: Stop wipes the
+   *  action queue), so a stopped unit doesn't resume a queued order. */
   stopSelected(): void {
-    for (const id of this.selected) this.sim.stop(id);
+    for (const id of this.selected) {
+      this.sim.clearQueue(id);
+      this.sim.stop(id);
+    }
   }
 
   /** Order the selected workers to repair a damaged friendly building. WC3
    *  rates: 35% of the build cost and 150% of the build time to go 1 HP→full. */
-  private repairAt(picked: number | null): boolean {
+  private repairAt(picked: number | null, queued = false): boolean {
     if (picked === null) return false;
     const target = this.sim.units.get(picked);
     if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp || target.owner !== this.localPlayer) return false;
@@ -910,7 +940,7 @@ export class RtsController {
     let any = false;
     for (const id of this.selected) {
       const w = this.sim.units.get(id);
-      if (w?.worker && this.sim.issueRepair(id, picked, hpPerSec, goldPerHp, lumberPerHp)) any = true;
+      if (w?.worker && this.order(id, { kind: "repair", buildingId: picked, hpPerSec, goldPerHp, lumberPerHp }, queued)) any = true;
     }
     return any;
   }
@@ -996,11 +1026,6 @@ export class RtsController {
     return this.primary;
   }
 
-  /** Order the primary worker to walk to a build site (only the builder goes). */
-  moveSelectedTo(x: number, y: number): void {
-    if (this.primary !== null) this.sim.issueMove(this.primary, x, y);
-  }
-
   /** Terrain height at a world point (for placing ground-hugging ghosts). */
   groundHeightAt(x: number, y: number): number {
     return this.heightAt(x, y);
@@ -1075,7 +1100,67 @@ export class RtsController {
   selectedRally(): { x: number; y: number; z: number } | null {
     if (this.primary === null) return null;
     const b = this.sim.units.get(this.primary)?.building;
-    return b && b.producesUnits ? { x: b.rallyX, y: b.rallyY, z: this.heightAt(b.rallyX, b.rallyY) } : null;
+    if (!b || !b.producesUnits) return null;
+    // For a mine/tree/unit rally, put the flag on the live target (a followed
+    // unit may have moved); fall back to the stored point if it's gone.
+    let x = b.rallyX;
+    let y = b.rallyY;
+    if (b.rallyKind === "unit") {
+      const t = this.sim.units.get(b.rallyTargetId);
+      if (t) { x = t.x; y = t.y; }
+    } else if (b.rallyKind === "tree") {
+      const t = this.sim.trees.get(b.rallyTargetId);
+      if (t) { x = t.x; y = t.y; }
+    } else if (b.rallyKind === "mine") {
+      const m = this.sim.mines.get(b.rallyTargetId);
+      if (m) { x = m.x; y = m.y; }
+    }
+    return { x, y, z: this.heightAt(x, y) };
+  }
+
+  /** World positions of every SELECTED unit's shift-queued orders, for the small
+   *  queue flags (rendered only while the owner is selected). A queued lumber
+   *  harvest flags the tree top; other orders flag the ground point/target. */
+  queueMarkers(): Array<{ x: number; y: number; z: number }> {
+    const out: Array<{ x: number; y: number; z: number }> = [];
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (!u) continue;
+      for (const o of u.orderQueue) {
+        const m = this.markerFor(o);
+        if (m) out.push(m);
+      }
+    }
+    return out;
+  }
+
+  /** World position (with height) of a queued order's target, or null if its
+   *  target has since vanished. Lumber harvests sit atop the tree. */
+  private markerFor(o: QueuedOrder): { x: number; y: number; z: number } | null {
+    switch (o.kind) {
+      case "move":
+      case "attackmove":
+      case "patrol":
+      case "buildnew":
+        return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
+      case "attack": {
+        const t = this.sim.units.get(o.targetId);
+        return t ? { x: t.x, y: t.y, z: this.heightAt(t.x, t.y) } : null;
+      }
+      case "buildresume":
+      case "repair": {
+        const b = this.sim.units.get(o.buildingId);
+        return b ? { x: b.x, y: b.y, z: this.heightAt(b.x, b.y) } : null;
+      }
+      case "harvest": {
+        if (o.res === "lumber") {
+          const t = this.sim.trees.get(o.nodeId);
+          return t ? { x: t.x, y: t.y, z: this.heightAt(t.x, t.y) + TREE_FLAG_HEIGHT } : null;
+        }
+        const m = this.sim.mines.get(o.nodeId);
+        return m ? { x: m.x, y: m.y, z: this.heightAt(m.x, m.y) } : null;
+      }
+    }
   }
 
   /** World position of the primary selected unit / mine (portrait-click focus). */
@@ -1122,48 +1207,54 @@ export class RtsController {
     return out;
   }
 
+  /** Route an order to a unit: either append it to the unit's shift-queue, or
+   *  execute it immediately (replacing its current order + queue). */
+  private order(id: number, o: QueuedOrder, queued: boolean): boolean {
+    if (queued) {
+      this.sim.queueOrder(id, o);
+      return true;
+    }
+    return this.sim.issueOrder(id, o);
+  }
+
   /** Right-click: order the whole selection. Attack a hostile under the cursor;
-   *  workers resume a friendly build or harvest a resource; else move to ground. */
-  moveAt(cssX: number, cssY: number): void {
+   *  workers resume a friendly build or harvest a resource; else move to ground.
+   *  `queued` (Shift held) appends to each unit's order queue instead of replacing. */
+  moveAt(cssX: number, cssY: number, queued = false): void {
     if (this.selected.size === 0) return;
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-    // A selected unit-producing building: right-click sets its rally point.
+    // A selected unit-producing building: right-click sets its (smart) rally point.
     if (prim?.building?.producesUnits) {
-      const hit = this.groundPoint(cssX, cssY);
-      if (hit) {
+      const r = this.resolveRally(cssX, cssY);
+      if (r) {
         for (const id of this.selected) {
-          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, hit[0], hit[1]);
+          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
-        this.queueArrow(hit[0], hit[1], MOVE_ARROW);
+        this.queueArrow(r.x, r.y, MOVE_ARROW);
       }
       return;
     }
     const picked = this.pickAt(cssX, cssY);
     if (picked !== null && !this.selected.has(picked)) {
       const target = this.sim.units.get(picked);
-      if (target && prim && this.sim.hostile(prim, target)) {
-        let any = false;
-        for (const id of this.selected) if (this.sim.issueAttack(id, picked)) any = true;
-        if (any) {
-          this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius);
+      if (target) {
+        const selR = this.byId.get(picked)?.selRadius ?? target.radius;
+        const enemy = prim ? this.sim.hostile(prim, target) : false;
+        if (enemy && !target.building) {
+          // Hostile UNIT: attack + red flash (existing behaviour).
+          let any = false;
+          for (const id of this.selected) if (this.order(id, { kind: "attack", targetId: picked }, queued)) any = true;
+          if (any) {
+            this.flashRing(target.x, target.y, selR, FLASH_RED);
+            return;
+          }
+        } else if (target.building) {
+          // ANY building: flash its footprint circle instead of a ground arrow —
+          // red for hostile, green for own, yellow for allied/neutral — and issue
+          // the fitting order (attack / resume construction / repair / move).
+          this.orderOnBuilding(target, picked, enemy, selR, queued);
           return;
         }
-      }
-      // Workers right-clicking a friendly under-construction building resume it.
-      if (target && target.building && target.building.constructionLeft > 0) {
-        let any = false;
-        for (const id of this.selected) {
-          const w = this.sim.units.get(id);
-          if (w?.worker && target.owner === w.owner) {
-            this.sim.assignBuilder(id, picked);
-            any = true;
-          }
-        }
-        if (any) return;
-      }
-      // Workers right-clicking a friendly DAMAGED (completed) building repair it.
-      if (target && target.building && target.building.constructionLeft <= 0 && target.hp < target.maxHp) {
-        if (this.repairAt(picked)) return;
       }
     }
     // screenToWorldRay/unproject expects window coords with a TOP-LEFT origin
@@ -1182,7 +1273,7 @@ export class RtsController {
       let any = false;
       for (const id of this.selected) {
         const w = this.sim.units.get(id);
-        if (w?.worker?.gold && this.sim.issueHarvest(id, "gold", mine.id)) any = true;
+        if (w?.worker?.gold && this.order(id, { kind: "harvest", res: "gold", nodeId: mine.id }, queued)) any = true;
       }
       if (any) {
         this.flashTarget(mine.x, mine.y, mine.radius);
@@ -1191,19 +1282,89 @@ export class RtsController {
     }
     const tree = this.sim.nearestTree(hit[0], hit[1], 140);
     if (tree) {
-      let any = false;
+      // Spread the group across nearby trees so they don't all crowd the one
+      // clicked trunk and shove each other. Gather the lumber workers, pull the
+      // N nearest trees to the click (N = worker count), then hand each worker
+      // the least-crowded candidate, breaking ties by which is closest to it.
+      const workers: number[] = [];
       for (const id of this.selected) {
-        const w = this.sim.units.get(id);
-        if (w?.worker?.lumber && this.sim.issueHarvest(id, "lumber", tree.id)) any = true;
+        if (this.sim.units.get(id)?.worker?.lumber) workers.push(id);
       }
-      if (any) {
-        this.flashTarget(tree.x, tree.y, 76); // a bigger ring around the tree
-        this.treePulses.push({ x: tree.x, y: tree.y }); // pulse the tree yellow too
-        return;
+      if (workers.length) {
+        const trees = this.sim.nearestTrees(tree.x, tree.y, 220, workers.length);
+        const load = new Map<number, number>(trees.map((t) => [t.id, 0]));
+        let any = false;
+        const targeted = new Set<number>();
+        for (const id of workers) {
+          const w = this.sim.units.get(id)!;
+          // fill each tree once (load dominates) before doubling up; nearest wins ties.
+          let best = trees[0];
+          let bestScore = Infinity;
+          for (const t of trees) {
+            const score = load.get(t.id)! * 1e6 + Math.hypot(t.x - w.x, t.y - w.y);
+            if (score < bestScore) {
+              bestScore = score;
+              best = t;
+            }
+          }
+          if (this.order(id, { kind: "harvest", res: "lumber", nodeId: best.id }, queued)) {
+            load.set(best.id, load.get(best.id)! + 1);
+            targeted.add(best.id);
+            any = true;
+          }
+        }
+        if (any) {
+          this.flashTarget(tree.x, tree.y, 76); // a bigger ring around the clicked tree
+          for (const t of trees) if (targeted.has(t.id)) this.treePulses.push({ x: t.x, y: t.y });
+          return;
+        }
       }
     }
-    this.groupMove(hit[0], hit[1]); // spread the group into a formation
+    this.groupMove(hit[0], hit[1], queued); // spread the group into a formation
     this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move-order feedback
+  }
+
+  /** Resolve where a rally right-click points: a unit under the cursor (follow),
+   *  a gold mine or tree (produced workers harvest it), else a ground point. */
+  private resolveRally(cssX: number, cssY: number): { x: number; y: number; kind: RallyKind; targetId: number } | null {
+    const picked = this.pickAt(cssX, cssY);
+    if (picked !== null) {
+      const t = this.sim.units.get(picked);
+      if (t && !t.building) return { x: t.x, y: t.y, kind: "unit", targetId: picked };
+    }
+    const hit = this.groundPoint(cssX, cssY);
+    if (!hit) return null;
+    const mine = this.sim.nearestMine(hit[0], hit[1], 320);
+    if (mine) return { x: mine.x, y: mine.y, kind: "mine", targetId: mine.id };
+    const tree = this.sim.nearestTree(hit[0], hit[1], 140);
+    if (tree) return { x: tree.x, y: tree.y, kind: "tree", targetId: tree.id };
+    return { x: hit[0], y: hit[1], kind: "point", targetId: 0 };
+  }
+
+  /** Right-clicked a building: issue the fitting order and flash its footprint
+   *  circle (no ground arrow). Hostile → attack + red; own → resume/repair (if a
+   *  worker) else move, green; allied/neutral → move, yellow. */
+  private orderOnBuilding(target: SimUnit, picked: number, enemy: boolean, selR: number, queued: boolean): void {
+    if (enemy) {
+      for (const id of this.selected) this.order(id, { kind: "attack", targetId: picked }, queued);
+      this.flashRing(target.x, target.y, selR, FLASH_RED);
+      return;
+    }
+    const own = this.primary !== null ? target.owner === this.sim.units.get(this.primary)?.owner : false;
+    let handled = false;
+    if (own && target.building && target.building.constructionLeft > 0) {
+      // Own building still going up: workers resume/assist it.
+      for (const id of this.selected) {
+        if (this.sim.units.get(id)?.worker) {
+          this.order(id, { kind: "buildresume", buildingId: picked }, queued);
+          handled = true;
+        }
+      }
+    } else if (own && target.hp < target.maxHp) {
+      handled = this.repairAt(picked, queued); // own damaged building: workers repair
+    }
+    if (!handled) this.groupMove(target.x, target.y, queued); // move toward it (no arrow)
+    this.flashRing(target.x, target.y, selR, own ? FLASH_GREEN : FLASH_YELLOW);
   }
 
   /** Give each unit in the group its OWN destination tile so they don't pile onto
@@ -1273,22 +1434,24 @@ export class RtsController {
     return out;
   }
 
-  /** Issue a formation move for the whole selection to a ground point. */
-  private groupMove(tx: number, ty: number): void {
+  /** Issue a formation move for the whole selection to a ground point (or queue
+   *  each unit's slot move when Shift is held). */
+  private groupMove(tx: number, ty: number, queued = false): void {
     const targets = this.groupTargets([...this.selected], tx, ty);
-    for (const [id, [x, y]] of targets) this.sim.issueMove(id, x, y);
+    for (const [id, [x, y]] of targets) this.order(id, { kind: "move", x, y }, queued);
   }
 
-  /** Queue a yellow harvest-target flash — the renderer draws it as a flat
-   *  ground circle (twice) like the selection ring, sized to the node. */
+  /** Queue a target-circle flash — the renderer draws it as a flat ground circle
+   *  (a twin-blink, like the selection ring / gold-mine flash), sized to the node
+   *  or building footprint and tinted per the caller (relationship colour). */
+  private flashRing(x: number, y: number, radius: number, color: [number, number, number]): void {
+    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color });
+  }
   private flashTarget(x: number, y: number, radius: number): void {
-    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color: [1, 0.88, 0.2] });
+    this.flashRing(x, y, radius, FLASH_YELLOW); // yellow harvest-target flash
   }
-
-  /** Queue a red attack-target flash at a hostile unit (same twin-blink as the
-   *  harvest flash, but red) when it's ordered to be attacked. */
   private flashAttack(x: number, y: number, radius: number): void {
-    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color: [1, 0.2, 0.16] });
+    this.flashRing(x, y, radius, FLASH_RED); // red attack-target flash
   }
 
   /** Trees to pulse yellow since the last drain (renderer tints the doodad). */

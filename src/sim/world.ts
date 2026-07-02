@@ -57,16 +57,40 @@ export interface WorkerState {
   carryLumber: number;
 }
 
+/** Where a rally point sends newly-produced units. A plain point is a move; a
+ *  mine/tree makes new workers harvest it; a unit makes them move to it (WC3). */
+export type RallyKind = "point" | "mine" | "tree" | "unit";
+
 /** Per-building state: construction progress + a unit training queue. */
 export interface BuildingState {
   constructionLeft: number; // seconds until built (0 = complete)
   buildTimeTotal: number; // full construction time (for the progress fraction)
-  builderId: number; // worker currently constructing (0 = none → progress halts)
+  builderIds: number[]; // workers constructing (empty → progress halts). Extra
+  // builders past the first "speed build" it (human peasants): faster, but they
+  // burn extra resources — see SPEED_BUILD_* constants + tickBuildings.
+  goldCost: number; // base build cost, for the speed-build surcharge
+  lumberCost: number;
   queue: Array<{ unitId: string; timeLeft: number; buildTime: number }>;
   rallyX: number; // trained units gather here (default: just south of the hall)
   rallyY: number;
+  rallyKind: RallyKind; // how the rally target is interpreted (point/mine/tree/unit)
+  rallyTargetId: number; // mine/tree/unit id for non-point rallies (0 for a point)
   producesUnits: boolean; // trains units → has a rally point (towers etc. don't)
 }
+
+/** A shift-queued follow-up order, replayed when the unit's current order ends.
+ *  WC3 allows chaining several (up to ~35) — move, attack, harvest, build… */
+export type QueuedOrder =
+  | { kind: "move"; x: number; y: number }
+  | { kind: "attackmove"; x: number; y: number }
+  | { kind: "patrol"; x: number; y: number }
+  | { kind: "attack"; targetId: number }
+  | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number }
+  | { kind: "buildnew"; defId: string; x: number; y: number }
+  | { kind: "buildresume"; buildingId: number }
+  | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number };
+
+const MAX_QUEUED_ORDERS = 35; // WC3 action-queue cap
 
 export interface SimMine {
   id: number;
@@ -144,6 +168,8 @@ export interface SimUnit {
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
   constructing: number; // building id this worker is constructing (0 = none)
   repair: RepairState | null; // active repair job (null = not repairing)
+  orderQueue: QueuedOrder[]; // shift-queued follow-up orders (drained as each completes)
+  buildPending: { defId: string; x: number; y: number } | null; // walking to raise a new building
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -163,6 +189,12 @@ const CHASE_REPATH = 128; // repath when the target strays this far from the pat
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
+// Human "speed build": each builder beyond the first adds SPEED_BUILD_BONUS to the
+// build rate (1.0 = one builder) and, spread across the shortened build time, a
+// SPEED_BUILD_SURCHARGE share of the base cost per extra builder. Tuned to WC3's
+// Town Hall reference: 5 peasants take ~53s (from 90s) and cost ~615g (from 385g).
+const SPEED_BUILD_BONUS = 0.17;
+const SPEED_BUILD_SURCHARGE = 0.15;
 const REPATH_COOLDOWN = 0.5; // seconds a blocked chaser waits before repathing
 // Resource gathering (community-documented WC3 values; docs/REFERENCES.md).
 const GOLD_PER_TRIP = 10;
@@ -198,7 +230,7 @@ export class SimWorld {
   // effect (the missile model's Death clip) at the recorded point.
   private projectileImpacts: Array<{ id: number; x: number; y: number }> = [];
   // Trained units ready to spawn: the renderer creates the model + sim unit.
-  private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number }> = [];
+  private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   private nextNodeId = 1;
   private rng: () => number;
 
@@ -242,6 +274,19 @@ export class SimWorld {
       }
     }
     return best;
+  }
+
+  /** Up to `limit` trees within `maxDist` of a point, nearest first — used to
+   *  spread a group of lumber workers across a cluster instead of piling every
+   *  worker onto the single closest tree. */
+  nearestTrees(x: number, y: number, maxDist: number, limit: number): SimTree[] {
+    const within: Array<{ t: SimTree; d: number }> = [];
+    for (const t of this.trees.values()) {
+      const d = Math.hypot(t.x - x, t.y - y);
+      if (d <= maxDist) within.push({ t, d });
+    }
+    within.sort((a, b) => a.d - b.d);
+    return within.slice(0, Math.max(1, limit)).map((e) => e.t);
   }
 
   nearestMine(x: number, y: number, maxDist: number): SimMine | null {
@@ -322,11 +367,16 @@ export class SimWorld {
     return b.queue.pop()!.unitId;
   }
 
-  setRally(buildingId: number, x: number, y: number): void {
+  /** Set a building's rally point. A plain point (kind "point") is a move
+   *  destination; a mine/tree/unit target makes produced units harvest it or
+   *  move to it (resolved in the renderer when each unit finishes). */
+  setRally(buildingId: number, x: number, y: number, kind: RallyKind = "point", targetId = 0): void {
     const b = this.units.get(buildingId)?.building;
     if (b) {
       b.rallyX = x;
       b.rallyY = y;
+      b.rallyKind = kind;
+      b.rallyTargetId = targetId;
     }
   }
 
@@ -337,10 +387,12 @@ export class SimWorld {
     const w = this.units.get(workerId);
     const b = this.units.get(buildingId);
     if (!w || !b?.building) return;
-    // Release any previous builder cleanly.
+    // Release this worker from any previous job, then add it to the site's
+    // builder list (multiple workers speed-build a single structure).
     this.detachBuilder(workerId);
+    w.buildPending = null; // its walk-to-build intent is now realised
     w.constructing = buildingId;
-    b.building.builderId = workerId;
+    if (!b.building.builderIds.includes(workerId)) b.building.builderIds.push(workerId);
     w.noCollision = false;
     w.stuckT = 0;
     w.stuckRetries = 0;
@@ -378,7 +430,7 @@ export class SimWorld {
     w.repair = null; // re-tasking cancels a repair
     if (!w.constructing) return;
     const b = this.units.get(w.constructing)?.building;
-    if (b && b.builderId === workerId) b.builderId = 0;
+    if (b) b.builderIds = b.builderIds.filter((id) => id !== workerId);
     w.constructing = 0;
   }
 
@@ -440,21 +492,47 @@ export class SimWorld {
       const b = u.building;
       if (!b) continue;
       if (b.constructionLeft > 0) {
-        // Only advance while a builder is assigned AND standing next to the
-        // site (WC3: construction halts if the worker wanders off). Progress
-        // resumes when a worker is re-tasked to build/repair it.
-        const builder = b.builderId ? this.units.get(b.builderId) : undefined;
-        const nearby =
-          builder && !builder.moving &&
-          Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96;
-        if (!builder) b.builderId = 0;
-        if (nearby) {
-          // Face the building while hammering (else the worker swings at the air).
-          builder!.desiredFacing = Math.atan2(u.y - builder!.y, u.x - builder!.x);
-          b.constructionLeft = Math.max(0, b.constructionLeft - dt);
+        // Only advance while a builder is assigned AND standing next to the site
+        // (WC3: construction halts if the worker wanders off). Progress resumes
+        // when a worker is re-tasked to build/repair it. Drop any builder that
+        // died or was re-tasked away, then count who is actually hammering.
+        b.builderIds = b.builderIds.filter((id) => this.units.get(id)?.constructing === u.id);
+        let present = 0;
+        for (const id of b.builderIds) {
+          const builder = this.units.get(id)!;
+          const nearby =
+            !builder.moving &&
+            Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96;
+          if (nearby) {
+            builder.desiredFacing = Math.atan2(u.y - builder.y, u.x - builder.x); // face the site while hammering
+            present++;
+          }
+        }
+        if (present > 0) {
+          // Extra builders past the first speed the build but burn extra
+          // resources. If the owner can't pay this tick's surcharge, drop back
+          // toward the base rate (only as many extras as they can afford).
+          let extra = present - 1;
+          if (extra > 0) {
+            const stash = this.stashOf(u.owner);
+            while (extra > 0) {
+              const rate = 1 + extra * SPEED_BUILD_BONUS;
+              const frac = extra * SPEED_BUILD_SURCHARGE * ((rate * dt) / b.buildTimeTotal);
+              const g = frac * b.goldCost;
+              const l = frac * b.lumberCost;
+              if (stash.gold >= g && stash.lumber >= l) {
+                stash.gold -= g;
+                stash.lumber -= l;
+                break;
+              }
+              extra--;
+            }
+          }
+          const rate = 1 + extra * SPEED_BUILD_BONUS;
+          b.constructionLeft = Math.max(0, b.constructionLeft - rate * dt);
           const done = 1 - b.constructionLeft / b.buildTimeTotal;
           u.hp = u.maxHp * (0.1 + 0.9 * done);
-          if (b.constructionLeft === 0) this.detachBuilder(b.builderId); // free the worker
+          if (b.constructionLeft === 0) for (const bid of [...b.builderIds]) this.detachBuilder(bid); // free the workers
         }
         continue; // can't train while still being built
       }
@@ -463,7 +541,7 @@ export class SimWorld {
         job.timeLeft -= dt;
         if (job.timeLeft <= 0) {
           b.queue.shift();
-          this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY });
+          this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
         }
       }
     }
@@ -476,7 +554,7 @@ export class SimWorld {
   cancelBuilding(id: number): boolean {
     const u = this.units.get(id);
     if (!u?.building) return false;
-    if (u.building.builderId) this.detachBuilder(u.building.builderId);
+    for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     this.unsettle(u); // free its reserved cells
     this.units.delete(u.id);
     this.removals.push(u.id);
@@ -530,6 +608,8 @@ export class SimWorld {
       | "building"
       | "constructing"
       | "repair"
+      | "orderQueue"
+      | "buildPending"
     >,
     building?: BuildingState | null,
   ): SimUnit {
@@ -574,6 +654,8 @@ export class SimWorld {
       building: building ?? null,
       constructing: 0,
       repair: null,
+      orderQueue: [],
+      buildPending: null,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -729,6 +811,67 @@ export class SimWorld {
     }
   }
 
+  // --- shift-queued orders --------------------------------------------------
+
+  /** Append a follow-up order to a unit's queue (WC3 shift-queue, capped at 35).
+   *  It runs once the unit's current order — and any orders queued before it —
+   *  finish. Does not interrupt whatever the unit is doing now. */
+  queueOrder(id: number, order: QueuedOrder): void {
+    const u = this.units.get(id);
+    if (!u || u.orderQueue.length >= MAX_QUEUED_ORDERS) return;
+    u.orderQueue.push(order);
+  }
+
+  /** Drop a unit's whole queue + any pending new-building intent. Every fresh
+   *  (non-shift) order calls this so it replaces the queue instead of appending. */
+  clearQueue(id: number): void {
+    const u = this.units.get(id);
+    if (u) {
+      u.orderQueue.length = 0;
+      u.buildPending = null;
+    }
+  }
+
+  /** Send a worker to raise a NEW building at (x,y): it walks there and the
+   *  renderer raises the foundation on arrival (watches `buildPending`). Used for
+   *  immediate (non-shift) placement; the shift path queues a `buildnew` order. */
+  issueBuildNew(id: number, defId: string, x: number, y: number): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    u.buildPending = { defId, x, y };
+    if (!this.issueMove(id, x, y)) u.moving = false; // already at the site → raise now
+  }
+
+  /** Execute an order right now, replacing whatever the unit is doing and its
+   *  whole queue (every fresh, non-shift order goes through here). */
+  issueOrder(id: number, order: QueuedOrder): boolean {
+    this.clearQueue(id);
+    return this.dispatch(id, order);
+  }
+
+  /** Route a QueuedOrder to the matching issue* method. Shared by immediate
+   *  orders (issueOrder) and queue replay (startNextQueued). */
+  private dispatch(id: number, o: QueuedOrder): boolean {
+    switch (o.kind) {
+      case "move": return this.issueMove(id, o.x, o.y);
+      case "attackmove": return this.issueAttackMove(id, o.x, o.y);
+      case "patrol": return this.issuePatrol(id, o.x, o.y);
+      case "attack": return this.issueAttack(id, o.targetId);
+      case "harvest": return this.issueHarvest(id, o.res, o.nodeId);
+      case "buildresume": this.assignBuilder(id, o.buildingId); return true;
+      case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
+      case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y); return true;
+    }
+  }
+
+  /** Start the next queued order (called when a unit falls idle with a queue).
+   *  A failed order (dead target, unbuildable, …) is simply dropped and the next
+   *  one is tried on the following tick. */
+  private startNextQueued(u: SimUnit): void {
+    const o = u.orderQueue.shift();
+    if (o) this.dispatch(u.id, o);
+  }
+
   /** Order a worker to harvest a mine or tree. False if it can't. */
   issueHarvest(id: number, kind: "gold" | "lumber", nodeId: number): boolean {
     const u = this.units.get(id);
@@ -858,6 +1001,14 @@ export class SimWorld {
       }
       this.tickSwing(u, dt); // land pending strikes at their damage point
       this.checkStuck(u, dt);
+    }
+    // Advance shift-queues: a unit that just fell idle (and isn't building or
+    // walking to a build site) starts its next queued order. Runs after all
+    // order/movement processing so "arrived → idle" is visible this tick.
+    for (const u of this.units.values()) {
+      if (u.orderQueue.length && u.order === "idle" && u.constructing === 0 && !u.buildPending) {
+        this.startNextQueued(u);
+      }
     }
   }
 

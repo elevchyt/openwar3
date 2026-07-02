@@ -17,6 +17,24 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 6 — speed-build/queues/rally/repair (2026-07-03, latest+19)** — **Human speed
+  build**: `BuildingState.builderIds[]` (was one `builderId`) — extra builders on one site build
+  faster (`+0.17` rate each) but burn a `0.15×`-base-cost surcharge over the shortened time; matches
+  WC3's Town Hall reference (5 peasants → ~53s/~616g from 90s/385g). **Idle-walk anim gate**: a unit
+  ordered to move but pinned by the crowd (EMA of actual/expected displacement < 0.2) plays Stand,
+  not the walk clip (no more jogging in place). **Tree-harvest distribution**: right-clicking a tree
+  with N workers spreads them across the N nearest trees (least-crowded, nearest-tie). **Shift-queued
+  orders**: `SimUnit.orderQueue` (cap 35) — move/attack/harvest/patrol/repair/build chain; the WC3
+  "build a farm then auto-harvest" combo works via a sim `buildPending` that holds the queue until the
+  build completes. **Smart rally**: `setRally` takes a kind (point/mine/tree/unit); produced workers
+  auto-harvest a rallied mine/tree, units move to a rallied unit's live position. **Small queue
+  flags** at each selected unit's queued-order positions (tree harvests flag the canopy top), shown
+  only while the owner is selected. **Building right-click** flashes the footprint circle (red enemy /
+  green own / yellow allied+neutral) instead of a ground arrow. **Cancel refund** now 75% (WC3), repair
+  already 35%/150%. **Ghost fix**: placement silhouette poses "Stand" (was scrubbing Birth-end, which
+  left most models half-built). **Command card**: Cancel pinned bottom-right, rally moved to
+  center-right. Headless sim checks (speed-build/queue/build→harvest/rally/tree-spread) pass; build clean.
+  Visual pieces (ghost, queue flags, flash colours, anim gate) need in-browser confirmation.
 - **Feedback pass 5 — impacts/attack-variants/portraits (2026-07-03, latest+18)** — **On-hit
   effects** now play: the missile models ship a `Death` clip (FireBall/Arrow impact burst); on hit
   the sim records the impact point (new `projectileImpacts` channel, hit-only not fizzle) and the
