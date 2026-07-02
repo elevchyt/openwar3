@@ -641,6 +641,16 @@ export class RtsController {
     this.hovered = this.pickAt(cssX, cssY);
   }
 
+  /** What the cursor is currently over, for the armed-order reticle: whether a
+   *  unit/building is under it and whether it's hostile to the selection. */
+  hoverTarget(): { has: boolean; hostile: boolean } {
+    if (this.hovered === null) return { has: false, hostile: false };
+    const u = this.sim.units.get(this.hovered);
+    if (!u) return { has: false, hostile: false };
+    const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    return { has: true, hostile: prim ? this.sim.hostile(prim, u) : false };
+  }
+
   /** Live units, for the metrics overlay. */
   unitCount(): number {
     return this.entries.length;

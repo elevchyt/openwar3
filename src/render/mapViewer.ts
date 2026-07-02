@@ -178,6 +178,8 @@ export class MapViewerScene {
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private selectBoxEl: HTMLDivElement | null = null;
   private cursorStyleEl: HTMLStyleElement | null = null;
+  private reticleEl: HTMLDivElement | null = null; // follows the cursor while armed
+  private lastMouse = { x: 0, y: 0 };
   private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
   private flashCircles: Array<{ inst: SpawnInstance; t: number }> = [];
   // Order-feedback arrows (Confirmation.mdx), green=move / red=attack-move.
@@ -1299,13 +1301,11 @@ export class MapViewerScene {
       this.cursorStyleEl = document.createElement("style");
       document.head.appendChild(this.cursorStyleEl);
     }
-    // Normal = the WC3 arrow everywhere; when an order is armed (attack-move,
-    // patrol, a skill/rally/repair target, …) show WC3's green targeting reticle.
-    // The armed selector is more specific, so it wins while `order-armed` is set.
-    const target = targetReticle();
+    // Normal = the WC3 arrow everywhere; when an order is armed, hide the OS
+    // cursor and let the DOM reticle (which can flash/pulse) follow the mouse.
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
-      `body.in-game.order-armed, body.in-game.order-armed * { cursor: url(${target}) 14 14, crosshair !important; }`;
+      `body.in-game.order-armed, body.in-game.order-armed * { cursor: none !important; }`;
   }
 
   /** Decode a BLP to a cached data URL for DOM use (icons). */
@@ -1350,6 +1350,7 @@ export class MapViewerScene {
       this.updateEffects(dt / 1000);
       this.updateTreePulses(dt / 1000);
       this.updateProjectiles();
+      this.updateReticle(this.lastMouse.x, this.lastMouse.y);
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
@@ -1418,6 +1419,8 @@ export class MapViewerScene {
     this.ghost = null;
     this.selectBoxEl?.remove();
     this.selectBoxEl = null;
+    this.reticleEl?.remove();
+    this.reticleEl = null;
     this.cursorStyleEl?.remove();
     this.cursorStyleEl = null;
     for (const g of this.buildGhosts.values()) g.hide();
@@ -1507,6 +1510,38 @@ export class MapViewerScene {
     if (this.selectBoxEl) this.selectBoxEl.hidden = true;
   }
 
+  /** Position + colour the armed-order reticle at the cursor. Green normally;
+   *  flashes RED when the Attack order is over a unit, pulses YELLOW when a
+   *  Move-type order is over a unit/building. Hidden when no order is armed. */
+  private updateReticle(cssX: number, cssY: number): void {
+    const mode = this.rts?.orderMode ?? null;
+    if (!mode || !this.rts) {
+      if (this.reticleEl) this.reticleEl.hidden = true;
+      return;
+    }
+    if (!this.reticleEl) {
+      this.reticleEl = document.createElement("div");
+      this.reticleEl.className = "order-reticle";
+      document.body.appendChild(this.reticleEl);
+    }
+    const el = this.reticleEl;
+    el.hidden = false;
+    el.style.left = `${cssX}px`;
+    el.style.top = `${cssY}px`;
+    const hover = this.rts.hoverTarget();
+    let color = "#48ff48"; // green
+    let anim = "";
+    if (mode === "attack" && hover.has) {
+      color = "#ff4040"; // red — attacking a unit
+      anim = "flash";
+    } else if (mode !== "attack" && hover.has) {
+      color = "#ffe23a"; // yellow — moving onto a unit/building
+      anim = "pulse";
+    }
+    el.style.backgroundImage = `url(${targetReticle(color)})`;
+    el.className = `order-reticle${anim ? " " + anim : ""}`;
+  }
+
   private aspect(): number {
     return this.canvas.width / this.canvas.height || 1;
   }
@@ -1556,6 +1591,8 @@ export class MapViewerScene {
       }
     });
     c.addEventListener("pointermove", (e) => {
+      this.lastMouse.x = e.offsetX;
+      this.lastMouse.y = e.offsetY;
       if (this.placement) this.updateGhost(e.offsetX, e.offsetY);
       // WC3 keeps a fixed camera angle — no free rotation. A left-drag draws a
       // selection rectangle (unless placing a building or holding an armed order).
@@ -1597,17 +1634,19 @@ function standSequence(seqs: Array<{ name: string }>): number {
   return nonBirth >= 0 ? nonBirth : seqs.length ? 0 : -1;
 }
 
-// WC3-style green targeting reticle (four corner brackets + centre pip) as a
-// 28×28 data URL, used as the mouse cursor while an order is armed. Cached.
-let targetReticleCache: string | null = null;
-function targetReticle(): string {
-  if (targetReticleCache) return targetReticleCache;
+// WC3-style targeting reticle (four corner brackets + centre pip) as a 28×28
+// data URL in the given colour. Cached per colour; used by the DOM reticle that
+// follows the cursor while an order is armed (so it can flash/pulse).
+const targetReticleCache: Record<string, string> = {};
+function targetReticle(color: string): string {
+  if (targetReticleCache[color]) return targetReticleCache[color];
   const s = 28;
   const c = document.createElement("canvas");
   c.width = s;
   c.height = s;
   const ctx = c.getContext("2d")!;
-  ctx.strokeStyle = "#48ff48";
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
   const m = 3, len = 8, e = s - m; // margin, bracket length, far edge
@@ -1622,10 +1661,9 @@ function targetReticle(): string {
   corner(e, m, -1, 1); // top-right
   corner(m, e, 1, -1); // bottom-left
   corner(e, e, -1, -1); // bottom-right
-  ctx.fillStyle = "#48ff48";
   ctx.fillRect(s / 2 - 1, s / 2 - 1, 2, 2); // centre pip
-  targetReticleCache = c.toDataURL();
-  return targetReticleCache;
+  targetReticleCache[color] = c.toDataURL();
+  return targetReticleCache[color];
 }
 
 // Quaternion for a rotation `angle` about +Z (WC3 units are Z-up), into `out`.

@@ -488,6 +488,26 @@ body.in-game .menu-panel { display: none; }
   background: rgba(224, 80, 70, 0.2);
 }
 
+/* Armed-order targeting reticle that follows the cursor (replaces the OS cursor
+   while an order is armed). Flashes red over an attack target, pulses yellow
+   over a move target, static green otherwise. */
+.order-reticle {
+  position: fixed;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  background: center / contain no-repeat;
+  pointer-events: none;
+  z-index: 7;
+}
+.order-reticle.flash { animation: reticle-flash 0.35s steps(1) infinite; }
+.order-reticle.pulse { animation: reticle-pulse 0.7s ease-in-out infinite; }
+@keyframes reticle-flash { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes reticle-pulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50% { transform: translate(-50%, -50%) scale(1.18); }
+}
+
 /* Drag-box selection rectangle (WC3 green marquee). */
 .select-box {
   position: fixed;
