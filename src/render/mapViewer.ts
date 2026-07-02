@@ -116,11 +116,26 @@ export class MapViewerScene {
       created.push(url);
     }
 
+    // Cliff models are loaded via loadBaseFile() → fetch(), so — like the base
+    // SLKs — they need a STRING url, not a Promise. Everything else goes through
+    // viewer.load(), which takes bytes. Generated cliff-model blob URLs are cached
+    // and tracked in `created` for revocation on dispose.
+    const cliffUrls = new Map<string, string | null>();
     const solver: Solver = (src) => {
       if (typeof src !== "string") return src; // in-memory loads pass through
       const path = src.replace(/\//g, "\\");
       const cached = baseUrls.get(path);
-      if (cached) return cached; // base files: string URL for fetch()
+      if (cached) return cached; // preloaded base SLKs
+      if (/^doodads\\terrain\\.*\.mdx$/i.test(path)) {
+        let url = cliffUrls.get(path);
+        if (url === undefined) {
+          const bytes = vfs.rawBytes(path);
+          url = bytes ? URL.createObjectURL(new Blob([bytes as BlobPart])) : null;
+          cliffUrls.set(path, url);
+          if (url) created.push(url);
+        }
+        return url ?? src;
+      }
       return vfs.read(path); // models/textures: Promise<Uint8Array>
     };
 
