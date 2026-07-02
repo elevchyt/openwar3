@@ -41,6 +41,8 @@ export interface HudSelection {
   queueLength: number;
   queue: Array<{ icon: string }>; // icons of queued training units
   icon: string; // the selected thing's own command icon (BLP path)
+  isMine: boolean; // selected gold mine
+  goldRemaining: number; // gold left in the selected mine
 }
 
 export interface HudDriver {
@@ -289,6 +291,11 @@ export class GameHud {
   }
 
   private buildConsole(skin: { consoleUrl: string; consoleAspect: number } | null): HTMLDivElement {
+    // Visual background rectangle that matches the console dimensions but
+    // without the skinned art. It sits behind the real console element.
+    const bg = document.createElement("div");
+    bg.className = "hud-console-background";
+
     const console_ = document.createElement("div");
     console_.className = "hud-console";
     const minimap = this.buildMinimap();
@@ -297,19 +304,26 @@ export class GameHud {
     const command = this.buildCommandCard();
     console_.append(minimap, portraitWrap, infoText, inventory, command);
     if (skin) {
+      // The visible console uses the skinned art.
       console_.classList.add("hud-console-skinned");
       console_.style.backgroundImage = `url(${skin.consoleUrl})`;
       // Keep the console at its NATURAL aspect ratio, centred, and let the sides
       // letterbox on widescreen — never stretch it. Height is capped so a wide
       // monitor doesn't blow it up; width follows from the aspect.
       console_.style.setProperty("--console-aspect", String(skin.consoleAspect));
+
       place(minimap, ZONES.minimap);
       place(portraitWrap, ZONES.portrait);
       place(infoText, ZONES.info);
       place(inventory, ZONES.inventory);
       place(command, ZONES.command);
     }
-    return console_;
+
+    // Wrapper holds the background and the real console; DOM order ensures the
+    // background sits behind the console element.
+    const wrapper = document.createElement("div");
+    wrapper.append(bg, console_);
+    return wrapper as unknown as HTMLDivElement;
   }
 
   private buildMinimap(): HTMLDivElement {
@@ -509,11 +523,18 @@ export class GameHud {
     this.portrait.classList.toggle("empty", !sel);
     if (sel) {
       this.selName.textContent = sel.name;
-      this.selHpText.textContent = `${Math.ceil(sel.hp)} / ${sel.maxHp}`;
+      this.selHpText.textContent = sel.maxHp > 0 ? `${Math.ceil(sel.hp)} / ${sel.maxHp}` : "";
       this.selMpText.textContent = sel.maxMana > 0 ? `${Math.floor(sel.mana)} / ${sel.maxMana}` : "";
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
-      if (constructing || training) {
+      if (sel.isMine) {
+        // Gold mine: show its remaining gold, no progress/combat stats.
+        this.progressWrap.hidden = true;
+        this.selStats.hidden = false;
+        this.selCarry.hidden = false;
+        this.selStats.textContent = `Gold: ${sel.goldRemaining}`;
+        this.selCarry.textContent = "";
+      } else if (constructing || training) {
         // Progress display replaces the stat lines.
         this.progressWrap.hidden = false;
         this.selStats.hidden = true;

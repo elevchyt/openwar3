@@ -143,6 +143,8 @@ export class MapViewerScene {
   private localRace: PlayableRace = "human";
   // Footprints of registered resource nodes, for unstamping on removal.
   private nodeFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
+  // Stamped footprints of spawned buildings, for unstamping when cancelled.
+  private buildingFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
   // Animated portrait of the selected unit (own small viewer + canvas).
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
@@ -164,6 +166,7 @@ export class MapViewerScene {
   private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
   private hoverCircle: SpawnInstance | null = null;
   private circleModel: SpawnModel | null = null;
+  private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private selectBoxEl: HTMLDivElement | null = null;
   private cursorStyleEl: HTMLStyleElement | null = null;
   private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
@@ -262,6 +265,8 @@ export class MapViewerScene {
     this.rts?.dispose();
     this.rts = null;
     this.startMarkersHidden = false;
+    this.buildingFootprints.clear();
+    this.rallyFlag = null;
 
     this.viewer.loadMap(bytes);
     const map = this.viewer.map;
@@ -473,7 +478,10 @@ export class MapViewerScene {
     const simId = this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team, constructionTime); // face south
 
     // Buildings block pathing: stamp their footprint so units route around them.
-    if (fp && this.grid) stampFootprint(this.grid, fp, x, y);
+    if (fp && this.grid) {
+      stampFootprint(this.grid, fp, x, y);
+      this.buildingFootprints.set(simId, { fp, x, y }); // for unstamping on cancel
+    }
     return simId;
   }
 
@@ -537,6 +545,14 @@ export class MapViewerScene {
     this.hoverCircle = this.newCircle();
     // Move/attack order-confirmation arrows (one model, tinted per order type).
     this.arrowModel = ((await this.viewer.load("UI\\Feedback\\Confirmation\\Confirmation.mdx", this.solver)) as SpawnModel | undefined) ?? null;
+    // Rally flag shown at a selected building's rally point.
+    const flag = (await this.viewer.load("UI\\Feedback\\RallyPoint\\RallyPoint.mdx", this.solver)) as SpawnModel | undefined;
+    if (flag && map) {
+      this.rallyFlag = flag.addInstance();
+      this.rallyFlag.setScene(map.worldScene);
+      this.rallyFlag.setSequenceLoopMode(2);
+      this.rallyFlag.hide();
+    }
   }
 
   /** Spawn a converging-arrows marker for each new move/attack-move order and
@@ -590,6 +606,19 @@ export class MapViewerScene {
     for (let i = rings.length; i < this.selCircles.length; i++) this.selCircles[i]?.hide();
     // hoverRing() already returns null when the hovered unit is selected.
     this.placeCircle(this.hoverCircle, this.rts?.hoverRing() ?? null, null);
+    // Rally flag at the selected building's rally point.
+    if (this.rallyFlag) {
+      const rally = this.rts?.selectedRally() ?? null;
+      if (rally) {
+        this.loc3[0] = rally.x;
+        this.loc3[1] = rally.y;
+        this.loc3[2] = rally.z;
+        this.rallyFlag.setLocation(this.loc3);
+        this.rallyFlag.show();
+      } else {
+        this.rallyFlag.hide();
+      }
+    }
     this.tickFlashCircles(dt);
   }
 
@@ -687,7 +716,7 @@ export class MapViewerScene {
 
   private placeCircle(
     inst: SpawnInstance | null,
-    info: { x: number; y: number; z: number; radius: number; owner: number; team: number } | null,
+    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean } | null,
     tint: number[] | null,
   ): void {
     if (!inst) return;
@@ -698,13 +727,13 @@ export class MapViewerScene {
     inst.show();
     this.loc3[0] = info.x;
     this.loc3[1] = info.y;
-    // Every indicator circle is drawn at the SAME uniform scale so its width and
-    // ring thickness are constant (previously scaled with the unit/target size,
-    // which made big circles look thick). Raised a hair off the terrain so it
-    // reads as an on-ground decal without z-fighting.
-    this.loc3[2] = info.z - 14 * MapViewerScene.CIRCLE_SCALE + MapViewerScene.CIRCLE_LIFT;
+    // Selection/hover rings are a CONSTANT size (uniform width + ring thickness).
+    // Order flashes (tinted — yellow harvest, red attack) size to their target so
+    // a gold mine gets a big ring. Lifted a hair off the terrain to avoid z-fight.
+    const scale = tint || info.sizeToRadius ? Math.max(0.7, info.radius / 38) : MapViewerScene.CIRCLE_SCALE;
+    this.loc3[2] = info.z - 14 * scale + MapViewerScene.CIRCLE_LIFT;
     inst.setLocation(this.loc3);
-    inst.setUniformScale(MapViewerScene.CIRCLE_SCALE);
+    inst.setUniformScale(scale);
     inst.setVertexColor(tint ?? [1, 1, 1]);
     // Flashes (tinted) use the neutral (white) base so the tint carries the
     // colour cleanly. Real selection/hover rings colour by alliance: your own
@@ -950,9 +979,13 @@ export class MapViewerScene {
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
         out.push(this.cmd({
           id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.name[0]?.toUpperCase() ?? "",
-          desc: `Trains a ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: d.foodUsed,
+          desc: d.description || `Trains a ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: d.foodUsed,
           col: d.buttonX, row: d.buttonY, disabled: !afford,
         }));
+      }
+      // Unit-producing buildings get a Set Rally Point button.
+      if (trainsFor(sel.typeId).length) {
+        out.push(this.cmd({ id: "rally", icon: btnIcon("BTNRally"), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 2, row: 2, active: this.rts?.orderMode === "rally" }));
       }
       if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
       return out;
@@ -967,7 +1000,7 @@ export class MapViewerScene {
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
         out.push(this.cmd({
           id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.name[0]?.toUpperCase() ?? "",
-          desc: `Builds ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: 0,
+          desc: d.description || `Builds ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: 0,
           col: d.buttonX, row: d.buttonY, disabled: !afford,
         }));
       }
@@ -985,14 +1018,15 @@ export class MapViewerScene {
     out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: armed === "attack" }));
     out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: armed === "patrol" }));
     if (sel.isWorker) {
-      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 3, row: 1 }));
+      // Build sits at the bottom-left of a worker's card (developer spec).
+      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2 }));
     }
     return out;
   }
 
   private runCommand(id: string): void {
     if (!this.rts) return;
-    if (id === "move" || id === "attack" || id === "patrol") {
+    if (id === "move" || id === "attack" || id === "patrol" || id === "rally") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
       return;
@@ -1013,9 +1047,9 @@ export class MapViewerScene {
       } else if (this.cardPage === "build") {
         this.cardPage = "root";
       } else {
-        // Building: refund the last queued unit.
         const sel = this.rts.selectedInfo();
-        if (sel?.isBuilding) this.cancelTrain(sel.id);
+        if (sel?.underConstruction) this.cancelConstruction(sel.id, sel.typeId);
+        else if (sel?.isBuilding) this.cancelTrain(sel.id); // refund the last queued unit
       }
       return;
     }
@@ -1042,6 +1076,26 @@ export class MapViewerScene {
     stash.gold -= d.goldCost;
     stash.lumber -= d.lumberCost;
     this.rts.simWorld.enqueueTrain(buildingId, unitId, d.buildTime || 15);
+  }
+
+  /** Cancel an under-construction building: refund its cost, free its pathing
+   *  footprint, and remove it (the sim fires a death event so it plays its
+   *  collapse/explosion — the same Death clip the game uses for a destroyed
+   *  building, since building models ship only a "Death" animation). */
+  private cancelConstruction(buildingId: number, typeId: string): void {
+    if (!this.rts) return;
+    const def = this.registry.get(typeId);
+    if (def) {
+      const stash = this.rts.stashFor(this.localPlayer);
+      stash.gold += def.goldCost;
+      stash.lumber += def.lumberCost;
+    }
+    const meta = this.buildingFootprints.get(buildingId);
+    if (meta && this.grid) {
+      unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
+      this.buildingFootprints.delete(buildingId);
+    }
+    this.rts.simWorld.cancelBuilding(buildingId);
   }
 
   private cancelTrain(buildingId: number): void {

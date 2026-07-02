@@ -17,6 +17,22 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Real-data stats + mine/rally/cancel pass (2026-07-02, latest+11)** — **inspected the real MPQs**
+  (`Warcraft III/`) and fixed unit stats: heroes were 100 HP because the loader used the raw `hp`
+  field — now uses the game's precomputed `realhp`/`realm`/`realdef` and adds the **primary
+  attribute** to hero attack (Paladin: 650 HP, 255 mana, 24–34 dmg, all matching the reference).
+  Command tooltips now use the real **Ubertip** descriptions (colour codes stripped). **Gold mines
+  are selectable** (click → shows remaining gold in the info panel, sized ground ring, mine
+  portrait). **Rally points**: a "Set Rally Point" button on unit-producing buildings + right-click,
+  and a persistent **rally flag** (`UI\Feedback\RallyPoint\RallyPoint.mdx`) at the selected
+  building's rally. **Cancel construction** now actually works — refunds cost, unstamps the pathing
+  footprint, and removes the building with a death/collapse event (building models ship only a
+  "Death" clip, used for both cancel and combat destruction). **Selection pick reworked to a hybrid**
+  (screen projection gated by world distance) so tall **buildings are clickable again** (the green
+  ring is back) while the zoomed-out distant-creep bug stays fixed. **Order flashes size to their
+  target again** (the yellow gold-mine ring), selection rings stay constant. Worker **Build** button
+  moved to bottom-left. Added the [[use-mpq-game-data]] memory. 27 headless sim checks pass; build
+  clean. (User also made manual HUD CSS tweaks — preserved.)
 - **Orders/selection/rally pass (2026-07-02, latest+10)** — used the real MPQs in
   `Warcraft III/` to verify data (via a throwaway MPQ-reader script): every building has
   `Birth`[0,60000] then `Stand`, and start-location props are `Objects\StartLocation\

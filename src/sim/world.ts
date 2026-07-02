@@ -373,6 +373,18 @@ export class SimWorld {
     }
   }
 
+  /** Cancel a building (manual cancel of an under-construction structure): free
+   *  its builder and remove it. Fires a death event so the renderer plays the
+   *  collapse/explosion, same as a combat destruction. Returns its type for the
+   *  caller to refund. */
+  cancelBuilding(id: number): boolean {
+    const u = this.units.get(id);
+    if (!u?.building) return false;
+    if (u.building.builderId) this.detachBuilder(u.building.builderId);
+    this.kill(u);
+    return true;
+  }
+
   /** Whether a building is still under construction (renderer/HUD cue). */
   isUnderConstruction(id: number): boolean {
     const b = this.units.get(id)?.building;

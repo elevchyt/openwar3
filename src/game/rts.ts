@@ -64,6 +64,8 @@ export interface SelectionInfo {
   icon: string; // the selected thing's own command-card icon (BLP path)
   carryGold: number;
   carryLumber: number;
+  isMine: boolean; // a selected gold mine (resource, not a unit)
+  goldRemaining: number; // gold left in the selected mine
 }
 
 // Resolved animation-sequence indices for a unit. Worker carry/chop variants
@@ -143,6 +145,9 @@ const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 // Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
 const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
 const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
+// Max world distance from the click's ground point to a pickable unit. Gates out
+// far/behind-camera units that screen-projection alone would wrongly match.
+const PICK_WORLD_MAX = 700;
 
 // A floating health bar drawn above a unit. One is pooled per visible unit so
 // HP bars are always on screen (WC3's "always show health bars"), not only for
@@ -171,6 +176,7 @@ export class RtsController {
   // leader that drives the HUD (portrait, info panel, command card).
   private selected = new Set<number>();
   private primary: number | null = null;
+  private selectedMine: number | null = null; // a selected gold mine (resource)
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
   private seeded = false;
@@ -218,6 +224,7 @@ export class RtsController {
     if (this.primary !== null && !this.sim.units.has(this.primary)) {
       this.primary = this.selected.values().next().value ?? null;
     }
+    if (this.selectedMine !== null && !this.sim.mines.has(this.selectedMine)) this.selectedMine = null;
   }
 
   /** Hide the floating health bars (e.g. when the map view is not active). */
@@ -461,10 +468,25 @@ export class RtsController {
    *  has no click-to-deselect — you keep your selection until you pick another). */
   selectAt(cssX: number, cssY: number): void {
     const id = this.pickAt(cssX, cssY);
-    if (id === null) return; // empty ground: keep the current selection
-    this.selected.clear();
-    this.selected.add(id);
-    this.primary = id;
+    if (id !== null) {
+      this.selected.clear();
+      this.selected.add(id);
+      this.primary = id;
+      this.selectedMine = null;
+      return;
+    }
+    // No unit under the cursor — a gold mine is clickable too (shows its gold).
+    const g = this.groundPoint(cssX, cssY);
+    if (g) {
+      const m = this.sim.nearestMine(g[0], g[1], 300);
+      if (m) {
+        this.selected.clear();
+        this.primary = null;
+        this.selectedMine = m.id;
+        return;
+      }
+    }
+    // Empty ground: keep the current selection (no manual deselect).
   }
 
   /** Drag-box: select all of the local player's mobile units whose on-screen
@@ -492,6 +514,7 @@ export class RtsController {
     this.selected.clear();
     for (const id of picked) this.selected.add(id);
     this.primary = picked[0];
+    this.selectedMine = null;
   }
 
   /** Pointer move: show the ring + HP bar under the unit being hovered. */
@@ -506,9 +529,9 @@ export class RtsController {
 
   // --- HUD driver surface ---------------------------------------------------
 
-  /** Armed command-card order ("move"/"attack"/"patrol"); the next left-click
-   *  executes it instead of selecting. */
-  orderMode: "move" | "attack" | "patrol" | null = null;
+  /** Armed command-card order; the next left-click executes it instead of
+   *  selecting. "rally" sets a building's rally point. */
+  orderMode: "move" | "attack" | "patrol" | "rally" | null = null;
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
@@ -519,6 +542,16 @@ export class RtsController {
     }
     const mode = this.orderMode;
     this.orderMode = null;
+    if (mode === "rally") {
+      const hit = this.groundPoint(cssX, cssY);
+      if (hit) {
+        for (const id of this.selected) {
+          if (this.sim.units.get(id)?.building) this.sim.setRally(id, hit[0], hit[1]);
+        }
+        this.queueArrow(hit[0], hit[1], MOVE_ARROW);
+      }
+      return true;
+    }
     if (mode === "attack") {
       const picked = this.pickAt(cssX, cssY);
       const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
@@ -572,8 +605,25 @@ export class RtsController {
   }
 
   selectedInfo(): SelectionInfo | null {
+    if (this.selectedMine !== null) return this.mineInfo(this.selectedMine);
     if (this.primary === null) return null;
     return this.infoFor(this.primary);
+  }
+
+  /** Selection info for a gold mine (name + remaining gold + its model). */
+  private mineInfo(mineId: number): SelectionInfo | null {
+    const m = this.sim.mines.get(mineId);
+    if (!m) return null;
+    const def = this.registry.get("ngol");
+    return {
+      id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
+      typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
+      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, damageMin: 0, damageMax: 0,
+      model: def?.model ?? "", isWorker: false, isBuilding: false,
+      underConstruction: false, buildProgress: 0, trainProgress: 0, queueLength: 0,
+      queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
+      isMine: true, goldRemaining: m.gold,
+    };
   }
 
   private infoFor(id: number): SelectionInfo | null {
@@ -608,6 +658,8 @@ export class RtsController {
       icon: this.registry.get(e.typeId)?.icon ?? "",
       carryGold: u.worker?.carryGold ?? 0,
       carryLumber: u.worker?.carryLumber ?? 0,
+      isMine: false,
+      goldRemaining: 0,
     };
   }
 
@@ -648,12 +700,16 @@ export class RtsController {
 
   /** Ground-circle info for every selected unit (the renderer draws each ring as
    *  a flat model on the terrain so geometry occludes it). */
-  selectionRings(): Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number }> {
-    const out: Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number }> = [];
+  selectionRings(): Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean }> {
+    const out: Array<{ x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean }> = [];
     for (const id of this.selected) {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
       if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team });
+    }
+    if (this.selectedMine !== null) {
+      const m = this.sim.mines.get(this.selectedMine);
+      if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius, owner: -1, team: -2, sizeToRadius: true });
     }
     return out;
   }
@@ -667,8 +723,19 @@ export class RtsController {
     return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team };
   }
 
-  /** World position of the primary selected unit (portrait-click camera focus). */
+  /** Rally point of the primary selected building (for the rally flag), or null. */
+  selectedRally(): { x: number; y: number; z: number } | null {
+    if (this.primary === null) return null;
+    const b = this.sim.units.get(this.primary)?.building;
+    return b ? { x: b.rallyX, y: b.rallyY, z: this.heightAt(b.rallyX, b.rallyY) } : null;
+  }
+
+  /** World position of the primary selected unit / mine (portrait-click focus). */
   selectedPosition(): [number, number] | null {
+    if (this.selectedMine !== null) {
+      const m = this.sim.mines.get(this.selectedMine);
+      return m ? [m.x, m.y] : null;
+    }
     if (this.primary === null) return null;
     const u = this.sim.units.get(this.primary);
     return u ? [u.x, u.y] : null;
@@ -812,14 +879,15 @@ export class RtsController {
    *  buildings are selectable anywhere on their body (not just dead-centre).
    *  Ties break toward the smallest hit (a unit in front of a building wins). */
   private pickAt(cssX: number, cssY: number): number | null {
-    // Pick by the GROUND point under the cursor (a real world location) rather
-    // than by projecting each unit to screen: the latter mis-fires badly when
-    // zoomed out and can even "select" units behind the camera (the reported
-    // far-away-creep bug). Find the nearest unit whose collision/selection
-    // radius covers the clicked ground point; units win over buildings.
-    const hit = this.groundPoint(cssX, cssY);
-    if (!hit) return null;
-    const [gx, gy] = hit;
+    // Hybrid pick: project each unit's mid-body to screen and test the cursor
+    // against it (this handles TALL buildings — you click the body, whose base's
+    // ground point sits well behind it), but GATE candidates by world distance
+    // to the click's ground point. The gate kills the zoomed-out / behind-camera
+    // false positives that pure screen-projection produced (distant creeps).
+    const ground = this.groundPoint(cssX, cssY);
+    const [glx, gly] = this.toGl(cssX, cssY);
+    const viewport = this.host.viewport();
+    const dpr = this.dpr();
     let bestUnit: number | null = null;
     let bestUnitScore = Infinity;
     let bestBldg: number | null = null;
@@ -827,13 +895,22 @@ export class RtsController {
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       if (e.hidden) continue;
-      // Generous world radius (models are viewed at an angle, so the ground
-      // point under a body-click sits a bit behind the unit — the extra reach
-      // keeps body clicks working). Buildings use their large selection radius.
-      const r = Math.max(u.radius, e.selRadius, 80);
-      const d = Math.hypot(u.x - gx, u.y - gy);
-      if (d > r) continue;
-      const score = d / r;
+      if (ground && Math.hypot(u.x - ground[0], u.y - ground[1]) > PICK_WORLD_MAX) continue;
+      const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
+      // Project the unit's mid-body (base + ~half its height) to screen.
+      this.world[0] = u.x;
+      this.world[1] = u.y;
+      this.world[2] = baseZ + Math.max(e.selRadius * 1.2, 60);
+      this.host.camera.worldToScreen(this.screen, this.world, viewport);
+      const cx = this.screen[0];
+      const cy = this.screen[1];
+      this.world2.set(this.world);
+      this.world2[0] = u.x + Math.max(u.radius, e.selRadius, 64);
+      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+      const rPx = Math.hypot(this.screen2[0] - cx, this.screen2[1] - cy) + 14 * dpr;
+      const d = Math.hypot(glx - cx, gly - cy);
+      if (d > rPx) continue;
+      const score = d / rPx;
       if (u.building) {
         if (score < bestBldgScore) { bestBldgScore = score; bestBldg = e.simId; }
       } else if (score < bestUnitScore) {
@@ -908,6 +985,12 @@ export class RtsController {
       bar.root.style.top = `${(h - sy) / dpr - (ry + 14)}px`; // gl y-up → css y-down
     }
     for (let k = n; k < this.hpBars.length; k++) this.hpBars[k].root.hidden = true;
+  }
+
+  /** CSS px → GL px (device pixels, y-up) to match camera.worldToScreen. */
+  private toGl(cssX: number, cssY: number): [number, number] {
+    const dpr = this.dpr();
+    return [cssX * dpr, this.host.canvas.height - cssY * dpr];
   }
 
   private dpr(): number {

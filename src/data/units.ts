@@ -14,8 +14,10 @@ export interface UnitDef {
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
   icon: string; // command-card BTN icon path (from UnitFunc "art")
+  description: string; // command-card tooltip text (UnitFunc "Ubertip"), cleaned
   buttonX: number; // command-card grid column (0-3), from "buttonpos"
   buttonY: number; // command-card grid row (0-2)
+  isHero: boolean;
   moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
@@ -135,6 +137,20 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     const strings = names.getRow(id) as Row | undefined;
     const fn = funcs.getRow(id) as Row | undefined;
     const [bx, by] = fn ? parseButtonPos(str(fn, "buttonpos")) : [0, 0];
+
+    // Heroes: the base hp/mana/def fields are level-1 BASE values; the game
+    // precomputes the real level-1 stats (base + attributes) into realhp/realm/
+    // realdef — Paladin: hp 100 → realhp 650 (100 + STR 22×25). Their attack base
+    // also gets the primary attribute (Paladin dmg 0 + STR 22 + 2d6 = 24–34).
+    // Verified against the real MPQ UnitBalance.slk.
+    const primary = b ? str(b, "primary") : "";
+    const isHero = primary === "STR" || primary === "AGI" || primary === "INT";
+    const attr = { STR: b ? num(b, "STR", 0) : 0, AGI: b ? num(b, "AGI", 0) : 0, INT: b ? num(b, "INT", 0) : 0 };
+    const realhp = b ? num(b, "realhp", 0) : 0;
+    const realm = b ? num(b, "realm", 0) : 0;
+    const realdef = b ? num(b, "realdef", 0) : 0;
+    const primaryVal = isHero ? attr[primary as "STR" | "AGI" | "INT"] : 0;
+
     defs.set(id, {
       id,
       name: (strings && str(strings, "Name")) || (u && (str(u, "Name") || str(u, "name"))) || id,
@@ -143,8 +159,10 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
       icon: fn ? str(fn, "art") : "",
+      description: fn ? cleanTip(str(fn, "Ubertip")) : "",
       buttonX: bx,
       buttonY: by,
+      isHero,
       moveType: d ? str(d, "movetp") : "",
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
@@ -154,15 +172,15 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // 1.27 layering quirk: collision lives in UnitBalance.slk in the
       // expansion/patch MPQs but in UnitData.slk in the RoC base.
       collision: (b && num(b, "collision", 0)) || (d ? num(d, "collision", 0) : 0),
-      hitPoints: b ? num(b, "hp", 0) : 0,
-      mana: b ? num(b, "manaN", 0) : 0,
-      armor: b ? num(b, "def", 0) : 0,
+      hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
+      mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
+      armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
       foodUsed: b ? num(b, "fused", 0) : 0,
       foodMade: b ? num(b, "fmade", 0) : 0,
       goldCost: b ? num(b, "goldcost", 0) : 0,
       lumberCost: b ? num(b, "lumbercost", 0) : 0,
       buildTime: b ? num(b, "bldtm", 0) : 0,
-      attackDamage: w ? num(w, "dmgplus1", 0) : 0,
+      attackDamage: (w ? num(w, "dmgplus1", 0) : 0) + primaryVal,
       attackDice: w ? num(w, "dice1", 0) : 0,
       attackSides: w ? num(w, "sides1", 0) : 0,
       attackCooldown: w ? num(w, "cool1", 0) : 0,
@@ -175,6 +193,17 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     });
   }
   return new UnitRegistry(defs);
+}
+
+// WC3 tooltip text (Ubertip) uses |cAARRGGBB…|r colour codes and |n line breaks.
+// Strip the colour markup and normalize breaks/whitespace for plain display.
+function cleanTip(v: string): string {
+  return v
+    .replace(/\|c[0-9a-fA-F]{8}/g, "")
+    .replace(/\|r/g, "")
+    .replace(/\|n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Weapon "Missileart" is a model path without extension (like unitUI "file");

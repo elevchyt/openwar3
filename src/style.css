@@ -299,6 +299,23 @@ body.in-game .menu-panel { display: none; }
   pointer-events: auto;
 }
 
+/* Plain black background rectangle matching the console dimensions. This
+   element intentionally has no skin artwork — it's a simple black block. */
+.hud-console-background {
+  position: absolute;
+  left: 20%;
+  right: 0;
+  bottom: 0;
+  height: 22%;
+  width: 50%;
+  display: grid;
+  grid-template-columns: 190px 120px 1fr 170px 240px;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(rgba(20, 17, 10, 0) 0, #14110a 14px, #0c0a06);
+  pointer-events: auto;
+}
+
 /* Skinned mode: the atlas art IS the chrome; zones are absolutely positioned
    over its sockets, and transparent art regions pass clicks to the map. The
    console keeps its natural aspect ratio, is centred, and letterboxes on
@@ -491,14 +508,13 @@ body.in-game .menu-panel { display: none; }
 .hud-mp-value { font-size: 13px; color: #4a7cff; }
 .hud-mp-value:empty { display: none; }
 
-/* Detail panel: SOLID black backdrop with the unit's name + damage/armor, always
+/* Detail panel: the unit's name + damage/armor, always
    present (no grass/console art showing through), even with nothing selected. */
 .hud-info-text {
   flex: 1;
   min-width: 0;
   padding: 8px 14px;
   border-radius: 6px;
-  background: #000;
 }
 .hud-sel-name { font-size: 17px; color: #f4e8c8; text-align: center; margin-bottom: 6px; letter-spacing: 0.3px; }
 .hud-sel-stats { font-size: 12px; color: #cfc7ab; white-space: pre-line; line-height: 1.5; }
