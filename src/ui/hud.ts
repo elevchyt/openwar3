@@ -133,12 +133,16 @@ export class GameHud {
   private clockFace?: HTMLDivElement;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
+  private lastSelId: number | null = null; // force a text refresh when selection changes
 
   constructor(parent: HTMLElement, private driver: HudDriver) {
     this.root = document.createElement("div");
     this.root.className = "hud";
     const skin = driver.consoleSkin();
-    this.root.append(this.buildTopBar(skin), this.buildConsole(skin));
+    // Opaque strip behind the console (covers grass in the art's gaps/letterbox).
+    const backing = document.createElement("div");
+    backing.className = "hud-console-backing";
+    this.root.append(backing, this.buildTopBar(skin), this.buildConsole(skin));
     parent.appendChild(this.root);
     window.addEventListener("keydown", this.onKey);
   }
@@ -165,6 +169,13 @@ export class GameHud {
     if (this.root.hidden) return;
     this.dotsT += dtMs;
     this.textT += dtMs;
+    // Refresh the info panel immediately when the selection changes, so the
+    // construction/training display never lingers from the previous selection.
+    const selId = this.driver.selection()?.id ?? null;
+    if (selId !== this.lastSelId) {
+      this.lastSelId = selId;
+      this.textT = TEXT_PERIOD;
+    }
     if (this.textT >= TEXT_PERIOD) {
       this.textT = 0;
       this.updateTexts();

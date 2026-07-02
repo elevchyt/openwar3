@@ -17,6 +17,18 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **HUD/ghost bugfix pass (2026-07-02, latest+9)** — fixed the info panel showing a stale
+  "Constructing"/"Training" for units and after deselect: `.hud-progress-wrap`/`.hud-queue` used
+  `display:flex`, which beat the `hidden` attribute → added a global `[hidden]{display:none
+  !important}` and force a text refresh the frame the selection id changes. **Command icons now
+  fill the slot** — the skinned-slot `background:` shorthand (higher specificity) was resetting
+  `background-size`; made `.hud-cmd` `100% 100% !important`. Added a full-width opaque **console
+  backing** so grass no longer shows through the art's gaps/letterbox (also blocks map clicks in
+  the HUD band). **Build ghost** now scrubs the **Birth clip to its last frame** (fully-built) —
+  "Stand" left birth-revealed geosets hidden, so most silhouettes looked half-built (Altar of Kings
+  happened to work). **Start-location (`sloc`) markers hidden** after melee init. **Click colliders**
+  widened (≥64-unit radius, ≥ the drawn circle) with the body capsule capped so tall buildings don't
+  grab sky clicks.
 - **HUD info-panel + tooltip pass (2026-07-02, latest+8)** — the selection info panel now matches
   the WC3 reference screenshots (`~/Downloads/2026-07-02 17_45*.png`): **construction** shows the
   building icon + "Constructing" + a gold progress bar; **training** shows "Training" + the current

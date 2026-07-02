@@ -107,7 +107,7 @@ interface SpawnInstance {
   detach(): boolean; // remove from the scene (projectiles on impact)
   localLocation: Float32Array;
   localRotation: Float32Array;
-  model: { sequences: Array<{ name: string }> };
+  model: { sequences: Array<{ name: string; interval?: ArrayLike<number> }> };
 }
 interface SpawnModel {
   addInstance(): SpawnInstance;
@@ -438,6 +438,18 @@ export class MapViewerScene {
           await this.spawnUnit(def, x, y, slot.id, slot.team);
         }
       }
+    }
+    this.hideStartLocations();
+  }
+
+  /** Hide the map's start-location (`sloc`) marker units once players are
+   *  spawned — they're just placement props (not real units) and shouldn't be
+   *  visible or clickable. */
+  private hideStartLocations(): void {
+    const map = this.viewer.map;
+    if (!map) return;
+    for (const u of map.units as Array<{ row?: { string(k: string): string | undefined }; instance?: { hide(): void } }>) {
+      if (u.row?.string("unitid") === "sloc") u.instance?.hide();
     }
   }
 
@@ -1059,13 +1071,24 @@ export class MapViewerScene {
       // east, which is the "wrong rotation" seen on the ghost.
       zQuat(this.mq, (3 * Math.PI) / 2);
       inst.setRotation(this.mq);
-      // Show the FINISHED building: play its idle "Stand" clip, not the default
-      // first sequence (often "Birth", the construction scaffold — that's why the
-      // ghost looked like an unfinished preview).
-      const stand = standSequence(inst.model.sequences);
-      if (stand >= 0) {
-        inst.setSequence(stand);
-        inst.setSequenceLoopMode(2);
+      // Show the FINISHED building. Most building models only reveal their full
+      // geometry at the END of the "Birth" clip (geoset-visibility grows during
+      // construction); jumping to "Stand" leaves those parts hidden, so the ghost
+      // looked half-built. Scrub Birth to its last frame (= fully built); a
+      // LOOP_NEVER sequence clamps there, so it stays complete. Fall back to
+      // "Stand" for models without a Birth clip.
+      const seqs = inst.model.sequences;
+      const birth = seqs.findIndex((s) => /^birth$/i.test(s.name));
+      if (birth >= 0 && seqs[birth].interval) {
+        inst.setSequence(birth);
+        inst.setSequenceLoopMode(0);
+        inst.frame = seqs[birth].interval![1];
+      } else {
+        const stand = standSequence(seqs);
+        if (stand >= 0) {
+          inst.setSequence(stand);
+          inst.setSequenceLoopMode(2);
+        }
       }
       this.buildGhosts.set(def.id, inst);
     }

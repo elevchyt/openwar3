@@ -818,15 +818,16 @@ export class RtsController {
       const bx = this.screen[0];
       const by = this.screen[1];
       // Generous pick radius from the unit's collision / selection size (the
-      // WC3 click collider). Uses the FULL selection radius, not half.
+      // WC3 click collider) — at least as wide as the drawn selection circle so
+      // anything inside the visible ring is clickable.
       this.world2.set(this.world);
-      this.world2[0] = u.x + Math.max(u.radius, e.selRadius, 48);
+      this.world2[0] = u.x + Math.max(u.radius, e.selRadius, 64);
       this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-      const rPx = Math.hypot(this.screen2[0] - bx, this.screen2[1] - by) + 12 * dpr;
+      const rPx = Math.hypot(this.screen2[0] - bx, this.screen2[1] - by) + 16 * dpr;
       // Top-of-body screen point: models rise UP from their base, so the click
-      // collider is a vertical capsule from the feet up over the body (bigger
-      // units/buildings are taller). This is the "raise it towards up" fix.
-      const bodyHeight = Math.max(e.selRadius * 2.5, 140);
+      // collider is a vertical capsule from the feet up over the body. Capped so
+      // a tall building doesn't swallow clicks in the empty sky above it.
+      const bodyHeight = Math.min(Math.max(e.selRadius * 2, 130), 220);
       this.world2.set(this.world);
       this.world2[2] = baseZ + bodyHeight;
       this.host.camera.worldToScreen(this.screen2, this.world2, viewport);

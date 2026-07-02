@@ -284,6 +284,21 @@ body.in-game .menu-panel { display: none; }
 .hud-upkeep[data-level="L"] { color: #e0c146; }
 .hud-upkeep[data-level="H"] { color: #e05046; }
 
+/* Full-width opaque strip behind the console so no terrain shows through the
+   art's transparent regions or the letterbox sides (the skinned console is
+   centred and narrower than the screen). Blocks map clicks in the HUD band. */
+.hud-console-backing {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: min(27vh, 260px);
+  min-height: 150px;
+  background: linear-gradient(rgba(8, 7, 4, 0) 0, #0a0906 20px, #050403);
+  pointer-events: auto;
+  z-index: 0;
+}
+
 .hud-console {
   position: absolute;
   left: 0;
@@ -386,12 +401,16 @@ body.in-game .menu-panel { display: none; }
 .hud-console-skinned .hud-inventory .hud-slot { background: none; border: none; }
 .hud-console-skinned .hud-cmd { font-size: 11px; }
 
+/* hidden must always win, even over flex/grid display rules below. */
+[hidden] { display: none !important; }
+
 /* Command buttons: the BTN icon fills the whole tile like the original command
-   card. background-size: 100% 100% stretches the (square) icon to exactly the
-   slot — no letterbox gaps and no bottom/right cropping (cover was cropping the
-   overflow on non-square slots). */
+   card. 100% 100% stretches the (square) icon to exactly the slot — no gaps, no
+   crop. !important because the skinned-slot `background:` shorthand (higher
+   specificity) otherwise resets background-size to auto and the icon renders at
+   its natural size with a margin. */
 .hud-cmd {
-  background-size: 100% 100%;
+  background-size: 100% 100% !important;
   background-repeat: no-repeat;
   background-position: center;
   color: transparent;
