@@ -16,8 +16,9 @@ import { STARTING_UNITS, resolveRace, type PlayableRace } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
-import { GameHud, type HudDriver } from "../ui/hud";
+import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
+import { buildsFor, trainsFor } from "../data/techtree";
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -143,6 +144,11 @@ export class MapViewerScene {
   private portraitFor: number | null = null;
   private portraitLoading = false;
   private cameraLock = false; // portrait held → camera follows the selected unit
+  private cardPage: "root" | "build" = "root";
+  private lastSelected: number | null = null;
+  private placement: { def: UnitDef; fp: Footprint | null; workerId: number } | null = null;
+  private ghost: HTMLDivElement | null = null;
+  private meleeTeams = new Map<number, number>(); // owner slot → team
   private consoleSkinCache:
     | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
     | null
@@ -379,6 +385,7 @@ export class MapViewerScene {
     // Resolve "random" once per slot: roster and console skin must agree.
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
     this.localRace = races.get(this.localPlayer) ?? "human";
+    this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
     this.applyRaceCursor();
     for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, 500, 150); // WC3 melee start
     this.mountHud();
@@ -406,7 +413,7 @@ export class MapViewerScene {
     }
   }
 
-  private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number): Promise<void> {
+  private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<void> {
     const map = this.viewer.map;
     if (!map || !this.rts) return;
     // Buildings snap to the pathing grid so their stamped footprint lands on
@@ -419,10 +426,77 @@ export class MapViewerScene {
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
     instance.setTeamColor(owner); // player slot doubles as team color for now
-    this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team); // face south (WC3 default)
+    this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team, constructionTime); // face south
 
     // Buildings block pathing: stamp their footprint so units route around them.
     if (fp && this.grid) stampFootprint(this.grid, fp, x, y);
+  }
+
+  /** Place the building being positioned at the cursor, if valid and affordable. */
+  private placeBuilding(cssX: number, cssY: number): void {
+    const p = this.placement;
+    if (!p || !this.rts || !this.grid) return;
+    const hit = this.rts.groundPoint(cssX, cssY);
+    if (!hit) return;
+    let [x, y] = hit;
+    if (p.fp) [x, y] = this.grid.snapForFootprintRect(x, y, p.fp.w, p.fp.h);
+    if (!this.placementValid(x, y)) return; // invalid site — keep placing
+    const stash = this.rts.stashFor(this.localPlayer);
+    if (stash.gold < p.def.goldCost || stash.lumber < p.def.lumberCost) return;
+    stash.gold -= p.def.goldCost;
+    stash.lumber -= p.def.lumberCost;
+    void this.spawnUnit(p.def, x, y, this.localPlayer, this.teamOf(this.localPlayer), p.def.buildTime || 60);
+    this.rts.moveSelectedTo(x, y); // send the worker to the site
+    this.cardPage = "root";
+    this.cancelPlacement();
+  }
+
+  private teamOf(owner: number): number {
+    return this.meleeTeams.get(owner) ?? owner;
+  }
+
+  /** All of the building footprint's cells must be walkable and unreserved. */
+  private placementValid(x: number, y: number): boolean {
+    const p = this.placement;
+    if (!p || !this.grid || !p.fp) return true;
+    const [bx, by] = this.grid.worldToCell(x - (p.fp.w * 32) / 2, y - (p.fp.h * 32) / 2);
+    for (let cy = 0; cy < p.fp.h; cy++) {
+      for (let cx = 0; cx < p.fp.w; cx++) {
+        if (!p.fp.blocked[cy * p.fp.w + cx]) continue;
+        if (!this.grid.walkable(bx + cx, by + cy) || this.grid.isReserved(bx + cx, by + cy)) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Update the build-placement ghost box under the cursor (green = valid site,
+   *  red = blocked). Anchored to the cursor; size scales with the footprint. */
+  private updateGhost(cssX: number, cssY: number): void {
+    if (!this.placement || !this.rts) {
+      if (this.ghost) this.ghost.hidden = true;
+      return;
+    }
+    if (!this.ghost) {
+      this.ghost = document.createElement("div");
+      this.ghost.className = "build-ghost";
+      document.body.appendChild(this.ghost);
+    }
+    const hit = this.rts.groundPoint(cssX, cssY);
+    let valid = false;
+    if (hit && this.grid) {
+      let [x, y] = hit;
+      const fp = this.placement.fp;
+      if (fp) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
+      valid = this.placementValid(x, y);
+    }
+    const cells = this.placement.fp ? Math.max(this.placement.fp.w, this.placement.fp.h) : 4;
+    const size = cells * 14; // rough on-screen footprint size (px)
+    this.ghost.hidden = false;
+    this.ghost.classList.toggle("invalid", !valid);
+    this.ghost.style.width = `${size}px`;
+    this.ghost.style.height = `${size}px`;
+    this.ghost.style.left = `${cssX}px`;
+    this.ghost.style.top = `${cssY}px`;
   }
 
   /** Build the in-game HUD (plan §10.1b) over the map view. */
@@ -468,6 +542,8 @@ export class MapViewerScene {
       icon: (kind) => this.resourceIcon(kind),
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: 8, isDay: true },
+      commandCard: () => this.commandCard(),
+      runCommand: (id) => this.runCommand(id),
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
     };
@@ -564,6 +640,138 @@ export class MapViewerScene {
       });
   }
 
+  // --- command card ---------------------------------------------------------
+
+  private cmd(over: Partial<CommandButton>): CommandButton {
+    return { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, col: 0, row: 0, disabled: false, active: false, ...over };
+  }
+
+  /** Build the command card for the current own-unit selection. */
+  private commandCard(): CommandButton[] {
+    const sel = this.rts?.selectedInfo();
+    if (!sel || sel.owner !== this.localPlayer) return [];
+    const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
+    const out: CommandButton[] = [];
+
+    if (sel.underConstruction) {
+      out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel construction.", col: 3, row: 2 }));
+      return out;
+    }
+    if (sel.isBuilding) {
+      for (const uid of trainsFor(sel.typeId)) {
+        const d = this.registry.get(uid);
+        if (!d) continue;
+        const stash = this.rts!.stashFor(this.localPlayer);
+        const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
+        out.push(this.cmd({
+          id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.name[0]?.toUpperCase() ?? "",
+          desc: `Trains a ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: d.foodUsed,
+          col: d.buttonX, row: d.buttonY, disabled: !afford,
+        }));
+      }
+      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
+      return out;
+    }
+
+    // Movable units. Build sub-page for workers, else the order set.
+    if (this.cardPage === "build" && sel.isWorker) {
+      const stash = this.rts!.stashFor(this.localPlayer);
+      for (const bid of buildsFor(sel.race as "human")) {
+        const d = this.registry.get(bid);
+        if (!d) continue;
+        const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
+        out.push(this.cmd({
+          id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.name[0]?.toUpperCase() ?? "",
+          desc: `Builds ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: 0,
+          col: d.buttonX, row: d.buttonY, disabled: !afford,
+        }));
+      }
+      out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Return to orders.", col: 3, row: 2 }));
+      return out;
+    }
+
+    const armed = this.rts?.orderMode ?? null;
+    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: armed === "move" }));
+    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0 }));
+    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0 }));
+    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit or point.", col: 3, row: 0, active: armed === "attack" }));
+    if (sel.isWorker) {
+      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2 }));
+    }
+    return out;
+  }
+
+  private runCommand(id: string): void {
+    if (!this.rts) return;
+    if (id === "move" || id === "attack") {
+      this.rts.orderMode = id;
+      this.hud?.setArmed(true);
+      return;
+    }
+    if (id === "stop" || id === "hold") {
+      this.rts.stopSelected();
+      this.rts.orderMode = null;
+      this.hud?.clearOrderMode();
+      return;
+    }
+    if (id === "build") {
+      this.cardPage = "build";
+      return;
+    }
+    if (id === "cancel") {
+      if (this.placement) {
+        this.cancelPlacement();
+      } else if (this.cardPage === "build") {
+        this.cardPage = "root";
+      } else {
+        // Building: refund the last queued unit.
+        const sel = this.rts.selectedInfo();
+        if (sel?.isBuilding) this.cancelTrain(sel.id);
+      }
+      return;
+    }
+    if (id.startsWith("build:")) {
+      const def = this.registry.get(id.slice(6));
+      const workerId = this.rts.selectedId;
+      if (def && workerId !== null) {
+        this.placement = { def, fp: def.pathTex ? this.footprintFor(def.pathTex) : null, workerId };
+      }
+      return;
+    }
+    if (id.startsWith("train:")) {
+      const sel = this.rts.selectedInfo();
+      if (sel) this.trainUnit(sel.id, id.slice(6));
+    }
+  }
+
+  private trainUnit(buildingId: number, unitId: string): void {
+    const d = this.registry.get(unitId);
+    if (!d || !this.rts) return;
+    const stash = this.rts.stashFor(this.localPlayer);
+    if (stash.gold < d.goldCost || stash.lumber < d.lumberCost) return;
+    stash.gold -= d.goldCost;
+    stash.lumber -= d.lumberCost;
+    this.rts.simWorld.enqueueTrain(buildingId, unitId, d.buildTime || 15);
+  }
+
+  private cancelTrain(buildingId: number): void {
+    const uid = this.rts?.simWorld.cancelLastTrain(buildingId);
+    if (!uid || !this.rts) return;
+    const d = this.registry.get(uid);
+    if (d) {
+      const stash = this.rts.stashFor(this.localPlayer);
+      stash.gold += d.goldCost;
+      stash.lumber += d.lumberCost;
+    }
+  }
+
+  private cancelPlacement(): void {
+    this.placement = null;
+    if (this.ghost) {
+      this.ghost.hidden = true;
+    }
+  }
+
   private resourceIcon(kind: "gold" | "lumber" | "supply"): string | null {
     const paths = {
       gold: "UI\\Widgets\\ToolTips\\Human\\ToolTipGoldIcon.blp",
@@ -630,6 +838,17 @@ export class MapViewerScene {
         for (const mine of world.drainDepletedMines()) {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
         }
+        // Spawn units that finished training, at their building's rally point.
+        for (const t of world.drainTrained()) {
+          const d = this.registry.get(t.unitId);
+          if (d) void this.spawnUnit(d, t.rallyX, t.rallyY, this.localPlayer, this.teamOf(this.localPlayer));
+        }
+      }
+      // Reset the command page + placement when the selection changes.
+      if (this.rts && this.rts.selectedId !== this.lastSelected) {
+        this.lastSelected = this.rts.selectedId;
+        this.cardPage = "root";
+        if (this.placement) this.cancelPlacement();
       }
       // Advance animations by REAL elapsed time (fixes 2x speed on high-refresh
       // displays), replicating War3MapViewer.update() = super.update() + map.update().
@@ -660,6 +879,9 @@ export class MapViewerScene {
     this.metrics.dispose();
     this.hud?.dispose();
     this.hud = null;
+    this.ghost?.remove();
+    this.ghost = null;
+    this.placement = null;
     document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
@@ -727,7 +949,12 @@ export class MapViewerScene {
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
       if (e.button === 2) {
-        this.rts?.moveAt(e.offsetX, e.offsetY);
+        // Right-click cancels build placement / an armed order, else moves.
+        if (this.placement) this.cancelPlacement();
+        else if (this.rts?.orderMode) {
+          this.rts.orderMode = null;
+          this.hud?.clearOrderMode();
+        } else this.rts?.moveAt(e.offsetX, e.offsetY);
         return;
       }
       if (e.button === 0) {
@@ -742,8 +969,10 @@ export class MapViewerScene {
       if (e.button === 0) {
         this.dragging = false;
         if (!this.moved && this.rts) {
-          // An armed command-card order (Move/Attack) consumes the click.
-          if (this.rts.orderMode) {
+          if (this.placement) {
+            this.placeBuilding(e.offsetX, e.offsetY);
+          } else if (this.rts.orderMode) {
+            // An armed command-card order (Move/Attack) consumes the click.
             if (this.rts.orderClickAt(e.offsetX, e.offsetY)) this.hud?.clearOrderMode();
           } else {
             this.rts.selectAt(e.offsetX, e.offsetY);
@@ -752,6 +981,10 @@ export class MapViewerScene {
       }
     });
     c.addEventListener("pointermove", (e) => {
+      if (this.placement) {
+        this.updateGhost(e.offsetX, e.offsetY);
+        if (!this.dragging) return;
+      }
       if (!this.dragging) {
         this.rts?.hoverAt(e.offsetX, e.offsetY);
         return;

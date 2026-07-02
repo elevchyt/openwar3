@@ -1,4 +1,4 @@
-import { SimWorld, type SimWeapon, type WorkerState, type SimUnit } from "../sim/world";
+import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type BuildingState } from "../sim/world";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
@@ -36,6 +36,29 @@ export interface RtsHost {
   viewport(): Float32Array;
   units(): MapUnit[];
   unitsReady(): boolean;
+}
+
+export interface SelectionInfo {
+  id: number;
+  typeId: string;
+  race: string;
+  name: string;
+  owner: number;
+  hp: number;
+  maxHp: number;
+  mana: number;
+  maxMana: number;
+  armor: number;
+  damageMin: number;
+  damageMax: number;
+  model: string;
+  isWorker: boolean;
+  isBuilding: boolean;
+  underConstruction: boolean;
+  buildProgress: number;
+  queueLength: number;
+  carryGold: number;
+  carryLumber: number;
 }
 
 // Resolved animation-sequence indices for a unit. Worker carry/chop variants
@@ -77,6 +100,8 @@ interface Entry {
   anims: AnimSet;
   moveHeight: number;
   selRadius: number; // selection-ring radius in WORLD units (from selScale)
+  typeId: string; // unit-type id (e.g. "hpea"); drives the command card
+  race: string;
   name: string;
   foodUsed: number;
   foodMade: number;
@@ -198,6 +223,8 @@ export class RtsController {
         anims,
         moveHeight: lift(def?.moveHeight ?? 0),
         selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
+        typeId: def?.id ?? unit.row?.string("unitid") ?? "",
+        race: def?.race ?? "",
         name: def?.name ?? unit.row?.string("unitid") ?? "Unit",
         foodUsed: def?.foodUsed ?? 0,
         foodMade: def?.foodMade ?? 0,
@@ -213,39 +240,49 @@ export class RtsController {
 
   /** Add a freshly-spawned unit (instance already attached to the scene) — used
    *  by melee init to place each race's starting units. Returns the sim id. */
-  addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0): number {
+  addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0): number {
     const seqs = instance.model.sequences;
     const anims = buildAnimSet(seqs);
     const simId = this.nextId++;
     const profile = WORKERS[def.id];
     const worker: WorkerState | null = profile ? { ...profile, carryGold: 0, carryLumber: 0 } : null;
-    this.sim.add({
-      id: simId,
-      owner,
-      team,
-      x,
-      y,
-      facing,
-      speed: def.speed,
-      turnRate: def.turnRate,
-      radius: def.collision || 16,
-      flying: def.moveType === "fly",
-      hp: def.hitPoints || 100,
-      maxHp: def.hitPoints || 100,
-      mana: def.mana,
-      maxMana: def.mana,
-      armor: def.armor,
-      weapon: weaponFor(def),
-      worker,
-      depotGold: DEPOT_IDS.has(def.id) && def.id !== "hlum", // lumber mill: lumber only
-      depotLumber: DEPOT_IDS.has(def.id),
-    });
+    // Structures get building state (construction + a training queue); rally
+    // point defaults to just south of the building.
+    const building: BuildingState | null = def.isBuilding
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, queue: [], rallyX: x, rallyY: y - 200 }
+      : null;
+    this.sim.add(
+      {
+        id: simId,
+        owner,
+        team,
+        x,
+        y,
+        facing,
+        speed: def.speed,
+        turnRate: def.turnRate,
+        radius: def.collision || 16,
+        flying: def.moveType === "fly",
+        hp: constructionTime > 0 ? (def.hitPoints || 100) * 0.1 : def.hitPoints || 100,
+        maxHp: def.hitPoints || 100,
+        mana: def.mana,
+        maxMana: def.mana,
+        armor: def.armor,
+        weapon: weaponFor(def),
+        worker,
+        depotGold: DEPOT_IDS.has(def.id) && def.id !== "hlum", // lumber mill: lumber only
+        depotLumber: DEPOT_IDS.has(def.id),
+      },
+      building,
+    );
     const entry: Entry = {
       simId,
       unit: { instance, state: IDLE },
       anims,
       moveHeight: lift(def.moveHeight),
       selRadius: (def.selScale || 1) * SEL_RADIUS_PER_SCALE,
+      typeId: def.id,
+      race: def.race,
       name: def.name,
       foodUsed: def.foodUsed,
       foodMade: def.foodMade,
@@ -400,29 +437,21 @@ export class RtsController {
     if (this.selected !== null) this.sim.stop(this.selected);
   }
 
-  selectedInfo(): {
-    id: number;
-    name: string;
-    owner: number;
-    hp: number;
-    maxHp: number;
-    mana: number;
-    maxMana: number;
-    armor: number;
-    damageMin: number;
-    damageMax: number;
-    model: string;
-    isWorker: boolean;
-    carryGold: number;
-    carryLumber: number;
-  } | null {
+  selectedInfo(): SelectionInfo | null {
     if (this.selected === null) return null;
-    const u = this.sim.units.get(this.selected);
-    const e = this.byId.get(this.selected);
+    return this.infoFor(this.selected);
+  }
+
+  private infoFor(id: number): SelectionInfo | null {
+    const u = this.sim.units.get(id);
+    const e = this.byId.get(id);
     if (!u || !e) return null;
     const w = u.weapon;
+    const b = u.building;
     return {
       id: e.simId,
+      typeId: e.typeId,
+      race: e.race,
       name: e.name,
       owner: u.owner,
       hp: u.hp,
@@ -435,9 +464,37 @@ export class RtsController {
       damageMax: w ? w.damage + w.dice * w.sides : 0,
       model: e.modelPath,
       isWorker: !!u.worker,
+      isBuilding: !!b,
+      underConstruction: !!b && b.constructionLeft > 0,
+      buildProgress: b && b.buildTimeTotal > 0 ? 1 - b.constructionLeft / b.buildTimeTotal : 1,
+      queueLength: b ? b.queue.length : 0,
       carryGold: u.worker?.carryGold ?? 0,
       carryLumber: u.worker?.carryLumber ?? 0,
     };
+  }
+
+  /** Owner of the selected unit (for build/train ownership checks). */
+  selectedOwner(): number | null {
+    if (this.selected === null) return null;
+    return this.sim.units.get(this.selected)?.owner ?? null;
+  }
+
+  get selectedId(): number | null {
+    return this.selected;
+  }
+
+  /** Order the selected worker to walk to a build site. */
+  moveSelectedTo(x: number, y: number): void {
+    if (this.selected !== null) this.sim.issueMove(this.selected, x, y);
+  }
+
+  /** Convert a CSS click to a world ground point (for build placement). */
+  groundPoint(cssX: number, cssY: number): [number, number] | null {
+    const dpr = this.dpr();
+    this.screen[0] = cssX * dpr;
+    this.screen[1] = cssY * dpr;
+    this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
+    return this.groundHit();
   }
 
   /** Time of day for the HUD clock: game-hour + day/night flag. */

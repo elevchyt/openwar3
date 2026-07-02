@@ -82,6 +82,21 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   (`margin-left:auto`), day/night medallion enlarged (300% of bar height), top menu buttons restyled
   as beveled WC3-ish stone (real `UpperMenuButtonTexture` is an FDF-decorated indirect name — full
   FDF-driven top bar deferred to the §10 UI pass).
+- **Phase 6 — building & training (2026-07-02, latest+3)** — the economy loop is now a game:
+  registry loads command-card **icons** (`art`) + grid positions (`buttonpos`) from the per-race
+  `UnitFunc.txt`; a curated melee **tech tree** (`src/data/techtree.ts`) maps each race's worker →
+  buildable structures and each structure → trainable units. Sim gained **building state**:
+  construction ramps HP 10%→full over the build time (blocks training until done) and a **training
+  queue** that emits completion events. **Dynamic command card** (`mapViewer.commandCard`/`runCommand`)
+  swaps per selection — worker: Move/Stop/Hold/Attack + Build (opens the structure sub-page); building:
+  its train list; under-construction: Cancel — with real BTN icons, hotkeys, and cost/description
+  tooltips; unaffordable buttons dim. **Build placement:** click a structure → cursor ghost (green/red
+  by footprint validity) → click to place (charges gold/lumber, spawns it under-construction, sends the
+  worker); right-click/Esc cancels. **Training:** deducts on queue, spawns the finished unit at the
+  building's rally point; Cancel refunds the last queued unit. Sim construction/training verified
+  headlessly; registry icons + tech-tree resolution verified against the real MPQs. Simplifications:
+  building appears at placement (not on worker-arrival), worker isn't consumed, no tier requirements,
+  no rally-point UI yet.
 - **Mining behaviour + HUD polish + day/night (2026-07-02, latest+2)** — **mining:** resources
   return to the *nearest* edge of the depot (worker paths to the building's near side), workers
   **ghost through each other** for the whole auto gold loop (`noCollision`, cleared by any manual

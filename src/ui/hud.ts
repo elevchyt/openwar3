@@ -6,6 +6,22 @@
 
 export type OrderMode = "move" | "attack" | null;
 
+/** One command-card button (order, build, or train). */
+export interface CommandButton {
+  id: string; // "move" | "stop" | "attack" | "build" | "cancel" | "build:htow" | "train:hfoo"
+  icon: string | null; // data URL
+  name: string;
+  hotkey: string;
+  desc: string;
+  gold: number;
+  lumber: number;
+  food: number;
+  col: number; // 0–3
+  row: number; // 0–2
+  disabled: boolean;
+  active: boolean; // armed (e.g. move/attack awaiting a target)
+}
+
 export interface HudSelection {
   id: number;
   name: string;
@@ -32,6 +48,10 @@ export interface HudDriver {
   focusSelected(lock: boolean): void;
   setOrderMode(mode: OrderMode): void;
   stopSelected(): void;
+  /** Command-card buttons for the current selection (empty = no card). */
+  commandCard(): CommandButton[];
+  /** Run a command-card button by id. */
+  runCommand(id: string): void;
   /** Data URL for a resource icon, or null to use the text fallback. */
   icon(kind: "gold" | "lumber" | "supply"): string | null;
   /** Data URL for a command button icon (e.g. "BTNMove"), or null. */
@@ -88,8 +108,9 @@ export class GameHud {
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
-  private modeButtons = new Map<string, HTMLButtonElement>();
   private cmdTooltip!: HTMLDivElement;
+  private cmdSlots: HTMLButtonElement[] = [];
+  private cmdKey = "";
   private clockFace?: HTMLDivElement;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
@@ -118,7 +139,7 @@ export class GameHud {
 
   /** An armed order was executed (or cancelled) — release the button state. */
   clearOrderMode(): void {
-    this.setMode(null);
+    this.setArmed(false);
   }
 
   frame(dtMs: number): void {
@@ -134,6 +155,7 @@ export class GameHud {
       this.drawDots();
     }
     this.updateClock();
+    this.refreshCommandCard();
   }
 
   /** Sun/moon disc: the indicator texture is sun–moon–sun across its width, so
@@ -146,16 +168,19 @@ export class GameHud {
 
   private onKey = (e: KeyboardEvent): void => {
     if (this.root.hidden) return;
-    if (e.key === "Escape") this.setMode(null);
-    else if (e.key === "m" || e.key === "M") this.setMode("move");
-    else if (e.key === "a" || e.key === "A") this.setMode("attack");
-    else if (e.key === "s" || e.key === "S") this.driver.stopSelected();
+    if (e.key === "Escape") {
+      this.driver.runCommand("cancel");
+      return;
+    }
+    // Trigger the command whose hotkey matches the pressed key.
+    const key = e.key.toUpperCase();
+    const cmd = this.driver.commandCard().find((c) => c.hotkey === key && !c.disabled);
+    if (cmd) this.driver.runCommand(cmd.id);
   };
 
-  private setMode(mode: OrderMode): void {
-    this.driver.setOrderMode(mode);
-    for (const [key, btn] of this.modeButtons) btn.classList.toggle("armed", key === mode);
-    document.body.classList.toggle("order-armed", mode !== null);
+  /** Reflect the armed order state on the body (crosshair cursor). */
+  setArmed(armed: boolean): void {
+    document.body.classList.toggle("order-armed", armed);
   }
 
   // --- construction ---------------------------------------------------------
@@ -345,52 +370,64 @@ export class GameHud {
   private buildCommandCard(): HTMLDivElement {
     const card = document.createElement("div");
     card.className = "hud-command";
-    // Tooltip shown above the card on hover (name + hotkey + description).
+    // Tooltip shown above the card on hover (name + hotkey + cost + description).
     this.cmdTooltip = document.createElement("div");
     this.cmdTooltip.className = "hud-tooltip";
     this.cmdTooltip.hidden = true;
     card.appendChild(this.cmdTooltip);
-
-    interface Cmd {
-      label: string;
-      hotkey: string;
-      icon: string;
-      desc: string;
-      run: () => void;
-      mode?: OrderMode;
-    }
-    const commands: Cmd[] = [
-      { label: "Move", hotkey: "M", icon: "BTNMove", desc: "Orders the unit to move to a target point.", run: () => this.setMode("move"), mode: "move" },
-      { label: "Stop", hotkey: "S", icon: "BTNStop", desc: "Halts the unit's current order.", run: () => { this.driver.stopSelected(); this.setMode(null); } },
-      { label: "Attack", hotkey: "A", icon: "BTNAttack", desc: "Orders the unit to attack a target.", run: () => this.setMode("attack"), mode: "attack" },
-    ];
+    // 12 fixed slots (4×3); contents are filled per selection each frame.
+    this.cmdSlots = [];
     for (let i = 0; i < 12; i++) {
-      const cmd = commands[i];
       const btn = document.createElement("button");
       btn.className = "hud-slot hud-cmd";
-      if (cmd) {
-        const url = this.driver.commandIcon(cmd.icon);
-        if (url) {
-          btn.style.backgroundImage = `url(${url})`;
-        } else {
-          btn.textContent = cmd.label;
-        }
-        btn.onclick = cmd.run;
-        const hk = cmd.hotkey;
-        const label = cmd.label.replace(hk, `<b>${hk}</b>`);
-        btn.addEventListener("pointerenter", () => this.showTooltip(`${label} (${hk})`, cmd.desc));
-        btn.addEventListener("pointerleave", () => (this.cmdTooltip.hidden = true));
-        if (cmd.mode) this.modeButtons.set(cmd.mode, btn);
-      } else {
-        btn.disabled = true;
-      }
+      btn.disabled = true;
       card.appendChild(btn);
+      this.cmdSlots.push(btn);
     }
     return card;
   }
 
-  private showTooltip(titleHtml: string, desc: string): void {
-    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${titleHtml}</div><div class="hud-tooltip-desc">${desc}</div>`;
+  /** Rebuild the command-card buttons from the driver's current command list.
+   *  Cheap enough to run each frame; skips work when nothing changed. */
+  private refreshCommandCard(): void {
+    const cmds = this.driver.commandCard();
+    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}`).join("|");
+    if (key === this.cmdKey) return;
+    this.cmdKey = key;
+    for (const btn of this.cmdSlots) {
+      btn.disabled = true;
+      btn.style.backgroundImage = "";
+      btn.classList.remove("armed");
+      btn.textContent = "";
+      btn.onclick = null;
+      btn.onpointerenter = null;
+      btn.onpointerleave = null;
+    }
+    for (const c of cmds) {
+      const idx = c.row * 4 + c.col;
+      const btn = this.cmdSlots[idx];
+      if (!btn) continue;
+      btn.disabled = false;
+      btn.classList.toggle("armed", c.active);
+      btn.classList.toggle("cant-afford", c.disabled);
+      if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
+      else btn.textContent = c.name.slice(0, 4);
+      btn.onclick = () => this.driver.runCommand(c.id);
+      btn.onpointerenter = () => this.showTooltip(c);
+      btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
+    }
+  }
+
+  private showTooltip(c: CommandButton): void {
+    const hk = c.hotkey && c.hotkey.length === 1 ? c.name.replace(c.hotkey, `<b>${c.hotkey}</b>`) : c.name;
+    const cost =
+      c.gold || c.lumber || c.food
+        ? `<div class="hud-tooltip-cost">${c.gold ? `<span class="tc-gold">${c.gold}</span>` : ""}${
+            c.lumber ? `<span class="tc-lumber">${c.lumber}</span>` : ""
+          }${c.food ? `<span class="tc-food">${c.food}</span>` : ""}</div>`
+        : "";
+    this.cmdTooltip.innerHTML =
+      `<div class="hud-tooltip-title">${hk}${c.hotkey ? ` (${c.hotkey})` : ""}</div>${cost}<div class="hud-tooltip-desc">${c.desc}</div>`;
     this.cmdTooltip.hidden = false;
   }
 
