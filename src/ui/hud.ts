@@ -32,7 +32,7 @@ export interface HudDriver {
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
   minimapImage(): HTMLCanvasElement | null;
   /** Race console atlas crops (UI\Console\<Race>UITile01–04) or null. */
-  consoleSkin(): { consoleUrl: string; consoleAspect: number; topUrl: string } | null;
+  consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number } | null;
 }
 
 // Zone rectangles measured from the rendered console atlas (fractions of the
@@ -73,10 +73,7 @@ export class GameHud {
   private upkeep!: HTMLSpanElement;
   private selName!: HTMLDivElement;
   private selHpText!: HTMLDivElement;
-  private selHpFill!: HTMLDivElement;
-  private selMpRow!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
-  private selMpFill!: HTMLDivElement;
   private selCarry!: HTMLDivElement;
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
@@ -142,13 +139,9 @@ export class GameHud {
 
   // --- construction ---------------------------------------------------------
 
-  private buildTopBar(skin: { topUrl: string } | null): HTMLDivElement {
+  private buildTopBar(skin: { clockUrl: string; clockAspect: number } | null): HTMLDivElement {
     const bar = document.createElement("div");
     bar.className = "hud-top";
-    if (skin) {
-      bar.classList.add("hud-top-skinned");
-      bar.style.backgroundImage = `url(${skin.topUrl})`;
-    }
 
     const menus = document.createElement("div");
     menus.className = "hud-menus";
@@ -160,9 +153,16 @@ export class GameHud {
       menus.appendChild(b);
     }
 
+    // Day/night clock — the real circular medallion (its own atlas crop so it
+    // isn't cut off), or a plain CSS orb without an install.
     const clock = document.createElement("div");
     clock.className = "hud-clock";
     clock.title = "Day/night cycle (not simulated yet)";
+    if (skin) {
+      clock.classList.add("hud-clock-skinned");
+      clock.style.backgroundImage = `url(${skin.clockUrl})`;
+      clock.style.aspectRatio = String(skin.clockAspect);
+    }
 
     const res = document.createElement("div");
     res.className = "hud-resources";
@@ -217,9 +217,10 @@ export class GameHud {
     if (skin) {
       console_.classList.add("hud-console-skinned");
       console_.style.backgroundImage = `url(${skin.consoleUrl})`;
-      // Natural height at full width, capped like WC3-on-widescreen (the art
-      // squishes vertically a little, exactly as the original did).
-      console_.style.height = `min(${(100 / skin.consoleAspect).toFixed(2)}vw, 31vh)`;
+      // Keep the console at its NATURAL aspect ratio, centred, and let the sides
+      // letterbox on widescreen — never stretch it. Height is capped so a wide
+      // monitor doesn't blow it up; width follows from the aspect.
+      console_.style.setProperty("--console-aspect", String(skin.consoleAspect));
       place(minimap, ZONES.minimap);
       place(portraitWrap, ZONES.portrait);
       place(infoText, ZONES.info);
@@ -254,41 +255,25 @@ export class GameHud {
 
   private buildInfoPanel(): { portraitWrap: HTMLDivElement; infoText: HTMLDivElement } {
     // Portrait: an animated 3D bust (the _portrait.mdx model) with the HP and
-    // mana readouts right under it, like the original console.
+    // mana values as plain coloured numbers beneath it — exactly like the
+    // original console (no bars under the portrait).
     this.portrait = document.createElement("div");
     this.portrait.className = "hud-portrait";
     this.portraitCanvasEl = document.createElement("canvas");
     this.portraitCanvasEl.className = "hud-portrait-canvas";
     this.portrait.appendChild(this.portraitCanvasEl);
 
-    const bars = document.createElement("div");
-    bars.className = "hud-portrait-bars";
-    const hpRow = document.createElement("div");
-    hpRow.className = "hud-bar-row";
-    const hpTrack = document.createElement("div");
-    hpTrack.className = "hud-sel-hp";
-    this.selHpFill = document.createElement("div");
-    this.selHpFill.className = "hud-sel-hp-fill";
-    hpTrack.appendChild(this.selHpFill);
+    const values = document.createElement("div");
+    values.className = "hud-portrait-values";
     this.selHpText = document.createElement("div");
-    this.selHpText.className = "hud-bar-text";
-    hpRow.append(hpTrack, this.selHpText);
-
-    this.selMpRow = document.createElement("div");
-    this.selMpRow.className = "hud-bar-row";
-    const mpTrack = document.createElement("div");
-    mpTrack.className = "hud-sel-hp hud-sel-mp";
-    this.selMpFill = document.createElement("div");
-    this.selMpFill.className = "hud-sel-hp-fill hud-sel-mp-fill";
-    mpTrack.appendChild(this.selMpFill);
+    this.selHpText.className = "hud-hp-value";
     this.selMpText = document.createElement("div");
-    this.selMpText.className = "hud-bar-text";
-    this.selMpRow.append(mpTrack, this.selMpText);
-    bars.append(hpRow, this.selMpRow);
+    this.selMpText.className = "hud-mp-value";
+    values.append(this.selHpText, this.selMpText);
 
     const portraitWrap = document.createElement("div");
     portraitWrap.className = "hud-portrait-wrap";
-    portraitWrap.append(this.portrait, bars);
+    portraitWrap.append(this.portrait, values);
 
     const infoText = document.createElement("div");
     infoText.className = "hud-info-text";
@@ -360,22 +345,14 @@ export class GameHud {
     this.portrait.classList.toggle("empty", !sel);
     if (sel) {
       this.selName.textContent = sel.name;
-      const frac = Math.max(0, Math.min(1, sel.hp / sel.maxHp));
-      this.selHpFill.style.width = `${frac * 100}%`;
-      this.selHpFill.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
       this.selHpText.textContent = `${Math.ceil(sel.hp)} / ${sel.maxHp}`;
-      this.selMpRow.hidden = sel.maxMana <= 0;
-      if (sel.maxMana > 0) {
-        this.selMpFill.style.width = `${Math.max(0, Math.min(1, sel.mana / sel.maxMana)) * 100}%`;
-        this.selMpText.textContent = `${Math.floor(sel.mana)} / ${sel.maxMana}`;
-      }
+      this.selMpText.textContent = sel.maxMana > 0 ? `${Math.floor(sel.mana)} / ${sel.maxMana}` : "";
       this.selCarry.textContent =
         sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";
     } else {
       this.selName.textContent = "";
-      this.selHpFill.style.width = "0";
       this.selHpText.textContent = "";
-      this.selMpRow.hidden = true;
+      this.selMpText.textContent = "";
       this.selCarry.textContent = "";
     }
   }

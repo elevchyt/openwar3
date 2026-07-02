@@ -91,6 +91,7 @@ export interface SimUnit {
   workT: number; // chop/mine timer
   inMine: boolean; // inside the gold mine (renderer hides the unit)
   working: boolean; // chopping (renderer plays the attack animation)
+  atNode: boolean; // parked at the resource (approach finished — stop pathing)
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -108,14 +109,7 @@ const REPATH_COOLDOWN = 0.5; // seconds a blocked chaser waits before repathing
 const GOLD_PER_TRIP = 10;
 const MINE_TIME = 1.0; // seconds a worker spends inside the mine
 const TREE_LUMBER = 50; // lumber a standard tree yields before falling
-// Trees block a 2×2-cell footprint and movers keep their own clearance, so the
-// closest reachable spot is ~2–3 cells from the trunk — the chop reach must
-// cover that or workers orbit forever without chopping.
-const TREE_RANGE = 72;
-const TREE_RADIUS = 16;
-// Workers enter the mine when they reach its footprint EDGE (Chebyshev — the
-// footprint is square; a circular test fires way too early on diagonals).
-const MINE_ENTER = 48;
+const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latch
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
 
@@ -230,6 +224,7 @@ export class SimWorld {
       | "workT"
       | "inMine"
       | "working"
+      | "atNode"
     >,
   ): SimUnit {
     const u: SimUnit = {
@@ -260,6 +255,7 @@ export class SimWorld {
       workT: 0,
       inMine: false,
       working: false,
+      atNode: false,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -269,14 +265,20 @@ export class SimWorld {
   // --- cell reservation (WC3 pathing grid) ---------------------------------
 
   /** A unit came to rest: align it to its cell footprint and reserve the cells
-   *  so other units path around it (this is what makes surrounds possible). */
-  private settle(u: SimUnit): void {
+   *  so other units path around it (this is what makes surrounds possible).
+   *  `snap` grid-aligns the position — skipped when parking a worker at a
+   *  resource so it doesn't teleport off the spot it walked to. */
+  private settle(u: SimUnit, snap = true): void {
     u.moving = false;
     u.path = [];
     if (u.footprint <= 0 || u.hasReservation) return;
-    const [sx, sy] = this.grid.snapForFootprint(u.x, u.y, u.footprint);
-    u.x = sx;
-    u.y = sy;
+    let sx = u.x;
+    let sy = u.y;
+    if (snap) {
+      [sx, sy] = this.grid.snapForFootprint(u.x, u.y, u.footprint);
+      u.x = sx;
+      u.y = sy;
+    }
     const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, u.footprint);
     this.grid.reserve(cx0, cy0, u.footprint);
     u.resX = cx0;
@@ -336,6 +338,7 @@ export class SimWorld {
       u.targetId = null;
       u.inCombat = false;
       u.working = false;
+      u.atNode = false;
       this.settle(u);
     }
   }
@@ -351,9 +354,19 @@ export class SimWorld {
     u.inCombat = false;
     u.resKind = kind;
     u.resId = nodeId;
+    u.atNode = false;
+    u.working = false;
     u.stuckT = 0;
     u.stuckRetries = 0;
+    this.pathToNode(u); // walk toward the node once; arrival latches atNode
     return true;
+  }
+
+  /** Path a harvesting worker toward its current node (once — arriveAtNode then
+   *  waits for arrival instead of re-pathing, which is what caused the jitter). */
+  private pathToNode(u: SimUnit): void {
+    const node = u.resKind === "gold" ? this.mines.get(u.resId) : this.trees.get(u.resId);
+    if (node) this.pathTo(u, node.x, node.y);
   }
 
   // Different teams are enemies; creeps all share team -1 (hostile to every
@@ -507,20 +520,15 @@ export class SimWorld {
         this.stop(u.id);
         return;
       }
-      // Distance to the square footprint edge, not the bounding circle. The
-      // extra slack once stopped prevents flapping after the settle-snap.
-      const edgeGap = Math.max(Math.abs(mine.x - u.x), Math.abs(mine.y - u.y)) - mine.radius - u.radius;
-      if (edgeGap > (u.moving ? MINE_ENTER : MINE_ENTER + 32)) {
-        this.chasePoint(u, mine.x, mine.y);
-        return;
-      }
-      if (mine.busy) {
-        this.settle(u); // queue at the entrance, WC3-style
-        return;
-      }
+      // Walk to the mine until the pathfinder can't get any closer (its blocked
+      // footprint stops us at the entrance). Only then disappear inside — this
+      // is why workers no longer vanish while still far from the mine.
+      if (!this.arriveAtNode(u, mine.x, mine.y, mine.radius + u.radius + 40)) return;
+      if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
       u.inMine = true;
       u.workT = MINE_TIME;
+      u.atNode = false;
       this.unsettle(u); // don't block cells while invisible inside
       u.moving = false;
       u.path = [];
@@ -537,16 +545,16 @@ export class SimWorld {
         return;
       }
       u.resId = tree.id;
-    }
-    const gap = Math.hypot(tree.x - u.x, tree.y - u.y) - u.radius - TREE_RADIUS;
-    // Hysteresis: settling snaps the worker up to ~22 units, so once chopping
-    // it keeps chopping — otherwise it flaps between walk and swing forever.
-    if (gap > (u.working ? TREE_RANGE + 32 : TREE_RANGE)) {
+      u.atNode = false;
       u.working = false;
-      this.chasePoint(u, tree.x, tree.y);
+      this.pathTo(u, tree.x, tree.y); // walk to the freshly-picked tree
+    }
+    // Approach until parked next to the tree, then chop in place (never re-path
+    // once working — that was the source of the mining "jiggle").
+    if (!this.arriveAtNode(u, tree.x, tree.y, u.radius + TREE_RADIUS + 40)) {
+      u.working = false;
       return;
     }
-    this.settle(u);
     u.working = true;
     u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
     u.workT -= dt;
@@ -562,8 +570,21 @@ export class SimWorld {
     }
     if (w.carryLumber >= w.lumberCapacity) {
       u.working = false;
+      u.atNode = false;
       u.order = "return";
     }
+  }
+
+  /** Latch a worker as "parked at the node". The approach path was issued once
+   *  at order time (pathToNode), so here we only need to wait for arrival: still
+   *  moving → keep walking; within `reach` or arrived (best-effort path ended)
+   *  → park in place (no snap, no re-path — this is what killed the jitter). */
+  private arriveAtNode(u: SimUnit, x: number, y: number, reach: number): boolean {
+    if (u.atNode) return true;
+    if (u.moving && Math.hypot(x - u.x, y - u.y) > reach) return false;
+    this.settle(u, false);
+    u.atNode = true;
+    return true;
   }
 
   private tickReturn(u: SimUnit): void {
@@ -600,9 +621,19 @@ export class SimWorld {
     w.carryGold = 0;
     w.carryLumber = 0;
     // Head back to the same node (or the nearest remaining tree), WC3-style.
-    if (u.resKind === "gold" && this.mines.has(u.resId)) u.order = "harvest";
-    else if (u.resKind === "lumber" && (this.trees.has(u.resId) || this.nearestTree(u.x, u.y, RETARGET_RANGE))) {
+    u.atNode = false;
+    if (u.resKind === "gold" && this.mines.has(u.resId)) {
       u.order = "harvest";
+      this.pathToNode(u);
+    } else if (u.resKind === "lumber") {
+      const tree = this.trees.get(u.resId) ?? this.nearestTree(u.x, u.y, RETARGET_RANGE);
+      if (tree) {
+        u.resId = tree.id;
+        u.order = "harvest";
+        this.pathToNode(u);
+      } else {
+        this.stop(u.id);
+      }
     } else {
       this.stop(u.id);
     }

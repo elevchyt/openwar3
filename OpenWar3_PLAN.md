@@ -71,6 +71,17 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   armed order consumes the next left-click). Melee start stash 500 g / 150 w; food live from owned
   units. In-game camera pans with arrow keys (WASD reserved for hotkeys); `src/render/blputil.ts`
   decodes BLPs for DOM use. Next: resource gathering loop (gold/lumber/train) driving these numbers.
+- **HUD v4 + gather rework (2026-07-02, latest)** — console no longer stretches: it's rendered at
+  its **natural aspect** (`aspect-ratio` + `min(26vh, 100vw/aspect)`), centred, letterboxed on
+  widescreen (matches the reference). Day/night clock is now its own centred medallion crop
+  (x 44.4%–55.6%, y 0–20.5% of the atlas) so it's not cut off. Portrait shows HP/mana as coloured
+  **numbers only** (no bars). Skinned command/inventory slots are transparent so the art's own frames
+  show. **Gathering reworked** to fix the jitter/early-mine bugs: a worker paths toward its node
+  **once** at order time (`pathToNode`), then `arriveAtNode` just waits for arrival and parks in
+  place (settle without the grid-snap) — no per-tick re-pathing, so no jiggle; mines are entered only
+  once the pathfinder can't get closer (at the blocked footprint edge), never early. Verified
+  headlessly against stamped tree walls + a 12×12 mine footprint (60 lumber/90 s steady, diagonal
+  mine entry at the wall).
 - **HUD v3 + gather fixes (2026-07-02, late)** — the console UITiles are a texture ATLAS (top
   ~55 px = resource-bar chrome with clock socket; y≈160–512 = console with minimap frame, portrait
   arch, inventory, command card) — verified by rendering the atlas to PNG and inspecting it. HUD

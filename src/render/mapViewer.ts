@@ -142,7 +142,7 @@ export class MapViewerScene {
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
   private portraitLoading = false;
-  private consoleSkinCache: { consoleUrl: string; consoleAspect: number; topUrl: string } | null | undefined;
+  private consoleSkinCache: { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number } | null | undefined;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -459,11 +459,13 @@ export class MapViewerScene {
     this.hud = new GameHud(ui, driver);
   }
 
-  /** The console tiles are a texture ATLAS (verified by rendering it out):
-   *  the top ~55px strip is the resource-bar chrome with the clock socket, and
-   *  y≈160–512 is the bottom console (minimap frame, portrait arch, inventory,
-   *  command card). Crop the two pieces separately. */
-  private consoleSkin(): { consoleUrl: string; consoleAspect: number; topUrl: string } | null {
+  /** The console tiles are a texture ATLAS (verified by rendering it out): the
+   *  bottom band (y≈180–512) is the console proper (minimap frame, portrait
+   *  arch, inventory, command card), and the day/night clock is a round
+   *  medallion at the top-centre. Crop the console band (kept at its natural
+   *  aspect — never stretched; letterboxed on widescreen) and the clock
+   *  separately so the clock isn't cut off by the thin top bar. */
+  private consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number } | null {
     if (this.consoleSkinCache !== undefined) return this.consoleSkinCache;
     const dirs: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
     const dir = dirs[this.localRace];
@@ -488,18 +490,25 @@ export class MapViewerScene {
       ctx.drawImage(tile, x, 0);
       x += tile.width;
     }
-    const crop = (y0: number, h: number): string => {
+    // Crop a sub-rect of the atlas to its own data URL.
+    const crop = (sx: number, sy: number, sw: number, sh: number): string => {
       const c = document.createElement("canvas");
-      c.width = width;
-      c.height = h;
-      c.getContext("2d")!.drawImage(atlas, 0, -y0);
+      c.width = sw;
+      c.height = sh;
+      c.getContext("2d")!.drawImage(atlas, -sx, -sy);
       return c.toDataURL();
     };
-    const consoleY = Math.round(height * 0.3125); // 160/512
+    const consoleY = Math.round(height * 0.352); // ~180/512 — top of the console chrome
+    const consoleH = height - consoleY;
+    // Clock medallion: centred blob in the top strip (measured x[710–890] y[0–104]).
+    const clockX = Math.round(width * 0.444);
+    const clockW = Math.round(width * 0.112);
+    const clockH = Math.round(height * 0.205);
     this.consoleSkinCache = {
-      topUrl: crop(0, Math.round(height * 0.107)), // 55/512
-      consoleUrl: crop(consoleY, height - consoleY),
-      consoleAspect: width / (height - consoleY),
+      consoleUrl: crop(0, consoleY, width, consoleH),
+      consoleAspect: width / consoleH,
+      clockUrl: crop(clockX, 0, clockW, clockH),
+      clockAspect: clockW / clockH,
     };
     return this.consoleSkinCache;
   }

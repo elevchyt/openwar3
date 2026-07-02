@@ -165,7 +165,10 @@ body.in-game .menu-panel { display: none; }
   background: linear-gradient(#1b1912, #0c0b07 85%, rgba(12, 11, 7, 0));
   border-bottom: 1px solid rgba(216, 180, 90, 0.25);
   pointer-events: auto;
+  overflow: visible; /* let the clock medallion dip below the bar */
 }
+/* The clock is absolutely centred in the bar; keep it out of the flex flow. */
+.hud-clock-skinned { z-index: 1; }
 
 .hud-menus {
   display: flex;
@@ -191,6 +194,23 @@ body.in-game .menu-panel { display: none; }
   border-radius: 50%;
   background: radial-gradient(circle at 35% 35%, #cfe4ff, #274a86 65%, #101d38);
   border: 1px solid var(--border);
+}
+
+/* Real day/night medallion: hangs from the top bar, centred, drawn at its
+   natural aspect (never cropped). Height exceeds the bar so it dips below. */
+.hud-clock-skinned {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  height: 150%;
+  width: auto;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: center / contain no-repeat;
+  background-image: inherit;
+  pointer-events: none;
 }
 
 .hud-resources {
@@ -239,9 +259,17 @@ body.in-game .menu-panel { display: none; }
 }
 
 /* Skinned mode: the atlas art IS the chrome; zones are absolutely positioned
-   over its sockets, and transparent art regions pass clicks to the map. */
+   over its sockets, and transparent art regions pass clicks to the map. The
+   console keeps its natural aspect ratio, is centred, and letterboxes on
+   widescreen — it is NEVER stretched (height capped so it stays a HUD strip). */
 .hud-console-skinned {
   display: block;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  aspect-ratio: var(--console-aspect);
+  height: min(26vh, calc(100vw / var(--console-aspect)));
+  width: auto;
   padding: 0;
   gap: 0;
   background: none;
@@ -251,14 +279,6 @@ body.in-game .menu-panel { display: none; }
   pointer-events: none;
 }
 .hud-zone { position: absolute; pointer-events: auto; }
-
-.hud-top-skinned {
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  background-color: transparent;
-  border-bottom: none;
-  height: max(28px, 3.4vw);
-}
 
 .hud-minimap {
   position: relative;
@@ -300,17 +320,22 @@ body.in-game .menu-panel { display: none; }
   /* tuck under the golden arch */
   border-radius: 45% 45% 0 0 / 28% 28% 0 0;
 }
-.hud-console-skinned .hud-portrait-bars { width: auto; }
+.hud-console-skinned .hud-portrait-values { width: auto; }
 .hud-console-skinned .hud-inventory,
 .hud-console-skinned .hud-command {
   background: none;
   border: none;
   padding: 2px;
 }
+/* The console art already draws the slot frames — our slots just hold the
+   icon/label over them, so drop our own backgrounds and borders when skinned. */
+.hud-console-skinned .hud-slot {
+  background: none;
+  border: none;
+}
+.hud-console-skinned .hud-cmd { font-size: 11px; }
 .hud-console-skinned .hud-info-text {
   padding: 4px 8px;
-  background: rgba(0, 0, 0, 0.35);
-  border-radius: 4px;
 }
 
 .hud-portrait {
@@ -324,22 +349,14 @@ body.in-game .menu-panel { display: none; }
 .hud-portrait.empty .hud-portrait-canvas { visibility: hidden; }
 .hud-portrait-canvas { width: 100%; height: 100%; display: block; }
 
-.hud-portrait-bars { display: flex; flex-direction: column; gap: 2px; width: 96px; }
-.hud-bar-row { display: flex; flex-direction: column; }
-.hud-bar-text { font-size: 10px; color: #cfc7ab; text-align: center; line-height: 1.2; }
+/* HP/mana as coloured numbers below the portrait (no bars — like the original). */
+.hud-portrait-values { text-align: center; line-height: 1.25; }
+.hud-hp-value { font-size: 13px; color: #46e05a; }
+.hud-mp-value { font-size: 13px; color: #4a7cff; }
 
 .hud-info-text { flex: 1; min-width: 0; padding-top: 6px; }
 .hud-sel-name { font-size: 16px; color: #f4e8c8; margin-bottom: 6px; }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; }
-.hud-sel-hp {
-  height: 6px;
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid rgba(0, 0, 0, 0.9);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.hud-sel-hp-fill { height: 100%; width: 0; background: #46e05a; }
-.hud-sel-mp-fill { background: #3f6fe0; width: 100%; }
 
 
 .hud-inventory {
