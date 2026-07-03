@@ -86,7 +86,7 @@ export type QueuedOrder =
   | { kind: "patrol"; x: number; y: number }
   | { kind: "attack"; targetId: number }
   | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number }
-  | { kind: "buildnew"; defId: string; x: number; y: number }
+  | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number }
   | { kind: "buildresume"; buildingId: number }
   | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number };
 
@@ -169,7 +169,9 @@ export interface SimUnit {
   constructing: number; // building id this worker is constructing (0 = none)
   repair: RepairState | null; // active repair job (null = not repairing)
   orderQueue: QueuedOrder[]; // shift-queued follow-up orders (drained as each completes)
-  buildPending: { defId: string; x: number; y: number } | null; // walking to raise a new building
+  // Walking to raise a new building; gold/lumber are the already-spent cost,
+  // refunded if the build is abandoned before construction starts.
+  buildPending: { defId: string; x: number; y: number; gold: number; lumber: number } | null;
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -823,22 +825,42 @@ export class SimWorld {
   }
 
   /** Drop a unit's whole queue + any pending new-building intent. Every fresh
-   *  (non-shift) order calls this so it replaces the queue instead of appending. */
+   *  (non-shift) order calls this so it replaces the queue instead of appending.
+   *  An unstarted build's cost is refunded (the structure never went up). */
   clearQueue(id: number): void {
     const u = this.units.get(id);
-    if (u) {
-      u.orderQueue.length = 0;
-      u.buildPending = null;
-    }
+    if (!u) return;
+    this.refundPendingBuild(u);
+    u.orderQueue.length = 0;
+  }
+
+  /** Return an abandoned build's already-spent cost and drop the intent. Called
+   *  whenever a `buildPending` worker is re-tasked, stopped, dies, or times out
+   *  waiting for its site to clear — i.e. any path where the building never rises.
+   *  (A successful raise clears `buildPending` in assignBuilder, without refund.) */
+  private refundPendingBuild(u: SimUnit): void {
+    if (!u.buildPending) return;
+    const s = this.stashOf(u.owner);
+    s.gold += u.buildPending.gold;
+    s.lumber += u.buildPending.lumber;
+    u.buildPending = null;
+  }
+
+  /** Public entry: abandon a worker's pending build and refund it (the renderer
+   *  calls this when the build site can't be cleared of units in time). */
+  cancelPendingBuild(id: number): void {
+    const u = this.units.get(id);
+    if (u) this.refundPendingBuild(u);
   }
 
   /** Send a worker to raise a NEW building at (x,y): it walks there and the
    *  renderer raises the foundation on arrival (watches `buildPending`). Used for
-   *  immediate (non-shift) placement; the shift path queues a `buildnew` order. */
-  issueBuildNew(id: number, defId: string, x: number, y: number): void {
+   *  immediate (non-shift) placement; the shift path queues a `buildnew` order.
+   *  gold/lumber are the already-spent cost, refunded if the build is abandoned. */
+  issueBuildNew(id: number, defId: string, x: number, y: number, gold: number, lumber: number): void {
     const u = this.units.get(id);
     if (!u) return;
-    u.buildPending = { defId, x, y };
+    u.buildPending = { defId, x, y, gold, lumber };
     if (!this.issueMove(id, x, y)) u.moving = false; // already at the site → raise now
   }
 
@@ -860,7 +882,7 @@ export class SimWorld {
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId);
       case "buildresume": this.assignBuilder(id, o.buildingId); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
-      case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y); return true;
+      case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber); return true;
     }
   }
 
@@ -1157,9 +1179,12 @@ export class SimWorld {
     if (u.weapon.ranged) {
       this.spawnProjectile(u, t);
     } else {
-      // Melee only connects if the target is still within reach of the swing.
+      // Melee connects if the target is still within the same reach the unit is
+      // allowed to swing from (range + the combat-hold leash) — NOT the tighter
+      // ARRIVE_EPS, which left a dead band where the attack animation played but
+      // the strike whiffed and no damage landed against a target drifting away.
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap <= u.weapon.range + ARRIVE_EPS) this.dealDamage(u, t);
+      if (gap <= u.weapon.range + ATTACK_LEASH) this.dealDamage(u, t);
     }
   }
 
@@ -1290,7 +1315,9 @@ export class SimWorld {
     if (!tree) {
       tree = this.nearestTree(u.x, u.y, RETARGET_RANGE);
       if (!tree) {
-        if (w.carryLumber > 0) u.order = "return";
+        // No tree left to chop: haul the partial load home (startReturn clears the
+        // working flag and paths to the depot), or idle if empty-handed.
+        if (w.carryLumber > 0) this.startReturn(u);
         else this.stop(u.id);
         return;
       }
@@ -1430,6 +1457,7 @@ export class SimWorld {
   }
 
   private kill(u: SimUnit): void {
+    this.refundPendingBuild(u); // died before its building went up → refund the cost
     this.unsettle(u); // corpses don't block cells
     if (u.inMine) {
       const mine = this.mines.get(u.resId);

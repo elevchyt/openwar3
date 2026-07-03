@@ -17,6 +17,23 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 7 — melee fix/build-over-units/anim polish (2026-07-03, latest+20)** — **Melee
+  damage bug fixed**: swings only landed within `range+ARRIVE_EPS` (8) but could START anywhere in the
+  combat-hold zone `range+ATTACK_LEASH` (48) — a dead band where the attack anim played but no damage
+  landed (heroes "attacking" a drifting target for zero effect). Impact now uses `range+ATTACK_LEASH`;
+  units still chase a target that flees past the leash (verified headlessly). **Mountain King slam**:
+  "Attack Slam" is bash/ability-reserved — excluded from the auto-attack variant rotation (MK now
+  cycles only "Attack -1"/"Attack -2"; verified against the real MDX). **Lumber stand anim**: a worker
+  merely holding lumber (its tree fell, `working` not yet cleared) showed the chop clip; now gated on
+  an active `harvest` order → shows Stand Lumber, and a partial load with no trees left properly
+  `startReturn`s home. **Build over own units**: placement ghost stays blue over our own units
+  (validity ignores unit reservations, still blocks terrain/buildings/trees); when the builder
+  arrives, own footprint occupants are shoved radially off the site, and if it isn't clear within 2s
+  the order is cancelled. **Refund on never-built**: `buildPending` carries its spent cost and the sim
+  refunds on any abandon path (re-tasked, stopped, killed, timed out). **Hero bars** a bit wider
+  (`×3`, floor 46 / ceil 210). **Queue flags** raised to 180 (tree-top). Headless checks
+  (melee dead-zone/chase, refund, lumber-return + pass-6 suite) pass; build clean. Build-over-units
+  clearing + anim/bar visuals need in-browser confirmation.
 - **Feedback pass 6 — speed-build/queues/rally/repair (2026-07-03, latest+19)** — **Human speed
   build**: `BuildingState.builderIds[]` (was one `builderId`) — extra builders on one site build
   faster (`+0.17` rate each) but burn a `0.15×`-base-cost surcharge over the shortened time; matches

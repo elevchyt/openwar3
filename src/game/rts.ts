@@ -110,12 +110,13 @@ function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
   const stand = find(/^stand(\s|$|-)/i) >= 0 ? find(/^stand(\s|$|-)/i) : find(/^stand/i);
   const walk = find(/^walk\s*$/i) >= 0 ? find(/^walk\s*$/i) : find(/walk/i);
   const attack = find(/^attack\s*$/i) >= 0 ? find(/^attack\s*$/i) : find(/attack/i);
-  // Every combat-attack clip (e.g. "Attack - 1"/"Attack - 2"/"Attack Slam"), so a
-  // random one can play per swing. Excludes the lumber chop, the Defend stance,
-  // and hero Alternate-form attacks.
+  // Every basic combat-attack clip (e.g. "Attack -1"/"Attack -2"), so a random
+  // one can play per swing. Excludes the lumber chop, the Defend stance, hero
+  // Alternate-form attacks, and "Attack Slam" — that clip is reserved for
+  // ability casts (e.g. the Mountain King's bash), not the auto-attack rotation.
   const attackVariants = seqs
     .map((s, i) => ({ n: s.name, i }))
-    .filter(({ n }) => /attack/i.test(n) && !/lumber|defend|alternate/i.test(n))
+    .filter(({ n }) => /attack/i.test(n) && !/lumber|defend|alternate|slam/i.test(n))
     .map(({ i }) => i);
   const or = (a: number, b: number) => (a >= 0 ? a : b);
   return {
@@ -190,7 +191,7 @@ const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
 const FLASH_GREEN: [number, number, number] = [0.3, 1, 0.3];
 const FLASH_YELLOW: [number, number, number] = [1, 0.88, 0.2];
 const FLASH_RED: [number, number, number] = [1, 0.2, 0.16];
-const TREE_FLAG_HEIGHT = 150; // lift a queue flag to a tree's canopy top
+const TREE_FLAG_HEIGHT = 180; // lift a queue flag to a tree's canopy top
 // Max world distance from the click's ground point to a pickable unit. Gates out
 // far/behind-camera units that screen-projection alone would wrongly match.
 const PICK_WORLD_MAX = 700;
@@ -727,7 +728,10 @@ export class RtsController {
     // reads as standing so it doesn't run in place (see the tick loop).
     if (moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
     if (u.constructing || u.repair?.active) return a.build; // hammering (build/repair)
-    if (u.working) return a.chopLumber; // chopping a tree
+    // Only the ACTIVE chop plays the harvest swing — a worker merely holding
+    // lumber while standing (its tree fell and it's about to return, so `working`
+    // isn't cleared yet) shows the Stand Lumber pose, not the chop.
+    if (u.working && u.order === "harvest") return a.chopLumber;
     if (u.inCombat) return a.attack;
     return carry === "gold" ? a.standGold : carry === "lumber" ? a.standLumber : a.stand;
   }
@@ -1593,7 +1597,12 @@ export class RtsController {
       }
       bar.root.hidden = false;
       // Bar width tracks the unit/building on-screen size (≈ its footprint).
-      bar.bars.style.width = `${Math.max(30, Math.min(170, ry * 2.4))}px`;
+      // Heroes get a wider bar (and a higher floor/ceiling) so their HP + mana
+      // read clearly and stand out from regular units.
+      const barW = e.isHero
+        ? Math.max(46, Math.min(210, ry * 3))
+        : Math.max(30, Math.min(170, ry * 2.4));
+      bar.bars.style.width = `${barW}px`;
       bar.root.style.left = `${sx / dpr}px`;
       bar.root.style.top = `${(h - sy) / dpr - (ry + 24)}px`; // gl y-up → css y-down (floats above the unit)
     }

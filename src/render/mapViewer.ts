@@ -7,7 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
-import type { QueuedOrder, RallyKind } from "../sim/world";
+import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, type Footprint } from "../sim/destructibles";
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
 import { makeHeightSampler } from "../game/heightmap";
@@ -53,6 +53,7 @@ const BASE_FILES = [
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const NEUTRAL_PASSIVE_PLAYER = 15; // war3mapUnits.doo owner slot for Neutral Passive
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
+const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
@@ -173,6 +174,8 @@ export class MapViewerScene {
   // Workers whose build foundation is mid-spawn (async model load), so
   // tickPendingBuild doesn't raise the same building twice.
   private buildSpawning = new Set<number>();
+  // Workers waiting for their build site to clear of units → seconds waited so far.
+  private buildWait = new Map<number, number>();
   private meleeTeams = new Map<number, number>(); // owner slot → team
   private startMarkersHidden = false; // hide sloc props once units finish loading
   // Flat selection-circle model instances, rendered on the terrain so geometry
@@ -535,7 +538,9 @@ export class MapViewerScene {
     if (stash.gold < p.def.goldCost || stash.lumber < p.def.lumberCost) return;
     stash.gold -= p.def.goldCost;
     stash.lumber -= p.def.lumberCost;
-    const order: QueuedOrder = { kind: "buildnew", defId: p.def.id, x, y };
+    // Carry the spent cost on the order so the sim can refund it if the build is
+    // ever abandoned before construction begins (re-tasked, killed, timed out).
+    const order: QueuedOrder = { kind: "buildnew", defId: p.def.id, x, y, gold: p.def.goldCost, lumber: p.def.lumberCost };
     if (queued) this.rts.simWorld.queueOrder(p.workerId, order);
     else this.rts.simWorld.issueOrder(p.workerId, order); // walk there now
     this.cardPage = "root";
@@ -543,26 +548,76 @@ export class MapViewerScene {
   }
 
   /** When a worker walking to raise a new building (`buildPending`) reaches its
-   *  site, spawn the foundation (under construction) and attach it as builder.
-   *  A guard set prevents a double-spawn during the async model load — the
-   *  worker keeps its `buildPending` (so the sim holds any queued follow-ups)
-   *  until assignBuilder clears it. */
-  private tickPendingBuild(): void {
+   *  site, clear any of our own units off the footprint, then spawn the
+   *  foundation (under construction) and attach it as builder. If the site can't
+   *  be cleared within BUILD_CLEAR_TIMEOUT, give up and refund. A guard set
+   *  prevents a double-spawn during the async model load — the worker keeps its
+   *  `buildPending` (so the sim holds queued follow-ups) until assignBuilder clears it. */
+  private tickPendingBuild(dt: number): void {
     if (!this.rts) return;
     const world = this.rts.simWorld;
     for (const w of world.units.values()) {
       const pb = w.buildPending;
       if (!pb || w.owner !== this.localPlayer || this.buildSpawning.has(w.id)) continue;
-      if (Math.hypot(w.x - pb.x, w.y - pb.y) >= 160 || w.moving) continue; // not there yet
+      if (Math.hypot(w.x - pb.x, w.y - pb.y) >= 160 || w.moving) { this.buildWait.delete(w.id); continue; } // not there yet
       const def = this.registry.get(pb.defId);
-      if (!def) { w.buildPending = null; continue; }
-      const workerId = w.id;
-      this.buildSpawning.add(workerId);
-      void this.spawnUnit(def, pb.x, pb.y, this.localPlayer, this.teamOf(this.localPlayer), def.buildTime || 60).then((simId) => {
-        this.buildSpawning.delete(workerId);
-        if (simId !== null) world.assignBuilder(workerId, simId); // clears buildPending
-        else { const wk = world.units.get(workerId); if (wk) wk.buildPending = null; }
-      });
+      if (!def) { world.cancelPendingBuild(w.id); this.buildWait.delete(w.id); continue; }
+      const fp = def.pathTex ? this.footprintFor(def.pathTex) : null;
+      const occupants = fp ? this.footprintOccupants(fp, pb.x, pb.y, w.id) : [];
+      if (occupants.length === 0) {
+        // Site clear (only the builder was there) → raise the foundation.
+        this.buildWait.delete(w.id);
+        const workerId = w.id;
+        this.buildSpawning.add(workerId);
+        void this.spawnUnit(def, pb.x, pb.y, this.localPlayer, this.teamOf(this.localPlayer), def.buildTime || 60).then((simId) => {
+          this.buildSpawning.delete(workerId);
+          if (simId !== null) world.assignBuilder(workerId, simId); // clears buildPending
+          else world.cancelPendingBuild(workerId); // model failed to load → refund
+        });
+        continue;
+      }
+      // Units are standing where the building must go: shove our own off the
+      // footprint and count down the patience window; when it expires, cancel
+      // (the sim refunds the spent cost).
+      this.clearFootprint(fp!, pb.x, pb.y, occupants);
+      const waited = (this.buildWait.get(w.id) ?? 0) + dt;
+      if (waited >= BUILD_CLEAR_TIMEOUT) {
+        this.buildWait.delete(w.id);
+        world.cancelPendingBuild(w.id);
+      } else {
+        this.buildWait.set(w.id, waited);
+      }
+    }
+  }
+
+  /** Movable ground units whose hull overlaps a building footprint (excluding the
+   *  builder). These are what must vacate before the structure can rise. */
+  private footprintOccupants(fp: Footprint, x: number, y: number, excludeId: number): SimUnit[] {
+    const world = this.rts!.simWorld;
+    const halfW = fp.w * 16; // cell = 32 world units → half-extent = cells × 16
+    const halfH = fp.h * 16;
+    const out: SimUnit[] = [];
+    for (const u of world.units.values()) {
+      if (u.id === excludeId || u.building || u.flying || u.speed <= 0) continue;
+      if (Math.abs(u.x - x) < halfW + u.radius && Math.abs(u.y - y) < halfH + u.radius) out.push(u);
+    }
+    return out;
+  }
+
+  /** Order our own footprint occupants to step off the site (radially outward).
+   *  Only pushes settled units so a unit already walking away isn't re-pathed
+   *  every frame; foreign units we can't command stay and let the timeout fire. */
+  private clearFootprint(fp: Footprint, x: number, y: number, occupants: SimUnit[]): void {
+    const world = this.rts!.simWorld;
+    const push = Math.max(fp.w, fp.h) * 16 + 96; // clear of the footprint edge
+    for (const u of occupants) {
+      if (u.owner !== this.localPlayer || u.moving) continue;
+      let dx = u.x - x;
+      let dy = u.y - y;
+      const d = Math.hypot(dx, dy);
+      if (d < 1) { dx = 1; dy = 0; } // dead-centre → push along +x
+      const n = Math.hypot(dx, dy);
+      world.issueMove(u.id, x + (dx / n) * push, y + (dy / n) * push);
     }
   }
 
@@ -954,7 +1009,10 @@ export class MapViewerScene {
     for (let cy = 0; cy < p.fp.h; cy++) {
       for (let cx = 0; cx < p.fp.w; cx++) {
         if (!p.fp.blocked[cy * p.fp.w + cx]) continue;
-        if (!this.grid.walkable(bx + cx, by + cy) || this.grid.isReserved(bx + cx, by + cy)) return false;
+        // Only terrain / other buildings / trees (unwalkable cells) block a site.
+        // Reserved cells (movable units standing there) do NOT — the ghost stays
+        // blue over our own units; they scatter when the builder arrives.
+        if (!this.grid.walkable(bx + cx, by + cy)) return false;
       }
     }
     return true;
@@ -1515,7 +1573,7 @@ export class MapViewerScene {
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
       this.updatePortrait();
-      this.tickPendingBuild();
+      this.tickPendingBuild(dt / 1000); // seconds, matching the sim's clock
       this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       // Map units load async — hide the start-location props once they're all in.
       if (!this.startMarkersHidden && this.viewer.map?.unitsReady) {
@@ -1619,6 +1677,7 @@ export class MapViewerScene {
     this.projectileModels.clear();
     this.placement = null;
     this.buildSpawning.clear();
+    this.buildWait.clear();
     this.cursorSheet = null;
     this.reticleUrls.clear();
     this.handUrls.clear();
