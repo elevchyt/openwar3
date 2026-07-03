@@ -164,6 +164,7 @@ export class MapViewerScene {
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
   private portraitLoading = false;
+  private portraitLabel = ""; // sound-set of the unit currently in the portrait (drives talk anim)
   private cameraLock = false; // portrait held → camera follows the selected unit
   private cardPage: "root" | "build" = "root";
   private lastSelected: number | null = null;
@@ -225,6 +226,10 @@ export class MapViewerScene {
     private solver: Solver,
   ) {
     this.sounds = new SoundBoard(vfs);
+    // When the unit shown in the portrait speaks, mouth it on the 3D bust.
+    this.sounds.onVoiceStart = (label, durationSec) => {
+      if (label && label === this.portraitLabel) this.portraitViewer?.playTalk(durationSec);
+    };
     this.attachControls();
   }
 
@@ -1195,11 +1200,15 @@ export class MapViewerScene {
     if (!sel) {
       if (this.portraitFor !== null) {
         this.portraitFor = null;
+        this.portraitLabel = "";
         this.portraitViewer?.stop();
       }
       return;
     }
     if (sel.id === this.portraitFor || this.portraitLoading || !sel.model) return;
+    // The sound-set of the unit now in the portrait — a voice line with this label
+    // drives the bust's talk animation (see the onVoiceStart hook in the ctor).
+    this.portraitLabel = this.registry.get(sel.typeId)?.soundSet ?? "";
     const canvas = this.hud.portraitCanvas();
     if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(canvas, this.vfs);
     // WC3 ships dedicated talking-head models alongside most units.

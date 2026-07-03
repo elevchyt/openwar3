@@ -14,6 +14,8 @@ export interface UnitDef {
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
+  weaponSound: string; // unitUI "weap1" weapon-impact base ("MetalMediumSlice"); "_" = none
+  armorSound: string; // unitUI "armor" material struck ("Metal"/"Flesh"/…) → combat-sound suffix
   icon: string; // command-card BTN icon path (from UnitFunc "art")
   description: string; // command-card tooltip text (UnitStrings "Ubertip"), cleaned
   hotkey: string; // command hotkey letter (UnitStrings "Hotkey")
@@ -170,6 +172,8 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
       soundSet: u ? str(u, "unitSound") : "",
+      weaponSound: u ? str(u, "weap1") : "",
+      armorSound: u ? str(u, "armor") : "",
       icon: fn ? str(fn, "art") : "",
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The

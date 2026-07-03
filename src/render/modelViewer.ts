@@ -74,6 +74,9 @@ export class ModelViewerScene {
   private camZoom = 1; // <1 dollies the model camera closer (portraits zoom in)
   private camPanLeft = 0; // >0 pans the portrait camera left (fraction of eye→target distance)
   private camPanDown = 0; // >0 pedestals the portrait camera down (fraction of eye→target distance)
+  private idleSeq = -1; // the portrait's resting sequence (reverted to after talking)
+  private talkSeq = -1; // the "Portrait Talk" sequence, or -1 if the model has none
+  private talkRemaining = 0; // ms left playing the talk clip before reverting to idle
 
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
     // Canvas must have a nonzero size before addScene() (viewport/aspect read here).
@@ -134,6 +137,11 @@ export class ModelViewerScene {
         sequences.find((s) => /stand/i.test(s.name)) ??
         sequences[0];
     if (preferred) instance.setSequence(preferred.index);
+    // Remember the resting clip and the talking clip so a voice line can drive the
+    // bust's mouth (names vary: "Portrait Talk", "Portrait Talk - 1", …).
+    this.idleSeq = preferred?.index ?? -1;
+    this.talkSeq = portrait ? sequences.find((s) => /portrait\s*talk/i.test(s.name))?.index ?? -1 : -1;
+    this.talkRemaining = 0;
 
     this.frameCamera();
     await this.viewer.whenAllLoaded(); // wait for textures so it isn't untextured
@@ -148,11 +156,24 @@ export class ModelViewerScene {
     this.instance?.setSequence(index);
   }
 
+  /** Play the "Portrait Talk" clip for a voice line, then fall back to the resting
+   *  clip after `durationSec`. Re-triggers cleanly if the unit speaks again while
+   *  already talking (extends the window). No-op if the model has no talk clip. */
+  playTalk(durationSec: number): void {
+    if (this.talkSeq < 0 || !this.instance) return;
+    if (this.talkRemaining <= 0) this.instance.setSequence(this.talkSeq);
+    this.talkRemaining = Math.max(this.talkRemaining, durationSec * 1000);
+  }
+
   start(): void {
     if (this.raf) return; // idempotent — never run two loops
     const frame = (t: number) => {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
+      if (this.talkRemaining > 0) {
+        this.talkRemaining -= dt;
+        if (this.talkRemaining <= 0 && this.idleSeq >= 0) this.instance?.setSequence(this.idleSeq); // done talking → rest
+      }
       this.syncCanvasSize();
       this.viewer.updateAndRender(dt); // dt in milliseconds
       this.raf = requestAnimationFrame(frame);

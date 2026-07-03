@@ -17,6 +17,26 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 10 — impact sounds, non-overlapping voices, portrait talk, mine line, lumberjack fix (2026-07-03, latest+23)**
+  — **Weapon-impact SFX**: `SoundBoard.playImpact(weap1, targetArmor)` resolves `UI\SoundInfo\
+  UnitCombatSounds.slk` row `<attacker.weap1><target.armor>` (both new `UnitDef` fields from UnitUI —
+  e.g. `MetalMediumSlice`+`Flesh`); ranged units carry `weap1="_"` → no melee clang. The sim now records
+  every landed hit (`applyDamage` → `drainHits()`, melee + projectile) and `rts.playImpacts()` (before
+  deaths, so a killed target's armour is still readable) plays them on an overlap-capped SFX pool.
+  — **Voices never cut each other**: the acknowledgement channel (What/Yes/YesAttack/Pissed/Warcry/Ready)
+  is now exclusive & DROP-if-busy — a playing line always finishes; new voice requests during it are
+  dropped (not preempted). Deaths/impacts stay on their own overlapping pools. Headless test confirms
+  drop-if-busy + coexistence + the `weap1="_"` skip. **Portrait talks**: `SoundBoard.onVoiceStart(label,
+  dur)` fires when a voice starts; mapViewer drives the bust's "Portrait Talk" clip (`ModelViewerScene.
+  playTalk`, reverts to the resting clip after `dur`) whenever the speaking unit is the one in the portrait.
+  — **Gold-mine ring** drawn 1.4× its collision radius (bigger visual, worker-entry reach unchanged).
+  — **Miners line up mine→hall**: new `mineApproach()` targets the mine edge FACING the town hall and the
+  enter-check keys off THAT point (not centre distance), so workers round to the hall side and enter there
+  regardless of approach angle (headless: E/W/N starts all enter the south/hall edge). **Lumberjack idle
+  bug fixed**: pass-9's stricter net-progress stuck check was idling crowded gatherers (A/B: 4/8 workers
+  stuck, 551 idle-empty frames) — `checkStuck` now never idles a worker mid harvest/return (re-routes, or a
+  boxed lumberjack parks so it chops the nearest reachable tree). A/B after: 0/8 idle. Build clean;
+  impact/voice/talk playback needs in-browser confirmation.
 - **Feedback pass 9 — sounds/voice, gold-mine collider, unit anti-dance, queue-cancel, portrait (2026-07-03, latest+22)**
   — **Unit voice lines & SFX from the game data** (new `src/audio/sounds.ts` `SoundBoard`): maps unit id →
   `unitSound` label (UnitUI.slk, now on `UnitDef.soundSet`) → `UI\SoundInfo\UnitAckSounds.slk` rows

@@ -235,6 +235,9 @@ export class SimWorld {
   // Projectiles that actually HIT (vs fizzled) — the renderer plays the impact
   // effect (the missile model's Death clip) at the recorded point.
   private projectileImpacts: Array<{ id: number; x: number; y: number }> = [];
+  // Landed hits (melee + projectile) — the renderer plays the weapon-impact SFX
+  // (attacker's weapon material vs target's armour material).
+  private hits: Array<{ attackerId: number; targetId: number }> = [];
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   private nextNodeId = 1;
@@ -354,6 +357,15 @@ export class SimWorld {
     if (!this.projectileImpacts.length) return this.projectileImpacts;
     const out = this.projectileImpacts;
     this.projectileImpacts = [];
+    return out;
+  }
+
+  /** Weapon hits (melee + projectile) landed since the last drain — the renderer
+   *  resolves each attacker/target's material to a combat-impact sound. */
+  drainHits(): Array<{ attackerId: number; targetId: number }> {
+    if (!this.hits.length) return this.hits;
+    const out = this.hits;
+    this.hits = [];
     return out;
   }
 
@@ -939,10 +951,49 @@ export class SimWorld {
   }
 
   /** Path a harvesting worker toward its current node (once — arriveAtNode then
-   *  waits for arrival instead of re-pathing, which is what caused the jitter). */
+   *  waits for arrival instead of re-pathing, which is what caused the jitter).
+   *  Gold miners approach the mine from the drop-off (town hall) side so they line
+   *  up mine-centre → hall-centre like the original game, rather than entering
+   *  whichever edge they happened to wander to. */
   private pathToNode(u: SimUnit): void {
-    const node = u.resKind === "gold" ? this.mines.get(u.resId) : this.trees.get(u.resId);
-    if (node) this.pathTo(u, node.x, node.y);
+    if (u.resKind === "gold") {
+      const mine = this.mines.get(u.resId);
+      if (mine) {
+        const [tx, ty] = this.mineApproach(u, mine);
+        this.pathTo(u, tx, ty);
+      }
+      return;
+    }
+    const tree = this.trees.get(u.resId);
+    if (tree) this.pathTo(u, tree.x, tree.y);
+  }
+
+  /** A point on the mine's edge facing the drop-off (town hall), so miners queue
+   *  and enter on the hall side — this is what makes them line up mine-centre →
+   *  hall-centre instead of ducking in wherever they first touch the footprint. */
+  private mineApproach(u: SimUnit, mine: SimMine): [number, number] {
+    const depot = this.nearestGoldDepot(u);
+    if (!depot) return [mine.x, mine.y];
+    const dx = depot.x - mine.x;
+    const dy = depot.y - mine.y;
+    const d = Math.hypot(dx, dy) || 1;
+    return [mine.x + (dx / d) * (mine.radius + u.radius), mine.y + (dy / d) * (mine.radius + u.radius)];
+  }
+
+  /** Nearest gold drop-off (town hall) of the worker's owner — the anchor for the
+   *  mine→hall harvest line. Distinct from nearestDepot, which keys off the load. */
+  private nearestGoldDepot(u: SimUnit): SimUnit | null {
+    let depot: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const d of this.units.values()) {
+      if (d.owner !== u.owner || !d.depotGold) continue;
+      const dist = Math.hypot(d.x - u.x, d.y - u.y);
+      if (dist < bestD) {
+        bestD = dist;
+        depot = d;
+      }
+    }
+    return depot;
   }
 
   /** Send a loaded worker back to deposit: path to the nearest depot ONCE, then
@@ -1086,16 +1137,29 @@ export class SimWorld {
     if (u.order === "attack") {
       this.settle(u);
       u.repathT = REPATH_COOLDOWN;
-    } else {
-      // Blocked/orbiting: the blockers may have stopped since the original path
-      // was computed — repath around them. A unit that stays stuck (boxed in)
-      // stands down after a couple of attempts and just faces where it was
-      // ordered — WC3 units never squeeze through crowds.
-      const [tx, ty] = [u.chaseX, u.chaseY];
-      if (++u.stuckRetries > 1 || !this.pathTo(u, tx, ty)) {
-        this.stop(u.id);
-        u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      return;
+    }
+    // Gatherers must NEVER idle mid-job just because they're jostling in a crowd
+    // around the trees/mine (which the stricter net-progress check above would
+    // otherwise flag). Re-route around the crowd; a boxed-in lumberjack parks in
+    // place so tickHarvest chops the nearest reachable tree instead of standing idle.
+    if (u.worker && (u.order === "harvest" || u.order === "return")) {
+      const routed = this.pathTo(u, u.chaseX, u.chaseY);
+      if (!routed && u.order === "harvest" && u.resKind === "lumber") {
+        this.settle(u);
+        u.atNode = false;
       }
+      u.stuckRetries = 0;
+      return;
+    }
+    // Blocked/orbiting: the blockers may have stopped since the original path
+    // was computed — repath around them. A unit that stays stuck (boxed in)
+    // stands down after a couple of attempts and just faces where it was
+    // ordered — WC3 units never squeeze through crowds.
+    const [tx, ty] = [u.chaseX, u.chaseY];
+    if (++u.stuckRetries > 1 || !this.pathTo(u, tx, ty)) {
+      this.stop(u.id);
+      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
     }
   }
 
@@ -1326,12 +1390,12 @@ export class SimWorld {
         this.stop(u.id);
         return;
       }
-      // Walk to the mine until the pathfinder can't get any closer (its blocked
-      // footprint stops us at the entrance). Only then disappear inside — this
-      // is why workers no longer vanish while still far from the mine. The reach
-      // hugs the footprint edge (radius + own body) with only a hair of slack so
-      // the worker visibly touches the mine before it ducks in.
-      if (!this.arriveAtNode(u, mine.x, mine.y, mine.radius + u.radius + 8)) return;
+      // Walk to the mine's HALL-FACING edge (not just anywhere within reach of the
+      // centre) before ducking inside, so workers approach and enter along the
+      // mine→hall axis and form a clean line instead of entering the near side. If
+      // the pathfinder parks us short (crowded), arriveAtNode still latches.
+      const [ax, ay] = this.mineApproach(u, mine);
+      if (!this.arriveAtNode(u, ax, ay, u.radius + 20)) return;
       if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
       u.inMine = true;
@@ -1475,6 +1539,7 @@ export class SimWorld {
   /** Apply already-rolled damage to a target (armor reduction, death, return
    *  fire). Shared by melee (instant) and projectile (on-impact) hits. */
   private applyDamage(target: SimUnit, rawDamage: number, attackerId: number): void {
+    this.hits.push({ attackerId, targetId: target.id }); // renderer plays the impact SFX
     // WC3 armor reduction: each armor point is worth 6% of pre-armor damage.
     const reduction = (target.armor * 0.06) / (1 + 0.06 * Math.max(0, target.armor));
     target.hp -= rawDamage * (1 - reduction);

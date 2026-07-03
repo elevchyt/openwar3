@@ -4,24 +4,31 @@ import type { DataSource } from "../vfs/types";
 // Unit voice lines & sound effects, sourced entirely from the real WC3 sound data
 // (the safest source of truth). The mapping, verified against the 1.27 MPQs:
 //
-//   Units\UnitUI.slk          `unitSound`  → a sound-set LABEL (e.g. hfoo → "Footman")
-//   UI\SoundInfo\UnitAckSounds.slk  row `<label><Category>` (FootmanWhat, GruntPissed…)
-//   UI\SoundInfo\AnimSounds.slk     row `<label>Death`      (death cries)
+//   Units\UnitUI.slk  `unitSound`  → a sound-set LABEL (hfoo → "Footman")
+//                     `weap1`      → a weapon-impact sound base ("MetalMediumSlice")
+//                     `armor`      → the unit's material when HIT ("Metal"/"Flesh"/…)
+//   UI\SoundInfo\UnitAckSounds.slk   row `<label><Category>`  (voice acknowledgements)
+//   UI\SoundInfo\AnimSounds.slk      row `<label>Death`       (death cries)
+//   UI\SoundInfo\UnitCombatSounds.slk row `<weap1><targetArmor>` (weapon impacts)
 //
 // Each row's `FileNames` is a comma-separated randomized list; the full path is
-// `DirectoryBase` + one chosen filename. Files are plain PCM WAV (mono/22050/16),
-// decoded directly by Web Audio. `Volume` is 0–127.
+// `DirectoryBase` + one chosen filename. Files are plain PCM WAV, decoded directly.
 //
-// WC3 categories → our events:
-//   What      selection click            Yes        move order ack
-//   YesAttack attack order ack           Pissed     repeated-click annoyance
-//   Warcry    attack/charge              Ready      just-trained
-//   Death     unit killed
+// Channels:
+//   VOICE  (What/Yes/YesAttack/Pissed/Warcry/Ready) — ONE exclusive channel: while a
+//          line plays, further voice requests are DROPPED, never cut (per feedback).
+//   Death, Impact — overlapping SFX pools, each concurrency-capped.
 
 export type SoundCategory = "What" | "Yes" | "YesAttack" | "Pissed" | "Warcry" | "Ready" | "Death";
 
 const ACK_TABLE = "UI\\SoundInfo\\UnitAckSounds.slk";
 const ANIM_TABLE = "UI\\SoundInfo\\AnimSounds.slk";
+const COMBAT_TABLE = "UI\\SoundInfo\\UnitCombatSounds.slk";
+
+const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["What", "Yes", "YesAttack", "Pissed", "Warcry", "Ready"]);
+
+const MAX_DEATHS = 4; // concurrent death cries
+const MAX_IMPACTS = 5; // concurrent weapon-impact clangs
 
 interface Clip {
   paths: string[]; // full MPQ paths of the randomized variants
@@ -30,29 +37,32 @@ interface Clip {
   pitchVar: number; // ± random jitter applied per play (0 = none)
 }
 
-// One shared "voice" channel: a new acknowledgement preempts the currently
-// playing one (WC3's CHANNELFULLPREEMPT), so rapid clicks never pile up echoes.
-// Deaths play on a separate, overlap-capped pool (battlefield ambience).
-const MAX_DEATHS = 4;
-
 export class SoundBoard {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private ack: MappedData | null = null;
   private anim: MappedData | null = null;
+  private combat: MappedData | null = null;
   private buffers = new Map<string, Promise<AudioBuffer | null>>();
-  private clips = new Map<string, Clip | null>(); // memoized (label|category) → clip
-  private voice: AudioBufferSourceNode | null = null; // current acknowledgement voice
+  private clips = new Map<string, Clip | null>(); // memoized row key → clip
+  private voiceBusy = false; // an acknowledgement voice is currently playing
+  private voiceSource: AudioBufferSourceNode | null = null;
   private deaths = 0;
+  private impacts = 0;
   private muted = false;
   private volume = 0.85;
 
+  /** Fired when an acknowledgement VOICE actually starts (label + clip seconds) —
+   *  the host drives the 3D portrait's talk animation off this. */
+  onVoiceStart: ((label: string, durationSec: number) => void) | null = null;
+
   constructor(private vfs: DataSource) {
-    this.ack = this.load(ACK_TABLE);
-    this.anim = this.load(ANIM_TABLE);
+    this.ack = this.loadTable(ACK_TABLE);
+    this.anim = this.loadTable(ANIM_TABLE);
+    this.combat = this.loadTable(COMBAT_TABLE);
   }
 
-  private load(path: string): MappedData | null {
+  private loadTable(path: string): MappedData | null {
     const bytes = this.vfs.rawBytes(path);
     if (!bytes) return null;
     const m = new MappedData();
@@ -84,55 +94,101 @@ export class SoundBoard {
     if (this.master && !this.muted) this.master.gain.value = this.volume;
   }
 
-  /** Play one random voice clip for a unit's sound-set label. Acknowledgements
-   *  (everything but Death) share one preempting channel; deaths overlap. No-op
-   *  when the label/category has no data or audio is still locked. */
+  /** Play a unit voice line (or death cry). Voice acknowledgements share one
+   *  exclusive channel and are dropped while it's busy; deaths overlap (capped). */
   play(label: string, category: SoundCategory): void {
     if (!label) return;
-    const clip = this.resolve(label, category);
+    if (category === "Death") {
+      this.playPool(this.resolve(this.anim, label + "Death"), "death");
+    } else {
+      this.playVoice(label, category);
+    }
+  }
+
+  /** Play a weapon-impact clang: attacker's `weap1` + target's `armor` material
+   *  (e.g. MetalMediumSlice + Flesh). No-op for weaponless/ranged (`weap1` "_"). */
+  playImpact(weaponSound: string, targetArmor: string): void {
+    if (!weaponSound || weaponSound === "_" || !targetArmor) return;
+    this.playPool(this.resolve(this.combat, weaponSound + targetArmor), "impact");
+  }
+
+  private playVoice(label: string, category: SoundCategory): void {
+    if (!VOICE_CATEGORIES.has(category)) return;
+    if (this.voiceBusy) return; // never cut the line that's already playing
+    const clip = this.resolve(this.ack, label + category);
     if (!clip || !clip.paths.length) return;
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return;
+    this.voiceBusy = true; // reserve the channel synchronously so bursts don't stack
     const path = clip.paths[(Math.random() * clip.paths.length) | 0];
-    const death = category === "Death";
-    // Reserve a death slot SYNCHRONOUSLY: an AoE can kill many units in one tick,
-    // and decode is async, so counting only after decode would let the whole burst
-    // slip past the cap. Release the slot if the clip never actually starts.
-    if (death) {
-      if (this.deaths >= MAX_DEATHS) return; // cap the death chorus
-      this.deaths++;
-    }
     void this.buffer(path).then((buf) => {
       if (!buf || !this.ctx || !this.master) {
-        if (death) this.deaths--;
+        this.voiceBusy = false;
         return;
       }
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      if (clip.pitchVar) src.playbackRate.value = clip.pitch + (Math.random() * 2 - 1) * clip.pitchVar;
-      else if (clip.pitch !== 1) src.playbackRate.value = clip.pitch;
-      const g = this.ctx.createGain();
-      g.gain.value = clip.gain;
-      src.connect(g).connect(this.master);
-      if (death) {
-        src.onended = () => { this.deaths--; };
-      } else {
-        // Preempt the previous acknowledgement voice (one channel).
-        try { this.voice?.stop(); } catch { /* already ended */ }
-        this.voice = src;
-        src.onended = () => { if (this.voice === src) this.voice = null; };
+      const src = this.source(buf, clip);
+      src.connect(this.gain(clip.gain)).connect(this.master);
+      this.voiceSource = src;
+      src.onended = () => {
+        this.voiceBusy = false;
+        if (this.voiceSource === src) this.voiceSource = null;
+      };
+      src.start();
+      this.onVoiceStart?.(label, buf.duration);
+    });
+  }
+
+  /** Play a clip on an overlapping, concurrency-capped pool (deaths / impacts). */
+  private playPool(clip: Clip | null, kind: "death" | "impact"): void {
+    if (!clip || !clip.paths.length) return;
+    this.unlock();
+    if (!this.ctx || !this.master || this.ctx.state !== "running") return;
+    const cap = kind === "death" ? MAX_DEATHS : MAX_IMPACTS;
+    // Reserve a slot SYNCHRONOUSLY — an AoE can kill/hit many units in one tick,
+    // and decode is async, so counting only after decode would slip the cap.
+    if (kind === "death") {
+      if (this.deaths >= cap) return;
+      this.deaths++;
+    } else {
+      if (this.impacts >= cap) return;
+      this.impacts++;
+    }
+    const release = () => {
+      if (kind === "death") this.deaths--;
+      else this.impacts--;
+    };
+    const path = clip.paths[(Math.random() * clip.paths.length) | 0];
+    void this.buffer(path).then((buf) => {
+      if (!buf || !this.ctx || !this.master) {
+        release();
+        return;
       }
+      const src = this.source(buf, clip);
+      src.connect(this.gain(clip.gain)).connect(this.master);
+      src.onended = release;
       src.start();
     });
   }
 
-  /** Resolve (label, category) → clip metadata, memoized. */
-  private resolve(label: string, category: SoundCategory): Clip | null {
-    const key = `${label}|${category}`;
+  private source(buf: AudioBuffer, clip: Clip): AudioBufferSourceNode {
+    const src = this.ctx!.createBufferSource();
+    src.buffer = buf;
+    if (clip.pitchVar) src.playbackRate.value = clip.pitch + (Math.random() * 2 - 1) * clip.pitchVar;
+    else if (clip.pitch !== 1) src.playbackRate.value = clip.pitch;
+    return src;
+  }
+
+  private gain(value: number): GainNode {
+    const g = this.ctx!.createGain();
+    g.gain.value = value;
+    return g;
+  }
+
+  /** Resolve a table row → clip metadata, memoized. */
+  private resolve(table: MappedData | null, key: string): Clip | null {
     const hit = this.clips.get(key);
     if (hit !== undefined) return hit;
-    const table = category === "Death" ? this.anim : this.ack;
-    const row = table?.getRow(label + category) as { string(k: string): string | undefined } | undefined;
+    const row = table?.getRow(key) as { string(k: string): string | undefined } | undefined;
     let clip: Clip | null = null;
     if (row) {
       const dir = row.string("directorybase") ?? "";

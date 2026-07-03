@@ -187,6 +187,9 @@ const SEL_RADIUS_PER_SCALE = 36;
 // Re-clicking the same single unit this many extra times flips its selection
 // voice from "What" to the annoyed "Pissed" set (WC3's easter-egg escalation).
 const PISSED_AFTER = 3;
+// The gold-mine ring is drawn a bit larger than the mine's collision radius (which
+// drives worker entry) so it reads as a ring hugging the mine base, not its footprint.
+const MINE_RING_SCALE = 1.4;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 // Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
 const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
@@ -328,6 +331,17 @@ export class RtsController {
     }
     const cat: SoundCategory = single && this.voiceStreak >= PISSED_AFTER ? "Pissed" : "What";
     this.sounds.play(def.soundSet, cat);
+  }
+
+  /** Play weapon-impact SFX for every hit landed this tick (attacker's weapon
+   *  material vs target's armour material — sourced from the game's combat sounds). */
+  private playImpacts(): void {
+    if (!this.sounds) return;
+    for (const h of this.sim.drainHits()) {
+      const atk = this.registry.get(this.byId.get(h.attackerId)?.typeId ?? "");
+      const tgt = this.registry.get(this.byId.get(h.targetId)?.typeId ?? "");
+      if (atk?.weaponSound && tgt?.armorSound) this.sounds.playImpact(atk.weaponSound, tgt.armorSound);
+    }
   }
 
   /** Play the focused unit's order acknowledgement ("Yes" or "YesAttack"). */
@@ -641,6 +655,7 @@ export class RtsController {
   tick(dt: number): void {
     this.trySeed();
     this.sim.tick(dt);
+    this.playImpacts(); // BEFORE deaths — a killed target's entry is still around to read its armour
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
     for (const id of this.sim.drainRemovals()) this.onRemove(id);
     this.tickCorpses(dt);
@@ -1123,7 +1138,7 @@ export class RtsController {
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
       // A gold mine is Neutral PASSIVE (yellow ring), not hostile (red).
-      if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius, owner: -1, team: -2, sizeToRadius: true, neutral: true });
+      if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true });
     }
     return out;
   }
@@ -1139,7 +1154,7 @@ export class RtsController {
     }
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);
-      if (m) return { x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius, owner: -1, team: -2, sizeToRadius: true, neutral: true };
+      if (m) return { x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true };
     }
     return null;
   }
