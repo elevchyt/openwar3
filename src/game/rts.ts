@@ -277,7 +277,7 @@ export class RtsController {
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
   private corpses: Array<{ instance: Instance; t: number }> = [];
-  private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number] }> = [];
+  private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
   private loc = new Float32Array(3);
@@ -1325,11 +1325,11 @@ export class RtsController {
         const selR = this.byId.get(picked)?.selRadius ?? target.radius;
         const enemy = prim ? this.sim.hostile(prim, target) : false;
         if (enemy && !target.building) {
-          // Hostile UNIT: attack + red flash (existing behaviour).
+          // Hostile UNIT: attack + red flash (constant ring, matching its hover).
           let any = false;
           for (const id of this.selected) if (this.order(id, { kind: "attack", targetId: picked }, queued)) any = true;
           if (any) {
-            this.flashRing(target.x, target.y, selR, FLASH_RED);
+            this.flashRing(target.x, target.y, selR, FLASH_RED, false);
             return;
           }
         } else if (target.building) {
@@ -1360,7 +1360,7 @@ export class RtsController {
         if (w?.worker?.gold && this.order(id, { kind: "harvest", res: "gold", nodeId: mine.id }, queued)) any = true;
       }
       if (any) {
-        this.flashTarget(mine.x, mine.y, mine.radius);
+        this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE); // match the mine's hover/selection ring
         return;
       }
     }
@@ -1528,16 +1528,18 @@ export class RtsController {
   }
 
   /** Queue a target-circle flash — the renderer draws it as a flat ground circle
-   *  (a twin-blink, like the selection ring / gold-mine flash), sized to the node
-   *  or building footprint and tinted per the caller (relationship colour). */
-  private flashRing(x: number, y: number, radius: number, color: [number, number, number]): void {
-    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color });
+   *  (a twin-blink, like the selection ring / gold-mine flash), tinted per the
+   *  caller. `big` MUST match how the target's hover/selection ring is sized so the
+   *  order flash is the SAME size as hovering it: units use the constant ring
+   *  (big=false), buildings/mines/trees size to their footprint radius (big=true). */
+  private flashRing(x: number, y: number, radius: number, color: [number, number, number], big = true): void {
+    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color, sizeToRadius: big });
   }
   private flashTarget(x: number, y: number, radius: number): void {
-    this.flashRing(x, y, radius, FLASH_YELLOW); // yellow harvest-target flash
+    this.flashRing(x, y, radius, FLASH_YELLOW); // yellow harvest-target flash (mine/tree → sized)
   }
   private flashAttack(x: number, y: number, radius: number): void {
-    this.flashRing(x, y, radius, FLASH_RED); // red attack-target flash
+    this.flashRing(x, y, radius, FLASH_RED, false); // red attack-target flash on a unit → constant ring
   }
 
   /** Trees to pulse yellow since the last drain (renderer tints the doodad). */
@@ -1549,7 +1551,7 @@ export class RtsController {
   }
 
   /** Harvest-flash requests since the last drain (renderer renders + times them). */
-  drainFlashes(): Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number] }> {
+  drainFlashes(): Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> {
     if (!this.flashRequests.length) return this.flashRequests;
     const out = this.flashRequests;
     this.flashRequests = [];

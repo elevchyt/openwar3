@@ -1506,7 +1506,11 @@ export class SimWorld {
     u.atNode = false;
     if (u.resKind === "gold" && this.mines.has(u.resId)) {
       u.order = "harvest";
-      this.pathToNode(u);
+      // Return to the SAME hall-facing edge we exited from (not the centre), so the
+      // round trip is a straight mine→hall line instead of re-entering off a side.
+      const mine = this.mines.get(u.resId)!;
+      const [tx, ty] = this.mineApproach(u, mine);
+      this.pathTo(u, tx, ty);
     } else if (u.resKind === "lumber") {
       const tree = this.trees.get(u.resId) ?? this.nearestTree(u.x, u.y, RETARGET_RANGE);
       if (tree) {

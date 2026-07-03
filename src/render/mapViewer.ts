@@ -864,7 +864,7 @@ export class MapViewerScene {
       const inst = this.newCircle();
       if (!inst) break;
       this.flashCircles.push({ inst, t: 0.7 });
-      this.placeCircle(inst, { x: req.x, y: req.y, z: req.z, radius: req.radius, owner: -2, team: -2 }, req.color);
+      this.placeCircle(inst, { x: req.x, y: req.y, z: req.z, radius: req.radius, owner: -2, team: -2, sizeToRadius: req.sizeToRadius }, req.color);
     }
     for (let i = this.flashCircles.length - 1; i >= 0; i--) {
       const f = this.flashCircles[i];
@@ -992,10 +992,11 @@ export class MapViewerScene {
     inst.show();
     this.loc3[0] = info.x;
     this.loc3[1] = info.y;
-    // Selection/hover rings are a CONSTANT size (uniform width + ring thickness).
-    // Order flashes (tinted — yellow harvest, red attack) size to their target so
-    // a gold mine gets a big ring. Lifted a hair off the terrain to avoid z-fight.
-    const scale = tint || info.sizeToRadius ? Math.max(0.7, info.radius / 38) : MapViewerScene.CIRCLE_SCALE;
+    // Ring size is driven ONLY by sizeToRadius, so an order flash on a target is
+    // the SAME size as hovering/selecting it: units use the constant ring, while
+    // buildings/mines/trees size to their footprint radius. Lifted a hair off the
+    // terrain to avoid z-fight.
+    const scale = info.sizeToRadius ? Math.max(0.7, info.radius / 38) : MapViewerScene.CIRCLE_SCALE;
     this.loc3[2] = info.z - 14 * scale + MapViewerScene.CIRCLE_LIFT;
     inst.setLocation(this.loc3);
     inst.setUniformScale(scale);
