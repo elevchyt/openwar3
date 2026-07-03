@@ -956,21 +956,13 @@ export class SimWorld {
    *  up mine-centre → hall-centre like the original game, rather than entering
    *  whichever edge they happened to wander to. */
   private pathToNode(u: SimUnit): void {
-    if (u.resKind === "gold") {
-      const mine = this.mines.get(u.resId);
-      if (mine) {
-        const [tx, ty] = this.mineApproach(u, mine);
-        this.pathTo(u, tx, ty);
-      }
-      return;
-    }
-    const tree = this.trees.get(u.resId);
-    if (tree) this.pathTo(u, tree.x, tree.y);
+    const node = u.resKind === "gold" ? this.mines.get(u.resId) : this.trees.get(u.resId);
+    if (node) this.pathTo(u, node.x, node.y); // approach (and enter) from any side
   }
 
-  /** A point on the mine's edge facing the drop-off (town hall), so miners queue
-   *  and enter on the hall side — this is what makes them line up mine-centre →
-   *  hall-centre instead of ducking in wherever they first touch the footprint. */
+  /** A point on the mine's edge facing the drop-off (town hall). Workers enter the
+   *  mine from whatever side they walked up to, but always EMERGE here so they exit
+   *  toward the nearest hall and form the mine→hall line (WC3). */
   private mineApproach(u: SimUnit, mine: SimMine): [number, number] {
     const depot = this.nearestGoldDepot(u);
     if (!depot) return [mine.x, mine.y];
@@ -1370,6 +1362,11 @@ export class SimWorld {
             this.mines.delete(mine.id);
             this.depleted.push(mine);
           }
+          // Emerge on the side facing the town hall — the worker was invisible
+          // inside, so re-placing it here is seamless and makes it ALWAYS exit
+          // toward the drop-off (forming the mine→hall line) whatever side it
+          // entered from. `mine` is still a valid object even if just depleted.
+          [u.x, u.y] = this.mineApproach(u, mine);
         }
         // Emerging from the mine with gold: ghost through other units for the
         // whole auto back-and-forth (WC3), until the player takes manual control.
@@ -1390,12 +1387,11 @@ export class SimWorld {
         this.stop(u.id);
         return;
       }
-      // Walk to the mine's HALL-FACING edge (not just anywhere within reach of the
-      // centre) before ducking inside, so workers approach and enter along the
-      // mine→hall axis and form a clean line instead of entering the near side. If
-      // the pathfinder parks us short (crowded), arriveAtNode still latches.
-      const [ax, ay] = this.mineApproach(u, mine);
-      if (!this.arriveAtNode(u, ax, ay, u.radius + 20)) return;
+      // Walk up to the mine and duck inside from WHATEVER side we reached — the
+      // reach hugs the footprint edge (radius + own body) with a hair of slack so
+      // the worker visibly touches the mine before it vanishes. (It re-emerges on
+      // the hall-facing side; see the emerge branch above.)
+      if (!this.arriveAtNode(u, mine.x, mine.y, mine.radius + u.radius + 8)) return;
       if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
       u.inMine = true;

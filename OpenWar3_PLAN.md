@@ -30,9 +30,10 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   dur)` fires when a voice starts; mapViewer drives the bust's "Portrait Talk" clip (`ModelViewerScene.
   playTalk`, reverts to the resting clip after `dur`) whenever the speaking unit is the one in the portrait.
   — **Gold-mine ring** drawn 1.4× its collision radius (bigger visual, worker-entry reach unchanged).
-  — **Miners line up mine→hall**: new `mineApproach()` targets the mine edge FACING the town hall and the
-  enter-check keys off THAT point (not centre distance), so workers round to the hall side and enter there
-  regardless of approach angle (headless: E/W/N starts all enter the south/hall edge). **Lumberjack idle
+  — **Miners line up mine→hall**: workers ENTER the mine from whatever side they walked up to, but always
+  re-EMERGE on the hall-facing edge (`mineApproach()`) — they're invisible inside, so re-placing them there
+  is seamless and makes them always exit toward the nearest gold depot, forming the mine→hall line (headless:
+  E/W/N approaches all enter their own side yet exit the south/hall edge). **Lumberjack idle
   bug fixed**: pass-9's stricter net-progress stuck check was idling crowded gatherers (A/B: 4/8 workers
   stuck, 551 idle-empty frames) — `checkStuck` now never idles a worker mid harvest/return (re-routes, or a
   boxed lumberjack parks so it chops the nearest reachable tree). A/B after: 0/8 idle. Build clean;
