@@ -23,6 +23,7 @@ export interface UnitDef {
   buttonX: number; // command-card grid column (0-3), from "buttonpos"
   buttonY: number; // command-card grid row (0-2)
   isHero: boolean;
+  priority: number; // UnitData `prio`: selection sub-group order (heroes 9, Footman 6, Peasant 1) — higher sorts first & leads the group
   moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
@@ -191,6 +192,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       buttonX: bx,
       buttonY: by,
       isHero,
+      priority: d ? num(d, "prio", 0) : 0, // UnitData `prio` — WC3 selection-order priority
       moveType: d ? str(d, "movetp") : "",
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",

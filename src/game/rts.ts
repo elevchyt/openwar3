@@ -447,14 +447,30 @@ export class RtsController {
     return this.registry.get(e.typeId)?.isHero ? `h${id}` : e.typeId;
   }
 
-  /** Distinct group keys in selection order (stable). */
+  /** A unit's selection priority (UnitData `prio`) — heroes 9, Footman 6, … 0. */
+  private priorityOf(id: number): number {
+    const e = this.byId.get(id);
+    return e ? this.registry.get(e.typeId)?.priority ?? 0 : 0;
+  }
+
+  /** Distinct group keys, ordered the way WC3 orders selection sub-groups: by unit
+   *  priority (UnitData `prio`) descending, so heroes lead, then stable by the
+   *  order units were added for ties. Drives the icon grid, Tab cycle, and primary. */
   private orderedGroups(): string[] {
     const keys: string[] = [];
+    const prio = new Map<string, number>();
+    const seq = new Map<string, number>();
+    let i = 0;
     for (const id of this.selected) {
       const k = this.groupKeyOf(id);
-      if (k && !keys.includes(k)) keys.push(k);
+      if (k && !prio.has(k)) {
+        prio.set(k, this.priorityOf(id));
+        seq.set(k, i);
+        keys.push(k);
+      }
+      i++;
     }
-    return keys;
+    return keys.sort((a, b) => (prio.get(b)! - prio.get(a)!) || (seq.get(a)! - seq.get(b)!));
   }
 
   private firstOfGroup(key: string): number | null {
@@ -730,6 +746,7 @@ export class RtsController {
           mana: def?.mana ?? 0,
           maxMana: def?.mana ?? 0,
           armor: def?.armor ?? 0,
+          armorType: def?.armorType ?? "",
           weapon: def ? weaponFor(def) : null,
           worker: null,
           depotGold: false,
@@ -800,6 +817,7 @@ export class RtsController {
         mana: 0,
         maxMana: 0,
         armor: def?.armor ?? 0,
+        armorType: def?.armorType ?? "",
         weapon: null,
         worker: null,
         depotGold: false,
@@ -871,6 +889,7 @@ export class RtsController {
         mana: def.mana,
         maxMana: def.mana,
         armor: def.armor,
+        armorType: def.armorType,
         weapon: weaponFor(def),
         worker,
         depotGold: DEPOT_IDS.has(def.id) && def.id !== "hlum", // lumber mill: lumber only
@@ -1232,8 +1251,12 @@ export class RtsController {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
       const ownMobile = !!u && !!e && u.owner === this.localPlayer && !u.building;
-      // Shift wins over the same-type grab so a deliberate shift-click that also
-      // reads as a fast double-click still just adds the one unit to the group.
+      // Shift + same-type (shift+ctrl-click or shift+double-click) ADDS the whole
+      // on-screen type group to the current selection, mirroring WC3.
+      if (mods.additive && mods.sameType && ownMobile) {
+        this.selectByType(e!.typeId, true);
+        return;
+      }
       if (mods.additive) {
         // Already in the group → toggle it out. Otherwise add own mobile units
         // (up to the cap). A shift-click on anything else (enemy/neutral/building)
@@ -1273,8 +1296,10 @@ export class RtsController {
   }
 
   /** Select every on-screen own mobile unit of a given type (Ctrl-click / double-
-   *  click). WC3 limits this to what's visible, so off-screen kin are left out. */
-  private selectByType(typeId: string): void {
+   *  click). WC3 limits this to what's visible, so off-screen kin are left out.
+   *  `additive` (shift held) unions them into the current selection instead of
+   *  replacing it. */
+  private selectByType(typeId: string, additive = false): void {
     const picked: number[] = [];
     for (const e of this.entries) {
       if (e.typeId !== typeId || e.hidden) continue;
@@ -1283,10 +1308,13 @@ export class RtsController {
       if (this.onScreen(u, e)) picked.push(e.simId);
     }
     if (!picked.length) return;
-    this.selected.clear();
-    for (const sid of picked.slice(0, MAX_SELECT)) this.selected.add(sid);
+    if (!additive) this.selected.clear();
+    for (const sid of picked) {
+      if (this.selected.size >= MAX_SELECT) break;
+      this.selected.add(sid);
+    }
     this.selectedMine = null;
-    this.refocus();
+    this.refocus(additive ? this.focusedKey : "");
     this.announceSelection();
   }
 
@@ -1305,8 +1333,10 @@ export class RtsController {
   }
 
   /** Drag-box: select all of the local player's mobile units whose on-screen
-   *  position falls inside the rectangle (CSS px). Empty box clears the group. */
-  selectBox(x0: number, y0: number, x1: number, y1: number): void {
+   *  position falls inside the rectangle (CSS px). Empty box keeps the group.
+   *  `additive` (shift held) unions the boxed units into the current selection
+   *  instead of replacing it — matching WC3's shift-drag. */
+  selectBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {
     const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
     const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
     const viewport = this.host.viewport();
@@ -1326,10 +1356,13 @@ export class RtsController {
       if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) picked.push(e.simId);
     }
     if (picked.length === 0) return; // empty box: keep the current selection
-    this.selected.clear();
-    for (const id of picked.slice(0, MAX_SELECT)) this.selected.add(id); // WC3 cap
+    if (!additive) this.selected.clear();
+    for (const id of picked) {
+      if (this.selected.size >= MAX_SELECT) break; // WC3 cap
+      this.selected.add(id);
+    }
     this.selectedMine = null;
-    this.refocus();
+    this.refocus(additive ? this.focusedKey : "");
     this.announceSelection();
   }
 
@@ -2438,6 +2471,7 @@ function weaponFor(def: UnitDef): SimWeapon | null {
     ranged,
     missileArt: def.missileArt,
     missileSpeed: def.missileSpeed,
+    attackType: def.attackType,
   };
 }
 

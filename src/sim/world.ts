@@ -20,6 +20,7 @@ export interface SimWeapon {
   ranged: boolean; // fires a travelling projectile instead of hitting instantly
   missileArt: string; // projectile model path (renderer), "" = invisible
   missileSpeed: number; // projectile travel speed (world units/sec)
+  attackType: string; // UnitWeapons atkType1 (normal/pierce/siege/magic/chaos/hero) → damage table
 }
 
 /** An in-flight projectile: homes on its target's current position, dealing its
@@ -33,6 +34,8 @@ export interface SimProjectile {
   speed: number;
   damage: number; // pre-armor damage rolled at launch (armor applied on impact)
   art: string; // missile model path
+  attackType?: string; // attacker's weapon attack type, carried so the damage-table
+  // multiplier is correct even if the attacker dies before the arrow lands
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
   // instead of dealing plain `damage` — the base code + rank to dispatch.
   spell?: { code: string; rank: number; abilityId: string };
@@ -226,6 +229,7 @@ export interface SimUnit {
   mana: number;
   maxMana: number;
   armor: number;
+  armorType: string; // UnitBalance defType (none/small/medium/large/fort/hero/divine) → damage table
   weapon: SimWeapon | null;
   worker: WorkerState | null;
   building: BuildingState | null; // set for structures (construction + training)
@@ -359,6 +363,34 @@ const KILL_XP = [0, 25, 40, 60, 85, 115, 150, 190, 235, 285, 340];
 const CREEP_XP_FACTOR = [0.8, 0.8, 0.7, 0.6, 0.5, 0, 0, 0, 0, 0, 0];
 const XP_SHARE_RANGE = 1200; // heroes within this of a kill share its XP (else global)
 const SUMMON_XP_FACTOR = 0.5; // summoned victims grant half XP
+// WC3 (TFT 1.27a) attack-type vs armor-type damage multiplier table. Source: the
+// official classic Battle.net basics page, "Armor and Weapon Types" (the Frozen
+// Throne chart) — https://classic.battle.net/war3/basics/armorandweapontypes.shtml
+// — cross-checked against Liquipedia. NB the classic TFT values differ from
+// Reforged 2.x (e.g. Pierce vs Heavy is 1.0 here, 0.9 in 2.x). Rows = weapon
+// attack type (UnitWeapons `atkType1`); cols = armor type (UnitBalance `defType`).
+// Divine (campaign-only) takes 5% from everything but Chaos (per Liquipedia; the
+// official chart omits it). Unknown attack/armor pairs default to 1.0 (no change).
+const DAMAGE_TABLE: Record<string, Record<string, number>> = {
+  //         none  small(light) medium large(heavy) fort  hero  divine
+  normal: { none: 1.0, small: 1.0, medium: 1.5, large: 1.0, fort: 0.7, hero: 1.0, divine: 0.05 },
+  pierce: { none: 1.5, small: 2.0, medium: 0.75, large: 1.0, fort: 0.35, hero: 0.5, divine: 0.05 },
+  siege: { none: 1.5, small: 1.0, medium: 0.5, large: 1.0, fort: 1.5, hero: 0.5, divine: 0.05 },
+  magic: { none: 1.0, small: 1.25, medium: 0.75, large: 2.0, fort: 0.35, hero: 0.5, divine: 0.05 },
+  chaos: { none: 1.0, small: 1.0, medium: 1.0, large: 1.0, fort: 1.0, hero: 1.0, divine: 1.0 },
+  hero: { none: 1.0, small: 1.0, medium: 1.0, large: 1.0, fort: 0.5, hero: 1.0, divine: 0.05 },
+  spells: { none: 1.0, small: 1.0, medium: 1.0, large: 1.0, fort: 1.0, hero: 0.7, divine: 0.05 },
+};
+
+/** Damage multiplier for a weapon `attackType` striking an `armorType`. Missing/
+ *  unknown types fall back to 1.0 so unrecognised data degrades to plain damage. */
+function damageMultiplier(attackType: string, armorType: string): number {
+  const row = DAMAGE_TABLE[attackType.toLowerCase()];
+  if (!row) return 1;
+  const m = row[armorType.toLowerCase()];
+  return m === undefined ? 1 : m;
+}
+
 // Attribute → stat conversions (Liquipedia Hero): verified against UnitBalance.
 const HP_PER_STR = 25;
 const MANA_PER_INT = 15;
@@ -1765,18 +1797,27 @@ export class SimWorld {
       if (!def || def.target !== "unit") continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (u.mana < lvl.cost) continue;
-      const friendly = def.code === "Ahea" || def.code === "Ainf" || def.code === "AUfu"; // heal/buff allies
-      const target = this.autocastTarget(u, lvl.castRange, friendly, def.code);
+      // Friendly vs hostile autocast is decided by the ability's real Targets
+      // Allowed flags (targs1), not a hard-coded code list: a spell allowing
+      // `friend`/`self`/`player` (and not `enemy`) buffs/heals allies; `enemy`
+      // targets foes. `self` in the flags lets the caster be its own target
+      // (Heal/Inner Fire/Frost Armor all carry it — verified in the 1.27 MPQ).
+      const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+      const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
+      const target = this.autocastTarget(u, lvl.castRange, friendly, def.code, F.has("self"));
       if (target) return this.issueCast(u.id, def.code, target.id);
     }
     return false;
   }
 
-  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string): SimUnit | null {
+  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = friendly ? 0.999 : Infinity;
     for (const t of this.units.values()) {
-      if (t === u || t.building || t.hp <= 0) continue;
+      if (t.building || t.hp <= 0) continue;
+      // Skip the caster unless the spell's flags permit self-targeting (a `self`
+      // autocast like Priest Heal can pick itself when it's the most-hurt ally).
+      if (t === u && !(friendly && selfOk)) continue;
       if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
       if (friendly) {
         if (!this.allied(u, t) || t.mechanical) continue;
@@ -2386,6 +2427,7 @@ export class SimWorld {
       speed: w.missileSpeed > 0 ? w.missileSpeed : 900,
       damage: this.rollDamage(w),
       art: w.missileArt,
+      attackType: w.attackType,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y });
@@ -2413,7 +2455,7 @@ export class SimWorld {
           const def = this.abilities?.get(p.spell.abilityId);
           this.applySpellEffect(p.spell.code, p.spell.rank, caster, { targetId: t.id, x: t.x, y: t.y }, def);
         } else {
-          const dealt = this.applyDamage(t, p.damage, p.sourceId);
+          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? "");
           if (dealt > 0) this.applyArrowAutocast(this.units.get(p.sourceId), t); // Searing/Frost/Black/Incinerate arrows
         }
         this.removeProjectile(p.id);
@@ -2656,7 +2698,7 @@ export class SimWorld {
   private dealDamage(attacker: SimUnit, target: SimUnit): void {
     // Critical Strike (Blademaster passive AOcr): a chance to multiply the swing.
     const raw = this.applyCriticalStrike(attacker, this.rollDamage(attacker.weapon!));
-    const dealt = this.applyDamage(target, raw, attacker.id);
+    const dealt = this.applyDamage(target, raw, attacker.id, attacker.weapon?.attackType ?? "");
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
     // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
@@ -2694,12 +2736,17 @@ export class SimWorld {
     }
   }
 
-  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number): number {
+  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = ""): number {
     // Evasion (Demon Hunter passive AEev): a chance to dodge a physical attack.
     if (this.tryEvade(target)) return 0;
+    // WC3 damage table: the weapon's attack type vs the target's armor type scales
+    // the hit (Normal +50% vs Medium, Pierce ×2 vs Light/Unarmored, Siege ×1.5 vs
+    // Fortified, Magic ×2 vs Heavy, …). Applied before the armor-value reduction;
+    // both are multiplicative so order is immaterial.
+    const typeMult = damageMultiplier(attackType, target.armorType);
     // WC3 armor reduction: each armor point is worth 6% of pre-armor damage.
     const reduction = (target.armor * 0.06) / (1 + 0.06 * Math.max(0, target.armor));
-    return this.landDamage(target, rawDamage * (1 - reduction), attackerId, true);
+    return this.landDamage(target, rawDamage * typeMult * (1 - reduction), attackerId, true);
   }
 
   /** Critical Strike (AOcr): dataB chance to multiply the swing damage by dataC. */

@@ -2422,8 +2422,9 @@ export class MapViewerScene {
           // An armed command-card order (Move/Attack) consumes the click.
           if (!this.moved && this.rts.orderClickAt(e.offsetX, e.offsetY, e.shiftKey)) this.hud?.clearOrderMode();
         } else if (this.moved) {
-          // A left-drag is a rectangle selection of the player's own units.
-          this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY);
+          // A left-drag is a rectangle selection of the player's own units
+          // (Shift held → add the boxed units to the current selection).
+          this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY, e.shiftKey);
         } else {
           // Modifiers: Shift = add/remove from group; Ctrl or a double-click =
           // select all on-screen units of the same type.
