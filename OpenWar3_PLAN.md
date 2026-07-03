@@ -17,6 +17,17 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 12 — control groups, hero hotkeys, idle-worker button (2026-07-03, latest+25)**
+  — **Control groups (number row 1-0)**: `RtsController` holds 10 groups; **Ctrl+N** binds the current own
+  selection (overwrite), **Shift+N** appends, **N** recalls, **N double-tap** recalls + centres the camera
+  on the group centroid. Cap **24** (= `MAX_SELECT`); **units XOR buildings** (units win a mixed pick);
+  dead members pruned lazily on recall. Shift-click remove + Tab subgroup cycle already existed. — **Hero
+  hotkeys F1/F2/F3** select the 1st/2nd/3rd hero (double-tap centres), independent of the number groups.
+  — Input in `hud.ts onKey` (digit/F-key handling + a `tapAgain` double-tap helper); camera jump via
+  `rts.selectionCentroid()` → mapViewer `jumpToSelection`. — **Idle-worker button redone**: a framed race-
+  worker **action icon** (`workerIcon()` = the race worker's command-card BLP) ABOVE the minimap's top-left
+  (per the WC3 console), with the idle **count** at its bottom-right; click / F8 / ~ cycles. Build clean;
+  control-group + hero input needs in-browser confirmation.
 - **Feedback pass 11 — circle unify, mine enter/exit, UI sounds, follow, multi-select, idle-worker (2026-07-03, latest+24)**
   — **Click/hover circles unified**: order-flash rings (yellow harvest / red attack) now size EXACTLY like
   the target's hover/selection ring — `placeCircle` keys size off `sizeToRadius` only (units = constant

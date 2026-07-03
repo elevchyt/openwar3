@@ -361,7 +361,7 @@ body.in-game .menu-panel { display: none; }
   align-self: center;
   border: 1px solid var(--border);
   background: #060806;
-  overflow: hidden;
+  overflow: visible; /* let the idle-worker button sit ABOVE the minimap */
   cursor: crosshair;
 }
 .hud-console-skinned .hud-minimap {
@@ -377,21 +377,35 @@ body.in-game .menu-panel { display: none; }
   height: 100%;
 }
 .hud-minimap-img { image-rendering: pixelated; }
-/* Idle-worker badge overlaid at the minimap's top-left corner. */
+/* Idle-worker button — a framed race-worker action icon ABOVE the minimap's
+   top-left corner, with an idle-count in its bottom-right (WC3 console). */
 .hud-idle-worker {
   position: absolute;
-  top: 4px;
-  left: 4px;
-  z-index: 3;
+  bottom: calc(100% + 3px);
+  left: 0;
+  width: 46px;
+  height: 46px;
+  z-index: 4;
+  padding: 0;
   cursor: pointer;
-  background: rgba(0, 0, 0, 0.62);
-  border: 1px solid rgba(240, 200, 80, 0.85);
-  border-radius: 4px;
-  color: #ffd86a;
-  font: 600 12px/1 ui-monospace, Menlo, Consolas, monospace;
-  padding: 2px 5px;
+  background-color: #0a0a08;
+  background-size: cover;
+  background-position: center;
+  border: 2px solid #c8a860;
+  border-radius: 3px;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.75);
 }
-.hud-idle-worker:hover { background: rgba(0, 0, 0, 0.82); filter: brightness(1.2); }
+.hud-idle-worker:hover { border-color: #ffe08a; filter: brightness(1.15); }
+.hud-idle-count {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font: 700 13px/1 ui-monospace, Menlo, Consolas, monospace;
+  color: #fff;
+  padding: 0 2px;
+  text-shadow: 0 0 3px #000, 0 0 3px #000, 1px 1px 1px #000;
+  pointer-events: none;
+}
 
 .hud-portrait-wrap {
   flex: none;

@@ -270,6 +270,7 @@ export class RtsController {
   private lastVoiceId: number | null = null; // last single unit that spoke (for What→Pissed escalation)
   private voiceStreak = 0; // consecutive re-clicks of that same unit
   private lastIdleWorker: number | null = null; // last idle worker selected via the badge/F8/~ cycle
+  private groups = new Map<string, number[]>(); // control groups "0".."9" → ordered member sim ids
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
@@ -481,6 +482,107 @@ export class RtsController {
     this.refocus();
     this.announceSelection();
     return true;
+  }
+
+  // --- control groups (keys 1-0) --------------------------------------------
+
+  /** Own selection members, partitioned units-vs-buildings; units WIN a mixed pick
+   *  (WC3 exclusion rule: a group is units XOR buildings). Capped at MAX_SELECT. */
+  private ownSelectionByKind(): { kind: "unit" | "building" | null; ids: number[] } {
+    const units: number[] = [];
+    const buildings: number[] = [];
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (!u || u.owner !== this.localPlayer) continue;
+      (u.building ? buildings : units).push(id);
+    }
+    if (units.length) return { kind: "unit", ids: units.slice(0, MAX_SELECT) };
+    if (buildings.length) return { kind: "building", ids: buildings.slice(0, MAX_SELECT) };
+    return { kind: null, ids: [] };
+  }
+
+  /** Living members of a group, pruning any that died (lazy cleanup). */
+  private livingGroup(key: string): number[] {
+    const g = this.groups.get(key);
+    if (!g) return [];
+    const alive = g.filter((id) => this.sim.units.has(id));
+    if (alive.length !== g.length) this.groups.set(key, alive);
+    return alive;
+  }
+
+  /** Ctrl+N: bind the current own selection to control group N (overwrite). An
+   *  empty selection leaves the existing group untouched (WC3). */
+  assignGroup(key: string): void {
+    const { ids } = this.ownSelectionByKind();
+    if (ids.length) this.groups.set(key, ids);
+  }
+
+  /** Shift+N: append the current selection to group N, keeping the group's kind
+   *  (units XOR buildings) and the MAX_SELECT cap, skipping duplicates. */
+  appendGroup(key: string): void {
+    const existing = this.livingGroup(key);
+    const sel = this.ownSelectionByKind();
+    const kind = existing.length ? (this.sim.units.get(existing[0])?.building ? "building" : "unit") : sel.kind;
+    if (!kind) return;
+    const merged = [...existing];
+    const seen = new Set(existing);
+    for (const id of this.selected) {
+      if (merged.length >= MAX_SELECT) break;
+      const u = this.sim.units.get(id);
+      if (!u || u.owner !== this.localPlayer || seen.has(id)) continue;
+      if ((u.building ? "building" : "unit") !== kind) continue;
+      merged.push(id);
+      seen.add(id);
+    }
+    if (merged.length) this.groups.set(key, merged);
+  }
+
+  /** N (tap): recall group N as the active selection. Returns false if empty. */
+  recallGroup(key: string): boolean {
+    const ids = this.livingGroup(key);
+    if (!ids.length) return false;
+    this.selected.clear();
+    for (const id of ids) this.selected.add(id);
+    this.selectedMine = null;
+    this.refocus();
+    this.announceSelection();
+    return true;
+  }
+
+  /** F1/F2/F3: select the (index+1)-th of the local player's heroes (stable order),
+   *  independent of the numbered control groups. Returns false if there's none. */
+  selectHero(index: number): boolean {
+    const heroes: number[] = [];
+    for (const e of this.entries) {
+      if (!e.isHero) continue;
+      const u = this.sim.units.get(e.simId);
+      if (u && u.owner === this.localPlayer) heroes.push(e.simId);
+    }
+    heroes.sort((a, b) => a - b);
+    const id = heroes[index];
+    if (id === undefined) return false;
+    this.selected.clear();
+    this.selected.add(id);
+    this.selectedMine = null;
+    this.refocus();
+    this.announceSelection();
+    return true;
+  }
+
+  /** Centre of the current selection (for the control-group double-tap camera jump). */
+  selectionCentroid(): [number, number] | null {
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (u) {
+        sx += u.x;
+        sy += u.y;
+        n++;
+      }
+    }
+    return n ? [sx / n, sy / n] : this.selectedPosition();
   }
 
   /** Drop dead units from the selection and repoint the primary if it died. */

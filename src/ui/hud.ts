@@ -76,6 +76,16 @@ export interface HudDriver {
   cycleIdleWorker(): void;
   /** How many local workers are currently idle (badge count). */
   idleWorkerCount(): number;
+  /** Icon (BLP path) of the local player's worker, for the idle-worker button. */
+  workerIcon(): string | null;
+  /** Ctrl+N — bind the current selection to control group N ("0".."9"). */
+  assignControlGroup(key: string): void;
+  /** Shift+N — append the current selection to control group N. */
+  appendControlGroup(key: string): void;
+  /** N — recall control group N; `jump` (double-tap) also centres the camera. */
+  recallControlGroup(key: string, jump: boolean): void;
+  /** F1/F2/F3 — select hero `index`; `jump` (double-tap) also centres the camera. */
+  selectHero(index: number, jump: boolean): void;
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
   /** Run a command-card button by id. */
@@ -159,6 +169,8 @@ export class GameHud {
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
   private idleWorkerBadge!: HTMLButtonElement;
+  private idleWorkerCount!: HTMLSpanElement;
+  private idleIconSet = false; // worker icon lazily applied once
   private cmdTooltip!: HTMLDivElement;
   private cmdSlots: HTMLButtonElement[] = [];
   private cmdKey = "";
@@ -218,11 +230,21 @@ export class GameHud {
     this.updateIdleWorkers();
   }
 
-  /** Show/hide the idle-worker badge with the current count. */
+  /** Show/hide the idle-worker button and update its count; apply the race worker
+   *  icon once it's known. */
   private updateIdleWorkers(): void {
     const n = this.driver.idleWorkerCount();
     this.idleWorkerBadge.hidden = n === 0;
-    if (n > 0) this.idleWorkerBadge.textContent = `⛏ ${n}`;
+    if (n === 0) return;
+    this.idleWorkerCount.textContent = String(n);
+    if (!this.idleIconSet) {
+      const path = this.driver.workerIcon();
+      const url = path ? this.driver.blpUrl(path) : null;
+      if (url) {
+        this.idleWorkerBadge.style.backgroundImage = `url(${url})`;
+        this.idleIconSet = true;
+      }
+    }
   }
 
   /** Sun/moon disc: the indicator texture is sun–moon–sun across its width, so
@@ -231,6 +253,18 @@ export class GameHud {
   private updateClock(): void {
     if (!this.clockFace) return;
     this.clockFace.style.backgroundPositionX = this.driver.dayNight().isDay ? "0%" : "50%";
+  }
+
+  private lastTapKey = ""; // for double-tap detection (control-group / hero camera jump)
+  private lastTapAt = 0;
+
+  /** True when `key` repeats the previous key within the double-tap window. */
+  private tapAgain(key: string): boolean {
+    const now = performance.now();
+    const again = key === this.lastTapKey && now - this.lastTapAt < 350;
+    this.lastTapKey = key;
+    this.lastTapAt = now;
+    return again;
   }
 
   private onKey = (e: KeyboardEvent): void => {
@@ -248,6 +282,21 @@ export class GameHud {
     if (e.key === "F8" || e.key === "`" || e.key === "~") {
       e.preventDefault();
       this.driver.cycleIdleWorker();
+      return;
+    }
+    // Hero hotkeys F1/F2/F3: select the hero (double-tap centres the camera).
+    if (e.key === "F1" || e.key === "F2" || e.key === "F3") {
+      e.preventDefault();
+      this.driver.selectHero(Number(e.key[1]) - 1, this.tapAgain(e.key));
+      return;
+    }
+    // Control groups on the number row 1-0: Ctrl assigns, Shift appends, a plain
+    // tap recalls, a double tap recalls + jumps the camera to the group.
+    if (/^[0-9]$/.test(e.key)) {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) this.driver.assignControlGroup(e.key);
+      else if (e.shiftKey) this.driver.appendControlGroup(e.key);
+      else this.driver.recallControlGroup(e.key, this.tapAgain(e.key));
       return;
     }
     // Trigger the command whose hotkey matches the pressed key.
@@ -395,12 +444,16 @@ export class GameHud {
       const [ox, oy, w, h] = this.driver.mapBounds();
       this.driver.panTo(ox + u * w, oy + (1 - v) * h); // minimap is north-up
     });
-    // Idle-worker badge — sits just above the minimap; click (or F8 / ~) selects
-    // and cycles through workers doing nothing. Hidden when there are none.
+    // Idle-worker button — a framed race-worker icon above the minimap (like the
+    // WC3 console), with an idle count at the bottom-right. Click (or F8 / ~)
+    // selects and cycles through workers doing nothing. Hidden when there are none.
     this.idleWorkerBadge = document.createElement("button");
     this.idleWorkerBadge.className = "hud-idle-worker";
     this.idleWorkerBadge.title = "Select idle worker (F8 / ~)";
     this.idleWorkerBadge.hidden = true;
+    this.idleWorkerCount = document.createElement("span");
+    this.idleWorkerCount.className = "hud-idle-count";
+    this.idleWorkerBadge.appendChild(this.idleWorkerCount);
     this.idleWorkerBadge.addEventListener("pointerdown", (e) => {
       e.stopPropagation(); // don't also ping the minimap
       this.driver.cycleIdleWorker();

@@ -14,7 +14,7 @@ import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { STARTING_UNITS, resolveRace, type PlayableRace } from "../data/races";
+import { STARTING_UNITS, WORKERS, resolveRace, type PlayableRace } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
@@ -988,6 +988,21 @@ export class MapViewerScene {
     this.projectileInsts.set(id, inst);
   }
 
+  /** Centre the camera on the current selection (control-group / hero jump). */
+  private jumpToSelection(): void {
+    const c = this.rts?.selectionCentroid();
+    if (c) {
+      this.target[0] = c[0];
+      this.target[1] = c[1];
+    }
+  }
+
+  /** Command-card icon (BLP path) of the local race's worker, for the idle button. */
+  private workerIcon(): string | null {
+    const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
+    return (workerId && this.registry.get(workerId)?.icon) || null;
+  }
+
   private placeCircle(
     inst: SpawnInstance | null,
     info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
@@ -1147,6 +1162,15 @@ export class MapViewerScene {
         }
       },
       idleWorkerCount: () => this.rts?.idleWorkerCount() ?? 0,
+      workerIcon: () => this.workerIcon(),
+      assignControlGroup: (key) => this.rts?.assignGroup(key),
+      appendControlGroup: (key) => this.rts?.appendGroup(key),
+      recallControlGroup: (key, jump) => {
+        if (this.rts?.recallGroup(key) && jump) this.jumpToSelection();
+      },
+      selectHero: (index, jump) => {
+        if (this.rts?.selectHero(index) && jump) this.jumpToSelection();
+      },
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
       minimapImage: () => this.minimap,
