@@ -126,6 +126,60 @@ export class SoundBoard {
     this.playPool(this.resolve("combat", weaponSound + targetArmor), "impact");
   }
 
+  /** Ranged attacks carry no melee `weap` label — their launch/impact sound is a
+   *  WAV that ships in the missile model's own folder (FireBall→…Death.wav /
+   *  …Launch1.wav, Arrow→ArrowImpact.wav / ArrowAttack1.wav, Water→…Missile1.wav).
+   *  Resolve it data-drivenly from the missile art path and play it. */
+  playMissile(missileArt: string, kind: "launch" | "impact"): void {
+    const suffixes =
+      kind === "impact"
+        ? ["Death", "Impact", "MissileDeath", "MissileImpact", "Hit1", "Hit2", "Hit3", "Hit", "Target1", "MissileHit1", "1", "2", "3", ""]
+        : ["Launch1", "Launch2", "Launch3", "Launch", "MissileLaunch1", "Attack1", "Attack2", "Attack", "1", "2", "3", ""];
+    const paths = this.folderSounds(kind, missileArt, suffixes);
+    if (paths.length) this.playPool({ paths, gain: 0.7, pitch: 1, pitchVar: 0.06 }, "impact");
+  }
+
+  /** Play a spell's cast/effect sound — a WAV that ships in the effect model's own
+   *  folder (HolyBoltSpecialArt.mdx → HolyBolt.wav, HealTarget.mdx → HealTarget.wav,
+   *  AvatarCaster.mdx → Avatar.wav, …). Tries each art path, then a curated fallback. */
+  playSpellSound(arts: string[], fallback?: string): void {
+    for (const art of arts) {
+      if (!art) continue;
+      const paths = this.folderSounds("cast", art, ["", "1", "Cast", "Target", "Caster", "Death"]);
+      if (paths.length) {
+        this.playPool({ paths, gain: 0.8, pitch: 1, pitchVar: 0.03 }, "impact");
+        return;
+      }
+    }
+    if (fallback && this.vfs.exists(fallback)) this.playPool({ paths: [fallback], gain: 0.8, pitch: 1, pitchVar: 0.03 }, "impact");
+  }
+
+  private soundCache = new Map<string, string[]>();
+  /** Resolve WAV variants living in a model's own folder, keyed off the model base
+   *  and the folder name (WC3 naming isn't consistent — ArrowMissile.mdx →
+   *  ArrowImpact.wav uses the folder name, HealTarget.mdx → HealTarget.wav the base). */
+  private folderSounds(kind: string, art: string, suffixes: string[]): string[] {
+    const cacheKey = `${kind}|${art}`;
+    const cached = this.soundCache.get(cacheKey);
+    if (cached) return cached;
+    const out: string[] = [];
+    const m = /^(.*[\\/])([^\\/]+)\.mdx$/i.exec(art);
+    if (m) {
+      const folder = m[1];
+      const base = m[2];
+      const folderName = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? base;
+      for (const b of base === folderName ? [base] : [base, folderName]) {
+        for (const s of suffixes) {
+          const p = `${folder}${b}${s}.wav`;
+          if (this.vfs.exists(p)) out.push(p);
+        }
+        if (out.length) break;
+      }
+    }
+    this.soundCache.set(cacheKey, out);
+    return out;
+  }
+
   /** Play a named interface sound from UISounds.slk (button click, place building,
    *  rally point, error, …) as a fire-and-forget one-shot. */
   playUi(name: string): void {

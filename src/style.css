@@ -381,7 +381,7 @@ body.in-game .menu-panel { display: none; }
    top-left corner, with an idle-count in its bottom-right (WC3 console). */
 .hud-idle-worker {
   position: absolute;
-  bottom: calc(100% + 3px);
+  bottom: calc(100% + 42px); /* sit well above the minimap */
   left: 0;
   width: 46px;
   height: 46px;
@@ -547,7 +547,26 @@ body.in-game .menu-panel { display: none; }
   inset: 0;
   box-shadow: inset 0 0 0 1px rgba(224, 80, 70, 0.7);
 }
-.hud-cmd { position: relative; }
+.hud-cmd { position: relative; overflow: hidden; }
+.hud-cmd-label { pointer-events: none; }
+/* Radial cooldown sweep (clockwise dark wedge) + seconds count over an ability. */
+.hud-cmd-cd {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.hud-cmd-cd-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 4px #000;
+}
 
 /* Build-placement ghost: a box under the cursor, green = valid, red = blocked. */
 .build-ghost {
@@ -570,6 +589,17 @@ body.in-game .menu-panel { display: none; }
    - .reticle: the real WC3 target reticle (row 2 of the race cursor sheet),
      shown only while an order is armed (Move/Attack/Patrol/…).
    - .hand: the race hand cursor, tinted, shown while merely hovering a unit. */
+/* Directional edge-scroll cursor: an arrow at the pointer pointing the pan way. */
+.scroll-arrow {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 8;
+  font-size: 30px;
+  line-height: 1;
+  color: #fff8d8;
+  text-shadow: 0 0 3px #000, 0 1px 3px #000, 0 0 8px rgba(255, 220, 120, 0.6);
+}
 .order-reticle {
   position: fixed;
   width: 32px;
@@ -634,17 +664,87 @@ body.in-game .menu-panel { display: none; }
   border-radius: 6px;
 }
 .hud-sel-name { font-size: 17px; color: #f4e8c8; text-align: center; margin-bottom: 6px; letter-spacing: 0.3px; }
-.hud-sel-sub { font-size: 12px; color: #c9a24a; text-align: center; margin: -2px 0 6px; }
+.hud-sel-sub { font-size: 12px; color: #c9a24a; text-align: center; margin: -2px 0 4px; }
+/* Hero XP / summon-timer bar — the label (level + experience, or "Summoned Unit
+   (Ns)") sits INSIDE the bar, centred over the purple (XP) / green (summon) fill. */
+.hud-xpbar {
+  position: relative;
+  height: 18px;
+  margin: 1px 6px 7px;
+  background: #150a22;
+  border: 1px solid #3a2650;
+  border-radius: 3px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+.hud-xpbar.summon {
+  background: #062024;
+  border-color: #1f4d55;
+}
+.hud-xpbar-fill {
+  position: absolute;
+  inset: 0;
+  width: 0;
+  background: linear-gradient(to bottom, #c07af0 0%, #8a3fd0 50%, #6a1fb0 100%);
+  box-shadow: 0 0 6px rgba(160, 90, 230, 0.55);
+  transition: width 0.25s ease-out;
+}
+.hud-xpbar.summon .hud-xpbar-fill {
+  background: linear-gradient(to bottom, #7ff0ff 0%, #22c8e0 50%, #12a0c0 100%);
+  box-shadow: 0 0 6px rgba(90, 220, 240, 0.55);
+}
+.hud-xpbar-text {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #f4ecff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.9);
+}
 .hud-sel-stats { font-size: 12px; color: #cfc7ab; line-height: 1.5; }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
-/* Attack/armor rows with real WC3 infocard type icons. */
-.hud-stat-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-.hud-stat-icon { width: 24px; height: 24px; flex: none; background-size: 100% 100%; background-repeat: no-repeat; }
-/* Hero STR/AGI/INT with attribute icons; the primary attribute is highlighted. */
-.hud-sel-attrs { display: flex; gap: 16px; margin-top: 5px; }
-.hud-attr { display: flex; align-items: center; gap: 5px; color: #cfc7ab; }
-.hud-attr-icon { width: 20px; height: 20px; background-size: 100% 100%; background-repeat: no-repeat; }
-.hud-attr.primary span { color: #f4e8c8; font-weight: 700; }
+/* Two columns (WC3 info panel): damage/armor blocks (left), hero attributes (right). */
+.hud-stat-cols { display: flex; gap: 18px; align-items: flex-start; }
+.hud-stat-col { display: flex; flex-direction: column; gap: 6px; }
+.hud-stat-icon { width: 26px; height: 26px; flex: none; background-size: 100% 100%; background-repeat: no-repeat; }
+/* A stat block: [icon] then "Damage:" over "67 - 76 +36". */
+.hud-stat-block { display: flex; align-items: center; gap: 8px; }
+.hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; }
+.hud-stat-label { font-size: 12px; color: #e0b93a; font-weight: 600; }
+.hud-stat-value { font-size: 13px; color: #eae2c4; }
+.stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura bonus */
+/* Hero attributes: one primary icon beside three value lines. */
+.hud-attr-col { display: flex; align-items: center; gap: 8px; }
+.hud-attr-primary-icon { width: 30px; height: 30px; }
+.hud-attr-lines { display: flex; flex-direction: column; line-height: 1.25; }
+.hud-attr-line { font-size: 12px; color: #eae2c4; }
+.hud-attr-line .attr-name { color: #e0b93a; }
+.hud-attr-line.primary { font-weight: 700; color: #fff8e0; }
+.hud-attr-line.primary .attr-name { color: #f4d060; }
+/* Buff / aura / debuff status icons under the stats. */
+.hud-sel-status { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.hud-status-icon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-color: #0c0c0a;
+  border: 1px solid #2f6a3a; /* green = beneficial */
+  border-radius: 2px;
+  font-size: 9px;
+  color: #cfc7ab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+}
+.hud-status-icon.harmful { border-color: #9a3a34; } /* red = debuff */
 
 /* Multi-selection grid: up to 24 unit icons (8 per row), grouped by type, each
    with an HP bar; the focused sub-group has a gold outline. */

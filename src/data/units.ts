@@ -54,9 +54,15 @@ export interface UnitDef {
   strength: number;
   agility: number;
   intelligence: number;
+  strPerLevel: number; // hero attribute growth per level (STRplus/AGIplus/INTplus)
+  agiPerLevel: number;
+  intPerLevel: number;
   primaryAttr: string;
   level: number;
-  abilities: string[];
+  abilities: string[]; // innate abilities (UnitAbilities.slk abilList)
+  heroAbilities: string[]; // learnable hero abilities in slot order (heroAbilList)
+  autoAbility: string; // default autocast ability id (UnitAbilities.slk "auto"), "" = none
+  classification: string[]; // UnitBalance "type": mechanical/undead/peon/ancient/… (lowercased)
 }
 
 interface Row {
@@ -219,12 +225,18 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       strength: attr.STR,
       agility: attr.AGI,
       intelligence: attr.INT,
+      strPerLevel: b ? num(b, "STRplus", 0) : 0,
+      agiPerLevel: b ? num(b, "AGIplus", 0) : 0,
+      intPerLevel: b ? num(b, "INTplus", 0) : 0,
       primaryAttr: isHero ? primary : "",
       // Heroes spawn at level 1. UnitBalance's `level` for heroes is 5 (their
       // creep-threat/bounty level), which wrongly showed newly-trained heroes as
       // Level 5. With no XP/leveling system yet, pin trained heroes to level 1.
       level: isHero ? 1 : b ? num(b, "level", 0) : 0,
       abilities: a ? (str(a, "abilList") || "").split(",").filter(Boolean) : [],
+      heroAbilities: a ? (str(a, "heroAbilList") || "").split(",").filter(Boolean) : [],
+      autoAbility: a ? str(a, "auto") : "",
+      classification: b ? (str(b, "type") || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean) : [],
     });
   }
   return new UnitRegistry(defs);

@@ -14,18 +14,49 @@ incomplete; the MPQ file list settled it).
 | [w3x-parser](https://github.com/voces/w3x-spec) | `.w3m/.w3x` format reference | |
 | [StormLib](https://github.com/ladislav-zezula/StormLib) / [CascLib](https://github.com/ladislav-zezula/CascLib) | MPQ/CASC correctness reference | CASC only matters for §9 |
 | [Nowar-Sans-War3](https://github.com/nowar-fonts/Nowar-Sans-War3) | Multi-language game font (Friz Quadrata replacement), OFL 1.1 | Bundled at `public/fonts/NowarSans.ttf` |
+| [Liquipedia Warcraft](https://liquipedia.net/warcraft/Main_Page) | **Primary engine-behavior reference** — attributes, XP, damage/armor, corpses, per-ability mechanics with exact numbers | Reachable via WebSearch; cross-check numbers against the MPQ SLKs |
+| [warcraft3.info](https://warcraft3.info/) | Engine-mechanics articles (hero XP, damage, etc.) | JS-rendered — WebFetch returns only the title; read via WebSearch summaries |
 
 ## Researching game mechanics
 
 For gameplay semantics that aren't in any file format (turn rate, damage timing, acquisition,
-upkeep, …), **search Hive Workshop threads first** — the modding community has empirically reverse-
-engineered most mechanics. Example: turn rate semantics came from
+upkeep, …), **check [Liquipedia's Warcraft wiki](https://liquipedia.net/warcraft/Main_Page) and
+Hive Workshop threads first** — both have empirically documented most mechanics. Example: turn rate
+semantics came from
 [How does Turn Rate work? (thread 129619)](https://www.hiveworkshop.com/threads/how-does-turn-rate-work.129619/)
 — the object-editor value is radians per 0.03 s internal frame, capped at ~0.2 rad/frame.
 
+**[Liquipedia Warcraft](https://liquipedia.net/warcraft/Main_Page) is a top-tier source for how the
+engine behaves** — attributes, experience, damage/armor tables, upkeep, day/night, and per-ability
+mechanics are all documented with exact numbers. Especially useful pages:
+[Hero](https://liquipedia.net/warcraft/Hero) · [Experience](https://liquipedia.net/warcraft/Experience)
+· [Corpse](https://liquipedia.net/warcraft/Corpse) · [Abilities index](https://liquipedia.net/warcraft/Abilities).
+Verified from it (2026-07-03): each Agility point = +0.30 armor & +attack speed; each Intelligence
+point = +15 mana & +0.05 mana-regen/sec; each Strength point = +25 HP & +0.05 HP-regen/sec; a hero's
+primary attribute also adds +1 base damage/point. Hero XP to **reach** level L = `100·(L(L+1)/2 − 1)`
+(200/500/900/1400/2000…; increment to next level = 100·(L+1)); creeps grant reduced XP via the
+`[80,70,60,50,0]%` reduction table indexed by the killing hero's level.
+
+**Auras** (verified from the MPQ `AbilityData.slk` + [Liquipedia Aura](https://liquipedia.net/warcraft/Aura),
+2026-07-03): all are passive, affect the caster + nearby allies in `area1` (900), non-stacking (highest
+wins). Codes → effect (dataA per level): **Devotion `AHad`** +armour (1.5/3/4.5); **Brilliance `AHab`**
++mana-regen/sec (0.75/1.5/2.25) — note the Archmage's aura is `AHab`, `AHbn` is *Banish*; **Endurance
+`AOae`** +move & attack speed % (0.1/0.2/0.3); **Trueshot `AEar`** +ranged attack-damage % (0.1/0.2/0.3,
+ranged units only); **Unholy `AUau`** +move speed % (dataA) & +hp-regen/sec (dataB 0.5/…); **Vampiric
+`AUav`** melee life-steal % (0.15/0.3/0.45); **Command `AOac`** +attack-damage % (0.1); **Thorns `AEah`**
+returns melee damage % to the attacker (0.1/0.2/0.3). Implemented via the generic `AURA_BUFFS` table
+(`src/sim/spells.ts`) + `applyAuras`/`recomputeStats` (`src/sim/world.ts`).
+
+**[warcraft3.info](https://warcraft3.info/) articles** are another solid engine-behavior source. Its
+[Hero Experience](https://warcraft3.info/articles/232/hero-experience-in-warcraft-3-how-it-works)
+article pins the XP-award side (verified 2026-07-03): a slain **level-1 unit grants 25 XP**, and a
+level-L unit grants `XP(L-1) + 5·(L+1)` → 25/40/60/85/115… XP is **shared among the killing side's
+heroes within 1200 range** of the dying unit (if none are in range it's awarded globally with no
+distance loss); **summoned units give 50%**; creeps use the reduction table above.
+
 Practical notes:
 - hiveworkshop.com blocks direct fetching (403) — go through a web search engine and read cached
-  summaries, or search for the thread title.
+  summaries, or search for the thread title. Liquipedia pages are reachable via WebSearch too.
 - Warsmash's source is the next stop: it encodes many of these findings as code.
 - When a mechanic matters for gameplay feel, write the source (thread/repo) next to the constant in
   the code.

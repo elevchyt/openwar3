@@ -17,6 +17,113 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Abilities & spells system — hero spells, unit skills, XP/leveling, corpses (2026-07-03, latest+27)**
+  — A **modular, data-driven ability engine** dispatched on each ability's base **`code`** (so custom-map
+  abilities that copy a standard one Just Work). **New `src/data/abilities.ts`** (`AbilityRegistry` from
+  `AbilityData.slk` + per-race `*AbilityFunc/Strings.txt` — per-level cost/cool/dur/rng/area/dataA-I,
+  icon/tooltip/hotkey/buttonpos, effect-art paths, `KNOWN_ABILITIES` target-type map). **New
+  `src/sim/spells.ts`** = the `code`→effect handler table over a small `SpellApi`. **Sim runtime in
+  `world.ts`**: mana/HP regen, a **buff/effect system** (stun, slow, invuln, armour/manaRegen/damage
+  bonuses, HoT/DoT; group-deduped auras; `recomputeStats` derives effective armour/speed/cooldown/
+  damage/regen each tick), **casting orders** (`issueCast` → walk into range → cast point → fire effect
+  or launch a spell missile that runs the effect on impact), and **passive auras** re-applied to in-range
+  allies. **Spells implemented** (representative of every archetype): Holy Light, Storm Bolt (missile +
+  stun), Thunder Clap (PBAoE + slow), Divine Shield (self-invuln), Avatar (ult self-buff), Resurrection
+  (ult, raises friendly **corpses**), Devotion & Brilliance Auras, Death Coil, Blizzard (channelled field),
+  Bash (on-hit proc), Priest Heal (autocast), Dispel Magic, Inner Fire, Slow, Summon Water Elemental
+  (deferred summon-request → renderer). **Hero XP + leveling** (Liquipedia/warcraft3.info formulas):
+  kills award XP (`50·(L²+L−2)` thresholds; per-kill 25/40/60/85…; creep `[80,70,60,50,0]%` table; 1200
+  share range; summons ×0.5), level-up grows STR/AGI/INT (→ HP 25/STR, mana 15/INT, armour 0.3/AGI,
+  +1 dmg/primary), fully heals, grants a **skill point**; ultimates locked to hero level 6. **Corpses**
+  (Liquipedia): dead organic units leave a persistent, targetable corpse that decays flesh→bone→gone
+  (2 s + 88 s), consumed by Resurrection; heroes hold their death pose (no decay); mechanical/summons/
+  buildings leave none. **UI**: hero command card shows learned spells (basics cols 0–2 / ult col 3 on
+  the bottom row) + a **Learn Skill page**; casting arms a unit/point target reticle (`orderMode="cast"`)
+  or fires no-target instantly; autocast toggles; HUD hero sub-line shows Level + XP-into-level + skill
+  points. **Renderer**: cast animations (throw/slam/spell tags), spell effect models, level-up nova,
+  summon/raise model creation, corpse decay driven by the sim clock. **Verified**: 38 headless sim checks
+  pass (spawn stats, learn+cast Holy Light/Storm Bolt/Thunder Clap/Death Coil, XP→level→skillpoint,
+  ultimate lock, corpses, Devotion aura, Divine Shield immunity, Dispel, autocast Heal, Water Elemental
+  summon, Resurrection, Slow); `tsc` + `vite build` clean. **Post-test fixes (47 checks total)**: the
+  real controller built `new SimWorld(grid)` WITHOUT the ability registry → the whole system silently
+  no-op'd in-browser (learning/casting/auras) — now wired; per-level tooltip parsing was splitting on
+  quote pairs (returned commas) → now splits on the `","` boundary + resolves `<code,Field>` placeholders
+  to real numbers; Learn Skill button got a hotkey (L) + real description; learn cards moved to the TOP
+  row with a "+" affordance; **dead-unit models now sink into the ground over 3 s then delete** (corpse
+  entity creation unchanged). **Adversarial-review fixes**: buff de-dup now keys on (group,kind) so
+  Avatar/Inner Fire keep BOTH their armour and damage buffs; spell damage bypasses the armor value (WC3);
+  expired summons leave no corpse; Blizzard captures the caster's team so it can't hit allies after the
+  caster dies; a stun pauses (not wipes) a move so it resumes. **Perf**: sim tick is 0.016 ms/tick for 60
+  idle units — the reported selection FPS drop is render-side (the per-frame 3D portrait model load), not
+  the ability system. **Feedback round 2 fixes**: **ranged attack sounds** — all ranged units carry
+  `weap1="_"` (no melee combat-sound row), so launch + impact SFX are now resolved DATA-DRIVENLY from the
+  missile art folder (`SoundBoard.playMissile`: FireBall→…Death/…Launch1-3.wav, Arrow→ArrowImpact/
+  ArrowAttack1.wav, Water→…Missile1-3.wav) and played on projectile spawn (launch) + landed hit (impact)
+  for EVERY unit; **hero XP bar** — a purple progress bar (`.hud-xpbar`) under the level line (WC3
+  reference); **rally-to-tree/mine** now flashes the same yellow ring + tree colorize pulse as a gather
+  order (`rallyFeedback`); **summons** spawn IN FRONT of the caster on the nearest free tile (`summonSpot`)
+  and play their **birth clip** before acting (sim `spawning` lock + `beginSummonBirth`); **idle-worker
+  button** raised above the minimap; **portrait models cached** by path (mitigates the selection spike on
+  re-selection). **Feedback round 3**: **hero XP bar** now shows "Level N  into/span" INSIDE a taller
+  bar; **skill cooldowns** draw a clockwise dark radial sweep (`conic-gradient`) + a seconds count over the
+  command button (`updateCooldownOverlays`, per-frame, unaffected by the cmdKey diff); **summon facing bug**
+  fixed — a no-target self-cast no longer spins the caster to face east (`atan2(0,0)`), so the summon
+  appears where the caster looks; **summoned units** show a green "Summoned Unit (Ns)" timer bar (sim
+  `summonMax`); **Shift+Tab** reverses the group sub-group cycle; **double-clicking a group icon** selects
+  only that unit (`selectSingle`); **armed skills can target group icons** through the console
+  (`tryTargetArmedAt`) and the reticle follows the cursor over the HUD; **food is reserved when training
+  begins** (queued units count toward supply; training blocks at the food cap); **build ghost** now pins
+  the Birth clip to its LAST frame (finished-building state) instead of cold-jumping to "Stand", which left
+  farm/barracks partially built; **idle-worker icon** raised further. **Feedback round 4**: **cast timing**
+  — spells now fire at a **cast point** (`SPELL_CAST_POINT` 0.4 s, or the channel time) so the caster's
+  spell animation plays first, THEN the effect lands; **spell cast sounds** resolved data-drivenly from the
+  effect model's folder (`SoundBoard.playSpellSound` — HolyBolt.wav / HealTarget.wav / Avatar.wav / …, with
+  a curated fallback for art-less spells like Divine Shield); **lumber chop sync** — the chop clip is now
+  re-triggered once per chop (`chopSeq`, like the attack swing) so the swing stays in phase with the chop
+  SFX instead of free-running; **edge-of-screen camera scrolling** with an 8-way directional arrow cursor
+  (gated to over-the-map, not the console); **build ghost** switched to the "Stand" clip pinned to a fixed
+  frame (per request). **README rewritten** to the current playable-melee state. **Full aura set (feedback
+  round 5)**: the generic `AURA_BUFFS` table (`src/sim/spells.ts`) + `applyAuras` now cover all 8 WC3
+  auras, data-verified against the MPQ + Liquipedia — **Devotion** (armour), **Brilliance** (`AHab`, mana
+  regen — corrected from the wrong `AHbn`=Banish), **Endurance** (move+attack speed), **Trueshot** (ranged
+  damage %, ranged-only filter), **Unholy** (move speed + hp regen), **Vampiric** (melee life-steal),
+  **Command** (damage %), **Thorns** (returns melee damage). New buff kinds `damagePct/hpRegen/lifesteal/
+  thorns` in `recomputeStats`; Vampiric/Thorns integrated into melee `dealDamage` (which now returns the
+  HP dealt). 57 headless sim checks pass (incl. 6 aura tests: range fade, ranged-only, life-steal, thorns
+  return, regen). **Feedback round 6**: **ability command-card slots** now use each ability's REAL
+  `buttonpos`/`researchbuttonpos` from the data (was computed → Brilliance/Water Elemental were swapped;
+  learn page correctly on row 0); **build ghost** — vertex-colour tint (the "shader") removed so models
+  render at their true look, blocked-placement shown by a red box overlay; **ghost switch fixed** — a new
+  build shortcut drops the previously-armed ghost; **Shift+N control-group append fixed** (keyed off
+  `e.code` = `Digit1` — with Shift, `e.key` is `"!"`, so it silently did nothing); **group-icon single
+  click** now selects just that unit; **buff/aura/debuff status row** added under the unit stats (icons
+  resolved from the source ability, red border = debuff), and **STR/AGI/INT moved to vertical stat rows**
+  (like damage/armor); the hero **"N skill points" label removed**. `tsc`/`vite build` clean, 57 sim
+  checks pass. **Feedback round 7**: **build ghost** now driven from the frame loop (appeared only on mouse
+  move before); **summoned-unit bar** recoloured cyan; **first hero is free** of gold/lumber (only food) per
+  WC3 melee (`freeHeroUsed` per player); the **Attack command force-attacks** friendly/own units + buildings
+  (`issueAttack(force)` + `force` on the attack order); **STR/AGI/INT moved to a right-hand column** beside
+  damage/armor (`hud-stat-cols`); **aura ground-effect models** now render under every affected unit
+  (`updateAuraEffects` pool: Devotion/Command/Trueshot/Unholy/Vampiric/Thorns rings, from the MPQ);
+  **projectiles** confirmed already straight-line (no pathing); **autocast** now also fires during
+  attack-move and **resumes** the attack-move/follow afterward (`PendingCast.resume`), so Priests heal on
+  the march. 62 sim checks pass (+ force-attack, autocast-resume). **In-browser confirmation still needed**
+  for the aura rings, two-column stats, force-attack, free hero, ghost, and autocast feel.
+- **Feedback round 8 (2026-07-03, latest+28)** — **Blizzard channel fixed**: its effect art is blank in
+  the data, so the shard model (`BlizzardTarget.mdx`) is now a curated `FIELD_ART` fallback, **scattered**
+  at random points across the area each wave; channelled spells now hold the caster for the field duration
+  (`PendingCast.channelLeft` + `channelDuration`), so it **can't self-interrupt** by auto-attacking (order
+  stays "cast"; manual orders still break it). **AoE cast circle** at the cursor for point-target area
+  spells (Blizzard/Dispel), sized to the ability's `area` (reuses the ground-ring model; the race-specific
+  `SpellAreaOfEffect.blp` texture swap is a follow-up). **Hero stats HUD rebuilt to match the reference**:
+  two columns — Damage/Armor blocks (icon + "Label:" over "base +bonus") on the left, and a single
+  **primary-attribute icon** beside the three attribute value lines on the right; damage/armour now split
+  BASE vs a green **"+N" buff/aura bonus** (`bonusArmor`/`bonusDamage` derived in `recomputeStats`). 66
+  headless sim checks pass (incl. the Blizzard channel). **In-browser confirmation needed** for the AoE
+  circle, Blizzard shards + channel feel, and the new hero stat panel.
+  **Next**: Blizzard channel feel + Mass Teleport; more races' hero kits (Orc/NE/Undead); autocast for the
+  full caster roster; corpse-consuming undead spells (Raise Dead, Cannibalize, Meat Wagon, Death Pact);
+  non-hero mana-regen value + AGI→attack-speed; item/inventory abilities; balance the XP-per-kill table.
 - **Feedback pass 13 — F10 game menu, pause, exit-to-menu, keyboard lock (2026-07-03, latest+26)**
   — **F10 Game Menu** (`src/ui/gameMenu.ts`): a centred WC3-style modal (Save/Load/Options/Help/Tips
   disabled placeholders; **End Game**, **Return to Game** wired) that **pauses** the sim (mapViewer

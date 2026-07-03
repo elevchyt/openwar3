@@ -1,0 +1,282 @@
+import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
+import type { DataSource } from "../vfs/types";
+
+// Ability data registry (plan §4, spells slice). Merges WC3's AbilityData.slk
+// (numbers), per-race AbilityFunc.txt (icon/effect art/buttonpos) and
+// AbilityStrings.txt (name/tooltip/hotkey) into one lookup keyed by ability id.
+//
+// The crucial field for modularity is **`code`** — the base ability an object
+// derives from. A custom map's "Super Holy Light" gets a new alias id but keeps
+// `code=AHhb`, so the sim dispatches its behaviour off `code`, never the alias.
+// That is what lets us translate arbitrary maps without per-map code.
+
+/** How an ability is aimed. Derived from its `code` (see KNOWN_ABILITIES). */
+export type TargetType = "none" | "unit" | "point" | "passive";
+
+/** Per-level numbers pulled from AbilityData's level-indexed columns. */
+export interface AbilityLevel {
+  cost: number; // mana cost (cost1..)
+  cooldown: number; // cool1..
+  duration: number; // dur1.. — effect duration on normal units
+  heroDuration: number; // herodur1.. — (shorter) duration on heroes
+  castRange: number; // rng1.. — how close the caster must be (0 = self/no-target)
+  area: number; // area1.. — AoE radius
+  castTime: number; // cast1.. — cast point / channel flag
+  /** dataa1..datai1 as [a,b,c,d,e,f,g,h,i] — meaning is per-ability (see spells). */
+  data: number[];
+  buffs: string[]; // buffid1.. — buff/effect codes this rank applies
+  summon: string; // unitid1.. — unit summoned (Water Elemental etc.)
+}
+
+export interface AbilityDef {
+  id: string; // alias (row id, e.g. "AHhb" or a custom "A000")
+  code: string; // base ability code — the dispatch key
+  isHero: boolean; // learnable hero ability (hero=1)
+  isItem: boolean;
+  levels: number; // max learnable ranks
+  reqLevel: number; // hero level required for rank 1 (ultimates: 6)
+  levelSkip: number; // hero levels between ranks (basics: 2 → learn at 1,3,5)
+  target: TargetType; // how it's cast (from KNOWN_ABILITIES; "passive" if unknown)
+  targetFlags: string[]; // targs1 — air/ground/enemy/friend/organic/notself/…
+  autocast: boolean; // can toggle autocast (Heal, Slow, …)
+  name: string;
+  icon: string; // command-button BLP path (art)
+  hotkey: string; // cast/learn hotkey letter
+  buttonX: number; // command-card column when active (buttonpos)
+  buttonY: number; // command-card row when active
+  learnX: number; // learn-skill page column (researchbuttonpos — usually row 0)
+  learnY: number; // learn-skill page row
+  research: boolean; // shown in the learn-skill page (hero ability)
+  tips: string[]; // per-level short tooltips (Tip)
+  uberTips: string[]; // per-level long tooltips (Ubertip)
+  levelData: AbilityLevel[]; // index 0 = rank 1
+  // Effect model paths (from AbilityFunc) — the renderer plays these on cast.
+  missileArt: string; // travelling projectile (Storm Bolt hammer, Death Coil orb)
+  targetArt: string; // effect attached to the target (Holy Light burst, Heal)
+  casterArt: string; // effect attached to the caster (Thunder Clap ring)
+  specialArt: string; // extra one-shot effect
+  areaArt: string; // AoE ground effect (Blizzard, Rain of Fire)
+  animNames: string[]; // caster animation tags (AbilityFunc "animnames": spell,throw,slam…)
+}
+
+/** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
+ *  sim how to aim it; `autocast` marks abilities that can toggle autocasting.
+ *  Anything not listed here loads as data but is treated as passive/uncastable
+ *  (so unknown custom abilities degrade gracefully rather than crash). */
+export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: boolean }> = {
+  // --- Human heroes ---
+  AHhb: { target: "unit" }, // Holy Light — heal ally / smite undead
+  AHtb: { target: "unit" }, // Storm Bolt — hammer: damage + stun
+  AHtc: { target: "none" }, // Thunder Clap — PBAoE damage + slow
+  AHds: { target: "none" }, // Divine Shield — self invulnerability
+  AHav: { target: "none" }, // Avatar — MK ult self-buff (HP/damage/immunity)
+  AHre: { target: "none" }, // Resurrection — Paladin ult, raise dead allies from corpses
+  // --- auras (passive, affect the caster + nearby allies) ---
+  AHad: { target: "passive" }, // Devotion Aura — +armour
+  AHab: { target: "passive" }, // Brilliance Aura — +mana regen (Archmage)
+  AOae: { target: "passive" }, // Endurance Aura — +move & attack speed
+  AEar: { target: "passive" }, // Trueshot Aura — +ranged attack damage
+  AUau: { target: "passive" }, // Unholy Aura — +move speed & hp regen
+  AUav: { target: "passive" }, // Vampiric Aura — melee life steal
+  AOac: { target: "passive" }, // Command Aura — +attack damage
+  AEah: { target: "passive" }, // Thorns Aura — return melee damage
+  AHwe: { target: "none" }, // Summon Water Elemental
+  AHbz: { target: "point" }, // Blizzard — channelled point AoE waves
+  AHbh: { target: "passive" }, // Bash — chance to stun on attack
+  // --- Undead ---
+  AUdc: { target: "unit" }, // Death Coil — heal undead / harm living
+  // --- Unit casters ---
+  Ahea: { target: "unit", autocast: true }, // Priest Heal
+  Adis: { target: "point" }, // Dispel Magic — clear buffs, damage summons
+  Ainf: { target: "unit", autocast: true }, // Inner Fire — +armour +damage
+  Aslo: { target: "unit", autocast: true }, // Slow (Sorceress)
+};
+
+interface Row {
+  string(key: string): string | undefined;
+}
+
+export class AbilityRegistry {
+  constructor(private defs: Map<string, AbilityDef>) {}
+  get(id: string): AbilityDef | undefined {
+    return this.defs.get(id);
+  }
+  has(id: string): boolean {
+    return this.defs.has(id);
+  }
+  get size(): number {
+    return this.defs.size;
+  }
+  all(): AbilityDef[] {
+    return [...this.defs.values()];
+  }
+}
+
+const FUNC_FILES = [
+  "Units\\HumanAbilityFunc.txt",
+  "Units\\OrcAbilityFunc.txt",
+  "Units\\UndeadAbilityFunc.txt",
+  "Units\\NightElfAbilityFunc.txt",
+  "Units\\NeutralAbilityFunc.txt",
+  "Units\\CommonAbilityFunc.txt",
+  "Units\\ItemAbilityFunc.txt",
+  "Units\\CampaignAbilityFunc.txt",
+];
+const STRING_FILES = FUNC_FILES.map((f) => f.replace("Func", "Strings"));
+
+export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
+  const defs = new Map<string, AbilityDef>();
+  const bytes = vfs.rawBytes("Units\\AbilityData.slk");
+  if (!bytes) return new AbilityRegistry(defs);
+  const data = new MappedData(new TextDecoder("windows-1252").decode(bytes));
+
+  const func = new MappedData();
+  for (const p of FUNC_FILES) {
+    const b = vfs.rawBytes(p);
+    if (b) func.load(new TextDecoder("windows-1252").decode(b));
+  }
+  const strs = new MappedData();
+  for (const p of STRING_FILES) {
+    const b = vfs.rawBytes(p);
+    if (b) strs.load(new TextDecoder("windows-1252").decode(b));
+  }
+
+  for (const id of Object.keys(data.map)) {
+    const r = data.getRow(id) as Row | undefined;
+    if (!r) continue;
+    const code = str(r, "code") || id;
+    // Skip rows with no real code (SLK header/comment artefacts).
+    if (!code || code.length < 2) continue;
+    const levels = Math.max(1, num(r, "levels", 1));
+    const f = func.getRow(id) as Row | undefined;
+    const s = strs.getRow(id) as Row | undefined;
+    const [bx, by] = f ? parseButtonPos(str(f, "buttonpos") || str(f, "researchbuttonpos")) : [0, 0];
+    const [lx, ly] = f ? parseButtonPos(str(f, "researchbuttonpos") || str(f, "buttonpos")) : [0, 0];
+    const known = KNOWN_ABILITIES[code];
+
+    const levelData: AbilityLevel[] = [];
+    for (let L = 1; L <= levels; L++) {
+      levelData.push({
+        cost: num(r, `cost${L}`, levelData[L - 2]?.cost ?? 0),
+        cooldown: num(r, `cool${L}`, levelData[L - 2]?.cooldown ?? 0),
+        duration: num(r, `dur${L}`, levelData[L - 2]?.duration ?? 0),
+        heroDuration: num(r, `herodur${L}`, levelData[L - 2]?.heroDuration ?? 0),
+        castRange: num(r, `rng${L}`, levelData[L - 2]?.castRange ?? 0),
+        area: num(r, `area${L}`, levelData[L - 2]?.area ?? 0),
+        castTime: num(r, `cast${L}`, levelData[L - 2]?.castTime ?? 0),
+        data: "abcdefghi".split("").map((c) => num(r, `data${c}${L}`, NaN)),
+        buffs: (str(r, `buffid${L}`) || "").split(",").map((x) => x.trim()).filter(Boolean),
+        summon: str(r, `unitid${L}`),
+      });
+    }
+
+    defs.set(id, {
+      id,
+      code,
+      isHero: num(r, "hero", 0) === 1,
+      isItem: num(r, "item", 0) === 1,
+      levels,
+      reqLevel: num(r, "reqlevel", 0),
+      levelSkip: num(r, "levelskip", 0),
+      target: known ? known.target : "passive",
+      targetFlags: (str(r, "targs1") || "").split(",").map((x) => x.trim()).filter((x) => x && x !== "_"),
+      autocast: !!known?.autocast,
+      name: (s && str(s, "Name")) || id,
+      icon: f ? str(f, "art") : "",
+      hotkey: (s ? (str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
+      buttonX: bx,
+      buttonY: by,
+      learnX: lx,
+      learnY: ly,
+      research: num(r, "hero", 0) === 1,
+      tips: splitList(s ? str(s, "Tip") : ""),
+      uberTips: splitList(s ? str(s, "Ubertip") : ""),
+      levelData,
+      missileArt: mdlPath(f ? str(f, "Missileart") : ""),
+      targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
+      casterArt: mdlPath(f ? str(f, "Casterart") : ""),
+      specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
+      areaArt: mdlPath(f ? str(f, "Areaeffectart") : ""),
+      animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+    });
+  }
+  return new AbilityRegistry(defs);
+}
+
+/** Value of a tooltip-referenced field on a level (`DataA1`, `Dur1`, `Cost1`, …).
+ *  The trailing level digit is ignored — we read the field for the shown rank. */
+export function tipFieldValue(lvl: AbilityLevel, field: string): number | null {
+  const f = field.toLowerCase().replace(/\d+$/, "");
+  const dataIdx = "abcdefghi".indexOf(f.replace(/^data/, ""));
+  if (f.startsWith("data") && dataIdx >= 0) return lvl.data[dataIdx] ?? null;
+  switch (f) {
+    case "dur":
+      return lvl.duration;
+    case "herodur":
+      return lvl.heroDuration;
+    case "cost":
+      return lvl.cost;
+    case "cool":
+      return lvl.cooldown;
+    case "area":
+      return lvl.area;
+    case "rng":
+      return lvl.castRange;
+    default:
+      return null;
+  }
+}
+
+/** Hero level required to learn a given rank (1-based) of an ability. Basics use
+ *  a 2-level skip (ranks at hero 1/3/5); ultimates carry reqLevel 6 directly. */
+export function requiredHeroLevel(def: AbilityDef, rank: number): number {
+  const skip = def.levelSkip > 0 ? def.levelSkip : 2;
+  return Math.max(1, def.reqLevel) + skip * (rank - 1);
+}
+
+// AbilityStrings pack per-level tooltips as a quoted, comma-separated list
+// `"level 1","level 2","level 3"` — but the SLK reader strips the OUTER quotes,
+// leaving `level 1","level 2","level 3`. Split on the `","` separator (not quote
+// pairs — that matched the `","` gap and returned commas) and trim stray quotes.
+function splitList(v: string): string[] {
+  if (!v) return [];
+  return v
+    .split(/",\s*"/)
+    .map((p) => cleanTip(p.replace(/^"|"$/g, "")))
+    .filter(Boolean);
+}
+
+function cleanTip(v: string): string {
+  return v
+    .replace(/\|c[0-9a-fA-F]{8}/g, "")
+    .replace(/\|r/g, "")
+    .replace(/\|n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Effect-art fields are ".mdl" model paths (comma-lists sometimes). Take the
+// first, normalise to the compiled ".mdx" the MPQ actually ships.
+function mdlPath(v: string): string {
+  if (!v) return "";
+  const pick = v.split(",")[0]?.trim();
+  if (!pick) return "";
+  const p = pick.replace(/\//g, "\\").replace(/\.mdl$/i, "");
+  return /\.mdx$/i.test(p) ? p : `${p}.mdx`;
+}
+
+function parseButtonPos(v: string): [number, number] {
+  const m = /(\d+)\s*,\s*(\d+)/.exec(v || "");
+  return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : [0, 0];
+}
+
+function str(row: Row, key: string): string {
+  const v = row.string(key);
+  return v === undefined || v === "-" ? "" : v;
+}
+function num(row: Row, key: string, fallback: number): number {
+  const v = row.string(key);
+  if (v === undefined || v === "-" || v === "") return fallback;
+  const n = parseFloat(v);
+  return Number.isNaN(n) ? fallback : n;
+}

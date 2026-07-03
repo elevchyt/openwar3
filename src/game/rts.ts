@@ -1,7 +1,9 @@
-import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind } from "../sim/world";
+import { SimWorld, xpForLevel, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
+import { KNOWN_ABILITIES } from "../data/abilities";
 import type { PathingGrid } from "../sim/pathing";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
+import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { WORKERS, DEPOT_IDS } from "../data/races";
 import { trainsFor } from "../data/techtree";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -52,13 +54,19 @@ export interface SelectionInfo {
   maxHp: number;
   mana: number;
   maxMana: number;
-  armor: number;
-  damageMin: number;
+  armor: number; // BASE armour (level/agility, without buff bonuses)
+  armorBonus: number; // green "+N" armour from buffs/auras
+  damageMin: number; // BASE damage range (without buff bonuses)
   damageMax: number;
+  damageBonus: number; // green "+N" attack damage from buffs/auras
   attackType: string; // normal/pierce/siege/magic/chaos/hero
   armorType: string; // small/medium/large/fort/hero/divine/none
   isHero: boolean;
   level: number;
+  xp: number; // hero current experience
+  xpThis: number; // XP threshold for the current level
+  xpNext: number; // XP threshold for the next level (== xpThis at max level)
+  skillPoints: number; // unspent hero skill points
   strength: number;
   agility: number;
   intelligence: number;
@@ -77,6 +85,10 @@ export interface SelectionInfo {
   carryLumber: number;
   isMine: boolean; // a selected gold mine (resource, not a unit)
   goldRemaining: number; // gold left in the selected mine
+  isSummon: boolean; // a temporary summoned unit (shows the "Summoned Unit" timer bar)
+  summonSecondsLeft: number; // seconds until the summon expires
+  summonFrac: number; // remaining fraction of its lifetime (bar fill)
+  buffs: Array<{ icon: string; name: string; harmful: boolean }>; // active auras/buffs/debuffs
 }
 
 // A ground selection/hover ring the renderer draws as a flat model.
@@ -105,6 +117,9 @@ interface AnimSet {
   walkLumber: number;
   chopLumber: number; // "Attack Lumber" — the chopping swing
   build: number; // "Stand Work" — the hammering pose while constructing
+  decayFlesh: number; // corpse decay — flesh rots (heroes lack this)
+  decayBone: number; // corpse decay — bones linger, then vanish
+  seqNames: string[]; // raw sequence names (for cast-animation tag matching)
 }
 
 function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
@@ -133,6 +148,9 @@ function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
     walkLumber: or(find(/walk lumber/i), walk),
     chopLumber: or(find(/attack lumber/i), attack),
     build: or(find(/stand work(?! gold| lumber)/i), or(find(/^stand work/i), attack)),
+    decayFlesh: find(/decay flesh/i),
+    decayBone: find(/decay bone/i),
+    seqNames: seqs.map((s) => s.name),
   };
 }
 
@@ -158,6 +176,8 @@ interface Entry {
   hidden: boolean; // instance hidden (worker inside a gold mine)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
+  lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
+  castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
   moveEma: number; // smoothed actual/expected displacement — gates the walk clip
 }
 
@@ -179,7 +199,22 @@ const WALK = 1, IDLE = 0;
 // smoothed to avoid flicker), fall back to the stand pose instead.
 const MOVE_ANIM_MIN_RATIO = 0.2;
 const MOVE_EMA_ALPHA = 0.25; // per-tick blend toward the current ratio
-const CORPSE_TIME = 3; // seconds a corpse stays before being hidden
+const DEATH_HOLD = 1.6; // seconds the death pose plays before the corpse sinks
+const CORPSE_SINK_TIME = 3; // seconds the corpse sinks into the ground before deletion
+const CORPSE_SINK_DEPTH = 180; // world units the corpse descends while sinking (buries it)
+const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
+// Buff status-row display: map non-aura buff groups to their source ability code,
+// and give the remaining buff kinds a generic icon + label.
+const GROUP_TO_CODE: Record<string, string> = { innerfire: "Ainf", avatar: "AHav", slow: "Aslo" };
+const BUFF_KIND_ICON: Record<string, string> = {
+  stun: "ReplaceableTextures\\CommandButtons\\BTNStun.blp",
+  invuln: "ReplaceableTextures\\CommandButtons\\BTNDivineIntervention.blp",
+};
+const BUFF_KIND_LABEL: Record<string, string> = {
+  stun: "Stunned", slow: "Slowed", invuln: "Invulnerable", armor: "Bonus Armor", damage: "Bonus Damage",
+  damagePct: "Bonus Damage", haste: "Haste", manaRegen: "Mana Regeneration", hpRegen: "Health Regeneration",
+  lifesteal: "Life Steal", thorns: "Thorns", hot: "Healing", dot: "Damage",
+};
 const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
 const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData moveheight
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
@@ -278,7 +313,11 @@ export class RtsController {
   private seeded = false;
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
-  private corpses: Array<{ instance: Instance; t: number }> = [];
+  // Corpses adopt the dead unit's model instance: it plays its death clip, then
+  // sinks into the ground and is deleted. `corpseId` links to the sim corpse so a
+  // spell that raises it (Resurrection/Raise Dead) can remove the model at once.
+  private corpses: Array<{ instance: Instance; corpseId: number; x: number; y: number; z: number; t: number; phase: "death" | "sink" }> = [];
+  private corpseLoc = new Float32Array(3); // scratch for sinking a corpse's location
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
@@ -295,8 +334,9 @@ export class RtsController {
     private heightAt: HeightSampler,
     private host: RtsHost,
     private registry: UnitRegistry,
+    private abilities: AbilityRegistry,
   ) {
-    this.sim = new SimWorld(grid);
+    this.sim = new SimWorld(grid, 1, this.abilities); // the ability registry powers casting/learning/auras
   }
 
   dispose(): void {
@@ -343,7 +383,12 @@ export class RtsController {
     for (const h of this.sim.drainHits()) {
       const atk = this.registry.get(this.byId.get(h.attackerId)?.typeId ?? "");
       const tgt = this.registry.get(this.byId.get(h.targetId)?.typeId ?? "");
-      if (atk?.weaponSound && tgt?.armorSound) this.sounds.playImpact(atk.weaponSound, tgt.armorSound);
+      if (!atk) continue;
+      if (atk.weaponSound && atk.weaponSound !== "_" && tgt?.armorSound) {
+        this.sounds.playImpact(atk.weaponSound, tgt.armorSound); // melee: material clang
+      } else if (atk.missileArt) {
+        this.sounds.playMissile(atk.missileArt, "impact"); // ranged: the missile's own impact sound
+      }
     }
     for (const workerId of this.sim.drainChops()) {
       const def = this.registry.get(this.byId.get(workerId)?.typeId ?? "");
@@ -435,14 +480,49 @@ export class RtsController {
     this.announceSelection();
   }
 
-  /** Cycle focus to the next sub-group (Tab). */
-  cycleFocus(): void {
+  /** Cycle focus to the next (Tab) or previous (Shift+Tab) sub-group. */
+  cycleFocus(reverse = false): void {
     const groups = this.orderedGroups();
     if (groups.length <= 1) return;
+    const n = groups.length;
     const i = groups.indexOf(this.focusedKey);
-    this.focusedKey = groups[(i + 1) % groups.length];
+    this.focusedKey = groups[(((i + (reverse ? -1 : 1)) % n) + n) % n];
     this.primary = this.firstOfGroup(this.focusedKey);
     this.announceSelection();
+  }
+
+  /** Select ONLY this unit (double-clicking its icon in the multi-select grid). */
+  selectSingle(simId: number): void {
+    if (!this.sim.units.has(simId)) return;
+    this.selected.clear();
+    this.selectedMine = null;
+    this.selected.add(simId);
+    this.primary = simId;
+    this.focusedKey = this.groupKeyOf(simId);
+    this.voiceStreak = 0;
+    this.announceSelection();
+  }
+
+  /** If a spell/attack is armed, apply it to a unit clicked in the HUD group grid
+   *  (so skills can be targeted through the console). Returns true if consumed. */
+  tryTargetArmedAt(simId: number): boolean {
+    if (this.orderMode === "cast" && this.armedCast) {
+      const cast = this.armedCast;
+      this.orderMode = null;
+      this.armedCast = null;
+      if (cast.target === "unit") this.castFromSelection(cast.code, simId, 0, 0);
+      return true; // point-target spells can't aim at a single icon — just disarm
+    }
+    if (this.orderMode === "attack") {
+      this.orderMode = null;
+      const t = this.sim.units.get(simId);
+      if (t && simId !== this.primary) {
+        for (const id of this.selected) if (id !== simId) this.order(id, { kind: "attack", targetId: simId, force: true }, false);
+        this.ack(true);
+      }
+      return true;
+    }
+    return false;
   }
 
   /** A worker of the local player that's doing nothing (not gathering, building,
@@ -617,27 +697,33 @@ export class RtsController {
       if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
       const anims = buildAnimSet(seqs);
       const simId = this.nextId++;
-      this.sim.add({
-        id: simId,
-        owner: -1, // map-placed units are neutral (creeps)
-        team: -1,
-        x: loc[0],
-        y: loc[1],
-        facing: quatToZ(unit.instance.localRotation),
-        speed: def?.speed || 270, // real movement speed from UnitBalance.slk
-        turnRate: def?.turnRate ?? 0.5,
-        radius: def?.collision || 16,
-        flying: def?.moveType === "fly",
-        hp: def?.hitPoints || 100,
-        maxHp: def?.hitPoints || 100,
-        mana: def?.mana ?? 0,
-        maxMana: def?.mana ?? 0,
-        armor: def?.armor ?? 0,
-        weapon: def ? weaponFor(def) : null,
-        worker: null,
-        depotGold: false,
-        depotLumber: false,
-      });
+      this.sim.add(
+        {
+          id: simId,
+          owner: -1, // map-placed units are neutral (creeps)
+          team: -1,
+          race: def?.race ?? "",
+          typeId: def?.id ?? "",
+          x: loc[0],
+          y: loc[1],
+          facing: quatToZ(unit.instance.localRotation),
+          speed: def?.speed || 270, // real movement speed from UnitBalance.slk
+          turnRate: def?.turnRate ?? 0.5,
+          radius: def?.collision || 16,
+          flying: def?.moveType === "fly",
+          hp: def?.hitPoints || 100,
+          maxHp: def?.hitPoints || 100,
+          mana: def?.mana ?? 0,
+          maxMana: def?.mana ?? 0,
+          armor: def?.armor ?? 0,
+          weapon: def ? weaponFor(def) : null,
+          worker: null,
+          depotGold: false,
+          depotLumber: false,
+        },
+        null,
+        { level: def?.level ?? 0, mechanical: def?.classification.includes("mechanical") ?? false },
+      );
       const entry: Entry = {
         simId,
         unit,
@@ -658,6 +744,8 @@ export class RtsController {
         hidden: false,
         curSeq: -1,
         lastSwingSeq: -1,
+        lastChopSeq: -1,
+        castAnimT: 0,
         moveEma: 1,
       };
       this.entries.push(entry);
@@ -684,6 +772,8 @@ export class RtsController {
         id: simId,
         owner: NEUTRAL_PASSIVE_OWNER,
         team: NEUTRAL_PASSIVE_TEAM,
+        race: def?.race ?? "",
+        typeId: def?.id ?? "",
         x: loc[0],
         y: loc[1],
         facing: quatToZ(unit.instance.localRotation),
@@ -724,6 +814,8 @@ export class RtsController {
       hidden: false,
       curSeq: -1,
       lastSwingSeq: -1,
+      lastChopSeq: -1,
+      castAnimT: 0,
       moveEma: 1,
     };
     this.entries.push(entry);
@@ -743,11 +835,16 @@ export class RtsController {
     const building: BuildingState | null = def.isBuilding
       ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: trainsFor(def.id).length > 0 }
       : null;
+    const hero: HeroInit | undefined = def.isHero
+      ? { level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: (def.primaryAttr as "STR" | "AGI" | "INT") || "" }
+      : undefined;
     this.sim.add(
       {
         id: simId,
         owner,
         team,
+        race: def.race,
+        typeId: def.id,
         x,
         y,
         facing,
@@ -766,6 +863,7 @@ export class RtsController {
         depotLumber: DEPOT_IDS.has(def.id),
       },
       building,
+      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), level: def.level },
     );
     const entry: Entry = {
       simId,
@@ -787,6 +885,8 @@ export class RtsController {
       hidden: false,
       curSeq: -1,
       lastSwingSeq: -1,
+      lastChopSeq: -1,
+      castAnimT: 0,
       moveEma: 1,
     };
     this.entries.push(entry);
@@ -797,6 +897,25 @@ export class RtsController {
       entry.curSeq = anims.stand;
     }
     return simId;
+  }
+
+  /** The ability list a unit spawns with. Innate abilities we implement (Priest
+   *  Heal, Sorceress Slow, …) start at rank 1; a hero's learnable abilities are
+   *  present at rank 0 (spent up with skill points as it levels). Abilities whose
+   *  base `code` we don't handle are dropped so they never make a dead button. */
+  private buildInitialAbilities(def: UnitDef): SimAbility[] {
+    const out: SimAbility[] = [];
+    for (const id of def.abilities) {
+      const a = this.abilities.get(id);
+      if (!a || !KNOWN_ABILITIES[a.code]) continue; // skip inventory/other passives
+      out.push({ id, code: a.code, level: 1, cooldownLeft: 0, autocastOn: def.autoAbility === id });
+    }
+    for (const id of def.heroAbilities) {
+      const a = this.abilities.get(id);
+      if (!a || !KNOWN_ABILITIES[a.code]) continue; // only slots we can actually cast/apply
+      out.push({ id, code: a.code, level: 0, cooldownLeft: 0, autocastOn: false });
+    }
+    return out;
   }
 
   tick(dt: number): void {
@@ -854,12 +973,33 @@ export class RtsController {
         e.curScale = e.baseScale;
         e.unit.instance.setUniformScale(e.baseScale);
       }
+      // A materializing summon holds its birth clip (sim `spawning`) — don't let
+      // the picker override it until it can act.
+      if (u.spawning > 0) continue;
+      // Hold a cast animation for its brief window so the throw/slam/spell gesture
+      // plays out instead of being overwritten by the stand/attack picker.
+      if (e.castAnimT > 0) {
+        e.castAnimT -= dt;
+        continue;
+      }
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
       // the strike gesture matches the damage-point-timed hit/projectile, and
       // units with several attack animations vary them shot to shot. Between
       // swings the LOOP_NEVER clip holds; everything else loops normally.
       const attacking = u.inCombat && !u.moving && e.anims.attack >= 0;
-      if (attacking) {
+      // Chopping is chop-driven, like the attack swing: re-trigger the "Attack
+      // Lumber" clip ONCE per chop so the swing stays in phase with the chop SFX
+      // (a free-running loop drifted out of sync with the sound).
+      const chopping = u.working && u.order === "harvest" && !u.moving && e.anims.chopLumber >= 0;
+      if (chopping) {
+        if (u.chopSeq !== e.lastChopSeq || e.curSeq !== e.anims.chopLumber) {
+          e.lastChopSeq = u.chopSeq;
+          e.curSeq = e.anims.chopLumber;
+          e.unit.state = WALK;
+          e.unit.instance.setSequence(e.anims.chopLumber);
+          e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+        }
+      } else if (attacking) {
         if (u.swingSeq !== e.lastSwingSeq || !e.anims.attackVariants.includes(e.curSeq)) {
           e.lastSwingSeq = u.swingSeq;
           const vs = e.anims.attackVariants;
@@ -905,7 +1045,12 @@ export class RtsController {
     if (e.anims.death >= 0) {
       e.unit.instance.setSequence(e.anims.death);
       e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
-      this.corpses.push({ instance: e.unit.instance, t: CORPSE_TIME });
+      // Adopt the model as the corpse: play the death clip, then sink into the
+      // ground and delete (see tickCorpses). Link to the sim corpse this death
+      // created (if any) so a raise spell can hide the model immediately.
+      const corpse = [...this.sim.corpses.values()].find((c) => c.deadId === simId);
+      const loc = e.unit.instance.localLocation;
+      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, x: loc[0], y: loc[1], z: loc[2], t: 0, phase: "death" });
     } else {
       e.unit.instance.hide();
     }
@@ -956,12 +1101,78 @@ export class RtsController {
   private tickCorpses(dt: number): void {
     for (let i = this.corpses.length - 1; i >= 0; i--) {
       const c = this.corpses[i];
-      c.t -= dt;
-      if (c.t <= 0) {
+      // Consumed by a raise spell → remove the model at once (the unit revives).
+      if (c.corpseId >= 0 && this.sim.corpses.get(c.corpseId)?.raised) {
         c.instance.hide();
         this.corpses.splice(i, 1);
+        continue;
       }
+      c.t += dt;
+      // Play the death clip, then start sinking into the ground.
+      if (c.phase === "death") {
+        if (c.t >= DEATH_HOLD) {
+          c.phase = "sink";
+          c.t = 0;
+        }
+        continue;
+      }
+      // Sinking: lower the model into the terrain, then delete it.
+      const prog = c.t / CORPSE_SINK_TIME;
+      if (prog >= 1) {
+        c.instance.hide();
+        this.corpses.splice(i, 1);
+        continue;
+      }
+      this.corpseLoc[0] = c.x;
+      this.corpseLoc[1] = c.y;
+      this.corpseLoc[2] = c.z - prog * CORPSE_SINK_DEPTH;
+      c.instance.setLocation(this.corpseLoc);
     }
+  }
+
+  /** Play a caster's spell animation once (matched to the ability's anim tags,
+   *  e.g. Storm Bolt "throw", Thunder Clap "slam", else "Spell"/"Attack"). */
+  playCastAnim(casterId: number, code: string): void {
+    const e = this.byId.get(casterId);
+    if (!e) return;
+    const def = this.abilityDefByCode(code);
+    const tags = def?.animNames ?? [];
+    const names = e.anims.seqNames;
+    const pick = (re: RegExp) => names.findIndex((n) => re.test(n));
+    let seq = -1;
+    // Prefer the more specific tag (throw/slam/channel) over the generic "spell".
+    for (const tag of [...tags].reverse()) {
+      if (tag === "spell") continue;
+      seq = pick(new RegExp(`\\b${tag}\\b`, "i"));
+      if (seq >= 0) break;
+    }
+    if (seq < 0) seq = pick(/spell/i);
+    if (seq < 0) seq = e.anims.attack;
+    if (seq < 0) return;
+    e.unit.instance.setSequence(seq);
+    e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+    e.curSeq = seq;
+    e.unit.state = WALK; // don't let the idle picker immediately override the cast
+    e.castAnimT = CAST_ANIM_HOLD; // hold the clip for its brief window
+  }
+
+  private abilityDefByCode(code: string): AbilityDef | undefined {
+    for (const a of this.abilities.all()) if (a.code === code) return a;
+    return undefined;
+  }
+
+  /** A summoned/raised unit materializes: play its birth clip and lock it out of
+   *  acting (sim `spawning`) until the clip finishes. No birth clip → acts at once. */
+  beginSummonBirth(simId: number): void {
+    const e = this.byId.get(simId);
+    const u = this.sim.units.get(simId);
+    if (!e || !u || e.birthSeq < 0) return;
+    const durMs = e.birthEnd - e.birthStart;
+    u.spawning = durMs > 0 ? durMs / 1000 : 1;
+    e.unit.instance.setSequence(e.birthSeq);
+    e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+    e.unit.state = WALK; // keep the picker from auto-standing over the birth clip
+    e.curSeq = e.birthSeq;
   }
 
   /** Left-click a unit selects it. Clicking empty ground does NOT deselect (WC3
@@ -1117,8 +1328,11 @@ export class RtsController {
 
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
-   *  damaged friendly building. */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | null = null;
+   *  damaged friendly building; "cast" targets a spell (see armedCast). */
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | null = null;
+  /** The spell armed for targeting when orderMode === "cast". `area` (>0) shows an
+   *  AoE cast circle at the cursor for point-target area spells. */
+  armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
@@ -1129,6 +1343,19 @@ export class RtsController {
     }
     const mode = this.orderMode;
     this.orderMode = null;
+    if (mode === "cast") {
+      const cast = this.armedCast;
+      this.armedCast = null;
+      if (!cast) return true;
+      if (cast.target === "unit") {
+        const picked = this.pickAt(cssX, cssY);
+        if (picked !== null) this.castFromSelection(cast.code, picked, 0, 0);
+        return true;
+      }
+      const hit = this.groundHitAt(cssX, cssY); // point-target spell
+      if (hit) this.castFromSelection(cast.code, 0, hit[0], hit[1]);
+      return true;
+    }
     if (mode !== "rally") this.ack(mode === "attack"); // rally is a building order — no unit voice
     if (mode === "rally") {
       const r = this.resolveRally(cssX, cssY);
@@ -1136,7 +1363,7 @@ export class RtsController {
         for (const id of this.selected) {
           if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
-        this.queueArrow(r.x, r.y, MOVE_ARROW);
+        this.rallyFeedback(r);
         this.sounds?.playUi("RallyPointPlace");
       }
       return true;
@@ -1150,16 +1377,18 @@ export class RtsController {
       const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
       if (picked !== null && prim) {
         const target = this.sim.units.get(picked);
-        if (target && this.sim.hostile(prim, target)) {
+        // The Attack command FORCE-attacks whatever is under the cursor — including
+        // friendly/own units and buildings (WC3 force attack).
+        if (target && target.id !== this.primary) {
           let any = false;
-          for (const id of this.selected) if (id !== picked && this.order(id, { kind: "attack", targetId: picked }, queued)) any = true;
+          for (const id of this.selected) if (id !== picked && this.order(id, { kind: "attack", targetId: picked, force: true }, queued)) any = true;
           if (any) {
             this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius);
             return true;
           }
         }
       }
-      // No hostile under the cursor: attack-MOVE to the ground point (below).
+      // Nothing under the cursor: attack-MOVE to the ground point (below).
     }
     const dpr = this.dpr();
     this.screen[0] = cssX * dpr;
@@ -1178,6 +1407,53 @@ export class RtsController {
       this.queueArrow(hit[0], hit[1], MOVE_ARROW);
     }
     return true;
+  }
+
+  // --- spellcasting ---------------------------------------------------------
+
+  /** Ground-point pick for a screen coordinate (point-target spells, move, …). */
+  private groundHitAt(cssX: number, cssY: number): [number, number] | null {
+    const dpr = this.dpr();
+    this.screen[0] = cssX * dpr;
+    this.screen[1] = cssY * dpr;
+    this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
+    return this.groundHit();
+  }
+
+  /** Cast an ability from every selected own unit that knows it (WC3 casts from
+   *  the whole selection — e.g. two priests both Dispel). */
+  private castFromSelection(code: string, targetId: number, x: number, y: number): void {
+    let any = false;
+    for (const id of this.selected) {
+      if (this.sim.units.get(id)?.owner !== this.localPlayer) continue;
+      if (this.sim.issueCast(id, code, targetId, x, y)) any = true;
+    }
+    if (any) this.ack(false);
+  }
+
+  /** Cast a no-target ability (Thunder Clap, Divine Shield, Avatar) immediately. */
+  castNoTarget(code: string): void {
+    this.castFromSelection(code, 0, 0, 0);
+  }
+
+  /** Learn (or rank up) a hero ability on the primary-selected hero. */
+  learnSkill(abilityId: string): boolean {
+    return this.primary !== null && this.sim.learnAbility(this.primary, abilityId);
+  }
+
+  /** Toggle an autocast ability (Heal, Slow, …) on the whole own selection. */
+  toggleAutocast(code: string): void {
+    let state: boolean | null = null;
+    for (const id of this.selected) {
+      if (this.sim.units.get(id)?.owner !== this.localPlayer) continue;
+      const s = this.sim.toggleAutocast(id, code);
+      if (state === null) state = s;
+    }
+  }
+
+  /** The primary-selected unit's live sim state (for the command card + HUD). */
+  selectedSimUnit(): SimUnit | null {
+    return this.primary !== null ? (this.sim.units.get(this.primary) ?? null) : null;
   }
 
   /** Order-feedback arrows (Confirmation.mdx) at a destination: green for a
@@ -1236,13 +1512,14 @@ export class RtsController {
     return {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
-      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, damageMin: 0, damageMax: 0,
-      attackType: "", armorType: "", isHero: false, level: 0, strength: 0,
+      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, damageMin: 0, damageMax: 0, damageBonus: 0,
+      attackType: "", armorType: "", isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, primaryAttr: "",
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
     };
   }
 
@@ -1264,17 +1541,26 @@ export class RtsController {
       maxHp: u.maxHp,
       mana: u.mana,
       maxMana: u.maxMana,
-      armor: u.armor,
-      // WC3 damage display: base + dice (min 1 each) … base + dice×sides.
-      damageMin: w ? w.damage + w.dice : 0,
-      damageMax: w ? w.damage + w.dice * w.sides : 0,
+      // Split base vs the green buff/aura "+N" (WC3 stat display). Base damage
+      // range = the weapon roll minus the buff portion.
+      armor: Math.round(u.armor - u.bonusArmor),
+      armorBonus: Math.round(u.bonusArmor),
+      damageMin: w ? Math.round(w.damage - u.bonusDamage) + w.dice : 0,
+      damageMax: w ? Math.round(w.damage - u.bonusDamage) + w.dice * w.sides : 0,
+      damageBonus: Math.round(u.bonusDamage),
       attackType: def?.attackType ?? "",
       armorType: def?.armorType ?? "",
-      isHero: def?.isHero ?? false,
-      level: def?.level ?? 0,
-      strength: def?.strength ?? 0,
-      agility: def?.agility ?? 0,
-      intelligence: def?.intelligence ?? 0,
+      isHero: u.isHero,
+      // Heroes carry their LIVE level/attributes on the sim unit (they grow with
+      // XP); non-heroes fall back to the data-def values.
+      level: u.isHero ? u.level : (def?.level ?? 0),
+      xp: u.xp,
+      xpThis: u.isHero ? xpForLevel(u.level) : 0,
+      xpNext: u.isHero ? xpForLevel(u.level + 1) : 0,
+      skillPoints: u.skillPoints,
+      strength: u.isHero ? u.str : (def?.strength ?? 0),
+      agility: u.isHero ? u.agi : (def?.agility ?? 0),
+      intelligence: u.isHero ? u.int : (def?.intelligence ?? 0),
       primaryAttr: def?.primaryAttr ?? "",
       model: e.modelPath,
       isWorker: !!u.worker,
@@ -1290,7 +1576,29 @@ export class RtsController {
       carryLumber: u.worker?.carryLumber ?? 0,
       isMine: false,
       goldRemaining: 0,
+      isSummon: u.isSummon && u.summonLeft > 0,
+      summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
+      summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
+      buffs: this.statusBuffsFor(u),
     };
+  }
+
+  /** Active buffs/auras/debuffs on a unit, de-duped by source, resolved to an icon
+   *  + name for the HUD status row. Aura buffs carry their base code in `group`. */
+  private statusBuffsFor(u: SimUnit): Array<{ icon: string; name: string; harmful: boolean }> {
+    if (!u.buffs.length) return [];
+    const out: Array<{ icon: string; name: string; harmful: boolean }> = [];
+    const seen = new Set<string>();
+    for (const b of u.buffs) {
+      const code = b.group.includes(":") ? b.group.split(":")[0] : (GROUP_TO_CODE[b.group] ?? "");
+      const key = code || b.kind;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const def = code ? this.abilityDefByCode(code) : undefined;
+      const harmful = b.kind === "stun" || b.kind === "slow" || b.kind === "dot";
+      out.push({ icon: def?.icon ?? BUFF_KIND_ICON[b.kind] ?? "", name: def?.name ?? BUFF_KIND_LABEL[b.kind] ?? b.kind, harmful });
+    }
+    return out;
   }
 
   /** Owner of the primary selected unit (for build/train ownership checks). */
@@ -1462,7 +1770,9 @@ export class RtsController {
     return this.sim.stashOf(owner);
   }
 
-  /** Food used/made by a player's living units. */
+  /** Food used/made by a player's units — including food RESERVED for units still
+   *  in training (WC3 takes food when training begins, like gold/lumber). A queued
+   *  unit's food moves seamlessly to the live count when it spawns (no double-up). */
   foodFor(owner: number): { used: number; made: number } {
     let used = 0;
     let made = 0;
@@ -1471,6 +1781,7 @@ export class RtsController {
       if (u && u.owner === owner) {
         used += e.foodUsed;
         made += e.foodMade;
+        if (u.building) for (const job of u.building.queue) used += this.registry.get(job.unitId)?.foodUsed ?? 0;
       }
     }
     return { used, made };
@@ -1509,7 +1820,7 @@ export class RtsController {
         for (const id of this.selected) {
           if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
-        this.queueArrow(r.x, r.y, MOVE_ARROW);
+        this.rallyFeedback(r);
         this.sounds?.playUi("RallyPointPlace");
       }
       return;
@@ -1636,6 +1947,21 @@ export class RtsController {
     const tree = this.sim.nearestTree(treeHit[0], treeHit[1], 140);
     if (tree) return { x: tree.x, y: tree.y, kind: "tree", targetId: tree.id };
     return { x: hit[0], y: hit[1], kind: "point", targetId: 0 };
+  }
+
+  /** Feedback for a rally point: a tree/mine rally flashes the same yellow ring
+   *  (and, for a tree, the yellow colorize pulse) as sending a worker to gather
+   *  it; a plain point/unit rally shows the green move arrow. */
+  private rallyFeedback(r: { x: number; y: number; kind: RallyKind; targetId: number }): void {
+    if (r.kind === "tree") {
+      this.flashTarget(r.x, r.y, 76);
+      this.treePulses.push({ x: r.x, y: r.y });
+    } else if (r.kind === "mine") {
+      const mine = this.sim.mines.get(r.targetId);
+      this.flashTarget(r.x, r.y, mine ? mine.radius * MINE_RING_SCALE : 76);
+    } else {
+      this.queueArrow(r.x, r.y, MOVE_ARROW);
+    }
   }
 
   /** Right-clicked a building: issue the fitting order and flash its footprint

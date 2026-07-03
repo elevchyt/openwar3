@@ -69,6 +69,7 @@ export class ModelViewerScene {
   private solver: Solver;
   private model: MdxModel | null = null;
   private instance: MdxInstance | null = null;
+  private modelCache = new Map<string, MdxModel>(); // parsed portrait models by path
   private raf = 0;
   private last = 0;
   private camZoom = 1; // <1 dollies the model camera closer (portraits zoom in)
@@ -111,14 +112,20 @@ export class ModelViewerScene {
     // Nudge the bust down a touch so the face sits slightly lower in the frame
     // (the authored portrait cameras aim a hair high for our console arch).
     this.camPanDown = portrait ? PORTRAIT_PAN_DOWN : 0;
-    const bytes = await this.vfs.read(path);
 
     if (this.instance) {
       this.scene.removeInstance(this.instance);
       this.instance = null;
     }
 
-    const model = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
+    // Cache parsed models by path so re-selecting a unit type is instant (avoids
+    // re-parsing the MDX + re-uploading GL resources — the selection FPS spike).
+    let model = this.modelCache.get(path);
+    if (!model) {
+      const bytes = await this.vfs.read(path);
+      model = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
+      if (model) this.modelCache.set(path, model);
+    }
     if (!model) throw new Error(`failed to load model: ${path}`);
     this.model = model;
 

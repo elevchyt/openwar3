@@ -1,5 +1,7 @@
 import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath } from "./pathfind";
+import { type AbilityRegistry, type AbilityDef, requiredHeroLevel } from "../data/abilities";
+import { SPELL_HANDLERS, AURA_BUFFS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -31,9 +33,97 @@ export interface SimProjectile {
   speed: number;
   damage: number; // pre-armor damage rolled at launch (armor applied on impact)
   art: string; // missile model path
+  // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
+  // instead of dealing plain `damage` — the base code + rank to dispatch.
+  spell?: { code: string; rank: number; abilityId: string };
 }
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "follow" | "harvest" | "return" | "repair";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast";
+
+/** A learned/innate ability on a unit. `code` is the base ability code (dispatch
+ *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
+export interface SimAbility {
+  id: string; // alias (for tooltip/icon lookup in the registry)
+  code: string; // base ability code — spell dispatch key
+  level: number; // current rank (0 = unlearned hero ability, ≥1 = active)
+  cooldownLeft: number; // seconds until castable again
+  autocastOn: boolean; // autocast toggle (Heal/Slow/…)
+}
+
+/** A timed effect on a unit. `kind` is our gameplay category; `group` de-dupes
+ *  non-stacking sources (e.g. two Devotion Auras → one armour buff, the larger). */
+export interface SimBuff {
+  kind: BuffKind;
+  group: string; // non-stacking key ("" = always its own instance)
+  timeLeft: number; // seconds (Infinity for auras, refreshed while in range)
+  sourceId: number;
+  value: number; // primary magnitude (armour, slow %, hp/sec, damage, …)
+  value2: number; // secondary magnitude (e.g. attack-speed slow)
+  art: string; // attached effect model (renderer), "" = none
+}
+
+export type BuffKind =
+  | "stun" // cannot act
+  | "slow" // value = move-slow fraction, value2 = attack-slow fraction
+  | "haste" // value = move bonus fraction, value2 = attack-speed bonus fraction
+  | "invuln" // immune to damage + enemy targeting (Divine Shield)
+  | "armor" // value = flat armour bonus (Devotion Aura, Inner Fire)
+  | "manaRegen" // value = flat mana/sec bonus (Brilliance Aura)
+  | "damage" // value = flat attack-damage bonus (Inner Fire)
+  | "damagePct" // value = fraction of base damage added (Command/Trueshot Aura)
+  | "hpRegen" // value = flat hp/sec bonus (Unholy Aura)
+  | "lifesteal" // value = fraction of melee damage dealt healed back (Vampiric Aura)
+  | "thorns" // value = fraction of melee damage returned to the attacker (Thorns Aura)
+  | "hot" // value = hp/sec healed
+  | "dot"; // value = dps taken
+
+/** An in-progress spell cast (order === "cast"). Walk into range, face, then at
+ *  the cast point fire the effect (or launch the spell missile). */
+export interface PendingCast {
+  code: string; // base ability code (dispatch)
+  abilityId: string; // the SimAbility on the caster (for cooldown/mana)
+  rank: number; // ability level being cast
+  targetId: number; // unit target (0 = none)
+  x: number; // point target
+  y: number;
+  range: number; // cast range (hull-to-hull); 0 = self/no-target
+  castLeft: number; // remaining cast point before the effect fires (-1 = not yet started)
+  started: boolean; // cast point begun (mana spent, animation playing)
+  fired: boolean; // the effect has fired (for channelled spells that then hold)
+  channelLeft: number; // remaining channel time — the caster stands + holds (Blizzard)
+  // The order to resume after the cast (so an autocast/manual cast mid attack-move
+  // or follow continues afterward instead of falling idle).
+  resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | null;
+}
+
+/** A corpse left by a dead unit (Liquipedia: Corpse). Persists on the ground,
+ *  decaying flesh→bone, and is a targetable entity for corpse-consuming spells
+ *  (Raise Dead, Cannibalize, Resurrection, Meat Wagon). */
+export interface SimCorpse {
+  id: number;
+  deadId: number; // the dead unit's sim id (renderer adopts its model as the corpse)
+  unitId: string; // the dead unit's type (renderer reuses/re-spawns its model)
+  x: number;
+  y: number;
+  facing: number;
+  owner: number;
+  isHero: boolean; // hero corpses can't be raised (they revive at an altar instead)
+  mechanical: boolean; // mechanical/summoned units leave no raisable corpse
+  decayLeft: number; // seconds until the corpse fully decays and is removed
+  raised: boolean; // consumed by a spell (renderer hides it immediately)
+}
+
+/** Attributes + growth for a hero, applied on spawn and each level-up. */
+export interface HeroInit {
+  level: number;
+  str: number;
+  agi: number;
+  int: number;
+  strPerLevel: number;
+  agiPerLevel: number;
+  intPerLevel: number;
+  primaryAttr: "STR" | "AGI" | "INT" | "";
+}
 
 /** Active repair job on a worker: restore a building's HP over time for a
  *  fraction of its build cost (WC3: 35% of cost, 150% of build time to full). */
@@ -84,7 +174,7 @@ export type QueuedOrder =
   | { kind: "move"; x: number; y: number }
   | { kind: "attackmove"; x: number; y: number }
   | { kind: "patrol"; x: number; y: number }
-  | { kind: "attack"; targetId: number }
+  | { kind: "attack"; targetId: number; force?: boolean }
   | { kind: "follow"; targetId: number }
   | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number }
   | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number }
@@ -113,6 +203,8 @@ export interface SimUnit {
   id: number;
   owner: number; // player slot; -1 = map-neutral
   team: number; // units on the same team are allied; -1 = hostile to everyone
+  race: string; // human|orc|undead|nightelf|… — for spell polarity (Holy Light vs undead)
+  typeId: string; // unit-def id (for corpses/Resurrection to re-create the unit)
   neutralPassive: boolean; // Neutral Passive (shops, critters): never hostile, yellow ring
   x: number;
   y: number;
@@ -140,6 +232,7 @@ export interface SimUnit {
   swingLeft: number; // -1 = no pending strike
   swingTargetId: number; // whom the pending strike is aimed at
   swingSeq: number; // increments each swing start (renderer re-triggers the attack clip)
+  chopSeq: number; // increments each lumber chop (renderer re-triggers the chop clip in sync)
   inCombat: boolean; // engaging in range this tick (drives the attack animation)
   path: Array<[number, number]>; // world waypoints
   waypoint: number;
@@ -177,6 +270,43 @@ export interface SimUnit {
   // Walking to raise a new building; gold/lumber are the already-spent cost,
   // refunded if the build is abandoned before construction starts.
   buildPending: { defId: string; x: number; y: number; gold: number; lumber: number } | null;
+  // --- hero / abilities / buffs (spells slice) ---
+  isHero: boolean;
+  level: number; // hero level (0 for non-heroes)
+  xp: number; // hero experience
+  skillPoints: number; // unspent skill points (1 gained per level)
+  primaryAttr: "STR" | "AGI" | "INT" | "";
+  baseStr: number; // level-1 attributes (growth is added per level)
+  baseAgi: number;
+  baseInt: number;
+  strPerLevel: number;
+  agiPerLevel: number;
+  intPerLevel: number;
+  str: number; // current (floored) attributes, recomputed on level-up
+  agi: number;
+  int: number;
+  baseMaxHp: number; // level-1 maxHp — attribute growth is layered on top
+  baseMaxMana: number;
+  baseArmor: number; // armour before agility growth + buffs
+  baseDamage: number; // weapon base damage before primary-attr growth + buffs
+  baseSpeed: number; // move speed before slow/haste
+  baseCooldown: number; // weapon cooldown before haste/slow
+  manaRegen: number; // mana per second (recomputed from INT + buffs)
+  hpRegen: number; // hp per second
+  lifesteal: number; // fraction of melee damage healed back (Vampiric Aura); derived
+  thorns: number; // fraction of melee damage returned to attackers (Thorns Aura); derived
+  bonusArmor: number; // buff/aura portion of armour (green "+N" in the HUD); derived
+  bonusDamage: number; // buff/aura portion of attack damage (green "+N"); derived
+  abilities: SimAbility[]; // learned/innate abilities
+  buffs: SimBuff[]; // active timed effects
+  stunned: boolean; // derived from buffs (cannot act)
+  invulnerable: boolean; // derived from buffs (immune to damage + enemy targeting)
+  mechanical: boolean; // machines/summons — no raisable corpse, unhealable by Heal
+  isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
+  spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
+  summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
+  summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
+  pendingCast: PendingCast | null; // in-progress cast (order === "cast")
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -211,6 +341,36 @@ const TREE_LUMBER = 50; // lumber a standard tree yields before falling
 const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latch
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
+
+// --- hero XP / leveling (docs/REFERENCES.md — Liquipedia Experience + warcraft3.info) ---
+const MAX_HERO_LEVEL = 10;
+// XP a hero KILL grants, indexed by the victim's level (1-based): 25/40/60/85/…
+// = xp[L-1] + 5·(L+1). Buildings/level-0 grant none.
+const KILL_XP = [0, 25, 40, 60, 85, 115, 150, 190, 235, 285, 340];
+// Creeps grant reduced XP by the killing hero's level (index = hero level).
+const CREEP_XP_FACTOR = [0.8, 0.8, 0.7, 0.6, 0.5, 0, 0, 0, 0, 0, 0];
+const XP_SHARE_RANGE = 1200; // heroes within this of a kill share its XP (else global)
+const SUMMON_XP_FACTOR = 0.5; // summoned victims grant half XP
+// Attribute → stat conversions (Liquipedia Hero): verified against UnitBalance.
+const HP_PER_STR = 25;
+const MANA_PER_INT = 15;
+const ARMOR_PER_AGI = 0.3;
+const REGEN_PER_STR = 0.05; // hp/sec per Strength point
+const REGEN_PER_INT = 0.05; // mana/sec per Intelligence point
+const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
+const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
+const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
+const SPELL_CAST_POINT = 0.4; // seconds the cast animation plays before the effect fires
+// Corpse decay (Units\MiscData.txt): flesh rots for DecayTime, bones linger for
+// BoneDecayTime, then the corpse is gone. Total lifetime = the sum.
+const CORPSE_FLESH_TIME = 2; // DecayTime
+const CORPSE_BONE_TIME = 88; // BoneDecayTime
+const CORPSE_TOTAL_TIME = CORPSE_FLESH_TIME + CORPSE_BONE_TIME;
+
+/** Total XP required to REACH a given hero level (Liquipedia: 50·(L²+L−2)). */
+export function xpForLevel(level: number): number {
+  return 50 * (level * level + level - 2);
+}
 
 // WC3 day/night: a full cycle is 480 real seconds = 24 game hours (so one game
 // hour = 20 real seconds); daytime is 06:00–18:00. Melee games start at 08:00.
@@ -247,8 +407,25 @@ export class SimWorld {
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   private nextNodeId = 1;
   private rng: () => number;
+  // --- corpses (persist + decay; targetable by corpse-consuming spells) ---
+  readonly corpses = new Map<number, SimCorpse>();
+  private nextCorpseId = 1;
+  // --- spell / ability event channels drained by the renderer each frame ---
+  // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt).
+  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number }> = [];
+  // A unit began casting: renderer plays the cast animation (spell/throw/slam).
+  private castStarts: Array<{ casterId: number; code: string; abilityId: string }> = [];
+  // Heroes that just gained a level: renderer plays the level-up nova + sound.
+  private levelUps: Array<{ unitId: number; level: number }> = [];
+  // Units summoned/raised by a spell this tick: the renderer creates their models
+  // (same deferral as trainCompletions — the sim owns no model instances).
+  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number }> = [];
 
-  constructor(readonly grid: PathingGrid, seed = 1) {
+  constructor(
+    readonly grid: PathingGrid,
+    seed = 1,
+    private abilities?: AbilityRegistry,
+  ) {
     this.rng = lcg(seed);
   }
 
@@ -621,6 +798,7 @@ export class SimWorld {
       | "swingLeft"
       | "swingTargetId"
       | "swingSeq"
+      | "chopSeq"
       | "inCombat"
       | "neutralPassive"
       | "chaseX"
@@ -655,9 +833,47 @@ export class SimWorld {
       | "repair"
       | "orderQueue"
       | "buildPending"
+      | "isHero"
+      | "level"
+      | "xp"
+      | "skillPoints"
+      | "primaryAttr"
+      | "baseStr"
+      | "baseAgi"
+      | "baseInt"
+      | "strPerLevel"
+      | "agiPerLevel"
+      | "intPerLevel"
+      | "str"
+      | "agi"
+      | "int"
+      | "baseMaxHp"
+      | "baseMaxMana"
+      | "baseArmor"
+      | "baseDamage"
+      | "baseSpeed"
+      | "baseCooldown"
+      | "manaRegen"
+      | "hpRegen"
+      | "lifesteal"
+      | "thorns"
+      | "bonusArmor"
+      | "bonusDamage"
+      | "abilities"
+      | "buffs"
+      | "stunned"
+      | "invulnerable"
+      | "mechanical"
+      | "isSummon"
+      | "spawning"
+      | "summonLeft"
+      | "summonMax"
+      | "pendingCast"
     >,
     building?: BuildingState | null,
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; manaRegen?: number; level?: number },
   ): SimUnit {
+    const hero = opts?.hero;
     const u: SimUnit = {
       ...unit,
       desiredFacing: unit.facing,
@@ -667,6 +883,7 @@ export class SimWorld {
       swingLeft: -1,
       swingTargetId: 0,
       swingSeq: 0,
+      chopSeq: 0,
       inCombat: false,
       neutralPassive: false,
       path: [],
@@ -705,9 +922,57 @@ export class SimWorld {
       repair: null,
       orderQueue: [],
       buildPending: null,
+      // --- hero / abilities / buffs ---
+      isHero: !!hero,
+      level: hero?.level ?? opts?.level ?? 0,
+      xp: hero ? xpForLevel(hero.level) : 0,
+      skillPoints: 0, // granted by leveling (initHero sets the starting points)
+      primaryAttr: hero?.primaryAttr ?? "",
+      baseStr: hero?.str ?? 0,
+      baseAgi: hero?.agi ?? 0,
+      baseInt: hero?.int ?? 0,
+      strPerLevel: hero?.strPerLevel ?? 0,
+      agiPerLevel: hero?.agiPerLevel ?? 0,
+      intPerLevel: hero?.intPerLevel ?? 0,
+      str: hero?.str ?? 0,
+      agi: hero?.agi ?? 0,
+      int: hero?.int ?? 0,
+      // Level-1 baselines — attribute growth + buffs layer on top of these.
+      baseMaxHp: unit.maxHp,
+      baseMaxMana: unit.maxMana,
+      baseArmor: unit.armor,
+      baseDamage: unit.weapon?.damage ?? 0,
+      baseSpeed: unit.speed,
+      baseCooldown: unit.weapon?.cooldown ?? 0,
+      manaRegen: opts?.manaRegen ?? 0, // recomputeStats derives the real value below
+      hpRegen: 0,
+      lifesteal: 0,
+      thorns: 0,
+      bonusArmor: 0,
+      bonusDamage: 0,
+      abilities: opts?.abilities ?? [],
+      buffs: [],
+      stunned: false,
+      invulnerable: false,
+      mechanical: !!opts?.mechanical,
+      isSummon: false,
+      spawning: 0,
+      summonLeft: 0,
+      summonMax: 0,
+      pendingCast: null,
     };
     this.units.set(u.id, u);
     this.settle(u);
+    if (hero) {
+      // Grant the starting skill point(s) for the hero's level and derive stats
+      // (HP/mana/armour/damage/regen) from the level-1 attributes.
+      u.skillPoints = hero.level;
+      this.recomputeStats(u);
+      u.hp = u.maxHp;
+      u.mana = u.maxMana;
+    } else {
+      this.recomputeStats(u); // sets regen for casters and applies any base buffs
+    }
     return u;
   }
 
@@ -832,11 +1097,12 @@ export class SimWorld {
     return true;
   }
 
-  /** Order a unit to attack another. False if either is missing or they're allied. */
-  issueAttack(id: number, targetId: number): boolean {
+  /** Order a unit to attack another. Normally requires the target to be hostile;
+   *  `force` (the deliberate Attack command) lets you attack allies/own units too. */
+  issueAttack(id: number, targetId: number, force = false): boolean {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
-    if (!u || !t || u === t || !u.weapon || !this.hostile(u, t)) return false;
+    if (!u || !t || u === t || !u.weapon || (!force && !this.hostile(u, t))) return false;
     u.order = "attack";
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
@@ -942,7 +1208,7 @@ export class SimWorld {
       case "move": return this.issueMove(id, o.x, o.y);
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
       case "patrol": return this.issuePatrol(id, o.x, o.y);
-      case "attack": return this.issueAttack(id, o.targetId);
+      case "attack": return this.issueAttack(id, o.targetId, o.force);
       case "follow": return this.issueFollow(id, o.targetId);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId);
       case "buildresume": this.assignBuilder(id, o.buildingId); return true;
@@ -1076,17 +1342,694 @@ export class SimWorld {
     return this.timeOfDay >= DAY_START && this.timeOfDay < DAY_END;
   }
 
+  /** Same team = allied (friendly). Neutral-passive shops count as nobody's ally. */
+  allied(a: SimUnit, b: SimUnit): boolean {
+    if (a.neutralPassive || b.neutralPassive) return false;
+    return a.team === b.team;
+  }
+
+  // === abilities / buffs / casting ==========================================
+
+  /** Recompute a unit's effective stats from its base values, hero attribute
+   *  growth, and active buffs. Called every tick (cheap, idempotent). */
+  private recomputeStats(u: SimUnit): void {
+    if (u.isHero) {
+      u.str = Math.floor(u.baseStr + u.strPerLevel * (u.level - 1));
+      u.agi = Math.floor(u.baseAgi + u.agiPerLevel * (u.level - 1));
+      u.int = Math.floor(u.baseInt + u.intPerLevel * (u.level - 1));
+    }
+    const dStr = u.isHero ? u.str - Math.floor(u.baseStr) : 0;
+    const dAgi = u.isHero ? u.agi - Math.floor(u.baseAgi) : 0;
+    const dInt = u.isHero ? u.int - Math.floor(u.baseInt) : 0;
+    const primaryDelta = u.primaryAttr === "STR" ? dStr : u.primaryAttr === "AGI" ? dAgi : u.primaryAttr === "INT" ? dInt : 0;
+    let armorBonus = 0;
+    let manaRegenBonus = 0;
+    let damageBonus = 0;
+    let slowMove = 0;
+    let slowAttack = 0;
+    let hasteMove = 0;
+    let hasteAttack = 0;
+    let damagePct = 0;
+    let hpRegenBonus = 0;
+    let lifesteal = 0;
+    let thorns = 0;
+    let stun = false;
+    let invuln = false;
+    for (const b of u.buffs) {
+      if (b.kind === "armor") armorBonus += b.value;
+      else if (b.kind === "manaRegen") manaRegenBonus += b.value;
+      else if (b.kind === "damage") damageBonus += b.value;
+      else if (b.kind === "damagePct") damagePct += b.value; // Command/Trueshot Aura
+      else if (b.kind === "hpRegen") hpRegenBonus += b.value; // Unholy Aura
+      else if (b.kind === "lifesteal") lifesteal = Math.max(lifesteal, b.value); // Vampiric Aura
+      else if (b.kind === "thorns") thorns = Math.max(thorns, b.value); // Thorns Aura
+      else if (b.kind === "slow") {
+        slowMove = Math.max(slowMove, b.value);
+        slowAttack = Math.max(slowAttack, b.value2);
+      } else if (b.kind === "haste") {
+        hasteMove = Math.max(hasteMove, b.value);
+        hasteAttack = Math.max(hasteAttack, b.value2);
+      } else if (b.kind === "stun") stun = true;
+      else if (b.kind === "invuln") invuln = true;
+    }
+    u.maxHp = u.baseMaxHp + HP_PER_STR * dStr;
+    u.maxMana = u.baseMaxMana + MANA_PER_INT * dInt;
+    if (u.hp > u.maxHp) u.hp = u.maxHp;
+    if (u.mana > u.maxMana) u.mana = u.maxMana;
+    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus;
+    u.bonusArmor = armorBonus; // the buff/aura portion (shown green in the HUD)
+    if (u.weapon) {
+      const base = u.baseDamage + primaryDelta;
+      u.weapon.damage = Math.max(0, base + damageBonus + base * damagePct); // Command/Trueshot add a % of base
+      u.bonusDamage = u.weapon.damage - base; // the buff/aura portion
+      u.weapon.cooldown = (u.baseCooldown * (1 + slowAttack)) / (1 + hasteAttack);
+    }
+    u.speed = Math.max(0, u.baseSpeed * (1 - slowMove) * (1 + hasteMove));
+    u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus;
+    u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus;
+    u.lifesteal = lifesteal;
+    u.thorns = thorns;
+    u.stunned = stun;
+    u.invulnerable = invuln;
+  }
+
+  /** Advance timed buffs; apply DoT/HoT. Returns true if the unit died (DoT). */
+  private tickBuffs(u: SimUnit, dt: number): boolean {
+    if (!u.buffs.length) return false;
+    for (const b of u.buffs) {
+      if (b.kind === "hot" && b.value) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
+      else if (b.kind === "dot" && b.value) u.hp -= b.value * dt;
+      b.timeLeft -= dt;
+    }
+    u.buffs = u.buffs.filter((b) => b.timeLeft > 0);
+    if (u.hp <= 0) {
+      this.kill(u);
+      return true;
+    }
+    return false;
+  }
+
+  private tickRegen(u: SimUnit, dt: number): void {
+    if (u.maxMana > 0 && u.mana < u.maxMana) u.mana = Math.min(u.maxMana, u.mana + u.manaRegen * dt);
+    if (u.hpRegen > 0 && u.hp > 0 && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.hpRegen * dt);
+  }
+
+  /** Re-apply every active aura's buff to allies in range (short-TTL, so it fades
+   *  when a unit leaves the aura). Non-stacking auras keep the strongest. */
+  private applyAuras(): void {
+    if (!this.abilities) return;
+    for (const src of this.units.values()) {
+      if (src.hp <= 0) continue;
+      for (const ab of src.abilities) {
+        if (ab.level < 1) continue;
+        const make = AURA_BUFFS[ab.code];
+        if (!make) continue;
+        const def = this.abilities.get(ab.id);
+        if (!def) continue;
+        const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+        const radius = lvl.area || 900;
+        const effects = make(lvl);
+        for (const t of this.units.values()) {
+          if (t.building || t.hp <= 0 || t.team !== src.team) continue;
+          if (Math.hypot(t.x - src.x, t.y - src.y) > radius) continue;
+          const ranged = !!t.weapon?.ranged;
+          for (const e of effects) {
+            if (e.rangedOnly && !ranged) continue; // Trueshot only helps ranged units
+            if (e.meleeOnly && (ranged || !t.weapon)) continue; // Vampiric only helps melee units
+            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: AURA_REFRESH, sourceId: src.id, value: e.value, value2: e.value2 });
+          }
+        }
+      }
+    }
+  }
+
+  /** Add/refresh a buff. Grouped buffs (auras, Inner Fire) don't stack — the
+   *  strongest wins and its timer refreshes. Ungrouped buffs are independent. */
+  private applyBuffInternal(u: SimUnit, init: SimBuffInit): void {
+    const group = init.group ?? "";
+    if (group) {
+      // De-dupe per (group, kind): abilities like Avatar/Inner Fire apply an armour
+      // AND a damage buff under one group — keying on group alone would drop the 2nd.
+      const existing = u.buffs.find((b) => b.group === group && b.kind === init.kind);
+      if (existing) {
+        existing.value = Math.max(existing.value, init.value ?? 0);
+        existing.value2 = Math.max(existing.value2, init.value2 ?? 0);
+        existing.timeLeft = Math.max(existing.timeLeft, init.timeLeft);
+        existing.sourceId = init.sourceId;
+        if (init.art) existing.art = init.art;
+        return;
+      }
+    }
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art: init.art ?? "" });
+  }
+
+  private interruptForStun(u: SimUnit): void {
+    // Pause movement WITHOUT clearing the path, so a plain move/patrol resumes when
+    // the stun ends (settle() would wipe the path and strand the unit on "move",
+    // which has no per-tick handler to restart it). Casting is fully interrupted.
+    u.moving = false;
+    u.inCombat = false;
+    this.cancelSwing(u);
+    if (u.order === "cast") {
+      u.pendingCast = null;
+      u.order = "idle";
+    }
+  }
+
+  /** Passive Bash (AHbh): a landed attack has dataB chance to stun for dataC. */
+  private tryBash(attacker: SimUnit, target: SimUnit): void {
+    if (!this.abilities || target.invulnerable) return;
+    const ab = attacker.abilities.find((a) => a.code === "AHbh" && a.level >= 1);
+    if (!ab) return;
+    const def = this.abilities.get(ab.id);
+    if (!def) return;
+    const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    const chance = lvl.data[1]; // dataB = bash chance
+    const stunDur = lvl.data[2] || 1; // dataC = stun duration
+    if (Number.isFinite(chance) && this.rng() < chance) {
+      this.applyBuffInternal(target, { kind: "stun", group: "", timeLeft: target.isHero ? Math.min(stunDur, lvl.heroDuration || stunDur) : stunDur, sourceId: attacker.id });
+    }
+  }
+
+  /** Look up a learned/innate ability on a unit by its base code. */
+  private findAbility(u: SimUnit, code: string): SimAbility | undefined {
+    return u.abilities.find((a) => a.code === code && a.level >= 1);
+  }
+
+  /** Can a unit target another with a (harmful) spell right now? */
+  private castableTarget(caster: SimUnit, target: SimUnit): boolean {
+    if (target.hp <= 0) return false;
+    if (target.invulnerable && this.hostile(caster, target)) return false;
+    return true;
+  }
+
+  /** Order a unit to cast an ability. `code` is the ability's base code; targetId
+   *  (unit) / x,y (point) depend on the ability's target type. Returns false if
+   *  the cast can't be started (unknown/unlearned ability, wrong target, dead). */
+  issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0): boolean {
+    const u = this.units.get(unitId);
+    if (!u || u.stunned || !this.abilities) return false;
+    const ab = this.findAbility(u, code);
+    if (!ab) return false;
+    const def = this.abilities.get(ab.id);
+    if (!def || def.target === "passive") return false;
+    const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    const t = def.target === "unit" ? this.units.get(targetId) : undefined;
+    if (def.target === "unit" && (!t || !this.castableTarget(u, t))) return false;
+    // Remember an attack-move/follow to resume after the cast (WC3 casters keep
+    // marching/following once they've cast).
+    const resume: PendingCast["resume"] =
+      u.order === "attackmove" ? { kind: "attackmove", x: u.amDestX, y: u.amDestY } : u.order === "follow" && u.targetId ? { kind: "follow", id: u.targetId } : null;
+    // Re-task away from whatever it was doing.
+    this.detachBuilder(unitId);
+    this.cancelSwing(u);
+    u.inCombat = false;
+    u.targetId = null;
+    u.order = "cast";
+    u.pendingCast = {
+      code,
+      abilityId: ab.id,
+      rank: ab.level,
+      targetId: def.target === "unit" ? targetId : 0,
+      x: def.target === "point" ? x : (t?.x ?? u.x),
+      y: def.target === "point" ? y : (t?.y ?? u.y),
+      range: def.target === "none" ? 0 : lvl.castRange,
+      castLeft: -1,
+      started: false,
+      fired: false,
+      channelLeft: 0,
+      resume,
+    };
+    return true;
+  }
+
+  /** Drive a pending cast: close to cast range, face the target, then at the cast
+   *  point spend mana + cooldown and fire the effect (or launch the spell missile). */
+  private tickCast(u: SimUnit, dt: number): void {
+    const pc = u.pendingCast;
+    if (!pc || !this.abilities) {
+      this.stop(u.id);
+      return;
+    }
+    const def = this.abilities.get(pc.abilityId);
+    const ab = u.abilities.find((a) => a.id === pc.abilityId);
+    if (!def || !ab || ab.level < 1) {
+      this.stop(u.id);
+      return;
+    }
+    const lvl = def.levelData[Math.min(pc.rank, def.levelData.length) - 1];
+    // Resolve where we're aiming; a unit target that died/became invalid aborts.
+    let tx = pc.x;
+    let ty = pc.y;
+    if (pc.targetId) {
+      const t = this.units.get(pc.targetId);
+      if (!t || !this.castableTarget(u, t)) {
+        this.stop(u.id);
+        return;
+      }
+      tx = t.x;
+      ty = t.y;
+      pc.x = tx;
+      pc.y = ty;
+    }
+    if (!pc.started) {
+      // Approach: close to cast range (hull-to-hull for unit targets), then face.
+      if (pc.range > 0) {
+        const t = pc.targetId ? this.units.get(pc.targetId) : null;
+        const gap = Math.hypot(tx - u.x, ty - u.y) - u.radius - (t?.radius ?? 0);
+        if (gap > pc.range) {
+          this.chasePoint(u, tx, ty);
+          return;
+        }
+      }
+      if (u.moving) this.settle(u);
+      // Face a unit/point target; for a no-target SELF cast (Water Elemental,
+      // Divine Shield, Avatar) keep the current facing so the caster doesn't spin
+      // to face east — and so the summon appears in front of where it's looking.
+      if (Math.hypot(tx - u.x, ty - u.y) > 1) u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_CAST_EPS) return; // still turning
+      // Validate + pay: enough mana and off cooldown.
+      if (ab.cooldownLeft > 0 || u.mana < lvl.cost) {
+        this.stop(u.id);
+        return;
+      }
+      u.mana -= lvl.cost;
+      ab.cooldownLeft = lvl.cooldown;
+      pc.started = true;
+      // The effect fires at the cast POINT — a short delay while the caster plays
+      // its spell animation (raise the hammer, etc.), THEN the spell lands. A
+      // channelled spell (Blizzard, cast>0) uses its cast time as the delay.
+      pc.castLeft = lvl.castTime > 0 ? lvl.castTime : SPELL_CAST_POINT;
+      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId }); // renderer plays the cast animation + sound
+    }
+    // Channelled spells (Blizzard): after firing, the caster STANDS and holds for
+    // the channel duration — it doesn't auto-attack, so the channel isn't self-
+    // interrupted (manual orders still break it).
+    if (pc.fired) {
+      pc.channelLeft -= dt;
+      if (u.moving) this.settle(u);
+      u.desiredFacing = Math.atan2(pc.y - u.y, pc.x - u.x);
+      if (pc.channelLeft > 0) return;
+      this.endCast(u, pc);
+      return;
+    }
+    // Fire once the (short) cast point elapses.
+    pc.castLeft -= dt;
+    if (pc.castLeft > 0) return;
+    pc.fired = true;
+    this.resolveCast(u, def, pc);
+    pc.channelLeft = this.channelDuration(def, pc.rank);
+    if (pc.channelLeft > 0) {
+      if (u.moving) this.settle(u); // begin channelling — hold position
+      return;
+    }
+    this.endCast(u, pc);
+  }
+
+  /** End a cast: resume the pre-cast attack-move/follow, else fall idle. */
+  private endCast(u: SimUnit, pc: PendingCast): void {
+    if (pc.resume?.kind === "attackmove") this.issueAttackMove(u.id, pc.resume.x, pc.resume.y);
+    else if (pc.resume?.kind === "follow") this.issueFollow(u.id, pc.resume.id);
+    else this.stop(u.id);
+  }
+
+  /** Channel time (the caster holds after firing) for a channelled spell — for a
+   *  wave field like Blizzard it's the field's lifetime (waves × interval). */
+  private channelDuration(def: AbilityDef, rank: number): number {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    if (lvl.castTime <= 0) return 0;
+    if (def.code === "AHbz") {
+      const waves = lvl.data[0];
+      const interval = lvl.data[3] || 0.5;
+      if (Number.isFinite(waves) && waves > 0) return waves * interval;
+    }
+    return lvl.castTime;
+  }
+
+  /** Deliver a cast's effect: launch the spell missile (if the ability has one)
+   *  or apply the effect immediately (instant / point / no-target). */
+  private resolveCast(u: SimUnit, def: AbilityDef, pc: PendingCast): void {
+    if (def.target === "unit" && def.missileArt && pc.targetId) {
+      // Travelling spell (Storm Bolt, Death Coil): the effect fires on impact.
+      this.spawnSpellProjectile(u, pc.targetId, def, pc.rank);
+      return;
+    }
+    this.applySpellEffect(pc.code, pc.rank, u, { targetId: pc.targetId, x: pc.x, y: pc.y }, def);
+  }
+
+  /** Idle autocast: a unit with a toggled-on autocast ability picks a valid
+   *  target and casts. Returns true if a cast started. */
+  private tickAutocast(u: SimUnit): boolean {
+    if (!this.abilities || u.mana <= 0) return false;
+    for (const ab of u.abilities) {
+      if (!ab.autocastOn || ab.level < 1 || ab.cooldownLeft > 0) continue;
+      const def = this.abilities.get(ab.id);
+      if (!def || def.target !== "unit") continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (u.mana < lvl.cost) continue;
+      const friendly = def.code === "Ahea" || def.code === "Ainf"; // heal/buff allies
+      const target = this.autocastTarget(u, lvl.castRange, friendly, def.code);
+      if (target) return this.issueCast(u.id, def.code, target.id);
+    }
+    return false;
+  }
+
+  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestScore = friendly ? 0.999 : Infinity;
+    for (const t of this.units.values()) {
+      if (t === u || t.building || t.hp <= 0) continue;
+      if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
+      if (friendly) {
+        if (!this.allied(u, t) || t.mechanical) continue;
+        if (code === "Ahea" && t.hp >= t.maxHp) continue; // only wounded
+        const frac = t.hp / t.maxHp; // heal the most-hurt ally
+        if (frac < bestScore) {
+          bestScore = frac;
+          best = t;
+        }
+      } else {
+        if (!this.hostile(u, t) || t.invulnerable) continue;
+        if (u.buffs.length && this.findBuffFrom(t, u.id)) continue;
+        const d = Math.hypot(t.x - u.x, t.y - u.y);
+        if (d < bestScore) {
+          bestScore = d;
+          best = t;
+        }
+      }
+    }
+    return best;
+  }
+
+  private findBuffFrom(t: SimUnit, sourceId: number): SimBuff | undefined {
+    return t.buffs.find((b) => b.sourceId === sourceId);
+  }
+
+  /** Launch a spell projectile that runs the ability's effect on its target on
+   *  impact (Storm Bolt hammer, Death Coil orb). */
+  private spawnSpellProjectile(u: SimUnit, targetId: number, def: AbilityDef, rank: number): void {
+    const id = this.nextProjectileId++;
+    const proj: SimProjectile = {
+      id,
+      x: u.x,
+      y: u.y,
+      sourceId: u.id,
+      targetId,
+      speed: 900,
+      damage: 0, // spell effect (not plain damage) is applied on impact
+      art: def.missileArt,
+      spell: { code: def.code, rank, abilityId: def.id },
+    };
+    this.projectiles.set(id, proj);
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y });
+  }
+
+  /** Run a spell's effect handler (dispatched on base `code`). Shared by instant
+   *  casts and spell-projectile impacts. */
+  applySpellEffect(code: string, rank: number, caster: SimUnit, ctx: { targetId: number; x: number; y: number }, def?: AbilityDef): void {
+    const handler = SPELL_HANDLERS[code];
+    const d = def ?? (this.abilities ? this.abilityByCode(code) : undefined);
+    if (!handler || !d) return;
+    handler(this.spellApi, caster, d, Math.max(1, rank), ctx);
+  }
+
+  private abilityByCode(code: string): AbilityDef | undefined {
+    if (!this.abilities) return undefined;
+    for (const a of this.abilities.all()) if (a.code === code) return a;
+    return undefined;
+  }
+
+  // === hero XP / leveling ===================================================
+
+  /** Award XP to the killer's heroes for a kill (Liquipedia sharing rules). */
+  private awardKillXp(victim: SimUnit, killerId: number): void {
+    if (victim.building || !killerId) return; // structures / unattributed deaths grant no XP
+    const victimLevel = Math.max(0, Math.min(KILL_XP.length - 1, victim.level || 0));
+    let base = KILL_XP[victimLevel] || 0;
+    if (base <= 0) return;
+    if (victim.isSummon) base *= SUMMON_XP_FACTOR;
+    const killer = this.units.get(killerId);
+    // Beneficiaries: enemy heroes of the victim within share range (else global).
+    const eligible: SimUnit[] = [];
+    for (const h of this.units.values()) {
+      if (!h.isHero || h.hp <= 0 || h.team === victim.team) continue;
+      if (killer && h.team !== killer.team) continue; // only the killer's side
+      if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE) eligible.push(h);
+    }
+    if (!eligible.length) {
+      // No hero in range: award globally to the killer's heroes (no distance loss).
+      for (const h of this.units.values()) {
+        if (h.isHero && h.hp > 0 && killer && h.team === killer.team) eligible.push(h);
+      }
+    }
+    if (!eligible.length) return;
+    const share = base / eligible.length; // split evenly among the sharers
+    for (const h of eligible) {
+      let amount = share;
+      const isCreep = victim.team === -1; // Neutral Hostile
+      if (isCreep) amount *= CREEP_XP_FACTOR[Math.min(h.level, CREEP_XP_FACTOR.length - 1)] ?? 0;
+      this.gainXp(h, amount);
+    }
+  }
+
+  /** Add XP to a hero, leveling it up (with stat growth) across thresholds. */
+  gainXp(hero: SimUnit, amount: number): void {
+    if (!hero.isHero || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
+    hero.xp += amount;
+    while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpForLevel(hero.level + 1)) {
+      this.levelUp(hero);
+    }
+  }
+
+  private levelUp(hero: SimUnit): void {
+    hero.level++;
+    hero.skillPoints++;
+    this.recomputeStats(hero); // new maxHp/maxMana/attributes
+    hero.hp = hero.maxHp; // WC3: leveling fully restores HP and mana
+    hero.mana = hero.maxMana;
+    this.levelUps.push({ unitId: hero.id, level: hero.level });
+  }
+
+  /** Learn (or rank up) a hero ability by spending a skill point. Returns true on
+   *  success. Enforces the hero level requirement, max ranks, and points. */
+  learnAbility(unitId: number, abilityId: string): boolean {
+    const u = this.units.get(unitId);
+    if (!u || !u.isHero || u.skillPoints <= 0 || !this.abilities) return false;
+    const def = this.abilities.get(abilityId);
+    if (!def) return false;
+    const ab = u.abilities.find((a) => a.id === abilityId);
+    if (!ab || ab.level >= def.levels) return false;
+    if (u.level < requiredHeroLevel(def, ab.level + 1)) return false;
+    ab.level++;
+    u.skillPoints--;
+    return true;
+  }
+
+  /** Toggle an ability's autocast (Heal/Slow/…). Returns the new state. */
+  toggleAutocast(unitId: number, code: string): boolean {
+    const u = this.units.get(unitId);
+    const ab = u ? this.findAbility(u, code) : undefined;
+    if (!ab) return false;
+    ab.autocastOn = !ab.autocastOn;
+    return ab.autocastOn;
+  }
+
+  // === spell fields (Blizzard-style repeating area effects) =================
+
+  private spellFields: Array<SpellFieldInit & { timer: number; done: number; team: number }> = [];
+
+  private addSpellFieldInternal(f: SpellFieldInit): void {
+    // Capture the caster's team NOW so the field targets enemies correctly even
+    // after the caster dies mid-channel (Blizzard would otherwise hit allies).
+    const team = this.units.get(f.casterId)?.team ?? 0;
+    this.spellFields.push({ ...f, timer: 0, done: 0, team });
+  }
+
+  private tickSpellFields(dt: number): void {
+    for (let i = this.spellFields.length - 1; i >= 0; i--) {
+      const f = this.spellFields[i];
+      f.timer -= dt;
+      if (f.timer <= 0) {
+        f.timer = f.interval;
+        f.done++;
+        for (const t of this.unitsInAreaInternal(f.x, f.y, f.area)) {
+          if (t.team === f.team || t.neutralPassive) continue; // hit only the caster's enemies
+          this.landDamage(t, f.damagePerWave, f.casterId, false); // spell damage: ignore armor
+        }
+        // Scatter the wave effect at a random point within the area (WC3 drops the
+        // ice shards across the whole circle each wave, not just the centre).
+        if (f.art) {
+          const ang = this.rng() * Math.PI * 2;
+          const r = f.area * Math.sqrt(this.rng());
+          this.spellEffects.push({ art: f.art, x: f.x + Math.cos(ang) * r, y: f.y + Math.sin(ang) * r, targetId: 0, z: 0 });
+        }
+      }
+      if (f.done >= f.waves) this.spellFields.splice(i, 1);
+    }
+  }
+
+  // === corpses ==============================================================
+
+  /** Leave a corpse for an organic, non-mechanical unit (Liquipedia: Corpse).
+   *  Buildings collapse, mechanical units explode, summons vanish — no corpse. */
+  private spawnCorpse(u: SimUnit): void {
+    // A summon (isSummon) leaves no corpse even after its timer hits 0 at expiry.
+    if (u.building || u.mechanical || u.isSummon || u.neutralPassive) return;
+    this.corpses.set(this.nextCorpseId, {
+      id: this.nextCorpseId,
+      deadId: u.id,
+      unitId: u.typeId,
+      x: u.x,
+      y: u.y,
+      facing: u.facing,
+      owner: u.owner,
+      isHero: u.isHero,
+      mechanical: u.mechanical,
+      decayLeft: CORPSE_TOTAL_TIME,
+      raised: false,
+    });
+    this.nextCorpseId++;
+  }
+
+  private tickCorpses(dt: number): void {
+    for (const c of this.corpses.values()) {
+      c.decayLeft -= dt;
+      if (c.decayLeft <= 0) this.corpses.delete(c.id);
+    }
+  }
+
+  /** Corpses within `radius` of a point, freshest first, excluding hero corpses
+   *  and already-raised ones (used by Resurrection / Raise Dead / Cannibalize). */
+  corpsesNear(x: number, y: number, radius: number): SimCorpse[] {
+    const out: SimCorpse[] = [];
+    for (const c of this.corpses.values()) {
+      if (c.raised || c.isHero) continue;
+      if (Math.hypot(c.x - x, c.y - y) > radius) continue;
+      out.push(c);
+    }
+    return out.sort((a, b) => b.decayLeft - a.decayLeft);
+  }
+
+  /** Mark up to `max` friendly corpses near a point as raised, emitting a summon
+   *  request to re-create each as a living unit for `owner`. Returns the count. */
+  raiseNearbyCorpsesInternal(x: number, y: number, radius: number, owner: number, team: number, max: number): number {
+    let raised = 0;
+    for (const c of this.corpses.values()) {
+      if (raised >= max) break;
+      if (c.raised || c.isHero || c.mechanical || !c.unitId) continue;
+      if (Math.hypot(c.x - x, c.y - y) > radius) continue;
+      c.raised = true; // the renderer hides the corpse model once raised
+      this.summonRequests.push({ unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team, summonLeft: 0, sourceId: 0 });
+      raised++;
+    }
+    return raised;
+  }
+
+  private unitsInAreaInternal(x: number, y: number, radius: number): SimUnit[] {
+    const out: SimUnit[] = [];
+    for (const t of this.units.values()) {
+      if (t.hp <= 0) continue;
+      if (Math.hypot(t.x - x, t.y - y) - t.radius <= radius) out.push(t);
+    }
+    return out;
+  }
+
+  // === SpellApi (what spell handlers may do to the world) ===================
+
+  private spellApi: SpellApi = {
+    rng: () => this.rng(),
+    getUnit: (id) => this.units.get(id),
+    unitsInArea: (x, y, r) => this.unitsInAreaInternal(x, y, r),
+    hostile: (a, b) => this.hostile(a, b),
+    ally: (a, b) => this.allied(a, b),
+    spellDamage: (t, amount, src) => this.landDamage(t, amount, src, false), // ignores armor
+    spellHeal: (t, amount) => {
+      t.hp = Math.min(t.maxHp, t.hp + amount);
+    },
+    applyBuff: (t, buff) => this.applyBuffInternal(t, buff),
+    dispel: (t) => {
+      t.buffs = []; // Dispel Magic clears all timed buffs (auras re-apply next tick)
+    },
+    requestSummon: (unitId, x, y, facing, owner, team, dur, src) => {
+      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src });
+    },
+    raiseNearbyCorpses: (x, y, r, owner, team, max) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max),
+    emitEffect: (art, x, y, targetId) => {
+      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0 });
+    },
+    addSpellField: (f) => this.addSpellFieldInternal(f),
+  };
+
+  // === drains (renderer pulls these each frame) =============================
+
+  /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
+  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number }> {
+    if (!this.spellEffects.length) return this.spellEffects;
+    const out = this.spellEffects;
+    this.spellEffects = [];
+    return out;
+  }
+  /** Casts that began this frame (renderer plays the cast animation). */
+  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string }> {
+    if (!this.castStarts.length) return this.castStarts;
+    const out = this.castStarts;
+    this.castStarts = [];
+    return out;
+  }
+  /** Heroes that leveled up this frame (renderer plays the level-up nova). */
+  drainLevelUps(): Array<{ unitId: number; level: number }> {
+    if (!this.levelUps.length) return this.levelUps;
+    const out = this.levelUps;
+    this.levelUps = [];
+    return out;
+  }
+  /** Units summoned/raised this frame — the renderer creates their models. */
+  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number }> {
+    if (!this.summonRequests.length) return this.summonRequests;
+    const out = this.summonRequests;
+    this.summonRequests = [];
+    return out;
+  }
+
   tick(dt: number): void {
     this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % 24;
     this.tickBuildings(dt);
+    this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
     for (const u of this.units.values()) {
+      if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
+      this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
+      this.tickRegen(u, dt); // mana + (hero) hp regeneration
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.repathT > 0) u.repathT -= dt;
+      for (const a of u.abilities) if (a.cooldownLeft > 0) a.cooldownLeft -= dt;
+      if (u.summonLeft > 0) {
+        u.summonLeft -= dt;
+        if (u.summonLeft <= 0) {
+          this.kill(u); // temporary summon (Water Elemental) expired
+          continue;
+        }
+      }
       u.prevX = u.x;
       u.prevY = u.y;
+      if (u.spawning > 0) {
+        u.spawning -= dt; // still materializing (playing its birth clip) — can't act
+        continue;
+      }
+      if (u.stunned) {
+        this.interruptForStun(u); // stunned units can't act this tick
+        continue;
+      }
       switch (u.order) {
+        case "move":
+          // Movement itself is driven by tickMovement while u.moving stays true;
+          // this only restarts a move that a stun/interrupt paused.
+          if (!u.moving && u.waypoint < u.path.length) u.moving = true;
+          break;
         case "attack":
           this.tickAttack(u);
+          break;
+        case "cast":
+          this.tickCast(u, dt); // walk into range, then fire the spell effect
           break;
         case "follow":
           this.tickFollow(u);
@@ -1104,16 +2047,20 @@ export class SimWorld {
           this.tickAttackMove(u, dt); // fight nearby enemies first, then advance
           break;
         case "patrol":
+          if (!u.moving && u.waypoint < u.path.length) u.moving = true; // resume after a stun
           this.tickAcquire(u, dt); // engage enemies encountered en route
           break;
         case "idle":
-          this.tickAcquire(u, dt);
+          // Autocast (toggled-on Heal/Slow/…) gets first refusal, then auto-attack.
+          if (!this.tickAutocast(u)) this.tickAcquire(u, dt);
           break;
       }
     }
     this.tickMovement(dt);
     this.resolveCollisions();
     this.tickProjectiles(dt);
+    this.tickSpellFields(dt); // Blizzard-style repeating area effects
+    this.tickCorpses(dt); // decay flesh→bone→gone
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
       // (or stands attacking) still finishes rotating to its desired heading.
@@ -1256,9 +2203,11 @@ export class SimWorld {
         return; // an enemy is in range — stand and fight, don't advance
       }
     }
-    // Nothing to fight nearby: resume toward the attack-move destination.
+    // Nothing to fight nearby: autocast (Heal/Slow/…) if the caster has one, then
+    // resume toward the attack-move destination (WC3 casters heal on the march).
     u.targetId = null;
     u.inCombat = false;
+    if (this.tickAutocast(u)) return; // a cast started — hold and cast
     if (Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= ARRIVE_EPS) {
       this.stop(u.id); // arrived
       return;
@@ -1348,7 +2297,15 @@ export class SimWorld {
       const step = p.speed * dt;
       if (dist <= step + t.radius) {
         this.projectileImpacts.push({ id: p.id, x: t.x, y: t.y }); // record the hit point
-        this.applyDamage(t, p.damage, p.sourceId);
+        if (p.spell) {
+          // Spell missile (Storm Bolt/Death Coil): run the ability effect on impact.
+          // Resolve the exact ability by id (several abilities share a base code).
+          const caster = this.units.get(p.sourceId) ?? t; // caster may have died mid-flight
+          const def = this.abilities?.get(p.spell.abilityId);
+          this.applySpellEffect(p.spell.code, p.spell.rank, caster, { targetId: t.id, x: t.x, y: t.y }, def);
+        } else {
+          this.applyDamage(t, p.damage, p.sourceId);
+        }
         this.removeProjectile(p.id);
       } else {
         p.x += (dx / dist) * step;
@@ -1493,6 +2450,7 @@ export class SimWorld {
     u.workT -= dt;
     if (u.workT > 0) return;
     u.workT = w.chopPeriod;
+    u.chopSeq++; // renderer re-triggers the chop swing so it stays in phase with the SFX
     this.chops.push(u.id); // axe landed → renderer plays the chop SFX
     w.carryLumber = Math.min(w.lumberCapacity, w.carryLumber + w.lumberPerChop);
     if (w.damagesTree) {
@@ -1586,28 +2544,45 @@ export class SimWorld {
   }
 
   private dealDamage(attacker: SimUnit, target: SimUnit): void {
-    this.applyDamage(target, this.rollDamage(attacker.weapon!), attacker.id);
+    const dealt = this.applyDamage(target, this.rollDamage(attacker.weapon!), attacker.id);
+    // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
+    if (attacker.lifesteal > 0 && dealt > 0 && attacker.hp > 0) {
+      attacker.hp = Math.min(attacker.maxHp, attacker.hp + dealt * attacker.lifesteal);
+    }
+    // Thorns Aura: the target returns a fraction of the damage to the attacker.
+    if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
+    this.tryBash(attacker, target); // passive: a chance to stun on a landed attack
   }
 
-  /** Apply already-rolled damage to a target (armor reduction, death, return
-   *  fire). Shared by melee (instant) and projectile (on-impact) hits. */
-  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number): void {
-    this.hits.push({ attackerId, targetId: target.id }); // renderer plays the impact SFX
+  /** Apply already-rolled PHYSICAL damage: reduced by the target's armor value,
+   *  plays the weapon-impact SFX. Returns the HP actually removed (0 if immune). */
+  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number): number {
     // WC3 armor reduction: each armor point is worth 6% of pre-armor damage.
     const reduction = (target.armor * 0.06) / (1 + 0.06 * Math.max(0, target.armor));
-    target.hp -= rawDamage * (1 - reduction);
+    return this.landDamage(target, rawDamage * (1 - reduction), attackerId, true);
+  }
+
+  /** Apply FINAL (post-reduction) damage: death, return fire, and (for physical
+   *  hits) the impact SFX. Spell damage calls this directly with recordHit=false —
+   *  WC3 ability damage ignores the armor value and plays its own effects. Returns
+   *  the HP removed (0 if the target was invulnerable). */
+  private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean): number {
+    if (target.invulnerable) return 0; // Divine Shield / Avatar: immune to damage
+    if (recordHit) this.hits.push({ attackerId, targetId: target.id });
+    target.hp -= amount;
     if (target.hp <= 0) {
-      this.kill(target);
-      return;
+      this.kill(target, attackerId);
+      return amount;
     }
     // Retaliate: an idle armed victim turns on its attacker (WC3 return fire),
     // unless the attacker has since died mid-flight.
     if (target.order === "idle" && target.weapon && this.units.has(attackerId)) {
       this.issueAttack(target.id, attackerId);
     }
+    return amount;
   }
 
-  private kill(u: SimUnit): void {
+  private kill(u: SimUnit, killerId = 0): void {
     this.refundPendingBuild(u); // died before its building went up → refund the cost
     this.unsettle(u); // corpses don't block cells
     if (u.inMine) {
@@ -1615,6 +2590,8 @@ export class SimWorld {
       if (mine) mine.busy = false; // don't wedge the mine shut forever
     }
     if (u.constructing) this.detachBuilder(u.id); // free the halted construction
+    this.awardKillXp(u, killerId); // enemy heroes near the kill gain experience
+    this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
   }

@@ -20,6 +20,8 @@ export interface CommandButton {
   row: number; // 0–2
   disabled: boolean;
   active: boolean; // armed (e.g. move/attack awaiting a target)
+  cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
+  cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
 }
 
 export interface HudSelection {
@@ -29,13 +31,19 @@ export interface HudSelection {
   maxHp: number;
   mana: number;
   maxMana: number;
-  armor: number;
-  damageMin: number;
+  armor: number; // base armour
+  armorBonus: number; // green "+N" from buffs/auras
+  damageMin: number; // base damage range
   damageMax: number;
+  damageBonus: number; // green "+N" attack damage
   attackType: string;
   armorType: string;
   isHero: boolean;
   level: number;
+  xp: number; // hero current experience
+  xpThis: number; // XP threshold for the current level
+  xpNext: number; // XP threshold for the next level
+  skillPoints: number; // unspent hero skill points
   strength: number;
   agility: number;
   intelligence: number;
@@ -52,6 +60,10 @@ export interface HudSelection {
   icon: string; // the selected thing's own command icon (BLP path)
   isMine: boolean; // selected gold mine
   goldRemaining: number; // gold left in the selected mine
+  isSummon: boolean; // temporary summon — show the "Summoned Unit" timer bar
+  summonSecondsLeft: number; // seconds until it expires
+  summonFrac: number; // remaining fraction of its lifetime (bar fill)
+  buffs: Array<{ icon: string; name: string; harmful: boolean }>; // active auras/buffs/debuffs
 }
 
 export interface HudDriver {
@@ -70,8 +82,12 @@ export interface HudDriver {
   selectionIcons(): Array<{ simId: number; icon: string; hpFrac: number; focused: boolean; owner: number }>;
   /** Focus the sub-group containing a unit (grid icon click). */
   focusUnit(simId: number): void;
-  /** Cycle focus to the next sub-group (Tab). */
-  cycleFocus(): void;
+  /** Select ONLY this unit (double-clicking its grid icon). */
+  selectSingle(simId: number): void;
+  /** If a spell/attack is armed, apply it to this grid unit; true if consumed. */
+  tryTargetArmedAt(simId: number): boolean;
+  /** Cycle focus to the next (or, reversed, previous) sub-group (Tab / Shift+Tab). */
+  cycleFocus(reverse: boolean): void;
   /** Select + centre on the next idle worker (idle-worker badge / F8 / ~). */
   cycleIdleWorker(): void;
   /** How many local workers are currently idle (badge count). */
@@ -145,13 +161,19 @@ export class GameHud {
   private upkeep!: HTMLSpanElement;
   private selName!: HTMLDivElement;
   private selSub!: HTMLDivElement; // "Level N" (heroes)
+  private xpBar!: HTMLDivElement; // hero XP / summon-timer track
+  private xpFill!: HTMLDivElement;
+  private xpText!: HTMLDivElement; // "Level N  into/span" or "Summoned Unit (Ns)" — inside the bar
   private selStats!: HTMLDivElement;
-  private attackStat!: StatRow;
-  private armorStat!: StatRow;
-  private attrRow!: HTMLDivElement;
-  private attrStr!: AttrItem;
-  private attrAgi!: AttrItem;
-  private attrInt!: AttrItem;
+  private attackStat!: StatBlock;
+  private armorStat!: StatBlock;
+  private attrIconEl!: HTMLDivElement; // single icon (the hero's primary attribute)
+  private attrLines!: HTMLDivElement;
+  private strLine!: HTMLDivElement;
+  private agiLine!: HTMLDivElement;
+  private intLine!: HTMLDivElement;
+  private selStatus!: HTMLDivElement; // buff/aura/debuff status icons row
+  private selStatusSlots: HTMLDivElement[] = [];
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
   private selCarry!: HTMLDivElement;
@@ -173,6 +195,9 @@ export class GameHud {
   private idleIconSet = false; // worker icon lazily applied once
   private cmdTooltip!: HTMLDivElement;
   private cmdSlots: HTMLButtonElement[] = [];
+  private cmdLabels: HTMLSpanElement[] = []; // per-slot fallback text (icon-less buttons)
+  private cmdCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
+  private cmdCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private cmdKey = "";
   private clockFace?: HTMLDivElement;
   private dotsT = 0;
@@ -271,8 +296,8 @@ export class GameHud {
     if (this.root.hidden) return;
     if (document.body.classList.contains("game-menu-open")) return; // F10 menu is modal
     if (e.key === "Tab") {
-      e.preventDefault(); // cycle the focused sub-group of a multi-selection
-      this.driver.cycleFocus();
+      e.preventDefault(); // Tab cycles the focused sub-group; Shift+Tab reverses
+      this.driver.cycleFocus(e.shiftKey);
       return;
     }
     if (e.key === "Escape") {
@@ -292,12 +317,16 @@ export class GameHud {
       return;
     }
     // Control groups on the number row 1-0: Ctrl assigns, Shift appends, a plain
-    // tap recalls, a double tap recalls + jumps the camera to the group.
-    if (/^[0-9]$/.test(e.key)) {
+    // tap recalls, a double tap recalls + jumps the camera to the group. Key off
+    // `e.code` (Digit1…) — with Shift held, `e.key` is the shifted symbol ("!"),
+    // which is why Shift+N was silently doing nothing.
+    const digit = /^Digit([0-9])$/.exec(e.code);
+    if (digit) {
       e.preventDefault();
-      if (e.ctrlKey || e.metaKey) this.driver.assignControlGroup(e.key);
-      else if (e.shiftKey) this.driver.appendControlGroup(e.key);
-      else this.driver.recallControlGroup(e.key, this.tapAgain(e.key));
+      const n = digit[1];
+      if (e.ctrlKey || e.metaKey) this.driver.assignControlGroup(n);
+      else if (e.shiftKey) this.driver.appendControlGroup(n);
+      else this.driver.recallControlGroup(n, this.tapAgain(n));
       return;
     }
     // Trigger the command whose hotkey matches the pressed key.
@@ -541,17 +570,52 @@ export class GameHud {
     // BLPs from the game data.
     this.selSub = document.createElement("div");
     this.selSub.className = "hud-sel-sub";
+    // Hero XP / summon-timer bar with the label INSIDE it (level + experience, or
+    // "Summoned Unit (Ns)"). Fill sits behind the centred text.
+    this.xpBar = document.createElement("div");
+    this.xpBar.className = "hud-xpbar";
+    this.xpBar.hidden = true;
+    this.xpFill = document.createElement("div");
+    this.xpFill.className = "hud-xpbar-fill";
+    this.xpText = document.createElement("div");
+    this.xpText.className = "hud-xpbar-text";
+    this.xpBar.append(this.xpFill, this.xpText);
     this.selStats = document.createElement("div");
     this.selStats.className = "hud-sel-stats";
-    this.attackStat = makeStatRow();
-    this.armorStat = makeStatRow();
-    this.attrRow = document.createElement("div");
-    this.attrRow.className = "hud-sel-attrs";
-    this.attrStr = makeAttrItem();
-    this.attrAgi = makeAttrItem();
-    this.attrInt = makeAttrItem();
-    this.attrRow.append(this.attrStr.wrap, this.attrAgi.wrap, this.attrInt.wrap);
-    this.selStats.append(this.attackStat.row, this.armorStat.row, this.attrRow);
+    // Left column: Damage + Armor blocks (icon + "Label:" over the value). Right
+    // column: ONE primary-attribute icon beside the three attribute value lines.
+    this.attackStat = makeStatBlock("Damage");
+    this.armorStat = makeStatBlock("Armor");
+    const leftCol = document.createElement("div");
+    leftCol.className = "hud-stat-col";
+    leftCol.append(this.attackStat.row, this.armorStat.row);
+    this.attrIconEl = document.createElement("div");
+    this.attrIconEl.className = "hud-stat-icon hud-attr-primary-icon";
+    this.attrLines = document.createElement("div");
+    this.attrLines.className = "hud-attr-lines";
+    this.strLine = document.createElement("div");
+    this.agiLine = document.createElement("div");
+    this.intLine = document.createElement("div");
+    this.attrLines.append(this.strLine, this.agiLine, this.intLine);
+    const rightCol = document.createElement("div");
+    rightCol.className = "hud-attr-col";
+    rightCol.append(this.attrIconEl, this.attrLines);
+    const cols = document.createElement("div");
+    cols.className = "hud-stat-cols";
+    cols.append(leftCol, rightCol);
+    this.selStats.append(cols);
+    // Buff / aura / debuff status icons, below the stats (WC3 reference).
+    this.selStatus = document.createElement("div");
+    this.selStatus.className = "hud-sel-status";
+    this.selStatus.hidden = true;
+    for (let i = 0; i < 8; i++) {
+      const slot = document.createElement("div");
+      slot.className = "hud-status-icon";
+      slot.hidden = true;
+      this.selStatusSlots.push(slot);
+      this.selStatus.appendChild(slot);
+    }
+    this.selStats.append(this.selStatus);
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
     // Multi-selection grid: up to 24 unit icons (grouped by type), each with an
@@ -568,7 +632,7 @@ export class GameHud {
       this.selGridSlots.push(slot);
       this.selGrid.appendChild(slot);
     }
-    infoText.append(this.selName, this.selSub, this.progressWrap, this.selStats, this.selCarry, this.selGrid);
+    infoText.append(this.selName, this.selSub, this.xpBar, this.progressWrap, this.selStats, this.selCarry, this.selGrid);
     return { portraitWrap, infoText };
   }
 
@@ -597,14 +661,31 @@ export class GameHud {
     this.cmdTooltip.className = "hud-tooltip";
     this.cmdTooltip.hidden = true;
     card.appendChild(this.cmdTooltip);
-    // 12 fixed slots (4×3); contents are filled per selection each frame.
+    // 12 fixed slots (4×3); contents are filled per selection each frame. Each
+    // slot carries a persistent fallback-text label + a radial cooldown overlay
+    // (kept as children so a card rebuild never wipes them).
     this.cmdSlots = [];
+    this.cmdLabels = [];
+    this.cmdCdOverlay = [];
+    this.cmdCdText = [];
     for (let i = 0; i < 12; i++) {
       const btn = document.createElement("button");
       btn.className = "hud-slot hud-cmd";
       btn.disabled = true;
+      const label = document.createElement("span");
+      label.className = "hud-cmd-label";
+      const cd = document.createElement("div");
+      cd.className = "hud-cmd-cd";
+      cd.hidden = true;
+      const cdText = document.createElement("span");
+      cdText.className = "hud-cmd-cd-text";
+      cd.appendChild(cdText);
+      btn.append(label, cd);
       card.appendChild(btn);
       this.cmdSlots.push(btn);
+      this.cmdLabels.push(label);
+      this.cmdCdOverlay.push(cd);
+      this.cmdCdText.push(cdText);
     }
     return card;
   }
@@ -613,6 +694,7 @@ export class GameHud {
    *  Cheap enough to run each frame; skips work when nothing changed. */
   private refreshCommandCard(): void {
     const cmds = this.driver.commandCard();
+    this.updateCooldownOverlays(cmds); // every frame (cheap) — cmdKey ignores cooldown
     const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
@@ -620,11 +702,12 @@ export class GameHud {
     // hide any hover tooltip so it doesn't linger over the now-empty slot — a
     // removed button never fires pointerleave.
     this.cmdTooltip.hidden = true;
-    for (const btn of this.cmdSlots) {
+    for (let i = 0; i < this.cmdSlots.length; i++) {
+      const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed");
-      btn.textContent = "";
+      btn.classList.remove("armed", "cant-afford");
+      this.cmdLabels[i].textContent = "";
       btn.onclick = null;
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -637,10 +720,28 @@ export class GameHud {
       btn.classList.toggle("armed", c.active);
       btn.classList.toggle("cant-afford", c.disabled);
       if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
-      else btn.textContent = c.name.slice(0, 4);
+      else this.cmdLabels[idx].textContent = c.name.slice(0, 4);
       btn.onclick = () => this.driver.runCommand(c.id);
       btn.onpointerenter = () => this.showTooltip(c);
       btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
+    }
+  }
+
+  /** Per-frame: draw a clockwise dark radial sweep + a seconds count over any
+   *  ability button that's on cooldown (WC3-style). */
+  private updateCooldownOverlays(cmds: CommandButton[]): void {
+    for (const cd of this.cmdCdOverlay) cd.hidden = true;
+    for (const c of cmds) {
+      if (!c.cooldownLeft || c.cooldownLeft <= 0) continue;
+      const idx = c.row * 4 + c.col;
+      const cd = this.cmdCdOverlay[idx];
+      if (!cd) continue;
+      cd.hidden = false;
+      // The revealed (elapsed) wedge grows clockwise from the top; the dark part
+      // is what's still on cooldown.
+      const elapsedDeg = (1 - (c.cooldownFrac ?? 0)) * 360;
+      cd.style.background = `conic-gradient(transparent 0deg ${elapsedDeg}deg, rgba(0,0,0,0.62) ${elapsedDeg}deg 360deg)`;
+      this.cmdCdText[idx].textContent = c.cooldownLeft >= 10 ? String(Math.ceil(c.cooldownLeft)) : c.cooldownLeft.toFixed(1);
     }
   }
 
@@ -678,6 +779,7 @@ export class GameHud {
 
     const sel = this.driver.selection();
     this.portrait.classList.toggle("empty", !sel);
+    if (!sel || this.driver.selectionIcons().length > 0) this.xpBar.hidden = true; // no single hero shown
     if (sel) {
       this.selName.textContent = sel.name;
       this.selHpText.textContent = sel.maxHp > 0 ? `${Math.ceil(sel.hp)} / ${sel.maxHp}` : "";
@@ -688,6 +790,7 @@ export class GameHud {
         return;
       }
       this.selGrid.hidden = true;
+      this.xpBar.hidden = true; // only the hero-stats branch below re-shows it
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
       this.queueTrainable = training; // reset every frame so a stale flag can't fire a cancel
@@ -741,25 +844,52 @@ export class GameHud {
         this.progressWrap.hidden = true;
         this.selStats.hidden = false;
         this.selCarry.hidden = false;
-        this.selSub.textContent = sel.isHero && sel.level > 0 ? `Level ${sel.level}` : "";
+        // Hero: level + experience shown INSIDE the purple XP bar; a summon shows
+        // a green "Summoned Unit (Ns)" timer bar. The sub-line carries a skill-
+        // point nudge for heroes.
+        if (sel.isHero && sel.level > 0) {
+          const span = sel.xpNext - sel.xpThis;
+          const into = Math.max(0, Math.round(sel.xp - sel.xpThis));
+          this.selSub.textContent = ""; // level + XP live inside the bar; no extra label
+          this.xpBar.hidden = false;
+          this.xpBar.classList.remove("summon");
+          this.xpText.textContent = span > 0 ? `Level ${sel.level}   ${into} / ${span}` : `Level ${sel.level}  (max)`;
+          this.xpFill.style.width = `${span > 0 ? Math.max(0, Math.min(1, into / span)) * 100 : 100}%`;
+        } else if (sel.isSummon) {
+          this.selSub.textContent = "";
+          this.xpBar.hidden = false;
+          this.xpBar.classList.add("summon");
+          this.xpText.textContent = `Summoned Unit (${sel.summonSecondsLeft}s)`;
+          this.xpFill.style.width = `${sel.summonFrac * 100}%`;
+        } else {
+          this.selSub.textContent = "";
+          this.xpBar.hidden = true;
+        }
+        // Damage / Armor: base value + a green "+N" bonus from buffs/auras.
         if (sel.damageMax > 0) {
           this.attackStat.row.hidden = false;
           this.setIcon(this.attackStat.icon, infocard("attack", sel.attackType));
-          this.attackStat.text.textContent = `Damage: ${sel.damageMin} - ${sel.damageMax}`;
+          this.attackStat.value.innerHTML = `${sel.damageMin} - ${sel.damageMax}${bonusHtml(sel.damageBonus)}`;
         } else {
           this.attackStat.row.hidden = true;
         }
         this.armorStat.row.hidden = false;
         this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType));
-        this.armorStat.text.textContent = `Armor: ${sel.armor}`;
+        this.armorStat.value.innerHTML = `${sel.armor}${bonusHtml(sel.armorBonus)}`;
+        // Hero attributes: ONE primary-attribute icon beside the three value lines.
         if (sel.isHero) {
-          this.attrRow.hidden = false;
-          this.setAttr(this.attrStr, "str", sel.strength, sel.primaryAttr === "STR");
-          this.setAttr(this.attrAgi, "agi", sel.agility, sel.primaryAttr === "AGI");
-          this.setAttr(this.attrInt, "int", sel.intelligence, sel.primaryAttr === "INT");
+          this.attrIconEl.hidden = false;
+          this.attrLines.hidden = false;
+          const prim = sel.primaryAttr === "AGI" ? "agi" : sel.primaryAttr === "INT" ? "int" : "str";
+          this.setIcon(this.attrIconEl, attrIcon(prim));
+          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.primaryAttr === "STR");
+          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.primaryAttr === "AGI");
+          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.primaryAttr === "INT");
         } else {
-          this.attrRow.hidden = true;
+          this.attrIconEl.hidden = true;
+          this.attrLines.hidden = true;
         }
+        this.renderStatus(sel.buffs);
         this.selCarry.textContent =
           sel.carryGold > 0 ? `Carrying ${sel.carryGold} gold` : sel.carryLumber > 0 ? `Carrying ${sel.carryLumber} lumber` : "";
       }
@@ -787,6 +917,7 @@ export class GameHud {
       if (!ic) {
         slot.hidden = true;
         slot.onclick = null;
+        slot.ondblclick = null;
         return;
       }
       slot.hidden = false;
@@ -797,7 +928,17 @@ export class GameHud {
       const bar = slot.firstElementChild as HTMLDivElement;
       bar.style.width = `${frac * 100}%`;
       bar.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
-      slot.onclick = () => this.driver.focusUnit(ic.simId);
+      // A click with a spell/attack armed targets this unit through the console;
+      // otherwise a single click narrows the selection to just this unit (the
+      // group is already selected, since the grid only shows for a multi-select).
+      slot.onclick = () => {
+        if (this.driver.tryTargetArmedAt(ic.simId)) {
+          this.clearOrderMode();
+          return;
+        }
+        this.driver.selectSingle(ic.simId);
+      };
+      slot.ondblclick = null;
     });
   }
 
@@ -806,10 +947,27 @@ export class GameHud {
     el.style.backgroundImage = url ? `url(${url})` : "";
   }
 
-  private setAttr(item: AttrItem, kind: "str" | "agi" | "int", value: number, primary: boolean): void {
-    this.setIcon(item.icon, attrIcon(kind));
-    item.text.textContent = String(value);
-    item.wrap.classList.toggle("primary", primary);
+
+  /** Render the active buff / aura / debuff status icons under the stats. */
+  private renderStatus(buffs: Array<{ icon: string; name: string; harmful: boolean }>): void {
+    this.selStatus.hidden = buffs.length === 0;
+    for (let i = 0; i < this.selStatusSlots.length; i++) {
+      const slot = this.selStatusSlots[i];
+      const b = buffs[i];
+      if (!b) {
+        slot.hidden = true;
+        slot.onpointerenter = null;
+        slot.onpointerleave = null;
+        continue;
+      }
+      slot.hidden = false;
+      const url = b.icon ? this.driver.blpUrl(b.icon) : null;
+      slot.style.backgroundImage = url ? `url(${url})` : "";
+      if (!url) slot.textContent = b.name.slice(0, 3);
+      else slot.textContent = "";
+      slot.classList.toggle("harmful", b.harmful);
+      slot.title = b.name;
+    }
   }
 
   private drawDots(): void {
@@ -826,26 +984,33 @@ export class GameHud {
   }
 }
 
-interface StatRow { row: HTMLDivElement; icon: HTMLDivElement; text: HTMLSpanElement; }
-interface AttrItem { wrap: HTMLDivElement; icon: HTMLDivElement; text: HTMLSpanElement; }
+interface StatBlock { row: HTMLDivElement; icon: HTMLDivElement; value: HTMLDivElement; }
 
-function makeStatRow(): StatRow {
+/** A stat block: [icon] then "Label:" over the value line (WC3 info panel). */
+function makeStatBlock(label: string): StatBlock {
   const row = document.createElement("div");
-  row.className = "hud-stat-row";
+  row.className = "hud-stat-block";
   const icon = document.createElement("div");
   icon.className = "hud-stat-icon";
-  const text = document.createElement("span");
+  const text = document.createElement("div");
+  text.className = "hud-stat-text";
+  const lab = document.createElement("div");
+  lab.className = "hud-stat-label";
+  lab.textContent = `${label}:`;
+  const value = document.createElement("div");
+  value.className = "hud-stat-value";
+  text.append(lab, value);
   row.append(icon, text);
-  return { row, icon, text };
+  return { row, icon, value };
 }
-function makeAttrItem(): AttrItem {
-  const wrap = document.createElement("div");
-  wrap.className = "hud-attr";
-  const icon = document.createElement("div");
-  icon.className = "hud-attr-icon";
-  const text = document.createElement("span");
-  wrap.append(icon, text);
-  return { wrap, icon, text };
+// A green "+N" bonus span (from buffs/auras/items), or empty when there's none.
+function bonusHtml(bonus: number): string {
+  return bonus > 0 ? ` <span class="stat-bonus">+${bonus}</span>` : "";
+}
+// An attribute line: "Strength: 34" — the label is yellow, the primary bold.
+function attrLineHtml(label: string, value: number, primary: boolean): string {
+  const cls = primary ? "hud-attr-line primary" : "hud-attr-line";
+  return `<span class="${cls}"><span class="attr-name">${label}:</span> ${value}</span>`;
 }
 
 // WC3 infocard type icons (real BLPs under UI\Widgets\Console\Human\). Attack/

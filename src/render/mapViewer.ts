@@ -14,6 +14,7 @@ import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
+import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { STARTING_UNITS, WORKERS, resolveRace, type PlayableRace } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig } from "../ui/lobby";
@@ -53,6 +54,22 @@ const BASE_FILES = [
 ];
 
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
+const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // hero level-up nova
+// Cast sounds for spells whose effect model doesn't sit next to a folder WAV
+// (e.g. Divine Shield has no target/caster art), by base ability code.
+const SPELL_SOUND_FALLBACK: Record<string, string> = {
+  AHds: "Abilities\\Spells\\Human\\DivineShield\\DivineShield.wav",
+};
+// Ground effect models shown under units affected by an aura, by base ability code
+// (verified present in the MPQ). Brilliance/Endurance ship no dedicated model.
+const AURA_EFFECT_MODEL: Record<string, string> = {
+  AHad: "Abilities\\Spells\\Human\\DevotionAura\\DevotionAura.mdx",
+  AOac: "Abilities\\Spells\\Orc\\CommandAura\\CommandAura.mdx",
+  AEar: "Abilities\\Spells\\NightElf\\TrueshotAura\\TrueshotAura.mdx",
+  AUau: "Abilities\\Spells\\Undead\\UnholyAura\\UnholyAura.mdx",
+  AUav: "Abilities\\Spells\\Undead\\VampiricAura\\VampiricAura.mdx",
+  AEah: "Abilities\\Spells\\NightElf\\ThornsAura\\ThornsAura.mdx",
+};
 const NEUTRAL_PASSIVE_PLAYER = 15; // war3mapUnits.doo owner slot for Neutral Passive
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
@@ -174,7 +191,7 @@ export class MapViewerScene {
   private portraitLoading = false;
   private portraitLabel = ""; // sound-set of the unit currently in the portrait (drives talk anim)
   private cameraLock = false; // portrait held → camera follows the selected unit
-  private cardPage: "root" | "build" = "root";
+  private cardPage: "root" | "build" | "learn" = "root";
   private lastSelected: number | null = null;
   private placement: { def: UnitDef; fp: Footprint | null; workerId: number } | null = null;
   private ghost: HTMLDivElement | null = null;
@@ -231,6 +248,7 @@ export class MapViewerScene {
     private blobUrls: string[],
     private vfs: DataSource,
     private registry: UnitRegistry,
+    private abilities: AbilityRegistry,
     private solver: Solver,
   ) {
     this.sounds = new SoundBoard(vfs);
@@ -301,7 +319,7 @@ export class MapViewerScene {
       else viewer.once("loadedbasefiles", resolve);
     });
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), solver);
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), solver);
   }
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
@@ -347,7 +365,7 @@ export class MapViewerScene {
         units: () => map.units as ReturnType<RtsHost["units"]>,
         unitsReady: () => map.unitsReady,
       };
-      this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry);
+      this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry, this.abilities);
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
@@ -521,6 +539,21 @@ export class MapViewerScene {
     for (const u of map.units as Array<{ row?: unknown; instance?: { hide(): void } }>) {
       if (!u.row) u.instance?.hide();
     }
+  }
+
+  /** Where to place a summoned unit: the tile in front of its summoner, else the
+   *  nearest free tile around it (WC3 summons appear ahead of the caster). */
+  private summonSpot(casterX: number, casterY: number, facing: number, collision: number): [number, number] {
+    const dist = 96;
+    const fx = casterX + Math.cos(facing) * dist;
+    const fy = casterY + Math.sin(facing) * dist;
+    if (this.grid) {
+      const n = footprintCells(collision);
+      const [cx, cy] = this.grid.worldToCell(fx, fy);
+      const spot = this.grid.nearestFit(cx, cy, n, 14) ?? this.grid.nearestWalkable(cx, cy, 14);
+      if (spot) return this.grid.cellToWorld(spot[0], spot[1]);
+    }
+    return [fx, fy];
   }
 
   private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<number | null> {
@@ -778,6 +811,67 @@ export class MapViewerScene {
     }
   }
 
+  // Persistent aura ground effects: a looping model under every unit currently
+  // affected by an aura (WC3's glowing rings). Pooled by (unit, aura code).
+  private auraFx = new Map<string, SpawnInstance>();
+  private auraFxLoading = new Set<string>();
+  private updateAuraEffects(): void {
+    const world = this.rts?.simWorld;
+    const map = this.viewer.map;
+    if (!world || !map) return;
+    const active = new Set<string>();
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !u.buffs.length) continue;
+      const seen = new Set<string>();
+      for (const b of u.buffs) {
+        const code = b.group.includes(":") ? b.group.split(":")[0] : "";
+        const path = AURA_EFFECT_MODEL[code];
+        if (!path || seen.has(code)) continue;
+        seen.add(code);
+        const key = `${u.id}:${code}`;
+        active.add(key);
+        const inst = this.auraFx.get(key);
+        if (inst) {
+          this.loc3[0] = u.x;
+          this.loc3[1] = u.y;
+          this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y);
+          inst.setLocation(this.loc3);
+        } else if (!this.auraFxLoading.has(key)) {
+          this.auraFxLoading.add(key);
+          void this.spawnAuraEffect(key, path, u.id);
+        }
+      }
+    }
+    for (const [key, inst] of this.auraFx) {
+      if (!active.has(key)) {
+        inst.detach();
+        this.auraFx.delete(key);
+      }
+    }
+  }
+
+  private async spawnAuraEffect(key: string, path: string, simId: number): Promise<void> {
+    let model = this.effectModels.get(path);
+    if (model === undefined) {
+      model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
+      this.effectModels.set(path, model);
+    }
+    this.auraFxLoading.delete(key);
+    const map = this.viewer.map;
+    const u = this.rts?.simWorld.units.get(simId);
+    if (!model || !map || !u || u.hp <= 0 || this.auraFx.has(key)) return;
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    this.loc3[0] = u.x;
+    this.loc3[1] = u.y;
+    this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y);
+    inst.setLocation(this.loc3);
+    inst.setSequence(0);
+    inst.setSequenceLoopMode(2); // loop the aura ring
+    inst.show();
+    this.auraFx.set(key, inst);
+  }
+
   private static readonly TREE_PULSE = 0.7; // two quick blinks over this window
 
   /** Blink a harvested tree a bright, saturated yellow TWICE (abrupt on/off), then
@@ -866,7 +960,33 @@ export class MapViewerScene {
       inst.show();
     }
     for (let i = markers.length; i < this.queueFlags.length; i++) this.queueFlags[i].hide();
+    this.updateAoeCircle();
     this.tickFlashCircles(dt);
+  }
+
+  /** AoE cast circle at the cursor while a point-target area spell (Blizzard,
+   *  Dispel, …) is armed — sized to the ability's area of effect. */
+  private aoeCircle: SpawnInstance | null = null;
+  private updateAoeCircle(): void {
+    const cast = this.rts?.armedCast;
+    if (!this.rts || !cast || cast.target !== "point" || !cast.area) {
+      this.aoeCircle?.hide();
+      return;
+    }
+    const hit = this.rts.groundPoint(this.lastMouse.x, this.lastMouse.y);
+    if (!hit) {
+      this.aoeCircle?.hide();
+      return;
+    }
+    if (!this.aoeCircle) this.aoeCircle = this.newCircle();
+    this.placeCircle(this.aoeCircle, { x: hit[0], y: hit[1], z: this.rts.groundHeightAt(hit[0], hit[1]), radius: cast.area, owner: -2, team: -2, sizeToRadius: true, neutral: true }, [0.45, 0.85, 1]);
+  }
+
+  private armedAbilityArea(code: string): number {
+    const su = this.rts?.selectedSimUnit();
+    const ab = su?.abilities.find((a) => a.code === code && a.level >= 1);
+    const def = ab ? this.abilities.get(ab.id) : undefined;
+    return def ? def.levelData[Math.min(ab!.level, def.levelData.length) - 1].area || 0 : 0;
   }
 
   /** Draw + time the harvest-/attack-order flashes (flat ground rings, twice):
@@ -907,6 +1027,8 @@ export class MapViewerScene {
   private static readonly ZOOM_MIN = 1500;
   private static readonly ZOOM_MAX = 3600;
   private static readonly MELEE_START = 2400;
+  private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
+  private mouseOverCanvas = false; // cursor over the map (not the console) — gates edge-scroll
 
   /** Create missile instances for freshly-launched projectiles, move live ones
    *  to their current sim position each frame, and detach ones that landed. */
@@ -916,6 +1038,7 @@ export class MapViewerScene {
     if (!world || !map) return;
     for (const p of world.drainSpawnedProjectiles()) {
       if (!p.art) continue; // no missile model (still deals delayed damage)
+      this.sounds?.playMissile(p.art, "launch"); // fire/whoosh/gunshot as it launches
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -1099,15 +1222,29 @@ export class MapViewerScene {
       valid = this.placementValid(x, y);
     }
     if (this.buildGhost && hit) {
-      // Position the silhouette on the ground and tint it blue/red.
+      // Position the finished-building silhouette on the ground. NO vertex-colour
+      // tint — the tint (a translucent multiply) was mangling many models; show
+      // the real look instead and signal "blocked" with a red box overlay only.
       this.buildGhost.show();
       if (this.ghostBirthFrame >= 0) this.buildGhost.frame = this.ghostBirthFrame; // keep it fully built
       this.loc3[0] = x;
       this.loc3[1] = y;
       this.loc3[2] = this.rts.groundHeightAt(x, y);
       this.buildGhost.setLocation(this.loc3);
-      this.buildGhost.setVertexColor(valid ? [0.35, 0.55, 1, 0.55] : [1, 0.35, 0.3, 0.55]);
-      if (this.ghost) this.ghost.hidden = true;
+      this.buildGhost.setVertexColor([1, 1, 1, 1]);
+      if (this.ghost) {
+        // Red footprint box shown only when the spot is blocked.
+        this.ghost.hidden = valid;
+        if (!valid) {
+          const cells = this.placement.fp ? Math.max(this.placement.fp.w, this.placement.fp.h) : 4;
+          const size = cells * 14;
+          this.ghost.classList.add("invalid");
+          this.ghost.style.width = `${size}px`;
+          this.ghost.style.height = `${size}px`;
+          this.ghost.style.left = `${cssX}px`;
+          this.ghost.style.top = `${cssY}px`;
+        }
+      }
       return;
     }
     // Fallback cursor box (until the ghost model loads).
@@ -1172,7 +1309,9 @@ export class MapViewerScene {
       dayNight: () => this.rts?.timeOfDay() ?? { hour: 8, isDay: true },
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
       focusUnit: (simId) => this.rts?.focusUnit(simId),
-      cycleFocus: () => this.rts?.cycleFocus(),
+      selectSingle: (simId) => this.rts?.selectSingle(simId),
+      tryTargetArmedAt: (simId) => this.rts?.tryTargetArmedAt(simId) ?? false,
+      cycleFocus: (reverse) => this.rts?.cycleFocus(reverse),
       cycleIdleWorker: () => {
         if (this.rts?.cycleIdleWorker()) {
           const pos = this.rts.selectedPosition();
@@ -1332,14 +1471,18 @@ export class MapViewerScene {
       return out;
     }
     if (sel.isBuilding) {
+      const food = this.rts!.foodFor(this.localPlayer);
       for (const uid of trainsFor(sel.typeId)) {
         const d = this.registry.get(uid);
         if (!d) continue;
         const stash = this.rts!.stashFor(this.localPlayer);
-        const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
+        const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer); // first hero is free
+        const gold = freeHero ? 0 : d.goldCost;
+        const lumber = freeHero ? 0 : d.lumberCost;
+        const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
         out.push(this.cmd({
           id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
-          desc: d.description || `Trains a ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: d.foodUsed,
+          desc: d.description || `Trains a ${d.name}.`, gold, lumber, food: d.foodUsed,
           col: d.buttonX, row: d.buttonY, disabled: !afford,
         }));
       }
@@ -1371,6 +1514,40 @@ export class MapViewerScene {
       return out;
     }
 
+    // Learn-skill sub-page (heroes): spend a skill point on a new/higher ability.
+    // Cards fill the TOP row(s) left→right (developer request), each showing a "+"
+    // affordance and the effect it grants at the next rank.
+    if (this.cardPage === "learn" && sel.isHero) {
+      const su = this.rts!.simWorld.units.get(sel.id);
+      if (su) {
+        for (const ab of su.abilities) {
+          const def = this.abilities.get(ab.id);
+          if (!def) continue;
+          const col = def.learnX; // researchbuttonpos — the WC3 learn-page slot (row 0)
+          const row = def.learnY;
+          const maxed = ab.level >= def.levels;
+          const nextRank = ab.level + 1;
+          const need = requiredHeroLevel(def, nextRank);
+          const canLearn = su.skillPoints > 0 && !maxed && su.level >= need;
+          const desc = maxed
+            ? `${def.name} is fully learned (rank ${def.levels}).`
+            : su.level < need
+              ? `Requires Hero Level ${need} to learn ${def.name} (rank ${nextRank}).`
+              : `Learn ${def.name} — Rank ${nextRank}.  ${this.abilityDesc(def, nextRank)}`;
+          out.push(this.cmd({
+            id: canLearn ? `learn:${ab.id}` : "noop",
+            icon: this.blpIcon(def.icon),
+            name: maxed ? `${def.name} (Max)` : `+ ${def.name} [${ab.level}/${def.levels}]`,
+            hotkey: def.hotkey,
+            desc,
+            col, row, disabled: !canLearn,
+          }));
+        }
+        out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Return to orders.", col: 3, row: 2 }));
+      }
+      return out;
+    }
+
     // WC3 layout (developer spec): top row = Move, Stop, Hold, Attack; Patrol at
     // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
     // is reserved for learned skills/abilities.
@@ -1386,16 +1563,120 @@ export class MapViewerScene {
       out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2 }));
       out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: armed === "repair" }));
     }
+    this.pushAbilityButtons(sel, out); // learned spells + a hero's Learn Skill button
     return out;
+  }
+
+  /** Fixed command-card slots for a hero's abilities: basics fill columns 0–2 of
+   *  the bottom row in learn-list order, the ultimate takes column 3. Non-heroes
+  /** Tooltip text for a spell button: mana/cooldown + the per-rank ubertip (with
+   *  its `<code,Field>` placeholders resolved to the real values). */
+  private abilityDesc(def: AbilityDef, rank: number): string {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    const head: string[] = [];
+    if (lvl.cost > 0) head.push(`Mana ${lvl.cost}`);
+    if (lvl.cooldown > 0) head.push(`Cooldown ${lvl.cooldown}s`);
+    const raw = def.uberTips[Math.min(rank, def.uberTips.length) - 1] || def.uberTips[0] || "";
+    const body = this.resolveTip(raw, def, rank);
+    return [head.join("  •  "), body].filter(Boolean).join("  —  ");
+  }
+
+  /** Replace WC3 tooltip references `<AbilCode,Field>` (and `,%` variants) with the
+   *  computed value for the shown rank — e.g. "heal for <AHhb,DataA1>" → "heal for
+   *  200". Unknown refs collapse to empty rather than leaking angle-bracket tokens. */
+  private resolveTip(text: string, def: AbilityDef, rank: number): string {
+    if (!text.includes("<")) return text;
+    return text.replace(/<([^,>]+),([^,>]+?)(,%)?>/g, (_m, code: string, field: string, pct?: string) => {
+      const d = this.abilities.get(code.trim()) ?? def;
+      const lvl = d.levelData[Math.min(rank, d.levelData.length) - 1];
+      const v = tipFieldValue(lvl, field.trim());
+      if (v === null || Number.isNaN(v)) return "";
+      const n = pct ? v * 100 : v;
+      return String(Math.abs(n % 1) < 1e-6 ? Math.round(n) : Math.round(n * 100) / 100);
+    });
+  }
+
+  /** Append a movable unit's learned/innate abilities (and a hero's Learn Skill
+   *  button) to its command card. Auras show as passive (disabled) indicators;
+   *  autocast abilities (Heal/Slow) toggle; the rest arm a target or fire. */
+  private pushAbilityButtons(sel: { id: number; isHero: boolean }, out: CommandButton[]): void {
+    if (!this.rts) return;
+    const su = this.rts.simWorld.units.get(sel.id);
+    if (!su || su.owner !== this.localPlayer) return;
+    const armedCode = this.rts.armedCast?.code ?? null;
+    for (const ab of su.abilities) {
+      if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
+      const def = this.abilities.get(ab.id);
+      if (!def) continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      const col = def.buttonX; // the ability's real WC3 command-card slot
+      const row = def.buttonY;
+      const passive = def.target === "passive";
+      const onCd = ab.cooldownLeft > 0;
+      const noMana = su.mana < lvl.cost;
+      out.push(this.cmd({
+        id: passive ? "noop" : def.autocast ? `autocast:${ab.code}` : `ability:${ab.code}`,
+        icon: this.blpIcon(def.icon),
+        name: def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
+        hotkey: def.hotkey,
+        desc: this.abilityDesc(def, ab.level),
+        col, row,
+        // Cooldown is shown by the radial overlay, not the greyed "can't afford"
+        // look (a click while on cooldown is harmlessly rejected by the sim).
+        disabled: passive || noMana,
+        active: armedCode === ab.code || (def.autocast && ab.autocastOn),
+        cooldownLeft: onCd ? ab.cooldownLeft : 0,
+        cooldownFrac: onCd && lvl.cooldown > 0 ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown)) : 0,
+      }));
+    }
+    if (su.isHero && su.skillPoints > 0) {
+      const pts = `${su.skillPoints} skill point${su.skillPoints > 1 ? "s" : ""}`;
+      out.push(this.cmd({
+        id: "learnpage",
+        icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSelectHeroOn.blp"),
+        name: "Learn Skill",
+        hotkey: "L",
+        desc: `Opens the skill list to learn or improve one of this hero's abilities. You have ${pts} to spend.`,
+        col: 3, row: 1,
+      }));
+    }
   }
 
   private runCommand(id: string): void {
     if (!this.rts) return;
+    if (id === "noop") return;
     this.sounds?.playUi("InterfaceClick"); // WC3 command-card button click
     this.sounds?.unlock(); // keyboard hotkeys are a gesture too
     if (id === "move" || id === "attack" || id === "patrol" || id === "rally" || id === "repair") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
+      return;
+    }
+    // --- spells ---
+    if (id.startsWith("ability:")) {
+      const code = id.slice(8);
+      const target = KNOWN_ABILITIES[code]?.target;
+      if (target === "none") {
+        this.rts.castNoTarget(code); // Thunder Clap / Divine Shield / Avatar — fire now
+      } else if (target === "unit" || target === "point") {
+        this.rts.armedCast = { code, target, area: target === "point" ? this.armedAbilityArea(code) : 0 };
+        this.rts.orderMode = "cast";
+        this.hud?.setArmed(true);
+      }
+      return;
+    }
+    if (id.startsWith("autocast:")) {
+      this.rts.toggleAutocast(id.slice(9)); // toggle Heal/Slow autocast on the selection
+      return;
+    }
+    if (id === "learnpage") {
+      this.cardPage = "learn";
+      return;
+    }
+    if (id.startsWith("learn:")) {
+      this.rts.learnSkill(id.slice(6));
+      const su = this.rts.selectedSimUnit();
+      if (!su || su.skillPoints <= 0) this.cardPage = "root"; // out of points → back to orders
       return;
     }
     if (id === "stop" || id === "hold") {
@@ -1414,12 +1695,13 @@ export class MapViewerScene {
       // building's training queue.
       if (this.rts.orderMode) {
         this.rts.orderMode = null;
+        this.rts.armedCast = null; // disarm a pending spell target
         this.hud?.clearOrderMode();
         return;
       }
       if (this.placement) {
         this.cancelPlacement();
-      } else if (this.cardPage === "build") {
+      } else if (this.cardPage === "build" || this.cardPage === "learn") {
         this.cardPage = "root";
       } else {
         const sel = this.rts.selectedInfo();
@@ -1432,6 +1714,8 @@ export class MapViewerScene {
       const def = this.registry.get(id.slice(6));
       const workerId = this.rts.selectedId;
       if (def && workerId !== null) {
+        this.buildGhost?.hide(); // switching buildings: drop the previously-armed ghost
+        this.buildGhost = null;
         this.placement = { def, fp: def.pathTex ? this.footprintFor(def.pathTex) : null, workerId };
         void this.showBuildGhost(def);
       }
@@ -1451,13 +1735,22 @@ export class MapViewerScene {
     }
   }
 
+  private freeHeroUsed = new Set<number>(); // players who've had their free first hero
   private trainUnit(buildingId: number, unitId: string): void {
     const d = this.registry.get(unitId);
     if (!d || !this.rts) return;
     const stash = this.rts.stashFor(this.localPlayer);
-    if (stash.gold < d.goldCost || stash.lumber < d.lumberCost) return;
-    stash.gold -= d.goldCost;
-    stash.lumber -= d.lumberCost;
+    const food = this.rts.foodFor(this.localPlayer);
+    // WC3 melee: a player's FIRST hero is free of gold/lumber (only food).
+    const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer);
+    const gold = freeHero ? 0 : d.goldCost;
+    const lumber = freeHero ? 0 : d.lumberCost;
+    // Food (like gold/lumber) is committed when training begins; block if the
+    // supply cap would be exceeded (WC3: "not enough food").
+    if (stash.gold < gold || stash.lumber < lumber || food.used + d.foodUsed > food.made) return;
+    stash.gold -= gold;
+    stash.lumber -= lumber;
+    if (freeHero) this.freeHeroUsed.add(this.localPlayer);
     this.rts.simWorld.enqueueTrain(buildingId, unitId, d.buildTime || 15);
   }
 
@@ -1547,13 +1840,21 @@ export class MapViewerScene {
   private applyGhostPose(inst: SpawnInstance): void {
     zQuat(this.mq, (3 * Math.PI) / 2); // face south, like a placed building
     inst.setRotation(this.mq);
-    const seqs = inst.model.sequences;
+    const seqs = inst.model.sequences as Array<{ name: string; interval?: ArrayLike<number> }>;
+    // Pose the ghost at the finished-building "Stand" clip, pinned to a fixed frame
+    // (forcing the frame each render is what actually makes the model render its
+    // built geometry — a cold setSequence sometimes showed the bind/scaffold pose).
     const stand = standSequence(seqs);
-    if (stand >= 0) {
+    if (stand >= 0 && seqs[stand].interval) {
+      inst.setSequence(stand);
+      inst.setSequenceLoopMode(0);
+      this.ghostBirthFrame = seqs[stand].interval![0];
+      inst.frame = this.ghostBirthFrame;
+    } else if (stand >= 0) {
       inst.setSequence(stand);
       inst.setSequenceLoopMode(2);
+      this.ghostBirthFrame = -1;
     }
-    this.ghostBirthFrame = -1; // no birth-frame pinning; let Stand play
   }
 
   private resourceIcon(kind: "gold" | "lumber" | "supply"): string | null {
@@ -1706,8 +2007,10 @@ export class MapViewerScene {
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);
       this.updateEffects(dt / 1000);
+      this.updateAuraEffects();
       this.updateTreePulses(dt / 1000);
       this.updateProjectiles();
+      if (this.placement) this.updateGhost(this.lastMouse.x, this.lastMouse.y); // show/position the ghost each frame (not only on mouse move)
       this.updateReticle(this.lastMouse.x, this.lastMouse.y);
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
@@ -1736,6 +2039,45 @@ export class MapViewerScene {
           this.sounds?.play(d.soundSet, "Ready"); // "unit ready" voice on completion
           void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
             if (simId !== null) this.applyRally(simId, rally);
+          });
+        }
+        // --- spells / abilities ---
+        // Effect models (Holy Light burst, Heal glow, Thunder Clap ring, …): follow
+        // the target unit if one is given, else play at the point.
+        for (const fx of world.drainSpellEffects()) {
+          const t = fx.targetId ? world.units.get(fx.targetId) : null;
+          const x = t ? t.x : fx.x;
+          const y = t ? t.y : fx.y;
+          void this.spawnEffect(fx.art, x, y, this.rts!.groundHeightAt(x, y) + (fx.z || 0), 2);
+        }
+        // Cast animations (throw/slam/spell) + the spell's cast/effect sound.
+        for (const c of world.drainCastStarts()) {
+          this.rts!.playCastAnim(c.casterId, c.code);
+          const def = this.abilities.get(c.abilityId);
+          if (def) this.sounds?.playSpellSound([def.targetArt, def.casterArt, def.specialArt], SPELL_SOUND_FALLBACK[c.code]);
+        }
+        // Hero level-up nova.
+        for (const lu of world.drainLevelUps()) {
+          const h = world.units.get(lu.unitId);
+          if (h) void this.spawnEffect(LEVEL_UP_FX, h.x, h.y, this.rts!.groundHeightAt(h.x, h.y), 1.5);
+        }
+        // Summoned / raised units — create their models IN FRONT of the caster
+        // (nearest free tile), play their birth clip, then flag temporary summons
+        // (Water Elemental) so the sim expires them on schedule.
+        for (const s of world.drainSummonRequests()) {
+          const d = this.registry.get(s.unitId);
+          if (!d) continue;
+          const summonLeft = s.summonLeft;
+          const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16);
+          void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
+            if (simId === null) return;
+            const su = world.units.get(simId);
+            if (su && summonLeft > 0) {
+              su.summonLeft = summonLeft;
+              su.summonMax = summonLeft;
+              su.isSummon = true; // temporary summon — expires, leaves no corpse, ×0.5 XP
+            }
+            this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
           });
         }
       }
@@ -1840,6 +2182,7 @@ export class MapViewerScene {
     if ((letters && this.keys.has("s")) || this.keys.has("arrowdown")) this.pan(fwd, -speed);
     if ((letters && this.keys.has("d")) || this.keys.has("arrowright")) this.pan(right, speed);
     if ((letters && this.keys.has("a")) || this.keys.has("arrowleft")) this.pan(right, -speed);
+    this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
 
     if (this.canvas.width !== scene.viewport[2] || this.canvas.height !== scene.viewport[3]) {
       syncCanvasSize(this.canvas);
@@ -1855,6 +2198,54 @@ export class MapViewerScene {
     ]);
     scene.camera.perspective(Math.PI / 4, this.aspect(), 16, this.distance * 8);
     scene.camera.moveToAndFace(eye, this.target, UP);
+  }
+
+  // Edge-of-screen scrolling (WC3): pan when the cursor rests within EDGE_MARGIN of
+  // a screen edge, and show a directional arrow cursor pointing the scroll way.
+  private scrollArrow: HTMLDivElement | null = null;
+  private updateEdgeScroll(fwd: [number, number], right: [number, number], speed: number): void {
+    // Only in a live match, cursor over the map (not the console), nothing modal.
+    const active =
+      !!this.hud &&
+      !this.paused &&
+      !this.placement &&
+      this.mouseOverCanvas &&
+      !document.body.classList.contains("game-menu-open");
+    let dx = 0;
+    let dy = 0;
+    if (active) {
+      const m = this.lastMouse;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const margin = MapViewerScene.EDGE_MARGIN;
+      if (m.x <= margin) dx = -1;
+      else if (m.x >= w - margin) dx = 1;
+      if (m.y <= margin) dy = -1;
+      else if (m.y >= h - margin) dy = 1;
+    }
+    if (dx || dy) {
+      if (dx) this.pan(right, dx * speed);
+      if (dy) this.pan(fwd, -dy * speed); // top of screen (dy<0) pans the view forward
+    }
+    this.showScrollArrow(dx, dy);
+  }
+
+  private showScrollArrow(dx: number, dy: number): void {
+    if (!dx && !dy) {
+      if (this.scrollArrow) this.scrollArrow.hidden = true;
+      return;
+    }
+    if (!this.scrollArrow) {
+      this.scrollArrow = document.createElement("div");
+      this.scrollArrow.className = "scroll-arrow";
+      document.body.appendChild(this.scrollArrow);
+    }
+    // Directional glyph (8-way) placed at the cursor, pointing the scroll way.
+    const arrows: Record<string, string> = { "-1,-1": "↖", "0,-1": "↑", "1,-1": "↗", "-1,0": "←", "1,0": "→", "-1,1": "↙", "0,1": "↓", "1,1": "↘" };
+    this.scrollArrow.textContent = arrows[`${dx},${dy}`] ?? "";
+    this.scrollArrow.style.left = `${this.lastMouse.x}px`;
+    this.scrollArrow.style.top = `${this.lastMouse.y}px`;
+    this.scrollArrow.hidden = false;
   }
 
   private pan(dir: [number, number], amount: number): void {
@@ -1952,6 +2343,7 @@ export class MapViewerScene {
         if (this.placement) this.cancelPlacement();
         else if (this.rts?.orderMode) {
           this.rts.orderMode = null;
+          this.rts.armedCast = null; // disarm a pending spell target
           this.hud?.clearOrderMode();
         } else this.rts?.moveAt(e.offsetX, e.offsetY, e.shiftKey);
         return;
@@ -1992,6 +2384,7 @@ export class MapViewerScene {
     c.addEventListener("pointermove", (e) => {
       this.lastMouse.x = e.offsetX;
       this.lastMouse.y = e.offsetY;
+      this.mouseOverCanvas = true;
       if (this.placement) this.updateGhost(e.offsetX, e.offsetY);
       // WC3 keeps a fixed camera angle — no free rotation. A left-drag draws a
       // selection rectangle (unless placing a building or holding an armed order).
@@ -2004,7 +2397,16 @@ export class MapViewerScene {
     // Pointer over an interactive HUD element (which swallows the canvas move
     // events): clear the hover so the reticle hides and the normal cursor shows.
     window.addEventListener("pointermove", (e) => {
-      if (e.target !== this.canvas && !this.dragging) this.rts?.clearHover();
+      if (e.target !== this.canvas && !this.dragging) {
+        this.mouseOverCanvas = false; // over the HUD/chrome — suspend edge-scroll
+        this.rts?.clearHover();
+        // While a spell/order is armed, keep the reticle following the cursor over
+        // the HUD too, so you can aim skills at units in the console's group grid.
+        if (this.rts?.orderMode) {
+          this.lastMouse.x = e.clientX;
+          this.lastMouse.y = e.clientY;
+        }
+      }
     });
     c.addEventListener(
       "wheel",
