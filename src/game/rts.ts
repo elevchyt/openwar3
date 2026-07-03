@@ -394,15 +394,19 @@ export class RtsController {
       const atk = this.registry.get(this.byId.get(h.attackerId)?.typeId ?? "");
       const tgt = this.registry.get(this.byId.get(h.targetId)?.typeId ?? "");
       if (!atk) continue;
+      const tu = this.sim.units.get(h.targetId); // impact rings out at the struck unit
+      const at = tu ? { x: tu.x, y: tu.y, z: this.heightAt(tu.x, tu.y) } : undefined;
       if (atk.weaponSound && atk.weaponSound !== "_" && tgt?.armorSound) {
-        this.sounds.playImpact(atk.weaponSound, tgt.armorSound); // melee: material clang
+        this.sounds.playImpact(atk.weaponSound, tgt.armorSound, at); // melee: material clang
       } else if (atk.missileArt) {
-        this.sounds.playMissile(atk.missileArt, "impact"); // ranged: the missile's own impact sound
+        this.sounds.playMissile(atk.missileArt, "impact", at); // ranged: the missile's own impact sound
       }
     }
     for (const workerId of this.sim.drainChops()) {
       const def = this.registry.get(this.byId.get(workerId)?.typeId ?? "");
-      if (def?.lumberSound) this.sounds.playImpact(def.lumberSound, "Wood"); // trees are "Wood" armour
+      const w = this.sim.units.get(workerId);
+      const at = w ? { x: w.x, y: w.y, z: this.heightAt(w.x, w.y) } : undefined;
+      if (def?.lumberSound) this.sounds.playImpact(def.lumberSound, "Wood", at); // trees are "Wood" armour
     }
   }
 
@@ -1047,7 +1051,9 @@ export class RtsController {
     // Death cry (all units, friend or foe — you hear the battlefield). Buildings
     // have no Death sound-set → resolves to nothing.
     const def = this.registry.get(e.typeId);
-    if (def?.soundSet) this.sounds?.play(def.soundSet, "Death");
+    // Death cry rings out from where the unit fell (its model's last location).
+    const loc = e.unit.instance.localLocation;
+    if (def?.soundSet) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
     this.byId.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);

@@ -1045,7 +1045,7 @@ export class MapViewerScene {
     if (!world || !map) return;
     for (const p of world.drainSpawnedProjectiles()) {
       if (!p.art) continue; // no missile model (still deals delayed damage)
-      this.sounds?.playMissile(p.art, "launch"); // fire/whoosh/gunshot as it launches
+      this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) }); // fire/whoosh/gunshot as it launches
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -2104,7 +2104,9 @@ export class MapViewerScene {
         for (const c of world.drainCastStarts()) {
           this.rts!.playCastAnim(c.casterId, c.code);
           const def = this.abilities.get(c.abilityId);
-          if (def) this.sounds?.playSpellSound([def.targetArt, def.casterArt, def.specialArt], SPELL_SOUND_FALLBACK[c.code]);
+          const caster = world.units.get(c.casterId);
+          const at = caster ? { x: caster.x, y: caster.y, z: this.rts!.groundHeightAt(caster.x, caster.y) } : undefined;
+          if (def) this.sounds?.playSpellSound([def.targetArt, def.casterArt, def.specialArt], SPELL_SOUND_FALLBACK[c.code], at);
         }
         // Hero level-up nova.
         for (const lu of world.drainLevelUps()) {
@@ -2248,6 +2250,9 @@ export class MapViewerScene {
     ]);
     scene.camera.perspective(Math.PI / 4, this.aspect(), 16, this.distance * 8);
     scene.camera.moveToAndFace(eye, this.target, UP);
+    // Drive positional (WANT3D) audio: listener at the ground focus, facing the
+    // camera's look direction so on-screen battles pan + attenuate around center.
+    this.sounds?.setListener(this.target, eye);
   }
 
   // Edge-of-screen scrolling (WC3): pan when the cursor rests within EDGE_MARGIN of

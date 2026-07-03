@@ -26,6 +26,14 @@ import type { DataSource } from "../vfs/types";
 
 export type SoundCategory = "What" | "Yes" | "YesAttack" | "Pissed" | "Warcry" | "Ready" | "Death";
 
+/** A world position for a positional (WANT3D) sound. z is optional (defaults to 0 —
+ *  panning is driven by the XY azimuth to the listener, so height barely matters). */
+export interface SoundPos {
+  x: number;
+  y: number;
+  z?: number;
+}
+
 const ACK_TABLE = "UI\\SoundInfo\\UnitAckSounds.slk";
 const ANIM_TABLE = "UI\\SoundInfo\\AnimSounds.slk";
 const COMBAT_TABLE = "UI\\SoundInfo\\UnitCombatSounds.slk";
@@ -41,6 +49,22 @@ interface Clip {
   gain: number; // 0..1 (Volume / 127)
   pitch: number; // base playback rate
   pitchVar: number; // ± random jitter applied per play (0 = none)
+  // Positional-audio fields, straight from the SoundInfo SLK row (see resolve()).
+  threeD: boolean; // Flags contains WANT3D → play through a positional PannerNode
+  refDist: number; // MinDistance — full volume within this radius (world units)
+  maxDist: number; // MaxDistance — attenuated to silence at this radius
+  cutoff: number; // DistanceCutoff — WC3 doesn't play the sound at all beyond this
+}
+
+/** The 3D listener frame, in WC3 world space (Z up). Position sits at the camera's
+ *  ground focus; forward is the look direction (target←eye), up is world +Z. */
+interface Listener {
+  px: number;
+  py: number;
+  pz: number;
+  fx: number;
+  fy: number;
+  fz: number;
 }
 
 // A parsed SLK plus a lowercase→actual row-name index for case-insensitive lookup.
@@ -62,6 +86,7 @@ export class SoundBoard {
   private loops = new Map<string, AudioBufferSourceNode>(); // active looping sounds by name
   private muted = false;
   private volume = 0.85;
+  private listener: Listener | null = null; // last camera frame (for WANT3D panning)
 
   /** Fired when an acknowledgement VOICE actually starts (label + clip seconds) —
    *  the host drives the 3D portrait's talk animation off this. */
@@ -93,8 +118,46 @@ export class SoundBoard {
       this.master = this.ctx.createGain();
       this.master.gain.value = this.muted ? 0 : this.volume;
       this.master.connect(this.ctx.destination);
+      this.applyListener(); // push the camera frame captured before the first gesture
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
+  }
+
+  /** Position the 3D audio listener at the camera's ground focus (`target`), facing
+   *  the look direction (target←eye). Called every frame by the renderer; WANT3D
+   *  clips (combat, deaths, spell casts) then pan + attenuate around it, while UI
+   *  sounds and the commanded unit's voice stay centered (2D). */
+  setListener(target: ArrayLike<number>, eye: ArrayLike<number>): void {
+    let fx = target[0] - eye[0];
+    let fy = target[1] - eye[1];
+    let fz = target[2] - eye[2];
+    const len = Math.hypot(fx, fy, fz) || 1;
+    fx /= len;
+    fy /= len;
+    fz /= len;
+    this.listener = { px: target[0], py: target[1], pz: target[2], fx, fy, fz };
+    this.applyListener();
+  }
+
+  private applyListener(): void {
+    const L = this.ctx?.listener;
+    const f = this.listener;
+    if (!L || !f) return;
+    // Modern API sets AudioParams; older Safari uses the deprecated setter pair.
+    if (L.positionX) {
+      L.positionX.value = f.px;
+      L.positionY.value = f.py;
+      L.positionZ.value = f.pz;
+      L.forwardX.value = f.fx;
+      L.forwardY.value = f.fy;
+      L.forwardZ.value = f.fz;
+      L.upX.value = 0;
+      L.upY.value = 0;
+      L.upZ.value = 1; // WC3 world space is Z-up
+    } else {
+      L.setPosition?.(f.px, f.py, f.pz);
+      L.setOrientation?.(f.fx, f.fy, f.fz, 0, 0, 1);
+    }
   }
 
   setMuted(muted: boolean): void {
@@ -113,45 +176,50 @@ export class SoundBoard {
 
   /** Play a unit voice line (or death cry). Voice acknowledgements share one
    *  exclusive channel and are dropped while it's busy; deaths overlap (capped). */
-  play(label: string, category: SoundCategory): void {
+  play(label: string, category: SoundCategory, at?: SoundPos): void {
     if (!label) return;
-    if (category === "Death") this.playPool(this.resolve("anim", label + "Death"), "death");
+    if (category === "Death") this.playPool(this.resolve("anim", label + "Death"), "death", at);
     else this.playVoice(label, category);
   }
 
   /** Play a weapon-impact / chop clang: `<weapon><material>` (MetalMediumSlice+Flesh,
    *  AxeMediumChop+Wood, …). No-op for weaponless entries (`weap` empty/"_"). */
-  playImpact(weaponSound: string, targetArmor: string): void {
+  playImpact(weaponSound: string, targetArmor: string, at?: SoundPos): void {
     if (!weaponSound || weaponSound === "_" || !targetArmor) return;
-    this.playPool(this.resolve("combat", weaponSound + targetArmor), "impact");
+    this.playPool(this.resolve("combat", weaponSound + targetArmor), "impact", at);
   }
 
   /** Ranged attacks carry no melee `weap` label — their launch/impact sound is a
    *  WAV that ships in the missile model's own folder (FireBall→…Death.wav /
    *  …Launch1.wav, Arrow→ArrowImpact.wav / ArrowAttack1.wav, Water→…Missile1.wav).
    *  Resolve it data-drivenly from the missile art path and play it. */
-  playMissile(missileArt: string, kind: "launch" | "impact"): void {
+  playMissile(missileArt: string, kind: "launch" | "impact", at?: SoundPos): void {
     const suffixes =
       kind === "impact"
         ? ["Death", "Impact", "MissileDeath", "MissileImpact", "Hit1", "Hit2", "Hit3", "Hit", "Target1", "MissileHit1", "1", "2", "3", ""]
         : ["Launch1", "Launch2", "Launch3", "Launch", "MissileLaunch1", "Attack1", "Attack2", "Attack", "1", "2", "3", ""];
     const paths = this.folderSounds(kind, missileArt, suffixes);
-    if (paths.length) this.playPool({ paths, gain: 0.7, pitch: 1, pitchVar: 0.06 }, "impact");
+    // Folder WAVs carry no SLK metadata, so mark them WANT3D with WC3's typical
+    // combat distances (min 600 / max 10000) — a missile whoosh is a world sound.
+    if (paths.length) this.playPool({ paths, gain: 0.7, pitch: 1, pitchVar: 0.06, threeD: true, refDist: 600, maxDist: 10000, cutoff: 3000 }, "impact", at);
   }
 
   /** Play a spell's cast/effect sound — a WAV that ships in the effect model's own
    *  folder (HolyBoltSpecialArt.mdx → HolyBolt.wav, HealTarget.mdx → HealTarget.wav,
    *  AvatarCaster.mdx → Avatar.wav, …). Tries each art path, then a curated fallback. */
-  playSpellSound(arts: string[], fallback?: string): void {
+  playSpellSound(arts: string[], fallback?: string, at?: SoundPos): void {
+    // As with missiles, effect-folder WAVs have no SLK row — treat them as WANT3D
+    // world sounds so a spell cast pans + attenuates from where it's cast.
+    const meta = { gain: 0.8, pitch: 1, pitchVar: 0.03, threeD: true, refDist: 800, maxDist: 10000, cutoff: 3500 };
     for (const art of arts) {
       if (!art) continue;
       const paths = this.folderSounds("cast", art, ["", "1", "Cast", "Target", "Caster", "Death"]);
       if (paths.length) {
-        this.playPool({ paths, gain: 0.8, pitch: 1, pitchVar: 0.03 }, "impact");
+        this.playPool({ paths, ...meta }, "impact", at);
         return;
       }
     }
-    if (fallback && this.vfs.exists(fallback)) this.playPool({ paths: [fallback], gain: 0.8, pitch: 1, pitchVar: 0.03 }, "impact");
+    if (fallback && this.vfs.exists(fallback)) this.playPool({ paths: [fallback], ...meta }, "impact", at);
   }
 
   private soundCache = new Map<string, string[]>();
@@ -278,11 +346,16 @@ export class SoundBoard {
   }
 
   /** Play a clip on an overlapping one-shot pool. deaths/impacts are concurrency-
-   *  capped (reserved synchronously so an AoE burst can't slip the cap); ui isn't. */
-  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui"): void {
+   *  capped (reserved synchronously so an AoE burst can't slip the cap); ui isn't.
+   *  A WANT3D clip with a world position pans + attenuates around the listener. */
+  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui", at?: SoundPos): void {
     if (!clip || !clip.paths.length) return;
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return;
+    const positional = clip.threeD && !!at && !!this.listener;
+    // WC3 DistanceCutoff: a positional sound past its cutoff isn't played at all —
+    // drop it before reserving a pool slot so far-off battles don't starve the cap.
+    if (positional && clip.cutoff > 0 && this.distanceTo(at!) > clip.cutoff) return;
     if (kind === "death") {
       if (this.deaths >= MAX_DEATHS) return;
       this.deaths++;
@@ -301,10 +374,39 @@ export class SoundBoard {
         return;
       }
       const src = this.source(buf, clip);
-      src.connect(this.gain(clip.gain)).connect(this.master);
+      const g = src.connect(this.gain(clip.gain));
+      if (positional) g.connect(this.panner(clip, at!)).connect(this.master);
+      else g.connect(this.master);
       src.onended = release;
       src.start();
     });
+  }
+
+  /** Distance from the listener to a world point (0 if no listener frame yet). */
+  private distanceTo(at: SoundPos): number {
+    const f = this.listener;
+    if (!f) return 0;
+    return Math.hypot(at.x - f.px, at.y - f.py, (at.z ?? 0) - f.pz);
+  }
+
+  /** Build a positional node for a WANT3D clip: equalpower stereo pan (WC3 isn't
+   *  HRTF) with a linear MinDistance→MaxDistance falloff, placed at the source. */
+  private panner(clip: Clip, at: SoundPos): PannerNode {
+    const p = this.ctx!.createPanner();
+    p.panningModel = "equalpower";
+    p.distanceModel = "linear"; // full within MinDistance, silent by MaxDistance
+    p.refDistance = Math.max(1, clip.refDist);
+    p.maxDistance = Math.max(p.refDistance + 1, clip.maxDist || p.refDistance + 1);
+    p.rolloffFactor = 1;
+    const z = at.z ?? 0;
+    if (p.positionX) {
+      p.positionX.value = at.x;
+      p.positionY.value = at.y;
+      p.positionZ.value = z;
+    } else {
+      p.setPosition?.(at.x, at.y, z);
+    }
+    return p;
   }
 
   private source(buf: AudioBuffer, clip: Clip): AudioBufferSourceNode {
@@ -341,11 +443,21 @@ export class SoundBoard {
         const pitch = parseFloat(row.string("pitch") ?? "1");
         const flags = row.string("flags") ?? "";
         const pv = /RANDOMPITCH/i.test(flags) ? parseFloat(row.string("pitchvariance") ?? "0") : 0;
+        // Positional-audio metadata (UnitCombatSounds/AnimSounds carry WANT3D + the
+        // MinDistance/MaxDistance/DistanceCutoff triple; UISounds are Flags=0 → 2D).
+        const num = (k: string) => {
+          const n = parseFloat(row.string(k) ?? "0");
+          return Number.isFinite(n) ? n : 0;
+        };
         clip = {
           paths: files.map((f) => (dir + f).replace(/\//g, "\\")),
           gain: Number.isFinite(vol) ? Math.max(0, Math.min(1, vol / 127)) : 1,
           pitch: Number.isFinite(pitch) && pitch > 0 ? pitch : 1,
           pitchVar: Number.isFinite(pv) ? pv : 0,
+          threeD: /WANT3D/i.test(flags),
+          refDist: num("mindistance"),
+          maxDist: num("maxdistance"),
+          cutoff: num("distancecutoff"),
         };
       }
     }
