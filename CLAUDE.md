@@ -15,6 +15,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 1. **The real 1.27a MPQs in `Warcraft III/`** — the ground truth. When a reference and the game data disagree, the MPQ
    wins (this is a hard-won rule; see the cliff-ramp story in `docs/REFERENCES.md`). Read `.slk`/`.txt`/`.w3*` data,
    model `.mdx`, and asset paths straight from the archives.
+   - **Archive split** (mounted in `src/vfs/profiles.ts`, patch wins): `War3.mpq` = all Reign-of-Chaos content +
+     base sounds; `War3x.mpq` = Frozen-Throne models/data/effect sounds; `War3xLocal.mpq` = TFT **localized unit
+     voices**. So a TFT unit (e.g. the Blood Mage) draws its model from War3x but its voice lines from War3xLocal.
+   - **TFT audio (Huffman+ADPCM):** WC3 stores every WAV as **Huffman(+ADPCM)**. War3.mpq WAVs are PCM (RoC), but
+     **all** War3x/War3xLocal WAVs are huffman — stock `mdx-m3-viewer` threw `compression type 'huffman' not
+     supported`, muting every expansion sound. Fixed in `patches/mdx-m3-viewer@5.12.0.patch` (Storm-Huffman port in
+     `huffman.js` + `file.js` wiring + an `adpcm.js` signedness fix). Verify decodes from Node against the real MPQs.
 2. **[`docs/REFERENCES.md`](docs/REFERENCES.md)** — the curated index of reference projects and research threads, with
    per-source gotchas. Start here to find the right reference for a topic.
 3. **[`docs/reverse-engineering/`](docs/reverse-engineering/)** — locally archived engine internals:
