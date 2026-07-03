@@ -68,6 +68,7 @@ export interface SelectionInfo {
   underConstruction: boolean;
   buildProgress: number; // 0..1 construction completion
   trainProgress: number; // 0..1 of the unit currently training (queue[0])
+  secondsLeft: number; // seconds remaining on the active construction/training job
   queueLength: number;
   queue: Array<{ icon: string }>; // icons of the units queued for training
   icon: string; // the selected thing's own command-card icon (BLP path)
@@ -192,6 +193,7 @@ const FLASH_GREEN: [number, number, number] = [0.3, 1, 0.3];
 const FLASH_YELLOW: [number, number, number] = [1, 0.88, 0.2];
 const FLASH_RED: [number, number, number] = [1, 0.2, 0.16];
 const TREE_FLAG_HEIGHT = 180; // lift a queue flag to a tree's canopy top
+const TREE_COLLIDER_HEIGHT = 110; // pick trees against a raised plane so clicking up the trunk/canopy still selects them
 // Max world distance from the click's ground point to a pickable unit. Gates out
 // far/behind-camera units that screen-projection alone would wrongly match.
 const PICK_WORLD_MAX = 700;
@@ -728,6 +730,10 @@ export class RtsController {
     // reads as standing so it doesn't run in place (see the tick loop).
     if (moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
     if (u.constructing || u.repair?.active) return a.build; // hammering (build/repair)
+    // A building actively producing (a unit in its queue) runs its "Stand Work"
+    // clip — the blacksmith hammers, the barracks stirs, etc. `build` resolves to
+    // that clip for structures (and is -1 → no-op for ones that lack it).
+    if (u.building && u.building.queue.length > 0) return a.build;
     // Only the ACTIVE chop plays the harvest swing — a worker merely holding
     // lumber while standing (its tree fell and it's about to return, so `working`
     // isn't cleared yet) shows the Stand Lumber pose, not the chop.
@@ -967,7 +973,7 @@ export class RtsController {
       attackType: "", armorType: "", isHero: false, level: 0, strength: 0,
       agility: 0, intelligence: 0, primaryAttr: "",
       model: def?.model ?? "", isWorker: false, isBuilding: false,
-      underConstruction: false, buildProgress: 0, trainProgress: 0, queueLength: 0,
+      underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
     };
@@ -1009,6 +1015,7 @@ export class RtsController {
       underConstruction: !!b && b.constructionLeft > 0,
       buildProgress: b && b.buildTimeTotal > 0 ? 1 - b.constructionLeft / b.buildTimeTotal : 1,
       trainProgress: q.length && q[0].buildTime > 0 ? 1 - q[0].timeLeft / q[0].buildTime : 0,
+      secondsLeft: b && b.constructionLeft > 0 ? b.constructionLeft : q.length ? q[0].timeLeft : 0,
       queueLength: q.length,
       queue: q.map((j) => ({ icon: this.registry.get(j.unitId)?.icon ?? "" })),
       icon: this.registry.get(e.typeId)?.icon ?? "",
@@ -1284,7 +1291,8 @@ export class RtsController {
         return;
       }
     }
-    const tree = this.sim.nearestTree(hit[0], hit[1], 140);
+    const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
+    const tree = this.sim.nearestTree(treeHit[0], treeHit[1], 140);
     if (tree) {
       // Spread the group across nearby trees so they don't all crowd the one
       // clicked trunk and shove each other. Gather the lumber workers, pull the
@@ -1340,7 +1348,8 @@ export class RtsController {
     if (!hit) return null;
     const mine = this.sim.nearestMine(hit[0], hit[1], 320);
     if (mine) return { x: mine.x, y: mine.y, kind: "mine", targetId: mine.id };
-    const tree = this.sim.nearestTree(hit[0], hit[1], 140);
+    const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
+    const tree = this.sim.nearestTree(treeHit[0], treeHit[1], 140);
     if (tree) return { x: tree.x, y: tree.y, kind: "tree", targetId: tree.id };
     return { x: hit[0], y: hit[1], kind: "point", targetId: 0 };
   }
@@ -1548,6 +1557,22 @@ export class RtsController {
       prev = cur;
     }
     return null;
+  }
+
+  /** Pick point for TREES: where the click ray crosses a horizontal plane raised
+   *  TREE_COLLIDER_HEIGHT above the terrain, instead of the terrain itself. A tree
+   *  is tall, so clicking up its trunk/canopy sends the ground ray well behind the
+   *  trunk; sampling the ray higher lands it back near the trunk's XY, giving trees
+   *  a taller click collider. Falls back to the ground hit if the ray is level. */
+  private treePickPoint(): [number, number] | null {
+    const g = this.groundHit();
+    if (!g) return null;
+    const r = this.ray;
+    const dz = r[5] - r[2];
+    if (Math.abs(dz) < 1e-6) return g; // level ray → no useful raise
+    const planeZ = this.heightAt(g[0], g[1]) + TREE_COLLIDER_HEIGHT;
+    const t = (planeZ - r[2]) / dz;
+    return [r[0] + (r[3] - r[0]) * t, r[1] + (r[4] - r[1]) * t];
   }
 
   /** Draw a floating HP bar above every visible unit each frame (always-on),

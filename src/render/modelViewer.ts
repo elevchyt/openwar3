@@ -68,6 +68,7 @@ export class ModelViewerScene {
   private raf = 0;
   private last = 0;
   private camZoom = 1; // <1 dollies the model camera closer (portraits zoom in)
+  private camPanLeft = 0; // >0 pans the portrait camera left (fraction of eye→target distance)
 
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
     // Canvas must have a nonzero size before addScene() (viewport/aspect read here).
@@ -94,9 +95,11 @@ export class ModelViewerScene {
   /** Load an MDX by VFS path, attach an instance, and play idle/walk (or the
    *  "Portrait" idle clip when `portrait` is set — portrait busts have no
    *  walk/stand, and a stray Walk clip on some models otherwise wins). */
-  async load(path: string, teamColor = 0, portrait = false): Promise<SequenceInfo[]> {
-    // Portraits dolly the bust camera in a bit for a tighter close-up.
+  async load(path: string, teamColor = 0, portrait = false, panLeft = 0): Promise<SequenceInfo[]> {
+    // Portraits dolly the bust camera in a bit for a tighter close-up; panLeft
+    // nudges it sideways for models whose authored camera crops the face.
     this.camZoom = portrait ? 0.78 : 1;
+    this.camPanLeft = panLeft;
     const bytes = await this.vfs.read(path);
 
     if (this.instance) {
@@ -164,12 +167,31 @@ export class ModelViewerScene {
       this.scene.camera.perspective(cam.fieldOfView, this.aspect(), cam.nearClippingPlane || 1, cam.farClippingPlane || 10000);
       // Dolly the eye toward the target by camZoom (<1 = closer) for the portrait
       // close-up, keeping the model's authored framing/angle.
-      const tgt = cam.targetPosition;
+      const tgt = new Float32Array(cam.targetPosition as ArrayLike<number>);
       const eye = new Float32Array([
         tgt[0] + (cam.position[0] - tgt[0]) * this.camZoom,
         tgt[1] + (cam.position[1] - tgt[1]) * this.camZoom,
         tgt[2] + (cam.position[2] - tgt[2]) * this.camZoom,
       ]);
+      // Pan the camera sideways (eye + target together) by a fraction of the
+      // eye→target distance. "Left" is the horizontal axis perpendicular to the
+      // view: for view dir (fx,fy) with Z up, left = (-fy, fx)·? → the +Z cross
+      // of forward. Used to recentre a face the authored camera crops.
+      if (this.camPanLeft) {
+        const fx = tgt[0] - eye[0];
+        const fy = tgt[1] - eye[1];
+        const fz = tgt[2] - eye[2];
+        const dist = Math.hypot(fx, fy, fz) || 1;
+        // camera "left" = up × forward (up = +Z): (0,0,1)×(fx,fy,fz) = (-fy, fx, 0)
+        const lx = -fy;
+        const ly = fx;
+        const ln = Math.hypot(lx, ly) || 1;
+        const shift = this.camPanLeft * dist;
+        const sx = (lx / ln) * shift;
+        const sy = (ly / ln) * shift;
+        eye[0] += sx; eye[1] += sy;
+        tgt[0] += sx; tgt[1] += sy;
+      }
       this.scene.camera.moveToAndFace(eye, tgt, new Float32Array([0, 0, 1]));
       return;
     }

@@ -46,6 +46,7 @@ export interface HudSelection {
   underConstruction: boolean;
   buildProgress: number; // 0..1
   trainProgress: number; // 0..1 (unit currently training)
+  secondsLeft: number; // seconds left on the active job (for the progress label)
   queueLength: number;
   queue: Array<{ icon: string }>; // icons of queued training units
   icon: string; // the selected thing's own command icon (BLP path)
@@ -606,7 +607,9 @@ export class GameHud {
         this.selStats.hidden = true;
         this.selSub.textContent = "";
         this.selCarry.hidden = true;
-        this.statusLabel.textContent = constructing ? "Constructing" : "Training";
+        // Label the job and the seconds left on it, e.g. "Training (12s)".
+        const secs = Math.max(0, Math.ceil(sel.secondsLeft));
+        this.statusLabel.textContent = `${constructing ? "Constructing" : "Training"} (${secs}s)`;
         const frac = Math.max(0, Math.min(1, constructing ? sel.buildProgress : sel.trainProgress));
         this.progressFill.style.width = `${frac * 100}%`;
         // Status icon: the building (constructing) or the unit being trained.

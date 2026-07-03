@@ -1203,8 +1203,11 @@ export class MapViewerScene {
     // `portrait` flag makes the viewer loop the model's "Portrait" idle clip
     // instead of walk/stand (portrait models have no walk — a stray one on some
     // heroes was being picked, so the bust just froze).
+    // The Paladin's authored portrait camera crops the right of his face — pan
+    // the bust camera a bit left so the whole face shows.
+    const panLeft = /paladin/i.test(sel.model) ? 0.14 : 0;
     this.portraitViewer
-      .load(path, sel.owner >= 0 ? sel.owner : 12, true)
+      .load(path, sel.owner >= 0 ? sel.owner : 12, true, panLeft)
       .then(() => {
         this.portraitFor = id;
         this.portraitViewer!.start();

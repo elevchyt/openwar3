@@ -17,6 +17,19 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 8 — building work anim / portrait / tree pick / job timer (2026-07-03, latest+21)**
+  — **Buildings run "Stand Work" while producing**: a structure with a unit in its queue plays its
+  work clip (blacksmith hammers, barracks stirs) via `pickSequence` (`build` resolves to Stand Work
+  for structures, -1 no-op if absent; verified the clip exists on Blacksmith/Barracks/Hunters Hall/etc
+  against the real MDX). **Progress label shows seconds left**: `SelectionInfo.secondsLeft` (construction
+  `constructionLeft` or `queue[0].timeLeft`) → HUD renders e.g. "Training (12s)". **Tree click collider
+  raised**: trees are tall, so clicking up the trunk sent the ground ray behind them — a new
+  `treePickPoint()` samples the ray against a plane `TREE_COLLIDER_HEIGHT` (110) above the terrain so the
+  pick lands back on the trunk (used by harvest + rally tree picks; non-worker moves still use the ground
+  hit). **Paladin portrait** camera pans left (`camPanLeft` 0.14 of the eye→target distance, screen-left
+  = up×forward) so his cropped face shows fully. Headless regression suite (speed-build/queue/build→
+  harvest/rally/melee/refund/lumber) still passes; build clean. Building work anim, portrait pan, tree
+  pick feel, and the label need in-browser confirmation (pan sign/magnitude + collider height are easy tunes).
 - **Feedback pass 7 — melee fix/build-over-units/anim polish (2026-07-03, latest+20)** — **Melee
   damage bug fixed**: swings only landed within `range+ARRIVE_EPS` (8) but could START anywhere in the
   combat-hold zone `range+ATTACK_LEASH` (48) — a dead band where the attack anim played but no damage
