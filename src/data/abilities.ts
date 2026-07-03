@@ -64,28 +64,132 @@ export interface AbilityDef {
  *  Anything not listed here loads as data but is treated as passive/uncastable
  *  (so unknown custom abilities degrade gracefully rather than crash). */
 export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: boolean }> = {
-  // --- Human heroes ---
+  // === Human heroes ===
+  // -- Paladin --
   AHhb: { target: "unit" }, // Holy Light — heal ally / smite undead
+  AHds: { target: "none" }, // Divine Shield — self invulnerability
+  AHre: { target: "none" }, // Resurrection — raise dead allies from corpses
+  AHad: { target: "passive" }, // Devotion Aura — +armour
+  // -- Mountain King --
   AHtb: { target: "unit" }, // Storm Bolt — hammer: damage + stun
   AHtc: { target: "none" }, // Thunder Clap — PBAoE damage + slow
-  AHds: { target: "none" }, // Divine Shield — self invulnerability
-  AHav: { target: "none" }, // Avatar — MK ult self-buff (HP/damage/immunity)
-  AHre: { target: "none" }, // Resurrection — Paladin ult, raise dead allies from corpses
-  // --- auras (passive, affect the caster + nearby allies) ---
-  AHad: { target: "passive" }, // Devotion Aura — +armour
-  AHab: { target: "passive" }, // Brilliance Aura — +mana regen (Archmage)
-  AOae: { target: "passive" }, // Endurance Aura — +move & attack speed
-  AEar: { target: "passive" }, // Trueshot Aura — +ranged attack damage
-  AUau: { target: "passive" }, // Unholy Aura — +move speed & hp regen
-  AUav: { target: "passive" }, // Vampiric Aura — melee life steal
-  AOac: { target: "passive" }, // Command Aura — +attack damage
-  AEah: { target: "passive" }, // Thorns Aura — return melee damage
-  AHwe: { target: "none" }, // Summon Water Elemental
-  AHbz: { target: "point" }, // Blizzard — channelled point AoE waves
   AHbh: { target: "passive" }, // Bash — chance to stun on attack
-  // --- Undead ---
+  AHav: { target: "none" }, // Avatar — self-buff (HP/damage/immunity)
+  // -- Archmage --
+  AHbz: { target: "point" }, // Blizzard — channelled point AoE waves
+  AHab: { target: "passive" }, // Brilliance Aura — +mana regen
+  AHwe: { target: "none" }, // Summon Water Elemental
+  AHmt: { target: "point" }, // Mass Teleport — warp nearby allies to a point
+  // -- Blood Mage --
+  AHfs: { target: "point" }, // Flame Strike — delayed point AoE burn field
+  AHbn: { target: "unit" }, // Banish — debuff: slow + magic vulnerability
+  AHdr: { target: "unit" }, // Siphon Mana / Life Drain — drain from target to caster
+  AHpx: { target: "none" }, // Phoenix — summon a phoenix
+  // === Orc heroes ===
+  // -- Blademaster --
+  AOwk: { target: "none" }, // Wind Walk — self invis + haste + bonus damage
+  AOcr: { target: "passive" }, // Critical Strike — chance to multiply a swing
+  AOmi: { target: "none" }, // Mirror Image — summon illusions of self
+  AOww: { target: "none" }, // Bladestorm — self PBAoE damage field
+  // -- Far Seer --
+  AOfs: { target: "point" }, // Far Sight — reveal an area
+  AOsf: { target: "none" }, // Feral Spirit — summon wolves
+  AOcl: { target: "unit" }, // Chain Lightning — bouncing bolt
+  AOeq: { target: "point" }, // Earthquake — point field: damage buildings + slow
+  // -- Tauren Chieftain --
+  AOsh: { target: "point" }, // Shockwave — line nuke
+  AOae: { target: "passive" }, // Endurance Aura — +move & attack speed
+  AOre: { target: "passive" }, // Reincarnation — revive on death
+  AOws: { target: "none" }, // War Stomp — PBAoE damage + stun
+  // -- Shadow Hunter --
+  AOhw: { target: "unit" }, // Healing Wave — chained heal
+  AOhx: { target: "unit" }, // Hex — transform/disable a target
+  AOwd: { target: "point" }, // Serpent Ward — summon a ward
+  AOvd: { target: "none" }, // Big Bad Voodoo — nearby allies invulnerable
+  AOac: { target: "passive" }, // Command Aura — +attack damage
+  // === Undead heroes ===
+  // -- Death Knight --
   AUdc: { target: "unit" }, // Death Coil — heal undead / harm living
-  // --- Unit casters ---
+  AUdp: { target: "unit" }, // Death Pact — sacrifice a friendly unit to heal
+  AUau: { target: "passive" }, // Unholy Aura — +move speed & hp regen
+  AUan: { target: "point" }, // Animate Dead — temporarily raise nearby corpses
+  // -- Lich --
+  AUfn: { target: "unit" }, // Frost Nova — missile: AoE damage + slow on impact
+  AUfu: { target: "unit", autocast: true }, // Frost Armor — +armour, slows attackers
+  AUdr: { target: "unit" }, // Dark Ritual — sacrifice a summon for mana
+  AUdd: { target: "point" }, // Death and Decay — point AoE % damage field
+  // -- Dreadlord --
+  AUav: { target: "passive" }, // Vampiric Aura — melee life steal
+  AUsl: { target: "unit" }, // Sleep — disable a target (wakes on damage)
+  AUcs: { target: "point" }, // Carrion Swarm — line nuke
+  AUin: { target: "point" }, // Inferno — summon an infernal + impact damage
+  // -- Crypt Lord --
+  AUim: { target: "point" }, // Impale — line nuke + stun
+  AUts: { target: "passive" }, // Spiked Carapace — bonus armour + return damage
+  AUcb: { target: "point" }, // Carrion Beetles — summon a beetle
+  AUls: { target: "none" }, // Locust Swarm — self PBAoE life-drain field
+  // === Night Elf heroes ===
+  // -- Keeper of the Grove --
+  AEer: { target: "unit" }, // Entangling Roots — root + DoT
+  AEfn: { target: "point" }, // Force of Nature — summon treants
+  AEah: { target: "passive" }, // Thorns Aura — return melee damage
+  AEtq: { target: "point" }, // Tranquility — channelled area heal field
+  // -- Priestess of the Moon --
+  AHfa: { target: "none", autocast: true }, // Searing Arrows — bonus fire damage on attack
+  AEst: { target: "none" }, // Scout — summon a flying owl
+  AEar: { target: "passive" }, // Trueshot Aura — +ranged attack damage
+  AEsf: { target: "none" }, // Starfall — channelled PBAoE waves around the caster
+  // -- Demon Hunter --
+  AEmb: { target: "unit" }, // Mana Burn — burn mana + deal that much damage
+  AEim: { target: "none" }, // Immolation — self damage field (toggle)
+  AEev: { target: "passive" }, // Evasion — chance to dodge attacks
+  AEme: { target: "none" }, // Metamorphosis — self transform buff
+  // -- Warden --
+  AEbl: { target: "point" }, // Blink — teleport a short distance
+  AEfk: { target: "none" }, // Fan of Knives — PBAoE nuke
+  AEsh: { target: "unit" }, // Shadow Strike — missile: damage + poison DoT + slow
+  AEsv: { target: "passive" }, // Vengeance — (ultimate passive)
+  // === Neutral heroes ===
+  // -- Naga Sea Witch --
+  ANfl: { target: "point" }, // Forked Lightning — cone nuke
+  AHca: { target: "none", autocast: true }, // Cold / Frost Arrows — slow on attack
+  ANms: { target: "none" }, // Mana Shield — absorb damage into mana (toggle)
+  ANto: { target: "point" }, // Tornado — summon a tornado
+  // -- Dark Ranger --
+  ANsi: { target: "point" }, // Silence — area silence
+  ANba: { target: "none", autocast: true }, // Black Arrow — bonus damage on attack
+  ANch: { target: "unit" }, // Charm — take control of a target
+  // -- Pandaren Brewmaster --
+  ANbf: { target: "point" }, // Breath of Fire — line nuke
+  ANdh: { target: "point" }, // Drunken Haze — area slow
+  ANdb: { target: "passive" }, // Drunken Brawler — crit + evasion (passive)
+  ANef: { target: "none" }, // Storm, Earth and Fire — summon three pandaren
+  // -- Beastmaster --
+  ANsg: { target: "none" }, // Summon Bear
+  ANsq: { target: "none" }, // Summon Quilbeast
+  ANsw: { target: "none" }, // Summon Hawk
+  ANst: { target: "point" }, // Stampede — channelled point field
+  // -- Pit Lord --
+  ANrf: { target: "point" }, // Rain of Fire — point AoE waves
+  ANht: { target: "none" }, // Howl of Terror — PBAoE enemy damage debuff
+  ANca: { target: "passive" }, // Cleaving Attack — splash on attack
+  ANdo: { target: "unit" }, // Doom — DoT curse
+  // -- Goblin Tinker --
+  ANsy: { target: "point" }, // Pocket Factory — summon a factory
+  ANcs: { target: "point" }, // Cluster Rockets — point AoE
+  ANeg: { target: "passive" }, // Engineering Upgrade (passive)
+  ANrg: { target: "none" }, // Robo-Goblin — self transform buff
+  // -- Firelord --
+  ANia: { target: "none", autocast: true }, // Incinerate — bonus fire damage on attack
+  ANso: { target: "unit" }, // Soul Burn — DoT + silence
+  ANlm: { target: "point" }, // Summon Lava Spawn
+  ANvc: { target: "point" }, // Volcano — point field
+  // -- Goblin Alchemist --
+  ANhs: { target: "point" }, // Healing Spray — area heal
+  ANab: { target: "unit" }, // Acid Bomb — DoT + armour reduction
+  ANcr: { target: "none" }, // Chemical Rage — self haste buff
+  ANtm: { target: "unit" }, // Transmute — kill a non-hero for gold
+  // === Unit casters ===
   Ahea: { target: "unit", autocast: true }, // Priest Heal
   Adis: { target: "point" }, // Dispel Magic — clear buffs, damage summons
   Ainf: { target: "unit", autocast: true }, // Inner Fire — +armour +damage

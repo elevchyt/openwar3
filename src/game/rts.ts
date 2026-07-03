@@ -230,6 +230,11 @@ const PISSED_AFTER = 3;
 // drives worker entry) so it reads as a ring hugging the mine base, not its footprint.
 const MINE_RING_SCALE = 1.4;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
+// Extra world-unit gap added to the builder fan-out when several workers speed-
+// build one structure, so they spread around the whole footprint instead of
+// bunching up (a body-and-a-half wider than the tight gold-mine approach).
+const SPEED_BUILD_SPREAD = 48;
+const MINE_APPROACH_SPREAD = 16; // gentle widening of the gold-mine approach ring
 // Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
 const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
 const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
@@ -1916,10 +1921,19 @@ export class RtsController {
     // lands the ground ray well behind the trunk.
     const mine = this.sim.nearestMine(hit[0], hit[1], 320);
     if (mine) {
+      // Fan the group around the mine's rim (distinct approach points) so they
+      // don't all path to the one entry point and pile up while they wait their
+      // turn — a mine takes one worker at a time. Nearest-slot keeps each worker
+      // on the side it walked up from; after the first trip the sim re-forms the
+      // usual mine→hall line (mineApproach), so this only cleans up the approach.
+      const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
+      // A little extra breathing room on the approach ring so they don't bunch on
+      // one side of the mine (kept modest — miners must still land within entry reach).
+      const spread = this.ringTargets(workers, mine.x, mine.y, mine.radius, MINE_APPROACH_SPREAD);
       let any = false;
-      for (const id of this.selected) {
-        const w = this.sim.units.get(id);
-        if (w?.worker?.gold && this.order(id, { kind: "harvest", res: "gold", nodeId: mine.id }, queued)) any = true;
+      for (const id of workers) {
+        const p = spread.get(id);
+        if (this.order(id, { kind: "harvest", res: "gold", nodeId: mine.id, ax: p?.[0], ay: p?.[1] }, queued)) any = true;
       }
       if (any) {
         this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE); // match the mine's hover/selection ring
@@ -2016,13 +2030,19 @@ export class RtsController {
     const own = this.primary !== null ? target.owner === this.sim.units.get(this.primary)?.owner : false;
     let handled = false;
     if (own && target.building && target.building.constructionLeft > 0) {
-      // Own building still going up: workers resume/assist it.
-      for (const id of this.selected) {
-        if (this.sim.units.get(id)?.worker) {
-          this.order(id, { kind: "buildresume", buildingId: picked }, queued);
-          handled = true;
-        }
+      // Own building still going up: workers resume/assist it. Fan the group
+      // around the footprint (distinct approach points) so they don't all walk
+      // onto the one centre point and shove — WC3 builders spread over a structure.
+      const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker);
+      // Speed-build: fan the builders WIDE around the structure (extra spacing) so
+      // they ring the whole footprint instead of bunching on the near edge and
+      // shoving. A gold-mine approach stays tight; this doesn't need to.
+      const spread = this.ringTargets(workers, target.x, target.y, target.radius, SPEED_BUILD_SPREAD);
+      for (const id of workers) {
+        const p = spread.get(id);
+        this.order(id, { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued);
       }
+      handled = workers.length > 0;
     } else if (own && target.hp < target.maxHp) {
       handled = this.repairAt(picked, queued); // own damaged building: workers repair
     }
@@ -2094,6 +2114,79 @@ export class RtsController {
       if (best !== null) { out.set(best, claim(slot[0], slot[1])); remaining.delete(best); }
     }
     for (const id of remaining) out.set(id, claim(tx, ty));
+    return out;
+  }
+
+  /** Distinct approach points fanned around a circular target (a building being
+   *  raised, or a gold mine) so a group ordered together spreads over its rim
+   *  instead of all pathing to the one centre point and shoving. Concentric rings
+   *  start just outside `radius`; nearest worker claims the nearest free walkable
+   *  slot (centre-out, like groupTargets — but ringed around an obstacle rather
+   *  than filling a point). A single unit gets the plain centre, so the spread
+   *  only kicks in when several are commanded at once. */
+  private ringTargets(ids: number[], cx: number, cy: number, radius: number, extraSpacing = 0): Map<number, [number, number]> {
+    const out = new Map<number, [number, number]>();
+    const list = ids
+      .map((id) => ({ id, u: this.sim.units.get(id) }))
+      .filter((x): x is { id: number; u: SimUnit } => !!x.u);
+    if (list.length <= 1) {
+      for (const { id } of list) out.set(id, [cx, cy]);
+      return out;
+    }
+    const grid = this.sim.grid;
+    let wr = 16;
+    for (const { u } of list) wr = Math.max(wr, u.radius);
+    // Neighbour gap along a ring / between rings. `extraSpacing` widens the fan
+    // for callers that want the group spread further apart (speed-build) rather
+    // than hugging the target tightly (a gold miner must land within entry reach).
+    const spacing = wr * 2 + 24 + extraSpacing;
+
+    // Claim a distinct, walkable cell near a world point (spiral out from it).
+    const used = new Set<number>();
+    const claim = (wx: number, wy: number): [number, number] => {
+      const [c0x, c0y] = grid.worldToCell(wx, wy);
+      for (let r = 0; r <= 12; r++) {
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring perimeter only
+            const gx = c0x + dx, gy = c0y + dy;
+            const key = gy * grid.width + gx;
+            if (used.has(key) || !grid.walkable(gx, gy)) continue;
+            used.add(key);
+            return grid.cellToWorld(gx, gy);
+          }
+        }
+      }
+      return [wx, wy];
+    };
+
+    // Ring 0 hugs the footprint edge (radius + a body + slack, so a gold miner
+    // lands within its entry reach); outer rings step out by `spacing`. Each ring
+    // holds as many evenly-spaced points as fit, staggered so rings interleave.
+    const slots: Array<[number, number]> = [];
+    for (let ring = 0; slots.length < list.length && ring < 24; ring++) {
+      const rr = radius + wr + 8 + extraSpacing + ring * spacing;
+      const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
+      for (let i = 0; i < n && slots.length < list.length; i++) {
+        const a = (i / n) * Math.PI * 2 + ring * 0.618; // golden-ish stagger between rings
+        slots.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]);
+      }
+    }
+    // Nearest unit → nearest slot (so each takes the side it approaches from),
+    // each on its own claimed walkable cell.
+    const remaining = new Set(list.map((x) => x.id));
+    for (const slot of slots) {
+      if (!remaining.size) break;
+      let best: number | null = null;
+      let bestD = Infinity;
+      for (const id of remaining) {
+        const u = this.sim.units.get(id)!;
+        const d = Math.hypot(u.x - slot[0], u.y - slot[1]);
+        if (d < bestD) { bestD = d; best = id; }
+      }
+      if (best !== null) { out.set(best, claim(slot[0], slot[1])); remaining.delete(best); }
+    }
+    for (const id of remaining) out.set(id, claim(cx, cy));
     return out;
   }
 

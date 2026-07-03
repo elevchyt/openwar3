@@ -9,7 +9,7 @@ import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
-import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
+import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
 import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
@@ -70,9 +70,10 @@ const AURA_EFFECT_MODEL: Record<string, string> = {
   AUav: "Abilities\\Spells\\Undead\\VampiricAura\\VampiricAura.mdx",
   AEah: "Abilities\\Spells\\NightElf\\ThornsAura\\ThornsAura.mdx",
 };
-const NEUTRAL_PASSIVE_PLAYER = 15; // war3mapUnits.doo owner slot for Neutral Passive
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
+const MAX_HEROES = 3; // WC3 melee: a player may field at most 3 heroes (altars + tavern combined)
+const TAVERN_HIRE_TIME = 1; // seconds — tavern heroes are hired (near-instant), not built like altar heroes
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
@@ -453,27 +454,21 @@ export class MapViewerScene {
       }
     }
 
-    // Pre-placed building units (gold mines, neutral buildings) from war3mapUnits.doo.
-    const unitBytes = archive.rawBytes("war3mapUnits.doo");
-    if (unitBytes) {
-      const units = new unitsdoo.File();
-      try {
-        units.load(unitBytes, buildVersion);
-      } catch {
-        return { trees, mines, neutral };
-      }
-      const buildings = units.units
-        .filter((u) => this.registry.get(u.id)?.isBuilding)
-        .map((u) => ({ id: u.id, x: u.location[0], y: u.location[1] }));
-      stampFootprints(grid, buildings, (id) => this.registry.get(id)?.pathTex || undefined, readBytes);
-      for (const u of units.units) {
-        if (u.id === "ngol") {
-          mines.push({ x: u.location[0], y: u.location[1], gold: (u as { goldAmount?: number }).goldAmount ?? 12500 });
-        } else if ((u as { player?: number }).player === NEUTRAL_PASSIVE_PLAYER) {
-          // Shops, taverns, labs, merchants, fountains, critters — anything owned
-          // by Neutral Passive gets the yellow selection/hover ring.
-          neutral.push({ x: u.location[0], y: u.location[1] });
-        }
+    // Pre-placed units/buildings (gold mines, neutral buildings, creeps, and on
+    // custom maps each player's own units) from war3mapUnits.doo — parsed by the
+    // shared map-units module so the data path is the same everywhere.
+    const placed = parseMapUnits(archive.rawBytes("war3mapUnits.doo"), buildVersion);
+    const buildings = placed
+      .filter((u) => this.registry.get(u.typeId)?.isBuilding)
+      .map((u) => ({ id: u.typeId, x: u.x, y: u.y }));
+    stampFootprints(grid, buildings, (id) => this.registry.get(id)?.pathTex || undefined, readBytes);
+    for (const u of placed) {
+      if (u.typeId === GOLD_MINE_ID) {
+        mines.push({ x: u.x, y: u.y, gold: u.goldAmount || 12500 });
+      } else if (u.neutralPassive) {
+        // Shops, taverns, labs, merchants, fountains, critters — anything owned
+        // by Neutral Passive gets the yellow selection/hover ring.
+        neutral.push({ x: u.x, y: u.y });
       }
     }
     return { trees, mines, neutral };
@@ -1471,10 +1466,34 @@ export class MapViewerScene {
     return { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, col: 0, row: 0, disabled: false, active: false, ...over };
   }
 
-  /** Build the command card for the current own-unit selection. */
+  /** Hero types the local player already has or is producing — owned hero units,
+   *  plus heroes queued in the player's own buildings (altars) or in a neutral shop
+   *  (tavern). WC3 heroes are unique per player and capped at MAX_HEROES, so these
+   *  are removed from / disabled on the altar & tavern cards. */
+  private heroTypesInProduction(player: number): Set<string> {
+    const set = new Set<string>();
+    const world = this.rts?.simWorld;
+    if (!world) return set;
+    for (const u of world.units.values()) {
+      if (u.owner === player && this.registry.get(u.typeId)?.isHero) set.add(u.typeId);
+      // Altars the player owns + neutral shops (taverns) they hire from.
+      if (u.building && (u.owner === player || u.neutralPassive)) {
+        for (const job of u.building.queue) {
+          if (this.registry.get(job.unitId)?.isHero) set.add(job.unitId);
+        }
+      }
+    }
+    return set;
+  }
+
+  /** Build the command card for the current selection. */
   private commandCard(): CommandButton[] {
     const sel = this.rts?.selectedInfo();
-    if (!sel || sel.owner !== this.localPlayer) return [];
+    if (!sel) return [];
+    // A neutral shop/tavern the local player can hire from shows its purchase card
+    // even though they don't own it; anything else must be the player's own unit.
+    const isShop = sel.isBuilding && sel.owner !== this.localPlayer && trainsFor(sel.typeId).length > 0;
+    if (sel.owner !== this.localPlayer && !isShop) return [];
     const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     const out: CommandButton[] = [];
 
@@ -1484,9 +1503,15 @@ export class MapViewerScene {
     }
     if (sel.isBuilding) {
       const food = this.rts!.foodFor(this.localPlayer);
+      // WC3 hero rules (shared by altars + taverns): a hero already owned or in
+      // production is removed from the card; once the player has MAX_HEROES the
+      // remaining hero buttons are disabled ("hero limit reached").
+      const heroesInProduction = this.heroTypesInProduction(this.localPlayer);
+      const atHeroCap = heroesInProduction.size >= MAX_HEROES;
       for (const uid of trainsFor(sel.typeId)) {
         const d = this.registry.get(uid);
         if (!d) continue;
+        if (d.isHero && heroesInProduction.has(uid)) continue; // already have/queued this hero
         const stash = this.rts!.stashFor(this.localPlayer);
         const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer); // first hero is free
         const gold = freeHero ? 0 : d.goldCost;
@@ -1495,13 +1520,14 @@ export class MapViewerScene {
         out.push(this.cmd({
           id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
           desc: d.description || `Trains a ${d.name}.`, gold, lumber, food: d.foodUsed,
-          col: d.buttonX, row: d.buttonY, disabled: !afford,
+          col: d.buttonX, row: d.buttonY, disabled: !afford || (d.isHero && atHeroCap),
         }));
       }
       // Cancel always owns the bottom-right slot (3,2) — the canonical WC3 spot.
       // The Set Rally Point button sits one above it, at center-right (3,1), so it
       // never shares the cancel slot. Neither collides with a train/hero button.
-      if (trainsFor(sel.typeId).length) {
+      // A neutral tavern isn't yours to rally, so it gets no rally button.
+      if (!isShop && trainsFor(sel.typeId).length) {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
         out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1, active: this.rts?.orderMode === "rally" }));
       }
@@ -1753,6 +1779,12 @@ export class MapViewerScene {
   private trainUnit(buildingId: number, unitId: string): void {
     const d = this.registry.get(unitId);
     if (!d || !this.rts) return;
+    // WC3 hero rules, enforced here too (not just hidden on the card) so a hotkey
+    // can't queue a duplicate hero or exceed the 3-hero cap.
+    if (d.isHero) {
+      const inProduction = this.heroTypesInProduction(this.localPlayer);
+      if (inProduction.has(unitId) || inProduction.size >= MAX_HEROES) return;
+    }
     const stash = this.rts.stashFor(this.localPlayer);
     const food = this.rts.foodFor(this.localPlayer);
     // WC3 melee: a player's FIRST hero is free of gold/lumber (only food).
@@ -1765,7 +1797,10 @@ export class MapViewerScene {
     stash.gold -= gold;
     stash.lumber -= lumber;
     if (freeHero) this.freeHeroUsed.add(this.localPlayer);
-    this.rts.simWorld.enqueueTrain(buildingId, unitId, d.buildTime || 15);
+    // A neutral shop (tavern) hires heroes near-instantly; own buildings use the
+    // unit's real build time (altar heroes ~55s).
+    const shop = this.rts.simWorld.units.get(buildingId)?.neutralPassive;
+    this.rts.simWorld.enqueueTrain(buildingId, unitId, shop ? TAVERN_HIRE_TIME : d.buildTime || 15);
   }
 
   /** Cancel an under-construction building: refund **75%** of its cost (WC3

@@ -1,6 +1,6 @@
 import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath } from "./pathfind";
-import { type AbilityRegistry, type AbilityDef, requiredHeroLevel } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
 import { SPELL_HANDLERS, AURA_BUFFS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -75,7 +75,11 @@ export type BuffKind =
   | "lifesteal" // value = fraction of melee damage dealt healed back (Vampiric Aura)
   | "thorns" // value = fraction of melee damage returned to the attacker (Thorns Aura)
   | "hot" // value = hp/sec healed
-  | "dot"; // value = dps taken
+  | "dot" // value = dps taken
+  | "sleep" // cannot act (like stun) but wakes the instant it takes damage (Sleep)
+  | "silence" // cannot cast spells (Silence, Soul Burn) — can still move & attack
+  | "manaShield" // absorb incoming damage into mana instead of hp; value = mana spent per hp
+  | "root"; // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
 
 /** An in-progress spell cast (order === "cast"). Walk into range, face, then at
  *  the cast point fire the effect (or launch the spell missile). */
@@ -176,9 +180,12 @@ export type QueuedOrder =
   | { kind: "patrol"; x: number; y: number }
   | { kind: "attack"; targetId: number; force?: boolean }
   | { kind: "follow"; targetId: number }
-  | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number }
+  // ax/ay: optional distinct approach point around the node, so a group ordered
+  // together fans over the mine's rim instead of all pathing to its centre.
+  | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number; ax?: number; ay?: number }
   | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number }
-  | { kind: "buildresume"; buildingId: number }
+  // ax/ay: as above, a distinct spot around the building's footprint to spread builders.
+  | { kind: "buildresume"; buildingId: number; ax?: number; ay?: number }
   | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number };
 
 const MAX_QUEUED_ORDERS = 35; // WC3 action-queue cap
@@ -300,6 +307,7 @@ export interface SimUnit {
   abilities: SimAbility[]; // learned/innate abilities
   buffs: SimBuff[]; // active timed effects
   stunned: boolean; // derived from buffs (cannot act)
+  silenced: boolean; // derived from buffs (cannot cast spells)
   invulnerable: boolean; // derived from buffs (immune to damage + enemy targeting)
   mechanical: boolean; // machines/summons — no raisable corpse, unhealable by Heal
   isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
@@ -601,7 +609,7 @@ export class SimWorld {
   /** Assign a worker to construct a building (walk there; progress advances
    *  once it arrives). Called when the building is first placed and when a
    *  worker is ordered to resume a halted construction. */
-  assignBuilder(workerId: number, buildingId: number): void {
+  assignBuilder(workerId: number, buildingId: number, ax?: number, ay?: number): void {
     const w = this.units.get(workerId);
     const b = this.units.get(buildingId);
     if (!w || !b?.building) return;
@@ -617,9 +625,11 @@ export class SimWorld {
     const gap = Math.max(Math.abs(w.x - b.x), Math.abs(w.y - b.y)) - b.radius - w.radius;
     if (gap >= 96) {
       // Far from the site (e.g. resuming a halted build): walk there. Progress
-      // stays paused until the worker arrives (tickBuildings' nearby check).
+      // stays paused until the worker arrives (tickBuildings' nearby check). A
+      // grouped order passes ax/ay — a distinct spot around the footprint — so
+      // builders fan around the structure rather than all making for its centre.
       w.order = "move";
-      if (!this.pathTo(w, b.x, b.y)) {
+      if (!this.pathTo(w, ax ?? b.x, ay ?? b.y)) {
         w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x);
       }
       return;
@@ -862,6 +872,7 @@ export class SimWorld {
       | "abilities"
       | "buffs"
       | "stunned"
+      | "silenced"
       | "invulnerable"
       | "mechanical"
       | "isSummon"
@@ -953,6 +964,7 @@ export class SimWorld {
       abilities: opts?.abilities ?? [],
       buffs: [],
       stunned: false,
+      silenced: false,
       invulnerable: false,
       mechanical: !!opts?.mechanical,
       isSummon: false,
@@ -1210,8 +1222,8 @@ export class SimWorld {
       case "patrol": return this.issuePatrol(id, o.x, o.y);
       case "attack": return this.issueAttack(id, o.targetId, o.force);
       case "follow": return this.issueFollow(id, o.targetId);
-      case "harvest": return this.issueHarvest(id, o.res, o.nodeId);
-      case "buildresume": this.assignBuilder(id, o.buildingId); return true;
+      case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
+      case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber); return true;
     }
@@ -1225,8 +1237,11 @@ export class SimWorld {
     if (o) this.dispatch(u.id, o);
   }
 
-  /** Order a worker to harvest a mine or tree. False if it can't. */
-  issueHarvest(id: number, kind: "gold" | "lumber", nodeId: number): boolean {
+  /** Order a worker to harvest a mine or tree. False if it can't. `ax/ay` is an
+   *  optional distinct approach point (a group ordered together fans around the
+   *  node's rim rather than piling on its centre); only the FIRST walk-up uses
+   *  it — later trips re-form the mine→hall line via mineApproach as before. */
+  issueHarvest(id: number, kind: "gold" | "lumber", nodeId: number, ax?: number, ay?: number): boolean {
     const u = this.units.get(id);
     if (!u || !u.worker) return false;
     if (kind === "gold" && (!u.worker.gold || !this.mines.has(nodeId))) return false;
@@ -1243,7 +1258,8 @@ export class SimWorld {
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
-    this.pathToNode(u); // walk toward the node once; arrival latches atNode
+    if (ax !== undefined && ay !== undefined) this.pathTo(u, ax, ay); // spread approach for a grouped command
+    else this.pathToNode(u); // walk toward the node once; arrival latches atNode
     return true;
   }
 
@@ -1374,6 +1390,7 @@ export class SimWorld {
     let lifesteal = 0;
     let thorns = 0;
     let stun = false;
+    let silence = false;
     let invuln = false;
     for (const b of u.buffs) {
       if (b.kind === "armor") armorBonus += b.value;
@@ -1389,15 +1406,20 @@ export class SimWorld {
       } else if (b.kind === "haste") {
         hasteMove = Math.max(hasteMove, b.value);
         hasteAttack = Math.max(hasteAttack, b.value2);
-      } else if (b.kind === "stun") stun = true;
+      } else if (b.kind === "root") slowMove = Math.max(slowMove, b.value); // pins movement (can still attack)
+      else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
+      else if (b.kind === "silence") silence = true;
       else if (b.kind === "invuln") invuln = true;
     }
     u.maxHp = u.baseMaxHp + HP_PER_STR * dStr;
     u.maxMana = u.baseMaxMana + MANA_PER_INT * dInt;
     if (u.hp > u.maxHp) u.hp = u.maxHp;
     if (u.mana > u.maxMana) u.mana = u.maxMana;
-    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus;
-    u.bonusArmor = armorBonus; // the buff/aura portion (shown green in the HUD)
+    // Spiked Carapace (Crypt Lord passive AUts): a flat bonus armour (dataB) while learned.
+    const carapace = this.passiveLevelData(u, "AUts");
+    const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
+    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor;
+    u.bonusArmor = armorBonus + carapaceArmor; // the buff/aura portion (shown green in the HUD)
     if (u.weapon) {
       const base = u.baseDamage + primaryDelta;
       u.weapon.damage = Math.max(0, base + damageBonus + base * damagePct); // Command/Trueshot add a % of base
@@ -1408,9 +1430,29 @@ export class SimWorld {
     u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus;
     u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus;
     u.lifesteal = lifesteal;
-    u.thorns = thorns;
+    // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
+    u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
+    u.silenced = silence;
     u.invulnerable = invuln;
+  }
+
+  /** The level-data for a passive ability the unit has learned (by base code), or
+   *  null. Shared by passive-effect derivations (Spiked Carapace, Critical Strike,
+   *  Evasion, Cleaving Attack). */
+  private passiveLevelData(u: SimUnit, code: string): AbilityLevel | null {
+    if (!this.abilities) return null;
+    const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
+    if (!ab) return null;
+    const def = this.abilities.get(ab.id);
+    if (!def) return null;
+    return def.levelData[Math.min(ab.level, def.levelData.length) - 1] ?? null;
+  }
+
+  /** Read dataX (a=0..i=8) off an ability level, NaN-safe. */
+  private dataOf(lvl: AbilityLevel, i: number, fallback = 0): number {
+    const v = lvl.data[i];
+    return v === undefined || Number.isNaN(v) ? fallback : v;
   }
 
   /** Advance timed buffs; apply DoT/HoT. Returns true if the unit died (DoT). */
@@ -1528,7 +1570,7 @@ export class SimWorld {
    *  the cast can't be started (unknown/unlearned ability, wrong target, dead). */
   issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0): boolean {
     const u = this.units.get(unitId);
-    if (!u || u.stunned || !this.abilities) return false;
+    if (!u || u.stunned || u.silenced || !this.abilities) return false;
     const ab = this.findAbility(u, code);
     if (!ab) return false;
     const def = this.abilities.get(ab.id);
@@ -1687,7 +1729,7 @@ export class SimWorld {
       if (!def || def.target !== "unit") continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
       if (u.mana < lvl.cost) continue;
-      const friendly = def.code === "Ahea" || def.code === "Ainf"; // heal/buff allies
+      const friendly = def.code === "Ahea" || def.code === "Ainf" || def.code === "AUfu"; // heal/buff allies
       const target = this.autocastTarget(u, lvl.castRange, friendly, def.code);
       if (target) return this.issueCast(u.id, def.code, target.id);
     }
@@ -1959,7 +2001,37 @@ export class SimWorld {
       if (art) this.spellEffects.push({ art, x, y, targetId, z: 0 });
     },
     addSpellField: (f) => this.addSpellFieldInternal(f),
+    burnMana: (t, amount) => {
+      const burned = Math.min(t.mana, Math.max(0, amount));
+      t.mana -= burned;
+      return burned;
+    },
+    teleport: (u, x, y) => this.teleportUnit(u, x, y),
+    changeOwner: (u, owner, team) => {
+      u.owner = owner;
+      u.team = team;
+    },
+    killUnit: (u) => this.kill(u),
   };
+
+  /** Relocate a unit instantly and re-settle it onto the pathing grid (Blink,
+   *  Mass Teleport). Clears its current path so it doesn't walk back. */
+  private teleportUnit(u: SimUnit, x: number, y: number): void {
+    this.unsettle(u);
+    if (this.grid && !u.flying) {
+      const [cx, cy] = this.grid.worldToCell(x, y);
+      const spot = this.grid.nearestFit(cx, cy, u.footprint, 12) ?? this.grid.nearestWalkable(cx, cy, 12);
+      if (spot) [x, y] = this.grid.cellToWorld(spot[0], spot[1]);
+    }
+    u.x = x;
+    u.y = y;
+    u.prevX = x;
+    u.prevY = y;
+    u.path = [];
+    u.waypoint = 0;
+    u.moving = false;
+    if (!u.flying) this.settle(u);
+  }
 
   // === drains (renderer pulls these each frame) =============================
 
@@ -2305,7 +2377,8 @@ export class SimWorld {
           const def = this.abilities?.get(p.spell.abilityId);
           this.applySpellEffect(p.spell.code, p.spell.rank, caster, { targetId: t.id, x: t.x, y: t.y }, def);
         } else {
-          this.applyDamage(t, p.damage, p.sourceId);
+          const dealt = this.applyDamage(t, p.damage, p.sourceId);
+          if (dealt > 0) this.applyArrowAutocast(this.units.get(p.sourceId), t); // Searing/Frost/Black/Incinerate arrows
         }
         this.removeProjectile(p.id);
       } else {
@@ -2545,7 +2618,11 @@ export class SimWorld {
   }
 
   private dealDamage(attacker: SimUnit, target: SimUnit): void {
-    const dealt = this.applyDamage(target, this.rollDamage(attacker.weapon!), attacker.id);
+    // Critical Strike (Blademaster passive AOcr): a chance to multiply the swing.
+    const raw = this.applyCriticalStrike(attacker, this.rollDamage(attacker.weapon!));
+    const dealt = this.applyDamage(target, raw, attacker.id);
+    // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
+    if (dealt > 0) this.applyCleave(attacker, target, raw);
     // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
     if (attacker.lifesteal > 0 && dealt > 0 && attacker.hp > 0) {
       attacker.hp = Math.min(attacker.maxHp, attacker.hp + dealt * attacker.lifesteal);
@@ -2557,10 +2634,67 @@ export class SimWorld {
 
   /** Apply already-rolled PHYSICAL damage: reduced by the target's armor value,
    *  plays the weapon-impact SFX. Returns the HP actually removed (0 if immune). */
+  /** Autocast attack modifiers that fire on a landed ranged hit: Searing Arrows
+   *  (AHfa) / Black Arrow (ANba) / Incinerate (ANia) add bonus fire damage; Cold &
+   *  Frost Arrows (AHca) slow the target. Each spends the ability's per-shot mana. */
+  private applyArrowAutocast(attacker: SimUnit | undefined, target: SimUnit): void {
+    if (!attacker || !this.abilities || target.hp <= 0) return;
+    for (const ab of attacker.abilities) {
+      if (!ab.autocastOn || ab.level < 1) continue;
+      if (ab.code !== "AHfa" && ab.code !== "ANba" && ab.code !== "ANia" && ab.code !== "AHca") continue;
+      const def = this.abilities.get(ab.id);
+      if (!def) continue;
+      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+      if (attacker.mana < lvl.cost) continue;
+      attacker.mana -= lvl.cost;
+      if (ab.code === "AHca") {
+        const d = target.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration || 4;
+        this.applyBuffInternal(target, { kind: "slow", group: "coldarrow", timeLeft: d, value: this.dataOf(lvl, 0, 0.25) || 0.25, value2: this.dataOf(lvl, 1, 0.25) || 0.25, sourceId: attacker.id, art: def.targetArt });
+      } else {
+        const bonus = this.dataOf(lvl, 0, 10) || 10;
+        this.landDamage(target, bonus, attacker.id, false);
+      }
+      if (def.targetArt) this.spellEffects.push({ art: def.targetArt, x: target.x, y: target.y, targetId: target.id, z: 0 });
+    }
+  }
+
   private applyDamage(target: SimUnit, rawDamage: number, attackerId: number): number {
+    // Evasion (Demon Hunter passive AEev): a chance to dodge a physical attack.
+    if (this.tryEvade(target)) return 0;
     // WC3 armor reduction: each armor point is worth 6% of pre-armor damage.
     const reduction = (target.armor * 0.06) / (1 + 0.06 * Math.max(0, target.armor));
     return this.landDamage(target, rawDamage * (1 - reduction), attackerId, true);
+  }
+
+  /** Critical Strike (AOcr): dataB chance to multiply the swing damage by dataC. */
+  private applyCriticalStrike(attacker: SimUnit, damage: number): number {
+    const lvl = this.passiveLevelData(attacker, "AOcr");
+    if (!lvl) return damage;
+    const chance = this.dataOf(lvl, 1); // dataB — crit chance
+    const mult = this.dataOf(lvl, 2, 2); // dataC — damage multiplier
+    return chance > 0 && this.rng() < chance ? damage * mult : damage;
+  }
+
+  /** Evasion (AEev): dataA chance for the DEFENDER to dodge a physical attack. */
+  private tryEvade(target: SimUnit): boolean {
+    const lvl = this.passiveLevelData(target, "AEev");
+    if (!lvl) return false;
+    const chance = this.dataOf(lvl, 0); // dataA — evasion chance
+    return chance > 0 && this.rng() < chance;
+  }
+
+  /** Cleaving Attack (ANca): the attacker splashes dataA of its swing to other
+   *  enemies within a short radius of the struck target (armor-reduced). */
+  private applyCleave(attacker: SimUnit, target: SimUnit, rawDamage: number): void {
+    const lvl = this.passiveLevelData(attacker, "ANca");
+    if (!lvl) return;
+    const frac = this.dataOf(lvl, 0); // dataA — cleave fraction
+    if (frac <= 0) return;
+    const radius = this.dataOf(lvl, 3, 200) || 200; // dataD — cleave radius
+    for (const t of this.unitsInAreaInternal(target.x, target.y, radius)) {
+      if (t === target || t === attacker || t.building || !this.hostile(attacker, t)) continue;
+      this.landDamage(t, rawDamage * frac, attacker.id, false); // splash ignores further armor tables
+    }
   }
 
   /** Apply FINAL (post-reduction) damage: death, return fire, and (for physical
@@ -2569,6 +2703,11 @@ export class SimWorld {
    *  the HP removed (0 if the target was invulnerable). */
   private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean): number {
     if (target.invulnerable) return 0; // Divine Shield / Avatar: immune to damage
+    // Sleep (Dreadlord) breaks the instant the sleeper takes damage (WC3).
+    if (target.buffs.some((b) => b.kind === "sleep")) target.buffs = target.buffs.filter((b) => b.kind !== "sleep");
+    // Mana Shield (Naga): absorb incoming damage into mana at `value` mana per hp.
+    amount = this.absorbWithManaShield(target, amount);
+    if (amount <= 0) return 0;
     if (recordHit) this.hits.push({ attackerId, targetId: target.id });
     target.hp -= amount;
     if (target.hp <= 0) {
@@ -2583,7 +2722,40 @@ export class SimWorld {
     return amount;
   }
 
+  /** Mana Shield (Naga Sea Witch, ANms): redirect incoming damage into the unit's
+   *  mana. `value` = mana consumed per hp absorbed; the shield covers as much as the
+   *  mana pool allows, then any overflow damage falls through to hp. */
+  private absorbWithManaShield(u: SimUnit, amount: number): number {
+    if (amount <= 0 || u.mana <= 0) return amount;
+    const buff = u.buffs.find((b) => b.kind === "manaShield");
+    if (!buff) return amount;
+    const perHp = buff.value > 0 ? buff.value : 1;
+    const absorbable = Math.min(amount, u.mana / perHp);
+    u.mana -= absorbable * perHp;
+    return amount - absorbable;
+  }
+
+  /** Reincarnation (AOre): if a dying hero has it learned and off cooldown, revive
+   *  it in place at full HP/mana, put the ability on cooldown, and keep it alive. */
+  private tryReincarnate(u: SimUnit): boolean {
+    if (!u.isHero || u.hp > 0) return false;
+    const ab = u.abilities.find((a) => a.code === "AOre" && a.level >= 1 && a.cooldownLeft <= 0);
+    if (!ab || !this.abilities) return false;
+    const def = this.abilities.get(ab.id);
+    if (!def) return false;
+    const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    ab.cooldownLeft = lvl.cooldown > 0 ? lvl.cooldown : 240;
+    u.hp = u.maxHp;
+    u.mana = u.maxMana;
+    u.buffs = u.buffs.filter((b) => b.kind === "manaShield"); // clear debuffs on revive
+    if (def.targetArt || def.casterArt) this.spellEffects.push({ art: def.targetArt || def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
+    return true;
+  }
+
   private kill(u: SimUnit, killerId = 0): void {
+    // Reincarnation (Tauren Chieftain / Elder Sage, AOre): a fatal blow instead
+    // revives the hero in place, on a long cooldown (stored on the ability).
+    if (this.tryReincarnate(u)) return;
     this.refundPendingBuild(u); // died before its building went up → refund the cost
     this.unsettle(u); // corpses don't block cells
     if (u.inMine) {

@@ -51,6 +51,12 @@ export const BUILDING_TRAINS: Record<string, string[]> = {
   eaow: ["edot", "ehip", "efdr"], // Ancient of Wind: Druid of the Talon, Hippogryph, Faerie Dragon
   edos: ["echm"], // Chimaera Roost: Chimaera
   eate: ["Edem", "Ekee", "Emoo", "Ewar"], // Altar of Elders (heroes)
+  // --- Neutral ---
+  // Tavern: the 8 neutral heroes any race can hire (Liquipedia/Wowpedia "Tavern" +
+  // MPQ ntav — 425g/135L, first hero free). Grid slots come from each hero's own
+  // NeutralUnitFunc buttonpos (rows 1-2). The Tavern is Neutral Passive (player 15);
+  // the command card still offers these to the local player (see commandCard()).
+  ntav: ["Nngs", "Nbrn", "Npbm", "Nfir", "Nplh", "Nbst", "Ntin", "Nalc"],
 };
 
 // Ground-order hotkeys (WC3 standard). Build/train use the unit's name hotkey.

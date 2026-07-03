@@ -175,9 +175,47 @@ export class SoundBoard {
         }
         if (out.length) break;
       }
+      // Fallback: many missile folders name their WAVs after the HERO, not the
+      // model — BloodElfMissile\BloodMageRangedAttack.wav, KeeperGroveMissile\
+      // KeeperOfTheGroveMissileLaunch1.wav, ShadowHunterMissile\HeroShadow…Hit1.wav.
+      // The exact base is undiscoverable, so scan the folder (from the MPQ listfile)
+      // for any .wav whose name matches this launch/impact/cast phase by keyword.
+      if (!out.length) out.push(...this.scanFolderWavs(folder, kind));
     }
     this.soundCache.set(cacheKey, out);
     return out;
+  }
+
+  // Lazy index: lowercased folder path → the .wav files the listfile knows it holds.
+  private wavFolders: Map<string, string[]> | null = null;
+  private wavIndex(): Map<string, string[]> {
+    if (this.wavFolders) return this.wavFolders;
+    const idx = new Map<string, string[]>();
+    for (const name of this.vfs.list()) {
+      if (!/\.wav$/i.test(name)) continue;
+      const p = name.replace(/\//g, "\\");
+      const slash = p.lastIndexOf("\\");
+      if (slash < 0) continue;
+      const folder = p.slice(0, slash + 1).toLowerCase();
+      (idx.get(folder) ?? idx.set(folder, []).get(folder)!).push(p);
+    }
+    this.wavFolders = idx;
+    return idx;
+  }
+
+  /** Any .wav in `folder` whose name matches the given sound phase by keyword —
+   *  used when the WAV isn't named after its model (hero-named missile sounds). */
+  private scanFolderWavs(folder: string, kind: string): string[] {
+    const files = this.wavIndex().get(folder.toLowerCase());
+    if (!files) return [];
+    const want =
+      kind === "impact"
+        ? /(hit|death|impact|target)/i
+        : kind === "launch"
+          ? /(launch|attack|throw|birth|ranged)/i
+          : /./; // cast: any wav in the effect folder
+    const matched = files.filter((f) => want.test(f.split("\\").pop() ?? ""));
+    return matched.length ? matched : kind === "launch" || kind === "impact" ? [] : files;
   }
 
   /** Play a named interface sound from UISounds.slk (button click, place building,

@@ -2,14 +2,18 @@ import w3i from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "./terrain";
 import { parseDoo, type DoodadInstance } from "./doodads";
+import { parseMapUnits, type PlacedUnit } from "./mapUnits";
 
 // Load a playable map (plan Phase 2/5). A .w3x/.w3m is itself an MPQ, so we open
-// it with the same reader and pull out terrain + doodads. This is the real-asset
-// path; makePlaceholderTerrain() is the zero-asset counterpart.
+// it with the same reader and pull out terrain + doodads + placed units. This is
+// the real-asset path; makePlaceholderTerrain() is the zero-asset counterpart.
 
 export interface LoadedMap {
   terrain: TerrainData;
   doodads: DoodadInstance[];
+  /** Pre-placed units/buildings (creeps, mines, shops, and — on custom maps —
+   *  each player's own units), read straight from war3mapUnits.doo. */
+  placedUnits: PlacedUnit[];
 }
 
 /** Open a .w3x/.w3m file (an MPQ) and extract its terrain and doodads. */
@@ -37,5 +41,7 @@ export function loadMapBytes(bytes: Uint8Array, label = "map"): LoadedMap {
   const dooBytes = mpq.rawBytes("war3map.doo");
   const doodads = dooBytes ? parseDoo(dooBytes, buildVersion) : [];
 
-  return { terrain, doodads };
+  const placedUnits = parseMapUnits(mpq.rawBytes("war3mapUnits.doo"), buildVersion);
+
+  return { terrain, doodads, placedUnits };
 }
