@@ -35,7 +35,10 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   click grabs all on-screen own units of that type (`selectByType`+`onScreen`). — **Idle-worker badge**
   (⛏ + count) above the minimap; click / **F8** / **~** selects & cycles idle workers and centres on them.
   Build clean; all sim regressions (dance/mine-roundtrip/lumber/follow) pass. Sounds, circles, follow feel,
-  and the idle badge need in-browser confirmation.
+  and the idle badge need in-browser confirmation. **Follow-up polish**: removed the (wrong-sounding)
+  construction loop; **red hostile cues accentuated** — attack reticle `[255,26,20]`, enemy-hover hand
+  cursor `[255,48,40]` (was pinkish), and hostile selection/hover rings get a harsh-red multiply tint
+  `ENEMY_RING_TINT [1,0.16,0.1]`.
 - **Feedback pass 10 — impact sounds, non-overlapping voices, portrait talk, mine line, lumberjack fix (2026-07-03, latest+23)**
   — **Weapon-impact SFX**: `SoundBoard.playImpact(weap1, targetArmor)` resolves `UI\SoundInfo\
   UnitCombatSounds.slk` row `<attacker.weap1><target.armor>` (both new `UnitDef` fields from UnitUI —

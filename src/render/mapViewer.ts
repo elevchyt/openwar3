@@ -893,6 +893,9 @@ export class MapViewerScene {
   // thickness), and a tiny lift so they sit just above the terrain.
   private static readonly CIRCLE_SCALE = 1.2;
   private static readonly CIRCLE_LIFT = 13; // sit the rings a bit higher (units + buildings)
+  // Multiply-tint for hostile selection/hover rings — cuts the model's softer red
+  // toward a harsh, saturated red so enemies read at a glance.
+  private static readonly ENEMY_RING_TINT = [1, 0.16, 0.1];
   // Camera zoom limits (world units of camera distance), WC3-like — not the huge
   // free range we had. MELEE_START opens a touch more zoomed out than before.
   private static readonly ZOOM_MIN = 1500;
@@ -985,21 +988,6 @@ export class MapViewerScene {
     this.projectileInsts.set(id, inst);
   }
 
-  /** Loop the construction "hammering" while any of the local player's buildings
-   *  is still going up; stop it when none are. One shared loop (WC3 channel 12). */
-  private updateConstructionSound(): void {
-    const world = this.rts?.simWorld;
-    if (!world) return;
-    let constructing = false;
-    for (const u of world.units.values()) {
-      if (u.owner === this.localPlayer && u.building && u.building.constructionLeft > 0) {
-        constructing = true;
-        break;
-      }
-    }
-    this.sounds?.setLoop("ConstructingBuildingDefault", constructing);
-  }
-
   private placeCircle(
     inst: SpawnInstance | null,
     info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
@@ -1021,17 +1009,19 @@ export class MapViewerScene {
     this.loc3[2] = info.z - 14 * scale + MapViewerScene.CIRCLE_LIFT;
     inst.setLocation(this.loc3);
     inst.setUniformScale(scale);
-    inst.setVertexColor(tint ?? [1, 1, 1]);
     // Flashes (tinted) use the neutral (white) base so the tint carries the
     // colour cleanly. Real selection/hover rings colour by alliance: your own
     // and allied (same-team) units are green, everyone else — including
     // neutral-hostile creeps — is red.
     let seq: number;
+    let vcolor = tint ?? [1, 1, 1];
     if (tint || info.neutral) seq = this.circleSeq.neutral; // flashes + neutral-passive (gold mine)
     else {
       const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
       seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;
+      if (!friendly) vcolor = MapViewerScene.ENEMY_RING_TINT; // accentuate hostile rings to a harsh red
     }
+    inst.setVertexColor(vcolor);
     inst.setSequence(seq);
     inst.setSequenceLoopMode(2);
   }
@@ -1563,7 +1553,7 @@ export class MapViewerScene {
     if (cached !== undefined) return cached;
     const sheet = this.cursorSheet;
     if (!sheet) return "";
-    const color = { green: [72, 255, 72], yellow: [255, 226, 58], red: [255, 64, 64] }[colorKey];
+    const color = { green: [72, 255, 72], yellow: [255, 226, 58], red: [255, 26, 20] }[colorKey]; // harsher, purer red
     const cell = Math.round(sheet.width / 8);
     const c = document.createElement("canvas");
     c.width = cell;
@@ -1595,7 +1585,7 @@ export class MapViewerScene {
     if (cached !== undefined) return cached;
     const sheet = this.cursorSheet;
     if (!sheet) return "";
-    const color = { green: [130, 255, 130], yellow: [255, 235, 110], red: [255, 110, 110] }[colorKey];
+    const color = { green: [130, 255, 130], yellow: [255, 235, 110], red: [255, 48, 40] }[colorKey]; // harsh red, not pink
     const cell = Math.round(sheet.width / 8);
     const c = document.createElement("canvas");
     c.width = cell;
@@ -1659,7 +1649,6 @@ export class MapViewerScene {
       this.updateTreePulses(dt / 1000);
       this.updateProjectiles();
       this.updateReticle(this.lastMouse.x, this.lastMouse.y);
-      this.updateConstructionSound();
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
