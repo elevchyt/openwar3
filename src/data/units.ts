@@ -15,6 +15,7 @@ export interface UnitDef {
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
   weaponSound: string; // unitUI "weap1" weapon-impact base ("MetalMediumSlice"); "_" = none
+  lumberSound: string; // unitUI "weap2" 2nd-weapon base — workers' chop ("AxeMediumChop"); "" = none
   armorSound: string; // unitUI "armor" material struck ("Metal"/"Flesh"/…) → combat-sound suffix
   icon: string; // command-card BTN icon path (from UnitFunc "art")
   description: string; // command-card tooltip text (UnitStrings "Ubertip"), cleaned
@@ -173,6 +174,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       selScale: u ? num(u, "scale", 1) : 1,
       soundSet: u ? str(u, "unitSound") : "",
       weaponSound: u ? str(u, "weap1") : "",
+      lumberSound: u ? str(u, "weap2") : "",
       armorSound: u ? str(u, "armor") : "",
       icon: fn ? str(fn, "art") : "",
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*

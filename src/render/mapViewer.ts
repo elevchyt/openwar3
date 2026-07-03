@@ -230,6 +230,8 @@ export class MapViewerScene {
     this.sounds.onVoiceStart = (label, durationSec) => {
       if (label && label === this.portraitLabel) this.portraitViewer?.playTalk(durationSec);
     };
+    // Mute toggle on the bottom-left debug panel.
+    this.metrics.onToggleMute = (muted) => this.sounds?.setMuted(muted);
     this.attachControls();
   }
 
@@ -556,6 +558,7 @@ export class MapViewerScene {
     const order: QueuedOrder = { kind: "buildnew", defId: p.def.id, x, y, gold: p.def.goldCost, lumber: p.def.lumberCost };
     if (queued) this.rts.simWorld.queueOrder(p.workerId, order);
     else this.rts.simWorld.issueOrder(p.workerId, order); // walk there now
+    this.sounds?.playUi("PlaceBuildingDefault"); // WC3 building-placement confirm
     this.cardPage = "root";
     this.cancelPlacement();
   }
@@ -979,6 +982,21 @@ export class MapViewerScene {
     this.projectileInsts.set(id, inst);
   }
 
+  /** Loop the construction "hammering" while any of the local player's buildings
+   *  is still going up; stop it when none are. One shared loop (WC3 channel 12). */
+  private updateConstructionSound(): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    let constructing = false;
+    for (const u of world.units.values()) {
+      if (u.owner === this.localPlayer && u.building && u.building.constructionLeft > 0) {
+        constructing = true;
+        break;
+      }
+    }
+    this.sounds?.setLoop("ConstructingBuildingDefault", constructing);
+  }
+
   private placeCircle(
     inst: SpawnInstance | null,
     info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
@@ -1313,6 +1331,8 @@ export class MapViewerScene {
 
   private runCommand(id: string): void {
     if (!this.rts) return;
+    this.sounds?.playUi("InterfaceClick"); // WC3 command-card button click
+    this.sounds?.unlock(); // keyboard hotkeys are a gesture too
     if (id === "move" || id === "attack" || id === "patrol" || id === "rally" || id === "repair") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
@@ -1626,6 +1646,7 @@ export class MapViewerScene {
       this.updateTreePulses(dt / 1000);
       this.updateProjectiles();
       this.updateReticle(this.lastMouse.x, this.lastMouse.y);
+      this.updateConstructionSound();
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {

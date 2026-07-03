@@ -2,33 +2,39 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import type { DataSource } from "../vfs/types";
 
 // Unit voice lines & sound effects, sourced entirely from the real WC3 sound data
-// (the safest source of truth). The mapping, verified against the 1.27 MPQs:
+// (the safest source of truth). Mappings, verified against the 1.27 MPQs:
 //
-//   Units\UnitUI.slk  `unitSound`  → a sound-set LABEL (hfoo → "Footman")
-//                     `weap1`      → a weapon-impact sound base ("MetalMediumSlice")
-//                     `armor`      → the unit's material when HIT ("Metal"/"Flesh"/…)
-//   UI\SoundInfo\UnitAckSounds.slk   row `<label><Category>`  (voice acknowledgements)
-//   UI\SoundInfo\AnimSounds.slk      row `<label>Death`       (death cries)
-//   UI\SoundInfo\UnitCombatSounds.slk row `<weap1><targetArmor>` (weapon impacts)
+//   Units\UnitUI.slk  `unitSound`  → sound-set LABEL (hfoo → "Footman")
+//                     `weap1`      → weapon-impact base ("MetalMediumSlice")
+//                     `weap2`      → lumber/2nd weapon base ("AxeMediumChop")
+//                     `armor`      → material struck ("Metal"/"Flesh"/"Wood"/…)
+//   UI\SoundInfo\UnitAckSounds.slk    row `<label><Category>`   (voice acks)
+//   UI\SoundInfo\AnimSounds.slk       row `<label>Death`        (death cries)
+//   UI\SoundInfo\UnitCombatSounds.slk row `<weap><armor>`       (impacts + chops)
+//   UI\SoundInfo\UISounds.slk         row `<name>`              (interface sounds)
 //
-// Each row's `FileNames` is a comma-separated randomized list; the full path is
-// `DirectoryBase` + one chosen filename. Files are plain PCM WAV, decoded directly.
+// Row keys are matched CASE-INSENSITIVELY: WC3's data is inconsistent (e.g. unit
+// `halt` has unitSound "AltarofKings" but the ack row is "AltarOfKingsWhat"), and
+// the engine looks them up case-insensitively — an exact match silently dropped
+// the Altars, Tree of Life, Boneyard, Slaughterhouse voices.
 //
 // Channels:
-//   VOICE  (What/Yes/YesAttack/Pissed/Warcry/Ready) — ONE exclusive channel: while a
-//          line plays, further voice requests are DROPPED, never cut (per feedback).
-//   Death, Impact — overlapping SFX pools, each concurrency-capped.
+//   VOICE  (What/Yes/YesAttack/Pissed/Warcry/Ready) — ONE exclusive channel: while
+//          a line plays, further voice requests are DROPPED, never cut.
+//   Death / Impact / UI — overlapping one-shot pools (deaths & impacts capped).
+//   Loops  — named looping sounds (building construction).
 
 export type SoundCategory = "What" | "Yes" | "YesAttack" | "Pissed" | "Warcry" | "Ready" | "Death";
 
 const ACK_TABLE = "UI\\SoundInfo\\UnitAckSounds.slk";
 const ANIM_TABLE = "UI\\SoundInfo\\AnimSounds.slk";
 const COMBAT_TABLE = "UI\\SoundInfo\\UnitCombatSounds.slk";
+const UI_TABLE = "UI\\SoundInfo\\UISounds.slk";
 
 const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["What", "Yes", "YesAttack", "Pissed", "Warcry", "Ready"]);
 
 const MAX_DEATHS = 4; // concurrent death cries
-const MAX_IMPACTS = 5; // concurrent weapon-impact clangs
+const MAX_IMPACTS = 5; // concurrent weapon-impact / chop clangs
 
 interface Clip {
   paths: string[]; // full MPQ paths of the randomized variants
@@ -37,18 +43,23 @@ interface Clip {
   pitchVar: number; // ± random jitter applied per play (0 = none)
 }
 
+// A parsed SLK plus a lowercase→actual row-name index for case-insensitive lookup.
+interface Table {
+  data: MappedData;
+  index: Map<string, string>;
+}
+
 export class SoundBoard {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
-  private ack: MappedData | null = null;
-  private anim: MappedData | null = null;
-  private combat: MappedData | null = null;
+  private tables = new Map<string, Table | null>();
   private buffers = new Map<string, Promise<AudioBuffer | null>>();
-  private clips = new Map<string, Clip | null>(); // memoized row key → clip
+  private clips = new Map<string, Clip | null>(); // memoized "table|key" → clip
   private voiceBusy = false; // an acknowledgement voice is currently playing
   private voiceSource: AudioBufferSourceNode | null = null;
   private deaths = 0;
   private impacts = 0;
+  private loops = new Map<string, AudioBufferSourceNode>(); // active looping sounds by name
   private muted = false;
   private volume = 0.85;
 
@@ -57,17 +68,19 @@ export class SoundBoard {
   onVoiceStart: ((label: string, durationSec: number) => void) | null = null;
 
   constructor(private vfs: DataSource) {
-    this.ack = this.loadTable(ACK_TABLE);
-    this.anim = this.loadTable(ANIM_TABLE);
-    this.combat = this.loadTable(COMBAT_TABLE);
+    for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE]] as const) {
+      this.tables.set(tag, this.loadTable(path));
+    }
   }
 
-  private loadTable(path: string): MappedData | null {
+  private loadTable(path: string): Table | null {
     const bytes = this.vfs.rawBytes(path);
     if (!bytes) return null;
     const m = new MappedData();
     m.load(new TextDecoder("windows-1252").decode(bytes));
-    return m;
+    const index = new Map<string, string>();
+    for (const k of Object.keys((m as unknown as { map: Record<string, unknown> }).map ?? {})) index.set(k.toLowerCase(), k);
+    return { data: m, index };
   }
 
   /** Resume the AudioContext from a user gesture (browsers block autoplay until
@@ -89,6 +102,10 @@ export class SoundBoard {
     if (this.master) this.master.gain.value = muted ? 0 : this.volume;
   }
 
+  isMuted(): boolean {
+    return this.muted;
+  }
+
   setVolume(v: number): void {
     this.volume = Math.max(0, Math.min(1, v));
     if (this.master && !this.muted) this.master.gain.value = this.volume;
@@ -98,24 +115,54 @@ export class SoundBoard {
    *  exclusive channel and are dropped while it's busy; deaths overlap (capped). */
   play(label: string, category: SoundCategory): void {
     if (!label) return;
-    if (category === "Death") {
-      this.playPool(this.resolve(this.anim, label + "Death"), "death");
-    } else {
-      this.playVoice(label, category);
-    }
+    if (category === "Death") this.playPool(this.resolve("anim", label + "Death"), "death");
+    else this.playVoice(label, category);
   }
 
-  /** Play a weapon-impact clang: attacker's `weap1` + target's `armor` material
-   *  (e.g. MetalMediumSlice + Flesh). No-op for weaponless/ranged (`weap1` "_"). */
+  /** Play a weapon-impact / chop clang: `<weapon><material>` (MetalMediumSlice+Flesh,
+   *  AxeMediumChop+Wood, …). No-op for weaponless entries (`weap` empty/"_"). */
   playImpact(weaponSound: string, targetArmor: string): void {
     if (!weaponSound || weaponSound === "_" || !targetArmor) return;
-    this.playPool(this.resolve(this.combat, weaponSound + targetArmor), "impact");
+    this.playPool(this.resolve("combat", weaponSound + targetArmor), "impact");
+  }
+
+  /** Play a named interface sound from UISounds.slk (button click, place building,
+   *  rally point, error, …) as a fire-and-forget one-shot. */
+  playUi(name: string): void {
+    this.playPool(this.resolve("ui", name), "ui");
+  }
+
+  /** Start/stop a named looping sound (e.g. building construction). Idempotent. */
+  setLoop(name: string, on: boolean): void {
+    if (on) {
+      if (this.loops.has(name)) return;
+      const clip = this.resolve("ui", name);
+      if (!clip || !clip.paths.length) return;
+      this.unlock();
+      if (!this.ctx || !this.master || this.ctx.state !== "running") return;
+      const placeholder = {} as AudioBufferSourceNode;
+      this.loops.set(name, placeholder); // reserve synchronously so we don't double-start
+      const path = clip.paths[(Math.random() * clip.paths.length) | 0];
+      void this.buffer(path).then((buf) => {
+        if (!buf || !this.ctx || !this.master || this.loops.get(name) !== placeholder) return;
+        const src = this.source(buf, clip);
+        src.loop = true;
+        src.connect(this.gain(clip.gain)).connect(this.master);
+        this.loops.set(name, src);
+        src.start();
+      });
+    } else {
+      const src = this.loops.get(name);
+      if (!src) return;
+      this.loops.delete(name);
+      try { src.stop(); } catch { /* not started yet / already stopped */ }
+    }
   }
 
   private playVoice(label: string, category: SoundCategory): void {
     if (!VOICE_CATEGORIES.has(category)) return;
     if (this.voiceBusy) return; // never cut the line that's already playing
-    const clip = this.resolve(this.ack, label + category);
+    const clip = this.resolve("ack", label + category);
     if (!clip || !clip.paths.length) return;
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return;
@@ -138,24 +185,22 @@ export class SoundBoard {
     });
   }
 
-  /** Play a clip on an overlapping, concurrency-capped pool (deaths / impacts). */
-  private playPool(clip: Clip | null, kind: "death" | "impact"): void {
+  /** Play a clip on an overlapping one-shot pool. deaths/impacts are concurrency-
+   *  capped (reserved synchronously so an AoE burst can't slip the cap); ui isn't. */
+  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui"): void {
     if (!clip || !clip.paths.length) return;
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return;
-    const cap = kind === "death" ? MAX_DEATHS : MAX_IMPACTS;
-    // Reserve a slot SYNCHRONOUSLY — an AoE can kill/hit many units in one tick,
-    // and decode is async, so counting only after decode would slip the cap.
     if (kind === "death") {
-      if (this.deaths >= cap) return;
+      if (this.deaths >= MAX_DEATHS) return;
       this.deaths++;
-    } else {
-      if (this.impacts >= cap) return;
+    } else if (kind === "impact") {
+      if (this.impacts >= MAX_IMPACTS) return;
       this.impacts++;
     }
     const release = () => {
       if (kind === "death") this.deaths--;
-      else this.impacts--;
+      else if (kind === "impact") this.impacts--;
     };
     const path = clip.paths[(Math.random() * clip.paths.length) | 0];
     void this.buffer(path).then((buf) => {
@@ -184,11 +229,14 @@ export class SoundBoard {
     return g;
   }
 
-  /** Resolve a table row → clip metadata, memoized. */
-  private resolve(table: MappedData | null, key: string): Clip | null {
-    const hit = this.clips.get(key);
+  /** Resolve a table row → clip metadata, memoized. Row lookup is case-insensitive. */
+  private resolve(tag: string, key: string): Clip | null {
+    const memo = `${tag}|${key.toLowerCase()}`;
+    const hit = this.clips.get(memo);
     if (hit !== undefined) return hit;
-    const row = table?.getRow(key) as { string(k: string): string | undefined } | undefined;
+    const table = this.tables.get(tag) ?? null;
+    const actual = table?.index.get(key.toLowerCase()) ?? key;
+    const row = table?.data.getRow(actual) as { string(k: string): string | undefined } | undefined;
     let clip: Clip | null = null;
     if (row) {
       const dir = row.string("directorybase") ?? "";
@@ -209,7 +257,7 @@ export class SoundBoard {
         };
       }
     }
-    this.clips.set(key, clip);
+    this.clips.set(memo, clip);
     return clip;
   }
 

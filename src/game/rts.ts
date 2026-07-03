@@ -334,13 +334,18 @@ export class RtsController {
   }
 
   /** Play weapon-impact SFX for every hit landed this tick (attacker's weapon
-   *  material vs target's armour material — sourced from the game's combat sounds). */
+   *  material vs target's armour material) plus lumber-chop SFX (worker's 2nd-weapon
+   *  material vs Wood) — all sourced from the game's combat sounds. */
   private playImpacts(): void {
     if (!this.sounds) return;
     for (const h of this.sim.drainHits()) {
       const atk = this.registry.get(this.byId.get(h.attackerId)?.typeId ?? "");
       const tgt = this.registry.get(this.byId.get(h.targetId)?.typeId ?? "");
       if (atk?.weaponSound && tgt?.armorSound) this.sounds.playImpact(atk.weaponSound, tgt.armorSound);
+    }
+    for (const workerId of this.sim.drainChops()) {
+      const def = this.registry.get(this.byId.get(workerId)?.typeId ?? "");
+      if (def?.lumberSound) this.sounds.playImpact(def.lumberSound, "Wood"); // trees are "Wood" armour
     }
   }
 
@@ -938,6 +943,7 @@ export class RtsController {
           if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
         this.queueArrow(r.x, r.y, MOVE_ARROW);
+        this.sounds?.playUi("RallyPointPlace");
       }
       return true;
     }
@@ -1309,6 +1315,7 @@ export class RtsController {
           if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
         this.queueArrow(r.x, r.y, MOVE_ARROW);
+        this.sounds?.playUi("RallyPointPlace");
       }
       return;
     }

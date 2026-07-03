@@ -708,7 +708,23 @@ body.in-game .menu-panel { display: none; }
   border-radius: 4px;
   pointer-events: none;
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+/* Mute toggle is interactive even though the panel itself ignores pointer events. */
+.metrics-mute {
+  pointer-events: auto;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 5px;
+}
+.metrics-mute:hover { background: rgba(255, 255, 255, 0.18); }
 
 #ui {
   position: fixed;

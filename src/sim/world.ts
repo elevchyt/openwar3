@@ -238,6 +238,9 @@ export class SimWorld {
   // Landed hits (melee + projectile) — the renderer plays the weapon-impact SFX
   // (attacker's weapon material vs target's armour material).
   private hits: Array<{ attackerId: number; targetId: number }> = [];
+  // Worker ids whose axe just landed a chop this tick — the renderer plays the
+  // chop SFX (worker's lumber-weapon material vs Wood).
+  private chops: number[] = [];
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   private nextNodeId = 1;
@@ -366,6 +369,14 @@ export class SimWorld {
     if (!this.hits.length) return this.hits;
     const out = this.hits;
     this.hits = [];
+    return out;
+  }
+
+  /** Worker ids that landed a chop since the last drain (renderer plays the axe SFX). */
+  drainChops(): number[] {
+    if (!this.chops.length) return this.chops;
+    const out = this.chops;
+    this.chops = [];
     return out;
   }
 
@@ -1441,6 +1452,7 @@ export class SimWorld {
     u.workT -= dt;
     if (u.workT > 0) return;
     u.workT = w.chopPeriod;
+    this.chops.push(u.id); // axe landed → renderer plays the chop SFX
     w.carryLumber = Math.min(w.lumberCapacity, w.carryLumber + w.lumberPerChop);
     if (w.damagesTree) {
       tree.lumber -= w.lumberPerChop;
