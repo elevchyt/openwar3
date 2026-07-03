@@ -269,6 +269,7 @@ export class GameHud {
 
   private onKey = (e: KeyboardEvent): void => {
     if (this.root.hidden) return;
+    if (document.body.classList.contains("game-menu-open")) return; // F10 menu is modal
     if (e.key === "Tab") {
       e.preventDefault(); // cycle the focused sub-group of a multi-selection
       this.driver.cycleFocus();

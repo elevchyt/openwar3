@@ -48,6 +48,7 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
   if (vfs) {
     show("map");
     if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs);
+    mapScene.onExit = () => exitToMenu(); // F10 → End Game leaves the match
     mapScene.loadMap(bytes);
     mapScene.start();
     return `${name} — authentic render (textures & models stream in)`;
@@ -123,6 +124,16 @@ async function viewModel(path: string): Promise<SequenceInfo[]> {
 function showTerrain(): void {
   show("bg");
   terrain.start();
+}
+
+/** Leave the current match (F10 → End Game): tear down the map scene and return
+ *  to the main menu over the placeholder terrain. A fresh scene is built next game. */
+function exitToMenu(): void {
+  mapScene?.dispose();
+  mapScene = null;
+  meleeConfig = null;
+  document.body.classList.remove("in-game"); // reveal the main-menu panel again
+  showTerrain();
 }
 
 mountMainMenu(ui, resolver, { onSinglePlayer: singlePlayer });

@@ -396,6 +396,52 @@ body.in-game .menu-panel { display: none; }
   box-shadow: 0 0 5px rgba(0, 0, 0, 0.75);
 }
 .hud-idle-worker:hover { border-color: #ffe08a; filter: brightness(1.15); }
+
+/* F10 Game Menu — centred modal that dims the paused battlefield. */
+.game-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+.game-menu {
+  width: 340px;
+  padding: 18px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  background: linear-gradient(#122036, #0b1526);
+  border: 2px solid #c8a860;
+  border-radius: 6px;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.game-menu-title {
+  text-align: center;
+  color: #fff;
+  font: 700 20px/1.2 "Trajan Pro", Georgia, serif;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  text-shadow: 0 1px 3px #000;
+}
+.game-menu-row { display: flex; gap: 11px; }
+.game-menu-row .game-menu-btn { flex: 1; }
+.game-menu-btn {
+  padding: 10px 12px;
+  background: linear-gradient(#1a2a44, #0e1a2e);
+  border: 1px solid #b8983f;
+  border-radius: 4px;
+  color: #f0c850;
+  font: 600 15px/1 Georgia, serif;
+  cursor: pointer;
+  text-shadow: 0 1px 2px #000;
+}
+.game-menu-btn:hover:not(:disabled) { background: linear-gradient(#24365a, #14243e); border-color: #ffe08a; color: #ffe08a; }
+.game-menu-btn:disabled { color: #6b6552; border-color: #4a4433; cursor: default; }
+.game-menu-btn.return { margin-top: 10px; }
+.game-menu-btn.danger:hover:not(:disabled) { border-color: #e06a5a; color: #ffb0a0; }
 .hud-idle-count {
   position: absolute;
   right: 1px;

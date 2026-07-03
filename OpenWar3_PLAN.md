@@ -17,6 +17,16 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 13 — F10 game menu, pause, exit-to-menu, keyboard lock (2026-07-03, latest+26)**
+  — **F10 Game Menu** (`src/ui/gameMenu.ts`): a centred WC3-style modal (Save/Load/Options/Help/Tips
+  disabled placeholders; **End Game**, **Return to Game** wired) that **pauses** the sim (mapViewer
+  `paused` gates `rts.tick`+`tickPendingBuild`; rendering continues so the battlefield freezes behind it).
+  F10 toggles it; Escape / Return to Game closes+unpauses; **End Game** → `onExit` → main.ts `exitToMenu()`
+  disposes the scene and returns to the main menu (fresh scene next game). The HUD stands down while the
+  menu is open (`body.game-menu-open` guard in `onKey`; menu Escape captured first). — **Append-to-group
+  creates** the group if none exists (already handled — verified). — **Browser-shortcut override**: best-
+  effort **Keyboard Lock API** (`navigator.keyboard.lock`), (un)locked on `fullscreenchange` — captures
+  Ctrl+number etc. ONLY in fullscreen (browser policy); our `preventDefault` covers the rest. Build clean.
 - **Feedback pass 12 — control groups, hero hotkeys, idle-worker button (2026-07-03, latest+25)**
   — **Control groups (number row 1-0)**: `RtsController` holds 10 groups; **Ctrl+N** binds the current own
   selection (overwrite), **Shift+N** appends, **N** recalls, **N double-tap** recalls + centres the camera

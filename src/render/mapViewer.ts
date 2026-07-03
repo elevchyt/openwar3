@@ -19,6 +19,7 @@ import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
+import { GameMenu } from "../ui/gameMenu";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { buildsFor, trainsFor } from "../data/techtree";
 
@@ -155,6 +156,10 @@ export class MapViewerScene {
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
   private hud: GameHud | null = null;
+  private gameMenu: GameMenu | null = null;
+  private paused = false; // F10 game menu freezes the sim (rendering continues)
+  /** Called when the player picks "End Game" — host tears the match down. */
+  onExit: (() => void) | null = null;
   private minimap: HTMLCanvasElement | null = null;
   private iconCache = new Map<string, string | null>();
   private localPlayer = 0;
@@ -229,6 +234,7 @@ export class MapViewerScene {
     private solver: Solver,
   ) {
     this.sounds = new SoundBoard(vfs);
+    this.setupKeyboardLock();
     // When the unit shown in the portrait speaks, mouth it on the 3D bust.
     this.sounds.onVoiceStart = (label, durationSec) => {
       if (label && label === this.portraitLabel) this.portraitViewer?.playTalk(durationSec);
@@ -988,6 +994,21 @@ export class MapViewerScene {
     this.projectileInsts.set(id, inst);
   }
 
+  /** Capture browser/OS shortcuts (Ctrl+number tab-switch, etc.) so game hotkeys
+   *  win. The Keyboard Lock API only engages in fullscreen (browser policy), so we
+   *  (un)lock as fullscreen toggles; outside fullscreen our keydown preventDefault
+   *  handles what it can. No-op where the API is unavailable. */
+  private setupKeyboardLock(): void {
+    const kb = (navigator as unknown as { keyboard?: { lock?: (keys?: string[]) => Promise<void>; unlock?: () => void } }).keyboard;
+    if (!kb?.lock) return;
+    const sync = (): void => {
+      if (document.fullscreenElement) void kb.lock!().catch(() => {});
+      else kb.unlock?.();
+    };
+    document.addEventListener("fullscreenchange", sync);
+    sync();
+  }
+
   /** Centre the camera on the current selection (control-group / hero jump). */
   private jumpToSelection(): void {
     const c = this.rts?.selectionCentroid();
@@ -1177,6 +1198,18 @@ export class MapViewerScene {
       consoleSkin: () => this.consoleSkin(),
     };
     this.hud = new GameHud(ui, driver);
+    this.gameMenu?.dispose();
+    this.gameMenu = new GameMenu(ui, {
+      onReturn: () => {
+        this.gameMenu?.hide();
+        this.paused = false;
+      },
+      onEndGame: () => {
+        this.gameMenu?.hide();
+        this.paused = false;
+        this.onExit?.();
+      },
+    });
   }
 
   /** The console tiles are a texture ATLAS (verified by rendering it out): the
@@ -1660,8 +1693,11 @@ export class MapViewerScene {
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
       this.updatePortrait();
-      this.tickPendingBuild(dt / 1000); // seconds, matching the sim's clock
-      this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
+      // The F10 game menu freezes the simulation (units hold; rendering continues).
+      if (!this.paused) {
+        this.tickPendingBuild(dt / 1000); // seconds, matching the sim's clock
+        this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
+      }
       // Map units load async — hide the start-location props once they're all in.
       if (!this.startMarkersHidden && this.viewer.map?.unitsReady) {
         this.hideStartLocations();
@@ -1743,6 +1779,9 @@ export class MapViewerScene {
     this.metrics.dispose();
     this.hud?.dispose();
     this.hud = null;
+    this.gameMenu?.dispose();
+    this.gameMenu = null;
+    this.paused = false;
     this.ghost?.remove();
     this.ghost = null;
     this.selectBoxEl?.remove();
@@ -1892,7 +1931,14 @@ export class MapViewerScene {
 
   private attachControls(): void {
     const c = this.canvas;
-    window.addEventListener("keydown", (e) => this.keys.add(e.key.toLowerCase()));
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "F10") {
+        e.preventDefault(); // F10 opens WC3's game menu, not the browser's
+        this.paused = this.gameMenu?.toggle() ?? false;
+        return;
+      }
+      this.keys.add(e.key.toLowerCase());
+    });
     window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
     c.addEventListener("contextmenu", (e) => e.preventDefault());
     // Left-drag rotates the camera; a left-click (no drag) selects a unit;
