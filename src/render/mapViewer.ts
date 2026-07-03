@@ -749,23 +749,35 @@ export class MapViewerScene {
     return this.queueFlags[i];
   }
 
-  /** Spawn a converging-arrows marker for each new move/attack-move order and
-   *  time out the live ones (the model plays once, then we detach it). */
+  /** Spawn a converging-arrows marker for the newest move/attack-move order and
+   *  time out the live one (the model plays once, then we detach it).
+   *
+   *  Only the most recent order matters, so we keep a SINGLE live instance and
+   *  reset its animation (re-tint, re-place, restart the clip) instead of adding
+   *  a fresh instance per click. Spamming orders would otherwise pile up a stack
+   *  of overlapping arrows — this reuse both fixes that and avoids create/detach
+   *  churn each frame. */
   private updateOrderArrows(dt: number): void {
     const map = this.viewer.map;
-    for (const req of this.rts?.drainOrderArrows() ?? []) {
-      if (!map || !this.arrowModel) continue; // drained regardless, drawn if ready
-      const inst = this.arrowModel.addInstance();
-      inst.setScene(map.worldScene);
+    const reqs = this.rts?.drainOrderArrows() ?? [];
+    if (reqs.length && map && this.arrowModel) {
+      const req = reqs[reqs.length - 1]; // newest order wins; drop any earlier ones
+      let a = this.orderArrows[0];
+      if (!a) {
+        const inst = this.arrowModel.addInstance();
+        inst.setScene(map.worldScene);
+        a = { inst, t: 0 };
+        this.orderArrows.push(a);
+      }
       this.loc3[0] = req.x;
       this.loc3[1] = req.y;
       this.loc3[2] = req.z + 4; // just above the ground
-      inst.setLocation(this.loc3);
-      inst.setVertexColor(req.color);
-      inst.setSequence(0); // single-shot "converge" clip
-      inst.setSequenceLoopMode(0); // play once
-      inst.show();
-      this.orderArrows.push({ inst, t: 0.9 });
+      a.inst.setLocation(this.loc3);
+      a.inst.setVertexColor(req.color);
+      a.inst.setSequence(0); // restart the single-shot "converge" clip from frame 0
+      a.inst.setSequenceLoopMode(0); // play once
+      a.inst.show();
+      a.t = 0.9;
     }
     for (let i = this.orderArrows.length - 1; i >= 0; i--) {
       const a = this.orderArrows[i];
@@ -1630,14 +1642,16 @@ export class MapViewerScene {
       }));
     }
     if (su.isHero && su.skillPoints > 0) {
-      const pts = `${su.skillPoints} skill point${su.skillPoints > 1 ? "s" : ""}`;
+      // Hero Abilities (learn-skill): opens the skill list to spend unspent points.
+      // WC3's canonical learn-abilities "Skillz" book art (the disabled-folder BLP),
+      // default hotkey O, and a corner badge showing the points available.
       out.push(this.cmd({
         id: "learnpage",
-        icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSelectHeroOn.blp"),
-        name: "Learn Skill",
-        hotkey: "L",
-        desc: `Opens the skill list to learn or improve one of this hero's abilities. You have ${pts} to spend.`,
-        col: 3, row: 1,
+        icon: this.blpIcon("ReplaceableTextures\\CommandButtonsDisabled\\DISBTNSkillz.blp"),
+        name: "Hero Abilities",
+        hotkey: "O",
+        desc: "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities.",
+        col: 3, row: 1, count: su.skillPoints,
       }));
     }
   }

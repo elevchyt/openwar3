@@ -199,9 +199,13 @@ const WALK = 1, IDLE = 0;
 // smoothed to avoid flicker), fall back to the stand pose instead.
 const MOVE_ANIM_MIN_RATIO = 0.2;
 const MOVE_EMA_ALPHA = 0.25; // per-tick blend toward the current ratio
-const DEATH_HOLD = 1.6; // seconds the death pose plays before the corpse sinks
-const CORPSE_SINK_TIME = 3; // seconds the corpse sinks into the ground before deletion
-const CORPSE_SINK_DEPTH = 180; // world units the corpse descends while sinking (buries it)
+// Corpse lifecycle (WC3): a dead unit plays Death, then — if the model has them —
+// Decay Flesh and Decay Bone, and the bones linger until the sim corpse fully
+// decays (88s after death; see world.ts CORPSE_TOTAL_TIME). Units that leave no
+// corpse (air/mechanical/buildings) simply vanish once the Death clip ends. Clip
+// lengths come from the MDX intervals; these are the fallbacks when unknown.
+const DEATH_CLIP_FALLBACK = 1.6; // seconds to hold a Death clip of unknown length
+const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown length
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
 // Buff status-row display: map non-aura buff groups to their source ability code,
 // and give the remaining buff kinds a generic icon + label.
@@ -313,11 +317,12 @@ export class RtsController {
   private seeded = false;
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
-  // Corpses adopt the dead unit's model instance: it plays its death clip, then
-  // sinks into the ground and is deleted. `corpseId` links to the sim corpse so a
-  // spell that raises it (Resurrection/Raise Dead) can remove the model at once.
-  private corpses: Array<{ instance: Instance; corpseId: number; x: number; y: number; z: number; t: number; phase: "death" | "sink" }> = [];
-  private corpseLoc = new Float32Array(3); // scratch for sinking a corpse's location
+  // Corpses adopt the dead unit's model instance and sequence it through Death →
+  // Decay Flesh → Decay Bone in place, holding the bones until the sim corpse
+  // decays (88s). `corpseId` links to the sim corpse so a spell that raises it
+  // (Resurrection/Raise Dead) can remove the model at once; -1 = no corpse, so the
+  // model just vanishes when its Death clip ends. `phaseT` = seconds in the phase.
+  private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: "death" | "flesh" | "bone" }> = [];
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
@@ -1029,8 +1034,8 @@ export class RtsController {
     this.updateHealthBars();
   }
 
-  /** The sim removed this unit: play its death animation, then keep the corpse
-   *  briefly before hiding the instance. */
+  /** The sim removed this unit: play its death animation, then decay the corpse
+   *  (flesh → bone) in place until it's fully removed (see tickCorpses). */
   private onDeath(simId: number): void {
     const e = this.byId.get(simId);
     if (!e) return;
@@ -1045,12 +1050,11 @@ export class RtsController {
     if (e.anims.death >= 0) {
       e.unit.instance.setSequence(e.anims.death);
       e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
-      // Adopt the model as the corpse: play the death clip, then sink into the
-      // ground and delete (see tickCorpses). Link to the sim corpse this death
-      // created (if any) so a raise spell can hide the model immediately.
+      // Adopt the model as the corpse and decay it in place (see tickCorpses).
+      // Link to the sim corpse this death created (if any) so a raise spell can
+      // hide the model immediately and so the sim's 88s timer drives its removal.
       const corpse = [...this.sim.corpses.values()].find((c) => c.deadId === simId);
-      const loc = e.unit.instance.localLocation;
-      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, x: loc[0], y: loc[1], z: loc[2], t: 0, phase: "death" });
+      this.corpses.push({ instance: e.unit.instance, corpseId: corpse?.id ?? -1, anims: e.anims, phaseT: 0, phase: "death" });
     } else {
       e.unit.instance.hide();
     }
@@ -1101,33 +1105,64 @@ export class RtsController {
   private tickCorpses(dt: number): void {
     for (let i = this.corpses.length - 1; i >= 0; i--) {
       const c = this.corpses[i];
-      // Consumed by a raise spell → remove the model at once (the unit revives).
-      if (c.corpseId >= 0 && this.sim.corpses.get(c.corpseId)?.raised) {
+      // Organic corpses are tracked in the sim so raise/consume spells can target
+      // them; the sim removes the corpse 88s after death (or a spell raises it).
+      // Once it's gone, drop the model too — the bones have decayed.
+      const leavesCorpse = c.corpseId >= 0;
+      const sc = leavesCorpse ? this.sim.corpses.get(c.corpseId) : undefined;
+      if (leavesCorpse && (!sc || sc.raised)) {
         c.instance.hide();
         this.corpses.splice(i, 1);
         continue;
       }
-      c.t += dt;
-      // Play the death clip, then start sinking into the ground.
+      c.phaseT += dt;
       if (c.phase === "death") {
-        if (c.t >= DEATH_HOLD) {
-          c.phase = "sink";
-          c.t = 0;
+        // Wait out the death animation, then either vanish (no corpse) or begin
+        // the flesh-decay stage.
+        if (c.phaseT < this.seqDuration(c.instance, c.anims.death, DEATH_CLIP_FALLBACK)) continue;
+        if (!leavesCorpse) {
+          c.instance.hide();
+          this.corpses.splice(i, 1);
+          continue;
         }
-        continue;
+        this.enterDecay(c, "flesh");
+      } else if (c.phase === "flesh") {
+        // Flesh clip finished → play the bones.
+        if (c.phaseT >= this.seqDuration(c.instance, c.anims.decayFlesh, DECAY_CLIP_FALLBACK)) {
+          this.enterDecay(c, "bone");
+        }
       }
-      // Sinking: lower the model into the terrain, then delete it.
-      const prog = c.t / CORPSE_SINK_TIME;
-      if (prog >= 1) {
-        c.instance.hide();
-        this.corpses.splice(i, 1);
-        continue;
-      }
-      this.corpseLoc[0] = c.x;
-      this.corpseLoc[1] = c.y;
-      this.corpseLoc[2] = c.z - prog * CORPSE_SINK_DEPTH;
-      c.instance.setLocation(this.corpseLoc);
+      // "bone": the settled bones hold their final frame until the sim corpse
+      // decays (removed at the top of the loop) — nothing to do per frame.
     }
+  }
+
+  /** Move a corpse into its flesh/bone decay stage, playing the matching clip if
+   *  the model has one. A model missing the flesh clip skips straight to bone; a
+   *  model missing both just holds whatever frame it ended on. */
+  private enterDecay(c: { instance: Instance; anims: AnimSet; phase: "death" | "flesh" | "bone"; phaseT: number }, stage: "flesh" | "bone"): void {
+    const seq = stage === "flesh" ? c.anims.decayFlesh : c.anims.decayBone;
+    if (seq >= 0) {
+      c.instance.setSequence(seq);
+      c.instance.setSequenceLoopMode(LOOP_NEVER); // play once, then hold the pose
+      c.phase = stage;
+      c.phaseT = 0;
+    } else if (stage === "flesh") {
+      this.enterDecay(c, "bone"); // no flesh clip → straight to bones
+    } else {
+      c.phase = "bone"; // no bone clip either → hold the current frame as "bones"
+      c.phaseT = 0;
+    }
+  }
+
+  /** A sequence's play length in seconds (from its MDX interval, in ms), or
+   *  `fallback` when the clip is absent (index < 0) or carries no interval. */
+  private seqDuration(inst: Instance, idx: number, fallback: number): number {
+    if (idx < 0) return fallback;
+    const iv = inst.model.sequences[idx]?.interval;
+    if (!iv || iv.length < 2) return fallback;
+    const dur = (iv[1] - iv[0]) / 1000;
+    return dur > 0 ? dur : fallback;
   }
 
   /** Play a caster's spell animation once (matched to the ability's anim tags,
@@ -1177,27 +1212,32 @@ export class RtsController {
 
   /** Left-click a unit selects it. Clicking empty ground does NOT deselect (WC3
    *  has no click-to-deselect — you keep your selection until you pick another).
-   *  Modifiers (WC3): `additive` (Shift) toggles the unit in/out of the group;
-   *  `sameType` (Ctrl / double-click) grabs every on-screen own unit of that type. */
+   *  Modifiers (WC3): `additive` (Shift) adds the unit to the current selection
+   *  (toggling it back out if it's already in); `sameType` (Ctrl / double-click)
+   *  grabs every on-screen own unit of that type. */
   selectAt(cssX: number, cssY: number, mods: { additive?: boolean; sameType?: boolean } = {}): void {
     const id = this.pickAt(cssX, cssY);
     if (id !== null) {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
       const ownMobile = !!u && !!e && u.owner === this.localPlayer && !u.building;
-      if (mods.sameType && ownMobile) {
-        this.selectByType(e!.typeId);
-        return;
-      }
-      if (mods.additive && (ownMobile || this.selected.has(id))) {
-        // Shift: drop the unit if already in the group, else add it.
+      // Shift wins over the same-type grab so a deliberate shift-click that also
+      // reads as a fast double-click still just adds the one unit to the group.
+      if (mods.additive) {
+        // Already in the group → toggle it out. Otherwise add own mobile units
+        // (up to the cap). A shift-click on anything else (enemy/neutral/building)
+        // is ignored so a stray click never wipes the current selection.
         if (this.selected.has(id)) this.deselect(id);
-        else {
+        else if (ownMobile && this.selected.size < MAX_SELECT) {
           this.selected.add(id);
           this.selectedMine = null;
           this.refocus(this.focusedKey);
           this.announceSelection();
         }
+        return;
+      }
+      if (mods.sameType && ownMobile) {
+        this.selectByType(e!.typeId);
         return;
       }
       this.selected.clear();

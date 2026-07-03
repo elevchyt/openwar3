@@ -567,6 +567,20 @@ body.in-game .menu-panel { display: none; }
   color: #fff;
   text-shadow: 0 1px 2px #000, 0 0 4px #000;
 }
+/* Corner count badge (e.g. a hero's unspent skill points), pinned bottom-right
+   over the icon like WC3's charge/skill-point number: a small cream numeral with
+   a hard black outline so it reads on any art. Empty span renders nothing. */
+.hud-cmd-count {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: #f5e7b8;
+  text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
+  pointer-events: none;
+}
 
 /* Build-placement ghost: a box under the cursor, green = valid, red = blocked. */
 .build-ghost {

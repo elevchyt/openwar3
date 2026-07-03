@@ -361,11 +361,11 @@ const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 const SPELL_CAST_POINT = 0.4; // seconds the cast animation plays before the effect fires
-// Corpse decay (Units\MiscData.txt): flesh rots for DecayTime, bones linger for
-// BoneDecayTime, then the corpse is gone. Total lifetime = the sum.
-const CORPSE_FLESH_TIME = 2; // DecayTime
-const CORPSE_BONE_TIME = 88; // BoneDecayTime
-const CORPSE_TOTAL_TIME = CORPSE_FLESH_TIME + CORPSE_BONE_TIME;
+// Corpse decay (Units\MiscData.txt BoneDecayTime): a corpse persists 88s after
+// death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
+// window — and is then removed. The flesh stage is an early sub-phase, not added
+// on top; 88s is the full lifetime from the moment of death.
+const CORPSE_TOTAL_TIME = 88;
 
 /** Total XP required to REACH a given hero level (Liquipedia: 50·(L²+L−2)). */
 export function xpForLevel(level: number): number {
@@ -1870,11 +1870,12 @@ export class SimWorld {
 
   // === corpses ==============================================================
 
-  /** Leave a corpse for an organic, non-mechanical unit (Liquipedia: Corpse).
-   *  Buildings collapse, mechanical units explode, summons vanish — no corpse. */
+  /** Leave a corpse for an organic, ground, non-mechanical unit (Liquipedia:
+   *  Corpse). Buildings collapse, mechanical units explode, summons vanish, and
+   *  air units crash without leaving a raisable ground corpse — none of them do. */
   private spawnCorpse(u: SimUnit): void {
     // A summon (isSummon) leaves no corpse even after its timer hits 0 at expiry.
-    if (u.building || u.mechanical || u.isSummon || u.neutralPassive) return;
+    if (u.building || u.mechanical || u.isSummon || u.neutralPassive || u.flying) return;
     this.corpses.set(this.nextCorpseId, {
       id: this.nextCorpseId,
       deadId: u.id,

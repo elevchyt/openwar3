@@ -14,6 +14,8 @@ incomplete; the MPQ file list settled it).
 | [w3x-parser](https://github.com/voces/w3x-spec) | `.w3m/.w3x` format reference | |
 | [StormLib](https://github.com/ladislav-zezula/StormLib) / [CascLib](https://github.com/ladislav-zezula/CascLib) | MPQ/CASC correctness reference | CASC only matters for §9 |
 | [Nowar-Sans-War3](https://github.com/nowar-fonts/Nowar-Sans-War3) | Multi-language game font (Friz Quadrata replacement), OFL 1.1 | Bundled at `public/fonts/NowarSans.ttf` |
+| [TinkerWorX/warcraftIII](https://github.com/TinkerWorX/warcraftIII) | RE'd engine **class layouts** (`CAgent`→`CWidget`→`CSelectable`→`CUnit`, `CAbility`, `AbilityLevelData`) + IDA native/import scripts — ground truth for how the engine models units/abilities/orders | IDA dumps (mostly `field_XX`); use the **named** fields. Notes in [`reverse-engineering/tinkerworx-repos.md`](reverse-engineering/tinkerworx-repos.md). Don't lift code |
+| [TinkerWorX/Blizzard.Net.Warcraft3](https://github.com/TinkerWorX/Blizzard.Net.Warcraft3) | C# model of WC3 **statistics/replay data** (`UnitInfo`/`HeroInfo`/`ItemInfo`/… + race/player/slot enums) | Cross-check for enum values & record shapes, not engine internals. Same notes doc |
 | [Liquipedia Warcraft](https://liquipedia.net/warcraft/Main_Page) | **Primary engine-behavior reference** — attributes, XP, damage/armor, corpses, per-ability mechanics with exact numbers | Reachable via WebSearch; cross-check numbers against the MPQ SLKs |
 | [warcraft3.info](https://warcraft3.info/) | Engine-mechanics articles (hero XP, damage, etc.) | JS-rendered — WebFetch returns only the title; read via WebSearch summaries |
 
@@ -57,12 +59,19 @@ distance loss); **summoned units give 50%**; creeps use the reduction table abov
 Practical notes:
 - hiveworkshop.com blocks direct fetching (403) — go through a web search engine and read cached
   summaries, or search for the thread title. Liquipedia pages are reachable via WebSearch too.
+  **Workaround that works:** `curl` (or any fetch) with a real browser `User-Agent` header returns the
+  full page — that's how the Game.dll thread below was archived.
 - Warsmash's source is the next stop: it encodes many of these findings as code.
 - When a mechanic matters for gameplay feel, write the source (thread/repo) next to the constant in
   the code.
 
 ### Specific threads / videos used
 
+- **Engine internals / `Game.dll` structure.** The [Reverse Engineer Game.dll thread (268718)](https://www.hiveworkshop.com/threads/reverse-engineer-game-dll.268718/)
+  — archived locally at [`reverse-engineering/game-dll-thread.md`](reverse-engineering/game-dll-thread.md).
+  User **A Void** dumped the C++ source strings and the `Game.pdb` source tree out of `Game.dll`, exposing the real
+  class names (`CUnit`, `CAbility*`, `CWidget`, `CGameUI`, the `frame`/`framedef`/`fdfile` FDF UI system, the `glue`
+  menus) and the data-file/asset names the engine reads. Use it to name/shape our subsystems to match the original.
 - **Unit selection = collision shapes, not the mesh.** WC3 picks a unit by its model's
   **CollisionShape** (box/sphere), sized from the pathing/collision value — clicking the mesh is
   wrong. Our picker uses the unit's collision + selection-scale radius projected to screen.

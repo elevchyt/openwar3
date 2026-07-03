@@ -22,6 +22,7 @@ export interface CommandButton {
   active: boolean; // armed (e.g. move/attack awaiting a target)
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
+  count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
 }
 
 export interface HudSelection {
@@ -198,6 +199,7 @@ export class GameHud {
   private cmdLabels: HTMLSpanElement[] = []; // per-slot fallback text (icon-less buttons)
   private cmdCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
   private cmdCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
+  private cmdCount: HTMLSpanElement[] = []; // per-slot corner count badge (skill points)
   private cmdKey = "";
   private clockFace?: HTMLDivElement;
   private dotsT = 0;
@@ -668,6 +670,7 @@ export class GameHud {
     this.cmdLabels = [];
     this.cmdCdOverlay = [];
     this.cmdCdText = [];
+    this.cmdCount = [];
     for (let i = 0; i < 12; i++) {
       const btn = document.createElement("button");
       btn.className = "hud-slot hud-cmd";
@@ -680,12 +683,17 @@ export class GameHud {
       const cdText = document.createElement("span");
       cdText.className = "hud-cmd-cd-text";
       cd.appendChild(cdText);
-      btn.append(label, cd);
+      // Corner count badge (e.g. a hero's unspent skill points) — a persistent
+      // child so a card rebuild never wipes it, like the label/cooldown nodes.
+      const count = document.createElement("span");
+      count.className = "hud-cmd-count";
+      btn.append(label, cd, count);
       card.appendChild(btn);
       this.cmdSlots.push(btn);
       this.cmdLabels.push(label);
       this.cmdCdOverlay.push(cd);
       this.cmdCdText.push(cdText);
+      this.cmdCount.push(count);
     }
     return card;
   }
@@ -695,7 +703,7 @@ export class GameHud {
   private refreshCommandCard(): void {
     const cmds = this.driver.commandCard();
     this.updateCooldownOverlays(cmds); // every frame (cheap) — cmdKey ignores cooldown
-    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}`).join("|");
+    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}:${c.count ?? 0}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
     // The card changed (e.g. a building was cancelled and its buttons vanished):
@@ -708,6 +716,7 @@ export class GameHud {
       btn.style.backgroundImage = "";
       btn.classList.remove("armed", "cant-afford");
       this.cmdLabels[i].textContent = "";
+      this.cmdCount[i].textContent = "";
       btn.onclick = null;
       btn.onpointerenter = null;
       btn.onpointerleave = null;
@@ -721,6 +730,7 @@ export class GameHud {
       btn.classList.toggle("cant-afford", c.disabled);
       if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
       else this.cmdLabels[idx].textContent = c.name.slice(0, 4);
+      if (c.count && c.count > 0) this.cmdCount[idx].textContent = String(c.count);
       btn.onclick = () => this.driver.runCommand(c.id);
       btn.onpointerenter = () => this.showTooltip(c);
       btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
