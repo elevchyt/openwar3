@@ -182,7 +182,9 @@ export type QueuedOrder =
   | { kind: "attackmove"; x: number; y: number }
   | { kind: "patrol"; x: number; y: number }
   | { kind: "attack"; targetId: number; force?: boolean }
-  | { kind: "follow"; targetId: number }
+  // offX/offY: optional formation offset from the leader's centre, so a group told
+  // to follow one unit fans into distinct slots instead of stacking on its centre.
+  | { kind: "follow"; targetId: number; offX?: number; offY?: number }
   // ax/ay: optional distinct approach point around the node, so a group ordered
   // together fans over the mine's rim instead of all pathing to its centre.
   | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number; ax?: number; ay?: number }
@@ -250,6 +252,11 @@ export interface SimUnit {
   moving: boolean;
   chaseX: number; // where the current chase path was aimed (repath when stale)
   chaseY: number;
+  // Follow-formation offset from the leader's centre (0,0 = a lone follower that
+  // just trails). A group told to follow one unit is fanned into distinct slots
+  // so they hold a spread instead of stacking on the leader's centre and shoving.
+  followOffX: number;
+  followOffY: number;
   amDestX: number; // attack-move final destination (units engage enemies en route)
   amDestY: number;
   patrolX: number; // the OTHER patrol endpoint (units bounce between the two)
@@ -336,6 +343,13 @@ const FACING_EPS = 0.35; // radians — must roughly face the target to swing
 const ATTACK_LEASH = 48;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
+// Hysteresis for follow (mirrors ATTACK_LEASH): once caught up and parked, the
+// leader must drift this much FURTHER than FOLLOW_GAP before the follower gives
+// chase again — without it the follower flip-flops chase↔settle at the gap edge
+// every tick (settle() snaps it to the grid, nudging the gap back over the line),
+// which flickers the walk↔stand clip and visibly jiggles the model.
+const FOLLOW_LEASH = 48;
+const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its formation slot
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
@@ -856,6 +870,8 @@ export class SimWorld {
       | "neutralPassive"
       | "chaseX"
       | "chaseY"
+      | "followOffX"
+      | "followOffY"
       | "amDestX"
       | "amDestY"
       | "patrolX"
@@ -945,6 +961,8 @@ export class SimWorld {
       moving: false,
       chaseX: 0,
       chaseY: 0,
+      followOffX: 0,
+      followOffY: 0,
       amDestX: unit.x,
       amDestY: unit.y,
       patrolX: unit.x,
@@ -1167,13 +1185,17 @@ export class SimWorld {
   }
 
   /** Order a unit to FOLLOW another (friendly/neutral/enemy) unit: it trails the
-   *  leader at FOLLOW_GAP and does NOT auto-acquire targets on its own (WC3). */
-  issueFollow(id: number, targetId: number): boolean {
+   *  leader at FOLLOW_GAP and does NOT auto-acquire targets on its own (WC3).
+   *  offX/offY give a formation offset from the leader's centre so a group told to
+   *  follow one unit fans out (0,0 = a lone follower that just trails). */
+  issueFollow(id: number, targetId: number, offX = 0, offY = 0): boolean {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || u.speed <= 0) return false;
     u.order = "follow";
     u.targetId = targetId;
+    u.followOffX = offX;
+    u.followOffY = offY;
     u.inCombat = false;
     u.noCollision = false;
     this.cancelSwing(u);
@@ -1264,7 +1286,7 @@ export class SimWorld {
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
       case "patrol": return this.issuePatrol(id, o.x, o.y);
       case "attack": return this.issueAttack(id, o.targetId, o.force);
-      case "follow": return this.issueFollow(id, o.targetId);
+      case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
       case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
@@ -2479,15 +2501,37 @@ export class SimWorld {
 
   /** Follow a leader: trail it at FOLLOW_GAP, parking when close and re-approaching
    *  when it moves off. No target acquisition — a follower only follows (WC3). If
-   *  the leader dies/vanishes, stop where we stand. */
+   *  the leader dies/vanishes, stop where we stand. A group told to follow one unit
+   *  carries a formation offset (followOff*) so each holds a distinct slot around
+   *  the leader instead of stacking on its centre and shoving. */
   private tickFollow(u: SimUnit): void {
     const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (!t) {
       this.stop(u.id);
       return;
     }
+    // Fanned follower: home on its slot (leader centre + offset). The slot moves
+    // with the leader, so it trails while keeping its place in the spread.
+    if (u.followOffX !== 0 || u.followOffY !== 0) {
+      const ax = t.x + u.followOffX;
+      const ay = t.y + u.followOffY;
+      const d = Math.hypot(ax - u.x, ay - u.y);
+      // Same hysteresis as the lone case (see below), measured to the slot.
+      const arrive = u.moving ? FOLLOW_SLOT_ARRIVE : FOLLOW_SLOT_ARRIVE + FOLLOW_LEASH;
+      if (d > arrive) {
+        this.chasePoint(u, ax, ay);
+      } else {
+        if (u.moving) this.settle(u);
+        u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x); // face the leader while parked
+      }
+      return;
+    }
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    if (gap > FOLLOW_GAP) {
+    // Hysteresis: while parked, tolerate the leader drifting out to FOLLOW_GAP +
+    // FOLLOW_LEASH before re-chasing, so small leader movements (or the settle
+    // snap) don't oscillate the walk↔stand clip — the follow-animation "jiggle".
+    const chaseGap = u.moving ? FOLLOW_GAP : FOLLOW_GAP + FOLLOW_LEASH;
+    if (gap > chaseGap) {
       this.chase(u, t); // approach (chasePoint repaths as the leader strays)
     } else {
       if (u.moving) this.settle(u); // caught up — hold position near the leader
