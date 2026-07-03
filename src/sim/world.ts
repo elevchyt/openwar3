@@ -326,6 +326,18 @@ export interface SimUnit {
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
   summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
   pendingCast: PendingCast | null; // in-progress cast (order === "cast")
+  // --- neutral-hostile creep guard AI (see the CREEP_* constants) -----------
+  isCreep: boolean; // a map-placed Neutral Hostile creep with guard/leash behaviour
+  guardX: number; // guard ("home") position — where it was placed; it leashes back here
+  guardY: number;
+  guardFacing: number; // facing to restore once it has returned home
+  aggroRange: number; // acquisition range (per-placed targetAcquisition, else the weapon's)
+  canSleep: boolean; // sleeps at night when guarding at home (UnitData `cansleep`)
+  asleep: boolean; // currently asleep (won't auto-acquire; wakes on damage/proximity/camp)
+  returning: boolean; // leashing back to the guard point (ignores enemies until home)
+  strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
+  returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
+  returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -431,6 +443,24 @@ export function xpForLevel(level: number): number {
 const GAME_HOURS_PER_SEC = 24 / 480;
 const DAY_START = 6;
 const DAY_END = 18;
+
+// Neutral-hostile creep guard/leash AI. Values are the real WC3 gameplay
+// constants from Units\MiscGame.txt (verified against the 1.27 MPQ):
+//   "After a unit has strayed 'GuardDistance' from where it started … and spends
+//    'GuardReturnTime' seconds chasing a target without getting attacked by
+//    anyone, the unit … heads home. If a creep goes beyond 'MaxGuardDistance'
+//    then it always returns home regardless of who's attacking it."
+// (These supersede the ~1.8×-aggro guess — the MPQ wins; see CLAUDE.md.)
+const GUARD_DISTANCE = 600; // strayed this far from home → start the return timer
+const MAX_GUARD_DISTANCE = 1000; // strayed this far → return home unconditionally, even under attack
+const GUARD_RETURN_TIME = 5.0; // MiscGame GuardReturnTime — also the "can't get home, resume fighting" window
+const CREEP_CALL_FOR_HELP = 600; // MiscGame CreepCallForHelp — camp cohesion: one aggros → the whole camp wakes/joins
+const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (reset + can sleep)
+// Not in any data file (engine-internal): a creep leashing home heals rapidly so
+// it reaches its post at (near) full, and a sleeping creep only wakes to a hostile
+// that strays very close — far enough that you can still scout past camps at night.
+const CREEP_RETURN_REGEN = 0.2; // fraction of maxHp restored per second while leashing home
+const SLEEP_WAKE_RANGE = 200; // a sleeping creep wakes if a hostile comes within this
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
@@ -939,6 +969,17 @@ export class SimWorld {
       | "summonLeft"
       | "summonMax"
       | "pendingCast"
+      | "isCreep"
+      | "guardX"
+      | "guardY"
+      | "guardFacing"
+      | "aggroRange"
+      | "canSleep"
+      | "asleep"
+      | "returning"
+      | "strayT"
+      | "returnBestDist"
+      | "returnStuckT"
     >,
     building?: BuildingState | null,
     opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; manaRegen?: number; level?: number },
@@ -1033,6 +1074,19 @@ export class SimWorld {
       summonLeft: 0,
       summonMax: 0,
       pendingCast: null,
+      // Creep guard AI is off by default; the map seeder flips isCreep on and sets
+      // the guard point / aggro range / sleep flag for Neutral Hostile units.
+      isCreep: false,
+      guardX: unit.x,
+      guardY: unit.y,
+      guardFacing: unit.facing,
+      aggroRange: 0,
+      canSleep: false,
+      asleep: false,
+      returning: false,
+      strayT: 0,
+      returnBestDist: 0,
+      returnStuckT: 0,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -2191,6 +2245,11 @@ export class SimWorld {
         this.interruptForStun(u); // stunned units can't act this tick
         continue;
       }
+      // Neutral Hostile creeps run a guard/leash/sleep controller on top of the
+      // normal order handling. It returns true when it has taken the unit over for
+      // this tick (asleep at its post, or leashing home) — skip the order switch;
+      // movement still runs in tickMovement so a returning creep keeps walking home.
+      if (u.isCreep && this.tickCreep(u, dt)) continue;
       switch (u.order) {
         case "move":
           // Movement itself is driven by tickMovement while u.moving stays true;
@@ -2841,9 +2900,17 @@ export class SimWorld {
       this.kill(target, attackerId);
       return amount;
     }
+    // A struck creep wakes and, being in combat, resets its "head home" timer —
+    // so while it's between the soft and hard guard limits, continued attacks keep
+    // it fighting (MiscGame: it only leaves after GuardReturnTime *unattacked*).
+    if (target.isCreep) {
+      target.asleep = false;
+      target.strayT = 0;
+    }
     // Retaliate: an idle armed victim turns on its attacker (WC3 return fire),
-    // unless the attacker has since died mid-flight.
-    if (target.order === "idle" && target.weapon && this.units.has(attackerId)) {
+    // unless the attacker has since died mid-flight. A creep leashing home ignores
+    // attackers until it's back at its post (it prioritises returning).
+    if (target.order === "idle" && target.weapon && !target.returning && this.units.has(attackerId)) {
       this.issueAttack(target.id, attackerId);
     }
     return amount;
@@ -2897,14 +2964,152 @@ export class SimWorld {
   }
 
   // Idle (or patrolling) armed units scan for the nearest enemy in acquisition
-  // range and turn on it.
+  // range and turn on it. Creeps acquire within their own aggro range (from the
+  // map's per-unit target-acquisition, else the weapon's), and never while asleep
+  // or leashing home; acquiring rallies the rest of their camp (call-for-help).
   private tickAcquire(u: SimUnit, dt: number): void {
-    if (!u.weapon || u.weapon.acquire <= 0) return;
+    if (!u.weapon) return;
+    if (u.isCreep && (u.asleep || u.returning)) return;
+    const range = u.isCreep ? u.aggroRange : u.weapon.acquire;
+    if (range <= 0) return;
     u.acquireT -= dt;
     if (u.acquireT > 0) return;
     u.acquireT = ACQUIRE_PERIOD;
-    const best = this.nearestEnemy(u, u.weapon.acquire);
-    if (best) this.issueAttack(u.id, best.id);
+    const best = this.nearestEnemy(u, range);
+    if (best) {
+      this.issueAttack(u.id, best.id);
+      if (u.isCreep) this.alertCamp(u, best);
+    }
+  }
+
+  // === neutral-hostile creep guard AI =======================================
+
+  /** Drive a creep's guard/leash/sleep behaviour, run before the order switch.
+   *  Returns true when it has handled the unit this tick (asleep or leashing
+   *  home) so the caller skips the normal order logic. */
+  private tickCreep(u: SimUnit, dt: number): boolean {
+    const atHome = Math.hypot(u.x - u.guardX, u.y - u.guardY) <= CREEP_HOME_EPS;
+    // --- sleep (night): doze off while guarding at the post, with no hostile
+    // right on top of us; dawn (or the checks below) wakes it. ---
+    if (u.canSleep && !u.returning) {
+      if (this.isDay) u.asleep = false;
+      else if (!u.asleep && u.order === "idle" && atHome && !this.nearestEnemy(u, SLEEP_WAKE_RANGE)) u.asleep = true;
+    } else if (!u.canSleep) {
+      u.asleep = false;
+    }
+    if (u.asleep) {
+      // A hostile straying very close wakes it (else you can scout past at night).
+      if (this.nearestEnemy(u, SLEEP_WAKE_RANGE)) {
+        u.asleep = false;
+        return false; // awake now — let it acquire this tick
+      }
+      u.inCombat = false;
+      this.settle(u);
+      u.desiredFacing = u.guardFacing;
+      return true; // still asleep — stand at the post
+    }
+    // --- leashing home: ignore enemies until back at the post ---
+    if (u.returning) {
+      this.tickCreepReturn(u, dt);
+      return true;
+    }
+    // --- fighting: leash back once we've strayed too far from the post ---
+    const engaged = u.order === "attack" && u.targetId !== null && this.units.has(u.targetId);
+    const dist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
+    if (engaged) {
+      if (dist >= MAX_GUARD_DISTANCE) {
+        this.beginCreepReturn(u); // dragged out past the hard limit — always go home
+        return true;
+      }
+      if (dist >= GUARD_DISTANCE) {
+        // Past the soft limit: head home only after chasing GUARD_RETURN_TIME
+        // unattacked (each hit resets strayT in landDamage → attacks keep it fighting).
+        u.strayT += dt;
+        if (u.strayT >= GUARD_RETURN_TIME) {
+          this.beginCreepReturn(u);
+          return true;
+        }
+      } else {
+        u.strayT = 0;
+      }
+      return false; // keep fighting
+    }
+    // Guarding: nothing to fight. If displaced from the post (e.g. a target just
+    // died out in the field) and no new enemy is in range, walk back home.
+    u.strayT = 0;
+    if (u.order === "idle" && !atHome && !this.nearestEnemy(u, u.aggroRange)) {
+      this.beginCreepReturn(u);
+      return true;
+    }
+    return false;
+  }
+
+  /** Begin leashing a creep back to its guard point. */
+  private beginCreepReturn(u: SimUnit): void {
+    u.returning = true;
+    u.targetId = null;
+    u.inCombat = false;
+    this.cancelSwing(u);
+    u.strayT = 0;
+    u.returnBestDist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
+    u.returnStuckT = 0;
+    u.order = "move";
+    if (!this.pathTo(u, u.guardX, u.guardY)) u.desiredFacing = Math.atan2(u.guardY - u.y, u.guardX - u.x);
+  }
+
+  /** Advance a leashing creep: heal quickly, walk home, and — if it can't make
+   *  progress for GUARD_RETURN_TIME (boxed in / body-blocked) — give up and fight
+   *  again where it stands (so a player can't kite it forever against a wall). */
+  private tickCreepReturn(u: SimUnit, dt: number): void {
+    const d = Math.hypot(u.x - u.guardX, u.y - u.guardY);
+    if (u.hp > 0 && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * CREEP_RETURN_REGEN * dt);
+    if (d <= CREEP_HOME_EPS) {
+      this.finishCreepReturn(u); // back at the post — reset to full and resume guarding
+      return;
+    }
+    if (d < u.returnBestDist - ARRIVE_EPS) {
+      u.returnBestDist = d; // getting closer — reset the give-up timer
+      u.returnStuckT = 0;
+    } else {
+      u.returnStuckT += dt;
+      if (u.returnStuckT >= GUARD_RETURN_TIME) {
+        u.returning = false; // can't get home — resume fighting from here
+        u.returnStuckT = 0;
+        u.order = "idle";
+        this.settle(u);
+        return;
+      }
+    }
+    if (!u.moving) {
+      // Stopped short of home (path blocked when computed) — try again toward it.
+      if (this.pathTo(u, u.guardX, u.guardY)) u.order = "move";
+      else u.desiredFacing = Math.atan2(u.guardY - u.y, u.guardX - u.x);
+    }
+  }
+
+  /** A creep reached its guard point: reset to full, face its guard heading, and
+   *  resume guarding (it will re-acquire any enemies still in range next tick). */
+  private finishCreepReturn(u: SimUnit): void {
+    u.returning = false;
+    u.returnStuckT = 0;
+    u.strayT = 0;
+    u.hp = u.maxHp; // creeps reset to full HP when they successfully leash home (WC3)
+    u.order = "idle";
+    this.settle(u);
+    u.desiredFacing = u.guardFacing;
+  }
+
+  /** Camp cohesion (MiscGame CreepCallForHelp): a creep that engages a target
+   *  wakes every sleeping camp-mate within range and pulls idle ones onto the
+   *  same target — "a creep camp acts as one unit; attack one and they all
+   *  attack" (Battle.net creep basics). Leashing camp-mates are left alone. */
+  private alertCamp(u: SimUnit, target: SimUnit): void {
+    for (const c of this.units.values()) {
+      if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
+      if (Math.hypot(c.x - u.x, c.y - u.y) > CREEP_CALL_FOR_HELP) continue;
+      c.asleep = false; // rouse the camp
+      if (c.order === "idle" && c.weapon && this.hostile(c, target)) this.issueAttack(c.id, target.id);
+    }
   }
 
   // --- movement -----------------------------------------------------------

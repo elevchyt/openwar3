@@ -46,6 +46,7 @@ export interface UnitDef {
   attackDamagePoint: number; // dmgpt1: delay from swing start to strike/launch (s)
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
+  canSleep: boolean; // UnitData `cansleep`: Neutral Hostile creeps of this type sleep at night
   weaponType: string; // weapTp1: "normal"/"instant" = melee, "missile"/… = ranged
   attackType: string; // atkType1: normal/pierce/siege/magic/chaos/hero (damage table)
   armorType: string; // defType: small/medium/large/fort/hero/divine/none
@@ -217,6 +218,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackDamagePoint: w ? num(w, "dmgpt1", 0) : 0,
       attackRange: w ? num(w, "rangeN1", 0) : 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
+      canSleep: (d ? num(d, "cansleep", 0) : 0) === 1,
       weaponType: w ? str(w, "weapTp1") : "",
       attackType: w ? str(w, "atkType1") : "",
       armorType: b ? str(b, "defType") : "",

@@ -370,6 +370,7 @@ export class MapViewerScene {
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
+      this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
     }
   }
 
@@ -424,10 +425,11 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }> } {
+  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: Array<{ x: number; y: number; aggro: number }> } {
     const trees: Array<{ x: number; y: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
     const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
+    const creeps: Array<{ x: number; y: number; aggro: number }> = []; // Neutral Hostile (player 12+) guard data
     let buildVersion = 0;
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
@@ -469,9 +471,14 @@ export class MapViewerScene {
         // Shops, taverns, labs, merchants, fountains, critters — anything owned
         // by Neutral Passive gets the yellow selection/hover ring.
         neutral.push({ x: u.x, y: u.y });
+      } else if (u.neutral) {
+        // Neutral Hostile (player 12+) — a creep. Carry its per-instance
+        // target-acquisition so the sim can use the map's own aggro range for it
+        // (-1/-2 → the unit's default, resolved at seed time). x,y is its guard post.
+        creeps.push({ x: u.x, y: u.y, aggro: u.targetAcquisition });
       }
     }
-    return { trees, mines, neutral };
+    return { trees, mines, neutral, creeps };
   }
 
   private slkText(path: string): string {

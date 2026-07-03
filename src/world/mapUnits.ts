@@ -30,6 +30,10 @@ export interface PlacedUnit {
   hpFraction: number;
   mana: number; // starting mana (-1 ⇒ default)
   goldAmount: number; // for gold mines
+  /** Per-instance acquisition range set in the editor: -1 = use the unit's default,
+   *  -2 = "Camp" (guard the camp with default acquisition), >0 = a custom range.
+   *  This is the map's own per-creep aggro range. */
+  targetAcquisition: number;
   heroLevel: number; // 0 for non-heroes
   /** True for the four Neutral player slots (12–15). */
   neutral: boolean;
@@ -59,6 +63,7 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
       hpFraction: u.hitpoints === undefined || u.hitpoints < 0 ? 1 : u.hitpoints / 100,
       mana: u.mana ?? -1,
       goldAmount: u.goldAmount ?? 0,
+      targetAcquisition: u.targetAcquisition ?? -1,
       heroLevel: u.heroLevel ?? 0,
       neutral,
       neutralPassive: player === PLAYER_NEUTRAL_PASSIVE,

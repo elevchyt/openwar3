@@ -322,6 +322,7 @@ export class RtsController {
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
   private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
+  private creepData: Array<{ x: number; y: number; aggro: number }> = []; // Neutral Hostile guard/aggro data (from the doo)
   private seeded = false;
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
@@ -433,6 +434,20 @@ export class RtsController {
   private isNeutralPassiveAt(x: number, y: number): boolean {
     for (const p of this.neutralPositions) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return true;
     return false;
+  }
+
+  /** Register the world positions + per-instance target-acquisition of Neutral
+   *  Hostile creeps (from war3mapUnits.doo, player 12+). trySeed matches each
+   *  rendered creep to this to set its guard post and aggro range. */
+  setCreepData(data: Array<{ x: number; y: number; aggro: number }>): void {
+    this.creepData = data;
+  }
+
+  /** The placed creep's editor target-acquisition at a position (-1 if none):
+   *  -1 = use the unit's default acquisition, -2 = "Camp", >0 = a custom range. */
+  private creepAggroAt(x: number, y: number): number {
+    for (const p of this.creepData) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return p.aggro;
+    return -1;
   }
 
   /** Remove a unit from the selection (keeping the primary consistent). */
@@ -730,7 +745,7 @@ export class RtsController {
       if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
       const anims = buildAnimSet(seqs);
       const simId = this.nextId++;
-      this.sim.add(
+      const su = this.sim.add(
         {
           id: simId,
           owner: -1, // map-placed units are neutral (creeps)
@@ -758,6 +773,18 @@ export class RtsController {
         null,
         { level: def?.level ?? 0, mechanical: def?.classification.includes("mechanical") ?? false },
       );
+      // Map-placed movable units are Neutral Hostile creeps: give them guard AI —
+      // home post at the spawn, an aggro range from the map's per-creep target-
+      // acquisition (falling back to the unit's own acquire range), and the
+      // night-sleep flag from unit data. This is what makes them leash back home
+      // after a chase and doze at night instead of chasing forever.
+      su.isCreep = true;
+      su.guardX = loc[0];
+      su.guardY = loc[1];
+      su.guardFacing = su.facing;
+      const aggro = this.creepAggroAt(loc[0], loc[1]);
+      su.aggroRange = aggro > 0 ? aggro : su.weapon?.acquire ?? def?.acquireRange ?? 0;
+      su.canSleep = def?.canSleep ?? false;
       const entry: Entry = {
         simId,
         unit,
@@ -1429,7 +1456,7 @@ export class RtsController {
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
   orderClickAt(cssX: number, cssY: number, queued = false): boolean {
-    if (!this.orderMode || this.selected.size === 0) {
+    if (!this.orderMode || this.selected.size === 0 || !this.hasControllable()) {
       this.orderMode = null;
       return false;
     }
@@ -1453,7 +1480,7 @@ export class RtsController {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
         for (const id of this.selected) {
-          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
+          if (this.controls(id) && this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
         this.rallyFeedback(r);
         this.sounds?.playUi("RallyPointPlace");
@@ -1528,9 +1555,9 @@ export class RtsController {
     this.castFromSelection(code, 0, 0, 0);
   }
 
-  /** Learn (or rank up) a hero ability on the primary-selected hero. */
+  /** Learn (or rank up) a hero ability on the primary-selected hero (own only). */
   learnSkill(abilityId: string): boolean {
-    return this.primary !== null && this.sim.learnAbility(this.primary, abilityId);
+    return this.primary !== null && this.controls(this.primary) && this.sim.learnAbility(this.primary, abilityId);
   }
 
   /** Toggle an autocast ability (Heal, Slow, …) on the whole own selection. */
@@ -1565,6 +1592,7 @@ export class RtsController {
    *  action queue), so a stopped unit doesn't resume a queued order. */
   stopSelected(): void {
     for (const id of this.selected) {
+      if (!this.controls(id)) continue; // only your own units obey Stop
       this.sim.clearQueue(id);
       this.sim.stop(id);
     }
@@ -1908,9 +1936,25 @@ export class RtsController {
     return out;
   }
 
+  /** True if this unit belongs to the local player (the only units they may
+   *  command). Enemy/neutral/creep units can be single-selected to inspect, but
+   *  never take orders — WC3 only lets you control your own. */
+  private controls(id: number): boolean {
+    return this.sim.units.get(id)?.owner === this.localPlayer;
+  }
+
+  /** True if the selection holds at least one unit the local player controls. */
+  private hasControllable(): boolean {
+    for (const id of this.selected) if (this.controls(id)) return true;
+    return false;
+  }
+
   /** Route an order to a unit: either append it to the unit's shift-queue, or
-   *  execute it immediately (replacing its current order + queue). */
+   *  execute it immediately (replacing its current order + queue). Silently
+   *  ignores units the local player doesn't own — the single choke point that
+   *  keeps enemy/neutral/creep units uncommandable. */
   private order(id: number, o: QueuedOrder, queued: boolean): boolean {
+    if (!this.controls(id)) return false;
     if (queued) {
       this.sim.queueOrder(id, o);
       return true;
@@ -1922,14 +1966,14 @@ export class RtsController {
    *  workers resume a friendly build or harvest a resource; else move to ground.
    *  `queued` (Shift held) appends to each unit's order queue instead of replacing. */
   moveAt(cssX: number, cssY: number, queued = false): void {
-    if (this.selected.size === 0) return;
+    if (this.selected.size === 0 || !this.hasControllable()) return; // can't command enemy/neutral units
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
     // A selected unit-producing building: right-click sets its (smart) rally point.
     if (prim?.building?.producesUnits) {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
         for (const id of this.selected) {
-          if (this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
+          if (this.controls(id) && this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
         }
         this.rallyFeedback(r);
         this.sounds?.playUi("RallyPointPlace");
