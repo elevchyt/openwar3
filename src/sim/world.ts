@@ -152,9 +152,13 @@ export interface SimUnit {
   acquireT: number; // seconds until the next auto-acquire scan
   stuckT: number; // seconds spent blocked while trying to move
   stuckRetries: number; // consecutive stuck-repath attempts without progress
+  stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
+  stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
   prevX: number; // position before this tick's movement (stuck detection)
   prevY: number;
+  velX: number; // scratch: intended pathed displacement this tick (collision steering)
+  velY: number;
   footprint: number; // reserved cells per side when stationary (0 = never)
   resX: number; // origin cell of the current reservation
   resY: number;
@@ -367,6 +371,16 @@ export class SimWorld {
     const b = this.units.get(buildingId)?.building;
     if (!b || !b.queue.length) return null;
     return b.queue.pop()!.unitId;
+  }
+
+  /** Cancel a specific queued item by index (0 = the one currently training).
+   *  Returns its unitId for a full refund, or null. Removing index 0 just
+   *  promotes the next item, which keeps its own untouched build timer (WC3:
+   *  cancelling the in-progress unit refunds in full and starts the next fresh). */
+  cancelTrainAt(buildingId: number, index: number): string | null {
+    const b = this.units.get(buildingId)?.building;
+    if (!b || index < 0 || index >= b.queue.length) return null;
+    return b.queue.splice(index, 1)[0].unitId;
   }
 
   /** Set a building's rally point. A plain point (kind "point") is a move
@@ -593,9 +607,13 @@ export class SimWorld {
       | "acquireT"
       | "stuckT"
       | "stuckRetries"
+      | "stuckAnchorX"
+      | "stuckAnchorY"
       | "repathT"
       | "prevX"
       | "prevY"
+      | "velX"
+      | "velY"
       | "footprint"
       | "resX"
       | "resY"
@@ -638,9 +656,13 @@ export class SimWorld {
       acquireT: 0,
       stuckT: 0,
       stuckRetries: 0,
+      stuckAnchorX: unit.x,
+      stuckAnchorY: unit.y,
       repathT: 0,
       prevX: unit.x,
       prevY: unit.y,
+      velX: 0,
+      velY: 0,
       // Buildings (speed 0) block via their stamped static footprint instead.
       footprint: unit.flying || unit.speed <= 0 ? 0 : footprintCells(unit.radius),
       resX: 0,
@@ -1037,34 +1059,43 @@ export class SimWorld {
   // A moving unit that barely progresses (blocked by units it may not push) gives
   // up after a moment: move orders stop (WC3 units halt when the way is blocked);
   // chasers pause before repathing so they don't grind against the blocker.
+  //
+  // Progress is measured as NET displacement over a whole STUCK_TIME window, not
+  // per-tick speed: two units orbiting each other move at full speed every tick
+  // (so a per-tick check never fires) yet drift almost nowhere — the window catches
+  // that "dancing" and breaks it up, while a unit legitimately detouring around an
+  // obstacle keeps covering real ground and is left alone.
   private checkStuck(u: SimUnit, dt: number): void {
     if (!u.moving || u.speed <= 0) {
       u.stuckT = 0;
       return;
     }
-    const actual = Math.hypot(u.x - u.prevX, u.y - u.prevY);
-    if (actual < u.speed * dt * STUCK_RATIO) {
-      u.stuckT += dt;
-      if (u.stuckT >= STUCK_TIME) {
-        u.stuckT = 0;
-        if (u.order === "attack") {
-          this.settle(u);
-          u.repathT = REPATH_COOLDOWN;
-        } else {
-          // Blocked mid-move: the blockers may have stopped since the original
-          // path was computed — repath around them. A unit that stays stuck
-          // (boxed in) stands down after a couple of attempts and just faces
-          // where it was ordered — WC3 units never squeeze through crowds.
-          const [tx, ty] = [u.chaseX, u.chaseY];
-          if (++u.stuckRetries > 1 || !this.pathTo(u, tx, ty)) {
-            this.stop(u.id);
-            u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
-          }
-        }
-      }
+    if (u.stuckT === 0) {
+      u.stuckAnchorX = u.prevX; // window opens from where this tick started
+      u.stuckAnchorY = u.prevY;
+    }
+    u.stuckT += dt;
+    if (u.stuckT < STUCK_TIME) return;
+    const netMoved = Math.hypot(u.x - u.stuckAnchorX, u.y - u.stuckAnchorY);
+    const expected = u.speed * u.stuckT;
+    u.stuckT = 0;
+    if (netMoved >= expected * STUCK_RATIO) {
+      u.stuckRetries = 0; // covered real ground — not stuck
+      return;
+    }
+    if (u.order === "attack") {
+      this.settle(u);
+      u.repathT = REPATH_COOLDOWN;
     } else {
-      u.stuckT = 0;
-      u.stuckRetries = 0;
+      // Blocked/orbiting: the blockers may have stopped since the original path
+      // was computed — repath around them. A unit that stays stuck (boxed in)
+      // stands down after a couple of attempts and just faces where it was
+      // ordered — WC3 units never squeeze through crowds.
+      const [tx, ty] = [u.chaseX, u.chaseY];
+      if (++u.stuckRetries > 1 || !this.pathTo(u, tx, ty)) {
+        this.stop(u.id);
+        u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      }
     }
   }
 
@@ -1297,8 +1328,10 @@ export class SimWorld {
       }
       // Walk to the mine until the pathfinder can't get any closer (its blocked
       // footprint stops us at the entrance). Only then disappear inside — this
-      // is why workers no longer vanish while still far from the mine.
-      if (!this.arriveAtNode(u, mine.x, mine.y, mine.radius + u.radius + 40)) return;
+      // is why workers no longer vanish while still far from the mine. The reach
+      // hugs the footprint edge (radius + own body) with only a hair of slack so
+      // the worker visibly touches the mine before it ducks in.
+      if (!this.arriveAtNode(u, mine.x, mine.y, mine.radius + u.radius + 8)) return;
       if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
       u.inMine = true;
@@ -1630,6 +1663,15 @@ export class SimWorld {
     // through everything until manually controlled (u.noCollision).
     for (const u of this.units.values())
       if (!u.flying && u.radius > 0 && u.speed > 0 && !u.noCollision) list.push(u);
+    // Snapshot each unit's intended (pathed) velocity for this tick, captured
+    // before the nudges below mutate positions. prevX/prevY are set pre-movement,
+    // so (x-prevX) is the step tickMovement just took toward the goal — used to
+    // tell head-on closers (slide past) from units circling or brushing shoulders
+    // (separate radially only, so they don't feed a perpetual orbit = "dancing").
+    for (const u of list) {
+      u.velX = u.x - u.prevX;
+      u.velY = u.y - u.prevY;
+    }
     for (let iter = 0; iter < 2; iter++) {
       for (let i = 0; i < list.length; i++) {
         for (let j = i + 1; j < list.length; j++) {
@@ -1648,12 +1690,19 @@ export class SimWorld {
           }
           const overlap = min - d;
           if (a.moving && b.moving) {
-            // Split the correction and add a tangential component so head-on
-            // movers spiral around each other instead of deadlocking.
-            const tx = (-dy / d) * (overlap / 2);
-            const ty = (dx / d) * (overlap / 2);
-            this.nudge(a, (-dx / d) * (overlap / 2) + tx, (-dy / d) * (overlap / 2) + ty);
-            this.nudge(b, (dx / d) * (overlap / 2) - tx, (dy / d) * (overlap / 2) - ty);
+            const nx = dx / d; // unit vector a→b
+            const ny = dy / d;
+            const half = overlap / 2;
+            // Tangential slide ONLY when the pair is genuinely closing head-on
+            // (relative velocity shrinks the gap) — that's the deadlock case the
+            // slide is meant to break. Parallel/circling pairs (relative velocity
+            // perpendicular to the gap) get pure radial separation, so nothing
+            // keeps spinning them around each other.
+            const closing = (b.velX - a.velX) * nx + (b.velY - a.velY) * ny < -1e-4;
+            const tx = closing ? -ny * half : 0;
+            const ty = closing ? nx * half : 0;
+            this.nudge(a, -nx * half + tx, -ny * half + ty);
+            this.nudge(b, nx * half - tx, ny * half - ty);
           } else if (a.moving) {
             this.nudge(a, (-dx / d) * overlap, (-dy / d) * overlap);
           } else {

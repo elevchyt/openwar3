@@ -150,6 +150,7 @@ export class GameHud {
   private progressFill!: HTMLDivElement;
   private queueRow!: HTMLDivElement;
   private queueSlots: HTMLDivElement[] = [];
+  private queueTrainable = false; // status icon shows a cancellable training job (not construction)
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
@@ -422,6 +423,12 @@ export class GameHud {
     statusLine.className = "hud-status-line";
     this.statusIcon = document.createElement("div");
     this.statusIcon.className = "hud-status-icon";
+    this.statusIcon.title = "Cancel";
+    // Clicking the in-progress icon cancels the unit currently training (queue
+    // slot 0) — only when it's a training job, never a building under construction.
+    this.statusIcon.onclick = () => {
+      if (this.queueTrainable) this.driver.runCommand("cancelqueue:0");
+    };
     this.statusLabel = document.createElement("div");
     this.statusLabel.className = "hud-status-label";
     statusLine.append(this.statusIcon, this.statusLabel);
@@ -435,6 +442,11 @@ export class GameHud {
     for (let i = 0; i < 6; i++) {
       const slot = document.createElement("div");
       slot.className = "hud-queue-slot";
+      // Queue slots hold positions 2..7 → queue indices 1..6. Clicking a filled
+      // slot cancels that unit and refunds it.
+      slot.onclick = () => {
+        if (slot.classList.contains("filled")) this.driver.runCommand(`cancelqueue:${i + 1}`);
+      };
       this.queueSlots.push(slot);
       this.queueRow.appendChild(slot);
     }
@@ -594,6 +606,7 @@ export class GameHud {
       this.selGrid.hidden = true;
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
+      this.queueTrainable = training; // reset every frame so a stale flag can't fire a cancel
       if (sel.isMine) {
         // Gold mine: show its remaining gold, no progress/combat stats.
         this.progressWrap.hidden = true;
@@ -613,10 +626,13 @@ export class GameHud {
         const frac = Math.max(0, Math.min(1, constructing ? sel.buildProgress : sel.trainProgress));
         this.progressFill.style.width = `${frac * 100}%`;
         // Status icon: the building (constructing) or the unit being trained.
+        // Only a training job's icon is click-to-cancel (construction has its own
+        // Cancel button) — queueTrainable (set above) gates the click handler.
         const iconPath = constructing ? sel.icon : sel.queue[0]?.icon ?? sel.icon;
         const url = iconPath ? this.driver.blpUrl(iconPath) : null;
         this.statusIcon.style.backgroundImage = url ? `url(${url})` : "";
         this.statusIcon.style.visibility = url ? "visible" : "hidden";
+        this.statusIcon.classList.toggle("clickable", training);
         // Queue slots hold positions 2..7 (the current unit is above the bar).
         this.queueRow.hidden = !training;
         if (training) {

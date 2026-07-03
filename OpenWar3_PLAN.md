@@ -17,6 +17,27 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 9 — sounds/voice, gold-mine collider, unit anti-dance, queue-cancel, portrait (2026-07-03, latest+22)**
+  — **Unit voice lines & SFX from the game data** (new `src/audio/sounds.ts` `SoundBoard`): maps unit id →
+  `unitSound` label (UnitUI.slk, now on `UnitDef.soundSet`) → `UI\SoundInfo\UnitAckSounds.slk` rows
+  `<label><Category>` (What/Yes/YesAttack/Pissed/Warcry/Ready) and `AnimSounds.slk` `<label>Death`; each
+  row's `FileNames` is a comma-list of randomized variants under `DirectoryBase` (plain PCM WAV → Web
+  Audio `decodeAudioData`, cached; `Volume`/127 gain, `RANDOMPITCH` ±`PitchVariance`). Events wired in
+  `rts.ts`: selection→What (escalates to Pissed after 3 re-clicks of the same unit), move/attack order→
+  Yes/YesAttack, death→Death (all units), and mapViewer train-complete→Ready. One preempting voice
+  channel (WC3 CHANNELFULLPREEMPT); deaths overlap, capped at 4 (reserved synchronously so an AoE burst
+  can't slip the cap). AudioContext unlocked on first pointerdown. Resolution verified against real MPQs;
+  headless SoundBoard smoke test passes. **Needs in-browser confirmation** (actual playback).
+  — **Gold-mine collider shrunk**: radius was sized off the FULL `16x16Goldmine.tga` (→256) but the texture
+  only blocks its central 8×8 — new `footprintRadius()` measures the *blocked* extent (→128), halving the
+  selection ring and the worker-entry reach (`mine.radius + u.radius + 8`, was +40) so miners walk right up
+  before vanishing. **Units no longer "dance"**: `checkStuck` now measures NET displacement over the whole
+  0.5s window (orbiting pairs move full-speed tangentially but drift nowhere → now caught & broken up;
+  detours still pass since they cover real ground), and the collision resolver only adds its tangential
+  slide when a pair is genuinely closing head-on (circling/parallel pairs get radial-only). A/B headless
+  test: old code left 4/8 ring-converge units orbiting forever, new settles all 8. **Queue cancel-any**:
+  clicking any production-queue icon (incl. the one training, slot 0) cancels + full-refunds it
+  (`SimWorld.cancelTrainAt`, clickable HUD status-icon/queue-slots). **Portrait** pedestals down 0.08.
 - **Feedback pass 8 — building work anim / portrait / tree pick / job timer (2026-07-03, latest+21)**
   — **Buildings run "Stand Work" while producing**: a structure with a unit in its queue plays its
   work clip (blacksmith hammers, barracks stirs) via `pickSequence` (`build` resolves to Stand Work

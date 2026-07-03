@@ -90,3 +90,27 @@ export function decodePathTex(bytes: Uint8Array): Footprint | null {
   }
   return { w, h, blocked };
 }
+
+/** World-unit radius of a footprint's *blocked* region (not the full texture).
+ *  WC3 pads pathing textures with empty border cells — e.g. the gold mine's
+ *  `16x16Goldmine.tga` only blocks the central 8×8, so its true half-extent is
+ *  4 cells (128), not 8 (256). Used to size selection rings and interaction
+ *  reach off what actually collides. Returns 0 for an all-clear footprint. */
+export function footprintRadius(fp: Footprint): number {
+  let minX = fp.w;
+  let maxX = -1;
+  let minY = fp.h;
+  let maxY = -1;
+  for (let y = 0; y < fp.h; y++) {
+    for (let x = 0; x < fp.w; x++) {
+      if (!fp.blocked[y * fp.w + x]) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return 0;
+  const span = Math.max(maxX - minX + 1, maxY - minY + 1);
+  return (span * PATHING_CELL) / 2;
+}

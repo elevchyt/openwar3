@@ -13,6 +13,7 @@ export interface UnitDef {
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
+  soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
   icon: string; // command-card BTN icon path (from UnitFunc "art")
   description: string; // command-card tooltip text (UnitStrings "Ubertip"), cleaned
   hotkey: string; // command hotkey letter (UnitStrings "Hotkey")
@@ -168,6 +169,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       model: `${file.replace(/\//g, "\\")}.mdx`,
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
+      soundSet: u ? str(u, "unitSound") : "",
       icon: fn ? str(fn, "art") : "",
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The

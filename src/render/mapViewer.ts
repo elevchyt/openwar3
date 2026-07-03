@@ -8,10 +8,11 @@ import { parseW3E } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
-import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, type Footprint } from "../sim/destructibles";
+import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
 import { makeHeightSampler } from "../game/heightmap";
 import { RtsController, type RtsHost } from "../game/rts";
+import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { STARTING_UNITS, resolveRace, type PlayableRace } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
@@ -146,6 +147,7 @@ export class MapViewerScene {
   private raf = 0;
   private last = 0;
   private rts: RtsController | null = null;
+  private sounds: SoundBoard | null = null; // unit voice lines / sfx from the game data
   private grid: PathingGrid | null = null;
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
@@ -222,6 +224,7 @@ export class MapViewerScene {
     private registry: UnitRegistry,
     private solver: Solver,
   ) {
+    this.sounds = new SoundBoard(vfs);
     this.attachControls();
   }
 
@@ -329,6 +332,7 @@ export class MapViewerScene {
         unitsReady: () => map.unitsReady,
       };
       this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry);
+      this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
     }
@@ -347,8 +351,12 @@ export class MapViewerScene {
     }
     const minePathTex = this.registry.get("ngol")?.pathTex || "";
     const mineFp = minePathTex ? this.footprintFor(minePathTex) : null;
+    // Size the mine's collider off the footprint's *blocked* extent, not the
+    // full texture: `16x16Goldmine.tga` pads to 16 cells but only blocks the
+    // central 8×8, so the true radius is 128, not 256 — the padded value made
+    // the ring huge and swallowed workers ~1.5 tiles early.
     for (const m of nodes.mines) {
-      const radius = mineFp ? (Math.max(mineFp.w, mineFp.h) * 32) / 2 : 96;
+      const radius = mineFp ? footprintRadius(mineFp) || 96 : 96;
       const mine = world.addMine(m.x, m.y, m.gold, radius);
       if (mineFp) this.nodeFootprints.set(mine.id, { fp: mineFp, x: m.x, y: m.y });
     }
@@ -1342,6 +1350,14 @@ export class MapViewerScene {
     if (id.startsWith("train:")) {
       const sel = this.rts.selectedInfo();
       if (sel) this.trainUnit(sel.id, id.slice(6));
+      return;
+    }
+    if (id.startsWith("cancelqueue:")) {
+      // Clicking any icon in the production queue (including the one currently
+      // training, index 0) cancels that item and refunds it in full.
+      const idx = Number(id.slice(12));
+      const sel = this.rts.selectedInfo();
+      if (sel?.isBuilding && Number.isInteger(idx)) this.cancelTrainAt(sel.id, idx);
     }
   }
 
@@ -1381,6 +1397,17 @@ export class MapViewerScene {
 
   private cancelTrain(buildingId: number): void {
     const uid = this.rts?.simWorld.cancelLastTrain(buildingId);
+    this.refundTrain(uid);
+  }
+
+  /** Cancel a specific queue slot (0 = currently training) and refund it. */
+  private cancelTrainAt(buildingId: number, index: number): void {
+    const uid = this.rts?.simWorld.cancelTrainAt(buildingId, index);
+    this.refundTrain(uid);
+  }
+
+  /** Refund a cancelled training unit's full cost to the local player. */
+  private refundTrain(uid: string | null | undefined): void {
     if (!uid || !this.rts) return;
     const d = this.registry.get(uid);
     if (d) {
@@ -1613,6 +1640,7 @@ export class MapViewerScene {
             if (spot) [sx, sy] = this.grid.cellToWorld(spot[0], spot[1]);
           }
           const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
+          this.sounds?.play(d.soundSet, "Ready"); // "unit ready" voice on completion
           void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
             if (simId !== null) this.applyRally(simId, rally);
           });
@@ -1814,6 +1842,7 @@ export class MapViewerScene {
     // right-click issues a move order for the selection.
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
+      this.sounds?.unlock(); // browsers gate audio until the first user gesture
       if (e.button === 2) {
         // Right-click cancels build placement / an armed order, else moves
         // (Shift held → append to the unit's order queue instead of replacing).

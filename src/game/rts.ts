@@ -4,6 +4,7 @@ import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { WORKERS, DEPOT_IDS } from "../data/races";
 import { trainsFor } from "../data/techtree";
+import type { SoundBoard, SoundCategory } from "../audio/sounds";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -183,6 +184,9 @@ const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
 const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData moveheight
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
+// Re-clicking the same single unit this many extra times flips its selection
+// voice from "What" to the annoyed "Pissed" set (WC3's easter-egg escalation).
+const PISSED_AFTER = 3;
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 // Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
 const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
@@ -259,6 +263,9 @@ export class RtsController {
   private primary: number | null = null;
   private focusedKey = ""; // sub-group (type, or hero id) currently focused
   private selectedMine: number | null = null; // a selected gold mine (resource)
+  private sounds: SoundBoard | null = null; // unit voice lines (set by the host)
+  private lastVoiceId: number | null = null; // last single unit that spoke (for What→Pissed escalation)
+  private voiceStreak = 0; // consecutive re-clicks of that same unit
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
@@ -295,6 +302,42 @@ export class RtsController {
   /** Which player's units a drag-box selects (set at melee start). */
   setLocalPlayer(id: number): void {
     this.localPlayer = id;
+  }
+
+  /** Wire the voice/sound board (owned by the host, which has the VFS). */
+  setSoundBoard(sounds: SoundBoard | null): void {
+    this.sounds = sounds;
+  }
+
+  /** Play the focused unit's selection voice — "What", escalating to "Pissed"
+   *  after PISSED_AFTER consecutive re-clicks of the SAME single unit. Only your
+   *  own units talk back (enemy/neutral clicks are silent, like WC3). */
+  private announceSelection(): void {
+    if (!this.sounds || this.primary === null) return;
+    const e = this.byId.get(this.primary);
+    const u = this.sim.units.get(this.primary);
+    if (!e || !u || u.owner !== this.localPlayer) return;
+    const def = this.registry.get(e.typeId);
+    if (!def?.soundSet) return;
+    const single = this.selected.size === 1;
+    if (single && this.primary === this.lastVoiceId) {
+      this.voiceStreak++;
+    } else {
+      this.voiceStreak = 0;
+      this.lastVoiceId = single ? this.primary : null;
+    }
+    const cat: SoundCategory = single && this.voiceStreak >= PISSED_AFTER ? "Pissed" : "What";
+    this.sounds.play(def.soundSet, cat);
+  }
+
+  /** Play the focused unit's order acknowledgement ("Yes" or "YesAttack"). */
+  private ack(attack: boolean): void {
+    if (!this.sounds || this.primary === null) return;
+    const e = this.byId.get(this.primary);
+    const u = this.sim.units.get(this.primary);
+    if (!e || !u || u.owner !== this.localPlayer || u.building) return; // buildings don't voice orders
+    const def = this.registry.get(e.typeId);
+    if (def?.soundSet) this.sounds.play(def.soundSet, attack ? "YesAttack" : "Yes");
   }
 
   /** Register the world positions of Neutral Passive entities (from the map's
@@ -368,6 +411,7 @@ export class RtsController {
     if (!this.selected.has(simId)) return;
     this.focusedKey = this.groupKeyOf(simId);
     this.primary = this.firstOfGroup(this.focusedKey);
+    this.announceSelection();
   }
 
   /** Cycle focus to the next sub-group (Tab). */
@@ -377,6 +421,7 @@ export class RtsController {
     const i = groups.indexOf(this.focusedKey);
     this.focusedKey = groups[(i + 1) % groups.length];
     this.primary = this.firstOfGroup(this.focusedKey);
+    this.announceSelection();
   }
 
   /** Drop dead units from the selection and repoint the primary if it died. */
@@ -687,6 +732,10 @@ export class RtsController {
   private onDeath(simId: number): void {
     const e = this.byId.get(simId);
     if (!e) return;
+    // Death cry (all units, friend or foe — you hear the battlefield). Buildings
+    // have no Death sound-set → resolves to nothing.
+    const def = this.registry.get(e.typeId);
+    if (def?.soundSet) this.sounds?.play(def.soundSet, "Death");
     this.byId.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
@@ -762,6 +811,7 @@ export class RtsController {
       this.selected.add(id);
       this.selectedMine = null;
       this.refocus();
+      this.announceSelection();
       return;
     }
     // No unit under the cursor — a gold mine is clickable too (shows its gold).
@@ -804,6 +854,7 @@ export class RtsController {
     for (const id of picked.slice(0, MAX_SELECT)) this.selected.add(id); // WC3 cap
     this.selectedMine = null;
     this.refocus();
+    this.announceSelection();
   }
 
   /** Pointer move: show the ring + HP bar under the unit (or gold mine) being
@@ -864,6 +915,7 @@ export class RtsController {
     }
     const mode = this.orderMode;
     this.orderMode = null;
+    if (mode !== "rally") this.ack(mode === "attack"); // rally is a building order — no unit voice
     if (mode === "rally") {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
@@ -1246,6 +1298,12 @@ export class RtsController {
       return;
     }
     const picked = this.pickAt(cssX, cssY);
+    // Acknowledge the order with the focused unit's voice — attack quote if it
+    // targets a hostile unit, otherwise the move quote.
+    {
+      const t = picked !== null ? this.sim.units.get(picked) : undefined;
+      this.ack(!!(t && prim && !t.building && this.sim.hostile(prim, t)));
+    }
     if (picked !== null && !this.selected.has(picked)) {
       const target = this.sim.units.get(picked);
       if (target) {

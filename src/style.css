@@ -606,6 +606,10 @@ body.in-game .menu-panel { display: none; }
   border: 1px solid rgba(216, 180, 90, 0.5);
   border-radius: 2px;
 }
+/* Click-to-cancel affordance: the in-progress icon (while training) and filled
+   queue slots take a pointer cursor and brighten on hover. */
+.hud-status-icon.clickable, .hud-queue-slot.filled { cursor: pointer; }
+.hud-status-icon.clickable:hover, .hud-queue-slot.filled:hover { border-color: rgba(240, 200, 80, 0.95); filter: brightness(1.15); }
 .hud-status-label { font-size: 15px; color: #f0c850; letter-spacing: 0.4px; }
 /* Gold capsule progress bar. */
 .hud-progress {
