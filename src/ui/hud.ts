@@ -72,6 +72,10 @@ export interface HudDriver {
   focusUnit(simId: number): void;
   /** Cycle focus to the next sub-group (Tab). */
   cycleFocus(): void;
+  /** Select + centre on the next idle worker (idle-worker badge / F8 / ~). */
+  cycleIdleWorker(): void;
+  /** How many local workers are currently idle (badge count). */
+  idleWorkerCount(): number;
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
   /** Run a command-card button by id. */
@@ -154,6 +158,7 @@ export class GameHud {
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
+  private idleWorkerBadge!: HTMLButtonElement;
   private cmdTooltip!: HTMLDivElement;
   private cmdSlots: HTMLButtonElement[] = [];
   private cmdKey = "";
@@ -210,6 +215,14 @@ export class GameHud {
     }
     this.updateClock();
     this.refreshCommandCard();
+    this.updateIdleWorkers();
+  }
+
+  /** Show/hide the idle-worker badge with the current count. */
+  private updateIdleWorkers(): void {
+    const n = this.driver.idleWorkerCount();
+    this.idleWorkerBadge.hidden = n === 0;
+    if (n > 0) this.idleWorkerBadge.textContent = `⛏ ${n}`;
   }
 
   /** Sun/moon disc: the indicator texture is sun–moon–sun across its width, so
@@ -229,6 +242,12 @@ export class GameHud {
     }
     if (e.key === "Escape") {
       this.driver.runCommand("cancel");
+      return;
+    }
+    // F8 / ` (tilde) select and cycle through idle workers (WC3).
+    if (e.key === "F8" || e.key === "`" || e.key === "~") {
+      e.preventDefault();
+      this.driver.cycleIdleWorker();
       return;
     }
     // Trigger the command whose hotkey matches the pressed key.
@@ -376,6 +395,17 @@ export class GameHud {
       const [ox, oy, w, h] = this.driver.mapBounds();
       this.driver.panTo(ox + u * w, oy + (1 - v) * h); // minimap is north-up
     });
+    // Idle-worker badge — sits just above the minimap; click (or F8 / ~) selects
+    // and cycles through workers doing nothing. Hidden when there are none.
+    this.idleWorkerBadge = document.createElement("button");
+    this.idleWorkerBadge.className = "hud-idle-worker";
+    this.idleWorkerBadge.title = "Select idle worker (F8 / ~)";
+    this.idleWorkerBadge.hidden = true;
+    this.idleWorkerBadge.addEventListener("pointerdown", (e) => {
+      e.stopPropagation(); // don't also ping the minimap
+      this.driver.cycleIdleWorker();
+    });
+    box.appendChild(this.idleWorkerBadge);
     return box;
   }
 

@@ -17,6 +17,25 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Feedback pass 11 — circle unify, mine enter/exit, UI sounds, follow, multi-select, idle-worker (2026-07-03, latest+24)**
+  — **Click/hover circles unified**: order-flash rings (yellow harvest / red attack) now size EXACTLY like
+  the target's hover/selection ring — `placeCircle` keys size off `sizeToRadius` only (units = constant
+  ring, buildings/mines/trees = footprint radius); mine flash uses the same 1.4× radius as its ring.
+  — **Gold mine enter-any-side, exit-toward-hall, straight-line return**: workers ENTER from whatever side
+  they reach the mine, always re-EMERGE on the hall-facing edge (`mineApproach`, seamless since invisible
+  inside), and on the RETURN trip re-approach that same edge → a straight mine↔hall line (headless: trips
+  2+ re-enter within ~6u of the prior exit, off-axis hall). — **UI/action sounds** (new `UISounds.slk` +
+  `UnitCombatSounds` chop): command-button click (`InterfaceClick`), building placement, rally point, a
+  looping construction hammer while local buildings go up, and per-chop lumber SFX (worker `weap2`
+  `AxeMediumChop` × `Wood`). **Case-INSENSITIVE** SoundInfo lookup fixes silent building voices (Altar of
+  Kings/Storms, Tree of Life, Boneyard, Slaughterhouse — label case ≠ ack-row case). **Mute button** on the
+  bottom-left debug panel. — **Follow order**: right-click a friendly/neutral unit → the selection follows
+  it (`SimOrder "follow"`, trails at FOLLOW_GAP 64, NO auto-acquire; idles if the leader dies; daisy-
+  chainable; headless-verified). — **Multi-select**: Shift+click adds/removes a unit; Ctrl+click / double-
+  click grabs all on-screen own units of that type (`selectByType`+`onScreen`). — **Idle-worker badge**
+  (⛏ + count) above the minimap; click / **F8** / **~** selects & cycles idle workers and centres on them.
+  Build clean; all sim regressions (dance/mine-roundtrip/lumber/follow) pass. Sounds, circles, follow feel,
+  and the idle badge need in-browser confirmation.
 - **Feedback pass 10 — impact sounds, non-overlapping voices, portrait talk, mine line, lumberjack fix (2026-07-03, latest+23)**
   — **Weapon-impact SFX**: `SoundBoard.playImpact(weap1, targetArmor)` resolves `UI\SoundInfo\
   UnitCombatSounds.slk` row `<attacker.weap1><target.armor>` (both new `UnitDef` fields from UnitUI —

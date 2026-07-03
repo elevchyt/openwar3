@@ -377,6 +377,21 @@ body.in-game .menu-panel { display: none; }
   height: 100%;
 }
 .hud-minimap-img { image-rendering: pixelated; }
+/* Idle-worker badge overlaid at the minimap's top-left corner. */
+.hud-idle-worker {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 3;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.62);
+  border: 1px solid rgba(240, 200, 80, 0.85);
+  border-radius: 4px;
+  color: #ffd86a;
+  font: 600 12px/1 ui-monospace, Menlo, Consolas, monospace;
+  padding: 2px 5px;
+}
+.hud-idle-worker:hover { background: rgba(0, 0, 0, 0.82); filter: brightness(1.2); }
 
 .hud-portrait-wrap {
   flex: none;

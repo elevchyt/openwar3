@@ -269,6 +269,7 @@ export class RtsController {
   private sounds: SoundBoard | null = null; // unit voice lines (set by the host)
   private lastVoiceId: number | null = null; // last single unit that spoke (for What→Pissed escalation)
   private voiceStreak = 0; // consecutive re-clicks of that same unit
+  private lastIdleWorker: number | null = null; // last idle worker selected via the badge/F8/~ cycle
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
@@ -441,6 +442,45 @@ export class RtsController {
     this.focusedKey = groups[(i + 1) % groups.length];
     this.primary = this.firstOfGroup(this.focusedKey);
     this.announceSelection();
+  }
+
+  /** A worker of the local player that's doing nothing (not gathering, building,
+   *  moving, or constructing) — the ones the idle-worker button/F8/~ cycle. */
+  private isIdleWorker(u: SimUnit | undefined): u is SimUnit {
+    return !!u && u.owner === this.localPlayer && !!u.worker && u.order === "idle" && !u.buildPending && u.constructing === 0 && !u.inMine;
+  }
+
+  private idleWorkerIds(): number[] {
+    const out: number[] = [];
+    for (const e of this.entries) if (this.isIdleWorker(this.sim.units.get(e.simId))) out.push(e.simId);
+    return out.sort((a, b) => a - b); // stable cycle order
+  }
+
+  /** Count of idle workers (drives the HUD idle-worker badge). */
+  idleWorkerCount(): number {
+    let n = 0;
+    for (const e of this.entries) if (this.isIdleWorker(this.sim.units.get(e.simId))) n++;
+    return n;
+  }
+
+  /** Select the NEXT idle worker (cycling), replacing the current selection.
+   *  Returns true if one was selected (host then centres the camera on it). */
+  cycleIdleWorker(): boolean {
+    const idle = this.idleWorkerIds();
+    if (!idle.length) return false;
+    let idx = 0;
+    if (this.lastIdleWorker !== null) {
+      const cur = idle.indexOf(this.lastIdleWorker);
+      idx = cur >= 0 ? (cur + 1) % idle.length : 0;
+    }
+    const id = idle[idx];
+    this.lastIdleWorker = id;
+    this.selected.clear();
+    this.selected.add(id);
+    this.selectedMine = null;
+    this.refocus();
+    this.announceSelection();
+    return true;
   }
 
   /** Drop dead units from the selection and repoint the primary if it died. */
@@ -823,10 +863,30 @@ export class RtsController {
   }
 
   /** Left-click a unit selects it. Clicking empty ground does NOT deselect (WC3
-   *  has no click-to-deselect — you keep your selection until you pick another). */
-  selectAt(cssX: number, cssY: number): void {
+   *  has no click-to-deselect — you keep your selection until you pick another).
+   *  Modifiers (WC3): `additive` (Shift) toggles the unit in/out of the group;
+   *  `sameType` (Ctrl / double-click) grabs every on-screen own unit of that type. */
+  selectAt(cssX: number, cssY: number, mods: { additive?: boolean; sameType?: boolean } = {}): void {
     const id = this.pickAt(cssX, cssY);
     if (id !== null) {
+      const u = this.sim.units.get(id);
+      const e = this.byId.get(id);
+      const ownMobile = !!u && !!e && u.owner === this.localPlayer && !u.building;
+      if (mods.sameType && ownMobile) {
+        this.selectByType(e!.typeId);
+        return;
+      }
+      if (mods.additive && (ownMobile || this.selected.has(id))) {
+        // Shift: drop the unit if already in the group, else add it.
+        if (this.selected.has(id)) this.deselect(id);
+        else {
+          this.selected.add(id);
+          this.selectedMine = null;
+          this.refocus(this.focusedKey);
+          this.announceSelection();
+        }
+        return;
+      }
       this.selected.clear();
       this.selected.add(id);
       this.selectedMine = null;
@@ -846,6 +906,38 @@ export class RtsController {
       }
     }
     // Empty ground: keep the current selection (no manual deselect).
+  }
+
+  /** Select every on-screen own mobile unit of a given type (Ctrl-click / double-
+   *  click). WC3 limits this to what's visible, so off-screen kin are left out. */
+  private selectByType(typeId: string): void {
+    const picked: number[] = [];
+    for (const e of this.entries) {
+      if (e.typeId !== typeId || e.hidden) continue;
+      const u = this.sim.units.get(e.simId);
+      if (!u || u.owner !== this.localPlayer || u.building) continue;
+      if (this.onScreen(u, e)) picked.push(e.simId);
+    }
+    if (!picked.length) return;
+    this.selected.clear();
+    for (const sid of picked.slice(0, MAX_SELECT)) this.selected.add(sid);
+    this.selectedMine = null;
+    this.refocus();
+    this.announceSelection();
+  }
+
+  /** True if a unit currently projects inside the viewport (for same-type select). */
+  private onScreen(u: SimUnit, e: Entry): boolean {
+    const viewport = this.host.viewport();
+    const dpr = this.dpr();
+    const h = this.host.canvas.height;
+    this.world[0] = u.x;
+    this.world[1] = u.y;
+    this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
+    this.host.camera.worldToScreen(this.screen, this.world, viewport);
+    const sx = this.screen[0] / dpr;
+    const sy = (h - this.screen[1]) / dpr;
+    return sx >= 0 && sy >= 0 && sx <= this.host.canvas.clientWidth && sy <= this.host.canvas.clientHeight;
   }
 
   /** Drag-box: select all of the local player's mobile units whose on-screen
@@ -1227,7 +1319,8 @@ export class RtsController {
       case "patrol":
       case "buildnew":
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
-      case "attack": {
+      case "attack":
+      case "follow": {
         const t = this.sim.units.get(o.targetId);
         return t ? { x: t.x, y: t.y, z: this.heightAt(t.x, t.y) } : null;
       }
@@ -1345,6 +1438,15 @@ export class RtsController {
           // the fitting order (attack / resume construction / repair / move).
           this.orderOnBuilding(target, picked, enemy, selR, queued);
           return;
+        } else {
+          // Friendly / neutral UNIT: FOLLOW it (move-follow, no auto-acquire) — for
+          // marshalling large forces or scouting a unit you can't attack (WC3).
+          let any = false;
+          for (const id of this.selected) if (id !== picked && this.order(id, { kind: "follow", targetId: picked }, queued)) any = true;
+          if (any) {
+            this.flashRing(target.x, target.y, selR, FLASH_GREEN, false); // green follow confirm
+            return;
+          }
         }
       }
     }

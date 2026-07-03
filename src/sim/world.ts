@@ -33,7 +33,7 @@ export interface SimProjectile {
   art: string; // missile model path
 }
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "harvest" | "return" | "repair";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "follow" | "harvest" | "return" | "repair";
 
 /** Active repair job on a worker: restore a building's HP over time for a
  *  fraction of its build cost (WC3: 35% of cost, 150% of build time to full). */
@@ -85,6 +85,7 @@ export type QueuedOrder =
   | { kind: "attackmove"; x: number; y: number }
   | { kind: "patrol"; x: number; y: number }
   | { kind: "attack"; targetId: number }
+  | { kind: "follow"; targetId: number }
   | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number }
   | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number }
   | { kind: "buildresume"; buildingId: number }
@@ -192,6 +193,7 @@ const FACING_EPS = 0.35; // radians — must roughly face the target to swing
 // animation flip-flop (and position jiggle) at the range boundary.
 const ATTACK_LEASH = 48;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
+const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
@@ -843,6 +845,23 @@ export class SimWorld {
     return true;
   }
 
+  /** Order a unit to FOLLOW another (friendly/neutral/enemy) unit: it trails the
+   *  leader at FOLLOW_GAP and does NOT auto-acquire targets on its own (WC3). */
+  issueFollow(id: number, targetId: number): boolean {
+    const u = this.units.get(id);
+    const t = this.units.get(targetId);
+    if (!u || !t || u === t || u.speed <= 0) return false;
+    u.order = "follow";
+    u.targetId = targetId;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    this.detachBuilder(id);
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    return true;
+  }
+
   stop(id: number): void {
     const u = this.units.get(id);
     if (u) {
@@ -924,6 +943,7 @@ export class SimWorld {
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
       case "patrol": return this.issuePatrol(id, o.x, o.y);
       case "attack": return this.issueAttack(id, o.targetId);
+      case "follow": return this.issueFollow(id, o.targetId);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId);
       case "buildresume": this.assignBuilder(id, o.buildingId); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
@@ -1067,6 +1087,9 @@ export class SimWorld {
       switch (u.order) {
         case "attack":
           this.tickAttack(u);
+          break;
+        case "follow":
+          this.tickFollow(u);
           break;
         case "harvest":
           this.tickHarvest(u, dt);
@@ -1343,6 +1366,24 @@ export class SimWorld {
   // down after being blocked by units we may not push.
   private chase(u: SimUnit, t: SimUnit): void {
     this.chasePoint(u, t.x, t.y);
+  }
+
+  /** Follow a leader: trail it at FOLLOW_GAP, parking when close and re-approaching
+   *  when it moves off. No target acquisition — a follower only follows (WC3). If
+   *  the leader dies/vanishes, stop where we stand. */
+  private tickFollow(u: SimUnit): void {
+    const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+    if (!t) {
+      this.stop(u.id);
+      return;
+    }
+    const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    if (gap > FOLLOW_GAP) {
+      this.chase(u, t); // approach (chasePoint repaths as the leader strays)
+    } else {
+      if (u.moving) this.settle(u); // caught up — hold position near the leader
+      u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+    }
   }
 
   private chasePoint(u: SimUnit, x: number, y: number): void {

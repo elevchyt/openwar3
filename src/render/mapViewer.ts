@@ -144,6 +144,9 @@ export class MapViewerScene {
   private downX = 0;
   private downY = 0;
   private moved = false;
+  private lastClickAt = 0; // for double-click detection (select same type)
+  private lastClickX = 0;
+  private lastClickY = 0;
   private raf = 0;
   private last = 0;
   private rts: RtsController | null = null;
@@ -1144,6 +1147,16 @@ export class MapViewerScene {
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
       focusUnit: (simId) => this.rts?.focusUnit(simId),
       cycleFocus: () => this.rts?.cycleFocus(),
+      cycleIdleWorker: () => {
+        if (this.rts?.cycleIdleWorker()) {
+          const pos = this.rts.selectedPosition();
+          if (pos) {
+            this.target[0] = pos[0];
+            this.target[1] = pos[1];
+          }
+        }
+      },
+      idleWorkerCount: () => this.rts?.idleWorkerCount() ?? 0,
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
       minimapImage: () => this.minimap,
@@ -1906,7 +1919,14 @@ export class MapViewerScene {
           // A left-drag is a rectangle selection of the player's own units.
           this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY);
         } else {
-          this.rts.selectAt(e.offsetX, e.offsetY);
+          // Modifiers: Shift = add/remove from group; Ctrl or a double-click =
+          // select all on-screen units of the same type.
+          const t = performance.now();
+          const dbl = t - this.lastClickAt < 350 && Math.hypot(e.offsetX - this.lastClickX, e.offsetY - this.lastClickY) < 8;
+          this.lastClickAt = t;
+          this.lastClickX = e.offsetX;
+          this.lastClickY = e.offsetY;
+          this.rts.selectAt(e.offsetX, e.offsetY, { additive: e.shiftKey, sameType: e.ctrlKey || e.metaKey || dbl });
         }
       }
     });
