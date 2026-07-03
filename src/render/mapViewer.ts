@@ -73,7 +73,7 @@ const AURA_EFFECT_MODEL: Record<string, string> = {
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 const MAX_HEROES = 3; // WC3 melee: a player may field at most 3 heroes (altars + tavern combined)
-const TAVERN_HIRE_TIME = 1; // seconds — tavern heroes are hired (near-instant), not built like altar heroes
+const TAVERN_HIRE_TIME = 0; // tavern heroes are HIRED instantly — no build time, the hero just spawns (pops next tick)
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
@@ -1342,6 +1342,7 @@ export class MapViewerScene {
       runCommand: (id) => this.runCommand(id),
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
+      cheat: (kind) => this.rts?.cheat(kind) ?? false,
     };
     this.hud = new GameHud(ui, driver);
     this.gameMenu?.dispose();

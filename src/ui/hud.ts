@@ -119,6 +119,9 @@ export interface HudDriver {
   minimapImage(): HTMLCanvasElement | null;
   /** Race console atlas crops (UI\Console\<Race>UITile01–04) or null. */
   consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null } | null;
+  /** Debug cheat: top up gold/lumber/food, or toggle fast build/train. Returns
+   *  the resulting on/off state (only meaningful for "fastbuild"). */
+  cheat(kind: "gold" | "lumber" | "food" | "fastbuild"): boolean;
 }
 
 // Zone rectangles measured from the rendered console atlas (fractions of the
@@ -210,7 +213,7 @@ export class GameHud {
     this.root = document.createElement("div");
     this.root.className = "hud";
     const skin = driver.consoleSkin();
-    this.root.append(this.buildTopBar(skin), this.buildConsole(skin));
+    this.root.append(this.buildTopBar(skin), this.buildConsole(skin), this.buildCheatPanel());
     parent.appendChild(this.root);
     window.addEventListener("keydown", this.onKey);
   }
@@ -454,6 +457,25 @@ export class GameHud {
     const wrapper = document.createElement("div");
     wrapper.append(bg, console_);
     return wrapper as unknown as HTMLDivElement;
+  }
+
+  /** A small floating panel of debug cheats in the bottom-right corner: top up
+   *  gold/lumber/food and a Fast Build toggle (builds + trains finish in ~1s). */
+  private buildCheatPanel(): HTMLDivElement {
+    const panel = document.createElement("div");
+    panel.className = "hud-cheats";
+    const mk = (label: string, kind: "gold" | "lumber" | "food" | "fastbuild") => {
+      const b = document.createElement("button");
+      b.className = "hud-cheat-btn";
+      b.textContent = label;
+      b.onclick = () => {
+        const on = this.driver.cheat(kind);
+        if (kind === "fastbuild") b.classList.toggle("active", on);
+      };
+      return b;
+    };
+    panel.append(mk("+500 Gold", "gold"), mk("+500 Lumber", "lumber"), mk("+Food", "food"), mk("Fast Build", "fastbuild"));
+    return panel;
   }
 
   private buildMinimap(): HTMLDivElement {

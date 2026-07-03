@@ -15,6 +15,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 1. **The real 1.27a MPQs in `Warcraft III/`** — the ground truth. When a reference and the game data disagree, the MPQ
    wins (this is a hard-won rule; see the cliff-ramp story in `docs/REFERENCES.md`). Read `.slk`/`.txt`/`.w3*` data,
    model `.mdx`, and asset paths straight from the archives.
+   - **[`docs/wc3-data-formats.md`](docs/wc3-data-formats.md)** — where each piece of data lives (archives, file
+     formats, and the exact tables/fields for target flags, tooltips, names, hotkeys, icons, sounds, maps).
    - **Archive split** (mounted in `src/vfs/profiles.ts`, patch wins): `War3.mpq` = all Reign-of-Chaos content +
      base sounds; `War3x.mpq` = Frozen-Throne models/data/effect sounds; `War3xLocal.mpq` = TFT **localized unit
      voices**. So a TFT unit (e.g. the Blood Mage) draws its model from War3x but its voice lines from War3xLocal.

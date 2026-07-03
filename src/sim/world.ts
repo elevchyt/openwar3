@@ -411,6 +411,9 @@ export class SimWorld {
   // Worker ids whose axe just landed a chop this tick — the renderer plays the
   // chop SFX (worker's lumber-weapon material vs Wood).
   private chops: number[] = [];
+  // Debug cheat: when true, construction + unit training complete in ~1 second
+  // (any build time is compressed to one second), regardless of builders present.
+  fastBuild = false;
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   private nextNodeId = 1;
@@ -720,6 +723,13 @@ export class SimWorld {
       const b = u.building;
       if (!b) continue;
       if (b.constructionLeft > 0) {
+        // Debug cheat: finish in ~1s no matter what (no builder required).
+        if (this.fastBuild) {
+          b.constructionLeft = Math.max(0, b.constructionLeft - Math.max(dt, b.buildTimeTotal * dt));
+          u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
+          if (b.constructionLeft === 0) for (const bid of [...b.builderIds]) this.detachBuilder(bid);
+          continue;
+        }
         // Only advance while a builder is assigned AND standing next to the site
         // (WC3: construction halts if the worker wanders off). Progress resumes
         // when a worker is re-tasked to build/repair it. Drop any builder that
@@ -766,7 +776,8 @@ export class SimWorld {
       }
       const job = b.queue[0];
       if (job) {
-        job.timeLeft -= dt;
+        // Debug cheat compresses any train time to ~1 second.
+        job.timeLeft -= this.fastBuild ? Math.max(dt, job.buildTime * dt) : dt;
         if (job.timeLeft <= 0) {
           b.queue.shift();
           this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
@@ -1559,10 +1570,35 @@ export class SimWorld {
   }
 
   /** Can a unit target another with a (harmful) spell right now? */
-  private castableTarget(caster: SimUnit, target: SimUnit): boolean {
+  private castableTarget(caster: SimUnit, target: SimUnit, flags: string[] = []): boolean {
     if (target.hp <= 0) return false;
     if (target.invulnerable && this.hostile(caster, target)) return false;
-    return true;
+    return this.targetAllowed(caster, target, flags);
+  }
+
+  /** Enforce the ability's "Targets Allowed" (AbilityData `targs1`) allegiance +
+   *  hero/non-hero flags, so a spell only hits what its data says it may. Verified
+   *  against the 1.27 MPQ: Storm Bolt/Chain Lightning/Slow are `enemy` (never a
+   *  friendly), Heal/Inner Fire/Frost Armor are `friend,self` (never an enemy),
+   *  Holy Light/Death Coil/Life Drain are `notself` (anything but the caster).
+   *  Codes with no allegiance flag (Banish) stay unrestricted. */
+  private targetAllowed(caster: SimUnit, target: SimUnit, flags: string[]): boolean {
+    const F = new Set(flags.map((f) => f.toLowerCase()));
+    // Clear-cut unit-type gates.
+    if (F.has("nonhero") && target.isHero) return false;
+    if (F.has("hero") && !target.isHero) return false;
+    const enemy = F.has("enemy");
+    const friend = F.has("friend") || F.has("player"); // `player` = own units (Death Pact/Dark Ritual)
+    const self = F.has("self");
+    const neutral = F.has("neutral");
+    const notself = F.has("notself");
+    // No allegiance restriction in the data (e.g. Banish) → any allegiance allowed.
+    if (!(enemy || friend || self || neutral || notself)) return true;
+    if (target.id === caster.id) return self;
+    if (notself) return true; // anything but the caster
+    if (this.hostile(caster, target)) return enemy;
+    if (target.neutralPassive) return neutral || friend;
+    return friend; // a friendly (same-team) unit
   }
 
   /** Order a unit to cast an ability. `code` is the ability's base code; targetId
@@ -1577,7 +1613,7 @@ export class SimWorld {
     if (!def || def.target === "passive") return false;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     const t = def.target === "unit" ? this.units.get(targetId) : undefined;
-    if (def.target === "unit" && (!t || !this.castableTarget(u, t))) return false;
+    if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags))) return false;
     // Remember an attack-move/follow to resume after the cast (WC3 casters keep
     // marching/following once they've cast).
     const resume: PendingCast["resume"] =
@@ -1625,7 +1661,7 @@ export class SimWorld {
     let ty = pc.y;
     if (pc.targetId) {
       const t = this.units.get(pc.targetId);
-      if (!t || !this.castableTarget(u, t)) {
+      if (!t || !this.castableTarget(u, t, def.targetFlags)) {
         this.stop(u.id);
         return;
       }

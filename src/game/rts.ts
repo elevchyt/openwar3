@@ -1829,7 +1829,26 @@ export class RtsController {
         if (u.building) for (const job of u.building.queue) used += this.registry.get(job.unitId)?.foodUsed ?? 0;
       }
     }
+    made += this.cheatFoodBonus.get(owner) ?? 0; // debug "add food" cheat
     return { used, made };
+  }
+
+  private cheatFoodBonus = new Map<number, number>(); // debug: extra supply cap per player
+
+  /** Debug cheats (the bottom-right buttons): top up the local player's economy. */
+  cheat(kind: "gold" | "lumber" | "food" | "fastbuild"): boolean {
+    if (kind === "fastbuild") {
+      this.sim.fastBuild = !this.sim.fastBuild; // builds/trains complete in ~1s
+      return this.sim.fastBuild;
+    }
+    if (kind === "food") {
+      this.cheatFoodBonus.set(this.localPlayer, (this.cheatFoodBonus.get(this.localPlayer) ?? 0) + 100);
+    } else {
+      const stash = this.sim.stashOf(this.localPlayer);
+      if (kind === "gold") stash.gold += 500;
+      else stash.lumber += 500;
+    }
+    return false;
   }
 
   /** Minimap dots: world positions + owners of all living units. */
