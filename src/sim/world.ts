@@ -463,10 +463,8 @@ const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (r
 // finish→snap→return→finish, flickering the walk↔stand clip (the return "jiggle"). So a
 // guarding creep only heads home again once displaced comfortably past the snap noise.
 const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + the settle snap
-// Not in any data file (engine-internal): a creep leashing home heals rapidly so
-// it reaches its post at (near) full, and a sleeping creep only wakes to a hostile
+// Not in any data file (engine-internal): a sleeping creep only wakes to a hostile
 // that strays very close — far enough that you can still scout past camps at night.
-const CREEP_RETURN_REGEN = 0.2; // fraction of maxHp restored per second while leashing home
 const SLEEP_WAKE_RANGE = 200; // a sleeping creep wakes if a hostile comes within this
 
 export class SimWorld {
@@ -3086,14 +3084,13 @@ export class SimWorld {
     if (!this.pathTo(u, u.guardX, u.guardY)) u.desiredFacing = Math.atan2(u.guardY - u.y, u.guardX - u.x);
   }
 
-  /** Advance a leashing creep: heal quickly, walk home, and — if it can't make
-   *  progress for GUARD_RETURN_TIME (boxed in / body-blocked) — give up and fight
-   *  again where it stands (so a player can't kite it forever against a wall). */
+  /** Advance a leashing creep: walk home, and — if it can't make progress for
+   *  GUARD_RETURN_TIME (boxed in / body-blocked) — give up and fight again where
+   *  it stands (so a player can't kite it forever against a wall). */
   private tickCreepReturn(u: SimUnit, dt: number): void {
     const d = Math.hypot(u.x - u.guardX, u.y - u.guardY);
-    if (u.hp > 0 && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * CREEP_RETURN_REGEN * dt);
     if (d <= CREEP_HOME_EPS) {
-      this.finishCreepReturn(u); // back at the post — reset to full and resume guarding
+      this.finishCreepReturn(u); // back at the post — resume guarding
       return;
     }
     if (d < u.returnBestDist - ARRIVE_EPS) {
@@ -3116,13 +3113,13 @@ export class SimWorld {
     }
   }
 
-  /** A creep reached its guard point: reset to full, face its guard heading, and
-   *  resume guarding (it will re-acquire any enemies still in range next tick). */
+  /** A creep reached its guard point: face its guard heading and resume guarding
+   *  (it will re-acquire any enemies still in range next tick). It keeps whatever
+   *  HP it had — no return-to-camp heal (removed at the maintainer's request). */
   private finishCreepReturn(u: SimUnit): void {
     u.returning = false;
     u.returnStuckT = 0;
     u.strayT = 0;
-    u.hp = u.maxHp; // creeps reset to full HP when they successfully leash home (WC3)
     u.order = "idle";
     this.settle(u);
     u.desiredFacing = u.guardFacing;
