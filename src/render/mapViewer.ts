@@ -4,13 +4,15 @@ import type { DataSource } from "../vfs/types";
 import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
-import { parseW3E } from "../world/terrain";
+import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
 import { makeHeightSampler } from "../game/heightmap";
+import { FogOverlay } from "./fogOverlay";
+import type { VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
@@ -91,13 +93,14 @@ type Solver = (src: unknown, params?: { tileset?: string }) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
   moveToAndFace(from: Float32Array, to: Float32Array, up: Float32Array): void;
+  viewProjectionMatrix: Float32Array; // World → Clip; drives the fog-overlay pass
 }
 interface Scene {
   camera: Camera;
   viewport: Float32Array;
 }
 interface HideableWidget {
-  instance: { localLocation: Float32Array; hide(): void };
+  instance: { localLocation: Float32Array; hide(): void; show(): void };
 }
 interface W3xMap {
   worldScene: Scene;
@@ -106,10 +109,12 @@ interface W3xMap {
   update(): void;
   units: unknown[];
   doodads: HideableWidget[];
+  doodadsReady: boolean;
   unitsReady: boolean;
 }
 interface W3xViewer {
   loadedBaseFiles: boolean;
+  gl: WebGLRenderingContext; // the viewer's GL context, shared by the fog overlay pass
   map: W3xMap | null;
   /** OpenWar3 patch hook: lets the map handler check which cliff-ramp
    *  (CliffTrans) models exist in the VFS before placing them. */
@@ -171,6 +176,15 @@ export class MapViewerScene {
   private rts: RtsController | null = null;
   private sounds: SoundBoard | null = null; // unit voice lines / sfx from the game data
   private grid: PathingGrid | null = null;
+  // Fog of war: the 3D terrain overlay + the doodads it can't darken (hidden until
+  // their cell is explored). Rebuilt per map; updated a few times a second.
+  private fog: FogOverlay | null = null;
+  private fogTerrain: TerrainData | null = null; // corner grid the fog mesh is built on
+  private fogAccum = 0; // ms since the last fog resample (throttle)
+  private hiddenWidgets: HideableWidget[] = []; // doodads + static units hidden in unexplored fog
+  private doodadsFogged = false; // one-time initial hide, when doodads finish loading
+  private unitsFogged = false; // one-time initial hide, when static units finish loading
+  private cheatBuf = ""; // rolling buffer of typed letters, for WC3 chat cheat codes
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
   private hud: GameHud | null = null;
@@ -330,6 +344,7 @@ export class MapViewerScene {
     // Drop the previous map's scene so reloading doesn't stack renders.
     const prev = this.viewer.map?.worldScene;
     if (prev) this.viewer.removeScene(prev);
+    this.disposeFog(); // drop the old map's fog overlay + un-hide its doodads
     this.rts?.dispose();
     this.rts = null;
     this.startMarkersHidden = false;
@@ -357,6 +372,7 @@ export class MapViewerScene {
     const wpm = archive.rawBytes("war3map.wpm");
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
+      this.fogTerrain = terrain; // corner grid for the fog overlay mesh
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -370,6 +386,7 @@ export class MapViewerScene {
       this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry, this.abilities);
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
+      this.rts.initVisionBlockers(); // fog line-of-sight: high ground + treelines block sight
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
     }
@@ -505,6 +522,7 @@ export class MapViewerScene {
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
     this.localRace = races.get(this.localPlayer) ?? "human";
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
+    this.rts!.setLocalTeam(this.teamOf(this.localPlayer)); // whose combined sight lifts the fog
     this.applyRaceCursor();
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     this.mountHud();
@@ -1350,6 +1368,7 @@ export class MapViewerScene {
         const [ox, oy] = map.centerOffset;
         return [ox, oy, (cols - 1) * 128, (rows - 1) * 128];
       },
+      fogAt: (wx, wy) => this.rts?.getVision().stateAt(wx, wy) ?? 2, // 2 = visible (no fog before a match)
       panTo: (wx, wy) => {
         this.target[0] = wx;
         this.target[1] = wy;
@@ -2121,7 +2140,10 @@ export class MapViewerScene {
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
-        for (const tree of world.drainFelledTrees()) this.removeNodeVisual(tree.id, tree.x, tree.y, map.doodads);
+        for (const tree of world.drainFelledTrees()) {
+          this.removeNodeVisual(tree.id, tree.x, tree.y, map.doodads);
+          this.rts?.onTreeFelled(tree.x, tree.y); // stop blocking fog line-of-sight
+        }
         for (const mine of world.drainDepletedMines()) {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
         }
@@ -2202,8 +2224,20 @@ export class MapViewerScene {
       // Re-pin under-construction buildings AFTER the animation advance so a
       // halted build's Birth animation truly freezes (and resumes with progress).
       this.rts?.repinConstructionFrames();
+      // Fog of war: build it once the map is ready, resample a few times a second,
+      // and draw it as our own pass over the freshly-rendered world.
+      this.ensureFog();
+      if (this.fog) {
+        this.fogAccum += dt;
+        if (this.fogAccum >= 100) {
+          this.fogAccum = 0;
+          this.updateFog();
+        }
+      }
       this.viewer.startFrame();
       this.viewer.render();
+      const fogScene = this.viewer.map?.worldScene;
+      if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -2262,6 +2296,70 @@ export class MapViewerScene {
     document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
+  }
+
+  /** Build the fog-of-war overlay once the map + sim exist, priming it from the
+   *  starting vision so the first frame isn't a full-screen black flash. */
+  private ensureFog(): void {
+    if (this.fog || !this.rts || !this.viewer.map || !this.fogTerrain) return;
+    // Build the fog mesh on the terrain's own corner grid so it's coplanar with the
+    // rendered terrain (see FogOverlay) — the fix for fog dropping out on cliffs/slopes.
+    this.fog = new FogOverlay(this.viewer.gl, this.fogTerrain);
+    this.fog.update(this.rts.getVision());
+  }
+
+  /** Resample the fog mask and progressively reveal map widgets as their ground is
+   *  explored. The flat ground overlay can't darken tall geometry (trees, buildings
+   *  poke above it), so unexplored doodads AND static map units are hidden outright
+   *  and popped in on first sight (last-seen persistence, like WC3). Units the RTS
+   *  drives (creeps, neutral shops) are skipped — the RTS fog-hides those itself. */
+  private updateFog(): void {
+    if (!this.fog || !this.rts) return;
+    const vision = this.rts.getVision();
+    this.fog.update(vision);
+    this.revealFoggedWidgets(vision);
+  }
+
+  private revealFoggedWidgets(vision: VisionMap): void {
+    const map = this.viewer.map;
+    if (!map) return;
+    const explored = (w: HideableWidget): boolean => {
+      const loc = w.instance.localLocation;
+      const [cx, cy] = vision.worldToCell(loc[0], loc[1]);
+      return vision.isExplored(cx, cy);
+    };
+    // Hide unexplored doodads (trees) the moment THEY load — don't wait on units, or
+    // they'd stay visible for a beat and then pop out ("disappear on scroll").
+    if (!this.doodadsFogged && map.doodadsReady) {
+      this.doodadsFogged = true;
+      for (const w of map.doodads) if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
+    }
+    // Hide unexplored static map units (structures, gold mines) once they load. Units
+    // the RTS drives (creeps, neutral shops) are skipped — the RTS fog-hides those.
+    if (!this.unitsFogged && map.unitsReady) {
+      this.unitsFogged = true;
+      for (const w of map.units as unknown as HideableWidget[]) {
+        if (this.rts?.managesViewerInstance(w.instance)) continue;
+        if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
+      }
+    }
+    let keep = 0; // compact the still-hidden list, revealing any now-explored widgets
+    for (const w of this.hiddenWidgets) {
+      if (explored(w)) w.instance.show();
+      else this.hiddenWidgets[keep++] = w;
+    }
+    this.hiddenWidgets.length = keep;
+  }
+
+  private disposeFog(): void {
+    this.fog?.dispose();
+    this.fog = null;
+    this.fogTerrain = null;
+    for (const w of this.hiddenWidgets) w.instance.show(); // un-fog before the map is dropped
+    this.hiddenWidgets = [];
+    this.doodadsFogged = false;
+    this.unitsFogged = false;
+    this.fogAccum = 0;
   }
 
   private updateCamera(): void {
@@ -2442,6 +2540,17 @@ export class MapViewerScene {
     return this.canvas.width / this.canvas.height || 1;
   }
 
+  /** WC3-style typed cheat codes. We don't have a chat box, so we watch the raw
+   *  keystream: `iseedeadpeople` toggles full-map reveal (the fog of war). */
+  private checkCheatCode(key: string): void {
+    if (key.length !== 1 || !/[a-z]/i.test(key)) return;
+    this.cheatBuf = (this.cheatBuf + key.toLowerCase()).slice(-16);
+    if (this.cheatBuf.endsWith("iseedeadpeople")) {
+      this.rts?.toggleRevealAll();
+      this.cheatBuf = "";
+    }
+  }
+
   private attachControls(): void {
     const c = this.canvas;
     window.addEventListener("keydown", (e) => {
@@ -2451,6 +2560,7 @@ export class MapViewerScene {
         return;
       }
       this.keys.add(e.key.toLowerCase());
+      this.checkCheatCode(e.key);
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
     c.addEventListener("contextmenu", (e) => e.preventDefault());

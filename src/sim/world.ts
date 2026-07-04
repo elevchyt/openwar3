@@ -226,6 +226,8 @@ export interface SimUnit {
   turnRate: number; // UnitData turnrate; scaled to rad/sec below
   radius: number; // collision radius (0 = no unit collision)
   flying: boolean; // air units ignore ground pathing & collision
+  sightDay: number; // fog-of-war sight radius in daylight (UnitBalance `sight`)
+  sightNight: number; // fog-of-war sight radius at night (UnitBalance `nsight`)
   hp: number;
   maxHp: number;
   mana: number;

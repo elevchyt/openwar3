@@ -1,6 +1,7 @@
 import { SimWorld, xpForLevel, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
-import { footprintCells, type PathingGrid } from "../sim/pathing";
+import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
+import { VisionMap, FogState } from "../sim/vision";
 import type { HeightSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
@@ -173,7 +174,8 @@ interface Entry {
   birthSeq: number; // "Birth" sequence index (-1 = none → scale-up fallback)
   birthStart: number; // Birth animation frame interval, for scrubbing
   birthEnd: number;
-  hidden: boolean; // instance hidden (worker inside a gold mine)
+  hidden: boolean; // instance currently hidden (worker in a gold mine, OR fog of war)
+  inMine: boolean; // worker is inside a gold mine (the hide cause that also deselects)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
@@ -319,6 +321,13 @@ export class RtsController {
   private lastIdleWorker: number | null = null; // last idle worker selected via the badge/F8/~ cycle
   private groups = new Map<string, number[]>(); // control groups "0".."9" → ordered member sim ids
   private localPlayer = 0; // owner whose units a drag-box selects
+  private localTeam = 0; // team whose combined sight reveals the fog of war
+  // Viewer instances the RTS drives visibility for (seeded neutrals + creeps). The
+  // map renderer skips these when it fog-hides the remaining static map widgets, so
+  // the two systems never fight over the same instance. Populated once at seed time.
+  private seededInstances = new Set<unknown>();
+  private vision!: VisionMap; // per-team fog-of-war grid (built in the constructor)
+  private visionAccum = 1; // seconds since the last vision rebuild (>interval → rebuild on first tick)
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
   private previewIds: number[] = []; // units under the live drag-box (marquee preview rings)
@@ -352,6 +361,10 @@ export class RtsController {
     private abilities: AbilityRegistry,
   ) {
     this.sim = new SimWorld(grid, 1, this.abilities); // the ability registry powers casting/learning/auras
+    // Fog-of-war grid, aligned to the same world origin as the pathing grid and
+    // spanning the whole map (pathing is 32-unit cells; span = cells × 32).
+    const [vox, voy] = grid.origin;
+    this.vision = new VisionMap(vox, voy, grid.width * PATHING_CELL, grid.height * PATHING_CELL);
   }
 
   dispose(): void {
@@ -362,6 +375,95 @@ export class RtsController {
   /** Which player's units a drag-box selects (set at melee start). */
   setLocalPlayer(id: number): void {
     this.localPlayer = id;
+  }
+
+  /** Which team's combined sight lifts the fog of war (allies share vision). */
+  setLocalTeam(team: number): void {
+    this.localTeam = team;
+  }
+
+  /** The fog-of-war grid — read by the minimap (HUD) and the 3D fog overlay. */
+  getVision(): VisionMap {
+    return this.vision;
+  }
+
+  /** True if the RTS drives this viewer instance's fog visibility (seeded neutral
+   *  shop or creep). The map renderer skips these when fog-hiding static widgets. */
+  managesViewerInstance(inst: unknown): boolean {
+    return this.seededInstances.has(inst);
+  }
+
+  /** `iseedeadpeople`: reveal the whole map (toggle). A pure override — turning it
+   *  back off restores the real fog you'd actually explored. */
+  setRevealAll(on: boolean): void {
+    this.vision.setRevealAll(on);
+  }
+  toggleRevealAll(): boolean {
+    const on = !this.vision.revealed;
+    this.vision.setRevealAll(on);
+    return on;
+  }
+
+  /** Rebuild the "currently visible" fog layer from this team's live sight. Each
+   *  friendly unit reveals a circle of its day- or night-sight radius; buildings
+   *  and allies count too. Neutral shops grant no vision. Throttled (see tick). */
+  private updateVision(): void {
+    const day = this.sim.isDay;
+    this.vision.beginFrame();
+    for (const u of this.sim.units.values()) {
+      if (u.neutralPassive) continue; // shops/critters don't scout for you
+      if (u.team !== this.localTeam) continue; // only your team's units reveal
+      const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
+      this.vision.reveal(u.x, u.y, r, u.flying); // flyers see over terrain/trees
+    }
+  }
+
+  /** Install the fog's line-of-sight height field + tree blockers, so vision is
+   *  shadowed by high ground and treelines. Called once the map's trees are seeded. */
+  initVisionBlockers(): void {
+    this.vision.setHeightField((x, y) => this.heightAt(x, y));
+    for (const tree of this.sim.trees.values()) this.vision.addTreeBlocker(tree.x, tree.y);
+  }
+
+  /** A tree was felled — it stops blocking sight (harvesting can open a sight line). */
+  onTreeFelled(x: number, y: number): void {
+    this.vision.removeTreeBlocker(x, y);
+  }
+
+  /** Should this unit's model be hidden by the fog of war right now? Your own team
+   *  is always visible. Enemy/neutral STRUCTURES persist once explored (WC3 shows
+   *  the last-seen building greyed in fog); mobile units and critters vanish unless
+   *  currently in sight — "concealing enemy movements". */
+  private fogHides(u: SimUnit): boolean {
+    if (this.vision.revealed) return false;
+    if (u.team === this.localTeam && !u.neutralPassive) return false;
+    if (u.building != null) {
+      const [cx, cy] = this.vision.worldToCell(u.x, u.y);
+      return !this.vision.isExplored(cx, cy);
+    }
+    return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
+  }
+
+  /** Apply the combined visibility decision (gold-mine + fog) to one render entry,
+   *  toggling the instance and firing the mine-entry deselect side-effect once. */
+  private applyVisibility(e: Entry, u: SimUnit): void {
+    if (u.inMine !== e.inMine) {
+      e.inMine = u.inMine;
+      if (u.inMine) {
+        this.deselect(e.simId); // a worker entering a mine drops out of the selection
+        if (this.hovered === e.simId) this.hovered = null;
+      }
+    }
+    const hide = u.inMine || this.fogHides(u);
+    if (hide !== e.hidden) {
+      e.hidden = hide;
+      if (hide) {
+        e.unit.instance.hide();
+        if (this.hovered === e.simId) this.hovered = null;
+      } else {
+        e.unit.instance.show();
+      }
+    }
   }
 
   /** Wire the voice/sound board (owned by the host, which has the VFS). */
@@ -760,6 +862,8 @@ export class RtsController {
           turnRate: def?.turnRate ?? 0.5,
           radius: def?.collision || 16,
           flying: def?.moveType === "fly",
+          sightDay: def?.sightDay || 1400,
+          sightNight: def?.sightNight || def?.sightDay || 800,
           hp: def?.hitPoints || 100,
           maxHp: def?.hitPoints || 100,
           mana: def?.mana ?? 0,
@@ -786,6 +890,7 @@ export class RtsController {
       const aggro = this.creepAggroAt(loc[0], loc[1]);
       su.aggroRange = aggro > 0 ? aggro : su.weapon?.acquire ?? def?.acquireRange ?? 0;
       su.canSleep = def?.canSleep ?? false;
+      this.seededInstances.add(unit.instance); // RTS drives this creep's fog visibility
       const entry: Entry = {
         simId,
         unit,
@@ -804,6 +909,7 @@ export class RtsController {
         curScale: def?.modelScale || 1,
         ...findBirthFields(unit.instance.model.sequences),
         hidden: false,
+        inMine: false,
         curSeq: -1,
         lastSwingSeq: -1,
         lastChopSeq: -1,
@@ -822,6 +928,7 @@ export class RtsController {
    *  makes it hoverable/selectable and rings it. */
   private seedNeutral(unit: MapUnit, def: UnitDef | undefined, loc: Float32Array): void {
     const simId = this.nextId++;
+    this.seededInstances.add(unit.instance); // RTS drives this shop/critter's fog visibility
     const isBuilding = def?.isBuilding ?? false;
     // Buildings get a (complete) building state so pickAt/rings treat them as
     // structures (footprint-sized ring, lowered collider); their footprint is
@@ -843,6 +950,8 @@ export class RtsController {
         turnRate: def?.turnRate ?? 0.5,
         radius: def?.collision || 16,
         flying: false,
+        sightDay: def?.sightDay || 1400,
+        sightNight: def?.sightNight || def?.sightDay || 800,
         hp: def?.hitPoints || 100,
         maxHp: def?.hitPoints || 100,
         mana: 0,
@@ -875,6 +984,7 @@ export class RtsController {
       curScale: def?.modelScale || 1,
       ...findBirthFields(unit.instance.model.sequences),
       hidden: false,
+      inMine: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
@@ -915,6 +1025,8 @@ export class RtsController {
         turnRate: def.turnRate,
         radius: def.collision || 16,
         flying: def.moveType === "fly",
+        sightDay: def.sightDay || 1400,
+        sightNight: def.sightNight || def.sightDay || 800,
         hp: constructionTime > 0 ? (def.hitPoints || 100) * 0.1 : def.hitPoints || 100,
         maxHp: def.hitPoints || 100,
         mana: def.mana,
@@ -947,6 +1059,7 @@ export class RtsController {
       curScale: def.modelScale || 1,
       ...findBirthFields(instance.model.sequences),
       hidden: false,
+      inMine: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
@@ -991,26 +1104,28 @@ export class RtsController {
     this.tickCorpses(dt);
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
     if (this.hoveredMine !== null && !this.sim.mines.has(this.hoveredMine)) this.hoveredMine = null;
+    // Fog of war: rebuild the "currently visible" layer a few times a second — WC3
+    // refreshes fog periodically, not every frame, and this keeps circle-stamping
+    // cheap. The initial accumulator > interval forces a rebuild on the first tick.
+    this.visionAccum += dt;
+    if (this.visionAccum >= 0.1) {
+      this.visionAccum = 0;
+      this.updateVision();
+    }
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
-      if (u.neutralPassive) continue; // static & viewer-rendered — don't drive its instance
+      if (u.neutralPassive) {
+        this.applyVisibility(e, u); // static & viewer-rendered, but fog still hides/reveals it
+        continue;
+      }
       this.loc[0] = u.x;
       this.loc[1] = u.y;
       this.loc[2] = this.heightAt(u.x, u.y) + e.moveHeight; // fly height for air units
       e.unit.instance.setLocation(this.loc);
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
-      // Workers inside a gold mine vanish; chopping plays the attack swing.
-      if (u.inMine !== e.hidden) {
-        e.hidden = u.inMine;
-        if (e.hidden) {
-          e.unit.instance.hide();
-          this.deselect(e.simId); // deselect on mine entry
-          if (this.hovered === e.simId) this.hovered = null;
-        } else {
-          e.unit.instance.show();
-        }
-      }
+      // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
+      this.applyVisibility(e, u);
       // A building under construction: play its own "Birth" animation, scrubbed
       // to the construction progress so it assembles in sync with the timer.
       // Models without a Birth clip fall back to scaling up from ~40% to full.
@@ -1975,12 +2090,17 @@ export class RtsController {
     return false;
   }
 
-  /** Minimap dots: world positions + owners of all living units. */
+  /** Minimap dots: world positions + owners of living units the local team can
+   *  see. Your own units always show; fogged enemies/neutrals are dropped so the
+   *  minimap hides enemy movements exactly like the main view. */
   dots(): Array<{ x: number; y: number; owner: number }> {
     const out: Array<{ x: number; y: number; owner: number }> = [];
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
-      if (u) out.push({ x: u.x, y: u.y, owner: u.owner });
+      if (!u) continue;
+      if (!e.hidden || (u.team === this.localTeam && !u.neutralPassive)) {
+        out.push({ x: u.x, y: u.y, owner: u.owner });
+      }
     }
     return out;
   }

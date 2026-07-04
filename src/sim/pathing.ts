@@ -102,6 +102,12 @@ export class PathingGrid {
     ];
   }
 
+  /** World-space origin (low corner) = the map's centerOffset. Used to align an
+   *  independent overlay grid (e.g. the fog-of-war vision map) to the same space. */
+  get origin(): readonly [number, number] {
+    return [this.originX, this.originY];
+  }
+
   inBounds(cx: number, cy: number): boolean {
     return cx >= 0 && cy >= 0 && cx < this.width && cy < this.height;
   }

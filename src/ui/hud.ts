@@ -74,6 +74,8 @@ export interface HudDriver {
   dots(): Array<{ x: number; y: number; owner: number }>;
   /** World rect covered by the map: [originX, originY, width, height]. */
   mapBounds(): [number, number, number, number];
+  /** Fog-of-war state at a world point: 0 unexplored, 1 explored, 2 visible. */
+  fogAt(wx: number, wy: number): number;
   panTo(wx: number, wy: number): void;
   /** Portrait clicked: snap the camera to the selected unit; `lock` follows it. */
   focusSelected(lock: boolean): void;
@@ -1002,10 +1004,13 @@ export class GameHud {
     }
   }
 
+  private fogImage: ImageData | null = null; // reused fog-of-war mask (MINIMAP_SIZE²)
+
   private drawDots(): void {
     const ctx = this.dotsCanvas.getContext("2d")!;
     ctx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
     const [ox, oy, w, h] = this.driver.mapBounds();
+    this.paintFog(ctx, ox, oy, w, h); // black/grey fog under the dots (own units always shown)
     for (const dot of this.driver.dots()) {
       const u = (dot.x - ox) / w;
       const v = 1 - (dot.y - oy) / h;
@@ -1013,6 +1018,25 @@ export class GameHud {
       ctx.fillStyle = dot.owner >= 0 ? PLAYER_COLORS[dot.owner % PLAYER_COLORS.length] : NEUTRAL_COLOR;
       ctx.fillRect(u * MINIMAP_SIZE - 2, v * MINIMAP_SIZE - 2, 4, 4);
     }
+  }
+
+  /** Paint the fog-of-war mask onto the minimap: unexplored is opaque black (hiding
+   *  the terrain image behind), explored is a translucent grey veil (terrain shown,
+   *  dimmed), and currently-visible is left clear. Written straight into an ImageData
+   *  so it costs one putImageData per redraw (throttled to DOTS_PERIOD). */
+  private paintFog(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
+    const img = (this.fogImage ??= ctx.createImageData(MINIMAP_SIZE, MINIMAP_SIZE));
+    const px = img.data;
+    for (let py = 0; py < MINIMAP_SIZE; py++) {
+      const wy = oy + (1 - py / MINIMAP_SIZE) * h; // minimap is north-up (v inverted)
+      for (let x = 0; x < MINIMAP_SIZE; x++) {
+        const wx = ox + (x / MINIMAP_SIZE) * w;
+        const state = this.driver.fogAt(wx, wy);
+        const a = state === 0 ? 255 : state === 1 ? 140 : 0; // black / grey veil / clear
+        px[(py * MINIMAP_SIZE + x) * 4 + 3] = a; // RGB stay 0 → the veil is black
+      }
+    }
+    ctx.putImageData(img, 0, 0);
   }
 }
 

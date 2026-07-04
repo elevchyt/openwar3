@@ -31,6 +31,12 @@ export interface UnitDef {
   turnRate: number; // radians-ish per second scale (UnitData turnrate)
   moveHeight: number; // fly altitude above ground (0 for ground units)
   collision: number;
+  // Fog-of-war sight radii (UnitBalance.slk `sight`/`nsight`, world units). Night
+  // is normally shorter — e.g. Footman 1400/800, Peasant 800/600, Town Hall 900/600.
+  // Ultravision (rare; the `Ault` ability) would set nsight == sight, but no stock
+  // melee unit carries it — night elves take the same night penalty as everyone.
+  sightDay: number;
+  sightNight: number;
   hitPoints: number;
   mana: number;
   armor: number;
@@ -203,6 +209,10 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // 1.27 layering quirk: collision lives in UnitBalance.slk in the
       // expansion/patch MPQs but in UnitData.slk in the RoC base.
       collision: (b && num(b, "collision", 0)) || (d ? num(d, "collision", 0) : 0),
+      // Sight radii live in UnitBalance.slk (`sight` day / `nsight` night). Verified
+      // against the real 1.27 MPQ; buildings use the same fields (Town Hall 900/600).
+      sightDay: b ? num(b, "sight", 0) : 0,
+      sightNight: b ? num(b, "nsight", 0) : 0,
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
       mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
       armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
