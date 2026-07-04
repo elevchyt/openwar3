@@ -487,11 +487,13 @@ export class MapViewerScene {
     return bytes ? new TextDecoder("windows-1252").decode(bytes) : "";
   }
 
-  /** Spawn each player's starting units at their start location (plan Phase 5.5). */
-  async startMelee(config: MeleeConfig): Promise<void> {
-    if (!this.rts || !this.viewer.map) return;
+  /** Shared match bring-up for both melee and custom starts: pick the local
+   *  player, aim the camera at their base, resolve each slot's race (so roster +
+   *  console skin agree), seed teams/stashes, and mount the HUD. Returns the
+   *  resolved race per slot (melee needs it for the starting roster). */
+  private beginMatch(config: MeleeConfig, startGold: number, startLumber: number): Map<number, PlayableRace> {
     this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
-    this.rts.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
+    this.rts!.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
     // Open on the local player's base at gameplay zoom.
     const home = config.slots.find((s) => s.id === this.localPlayer);
     if (home) {
@@ -504,9 +506,18 @@ export class MapViewerScene {
     this.localRace = races.get(this.localPlayer) ?? "human";
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
     this.applyRaceCursor();
-    for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, 500, 150); // WC3 melee start
+    for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     this.mountHud();
     void this.loadSelectionCircles();
+    return races;
+  }
+
+  /** Standard-melee start (plan Phase 5.5): spawn each player's starting town
+   *  hall + workers at their start location. Runs only on maps the World Editor
+   *  flagged as melee (see MapInfo.isMelee / src/world/mapKind.ts). */
+  async startMelee(config: MeleeConfig): Promise<void> {
+    if (!this.rts || !this.viewer.map) return;
+    const races = this.beginMatch(config, 500, 150); // WC3 melee start resources
     for (const slot of config.slots) {
       const roster = STARTING_UNITS[races.get(slot.id) ?? "human"];
       const workerTotal = roster
@@ -529,6 +540,25 @@ export class MapViewerScene {
         }
       }
     }
+  }
+
+  /** Custom / scenario / game-mode start (maps NOT flagged melee). Such a map
+   *  sets up its own game — starting units, heroes, resources, win conditions —
+   *  from its triggers (war3map.j, read by src/world/triggers.ts). We don't run
+   *  a JASS/Lua interpreter yet (plan Phase 7), so we deliberately do NOT inject
+   *  the melee starting roster here: dropping town halls + workers on a scenario
+   *  map (the old always-melee behaviour) is wrong. The map's own pre-placed
+   *  units already render via War3MapViewer; making them controllable is part of
+   *  the trigger work. For now we just bring up the camera/HUD over the map. */
+  async startCustom(_config: MeleeConfig): Promise<void> {
+    if (!this.rts || !this.viewer.map) return;
+    // Custom maps get their starting resources from triggers we can't run yet,
+    // so seed empty stashes rather than the melee 500/150 default.
+    this.beginMatch(_config, 0, 0);
+    console.info(
+      "[openwar3] Custom map loaded — melee initialization skipped. " +
+        "Trigger execution (war3map.j → our engine) is plan Phase 7 and not yet implemented.",
+    );
   }
 
   /** Hide the map's start-location marker props (the `sloc` StartLocation.mdx

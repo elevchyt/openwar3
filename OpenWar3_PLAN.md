@@ -17,6 +17,24 @@ Repo: `elevchyt/openwar3` (private). Package manager: **pnpm**. Renderer: mdx-m3
 patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes below.
 
 **Done:**
+- **Melee vs. custom map classification (2026-07-04, latest+29)** — the engine now tells a **standard melee**
+  map from a **custom / scenario / game-mode** map instead of force-running melee init on everything. Ground truth is
+  the **`war3map.w3i` melee flag (0x0004)**, which the World Editor sets iff the map is melee — verified against **all
+  161 bundled 1.27a maps** (every stock melee map has the flag + all 8 `Melee*` init funcs in `war3map.j`; every
+  Scenario map has it clear; the altered-melee `(4)Monolith` calls 5/8 `Melee*` funcs but has the flag OFF → correctly
+  classified custom, proving the flag — not a script scan — is authoritative). New **`src/world/mapKind.ts`**
+  (`classifyMap` + the full w3i flag table) and **`src/world/triggers.ts`** (`readMapScript`: reads the compiled
+  trigger script — `war3map.j`/`.lua` — reports its language, GUI-trigger presence, and which `Melee*` calls appear;
+  the first step toward Phase 7 trigger translation and the seam that holds the source for it). `MapInfo` now carries
+  `isMelee` + the full `classification`; the **lobby** shows a Melee/Custom badge and warns on custom maps that their
+  triggers aren't executed yet. **Game start branches**: melee → `startMelee` (unchanged); custom → new
+  `mapViewer.startCustom` which brings up the camera/HUD but **deliberately does NOT inject the melee roster** (dropping
+  town halls on a scenario map was the old bug) — the map's pre-placed units still render via War3MapViewer; making them
+  controllable is part of the trigger work. Shared bring-up refactored into `beginMatch()`. **Verified**: real
+  `classifyMap`/`parseMapInfo` run headlessly against PlunderIsle (melee), WarChasers + Monolith (custom) — 3/3 correct;
+  `pnpm build` clean. **Next (Phase 7)**: an actual JASS/Lua interpreter to *execute* a custom map's triggers (create
+  its units, heroes, resources, win conditions) and to run melee maps from their own `Melee*` calls rather than our
+  hard-coded roster.
 - **Abilities & spells system — hero spells, unit skills, XP/leveling, corpses (2026-07-03, latest+27)**
   — A **modular, data-driven ability engine** dispatched on each ability's base **`code`** (so custom-map
   abilities that copy a standard one Just Work). **New `src/data/abilities.ts`** (`AbilityRegistry` from
@@ -916,8 +934,12 @@ this from `blizzard.j` melee triggers; we reimplement it natively):
 - **Exit:** a local melee skirmish vs a dumb AI or a second local player.
 
 ### Phase 7 — Triggers / JASS (very large — defer until custom/campaign maps)
+- **Detailed, data-grounded plan: [`docs/phase7-triggers-jass-plan.md`](docs/phase7-triggers-jass-plan.md)** —
+  architecture (`src/jass/`), the verified JASS surface (common.j = 1160 natives / 91 types; blizzard.j = 923 funcs;
+  only 335 natives used across the 161 bundled maps), a prioritized native list, and phased milestones with exit
+  checks (parse corpus → `config()` vs w3i → `CreateUnit` bridge → melee-via-script parity → event runtime).
 - JASS2 interpreter/VM (or transpile to TS) + WC3 natives. Cost = hundreds of natives, not the
-  language. Warsmash is the reference. **This is where RoC vs TFT campaign nuances live.**
+  language. Warsmash is the reference (study, don't lift). **This is where RoC vs TFT campaign nuances live.**
 - **Exit:** a simple triggered custom map runs.
 
 ### Phase 8 — Multiplayer (very large; server-authoritative — see §7 detail)

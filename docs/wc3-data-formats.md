@@ -120,10 +120,23 @@ A map is itself an MPQ containing chunk files. The ones OpenWar3 reads (`src/wor
 | `war3map.w3e` | Terrain: tiles, cliff/ramp/height/water per corner |
 | `war3mapUnits.doo` | **Placed units/buildings** (creeps, gold mines, shops, start locations, player units) — parsed in `src/world/mapUnits.ts` |
 | `war3map.doo` | Placed doodads/destructibles (trees, etc.) |
-| `war3map.w3i` | Map info: name, players, teams, start locations |
+| `war3map.w3i` | Map info: name, players, teams, start locations, **flags** (see below) — parsed in `src/world/mapInfo.ts` |
+| `war3map.j` | **Compiled trigger script** (JASS; Lua on Reforged). What the engine actually runs — read in `src/world/triggers.ts` |
+| `war3map.wtg` / `war3map.wct` | GUI trigger tree + custom text. Editor-only source; the game runs the compiled `.j`, not these |
 | `war3mapMap.blp` | Preview minimap image |
 
 Player **15** is Neutral Passive (shops, taverns, fountains, critters); neutral-hostile creeps use other slots.
+
+### Melee vs. custom (the `war3map.w3i` flags)
+
+The w3i **flags** bitfield (Map Properties) tells melee from custom. Bit **0x0004 = "melee map"** is the ground
+truth: the World Editor sets it iff the map is a standard melee map. `src/world/mapKind.ts` reads it to decide whether
+to run our standard melee setup (`startMelee`: town hall + workers + melee rules) or leave setup to the map's own
+triggers (`startCustom`). Verified against **all 161 bundled 1.27a maps**: every stock melee map has the flag set *and*
+all 8 `Melee*` init functions (`MeleeStartingUnits`, `MeleeStartingResources`, …) in its `war3map.j`; every Scenario
+map has it clear. The lone TFT altered-melee map `(4)Monolith` calls 5/8 `Melee*` funcs yet has the flag **off** — so
+the **flag**, not a script scan, is authoritative (Monolith runs as custom). `src/world/triggers.ts` still scans the
+`.j` for those `Melee*` calls as a corroborating/diagnostic signal and to hold the source for the future JASS pass.
 
 ## Reading it yourself
 

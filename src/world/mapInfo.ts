@@ -1,6 +1,7 @@
 import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MpqDataSource } from "../vfs/mpq";
 import { raceFromW3i, type Race } from "../data/races";
+import { classifyMap, type MapClassification } from "./mapKind";
 
 // Map metadata for the lobby (plan Phase 5.5), read from war3map.w3i: name,
 // recommended players, tileset/size, and the player slots with their start
@@ -20,11 +21,20 @@ export interface MapInfo {
   width: number;
   height: number;
   slots: PlayerSlot[];
+  /** Whether the map is a standard melee map (drives melee vs. custom start). */
+  isMelee: boolean;
+  /** Melee/custom classification + the map's flags and trigger script. */
+  classification: MapClassification;
 }
 
 export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
-  const empty: MapInfo = { name: fallbackName, recommendedPlayers: "", tileset: "", width: 0, height: 0, slots: [] };
-  const w3iBytes = new MpqDataSource("map", bytes).rawBytes("war3map.w3i");
+  const mpq = new MpqDataSource("map", bytes);
+  const classification = classifyMap(mpq); // melee vs. custom, from the w3i flags
+  const empty: MapInfo = {
+    name: fallbackName, recommendedPlayers: "", tileset: "", width: 0, height: 0,
+    slots: [], isMelee: classification.isMelee, classification,
+  };
+  const w3iBytes = mpq.rawBytes("war3map.w3i");
   if (!w3iBytes) return empty;
 
   const info = new w3iParser.File();
@@ -45,6 +55,8 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     width: info.playableSize[0],
     height: info.playableSize[1],
     slots,
+    isMelee: classification.isMelee,
+    classification,
   };
 }
 

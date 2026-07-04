@@ -85,7 +85,10 @@ async function singlePlayer(): Promise<void> {
       meleeConfig = config;
       teardown();
       await enterMap(bytes, info.name);
-      await mapScene?.startMelee(config); // spawn each race's starting units
+      // Melee maps get the standard setup (town hall + workers, melee rules);
+      // custom/scenario maps run their own triggers instead (see mapKind.ts).
+      if (info.isMelee) await mapScene?.startMelee(config);
+      else await mapScene?.startCustom(config);
     },
   });
 }

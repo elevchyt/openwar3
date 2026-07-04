@@ -45,10 +45,21 @@ export function showLobby(
 
   const meta = document.createElement("p");
   meta.className = "lobby-meta";
+  const kind = info.isMelee ? "Melee" : "Custom";
   meta.textContent =
-    `${info.slots.length} players · ${info.width}×${info.height} · tileset ${info.tileset || "?"}` +
+    `${kind} · ${info.slots.length} players · ${info.width}×${info.height} · tileset ${info.tileset || "?"}` +
     (info.recommendedPlayers ? ` · suggested: ${info.recommendedPlayers}` : "");
   panel.appendChild(meta);
+
+  // Custom maps set up their game from triggers we don't execute yet (Phase 7),
+  // so warn that this loads the terrain/units without the map's own game logic.
+  if (!info.isMelee) {
+    const note = document.createElement("p");
+    note.className = "lobby-meta";
+    note.style.opacity = "0.7";
+    note.textContent = "Custom map: triggers aren't run yet — melee setup is skipped, so no starting base is spawned.";
+    panel.appendChild(note);
+  }
 
   const rows: Array<{ slot: PlayerSlot; controller: HTMLSelectElement; race: HTMLSelectElement; team: HTMLSelectElement }> = [];
   const table = document.createElement("div");
