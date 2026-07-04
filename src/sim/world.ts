@@ -2403,7 +2403,7 @@ export class SimWorld {
     const chaseGap = u.inCombat ? w.range + ATTACK_LEASH : w.range;
     if (gap > chaseGap) {
       u.inCombat = false;
-      this.chase(u, t);
+      this.chaseToAttack(u, t);
       return;
     }
     // In range: halt, face the target, swing when ready (rotation itself is
@@ -2599,6 +2599,41 @@ export class SimWorld {
   // goal (A* every tick would be wasteful and jittery), and not while cooling
   // down after being blocked by units we may not push.
   private chase(u: SimUnit, t: SimUnit): void {
+    this.chasePoint(u, t.x, t.y);
+  }
+
+  /** Head for a target to ATTACK it, but aim at a standing slot beside it that
+   *  THIS unit's own footprint actually fits in — so large units (and crowds of
+   *  attackers) settle into distinct spots around the target instead of all piling
+   *  onto its exact centre and dancing when they can't fit. The slot size comes
+   *  from the unit's collision footprint (UnitBalance `collision` → footprintCells),
+   *  and nearestFit spirals out past cells already reserved by settled units, which
+   *  is what spreads a swarm into a proper surround.
+   *
+   *  Ranged units just close on the target (they stop far out, where crowding
+   *  barely matters). We only divert to a slot that's actually CLOSER to the target
+   *  than we already are — otherwise (target fully surrounded, or no free slot
+   *  nearby) we head straight in and let checkStuck()/collision settle us in place,
+   *  so this never makes a unit wander backwards or chase a far "fitting" cell. */
+  private chaseToAttack(u: SimUnit, t: SimUnit): void {
+    const w = u.weapon;
+    if (!w || w.ranged || u.footprint <= 0) {
+      this.chasePoint(u, t.x, t.y);
+      return;
+    }
+    // Ideal contact point: hull-to-hull on the side we're approaching from.
+    const dx = u.x - t.x, dy = u.y - t.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const stand = t.radius + u.radius;
+    const [cx, cy] = this.grid.worldToCell(t.x + (dx / d) * stand, t.y + (dy / d) * stand);
+    const fit = this.grid.nearestFit(cx, cy, u.footprint, 5);
+    if (fit) {
+      const [wx, wy] = this.grid.cellToWorld(fit[0], fit[1]);
+      if (Math.hypot(wx - t.x, wy - t.y) < Math.hypot(u.x - t.x, u.y - t.y)) {
+        this.chasePoint(u, wx, wy);
+        return;
+      }
+    }
     this.chasePoint(u, t.x, t.y);
   }
 
