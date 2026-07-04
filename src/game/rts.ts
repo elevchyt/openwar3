@@ -1395,7 +1395,19 @@ export class RtsController {
       this.host.camera.worldToScreen(this.screen, this.world, viewport);
       const sx = this.screen[0] / dpr;
       const sy = (h - this.screen[1]) / dpr; // gl y-up → css y-down
-      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) (u.building ? buildings : units).push(e.simId);
+      // Screen-space radius of the unit's selection circle (CSS px): project a
+      // point offset by its radius and measure the pixel gap. The box then tests
+      // against the unit's CIRCLE, not just its centre — so a tiny rectangle drawn
+      // over a unit, or the box's border merely grazing one, still selects it
+      // (before, the centre had to be strictly inside, so small boxes caught nothing).
+      this.world2.set(this.world);
+      this.world2[0] = u.x + Math.max(u.radius, e.selRadius);
+      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+      const rCss = Math.hypot(this.screen2[0] - this.screen[0], this.screen2[1] - this.screen[1]) / dpr;
+      // Circle-vs-rect: distance from the centre to the nearest point inside the box.
+      const nx = sx < minX ? minX : sx > maxX ? maxX : sx;
+      const ny = sy < minY ? minY : sy > maxY ? maxY : sy;
+      if (Math.hypot(sx - nx, sy - ny) <= rCss) (u.building ? buildings : units).push(e.simId);
     }
     // Units take priority — buildings only when the box caught no units at all.
     return units.length ? units : buildings;

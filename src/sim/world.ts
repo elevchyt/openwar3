@@ -267,6 +267,7 @@ export interface SimUnit {
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
+  yieldT: number; // seconds paused giving way to another unit (breaks head-on "dancing")
   prevX: number; // position before this tick's movement (stuck detection)
   prevY: number;
   velX: number; // scratch: intended pathed displacement this tick (collision steering)
@@ -365,6 +366,10 @@ const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its forma
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
+// When two units meet head-on, the lower-priority one pauses for YIELD_TIME so the
+// other can clear — this breaks the symmetric "dance" (both endlessly sidestepping
+// into the tile the other just vacated) instead of letting it churn for seconds.
+const YIELD_TIME = 0.2;
 // Human "speed build": each builder beyond the first adds SPEED_BUILD_BONUS to the
 // build rate (1.0 = one builder) and, spread across the shortened build time, a
 // SPEED_BUILD_SURCHARGE share of the base cost per extra builder. Tuned to WC3's
@@ -917,6 +922,7 @@ export class SimWorld {
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
+      | "yieldT"
       | "prevX"
       | "prevY"
       | "velX"
@@ -1019,6 +1025,7 @@ export class SimWorld {
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
+      yieldT: 0,
       prevX: unit.x,
       prevY: unit.y,
       velX: 0,
@@ -1116,6 +1123,7 @@ export class SimWorld {
    *  resource so it doesn't teleport off the spot it walked to. */
   private settle(u: SimUnit, snap = true): void {
     u.moving = false;
+    u.yieldT = 0; // no longer moving — drop any pending give-way pause
     u.path = [];
     if (u.footprint <= 0 || u.hasReservation) return;
     let sx = u.x;
@@ -3313,6 +3321,12 @@ export class SimWorld {
   private tickMovement(dt: number): void {
     for (const u of this.units.values()) {
       if (!u.moving) continue;
+      if (u.yieldT > 0) {
+        // Giving way to an oncoming unit: hold position this tick (the shared
+        // turning pass still lets it keep facing its heading) so the other passes.
+        u.yieldT -= dt;
+        continue;
+      }
       let budget = u.speed * dt;
       let dirX = 0;
       let dirY = 0;
@@ -3412,6 +3426,14 @@ export class SimWorld {
             // perpendicular to the gap) get pure radial separation, so nothing
             // keeps spinning them around each other.
             const closing = (b.velX - a.velX) * nx + (b.velY - a.velY) * ny < -1e-4;
+            if (closing && a.yieldT <= 0 && b.yieldT <= 0) {
+              // Head-on: rather than both sidestepping forever (the "dance"), the
+              // lower-priority unit (higher id) pauses a beat so the other clears.
+              // The guard (neither already yielding) keeps it a one-shot pause per
+              // encounter, not a re-armed freeze; checkStuck() is the backstop if the
+              // way never opens.
+              (a.id > b.id ? a : b).yieldT = YIELD_TIME;
+            }
             const tx = closing ? -ny * half : 0;
             const ty = closing ? nx * half : 0;
             this.nudge(a, -nx * half + tx, -ny * half + ty);
