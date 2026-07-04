@@ -210,6 +210,7 @@ export class MapViewerScene {
   // Flat selection-circle model instances, rendered on the terrain so geometry
   // occludes the far side (unlike a DOM overlay drawn on top).
   private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
+  private previewCircles: Array<SpawnInstance | null> = []; // pool, one per unit under the live drag-box
   private hoverCircle: SpawnInstance | null = null;
   private circleModel: SpawnModel | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
@@ -947,8 +948,17 @@ export class MapViewerScene {
       this.placeCircle(this.selCircles[i], rings[i], null);
     }
     for (let i = rings.length; i < this.selCircles.length; i++) this.selCircles[i]?.hide();
-    // hoverRing() already returns null when the hovered unit is selected.
-    this.placeCircle(this.hoverCircle, this.rts?.hoverRing() ?? null, null);
+    // Live drag-box preview: full-green rings on the units the marquee currently
+    // covers, so the player sees the pick before releasing the mouse.
+    const preview = this.rts?.previewRings() ?? [];
+    for (let i = 0; i < preview.length; i++) {
+      if (!this.previewCircles[i]) this.previewCircles[i] = this.newCircle();
+      this.placeCircle(this.previewCircles[i], preview[i], null);
+    }
+    for (let i = preview.length; i < this.previewCircles.length; i++) this.previewCircles[i]?.hide();
+    // hoverRing() already returns null when the hovered unit is selected. Dimmed so
+    // a hover ring stays more discrete than the committed selection rings.
+    this.placeCircle(this.hoverCircle, this.rts?.hoverRing() ?? null, null, true);
     // Rally flag at the selected building's rally point.
     if (this.rallyFlag) {
       const rally = this.rts?.selectedRally() ?? null;
@@ -1036,6 +1046,10 @@ export class MapViewerScene {
   // Multiply-tint for hostile selection/hover rings — cuts the model's softer red
   // toward a harsh, saturated red so enemies read at a glance.
   private static readonly ENEMY_RING_TINT = [1, 0.16, 0.1];
+  // Brightness scale for HOVER rings (all colours) so a merely-hovered unit reads
+  // as fainter/more discrete than a committed selection ring. The rings blend
+  // additively, so lowering RGB directly softens the glow.
+  private static readonly HOVER_RING_DIM = 0.5;
   // Camera zoom limits (world units of camera distance), WC3-like — not the huge
   // free range we had. MELEE_START opens a touch more zoomed out than before.
   private static readonly ZOOM_MIN = 1500;
@@ -1165,6 +1179,7 @@ export class MapViewerScene {
     inst: SpawnInstance | null,
     info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
     tint: number[] | null,
+    dim = false,
   ): void {
     if (!inst) return;
     if (!info) {
@@ -1194,6 +1209,10 @@ export class MapViewerScene {
       seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;
       if (!friendly) vcolor = MapViewerScene.ENEMY_RING_TINT; // accentuate hostile rings to a harsh red
     }
+    // Hover rings read as a fainter, more "discrete" version of the committed
+    // selection ring: scale the (additive-blended) ring colour down so its glow is
+    // dimmer than a real selection — applies to every colour (green/red/yellow).
+    if (dim) vcolor = vcolor.map((c) => c * MapViewerScene.HOVER_RING_DIM);
     inst.setVertexColor(vcolor);
     inst.setSequence(seq);
     inst.setSequenceLoopMode(2);
@@ -2329,10 +2348,21 @@ export class MapViewerScene {
     el.style.top = `${Math.min(this.downY, y)}px`;
     el.style.width = `${Math.abs(x - this.downX)}px`;
     el.style.height = `${Math.abs(y - this.downY)}px`;
+    // Ring the units the box currently covers (green preview) as it's dragged.
+    this.rts?.setPreviewBox(this.downX, this.downY, x, y);
   }
 
   private hideSelectBox(): void {
     if (this.selectBoxEl) this.selectBoxEl.hidden = true;
+    this.rts?.clearPreviewBox(); // drop the marquee preview rings
+  }
+
+  /** Abort an in-progress drag-select without committing it (right-click, or a
+   *  cancelled/stolen pointer) — resets all drag state and clears the marquee. */
+  private cancelDrag(): void {
+    this.dragging = false;
+    this.moved = false;
+    this.hideSelectBox();
   }
 
   /** Drive the cursor overlay at the mouse. While an order is ARMED (Move/Attack/
@@ -2400,6 +2430,13 @@ export class MapViewerScene {
       c.setPointerCapture(e.pointerId);
       this.sounds?.unlock(); // browsers gate audio until the first user gesture
       if (e.button === 2) {
+        // A right-click while a left-drag box is in progress just cancels the box
+        // (WC3) — it issues no move order. This also guards against the drag state
+        // leaking (a stuck marquee) when left+right are clicked in quick succession.
+        if (this.dragging) {
+          this.cancelDrag();
+          return;
+        }
         // Right-click cancels build placement / an armed order, else moves
         // (Shift held → append to the unit's order queue instead of replacing).
         if (this.placement) this.cancelPlacement();
@@ -2417,12 +2454,20 @@ export class MapViewerScene {
         this.moved = false;
       }
     });
+    // Belt-and-suspenders: if the browser cancels/steals the pointer mid-drag,
+    // tear the drag state down so the marquee can't get stuck on screen.
+    c.addEventListener("pointercancel", () => this.cancelDrag());
     c.addEventListener("pointerup", (e) => {
-      c.releasePointerCapture(e.pointerId);
+      // Release capture only once ALL buttons are up, so a second button's release
+      // can't strand the primary button's pointerup off-target (stuck marquee).
+      if (e.buttons === 0) c.releasePointerCapture(e.pointerId);
       if (e.button === 0) {
+        const wasDragging = this.dragging;
         this.dragging = false;
         this.hideSelectBox();
-        if (!this.rts) return;
+        // A drag cancelled out from under us (e.g. by a right-click) consumes this
+        // left-up without selecting anything.
+        if (!this.rts || !wasDragging) return;
         if (this.placement) {
           if (!this.moved) this.placeBuilding(e.offsetX, e.offsetY, e.shiftKey);
         } else if (this.rts.orderMode) {
@@ -2452,14 +2497,24 @@ export class MapViewerScene {
       // WC3 keeps a fixed camera angle — no free rotation. A left-drag draws a
       // selection rectangle (unless placing a building or holding an armed order).
       if (this.dragging) {
-        if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) this.moved = true;
-        if (this.moved && !this.placement && !this.rts?.orderMode) this.updateSelectBox(e.offsetX, e.offsetY);
+        // Self-heal: if the left button isn't actually held any more, the ending
+        // pointerup was lost (a rapid left+right click can swallow it) — drop the
+        // drag so the marquee can't stick to the cursor with no button pressed.
+        if (!(e.buttons & 1)) this.cancelDrag();
+        else {
+          if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) this.moved = true;
+          if (this.moved && !this.placement && !this.rts?.orderMode) this.updateSelectBox(e.offsetX, e.offsetY);
+        }
       }
       if (!this.dragging) this.rts?.hoverAt(e.offsetX, e.offsetY);
     });
     // Pointer over an interactive HUD element (which swallows the canvas move
     // events): clear the hover so the reticle hides and the normal cursor shows.
     window.addEventListener("pointermove", (e) => {
+      // Self-heal a stuck drag even while the pointer is off the canvas (over the
+      // HUD): still "dragging" with the left button not held means the pointerup
+      // was lost, so cancel it here too — the canvas handler can't see these moves.
+      if (this.dragging && !(e.buttons & 1)) this.cancelDrag();
       if (e.target !== this.canvas && !this.dragging) {
         this.mouseOverCanvas = false; // over the HUD/chrome — suspend edge-scroll
         this.rts?.clearHover();

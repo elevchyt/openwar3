@@ -321,6 +321,7 @@ export class RtsController {
   private localPlayer = 0; // owner whose units a drag-box selects
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
+  private previewIds: number[] = []; // units under the live drag-box (marquee preview rings)
   private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
   private creepData: Array<{ x: number; y: number; aggro: number }> = []; // Neutral Hostile guard/aggro data (from the doo)
   private seeded = false;
@@ -1371,7 +1372,10 @@ export class RtsController {
    *  position falls inside the rectangle (CSS px). Empty box keeps the group.
    *  `additive` (shift held) unions the boxed units into the current selection
    *  instead of replacing it — matching WC3's shift-drag. */
-  selectBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {
+  /** Own mobile units whose screen position falls inside the CSS-space drag box.
+   *  Shared by the live marquee preview and the commit on mouse-up so both agree
+   *  exactly on which units the box covers. */
+  private unitsInBox(x0: number, y0: number, x1: number, y1: number): number[] {
     const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
     const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
     const viewport = this.host.viewport();
@@ -1390,6 +1394,11 @@ export class RtsController {
       const sy = (h - this.screen[1]) / dpr; // gl y-up → css y-down
       if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) picked.push(e.simId);
     }
+    return picked;
+  }
+
+  selectBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {
+    const picked = this.unitsInBox(x0, y0, x1, y1);
     if (picked.length === 0) return; // empty box: keep the current selection
     if (!additive) this.selected.clear();
     for (const id of picked) {
@@ -1399,6 +1408,18 @@ export class RtsController {
     this.selectedMine = null;
     this.refocus(additive ? this.focusedKey : "");
     this.announceSelection();
+  }
+
+  /** Update the live marquee preview: the units the drag-box currently covers get
+   *  a green ring (via previewRings) so the player sees exactly who will be picked
+   *  before releasing. Already-selected units are skipped — they keep their own
+   *  selection ring, so an additive (Shift) drag shows the union without stacking. */
+  setPreviewBox(x0: number, y0: number, x1: number, y1: number): void {
+    this.previewIds = this.unitsInBox(x0, y0, x1, y1).filter((id) => !this.selected.has(id));
+  }
+
+  clearPreviewBox(): void {
+    if (this.previewIds.length) this.previewIds = [];
   }
 
   /** Pointer move: show the ring + HP bar under the unit (or gold mine) being
@@ -1767,6 +1788,18 @@ export class RtsController {
       const m = this.sim.mines.get(this.selectedMine);
       // A gold mine is Neutral PASSIVE (yellow ring), not hostile (red).
       if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true });
+    }
+    return out;
+  }
+
+  /** Ground-circles for the units currently inside the live drag-box — drawn in
+   *  full selection green so the player previews the pick before releasing. */
+  previewRings(): RingInfo[] {
+    const out: RingInfo[] = [];
+    for (const id of this.previewIds) {
+      const u = this.sim.units.get(id);
+      const e = this.byId.get(id);
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
     }
     return out;
   }

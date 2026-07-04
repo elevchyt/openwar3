@@ -2473,6 +2473,37 @@ export class SimWorld {
     return best;
   }
 
+  /** How much of a threat a target is to a creep, for target selection: armed
+   *  units (incl. heroes) rank above helpless units, which rank above buildings.
+   *  Creeps "attack enemy units first" instead of chewing a structure while an
+   *  army stands on them. Same tier → distance breaks the tie (see bestCreepTarget). */
+  private threatTier(t: SimUnit): number {
+    if (t.building) return 0; // structures last
+    if (t.weapon) return 2; // armed units / heroes first
+    return 1; // unarmed units (workers) in between
+  }
+
+  /** Highest-threat hostile within `range` for a creep — the biggest threat tier,
+   *  nearest within that tier. This is what makes a camp focus the real threat
+   *  rather than the nearest thing. */
+  private bestCreepTarget(u: SimUnit, range: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestTier = -1;
+    let bestGap = Infinity;
+    for (const t of this.units.values()) {
+      if (t === u || !this.hostile(u, t)) continue;
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap > range) continue;
+      const tier = this.threatTier(t);
+      if (tier > bestTier || (tier === bestTier && gap < bestGap)) {
+        bestTier = tier;
+        bestGap = gap;
+        best = t;
+      }
+    }
+    return best;
+  }
+
   /** Advance an in-progress attack swing; when it reaches the weapon's damage
    *  point, launch the projectile (ranged) or deal the hit (melee). */
   private tickSwing(u: SimUnit, dt: number): void {
@@ -2999,7 +3030,9 @@ export class SimWorld {
     u.acquireT -= dt;
     if (u.acquireT > 0) return;
     u.acquireT = ACQUIRE_PERIOD;
-    const best = this.nearestEnemy(u, range);
+    // Creeps pick the highest-threat target (enemy units before buildings); other
+    // units keep WC3's plain nearest-enemy acquisition.
+    const best = u.isCreep ? this.bestCreepTarget(u, range) : this.nearestEnemy(u, range);
     if (best) {
       this.issueAttack(u.id, best.id);
       if (u.isCreep) this.alertCamp(u, best);
@@ -3041,6 +3074,21 @@ export class SimWorld {
     const engaged = u.order === "attack" && u.targetId !== null && this.units.has(u.targetId);
     const dist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
     if (engaged) {
+      // Every so often while fighting: (1) upgrade onto a bigger threat if we're on
+      // a low-threat target (a unit walked up while we hit a building), and (2)
+      // re-call the camp so a campmate that already returned home / went idle
+      // rejoins the fight — the camp keeps swarming as long as any of us is engaged.
+      u.acquireT -= dt;
+      if (u.acquireT <= 0) {
+        u.acquireT = ACQUIRE_PERIOD;
+        const cur = this.units.get(u.targetId!)!;
+        const best = this.bestCreepTarget(u, u.aggroRange);
+        if (best && best.id !== cur.id && this.threatTier(best) > this.threatTier(cur)) {
+          this.issueAttack(u.id, best.id);
+        }
+        const focus = this.units.get(u.targetId!);
+        if (focus) this.alertCamp(u, focus);
+      }
       if (dist >= MAX_GUARD_DISTANCE) {
         this.beginCreepReturn(u); // dragged out past the hard limit — always go home
         return true;
