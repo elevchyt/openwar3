@@ -1294,14 +1294,18 @@ export class SimWorld {
     u.atkOffTarget = t.id;
     u.atkOffX = 0;
     u.atkOffY = 0;
-    // Slots already held by other units attacking this same target.
-    const held: Array<[number, number]> = [];
-    for (const o of this.units.values()) {
-      if (o === u || o.atkOffTarget !== t.id || o.order !== "attack" || o.targetId !== t.id) continue;
-      if (o.atkOffX !== 0 || o.atkOffY !== 0) held.push([o.atkOffX, o.atkOffY]);
-    }
     const wr = Math.max(u.radius, 16);
     const spacing = wr * 2 + 24; // neighbour gap so bodies don't overlap
+    // Obstacles to route AROUND: every other unit already attacking this same target
+    // — both where it stands now and the slot it's heading to — so we don't pick a
+    // spot it occupies or is claiming. This is what makes a blocked unit go around
+    // to a free spot instead of grinding into the one ahead of it.
+    const obstacles: Array<[number, number]> = [];
+    for (const o of this.units.values()) {
+      if (o === u || o.atkOffTarget !== t.id || o.order !== "attack" || o.targetId !== t.id) continue;
+      obstacles.push([o.x, o.y]);
+      if (o.atkOffX !== 0 || o.atkOffY !== 0) obstacles.push([t.x + o.atkOffX, t.y + o.atkOffY]);
+    }
     // Effective target radius: a building surrounds its footprint, a unit its hull.
     const tr = t.building ? Math.max(t.radius, (t.footprint || 2) * PATHING_CELL * 0.5) : t.radius;
     // Innermost ring sits at the unit's actual standing distance (hull gap == weapon
@@ -1311,19 +1315,26 @@ export class SimWorld {
     const stand = tr + wr + Math.min(u.weapon ? u.weapon.range : 0, 160);
     let best: [number, number] | null = null;
     let bestD = Infinity;
-    for (let ring = 0; ring < 6; ring++) {
+    for (let ring = 0; ring < 8; ring++) {
       const rr = stand + ring * spacing;
       const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + ring * 0.618; // golden-ish stagger between rings
         const ox = Math.cos(a) * rr;
         const oy = Math.sin(a) * rr;
+        const sx = t.x + ox;
+        const sy = t.y + oy;
+        // Skip a slot another attacker holds or occupies.
         let taken = false;
-        for (const [hx, hy] of held) {
-          if (Math.hypot(hx - ox, hy - oy) < spacing * 0.75) { taken = true; break; }
+        for (const [hx, hy] of obstacles) {
+          if (Math.hypot(hx - sx, hy - sy) < spacing * 0.75) { taken = true; break; }
         }
         if (taken) continue;
-        const d = Math.hypot(t.x + ox - u.x, t.y + oy - u.y); // nearest free slot to us
+        // Skip a slot our own footprint can't actually stand on (blocked terrain, a
+        // building, or a cell reserved by a settled unit) — only offer slots we FIT.
+        const [cx, cy] = this.grid.worldToCell(sx, sy);
+        if (u.footprint > 0 && !this.grid.footprintFits(cx, cy, u.footprint)) continue;
+        const d = Math.hypot(sx - u.x, sy - u.y); // nearest free slot to us
         if (d < bestD) { bestD = d; best = [ox, oy]; }
       }
       if (best) break; // fill this ring before stepping out to the next
@@ -2432,6 +2443,20 @@ export class SimWorld {
       return;
     }
     if (u.order === "attack") {
+      // Blocked short of our attack slot (a unit is in the way). Pick a fresh slot
+      // we actually fit in — steering AROUND the blockers — and head straight for
+      // it, instead of grinding into the unit ahead (which reads as the stuck/
+      // jiggling shuffle). Fall back to a brief settle only if nothing's reachable.
+      const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+      if (t) {
+        this.assignAttackSlot(u, t);
+        const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
+        const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
+        if (this.pathTo(u, ax, ay)) {
+          u.stuckRetries = 0;
+          return;
+        }
+      }
       this.settle(u);
       u.repathT = REPATH_COOLDOWN;
       return;
