@@ -1372,29 +1372,33 @@ export class RtsController {
    *  position falls inside the rectangle (CSS px). Empty box keeps the group.
    *  `additive` (shift held) unions the boxed units into the current selection
    *  instead of replacing it — matching WC3's shift-drag. */
-  /** Own mobile units whose screen position falls inside the CSS-space drag box.
-   *  Shared by the live marquee preview and the commit on mouse-up so both agree
-   *  exactly on which units the box covers. */
+  /** Own entities whose screen position falls inside the CSS-space drag box, with
+   *  WC3's box priority applied: mobile units win, so a building is only box-picked
+   *  when the box catches NO units at all (drag a box over a unit + your town hall →
+   *  just the unit). Shared by the live marquee preview and the commit on mouse-up
+   *  so both agree exactly on what the box covers. */
   private unitsInBox(x0: number, y0: number, x1: number, y1: number): number[] {
     const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
     const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
     const viewport = this.host.viewport();
     const dpr = this.dpr();
     const h = this.host.canvas.height;
-    const picked: number[] = [];
+    const units: number[] = [];
+    const buildings: number[] = [];
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
       if (!u || e.hidden) continue;
-      if (u.owner !== this.localPlayer || u.building) continue; // own mobile units only
+      if (u.owner !== this.localPlayer) continue; // own entities only
       this.world[0] = u.x;
       this.world[1] = u.y;
       this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
       this.host.camera.worldToScreen(this.screen, this.world, viewport);
       const sx = this.screen[0] / dpr;
       const sy = (h - this.screen[1]) / dpr; // gl y-up → css y-down
-      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) picked.push(e.simId);
+      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) (u.building ? buildings : units).push(e.simId);
     }
-    return picked;
+    // Units take priority — buildings only when the box caught no units at all.
+    return units.length ? units : buildings;
   }
 
   selectBox(x0: number, y0: number, x1: number, y1: number, additive = false): void {

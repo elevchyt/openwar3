@@ -3036,6 +3036,11 @@ export class SimWorld {
     if (best) {
       this.issueAttack(u.id, best.id);
       if (u.isCreep) this.alertCamp(u, best);
+    } else if (u.isCreep) {
+      // Nothing in our own aggro range, but if a camp-mate is still fighting, go
+      // help — no creep sits idle at the post while its camp is in a fight.
+      const help = this.campFightTarget(u);
+      if (help) this.issueAttack(u.id, help.id);
     }
   }
 
@@ -3074,10 +3079,8 @@ export class SimWorld {
     const engaged = u.order === "attack" && u.targetId !== null && this.units.has(u.targetId);
     const dist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
     if (engaged) {
-      // Every so often while fighting: (1) upgrade onto a bigger threat if we're on
-      // a low-threat target (a unit walked up while we hit a building), and (2)
-      // re-call the camp so a campmate that already returned home / went idle
-      // rejoins the fight — the camp keeps swarming as long as any of us is engaged.
+      // Stay on the biggest threat: periodically upgrade off a low-threat target
+      // (e.g. a building) onto a real unit that walked into range.
       u.acquireT -= dt;
       if (u.acquireT <= 0) {
         u.acquireT = ACQUIRE_PERIOD;
@@ -3086,20 +3089,25 @@ export class SimWorld {
         if (best && best.id !== cur.id && this.threatTier(best) > this.threatTier(cur)) {
           this.issueAttack(u.id, best.id);
         }
-        const focus = this.units.get(u.targetId!);
-        if (focus) this.alertCamp(u, focus);
       }
       if (dist >= MAX_GUARD_DISTANCE) {
         this.beginCreepReturn(u); // dragged out past the hard limit — always go home
         return true;
       }
       if (dist >= GUARD_DISTANCE) {
-        // Past the soft limit: head home only after chasing GUARD_RETURN_TIME
-        // unattacked (each hit resets strayT in landDamage → attacks keep it fighting).
-        u.strayT += dt;
-        if (u.strayT >= GUARD_RETURN_TIME) {
-          this.beginCreepReturn(u);
-          return true;
+        // Past the soft limit: normally head home after chasing GUARD_RETURN_TIME
+        // unattacked (each hit resets strayT in landDamage). But do NOT peel off
+        // while a camp-mate is still in the fight — the camp commits as one and
+        // breaks off together (or at the hard MaxGuardDistance above). This is what
+        // stops a single creep being left fighting at max range while the rest sit.
+        if (this.campFightTarget(u)) {
+          u.strayT = 0;
+        } else {
+          u.strayT += dt;
+          if (u.strayT >= GUARD_RETURN_TIME) {
+            this.beginCreepReturn(u);
+            return true;
+          }
         }
       } else {
         u.strayT = 0;
@@ -3113,6 +3121,13 @@ export class SimWorld {
     // snap from re-triggering a return every tick (the return "jiggle").
     u.strayT = 0;
     if (u.order === "idle" && dist > CREEP_RETURN_TRIGGER && !this.nearestEnemy(u, u.aggroRange)) {
+      // About to walk home — but if a camp-mate is still fighting, go help instead
+      // of standing down while the camp is engaged.
+      const help = u.weapon ? this.campFightTarget(u) : null;
+      if (help) {
+        this.issueAttack(u.id, help.id);
+        return false;
+      }
       this.beginCreepReturn(u);
       return true;
     }
@@ -3173,17 +3188,41 @@ export class SimWorld {
     u.desiredFacing = u.guardFacing;
   }
 
+  /** Two creeps belong to the same camp when their guard posts were placed within
+   *  CreepCallForHelp of each other. Membership is keyed to the fixed GUARD points,
+   *  NOT live positions — so a creep dragged out to the edge of its leash still
+   *  counts as a camp-mate and can rally (or be rallied by) the ones back home. */
+  private sameCamp(a: SimUnit, b: SimUnit): boolean {
+    return Math.hypot(a.guardX - b.guardX, a.guardY - b.guardY) <= CREEP_CALL_FOR_HELP;
+  }
+
   /** Camp cohesion (MiscGame CreepCallForHelp): a creep that engages a target
-   *  wakes every sleeping camp-mate within range and pulls idle ones onto the
-   *  same target — "a creep camp acts as one unit; attack one and they all
-   *  attack" (Battle.net creep basics). Leashing camp-mates are left alone. */
+   *  wakes every sleeping camp-mate and pulls idle ones onto the same target —
+   *  "a creep camp acts as one unit; attack one and they all attack" (Battle.net
+   *  creep basics). Leashing camp-mates are left alone. */
   private alertCamp(u: SimUnit, target: SimUnit): void {
     for (const c of this.units.values()) {
       if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
-      if (Math.hypot(c.x - u.x, c.y - u.y) > CREEP_CALL_FOR_HELP) continue;
+      if (!this.sameCamp(c, u)) continue;
       c.asleep = false; // rouse the camp
       if (c.order === "idle" && c.weapon && this.hostile(c, target)) this.issueAttack(c.id, target.id);
     }
+  }
+
+  /** A hostile currently being fought by a live camp-mate of `u`, or null. Used to
+   *  keep the camp committed as one: while any member is engaged, the rest rejoin
+   *  rather than idling at the post or peeling off home — even when the fight has
+   *  been kited out near the leash limit (the exact case where a lone creep used to
+   *  be left fighting while its camp sat back). */
+  private campFightTarget(u: SimUnit): SimUnit | null {
+    for (const c of this.units.values()) {
+      if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
+      if (c.order !== "attack" || c.targetId === null) continue;
+      if (!this.sameCamp(c, u)) continue;
+      const t = this.units.get(c.targetId);
+      if (t && this.hostile(u, t)) return t;
+    }
+    return null;
   }
 
   // --- movement -----------------------------------------------------------
