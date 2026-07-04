@@ -182,8 +182,8 @@ export class MapViewerScene {
   private fogTerrain: TerrainData | null = null; // corner grid the fog mesh is built on
   private fogAccum = 0; // ms since the last fog resample (throttle)
   private hiddenWidgets: HideableWidget[] = []; // doodads + static units hidden in unexplored fog
-  private doodadsFogged = false; // one-time initial hide, when doodads finish loading
-  private unitsFogged = false; // one-time initial hide, when static units finish loading
+  private doodadsProcessed = 0; // count of map.doodads already fog-checked (they stream in async)
+  private unitsProcessed = 0; // count of map.units already fog-checked (they stream in async)
   private cheatBuf = ""; // rolling buffer of typed letters, for WC3 chat cheat codes
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
@@ -2328,21 +2328,28 @@ export class MapViewerScene {
       const [cx, cy] = vision.worldToCell(loc[0], loc[1]);
       return vision.isExplored(cx, cy);
     };
-    // Hide unexplored doodads (trees) the moment THEY load — don't wait on units, or
-    // they'd stay visible for a beat and then pop out ("disappear on scroll").
-    if (!this.doodadsFogged && map.doodadsReady) {
-      this.doodadsFogged = true;
-      for (const w of map.doodads) if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
+    // Hide unexplored doodads (trees) and static map units (structures, gold mines) as
+    // they stream in. Their models load ASYNC and are pushed into map.doodads/map.units
+    // over many frames, but the viewer flips map.doodadsReady/unitsReady true BEFORE
+    // those pushes — so a one-time snapshot on the "ready" flag misses everything that
+    // loads afterward (the cause of trees poking through the black fog). Instead sweep
+    // only the newly-appended widgets each update. The arrays are append-only for our
+    // purposes (felling hides the instance in place, never splices), so a running count
+    // is a safe cursor.
+    const doodads = map.doodads;
+    for (let i = this.doodadsProcessed; i < doodads.length; i++) {
+      const w = doodads[i];
+      if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
     }
-    // Hide unexplored static map units (structures, gold mines) once they load. Units
-    // the RTS drives (creeps, neutral shops) are skipped — the RTS fog-hides those.
-    if (!this.unitsFogged && map.unitsReady) {
-      this.unitsFogged = true;
-      for (const w of map.units as unknown as HideableWidget[]) {
-        if (this.rts?.managesViewerInstance(w.instance)) continue;
-        if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
-      }
+    this.doodadsProcessed = doodads.length;
+    // Units the RTS drives (creeps, neutral shops) are skipped — the RTS fog-hides those.
+    const units = map.units as unknown as HideableWidget[];
+    for (let i = this.unitsProcessed; i < units.length; i++) {
+      const w = units[i];
+      if (this.rts?.managesViewerInstance(w.instance)) continue;
+      if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
     }
+    this.unitsProcessed = units.length;
     let keep = 0; // compact the still-hidden list, revealing any now-explored widgets
     for (const w of this.hiddenWidgets) {
       if (explored(w)) w.instance.show();
@@ -2357,8 +2364,8 @@ export class MapViewerScene {
     this.fogTerrain = null;
     for (const w of this.hiddenWidgets) w.instance.show(); // un-fog before the map is dropped
     this.hiddenWidgets = [];
-    this.doodadsFogged = false;
-    this.unitsFogged = false;
+    this.doodadsProcessed = 0;
+    this.unitsProcessed = 0;
     this.fogAccum = 0;
   }
 
