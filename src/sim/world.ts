@@ -456,6 +456,13 @@ const MAX_GUARD_DISTANCE = 1000; // strayed this far → return home uncondition
 const GUARD_RETURN_TIME = 5.0; // MiscGame GuardReturnTime — also the "can't get home, resume fighting" window
 const CREEP_CALL_FOR_HELP = 600; // MiscGame CreepCallForHelp — camp cohesion: one aggros → the whole camp wakes/joins
 const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (reset + can sleep)
+// Hysteresis for the "walk back to post" trigger (mirrors ATTACK_LEASH / FOLLOW_LEASH):
+// a return FINISHES at CREEP_HOME_EPS and settle() then snaps the creep to the grid —
+// a snap of up to ~half a cell can nudge it just back over CREEP_HOME_EPS. Without a
+// wider re-trigger threshold an idle creep resting near its post would oscillate
+// finish→snap→return→finish, flickering the walk↔stand clip (the return "jiggle"). So a
+// guarding creep only heads home again once displaced comfortably past the snap noise.
+const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + the settle snap
 // Not in any data file (engine-internal): a creep leashing home heals rapidly so
 // it reaches its post at (near) full, and a sleeping creep only wakes to a hostile
 // that strays very close — far enough that you can still scout past camps at night.
@@ -2910,8 +2917,27 @@ export class SimWorld {
     // Retaliate: an idle armed victim turns on its attacker (WC3 return fire),
     // unless the attacker has since died mid-flight. A creep leashing home ignores
     // attackers until it's back at its post (it prioritises returning).
-    if (target.order === "idle" && target.weapon && !target.returning && this.units.has(attackerId)) {
+    const attacker = this.units.get(attackerId);
+    if (target.order === "idle" && target.weapon && !target.returning && attacker) {
       this.issueAttack(target.id, attackerId);
+    }
+    // Creep "call for help" (Battle.net creep basics): attacking one creep rallies
+    // its whole camp — every camp-mate within CREEP_CALL_FOR_HELP aggros the
+    // attacker at once, even one still out of its own acquisition range.
+    if (target.isCreep && attacker && this.hostile(target, attacker)) {
+      this.alertCamp(target, attacker);
+    }
+    // "Creeps will also call for help if you attack another unit currently being
+    // targeted by those creeps." Only a NON-creep attacker striking a NON-creep
+    // victim can trigger this (a creep is never hostile to a fellow creep, and no
+    // creep ever targets a camp-mate), so the reverse-target scan is skipped in the
+    // common player↔creep exchanges where it could never fire.
+    else if (attacker && !attacker.isCreep && !target.isCreep) {
+      for (const c of this.units.values()) {
+        if (c.isCreep && c.hp > 0 && !c.returning && c.targetId === target.id && this.hostile(c, attacker)) {
+          this.alertCamp(c, attacker);
+        }
+      }
     }
     return amount;
   }
@@ -3035,9 +3061,12 @@ export class SimWorld {
       return false; // keep fighting
     }
     // Guarding: nothing to fight. If displaced from the post (e.g. a target just
-    // died out in the field) and no new enemy is in range, walk back home.
+    // died out in the field) and no new enemy is in range, walk back home. The
+    // trigger uses CREEP_RETURN_TRIGGER, NOT the tighter CREEP_HOME_EPS the return
+    // finishes at — the gap between them is the hysteresis that stops the settle
+    // snap from re-triggering a return every tick (the return "jiggle").
     u.strayT = 0;
-    if (u.order === "idle" && !atHome && !this.nearestEnemy(u, u.aggroRange)) {
+    if (u.order === "idle" && dist > CREEP_RETURN_TRIGGER && !this.nearestEnemy(u, u.aggroRange)) {
       this.beginCreepReturn(u);
       return true;
     }
