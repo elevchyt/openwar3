@@ -257,6 +257,13 @@ export interface SimUnit {
   // so they hold a spread instead of stacking on the leader's centre and shoving.
   followOffX: number;
   followOffY: number;
+  // Attack-formation slot: a distinct offset from the TARGET's centre this unit
+  // stands at to attack, so a group swarming one enemy fans out around it (WC3
+  // surround) instead of lining up. atkOffTarget marks which target the slot was
+  // assigned for (re-assigned only when the target changes, so slots stay stable).
+  atkOffX: number;
+  atkOffY: number;
+  atkOffTarget: number; // -1 = no slot assigned
   amDestX: number; // attack-move final destination (units engage enemies en route)
   amDestY: number;
   patrolX: number; // the OTHER patrol endpoint (units bounce between the two)
@@ -912,6 +919,9 @@ export class SimWorld {
       | "chaseY"
       | "followOffX"
       | "followOffY"
+      | "atkOffX"
+      | "atkOffY"
+      | "atkOffTarget"
       | "amDestX"
       | "amDestY"
       | "patrolX"
@@ -1015,6 +1025,9 @@ export class SimWorld {
       chaseY: 0,
       followOffX: 0,
       followOffY: 0,
+      atkOffX: 0,
+      atkOffY: 0,
+      atkOffTarget: -1,
       amDestX: unit.x,
       amDestY: unit.y,
       patrolX: unit.x,
@@ -1248,7 +1261,74 @@ export class SimWorld {
     u.noCollision = false; // manual control restores collision
     this.cancelSwing(u); // a fresh target starts a fresh swing
     this.detachBuilder(id);
+    // Claim a distinct standing slot around the target so a group swarming one
+    // enemy fans out around it instead of lining up (generic: every attack order,
+    // player-issued or a creep camp's, goes through here). No-op if the unit
+    // already holds a slot for this target, so an already-committed attacker keeps
+    // its place (no per-hit re-shuffle).
+    this.setAttackSlot(u, t);
     return true;
+  }
+
+  /** Assign `u` a fan-out slot for target `t` (once per target). Melee units get a
+   *  distinct ring slot around the target (assignAttackSlot); ranged units stand
+   *  off at weapon range and don't surround, so they just aim at the centre. */
+  private setAttackSlot(u: SimUnit, t: SimUnit): void {
+    if (u.atkOffTarget === t.id) return; // already placed for this target
+    if (u.weapon && !u.weapon.ranged) {
+      this.assignAttackSlot(u, t);
+    } else {
+      u.atkOffX = 0;
+      u.atkOffY = 0;
+      u.atkOffTarget = t.id;
+    }
+  }
+
+  /** Give `u` a distinct standing slot (offset from the target's centre) among the
+   *  units already attacking the same target — the sim-side equivalent of the
+   *  worker fan-out around a building/mine, but relative so it tracks a moving
+   *  target. Concentric rings sized to the unit's own collision radius, filling the
+   *  inner ring first; the unit takes the nearest FREE slot to where it stands (so
+   *  it surrounds from its approach side with least crossing). */
+  private assignAttackSlot(u: SimUnit, t: SimUnit): void {
+    u.atkOffTarget = t.id;
+    u.atkOffX = 0;
+    u.atkOffY = 0;
+    // Slots already held by other units attacking this same target.
+    const held: Array<[number, number]> = [];
+    for (const o of this.units.values()) {
+      if (o === u || o.atkOffTarget !== t.id || o.order !== "attack" || o.targetId !== t.id) continue;
+      if (o.atkOffX !== 0 || o.atkOffY !== 0) held.push([o.atkOffX, o.atkOffY]);
+    }
+    const wr = Math.max(u.radius, 16);
+    const spacing = wr * 2 + 24; // neighbour gap so bodies don't overlap
+    // Effective target radius: a building surrounds its footprint, a unit its hull.
+    const tr = t.building ? Math.max(t.radius, (t.footprint || 2) * PATHING_CELL * 0.5) : t.radius;
+    // Innermost ring sits at the unit's actual standing distance (hull gap == weapon
+    // range), so a melee unit that reaches its slot is exactly in range — the slots
+    // ARE the surround positions, giving a full ring of them rather than a tight
+    // clump the units overshoot.
+    const stand = tr + wr + Math.min(u.weapon ? u.weapon.range : 0, 160);
+    let best: [number, number] | null = null;
+    let bestD = Infinity;
+    for (let ring = 0; ring < 6; ring++) {
+      const rr = stand + ring * spacing;
+      const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + ring * 0.618; // golden-ish stagger between rings
+        const ox = Math.cos(a) * rr;
+        const oy = Math.sin(a) * rr;
+        let taken = false;
+        for (const [hx, hy] of held) {
+          if (Math.hypot(hx - ox, hy - oy) < spacing * 0.75) { taken = true; break; }
+        }
+        if (taken) continue;
+        const d = Math.hypot(t.x + ox - u.x, t.y + oy - u.y); // nearest free slot to us
+        if (d < bestD) { bestD = d; best = [ox, oy]; }
+      }
+      if (best) break; // fill this ring before stepping out to the next
+    }
+    if (best) { u.atkOffX = best[0]; u.atkOffY = best[1]; }
   }
 
   /** Order a unit to FOLLOW another (friendly/neutral/enemy) unit: it trails the
@@ -2442,6 +2522,7 @@ export class SimWorld {
         }
       }
       if (t) {
+        this.setAttackSlot(u, t); // fan out around it, like a direct attack order
         u.targetId = t.id;
         this.engage(u, t);
         return; // an enemy is in range — stand and fight, don't advance
@@ -2602,39 +2683,17 @@ export class SimWorld {
     this.chasePoint(u, t.x, t.y);
   }
 
-  /** Head for a target to ATTACK it, but aim at a standing slot beside it that
-   *  THIS unit's own footprint actually fits in — so large units (and crowds of
-   *  attackers) settle into distinct spots around the target instead of all piling
-   *  onto its exact centre and dancing when they can't fit. The slot size comes
-   *  from the unit's collision footprint (UnitBalance `collision` → footprintCells),
-   *  and nearestFit spirals out past cells already reserved by settled units, which
-   *  is what spreads a swarm into a proper surround.
-   *
-   *  Ranged units just close on the target (they stop far out, where crowding
-   *  barely matters). We only divert to a slot that's actually CLOSER to the target
-   *  than we already are — otherwise (target fully surrounded, or no free slot
-   *  nearby) we head straight in and let checkStuck()/collision settle us in place,
-   *  so this never makes a unit wander backwards or chase a far "fitting" cell. */
+  /** Head for a target to ATTACK it, aiming at this unit's assigned formation slot
+   *  around the target (see assignAttackSlot) rather than its exact centre — so a
+   *  group swarming one enemy fans out around it and holds a surround, instead of
+   *  lining up behind each other and shoving. The slot is a relative offset, so it
+   *  tracks a moving target. A lone attacker (no slot) heads straight in. */
   private chaseToAttack(u: SimUnit, t: SimUnit): void {
-    const w = u.weapon;
-    if (!w || w.ranged || u.footprint <= 0) {
+    if (u.atkOffTarget === t.id && (u.atkOffX !== 0 || u.atkOffY !== 0)) {
+      this.chasePoint(u, t.x + u.atkOffX, t.y + u.atkOffY);
+    } else {
       this.chasePoint(u, t.x, t.y);
-      return;
     }
-    // Ideal contact point: hull-to-hull on the side we're approaching from.
-    const dx = u.x - t.x, dy = u.y - t.y;
-    const d = Math.hypot(dx, dy) || 1;
-    const stand = t.radius + u.radius;
-    const [cx, cy] = this.grid.worldToCell(t.x + (dx / d) * stand, t.y + (dy / d) * stand);
-    const fit = this.grid.nearestFit(cx, cy, u.footprint, 5);
-    if (fit) {
-      const [wx, wy] = this.grid.cellToWorld(fit[0], fit[1]);
-      if (Math.hypot(wx - t.x, wy - t.y) < Math.hypot(u.x - t.x, u.y - t.y)) {
-        this.chasePoint(u, wx, wy);
-        return;
-      }
-    }
-    this.chasePoint(u, t.x, t.y);
   }
 
   /** Follow a leader: trail it at FOLLOW_GAP, parking when close and re-approaching
