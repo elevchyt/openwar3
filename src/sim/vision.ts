@@ -108,6 +108,14 @@ export class VisionMap {
   setRevealAll(on: boolean): void {
     this.revealAll = on;
   }
+
+  /** Mark every cell Explored (terrain memory) without making it Visible — the
+   *  "start explored" lobby option: the whole map shows dimmed grey instead of
+   *  pitch black, while live sight and enemy-movement concealment still work
+   *  (non-visible cells stay Explored, never promoted to Visible). */
+  exploreAll(): void {
+    this.explored.fill(1);
+  }
   get revealed(): boolean {
     return this.revealAll;
   }

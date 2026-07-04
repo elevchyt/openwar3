@@ -16,8 +16,15 @@ export interface SlotConfig {
   startY: number;
 }
 
+/** Fog-of-war start mode chosen in the lobby:
+ *   • explored   — whole map begins dimmed grey (terrain memory), live fog still on
+ *   • unexplored — normal WC3 fog: unseen ground is pitch black
+ *   • revealall  — no fog of war at all; the entire map + every unit stays visible */
+export type FogMode = "explored" | "unexplored" | "revealall";
+
 export interface MeleeConfig {
   slots: SlotConfig[];
+  fog: FogMode; // fog-of-war start mode; default "explored"
 }
 
 const CONTROLLERS: Array<[Controller, string]> = [
@@ -25,6 +32,12 @@ const CONTROLLERS: Array<[Controller, string]> = [
   ["computer", "Computer"],
   ["open", "Open"],
   ["closed", "Closed"],
+];
+
+const FOG_MODES: Array<[FogMode, string]> = [
+  ["explored", "Explored (dimmed, fog on)"],
+  ["unexplored", "Unexplored (black fog)"],
+  ["revealall", "Reveal all (no fog)"],
 ];
 
 export function showLobby(
@@ -85,6 +98,16 @@ export function showLobby(
   });
   panel.appendChild(table);
 
+  // Fog-of-war start mode (default "explored": whole map dimmed grey but fog still on).
+  const options = document.createElement("div");
+  options.className = "lobby-options";
+  const fogLabel = document.createElement("span");
+  fogLabel.className = "lobby-label";
+  fogLabel.textContent = "Fog of war";
+  const fog = makeSelect(FOG_MODES, "explored");
+  options.append(fogLabel, fog);
+  panel.appendChild(options);
+
   const actions = document.createElement("div");
   actions.className = "lobby-actions";
   actions.append(
@@ -100,6 +123,7 @@ export function showLobby(
             startX: r.slot.startX,
             startY: r.slot.startY,
           })),
+        fog: fog.value as FogMode,
       });
     }),
     makeButton("Cancel", () => cb.onCancel()),

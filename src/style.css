@@ -109,6 +109,17 @@ html, body {
   border-radius: 4px;
 }
 
+.lobby-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.lobby-options .lobby-select {
+  flex: 1;
+}
+
 .lobby-actions {
   display: flex;
   gap: 12px;

@@ -398,6 +398,12 @@ export class RtsController {
   setRevealAll(on: boolean): void {
     this.vision.setRevealAll(on);
   }
+
+  /** Lobby "start explored": reveal the whole map as grey terrain memory, keeping
+   *  live fog (current sight stays lit, enemy movement in the grey stays hidden). */
+  exploreAll(): void {
+    this.vision.exploreAll();
+  }
   toggleRevealAll(): boolean {
     const on = !this.vision.revealed;
     this.vision.setRevealAll(on);

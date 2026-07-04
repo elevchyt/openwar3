@@ -523,6 +523,11 @@ export class MapViewerScene {
     this.localRace = races.get(this.localPlayer) ?? "human";
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
     this.rts!.setLocalTeam(this.teamOf(this.localPlayer)); // whose combined sight lifts the fog
+    // Fog-of-war start mode from the lobby: "explored" reveals the whole map as grey
+    // terrain memory (live fog still hides current enemy movement); "revealall" drops
+    // fog entirely; "unexplored" leaves the default pitch-black unseen ground.
+    if (config.fog === "explored") this.rts!.exploreAll();
+    else if (config.fog === "revealall") this.rts!.setRevealAll(true);
     this.applyRaceCursor();
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     this.mountHud();
