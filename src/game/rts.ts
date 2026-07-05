@@ -2962,6 +2962,10 @@ function weaponFor(def: UnitDef): SimWeapon | null {
     missileArt: def.missileArt,
     missileSpeed: def.missileSpeed,
     attackType: def.attackType,
+    launchX: def.launchX,
+    launchY: def.launchY,
+    launchZ: def.launchZ,
+    impactZ: def.impactZ,
   };
 }
 

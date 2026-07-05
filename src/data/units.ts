@@ -61,6 +61,15 @@ export interface UnitDef {
   armorType: string; // defType: small/medium/large/fort/hero/divine/none
   missileArt: string; // weapon-1 projectile model (MDX path, backslashes) or ""
   missileSpeed: number; // projectile travel speed (world units/sec)
+  // Projectile launch offset from the unit's origin, in its LOCAL frame (x forward,
+  // y left, z up), rotated by facing — UnitWeapons.slk launchx/y/z. e.g. the Archmage
+  // fires his fireball from launchz=66 (rod height), the Archer from launchy=62 (bow
+  // offset to the side), not from the unit's feet. impactZ is the height the missile
+  // aims for on the target (impactz, ~60 for everything).
+  launchX: number;
+  launchY: number;
+  launchZ: number;
+  impactZ: number;
   // Hero attributes (0 for non-heroes). primaryAttr is "STR"/"AGI"/"INT" or "".
   strength: number;
   agility: number;
@@ -240,6 +249,12 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // as .mdl paths (e.g. Archmage FireBallMissile, Archer ArrowMissile).
       missileArt: fn ? missilePath(str(fn, "missileart")) : "",
       missileSpeed: fn ? num(fn, "missilespeed", 900) : 900,
+      // Launch/impact offsets live in UnitWeapons.slk (launchx/y/z, impactz). Verified
+      // against the real 1.27 MPQ: Archmage launchx=15/launchz=66, Archer launchy=62.
+      launchX: w ? num(w, "launchx", 0) : 0,
+      launchY: w ? num(w, "launchy", 0) : 0,
+      launchZ: w ? num(w, "launchz", 0) : 0,
+      impactZ: w ? num(w, "impactz", 0) : 0,
       strength: attr.STR,
       agility: attr.AGI,
       intelligence: attr.INT,

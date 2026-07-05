@@ -1250,7 +1250,6 @@ export class MapViewerScene {
 
   // --- projectiles (missile models) -----------------------------------------
 
-  private static readonly MISSILE_HEIGHT = 60; // launch/flight height above ground
   // Uniform size for ALL selection/hover/order circles (constant width + ring
   // thickness), and a tiny lift so they sit just above the terrain.
   private static readonly CIRCLE_SCALE = 1.2;
@@ -1278,17 +1277,17 @@ export class MapViewerScene {
     if (!world || !map) return;
     for (const p of world.drainSpawnedProjectiles()) {
       if (!p.art) continue; // no missile model (still deals delayed damage)
-      this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) }); // fire/whoosh/gunshot as it launches
+      this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z }); // fire/whoosh/gunshot as it launches
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
     // A hit plays the missile's impact (Death) clip at the point of impact; a
     // fizzle (target vanished mid-flight) just detaches.
-    const impacts = new Map<number, { x: number; y: number }>();
+    const impacts = new Map<number, { x: number; y: number; z: number }>();
     for (const im of world.drainProjectileImpacts()) impacts.set(im.id, im);
     for (const id of world.drainRemovedProjectiles()) {
       const im = impacts.get(id);
-      if (im) this.impactProjectile(id, im.x, im.y);
+      if (im) this.impactProjectile(id, im.x, im.y, im.z);
       else this.detachProjectile(id);
     }
     for (const [id, inst] of this.projectileInsts) {
@@ -1300,7 +1299,7 @@ export class MapViewerScene {
       const t = world.units.get(p.targetId);
       this.loc3[0] = p.x;
       this.loc3[1] = p.y;
-      this.loc3[2] = this.rts!.groundHeightAt(p.x, p.y) + MapViewerScene.MISSILE_HEIGHT;
+      this.loc3[2] = this.rts!.groundHeightAt(p.x, p.y) + p.z; // per-projectile launch→impact height
       inst.setLocation(this.loc3);
       const ang = t ? Math.atan2(t.y - p.y, t.x - p.x) : 0;
       zQuat(this.mq, ang);
@@ -1320,7 +1319,7 @@ export class MapViewerScene {
   /** A projectile hit: play the missile model's "Death" clip (the impact burst)
    *  once at the hit point, then detach it after a moment (reusing the timed
    *  one-shot effect list). Missiles without a Death clip just detach. */
-  private impactProjectile(id: number, x: number, y: number): void {
+  private impactProjectile(id: number, x: number, y: number, z: number): void {
     this.projectileLoading.delete(id);
     const inst = this.projectileInsts.get(id);
     if (!inst) return;
@@ -1332,7 +1331,7 @@ export class MapViewerScene {
     }
     this.loc3[0] = x;
     this.loc3[1] = y;
-    this.loc3[2] = this.rts!.groundHeightAt(x, y) + MapViewerScene.MISSILE_HEIGHT;
+    this.loc3[2] = this.rts!.groundHeightAt(x, y) + z; // impact at the weapon's impactz height
     inst.setLocation(this.loc3);
     inst.setSequence(death);
     inst.setSequenceLoopMode(0); // play once, then the effects timer detaches it

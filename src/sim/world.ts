@@ -21,6 +21,13 @@ export interface SimWeapon {
   missileArt: string; // projectile model path (renderer), "" = invisible
   missileSpeed: number; // projectile travel speed (world units/sec)
   attackType: string; // UnitWeapons atkType1 (normal/pierce/siege/magic/chaos/hero) → damage table
+  // Projectile launch offset (LOCAL frame: x forward, y left, z up; rotated by facing)
+  // and impact height — UnitWeapons.slk launchx/y/z, impactz. The missile leaves from
+  // launchZ (e.g. the Archmage's rod at 66) rather than the unit's feet.
+  launchX: number;
+  launchY: number;
+  launchZ: number;
+  impactZ: number;
 }
 
 /** An in-flight projectile: homes on its target's current position, dealing its
@@ -29,11 +36,17 @@ export interface SimProjectile {
   id: number;
   x: number;
   y: number;
+  z: number; // current height ABOVE GROUND (renderer adds terrain height under x/y)
   sourceId: number; // attacker (for retaliation on hit); may have died mid-flight
   targetId: number;
   speed: number;
   damage: number; // pre-armor damage rolled at launch (armor applied on impact)
   art: string; // missile model path
+  // Straight-line height interpolation launch→impact (all above-ground): z lerps from
+  // startZ (the launch height) to impactZ across the horizontal flight (startDist).
+  startZ: number;
+  impactZ: number;
+  startDist: number;
   attackType?: string; // attacker's weapon attack type, carried so the damage-table
   // multiplier is correct even if the attacker dies before the arrow lands
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
@@ -511,11 +524,11 @@ export class SimWorld {
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
   private nextProjectileId = 1;
-  private spawnedProjectiles: Array<{ id: number; art: string; x: number; y: number }> = [];
+  private spawnedProjectiles: Array<{ id: number; art: string; x: number; y: number; z: number }> = [];
   private removedProjectiles: number[] = [];
   // Projectiles that actually HIT (vs fizzled) — the renderer plays the impact
-  // effect (the missile model's Death clip) at the recorded point.
-  private projectileImpacts: Array<{ id: number; x: number; y: number }> = [];
+  // effect (the missile model's Death clip) at the recorded point (z above ground).
+  private projectileImpacts: Array<{ id: number; x: number; y: number; z: number }> = [];
   // Landed hits (melee + projectile) — the renderer plays the weapon-impact SFX
   // (attacker's weapon material vs target's armour material).
   private hits: Array<{ attackerId: number; targetId: number }> = [];
@@ -644,7 +657,7 @@ export class SimWorld {
   }
 
   /** Projectiles launched since the last drain (renderer creates missile models). */
-  drainSpawnedProjectiles(): Array<{ id: number; art: string; x: number; y: number }> {
+  drainSpawnedProjectiles(): Array<{ id: number; art: string; x: number; y: number; z: number }> {
     if (!this.spawnedProjectiles.length) return this.spawnedProjectiles;
     const out = this.spawnedProjectiles;
     this.spawnedProjectiles = [];
@@ -661,7 +674,7 @@ export class SimWorld {
 
   /** Projectiles that HIT their target since the last drain, with the hit point
    *  (renderer plays the impact effect there). Fizzles are absent. */
-  drainProjectileImpacts(): Array<{ id: number; x: number; y: number }> {
+  drainProjectileImpacts(): Array<{ id: number; x: number; y: number; z: number }> {
     if (!this.projectileImpacts.length) return this.projectileImpacts;
     const out = this.projectileImpacts;
     this.projectileImpacts = [];
@@ -2085,19 +2098,30 @@ export class SimWorld {
    *  impact (Storm Bolt hammer, Death Coil orb). */
   private spawnSpellProjectile(u: SimUnit, targetId: number, def: AbilityDef, rank: number): void {
     const id = this.nextProjectileId++;
+    // Launch from the caster's weapon model point if it has one (e.g. the Death
+    // Knight's Death Coil from his hand); otherwise from a default missile height so
+    // it never leaves from the feet.
+    const w = u.weapon;
+    const lz0 = w && w.launchZ > 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
+    const [lx, ly, lz] = launchPoint(u, w?.launchX ?? 0, w?.launchY ?? 0, lz0);
+    const t = this.units.get(targetId);
     const proj: SimProjectile = {
       id,
-      x: u.x,
-      y: u.y,
+      x: lx,
+      y: ly,
+      z: lz,
       sourceId: u.id,
       targetId,
       speed: 900,
       damage: 0, // spell effect (not plain damage) is applied on impact
       art: def.missileArt,
       spell: { code: def.code, rank, abilityId: def.id },
+      startZ: lz,
+      impactZ: w && w.impactZ > 0 ? w.impactZ : DEFAULT_MISSILE_HEIGHT,
+      startDist: t ? Math.hypot(t.x - lx, t.y - ly) : 0,
     };
     this.projectiles.set(id, proj);
-    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y });
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
   }
 
   /** Run a spell's effect handler (dispatched on base `code`). Shared by instant
@@ -2738,19 +2762,26 @@ export class SimWorld {
   private spawnProjectile(u: SimUnit, t: SimUnit): void {
     const w = u.weapon!;
     const id = this.nextProjectileId++;
+    // Launch from the weapon's model point (local offset rotated by facing), not the
+    // unit's feet — e.g. the Archmage's fireball leaves from launchz=66 (his rod).
+    const [lx, ly, lz] = launchPoint(u, w.launchX, w.launchY, w.launchZ);
     const proj: SimProjectile = {
       id,
-      x: u.x,
-      y: u.y,
+      x: lx,
+      y: ly,
+      z: lz,
       sourceId: u.id,
       targetId: t.id,
       speed: w.missileSpeed > 0 ? w.missileSpeed : 900,
       damage: this.rollDamage(w),
       art: w.missileArt,
       attackType: w.attackType,
+      startZ: lz,
+      impactZ: w.impactZ > 0 ? w.impactZ : lz,
+      startDist: Math.hypot(t.x - lx, t.y - ly),
     };
     this.projectiles.set(id, proj);
-    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y });
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
   }
 
   /** Advance in-flight projectiles toward their (moving) targets; deal damage on
@@ -2767,7 +2798,7 @@ export class SimWorld {
       const dist = Math.hypot(dx, dy);
       const step = p.speed * dt;
       if (dist <= step + t.radius) {
-        this.projectileImpacts.push({ id: p.id, x: t.x, y: t.y }); // record the hit point
+        this.projectileImpacts.push({ id: p.id, x: t.x, y: t.y, z: p.impactZ }); // record the hit point
         if (p.spell) {
           // Spell missile (Storm Bolt/Death Coil): run the ability effect on impact.
           // Resolve the exact ability by id (several abilities share a base code).
@@ -2782,6 +2813,9 @@ export class SimWorld {
       } else {
         p.x += (dx / dist) * step;
         p.y += (dy / dist) * step;
+        // Straight-line 3D flight: height lerps launch→impact by horizontal progress.
+        const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
+        p.z = p.startZ + (p.impactZ - p.startZ) * prog;
       }
     }
   }
@@ -3755,6 +3789,20 @@ export class SimWorld {
       u.y = ny;
     }
   }
+}
+
+// Fallback launch/impact height (units above ground) for missiles whose weapon has
+// no launch data — every real ranged unit's impactz is ~60, so this matches the game.
+const DEFAULT_MISSILE_HEIGHT = 60;
+
+// World-space launch point for a missile: the unit origin plus the weapon's LOCAL
+// (launchX forward, launchY left, launchZ up) offset, rotated by facing. WC3
+// UnitWeapons.slk launchx/y/z — e.g. the Archmage's fireball leaves from his rod.
+// Returns [worldX, worldY, heightAboveGround].
+function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, number, number] {
+  const c = Math.cos(u.facing);
+  const s = Math.sin(u.facing);
+  return [u.x + lx * c - ly * s, u.y + lx * s + ly * c, lz];
 }
 
 // Angular speed in rad/sec from a unit's UnitData turnrate (WC3 semantics).
