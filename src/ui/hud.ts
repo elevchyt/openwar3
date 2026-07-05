@@ -135,6 +135,9 @@ export interface HudDriver {
   /** Toggle the debug collider overlay (click/pathing/fog obstruction). Returns the
    *  resulting on/off state so the caller can show/hide the legend. */
   toggleColliders(): boolean;
+  /** Toggle the "Show Pathing" overlay (pathing grid + moving units' routes).
+   *  Returns the resulting on/off state so the caller can show/hide the legend. */
+  togglePathing(): boolean;
 }
 
 // Zone rectangles measured from the rendered console atlas (fractions of the
@@ -530,6 +533,25 @@ export class GameHud {
       legend.hidden = !on;
     };
     panel.append(colliderBtn, legend);
+
+    // Pathing debug overlay toggle: the pathing grid + moving units' routes.
+    const pathLegend = document.createElement("div");
+    pathLegend.className = "hud-collider-legend";
+    pathLegend.hidden = true;
+    pathLegend.append(
+      swatch("rgb(140,158,184)", "Pathing grid"),
+      swatch("rgb(255,64,51)", "Blocked cell"),
+      swatch("rgb(255,217,51)", "Unit path"),
+    );
+    const pathBtn = document.createElement("button");
+    pathBtn.className = "hud-cheat-btn";
+    pathBtn.textContent = "Show Pathing";
+    pathBtn.onclick = () => {
+      const on = this.driver.togglePathing();
+      pathBtn.classList.toggle("active", on);
+      pathLegend.hidden = !on;
+    };
+    panel.append(pathBtn, pathLegend);
     return panel;
   }
 

@@ -1989,6 +1989,21 @@ export class RtsController {
     return out;
   }
 
+  /** Remaining route for every moving unit — current position followed by the
+   *  waypoints it still has to reach — for the "Show Pathing" debug overlay. The
+   *  path shrinks as the unit consumes waypoints and vanishes when it settles, so
+   *  a line drawn from this traces the unit until it finishes moving. */
+  debugUnitPaths(): Array<Array<[number, number]>> {
+    const out: Array<Array<[number, number]>> = [];
+    for (const [, u] of this.sim.units) {
+      if (!u.moving || u.waypoint >= u.path.length) continue;
+      const pts: Array<[number, number]> = [[u.x, u.y]];
+      for (let i = u.waypoint; i < u.path.length; i++) pts.push([u.path[i][0], u.path[i][1]]);
+      out.push(pts);
+    }
+    return out;
+  }
+
   /** Ground-circle info for every selected unit (the renderer draws each ring as
    *  a flat model on the terrain so geometry occludes it). */
   selectionRings(): RingInfo[] {

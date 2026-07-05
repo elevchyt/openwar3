@@ -211,6 +211,17 @@ export class MapViewerScene {
   private dbgUnitRings = new Float32Array(0); // unit/building click rings (lines)
   private dbgUnitVerts = 0;
   private dbgStaticAccum = 1e9; // ms since static rebuild (force one on first frame)
+  // "Show Pathing" overlay (separate toggle): the cell lattice (built once per map),
+  // filled unwalkable cells (rebuilt on a slow timer), and live unit routes (per frame).
+  private showPathing = false;
+  private dbgGridLines = new Float32Array(0); // pathing-cell lattice (lines)
+  private dbgGridVerts = 0;
+  private dbgGridFor: PathingGrid | null = null; // grid the lattice was built for (cache key)
+  private dbgBlocked = new Float32Array(0); // unwalkable cell fills (triangles)
+  private dbgBlockedVerts = 0;
+  private dbgBlockAccum = 1e9; // ms since the blocked-cell rebuild (force one on first frame)
+  private dbgPaths = new Float32Array(0); // moving units' remaining routes (lines)
+  private dbgPathVerts = 0;
   private fogAccum = 0; // ms since the last fog resample (throttle)
   private removedWidgets = new Set<HideableWidget>(); // felled trees / mined-out mines — stay gone, never re-fogged
   private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
@@ -1486,6 +1497,7 @@ export class MapViewerScene {
       consoleSkin: () => this.consoleSkin(),
       cheat: (kind) => this.rts?.cheat(kind) ?? false,
       toggleColliders: () => (this.showColliders = !this.showColliders),
+      togglePathing: () => (this.showPathing = !this.showPathing),
     };
     this.hud = new GameHud(ui, driver);
     this.gameMenu?.dispose();
@@ -2410,6 +2422,7 @@ export class MapViewerScene {
       const fogScene = this.viewer.map?.worldScene;
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
       if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);
+      if (this.showPathing && fogScene) this.renderPathing(fogScene.camera.viewProjectionMatrix, dt);
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -2624,6 +2637,109 @@ export class MapViewerScene {
     }
     this.dbgUnitRings = Float32Array.from(rings);
     this.dbgUnitVerts = rings.length / FLOATS_PER_VERT;
+  }
+
+  /** Draw the "Show Pathing" overlay: the pathing-cell lattice (static, built once
+   *  per map), filled unwalkable cells (rebuilt on a slow timer since only felled
+   *  trees / new buildings change them), and each moving unit's remaining route
+   *  (rebuilt every frame). Reuses the DebugColliders tri/line batch renderer. */
+  private renderPathing(viewProj: Float32Array, dt: number): void {
+    if (!this.debug) this.debug = new DebugColliders(this.viewer.gl);
+    if (this.dbgGridFor !== this.grid) this.rebuildPathGrid();
+    this.dbgBlockAccum += dt;
+    if (this.dbgBlockAccum >= 250) {
+      this.dbgBlockAccum = 0;
+      this.rebuildBlockedCells();
+    }
+    this.rebuildUnitPaths();
+    // Order matters (depth test off): fills first, lattice over them, routes on top.
+    const batches: ColliderBatch[] = [
+      { data: this.dbgBlocked, verts: this.dbgBlockedVerts, mode: "tri" },
+      { data: this.dbgGridLines, verts: this.dbgGridVerts, mode: "line" },
+      { data: this.dbgPaths, verts: this.dbgPathVerts, mode: "line" },
+    ];
+    this.debug.render(viewProj, batches);
+  }
+
+  /** Build the pathing-cell lattice (terrain-hugging boundary lines). The grid is
+   *  fixed for the life of a map, so this runs once (keyed on grid identity). Very
+   *  large grids drop to a 2-cell step so the buffer stays bounded. */
+  private rebuildPathGrid(): void {
+    const h = this.heightSampler;
+    const grid = this.grid;
+    this.dbgGridFor = grid;
+    if (!h || !grid) {
+      this.dbgGridVerts = 0;
+      return;
+    }
+    const [ox, oy] = grid.origin;
+    const W = grid.width, H = grid.height;
+    const step = W * H > 250_000 ? 2 : 1; // keep huge maps' lattice affordable
+    const c = COLLIDER_COLORS.grid;
+    const v: number[] = [];
+    const lift = COLLIDER_LIFT;
+    for (let cy = 0; cy <= H; cy += step) {
+      const y = oy + cy * PATHING_CELL;
+      for (let cx = 0; cx < W; cx++) {
+        const x0 = ox + cx * PATHING_CELL, x1 = x0 + PATHING_CELL;
+        pushColliderVert(v, x0, y, h(x0, y) + lift, c);
+        pushColliderVert(v, x1, y, h(x1, y) + lift, c);
+      }
+    }
+    for (let cx = 0; cx <= W; cx += step) {
+      const x = ox + cx * PATHING_CELL;
+      for (let cy = 0; cy < H; cy++) {
+        const y0 = oy + cy * PATHING_CELL, y1 = y0 + PATHING_CELL;
+        pushColliderVert(v, x, y0, h(x, y0) + lift, c);
+        pushColliderVert(v, x, y1, h(x, y1) + lift, c);
+      }
+    }
+    this.dbgGridLines = Float32Array.from(v);
+    this.dbgGridVerts = v.length / FLOATS_PER_VERT;
+  }
+
+  /** Fill every unwalkable pathing cell (what the pathfinder can't route through). */
+  private rebuildBlockedCells(): void {
+    const h = this.heightSampler;
+    const grid = this.grid;
+    if (!h || !grid) {
+      this.dbgBlockedVerts = 0;
+      return;
+    }
+    const [ox, oy] = grid.origin;
+    const cells: number[] = [];
+    for (let cy = 0; cy < grid.height; cy++) {
+      for (let cx = 0; cx < grid.width; cx++) {
+        if (grid.walkable(cx, cy)) continue;
+        const x0 = ox + cx * PATHING_CELL, y0 = oy + cy * PATHING_CELL;
+        pushColliderQuad(cells, x0, y0, x0 + PATHING_CELL, y0 + PATHING_CELL, h, COLLIDER_COLORS.blocked);
+      }
+    }
+    this.dbgBlocked = Float32Array.from(cells);
+    this.dbgBlockedVerts = cells.length / FLOATS_PER_VERT;
+  }
+
+  /** Rebuild the moving-unit route polylines + waypoint markers — every frame. */
+  private rebuildUnitPaths(): void {
+    const h = this.heightSampler;
+    const paths = this.rts?.debugUnitPaths();
+    if (!h || !paths) {
+      this.dbgPathVerts = 0;
+      return;
+    }
+    const v: number[] = [];
+    const c = COLLIDER_COLORS.path;
+    for (const pts of paths) {
+      pushPathPolyline(v, pts, h, c);
+      // Ring each waypoint the unit still has to reach (pts[0] is its live position);
+      // the final destination gets a bigger ring.
+      for (let i = 1; i < pts.length; i++) {
+        const last = i === pts.length - 1;
+        pushColliderRing(v, pts[i][0], pts[i][1], h(pts[i][0], pts[i][1]), last ? 16 : 7, c, last ? 14 : 6);
+      }
+    }
+    this.dbgPaths = Float32Array.from(v);
+    this.dbgPathVerts = v.length / FLOATS_PER_VERT;
   }
 
   private disposeFog(): void {
@@ -3013,6 +3129,7 @@ function zQuat(out: Float32Array, angle: number): void {
 // --- Debug collider overlay geometry helpers (interleaved [x,y,z, r,g,b,a]) ---
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
 const TREE_CLICK_RADIUS = 40; // approx harvest-click radius drawn for each tree
+const PATH_LIFT = 18; // path lines sit above the grid/blocked overlay so they read on top
 
 function pushColliderVert(a: number[], x: number, y: number, z: number, c: readonly number[]): void {
   a.push(x, y, z, c[0], c[1], c[2], c[3]);
@@ -3025,6 +3142,23 @@ function pushColliderQuad(a: number[], x0: number, y0: number, x1: number, y1: n
   const z01 = h(x0, y1) + COLLIDER_LIFT, z11 = h(x1, y1) + COLLIDER_LIFT;
   pushColliderVert(a, x0, y0, z00, c); pushColliderVert(a, x1, y0, z10, c); pushColliderVert(a, x0, y1, z01, c);
   pushColliderVert(a, x1, y0, z10, c); pushColliderVert(a, x1, y1, z11, c); pushColliderVert(a, x0, y1, z01, c);
+}
+
+/** A polyline through world points [x,y], each vertex lifted to terrain height.
+ *  Long segments are subdivided per pathing cell so the line hugs hills instead
+ *  of cutting straight through them. Emitted as GL line-segment pairs. */
+function pushPathPolyline(a: number[], pts: Array<[number, number]>, h: HeightSampler, c: readonly number[]): void {
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[i + 1];
+    const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / PATHING_CELL));
+    for (let s = 0; s < steps; s++) {
+      const ax = x0 + ((x1 - x0) * s) / steps, ay = y0 + ((y1 - y0) * s) / steps;
+      const bx = x0 + ((x1 - x0) * (s + 1)) / steps, by = y0 + ((y1 - y0) * (s + 1)) / steps;
+      pushColliderVert(a, ax, ay, h(ax, ay) + PATH_LIFT, c);
+      pushColliderVert(a, bx, by, h(bx, by) + PATH_LIFT, c);
+    }
+  }
 }
 
 /** A ring (as line segments) of radius `r` at (cx,cy), flat at height `z` + lift. */
