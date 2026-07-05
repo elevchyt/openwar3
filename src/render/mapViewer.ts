@@ -681,6 +681,96 @@ export class MapViewerScene {
     return [fx, fy];
   }
 
+  /** Where a freshly-trained unit exits its production building. WC3: units leave
+   *  from the building corner nearest the rally point (bottom-left when the rally
+   *  sits on the building itself); if that corner is blocked by a unit, building
+   *  or trees, the game rotates counterclockwise around the building to the next
+   *  clear spot. `claimed` are spots already given out this frame — a batch
+   *  trained simultaneously walks out to distinct corners instead of stacking. */
+  private trainSpawnSpot(
+    buildingId: number,
+    bx: number,
+    by: number,
+    rallyX: number,
+    rallyY: number,
+    collision: number,
+    claimed: Array<[number, number]>,
+  ): [number, number] {
+    if (!this.grid) return [bx, by];
+    const n = footprintCells(collision);
+    // Building half-extents in world units (cell = 32 → half-cell = 16). Fall back
+    // to a 3×3-ish structure if we somehow have no stamped footprint on record.
+    const meta = this.buildingFootprints.get(buildingId);
+    const halfW = meta ? meta.fp.w * 16 : 48;
+    const halfH = meta ? meta.fp.h * 16 : 48;
+    // Four corners in counterclockwise order (WC3 rotates CCW): SW → SE → NE → NW,
+    // i.e. bottom-left, bottom-right, top-right, top-left. World +y is north.
+    const corners: Array<[number, number]> = [
+      [bx - halfW, by - halfH], // SW (bottom-left)
+      [bx + halfW, by - halfH], // SE (bottom-right)
+      [bx + halfW, by + halfH], // NE (top-right)
+      [bx - halfW, by + halfH], // NW (top-left)
+    ];
+    // Start corner: the one nearest the rally point, or bottom-left (SW, index 0)
+    // when the rally sits on the building footprint itself (WC3's default corner).
+    let start = 0;
+    const rallyOnBuilding = Math.abs(rallyX - bx) <= halfW && Math.abs(rallyY - by) <= halfH;
+    if (!rallyOnBuilding) {
+      let bestD = Infinity;
+      for (let i = 0; i < 4; i++) {
+        const d = Math.hypot(corners[i][0] - rallyX, corners[i][1] - rallyY);
+        if (d < bestD) { bestD = d; start = i; }
+      }
+    }
+    // Try each corner in CCW order from the chosen one; take the first with a free
+    // spot our footprint fits on that no unit (settled OR walking) already holds.
+    for (let k = 0; k < 4; k++) {
+      const [cwx, cwy] = corners[(start + k) % 4];
+      const spot = this.freeSpotNear(cwx, cwy, n, collision, claimed, 4);
+      if (spot) { claimed.push(spot); return spot; }
+    }
+    // Every corner crowded (heavy congestion): widen the search from the building
+    // centre so the unit still lands somewhere free rather than inside another.
+    const [ccx, ccy] = this.grid.worldToCell(bx, by);
+    const wide = this.grid.nearestFit(ccx, ccy, n, 24) ?? this.grid.nearestWalkable(ccx, ccy, 24);
+    if (wide) {
+      const w = this.grid.cellToWorld(wide[0], wide[1]);
+      claimed.push(w);
+      return w;
+    }
+    return [bx, by];
+  }
+
+  /** Spiral out from world (wx,wy) for the nearest cell an n×n footprint fits on
+   *  that is neither claimed this frame nor overlapping a live unit. Radius is in
+   *  cells; null if nothing clear within it. */
+  private freeSpotNear(
+    wx: number,
+    wy: number,
+    n: number,
+    collision: number,
+    claimed: Array<[number, number]>,
+    maxRadius: number,
+  ): [number, number] | null {
+    if (!this.grid) return null;
+    const world = this.rts?.simWorld;
+    const gap = collision * 2; // keep spawned bodies at least a diameter apart
+    const [cx, cy] = this.grid.worldToCell(wx, wy);
+    for (let r = 0; r <= maxRadius; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          if (!this.grid.footprintFits(cx + dx, cy + dy, n)) continue;
+          const [sx, sy] = this.grid.cellToWorld(cx + dx, cy + dy);
+          if (claimed.some(([px, py]) => Math.hypot(px - sx, py - sy) < gap)) continue;
+          if (world?.spotOccupied(sx, sy, collision)) continue;
+          return [sx, sy];
+        }
+      }
+    }
+    return null;
+  }
+
   private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<number | null> {
     const map = this.viewer.map;
     if (!map || !this.rts) return null;
@@ -2329,22 +2419,15 @@ export class MapViewerScene {
         for (const mine of world.drainDepletedMines()) {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
         }
-        // Finished training: spawn the unit on the nearest FREE tile beside the
-        // building (not inside it), then send it to the rally point — WC3-style.
+        // Finished training: the unit exits from the building corner nearest its
+        // rally point and rotates counterclockwise to the next clear spot if that
+        // corner is crowded (WC3), then walks to the rally point. `claimed` holds
+        // the spots handed out this frame so a batch trained at once can't stack.
+        const claimed: Array<[number, number]> = [];
         for (const t of world.drainTrained()) {
           const d = this.registry.get(t.unitId);
           if (!d) continue;
-          let sx = t.x;
-          let sy = t.y;
-          if (this.grid) {
-            const [cx, cy] = this.grid.worldToCell(t.x, t.y);
-            // Place the unit on the nearest tile its OWN footprint fits on (a
-            // Knight needs more room than a Footman), not just any single free
-            // cell — otherwise big units spawned clipping the building/each other.
-            const n = footprintCells(d.collision || 16);
-            const spot = this.grid.nearestFit(cx, cy, n, 16) ?? this.grid.nearestWalkable(cx, cy, 16);
-            if (spot) [sx, sy] = this.grid.cellToWorld(spot[0], spot[1]);
-          }
+          const [sx, sy] = this.trainSpawnSpot(t.buildingId, t.x, t.y, t.rallyX, t.rallyY, d.collision || 16, claimed);
           const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
           this.sounds?.play(d.soundSet, "Ready"); // "unit ready" voice on completion
           void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
