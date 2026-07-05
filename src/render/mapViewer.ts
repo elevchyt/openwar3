@@ -2497,7 +2497,7 @@ export class MapViewerScene {
         }
         // Cast animations (throw/slam/spell) + the spell's cast/effect sound.
         for (const c of world.drainCastStarts()) {
-          this.rts!.playCastAnim(c.casterId, c.code);
+          this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
           const def = this.abilities.get(c.abilityId);
           const caster = world.units.get(c.casterId);
           const at = caster ? { x: caster.x, y: caster.y, z: this.rts!.groundHeightAt(caster.x, caster.y) } : undefined;

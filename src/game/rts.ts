@@ -944,6 +944,8 @@ export class RtsController {
           armor: def?.armor ?? 0,
           armorType: def?.armorType ?? "",
           weapon: def ? weaponFor(def) : null,
+          castPoint: def?.castPoint ?? 0,
+          castBackswing: def?.castBackswing ?? 0,
           worker: null,
           depotGold: false,
           depotLumber: false,
@@ -1032,6 +1034,8 @@ export class RtsController {
         armor: def?.armor ?? 0,
         armorType: def?.armorType ?? "",
         weapon: null,
+        castPoint: 0, // neutral-passive structures never cast
+        castBackswing: 0,
         worker: null,
         depotGold: false,
         depotLumber: false,
@@ -1111,6 +1115,8 @@ export class RtsController {
         armor: def.armor,
         armorType: def.armorType,
         weapon: weaponFor(def),
+        castPoint: def.castPoint,
+        castBackswing: def.castBackswing,
         worker,
         depotGold: DEPOT_IDS.has(def.id) && def.id !== "hlum", // lumber mill: lumber only
         depotLumber: DEPOT_IDS.has(def.id),
@@ -1232,11 +1238,15 @@ export class RtsController {
       // A materializing summon holds its birth clip (sim `spawning`) — don't let
       // the picker override it until it can act.
       if (u.spawning > 0) continue;
-      // Hold a cast animation for its brief window so the throw/slam/spell gesture
-      // plays out instead of being overwritten by the stand/attack picker.
+      // Hold a cast animation so the throw/slam/spell gesture (or a looped channel)
+      // plays out instead of being overwritten by the stand/attack picker. But drop
+      // the hold the instant the unit is interrupted — a new order, or it starts
+      // moving (a canceled cast backswing / channel) — so the picker takes over at
+      // once and WC3 "animation canceling" looks instantaneous.
       if (e.castAnimT > 0) {
         e.castAnimT -= dt;
-        continue;
+        if (u.order === "cast" && !u.moving) continue;
+        e.castAnimT = 0;
       }
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
       // the strike gesture matches the damage-point-timed hit/projectile, and
@@ -1428,9 +1438,12 @@ export class RtsController {
     return dur > 0 ? dur : fallback;
   }
 
-  /** Play a caster's spell animation once (matched to the ability's anim tags,
-   *  e.g. Storm Bolt "throw", Thunder Clap "slam", else "Spell"/"Attack"). */
-  playCastAnim(casterId: number, code: string): void {
+  /** Play a caster's spell animation (matched to the ability's anim tags, e.g. Storm
+   *  Bolt "throw", Thunder Clap "slam", else "Spell"/"Attack") and hold it for `hold`
+   *  seconds — the whole cast (wind-up + backswing, or wind-up + channel). A channel
+   *  (`loop`) prefers a "channel" clip and loops it for the duration; a one-shot cast
+   *  plays its gesture once. The sim drops the hold early on interruption. */
+  playCastAnim(casterId: number, code: string, hold: number, loop: boolean): void {
     const e = this.byId.get(casterId);
     if (!e) return;
     const def = this.abilityDefByCode(code);
@@ -1438,20 +1451,23 @@ export class RtsController {
     const names = e.anims.seqNames;
     const pick = (re: RegExp) => names.findIndex((n) => re.test(n));
     let seq = -1;
-    // Prefer the more specific tag (throw/slam/channel) over the generic "spell".
-    for (const tag of [...tags].reverse()) {
-      if (tag === "spell") continue;
-      seq = pick(new RegExp(`\\b${tag}\\b`, "i"));
-      if (seq >= 0) break;
-    }
+    // A channelled spell prefers a dedicated "channel" clip (Blizzard, Starfall).
+    if (loop) seq = pick(/channel/i);
+    // Otherwise prefer the more specific tag (throw/slam) over the generic "spell".
+    if (seq < 0)
+      for (const tag of [...tags].reverse()) {
+        if (tag === "spell") continue;
+        seq = pick(new RegExp(`\\b${tag}\\b`, "i"));
+        if (seq >= 0) break;
+      }
     if (seq < 0) seq = pick(/spell/i);
     if (seq < 0) seq = e.anims.attack;
     if (seq < 0) return;
     e.unit.instance.setSequence(seq);
-    e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+    e.unit.instance.setSequenceLoopMode(loop ? LOOP_ALWAYS : LOOP_NEVER);
     e.curSeq = seq;
     e.unit.state = WALK; // don't let the idle picker immediately override the cast
-    e.castAnimT = CAST_ANIM_HOLD; // hold the clip for its brief window
+    e.castAnimT = hold > 0 ? hold : CAST_ANIM_HOLD; // hold the clip for the whole cast
   }
 
   private abilityDefByCode(code: string): AbilityDef | undefined {

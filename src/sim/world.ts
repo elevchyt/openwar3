@@ -97,8 +97,15 @@ export type BuffKind =
   | "manaShield" // absorb incoming damage into mana instead of hp; value = mana spent per hp
   | "root"; // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
 
-/** An in-progress spell cast (order === "cast"). Walk into range, face, then at
- *  the cast point fire the effect (or launch the spell missile). */
+/** An in-progress spell cast (order === "cast"). The lifecycle, matching WC3
+ *  (hiveworkshop "Cast Point and Backswing Point" thread 265781): walk into range
+ *  and face → WIND UP for the cast point (unit `castPoint` + the ability's own
+ *  Casting Time) → at its end the effect FIRES and mana/cooldown are committed →
+ *  then either CHANNEL (the caster stands locked; a new order stops it and the
+ *  remaining ticks) or play a cast BACKSWING (pure recovery a new order cancels
+ *  for free — the effect already happened, so canceling costs nothing: the
+ *  "animation canceling" micro). Interrupting DURING the wind-up cancels the spell
+ *  entirely (no effect, no mana, no cooldown), since nothing has committed yet. */
 export interface PendingCast {
   code: string; // base ability code (dispatch)
   abilityId: string; // the SimAbility on the caster (for cooldown/mana)
@@ -107,10 +114,11 @@ export interface PendingCast {
   x: number; // point target
   y: number;
   range: number; // cast range (hull-to-hull); 0 = self/no-target
-  castLeft: number; // remaining cast point before the effect fires (-1 = not yet started)
-  started: boolean; // cast point begun (mana spent, animation playing)
-  fired: boolean; // the effect has fired (for channelled spells that then hold)
-  channelLeft: number; // remaining channel time — the caster stands + holds (Blizzard)
+  castLeft: number; // remaining wind-up before the effect fires (-1 = not yet started)
+  started: boolean; // wind-up begun (facing done, cast animation playing)
+  fired: boolean; // the effect has fired (mana/cooldown committed) — now channel/backswing
+  channelLeft: number; // remaining channel time — the caster stands + holds (Blizzard, Starfall)
+  backLeft: number; // remaining cast backswing (recovery) after a non-channelled effect
   // The order to resume after the cast (so an autocast/manual cast mid attack-move
   // or follow continues afterward instead of falling idle).
   resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | null;
@@ -248,6 +256,13 @@ export interface SimUnit {
   armor: number;
   armorType: string; // UnitBalance defType (none/small/medium/large/fort/hero/divine) → damage table
   weapon: SimWeapon | null;
+  // Ability cast animation timing (UnitWeapons.slk castpt/castbsw), per-unit — not
+  // per-weapon, so a weaponless pure caster still has them. castPoint = wind-up
+  // before a spell's effect fires (added to the ability's Casting Time); castBackswing
+  // = the recovery after the effect, which any new order cancels for free (the WC3
+  // "animation canceling" micro). See PendingCast + tickCast.
+  castPoint: number;
+  castBackswing: number;
   worker: WorkerState | null;
   building: BuildingState | null; // set for structures (construction + training)
   depotGold: boolean; // accepts gold deposits (town halls)
@@ -469,7 +484,14 @@ const REGEN_PER_INT = 0.05; // mana/sec per Intelligence point
 const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
-const SPELL_CAST_POINT = 0.4; // seconds the cast animation plays before the effect fires
+// Channelled abilities (base code): the caster stands locked for the channel and a
+// new order stops it AND the remaining ticks (unlike a backswing, which is free to
+// cancel because its effect already happened). These are WC3's stand-and-channel
+// hero spells — verified against AbilityData.slk + Liquipedia: Blizzard, Rain of
+// Fire, Starfall, Tranquility, Death and Decay, Stampede, Earthquake. NOT channelled
+// (fire-and-forget, caster free right after the cast): Flame Strike, Volcano, Locust
+// Swarm, Bladestorm (the Blademaster keeps moving), Immolation, Cluster Rockets.
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq"]);
 // Corpse decay (Units\MiscData.txt BoneDecayTime): a corpse persists 88s after
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
@@ -552,8 +574,11 @@ export class SimWorld {
   // --- spell / ability event channels drained by the renderer each frame ---
   // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt).
   private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number }> = [];
-  // A unit began casting: renderer plays the cast animation (spell/throw/slam).
-  private castStarts: Array<{ casterId: number; code: string; abilityId: string }> = [];
+  // A unit began casting: renderer plays the cast animation (spell/throw/slam) and
+  // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
+  // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
+  // one-shot gesture (Storm Bolt throw) that plays once.
+  private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean }> = [];
   // Heroes that just gained a level: renderer plays the level-up nova + sound.
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
@@ -1918,13 +1943,14 @@ export class SimWorld {
       started: false,
       fired: false,
       channelLeft: 0,
+      backLeft: 0,
       resume,
     };
     return true;
   }
 
-  /** Drive a pending cast: close to cast range, face the target, then at the cast
-   *  point spend mana + cooldown and fire the effect (or launch the spell missile). */
+  /** Drive a pending cast through its lifecycle (see PendingCast): approach + face
+   *  → wind up → fire (commit mana/cooldown) → channel or backswing → resume. */
   private tickCast(u: SimUnit, dt: number): void {
     const pc = u.pendingCast;
     if (!pc || !this.abilities) {
@@ -1938,10 +1964,11 @@ export class SimWorld {
       return;
     }
     const lvl = def.levelData[Math.min(pc.rank, def.levelData.length) - 1];
-    // Resolve where we're aiming; a unit target that died/became invalid aborts.
+    // Resolve where we're aiming; a unit target that died/became invalid aborts
+    // (but only until the effect has fired — a channel/backswing keeps its point).
     let tx = pc.x;
     let ty = pc.y;
-    if (pc.targetId) {
+    if (pc.targetId && !pc.fired) {
       const t = this.units.get(pc.targetId);
       if (!t || !this.castableTarget(u, t, def.targetFlags)) {
         this.stop(u.id);
@@ -1952,6 +1979,29 @@ export class SimWorld {
       pc.x = tx;
       pc.y = ty;
     }
+
+    // --- phase 3: post-effect. Either CHANNEL (locked, a new order stops it and
+    // its ticks) or a cast BACKSWING (pure recovery a new order cancels for free).
+    // We reach here only via the normal timeline; any new order re-tasks u.order
+    // away from "cast", so tickCast simply stops running (the recovery/channel is
+    // abandoned) — which is exactly WC3 animation canceling.
+    if (pc.fired) {
+      if (u.moving) this.settle(u);
+      if (pc.channelLeft > 0) {
+        // Channelling: keep facing the target point (Blizzard aims where you cast).
+        u.desiredFacing = Math.atan2(pc.y - u.y, pc.x - u.x);
+        pc.channelLeft -= dt;
+        if (pc.channelLeft > 0) return;
+      } else if (pc.backLeft > 0) {
+        // Backswing: the effect already happened; just stand out the recovery.
+        pc.backLeft -= dt;
+        if (pc.backLeft > 0) return;
+      }
+      this.endCast(u, pc);
+      return;
+    }
+
+    // --- phase 1: approach + face (before the wind-up begins) ---
     if (!pc.started) {
       // Approach: close to cast range (hull-to-hull for unit targets), then face.
       if (pc.range > 0) {
@@ -1968,42 +2018,46 @@ export class SimWorld {
       // to face east — and so the summon appears in front of where it's looking.
       if (Math.hypot(tx - u.x, ty - u.y) > 1) u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
       if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_CAST_EPS) return; // still turning
-      // Validate + pay: enough mana and off cooldown.
+      // Gate on affordability up front so the caster never winds up a spell it
+      // can't pay for. Mana/cooldown are only COMMITTED at the effect (below), so
+      // interrupting the wind-up cancels the spell for free.
       if (ab.cooldownLeft > 0 || u.mana < lvl.cost) {
         this.stop(u.id);
         return;
       }
-      u.mana -= lvl.cost;
-      ab.cooldownLeft = lvl.cooldown;
       pc.started = true;
-      // The effect fires at the cast POINT — a short delay while the caster plays
-      // its spell animation (raise the hammer, etc.), THEN the spell lands. A
-      // channelled spell (Blizzard, cast>0) uses its cast time as the delay.
-      pc.castLeft = lvl.castTime > 0 ? lvl.castTime : SPELL_CAST_POINT;
-      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId }); // renderer plays the cast animation + sound
+      // Wind-up before the effect = the unit's Cast Point PLUS the ability's own
+      // Casting Time (they add — hiveworkshop "Cast Point and Backswing" 265781;
+      // castPoint 0 → an instant cast). Storm Bolt = MK's 0.4; Blizzard = Archmage's
+      // 0.3 + the spell's 1.0 Casting Time = 1.3s before the first shard.
+      pc.castLeft = u.castPoint + lvl.castTime;
+      const channelLen = this.channelDuration(def, pc.rank);
+      // Tell the renderer to play the cast clip and hold it for the whole cast
+      // (wind-up + backswing, or wind-up + channel — looped for a channel).
+      const hold = pc.castLeft + (channelLen > 0 ? channelLen : u.castBackswing);
+      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 });
     }
-    // Channelled spells (Blizzard): after firing, the caster STANDS and holds for
-    // the channel duration — it doesn't auto-attack, so the channel isn't self-
-    // interrupted (manual orders still break it).
-    if (pc.fired) {
-      pc.channelLeft -= dt;
-      if (u.moving) this.settle(u);
-      u.desiredFacing = Math.atan2(pc.y - u.y, pc.x - u.x);
-      if (pc.channelLeft > 0) return;
-      this.endCast(u, pc);
-      return;
-    }
-    // Fire once the (short) cast point elapses.
+
+    // --- phase 2: wind-up. The effect fires when it elapses; canceling before then
+    // (a new order, or a stun via interruptForStun) aborts the spell with no cost. ---
     pc.castLeft -= dt;
     if (pc.castLeft > 0) return;
+    // Commit: spend mana + start the cooldown, THEN fire. Re-check mana in case it
+    // was drained (Mana Burn) mid-wind-up.
+    if (u.mana < lvl.cost || ab.cooldownLeft > 0) {
+      this.stop(u.id);
+      return;
+    }
+    u.mana -= lvl.cost;
+    ab.cooldownLeft = lvl.cooldown;
     pc.fired = true;
     this.resolveCast(u, def, pc);
     pc.channelLeft = this.channelDuration(def, pc.rank);
-    if (pc.channelLeft > 0) {
-      if (u.moving) this.settle(u); // begin channelling — hold position
-      return;
-    }
-    this.endCast(u, pc);
+    // No channel → play the cast backswing recovery (0 = none). A channel holds
+    // instead; there's no backswing after one.
+    pc.backLeft = pc.channelLeft > 0 ? 0 : u.castBackswing;
+    if (u.moving) this.settle(u);
+    if (pc.channelLeft <= 0 && pc.backLeft <= 0) this.endCast(u, pc); // instant, no recovery
   }
 
   /** End a cast: resume the pre-cast attack-move/follow, else fall idle. */
@@ -2013,17 +2067,18 @@ export class SimWorld {
     else this.stop(u.id);
   }
 
-  /** Channel time (the caster holds after firing) for a channelled spell — for a
-   *  wave field like Blizzard it's the field's lifetime (waves × interval). */
+  /** How long a channelled spell locks its caster (0 = not a channel). Matches the
+   *  wave field the handler schedules so the caster channels exactly as long as the
+   *  effect lasts: the ability's Duration for the timed fields (Tranquility 30s,
+   *  Starfall 45s, Death and Decay 35s, Stampede/Earthquake), or waves × interval
+   *  for Blizzard (which carries a 0 Duration, so its length lives in dataA/dataD). */
   private channelDuration(def: AbilityDef, rank: number): number {
+    if (!CHANNELED.has(def.code)) return 0;
     const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
-    if (lvl.castTime <= 0) return 0;
-    if (def.code === "AHbz") {
-      const waves = lvl.data[0];
-      const interval = lvl.data[3] || 0.5;
-      if (Number.isFinite(waves) && waves > 0) return waves * interval;
-    }
-    return lvl.castTime;
+    if (lvl.duration > 0) return lvl.duration;
+    const waves = lvl.data[0];
+    const interval = lvl.data[3] || 0.5;
+    return (Number.isFinite(waves) && waves > 0 ? waves : 6) * interval;
   }
 
   /** Deliver a cast's effect: launch the spell missile (if the ability has one)
@@ -2228,6 +2283,22 @@ export class SimWorld {
   private tickSpellFields(dt: number): void {
     for (let i = this.spellFields.length - 1; i >= 0; i--) {
       const f = this.spellFields[i];
+      // A channelled field (Blizzard, Rain of Fire, Starfall, …) stops the instant
+      // its caster is INTERRUPTED — re-tasked away from "cast" while channel time
+      // remained, killed, or moved on to another cast — matching WC3. A channel that
+      // ENDED normally (channelLeft reached 0) leaves the field to exhaust its own
+      // final wave on schedule, so no tick is dropped. Fields from fire-and-forget
+      // spells (Flame Strike, Volcano, Bladestorm) aren't in CHANNELED and run their
+      // full course independently of the caster.
+      if (CHANNELED.has(f.code)) {
+        const caster = this.units.get(f.casterId);
+        const pc = caster?.pendingCast;
+        const interrupted = !caster || !pc || pc.code !== f.code || (caster.order !== "cast" && pc.channelLeft > 0);
+        if (interrupted) {
+          this.spellFields.splice(i, 1);
+          continue;
+        }
+      }
       f.timer -= dt;
       if (f.timer <= 0) {
         f.timer = f.interval;
@@ -2381,7 +2452,7 @@ export class SimWorld {
     return out;
   }
   /** Casts that began this frame (renderer plays the cast animation). */
-  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string }> {
+  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean }> {
     if (!this.castStarts.length) return this.castStarts;
     const out = this.castStarts;
     this.castStarts = [];

@@ -58,6 +58,15 @@ export interface UnitDef {
   attackSides: number; // sides per damage die (sides1)
   attackCooldown: number;
   attackDamagePoint: number; // dmgpt1: delay from swing start to strike/launch (s)
+  // Ability casting animation timing, per-unit (UnitWeapons.slk castpt/castbsw),
+  // NOT per-ability. WC3's Object Editor exposes these as "Art - Animation - Cast
+  // Point" / "Cast Backswing". Cast point = the wind-up the caster plays before a
+  // spell takes effect (added to the ability's own Casting Time); 0 = instant.
+  // Cast backswing = the recovery animation AFTER the effect — pure follow-through
+  // that a new order cancels for free (the "animation canceling" micro). Verified
+  // against the real 1.27 MPQ (Archmage 0.3/2.4, Paladin 0.5/1.67, MK 0.4/0.5).
+  castPoint: number;
+  castBackswing: number;
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   canSleep: boolean; // UnitData `cansleep`: Neutral Hostile creeps of this type sleep at night
@@ -245,6 +254,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackSides: w ? num(w, "sides1", 0) : 0,
       attackCooldown: w ? num(w, "cool1", 0) : 0,
       attackDamagePoint: w ? num(w, "dmgpt1", 0) : 0,
+      // castpt/castbsw live in UnitWeapons.slk alongside the attack timing (they
+      // apply to the unit's casting, not to any one weapon). Default 0 → an instant
+      // cast / no backswing for units with no weapons row (wards, most summons).
+      castPoint: w ? num(w, "castpt", 0) : 0,
+      castBackswing: w ? num(w, "castbsw", 0) : 0,
       attackRange: w ? num(w, "rangeN1", 0) : 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       canSleep: (d ? num(d, "cansleep", 0) : 0) === 1,
