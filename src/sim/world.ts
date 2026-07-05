@@ -319,6 +319,7 @@ export interface SimUnit {
   baseDamage: number; // weapon base damage before primary-attr growth + buffs
   baseSpeed: number; // move speed before slow/haste
   baseCooldown: number; // weapon cooldown before haste/slow
+  baseDamagePoint: number; // weapon damage point before haste/slow (scales with cooldown)
   manaRegen: number; // mana per second (recomputed from INT + buffs)
   hpRegen: number; // hp per second
   lifesteal: number; // fraction of melee damage healed back (Vampiric Aura); derived
@@ -988,6 +989,7 @@ export class SimWorld {
       | "baseDamage"
       | "baseSpeed"
       | "baseCooldown"
+      | "baseDamagePoint"
       | "manaRegen"
       | "hpRegen"
       | "lifesteal"
@@ -1097,6 +1099,7 @@ export class SimWorld {
       baseDamage: unit.weapon?.damage ?? 0,
       baseSpeed: unit.speed,
       baseCooldown: unit.weapon?.cooldown ?? 0,
+      baseDamagePoint: unit.weapon?.damagePoint ?? 0,
       manaRegen: opts?.manaRegen ?? 0, // recomputeStats derives the real value below
       hpRegen: 0,
       lifesteal: 0,
@@ -1662,7 +1665,12 @@ export class SimWorld {
       const base = u.baseDamage + primaryDelta;
       u.weapon.damage = Math.max(0, base + damageBonus + base * damagePct); // Command/Trueshot add a % of base
       u.bonusDamage = u.weapon.damage - base; // the buff/aura portion
-      u.weapon.cooldown = (u.baseCooldown * (1 + slowAttack)) / (1 + hasteAttack);
+      // Attack speed scales cooldown AND damage point together (verified: thehelper
+      // "attack speed animations" thread — agility/haste divides both by the same
+      // factor, so the strike lands proportionally sooner as the unit swings faster).
+      const speedFactor = (1 + slowAttack) / (1 + hasteAttack);
+      u.weapon.cooldown = u.baseCooldown * speedFactor;
+      u.weapon.damagePoint = u.baseDamagePoint * speedFactor;
     }
     u.speed = Math.max(0, u.baseSpeed * (1 - slowMove) * (1 + hasteMove));
     u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus;
@@ -2516,6 +2524,19 @@ export class SimWorld {
    *  direct Attack orders and attack-move engagements. */
   private engage(u: SimUnit, t: SimUnit): void {
     const w = u.weapon!;
+    // Committed to a swing: the attack animation is playing toward its damage point,
+    // where the strike/projectile fires (a delayed frame WITHIN the animation). A
+    // WC3 unit stands still for that whole wind-up — it NEVER walks mid-strike, so
+    // don't let a target drifting out of range start a chase now. Hold position and
+    // keep facing the swing's target; tickSwing lands the hit at the damage point,
+    // and only afterwards (swingLeft back to -1) do we re-check range and give chase.
+    if (u.swingLeft >= 0) {
+      if (u.moving) this.settle(u);
+      u.inCombat = true;
+      const st = this.units.get(u.swingTargetId) ?? t;
+      u.desiredFacing = Math.atan2(st.y - u.y, st.x - u.x);
+      return;
+    }
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
     // Hysteresis: while already in combat, tolerate a little extra distance before
     // re-chasing, so a target that jostles across the range edge doesn't make the
@@ -2548,6 +2569,16 @@ export class SimWorld {
    *  destination only when nothing is left to fight nearby (WC3 A-move). */
   private tickAttackMove(u: SimUnit, dt: number): void {
     const w = u.weapon;
+    // Committed to a swing (see engage): stand still through the wind-up rather than
+    // advancing toward the attack-move destination — a target fleeing past acquire
+    // range mustn't drag the unit into walking while its strike is still pending.
+    if (u.swingLeft >= 0) {
+      if (u.moving) this.settle(u);
+      u.inCombat = true;
+      const st = this.units.get(u.swingTargetId);
+      if (st) u.desiredFacing = Math.atan2(st.y - u.y, st.x - u.x);
+      return;
+    }
     if (w && w.acquire > 0) {
       const hadTarget = u.targetId !== null;
       let t = hadTarget ? this.units.get(u.targetId!) : undefined;
