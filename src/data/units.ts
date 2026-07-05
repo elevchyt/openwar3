@@ -30,6 +30,11 @@ export interface UnitDef {
   moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
+  // Art - Ground Texture (unitUI "uberSplat"): a 4-char UberSplatData.slk code
+  // (e.g. HTOW, HMED) for the dirt/foundation decal painted on the terrain under a
+  // building. "" (SLK "_") = no splat. Resolved to a texture + scale via
+  // loadUberSplatRegistry (src/data/ubersplats.ts).
+  uberSplat: string;
   speed: number; // world units / second
   turnRate: number; // radians-ish per second scale (UnitData turnrate)
   moveHeight: number; // fly altitude above ground (0 for ground units)
@@ -216,6 +221,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       moveType: d ? str(d, "movetp") : "",
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
+      uberSplat: u ? str(u, "uberSplat") : "", // building ground-texture code (UberSplatData.slk)
       speed: b ? num(b, "spd", 0) : 0,
       turnRate: d ? num(d, "turnrate", 0.5) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,

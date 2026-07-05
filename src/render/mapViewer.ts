@@ -12,11 +12,13 @@ import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footp
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
 import { makeHeightSampler, makeCliffLevelSampler, type HeightSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
+import { UberSplatOverlay } from "./uberSplatOverlay";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
+import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { STARTING_UNITS, WORKERS, resolveRace, type PlayableRace } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
@@ -199,6 +201,13 @@ export class MapViewerScene {
   // their cell is explored). Rebuilt per map; updated a few times a second.
   private fog: FogOverlay | null = null;
   private fogTerrain: TerrainData | null = null; // corner grid the fog mesh is built on
+  // Building ground textures (ubersplats): the dirt/foundation decals under buildings
+  // + gold mines (issue #12). Built at map load (needs only terrain + gl). uberSplats
+  // resolves a building's `uberSplat` code → texture + scale. simBuildingSplats tracks
+  // the ids we register from spawnUnit so they can be pruned when the building dies.
+  private splats: UberSplatOverlay | null = null;
+  private uberSplats: UberSplatRegistry | null = null;
+  private simBuildingSplats = new Set<number>();
   private debug: DebugColliders | null = null; // debug collider overlay (lazy)
   private showColliders = false; // debug overlay toggle (bottom-right cheat button)
   private heightSampler: HeightSampler | null = null; // terrain height for the overlay
@@ -401,6 +410,9 @@ export class MapViewerScene {
     const prev = this.viewer.map?.worldScene;
     if (prev) this.viewer.removeScene(prev);
     this.disposeFog(); // drop the old map's fog overlay + un-hide its doodads
+    this.splats?.dispose();
+    this.splats = null;
+    this.simBuildingSplats.clear();
     this.rts?.dispose();
     this.rts = null;
     this.startMarkersHidden = false;
@@ -434,6 +446,13 @@ export class MapViewerScene {
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
       this.fogTerrain = terrain; // corner grid for the fog overlay mesh
+      // Building ground-texture (ubersplat) overlay — needs only terrain + the GL
+      // context, both ready here, so build it now (unlike fog, which waits on vision).
+      // stampMapPathing (pre-placed buildings) and spawnUnit register splats into it.
+      this.splats = new UberSplatOverlay(this.viewer.gl, terrain, (p) => {
+        const b = this.vfs.rawBytes(p);
+        return b ? blpToCanvas(b) : null;
+      });
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -471,10 +490,14 @@ export class MapViewerScene {
     // full texture: `16x16Goldmine.tga` pads to 16 cells but only blocks the
     // central 8×8, so the true radius is 128, not 256 — the padded value made
     // the ring huge and swallowed workers ~1.5 tiles early.
+    const mineDef = this.registry.get(GOLD_MINE_ID);
     for (const m of nodes.mines) {
       const radius = mineFp ? footprintRadius(mineFp) || 96 : 96;
       const mine = world.addMine(m.x, m.y, m.gold, radius);
       if (mineFp) this.nodeFootprints.set(mine.id, { fp: mineFp, x: m.x, y: m.y });
+      // Gold-mine ground texture (NGOL splat); keyed by sim id so it's removed when
+      // the mine depletes (drainDepletedMines).
+      if (mineDef) this.addBuildingSplat(`m${mine.id}`, mineDef, m.x, m.y);
     }
   }
 
@@ -547,7 +570,16 @@ export class MapViewerScene {
       .filter((u) => this.registry.get(u.typeId)?.isBuilding)
       .map((u) => ({ id: u.typeId, x: u.x, y: u.y }));
     stampFootprints(grid, buildings, (id) => this.registry.get(id)?.pathTex || undefined, readBytes);
-    for (const u of placed) {
+    for (let i = 0; i < placed.length; i++) {
+      const u = placed[i];
+      // Pre-placed buildings (neutral shops, taverns, fountains, altars, etc.) get
+      // their ground texture too. Keyed "p<i>" — static; these don't die in melee.
+      // Gold mines are handled in registerResourceNodes (keyed by sim id, so the
+      // splat can be removed when the mine depletes).
+      if (u.typeId !== GOLD_MINE_ID) {
+        const def = this.registry.get(u.typeId);
+        if (def?.isBuilding && def.uberSplat) this.addBuildingSplat(`p${i}`, def, u.x, u.y);
+      }
       if (u.typeId === GOLD_MINE_ID) {
         mines.push({ x: u.x, y: u.y, gold: u.goldAmount || 12500 });
       } else if (u.neutralPassive) {
@@ -771,6 +803,20 @@ export class MapViewerScene {
     return null;
   }
 
+  /** Lazily-built UberSplat table (building ground-texture code → texture + scale). */
+  private uberSplatRegistry(): UberSplatRegistry {
+    if (!this.uberSplats) this.uberSplats = loadUberSplatRegistry(this.vfs);
+    return this.uberSplats;
+  }
+
+  /** Paint a building's ground texture (ubersplat) on the terrain under it, keyed by
+   *  `key`. A no-op for units without a `uberSplat`, or before the overlay exists. */
+  private addBuildingSplat(key: number | string, def: UnitDef, x: number, y: number): void {
+    if (!def.uberSplat || !this.splats) return;
+    const s = this.uberSplatRegistry().get(def.uberSplat);
+    if (s) this.splats.add(key, x, y, s.scale, s.texture);
+  }
+
   private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<number | null> {
     const map = this.viewer.map;
     if (!map || !this.rts) return null;
@@ -790,6 +836,12 @@ export class MapViewerScene {
     if (fp && this.grid) {
       stampFootprint(this.grid, fp, x, y);
       this.buildingFootprints.set(simId, { fp, x, y }); // for unstamping on cancel
+    }
+    // Paint the building's ground texture (ubersplat) on the terrain under it. Tracked
+    // so it's removed when the building is destroyed (reconcile) or cancelled.
+    if (def.isBuilding && def.uberSplat) {
+      this.simBuildingSplats.add(simId);
+      this.addBuildingSplat(simId, def, x, y);
     }
     return simId;
   }
@@ -2417,6 +2469,7 @@ export class MapViewerScene {
         }
         for (const mine of world.drainDepletedMines()) {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
+          this.splats?.remove(`m${mine.id}`); // drop the mine's ground texture
         }
         // Finished training: the unit exits from the building corner nearest its
         // rally point and rotates counterclockwise to the next clear spot if that
@@ -2501,6 +2554,14 @@ export class MapViewerScene {
       this.viewer.startFrame();
       this.viewer.render();
       const fogScene = this.viewer.map?.worldScene;
+      // Building ground textures (ubersplats) draw on the terrain, BEFORE the fog so
+      // the veil dims them like the ground. Prune those whose building has died.
+      if (this.splats && fogScene) {
+        const world = this.rts?.simWorld;
+        if (world) this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
+        for (const id of [...this.simBuildingSplats]) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
+        this.splats.render(fogScene.camera.viewProjectionMatrix);
+      }
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
       if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);
       if (this.showPathing && fogScene) this.renderPathing(fogScene.camera.viewProjectionMatrix, dt);
@@ -2526,6 +2587,9 @@ export class MapViewerScene {
     this.stop();
     this.rts?.dispose();
     this.rts = null;
+    this.splats?.dispose();
+    this.splats = null;
+    this.simBuildingSplats.clear();
     this.debug?.dispose();
     this.debug = null;
     this.pathGridLayer?.dispose();
