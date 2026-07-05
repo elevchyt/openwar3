@@ -1,5 +1,5 @@
 import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
-import { findPath } from "./pathfind";
+import { findPath, smoothPath } from "./pathfind";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
 import { SPELL_HANDLERS, AURA_BUFFS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
@@ -3390,16 +3390,23 @@ export class SimWorld {
     const wasReserved = u.hasReservation;
     this.unsettle(u);
     const start = this.grid.worldToCell(u.x, u.y);
-    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), this.clearanceBlocker(u, start));
+    const blocked = this.clearanceBlocker(u, start);
+    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), blocked);
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
       if (wasReserved) this.settle(u);
       return false;
     }
+    // String-pull the raw A* staircase into straight runs (same clearance
+    // predicate, so it never routes anywhere A* wouldn't). This makes the unit
+    // glide straight toward each turn-point instead of stepping cell-to-cell in
+    // 45° increments — the per-segment heading (and thus facing) then tracks the
+    // real travel direction rather than zig-zagging and snapping on arrival.
+    const smoothed = smoothPath(this.grid, cells, blocked);
     // Cell centres as waypoints. When the path actually reaches the target cell
     // (best-effort paths stop short), finish on the footprint-aligned point so
     // the unit settles exactly onto the cells it will reserve.
-    const pts = cells.slice(1).map(([cx, cy]) => this.grid.cellToWorld(cx, cy)) as Array<[number, number]>;
+    const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.cellToWorld(cx, cy)) as Array<[number, number]>;
     const [lastX, lastY] = pts[pts.length - 1];
     if (Math.hypot(tx - lastX, ty - lastY) <= PATHING_CELL) {
       pts.push(this.grid.snapForFootprint(tx, ty, u.footprint));
@@ -3468,6 +3475,7 @@ export class SimWorld {
       let dirX = 0;
       let dirY = 0;
       while (budget > 0 && u.waypoint < u.path.length) {
+        const isLast = u.waypoint === u.path.length - 1;
         const [wx, wy] = u.path[u.waypoint];
         const dx = wx - u.x;
         const dy = wy - u.y;
@@ -3476,12 +3484,21 @@ export class SimWorld {
           u.waypoint++;
           continue;
         }
-        dirX = dx / dist;
-        dirY = dy / dist;
+        const ux = dx / dist;
+        const uy = dy / dist;
         const step = Math.min(budget, dist);
-        u.x += dirX * step;
-        u.y += dirY * step;
+        u.x += ux * step;
+        u.y += uy * step;
         budget -= step;
+        // Steer facing from real travel segments only. pathTo appends a sub-cell
+        // "footprint-snap" nudge as the final waypoint (so even-footprint units
+        // settle onto their reserved corner without a position pop); that nudge
+        // points along an arbitrary axis/diagonal and must NOT hijack the heading
+        // on the last ticks — leave desiredFacing on the true approach heading.
+        if (!(isLast && dist < PATHING_CELL)) {
+          dirX = ux;
+          dirY = uy;
+        }
         if (dist - step <= ARRIVE_EPS) u.waypoint++;
       }
       // Face the movement direction; the shared turning pass rotates at the
@@ -3507,8 +3524,21 @@ export class SimWorld {
         // A plain move ends here. An attack-move only ends when it has actually
         // reached its destination — a path that ended mid-chase (or short of the
         // goal) stays an attack-move so tickAttackMove keeps fighting/advancing.
-        if (u.order === "move") u.order = "idle";
-        else if (u.order === "attackmove" && Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= PATHING_CELL * 1.5) u.order = "idle";
+        const arrived =
+          u.order === "move" ||
+          (u.order === "attackmove" && Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= PATHING_CELL * 1.5);
+        if (arrived) {
+          // Keep the heading the unit travelled with: pin desiredFacing onto the
+          // current facing so the shared turning pass (which keeps rotating even
+          // a stopped unit toward desiredFacing) has nothing left to do. Without
+          // this a unit that arrived mid-turn would keep swivelling to its last
+          // path segment after halting — a visible "snap". u.facing is still last
+          // tick's smoothed travel heading here (the turning pass runs later this
+          // tick), so it lands facing the way it came — as WC3 units do. Belt-and-
+          // suspenders alongside path smoothing + the final-nudge guard above.
+          u.desiredFacing = u.facing;
+          u.order = "idle";
+        }
       }
     }
   }
