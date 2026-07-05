@@ -2523,8 +2523,16 @@ export class MapViewerScene {
     if ((letters && this.keys.has("a")) || this.keys.has("arrowleft")) this.pan(right, -speed);
     this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
 
-    if (this.canvas.width !== scene.viewport[2] || this.canvas.height !== scene.viewport[3]) {
-      syncCanvasSize(this.canvas);
+    // Keep the WebGL backing buffer matched to the on-screen size EVERY frame so
+    // the scene keeps its true aspect ratio when the window changes — F11
+    // fullscreen, opening/closing devtools, browser zoom or a DPI change (issue
+    // #1). The old guard compared the buffer size to the stored viewport (always
+    // equal after the first sync), so it never fired on resize and CSS stretched
+    // the stale buffer. syncCanvasSize now derives the wanted size from the CSS
+    // size and only reallocates on an actual change, so calling it per-frame is
+    // cheap.
+    syncCanvasSize(this.canvas);
+    if (scene.viewport[2] !== this.canvas.width || scene.viewport[3] !== this.canvas.height) {
       scene.viewport[2] = this.canvas.width;
       scene.viewport[3] = this.canvas.height;
     }
@@ -2811,8 +2819,18 @@ export class MapViewerScene {
 }
 
 function syncCanvasSize(canvas: HTMLCanvasElement): void {
-  canvas.width = Math.floor(canvas.clientWidth * devicePixelRatio) || 1280;
-  canvas.height = Math.floor(canvas.clientHeight * devicePixelRatio) || 720;
+  // Match the WebGL backing buffer to the element's on-screen (CSS) size × DPR.
+  // Derive the wanted size from clientWidth/Height (the actual on-screen size),
+  // NOT from the current buffer — that's what lets a window resize (F11,
+  // devtools, browser zoom / DPI change) re-sync instead of stretching a stale
+  // buffer. Only assign when it changed: reassigning canvas.width/height even to
+  // the same value reallocates and clears the GL drawing buffer.
+  const w = Math.floor(canvas.clientWidth * devicePixelRatio) || 1280;
+  const h = Math.floor(canvas.clientHeight * devicePixelRatio) || 720;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
 }
 
 function clamp(v: number, lo: number, hi: number): number {
