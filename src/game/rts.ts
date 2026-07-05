@@ -2098,17 +2098,103 @@ export class RtsController {
 
   /** Minimap dots: world positions + owners of living units the local team can
    *  see. Your own units always show; fogged enemies/neutrals are dropped so the
-   *  minimap hides enemy movements exactly like the main view. */
+   *  minimap hides enemy movements exactly like the main view. Creep camps and
+   *  neutral buildings are pulled out here — they get their own persistent camp
+   *  circles / house icons (creepCamps / neutralBuildings) instead of unit dots. */
   dots(): Array<{ x: number; y: number; owner: number }> {
     const out: Array<{ x: number; y: number; owner: number }> = [];
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
       if (!u) continue;
+      if (u.isCreep) continue; // shown as a camp difficulty circle
+      if (u.neutralPassive && u.building != null) continue; // shown as a house icon
       if (!e.hidden || (u.team === this.localTeam && !u.neutralPassive)) {
         out.push({ x: u.x, y: u.y, owner: u.owner });
       }
     }
     return out;
+  }
+
+  // Creep-camp minimap markers. WC3 groups a map's Neutral Hostile creeps into
+  // camps and marks each on the minimap with a difficulty dot coloured by the
+  // camp's COMBINED creep level — green 1–9, yellow 10–19, red 20+ (Liquipedia
+  // "Creeps"). The level is fixed map data: computed once from the placed creeps
+  // and never recomputed, so the colour never drifts as the camp is whittled
+  // down. Camps are clustered by guard-post proximity using the same "acts as one
+  // camp" radius the guard AI already uses (MiscGame CreepCallForHelp).
+  private static readonly CAMP_LINK = 600; // world units — CreepCallForHelp; matches world.ts sameCamp
+  private creepCampData: Array<{ x: number; y: number; level: number; members: number[] }> | null = null;
+
+  /** Cluster the seeded creeps into camps once (guard posts are fixed, so this is
+   *  stable). Each camp keeps its centre, its fixed total level, and its member
+   *  sim ids so the marker can vanish once the whole camp is dead. */
+  private buildCreepCamps(): Array<{ x: number; y: number; level: number; members: number[] }> {
+    const creeps: Array<{ id: number; gx: number; gy: number; level: number }> = [];
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u || !u.isCreep) continue;
+      creeps.push({ id: e.simId, gx: u.guardX, gy: u.guardY, level: e.level });
+    }
+    // Union-find connected components over the "same camp" (guard posts within
+    // CAMP_LINK of each other) relation.
+    const parent = creeps.map((_, i) => i);
+    const find = (i: number): number => {
+      while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+      return i;
+    };
+    const link2 = RtsController.CAMP_LINK * RtsController.CAMP_LINK;
+    for (let i = 0; i < creeps.length; i++) {
+      for (let j = i + 1; j < creeps.length; j++) {
+        const dx = creeps[i].gx - creeps[j].gx, dy = creeps[i].gy - creeps[j].gy;
+        if (dx * dx + dy * dy <= link2) parent[find(i)] = find(j);
+      }
+    }
+    const groups = new Map<number, { sx: number; sy: number; level: number; members: number[] }>();
+    for (let i = 0; i < creeps.length; i++) {
+      const r = find(i);
+      const g = groups.get(r) ?? { sx: 0, sy: 0, level: 0, members: [] };
+      g.sx += creeps[i].gx; g.sy += creeps[i].gy; g.level += creeps[i].level; g.members.push(creeps[i].id);
+      groups.set(r, g);
+    }
+    return [...groups.values()].map((g) => ({
+      x: g.sx / g.members.length, y: g.sy / g.members.length, level: g.level, members: g.members,
+    }));
+  }
+
+  /** Creep-camp difficulty markers for the minimap: camp centre + fixed combined
+   *  level. A camp shows once its location has been explored and disappears once
+   *  every creep in it is dead (WC3 clears the marker when the camp is wiped). */
+  creepCamps(): Array<{ x: number; y: number; level: number }> {
+    if (!this.seeded) return [];
+    if (this.creepCampData === null) this.creepCampData = this.buildCreepCamps();
+    const out: Array<{ x: number; y: number; level: number }> = [];
+    for (const camp of this.creepCampData) {
+      if (!camp.members.some((id) => this.sim.units.has(id))) continue; // camp cleared
+      if (!this.pointExplored(camp.x, camp.y)) continue;
+      out.push({ x: camp.x, y: camp.y, level: camp.level });
+    }
+    return out;
+  }
+
+  /** Neutral-passive BUILDINGS (taverns, goblin merchant/lab, mercenary camps,
+   *  fountains…) for the minimap house icon. Critters (non-buildings) are left as
+   *  plain neutral dots. Shown once the building's location has been explored. */
+  neutralBuildings(): Array<{ x: number; y: number }> {
+    const out: Array<{ x: number; y: number }> = [];
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u || !u.neutralPassive || u.building == null) continue;
+      if (!this.pointExplored(u.x, u.y)) continue;
+      out.push({ x: u.x, y: u.y });
+    }
+    return out;
+  }
+
+  /** Has this world point ever been seen? Camp circles + neutral-building icons
+   *  persist on the minimap once explored, even after the area falls back to fog
+   *  (like WC3's last-seen building memory). */
+  private pointExplored(wx: number, wy: number): boolean {
+    return this.vision.stateAt(wx, wy) !== FogState.Unexplored;
   }
 
   /** True if this unit belongs to the local player (the only units they may

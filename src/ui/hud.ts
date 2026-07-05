@@ -72,6 +72,11 @@ export interface HudDriver {
   selection(): HudSelection | null;
   /** Minimap dots: world positions + owning player (for color). */
   dots(): Array<{ x: number; y: number; owner: number }>;
+  /** Creep-camp difficulty markers: camp centre + combined creep level (the HUD
+   *  colours it green ≤9 / yellow ≤19 / red 20+). Fixed map data — never changes. */
+  creepCamps(): Array<{ x: number; y: number; level: number }>;
+  /** Neutral-passive buildings (taverns/shops/labs/fountains) for the house icon. */
+  neutralBuildings(): Array<{ x: number; y: number }>;
   /** World rect covered by the map: [originX, originY, width, height]. */
   mapBounds(): [number, number, number, number];
   /** Fog-of-war state at a world point: 0 unexplored, 1 explored, 2 visible. */
@@ -154,6 +159,18 @@ const PLAYER_COLORS = [
   "#20c000", "#e55bb0", "#959697", "#7ebff1", "#106246", "#4e2a04",
 ];
 const NEUTRAL_COLOR = "#b8b8b8";
+
+// Creep-camp difficulty dot colours (Liquipedia "Creeps"): the camp's combined
+// creep level → minimap colour. Green 1–9 (easy), yellow 10–19 (medium), red
+// 20+ (hard). The level is fixed map data, so a camp's colour never changes.
+const CAMP_EASY = "#38d038"; // green
+const CAMP_MEDIUM = "#ecd60c"; // golden yellow (the reference's dominant medium hue)
+const CAMP_HARD = "#ff2a2a"; // red
+function campColor(level: number): string {
+  return level >= 20 ? CAMP_HARD : level >= 10 ? CAMP_MEDIUM : CAMP_EASY;
+}
+// The real WC3 minimap house glyph for neutral buildings (yellow house on clear).
+const NEUTRAL_BUILDING_ICON = "UI\\Minimap\\MiniMap-NeutralBuilding.blp";
 
 const MINIMAP_SIZE = 168; // css px
 const DOTS_PERIOD = 100; // ms between minimap dot redraws
@@ -1005,19 +1022,69 @@ export class GameHud {
   }
 
   private fogImage: ImageData | null = null; // reused fog-of-war mask (MINIMAP_SIZE²)
+  private houseIcon: HTMLImageElement | null = null; // neutral-building glyph (lazy-loaded)
+  private houseIconReady = false;
 
   private drawDots(): void {
     const ctx = this.dotsCanvas.getContext("2d")!;
     ctx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
     const [ox, oy, w, h] = this.driver.mapBounds();
-    this.paintFog(ctx, ox, oy, w, h); // black/grey fog under the dots (own units always shown)
+    this.paintFog(ctx, ox, oy, w, h); // black/grey fog under the markers (own units always shown)
+    // Persistent map markers ride ON TOP of the fog veil — bright once explored.
+    this.drawCreepCamps(ctx, ox, oy, w, h);
+    this.drawNeutralBuildings(ctx, ox, oy, w, h);
     for (const dot of this.driver.dots()) {
-      const u = (dot.x - ox) / w;
-      const v = 1 - (dot.y - oy) / h;
-      if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+      const p = this.toMini(dot.x, dot.y, ox, oy, w, h);
+      if (!p) continue;
       ctx.fillStyle = dot.owner >= 0 ? PLAYER_COLORS[dot.owner % PLAYER_COLORS.length] : NEUTRAL_COLOR;
-      ctx.fillRect(u * MINIMAP_SIZE - 2, v * MINIMAP_SIZE - 2, 4, 4);
+      ctx.fillRect(p[0] - 2, p[1] - 2, 4, 4);
     }
+  }
+
+  /** World point → minimap canvas pixel (north-up), or null if off-map. */
+  private toMini(x: number, y: number, ox: number, oy: number, w: number, h: number): [number, number] | null {
+    const u = (x - ox) / w, v = 1 - (y - oy) / h;
+    if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+    return [u * MINIMAP_SIZE, v * MINIMAP_SIZE];
+  }
+
+  /** Creep-camp difficulty dots: one per camp, coloured by combined level, with a
+   *  thin dark rim so the bright dot reads against any terrain. */
+  private drawCreepCamps(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
+    for (const camp of this.driver.creepCamps()) {
+      const p = this.toMini(camp.x, camp.y, ox, oy, w, h);
+      if (!p) continue;
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = campColor(camp.level);
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(0,0,0,0.65)";
+      ctx.stroke();
+    }
+  }
+
+  /** Neutral-building house icons (the real WC3 minimap glyph, once loaded). */
+  private drawNeutralBuildings(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
+    this.ensureHouseIcon();
+    if (!this.houseIconReady || !this.houseIcon) return;
+    const s = 11; // glyph size in the 168-px minimap space
+    for (const b of this.driver.neutralBuildings()) {
+      const p = this.toMini(b.x, b.y, ox, oy, w, h);
+      if (!p) continue;
+      ctx.drawImage(this.houseIcon, p[0] - s / 2, p[1] - s / 2, s, s);
+    }
+  }
+
+  /** Lazily fetch + cache the neutral-building glyph as a drawable image. */
+  private ensureHouseIcon(): void {
+    if (this.houseIcon) return;
+    const url = this.driver.blpUrl(NEUTRAL_BUILDING_ICON);
+    if (!url) return;
+    const img = new Image();
+    img.onload = () => { this.houseIconReady = true; };
+    img.src = url;
+    this.houseIcon = img;
   }
 
   /** Paint the fog-of-war mask onto the minimap: unexplored is opaque black (hiding

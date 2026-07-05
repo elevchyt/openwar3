@@ -1366,6 +1366,8 @@ export class MapViewerScene {
       },
       selection: () => this.rts?.selectedInfo() ?? null,
       dots: () => this.rts?.dots() ?? [],
+      creepCamps: () => this.rts?.creepCamps() ?? [],
+      neutralBuildings: () => this.rts?.neutralBuildings() ?? [],
       mapBounds: () => {
         const map = this.viewer.map;
         if (!map) return [0, 0, 1, 1];
