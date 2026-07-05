@@ -155,6 +155,19 @@ export class ModelViewerScene {
     return sequences;
   }
 
+  /** Parse + upload a model into the cache WITHOUT displaying it, so a later
+   *  load() of the same path reuses it instantly instead of parsing the MDX and
+   *  uploading its textures inside the render frame (the first-select FPS spike).
+   *  Shares the viewer + modelCache with load() by design — pre-filling the cache
+   *  load() reads is the whole point. No-op if already cached. */
+  async preload(path: string): Promise<void> {
+    if (this.modelCache.has(path)) return;
+    const bytes = await this.vfs.read(path);
+    const model = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
+    if (model) this.modelCache.set(path, model);
+    await this.viewer.whenAllLoaded(); // decode + upload textures now (idle), not on first show
+  }
+
   sequences(): SequenceInfo[] {
     return (this.model?.sequences ?? []).map((s, index) => ({ index, name: s.name }));
   }

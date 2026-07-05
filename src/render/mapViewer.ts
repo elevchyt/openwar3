@@ -75,6 +75,15 @@ const AURA_EFFECT_MODEL: Record<string, string> = {
 };
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
+// Command-card icons that aren't tied to a specific unit/ability: the order row
+// (Move/Stop/Hold/Attack/Patrol), a worker's Build/Repair, Cancel, and the four
+// race rally-point flags. Warmed up-front with the data-driven icons so the very
+// first selection of any unit doesn't decode its whole order row in one frame.
+const FIXED_CARD_ICONS = [
+  "BTNMove", "BTNStop", "BTNHoldPosition", "BTNAttack", "BTNPatrol",
+  "BTNHumanBuild", "BTNRepair", "BTNCancel",
+  "BTNRallyPoint", "BTNOrcRallyPoint", "BTNRallyPointUndead", "BTNRallyPointNightElf",
+];
 const MAX_HEROES = 3; // WC3 melee: a player may field at most 3 heroes (altars + tavern combined)
 const TAVERN_HIRE_TIME = 0; // tavern heroes are HIRED instantly — no build time, the hero just spawns (pops next tick)
 
@@ -226,6 +235,12 @@ export class MapViewerScene {
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
   private portraitLoading = false;
+  // Background portrait-model warming (kills the first-select spike): types whose
+  // bust is already parsed/cached, the pending decode queue, and the idle-drain guard.
+  private warmedPortraits = new Set<string>();
+  private portraitWarmQueue: string[] = [];
+  private portraitWarmScheduled = false;
+  private portraitWarmAccum = 0; // ms since the last on-map type re-scan
   private portraitLabel = ""; // sound-set of the unit currently in the portrait (drives talk anim)
   private lastVoice: { label: string; until: number } | null = null; // most recent voice line (label + when it ends), so a bust that finishes loading mid-line still mouths it
   private cameraLock = false; // portrait held → camera follows the selected unit
@@ -304,6 +319,9 @@ export class MapViewerScene {
     // Mute toggle on the bottom-left debug panel.
     this.metrics.onToggleMute = (muted) => this.sounds?.setMuted(muted);
     this.attachControls();
+    // Decode command-card icons ahead of time (idle) so the first selection of a
+    // unit/building type doesn't stall a frame decoding its whole card at once.
+    this.warmIconCache();
   }
 
   /** Construct the viewer and wait for its base SLK tables (required before loadMap). */
@@ -569,6 +587,10 @@ export class MapViewerScene {
     for (const slot of config.slots) this.rts!.simWorld.initStash(slot.id, startGold, startLumber);
     this.mountHud();
     void this.loadSelectionCircles();
+    // Warm portrait busts in the background so the first selection of a unit type
+    // doesn't stall a frame parsing its model (see warmPortraits). Kicked off once
+    // the HUD (portrait canvas) and local race exist; re-scanned in the frame loop.
+    this.warmPortraits();
     return races;
   }
 
@@ -1590,6 +1612,59 @@ export class MapViewerScene {
       });
   }
 
+  /** Portrait busts are loaded lazily on the first selection of each unit type:
+   *  the MDX parse + texture upload stalls a frame (measured 100–280ms), and the
+   *  very first portrait additionally builds the bust viewer + compiles its
+   *  shaders. Warm them in the background instead — preload the portrait model for
+   *  every type the player is likely to click (units on the map now, plus the
+   *  local race's producible roster) during idle, so the click just reuses a
+   *  cached model. Re-scanned periodically so freshly trained/scouted types warm
+   *  before they're clicked; the lazy load() in updatePortrait() stays the
+   *  fallback for anything selected before warming reaches it. */
+  private warmPortraits(): void {
+    if (!this.hud || !this.rts) return;
+    const consider = (typeId: string) => {
+      const def = this.registry.get(typeId);
+      if (!def?.model) return;
+      const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
+      const path = this.vfs.exists(portraitPath) ? portraitPath : def.model; // mirror updatePortrait()
+      if (this.warmedPortraits.has(path)) return;
+      this.warmedPortraits.add(path);
+      this.portraitWarmQueue.push(path);
+    };
+    for (const u of this.rts.simWorld.units.values()) consider(u.typeId);
+    for (const bid of buildsFor(this.localRace)) {
+      consider(bid);
+      for (const uid of trainsFor(bid)) consider(uid); // units this building trains
+    }
+    this.schedulePortraitWarm();
+  }
+
+  /** Drain the portrait-warm queue one model per idle slice — a parse + GPU
+   *  upload is heavy (up to ~90ms for a big building), so one at a time keeps each
+   *  slice short. Creating the viewer on the first slice moves the one-time shader
+   *  compile off the click too. Yields to any in-flight on-click load so warming
+   *  never contends for the viewer's single instance slot. */
+  private schedulePortraitWarm(): void {
+    if (this.portraitWarmScheduled || !this.portraitWarmQueue.length) return;
+    this.portraitWarmScheduled = true;
+    const run = () => {
+      this.portraitWarmScheduled = false;
+      if (!this.hud) return; // match torn down
+      if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(this.hud.portraitCanvas(), this.vfs);
+      if (this.portraitLoading) { this.schedulePortraitWarm(); return; } // let the real selection win
+      const path = this.portraitWarmQueue.shift();
+      if (!path) return;
+      this.portraitViewer
+        .preload(path)
+        .catch(() => {})
+        .finally(() => this.schedulePortraitWarm());
+    };
+    const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback.bind(window) : null;
+    if (ric) ric(run, { timeout: 2000 });
+    else setTimeout(run, 50);
+  }
+
   // --- command card ---------------------------------------------------------
 
   private cmd(over: Partial<CommandButton>): CommandButton {
@@ -2154,6 +2229,41 @@ export class MapViewerScene {
     return url;
   }
 
+  /** Pre-decode every command-card icon in the background so none is ever decoded
+   *  inside a render frame. blpIcon() is synchronous (BLP → canvas → PNG data URL):
+   *  cheap for one icon, but a whole card's worth decoding at once on the FIRST
+   *  selection of a unit/building type stalls a frame — the visible "first select"
+   *  FPS spike. The unit/ability registries are fixed for the session, so we warm
+   *  the cache once during idle time; blpIcon()'s lazy decode stays as the fallback
+   *  for anything selected before warming reaches it. */
+  private warmIconCache(): void {
+    const paths = new Set<string>();
+    for (const n of FIXED_CARD_ICONS) paths.add(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
+    // The hero "Hero Abilities" learn-skill book uses the disabled-folder Skillz art
+    // (see pushAbilityButtons) — not a registry icon, so warm it explicitly.
+    paths.add("ReplaceableTextures\\CommandButtonsDisabled\\DISBTNSkillz.blp");
+    for (const d of this.registry.all()) if (d.icon) paths.add(d.icon);
+    for (const a of this.abilities.all()) if (a.icon) paths.add(a.icon);
+    const queue = [...paths].filter((p) => !this.iconCache.has(p));
+
+    let i = 0;
+    const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback.bind(window) : null;
+    const step = (deadline?: IdleDeadline) => {
+      // With real idle time, drain until the budget runs low. When the browser
+      // forced us in on the timeout (or there's no idle API) decode a small fixed
+      // batch instead, so we make steady progress without stealing a whole frame.
+      const hasIdle = !!deadline && !deadline.didTimeout;
+      let n = 0;
+      while (i < queue.length && (hasIdle ? deadline!.timeRemaining() > 1 : n < 6)) {
+        this.blpIcon(queue[i++]); // decode + cache (a miss caches null, so no retry)
+        n++;
+      }
+      if (i < queue.length) schedule();
+    };
+    const schedule = () => (ric ? ric(step, { timeout: 1000 }) : setTimeout(step, 32));
+    schedule();
+  }
+
   private footprintFor(texPath: string): Footprint | null {
     let fp = this.footprints.get(texPath);
     if (fp === undefined) {
@@ -2173,6 +2283,13 @@ export class MapViewerScene {
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
       this.updatePortrait();
+      // Re-scan for new on-map unit types (trained units, scouted enemies) a couple
+      // times a second and warm their portraits before they're clicked.
+      this.portraitWarmAccum += dt;
+      if (this.portraitWarmAccum > 2000) {
+        this.portraitWarmAccum = 0;
+        this.warmPortraits();
+      }
       // The F10 game menu freezes the simulation (units hold; rendering continues).
       if (!this.paused) {
         this.tickPendingBuild(dt / 1000); // seconds, matching the sim's clock
