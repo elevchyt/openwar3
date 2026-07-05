@@ -44,6 +44,52 @@ export interface ColliderBatch {
   mode: "tri" | "line";
 }
 
+/** A persistent GPU buffer for one overlay batch: upload its geometry ONCE (or only
+ *  when it changes) with set(), then draw it many frames via DebugColliders.render-
+ *  Layers WITHOUT re-uploading. This is the fix for large static overlays — the
+ *  pathing grid lattice + blocked cells are >1M verts each and re-uploading them
+ *  every frame (as ColliderBatch does) melts the framerate. */
+export class OverlayLayer {
+  private buf: WebGLBuffer;
+  verts = 0;
+  constructor(private gl: GL, readonly mode: "tri" | "line", private dynamic = false) {
+    this.buf = gl.createBuffer()!;
+  }
+  /** Upload interleaved [x,y,z,r,g,b,a] verts. Call only when the geometry changes
+   *  (static layers: once; the per-frame route layer: constructed with dynamic=true). */
+  set(data: Float32Array, verts: number): void {
+    this.verts = verts;
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buf);
+    this.gl.bufferData(
+      this.gl.ARRAY_BUFFER,
+      data.subarray(0, verts * FLOATS_PER_VERT),
+      this.dynamic ? this.gl.DYNAMIC_DRAW : this.gl.STATIC_DRAW,
+    );
+  }
+  buffer(): WebGLBuffer {
+    return this.buf;
+  }
+  dispose(): void {
+    this.gl.deleteBuffer(this.buf);
+  }
+}
+
+/** Snapshot of the GL state DebugColliders touches, so it can be restored (mdx-m3-
+ *  viewer caches state JS-side and will draw the next frame with our program/attribs
+ *  if we leave them dirty). */
+interface SavedGLState {
+  program: WebGLProgram | null;
+  arrayBuf: WebGLBuffer | null;
+  blend: boolean;
+  depthTest: boolean;
+  cull: boolean;
+  blendSrcRGB: number;
+  blendDstRGB: number;
+  blendSrcA: number;
+  blendDstA: number;
+  attribs: boolean[];
+}
+
 export class DebugColliders {
   private gl: GL;
   private program: WebGLProgram;
@@ -64,25 +110,62 @@ export class DebugColliders {
   }
 
   /** Draw a list of triangle/line batches (interleaved [x,y,z,r,g,b,a]) in one GL
-   *  state save/restore. Called every frame while the overlay is on. */
+   *  state save/restore, re-uploading each batch's data. For small, changes-every-
+   *  frame geometry (the collider overlay's rings). Large static geometry should use
+   *  a persistent OverlayLayer + renderLayers() instead. */
   render(viewProj: Float32Array | Iterable<number>, batches: ColliderBatch[]): void {
     if (batches.every((b) => b.verts === 0)) return;
     const gl = this.gl;
-    // --- snapshot GL state we touch (mirror FogOverlay) ---
-    const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
-    const prevArrayBuf = gl.getParameter(gl.ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
-    const prevBlend = gl.isEnabled(gl.BLEND);
-    const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST);
-    const prevCull = gl.isEnabled(gl.CULL_FACE);
-    const prevBlendSrcRGB = gl.getParameter(gl.BLEND_SRC_RGB) as number;
-    const prevBlendDstRGB = gl.getParameter(gl.BLEND_DST_RGB) as number;
-    const prevBlendSrcA = gl.getParameter(gl.BLEND_SRC_ALPHA) as number;
-    const prevBlendDstA = gl.getParameter(gl.BLEND_DST_ALPHA) as number;
-    const prevAttribEnabled: boolean[] = [];
-    for (let i = 0; i < this.maxAttribs; i++) {
-      prevAttribEnabled[i] = gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_ENABLED) as boolean;
+    const saved = this.begin(viewProj);
+    const stride = FLOATS_PER_VERT * 4;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+    gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, stride, 3 * 4);
+    for (const b of batches) {
+      if (b.verts === 0) continue;
+      gl.bufferData(gl.ARRAY_BUFFER, b.data.subarray(0, b.verts * FLOATS_PER_VERT), gl.DYNAMIC_DRAW);
+      gl.drawArrays(b.mode === "tri" ? gl.TRIANGLES : gl.LINES, 0, b.verts);
     }
+    this.end(saved);
+  }
 
+  /** Draw persistent OverlayLayers whose VBOs already hold their geometry — NO per-
+   *  frame upload. The big win for static overlays (pathing grid + blocked cells):
+   *  bind each buffer and draw it, instead of re-streaming megabytes every frame. */
+  renderLayers(viewProj: Float32Array | Iterable<number>, layers: OverlayLayer[]): void {
+    if (layers.every((l) => l.verts === 0)) return;
+    const gl = this.gl;
+    const saved = this.begin(viewProj);
+    const stride = FLOATS_PER_VERT * 4;
+    for (const l of layers) {
+      if (l.verts === 0) continue;
+      gl.bindBuffer(gl.ARRAY_BUFFER, l.buffer());
+      gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, stride, 0);
+      gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, stride, 3 * 4);
+      gl.drawArrays(l.mode === "tri" ? gl.TRIANGLES : gl.LINES, 0, l.verts);
+    }
+    this.end(saved);
+  }
+
+  /** Snapshot the GL state we touch, then set up our program/blend/attribs. mdx-m3-
+   *  viewer caches state JS-side, so end() must restore everything (see FogOverlay). */
+  private begin(viewProj: Float32Array | Iterable<number>): SavedGLState {
+    const gl = this.gl;
+    const saved: SavedGLState = {
+      program: gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null,
+      arrayBuf: gl.getParameter(gl.ARRAY_BUFFER_BINDING) as WebGLBuffer | null,
+      blend: gl.isEnabled(gl.BLEND),
+      depthTest: gl.isEnabled(gl.DEPTH_TEST),
+      cull: gl.isEnabled(gl.CULL_FACE),
+      blendSrcRGB: gl.getParameter(gl.BLEND_SRC_RGB) as number,
+      blendDstRGB: gl.getParameter(gl.BLEND_DST_RGB) as number,
+      blendSrcA: gl.getParameter(gl.BLEND_SRC_ALPHA) as number,
+      blendDstA: gl.getParameter(gl.BLEND_DST_ALPHA) as number,
+      attribs: [],
+    };
+    for (let i = 0; i < this.maxAttribs; i++) {
+      saved.attribs[i] = gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_ENABLED) as boolean;
+    }
     gl.useProgram(this.program);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -92,28 +175,21 @@ export class DebugColliders {
       if (i !== this.aPos && i !== this.aColor) gl.disableVertexAttribArray(i);
     }
     gl.uniformMatrix4fv(this.uViewProj, false, viewProj as Float32Array);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
-    const stride = FLOATS_PER_VERT * 4;
     gl.enableVertexAttribArray(this.aPos);
-    gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, stride, 0);
     gl.enableVertexAttribArray(this.aColor);
-    gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, stride, 3 * 4);
+    return saved;
+  }
 
-    for (const b of batches) {
-      if (b.verts === 0) continue;
-      gl.bufferData(gl.ARRAY_BUFFER, b.data.subarray(0, b.verts * FLOATS_PER_VERT), gl.DYNAMIC_DRAW);
-      gl.drawArrays(b.mode === "tri" ? gl.TRIANGLES : gl.LINES, 0, b.verts);
-    }
-
-    // --- restore ---
-    gl.useProgram(prevProgram);
-    gl.bindBuffer(gl.ARRAY_BUFFER, prevArrayBuf);
-    setEnabled(gl, gl.BLEND, prevBlend);
-    setEnabled(gl, gl.DEPTH_TEST, prevDepthTest);
-    setEnabled(gl, gl.CULL_FACE, prevCull);
-    gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcA, prevBlendDstA);
+  private end(saved: SavedGLState): void {
+    const gl = this.gl;
+    gl.useProgram(saved.program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, saved.arrayBuf);
+    setEnabled(gl, gl.BLEND, saved.blend);
+    setEnabled(gl, gl.DEPTH_TEST, saved.depthTest);
+    setEnabled(gl, gl.CULL_FACE, saved.cull);
+    gl.blendFuncSeparate(saved.blendSrcRGB, saved.blendDstRGB, saved.blendSrcA, saved.blendDstA);
     for (let i = 0; i < this.maxAttribs; i++) {
-      if (prevAttribEnabled[i]) gl.enableVertexAttribArray(i);
+      if (saved.attribs[i]) gl.enableVertexAttribArray(i);
       else gl.disableVertexAttribArray(i);
     }
   }

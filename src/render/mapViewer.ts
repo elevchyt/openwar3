@@ -12,7 +12,7 @@ import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footp
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
 import { makeHeightSampler, makeCliffLevelSampler, type HeightSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
-import { DebugColliders, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
+import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
@@ -211,17 +211,16 @@ export class MapViewerScene {
   private dbgUnitRings = new Float32Array(0); // unit/building click rings (lines)
   private dbgUnitVerts = 0;
   private dbgStaticAccum = 1e9; // ms since static rebuild (force one on first frame)
-  // "Show Pathing" overlay (separate toggle): the cell lattice (built once per map),
-  // filled unwalkable cells (rebuilt on a slow timer), and live unit routes (per frame).
+  // "Show Pathing" overlay (separate toggle). Static geometry (the cell lattice, built
+  // once per map; the unwalkable-cell outlines, rebuilt on a slow timer) lives in
+  // PERSISTENT GPU buffers uploaded only when it changes — re-streaming its >1M verts
+  // every frame tanked the framerate. Only the small per-frame route layer re-uploads.
   private showPathing = false;
-  private dbgGridLines = new Float32Array(0); // pathing-cell lattice (lines)
-  private dbgGridVerts = 0;
+  private pathGridLayer: OverlayLayer | null = null; // pathing-cell lattice (lines)
+  private pathBlockedLayer: OverlayLayer | null = null; // unwalkable cell outlines (triangles)
+  private pathRouteLayer: OverlayLayer | null = null; // moving units' remaining routes (lines)
   private dbgGridFor: PathingGrid | null = null; // grid the lattice was built for (cache key)
-  private dbgBlocked = new Float32Array(0); // unwalkable cell fills (triangles)
-  private dbgBlockedVerts = 0;
   private dbgBlockAccum = 1e9; // ms since the blocked-cell rebuild (force one on first frame)
-  private dbgPaths = new Float32Array(0); // moving units' remaining routes (lines)
-  private dbgPathVerts = 0;
   private fogAccum = 0; // ms since the last fog resample (throttle)
   private removedWidgets = new Set<HideableWidget>(); // felled trees / mined-out mines — stay gone, never re-fogged
   private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
@@ -2447,6 +2446,11 @@ export class MapViewerScene {
     this.rts = null;
     this.debug?.dispose();
     this.debug = null;
+    this.pathGridLayer?.dispose();
+    this.pathBlockedLayer?.dispose();
+    this.pathRouteLayer?.dispose();
+    this.pathGridLayer = this.pathBlockedLayer = this.pathRouteLayer = null;
+    this.dbgGridFor = null;
     this.metrics.dispose();
     this.hud?.dispose();
     this.hud = null;
@@ -2639,42 +2643,45 @@ export class MapViewerScene {
     this.dbgUnitVerts = rings.length / FLOATS_PER_VERT;
   }
 
-  /** Draw the "Show Pathing" overlay: the pathing-cell lattice (static, built once
-   *  per map), filled unwalkable cells (rebuilt on a slow timer since only felled
-   *  trees / new buildings change them), and each moving unit's remaining route
-   *  (rebuilt every frame). Reuses the DebugColliders tri/line batch renderer. */
+  /** Draw the "Show Pathing" overlay from persistent GPU buffers: the pathing-cell
+   *  lattice (static, uploaded once per map), the unwalkable-cell outlines (uploaded
+   *  only when trees fall / buildings change), and each moving unit's remaining route
+   *  (the one small buffer that re-uploads per frame). No megabyte-per-frame streaming. */
   private renderPathing(viewProj: Float32Array, dt: number): void {
     if (!this.debug) this.debug = new DebugColliders(this.viewer.gl);
+    const gl = this.viewer.gl;
+    this.pathGridLayer ??= new OverlayLayer(gl, "line");
+    this.pathBlockedLayer ??= new OverlayLayer(gl, "tri");
+    this.pathRouteLayer ??= new OverlayLayer(gl, "line", true); // updates every frame
     if (this.dbgGridFor !== this.grid) this.rebuildPathGrid();
     this.dbgBlockAccum += dt;
-    if (this.dbgBlockAccum >= 250) {
+    if (this.dbgBlockAccum >= 500) {
       this.dbgBlockAccum = 0;
       this.rebuildBlockedCells();
     }
     this.rebuildUnitPaths();
     // Order matters (depth test off): fills first, lattice over them, routes on top.
-    const batches: ColliderBatch[] = [
-      { data: this.dbgBlocked, verts: this.dbgBlockedVerts, mode: "tri" },
-      { data: this.dbgGridLines, verts: this.dbgGridVerts, mode: "line" },
-      { data: this.dbgPaths, verts: this.dbgPathVerts, mode: "line" },
-    ];
-    this.debug.render(viewProj, batches);
+    this.debug.renderLayers(viewProj, [this.pathBlockedLayer, this.pathGridLayer, this.pathRouteLayer]);
   }
 
-  /** Build the pathing-cell lattice (terrain-hugging boundary lines). The grid is
-   *  fixed for the life of a map, so this runs once (keyed on grid identity). Very
-   *  large grids drop to a 2-cell step so the buffer stays bounded. */
+  /** Build the pathing-cell lattice (terrain-hugging boundary lines) into its
+   *  persistent buffer. The grid is fixed for the life of a map, so this runs once
+   *  (keyed on grid identity). Very large grids drop to a coarser step so the buffer
+   *  (and its per-frame draw) stay bounded. */
   private rebuildPathGrid(): void {
     const h = this.heightSampler;
     const grid = this.grid;
     this.dbgGridFor = grid;
-    if (!h || !grid) {
-      this.dbgGridVerts = 0;
+    if (!h || !grid || !this.pathGridLayer) {
+      this.pathGridLayer?.set(EMPTY_VERTS, 0);
       return;
     }
     const [ox, oy] = grid.origin;
     const W = grid.width, H = grid.height;
-    const step = W * H > 250_000 ? 2 : 1; // keep huge maps' lattice affordable
+    // Full cell resolution on all real maps (a 768² grid = 2.4M verts draws at ~140fps
+    // from the persistent buffer); only an enormous custom grid coarsens, to cap the
+    // buffer/draw. sqrt keeps the *linear* cell spacing roughly constant when it does.
+    const step = Math.max(1, Math.round(Math.sqrt((W * H) / 1_200_000)));
     const c = COLLIDER_COLORS.grid;
     const v: number[] = [];
     const lift = COLLIDER_LIFT;
@@ -2694,16 +2701,18 @@ export class MapViewerScene {
         pushColliderVert(v, x, y1, h(x, y1) + lift, c);
       }
     }
-    this.dbgGridLines = Float32Array.from(v);
-    this.dbgGridVerts = v.length / FLOATS_PER_VERT;
+    this.pathGridLayer.set(Float32Array.from(v), v.length / FLOATS_PER_VERT);
   }
 
-  /** Fill every unwalkable pathing cell (what the pathfinder can't route through). */
+  /** Outline the unwalkable region(s) into the blocked layer's persistent buffer. Only
+   *  cells on the BORDER (touching walkable ground) are drawn — a solid fill of a whole
+   *  water/out-of-bounds region is hundreds of thousands of quads; the coastline is a
+   *  few thousand, and the lattice already shows the interior cells. */
   private rebuildBlockedCells(): void {
     const h = this.heightSampler;
     const grid = this.grid;
-    if (!h || !grid) {
-      this.dbgBlockedVerts = 0;
+    if (!h || !grid || !this.pathBlockedLayer) {
+      this.pathBlockedLayer?.set(EMPTY_VERTS, 0);
       return;
     }
     const [ox, oy] = grid.origin;
@@ -2711,20 +2720,21 @@ export class MapViewerScene {
     for (let cy = 0; cy < grid.height; cy++) {
       for (let cx = 0; cx < grid.width; cx++) {
         if (grid.walkable(cx, cy)) continue;
+        if (!(grid.walkable(cx - 1, cy) || grid.walkable(cx + 1, cy) || grid.walkable(cx, cy - 1) || grid.walkable(cx, cy + 1))) continue;
         const x0 = ox + cx * PATHING_CELL, y0 = oy + cy * PATHING_CELL;
         pushColliderQuad(cells, x0, y0, x0 + PATHING_CELL, y0 + PATHING_CELL, h, COLLIDER_COLORS.blocked);
       }
     }
-    this.dbgBlocked = Float32Array.from(cells);
-    this.dbgBlockedVerts = cells.length / FLOATS_PER_VERT;
+    this.pathBlockedLayer.set(Float32Array.from(cells), cells.length / FLOATS_PER_VERT);
   }
 
-  /** Rebuild the moving-unit route polylines + waypoint markers — every frame. */
+  /** Rebuild the moving-unit route polylines + waypoint markers into the route
+   *  layer — every frame, but this is tiny (a handful of moving units). */
   private rebuildUnitPaths(): void {
     const h = this.heightSampler;
     const paths = this.rts?.debugUnitPaths();
-    if (!h || !paths) {
-      this.dbgPathVerts = 0;
+    if (!h || !paths || !this.pathRouteLayer) {
+      this.pathRouteLayer?.set(EMPTY_VERTS, 0);
       return;
     }
     const v: number[] = [];
@@ -2738,8 +2748,7 @@ export class MapViewerScene {
         pushColliderRing(v, pts[i][0], pts[i][1], h(pts[i][0], pts[i][1]), last ? 16 : 7, c, last ? 14 : 6);
       }
     }
-    this.dbgPaths = Float32Array.from(v);
-    this.dbgPathVerts = v.length / FLOATS_PER_VERT;
+    this.pathRouteLayer.set(Float32Array.from(v), v.length / FLOATS_PER_VERT);
   }
 
   private disposeFog(): void {
@@ -3130,6 +3139,7 @@ function zQuat(out: Float32Array, angle: number): void {
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
 const TREE_CLICK_RADIUS = 40; // approx harvest-click radius drawn for each tree
 const PATH_LIFT = 18; // path lines sit above the grid/blocked overlay so they read on top
+const EMPTY_VERTS = new Float32Array(0); // clears a persistent OverlayLayer (verts = 0)
 
 function pushColliderVert(a: number[], x: number, y: number, z: number, c: readonly number[]): void {
   a.push(x, y, z, c[0], c[1], c[2], c[3]);
