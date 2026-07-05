@@ -12,7 +12,7 @@ import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footp
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
 import { makeHeightSampler, makeCliffLevelSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
-import type { VisionMap } from "../sim/vision";
+import { FogState, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
@@ -100,7 +100,13 @@ interface Scene {
   viewport: Float32Array;
 }
 interface HideableWidget {
-  instance: { localLocation: Float32Array; hide(): void; show(): void };
+  instance: {
+    localLocation: Float32Array;
+    hide(): void;
+    show(): void;
+    vertexColor?: Float32Array; // MDX instance tint (base colour before fog dimming)
+    setVertexColor?(c: ArrayLike<number>): void;
+  };
 }
 interface W3xMap {
   worldScene: Scene;
@@ -181,9 +187,9 @@ export class MapViewerScene {
   private fog: FogOverlay | null = null;
   private fogTerrain: TerrainData | null = null; // corner grid the fog mesh is built on
   private fogAccum = 0; // ms since the last fog resample (throttle)
-  private hiddenWidgets: HideableWidget[] = []; // doodads + static units hidden in unexplored fog
-  private doodadsProcessed = 0; // count of map.doodads already fog-checked (they stream in async)
-  private unitsProcessed = 0; // count of map.units already fog-checked (they stream in async)
+  private removedWidgets = new Set<HideableWidget>(); // felled trees / mined-out mines — stay gone, never re-fogged
+  private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
+  private tintScratch = new Float32Array(4); // reused fog tint, avoids per-widget allocation
   private cheatBuf = ""; // rolling buffer of typed letters, for WC3 chat cheat codes
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
@@ -434,7 +440,10 @@ export class MapViewerScene {
         best = w;
       }
     }
-    best?.instance.hide();
+    if (best) {
+      best.instance.hide();
+      this.removedWidgets.add(best); // gone for good — keep the fog pass from re-showing it
+    }
   }
 
   /** Stamp destructible (tree) AND building footprints onto the terrain grid so
@@ -2321,64 +2330,80 @@ export class MapViewerScene {
     cliffFog.fogParams = this.fog.fogParams;
   }
 
-  /** Resample the fog mask and progressively reveal map widgets as their ground is
-   *  explored. The flat ground overlay can't darken tall geometry (trees, buildings
-   *  poke above it), so unexplored doodads AND static map units are hidden outright
-   *  and popped in on first sight (last-seen persistence, like WC3). Units the RTS
-   *  drives (creeps, neutral shops) are skipped — the RTS fog-hides those itself. */
+  /** Resample the fog mask and re-fog the map's widgets. */
   private updateFog(): void {
     if (!this.fog || !this.rts) return;
     const vision = this.rts.getVision();
     this.fog.update(vision);
-    this.revealFoggedWidgets(vision);
+    this.fogWidgets(vision);
   }
 
-  private revealFoggedWidgets(vision: VisionMap): void {
+  // Explored (remembered-but-not-seen) props are shown at half brightness, matching
+  // the ground veil's grey (EXPLORED_DARK 0.5 → 1 - 0.5). In sight = full colour.
+  private static readonly FOG_EXPLORED_BRIGHT = 0.5;
+
+  /** Fog-of-war for the map's DOODADS and static units (trees, props, structures,
+   *  gold mines). The flat ground veil can't darken tall geometry — it pokes above the
+   *  sheet — so we tint each model by the fog at its base: full colour in sight, dimmed
+   *  grey once explored (terrain memory), hidden while unexplored. This also makes trees
+   *  behind a treeline vanish (the treeline blocks their sight in the vision grid), the
+   *  way WC3 hides forest interiors. Iterated in full each tick (a few thousand widgets,
+   *  cheap) so props that stream in async are already fogged and re-brighten on sight. */
+  private fogWidgets(vision: VisionMap): void {
     const map = this.viewer.map;
     if (!map) return;
-    const explored = (w: HideableWidget): boolean => {
-      const loc = w.instance.localLocation;
+    // Trees mid harvest-blink own their colour this frame (see updateTreePulses) — the
+    // blink runs every frame while our tint runs at ~10Hz, so skip them or we'd fight it.
+    const pulsing = this.treePulses.length
+      ? new Set(this.treePulses.map((p) => p.inst as unknown as HideableWidget["instance"]))
+      : null;
+    const tint = (w: HideableWidget): void => {
+      const inst = w.instance;
+      if (pulsing && pulsing.has(inst)) return;
+      const loc = inst.localLocation;
       const [cx, cy] = vision.worldToCell(loc[0], loc[1]);
-      return vision.isExplored(cx, cy);
+      const state = vision.cellState(cx, cy);
+      if (state === FogState.Unexplored) {
+        inst.hide(); // never seen — don't even hint at what's there
+        return;
+      }
+      const b = state === FogState.Visible ? 1 : MapViewerScene.FOG_EXPLORED_BRIGHT;
+      const base = this.widgetBase(inst);
+      const s = this.tintScratch;
+      s[0] = base[0] * b; s[1] = base[1] * b; s[2] = base[2] * b; s[3] = base[3];
+      inst.setVertexColor?.(s);
+      inst.show();
     };
-    // Hide unexplored doodads (trees) and static map units (structures, gold mines) as
-    // they stream in. Their models load ASYNC and are pushed into map.doodads/map.units
-    // over many frames, but the viewer flips map.doodadsReady/unitsReady true BEFORE
-    // those pushes — so a one-time snapshot on the "ready" flag misses everything that
-    // loads afterward (the cause of trees poking through the black fog). Instead sweep
-    // only the newly-appended widgets each update. The arrays are append-only for our
-    // purposes (felling hides the instance in place, never splices), so a running count
-    // is a safe cursor.
-    const doodads = map.doodads;
-    for (let i = this.doodadsProcessed; i < doodads.length; i++) {
-      const w = doodads[i];
-      if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
+    for (const w of map.doodads) {
+      if (!this.removedWidgets.has(w)) tint(w); // felled trees stay gone
     }
-    this.doodadsProcessed = doodads.length;
-    // Units the RTS drives (creeps, neutral shops) are skipped — the RTS fog-hides those.
-    const units = map.units as unknown as HideableWidget[];
-    for (let i = this.unitsProcessed; i < units.length; i++) {
-      const w = units[i];
-      if (this.rts?.managesViewerInstance(w.instance)) continue;
-      if (!explored(w)) { w.instance.hide(); this.hiddenWidgets.push(w); }
+    const units = map.units as unknown as Array<HideableWidget & { row?: unknown }>;
+    for (const w of units) {
+      if (this.removedWidgets.has(w)) continue; // mined-out gold mines stay gone
+      if (!w.row) continue; // start-location markers (rowless) are hidden for good — see hideStartLocations
+      if (this.rts?.managesViewerInstance(w.instance)) continue; // RTS fog-hides creeps/shops
+      tint(w);
     }
-    this.unitsProcessed = units.length;
-    let keep = 0; // compact the still-hidden list, revealing any now-explored widgets
-    for (const w of this.hiddenWidgets) {
-      if (explored(w)) w.instance.show();
-      else this.hiddenWidgets[keep++] = w;
+  }
+
+  /** Each widget's ORIGINAL tint (unit/player colour, else white), captured the first
+   *  time we fog it — so fog dimming multiplies the base instead of clobbering it. */
+  private widgetBase(inst: HideableWidget["instance"]): Float32Array {
+    let base = this.baseColors.get(inst);
+    if (!base) {
+      const c = inst.vertexColor;
+      base = c ? new Float32Array([c[0], c[1], c[2], c[3]]) : new Float32Array([1, 1, 1, 1]);
+      this.baseColors.set(inst, base);
     }
-    this.hiddenWidgets.length = keep;
+    return base;
   }
 
   private disposeFog(): void {
     this.fog?.dispose();
     this.fog = null;
     this.fogTerrain = null;
-    for (const w of this.hiddenWidgets) w.instance.show(); // un-fog before the map is dropped
-    this.hiddenWidgets = [];
-    this.doodadsProcessed = 0;
-    this.unitsProcessed = 0;
+    this.removedWidgets.clear();
+    this.baseColors = new WeakMap();
     this.fogAccum = 0;
   }
 
