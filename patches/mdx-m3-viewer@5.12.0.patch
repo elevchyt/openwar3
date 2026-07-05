@@ -325,7 +325,7 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
      }
      return offset;
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..6552b9328cb652344ec97edb6af204b6d9cdc130 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..ae4d63d4f3e02a816255f2c51719c6928bf9505d 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -168,7 +168,11 @@ class War3MapViewerMap {
@@ -506,7 +506,26 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..6552b9328cb652344ec97edb6af204b6
                              }
                          });
                      }
-@@ -671,6 +806,24 @@ class War3MapViewerMap {
+@@ -612,6 +747,18 @@ class War3MapViewerMap {
+                 gl.activeTexture(gl.TEXTURE2);
+                 gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
+             }
++            // OpenWar3: fog of war — dim cliff faces by the fog mask (set by FogOverlay
++            // via mapViewer). Stays off (stock behaviour) until fogTexture is installed.
++            if (this.fogTexture) {
++                gl.uniform1f(uniforms['u_fogEnabled'], 1);
++                gl.uniform4fv(uniforms['u_fogParams'], this.fogParams);
++                gl.uniform1i(uniforms['u_fogTexture'], 3);
++                gl.activeTexture(gl.TEXTURE3);
++                gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
++            }
++            else {
++                gl.uniform1f(uniforms['u_fogEnabled'], 0);
++            }
+             // Set instanced attributes.
+             if (!vertexArrayObject) {
+                 instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
+@@ -671,6 +818,24 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -531,3 +550,36 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..6552b9328cb652344ec97edb6af204b6
      /**
       * Is the tile at the given column and row water?
       */
+diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..825d0d740f23e7e1369564d6f99688b98f779773 100644
+--- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
++++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
+@@ -9,6 +9,15 @@ ${precision_glsl_1.default}
+ uniform sampler2D u_texture1;
+ uniform sampler2D u_texture2;
+ 
++// OpenWar3: fog of war. Cliff faces are batched instanced models drawn in the terrain
++// pass, so our ground-veil mesh can't cover their overhang — instead we dim them here.
++// u_fogTexture is a per-corner brightness mask (1=in sight, 0.5=explored, 0=unexplored)
++// built by FogOverlay; u_fogParams maps world XY → mask UV (originX, originY, invSpanX,
++// invSpanY). u_fogEnabled is 0 when no fog is installed, keeping stock behaviour.
++uniform sampler2D u_fogTexture;
++uniform vec4 u_fogParams;
++uniform float u_fogEnabled;
++
+ varying vec3 v_normal;
+ varying vec2 v_uv;
+ varying float v_texture;
+@@ -35,6 +44,12 @@ void main() {
+ 
+   // color *= clamp(dot(normal, lightDirection) + 0.45, 0.1, 1.0);
+ 
++  // OpenWar3: dim the cliff by the fog-of-war brightness at this fragment's world XY.
++  if (u_fogEnabled > 0.5) {
++    vec2 fogUv = (v_position.xy - u_fogParams.xy) * u_fogParams.zw;
++    color.rgb *= texture2D(u_fogTexture, fogUv).r;
++  }
++
+   gl_FragColor = color;
+ }
+ `;

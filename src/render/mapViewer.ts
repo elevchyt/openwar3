@@ -10,7 +10,7 @@ import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
-import { makeHeightSampler } from "../game/heightmap";
+import { makeHeightSampler, makeCliffLevelSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import type { VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
@@ -386,7 +386,7 @@ export class MapViewerScene {
       this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry, this.abilities);
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
-      this.rts.initVisionBlockers(); // fog line-of-sight: high ground + treelines block sight
+      this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
     }
@@ -2313,6 +2313,12 @@ export class MapViewerScene {
     // rendered terrain (see FogOverlay) — the fix for fog dropping out on cliffs/slopes.
     this.fog = new FogOverlay(this.viewer.gl, this.fogTerrain);
     this.fog.update(this.rts.getVision());
+    // Hand the fog mask to the viewer's patched cliff shader so cliff FACES dim with
+    // the fog like the ground (our veil mesh can't cover their overhang). The texture
+    // object + params are stable; its contents refresh in FogOverlay.update().
+    const cliffFog = this.viewer.map as unknown as { fogTexture?: WebGLTexture; fogParams?: Float32Array };
+    cliffFog.fogTexture = this.fog.fogTexture;
+    cliffFog.fogParams = this.fog.fogParams;
   }
 
   /** Resample the fog mask and progressively reveal map widgets as their ground is

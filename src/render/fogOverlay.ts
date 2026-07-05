@@ -71,6 +71,18 @@ export class FogOverlay {
   private vx: Float32Array; // per-vertex world X (for sampling the vision map)
   private vy: Float32Array;
   private dark: Float32Array; // per-vertex darkness (uploaded each update)
+  // Fog mask handed to the viewer's patched CLIFF shader (see below). The ground veil
+  // is a mesh; cliff FACES are batched instanced models inside the viewer's own terrain
+  // pass, whose rocky overhang pokes through the veil's diagonal from the WC3 camera —
+  // so cliffs stayed fully lit in fog. Instead the cliff shader multiplies its colour by
+  // this per-corner BRIGHTNESS texture (1=in sight, 0.5=explored grey, 0=unexplored),
+  // dimming cliffs exactly like the ground. Same per-corner data as the mesh (1 - dark),
+  // so cliff and ground fog agree at every shared corner.
+  private fogTex: WebGLTexture;
+  private bright: Uint8Array; // per-corner luminance byte, uploaded each update
+  private gridW: number;
+  private gridH: number;
+  readonly fogParams: Float32Array; // world→UV: originX, originY, invSpanX, invSpanY
 
   constructor(gl: GL, terrain: TerrainData) {
     this.gl = gl;
@@ -124,6 +136,31 @@ export class FogOverlay {
     this.posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     this.darkBuf = createBuffer(gl, gl.ARRAY_BUFFER, this.dark, gl.DYNAMIC_DRAW);
     this.idxBuf = createBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+
+    // Per-corner brightness texture for the cliff shader (see field comment). Corner
+    // grid → [0,1] UV: origin at centerOffset, span (n-1) cells of CELL each. LINEAR so
+    // a cliff face reads a smooth brightness across the tile it spans; CLAMP at edges.
+    this.gridW = width;
+    this.gridH = height;
+    this.bright = new Uint8Array(n); // 0 everywhere = start fully unexplored (black)
+    this.fogParams = new Float32Array([
+      centerOffset[0], centerOffset[1], 1 / ((width - 1) * CELL), 1 / ((height - 1) * CELL),
+    ]);
+    this.fogTex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.fogTex);
+    // Row length = width bytes (not a multiple of 4), so unpack one byte at a time.
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, this.bright);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4); // restore the viewer's default
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+
+  /** The per-corner fog brightness texture, for the viewer's patched cliff shader. */
+  get fogTexture(): WebGLTexture {
+    return this.fogTex;
   }
 
   /** Re-sample the vision map into the per-vertex darkness and upload it. Throttle
@@ -131,11 +168,17 @@ export class FogOverlay {
   update(vision: VisionMap): void {
     for (let i = 0; i < this.dark.length; i++) {
       const state = vision.stateAt(this.vx[i], this.vy[i]);
-      this.dark[i] = state === FogState.Visible ? 0 : state === FogState.Explored ? EXPLORED_DARK : 1;
+      const d = state === FogState.Visible ? 0 : state === FogState.Explored ? EXPLORED_DARK : 1;
+      this.dark[i] = d;
+      this.bright[i] = (1 - d) * 255; // luminance for the cliff fog texture (255/128/0)
     }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.darkBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.dark);
+    gl.bindTexture(gl.TEXTURE_2D, this.fogTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gridW, this.gridH, gl.LUMINANCE, gl.UNSIGNED_BYTE, this.bright);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
   }
 
   /** Draw the fog. Call every frame, AFTER the viewer has rendered the world.
@@ -222,6 +265,7 @@ export class FogOverlay {
     gl.deleteBuffer(this.posBuf);
     gl.deleteBuffer(this.darkBuf);
     gl.deleteBuffer(this.idxBuf);
+    gl.deleteTexture(this.fogTex);
     gl.deleteProgram(this.program);
   }
 }

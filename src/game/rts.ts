@@ -425,9 +425,12 @@ export class RtsController {
   }
 
   /** Install the fog's line-of-sight height field + tree blockers, so vision is
-   *  shadowed by high ground and treelines. Called once the map's trees are seeded. */
-  initVisionBlockers(): void {
-    this.vision.setHeightField((x, y) => this.heightAt(x, y));
+   *  shadowed by high ground and treelines. Called once the map's trees are seeded.
+   *  `cliffHeightAt` is the CLIFF-LEVEL sampler (makeCliffLevelSampler), not the full
+   *  terrain height — only real cliff levels block WC3 sight, not rolling groundHeight
+   *  (see hiveworkshop "About high ground advantage" #255594). */
+  initVisionBlockers(cliffHeightAt: HeightSampler): void {
+    this.vision.setHeightField((x, y) => cliffHeightAt(x, y));
     for (const tree of this.sim.trees.values()) this.vision.addTreeBlocker(tree.x, tree.y);
   }
 
