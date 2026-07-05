@@ -1234,9 +1234,11 @@ export class RtsController {
       }
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
       // the strike gesture matches the damage-point-timed hit/projectile, and
-      // units with several attack animations vary them shot to shot. Between
-      // swings the LOOP_NEVER clip holds; everything else loops normally.
-      const attacking = u.inCombat && !u.moving && e.anims.attack >= 0;
+      // units with several attack animations vary them shot to shot. Between swings
+      // the LOOP_NEVER clip holds; everything else loops normally. A unit that walked
+      // after firing (`swingBroken` — its backswing was move-canceled) does NOT show
+      // the attack clip: it stands out the recovery until its next real swing.
+      const attacking = u.inCombat && !u.moving && !u.swingBroken && e.anims.attack >= 0;
       // Chopping is chop-driven, like the attack swing: re-trigger the "Attack
       // Lumber" clip ONCE per chop so the swing stays in phase with the chop SFX
       // (a free-running loop drifted out of sync with the sound).
@@ -1345,7 +1347,10 @@ export class RtsController {
     // lumber while standing (its tree fell and it's about to return, so `working`
     // isn't cleared yet) shows the Stand Lumber pose, not the chop.
     if (u.working && u.order === "harvest") return a.chopLumber;
-    if (u.inCombat) return a.attack;
+    // NOTE: no `inCombat → attack` here. The attack clip is owned entirely by the
+    // swing-driven block above (triggered per swing). Reaching pickSequence while in
+    // combat means the swing was broken by walking (backswing move-canceled), so the
+    // unit stands out the recovery until its next real swing — it does not attack.
     return carry === "gold" ? a.standGold : carry === "lumber" ? a.standLumber : a.stand;
   }
 
