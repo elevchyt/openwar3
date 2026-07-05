@@ -247,6 +247,10 @@ export interface SimUnit {
   swingLeft: number; // -1 = no pending strike
   swingTargetId: number; // whom the pending strike is aimed at
   swingSeq: number; // increments each swing start (renderer re-triggers the attack clip)
+  // "Animation break": the unit walked after firing (an attack's backswing was
+  // move-canceled), so its attack clip must NOT resume — it stands out the recovery
+  // until the next real swing fires (the swing clears this). Reset every swing start.
+  swingBroken: boolean;
   chopSeq: number; // increments each lumber chop (renderer re-triggers the chop clip in sync)
   inCombat: boolean; // engaging in range this tick (drives the attack animation)
   path: Array<[number, number]>; // world waypoints
@@ -928,6 +932,7 @@ export class SimWorld {
       | "swingLeft"
       | "swingTargetId"
       | "swingSeq"
+      | "swingBroken"
       | "chopSeq"
       | "inCombat"
       | "neutralPassive"
@@ -1032,6 +1037,7 @@ export class SimWorld {
       swingLeft: -1,
       swingTargetId: 0,
       swingSeq: 0,
+      swingBroken: false,
       chopSeq: 0,
       inCombat: false,
       neutralPassive: false,
@@ -2426,6 +2432,11 @@ export class SimWorld {
         u.facing = turnToward(u.facing, u.desiredFacing, turnSpeed(u.turnRate) * dt);
       }
       this.tickSwing(u, dt); // land pending strikes at their damage point
+      // Any walking (only possible after the damage point — the wind-up holds
+      // position) breaks the attack animation: the unit move-canceled its backswing,
+      // so its attack clip must not resume until the next real swing (which clears
+      // this). Runs AFTER tickMovement so u.moving reflects this tick's actual walking.
+      if (u.moving) u.swingBroken = true;
       this.checkStuck(u, dt);
     }
     // Advance shift-queues: a unit that just fell idle (and isn't building or
@@ -2560,6 +2571,7 @@ export class SimWorld {
     // matching WC3 so e.g. the Archmage's fireball leaves at the right moment.
     u.cooldownLeft = w.cooldown;
     u.swingLeft = Math.max(0, w.damagePoint);
+    u.swingBroken = false; // a genuine new swing always animates (clears any prior break)
     u.swingTargetId = t.id;
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
   }
