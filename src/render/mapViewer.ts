@@ -165,6 +165,9 @@ const ViewerClass = War3MapViewer as unknown as {
 export class MapViewerScene {
   // Orbit camera state.
   private target = new Float32Array([0, 0, 0]);
+  // Terrain extent the camera focus is kept inside so it can't scroll off into the
+  // black void (issue #5). Set on map load from centerOffset + mapSize; null = no map.
+  private mapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
   private distance = 4000;
   // Look from the south toward +Y (north up), matching WC3's default camera so
   // units/buildings (which default to facing 270° = south) face the viewer.
@@ -384,6 +387,11 @@ export class MapViewerScene {
 
     const [cols, rows] = map.mapSize;
     const [ox, oy] = map.centerOffset;
+    // Terrain spans centerOffset → centerOffset + (n-1) tiles, 128 world units per
+    // tile (CELL); the map centre lands on world origin. Keep the camera focus
+    // clamped to this rect so it can't drift into the void beyond the map (issue #5).
+    const CELL = 128;
+    this.mapBounds = { minX: ox, maxX: ox + (cols - 1) * CELL, minY: oy, maxY: oy + (rows - 1) * CELL };
     this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
     // Start near gameplay zoom rather than a whole-map overview — far better
     // draw performance and closer to WC3's default camera.
@@ -2552,6 +2560,7 @@ export class MapViewerScene {
       scene.viewport[3] = this.canvas.height;
     }
 
+    this.clampTarget(); // keep the focus on the map, whatever moved it (pan/edge-scroll/minimap/follow)
     const cp = Math.cos(this.pitch);
     const eye = new Float32Array([
       this.target[0] - Math.cos(this.yaw) * cp * this.distance,
@@ -2616,6 +2625,17 @@ export class MapViewerScene {
   private pan(dir: [number, number], amount: number): void {
     this.target[0] += dir[0] * amount;
     this.target[1] += dir[1] * amount;
+  }
+
+  /** Confine the camera focus to the terrain rect so it can't scroll into the void
+   *  past the map edge (issue #5). Central choke point: every mover (keyboard/edge
+   *  scroll, minimap click, follow-selection, panTo) writes this.target, so clamping
+   *  once per frame before the eye is derived catches them all. */
+  private clampTarget(): void {
+    const b = this.mapBounds;
+    if (!b) return;
+    this.target[0] = clamp(this.target[0], b.minX, b.maxX);
+    this.target[1] = clamp(this.target[1], b.minY, b.maxY);
   }
 
   /** Draw the drag-selection rectangle (canvas fills the page, so offset coords
