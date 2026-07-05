@@ -276,6 +276,8 @@ export interface SimUnit {
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
+  repollT: number; // proactive-reroute poll timer (issue #6): seconds until the next
+  // check of whether the path ahead is still clear of newly-stopped units
   yieldT: number; // seconds paused giving way to another unit (breaks head-on "dancing")
   prevX: number; // position before this tick's movement (stuck detection)
   prevY: number;
@@ -386,6 +388,15 @@ const YIELD_TIME = 0.2;
 const SPEED_BUILD_BONUS = 0.17;
 const SPEED_BUILD_SURCHARGE = 0.15;
 const REPATH_COOLDOWN = 0.5; // seconds a blocked chaser waits before repathing
+// Proactive reroute poll (issue #6). A unit's path is computed once, but other
+// units may stop and reserve cells across it while it travels. Rather than let a
+// unit grind into that crowd until checkStuck() fires (0.5 s of no progress),
+// every REPATH_POLL seconds it re-checks the path just ahead and, if a unit has
+// since blocked it, recomputes the route around the obstruction. REPATH_LOOKAHEAD
+// bounds how far ahead (world units) the check scans — deliberately local, so a
+// distant block that may clear before arrival doesn't trigger a needless reroute.
+const REPATH_POLL = 0.25;
+const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
 // Resource gathering (community-documented WC3 values; docs/REFERENCES.md).
 const GOLD_PER_TRIP = 10;
 const MINE_TIME = 1.0; // seconds a worker spends inside the mine
@@ -947,6 +958,7 @@ export class SimWorld {
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
+      | "repollT"
       | "yieldT"
       | "prevX"
       | "prevY"
@@ -1053,6 +1065,7 @@ export class SimWorld {
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
+      repollT: 0,
       yieldT: 0,
       prevX: unit.x,
       prevY: unit.y,
@@ -3372,6 +3385,62 @@ export class SimWorld {
 
   // --- movement -----------------------------------------------------------
 
+  /** Proactive reroute (issue #6). Every REPATH_POLL seconds a moving ground unit
+   *  re-checks the path just ahead; if another unit has stopped and reserved cells
+   *  across it since the path was computed, recompute the route toward the same
+   *  goal so we steer AROUND the crowd instead of forcing through it. Applies to
+   *  every moving footprint unit — player move/attack/patrol orders and creeps
+   *  returning home alike — because they all set chaseX/chaseY via pathTo(). Cheap
+   *  by design: the lookahead scan runs on the poll tick and only the genuinely-
+   *  blocked minority pay for a fresh A*; a moving crowd reserves no cells, so we
+   *  never thrash rerouting around our own squadmates. checkStuck() stays the
+   *  backstop for the boxed-in case where no better route exists. */
+  private repathPoll(u: SimUnit, dt: number): void {
+    // Flyers (footprint 0) path straight and ignore ground occupancy; ghosting
+    // workers (mining) pass through units, so neither reroutes.
+    if (u.footprint <= 0 || u.noCollision) return;
+    if (u.repathT > 0) return; // just got blocked — honour the chaser repath cooldown
+    u.repollT -= dt;
+    if (u.repollT > 0) return;
+    u.repollT = REPATH_POLL;
+    if (u.waypoint >= u.path.length) return; // nothing left to walk
+    if (!this.pathAheadBlocked(u)) return;
+    this.pathTo(u, u.chaseX, u.chaseY); // reroute toward the same goal
+  }
+
+  /** True when the remaining path — out to REPATH_LOOKAHEAD ahead — now runs
+   *  through a cell the mover's footprint no longer fits, i.e. a unit has stopped
+   *  and reserved cells across our route. Cheap: a bounded half-cell walk of the
+   *  path polyline, no A*. Uses the SAME clearance predicate A* would, so it only
+   *  flags obstructions A* would actually route around. */
+  private pathAheadBlocked(u: SimUnit): boolean {
+    const start = this.grid.worldToCell(u.x, u.y);
+    const blocked = this.clearanceBlocker(u, start);
+    if (!blocked) return false; // footprint-less mover — nothing to check
+    const stepLen = PATHING_CELL * 0.5;
+    let remaining = REPATH_LOOKAHEAD;
+    let px = u.x;
+    let py = u.y;
+    for (let i = u.waypoint; i < u.path.length && remaining > 0; i++) {
+      const [wx, wy] = u.path[i];
+      const segDx = wx - px;
+      const segDy = wy - py;
+      const segLen = Math.hypot(segDx, segDy);
+      if (segLen > 0) {
+        const ux = segDx / segLen;
+        const uy = segDy / segLen;
+        for (let d = stepLen; d <= segLen && remaining > 0; d += stepLen) {
+          const [cx, cy] = this.grid.worldToCell(px + ux * d, py + uy * d);
+          if (blocked(cx, cy)) return true;
+          remaining -= stepLen;
+        }
+      }
+      px = wx;
+      py = wy;
+    }
+    return false;
+  }
+
   /** Set a path toward a world point (straight line for air units). False when
    *  no movement toward the point is possible at all. */
   private pathTo(u: SimUnit, tx: number, ty: number): boolean {
@@ -3465,6 +3534,9 @@ export class SimWorld {
   private tickMovement(dt: number): void {
     for (const u of this.units.values()) {
       if (!u.moving) continue;
+      // Proactively reroute around units that have stopped across our path since
+      // it was computed (issue #6), before we grind into them (checkStuck backstop).
+      this.repathPoll(u, dt);
       if (u.yieldT > 0) {
         // Giving way to an oncoming unit: hold position this tick (the shared
         // turning pass still lets it keep facing its heading) so the other passes.
