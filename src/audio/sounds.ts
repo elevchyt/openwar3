@@ -19,8 +19,12 @@ import type { DataSource } from "../vfs/types";
 // the Altars, Tree of Life, Boneyard, Slaughterhouse voices.
 //
 // Channels:
-//   VOICE  (What/Yes/YesAttack/Pissed/Warcry/Ready) — ONE exclusive channel: while
-//          a line plays, further voice requests are DROPPED, never cut.
+//   VOICE  (What/Yes/YesAttack/Pissed/Warcry/Ready) — one exclusive channel PER
+//          SOURCE (a unit/building instance), so different units/buildings overlap
+//          freely, but while a given source's line plays its own further requests
+//          are DROPPED (never cut) until it finishes. Source-less voices (e.g. a
+//          just-trained unit's "Ready") each get a fresh key so they always overlap.
+//          A global MAX_VOICES cap bounds a pathological burst.
 //   Death / Impact / UI — overlapping one-shot pools (deaths & impacts capped).
 //   Loops  — named looping sounds (building construction).
 
@@ -43,6 +47,7 @@ const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["Wh
 
 const MAX_DEATHS = 4; // concurrent death cries
 const MAX_IMPACTS = 5; // concurrent weapon-impact / chop clangs
+const MAX_VOICES = 8; // concurrent voice lines across all sources (safety cap on overlap)
 
 interface Clip {
   paths: string[]; // full MPQ paths of the randomized variants
@@ -79,8 +84,11 @@ export class SoundBoard {
   private tables = new Map<string, Table | null>();
   private buffers = new Map<string, Promise<AudioBuffer | null>>();
   private clips = new Map<string, Clip | null>(); // memoized "table|key" → clip
-  private voiceBusy = false; // an acknowledgement voice is currently playing
-  private voiceSource: AudioBufferSourceNode | null = null;
+  // Active voice lines keyed by SOURCE (unit/building instance id). One line per
+  // source at a time — distinct sources overlap; a source re-requesting while its
+  // own line still plays is dropped. Source-less voices use a fresh voiceSeq key.
+  private voices = new Map<string, AudioBufferSourceNode>();
+  private voiceSeq = 0;
   private deaths = 0;
   private impacts = 0;
   private loops = new Map<string, AudioBufferSourceNode>(); // active looping sounds by name
@@ -174,12 +182,16 @@ export class SoundBoard {
     if (this.master && !this.muted) this.master.gain.value = this.volume;
   }
 
-  /** Play a unit voice line (or death cry). Voice acknowledgements share one
-   *  exclusive channel and are dropped while it's busy; deaths overlap (capped). */
-  play(label: string, category: SoundCategory, at?: SoundPos): void {
+  /** Play a unit voice line (or death cry). Voice acknowledgements are exclusive
+   *  PER SOURCE (a unit/building instance): a given `source`'s line is dropped
+   *  while its own previous line still plays, but different sources overlap. Pass
+   *  the emitting unit's instance id as `source`; omit it for a fire-and-forget
+   *  line (e.g. a just-trained unit's "Ready") that should always overlap. Deaths
+   *  go through the overlapping death pool (capped). */
+  play(label: string, category: SoundCategory, at?: SoundPos, source?: string | number): void {
     if (!label) return;
     if (category === "Death") this.playPool(this.resolve("anim", label + "Death"), "death", at);
-    else this.playVoice(label, category);
+    else this.playVoice(label, category, source);
   }
 
   /** Play a weapon-impact / chop clang: `<weapon><material>` (MetalMediumSlice+Flesh,
@@ -319,26 +331,30 @@ export class SoundBoard {
     }
   }
 
-  private playVoice(label: string, category: SoundCategory): void {
+  private playVoice(label: string, category: SoundCategory, source?: string | number): void {
     if (!VOICE_CATEGORIES.has(category)) return;
-    if (this.voiceBusy) return; // never cut the line that's already playing
+    // A specific source gets one voice at a time; a source-less line gets a unique
+    // key so it always overlaps rather than clashing on a shared channel.
+    const key = source != null ? `s:${source}` : `anon:${this.voiceSeq++}`;
+    if (this.voices.has(key)) return; // this source is still talking — don't stack or cut it
     const clip = this.resolve("ack", label + category);
     if (!clip || !clip.paths.length) return;
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return;
-    this.voiceBusy = true; // reserve the channel synchronously so bursts don't stack
+    if (this.voices.size >= MAX_VOICES) return; // bound a pathological overlap burst
+    const placeholder = {} as AudioBufferSourceNode; // reserve the key synchronously
+    this.voices.set(key, placeholder);
     const path = clip.paths[(Math.random() * clip.paths.length) | 0];
     void this.buffer(path).then((buf) => {
-      if (!buf || !this.ctx || !this.master) {
-        this.voiceBusy = false;
+      if (!buf || !this.ctx || !this.master || this.voices.get(key) !== placeholder) {
+        if (this.voices.get(key) === placeholder) this.voices.delete(key);
         return;
       }
       const src = this.source(buf, clip);
       src.connect(this.gain(clip.gain)).connect(this.master);
-      this.voiceSource = src;
+      this.voices.set(key, src);
       src.onended = () => {
-        this.voiceBusy = false;
-        if (this.voiceSource === src) this.voiceSource = null;
+        if (this.voices.get(key) === src) this.voices.delete(key);
       };
       src.start();
       this.onVoiceStart?.(label, buf.duration);

@@ -514,21 +514,25 @@ export class RtsController {
    *  after PISSED_AFTER consecutive re-clicks of the SAME single unit. Only your
    *  own units talk back (enemy/neutral clicks are silent, like WC3). */
   private announceSelection(): void {
-    if (!this.sounds || this.primary === null) return;
-    const e = this.byId.get(this.primary);
-    const u = this.sim.units.get(this.primary);
-    if (!e || !u || u.owner !== this.localPlayer) return;
-    const def = this.registry.get(e.typeId);
-    if (!def?.soundSet) return;
-    const single = this.selected.size === 1;
+    const e = this.primary !== null ? this.byId.get(this.primary) : undefined;
+    const u = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    const own = !!e && !!u && u.owner === this.localPlayer;
+    const single = own && this.selected.size === 1;
+    // Escalation counter is per single own unit: it only climbs on consecutive
+    // re-clicks of that SAME unit. Selecting anything else in between — a different
+    // unit, an enemy/neutral, a group, or nothing selectable — resets it, so the
+    // next re-click restarts at "What" (matches WC3's annoyed easter-egg).
     if (single && this.primary === this.lastVoiceId) {
       this.voiceStreak++;
     } else {
       this.voiceStreak = 0;
       this.lastVoiceId = single ? this.primary : null;
     }
+    if (!this.sounds || !own || !e) return; // enemy/neutral/empty: state reset above, no voice
+    const def = this.registry.get(e.typeId);
+    if (!def?.soundSet) return;
     const cat: SoundCategory = single && this.voiceStreak >= PISSED_AFTER ? "Pissed" : "What";
-    this.sounds.play(def.soundSet, cat);
+    this.sounds.play(def.soundSet, cat, undefined, this.primary!); // source = this unit → overlaps other units
   }
 
   /** Play weapon-impact SFX for every hit landed this tick (attacker's weapon
@@ -563,7 +567,7 @@ export class RtsController {
     const u = this.sim.units.get(this.primary);
     if (!e || !u || u.owner !== this.localPlayer || u.building) return; // buildings don't voice orders
     const def = this.registry.get(e.typeId);
-    if (def?.soundSet) this.sounds.play(def.soundSet, attack ? "YesAttack" : "Yes");
+    if (def?.soundSet) this.sounds.play(def.soundSet, attack ? "YesAttack" : "Yes", undefined, this.primary); // source = focused unit
   }
 
   /** Register the world positions of Neutral Passive entities (from the map's
@@ -1479,6 +1483,8 @@ export class RtsController {
         this.selected.clear();
         this.primary = null;
         this.selectedMine = m.id;
+        this.voiceStreak = 0; // selecting a mine breaks a unit's re-click streak
+        this.lastVoiceId = null;
         return;
       }
     }
