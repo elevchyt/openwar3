@@ -1198,6 +1198,21 @@ export class SimWorld {
     }
   }
 
+  /** True if any live ground unit's hull overlaps a circle of `radius` at (x,y).
+   *  The grid's reservations only cover *settled* units; a unit that's moving
+   *  (or freshly trained and already walking to its rally) doesn't reserve cells,
+   *  so grid.footprintFits() alone can't tell a spawn spot is really clear. This
+   *  catches those, keeping a new unit from popping out on top of another. Flyers
+   *  and buildings (footprints handled by the grid) are ignored. */
+  spotOccupied(x: number, y: number, radius: number, excludeId = 0): boolean {
+    for (const u of this.units.values()) {
+      if (u.id === excludeId || u.flying || u.building || u.radius <= 0 || u.hp <= 0) continue;
+      const rr = radius + u.radius;
+      if (Math.abs(u.x - x) < rr && Math.abs(u.y - y) < rr && Math.hypot(u.x - x, u.y - y) < rr) return true;
+    }
+    return false;
+  }
+
   /** Sim ids of units that died since the last drain (renderer plays deaths). */
   drainDeaths(): number[] {
     if (!this.deaths.length) return this.deaths;
