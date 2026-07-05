@@ -224,6 +224,7 @@ export class MapViewerScene {
   private portraitFor: number | null = null;
   private portraitLoading = false;
   private portraitLabel = ""; // sound-set of the unit currently in the portrait (drives talk anim)
+  private lastVoice: { label: string; until: number } | null = null; // most recent voice line (label + when it ends), so a bust that finishes loading mid-line still mouths it
   private cameraLock = false; // portrait held → camera follows the selected unit
   private cardPage: "root" | "build" | "learn" = "root";
   private lastSelected: number | null = null;
@@ -288,9 +289,14 @@ export class MapViewerScene {
   ) {
     this.sounds = new SoundBoard(vfs);
     this.setupKeyboardLock();
-    // When the unit shown in the portrait speaks, mouth it on the 3D bust.
+    // When the unit shown in the portrait speaks, mouth it on the 3D bust. Also
+    // remember the line: a fresh selection plays its "What" voice while the bust
+    // model is still loading, so onVoiceStart fires before the instance exists and
+    // playTalk here no-ops — updatePortrait() replays it once the bust is ready.
     this.sounds.onVoiceStart = (label, durationSec) => {
-      if (label && label === this.portraitLabel) this.portraitViewer?.playTalk(durationSec);
+      if (!label) return;
+      this.lastVoice = { label, until: performance.now() + durationSec * 1000 };
+      if (label === this.portraitLabel) this.portraitViewer?.playTalk(durationSec);
     };
     // Mute toggle on the bottom-left debug panel.
     this.metrics.onToggleMute = (muted) => this.sounds?.setMuted(muted);
@@ -1561,6 +1567,14 @@ export class MapViewerScene {
       .then(() => {
         this.portraitFor = id;
         this.portraitViewer!.start();
+        // The selection voice ("What") likely started before this bust finished
+        // loading — its onVoiceStart no-op'd because the instance wasn't ready yet.
+        // If that line is this unit's and still playing, mouth the remaining span.
+        const v = this.lastVoice;
+        if (v && v.label === this.portraitLabel) {
+          const remaining = v.until - performance.now();
+          if (remaining > 0) this.portraitViewer!.playTalk(remaining / 1000);
+        }
       })
       .catch(() => {})
       .finally(() => {
