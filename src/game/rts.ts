@@ -26,6 +26,8 @@ interface Instance {
   setUniformScale(s: number): unknown;
   hide(): void;
   show(): void;
+  vertexColor?: Float32Array; // MDX tint; multiplied by fog brightness to dim in fog
+  setVertexColor?(c: ArrayLike<number>): unknown;
   model: { sequences: Array<{ name: string; interval?: ArrayLike<number> }> };
 }
 interface MapUnit {
@@ -181,6 +183,8 @@ interface Entry {
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
   castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
   moveEma: number; // smoothed actual/expected displacement — gates the walk clip
+  baseColor?: Float32Array; // model's own tint, captured before any fog dimming
+  fogTintB?: number; // last fog brightness applied (avoids redundant setVertexColor)
 }
 
 /** The "Birth" construction sequence + its frame interval, if the model has one. */
@@ -195,6 +199,9 @@ function findBirthFields(seqs: Array<{ name: string; interval?: ArrayLike<number
 }
 
 const WALK = 1, IDLE = 0;
+// Brightness of a remembered-but-not-seen building in fog — matches the ground veil's
+// EXPLORED_DARK (0.5) so a greyed structure sits at the same dimness as its terrain.
+const FOG_EXPLORED_BRIGHT = 0.5;
 // A unit ordered to move but pinned in place by the crowd (actual displacement
 // far below what its speed would cover) shouldn't run the walk clip — it just
 // jogs on the spot, awkwardly. Below this share of expected displacement (EMA-
@@ -473,6 +480,29 @@ export class RtsController {
         e.unit.instance.show();
       }
     }
+    if (!hide) this.applyFogTint(e, u);
+  }
+
+  /** Dim an enemy/neutral BUILDING that's shown from fog memory (last-seen, out of
+   *  current sight) to the same grey as the ground veil — WC3 greys remembered
+   *  structures. Own units and anything currently in sight stay full colour; mobile
+   *  enemy units never reach here (fogHides already hides them out of sight). Tint
+   *  multiplies the model's own base colour so a unit's team/UnitData tint survives. */
+  private applyFogTint(e: Entry, u: SimUnit): void {
+    const inst = e.unit.instance;
+    if (!inst.setVertexColor) return;
+    let b = 1;
+    if (!this.vision.revealed && u.team !== this.localTeam && this.vision.stateAt(u.x, u.y) !== FogState.Visible) {
+      b = FOG_EXPLORED_BRIGHT; // remembered-but-not-seen → half-bright grey
+    }
+    if (e.fogTintB === b) return; // unchanged since last tick
+    e.fogTintB = b;
+    if (!e.baseColor) {
+      const c = inst.vertexColor;
+      e.baseColor = c ? new Float32Array([c[0], c[1], c[2], c[3]]) : new Float32Array([1, 1, 1, 1]);
+    }
+    const base = e.baseColor;
+    inst.setVertexColor([base[0] * b, base[1] * b, base[2] * b, base[3]]);
   }
 
   /** Wire the voice/sound board (owned by the host, which has the VFS). */
@@ -1910,6 +1940,19 @@ export class RtsController {
   /** Time of day for the HUD clock: game-hour + day/night flag. */
   timeOfDay(): { hour: number; isDay: boolean } {
     return { hour: this.sim.timeOfDay, isDay: this.sim.isDay };
+  }
+
+  /** CLICK/selection colliders for EVERY live unit (position, ground height, and
+   *  selection radius) — for the debug collider overlay. Pathing & LOS obstruction are
+   *  read straight off the grid/vision map by the renderer. */
+  debugUnitColliders(): Array<{ x: number; y: number; z: number; radius: number; building: boolean }> {
+    const out: Array<{ x: number; y: number; z: number; radius: number; building: boolean }> = [];
+    for (const [id, u] of this.sim.units) {
+      const e = this.byId.get(id);
+      if (!e) continue;
+      out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, building: u.building != null });
+    }
+    return out;
   }
 
   /** Ground-circle info for every selected unit (the renderer draws each ring as

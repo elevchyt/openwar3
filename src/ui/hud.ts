@@ -129,6 +129,9 @@ export interface HudDriver {
   /** Debug cheat: top up gold/lumber/food, or toggle fast build/train. Returns
    *  the resulting on/off state (only meaningful for "fastbuild"). */
   cheat(kind: "gold" | "lumber" | "food" | "fastbuild"): boolean;
+  /** Toggle the debug collider overlay (click/pathing/fog obstruction). Returns the
+   *  resulting on/off state so the caller can show/hide the legend. */
+  toggleColliders(): boolean;
 }
 
 // Zone rectangles measured from the rendered console atlas (fractions of the
@@ -494,6 +497,36 @@ export class GameHud {
       return b;
     };
     panel.append(mk("+500 Gold", "gold"), mk("+500 Lumber", "lumber"), mk("+Food", "food"), mk("Fast Build", "fastbuild"));
+
+    // Collider debug overlay toggle + a colour legend (hidden until turned on).
+    const legend = document.createElement("div");
+    legend.className = "hud-collider-legend";
+    legend.hidden = true;
+    const swatch = (color: string, label: string) => {
+      const row = document.createElement("div");
+      row.className = "hud-legend-row";
+      const box = document.createElement("span");
+      box.className = "hud-legend-swatch";
+      box.style.background = color;
+      const text = document.createElement("span");
+      text.textContent = label;
+      row.append(box, text);
+      return row;
+    };
+    legend.append(
+      swatch("rgb(64,255,115)", "Click / selection"),
+      swatch("rgb(255,72,51)", "Pathing obstruction"),
+      swatch("rgb(77,166,255)", "Fog-of-war (line-of-sight) blocker"),
+    );
+    const colliderBtn = document.createElement("button");
+    colliderBtn.className = "hud-cheat-btn";
+    colliderBtn.textContent = "Show Colliders";
+    colliderBtn.onclick = () => {
+      const on = this.driver.toggleColliders();
+      colliderBtn.classList.toggle("active", on);
+      legend.hidden = !on;
+    };
+    panel.append(colliderBtn, legend);
     return panel;
   }
 

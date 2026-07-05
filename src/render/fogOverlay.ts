@@ -45,6 +45,12 @@ void main() {
 }`;
 
 const EXPLORED_DARK = 0.5; // grey veil over remembered-but-not-seen terrain
+// The vision map is a coarse grid with HARD per-cell states, so a cliff's line-of-sight
+// shadow or a sight-radius edge renders as a razor-sharp, geometric dark wedge — reads as
+// an artifact, not fog. Blur the per-corner darkness (separable box, radius in corners at
+// 128 units each) so edges become soft gradients like WC3's fog. Purely visual — gameplay
+// visibility (unit hiding, minimap) still reads the hard `vision.stateAt`.
+const FOG_BLUR_RADIUS = 2;
 // The fog mesh is now coplanar with the terrain (same corner grid + triangulation), so
 // only a slope-scaled depth bias is needed to make it win LEQUAL against the terrain.
 // glPolygonOffset biases depth in screen space, scaled by the surface's screen-space
@@ -80,6 +86,8 @@ export class FogOverlay {
   // so cliff and ground fog agree at every shared corner.
   private fogTex: WebGLTexture;
   private bright: Uint8Array; // per-corner luminance byte, uploaded each update
+  private rawDark: Float32Array; // per-corner darkness before the softening blur
+  private blurTmp: Float32Array; // scratch for the separable blur's horizontal pass
   private gridW: number;
   private gridH: number;
   readonly fogParams: Float32Array; // world→UV: originX, originY, invSpanX, invSpanY
@@ -143,6 +151,8 @@ export class FogOverlay {
     this.gridW = width;
     this.gridH = height;
     this.bright = new Uint8Array(n); // 0 everywhere = start fully unexplored (black)
+    this.rawDark = new Float32Array(n);
+    this.blurTmp = new Float32Array(n);
     this.fogParams = new Float32Array([
       centerOffset[0], centerOffset[1], 1 / ((width - 1) * CELL), 1 / ((height - 1) * CELL),
     ]);
@@ -166,12 +176,15 @@ export class FogOverlay {
   /** Re-sample the vision map into the per-vertex darkness and upload it. Throttle
    *  the caller — the vision itself only changes a few times a second. */
   update(vision: VisionMap): void {
-    for (let i = 0; i < this.dark.length; i++) {
+    // 1) Raw per-corner darkness from the hard fog states.
+    for (let i = 0; i < this.rawDark.length; i++) {
       const state = vision.stateAt(this.vx[i], this.vy[i]);
-      const d = state === FogState.Visible ? 0 : state === FogState.Explored ? EXPLORED_DARK : 1;
-      this.dark[i] = d;
-      this.bright[i] = (1 - d) * 255; // luminance for the cliff fog texture (255/128/0)
+      this.rawDark[i] = state === FogState.Visible ? 0 : state === FogState.Explored ? EXPLORED_DARK : 1;
     }
+    // 2) Soften the hard cell edges into gradients (separable box blur) → this.dark.
+    this.blurDark();
+    // 3) Cliff-shader luminance from the same softened field, so cliff & ground agree.
+    for (let i = 0; i < this.dark.length; i++) this.bright[i] = (1 - this.dark[i]) * 255;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.darkBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.dark);
@@ -179,6 +192,36 @@ export class FogOverlay {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.gridW, this.gridH, gl.LUMINANCE, gl.UNSIGNED_BYTE, this.bright);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  }
+
+  /** Separable box blur of `rawDark` → `dark` (edges clamped). Radius is in corners,
+   *  so it softens the fog boundary over ~2·R·CELL world units without touching the
+   *  hard vision states the sim reads. Symmetric, so the boundary stays centred. */
+  private blurDark(): void {
+    const W = this.gridW, H = this.gridH, R = FOG_BLUR_RADIUS;
+    const src = this.rawDark, tmp = this.blurTmp, out = this.dark;
+    const inv = 1 / (2 * R + 1);
+    for (let y = 0; y < H; y++) { // horizontal pass: src → tmp
+      const row = y * W;
+      for (let x = 0; x < W; x++) {
+        let sum = 0;
+        for (let k = -R; k <= R; k++) {
+          const xx = x + k < 0 ? 0 : x + k >= W ? W - 1 : x + k;
+          sum += src[row + xx];
+        }
+        tmp[row + x] = sum * inv;
+      }
+    }
+    for (let y = 0; y < H; y++) { // vertical pass: tmp → out
+      for (let x = 0; x < W; x++) {
+        let sum = 0;
+        for (let k = -R; k <= R; k++) {
+          const yy = y + k < 0 ? 0 : y + k >= H ? H - 1 : y + k;
+          sum += tmp[yy * W + x];
+        }
+        out[y * W + x] = sum * inv;
+      }
+    }
   }
 
   /** Draw the fog. Call every frame, AFTER the viewer has rendered the world.

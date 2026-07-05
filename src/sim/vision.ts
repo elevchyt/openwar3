@@ -252,4 +252,14 @@ export class VisionMap {
   isExplored(cx: number, cy: number): boolean {
     return this.revealAll || (this.inBounds(cx, cy) && this.explored[cy * this.width + cx] === 1);
   }
+
+  /** Does this cell block line of sight beyond its own terrain height? True for tree
+   *  (treeline) cells that raise the horizon — used by the debug collider overlay to
+   *  show which cells obstruct fog-of-war vision. (Cliffs block via terrain height, not
+   *  this flag.) */
+  isBlocker(cx: number, cy: number): boolean {
+    if (!this.block || !this.ground || !this.inBounds(cx, cy)) return false;
+    const i = cy * this.width + cx;
+    return this.block[i] > this.ground[i] + 1;
+  }
 }

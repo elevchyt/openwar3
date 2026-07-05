@@ -207,6 +207,27 @@ body.in-game .menu-panel { display: none; }
 .hud-cheat-btn:hover { background: rgba(50, 40, 16, 0.92); border-color: #a58a3e; }
 .hud-cheat-btn:active { background: rgba(70, 56, 22, 0.95); }
 .hud-cheat-btn.active { background: #3a6a2a; border-color: #6fd05a; color: #d6ffcf; }
+.hud-collider-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 7px;
+  background: rgba(12, 10, 6, 0.86);
+  border: 1px solid #6b5a2e;
+  border-radius: 3px;
+  font-family: var(--game-font);
+  font-size: 10px;
+  color: #e8dcc0;
+  text-shadow: 0 1px 1px #000;
+}
+.hud-legend-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.hud-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  flex: none;
+}
 
 .hud-top {
   position: absolute;

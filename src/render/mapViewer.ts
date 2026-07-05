@@ -6,13 +6,14 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
-import { PathingGrid, parseWpm, footprintCells } from "../sim/pathing";
+import { PathingGrid, parseWpm, footprintCells, PATHING_CELL } from "../sim/pathing";
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
-import { makeHeightSampler, makeCliffLevelSampler } from "../game/heightmap";
+import { makeHeightSampler, makeCliffLevelSampler, type HeightSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
-import { FogState, type VisionMap } from "../sim/vision";
+import { DebugColliders, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
+import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
@@ -186,6 +187,18 @@ export class MapViewerScene {
   // their cell is explored). Rebuilt per map; updated a few times a second.
   private fog: FogOverlay | null = null;
   private fogTerrain: TerrainData | null = null; // corner grid the fog mesh is built on
+  private debug: DebugColliders | null = null; // debug collider overlay (lazy)
+  private showColliders = false; // debug overlay toggle (bottom-right cheat button)
+  private heightSampler: HeightSampler | null = null; // terrain height for the overlay
+  // Static geometry (pathing/vision cells + tree click-rings) — rebuilt on a slow timer;
+  // dynamic geometry (unit click-rings) — rebuilt every frame since units move.
+  private dbgCells = new Float32Array(0); // pathing + vision quads (triangles)
+  private dbgCellVerts = 0;
+  private dbgTreeRings = new Float32Array(0); // tree click rings (lines)
+  private dbgTreeVerts = 0;
+  private dbgUnitRings = new Float32Array(0); // unit/building click rings (lines)
+  private dbgUnitVerts = 0;
+  private dbgStaticAccum = 1e9; // ms since static rebuild (force one on first frame)
   private fogAccum = 0; // ms since the last fog resample (throttle)
   private removedWidgets = new Set<HideableWidget>(); // felled trees / mined-out mines — stay gone, never re-fogged
   private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
@@ -389,7 +402,8 @@ export class MapViewerScene {
         units: () => map.units as ReturnType<RtsHost["units"]>,
         unitsReady: () => map.unitsReady,
       };
-      this.rts = new RtsController(grid, makeHeightSampler(terrain), host, this.registry, this.abilities);
+      this.heightSampler = makeHeightSampler(terrain);
+      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities);
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
@@ -1434,6 +1448,7 @@ export class MapViewerScene {
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
       cheat: (kind) => this.rts?.cheat(kind) ?? false,
+      toggleColliders: () => (this.showColliders = !this.showColliders),
     };
     this.hud = new GameHud(ui, driver);
     this.gameMenu?.dispose();
@@ -2254,6 +2269,7 @@ export class MapViewerScene {
       this.viewer.render();
       const fogScene = this.viewer.map?.worldScene;
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
+      if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -2276,6 +2292,8 @@ export class MapViewerScene {
     this.stop();
     this.rts?.dispose();
     this.rts = null;
+    this.debug?.dispose();
+    this.debug = null;
     this.metrics.dispose();
     this.hud?.dispose();
     this.hud = null;
@@ -2396,6 +2414,76 @@ export class MapViewerScene {
       this.baseColors.set(inst, base);
     }
     return base;
+  }
+
+  /** Draw the debug collider overlay. Static geometry (pathing/vision cells + tree
+   *  click-rings) is rebuilt a few times a second; the moving unit rings every frame. */
+  private renderColliders(viewProj: Float32Array, dt: number): void {
+    if (!this.debug) this.debug = new DebugColliders(this.viewer.gl);
+    this.dbgStaticAccum += dt;
+    if (this.dbgStaticAccum >= 250) {
+      this.dbgStaticAccum = 0;
+      this.rebuildStaticColliders();
+    }
+    this.rebuildUnitColliders();
+    const batches: ColliderBatch[] = [
+      { data: this.dbgCells, verts: this.dbgCellVerts, mode: "tri" },
+      { data: this.dbgTreeRings, verts: this.dbgTreeVerts, mode: "line" },
+      { data: this.dbgUnitRings, verts: this.dbgUnitVerts, mode: "line" },
+    ];
+    this.debug.render(viewProj, batches);
+  }
+
+  /** Rebuild pathing-blocked cells + LOS-blocker cells (filled quads) and tree
+   *  click-rings (lines) — the parts that only change when buildings go up or trees fall. */
+  private rebuildStaticColliders(): void {
+    const h = this.heightSampler;
+    if (!h) return;
+    const cells: number[] = [];
+    const grid = this.grid;
+    if (grid) {
+      const [ox, oy] = grid.origin;
+      for (let cy = 0; cy < grid.height; cy++) {
+        for (let cx = 0; cx < grid.width; cx++) {
+          if (grid.walkable(cx, cy)) continue;
+          // Draw only the BORDER of unwalkable regions (a cell touching walkable ground):
+          // small object footprints (buildings, trees, mines) fill solid, but a huge
+          // water/boundary region shows as a thin coastline instead of a red flood.
+          if (grid.walkable(cx - 1, cy) || grid.walkable(cx + 1, cy) || grid.walkable(cx, cy - 1) || grid.walkable(cx, cy + 1)) {
+            const x0 = ox + cx * PATHING_CELL, y0 = oy + cy * PATHING_CELL;
+            pushColliderQuad(cells, x0, y0, x0 + PATHING_CELL, y0 + PATHING_CELL, h, COLLIDER_COLORS.pathing);
+          }
+        }
+      }
+    }
+    const vis = this.rts?.getVision();
+    if (vis) {
+      for (let cy = 0; cy < vis.height; cy++) {
+        for (let cx = 0; cx < vis.width; cx++) {
+          if (!vis.isBlocker(cx, cy)) continue;
+          const x0 = vis.originX + cx * VISION_CELL, y0 = vis.originY + cy * VISION_CELL;
+          pushColliderQuad(cells, x0, y0, x0 + VISION_CELL, y0 + VISION_CELL, h, COLLIDER_COLORS.vision);
+        }
+      }
+    }
+    this.dbgCells = Float32Array.from(cells);
+    this.dbgCellVerts = cells.length / FLOATS_PER_VERT;
+
+    const rings: number[] = [];
+    const world = this.rts?.simWorld;
+    if (world) for (const tr of world.trees.values()) pushColliderRing(rings, tr.x, tr.y, h(tr.x, tr.y), TREE_CLICK_RADIUS, COLLIDER_COLORS.click, 8);
+    this.dbgTreeRings = Float32Array.from(rings);
+    this.dbgTreeVerts = rings.length / FLOATS_PER_VERT;
+  }
+
+  /** Rebuild the moving unit/building click rings (green) — every frame. */
+  private rebuildUnitColliders(): void {
+    const rings: number[] = [];
+    for (const c of this.rts?.debugUnitColliders() ?? []) {
+      pushColliderRing(rings, c.x, c.y, c.z, c.radius, COLLIDER_COLORS.click, c.building ? 24 : 16);
+    }
+    this.dbgUnitRings = Float32Array.from(rings);
+    this.dbgUnitVerts = rings.length / FLOATS_PER_VERT;
   }
 
   private disposeFog(): void {
@@ -2750,4 +2838,31 @@ function zQuat(out: Float32Array, angle: number): void {
   out[1] = 0;
   out[2] = Math.sin(half);
   out[3] = Math.cos(half);
+}
+
+// --- Debug collider overlay geometry helpers (interleaved [x,y,z, r,g,b,a]) ---
+const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
+const TREE_CLICK_RADIUS = 40; // approx harvest-click radius drawn for each tree
+
+function pushColliderVert(a: number[], x: number, y: number, z: number, c: readonly number[]): void {
+  a.push(x, y, z, c[0], c[1], c[2], c[3]);
+}
+
+/** Two triangles covering the world-space rect [x0,y0]–[x1,y1], each corner at terrain
+ *  height + lift so the quad hugs the ground. */
+function pushColliderQuad(a: number[], x0: number, y0: number, x1: number, y1: number, h: HeightSampler, c: readonly number[]): void {
+  const z00 = h(x0, y0) + COLLIDER_LIFT, z10 = h(x1, y0) + COLLIDER_LIFT;
+  const z01 = h(x0, y1) + COLLIDER_LIFT, z11 = h(x1, y1) + COLLIDER_LIFT;
+  pushColliderVert(a, x0, y0, z00, c); pushColliderVert(a, x1, y0, z10, c); pushColliderVert(a, x0, y1, z01, c);
+  pushColliderVert(a, x1, y0, z10, c); pushColliderVert(a, x1, y1, z11, c); pushColliderVert(a, x0, y1, z01, c);
+}
+
+/** A ring (as line segments) of radius `r` at (cx,cy), flat at height `z` + lift. */
+function pushColliderRing(a: number[], cx: number, cy: number, z: number, r: number, c: readonly number[], segs: number): void {
+  const zz = z + COLLIDER_LIFT;
+  for (let i = 0; i < segs; i++) {
+    const a0 = (i / segs) * Math.PI * 2, a1 = ((i + 1) / segs) * Math.PI * 2;
+    pushColliderVert(a, cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, zz, c);
+    pushColliderVert(a, cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, zz, c);
+  }
 }
