@@ -324,6 +324,189 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
          }
      }
      return offset;
+diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
+index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb9f8a68a3 100644
+--- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
++++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
+@@ -21,6 +21,13 @@ const scaleHeap = gl_matrix_1.vec3.create();
+ const colorHeap = new Float32Array(3);
+ const alphaHeap = new Float32Array(1);
+ const textureIdHeap = new Uint32Array(1);
++// OpenWar3: scratch quat for the animation cross-fade slerp (see updateNodes).
++const blendRotationHeap = gl_matrix_1.quat.create();
++// OpenWar3: default animation cross-fade duration in ms. Real WC3's per-unit
++// "Animation blend time" (UnitUI.slk `blend`) is 0.15s for the overwhelming
++// majority of units; the app overrides this per instance via setBlendTime().
++// Applies to any instance that never gets an override (effects, portraits, …).
++const DEFAULT_BLEND_TIME = 150;
+ /**
+  * An MDX model instance.
+  */
+@@ -48,6 +55,13 @@ class MdxModelInstance extends modelinstance_1.default {
+         // Any later non-forced update can then use variancy to skip updating things.
+         // It is set to true every time the sequence is set with setSequence().
+         this.forced = true;
++        // OpenWar3: animation cross-fade state. On setSequence() we snapshot the
++        // current per-node local TRS into blendSnapshot, then over blendTime ms
++        // blend from that snapshot toward the new sequence's pose (WC3 plays
++        // sequences as hard cuts otherwise). blendRemaining counts down; 0 = idle.
++        this.blendTime = DEFAULT_BLEND_TIME; // duration (ms), overridable per instance
++        this.blendRemaining = 0; // ms left in the active cross-fade (0 = not blending)
++        this.blendSnapshot = null; // Float32Array(nodeCount*10): [loc3, rot4, scale3] per node
+         this.geosetColors = [];
+         this.layerAlphas = [];
+         this.layerTextures = [];
+@@ -223,6 +237,25 @@ class MdxModelInstance extends modelinstance_1.default {
+         const sortedNodes = this.sortedNodes;
+         const model = this.model;
+         const sortedGenericObjects = model.sortedGenericObjects;
++        // OpenWar3: advance the animation cross-fade. blendT goes 0 -> 1 across
++        // blendTime ms; each node's freshly-sampled pose is blended back toward
++        // the snapshot captured at setSequence() by (1 - blendT). While blending
++        // every node must be re-evaluated each frame (like a forced update), so
++        // variancy-skipping is disabled — otherwise a node whose new sequence
++        // has no track for a channel would never re-blend off the snapshot.
++        const snapshot = this.blendSnapshot;
++        let blending = false;
++        let blendInv = 0; // weight on the snapshot pose = 1 - blendT
++        if (this.blendRemaining > 0 && snapshot !== null && sequence !== -1) {
++            this.blendRemaining -= dt * 1000;
++            if (this.blendRemaining <= 0) {
++                this.blendRemaining = 0; // fade complete this frame
++            }
++            else {
++                blending = true;
++                blendInv = this.blendTime > 0 ? this.blendRemaining / this.blendTime : 0;
++            }
++        }
+         // Update the nodes
+         for (let i = 0, l = sortedNodes.length; i < l; i++) {
+             const genericObject = sortedGenericObjects[i];
+@@ -231,20 +264,43 @@ class MdxModelInstance extends modelinstance_1.default {
+             let wasDirty = forced || parent.wasDirty || genericObject.anyBillboarding;
+             const variants = genericObject.variants;
+             // Local node transformation.
+-            // Use variants to skip animation data when possible.
+-            if (forced || variants['generic'][sequence]) {
++            // Use variants to skip animation data when possible (never while
++            // blending — every node has to re-blend each frame).
++            if (forced || blending || variants['generic'][sequence]) {
+                 wasDirty = true;
++                const s = i * 10; // this node's slot in the flat snapshot buffer
+                 // Translation
+-                if (forced || variants['translation'][sequence]) {
+-                    genericObject.getTranslation(node.localLocation, sequence, frame, counter);
++                if (forced || blending || variants['translation'][sequence]) {
++                    const t = node.localLocation;
++                    genericObject.getTranslation(t, sequence, frame, counter);
++                    if (blending) {
++                        t[0] += (snapshot[s] - t[0]) * blendInv;
++                        t[1] += (snapshot[s + 1] - t[1]) * blendInv;
++                        t[2] += (snapshot[s + 2] - t[2]) * blendInv;
++                    }
+                 }
+                 // Rotation
+-                if (forced || variants['rotation'][sequence]) {
+-                    genericObject.getRotation(node.localRotation, sequence, frame, counter);
++                if (forced || blending || variants['rotation'][sequence]) {
++                    const r = node.localRotation;
++                    genericObject.getRotation(r, sequence, frame, counter);
++                    if (blending) {
++                        blendRotationHeap[0] = snapshot[s + 3];
++                        blendRotationHeap[1] = snapshot[s + 4];
++                        blendRotationHeap[2] = snapshot[s + 5];
++                        blendRotationHeap[3] = snapshot[s + 6];
++                        // slerp target -> snapshot by blendInv (so blendInv=0 keeps target).
++                        gl_matrix_1.quat.slerp(r, r, blendRotationHeap, blendInv);
++                    }
+                 }
+                 // Scale
+-                if (forced || variants['scale'][sequence]) {
+-                    genericObject.getScale(node.localScale, sequence, frame, counter);
++                if (forced || blending || variants['scale'][sequence]) {
++                    const sc = node.localScale;
++                    genericObject.getScale(sc, sequence, frame, counter);
++                    if (blending) {
++                        sc[0] += (snapshot[s + 7] - sc[0]) * blendInv;
++                        sc[1] += (snapshot[s + 8] - sc[1]) * blendInv;
++                        sc[2] += (snapshot[s + 9] - sc[2]) * blendInv;
++                    }
+                 }
+             }
+             node.wasDirty = wasDirty;
+@@ -436,6 +492,7 @@ class MdxModelInstance extends modelinstance_1.default {
+     setSequence(id) {
+         const model = this.model;
+         const sequences = model.sequences;
++        const previous = this.sequence; // captured before the switch, for cross-fade
+         this.sequence = id;
+         if (id < 0 || id > sequences.length - 1) {
+             this.sequence = -1;
+@@ -445,11 +502,64 @@ class MdxModelInstance extends modelinstance_1.default {
+         else {
+             this.frame = sequences[id].interval[0];
+         }
++        // OpenWar3: start an animation cross-fade from the pose we're leaving into
++        // the new sequence. Only blend on a real change between two live sequences
++        // (skip the initial -1 -> first-clip set, and same-clip restarts such as a
++        // per-swing attack re-trigger, which must hard-cut to stay in phase).
++        if (this.blendTime > 0 && previous !== -1 && this.sequence !== -1 && previous !== this.sequence) {
++            this.captureBlendSnapshot();
++            this.blendRemaining = this.blendTime;
++        }
++        else {
++            this.blendRemaining = 0;
++        }
+         this.resetEventEmitters();
+         this.resetAttachments();
+         this.forced = true;
+         return this;
+     }
++    /**
++     * OpenWar3: set this instance's animation cross-fade duration, in seconds.
++     * Fed from each unit's UnitUI.slk `blend` value (0.15s for most WC3 units).
++     * 0 disables blending (hard cuts, the stock mdx-m3-viewer behavior).
++     */
++    setBlendTime(seconds) {
++        this.blendTime = Math.max(0, seconds * 1000);
++        if (this.blendTime === 0) {
++            this.blendRemaining = 0;
++        }
++        return this;
++    }
++    /**
++     * OpenWar3: snapshot every node's current local TRS into the flat blend
++     * buffer, laid out as [loc.x,loc.y,loc.z, rot.x,rot.y,rot.z,rot.w, sc.x,sc.y,sc.z]
++     * per node in sortedNodes order (matching updateNodes' iteration).
++     */
++    captureBlendSnapshot() {
++        const sortedNodes = this.sortedNodes;
++        const l = sortedNodes.length;
++        let snapshot = this.blendSnapshot;
++        if (snapshot === null || snapshot.length < l * 10) {
++            snapshot = this.blendSnapshot = new Float32Array(l * 10);
++        }
++        for (let i = 0; i < l; i++) {
++            const node = sortedNodes[i];
++            const loc = node.localLocation;
++            const rot = node.localRotation;
++            const sc = node.localScale;
++            const s = i * 10;
++            snapshot[s] = loc[0];
++            snapshot[s + 1] = loc[1];
++            snapshot[s + 2] = loc[2];
++            snapshot[s + 3] = rot[0];
++            snapshot[s + 4] = rot[1];
++            snapshot[s + 5] = rot[2];
++            snapshot[s + 6] = rot[3];
++            snapshot[s + 7] = sc[0];
++            snapshot[s + 8] = sc[1];
++            snapshot[s + 9] = sc[2];
++        }
++    }
+     getBounds() {
+         const model = this.model;
+         if (this.sequence === -1) {
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
 index e4c8ea760e92653ef6423bd34f9111d0b062a901..ae4d63d4f3e02a816255f2c51719c6928bf9505d 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js

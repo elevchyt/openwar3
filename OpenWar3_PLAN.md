@@ -457,11 +457,15 @@ patched via `pnpm patch` (`patches/mdx-m3-viewer@5.12.0.patch`) — see notes be
   placement silhouette now faces south and plays its finished "Stand" clip (was showing the default
   first sequence — often the "Birth" scaffold, the "preview/wrong-rotation" look). **Construction
   pause/resume** re-verified headlessly (freezes when the worker leaves, resumes — walking back if
-  far — when reassigned). *Deferred:* true animation-blend cross-fades (mdx-m3-viewer plays
-  sequences as hard cuts; adding blending means patching its per-frame `updateNodes` node-pose
-  path — large blast radius, needs in-browser verification); build-ghost translucency (vertex-alpha
-  is ignored on opaque building geosets — the ghost is solid-tinted). All sim logic verified via a
-  headless esbuild script (15 checks: projectiles, melee, construction pause/resume); `npm run
+  far — when reassigned). **Animation blending (issue #8, done):** per-unit cross-fades between
+  animation sequences — mdx-m3-viewer plays sequences as hard cuts, so `patches/` now snapshots
+  each node's local TRS on `setSequence()` and lerp/slerps toward the new sequence's pose over the
+  unit's own blend time in `updateNodes`. The duration is the real per-unit **UnitUI.slk `blend`**
+  value (0.15s for 808 of ~836 units; a handful use 0.01/0.3/0.4/0.5/1.5s), wired per instance via
+  `setBlendTime()`. Verified in-browser: `blendRemaining` counts 150→0ms and a peasant's bone
+  rotation eases frame-by-frame instead of snapping. *Deferred:* build-ghost translucency (vertex-
+  alpha is ignored on opaque building geosets — the ghost is solid-tinted). All sim logic verified
+  via a headless esbuild script (15 checks: projectiles, melee, construction pause/resume); `npm run
   build` clean.
 - **Phase 0** — Vite+TS scaffold, asset resolver (install→CC0→primitive), OPFS import, menu shell.
 - **Phase 1** — layered MPQ VFS + content profiles (TFT default). Import a WC3 folder, read any file.
@@ -647,12 +651,12 @@ types absent from `CliffTypes.slk` (fallback to `CLdi`).
 4. Later: **Phase 7** JASS, **Phase 8** server-authoritative multiplayer, **Phase 9** CASC/RoC/Electron.
 
 **Final polish milestones (deferred to late in the project, by developer request):**
-- **Animation blending** — a tiny, discrete default cross-fade between ALL unit animation
+- **Animation blending** — ✅ *done (issue #8).* A per-unit cross-fade between unit animation
   sequences (walk↔stand↔attack, etc.). mdx-m3-viewer plays sequences as hard cuts with no blend
-  hook, so this needs a `patches/` change to its per-frame `updateNodes` node-pose path (snapshot
-  each node's TRS on `setSequence`, then lerp/slerp toward the new sequence's pose over ~150 ms).
-  Large blast radius (a mistake breaks all animation) → do it last, verified in-browser. The
-  developer intends to implement this themselves later.
+  hook, so `patches/mdx-m3-viewer@5.12.0.patch` snapshots each node's local TRS on `setSequence`
+  and lerp/slerps toward the new sequence's pose over the unit's blend time in `updateNodes`. The
+  duration is the real per-unit `UnitUI.slk` `blend` value (`MdxModelInstance.setBlendTime`, fed
+  from `UnitDef.animBlend`; 0.15s for most units). Verified in-browser.
 
 **Unverified caveat:** all rendering/interaction is authored against the code but confirmed only by
 the developer in-browser (no browser in the build environment). No test runner is set up yet; the sim

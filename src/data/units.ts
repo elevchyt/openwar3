@@ -13,6 +13,9 @@ export interface UnitDef {
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
+  animBlend: number; // Art - Animation Blend Time (unitUI "blend", seconds): cross-fade
+  // duration between animation sequences. Real WC3 default is 0.15s (808 of ~836 units);
+  // a handful differ (0.01/0.3/0.4/0.5/1.5). Verified against War3Patch.mpq UnitUI.slk.
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
   weaponSound: string; // unitUI "weap1" weapon-impact base ("MetalMediumSlice"); "_" = none
   lumberSound: string; // unitUI "weap2" 2nd-weapon base — workers' chop ("AxeMediumChop"); "" = none
@@ -186,6 +189,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       model: `${file.replace(/\//g, "\\")}.mdx`,
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
+      animBlend: u ? num(u, "blend", 0.15) : 0.15,
       soundSet: u ? str(u, "unitSound") : "",
       weaponSound: u ? str(u, "weap1") : "",
       lumberSound: u ? str(u, "weap2") : "",

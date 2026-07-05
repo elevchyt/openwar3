@@ -24,6 +24,7 @@ interface Instance {
   setSequence(i: number): unknown;
   setSequenceLoopMode(m: number): unknown;
   setUniformScale(s: number): unknown;
+  setBlendTime?(seconds: number): unknown; // per-unit animation cross-fade (UnitUI `blend`)
   hide(): void;
   show(): void;
   vertexColor?: Float32Array; // MDX tint; multiplied by fog brightness to dim in fog
@@ -918,6 +919,7 @@ export class RtsController {
       const seqs = unit.instance.model.sequences;
       if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
       const anims = buildAnimSet(seqs);
+      unit.instance.setBlendTime?.(def?.animBlend ?? 0.15); // per-unit anim cross-fade (issue #8)
       const simId = this.nextId++;
       const su = this.sim.add(
         {
@@ -1071,6 +1073,10 @@ export class RtsController {
   addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0): number {
     const seqs = instance.model.sequences;
     const anims = buildAnimSet(seqs);
+    // Per-unit animation blending: cross-fade between sequences over this unit's
+    // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
+    // transitions ease instead of hard-cutting (issue #8).
+    instance.setBlendTime?.(def.animBlend);
     const simId = this.nextId++;
     const profile = WORKERS[def.id];
     const worker: WorkerState | null = profile ? { ...profile, carryGold: 0, carryLumber: 0 } : null;

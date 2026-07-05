@@ -52,6 +52,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 
 ## Practical
 
+- **Git workflow:** commit and push directly to `main` — do **not** create a branch or open a PR unless the developer
+  explicitly asks for one. Still commit only when the change is done and verified (`pnpm typecheck` / in-browser as needed).
 - **Build / check:** `pnpm dev` (localhost:5173), `pnpm build` (typecheck + build), `pnpm typecheck`. Run `pnpm typecheck`
   before considering a change done.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
