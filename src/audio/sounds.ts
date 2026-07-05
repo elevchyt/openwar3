@@ -1,4 +1,5 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
+import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import type { DataSource } from "../vfs/types";
 
 // Unit voice lines & sound effects, sourced entirely from the real WC3 sound data
@@ -12,6 +13,16 @@ import type { DataSource } from "../vfs/types";
 //   UI\SoundInfo\AnimSounds.slk       row `<label>Death`        (death cries)
 //   UI\SoundInfo\UnitCombatSounds.slk row `<weap><armor>`       (impacts + chops)
 //   UI\SoundInfo\UISounds.slk         row `<name>`              (interface sounds)
+//
+// A unit's/missile's ATTACK sound is NOT in any of the above nor in the model's own
+// folder — it's embedded in the MODEL as an `SND` event object (e.g. Rifleman.mdx
+// carries "SNDXKRIF"). The 4-char code (KRIF) resolves via UI\SoundInfo\AnimLookups.slk
+// (code → SoundLabel) then UI\SoundInfo\AnimSounds.slk (label → WAVs + 3D metadata).
+// The leading letter categorises it: K = the unit's own fire sound (gunshot, mortar
+// boom, dragon breath, tower fire), M = a missile's launch/impact whoosh, D = death.
+// This is why the Rifleman's gunshot (Units\Human\Rifleman\RiflemanAttack1.wav) and
+// the Frost Wyrm's missile sound (in the FireBallMissile folder!) can't be found by
+// scanning the model's own folder — resolveModelSounds() walks this chain instead.
 //
 // Row keys are matched CASE-INSENSITIVELY: WC3's data is inconsistent (e.g. unit
 // `halt` has unitSound "AltarofKings" but the ack row is "AltarOfKingsWhat"), and
@@ -42,6 +53,8 @@ const ACK_TABLE = "UI\\SoundInfo\\UnitAckSounds.slk";
 const ANIM_TABLE = "UI\\SoundInfo\\AnimSounds.slk";
 const COMBAT_TABLE = "UI\\SoundInfo\\UnitCombatSounds.slk";
 const UI_TABLE = "UI\\SoundInfo\\UISounds.slk";
+const ANIMLOOKUPS_TABLE = "UI\\SoundInfo\\AnimLookups.slk"; // SND event code → SoundLabel
+// (SoundLabel → WAVs + 3D metadata is AnimSounds.slk — already loaded under the "anim" tag.)
 
 const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["What", "Yes", "YesAttack", "Pissed", "Warcry", "Ready"]);
 
@@ -59,6 +72,16 @@ interface Clip {
   refDist: number; // MinDistance — full volume within this radius (world units)
   maxDist: number; // MaxDistance — attenuated to silence at this radius
   cutoff: number; // DistanceCutoff — WC3 doesn't play the sound at all beyond this
+}
+
+/** Weapon sounds embedded in a unit/missile MODEL as SND event objects, resolved via
+ *  AnimLookups (4-char code → label) → AnimSounds (label → clip). Categorised by the
+ *  event code's leading letter: K = the unit's own attack/fire sound; M = a missile's
+ *  launch/impact whoosh. (D death / A ability events are handled by other channels.) */
+interface ModelSounds {
+  attack: Clip[]; // K events — the unit's fire sound (played at the swing's damage point)
+  launch: Clip[]; // M events whose label is a "…Launch"
+  impact: Clip[]; // M events whose label is a "…Hit"/"…Impact" (or a single generic missile sound)
 }
 
 /** The 3D listener frame, in WC3 world space (Z up). Position sits at the camera's
@@ -101,7 +124,7 @@ export class SoundBoard {
   onVoiceStart: ((label: string, durationSec: number) => void) | null = null;
 
   constructor(private vfs: DataSource) {
-    for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE]] as const) {
+    for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE], ["animlookups", ANIMLOOKUPS_TABLE]] as const) {
       this.tables.set(tag, this.loadTable(path));
     }
   }
@@ -187,11 +210,18 @@ export class SoundBoard {
    *  while its own previous line still plays, but different sources overlap. Pass
    *  the emitting unit's instance id as `source`; omit it for a fire-and-forget
    *  line (e.g. a just-trained unit's "Ready") that should always overlap. Deaths
-   *  go through the overlapping death pool (capped). */
-  play(label: string, category: SoundCategory, at?: SoundPos, source?: string | number): void {
-    if (!label) return;
-    if (category === "Death") this.playPool(this.resolve("anim", label + "Death"), "death", at);
-    else this.playVoice(label, category, source);
+   *  go through the overlapping death pool (capped).
+   *  @returns whether a NEW voice line actually started — false if it was dropped
+   *  because the source is still talking (or is unready/has no such clip). Callers use
+   *  this to advance the What→Pissed streak by lines *heard*, not clicks. Death always
+   *  returns false (it's a pooled cry, not a per-source voice). */
+  play(label: string, category: SoundCategory, at?: SoundPos, source?: string | number): boolean {
+    if (!label) return false;
+    if (category === "Death") {
+      this.playPool(this.resolve("anim", label + "Death"), "death", at);
+      return false;
+    }
+    return this.playVoice(label, category, source);
   }
 
   /** Play a weapon-impact / chop clang: `<weapon><material>` (MetalMediumSlice+Flesh,
@@ -201,11 +231,21 @@ export class SoundBoard {
     this.playPool(this.resolve("combat", weaponSound + targetArmor), "impact", at);
   }
 
-  /** Ranged attacks carry no melee `weap` label — their launch/impact sound is a
-   *  WAV that ships in the missile model's own folder (FireBall→…Death.wav /
-   *  …Launch1.wav, Arrow→ArrowImpact.wav / ArrowAttack1.wav, Water→…Missile1.wav).
-   *  Resolve it data-drivenly from the missile art path and play it. */
+  /** Play a missile's launch/impact whoosh. Authentic source: the missile model's own
+   *  SND "M" event objects (AnimLookups→AnimSounds), which frequently point at a WAV in
+   *  a DIFFERENT folder than the model — e.g. FrostWyrmMissile.mdx's sound lives in the
+   *  FireBallMissile folder, so a scan of the model's own folder finds nothing. Falls
+   *  back to a keyword folder scan for the rare missile that carries no SND event but
+   *  does ship a launch/impact WAV alongside its model. */
   playMissile(missileArt: string, kind: "launch" | "impact", at?: SoundPos): void {
+    if (!missileArt) return;
+    const ms = this.resolveModelSounds(missileArt);
+    const clips = kind === "launch" ? ms.launch : ms.impact;
+    if (clips.length) {
+      this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
+      return;
+    }
+    // Fallback: no SND event on the model — scan its folder for a matching WAV.
     const suffixes =
       kind === "impact"
         ? ["Death", "Impact", "MissileDeath", "MissileImpact", "Hit1", "Hit2", "Hit3", "Hit", "Target1", "MissileHit1", "1", "2", "3", ""]
@@ -214,6 +254,16 @@ export class SoundBoard {
     // Folder WAVs carry no SLK metadata, so mark them WANT3D with WC3's typical
     // combat distances (min 600 / max 10000) — a missile whoosh is a world sound.
     if (paths.length) this.playPool({ paths, gain: 0.7, pitch: 1, pitchVar: 0.06, threeD: true, refDist: 600, maxDist: 10000, cutoff: 3000 }, "impact", at);
+  }
+
+  /** Play a unit's own attack/fire sound — the SND "K" event embedded in its model
+   *  (Rifleman gunshot, Mortar boom, dragon breath, tower fire), fired at the swing's
+   *  damage point. No-op for melee units whose model carries no such event: their
+   *  audible attack is the weapon-impact clang (playImpact), not a fire sound. */
+  playModelAttack(modelArt: string, at?: SoundPos): void {
+    if (!modelArt) return;
+    const clips = this.resolveModelSounds(modelArt).attack;
+    if (clips.length) this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
   }
 
   /** Play a spell's cast/effect sound — a WAV that ships in the effect model's own
@@ -263,6 +313,48 @@ export class SoundBoard {
       if (!out.length) out.push(...this.scanFolderWavs(folder, kind));
     }
     this.soundCache.set(cacheKey, out);
+    return out;
+  }
+
+  private modelSounds = new Map<string, ModelSounds>();
+  /** Resolve a unit/missile model's embedded weapon sounds — the SND event objects
+   *  WC3 fires during the attack/flight animation. The 4-char event code (e.g. "KRIF")
+   *  maps through AnimLookups (→ SoundLabel) then AnimSounds (→ WAVs + 3D metadata).
+   *  Cached per model path — the MDX is parsed once, lazily on first use. We only
+   *  care about K (the unit's fire sound) and M (a missile's launch/impact) events;
+   *  D (death) is played via the unit's sound-set label, A (ability) by the spell code. */
+  private resolveModelSounds(modelArt: string): ModelSounds {
+    const key = modelArt.toLowerCase();
+    const cached = this.modelSounds.get(key);
+    if (cached) return cached;
+    const out: ModelSounds = { attack: [], launch: [], impact: [] };
+    this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
+    const bytes = this.vfs.rawBytes(modelArt);
+    if (!bytes) return out;
+    let model: MdlxModel;
+    try {
+      model = new MdlxModel();
+      model.load(bytes);
+    } catch {
+      return out; // unparseable model — stay silent rather than throw mid-combat
+    }
+    const lookups = this.tables.get("animlookups") ?? null;
+    for (const evt of model.eventObjects) {
+      // Event-object names are "SND" + a 1-char separator + a 4-char code ("SNDXKRIF").
+      if (evt.name.substring(0, 3) !== "SND") continue;
+      const id = evt.name.substring(4);
+      const cat = id[0]; // K = attack, M = missile, D = death, A = ability
+      if (cat !== "K" && cat !== "M") continue;
+      const actual = lookups?.index.get(id.toLowerCase()) ?? id;
+      const lrow = lookups?.data.getRow(actual) as { string(k: string): string | undefined } | undefined;
+      const label = lrow?.string("SoundLabel");
+      if (!label) continue;
+      const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
+      if (!clip) continue;
+      if (cat === "K") out.attack.push(clip);
+      else if (/launch/i.test(label)) out.launch.push(clip);
+      else out.impact.push(clip); // "…Hit"/"…Impact", or a single generic missile sound
+    }
     return out;
   }
 
@@ -331,17 +423,19 @@ export class SoundBoard {
     }
   }
 
-  private playVoice(label: string, category: SoundCategory, source?: string | number): void {
-    if (!VOICE_CATEGORIES.has(category)) return;
+  /** @returns true once a new line is committed to `source` (loads/plays async); false
+   *  if the request was dropped (source still talking, unready context, cap, no clip). */
+  private playVoice(label: string, category: SoundCategory, source?: string | number): boolean {
+    if (!VOICE_CATEGORIES.has(category)) return false;
     // A specific source gets one voice at a time; a source-less line gets a unique
     // key so it always overlaps rather than clashing on a shared channel.
     const key = source != null ? `s:${source}` : `anon:${this.voiceSeq++}`;
-    if (this.voices.has(key)) return; // this source is still talking — don't stack or cut it
+    if (this.voices.has(key)) return false; // this source is still talking — don't stack or cut it
     const clip = this.resolve("ack", label + category);
-    if (!clip || !clip.paths.length) return;
+    if (!clip || !clip.paths.length) return false;
     this.unlock();
-    if (!this.ctx || !this.master || this.ctx.state !== "running") return;
-    if (this.voices.size >= MAX_VOICES) return; // bound a pathological overlap burst
+    if (!this.ctx || !this.master || this.ctx.state !== "running") return false;
+    if (this.voices.size >= MAX_VOICES) return false; // bound a pathological overlap burst
     const placeholder = {} as AudioBufferSourceNode; // reserve the key synchronously
     this.voices.set(key, placeholder);
     const path = clip.paths[(Math.random() * clip.paths.length) | 0];
@@ -359,6 +453,7 @@ export class SoundBoard {
       src.start();
       this.onVoiceStart?.(label, buf.duration);
     });
+    return true; // key reserved for this source — the line is committed (loads async)
   }
 
   /** Play a clip on an overlapping one-shot pool. deaths/impacts are concurrency-

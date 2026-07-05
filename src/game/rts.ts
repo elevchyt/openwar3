@@ -518,13 +518,11 @@ export class RtsController {
     const u = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
     const own = !!e && !!u && u.owner === this.localPlayer;
     const single = own && this.selected.size === 1;
-    // Escalation counter is per single own unit: it only climbs on consecutive
-    // re-clicks of that SAME unit. Selecting anything else in between — a different
-    // unit, an enemy/neutral, a group, or nothing selectable — resets it, so the
-    // next re-click restarts at "What" (matches WC3's annoyed easter-egg).
-    if (single && this.primary === this.lastVoiceId) {
-      this.voiceStreak++;
-    } else {
+    // Escalation counter is per single own unit. Selecting anything else — a different
+    // unit, an enemy/neutral, a group, or nothing selectable — resets it, so the next
+    // re-click restarts at "What" (matches WC3's annoyed easter-egg). Staying on the
+    // SAME single unit preserves the streak (advanced below, per line actually played).
+    if (!single || this.primary !== this.lastVoiceId) {
       this.voiceStreak = 0;
       this.lastVoiceId = single ? this.primary : null;
     }
@@ -532,7 +530,11 @@ export class RtsController {
     const def = this.registry.get(e.typeId);
     if (!def?.soundSet) return;
     const cat: SoundCategory = single && this.voiceStreak >= PISSED_AFTER ? "Pissed" : "What";
-    this.sounds.play(def.soundSet, cat, undefined, this.primary!); // source = this unit → overlaps other units
+    // Count the streak by voice lines actually HEARD, not clicks: re-clicking while the
+    // unit is still talking drops the line (play returns false), so it must not advance
+    // the counter — otherwise click-spam races to "Pissed" without the intervening
+    // "What"s ever playing. source = this unit → overlaps other units' lines.
+    if (this.sounds.play(def.soundSet, cat, undefined, this.primary!) && single) this.voiceStreak++;
   }
 
   /** Play weapon-impact SFX for every hit landed this tick (attacker's weapon
@@ -540,6 +542,15 @@ export class RtsController {
    *  material vs Wood) — all sourced from the game's combat sounds. */
   private playImpacts(): void {
     if (!this.sounds) return;
+    // A unit's own attack/fire sound (rifleman gunshot, mortar boom, dragon breath,
+    // tower fire) lives on its MODEL as an SND "K" event — play it when the swing
+    // fires. Melee units without such an event are silent here; their audible attack
+    // is the weapon-impact clang below. Resolved authentically (AnimLookups→AnimSounds).
+    for (const attackerId of this.sim.drainAttackSwings()) {
+      const def = this.registry.get(this.byId.get(attackerId)?.typeId ?? "");
+      const au = this.sim.units.get(attackerId);
+      if (def?.model && au) this.sounds.playModelAttack(def.model, { x: au.x, y: au.y, z: this.heightAt(au.x, au.y) });
+    }
     for (const h of this.sim.drainHits()) {
       const atk = this.registry.get(this.byId.get(h.attackerId)?.typeId ?? "");
       const tgt = this.registry.get(this.byId.get(h.targetId)?.typeId ?? "");
@@ -666,15 +677,33 @@ export class RtsController {
     return out;
   }
 
-  /** Focus the sub-group containing a unit (grid click). */
-  focusUnit(simId: number): void {
+  /** Single-click a unit's icon in the multi-select grid. If the clicked unit's
+   *  sub-group is NOT the focused one, just move focus onto it — like Tab — keeping the
+   *  whole selection intact (no isolation, no voice). If it IS already focused, drill
+   *  down to select only that one specific unit (leaving group mode). */
+  selectGridUnit(simId: number): void {
     if (!this.selected.has(simId)) return;
+    if (this.groupKeyOf(simId) === this.focusedKey) {
+      this.selectSingle(simId); // already-focused group → isolate to just this unit
+      return;
+    }
+    // A different sub-group: focus it (keep the full selection), staying silent since
+    // focusing isn't a fresh selection — same as cycleFocus/Tab.
     this.focusedKey = this.groupKeyOf(simId);
     this.primary = this.firstOfGroup(this.focusedKey);
-    this.announceSelection();
   }
 
-  /** Cycle focus to the next (Tab) or previous (Shift+Tab) sub-group. */
+  /** Shift-click a unit's grid icon: remove just that one unit from the CURRENT
+   *  selection (this moment's group, not a saved control group). No-op when it isn't
+   *  selected or is the last unit left (the grid only shows for a multi-selection). */
+  deselectUnit(simId: number): void {
+    if (!this.selected.has(simId) || this.selected.size <= 1) return;
+    this.deselect(simId); // removes it + refocuses the primary if it was the one removed
+  }
+
+  /** Cycle focus to the next (Tab) or previous (Shift+Tab) sub-group. Tab only
+   *  MOVES the focus within the existing selection — it is not a fresh selection, so
+   *  the newly-focused units stay SILENT (no "What"), matching WC3. */
   cycleFocus(reverse = false): void {
     const groups = this.orderedGroups();
     if (groups.length <= 1) return;
@@ -682,7 +711,6 @@ export class RtsController {
     const i = groups.indexOf(this.focusedKey);
     this.focusedKey = groups[(((i + (reverse ? -1 : 1)) % n) + n) % n];
     this.primary = this.firstOfGroup(this.focusedKey);
-    this.announceSelection();
   }
 
   /** Select ONLY this unit (double-clicking its icon in the multi-select grid). */
@@ -2142,8 +2170,8 @@ export class RtsController {
       this.cheatFoodBonus.set(this.localPlayer, (this.cheatFoodBonus.get(this.localPlayer) ?? 0) + 100);
     } else {
       const stash = this.sim.stashOf(this.localPlayer);
-      if (kind === "gold") stash.gold += 500;
-      else stash.lumber += 500;
+      if (kind === "gold") stash.gold += 5000;
+      else stash.lumber += 5000;
     }
     return false;
   }

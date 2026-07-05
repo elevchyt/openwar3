@@ -506,6 +506,10 @@ export class SimWorld {
   // Worker ids whose axe just landed a chop this tick — the renderer plays the
   // chop SFX (worker's lumber-weapon material vs Wood).
   private chops: number[] = [];
+  // Attacker ids whose swing just reached its damage point (fired) this tick — the
+  // renderer plays the unit's own attack/fire sound (the SND "K" event on its model:
+  // rifleman gunshot, mortar boom, dragon breath). Distinct from the landed-hit clang.
+  private attackSwings: number[] = [];
   // Debug cheat: when true, construction + unit training complete in ~1 second
   // (any build time is compressed to one second), regardless of builders present.
   fastBuild = false;
@@ -662,6 +666,15 @@ export class SimWorld {
     if (!this.chops.length) return this.chops;
     const out = this.chops;
     this.chops = [];
+    return out;
+  }
+
+  /** Attacker ids whose swing fired since the last drain (renderer plays the unit's
+   *  own attack/fire sound — the SND "K" event embedded in its model). */
+  drainAttackSwings(): number[] {
+    if (!this.attackSwings.length) return this.attackSwings;
+    const out = this.attackSwings;
+    this.attackSwings = [];
     return out;
   }
 
@@ -2629,6 +2642,9 @@ export class SimWorld {
     u.swingLeft = -1;
     const t = this.units.get(u.swingTargetId);
     if (!t) return; // target gone before impact — the swing whiffs
+    // The swing reached its fire frame: play the attacker's own weapon sound (its
+    // model's SND "K" event) regardless of whether a melee strike will connect.
+    this.attackSwings.push(u.id);
     if (u.weapon.ranged) {
       this.spawnProjectile(u, t);
     } else {

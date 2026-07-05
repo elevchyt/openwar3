@@ -88,9 +88,12 @@ export interface HudDriver {
   stopSelected(): void;
   /** Icons for a multi-unit selection grid (empty for a single unit / mine). */
   selectionIcons(): Array<{ simId: number; icon: string; hpFrac: number; focused: boolean; owner: number }>;
-  /** Focus the sub-group containing a unit (grid icon click). */
-  focusUnit(simId: number): void;
-  /** Select ONLY this unit (double-clicking its grid icon). */
+  /** Grid icon click: focus the unit's sub-group (like Tab), or (if that group is
+   *  already focused) drill down to just this one unit. */
+  selectGridUnit(simId: number): void;
+  /** Shift-click a grid icon: remove just that unit from the current selection. */
+  deselectUnit(simId: number): void;
+  /** Select ONLY this unit (used internally once a focused sub-group is drilled into). */
   selectSingle(simId: number): void;
   /** If a spell/attack is armed, apply it to this grid unit; true if consumed. */
   tryTargetArmedAt(simId: number): boolean;
@@ -496,7 +499,7 @@ export class GameHud {
       };
       return b;
     };
-    panel.append(mk("+500 Gold", "gold"), mk("+500 Lumber", "lumber"), mk("+Food", "food"), mk("Fast Build", "fastbuild"));
+    panel.append(mk("+5000 Gold", "gold"), mk("+5000 Lumber", "lumber"), mk("+Food", "food"), mk("Fast Build", "fastbuild"));
 
     // Collider debug overlay toggle + a colour legend (hidden until turned on).
     const legend = document.createElement("div");
@@ -1013,14 +1016,19 @@ export class GameHud {
       bar.style.width = `${frac * 100}%`;
       bar.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
       // A click with a spell/attack armed targets this unit through the console;
-      // otherwise a single click narrows the selection to just this unit (the
-      // group is already selected, since the grid only shows for a multi-select).
-      slot.onclick = () => {
+      // Shift+click removes just this unit from the selection; otherwise a plain click
+      // focuses this unit's sub-group (like Tab), and clicking again (group now focused)
+      // drills down to just this unit.
+      slot.onclick = (e) => {
         if (this.driver.tryTargetArmedAt(ic.simId)) {
           this.clearOrderMode();
           return;
         }
-        this.driver.selectSingle(ic.simId);
+        if (e.shiftKey) {
+          this.driver.deselectUnit(ic.simId);
+          return;
+        }
+        this.driver.selectGridUnit(ic.simId);
       };
       slot.ondblclick = null;
     });
