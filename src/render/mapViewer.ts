@@ -10,7 +10,7 @@ import { PathingGrid, parseWpm, footprintCells, PATHING_CELL } from "../sim/path
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
-import { makeHeightSampler, makeCliffLevelSampler, type HeightSampler } from "../game/heightmap";
+import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
@@ -110,6 +110,11 @@ interface Camera {
 interface Scene {
   camera: Camera;
   viewport: Float32Array;
+  // Split render hooks (mdx-m3-viewer Scene) — let us slot the ubersplat pass BETWEEN
+  // the opaque world and the translucent ground rings so the rings draw on top (issue #16).
+  startFrame(): void;
+  renderOpaque(): void;
+  renderTranslucent(): void;
 }
 interface HideableWidget {
   instance: {
@@ -125,6 +130,14 @@ interface W3xMap {
   centerOffset: Float32Array;
   mapSize: Int32Array;
   update(): void;
+  render(): void;
+  // Terrain sub-passes (mdx-m3-viewer w3x map). `render()` runs them as
+  // ground → cliffs → opaque instances → water → translucent instances; we replay that
+  // sequence ourselves to insert the ubersplat pass before the translucent one (issue #16).
+  anyReady: boolean;
+  renderGround(): void;
+  renderCliffs(): void;
+  renderWater(): void;
   units: unknown[];
   doodads: HideableWidget[];
   doodadsReady: boolean;
@@ -464,7 +477,7 @@ export class MapViewerScene {
         unitsReady: () => map.unitsReady,
       };
       this.heightSampler = makeHeightSampler(terrain);
-      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities);
+      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, makeFootprintMaxSampler(terrain));
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
@@ -836,6 +849,10 @@ export class MapViewerScene {
     if (fp && this.grid) {
       stampFootprint(this.grid, fp, x, y);
       this.buildingFootprints.set(simId, { fp, x, y }); // for unstamping on cancel
+      // Seat the structure on the tallest terrain its footprint spans so it never
+      // clips into a small hill/slope (issue #15). Half-extents in world units:
+      // footprint cells are PATHING_CELL (32u) wide, centred on (x, y).
+      this.rts.setBuildingFootprint(simId, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2);
     }
     // Paint the building's ground texture (ubersplat) on the terrain under it. Tracked
     // so it's removed when the building is destroyed (reconcile) or cancelled.
@@ -2552,15 +2569,31 @@ export class MapViewerScene {
         }
       }
       this.viewer.startFrame();
-      this.viewer.render();
-      const fogScene = this.viewer.map?.worldScene;
-      // Building ground textures (ubersplats) draw on the terrain, BEFORE the fog so
-      // the veil dims them like the ground. Prune those whose building has died.
+      const fogScene = map?.worldScene;
+      // Prune ubersplats whose building has died before we draw them this frame.
       if (this.splats && fogScene) {
         const world = this.rts?.simWorld;
         if (world) this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
         for (const id of [...this.simBuildingSplats]) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
-        this.splats.render(fogScene.camera.viewProjectionMatrix);
+      }
+      // We replay the w3x map's own render sequence (ground → cliffs → opaque → water →
+      // translucent) so the building ubersplat pass can slot in AFTER the opaque world
+      // but BEFORE the translucent instances. That way selection/hover/AoE/flash rings —
+      // which are flat MDX ground decals in the translucent pass — paint ON TOP of the
+      // ubersplats instead of under them (issue #16), while the splats still sit on the
+      // terrain. Splats draw before the fog so the veil dims them like the ground.
+      if (map && fogScene && map.anyReady) {
+        fogScene.startFrame();
+        map.renderGround();
+        map.renderCliffs();
+        fogScene.renderOpaque();
+        map.renderWater();
+        if (this.splats) this.splats.render(fogScene.camera.viewProjectionMatrix);
+        fogScene.renderTranslucent();
+      } else {
+        // Map not fully ready — fall back to the stock all-in-one path (splats after).
+        this.viewer.render();
+        if (this.splats && fogScene) this.splats.render(fogScene.camera.viewProjectionMatrix);
       }
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
       if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);

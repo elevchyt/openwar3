@@ -27,6 +27,44 @@ export function makeHeightSampler(terrain: TerrainData): HeightSampler {
   };
 }
 
+// Highest terrain world-height over a building's axis-aligned footprint rectangle,
+// centred at (cx, cy) with half-extents (halfW, halfH). WC3 seats a structure on the
+// TALLEST terrain level its footprint touches — sampling only the centre (as moving
+// units do) sinks a building into any small hill/slope its far corners sit on (issue
+// #15). Buildings never move, so a caller resolves this once at spawn. Overshooting a
+// hair is harmless (model bases have plenty of skirt height); clipping is not, so we
+// take the max, never an average.
+export type FootprintMaxSampler = (cx: number, cy: number, halfW: number, halfH: number) => number;
+
+export function makeFootprintMaxSampler(terrain: TerrainData): FootprintMaxSampler {
+  const sample = makeHeightSampler(terrain);
+  const { width, height, centerOffset, corners } = terrain;
+  const cornerH = (gx: number, gy: number): number => cornerHeight(corners[gy * width + gx]) * CELL;
+
+  return (cx, cy, halfW, halfH) => {
+    const minX = cx - halfW;
+    const maxX = cx + halfW;
+    const minY = cy - halfH;
+    const maxY = cy + halfH;
+    // The height field is bilinear within each 128-unit cell, so its max over the
+    // rectangle is reached either at a terrain corner strictly inside the rect (a
+    // hilltop the footprint straddles) or at the rect's own corners (footprints
+    // smaller than a cell). Take the max of both sets.
+    let m = Math.max(sample(minX, minY), sample(maxX, minY), sample(minX, maxY), sample(maxX, maxY));
+    const gx0 = Math.max(0, Math.ceil((minX - centerOffset[0]) / CELL));
+    const gx1 = Math.min(width - 1, Math.floor((maxX - centerOffset[0]) / CELL));
+    const gy0 = Math.max(0, Math.ceil((minY - centerOffset[1]) / CELL));
+    const gy1 = Math.min(height - 1, Math.floor((maxY - centerOffset[1]) / CELL));
+    for (let gy = gy0; gy <= gy1; gy++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const h = cornerH(gx, gy);
+        if (h > m) m = h;
+      }
+    }
+    return m;
+  };
+}
+
 // Cliff-LEVEL height sampler for fog-of-war line-of-sight. In WC3 the high-ground
 // advantage (vision blocking AND the uphill miss chance) comes ONLY from Blizzard
 // cliff levels — the discrete `layerHeight` steps and their ramp slopes — NOT from

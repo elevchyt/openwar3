@@ -2,7 +2,7 @@ import { SimWorld, xpForLevel, type SimWeapon, type WorkerState, type SimUnit, t
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import { VisionMap, FogState } from "../sim/vision";
-import type { HeightSampler } from "./heightmap";
+import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { WORKERS, DEPOT_IDS } from "../data/races";
@@ -163,6 +163,10 @@ interface Entry {
   unit: MapUnit;
   anims: AnimSet;
   moveHeight: number;
+  // Building footprint half-extents in WORLD units (0 for mobile units). When set, the
+  // render Z seats the structure on the tallest terrain its footprint spans (issue #15).
+  footHalfW: number;
+  footHalfH: number;
   selRadius: number; // selection-ring radius in WORLD units (from selScale)
   typeId: string; // unit-type id (e.g. "hpea"); drives the command card
   race: string;
@@ -367,6 +371,9 @@ export class RtsController {
     private host: RtsHost,
     private registry: UnitRegistry,
     private abilities: AbilityRegistry,
+    // Highest terrain height across a building's footprint — used to seat structures
+    // on the tallest level they touch instead of the (often lower) centre (issue #15).
+    private footMaxHeight: FootprintMaxSampler,
   ) {
     this.sim = new SimWorld(grid, 1, this.abilities); // the ability registry powers casting/learning/auras
     // Fog-of-war grid, aligned to the same world origin as the pathing grid and
@@ -971,6 +978,8 @@ export class RtsController {
         unit,
         anims,
         moveHeight: lift(def?.moveHeight ?? 0),
+        footHalfW: 0, // creeps are mobile — centre-sampled ground, no footprint seat
+        footHalfH: 0,
         selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
         typeId: def?.id ?? unit.row?.string("unitid") ?? "",
         race: def?.race ?? "",
@@ -1048,6 +1057,8 @@ export class RtsController {
       unit,
       anims: buildAnimSet(unit.instance.model.sequences),
       moveHeight: 0,
+      footHalfW: 0, // neutral-passive buildings keep their map-placed Z (not driven here)
+      footHalfH: 0,
       selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
       typeId: def?.id ?? unit.row?.string("unitid") ?? "",
       race: def?.race ?? "",
@@ -1129,6 +1140,8 @@ export class RtsController {
       unit: { instance, state: IDLE },
       anims,
       moveHeight: lift(def.moveHeight),
+      footHalfW: 0, // set by setBuildingFootprint() once the footprint is stamped
+      footHalfH: 0,
       selRadius: (def.selScale || 1) * SEL_RADIUS_PER_SCALE,
       typeId: def.id,
       race: def.race,
@@ -1157,6 +1170,17 @@ export class RtsController {
       entry.curSeq = anims.stand;
     }
     return simId;
+  }
+
+  /** Record a building's footprint half-extents (WORLD units) so the render loop seats
+   *  it on the tallest terrain its footprint touches rather than its centre height —
+   *  otherwise a structure on a small hill/slope clips into the ground (issue #15).
+   *  Called by the spawner once the footprint is known. */
+  setBuildingFootprint(simId: number, halfW: number, halfH: number): void {
+    const e = this.byId.get(simId);
+    if (!e) return;
+    e.footHalfW = halfW;
+    e.footHalfH = halfH;
   }
 
   /** The ability list a unit spawns with. Innate abilities we implement (Priest
@@ -1203,7 +1227,10 @@ export class RtsController {
       }
       this.loc[0] = u.x;
       this.loc[1] = u.y;
-      this.loc[2] = this.heightAt(u.x, u.y) + e.moveHeight; // fly height for air units
+      // Buildings seat on the tallest terrain their footprint spans (issue #15); mobile
+      // units (footHalfW 0) ride the centre-sampled ground + their fly height.
+      this.loc[2] =
+        (e.footHalfW > 0 ? this.footMaxHeight(u.x, u.y, e.footHalfW, e.footHalfH) : this.heightAt(u.x, u.y)) + e.moveHeight;
       e.unit.instance.setLocation(this.loc);
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
