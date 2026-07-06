@@ -576,17 +576,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 1, 25), waves: d(lvl, 0, 6), interval: d(lvl, 3, 0.5) || 0.5, casterId: caster.id, art: def.areaArt || def.targetArt });
   },
 
-  // Flame Strike (Blood Mage) — a burning pillar: dataA damage per second in `area`
-  // for the burn duration (modelled as one-second waves). WC3 shows two distinct
-  // arts: the ground "beware" warning ring (ability Effectart = FlameStrikeTarget)
-  // that drops the instant the cast lands, and the erupting fire pillar (ability
-  // Specialart = FlameStrike1) — scattered across the burn area each wave so the
-  // whole circle looks alight, not just its centre.
+  // Flame Strike (Blood Mage) — reached only when the 1.33s cast wind-up FINISHES
+  // (MPQ AHfs Cast=1.33). The wind-up and its FlameStrikeTarget "beware" vortex live
+  // in tickCast (PRECAST_WARNING), so moving the Blood Mage before ignition aborts
+  // here and leaves just the gong + vortex — matching WC3 (Liquipedia: Blood Mage).
+  // On ignition WC3 shows the erupting fire pillar (Specialart = FlameStrike1) ONCE,
+  // then the ground stays alight for the burn Duration: the burn field damages `area`
+  // (dataA/sec, modelled as 1s waves for Dur=9) while scattering the persistent ember
+  // model (buff BHfs TargetArt = FlameStrikeDamageTarget) across the circle each wave
+  // — so lingering flames cover the whole area rather than the pillar re-erupting.
   AHfs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const waves = Math.max(4, Math.round(lvl.duration || 9));
-    if (def.effectArt) api.emitEffect(def.effectArt, ctx.x, ctx.y, 0); // warning ring at centre
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 15), waves, interval: 1, casterId: caster.id, art: def.specialArt || def.areaArt || def.targetArt });
+    const waves = Math.max(1, Math.round(lvl.duration || 9));
+    if (def.specialArt) api.emitEffect(def.specialArt, ctx.x, ctx.y, 0); // one-shot eruption pillar
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 15), waves, interval: 1, casterId: caster.id, art: def.buffArt || def.areaArt || def.targetArt });
   },
 
   // Death and Decay (Lich, ult) — a decay field damaging everything in `area` each

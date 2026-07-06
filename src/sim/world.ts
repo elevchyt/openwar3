@@ -506,6 +506,13 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // (fire-and-forget, caster free right after the cast): Flame Strike, Volcano, Locust
 // Swarm, Bladestorm (the Blademaster keeps moving), Immolation, Cluster Rockets.
 const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq"]);
+// Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
+// moment the cast WIND-UP begins — not when it lands — so it charges up in place and
+// REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
+// FlameStrikeTarget smoke vortex (MPQ AHfs Effectart; Liquipedia: interrupting the
+// Blood Mage — by moving or a stun — leaves only the gong + vortex, no flames). The
+// strike itself (pillar + burn) still needs the wind-up to finish (see spells AHfs).
+const PRECAST_WARNING = new Set(["AHfs"]);
 // Corpse decay (Units\MiscData.txt BoneDecayTime): a corpse persists 88s after
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
@@ -2076,6 +2083,13 @@ export class SimWorld {
       // (wind-up + backswing, or wind-up + channel — looped for a channel).
       const hold = pc.castLeft + (channelLen > 0 ? channelLen : u.castBackswing);
       this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 });
+      // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's
+      // Effectart at the target NOW, as the wind-up begins, so Flame Strike's smoke
+      // vortex charges in place and lingers even if the cast is interrupted before
+      // the pillar erupts. Only the completed cast reaches the effect handler.
+      if (PRECAST_WARNING.has(pc.code) && def.effectArt) {
+        this.spellEffects.push({ art: def.effectArt, x: tx, y: ty, targetId: 0, z: 0 });
+      }
     }
 
     // --- phase 2: wind-up. The effect fires when it elapses; canceling before then
