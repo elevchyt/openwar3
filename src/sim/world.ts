@@ -54,7 +54,7 @@ export interface SimProjectile {
   spell?: { code: string; rank: number; abilityId: string };
 }
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast";
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
@@ -202,6 +202,7 @@ export type QueuedOrder =
   | { kind: "move"; x: number; y: number }
   | { kind: "attackmove"; x: number; y: number }
   | { kind: "patrol"; x: number; y: number }
+  | { kind: "hold" }
   | { kind: "attack"; targetId: number; force?: boolean }
   // offX/offY: optional formation offset from the leader's centre, so a group told
   // to follow one unit fans into distinct slots instead of stacking on its centre.
@@ -564,6 +565,13 @@ export class SimWorld {
   // Debug cheat: when true, construction + unit training complete in ~1 second
   // (any build time is compressed to one second), regardless of builders present.
   fastBuild = false;
+  // Injected by the game layer: is world point (x,y) currently VISIBLE (not fogged)
+  // to `team`? Idle units only auto-acquire enemies their team can actually see —
+  // WC3 units never aggro a target hidden in the fog of war (issue #17). Defaults to
+  // always-visible so headless sim tests (which build no vision map) behave as before;
+  // only the local player's team is fog-modelled, so other teams pass through as
+  // visible (see rts.ts, which wires this to the per-team VisionMap).
+  visibleToTeam: (team: number, x: number, y: number) => boolean = () => true;
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   private nextNodeId = 1;
@@ -1340,6 +1348,24 @@ export class SimWorld {
     return true;
   }
 
+  /** Hold Position: the unit plants where it stands and NEVER chases, but it still
+   *  attacks any hostile that comes within its weapon range (WC3 Hold, issue #17). */
+  issueHold(id: number): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    u.order = "hold";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    this.detachBuilder(id);
+    u.stuckT = 0;
+    u.stuckRetries = 0;
+    u.acquireT = 0; // scan for an in-range enemy immediately
+    this.settle(u); // stop any current movement and hold this cell
+    return true;
+  }
+
   /** Order a unit to attack another. Normally requires the target to be hostile;
    *  `force` (the deliberate Attack command) lets you attack allies/own units too. */
   issueAttack(id: number, targetId: number, force = false): boolean {
@@ -1533,6 +1559,7 @@ export class SimWorld {
       case "move": return this.issueMove(id, o.x, o.y);
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
       case "patrol": return this.issuePatrol(id, o.x, o.y);
+      case "hold": return this.issueHold(id);
       case "attack": return this.issueAttack(id, o.targetId, o.force);
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
@@ -2537,6 +2564,9 @@ export class SimWorld {
           if (!u.moving && u.waypoint < u.path.length) u.moving = true; // resume after a stun
           this.tickAcquire(u, dt); // engage enemies encountered en route
           break;
+        case "hold":
+          this.tickHold(u, dt); // attack enemies in range, but never chase
+          break;
         case "idle":
           // Autocast (toggled-on Heal/Slow/…) gets first refusal, then auto-attack.
           if (!this.tickAutocast(u)) this.tickAcquire(u, dt);
@@ -2655,8 +2685,9 @@ export class SimWorld {
   }
 
   /** Close to weapon range, then face + swing at the damage point. Shared by
-   *  direct Attack orders and attack-move engagements. */
-  private engage(u: SimUnit, t: SimUnit): void {
+   *  direct Attack orders and attack-move engagements. `noChase` (Hold Position)
+   *  makes the unit strike only what's already in range and never pursue. */
+  private engage(u: SimUnit, t: SimUnit, noChase = false): void {
     const w = u.weapon!;
     // Committed to a swing: the attack animation is playing toward its damage point,
     // where the strike/projectile fires (a delayed frame WITHIN the animation). A
@@ -2678,6 +2709,10 @@ export class SimWorld {
     const chaseGap = u.inCombat ? w.range + ATTACK_LEASH : w.range;
     if (gap > chaseGap) {
       u.inCombat = false;
+      if (noChase) {
+        this.settle(u); // Hold Position: attack in range only, never step forward
+        return;
+      }
       this.chaseToAttack(u, t);
       return;
     }
@@ -3352,8 +3387,8 @@ export class SimWorld {
     if (u.acquireT > 0) return;
     u.acquireT = ACQUIRE_PERIOD;
     // Creeps pick the highest-threat target (enemy units before buildings); other
-    // units keep WC3's plain nearest-enemy acquisition.
-    const best = u.isCreep ? this.bestCreepTarget(u, range) : this.nearestEnemy(u, range);
+    // units auto-acquire the nearest VISIBLE enemy, skipping idle creep camps.
+    const best = u.isCreep ? this.bestCreepTarget(u, range) : this.acquireTarget(u, range);
     if (best) {
       this.issueAttack(u.id, best.id);
       if (u.isCreep) this.alertCamp(u, best);
@@ -3363,6 +3398,75 @@ export class SimWorld {
       const help = this.campFightTarget(u);
       if (help) this.issueAttack(u.id, help.id);
     }
+  }
+
+  /** Drive a Hold-Position unit: strike any hostile that is within weapon range
+   *  (fog- and idle-creep-filtered, like normal auto-acquire) but NEVER move to
+   *  chase — the unit stays planted where Hold was issued (issue #17). */
+  private tickHold(u: SimUnit, dt: number): void {
+    const w = u.weapon;
+    if (!w || w.range <= 0) {
+      u.inCombat = false;
+      this.settle(u);
+      return;
+    }
+    // A committed swing always finishes (a unit never walks mid-strike anyway).
+    if (u.swingLeft >= 0) {
+      const st = this.units.get(u.swingTargetId);
+      if (st) {
+        this.engage(u, st, true);
+        return;
+      }
+      this.cancelSwing(u);
+    }
+    // Hold onto the current target while it's still hostile, alive, and within
+    // reach; otherwise re-scan (throttled) for the nearest in-range enemy.
+    const reach = w.range + (u.inCombat ? ATTACK_LEASH : 0);
+    let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+    if (t && (!this.hostile(u, t) || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach)) t = undefined;
+    if (!t) {
+      u.acquireT -= dt;
+      if (u.acquireT <= 0) {
+        u.acquireT = ACQUIRE_PERIOD;
+        t = this.acquireTarget(u, w.range) ?? undefined; // striking distance only
+      }
+    }
+    if (t) {
+      u.targetId = t.id;
+      this.engage(u, t, true); // noChase — attack in place
+    } else {
+      u.targetId = null;
+      u.inCombat = false;
+      this.settle(u);
+    }
+  }
+
+  /** Nearest hostile within `range` that an idle/holding non-creep unit will
+   *  auto-acquire. Beyond plain hostility it must be (a) VISIBLE to the acquirer's
+   *  team — WC3 units never aggro a target hidden in the fog of war — and (b) not
+   *  an un-triggered neutral-hostile creep camp: you only pull a camp by attacking
+   *  it or walking into its own aggro range, never by an idle unit noticing it. */
+  private acquireTarget(u: SimUnit, range: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestGap = range;
+    for (const t of this.units.values()) {
+      if (t === u || !this.hostile(u, t)) continue;
+      if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
+      if (!this.visibleToTeam(u.team, t.x, t.y)) continue; // fogged → can't see it, don't aggro
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = t;
+      }
+    }
+    return best;
+  }
+
+  /** True while a neutral-hostile creep is in its aggroed (fighting) state — it has
+   *  a live attack target. An idle/guarding/sleeping/leashing creep is NOT aggroed,
+   *  so nearby player units won't auto-attack it until the camp has been triggered. */
+  private creepAggroed(c: SimUnit): boolean {
+    return c.order === "attack" && c.targetId !== null && this.units.has(c.targetId);
   }
 
   // === neutral-hostile creep guard AI =======================================

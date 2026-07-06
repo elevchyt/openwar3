@@ -2133,7 +2133,8 @@ export class MapViewerScene {
       return;
     }
     if (id === "stop" || id === "hold") {
-      this.rts.stopSelected();
+      if (id === "hold") this.rts.holdSelected();
+      else this.rts.stopSelected();
       this.rts.orderMode = null;
       this.hud?.clearOrderMode();
       return;

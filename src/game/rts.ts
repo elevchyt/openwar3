@@ -380,6 +380,11 @@ export class RtsController {
     // spanning the whole map (pathing is 32-unit cells; span = cells × 32).
     const [vox, voy] = grid.origin;
     this.vision = new VisionMap(vox, voy, grid.width * PATHING_CELL, grid.height * PATHING_CELL);
+    // Gate the sim's auto-acquisition on the fog of war (issue #17): idle units only
+    // aggro enemies their team can actually SEE. Only the local team's sight is
+    // modelled, so other teams pass through as visible (unchanged behaviour).
+    this.sim.visibleToTeam = (team, x, y) =>
+      team !== this.localTeam || this.vision.stateAt(x, y) === FogState.Visible;
   }
 
   dispose(): void {
@@ -1877,6 +1882,17 @@ export class RtsController {
     }
   }
 
+  /** Hold Position on the selection: each unit plants where it stands and attacks
+   *  only enemies that walk into its weapon range, never chasing (WC3 Hold). Like
+   *  Stop, it wipes the shift-queue so the unit doesn't resume a queued order. */
+  holdSelected(): void {
+    for (const id of this.selected) {
+      if (!this.controls(id)) continue; // only your own units obey Hold
+      this.sim.clearQueue(id);
+      this.sim.issueHold(id);
+    }
+  }
+
   /** Order the selected workers to repair a damaged friendly building. WC3
    *  rates: 35% of the build cost and 150% of the build time to go 1 HP→full. */
   private repairAt(picked: number | null, queued = false): boolean {
@@ -2168,6 +2184,8 @@ export class RtsController {
       case "patrol":
       case "buildnew":
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
+      case "hold":
+        return null; // Hold Position has no destination/target to draw a marker for
       case "attack":
       case "follow": {
         const t = this.sim.units.get(o.targetId);
