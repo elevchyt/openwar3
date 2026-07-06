@@ -420,6 +420,7 @@ export interface SimUnit {
   inventory: (HeldItem | null)[]; // 6 slots for heroes ([] for units without an inventory)
   getItemId: number; // ground item this unit is walking to pick up (order === "getitem"; 0 = none)
   pendingGive: { toId: number; slot: number } | null; // walking to hand a slot's item to another hero
+  pendingDrop: { slot: number; x: number; y: number } | null; // walking to a spot to drop a slot's item
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
@@ -1153,6 +1154,7 @@ export class SimWorld {
       | "inventory"
       | "getItemId"
       | "pendingGive"
+      | "pendingDrop"
     >,
     building?: BuildingState | null,
     opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; manaRegen?: number; level?: number },
@@ -1275,6 +1277,7 @@ export class SimWorld {
       inventory: hero ? [null, null, null, null, null, null] : [],
       getItemId: 0,
       pendingGive: null,
+      pendingDrop: null,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -3720,6 +3723,17 @@ export class SimWorld {
   /** Drive the "getitem" order: walk to the ground item (or target hero) and, once
    *  close enough, pick it up / hand it over. */
   private tickGetItem(u: SimUnit): void {
+    if (u.pendingDrop) {
+      const { slot, x, y } = u.pendingDrop;
+      if (!u.inventory[slot]) { this.stop(u.id); return; } // slot emptied meanwhile
+      if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
+        this.doDropItem(u, slot, x, y);
+        this.stop(u.id);
+      } else if (!u.moving) {
+        this.pathTo(u, x, y);
+      }
+      return;
+    }
     if (u.pendingGive) {
       const to = this.units.get(u.pendingGive.toId);
       if (!to || to.hp <= 0 || !u.inventory[u.pendingGive.slot]) { this.stop(u.id); return; }
@@ -3774,23 +3788,50 @@ export class SimWorld {
     this.recomputeStats(to);
   }
 
-  /** Drop a held item onto the ground at a point (WC3 manual item drop). The drop
-   *  lands within ITEM_DROP_RANGE (150) of the unit — a click further out is clamped
-   *  to that radius, so items always bounce down next to the hero, never across the map. */
+  /** Drop a held item onto the ground at a point (WC3 manual item drop). WC3's
+   *  "Item Drop Distance" gameplay constant (150) is the reach: a spot within range
+   *  drops immediately; a spot further out makes the unit WALK toward it and drop
+   *  once the spot comes within range (handled in tickGetItem). */
   dropItem(unitId: number, slot: number, x: number, y: number): boolean {
     const u = this.units.get(unitId);
     if (!u || slot < 0 || slot >= u.inventory.length) return false;
     const held = u.inventory[slot];
     if (!held) return false;
-    const dist = Math.hypot(x - u.x, y - u.y);
-    if (dist > ITEM_DROP_RANGE) {
-      const s = ITEM_DROP_RANGE / dist;
-      x = u.x + (x - u.x) * s;
-      y = u.y + (y - u.y) * s;
+    if (Math.hypot(x - u.x, y - u.y) <= ITEM_DROP_RANGE + u.radius) {
+      this.doDropItem(u, slot, x, y);
+      return true;
     }
+    // Out of reach: walk to the spot and drop it when it comes within drop range.
+    u.pendingDrop = { slot, x, y };
+    u.getItemId = 0;
+    u.pendingGive = null;
+    u.order = "getitem";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    this.detachBuilder(unitId);
+    this.pathTo(u, x, y);
+    return true;
+  }
+
+  /** Actually place a slot's item on the ground at (x,y) and clear the slot. */
+  private doDropItem(u: SimUnit, slot: number, x: number, y: number): void {
+    const held = u.inventory[slot];
+    if (!held) return;
     u.inventory[slot] = null;
+    u.pendingDrop = null;
     this.spawnGroundItem(held.itemId, x, y, held.charges);
     this.recomputeStats(u);
+  }
+
+  /** Swap (or move) two inventory slots on the same unit. */
+  swapItems(unitId: number, a: number, b: number): boolean {
+    const u = this.units.get(unitId);
+    if (!u || a === b || a < 0 || b < 0 || a >= u.inventory.length || b >= u.inventory.length) return false;
+    const tmp = u.inventory[a];
+    u.inventory[a] = u.inventory[b];
+    u.inventory[b] = tmp;
     return true;
   }
 

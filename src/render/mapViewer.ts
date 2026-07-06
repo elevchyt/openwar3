@@ -341,6 +341,8 @@ export class MapViewerScene {
   // Ground items (dropped / creep-dropped): one model instance per sim item id.
   private itemInstances = new Map<number, SpawnInstance>();
   private itemLoading = new Set<number>();
+  // Items mid-"Birth": once the birth clip finishes, switch them to a looping Stand.
+  private itemBirthing: Array<{ id: number; inst: SpawnInstance; standIdx: number; birthEnd: number }> = [];
   // Trees briefly tinted yellow when a worker is sent to harvest them.
   private treePulses: Array<{ inst: { setVertexColor(c: ArrayLike<number>): unknown }; t: number }> = [];
   // Projectile (missile) instances, keyed by the sim projectile id.
@@ -1167,9 +1169,22 @@ export class MapViewerScene {
     this.loc3[2] = this.rts.groundHeightAt(x, y);
     inst.setLocation(this.loc3);
     if (def && def.scale !== 1) inst.setUniformScale(def.scale);
-    inst.setSequence(this.effectSequence(inst)); // "Birth": the chest drops in + opens
-    inst.setSequenceLoopMode(0); // play the open ONCE and hold the final (open, resting) frame —
-    //                              looping it made the chest re-play its drop-in and sink underground.
+    const seqs = inst.model?.sequences ?? [];
+    const stand = seqs.findIndex((s) => /^stand/i.test(s.name)); // "Stand - 1" (open idle)
+    const birth = seqs.findIndex((s) => /birth/i.test(s.name));
+    const standIdx = stand >= 0 ? stand : this.effectSequence(inst);
+    // The treasure chest (the shared default item model) sinks into the ground during
+    // its Birth clip, so it just loops its open "Stand" idle. Other item models (tomes,
+    // pot of gold, …) play Birth ONCE on spawn, then switch to looping their Stand idle.
+    if (/treasurechest/i.test(path) || birth < 0) {
+      inst.setSequence(standIdx);
+      inst.setSequenceLoopMode(2); // loop the open idle
+    } else {
+      inst.setSequence(birth);
+      inst.setSequenceLoopMode(0); // play birth once, then hand off to Stand (below)
+      const birthEnd = seqs[birth]?.interval?.[1] ?? 0;
+      this.itemBirthing.push({ id: itemId, inst, standIdx, birthEnd });
+    }
     inst.show();
     this.itemInstances.set(itemId, inst);
   }
@@ -1179,6 +1194,20 @@ export class MapViewerScene {
     if (inst) {
       inst.detach();
       this.itemInstances.delete(itemId);
+    }
+    const bi = this.itemBirthing.findIndex((b) => b.id === itemId);
+    if (bi >= 0) this.itemBirthing.splice(bi, 1);
+  }
+
+  /** Hand a birthing item off to its looping Stand idle once the Birth clip ends. */
+  private updateItemAnims(): void {
+    for (let i = this.itemBirthing.length - 1; i >= 0; i--) {
+      const b = this.itemBirthing[i];
+      if (b.inst.frame >= b.birthEnd) {
+        b.inst.setSequence(b.standIdx);
+        b.inst.setSequenceLoopMode(2); // loop the open idle for the rest of its life
+        this.itemBirthing.splice(i, 1);
+      }
     }
   }
 
@@ -1816,11 +1845,11 @@ export class MapViewerScene {
         ),
       useInventory: (slot) => {
         this.rts?.useInventorySlot(slot);
-        if (this.rts?.orderMode === "item") this.hud?.setArmed(true);
+        this.hud?.setArmed(!!this.rts?.orderMode); // armed if this began a point-use targeting
       },
       moveInventory: (slot) => {
         this.rts?.moveInventorySlot(slot);
-        if (this.rts?.orderMode === "item") this.hud?.setArmed(true);
+        this.hud?.setArmed(!!this.rts?.orderMode); // enter "target to move" mode
       },
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
@@ -2813,6 +2842,7 @@ export class MapViewerScene {
         // --- items on the ground (dropped / creep-dropped) ---
         for (const it of world.drainItemSpawns()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
         for (const id of world.drainItemRemovals()) this.removeItemModel(id);
+        this.updateItemAnims();
       }
       // Reset the command page + placement when the selection changes.
       if (this.rts && this.rts.selectedId !== this.lastSelected) {

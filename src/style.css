@@ -802,6 +802,8 @@ body.in-game .menu-panel { display: none; }
 }
 .hud-sel-stats { font-size: 12px; color: #cfc7ab; line-height: 1.5; }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
+/* Item description shown when a ground item is selected (in place of the stat block). */
+.hud-sel-desc { font-size: 12px; color: #c9cfd8; line-height: 1.35; margin-top: 4px; max-width: 240px; }
 /* Two columns (WC3 info panel): damage/armor blocks (left), hero attributes (right). */
 .hud-stat-cols { display: flex; gap: 18px; align-items: flex-start; }
 .hud-stat-col { display: flex; flex-direction: column; gap: 6px; }

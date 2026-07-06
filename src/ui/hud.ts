@@ -75,6 +75,8 @@ export interface HudSelection {
   icon: string; // the selected thing's own command icon (BLP path)
   isMine: boolean; // selected gold mine
   goldRemaining: number; // gold left in the selected mine
+  isItem: boolean; // selected ground item (show name + description instead of stats)
+  description: string; // item description (shown when isItem)
   isSummon: boolean; // temporary summon — show the "Summoned Unit" timer bar
   summonSecondsLeft: number; // seconds until it expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
@@ -229,6 +231,7 @@ export class GameHud {
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
   private selCarry!: HTMLDivElement;
+  private selDesc!: HTMLDivElement; // item description shown when a ground item is selected
   private selGrid!: HTMLDivElement; // multi-selection icon grid
   private selGridSlots: HTMLButtonElement[] = [];
   // Construction / training progress display.
@@ -754,6 +757,10 @@ export class GameHud {
     this.selStats.append(this.selStatus);
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
+    // Item description: shown (in place of the stat block) when a ground item is selected.
+    this.selDesc = document.createElement("div");
+    this.selDesc.className = "hud-sel-desc";
+    this.selDesc.hidden = true;
     // Multi-selection grid: up to 24 unit icons (grouped by type), each with an
     // HP bar; the focused sub-group is highlighted. Clicking focuses that group.
     this.selGrid = document.createElement("div");
@@ -768,7 +775,7 @@ export class GameHud {
       this.selGridSlots.push(slot);
       this.selGrid.appendChild(slot);
     }
-    infoText.append(this.selName, this.selSub, this.xpBar, this.progressWrap, this.selStats, this.selCarry, this.selGrid);
+    infoText.append(this.selName, this.selSub, this.xpBar, this.progressWrap, this.selStats, this.selDesc, this.selCarry, this.selGrid);
     return { portraitWrap, infoText };
   }
 
@@ -1001,11 +1008,22 @@ export class GameHud {
         return;
       }
       this.selGrid.hidden = true;
+      this.selDesc.hidden = true; // only the item branch shows it
       this.xpBar.hidden = true; // only the hero-stats branch below re-shows it
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
       this.queueTrainable = training; // reset every frame so a stale flag can't fire a cancel
-      if (sel.isMine) {
+      if (sel.isItem) {
+        // Ground item: show its name (set above) + description instead of any stats.
+        this.progressWrap.hidden = true;
+        this.selStats.hidden = true;
+        this.selSub.textContent = "";
+        this.selCarry.hidden = true;
+        this.selDesc.hidden = false;
+        this.selDesc.textContent = sel.description;
+        this.attrIconEl.hidden = true;
+        this.attrLines.hidden = true;
+      } else if (sel.isMine) {
         // Gold mine: show its remaining gold, no progress/combat stats.
         this.progressWrap.hidden = true;
         this.selStats.hidden = true;

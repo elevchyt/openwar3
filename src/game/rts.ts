@@ -4,7 +4,7 @@ import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import { VisionMap, FogState } from "../sim/vision";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
-import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, tipFieldValue } from "../data/abilities";
 import { type ItemRegistry } from "../data/items";
 import { WORKERS, DEPOT_IDS } from "../data/races";
 import { trainsFor } from "../data/techtree";
@@ -93,6 +93,8 @@ export interface SelectionInfo {
   carryLumber: number;
   isMine: boolean; // a selected gold mine (resource, not a unit)
   goldRemaining: number; // gold left in the selected mine
+  isItem: boolean; // a selected ground item (show name + description instead of stats)
+  description: string; // item description (Ubertip), shown when isItem
   isSummon: boolean; // a temporary summoned unit (shows the "Summoned Unit" timer bar)
   summonSecondsLeft: number; // seconds until the summon expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
@@ -253,6 +255,8 @@ const PISSED_AFTER = 3;
 // The gold-mine ring is drawn a bit larger than the mine's collision radius (which
 // drives worker entry) so it reads as a ring hugging the mine base, not its footprint.
 const MINE_RING_SCALE = 1.4;
+const ITEM_PICK_RADIUS = 72; // click/hover pick radius around a ground item
+const ITEM_RING_RADIUS = 40; // yellow selection/hover ring radius under a ground item
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 // Extra world-unit gap added to the builder fan-out when several workers speed-
 // build one structure, so they spread around the whole footprint instead of
@@ -337,6 +341,7 @@ export class RtsController {
   private primary: number | null = null;
   private focusedKey = ""; // sub-group (type, or hero id) currently focused
   private selectedMine: number | null = null; // a selected gold mine (resource)
+  private selectedItem: number | null = null; // a selected ground item (shows its info on the HUD)
   private aoeHighlight = new Set<number>(); // sim ids of units an armed AoE spell would hit (green-tinted)
   private sounds: SoundBoard | null = null; // unit voice lines (set by the host)
   private lastVoiceId: number | null = null; // last single unit that spoke (for What→Pissed escalation)
@@ -353,6 +358,7 @@ export class RtsController {
   private visionAccum = 1; // seconds since the last vision rebuild (>interval → rebuild on first tick)
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
+  private hoveredItem: number | null = null; // a ground item under the cursor (yellow hover ring)
   private previewIds: number[] = []; // units under the live drag-box (marquee preview rings)
   private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
   private creepData: Array<{ x: number; y: number; aggro: number; drops?: Array<{ items: Array<{ id: string; chance: number }> }> }> = []; // Neutral Hostile guard/aggro/drop data (from the doo)
@@ -759,6 +765,7 @@ export class RtsController {
     if (!this.sim.units.has(simId)) return;
     this.selected.clear();
     this.selectedMine = null;
+    this.selectedItem = null;
     this.selected.add(simId);
     this.primary = simId;
     this.focusedKey = this.groupKeyOf(simId);
@@ -822,6 +829,7 @@ export class RtsController {
     this.selected.clear();
     this.selected.add(id);
     this.selectedMine = null;
+    this.selectedItem = null;
     this.refocus();
     this.announceSelection();
     return true;
@@ -887,6 +895,7 @@ export class RtsController {
     this.selected.clear();
     for (const id of ids) this.selected.add(id);
     this.selectedMine = null;
+    this.selectedItem = null;
     this.refocus();
     this.announceSelection();
     return true;
@@ -907,6 +916,7 @@ export class RtsController {
     this.selected.clear();
     this.selected.add(id);
     this.selectedMine = null;
+    this.selectedItem = null;
     this.refocus();
     this.announceSelection();
     return true;
@@ -934,6 +944,7 @@ export class RtsController {
     for (const id of this.selected) if (!this.sim.units.has(id)) { this.selected.delete(id); changed = true; }
     if (changed || (this.primary !== null && !this.sim.units.has(this.primary))) this.refocus(this.focusedKey);
     if (this.selectedMine !== null && !this.sim.mines.has(this.selectedMine)) this.selectedMine = null;
+    if (this.selectedItem !== null && !this.sim.items.has(this.selectedItem)) this.selectedItem = null;
   }
 
   /** Hide the floating health bars (e.g. when the map view is not active). */
@@ -1260,6 +1271,7 @@ export class RtsController {
     this.tickCorpses(dt);
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
     if (this.hoveredMine !== null && !this.sim.mines.has(this.hoveredMine)) this.hoveredMine = null;
+    if (this.hoveredItem !== null && !this.sim.items.has(this.hoveredItem)) this.hoveredItem = null;
     // Fog of war: rebuild the "currently visible" layer a few times a second — WC3
     // refreshes fog periodically, not every frame, and this keeps circle-stamping
     // cheap. The initial accumulator > interval forces a rebuild on the first tick.
@@ -1590,6 +1602,7 @@ export class RtsController {
         else if (ownMobile && this.selected.size < MAX_SELECT) {
           this.selected.add(id);
           this.selectedMine = null;
+          this.selectedItem = null;
           this.refocus(this.focusedKey);
           this.announceSelection();
         }
@@ -1602,6 +1615,7 @@ export class RtsController {
       this.selected.clear();
       this.selected.add(id);
       this.selectedMine = null;
+      this.selectedItem = null;
       this.refocus();
       this.announceSelection();
       return;
@@ -1614,7 +1628,19 @@ export class RtsController {
         this.selected.clear();
         this.primary = null;
         this.selectedMine = m.id;
+        this.selectedItem = null;
         this.voiceStreak = 0; // selecting a mine breaks a unit's re-click streak
+        this.lastVoiceId = null;
+        return;
+      }
+      // A ground item is clickable too — selecting it shows its portrait + description.
+      const it = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
+      if (it) {
+        this.selected.clear();
+        this.primary = null;
+        this.selectedMine = null;
+        this.selectedItem = it.id;
+        this.voiceStreak = 0;
         this.lastVoiceId = null;
         return;
       }
@@ -1641,6 +1667,7 @@ export class RtsController {
       this.selected.add(sid);
     }
     this.selectedMine = null;
+    this.selectedItem = null;
     this.refocus(additive ? this.focusedKey : "");
     this.announceSelection();
   }
@@ -1713,6 +1740,7 @@ export class RtsController {
       this.selected.add(id);
     }
     this.selectedMine = null;
+    this.selectedItem = null;
     this.refocus(additive ? this.focusedKey : "");
     this.announceSelection();
   }
@@ -1735,11 +1763,14 @@ export class RtsController {
   hoverAt(cssX: number, cssY: number): void {
     this.hovered = this.pickAt(cssX, cssY);
     this.hoveredMine = null;
+    this.hoveredItem = null;
     if (this.hovered === null) {
       const g = this.groundPoint(cssX, cssY);
       if (g) {
         const m = this.sim.nearestMine(g[0], g[1], 300);
         this.hoveredMine = m ? m.id : null;
+        // A ground item is hoverable too (yellow ring), when no mine is under the cursor.
+        if (!m) this.hoveredItem = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS)?.id ?? null;
       }
     }
   }
@@ -1749,13 +1780,14 @@ export class RtsController {
   clearHover(): void {
     this.hovered = null;
     this.hoveredMine = null;
+    this.hoveredItem = null;
   }
 
   /** What the cursor is over, for the targeting reticle: whether something is
    *  under it and its allegiance (own/ally = friendly, gold mine / neutral
    *  passive = neutral, everyone else = enemy). */
   hoverInfo(): { has: boolean; category: "friendly" | "neutral" | "enemy" } {
-    if (this.hoveredMine !== null) return { has: true, category: "neutral" };
+    if (this.hoveredMine !== null || this.hoveredItem !== null) return { has: true, category: "neutral" };
     if (this.hovered === null) return { has: false, category: "neutral" };
     const u = this.sim.units.get(this.hovered);
     if (!u) return { has: false, category: "neutral" };
@@ -1943,33 +1975,38 @@ export class RtsController {
     return cd;
   }
 
-  /** Left-click an inventory slot: fire a self-target usable item now, arm a
-   *  point-target usable item (blink) for a ground click, or (passive item) arm
-   *  its drop/give targeting. */
+  /** Left-click an inventory slot. If a move/drop is armed (right-click), this click
+   *  completes it as a slot-to-slot move/swap. Otherwise it's a USE: fire a
+   *  self-target consumable now, or arm a point-target one (blink) for a ground click.
+   *  Left-click on a passive item does nothing (dropping/moving is right-click). */
   useInventorySlot(slot: number): void {
     const id = this.primary;
     if (id === null || !this.controls(id)) return;
+    // Complete an armed move by dropping the carried item into this slot (swap).
+    if (this.orderMode === "item" && this.armedItem?.mode === "move") {
+      const from = this.armedItem.slot;
+      this.armedItem = null;
+      this.orderMode = null;
+      if (from !== slot) this.sim.swapItems(id, from, slot);
+      return;
+    }
     const u = this.sim.units.get(id);
     const held = u?.inventory[slot];
     if (!u || !held) return;
     const def = this.items.get(held.itemId);
-    if (def?.usable) {
-      const point = def.abilities.some((aid) => this.abilities.get(aid)?.target === "point");
-      if (point) {
-        this.armedItem = { slot, mode: "usepoint" };
-        this.orderMode = "item";
-        return;
-      }
-      this.sim.useItem(id, slot, 0, u.x, u.y); // self/instant potion — fire immediately
+    if (!def?.usable) return; // passive item — left-click is a no-op (right-click to move/drop)
+    const point = def.abilities.some((aid) => this.abilities.get(aid)?.target === "point");
+    if (point) {
+      this.armedItem = { slot, mode: "usepoint" };
+      this.orderMode = "item";
       return;
     }
-    // Passive item (Claws, Ring, …): left-click arms a drop/give like the mouse-drag.
-    this.armedItem = { slot, mode: "move" };
-    this.orderMode = "item";
+    this.sim.useItem(id, slot, 0, u.x, u.y); // self/instant consumable — fire immediately
   }
 
-  /** Right-click an inventory slot: arm its drop/give targeting (ground → drop,
-   *  allied hero → give), whether or not the item is usable. */
+  /** Right-click an inventory slot: enter "target to move" mode. The next click
+   *  resolves it — another inventory slot (move/swap), open ground (drop, walking
+   *  into range first), or an allied hero (give). */
   moveInventorySlot(slot: number): void {
     const id = this.primary;
     if (id === null || !this.controls(id) || !this.sim.units.get(id)?.inventory[slot]) return;
@@ -2053,8 +2090,40 @@ export class RtsController {
 
   selectedInfo(): SelectionInfo | null {
     if (this.selectedMine !== null) return this.mineInfo(this.selectedMine);
+    if (this.selectedItem !== null) return this.itemInfo(this.selectedItem);
     if (this.primary === null) return null;
     return this.infoFor(this.primary);
+  }
+
+  /** Selection info for a ground item: its name + description + model (for the HUD
+   *  portrait), with the combat/attribute stats blanked out. */
+  private itemInfo(itemId: number): SelectionInfo | null {
+    const it = this.sim.items.get(itemId);
+    if (!it) return null;
+    const def = this.items.get(it.itemId);
+    return {
+      id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
+      typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
+      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, damageMin: 0, damageMax: 0, damageBonus: 0,
+      attackType: "", armorType: "", isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: "",
+      model: def?.model ?? "", isWorker: false, isBuilding: false,
+      underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
+      queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
+      isMine: false, goldRemaining: 0,
+      isItem: true, description: def ? this.resolveItemDesc(def.description) : "",
+      isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
+    };
+  }
+
+  /** Resolve `<ABIL,Field>` value placeholders in an item description against the
+   *  ability data (e.g. a Potion of Healing's "<AIh1,DataA1>" → its heal amount). */
+  private resolveItemDesc(desc: string): string {
+    return desc.replace(/<([^,>]+),([^>]+)>/g, (_m, abilId: string, field: string) => {
+      const ad = this.abilities.get(abilId.trim());
+      const v = ad ? tipFieldValue(ad.levelData[0], field.trim()) : null;
+      return v === null || v === undefined ? "" : String(Math.round(v));
+    });
   }
 
   /** Selection info for a gold mine (name + remaining gold + its model). */
@@ -2072,6 +2141,7 @@ export class RtsController {
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
+      isItem: false, description: "",
       isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
     };
   }
@@ -2134,6 +2204,8 @@ export class RtsController {
       carryLumber: u.worker?.carryLumber ?? 0,
       isMine: false,
       goldRemaining: 0,
+      isItem: false,
+      description: "",
       isSummon: u.isSummon && u.summonLeft > 0,
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
@@ -2234,6 +2306,11 @@ export class RtsController {
       // A gold mine is Neutral PASSIVE (yellow ring), not hostile (red).
       if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true });
     }
+    if (this.selectedItem !== null) {
+      const it = this.sim.items.get(this.selectedItem);
+      // A ground item rings yellow (neutral), like a mine — sized to the item.
+      if (it) out.push({ x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, neutral: true });
+    }
     return out;
   }
 
@@ -2261,6 +2338,10 @@ export class RtsController {
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);
       if (m) return { x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true };
+    }
+    if (this.hoveredItem !== null && this.hoveredItem !== this.selectedItem) {
+      const it = this.sim.items.get(this.hoveredItem);
+      if (it) return { x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, neutral: true };
     }
     return null;
   }
