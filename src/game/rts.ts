@@ -72,9 +72,12 @@ export interface SelectionInfo {
   xpThis: number; // XP threshold for the current level
   xpNext: number; // XP threshold for the next level (== xpThis at max level)
   skillPoints: number; // unspent hero skill points
-  strength: number;
+  strength: number; // base attribute (item bonus excluded)
   agility: number;
   intelligence: number;
+  strengthBonus: number; // item contribution (green "+N" / red "-N")
+  agilityBonus: number;
+  intelligenceBonus: number;
   primaryAttr: string; // "STR"/"AGI"/"INT" or ""
   model: string;
   isWorker: boolean;
@@ -2064,7 +2067,7 @@ export class RtsController {
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, damageMin: 0, damageMax: 0, damageBonus: 0,
       attackType: "", armorType: "", isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
-      agility: 0, intelligence: 0, primaryAttr: "",
+      agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: "",
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
@@ -2108,9 +2111,14 @@ export class RtsController {
       xpThis: u.isHero ? xpForLevel(u.level) : 0,
       xpNext: u.isHero ? xpForLevel(u.level + 1) : 0,
       skillPoints: u.skillPoints,
-      strength: u.isHero ? u.str : (def?.strength ?? 0),
-      agility: u.isHero ? u.agi : (def?.agility ?? 0),
-      intelligence: u.isHero ? u.int : (def?.intelligence ?? 0),
+      // Split base attribute vs the item "+N": the shown number is the natural
+      // attribute (growth), the bonus is the item contribution (green/red in the HUD).
+      strength: u.isHero ? u.str - u.bonusStr : (def?.strength ?? 0),
+      agility: u.isHero ? u.agi - u.bonusAgi : (def?.agility ?? 0),
+      intelligence: u.isHero ? u.int - u.bonusInt : (def?.intelligence ?? 0),
+      strengthBonus: u.isHero ? u.bonusStr : 0,
+      agilityBonus: u.isHero ? u.bonusAgi : 0,
+      intelligenceBonus: u.isHero ? u.bonusInt : 0,
       primaryAttr: def?.primaryAttr ?? "",
       model: e.modelPath,
       isWorker: !!u.worker,

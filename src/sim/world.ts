@@ -390,6 +390,9 @@ export interface SimUnit {
   thorns: number; // fraction of melee damage returned to attackers (Thorns Aura); derived
   bonusArmor: number; // buff/aura portion of armour (green "+N" in the HUD); derived
   bonusDamage: number; // buff/aura portion of attack damage (green "+N"); derived
+  bonusStr: number; // item portion of Strength (green "+N" / red "-N" in the HUD); derived
+  bonusAgi: number; // item portion of Agility; derived
+  bonusInt: number; // item portion of Intelligence; derived
   abilities: SimAbility[]; // learned/innate abilities
   buffs: SimBuff[]; // active timed effects
   stunned: boolean; // derived from buffs (cannot act)
@@ -421,6 +424,7 @@ export interface SimUnit {
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
 const ITEM_PICKUP_RANGE = 100; // hull-gap within which a hero can grab a ground item / hand one over
+const ITEM_DROP_RANGE = 150; // WC3 Gameplay Constant "Item Drop Distance" — max radius a drop lands from the unit
 // A move ordered within this distance of the unit only turns it in place (WC3
 // doesn't shuffle a unit a few pixels — it just pivots to face the point).
 const MOVE_MIN_DIST = 40;
@@ -1121,6 +1125,9 @@ export class SimWorld {
       | "thorns"
       | "bonusArmor"
       | "bonusDamage"
+      | "bonusStr"
+      | "bonusAgi"
+      | "bonusInt"
       | "abilities"
       | "buffs"
       | "stunned"
@@ -1236,6 +1243,9 @@ export class SimWorld {
       thorns: 0,
       bonusArmor: 0,
       bonusDamage: 0,
+      bonusStr: 0,
+      bonusAgi: 0,
+      bonusInt: 0,
       abilities: opts?.abilities ?? [],
       buffs: [],
       stunned: false,
@@ -1886,6 +1896,10 @@ export class SimWorld {
     u.stunned = stun;
     u.silenced = silence;
     u.invulnerable = invuln;
+    // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
+    u.bonusStr = item.str;
+    u.bonusAgi = item.agi;
+    u.bonusInt = item.int;
   }
 
   /** The level-data for a passive ability the unit has learned (by base code), or
@@ -3608,12 +3622,24 @@ export class SimWorld {
     }
   }
 
-  /** Create a ground item at a point (queued for the renderer to model). */
+  /** Create a ground item at a point (queued for the renderer to model). The
+   *  position is snapped to a pathing-grid cell centre so items always rest on a
+   *  grid slot (WC3 behaviour) rather than at arbitrary sub-cell offsets. */
   private spawnGroundItem(itemId: string, x: number, y: number, charges: number): SimItem {
-    const it: SimItem = { id: this.nextItemId++, itemId, x, y, charges };
+    const [sx, sy] = this.snapItemPos(x, y);
+    const it: SimItem = { id: this.nextItemId++, itemId, x: sx, y: sy, charges };
     this.items.set(it.id, it);
     this.itemSpawns.push(it);
     return it;
+  }
+
+  /** Snap a world point to the centre of its pathing-grid cell. */
+  private snapItemPos(x: number, y: number): [number, number] {
+    const [ox, oy] = this.grid.origin;
+    return [
+      ox + (Math.floor((x - ox) / PATHING_CELL) + 0.5) * PATHING_CELL,
+      oy + (Math.floor((y - oy) / PATHING_CELL) + 0.5) * PATHING_CELL,
+    ];
   }
 
   /** New ground items since the last drain (renderer creates their models). */
@@ -3748,12 +3774,20 @@ export class SimWorld {
     this.recomputeStats(to);
   }
 
-  /** Drop a held item onto the ground at a point (WC3 manual item drop). */
+  /** Drop a held item onto the ground at a point (WC3 manual item drop). The drop
+   *  lands within ITEM_DROP_RANGE (150) of the unit — a click further out is clamped
+   *  to that radius, so items always bounce down next to the hero, never across the map. */
   dropItem(unitId: number, slot: number, x: number, y: number): boolean {
     const u = this.units.get(unitId);
     if (!u || slot < 0 || slot >= u.inventory.length) return false;
     const held = u.inventory[slot];
     if (!held) return false;
+    const dist = Math.hypot(x - u.x, y - u.y);
+    if (dist > ITEM_DROP_RANGE) {
+      const s = ITEM_DROP_RANGE / dist;
+      x = u.x + (x - u.x) * s;
+      y = u.y + (y - u.y) * s;
+    }
     u.inventory[slot] = null;
     this.spawnGroundItem(held.itemId, x, y, held.charges);
     this.recomputeStats(u);

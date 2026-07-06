@@ -56,9 +56,12 @@ export interface HudSelection {
   xpThis: number; // XP threshold for the current level
   xpNext: number; // XP threshold for the next level
   skillPoints: number; // unspent hero skill points
-  strength: number;
+  strength: number; // base attribute (without item bonus)
   agility: number;
   intelligence: number;
+  strengthBonus: number; // item contribution (green "+N" / red "-N")
+  agilityBonus: number;
+  intelligenceBonus: number;
   primaryAttr: string;
   carryGold: number;
   carryLumber: number;
@@ -1090,9 +1093,9 @@ export class GameHud {
           this.attrLines.hidden = false;
           const prim = sel.primaryAttr === "AGI" ? "agi" : sel.primaryAttr === "INT" ? "int" : "str";
           this.setIcon(this.attrIconEl, attrIcon(prim));
-          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.primaryAttr === "STR");
-          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.primaryAttr === "AGI");
-          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.primaryAttr === "INT");
+          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.strengthBonus, sel.primaryAttr === "STR");
+          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.agilityBonus, sel.primaryAttr === "AGI");
+          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.intelligenceBonus, sel.primaryAttr === "INT");
         } else {
           this.attrIconEl.hidden = true;
           this.attrLines.hidden = true;
@@ -1288,14 +1291,18 @@ function makeStatBlock(label: string): StatBlock {
   row.append(icon, text);
   return { row, icon, value };
 }
-// A green "+N" bonus span (from buffs/auras/items), or empty when there's none.
+// A bonus span from buffs/auras/items: green "+N" when positive, red "-N" when
+// negative (WC3 shows debuffed stats in red), empty when there's none.
 function bonusHtml(bonus: number): string {
-  return bonus > 0 ? ` <span class="stat-bonus">+${bonus}</span>` : "";
+  if (bonus > 0) return ` <span class="stat-bonus">+${bonus}</span>`;
+  if (bonus < 0) return ` <span class="stat-penalty">${bonus}</span>`; // `bonus` already carries the minus
+  return "";
 }
-// An attribute line: "Strength: 34" — the label is yellow, the primary bold.
-function attrLineHtml(label: string, value: number, primary: boolean): string {
+// An attribute line: "Strength: 34 +9" — the label is yellow, the primary bold, and
+// the item contribution shows as a green "+N" (red "-N" if the total is negative).
+function attrLineHtml(label: string, value: number, bonus: number, primary: boolean): string {
   const cls = primary ? "hud-attr-line primary" : "hud-attr-line";
-  return `<span class="${cls}"><span class="attr-name">${label}:</span> ${value}</span>`;
+  return `<span class="${cls}"><span class="attr-name">${label}:</span> ${value}${bonusHtml(bonus)}</span>`;
 }
 
 // WC3 infocard type icons (real BLPs under UI\Widgets\Console\Human\). Attack/

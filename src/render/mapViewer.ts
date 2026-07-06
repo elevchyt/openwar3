@@ -1167,8 +1167,9 @@ export class MapViewerScene {
     this.loc3[2] = this.rts.groundHeightAt(x, y);
     inst.setLocation(this.loc3);
     if (def && def.scale !== 1) inst.setUniformScale(def.scale);
-    inst.setSequence(this.effectSequence(inst));
-    inst.setSequenceLoopMode(2); // loop the idle/birth clip for as long as it lies there
+    inst.setSequence(this.effectSequence(inst)); // "Birth": the chest drops in + opens
+    inst.setSequenceLoopMode(0); // play the open ONCE and hold the final (open, resting) frame —
+    //                              looping it made the chest re-play its drop-in and sink underground.
     inst.show();
     this.itemInstances.set(itemId, inst);
   }

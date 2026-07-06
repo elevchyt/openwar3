@@ -811,7 +811,8 @@ body.in-game .menu-panel { display: none; }
 .hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; }
 .hud-stat-label { font-size: 12px; color: #e0b93a; font-weight: 600; }
 .hud-stat-value { font-size: 13px; color: #eae2c4; }
-.stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura bonus */
+.stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura/item bonus */
+.stat-penalty { color: #e0504a; font-weight: 700; } /* red debuff/negative-item penalty */
 /* Hero attributes: one primary icon beside three value lines. */
 .hud-attr-col { display: flex; align-items: center; gap: 8px; }
 .hud-attr-primary-icon { width: 30px; height: 30px; }
