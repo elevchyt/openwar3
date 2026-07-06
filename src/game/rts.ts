@@ -345,7 +345,13 @@ export class RtsController {
   private previewIds: number[] = []; // units under the live drag-box (marquee preview rings)
   private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
   private creepData: Array<{ x: number; y: number; aggro: number }> = []; // Neutral Hostile guard/aggro data (from the doo)
-  private seeded = false;
+  private seeded = false; // true once trySeed has run at least one scan (creepCamps gate)
+  // Map-placed unit instances trySeed has already handled (seeded OR deliberately
+  // skipped). The viewer pushes each Unit into map.units only AFTER its model
+  // finishes loading (async), so we adopt them progressively rather than in a
+  // single racing pass — see trySeed.
+  private processedInstances = new Set<object>();
+  private lastSeenUnitCount = -1; // map.units length at the last scan (grows as models stream in)
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
   // Corpses adopt the dead unit's model instance and sequence it through Death →
@@ -913,10 +919,24 @@ export class RtsController {
     for (const b of this.hpBars) b.root.hidden = true;
   }
 
-  /** Seed movable units from the map once its units have loaded. */
+  /** Seed movable units (creeps) and neutral-passive sites from the map.
+   *
+   *  The viewer sets `unitsReady` synchronously but pushes each Unit into
+   *  `map.units` only once its model has finished loading ASYNCHRONOUSLY. A
+   *  one-shot pass therefore races the model loads and silently drops any
+   *  creep/neutral whose model hasn't arrived yet — which is exactly what broke
+   *  when map models moved to blob-url loading (issue #14): those loads resolve a
+   *  frame or two later than the old in-memory promises, so the single seed pass
+   *  saw an empty list. Instead we re-scan whenever the count grows and adopt each
+   *  instance exactly once, so late-loading units are still picked up. */
   private trySeed(): void {
-    if (this.seeded || !this.host.unitsReady()) return;
-    for (const unit of this.host.units()) {
+    if (!this.host.unitsReady()) return;
+    const units = this.host.units();
+    if (units.length === this.lastSeenUnitCount) return; // no new instances since the last scan
+    this.lastSeenUnitCount = units.length;
+    for (const unit of units) {
+      if (this.processedInstances.has(unit.instance)) continue; // already seeded/skipped
+      this.processedInstances.add(unit.instance);
       const loc = unit.instance.localLocation;
       const def = this.registry.get(unit.row?.string("unitid") ?? "");
       // Neutral Passive (shops/taverns/labs/merchants/fountains/critters): seed
@@ -1007,6 +1027,7 @@ export class RtsController {
       };
       this.entries.push(entry);
       this.byId.set(simId, entry);
+      this.creepCampData = null; // a creep arrived — rebuild camp clusters lazily
     }
     this.seeded = true;
   }
