@@ -948,6 +948,23 @@ body.in-game .menu-panel { display: none; }
   border-radius: 3px;
 }
 
+/* Hero inventory slot: an icon-filled button (like a command button) with the
+   charge badge + cooldown sweep reused from .hud-cmd-count/.hud-cmd-cd. */
+.hud-inv-slot {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  background-size: 100% 100% !important;
+  background-repeat: no-repeat;
+  background-position: center;
+  color: transparent;
+}
+.hud-inv-slot:disabled { cursor: default; }
+.hud-inv-slot:not(:disabled):hover { border-color: var(--gold); }
+.hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }
+
 .hud-cmd {
   font: inherit;
   font-size: 12px;

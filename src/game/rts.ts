@@ -5,6 +5,7 @@ import { VisionMap, FogState } from "../sim/vision";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
+import { type ItemRegistry } from "../data/items";
 import { WORKERS, DEPOT_IDS } from "../data/races";
 import { trainsFor } from "../data/techtree";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -351,7 +352,7 @@ export class RtsController {
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
   private previewIds: number[] = []; // units under the live drag-box (marquee preview rings)
   private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
-  private creepData: Array<{ x: number; y: number; aggro: number }> = []; // Neutral Hostile guard/aggro data (from the doo)
+  private creepData: Array<{ x: number; y: number; aggro: number; drops?: Array<{ items: Array<{ id: string; chance: number }> }> }> = []; // Neutral Hostile guard/aggro/drop data (from the doo)
   private seeded = false; // true once trySeed has run at least one scan (creepCamps gate)
   // Map-placed unit instances trySeed has already handled (seeded OR deliberately
   // skipped). The viewer pushes each Unit into map.units only AFTER its model
@@ -384,11 +385,12 @@ export class RtsController {
     private host: RtsHost,
     private registry: UnitRegistry,
     private abilities: AbilityRegistry,
+    private items: ItemRegistry,
     // Highest terrain height across a building's footprint — used to seat structures
     // on the tallest level they touch instead of the (often lower) centre (issue #15).
     private footMaxHeight: FootprintMaxSampler,
   ) {
-    this.sim = new SimWorld(grid, 1, this.abilities); // the ability registry powers casting/learning/auras
+    this.sim = new SimWorld(grid, 1, this.abilities, this.items); // registries power casting/learning/auras + items
     // Fog-of-war grid, aligned to the same world origin as the pathing grid and
     // spanning the whole map (pathing is 32-unit cells; span = cells × 32).
     const [vox, voy] = grid.origin;
@@ -626,7 +628,7 @@ export class RtsController {
   /** Register the world positions + per-instance target-acquisition of Neutral
    *  Hostile creeps (from war3mapUnits.doo, player 12+). trySeed matches each
    *  rendered creep to this to set its guard post and aggro range. */
-  setCreepData(data: Array<{ x: number; y: number; aggro: number }>): void {
+  setCreepData(data: Array<{ x: number; y: number; aggro: number; drops?: Array<{ items: Array<{ id: string; chance: number }> }> }>): void {
     this.creepData = data;
   }
 
@@ -635,6 +637,12 @@ export class RtsController {
   private creepAggroAt(x: number, y: number): number {
     for (const p of this.creepData) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return p.aggro;
     return -1;
+  }
+
+  /** The placed creep's dropped-item table at a position (empty if none). */
+  private creepDropsAt(x: number, y: number): Array<{ items: Array<{ id: string; chance: number }> }> {
+    for (const p of this.creepData) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return p.drops ?? [];
+    return [];
   }
 
   /** Remove a unit from the selection (keeping the primary consistent). */
@@ -1008,6 +1016,7 @@ export class RtsController {
       const aggro = this.creepAggroAt(loc[0], loc[1]);
       su.aggroRange = aggro > 0 ? aggro : su.weapon?.acquire ?? def?.acquireRange ?? 0;
       su.canSleep = def?.canSleep ?? false;
+      this.sim.setUnitDrops(simId, this.creepDropsAt(loc[0], loc[1])); // scatter loot on death
       this.seededInstances.add(unit.instance); // RTS drives this creep's fog visibility
       const entry: Entry = {
         simId,
@@ -1764,10 +1773,14 @@ export class RtsController {
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
    *  damaged friendly building; "cast" targets a spell (see armedCast). */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | null = null;
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | "item" | null = null;
   /** The spell armed for targeting when orderMode === "cast". `area` (>0) shows an
    *  AoE cast circle at the cursor for point-target area spells. */
   armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
+  /** The inventory item armed for targeting when orderMode === "item": a point-use
+   *  item (blink) awaiting a ground click, or a passive item awaiting a drop/give
+   *  target (ground → drop, allied hero → give). */
+  armedItem: { slot: number; mode: "usepoint" | "move" } | null = null;
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state). */
@@ -1789,6 +1802,27 @@ export class RtsController {
       }
       const hit = this.groundHitAt(cssX, cssY); // point-target spell
       if (hit) this.castFromSelection(cast.code, 0, hit[0], hit[1]);
+      return true;
+    }
+    if (mode === "item") {
+      const armed = this.armedItem;
+      this.armedItem = null;
+      const id = this.primary;
+      if (!armed || id === null || !this.controls(id)) return true;
+      if (armed.mode === "usepoint") {
+        const hit = this.groundHitAt(cssX, cssY);
+        if (hit) this.sim.useItem(id, armed.slot, 0, hit[0], hit[1]);
+        return true;
+      }
+      // "move": hand the item to an allied hero clicked, else drop it on the ground.
+      const picked = this.pickAt(cssX, cssY);
+      const to = picked !== null ? this.sim.units.get(picked) : undefined;
+      if (to && picked !== null && picked !== id && this.controls(picked) && to.inventory.length) {
+        this.sim.issueGiveItem(id, armed.slot, picked);
+      } else {
+        const hit = this.groundHitAt(cssX, cssY);
+        if (hit) this.sim.dropItem(id, armed.slot, hit[0], hit[1]);
+      }
       return true;
     }
     if (mode !== "rally") this.ack(mode === "attack"); // rally is a building order — no unit voice
@@ -1869,6 +1903,75 @@ export class RtsController {
   /** Cast a no-target ability (Thunder Clap, Divine Shield, Avatar) immediately. */
   castNoTarget(code: string): void {
     this.castFromSelection(code, 0, 0, 0);
+  }
+
+  // --- inventory (hero items) ----------------------------------------------
+
+  /** The primary selected hero's 6 inventory slots for the HUD (null = empty). An
+   *  empty array means the selection has no inventory (not a hero). */
+  inventorySlots(): Array<{ itemId: string; icon: string; name: string; desc: string; charges: number; cooldownLeft: number; cooldownFrac: number; usable: boolean } | null> {
+    const id = this.primary;
+    const u = id !== null ? this.sim.units.get(id) : undefined;
+    if (!u || !u.inventory.length) return [];
+    return u.inventory.map((held) => {
+      if (!held) return null;
+      const def = this.items.get(held.itemId);
+      const total = def ? this.itemActiveCooldown(def) : 0;
+      return {
+        itemId: held.itemId,
+        icon: def?.icon ?? "",
+        name: def?.name ?? held.itemId,
+        desc: "",
+        charges: held.charges,
+        cooldownLeft: held.cooldownLeft,
+        cooldownFrac: total > 0 ? Math.max(0, Math.min(1, held.cooldownLeft / total)) : 0,
+        usable: def?.usable ?? false,
+      };
+    });
+  }
+
+  /** The active-use cooldown of an item (its usable ability's cool1), for the HUD sweep. */
+  private itemActiveCooldown(def: { abilities: string[] }): number {
+    let cd = 0;
+    for (const aid of def.abilities) {
+      const ad = this.abilities.get(aid);
+      if (ad) cd = Math.max(cd, ad.levelData[0]?.cooldown ?? 0);
+    }
+    return cd;
+  }
+
+  /** Left-click an inventory slot: fire a self-target usable item now, arm a
+   *  point-target usable item (blink) for a ground click, or (passive item) arm
+   *  its drop/give targeting. */
+  useInventorySlot(slot: number): void {
+    const id = this.primary;
+    if (id === null || !this.controls(id)) return;
+    const u = this.sim.units.get(id);
+    const held = u?.inventory[slot];
+    if (!u || !held) return;
+    const def = this.items.get(held.itemId);
+    if (def?.usable) {
+      const point = def.abilities.some((aid) => this.abilities.get(aid)?.target === "point");
+      if (point) {
+        this.armedItem = { slot, mode: "usepoint" };
+        this.orderMode = "item";
+        return;
+      }
+      this.sim.useItem(id, slot, 0, u.x, u.y); // self/instant potion — fire immediately
+      return;
+    }
+    // Passive item (Claws, Ring, …): left-click arms a drop/give like the mouse-drag.
+    this.armedItem = { slot, mode: "move" };
+    this.orderMode = "item";
+  }
+
+  /** Right-click an inventory slot: arm its drop/give targeting (ground → drop,
+   *  allied hero → give), whether or not the item is usable. */
+  moveInventorySlot(slot: number): void {
+    const id = this.primary;
+    if (id === null || !this.controls(id) || !this.sim.units.get(id)?.inventory[slot]) return;
+    this.armedItem = { slot, mode: "move" };
+    this.orderMode = "item";
   }
 
   /** Learn (or rank up) a hero ability on the primary-selected hero (own only). */
@@ -2513,6 +2616,21 @@ export class RtsController {
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
     if (!hit) return;
+    // Right-click a ground item → send the selected hero(es) to pick it up (WC3).
+    const gitem = this.sim.itemAt(hit[0], hit[1], 96);
+    if (gitem) {
+      let any = false;
+      for (const id of this.selected) {
+        const u = this.sim.units.get(id);
+        if (this.controls(id) && u?.inventory.length) {
+          if (this.sim.issueGetItem(id, gitem.id)) any = true;
+        }
+      }
+      if (any) {
+        this.flashRing(gitem.x, gitem.y, 48, FLASH_GREEN, false);
+        return;
+      }
+    }
     // Workers in the selection right-clicking a resource start harvesting.
     // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
     // lands the ground ray well behind the trunk.

@@ -1,6 +1,7 @@
 import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
+import { type ItemRegistry, type ItemDef } from "../data/items";
 import { SPELL_HANDLERS, AURA_BUFFS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -54,7 +55,7 @@ export interface SimProjectile {
   spell?: { code: string; rank: number; abilityId: string };
 }
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem";
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
@@ -140,6 +141,33 @@ export interface SimCorpse {
   mechanical: boolean; // mechanical/summoned units leave no raisable corpse
   decayLeft: number; // seconds until the corpse fully decays and is removed
   raised: boolean; // consumed by a spell (renderer hides it immediately)
+}
+
+/** An item held in a hero's inventory (one of 6 slots). Its stat bonus / active
+ *  effect is derived from the item def's granted abilities (world.ts item logic),
+ *  keyed by the base ability `code` — the same dispatch model spells use. */
+export interface HeldItem {
+  itemId: string; // item rawcode (ItemRegistry key)
+  charges: number; // remaining uses (0 = a passive/permanent item, no active use)
+  cooldownLeft: number; // seconds until this item can be used again
+}
+
+/** An item lying on the ground: droppable, pickable, and (in WC3) destructible.
+ *  Not a SimUnit — a lightweight entity the renderer draws as the item's model. */
+export interface SimItem {
+  id: number; // sim entity id (own id space)
+  itemId: string; // item rawcode
+  x: number;
+  y: number;
+  charges: number; // charges carried onto the ground (restored when picked back up)
+}
+
+/** A creep's dropped-item table (from war3mapUnits.doo). Each SET drops (at most)
+ *  one item, chosen among its entries by their `chance` percentages; multiple sets
+ *  mean multiple independent drops. Ids may be real item rawcodes or a "random item
+ *  of level N" marker resolved through the ItemRegistry. */
+export interface ItemDropSet {
+  items: Array<{ id: string; chance: number }>;
 }
 
 /** Attributes + growth for a hero, applied on spawn and each level-up. */
@@ -385,9 +413,14 @@ export interface SimUnit {
   strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
   returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
+  // --- inventory (heroes) ---------------------------------------------------
+  inventory: (HeldItem | null)[]; // 6 slots for heroes ([] for units without an inventory)
+  getItemId: number; // ground item this unit is walking to pick up (order === "getitem"; 0 = none)
+  pendingGive: { toId: number; slot: number } | null; // walking to hand a slot's item to another hero
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
+const ITEM_PICKUP_RANGE = 100; // hull-gap within which a hero can grab a ground item / hand one over
 // A move ordered within this distance of the unit only turns it in place (WC3
 // doesn't shuffle a unit a few pixels — it just pivots to face the point).
 const MOVE_MIN_DIST = 40;
@@ -600,6 +633,13 @@ export class SimWorld {
   // --- corpses (persist + decay; targetable by corpse-consuming spells) ---
   readonly corpses = new Map<number, SimCorpse>();
   private nextCorpseId = 1;
+  // --- items on the ground (dropped / creep-dropped; pickable) -------------
+  readonly items = new Map<number, SimItem>();
+  private nextItemId = 1;
+  private itemSpawns: SimItem[] = []; // new ground items the renderer must model
+  private itemRemovals: number[] = []; // ground items picked up/destroyed (drop their model)
+  // Per-unit creep drop tables, seeded at spawn (map .doo), rolled on death.
+  private unitDrops = new Map<number, ItemDropSet[]>();
   // --- spell / ability event channels drained by the renderer each frame ---
   // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt).
   private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number }> = [];
@@ -618,6 +658,7 @@ export class SimWorld {
     readonly grid: PathingGrid,
     seed = 1,
     private abilities?: AbilityRegistry,
+    private itemReg?: ItemRegistry,
   ) {
     this.rng = lcg(seed);
   }
@@ -1102,6 +1143,9 @@ export class SimWorld {
       | "strayT"
       | "returnBestDist"
       | "returnStuckT"
+      | "inventory"
+      | "getItemId"
+      | "pendingGive"
     >,
     building?: BuildingState | null,
     opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; manaRegen?: number; level?: number },
@@ -1216,6 +1260,11 @@ export class SimWorld {
       strayT: 0,
       returnBestDist: 0,
       returnStuckT: 0,
+      // Only heroes carry an inventory in melee WC3 (6 slots). Other units get an
+      // empty array (no inventory ability) so item logic simply skips them.
+      inventory: hero ? [null, null, null, null, null, null] : [],
+      getItemId: 0,
+      pendingGive: null,
     };
     this.units.set(u.id, u);
     this.settle(u);
@@ -1727,13 +1776,48 @@ export class SimWorld {
 
   // === abilities / buffs / casting ==========================================
 
+  /** Sum the passive stat bonuses granted by the items in a unit's inventory.
+   *  Item behaviour is dispatched off the granted ability's base `code` (verified
+   *  against AbilityData.slk): +damage AIat, +armour AIde, +attributes AIab
+   *  (dataA=agi, dataB=int, dataC=str), +attack-speed AIas, +mana-regen AHab.
+   *  Lifesteal (Mask of Death AIva) does NOT stack — we keep the strongest.
+   *  Permanent item stats are computed here every tick rather than stored as
+   *  buffs, so Dispel Magic (which wipes `u.buffs`) can never remove them. */
+  private itemBonuses(u: SimUnit): {
+    str: number; agi: number; int: number; damage: number; armor: number; attackSpeed: number; manaRegen: number; lifesteal: number;
+  } {
+    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, lifesteal: 0 };
+    if (!u.inventory.length || !this.itemReg || !this.abilities) return b;
+    for (const held of u.inventory) {
+      if (!held) continue;
+      const item = this.itemReg.get(held.itemId);
+      if (!item) continue;
+      for (const abilId of item.abilities) {
+        const def = this.abilities.get(abilId);
+        if (!def) continue;
+        const d = def.levelData[0]?.data ?? [];
+        const val = (i: number) => (d[i] === undefined || Number.isNaN(d[i]) ? 0 : d[i]);
+        switch (def.code) {
+          case "AIat": b.damage += val(0); break; // Claws of Attack (+damage)
+          case "AIde": b.armor += val(0); break; // Ring of Protection (+armour)
+          case "AIab": b.agi += val(0); b.int += val(1); b.str += val(2); break; // stat items
+          case "AIas": b.attackSpeed += val(0); break; // Gloves of Haste (+attack speed)
+          case "AHab": b.manaRegen += val(0); break; // Pipe of Insight (mana regen)
+          case "AIva": b.lifesteal = Math.max(b.lifesteal, val(0)); break; // Mask of Death (lifesteal)
+        }
+      }
+    }
+    return b;
+  }
+
   /** Recompute a unit's effective stats from its base values, hero attribute
    *  growth, and active buffs. Called every tick (cheap, idempotent). */
   private recomputeStats(u: SimUnit): void {
+    const item = this.itemBonuses(u);
     if (u.isHero) {
-      u.str = Math.floor(u.baseStr + u.strPerLevel * (u.level - 1));
-      u.agi = Math.floor(u.baseAgi + u.agiPerLevel * (u.level - 1));
-      u.int = Math.floor(u.baseInt + u.intPerLevel * (u.level - 1));
+      u.str = Math.floor(u.baseStr + u.strPerLevel * (u.level - 1)) + item.str;
+      u.agi = Math.floor(u.baseAgi + u.agiPerLevel * (u.level - 1)) + item.agi;
+      u.int = Math.floor(u.baseInt + u.intPerLevel * (u.level - 1)) + item.int;
     }
     const dStr = u.isHero ? u.str - Math.floor(u.baseStr) : 0;
     const dAgi = u.isHero ? u.agi - Math.floor(u.baseAgi) : 0;
@@ -1779,23 +1863,24 @@ export class SimWorld {
     // Spiked Carapace (Crypt Lord passive AUts): a flat bonus armour (dataB) while learned.
     const carapace = this.passiveLevelData(u, "AUts");
     const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
-    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor;
-    u.bonusArmor = armorBonus + carapaceArmor; // the buff/aura portion (shown green in the HUD)
+    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor;
+    u.bonusArmor = armorBonus + carapaceArmor + item.armor; // the buff/aura/item portion (shown green in the HUD)
     if (u.weapon) {
       const base = u.baseDamage + primaryDelta;
-      u.weapon.damage = Math.max(0, base + damageBonus + base * damagePct); // Command/Trueshot add a % of base
-      u.bonusDamage = u.weapon.damage - base; // the buff/aura portion
+      u.weapon.damage = Math.max(0, base + damageBonus + item.damage + base * damagePct); // Command/Trueshot add a % of base
+      u.bonusDamage = u.weapon.damage - base; // the buff/aura/item portion
       // Attack speed scales cooldown AND damage point together (verified: thehelper
       // "attack speed animations" thread — agility/haste divides both by the same
       // factor, so the strike lands proportionally sooner as the unit swings faster).
-      const speedFactor = (1 + slowAttack) / (1 + hasteAttack);
+      // Item attack-speed (Gloves of Haste) adds to the haste side.
+      const speedFactor = (1 + slowAttack) / (1 + hasteAttack + item.attackSpeed);
       u.weapon.cooldown = u.baseCooldown * speedFactor;
       u.weapon.damagePoint = u.baseDamagePoint * speedFactor;
     }
     u.speed = Math.max(0, u.baseSpeed * (1 - slowMove) * (1 + hasteMove));
-    u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus;
+    u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen;
     u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus;
-    u.lifesteal = lifesteal;
+    u.lifesteal = Math.max(lifesteal, item.lifesteal);
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
@@ -2607,6 +2692,7 @@ export class SimWorld {
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.repathT > 0) u.repathT -= dt;
       for (const a of u.abilities) if (a.cooldownLeft > 0) a.cooldownLeft -= dt;
+      for (const it of u.inventory) if (it && it.cooldownLeft > 0) it.cooldownLeft -= dt;
       if (u.summonLeft > 0) {
         u.summonLeft -= dt;
         if (u.summonLeft <= 0) {
@@ -2640,6 +2726,9 @@ export class SimWorld {
           break;
         case "cast":
           this.tickCast(u, dt); // walk into range, then fire the spell effect
+          break;
+        case "getitem":
+          this.tickGetItem(u); // walk to a ground item / another hero, then pick up / hand over
           break;
         case "follow":
           this.tickFollow(u);
@@ -3465,9 +3554,312 @@ export class SimWorld {
     }
     if (u.constructing) this.detachBuilder(u.id); // free the halted construction
     this.awardKillXp(u, killerId); // enemy heroes near the kill gain experience
+    this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
+    this.dropInventory(u); // a dying hero/inventory-unit drops its held items
     this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
+    this.unitDrops.delete(u.id);
+  }
+
+  // === items ================================================================
+
+  /** Register a creep's dropped-item table (from war3mapUnits.doo), rolled when it
+   *  dies. Called by the game layer as it seeds each Neutral Hostile creep. */
+  setUnitDrops(id: number, sets: ItemDropSet[]): void {
+    if (sets.length) this.unitDrops.set(id, sets);
+  }
+
+  /** Roll a dead unit's drop table and scatter the results on the ground. Each SET
+   *  drops at most one item, chosen among its entries by their `chance` percentages
+   *  (WC3 dropped-item-set semantics); leftover probability = no drop. */
+  private rollCreepDrops(u: SimUnit): void {
+    const sets = this.unitDrops.get(u.id);
+    if (!sets || !this.itemReg) return;
+    let n = 0;
+    for (const set of sets) {
+      let roll = this.rng() * 100;
+      let chosen: string | null = null;
+      for (const entry of set.items) {
+        if (roll < entry.chance) { chosen = entry.id; break; }
+        roll -= entry.chance;
+      }
+      if (!chosen) continue;
+      const def = this.itemReg.resolveDrop(chosen, this.rng);
+      if (!def) continue;
+      // Fan multiple drops out around the corpse so they don't stack on one spot.
+      const ang = (n * 2.399963) % (Math.PI * 2); // golden-angle spread
+      const r = n === 0 ? 0 : 48;
+      this.spawnGroundItem(def.id, u.x + Math.cos(ang) * r, u.y + Math.sin(ang) * r, def.charges);
+      n++;
+    }
+  }
+
+  /** A dying inventory-holder (a hero) scatters its held items on the ground. */
+  private dropInventory(u: SimUnit): void {
+    let n = 0;
+    for (let i = 0; i < u.inventory.length; i++) {
+      const held = u.inventory[i];
+      if (!held) continue;
+      u.inventory[i] = null;
+      const ang = (n * 2.399963) % (Math.PI * 2);
+      this.spawnGroundItem(held.itemId, u.x + Math.cos(ang) * 64, u.y + Math.sin(ang) * 64, held.charges);
+      n++;
+    }
+  }
+
+  /** Create a ground item at a point (queued for the renderer to model). */
+  private spawnGroundItem(itemId: string, x: number, y: number, charges: number): SimItem {
+    const it: SimItem = { id: this.nextItemId++, itemId, x, y, charges };
+    this.items.set(it.id, it);
+    this.itemSpawns.push(it);
+    return it;
+  }
+
+  /** New ground items since the last drain (renderer creates their models). */
+  drainItemSpawns(): SimItem[] {
+    if (!this.itemSpawns.length) return this.itemSpawns;
+    const out = this.itemSpawns;
+    this.itemSpawns = [];
+    return out;
+  }
+
+  /** Ground items removed since the last drain (renderer drops their models). */
+  drainItemRemovals(): number[] {
+    if (!this.itemRemovals.length) return this.itemRemovals;
+    const out = this.itemRemovals;
+    this.itemRemovals = [];
+    return out;
+  }
+
+  private removeGroundItem(id: number): void {
+    if (this.items.delete(id)) this.itemRemovals.push(id);
+  }
+
+  /** The ground item nearest a world point within `radius`, or null (for click-to-
+   *  pick-up hit-testing). */
+  itemAt(x: number, y: number, radius = 64): SimItem | null {
+    let best: SimItem | null = null;
+    let bestD = radius;
+    for (const it of this.items.values()) {
+      const d = Math.hypot(it.x - x, it.y - y);
+      if (d < bestD) { bestD = d; best = it; }
+    }
+    return best;
+  }
+
+  /** Order a hero to walk to a ground item and pick it up. */
+  issueGetItem(unitId: number, itemId: number): boolean {
+    const u = this.units.get(unitId);
+    const it = this.items.get(itemId);
+    if (!u || !it || !u.inventory.length) return false;
+    u.getItemId = itemId;
+    u.pendingGive = null;
+    u.order = "getitem";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    this.detachBuilder(unitId);
+    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
+      this.pickUpItem(u, it);
+      this.stop(unitId);
+    } else {
+      this.pathTo(u, it.x, it.y);
+    }
+    return true;
+  }
+
+  /** Order a hero to walk to another hero and hand over the item in `slot`. */
+  issueGiveItem(fromId: number, slot: number, toId: number): boolean {
+    const u = this.units.get(fromId);
+    const to = this.units.get(toId);
+    if (!u || !to || !u.inventory[slot] || !to.inventory.length) return false;
+    u.pendingGive = { toId, slot };
+    u.getItemId = 0;
+    u.order = "getitem";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_PICKUP_RANGE) {
+      this.transferItem(u, slot, to);
+      this.stop(fromId);
+    } else {
+      this.pathTo(u, to.x, to.y);
+    }
+    return true;
+  }
+
+  /** Drive the "getitem" order: walk to the ground item (or target hero) and, once
+   *  close enough, pick it up / hand it over. */
+  private tickGetItem(u: SimUnit): void {
+    if (u.pendingGive) {
+      const to = this.units.get(u.pendingGive.toId);
+      if (!to || to.hp <= 0 || !u.inventory[u.pendingGive.slot]) { this.stop(u.id); return; }
+      if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_PICKUP_RANGE) {
+        this.transferItem(u, u.pendingGive.slot, to);
+        this.stop(u.id);
+      } else if (!u.moving) {
+        this.pathTo(u, to.x, to.y);
+      }
+      return;
+    }
+    const it = this.items.get(u.getItemId);
+    if (!it) { this.stop(u.id); return; } // item gone (someone else grabbed it)
+    if (Math.hypot(it.x - u.x, it.y - u.y) <= u.radius + ITEM_PICKUP_RANGE) {
+      this.pickUpItem(u, it);
+      this.stop(u.id);
+    } else if (!u.moving) {
+      this.pathTo(u, it.x, it.y); // arrived-but-not-close (blocked) or needs a repath
+    }
+  }
+
+  /** Put a ground item into a hero's inventory. Powerups (tomes, runes, gold) are
+   *  consumed instantly instead of stored. False if the inventory is full. */
+  private pickUpItem(u: SimUnit, it: SimItem): boolean {
+    if (!this.itemReg) return false;
+    const def = this.itemReg.get(it.itemId);
+    if (!def) { this.removeGroundItem(it.id); return true; }
+    if (def.powerup) {
+      this.applyPowerup(u, def);
+      this.removeGroundItem(it.id);
+      return true;
+    }
+    const slot = u.inventory.indexOf(null);
+    if (slot < 0) return false; // inventory full — leave the item on the ground
+    u.inventory[slot] = { itemId: it.itemId, charges: it.charges, cooldownLeft: 0 };
+    this.removeGroundItem(it.id);
+    this.recomputeStats(u); // reflect any stat bonus immediately
+    return true;
+  }
+
+  /** Hand a held item from one hero to another (drops to the ground if the
+   *  recipient's inventory is full). */
+  private transferItem(from: SimUnit, slot: number, to: SimUnit): void {
+    const held = from.inventory[slot];
+    if (!held) return;
+    const dest = to.inventory.indexOf(null);
+    if (dest < 0) { this.spawnGroundItem(held.itemId, to.x, to.y, held.charges); }
+    else { to.inventory[dest] = { itemId: held.itemId, charges: held.charges, cooldownLeft: 0 }; }
+    from.inventory[slot] = null;
+    from.pendingGive = null;
+    this.recomputeStats(from);
+    this.recomputeStats(to);
+  }
+
+  /** Drop a held item onto the ground at a point (WC3 manual item drop). */
+  dropItem(unitId: number, slot: number, x: number, y: number): boolean {
+    const u = this.units.get(unitId);
+    if (!u || slot < 0 || slot >= u.inventory.length) return false;
+    const held = u.inventory[slot];
+    if (!held) return false;
+    u.inventory[slot] = null;
+    this.spawnGroundItem(held.itemId, x, y, held.charges);
+    this.recomputeStats(u);
+    return true;
+  }
+
+  /** Use an active item in a slot (potion/scroll). Returns true if it fired (a
+   *  charge was consumed / a cooldown started). Dispatches on the granted ability's
+   *  base `code`, like spells. */
+  useItem(unitId: number, slot: number, _targetId: number, x: number, y: number): boolean {
+    const u = this.units.get(unitId);
+    if (!u || !this.itemReg || !this.abilities) return false;
+    const held = u.inventory[slot];
+    if (!held || held.cooldownLeft > 0) return false;
+    const def = this.itemReg.get(held.itemId);
+    if (!def || !def.usable) return false;
+    // The active behaviour is the first granted ability with a code we handle.
+    for (const abilId of def.abilities) {
+      const ad = this.abilities.get(abilId);
+      if (!ad) continue;
+      const lvl = ad.levelData[0];
+      const d = (i: number) => (lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
+      let fired = false;
+      switch (ad.code) {
+        case "AIhe": // Potion of Healing / Health Stone / Scroll of Healing → restore HP
+          if (u.hp < u.maxHp) { u.hp = Math.min(u.maxHp, u.hp + d(0)); fired = true; }
+          break;
+        case "AIma": // Potion of Mana / Scroll of Mana → restore mana
+          if (u.mana < u.maxMana) { u.mana = Math.min(u.maxMana, u.mana + d(0)); fired = true; }
+          break;
+        case "AIvu": // Potion of Invulnerability → brief invulnerability
+          this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0 });
+          fired = true;
+          break;
+        case "AEbl": { // Kelen's Dagger of Escape → blink to a point within range
+          const range = d(0) || 1000;
+          const dist = Math.hypot(x - u.x, y - u.y);
+          const s = dist > range ? range / dist : 1;
+          const tx = u.x + (x - u.x) * s;
+          const ty = u.y + (y - u.y) * s;
+          this.unsettle(u);
+          u.x = tx; u.y = ty;
+          u.path = []; u.moving = false; u.waypoint = 0;
+          this.settle(u);
+          fired = true;
+          break;
+        }
+        default:
+          continue; // ability we don't handle — try the next granted ability
+      }
+      if (!fired) return false; // handled code but nothing to do (already full) — no charge spent
+      this.consumeItemUse(u, slot, def, lvl?.cooldown || 0);
+      return true;
+    }
+    return false;
+  }
+
+  /** Spend a charge + start the item's cooldown (shared across its cooldown group,
+   *  WC3-style: drinking one potion puts every item in that group on cooldown). */
+  private consumeItemUse(u: SimUnit, slot: number, def: ItemDef, cooldown: number): void {
+    const held = u.inventory[slot];
+    if (!held) return;
+    if (def.charges > 0) {
+      held.charges -= 1;
+      if (held.charges <= 0 && def.perishable) { u.inventory[slot] = null; this.recomputeStats(u); }
+    }
+    if (cooldown > 0) {
+      held.cooldownLeft = Math.max(held.cooldownLeft, cooldown);
+      if (def.cooldownGroup && this.itemReg) {
+        for (const other of u.inventory) {
+          if (!other || other === held) continue;
+          const od = this.itemReg.get(other.itemId);
+          if (od && od.cooldownGroup === def.cooldownGroup) other.cooldownLeft = Math.max(other.cooldownLeft, cooldown);
+        }
+      }
+    }
+  }
+
+  /** Apply a powerup consumed on pickup (tomes, manuals, runes, gold/lumber),
+   *  dispatched on its granted ability's base `code`. */
+  private applyPowerup(u: SimUnit, def: ItemDef): void {
+    if (!this.abilities) return;
+    for (const abilId of def.abilities) {
+      const ad = this.abilities.get(abilId);
+      if (!ad) continue;
+      const lvl = ad.levelData[0];
+      const dv = (i: number) => (lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
+      switch (ad.code) {
+        // Attribute tomes (dataA=agi, dataB=int, dataC=str) — permanent, so bump the
+        // BASE attribute + gain the HP/mana the new points confer.
+        case "AIam": case "AIim": case "AIsm": case "AIxm": {
+          const dAgi = dv(0), dInt = dv(1), dStr = dv(2);
+          u.baseAgi += dAgi; u.baseInt += dInt; u.baseStr += dStr;
+          u.hp += HP_PER_STR * dStr; u.mana += MANA_PER_INT * dInt;
+          break;
+        }
+        case "AImi": u.baseMaxHp += dv(0); u.hp += dv(0); break; // Manual of Health (+max HP)
+        case "AIem": if (u.isHero) this.gainXp(u, dv(0)); break; // Tome of Experience (+XP)
+        case "AIha": u.hp = Math.min(u.maxHp, u.hp + dv(0)); break; // Rune of Healing
+        case "AImr": u.mana = Math.min(u.maxMana, u.mana + dv(0)); break; // Rune of Mana
+        case "AIra": u.hp = Math.min(u.maxHp, u.hp + dv(0)); u.mana = Math.min(u.maxMana, u.mana + dv(1)); break; // Rune of Restoration
+        case "AIgo": this.stashOf(u.owner).gold += dv(0); break; // Gold Coins
+        case "AIlu": this.stashOf(u.owner).lumber += dv(0); break; // Bundle of Lumber
+      }
+    }
+    this.recomputeStats(u);
   }
 
   // Idle (or patrolling) armed units scan for the nearest enemy in acquisition

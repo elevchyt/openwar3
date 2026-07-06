@@ -20,6 +20,15 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
+import { loadItemRegistry, type ItemRegistry } from "../data/items";
+
+/** Per-creep seed data collected from the map (guard post + drop table). */
+interface CreepSeed {
+  x: number;
+  y: number;
+  aggro: number;
+  drops: Array<{ items: Array<{ id: string; chance: number }> }>;
+}
 import { STARTING_UNITS, WORKERS, resolveRace, type PlayableRace } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig } from "../ui/lobby";
@@ -329,6 +338,9 @@ export class MapViewerScene {
   // One-shot spawn effects (e.g. the building cancel explosion), cached by path.
   private effectModels = new Map<string, SpawnModel | null>();
   private effects: Array<{ inst: SpawnInstance; t: number }> = [];
+  // Ground items (dropped / creep-dropped): one model instance per sim item id.
+  private itemInstances = new Map<number, SpawnInstance>();
+  private itemLoading = new Set<number>();
   // Trees briefly tinted yellow when a worker is sent to harvest them.
   private treePulses: Array<{ inst: { setVertexColor(c: ArrayLike<number>): unknown }; t: number }> = [];
   // Projectile (missile) instances, keyed by the sim projectile id.
@@ -349,6 +361,7 @@ export class MapViewerScene {
     private vfs: DataSource,
     private registry: UnitRegistry,
     private abilities: AbilityRegistry,
+    private items: ItemRegistry,
     private solver: Solver,
   ) {
     this.sounds = new SoundBoard(vfs);
@@ -430,7 +443,7 @@ export class MapViewerScene {
       else viewer.once("loadedbasefiles", resolve);
     });
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), solver);
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), solver);
   }
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
@@ -495,7 +508,7 @@ export class MapViewerScene {
       };
       this.heightSampler = makeHeightSampler(terrain);
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
-      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.footMaxHeight);
+      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.footMaxHeight);
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
@@ -562,11 +575,11 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: Array<{ x: number; y: number; aggro: number }> } {
+  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[] } {
     const trees: Array<{ x: number; y: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
     const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
-    const creeps: Array<{ x: number; y: number; aggro: number }> = []; // Neutral Hostile (player 12+) guard data
+    const creeps: CreepSeed[] = []; // Neutral Hostile (player 12+) guard + drop data
     let buildVersion = 0;
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
@@ -621,7 +634,8 @@ export class MapViewerScene {
         // Neutral Hostile (player 12+) — a creep. Carry its per-instance
         // target-acquisition so the sim can use the map's own aggro range for it
         // (-1/-2 → the unit's default, resolved at seed time). x,y is its guard post.
-        creeps.push({ x: u.x, y: u.y, aggro: u.targetAcquisition });
+        // Its dropped-item table rides along so the sim can scatter loot on death.
+        creeps.push({ x: u.x, y: u.y, aggro: u.targetAcquisition, drops: u.dropSets });
       }
     }
     return { trees, mines, neutral, creeps };
@@ -1128,6 +1142,43 @@ export class MapViewerScene {
     inst.setSequenceLoopMode(0); // play once
     inst.show();
     this.effects.push({ inst, t: life });
+  }
+
+  /** Spawn the ground model for a dropped item (its own .mdx, looping its stand/
+   *  birth clip) at the item's position. Cached by model path like spell effects. */
+  private async spawnItemModel(itemId: number, itemDefId: string, x: number, y: number): Promise<void> {
+    if (this.itemInstances.has(itemId) || this.itemLoading.has(itemId)) return;
+    const def = this.items.get(itemDefId);
+    const path = def?.model || "Objects\\InventoryItems\\TreasureChest\\treasurechest.mdx";
+    this.itemLoading.add(itemId);
+    let model = this.effectModels.get(path);
+    if (model === undefined) {
+      model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
+      this.effectModels.set(path, model);
+    }
+    this.itemLoading.delete(itemId);
+    const map = this.viewer.map;
+    // The item may have been picked up while its model was still loading.
+    if (!model || !map || !this.rts?.simWorld.items.has(itemId) || this.itemInstances.has(itemId)) return;
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    this.loc3[0] = x;
+    this.loc3[1] = y;
+    this.loc3[2] = this.rts.groundHeightAt(x, y);
+    inst.setLocation(this.loc3);
+    if (def && def.scale !== 1) inst.setUniformScale(def.scale);
+    inst.setSequence(this.effectSequence(inst));
+    inst.setSequenceLoopMode(2); // loop the idle/birth clip for as long as it lies there
+    inst.show();
+    this.itemInstances.set(itemId, inst);
+  }
+
+  private removeItemModel(itemId: number): void {
+    const inst = this.itemInstances.get(itemId);
+    if (inst) {
+      inst.detach();
+      this.itemInstances.delete(itemId);
+    }
   }
 
   private updateEffects(dt: number): void {
@@ -1758,6 +1809,18 @@ export class MapViewerScene {
       },
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
+      inventory: () =>
+        (this.rts?.inventorySlots() ?? []).map((s) =>
+          s ? { icon: s.icon ? this.blpIcon(s.icon) : null, name: s.name, desc: s.desc, charges: s.charges, cooldownLeft: s.cooldownLeft, cooldownFrac: s.cooldownFrac, usable: s.usable } : null,
+        ),
+      useInventory: (slot) => {
+        this.rts?.useInventorySlot(slot);
+        if (this.rts?.orderMode === "item") this.hud?.setArmed(true);
+      },
+      moveInventory: (slot) => {
+        this.rts?.moveInventorySlot(slot);
+        if (this.rts?.orderMode === "item") this.hud?.setArmed(true);
+      },
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
       cheat: (kind) => this.rts?.cheat(kind) ?? false,
@@ -2613,6 +2676,7 @@ export class MapViewerScene {
     paths.add("ReplaceableTextures\\CommandButtonsDisabled\\DISBTNSkillz.blp");
     for (const d of this.registry.all()) if (d.icon) paths.add(d.icon);
     for (const a of this.abilities.all()) if (a.icon) paths.add(a.icon);
+    for (const it of this.items.all()) if (it.icon) paths.add(it.icon);
     const queue = [...paths].filter((p) => !this.iconCache.has(p));
 
     let i = 0;
@@ -2745,6 +2809,9 @@ export class MapViewerScene {
             this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
           });
         }
+        // --- items on the ground (dropped / creep-dropped) ---
+        for (const it of world.drainItemSpawns()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
+        for (const id of world.drainItemRemovals()) this.removeItemModel(id);
       }
       // Reset the command page + placement when the selection changes.
       if (this.rts && this.rts.selectedId !== this.lastSelected) {

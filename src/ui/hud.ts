@@ -25,6 +25,17 @@ export interface CommandButton {
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
 }
 
+/** One hero inventory slot (null = empty). */
+export interface HudInvSlot {
+  icon: string | null; // data URL
+  name: string;
+  desc: string;
+  charges: number; // remaining charges (0 = no badge)
+  cooldownLeft: number; // seconds remaining (0 = ready)
+  cooldownFrac: number; // remaining fraction 0..1 (radial sweep)
+  usable: boolean; // has an active effect (potion/scroll) vs a passive stat item
+}
+
 export interface HudSelection {
   id: number;
   name: string;
@@ -117,6 +128,12 @@ export interface HudDriver {
   commandCard(): CommandButton[];
   /** Run a command-card button by id. */
   runCommand(id: string): void;
+  /** The primary selected hero's 6 inventory slots (null = empty; [] = no inventory). */
+  inventory(): Array<HudInvSlot | null>;
+  /** Left-click / numpad an inventory slot: use it (or arm its drop/give targeting). */
+  useInventory(slot: number): void;
+  /** Right-click an inventory slot: arm its drop/give targeting. */
+  moveInventory(slot: number): void;
   /** Data URL for a resource icon, or null to use the text fallback. */
   icon(kind: "gold" | "lumber" | "supply"): string | null;
   /** Data URL for a command button icon (e.g. "BTNMove"), or null. */
@@ -232,6 +249,12 @@ export class GameHud {
   private cmdCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private cmdCount: HTMLSpanElement[] = []; // per-slot corner count badge (skill points)
   private cmdKey = "";
+  // Hero inventory: 6 slot buttons (2×3) with icon, charge badge, cooldown sweep.
+  private invSlots: HTMLButtonElement[] = [];
+  private invCount: HTMLSpanElement[] = []; // per-slot charge count badge
+  private invCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
+  private invCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
+  private invKey = "";
   private clockFace?: HTMLDivElement;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
@@ -285,6 +308,7 @@ export class GameHud {
     }
     this.updateClock();
     this.refreshCommandCard();
+    this.refreshInventory();
     this.updateIdleWorkers();
   }
 
@@ -360,6 +384,14 @@ export class GameHud {
       if (e.ctrlKey || e.metaKey) this.driver.assignControlGroup(n);
       else if (e.shiftKey) this.driver.appendControlGroup(n);
       else this.driver.recallControlGroup(n, this.tapAgain(n));
+      return;
+    }
+    // NumPad maps to the 2×3 inventory grid (WC3): 7/8 top, 4/5 middle, 1/2 bottom.
+    // Key off `e.code` so NumLock-off symbols don't interfere.
+    const numpad: Record<string, number> = { Numpad7: 0, Numpad8: 1, Numpad4: 2, Numpad5: 3, Numpad1: 4, Numpad2: 5 };
+    if (e.code in numpad) {
+      e.preventDefault();
+      this.driver.useInventory(numpad[e.code]);
       return;
     }
     // Trigger the command whose hotkey matches the pressed key.
@@ -749,9 +781,76 @@ export class GameHud {
     }
     const grid = document.createElement("div");
     grid.className = "hud-inv-grid";
-    for (let i = 0; i < 6; i++) grid.appendChild(document.createElement("div")).className = "hud-slot";
+    // 6 inventory slot buttons (2×3), each with a persistent icon background, a
+    // charge-count badge and a radial cooldown overlay (kept as children so a
+    // per-frame refresh never wipes them). Left-click uses/arms; right-click drops.
+    this.invSlots = [];
+    this.invCount = [];
+    this.invCdOverlay = [];
+    this.invCdText = [];
+    for (let i = 0; i < 6; i++) {
+      const btn = document.createElement("button");
+      btn.className = "hud-slot hud-inv-slot";
+      btn.disabled = true;
+      const cd = document.createElement("div");
+      cd.className = "hud-cmd-cd";
+      cd.hidden = true;
+      const cdText = document.createElement("span");
+      cdText.className = "hud-cmd-cd-text";
+      cd.appendChild(cdText);
+      const count = document.createElement("span");
+      count.className = "hud-cmd-count";
+      btn.append(cd, count);
+      btn.onclick = () => this.driver.useInventory(i);
+      btn.oncontextmenu = (e) => {
+        e.preventDefault();
+        this.driver.moveInventory(i);
+      };
+      grid.appendChild(btn);
+      this.invSlots.push(btn);
+      this.invCount.push(count);
+      this.invCdOverlay.push(cd);
+      this.invCdText.push(cdText);
+    }
     inv.appendChild(grid);
     return inv;
+  }
+
+  /** Rebuild the hero inventory slots from the driver's current inventory. Cheap
+   *  enough to run each frame; only touches the DOM when a slot changed. */
+  private refreshInventory(): void {
+    const inv = this.driver.inventory();
+    // Cooldown sweep every frame (cheap; the diff key ignores cooldown).
+    for (let i = 0; i < this.invSlots.length; i++) {
+      const s = inv[i] ?? null;
+      const cd = this.invCdOverlay[i];
+      if (s && s.cooldownLeft > 0) {
+        cd.hidden = false;
+        const elapsedDeg = (1 - s.cooldownFrac) * 360;
+        cd.style.background = `conic-gradient(transparent 0deg ${elapsedDeg}deg, rgba(0,0,0,0.62) ${elapsedDeg}deg 360deg)`;
+        this.invCdText[i].textContent = s.cooldownLeft >= 10 ? String(Math.ceil(s.cooldownLeft)) : s.cooldownLeft.toFixed(1);
+      } else {
+        cd.hidden = true;
+      }
+    }
+    const key = inv.map((s) => (s ? `${s.icon ? 1 : 0}:${s.name}:${s.charges}` : "-")).join("|");
+    if (key === this.invKey) return;
+    this.invKey = key;
+    for (let i = 0; i < this.invSlots.length; i++) {
+      const btn = this.invSlots[i];
+      const s = inv[i] ?? null;
+      if (!s) {
+        btn.disabled = true;
+        btn.style.backgroundImage = "";
+        btn.title = "";
+        this.invCount[i].textContent = "";
+        continue;
+      }
+      btn.disabled = false;
+      btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
+      btn.title = s.name;
+      this.invCount[i].textContent = s.charges > 0 ? String(s.charges) : "";
+    }
   }
 
   private buildCommandCard(): HTMLDivElement {

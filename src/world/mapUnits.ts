@@ -39,6 +39,10 @@ export interface PlacedUnit {
   neutral: boolean;
   /** True for the Neutral Passive slot (15): shops/taverns/critters. */
   neutralPassive: boolean;
+  /** Dropped-item table (war3mapUnits.doo): each set drops one weighted item when
+   *  this unit dies. Item ids may be real rawcodes or "random item of level N"
+   *  markers resolved through the ItemRegistry. Empty for units with no table. */
+  dropSets: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
 
 /** Parse war3mapUnits.doo into typed placed units. `buildVersion` comes from
@@ -67,6 +71,9 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
       heroLevel: u.heroLevel ?? 0,
       neutral,
       neutralPassive: player === PLAYER_NEUTRAL_PASSIVE,
+      dropSets: (u.droppedItemSets ?? []).map((s) => ({
+        items: (s.items ?? []).map((it) => ({ id: it.id, chance: it.chance })),
+      })),
     };
   });
 }
