@@ -10,7 +10,7 @@ import { PathingGrid, parseWpm, footprintCells, PATHING_CELL } from "../sim/path
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
-import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler } from "../game/heightmap";
+import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
@@ -224,6 +224,12 @@ export class MapViewerScene {
   private debug: DebugColliders | null = null; // debug collider overlay (lazy)
   private showColliders = false; // debug overlay toggle (bottom-right cheat button)
   private heightSampler: HeightSampler | null = null; // terrain height for the overlay
+  private footMaxHeight: FootprintMaxSampler | null = null; // tallest terrain across a footprint (issue #15)
+  // Building-placement footprint grid: rebuilt each frame while positioning a build and
+  // drawn as its own colored-quad pass (reuses the debug-collider overlay). One quad per
+  // blocked footprint cell — green where buildable, red where the pathing grid obstructs.
+  private placeCells = new Float32Array(0);
+  private placeCellVerts = 0;
   // Static geometry (pathing/vision cells + tree click-rings) — rebuilt on a slow timer;
   // dynamic geometry (unit click-rings) — rebuilt every frame since units move.
   private dbgCells = new Float32Array(0); // pathing + vision quads (triangles)
@@ -477,7 +483,8 @@ export class MapViewerScene {
         unitsReady: () => map.unitsReady,
       };
       this.heightSampler = makeHeightSampler(terrain);
-      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, makeFootprintMaxSampler(terrain));
+      this.footMaxHeight = makeFootprintMaxSampler(terrain);
+      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.footMaxHeight);
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
@@ -1515,65 +1522,83 @@ export class MapViewerScene {
     return true;
   }
 
-  /** Update the build-placement ghost under the cursor: the translucent
-   *  building silhouette (blue = valid, red = blocked) positioned on the ground.
-   *  Falls back to a green/red cursor box until the model has loaded. */
+  /** Update the build-placement ghost under the cursor: the finished-building
+   *  silhouette positioned on the ground, plus a green/red per-cell footprint grid
+   *  (rebuilt here, drawn in the frame loop) that mirrors the pathing-obstruction
+   *  collider — green cells are clear, red cells are blocked and prevent the build. */
   private updateGhost(cssX: number, cssY: number): void {
     if (!this.placement || !this.rts || !this.grid) {
       if (this.ghost) this.ghost.hidden = true;
       this.buildGhost?.hide();
+      this.placeCellVerts = 0;
       return;
     }
+    if (this.ghost) this.ghost.hidden = true; // the 3D footprint grid replaces the old DOM box
     const hit = this.rts.groundPoint(cssX, cssY);
-    let x = 0;
-    let y = 0;
-    let valid = false;
-    if (hit) {
-      [x, y] = hit;
-      const fp = this.placement.fp;
-      if (fp) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
-      valid = this.placementValid(x, y);
+    if (!hit) {
+      this.buildGhost?.hide();
+      this.placeCellVerts = 0;
+      return;
     }
-    if (this.buildGhost && hit) {
-      // Position the finished-building silhouette on the ground. NO vertex-colour
-      // tint — the tint (a translucent multiply) was mangling many models; show
-      // the real look instead and signal "blocked" with a red box overlay only.
+    let [x, y] = hit;
+    const fp = this.placement.fp;
+    if (fp) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
+    // Rebuild the green/red footprint collider grid under the ghost.
+    this.rebuildPlacementFootprint(x, y);
+    if (this.buildGhost) {
+      // Position the finished-building silhouette on the ground. NO vertex-colour tint —
+      // the tint (a translucent multiply) was mangling many models; show the real look
+      // and signal "blocked" with the red footprint cells instead.
       this.buildGhost.show();
       if (this.ghostBirthFrame >= 0) this.buildGhost.frame = this.ghostBirthFrame; // keep it fully built
       this.loc3[0] = x;
       this.loc3[1] = y;
-      this.loc3[2] = this.rts.groundHeightAt(x, y);
+      // Seat the ghost on the tallest terrain its footprint spans, exactly like the real
+      // building will once built (issue #15), so the preview never sinks into a slope.
+      this.loc3[2] = this.ghostGroundZ(x, y);
       this.buildGhost.setLocation(this.loc3);
       this.buildGhost.setVertexColor([1, 1, 1, 1]);
-      if (this.ghost) {
-        // Red footprint box shown only when the spot is blocked.
-        this.ghost.hidden = valid;
-        if (!valid) {
-          const cells = this.placement.fp ? Math.max(this.placement.fp.w, this.placement.fp.h) : 4;
-          const size = cells * 14;
-          this.ghost.classList.add("invalid");
-          this.ghost.style.width = `${size}px`;
-          this.ghost.style.height = `${size}px`;
-          this.ghost.style.left = `${cssX}px`;
-          this.ghost.style.top = `${cssY}px`;
-        }
-      }
+    }
+  }
+
+  /** Ground Z for the placement ghost — the tallest terrain its footprint touches, so
+   *  the preview seats where the real building will (issue #15). Centre sample when the
+   *  building has no footprint texture. */
+  private ghostGroundZ(x: number, y: number): number {
+    const fp = this.placement?.fp;
+    if (fp && this.footMaxHeight) {
+      return this.footMaxHeight(x, y, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2);
+    }
+    return this.rts?.groundHeightAt(x, y) ?? 0;
+  }
+
+  /** Rebuild the placement footprint grid batch centred on world (x, y): one terrain-
+   *  hugging quad per BLOCKED footprint cell (the pathing-obstruction collider), green
+   *  where that grid cell is buildable and red where it's obstructed — the exact per-cell
+   *  `walkable` test placementValid uses. Drawn by the frame loop while placing. */
+  private rebuildPlacementFootprint(x: number, y: number): void {
+    const p = this.placement;
+    const h = this.heightSampler;
+    if (!p || !p.fp || !this.grid || !h) {
+      this.placeCellVerts = 0;
       return;
     }
-    // Fallback cursor box (until the ghost model loads).
-    if (!this.ghost) {
-      this.ghost = document.createElement("div");
-      this.ghost.className = "build-ghost";
-      document.body.appendChild(this.ghost);
+    const fp = p.fp;
+    const [ox, oy] = this.grid.origin;
+    // Low-corner cell of the footprint — same centring as placementValid / stampFootprint.
+    const [bx, by] = this.grid.worldToCell(x - (fp.w * PATHING_CELL) / 2, y - (fp.h * PATHING_CELL) / 2);
+    const cells: number[] = [];
+    for (let cy = 0; cy < fp.h; cy++) {
+      for (let cx = 0; cx < fp.w; cx++) {
+        if (!fp.blocked[cy * fp.w + cx]) continue; // only the actual obstruction cells
+        const gx = bx + cx, gy = by + cy;
+        const color = this.grid.walkable(gx, gy) ? COLLIDER_COLORS.buildable : COLLIDER_COLORS.unbuildable;
+        const x0 = ox + gx * PATHING_CELL, y0 = oy + gy * PATHING_CELL;
+        pushColliderQuad(cells, x0, y0, x0 + PATHING_CELL, y0 + PATHING_CELL, h, color);
+      }
     }
-    const cells = this.placement.fp ? Math.max(this.placement.fp.w, this.placement.fp.h) : 4;
-    const size = cells * 14;
-    this.ghost.hidden = false;
-    this.ghost.classList.toggle("invalid", !valid);
-    this.ghost.style.width = `${size}px`;
-    this.ghost.style.height = `${size}px`;
-    this.ghost.style.left = `${cssX}px`;
-    this.ghost.style.top = `${cssY}px`;
+    this.placeCells = Float32Array.from(cells);
+    this.placeCellVerts = cells.length / FLOATS_PER_VERT;
   }
 
   /** Build the in-game HUD (plan §10.1b) over the map view. */
@@ -2228,6 +2253,7 @@ export class MapViewerScene {
     if (this.ghost) this.ghost.hidden = true;
     this.buildGhost?.hide();
     this.buildGhost = null;
+    this.placeCellVerts = 0; // stop drawing the footprint grid
   }
 
   /** Load (once per building type) and show the finished-building silhouette. */
@@ -2596,6 +2622,13 @@ export class MapViewerScene {
         if (this.splats && fogScene) this.splats.render(fogScene.camera.viewProjectionMatrix);
       }
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
+      // Building-placement footprint grid (green = buildable, red = obstructed) — drawn
+      // over the world while a build is being positioned so the player sees the pathing
+      // collider and which cells block the site. Reuses the debug-collider overlay pass.
+      if (this.placement && this.placeCellVerts > 0 && fogScene) {
+        this.debug ??= new DebugColliders(this.viewer.gl);
+        this.debug.render(fogScene.camera.viewProjectionMatrix, [{ data: this.placeCells, verts: this.placeCellVerts, mode: "tri" }]);
+      }
       if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);
       if (this.showPathing && fogScene) this.renderPathing(fogScene.camera.viewProjectionMatrix, dt);
       this.raf = requestAnimationFrame(frame);

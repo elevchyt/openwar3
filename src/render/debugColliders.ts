@@ -33,6 +33,9 @@ export const COLLIDER_COLORS = {
   grid: [0.55, 0.62, 0.72, 0.35] as const, // faint grey — the pathing-cell lattice
   blocked: [1.0, 0.25, 0.2, 0.22] as const, // red — an unwalkable cell (filled)
   path: [1.0, 0.85, 0.2, 0.95] as const, // bright yellow — a unit's remaining route
+  // Building-placement footprint grid (mirrors the pathing-obstruction collider).
+  buildable: [0.25, 1.0, 0.4, 0.5] as const, // green — a footprint cell clear to build on
+  unbuildable: [1.0, 0.2, 0.15, 0.6] as const, // red — a footprint cell obstructed by the grid
 };
 
 export const FLOATS_PER_VERT = 7; // x,y,z, r,g,b,a
