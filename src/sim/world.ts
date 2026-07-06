@@ -2315,22 +2315,23 @@ export class SimWorld {
    *  fire works: Flame Strike lists `enemy,friend,self`, and Blizzard/Rain of Fire/
    *  Death&Decay list no allegiance at all — every one of them damages your own units
    *  too. Only a spell that lists `enemy` WITHOUT `friend`/`self` (Starfall, Stampede,
-   *  Cluster Rockets, Locust Swarm) stays enemy-only. The CASTER is always spared,
-   *  though: an area effect never hits the unit that cast it, even when targs1 carries
-   *  `self` (that flag governs single-target self-casting, not area splash). Neutral-
-   *  passive shops/critters are spared unless `neutral` is allowed. Shared by the damage
-   *  tick and the green valid-target preview so the highlight matches who gets hit. */
+   *  Cluster Rockets, Locust Swarm) stays enemy-only. The `self` flag makes the CASTER
+   *  a valid target too (Flame Strike has it, so it burns its own caster if he stands
+   *  in the fire); without `self`, the caster is spared. Neutral-passive shops/critters
+   *  are spared unless `neutral` is allowed. Shared by the damage tick and the green
+   *  valid-target preview so the highlight always matches who actually gets hit. */
   areaEffectAffects(casterId: number, casterTeam: number, flags: string[], t: SimUnit): boolean {
     if (t.hp <= 0) return false;
-    if (t.id === casterId) return false; // an AoE never damages its own caster (even with `self`)
     const F = new Set(flags.map((x) => x.toLowerCase()));
     if (t.neutralPassive) return F.has("neutral");
+    const isSelf = t.id === casterId;
     const enemy = F.has("enemy");
     const friend = F.has("friend");
     const self = F.has("self");
     // No allegiance flag at all (Blizzard `_`, Death&Decay, Volcano's `notself`) → hit
-    // everything else in range.
-    if (!(enemy || friend || self)) return true;
+    // everything in range except the caster (no `self` → the caster is spared).
+    if (!(enemy || friend || self)) return !isSelf;
+    if (isSelf) return self; // the caster is hit only when `self` is in targs1
     if (t.team === casterTeam) return friend; // own/allied (same team)
     return enemy; // different team
   }
