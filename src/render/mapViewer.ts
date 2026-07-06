@@ -319,7 +319,6 @@ export class MapViewerScene {
   // occludes the far side (unlike a DOM overlay drawn on top).
   private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
   private previewCircles: Array<SpawnInstance | null> = []; // pool, one per unit under the live drag-box
-  private aoeTargetCircles: Array<SpawnInstance | null> = []; // pool: green rings on units an armed AoE spell would hit
   private hoverCircle: SpawnInstance | null = null;
   private circleModel: SpawnModel | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
@@ -1312,9 +1311,9 @@ export class MapViewerScene {
   /** AoE cast indicator at the cursor while a point-target area spell (Blizzard,
    *  Flame Strike, …) is armed — WC3's real per-race SpellAreaOfEffect ground splat,
    *  sized to the ability's area of effect (issue #20). Painted through the ubersplat
-   *  overlay so it's genuinely coplanar with the terrain (flats, slopes, ramps). Plus
-   *  a green ring under each unit the spell would hit, so the player sees its valid
-   *  targets before clicking (per the ability's own target rules — see aoeTargetRings). */
+   *  overlay so it's genuinely coplanar with the terrain (flats, slopes, ramps). The
+   *  units the spell would hit are green-tinted (rts.setAoeHighlight) so the player
+   *  sees its valid targets — friendly fire included — before clicking. */
   private aoeSplatShown = false;
   private updateAoeCircle(): void {
     const cast = this.rts?.armedCast;
@@ -1325,19 +1324,14 @@ export class MapViewerScene {
         this.splats?.remove("aoe");
         this.aoeSplatShown = false;
       }
-      for (const c of this.aoeTargetCircles) c?.hide();
+      this.rts?.setAoeHighlight([]);
       return;
     }
     // `scale` is the splat's half-width, so a radius-`area` circle maps directly.
     this.splats.add("aoe", hit[0], hit[1], area, AOE_SPLAT_TEXTURE[this.localRace]);
     this.aoeSplatShown = true;
-    // Green rings on the units this cast would actually affect.
-    const targets = this.rts?.aoeTargetRings(hit[0], hit[1]) ?? [];
-    for (let i = 0; i < targets.length; i++) {
-      if (!this.aoeTargetCircles[i]) this.aoeTargetCircles[i] = this.newCircle();
-      this.placeCircle(this.aoeTargetCircles[i], targets[i], null);
-    }
-    for (let i = targets.length; i < this.aoeTargetCircles.length; i++) this.aoeTargetCircles[i]?.hide();
+    // Green-tint the units this cast would actually affect (applied in applyFogTint).
+    this.rts?.setAoeHighlight(this.rts?.aoeTargetIds(hit[0], hit[1]) ?? []);
   }
 
   private armedAbilityArea(code: string): number {
@@ -1510,7 +1504,7 @@ export class MapViewerScene {
 
   private placeCircle(
     inst: SpawnInstance | null,
-    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean; green?: boolean } | null,
+    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
     tint: number[] | null,
     dim = false,
   ): void {
@@ -1536,10 +1530,7 @@ export class MapViewerScene {
     // neutral-hostile creeps — is red.
     let seq: number;
     let vcolor = tint ?? [1, 1, 1];
-    if (info.green) {
-      seq = this.circleSeq.friendly; // valid AoE spell target: green regardless of allegiance
-      vcolor = [1, 1, 1];
-    } else if (tint || info.neutral) seq = this.circleSeq.neutral; // flashes + neutral-passive (gold mine)
+    if (tint || info.neutral) seq = this.circleSeq.neutral; // flashes + neutral-passive (gold mine)
     else {
       const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
       seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;

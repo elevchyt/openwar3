@@ -105,7 +105,6 @@ export interface RingInfo {
   team: number;
   sizeToRadius?: boolean; // scale the ring to `radius` (buildings/mines) vs constant
   neutral?: boolean; // neutral-passive (yellow) ring, e.g. a gold mine
-  green?: boolean; // force the green ring regardless of allegiance (valid AoE spell target)
 }
 
 // Resolved animation-sequence indices for a unit. Worker carry/chop variants
@@ -191,7 +190,13 @@ interface Entry {
   moveEma: number; // smoothed actual/expected displacement — gates the walk clip
   baseColor?: Float32Array; // model's own tint, captured before any fog dimming
   fogTintB?: number; // last fog brightness applied (avoids redundant setVertexColor)
+  aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
 }
+
+// Green multiply-tint on a unit's whole mesh while it's a valid target of an armed
+// AoE spell (issue #20) — the same idea as the dark-blue "about to be built" ghost
+// (PENDING_GHOST_TINT), so a caught unit reads clearly as "this will be hit".
+const AOE_TARGET_TINT = [0.25, 1.0, 0.25] as const;
 
 /** The "Birth" construction sequence + its frame interval, if the model has one. */
 function findBirthFields(seqs: Array<{ name: string; interval?: ArrayLike<number> }>): {
@@ -328,6 +333,7 @@ export class RtsController {
   private primary: number | null = null;
   private focusedKey = ""; // sub-group (type, or hero id) currently focused
   private selectedMine: number | null = null; // a selected gold mine (resource)
+  private aoeHighlight = new Set<number>(); // sim ids of units an armed AoE spell would hit (green-tinted)
   private sounds: SoundBoard | null = null; // unit voice lines (set by the host)
   private lastVoiceId: number | null = null; // last single unit that spoke (for What→Pissed escalation)
   private voiceStreak = 0; // consecutive re-clicks of that same unit
@@ -515,14 +521,18 @@ export class RtsController {
     if (!this.vision.revealed && u.team !== this.localTeam && this.vision.stateAt(u.x, u.y) !== FogState.Visible) {
       b = FOG_EXPLORED_BRIGHT; // remembered-but-not-seen → half-bright grey
     }
-    if (e.fogTintB === b) return; // unchanged since last tick
+    // Green whole-mesh tint while this unit is a valid target of an armed AoE spell.
+    const hi = this.aoeHighlight.has(e.simId);
+    if (e.fogTintB === b && e.aoeHi === hi) return; // unchanged since last tick
     e.fogTintB = b;
+    e.aoeHi = hi;
     if (!e.baseColor) {
       const c = inst.vertexColor;
       e.baseColor = c ? new Float32Array([c[0], c[1], c[2], c[3]]) : new Float32Array([1, 1, 1, 1]);
     }
     const base = e.baseColor;
-    inst.setVertexColor([base[0] * b, base[1] * b, base[2] * b, base[3]]);
+    const g = hi ? AOE_TARGET_TINT : ([1, 1, 1] as const);
+    inst.setVertexColor([base[0] * b * g[0], base[1] * b * g[1], base[2] * b * g[2], base[3]]);
   }
 
   /** Wire the voice/sound board (owned by the host, which has the VFS). */
@@ -2144,32 +2154,24 @@ export class RtsController {
     return null;
   }
 
-  /** Green rings for the units an armed point-AoE spell would affect if cast at
-   *  world (wx,wy) — the "valid target" preview shown while aiming (issue #20), so
-   *  the player sees who gets hit before committing. Target selection mirrors the
-   *  sim: harmful area fields (Blizzard, Flame Strike, …) hit the caster's enemies
-   *  — `hostile` is exactly the field's `team != casterTeam && !neutralPassive`
-   *  check; heals (Tranquility: `friend,self` in targs1, no `enemy`) ring allies;
-   *  Dispel Magic affects every unit in the area. Empty unless a point-target
-   *  spell with an area is armed. */
-  aoeTargetRings(wx: number, wy: number): RingInfo[] {
+  /** Ids of the units an armed point-AoE spell would affect if cast at world (wx,wy)
+   *  — its valid targets, so the renderer can green-tint their meshes while aiming
+   *  (issue #20). Delegates to the sim's own area-effect predicate (targs1), so the
+   *  highlight matches who the cast actually hits, friendly fire included. Empty
+   *  unless a point-target spell with an area is armed. */
+  aoeTargetIds(wx: number, wy: number): number[] {
     const cast = this.armedCast;
     if (!cast || cast.target !== "point" || !cast.area) return [];
     const caster = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
     if (!caster) return [];
-    const F = new Set((this.abilityDefByCode(cast.code)?.targetFlags ?? []).map((f) => f.toLowerCase()));
-    const helpful = (F.has("friend") || F.has("self")) && !F.has("enemy"); // buff/heal field → allies
-    const affectsAll = cast.code === "Adis"; // Dispel Magic clears buffs from EVERY unit in the area
-    const area = cast.area;
-    const out: RingInfo[] = [];
-    for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
-      if (!u || u.hp <= 0 || u.neutralPassive) continue; // shops/critters aren't spell targets
-      if (Math.hypot(u.x - wx, u.y - wy) > area) continue;
-      const ok = affectsAll || (helpful ? this.sim.allied(caster, u) : this.sim.hostile(caster, u));
-      if (ok) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, green: true });
-    }
-    return out;
+    const flags = this.abilityDefByCode(cast.code)?.targetFlags ?? [];
+    return this.sim.areaEffectTargets(caster.id, caster.team, flags, wx, wy, cast.area);
+  }
+
+  /** Set which units are highlighted as valid AoE-spell targets (green mesh tint,
+   *  applied in applyFogTint). Called each frame while aiming; empty clears it. */
+  setAoeHighlight(ids: Iterable<number>): void {
+    this.aoeHighlight = new Set(ids);
   }
 
   /** Re-pin under-construction buildings' Birth frame to construction progress

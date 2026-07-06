@@ -2298,13 +2298,51 @@ export class SimWorld {
 
   // === spell fields (Blizzard-style repeating area effects) =================
 
-  private spellFields: Array<SpellFieldInit & { timer: number; done: number; team: number }> = [];
+  private spellFields: Array<SpellFieldInit & { timer: number; done: number; team: number; flags: string[] }> = [];
 
   private addSpellFieldInternal(f: SpellFieldInit): void {
-    // Capture the caster's team NOW so the field targets enemies correctly even
-    // after the caster dies mid-channel (Blizzard would otherwise hit allies).
-    const team = this.units.get(f.casterId)?.team ?? 0;
-    this.spellFields.push({ ...f, timer: 0, done: 0, team });
+    // Capture the caster's team + the ability's Targets Allowed (targs1) NOW, so the
+    // field keeps affecting the right allegiances even after the caster dies mid-channel.
+    const caster = this.units.get(f.casterId);
+    const team = caster?.team ?? 0;
+    const ab = caster ? this.findAbility(caster, f.code) : undefined;
+    const flags = (ab && this.abilities?.get(ab.id)?.targetFlags) ?? [];
+    this.spellFields.push({ ...f, timer: 0, done: 0, team, flags });
+  }
+
+  /** Would an area effect with `flags` (the ability's targs1), cast by unit `casterId`
+   *  on `casterTeam`, affect `t`? Allegiance follows targs1 EXACTLY, so WC3 friendly
+   *  fire works: Flame Strike lists `enemy,friend,self`, and Blizzard/Rain of Fire/
+   *  Death&Decay list no allegiance at all — every one of them damages your own units
+   *  too. Only a spell that lists `enemy` WITHOUT `friend`/`self` (Starfall, Stampede,
+   *  Cluster Rockets, Locust Swarm) stays enemy-only. Neutral-passive shops/critters are
+   *  spared unless `neutral` is allowed. Shared by the damage tick and the green
+   *  valid-target preview so the highlight always matches who actually gets hit. */
+  areaEffectAffects(casterId: number, casterTeam: number, flags: string[], t: SimUnit): boolean {
+    if (t.hp <= 0) return false;
+    const F = new Set(flags.map((x) => x.toLowerCase()));
+    if (t.neutralPassive) return F.has("neutral");
+    const isSelf = t.id === casterId;
+    const enemy = F.has("enemy");
+    const friend = F.has("friend");
+    const self = F.has("self");
+    // No allegiance flag at all (Blizzard `_`, Death&Decay, Volcano's `notself`) → hit
+    // everything in range except the caster itself.
+    if (!(enemy || friend || self)) return !isSelf;
+    if (isSelf) return self;
+    if (t.team === casterTeam) return friend; // own/allied (same team)
+    return enemy; // different team
+  }
+
+  /** Ids of the units an area effect (`flags` = targs1) cast by `casterId`/`casterTeam`
+   *  at (x,y,radius) would affect — the same set `tickSpellFields` damages. Drives the
+   *  green valid-target preview (issue #20) so it matches reality, friendly fire and all. */
+  areaEffectTargets(casterId: number, casterTeam: number, flags: string[], x: number, y: number, radius: number): number[] {
+    const out: number[] = [];
+    for (const t of this.unitsInAreaInternal(x, y, radius)) {
+      if (this.areaEffectAffects(casterId, casterTeam, flags, t)) out.push(t.id);
+    }
+    return out;
   }
 
   private tickSpellFields(dt: number): void {
@@ -2331,7 +2369,9 @@ export class SimWorld {
         f.timer = f.interval;
         f.done++;
         for (const t of this.unitsInAreaInternal(f.x, f.y, f.area)) {
-          if (t.team === f.team || t.neutralPassive) continue; // hit only the caster's enemies
+          // Hit whoever the ability's targs1 allows — enemy-only for Starfall/Stampede,
+          // but everyone (incl. your own units) for Flame Strike/Blizzard/Death&Decay.
+          if (!this.areaEffectAffects(f.casterId, f.team, f.flags, t)) continue;
           this.landDamage(t, f.damagePerWave, f.casterId, false); // spell damage: ignore armor
         }
         // Scatter the wave effect at a random point within the area (WC3 drops the
