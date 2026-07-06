@@ -2711,7 +2711,7 @@ export class MapViewerScene {
           const t = fx.targetId ? world.units.get(fx.targetId) : null;
           const x = t ? t.x : fx.x;
           const y = t ? t.y : fx.y;
-          void this.spawnEffect(fx.art, x, y, this.rts!.groundHeightAt(x, y) + (fx.z || 0), 2);
+          void this.spawnEffect(fx.art, x, y, this.rts!.groundHeightAt(x, y) + (fx.z || 0), fx.life ?? 2);
         }
         // Cast animations (throw/slam/spell) + the spell's cast/effect sound.
         for (const c of world.drainCastStarts()) {

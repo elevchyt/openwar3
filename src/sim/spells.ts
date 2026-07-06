@@ -30,8 +30,10 @@ export interface SpellApi {
   requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number): void;
   /** Raise up to `max` friendly corpses near a point back to life (Resurrection). */
   raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number): number;
-  /** Play an effect model at a unit (targetId>0) or a point (renderer). */
-  emitEffect(art: string, x: number, y: number, targetId: number): void;
+  /** Play an effect model at a unit (targetId>0) or a point (renderer). `life` = how
+   *  long (s) the model instance is held before detaching (default ~2s); pass a longer
+   *  value for a sustained effect like Flame Strike's 7s fire pillar. */
+  emitEffect(art: string, x: number, y: number, targetId: number, life?: number): void;
   /** Register a repeating area effect (Blizzard waves, Rain of Fire, …). */
   addSpellField(f: SpellFieldInit): void;
   /** Drain up to `amount` mana from a unit; returns the mana actually removed
@@ -80,6 +82,14 @@ type Handler = (api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, c
 const FIELD_ART: Record<string, string> = {
   AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardTarget.mdx",
 };
+
+// Flame Strike models, straight from the 1.27 MPQ (War3x, Abilities\Spells\Human\
+// FlameStrike\). The ability's Specialart lists FlameStrike1,FlameStrike2,FlameStrike
+// but our data keeps only the first (FlameStrike1); WC3 erupts the PLAIN FlameStrike
+// pillar, whose "birth" clip burns for ~7.2s — the lingering fire. FlameStrikeEmbers
+// (a ~0.7s flame burst) is dropped in a ring to paint the burning circle at ignition.
+const FLAMESTRIKE_PILLAR = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrike.mdx";
+const FLAMESTRIKE_EMBERS = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrikeEmbers.mdx";
 
 /** Effect duration on a target: heroes resist longer effects (herodur). */
 function dur(lvl: AbilityLevel, target: SimUnit): number {
@@ -577,19 +587,30 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Flame Strike (Blood Mage) — reached only when the 1.33s cast wind-up FINISHES
-  // (MPQ AHfs Cast=1.33). The wind-up and its FlameStrikeTarget "beware" vortex live
-  // in tickCast (PRECAST_WARNING), so moving the Blood Mage before ignition aborts
-  // here and leaves just the gong + vortex — matching WC3 (Liquipedia: Blood Mage).
-  // On ignition WC3 shows the erupting fire pillar (Specialart = FlameStrike1) ONCE,
-  // then the ground stays alight for the burn Duration: the burn field damages `area`
-  // (dataA/sec, modelled as 1s waves for Dur=9) while scattering the persistent ember
-  // model (buff BHfs TargetArt = FlameStrikeDamageTarget) across the circle each wave
-  // — so lingering flames cover the whole area rather than the pillar re-erupting.
+  // (MPQ AHfs Cast=1.33). The wind-up drops the FlameStrikeTarget "beware" vortex and
+  // spends the mana up front (in tickCast, PRECAST_WARNING), so moving the Blood Mage
+  // before ignition aborts here and leaves just the gong + vortex and a wasted cast —
+  // matching WC3 (Liquipedia: Blood Mage). At ignition the plain FlameStrike pillar
+  // erupts ONCE (its ~7.2s "birth" clip is the lingering fire), then FlameStrikeEmbers
+  // paint the burning circle: 9 in a ring around the area + 1 at the centre. The burn
+  // field damages `area` (dataA/sec, modelled as 1s waves for Dur=9) — damage only, no
+  // per-wave art, since the pillar + ring already carry the fire.
   AHfs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
+    const area = lvl.area || 200;
     const waves = Math.max(1, Math.round(lvl.duration || 9));
-    if (def.specialArt) api.emitEffect(def.specialArt, ctx.x, ctx.y, 0); // one-shot eruption pillar
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 15), waves, interval: 1, casterId: caster.id, art: def.buffArt || def.areaArt || def.targetArt });
+    // Eruption pillar: hold it ~7.2s so the whole "birth" fire plays out, not just 2s.
+    api.emitEffect(FLAMESTRIKE_PILLAR, ctx.x, ctx.y, 0, 7.2);
+    // Ring of embers marking the burning circle (see reference: a solid ring of flame
+    // blobs with one in the middle). A ring a little inside `area` reads as a cohesive
+    // ring rather than sparse dots on the rim.
+    const ringR = area * 0.62;
+    api.emitEffect(FLAMESTRIKE_EMBERS, ctx.x, ctx.y, 0); // centre
+    for (let i = 0; i < 9; i++) {
+      const ang = (i / 9) * Math.PI * 2;
+      api.emitEffect(FLAMESTRIKE_EMBERS, ctx.x + Math.cos(ang) * ringR, ctx.y + Math.sin(ang) * ringR, 0);
+    }
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area, damagePerWave: d(lvl, 0, 15), waves, interval: 1, casterId: caster.id, art: "" });
   },
 
   // Death and Decay (Lich, ult) — a decay field damaging everything in `area` each

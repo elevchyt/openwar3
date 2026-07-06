@@ -116,6 +116,7 @@ export interface PendingCast {
   range: number; // cast range (hull-to-hull); 0 = self/no-target
   castLeft: number; // remaining wind-up before the effect fires (-1 = not yet started)
   started: boolean; // wind-up begun (facing done, cast animation playing)
+  committed: boolean; // mana/cooldown already spent (Flame Strike commits at wind-up start)
   fired: boolean; // the effect has fired (mana/cooldown committed) — now channel/backswing
   channelLeft: number; // remaining channel time — the caster stands + holds (Blizzard, Starfall)
   backLeft: number; // remaining cast backswing (recovery) after a non-channelled effect
@@ -601,7 +602,7 @@ export class SimWorld {
   private nextCorpseId = 1;
   // --- spell / ability event channels drained by the renderer each frame ---
   // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt).
-  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number }> = [];
+  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number }> = [];
   // A unit began casting: renderer plays the cast animation (spell/throw/slam) and
   // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
@@ -1988,6 +1989,7 @@ export class SimWorld {
       range: def.target === "none" ? 0 : lvl.castRange,
       castLeft: -1,
       started: false,
+      committed: false,
       fired: false,
       channelLeft: 0,
       backLeft: 0,
@@ -2087,23 +2089,35 @@ export class SimWorld {
       // Effectart at the target NOW, as the wind-up begins, so Flame Strike's smoke
       // vortex charges in place and lingers even if the cast is interrupted before
       // the pillar erupts. Only the completed cast reaches the effect handler.
-      if (PRECAST_WARNING.has(pc.code) && def.effectArt) {
-        this.spellEffects.push({ art: def.effectArt, x: tx, y: ty, targetId: 0, z: 0 });
+      if (PRECAST_WARNING.has(pc.code)) {
+        if (def.effectArt) this.spellEffects.push({ art: def.effectArt, x: tx, y: ty, targetId: 0, z: 0 });
+        // ...and spend the mana + cooldown UP FRONT (WC3/Liquipedia: interrupting the
+        // Blood Mage mid-cast still wastes the cast). `committed` stops phase 2 from
+        // charging a second time. The affordability gate above already ran, so we know
+        // it's payable here.
+        u.mana -= lvl.cost;
+        ab.cooldownLeft = lvl.cooldown;
+        pc.committed = true;
       }
     }
 
     // --- phase 2: wind-up. The effect fires when it elapses; canceling before then
-    // (a new order, or a stun via interruptForStun) aborts the spell with no cost. ---
+    // (a new order, or a stun via interruptForStun) aborts the spell — with no cost
+    // for a normal spell, but a PRECAST_WARNING spell (Flame Strike) has already paid
+    // at wind-up start, so an interrupt there simply wastes the cast. ---
     pc.castLeft -= dt;
     if (pc.castLeft > 0) return;
     // Commit: spend mana + start the cooldown, THEN fire. Re-check mana in case it
-    // was drained (Mana Burn) mid-wind-up.
-    if (u.mana < lvl.cost || ab.cooldownLeft > 0) {
-      this.stop(u.id);
-      return;
+    // was drained (Mana Burn) mid-wind-up. Abilities that committed at wind-up start
+    // (PRECAST_WARNING) already paid, so skip the charge and fire regardless.
+    if (!pc.committed) {
+      if (u.mana < lvl.cost || ab.cooldownLeft > 0) {
+        this.stop(u.id);
+        return;
+      }
+      u.mana -= lvl.cost;
+      ab.cooldownLeft = lvl.cooldown;
     }
-    u.mana -= lvl.cost;
-    ab.cooldownLeft = lvl.cooldown;
     pc.fired = true;
     this.resolveCast(u, def, pc);
     pc.channelLeft = this.channelDuration(def, pc.rank);
@@ -2515,8 +2529,8 @@ export class SimWorld {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src });
     },
     raiseNearbyCorpses: (x, y, r, owner, team, max) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max),
-    emitEffect: (art, x, y, targetId) => {
-      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0 });
+    emitEffect: (art, x, y, targetId, life) => {
+      if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life });
     },
     addSpellField: (f) => this.addSpellFieldInternal(f),
     burnMana: (t, amount) => {
@@ -2554,7 +2568,7 @@ export class SimWorld {
   // === drains (renderer pulls these each frame) =============================
 
   /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
-  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number }> {
+  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number }> {
     if (!this.spellEffects.length) return this.spellEffects;
     const out = this.spellEffects;
     this.spellEffects = [];
