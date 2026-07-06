@@ -98,6 +98,16 @@ const CANCEL_FX: Record<PlayableRace, string> = {
   nightelf: "Objects\\Spawnmodels\\NightElf\\NECancelDeath\\NECancelDeath.mdx",
 };
 
+// WC3's real ground indicator for a point-target area spell (Blizzard, Flame Strike,
+// …), painted under the cursor while the ability is armed (issue #20). One texture per
+// caster race — the game colour-codes the ring by race (all four verified in War3.mpq).
+const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
+  human: "ReplaceableTextures\\Selection\\SpellAreaOfEffect.blp",
+  nightelf: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_NE.blp",
+  orc: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_Orc.blp",
+  undead: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_Undead.blp",
+};
+
 // Minimal local typings (mdx-m3-viewer's exports drag in their own gl-matrix).
 // The viewer calls the solver as (src, solverParams) — params carry the map's
 // tileset letter once war3map.w3i is parsed.
@@ -1287,22 +1297,25 @@ export class MapViewerScene {
     this.tickFlashCircles(dt);
   }
 
-  /** AoE cast circle at the cursor while a point-target area spell (Blizzard,
-   *  Dispel, …) is armed — sized to the ability's area of effect. */
-  private aoeCircle: SpawnInstance | null = null;
+  /** AoE cast indicator at the cursor while a point-target area spell (Blizzard,
+   *  Flame Strike, …) is armed — WC3's real per-race SpellAreaOfEffect ground splat,
+   *  sized to the ability's area of effect (issue #20). Painted through the ubersplat
+   *  overlay so it's genuinely coplanar with the terrain (flats, slopes, ramps). */
+  private aoeSplatShown = false;
   private updateAoeCircle(): void {
     const cast = this.rts?.armedCast;
-    if (!this.rts || !cast || cast.target !== "point" || !cast.area) {
-      this.aoeCircle?.hide();
+    const area = cast && cast.target === "point" ? cast.area : undefined;
+    const hit = this.rts && area ? this.rts.groundPoint(this.lastMouse.x, this.lastMouse.y) : null;
+    if (!this.splats || !hit || !area) {
+      if (this.aoeSplatShown) {
+        this.splats?.remove("aoe");
+        this.aoeSplatShown = false;
+      }
       return;
     }
-    const hit = this.rts.groundPoint(this.lastMouse.x, this.lastMouse.y);
-    if (!hit) {
-      this.aoeCircle?.hide();
-      return;
-    }
-    if (!this.aoeCircle) this.aoeCircle = this.newCircle();
-    this.placeCircle(this.aoeCircle, { x: hit[0], y: hit[1], z: this.rts.groundHeightAt(hit[0], hit[1]), radius: cast.area, owner: -2, team: -2, sizeToRadius: true, neutral: true }, [0.45, 0.85, 1]);
+    // `scale` is the splat's half-width, so a radius-`area` circle maps directly.
+    this.splats.add("aoe", hit[0], hit[1], area, AOE_SPLAT_TEXTURE[this.localRace]);
+    this.aoeSplatShown = true;
   }
 
   private armedAbilityArea(code: string): number {
