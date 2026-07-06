@@ -290,6 +290,13 @@ export class MapViewerScene {
   private buildGhosts = new Map<string, SpawnInstance>();
   private buildGhost: SpawnInstance | null = null;
   private ghostBirthFrame = -1; // frame to pin the ghost at (Birth end = built)
+  // Dark-blue "pending build" ghosts shown at each queued build site while the worker
+  // walks there (issue #18) — only for the owning player. Keyed by build site so a
+  // site's ghost is created once and dropped the instant its worker's order clears
+  // (build starts, is canceled, or the worker is re-tasked). pendingGhostLoading guards
+  // the async model load so a site isn't double-spawned.
+  private pendingGhosts = new Map<string, { inst: SpawnInstance; defId: string; frame: number }>();
+  private pendingGhostLoading = new Set<string>();
   // Workers whose build foundation is mid-spawn (async model load), so
   // tickPendingBuild doesn't raise the same building twice.
   private buildSpawning = new Set<number>();
@@ -2271,7 +2278,7 @@ export class MapViewerScene {
       this.buildGhosts.set(def.id, inst);
     }
     // (Re)apply the finished-building pose every time it's shown.
-    this.applyGhostPose(inst);
+    this.ghostBirthFrame = this.applyGhostPose(inst);
     if (this.placement?.def.id === def.id) {
       this.buildGhost = inst;
       inst.show();
@@ -2286,24 +2293,114 @@ export class MapViewerScene {
    *  their final geometry only appears in "Stand", so scrubbing Birth showed
    *  just the construction geosets (only models whose Birth-end already matches
    *  Stand — e.g. the Altar — looked whole). Stand loops harmlessly. */
-  private applyGhostPose(inst: SpawnInstance): void {
+  private applyGhostPose(inst: SpawnInstance): number {
     zQuat(this.mq, (3 * Math.PI) / 2); // face south, like a placed building
     inst.setRotation(this.mq);
     const seqs = inst.model.sequences as Array<{ name: string; interval?: ArrayLike<number> }>;
     // Pose the ghost at the finished-building "Stand" clip, pinned to a fixed frame
     // (forcing the frame each render is what actually makes the model render its
     // built geometry — a cold setSequence sometimes showed the bind/scaffold pose).
+    // Returns the frame to re-pin each render (-1 if the model has no pinnable Stand).
     const stand = standSequence(seqs);
     if (stand >= 0 && seqs[stand].interval) {
       inst.setSequence(stand);
       inst.setSequenceLoopMode(0);
-      this.ghostBirthFrame = seqs[stand].interval![0];
-      inst.frame = this.ghostBirthFrame;
+      inst.frame = seqs[stand].interval![0];
+      return seqs[stand].interval![0];
     } else if (stand >= 0) {
       inst.setSequence(stand);
       inst.setSequenceLoopMode(2);
-      this.ghostBirthFrame = -1;
     }
+    return -1;
+  }
+
+  /** Show a dark-blue ghost of every building the owning player has queued but not yet
+   *  begun: each worker's active `buildPending` site AND its shift-queued `buildnew`
+   *  orders (issue #18). Rebuilt each frame from the live sim so a ghost appears the
+   *  moment the order is given and vanishes the instant it clears (build starts, is
+   *  canceled, or the worker is re-tasked). Only the owning player's sites are drawn. */
+  private updatePendingBuildGhosts(): void {
+    if (!this.rts || !this.viewer.map) {
+      this.clearPendingGhosts();
+      return;
+    }
+    // Collect every desired build site (keyed by defId + snapped position, unique per
+    // footprint) from the local player's workers.
+    const desired = new Map<string, { defId: string; x: number; y: number }>();
+    for (const u of this.rts.simWorld.units.values()) {
+      if (u.owner !== this.localPlayer) continue;
+      if (u.buildPending) {
+        const pb = u.buildPending;
+        desired.set(this.pendingKey(pb.defId, pb.x, pb.y), { defId: pb.defId, x: pb.x, y: pb.y });
+      }
+      for (const o of u.orderQueue) {
+        if (o.kind === "buildnew") desired.set(this.pendingKey(o.defId, o.x, o.y), { defId: o.defId, x: o.x, y: o.y });
+      }
+    }
+    // Drop ghosts whose site is no longer pending (order started/canceled/re-tasked).
+    for (const [key, g] of this.pendingGhosts) {
+      if (!desired.has(key)) {
+        g.inst.detach();
+        this.pendingGhosts.delete(key);
+      }
+    }
+    // Add/position the ghosts for the sites that are still pending.
+    for (const [key, site] of desired) {
+      const g = this.pendingGhosts.get(key);
+      if (g) {
+        this.placePendingGhost(g, site.x, site.y);
+        continue;
+      }
+      if (this.pendingGhostLoading.has(key)) continue; // model still loading
+      const def = this.registry.get(site.defId);
+      if (!def) continue;
+      this.pendingGhostLoading.add(key);
+      void this.spawnPendingGhost(key, def, site.x, site.y);
+    }
+  }
+
+  /** Site key for a pending build: defId + snapped position (one ghost per footprint). */
+  private pendingKey(defId: string, x: number, y: number): string {
+    return `${defId}@${Math.round(x)},${Math.round(y)}`;
+  }
+
+  /** Load (async) and register a dark-blue ghost for a pending build site, unless the
+   *  order was canceled while the model streamed in. */
+  private async spawnPendingGhost(key: string, def: UnitDef, x: number, y: number): Promise<void> {
+    const map = this.viewer.map;
+    const model = map ? ((await this.viewer.load(def.model, this.solver)) as SpawnModel | undefined) : undefined;
+    this.pendingGhostLoading.delete(key);
+    // Bail if the site was canceled (or the scene torn down) during the load.
+    if (!model || !this.viewer.map || this.pendingGhosts.has(key)) return;
+    const inst = model.addInstance();
+    inst.setScene(this.viewer.map.worldScene);
+    inst.setUniformScale(def.modelScale || 1);
+    inst.setTeamColor(this.localPlayer);
+    const g = { inst, defId: def.id, frame: this.applyGhostPose(inst) };
+    this.pendingGhosts.set(key, g);
+    this.placePendingGhost(g, x, y);
+  }
+
+  /** Position a pending-build ghost on its site — seated on the tallest terrain its
+   *  footprint spans (like the real building, issue #15), pinned to the built pose, and
+   *  tinted a hard dark blue so it reads clearly as "about to be built". */
+  private placePendingGhost(g: { inst: SpawnInstance; defId: string; frame: number }, x: number, y: number): void {
+    const def = this.registry.get(g.defId);
+    const fp = def?.pathTex ? this.footprintFor(def.pathTex) : null;
+    this.loc3[0] = x;
+    this.loc3[1] = y;
+    this.loc3[2] =
+      fp && this.footMaxHeight ? this.footMaxHeight(x, y, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2) : (this.rts?.groundHeightAt(x, y) ?? 0);
+    g.inst.setLocation(this.loc3);
+    if (g.frame >= 0) g.inst.frame = g.frame; // keep it fully built, not mid-animation
+    g.inst.setVertexColor(PENDING_GHOST_TINT); // hard dark blue
+    g.inst.show();
+  }
+
+  private clearPendingGhosts(): void {
+    for (const g of this.pendingGhosts.values()) g.inst.detach();
+    this.pendingGhosts.clear();
+    this.pendingGhostLoading.clear();
   }
 
   private resourceIcon(kind: "gold" | "lumber" | "supply"): string | null {
@@ -2501,6 +2598,7 @@ export class MapViewerScene {
       this.updateAuraEffects();
       this.updateTreePulses(dt / 1000);
       this.updateProjectiles();
+      this.updatePendingBuildGhosts(); // dark-blue ghosts of queued-but-not-started builds
       if (this.placement) this.updateGhost(this.lastMouse.x, this.lastMouse.y); // show/position the ghost each frame (not only on mouse move)
       this.updateReticle(this.lastMouse.x, this.lastMouse.y);
       const world = this.rts?.simWorld;
@@ -2680,6 +2778,7 @@ export class MapViewerScene {
     for (const g of this.buildGhosts.values()) g.hide();
     this.buildGhosts.clear();
     this.buildGhost = null;
+    this.clearPendingGhosts();
     for (const a of this.orderArrows) a.inst.detach();
     this.orderArrows = [];
     for (const e of this.effects) e.inst.detach();
@@ -3348,6 +3447,12 @@ function zQuat(out: Float32Array, angle: number): void {
 }
 
 // --- Debug collider overlay geometry helpers (interleaved [x,y,z, r,g,b,a]) ---
+// Hard dark-blue vertex tint for the "pending build" ghost (issue #18). setVertexColor
+// multiplies the model's texture, so low red/green + strong blue reads as a dark-blue
+// silhouette across any building. Alpha MUST stay 1.0 — a translucent (<1) vertex colour
+// makes many building models vanish entirely (the same mdx-m3-viewer quirk the cursor
+// ghost avoids by not tinting at all); "hard" dark blue is opaque anyway.
+const PENDING_GHOST_TINT = [0.12, 0.22, 0.85, 1.0] as const;
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
 const TREE_CLICK_RADIUS = 40; // approx harvest-click radius drawn for each tree
 const PATH_LIFT = 18; // path lines sit above the grid/blocked overlay so they read on top
