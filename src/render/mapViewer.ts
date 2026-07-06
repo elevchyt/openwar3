@@ -199,6 +199,7 @@ export class MapViewerScene {
   private pitch = 0.95;
   private keys = new Set<string>();
   private dragging = false;
+  private midPanning = false; // middle-mouse (button 1) held → drag-pan the camera (WC3)
   private downX = 0;
   private downY = 0;
   private moved = false;
@@ -3183,6 +3184,24 @@ export class MapViewerScene {
     this.target[1] += dir[1] * amount;
   }
 
+  /** Middle-mouse drag-pan (WC3): the camera pans OPPOSITE the drag — drag the
+   *  mouse up and the view scrolls down, drag left and it scrolls right — like
+   *  pushing a joystick. `mx`/`my` are the pointer's per-move pixel deltas.
+   *
+   *  World units per screen pixel are derived from the perspective FOV (π/4) and
+   *  the camera distance so the pan speed feels the same at every zoom level; the
+   *  forward axis is divided by sin(pitch) because the tilted ground plane covers
+   *  more world per vertical screen pixel. */
+  private midPan(mx: number, my: number): void {
+    const h = this.canvas.clientHeight || 720;
+    const worldPerPx = (2 * this.distance * Math.tan(Math.PI / 8)) / h; // fov = π/4
+    const fwd: [number, number] = [Math.cos(this.yaw), Math.sin(this.yaw)];
+    const right: [number, number] = [fwd[1], -fwd[0]];
+    // Inverted: +mx (drag right) → pan left; -my (drag up) → pan down/backward.
+    this.pan(right, -mx * worldPerPx);
+    this.pan(fwd, (my * worldPerPx) / Math.sin(this.pitch));
+  }
+
   /** Confine the camera focus to the terrain rect so it can't scroll into the void
    *  past the map edge (issue #5). Central choke point: every mover (keyboard/edge
    *  scroll, minimap click, follow-selection, panTo) writes this.target, so clamping
@@ -3296,11 +3315,23 @@ export class MapViewerScene {
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
     c.addEventListener("contextmenu", (e) => e.preventDefault());
+    // Suppress the browser's middle-click autoscroll (it fires off mousedown, which
+    // preventDefault on pointerdown doesn't reach) so button 1 is free to drag-pan.
+    c.addEventListener("mousedown", (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
     // Left-drag rotates the camera; a left-click (no drag) selects a unit;
     // right-click issues a move order for the selection.
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
       this.sounds?.unlock(); // browsers gate audio until the first user gesture
+      if (e.button === 1) {
+        // Middle mouse (scroll-wheel click) held: drag-pan the camera, WC3-style.
+        // preventDefault suppresses the browser's middle-click autoscroll cursor.
+        e.preventDefault();
+        this.midPanning = true;
+        return;
+      }
       if (e.button === 2) {
         // A right-click while a left-drag box is in progress just cancels the box
         // (WC3) — it issues no move order. This also guards against the drag state
@@ -3328,11 +3359,15 @@ export class MapViewerScene {
     });
     // Belt-and-suspenders: if the browser cancels/steals the pointer mid-drag,
     // tear the drag state down so the marquee can't get stuck on screen.
-    c.addEventListener("pointercancel", () => this.cancelDrag());
+    c.addEventListener("pointercancel", () => {
+      this.cancelDrag();
+      this.midPanning = false;
+    });
     c.addEventListener("pointerup", (e) => {
       // Release capture only once ALL buttons are up, so a second button's release
       // can't strand the primary button's pointerup off-target (stuck marquee).
       if (e.buttons === 0) c.releasePointerCapture(e.pointerId);
+      if (e.button === 1) this.midPanning = false;
       if (e.button === 0) {
         const wasDragging = this.dragging;
         this.dragging = false;
@@ -3365,6 +3400,12 @@ export class MapViewerScene {
       this.lastMouse.x = e.offsetX;
       this.lastMouse.y = e.offsetY;
       this.mouseOverCanvas = true;
+      if (this.midPanning) {
+        // Self-heal: if the middle button isn't actually held any more, the ending
+        // pointerup was lost — drop the pan so it can't stick to the cursor.
+        if (!(e.buttons & 4)) this.midPanning = false;
+        else this.midPan(e.movementX, e.movementY);
+      }
       if (this.placement) this.updateGhost(e.offsetX, e.offsetY);
       // WC3 keeps a fixed camera angle — no free rotation. A left-drag draws a
       // selection rectangle (unless placing a building or holding an armed order).
