@@ -383,11 +383,17 @@ export class MapViewerScene {
       created.push(url);
     }
 
-    // Cliff models are loaded via loadBaseFile() → fetch(), so — like the base
-    // SLKs — they need a STRING url, not a Promise. Everything else goes through
-    // viewer.load(), which takes bytes. Generated cliff-model blob URLs are cached
-    // and tracked in `created` for revocation on dispose.
-    const cliffUrls = new Map<string, string | null>();
+    // Every model/texture path resolves to a STABLE, cached blob-url string —
+    // never a Promise<bytes>. This is the load-time win behind issue #14: the
+    // viewer only DEDUPES a resource when the path solver hands it a string it
+    // can key its promiseMap/resourceMap on. A Promise (what `vfs.read()`
+    // returns) sends the load down the viewer's __DIRECT_LOAD path, which mints a
+    // unique id and parses a *fresh* resource EVERY call — so a map with hundreds
+    // of trees all referencing one LordaeronTree.mdx re-read and re-parsed that
+    // model once per tree, the dominant cost of map init. One blob url per path
+    // (cached here, tracked in `created` for revocation on dispose) means each
+    // shared model/texture is fetched once and parsed exactly once.
+    const blobUrls = new Map<string, string | null>();
     const solver: Solver = (src, params) => {
       if (typeof src !== "string") return src; // in-memory loads pass through
       let path = src.replace(/\//g, "\\");
@@ -405,17 +411,14 @@ export class MapViewerScene {
       }
       const cached = baseUrls.get(path);
       if (cached) return cached; // preloaded base SLKs
-      if (/^doodads\\terrain\\.*\.mdx$/i.test(path)) {
-        let url = cliffUrls.get(path);
-        if (url === undefined) {
-          const bytes = vfs.rawBytes(path);
-          url = bytes ? URL.createObjectURL(new Blob([bytes as BlobPart])) : null;
-          cliffUrls.set(path, url);
-          if (url) created.push(url);
-        }
-        return url ?? src;
+      let url = blobUrls.get(path);
+      if (url === undefined) {
+        const bytes = vfs.rawBytes(path); // MPQ decode is synchronous (mpq.ts)
+        url = bytes ? URL.createObjectURL(new Blob([bytes as BlobPart])) : null;
+        blobUrls.set(path, url);
+        if (url) created.push(url);
       }
-      return vfs.read(path); // models/textures: Promise<Uint8Array>
+      return url ?? src; // string ⇒ the viewer caches+dedupes by this url
     };
 
     const viewer = new ViewerClass(canvas, solver, false);
