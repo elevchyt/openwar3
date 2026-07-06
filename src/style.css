@@ -18,6 +18,27 @@
 
 * { box-sizing: border-box; }
 
+/* Kill the default UA focus ring everywhere — it clashes with the game's custom
+   gold-panel chrome (buttons/inputs draw their own borders). Reset on :focus,
+   then restore a subtle gold ring ONLY for :focus-visible so keyboard users keep
+   a visible focus target (mouse/touch clicks won't show it). Accessibility-safe. */
+*,
+*::before,
+*::after {
+  outline: none;
+}
+
+*:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+  box-shadow: 0 0 4px rgba(216, 180, 90, 0.6);
+}
+
 html, body {
   margin: 0;
   height: 100%;
