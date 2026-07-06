@@ -1512,18 +1512,20 @@ export class MapViewerScene {
     inst.setSequenceLoopMode(2);
   }
 
-  /** All of the building footprint's cells must be walkable and unreserved. */
+  /** Every cell of the building's full (blue) pathTex footprint must be buildable.
+   *  We test the UNBUILDABLE footprint — not just the unwalkable red core — so a
+   *  building's walkable border still reserves build space: that border is what
+   *  keeps two production buildings' cores apart, leaving the corridor units pass
+   *  through. Terrain (cliffs/water/unbuildable margins) and other buildings' blue
+   *  footprints block; movable-unit reservations do NOT (they scatter on arrival). */
   private placementValid(x: number, y: number): boolean {
     const p = this.placement;
     if (!p || !this.grid || !p.fp) return true;
     const [bx, by] = this.grid.worldToCell(x - (p.fp.w * 32) / 2, y - (p.fp.h * 32) / 2);
     for (let cy = 0; cy < p.fp.h; cy++) {
       for (let cx = 0; cx < p.fp.w; cx++) {
-        if (!p.fp.blocked[cy * p.fp.w + cx]) continue;
-        // Only terrain / other buildings / trees (unwalkable cells) block a site.
-        // Reserved cells (movable units standing there) do NOT — the ghost stays
-        // blue over our own units; they scatter when the builder arrives.
-        if (!this.grid.walkable(bx + cx, by + cy)) return false;
+        if (!p.fp.buildBlocked[cy * p.fp.w + cx]) continue;
+        if (!this.grid.buildable(bx + cx, by + cy)) return false;
       }
     }
     return true;
@@ -1580,9 +1582,10 @@ export class MapViewerScene {
   }
 
   /** Rebuild the placement footprint grid batch centred on world (x, y): one terrain-
-   *  hugging quad per BLOCKED footprint cell (the pathing-obstruction collider), green
-   *  where that grid cell is buildable and red where it's obstructed — the exact per-cell
-   *  `walkable` test placementValid uses. Drawn by the frame loop while placing. */
+   *  hugging quad per cell of the building's full (blue) footprint, green where that
+   *  cell is buildable and red where it's obstructed — the exact per-cell `buildable`
+   *  test placementValid uses, so the grid shows the true reserved footprint (walkable
+   *  border included), not just the unwalkable core. Drawn by the frame loop. */
   private rebuildPlacementFootprint(x: number, y: number): void {
     const p = this.placement;
     const h = this.heightSampler;
@@ -1597,9 +1600,9 @@ export class MapViewerScene {
     const cells: number[] = [];
     for (let cy = 0; cy < fp.h; cy++) {
       for (let cx = 0; cx < fp.w; cx++) {
-        if (!fp.blocked[cy * fp.w + cx]) continue; // only the actual obstruction cells
+        if (!fp.buildBlocked[cy * fp.w + cx]) continue; // the full reserved footprint
         const gx = bx + cx, gy = by + cy;
-        const color = this.grid.walkable(gx, gy) ? COLLIDER_COLORS.buildable : COLLIDER_COLORS.unbuildable;
+        const color = this.grid.buildable(gx, gy) ? COLLIDER_COLORS.buildable : COLLIDER_COLORS.unbuildable;
         const x0 = ox + gx * PATHING_CELL, y0 = oy + gy * PATHING_CELL;
         pushColliderQuad(cells, x0, y0, x0 + PATHING_CELL, y0 + PATHING_CELL, h, color);
       }

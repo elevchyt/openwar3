@@ -3,7 +3,18 @@ import { PATHING_CELL, type PathingGrid } from "./pathing";
 // Stamp pathing footprints onto the grid (plan Phase 5). war3map.wpm encodes only
 // TERRAIN pathing (cliffs/water) — destructibles (trees) AND buildings block via
 // their own pathing textures (`pathTex`), applied here so units path around them.
-// WC3 pathing textures: R channel > 0 = unwalkable (G stays 0 → still flyable).
+//
+// WC3 pathing textures carry TWO independent channels (verified against the real
+// 1.27a MPQs — e.g. `PathTextures\12x12Simple.tga` for the Barracks):
+//   R channel > 0 → UNWALKABLE  (blocks unit movement / collision)
+//   B channel > 0 → UNBUILDABLE (blocks *building placement* only — still walkable)
+//   G stays 0 → still flyable.
+// Production buildings pad their solid red core with a ~2-cell blue-only border:
+// unbuildable but walkable. That border is what keeps two buildings' red cores
+// spaced apart, leaving the walkable corridor units slip through (Taurens et al.).
+// A Farm's texture (`4x4SimpleSolid.tga`) is red+blue to every edge — no border,
+// so farms wall. We must therefore keep the two channels separate: stamp red as
+// unwalkable (collision) and blue as unbuildable (placement), never collapse them.
 
 export interface Placement {
   id: string;
@@ -14,7 +25,8 @@ export interface Placement {
 export interface Footprint {
   w: number;
   h: number;
-  blocked: boolean[]; // row-major [y*w + x]; y=0 is the low-Y (bottom) row
+  blocked: boolean[]; // red channel → UNWALKABLE. row-major [y*w + x]; y=0 = low-Y (bottom) row
+  buildBlocked: boolean[]; // blue channel → UNBUILDABLE (a superset of `blocked` for buildings)
 }
 
 export type PathTexLookup = (id: string) => string | undefined;
@@ -60,17 +72,19 @@ function applyFootprint(grid: PathingGrid, fp: Footprint, worldX: number, worldY
   const [bx, by] = grid.worldToCell(worldX - (fp.w * PATHING_CELL) / 2, worldY - (fp.h * PATHING_CELL) / 2);
   for (let y = 0; y < fp.h; y++) {
     for (let x = 0; x < fp.w; x++) {
-      if (fp.blocked[y * fp.w + x]) {
-        if (block) grid.block(bx + x, by + y);
-        else grid.unblock(bx + x, by + y);
-      }
+      const i = y * fp.w + x;
+      // Red core → unwalkable (units route around it). Blue footprint (a superset:
+      // the walkable border) → unbuildable (reserves spacing so the next building
+      // can't crowd in and close the walkable corridor between production buildings).
+      if (fp.blocked[i]) block ? grid.block(bx + x, by + y) : grid.unblock(bx + x, by + y);
+      if (fp.buildBlocked[i]) block ? grid.blockBuild(bx + x, by + y) : grid.unblockBuild(bx + x, by + y);
     }
   }
 }
 
-// Decode a WC3 pathing texture (uncompressed 24bpp TGA). A pixel blocks walking
-// when its red channel is set. (Rotation ignored — blocking footprints are
-// square/symmetric for trees & buildings here.)
+// Decode a WC3 pathing texture (uncompressed 24bpp TGA) into its two channels:
+// red → `blocked` (unwalkable), blue → `buildBlocked` (unbuildable). (Rotation
+// ignored — blocking footprints are square/symmetric for trees & buildings here.)
 export function decodePathTex(bytes: Uint8Array): Footprint | null {
   if (bytes[2] !== 2) return null; // only uncompressed true-color TGA
   const idLength = bytes[0];
@@ -81,14 +95,16 @@ export function decodePathTex(bytes: Uint8Array): Footprint | null {
   const stride = bpp >> 3;
   const start = 18 + idLength;
   const blocked: boolean[] = new Array(w * h);
+  const buildBlocked: boolean[] = new Array(w * h);
   for (let row = 0; row < h; row++) {
     const y = topDown ? h - 1 - row : row;
     for (let x = 0; x < w; x++) {
       const i = start + (row * w + x) * stride;
-      blocked[y * w + x] = bytes[i + 2] > 127; // BGR order: red is +2
+      blocked[y * w + x] = bytes[i + 2] > 127; // BGR order: red is +2 → unwalkable
+      buildBlocked[y * w + x] = bytes[i] > 127; // blue is +0 → unbuildable
     }
   }
-  return { w, h, blocked };
+  return { w, h, blocked, buildBlocked };
 }
 
 /** World-unit radius of a footprint's *blocked* region (not the full texture).
