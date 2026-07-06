@@ -319,6 +319,7 @@ export class MapViewerScene {
   // occludes the far side (unlike a DOM overlay drawn on top).
   private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
   private previewCircles: Array<SpawnInstance | null> = []; // pool, one per unit under the live drag-box
+  private aoeTargetCircles: Array<SpawnInstance | null> = []; // pool: green rings on units an armed AoE spell would hit
   private hoverCircle: SpawnInstance | null = null;
   private circleModel: SpawnModel | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
@@ -1249,7 +1250,17 @@ export class MapViewerScene {
   /** Position/scale/colour the flat selection + hover rings each frame, plus
    *  the transient yellow harvest-order flashes. */
   private updateSelectionCircles(dt: number): void {
-    const rings = this.rts?.selectionRings() ?? [];
+    // "Aiming mode": a spell is armed for targeting (orderMode === "cast"). While
+    // aiming, the persistent selection/preview rings under the army are suppressed so
+    // the ground isn't cluttered (issue #20). What replaces them depends on the aim:
+    //   • point-AoE (ubersplat): the splat + green rings on the units it would hit;
+    //     the hover ring is hidden (the green target rings are the indicator).
+    //   • single-target: the normal hover ring stays on whatever unit the cursor is
+    //     over — allegiance-coloured, NOT green — so the player still sees their target.
+    const cast = this.rts?.armedCast ?? null;
+    const aiming = !!cast;
+    const aoeAiming = !!(cast && cast.target === "point" && cast.area);
+    const rings = aiming ? [] : (this.rts?.selectionRings() ?? []);
     for (let i = 0; i < rings.length; i++) {
       // Retry while null (the circle model may not have loaded yet); newCircle
       // is a no-op returning null until then, so this doesn't leak.
@@ -1259,15 +1270,16 @@ export class MapViewerScene {
     for (let i = rings.length; i < this.selCircles.length; i++) this.selCircles[i]?.hide();
     // Live drag-box preview: full-green rings on the units the marquee currently
     // covers, so the player sees the pick before releasing the mouse.
-    const preview = this.rts?.previewRings() ?? [];
+    const preview = aiming ? [] : (this.rts?.previewRings() ?? []);
     for (let i = 0; i < preview.length; i++) {
       if (!this.previewCircles[i]) this.previewCircles[i] = this.newCircle();
       this.placeCircle(this.previewCircles[i], preview[i], null);
     }
     for (let i = preview.length; i < this.previewCircles.length; i++) this.previewCircles[i]?.hide();
     // hoverRing() already returns null when the hovered unit is selected. Dimmed so
-    // a hover ring stays more discrete than the committed selection rings.
-    this.placeCircle(this.hoverCircle, this.rts?.hoverRing() ?? null, null, true);
+    // a hover ring stays more discrete than the committed selection rings. Kept for a
+    // single-target aim (the target indicator); dropped for a point-AoE aim.
+    this.placeCircle(this.hoverCircle, aoeAiming ? null : (this.rts?.hoverRing() ?? null), null, true);
     // Rally flag at the selected building's rally point.
     if (this.rallyFlag) {
       const rally = this.rts?.selectedRally() ?? null;
@@ -1300,7 +1312,9 @@ export class MapViewerScene {
   /** AoE cast indicator at the cursor while a point-target area spell (Blizzard,
    *  Flame Strike, …) is armed — WC3's real per-race SpellAreaOfEffect ground splat,
    *  sized to the ability's area of effect (issue #20). Painted through the ubersplat
-   *  overlay so it's genuinely coplanar with the terrain (flats, slopes, ramps). */
+   *  overlay so it's genuinely coplanar with the terrain (flats, slopes, ramps). Plus
+   *  a green ring under each unit the spell would hit, so the player sees its valid
+   *  targets before clicking (per the ability's own target rules — see aoeTargetRings). */
   private aoeSplatShown = false;
   private updateAoeCircle(): void {
     const cast = this.rts?.armedCast;
@@ -1311,11 +1325,19 @@ export class MapViewerScene {
         this.splats?.remove("aoe");
         this.aoeSplatShown = false;
       }
+      for (const c of this.aoeTargetCircles) c?.hide();
       return;
     }
     // `scale` is the splat's half-width, so a radius-`area` circle maps directly.
     this.splats.add("aoe", hit[0], hit[1], area, AOE_SPLAT_TEXTURE[this.localRace]);
     this.aoeSplatShown = true;
+    // Green rings on the units this cast would actually affect.
+    const targets = this.rts?.aoeTargetRings(hit[0], hit[1]) ?? [];
+    for (let i = 0; i < targets.length; i++) {
+      if (!this.aoeTargetCircles[i]) this.aoeTargetCircles[i] = this.newCircle();
+      this.placeCircle(this.aoeTargetCircles[i], targets[i], null);
+    }
+    for (let i = targets.length; i < this.aoeTargetCircles.length; i++) this.aoeTargetCircles[i]?.hide();
   }
 
   private armedAbilityArea(code: string): number {
@@ -1488,7 +1510,7 @@ export class MapViewerScene {
 
   private placeCircle(
     inst: SpawnInstance | null,
-    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
+    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean; green?: boolean } | null,
     tint: number[] | null,
     dim = false,
   ): void {
@@ -1514,7 +1536,10 @@ export class MapViewerScene {
     // neutral-hostile creeps — is red.
     let seq: number;
     let vcolor = tint ?? [1, 1, 1];
-    if (tint || info.neutral) seq = this.circleSeq.neutral; // flashes + neutral-passive (gold mine)
+    if (info.green) {
+      seq = this.circleSeq.friendly; // valid AoE spell target: green regardless of allegiance
+      vcolor = [1, 1, 1];
+    } else if (tint || info.neutral) seq = this.circleSeq.neutral; // flashes + neutral-passive (gold mine)
     else {
       const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
       seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;

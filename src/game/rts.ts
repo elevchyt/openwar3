@@ -105,6 +105,7 @@ export interface RingInfo {
   team: number;
   sizeToRadius?: boolean; // scale the ring to `radius` (buildings/mines) vs constant
   neutral?: boolean; // neutral-passive (yellow) ring, e.g. a gold mine
+  green?: boolean; // force the green ring regardless of allegiance (valid AoE spell target)
 }
 
 // Resolved animation-sequence indices for a unit. Worker carry/chop variants
@@ -2141,6 +2142,34 @@ export class RtsController {
       if (m) return { x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true };
     }
     return null;
+  }
+
+  /** Green rings for the units an armed point-AoE spell would affect if cast at
+   *  world (wx,wy) — the "valid target" preview shown while aiming (issue #20), so
+   *  the player sees who gets hit before committing. Target selection mirrors the
+   *  sim: harmful area fields (Blizzard, Flame Strike, …) hit the caster's enemies
+   *  — `hostile` is exactly the field's `team != casterTeam && !neutralPassive`
+   *  check; heals (Tranquility: `friend,self` in targs1, no `enemy`) ring allies;
+   *  Dispel Magic affects every unit in the area. Empty unless a point-target
+   *  spell with an area is armed. */
+  aoeTargetRings(wx: number, wy: number): RingInfo[] {
+    const cast = this.armedCast;
+    if (!cast || cast.target !== "point" || !cast.area) return [];
+    const caster = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    if (!caster) return [];
+    const F = new Set((this.abilityDefByCode(cast.code)?.targetFlags ?? []).map((f) => f.toLowerCase()));
+    const helpful = (F.has("friend") || F.has("self")) && !F.has("enemy"); // buff/heal field → allies
+    const affectsAll = cast.code === "Adis"; // Dispel Magic clears buffs from EVERY unit in the area
+    const area = cast.area;
+    const out: RingInfo[] = [];
+    for (const e of this.entries) {
+      const u = this.sim.units.get(e.simId);
+      if (!u || u.hp <= 0 || u.neutralPassive) continue; // shops/critters aren't spell targets
+      if (Math.hypot(u.x - wx, u.y - wy) > area) continue;
+      const ok = affectsAll || (helpful ? this.sim.allied(caster, u) : this.sim.hostile(caster, u));
+      if (ok) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, green: true });
+    }
+    return out;
   }
 
   /** Re-pin under-construction buildings' Birth frame to construction progress
