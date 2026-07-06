@@ -52,10 +52,15 @@ export interface AbilityDef {
   levelData: AbilityLevel[]; // index 0 = rank 1
   // Effect model paths (from AbilityFunc) — the renderer plays these on cast.
   missileArt: string; // travelling projectile (Storm Bolt hammer, Death Coil orb)
-  targetArt: string; // effect attached to the target (Holy Light burst, Heal)
+  targetArt: string; // effect attached to the target (Holy Light burst, Heal); for an
+  //                    aura this is the BIG model shown under its OWNER only.
   casterArt: string; // effect attached to the caster (Thunder Clap ring)
-  specialArt: string; // extra one-shot effect
+  specialArt: string; // extra one-shot effect (Flame Strike's erupting fire pillar)
+  effectArt: string; // ability "beware"/effect art — Flame Strike's ground warning ring
   areaArt: string; // AoE ground effect (Blizzard, Rain of Fire)
+  buffArt: string; // TargetArt of this ability's primary buff (buffid1): the PERSISTENT
+  //                  model worn by a buffed unit — Banish's ethereal glow, the small
+  //                  per-unit aura swirl (GeneralAuraTarget), Flame Strike's burn.
   animNames: string[]; // caster animation tags (AbilityFunc "animnames": spell,throw,slam…)
 }
 
@@ -300,7 +305,13 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
       casterArt: mdlPath(f ? str(f, "Casterart") : ""),
       specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
+      effectArt: mdlPath(f ? str(f, "Effectart") : ""),
       areaArt: mdlPath(f ? str(f, "Areaeffectart") : ""),
+      // The persistent buff model lives on the BUFF, not the ability: resolve
+      // buffid1's own [B….] func section TargetArt (Banish → BanishTarget, an aura →
+      // GeneralAuraTarget, Flame Strike → FlameStrikeDamageTarget). Verified 2026-07
+      // against the 1.27 MPQ (docs/wc3-data-formats.md).
+      buffArt: mdlPath(buffTargetArt(func, str(r, "buffid1"))),
       animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
     });
   }
@@ -357,6 +368,16 @@ function cleanTip(v: string): string {
     .replace(/\|n/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** A buff's own persistent TargetArt, read from its `[B….]` section in the same
+ *  AbilityFunc files (buffs live alongside abilities there). `buffId` may be a
+ *  comma-list (multi-buff abilities); we take the first. "" if absent. */
+function buffTargetArt(func: MappedData, buffId: string): string {
+  const first = (buffId || "").split(",")[0]?.trim();
+  if (!first) return "";
+  const row = func.getRow(first) as Row | undefined;
+  return row ? str(row, "Targetart") : "";
 }
 
 // Effect-art fields are ".mdl" model paths (comma-lists sometimes). Take the

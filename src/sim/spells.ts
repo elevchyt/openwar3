@@ -478,12 +478,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Banish (Blood Mage) — slow a target's movement & attack (and, in WC3, make it
-  // take extra magic damage — approximated by the slow) for the duration.
+  // take extra magic damage — approximated by the slow) for the duration. The
+  // banished unit wears the ethereal BanishTarget glow for the whole time — that
+  // model is the buff's own TargetArt (def.buffArt), not the ability's (which is
+  // empty), so the renderer keeps it attached while the buff lasts.
   AHbn: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "slow", group: "banish", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: d(lvl, 0, 0.5), value2: d(lvl, 0, 0.5), art: def.targetArt });
+    api.applyBuff(t, { kind: "slow", group: "banish", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: d(lvl, 0, 0.5), value2: d(lvl, 0, 0.5), art: def.buffArt });
   },
 
   // Doom (Pit Lord, ult) — a heavy damage-over-time curse (dataA/sec).
@@ -574,11 +577,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Flame Strike (Blood Mage) — a burning pillar: dataA damage per second in `area`
-  // for the burn duration (modelled as one-second waves).
+  // for the burn duration (modelled as one-second waves). WC3 shows two distinct
+  // arts: the ground "beware" warning ring (ability Effectart = FlameStrikeTarget)
+  // that drops the instant the cast lands, and the erupting fire pillar (ability
+  // Specialart = FlameStrike1) — scattered across the burn area each wave so the
+  // whole circle looks alight, not just its centre.
   AHfs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const waves = Math.max(4, Math.round(lvl.duration || 9));
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 15), waves, interval: 1, casterId: caster.id, art: def.areaArt || def.targetArt });
+    if (def.effectArt) api.emitEffect(def.effectArt, ctx.x, ctx.y, 0); // warning ring at centre
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 0, 15), waves, interval: 1, casterId: caster.id, art: def.specialArt || def.areaArt || def.targetArt });
   },
 
   // Death and Decay (Lich, ult) — a decay field damaging everything in `area` each

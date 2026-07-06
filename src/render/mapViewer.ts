@@ -65,16 +65,6 @@ const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // h
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
   AHds: "Abilities\\Spells\\Human\\DivineShield\\DivineShield.wav",
 };
-// Ground effect models shown under units affected by an aura, by base ability code
-// (verified present in the MPQ). Brilliance/Endurance ship no dedicated model.
-const AURA_EFFECT_MODEL: Record<string, string> = {
-  AHad: "Abilities\\Spells\\Human\\DevotionAura\\DevotionAura.mdx",
-  AOac: "Abilities\\Spells\\Orc\\CommandAura\\CommandAura.mdx",
-  AEar: "Abilities\\Spells\\NightElf\\TrueshotAura\\TrueshotAura.mdx",
-  AUau: "Abilities\\Spells\\Undead\\UnholyAura\\UnholyAura.mdx",
-  AUav: "Abilities\\Spells\\Undead\\VampiricAura\\VampiricAura.mdx",
-  AEah: "Abilities\\Spells\\NightElf\\ThornsAura\\ThornsAura.mdx",
-};
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 // Command-card icons that aren't tied to a specific unit/ability: the order row
@@ -1101,8 +1091,24 @@ export class MapViewerScene {
     }
   }
 
-  /** Play a one-shot spawn-effect model (its single "Birth" clip) at a point,
-   *  then detach it after `life` seconds. Model is loaded+cached on demand. */
+  /** The sequence an effect model should play: its "Birth" clip if it has one, else
+   *  the first sequence with a SANE interval. Some WC3 effect models (e.g.
+   *  ThunderClapCaster) put a junk `nothing [4294966896-400]` clip at index 0 and the
+   *  real animation ("stand"/"birth") later — blindly playing index 0 shows nothing,
+   *  which is why Thunder Clap's shockwave never animated (issue #19). */
+  private effectSequence(inst: SpawnInstance): number {
+    const seqs = inst.model?.sequences ?? [];
+    const birth = seqs.findIndex((s) => /birth/i.test(s.name));
+    if (birth >= 0) return birth;
+    const sane = seqs.findIndex((s) => {
+      const iv = s.interval;
+      return iv && iv[0] >= 0 && iv[0] < 1e7 && iv[1] > iv[0];
+    });
+    return sane >= 0 ? sane : 0;
+  }
+
+  /** Play a one-shot spawn-effect model (its "Birth" clip) at a point, then detach it
+   *  after `life` seconds. Model is loaded+cached on demand. */
   private async spawnEffect(path: string, x: number, y: number, z: number, life = 2.5): Promise<void> {
     const map = this.viewer.map;
     if (!map) return;
@@ -1118,7 +1124,7 @@ export class MapViewerScene {
     this.loc3[1] = y;
     this.loc3[2] = z;
     inst.setLocation(this.loc3);
-    inst.setSequence(0);
+    inst.setSequence(this.effectSequence(inst));
     inst.setSequenceLoopMode(0); // play once
     inst.show();
     this.effects.push({ inst, t: life });
@@ -1135,10 +1141,24 @@ export class MapViewerScene {
     }
   }
 
-  // Persistent aura ground effects: a looping model under every unit currently
-  // affected by an aura (WC3's glowing rings). Pooled by (unit, aura code).
-  private auraFx = new Map<string, SpawnInstance>();
-  private auraFxLoading = new Set<string>();
+  // Persistent per-unit buff models: a looping effect worn by a unit for as long as
+  // it carries a given buff. Pooled by a stable key so it's created once and detached
+  // when the buff falls off. Two families feed this, both data-driven:
+  //   • auras — WC3 shows TWO models: a BIG one under the aura's OWNER only (the
+  //     ability's own TargetArt, e.g. DevotionAura) and a SMALL swirl under EVERY
+  //     affected unit incl. the owner (the buff's TargetArt = GeneralAuraTarget).
+  //   • single-target buffs that carry their own art (Banish's ethereal BanishTarget).
+  private buffFx = new Map<string, SpawnInstance>();
+  private buffFxLoading = new Set<string>();
+  private abilityByCode: Map<string, AbilityDef> | null = null;
+  /** First ability def with the given base code (aura visuals only need its art). */
+  private abilityDefByCode(code: string): AbilityDef | undefined {
+    if (!this.abilityByCode) {
+      this.abilityByCode = new Map();
+      for (const a of this.abilities.all()) if (!this.abilityByCode.has(a.code)) this.abilityByCode.set(a.code, a);
+    }
+    return this.abilityByCode.get(code);
+  }
   private updateAuraEffects(): void {
     const world = this.rts?.simWorld;
     const map = this.viewer.map;
@@ -1148,52 +1168,72 @@ export class MapViewerScene {
       if (u.hp <= 0 || !u.buffs.length) continue;
       const seen = new Set<string>();
       for (const b of u.buffs) {
-        const code = b.group.includes(":") ? b.group.split(":")[0] : "";
-        const path = AURA_EFFECT_MODEL[code];
-        if (!path || seen.has(code)) continue;
-        seen.add(code);
-        const key = `${u.id}:${code}`;
-        active.add(key);
-        const inst = this.auraFx.get(key);
-        if (inst) {
-          this.loc3[0] = u.x;
-          this.loc3[1] = u.y;
-          this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y);
-          inst.setLocation(this.loc3);
-        } else if (!this.auraFxLoading.has(key)) {
-          this.auraFxLoading.add(key);
-          void this.spawnAuraEffect(key, path, u.id);
+        // Aura buffs are grouped "code:kind"; a plain single-target buff isn't.
+        const auraCode = b.group.includes(":") ? b.group.split(":")[0] : "";
+        if (auraCode) {
+          if (seen.has("a:" + auraCode)) continue;
+          seen.add("a:" + auraCode);
+          const def = this.abilityDefByCode(auraCode);
+          if (!def) continue;
+          // Small swirl on every affected unit; big model on the owner only (its own
+          // aura copy carries sourceId === its id — allies get the owner's id).
+          this.trackBuffFx(active, `${u.id}|${auraCode}|s`, def.buffArt, u.id);
+          if (b.sourceId === u.id) this.trackBuffFx(active, `${u.id}|${auraCode}|o`, def.targetArt, u.id);
+        } else if (b.art) {
+          if (seen.has("b:" + b.art)) continue;
+          seen.add("b:" + b.art);
+          this.trackBuffFx(active, `${u.id}|${b.art}`, b.art, u.id);
         }
       }
     }
-    for (const [key, inst] of this.auraFx) {
+    for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) {
         inst.detach();
-        this.auraFx.delete(key);
+        this.buffFx.delete(key);
       }
     }
   }
 
-  private async spawnAuraEffect(key: string, path: string, simId: number): Promise<void> {
+  /** Mark a persistent buff model live this frame: (re)position an existing instance,
+   *  or spawn it on demand. `path` "" is a no-op (aura with no small/big model). */
+  private trackBuffFx(active: Set<string>, key: string, path: string, simId: number): void {
+    if (!path) return;
+    active.add(key);
+    const inst = this.buffFx.get(key);
+    if (inst) {
+      const u = this.rts?.simWorld.units.get(simId);
+      if (u) {
+        this.loc3[0] = u.x;
+        this.loc3[1] = u.y;
+        this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y);
+        inst.setLocation(this.loc3);
+      }
+    } else if (!this.buffFxLoading.has(key)) {
+      this.buffFxLoading.add(key);
+      void this.spawnBuffFx(key, path, simId);
+    }
+  }
+
+  private async spawnBuffFx(key: string, path: string, simId: number): Promise<void> {
     let model = this.effectModels.get(path);
     if (model === undefined) {
       model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
       this.effectModels.set(path, model);
     }
-    this.auraFxLoading.delete(key);
+    this.buffFxLoading.delete(key);
     const map = this.viewer.map;
     const u = this.rts?.simWorld.units.get(simId);
-    if (!model || !map || !u || u.hp <= 0 || this.auraFx.has(key)) return;
+    if (!model || !map || !u || u.hp <= 0 || this.buffFx.has(key)) return;
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
     this.loc3[0] = u.x;
     this.loc3[1] = u.y;
     this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y);
     inst.setLocation(this.loc3);
-    inst.setSequence(0);
-    inst.setSequenceLoopMode(2); // loop the aura ring
+    inst.setSequence(this.effectSequence(inst));
+    inst.setSequenceLoopMode(2); // loop the buff/aura effect for its lifetime
     inst.show();
-    this.auraFx.set(key, inst);
+    this.buffFx.set(key, inst);
   }
 
   private static readonly TREE_PULSE = 0.7; // two quick blinks over this window
