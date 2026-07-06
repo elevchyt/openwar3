@@ -2226,11 +2226,16 @@ export class SimWorld {
   /** Award XP to the killer's heroes for a kill (Liquipedia sharing rules). */
   private awardKillXp(victim: SimUnit, killerId: number): void {
     if (victim.building || !killerId) return; // structures / unattributed deaths grant no XP
+    const killer = this.units.get(killerId);
+    // Only an ENEMY kill grants XP: killing your own or an allied unit (same team),
+    // or a neutral-passive critter/shop, awards nothing (issue #21). Without this the
+    // even-share loop finds no eligible hero and the global fallback below would still
+    // reward the killer's own heroes for a friendly-fire kill.
+    if (killer && !this.hostile(killer, victim)) return;
     const victimLevel = Math.max(0, Math.min(KILL_XP.length - 1, victim.level || 0));
     let base = KILL_XP[victimLevel] || 0;
     if (base <= 0) return;
     if (victim.isSummon) base *= SUMMON_XP_FACTOR;
-    const killer = this.units.get(killerId);
     // Beneficiaries: enemy heroes of the victim within share range (else global).
     const eligible: SimUnit[] = [];
     for (const h of this.units.values()) {
