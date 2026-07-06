@@ -439,14 +439,27 @@ const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latc
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
 
-// --- hero XP / leveling (docs/REFERENCES.md — Liquipedia Experience + warcraft3.info) ---
-const MAX_HERO_LEVEL = 10;
-// XP a hero KILL grants, indexed by the victim's level (1-based): 25/40/60/85/…
-// = xp[L-1] + 5·(L+1). Buildings/level-0 grant none.
+// --- hero XP / leveling ---
+// Every constant here is the real WC3 (TFT 1.27a) value, read straight from the
+// MPQ ground truth `Units\MiscGame.txt` / `Units\MiscData.txt` (verified against
+// the local War3x.mpq/War3Patch.mpq — the patch layer wins). Cross-checked with
+// Liquipedia: Experience + warcraft3.info article 232 (docs/REFERENCES.md).
+const MAX_HERO_LEVEL = 10; // MiscData MaxHeroLevel=10
+// XP a KILL grants, indexed by the victim's level (1-based). Two separate tables,
+// exactly as the engine keeps them:
+//   • normal units — MiscGame GrantNormalXP=25 + formula (A=1,B=5,C=5), i.e.
+//     xp[L] = xp[L-1] + 5·(L+1): 25/40/60/85/115/150/190/235/285/340.
+//   • enemy HEROES — MiscGame GrantHeroXP=100,120,160,220,300 + formula
+//     (A=1,B=0,C=100 → +100 per level past the table): 100/120/160/220/300/
+//     400/500/600/700/800. Killing an enemy hero is worth far more than a unit.
+// Buildings grant none (MiscGame BuildingKillsGiveExp=0) — filtered before lookup.
 const KILL_XP = [0, 25, 40, 60, 85, 115, 150, 190, 235, 285, 340];
-// Creeps grant reduced XP by the killing hero's level (index = hero level).
+const HERO_KILL_XP = [0, 100, 120, 160, 220, 300, 400, 500, 600, 700, 800];
+// Creeps (Neutral Hostile) grant reduced XP by the KILLING hero's level, so a high
+// hero stops farming camps: MiscGame HeroFactorXP=80,70,60,50,0 (%) for levels 1–5,
+// 0% at level 5+. Index = hero level (index 0 unused; heroes are always level ≥1).
 const CREEP_XP_FACTOR = [0.8, 0.8, 0.7, 0.6, 0.5, 0, 0, 0, 0, 0, 0];
-const XP_SHARE_RANGE = 1200; // heroes within this of a kill share its XP (else global)
+const XP_SHARE_RANGE = 1200; // MiscData/MiscGame HeroExpRange=1200: heroes within this of a kill share its XP (else global — GlobalExperience=1)
 const SUMMON_XP_FACTOR = 0.5; // summoned victims grant half XP
 // WC3 (TFT 1.27a) attack-type vs armor-type damage multiplier table. Source: the
 // official classic Battle.net basics page, "Armor and Weapon Types" (the Frozen
@@ -2232,19 +2245,27 @@ export class SimWorld {
     // even-share loop finds no eligible hero and the global fallback below would still
     // reward the killer's own heroes for a friendly-fire kill.
     if (killer && !this.hostile(killer, victim)) return;
-    const victimLevel = Math.max(0, Math.min(KILL_XP.length - 1, victim.level || 0));
-    let base = KILL_XP[victimLevel] || 0;
+    // A slain enemy hero pays out the (much larger) GrantHeroXP table; everything
+    // else pays GrantNormalXP. Both are indexed by the victim's own level.
+    const table = victim.isHero ? HERO_KILL_XP : KILL_XP;
+    const victimLevel = Math.max(0, Math.min(table.length - 1, victim.level || 0));
+    let base = table[victimLevel] || 0;
     if (base <= 0) return;
     if (victim.isSummon) base *= SUMMON_XP_FACTOR;
     // Beneficiaries: enemy heroes of the victim within share range (else global).
+    // NB max-level heroes are deliberately NOT excluded — MiscGame
+    // MaxLevelHeroesDrainExp=1, so a level-10 hero standing in range still claims a
+    // share of the pool (which gainXp then discards), shrinking what its lower-level
+    // team-mates receive. This is real WC3 behaviour, not an oversight.
     const eligible: SimUnit[] = [];
     for (const h of this.units.values()) {
       if (!h.isHero || h.hp <= 0 || h.team === victim.team) continue;
-      if (killer && h.team !== killer.team) continue; // only the killer's side
+      if (killer && h.team !== killer.team) continue; // only the killer's side (team = alliance group)
       if (Math.hypot(h.x - victim.x, h.y - victim.y) <= XP_SHARE_RANGE) eligible.push(h);
     }
     if (!eligible.length) {
-      // No hero in range: award globally to the killer's heroes (no distance loss).
+      // No hero in range: GlobalExperience=1 — award to ALL the killer's heroes
+      // regardless of distance (still split among them, no per-distance loss).
       for (const h of this.units.values()) {
         if (h.isHero && h.hp > 0 && killer && h.team === killer.team) eligible.push(h);
       }
