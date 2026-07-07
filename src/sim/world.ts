@@ -456,6 +456,13 @@ const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of 
 // other can clear — this breaks the symmetric "dance" (both endlessly sidestepping
 // into the tile the other just vacated) instead of letting it churn for seconds.
 const YIELD_TIME = 0.2;
+// Air units ignore ground pathing & collision *while cruising* (issue #31), so a
+// group flies as one point and stacks perfectly on arrival / when swarming a
+// target. WC3 flyers don't stack: once stopped (arrived or fighting) they glide
+// apart until their collision hulls no longer overlap. This is the max drift speed
+// of that fan-out, as a share of the flyer's own move speed — a share (not full
+// speed) so it reads as a gentle spread rather than a pop.
+const AIR_FANOUT_SPEED = 0.6;
 // Human "speed build": each builder beyond the first adds SPEED_BUILD_BONUS to the
 // build rate (1.0 = one builder) and, spread across the shortened build time, a
 // SPEED_BUILD_SURCHARGE share of the base cost per extra builder. Tuned to WC3's
@@ -2783,6 +2790,7 @@ export class SimWorld {
     }
     this.tickMovement(dt);
     this.resolveCollisions();
+    this.resolveAirSeparation(dt);
     this.tickProjectiles(dt);
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
     this.tickCorpses(dt); // decay flesh→bone→gone
@@ -4526,6 +4534,67 @@ export class SimWorld {
           }
         }
       }
+    }
+  }
+
+  // Fan stopped air units apart (issue #31). Flyers cruise with no collision (they
+  // fly over everything), so a moving group is a single point and they stack exactly
+  // on top of each other once they arrive or converge on a target. WC3 flyers don't
+  // stack: the moment they stop they glide apart until their hulls clear. So this
+  // acts on air units that are NOT moving — i.e. those that have reached their
+  // destination or are holding position while fighting — and leaves cruising flyers
+  // untouched (they still pass freely through the air). Both units in an overlapping
+  // pair are stationary, so the correction is split evenly and each drifts out; the
+  // per-unit step is capped to a share of its move speed so a clump spreads over a
+  // few frames instead of popping. Air-vs-air only; ground collision is separate.
+  private resolveAirSeparation(dt: number): void {
+    const list: SimUnit[] = [];
+    for (const u of this.units.values())
+      if (u.flying && u.radius > 0 && !u.moving && !u.noCollision && u.hp > 0) list.push(u);
+    if (list.length < 2) return;
+    // Accumulate every pair's desired push, then apply once (capped) per unit — so a
+    // flyer buried in a stack drifts out smoothly instead of jerking pair-by-pair.
+    const pushX = new Float64Array(list.length);
+    const pushY = new Float64Array(list.length);
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        const min = a.radius + b.radius;
+        let d = Math.hypot(dx, dy);
+        if (d >= min) continue;
+        if (d === 0) {
+          // Exact stack (a group that arrived on one point): split along a
+          // deterministic per-unit heading (golden angle, no RNG — the sim is
+          // lockstep) so the pile bursts into a ring rather than a single line.
+          const ang = a.id * 2.399963;
+          dx = Math.cos(ang);
+          dy = Math.sin(ang);
+          d = 1;
+        }
+        const half = (min - d) / 2;
+        const nx = dx / d;
+        const ny = dy / d;
+        pushX[i] -= nx * half;
+        pushY[i] -= ny * half;
+        pushX[j] += nx * half;
+        pushY[j] += ny * half;
+      }
+    }
+    for (let i = 0; i < list.length; i++) {
+      let px = pushX[i];
+      let py = pushY[i];
+      const mag = Math.hypot(px, py);
+      if (mag <= 1e-6) continue;
+      const maxStep = list[i].speed * AIR_FANOUT_SPEED * dt;
+      if (maxStep > 0 && mag > maxStep) {
+        px = (px / mag) * maxStep;
+        py = (py / mag) * maxStep;
+      }
+      list[i].x += px;
+      list[i].y += py;
     }
   }
 
