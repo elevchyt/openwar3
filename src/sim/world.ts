@@ -2419,16 +2419,24 @@ export class SimWorld {
       let amount = share;
       const isCreep = victim.team === -1; // Neutral Hostile
       if (isCreep) amount *= CREEP_XP_FACTOR[Math.min(h.level, CREEP_XP_FACTOR.length - 1)] ?? 0;
-      this.gainXp(h, amount);
+      this.gainXp(h, amount, isCreep);
     }
   }
 
   /** Add XP to a hero, leveling it up (with stat growth) across thresholds. */
-  gainXp(hero: SimUnit, amount: number): void {
+  gainXp(hero: SimUnit, amount: number, isCreep = false): void {
     if (!hero.isHero || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
     hero.xp += amount;
     while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpForLevel(hero.level + 1)) {
       this.levelUp(hero);
+      // WC3: once a hero reaches a level where creeps grant no XP (HeroFactorXP=0 at
+      // level 5+), any surplus that a creep kill pushed past the threshold is dropped
+      // — the overshoot came from a creep and must not count (issue #30). The bar sits
+      // exactly at the new level's threshold rather than carrying leftover creep XP.
+      if (isCreep && (CREEP_XP_FACTOR[hero.level] ?? 0) === 0) {
+        hero.xp = xpForLevel(hero.level);
+        break;
+      }
     }
   }
 
