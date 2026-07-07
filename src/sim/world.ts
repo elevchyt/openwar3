@@ -3254,8 +3254,18 @@ export class SimWorld {
     // reachable; but if we keep stalling anyway (A* threads the surround's gaps, collision
     // blocks the last stretch — the outer-ring jitter), stop trusting it and HOLD.
     u.attackStalls++;
-    if (u.attackStalls >= 2) this.holdAttack(u, t);
-    else this.redecideAttack(u, t);
+    if (u.attackStalls >= 2) {
+      // Before standing down, make sure there isn't ANOTHER enemy we can actually reach
+      // and fight instead — a unit must never stand idle beside an enemy it could attack
+      // just because its ORIGINAL target is walled off (issue #24: "the nearest enemy must
+      // always be attacked"). Only hold when nothing reachable remains.
+      const range = u.isCreep ? u.aggroRange : u.weapon.acquire;
+      const next = range > 0 ? this.reachableEnemy(u, range, t.id) : null;
+      if (next) this.issueAttack(u.id, next.id);
+      else this.holdAttack(u, t);
+    } else {
+      this.redecideAttack(u, t);
+    }
   }
 
   /** Stop chasing and hold position facing the target — used when an attacker keeps
@@ -4005,11 +4015,18 @@ export class SimWorld {
       target.asleep = false;
       target.strayT = 0;
     }
-    // Retaliate: an idle armed victim turns on its attacker (WC3 return fire),
-    // unless the attacker has since died mid-flight. A creep leashing home ignores
-    // attackers until it's back at its post (it prioritises returning).
+    // Retaliate: an armed victim turns on its attacker (WC3 return fire), unless the
+    // attacker died mid-flight or the victim is a creep leashing home (it prioritises
+    // returning). Fires when the victim is idle, OR is on an attack order but NOT actually
+    // in combat — i.e. it's chasing / stalled / holding on a target it can't reach while
+    // THIS enemy stands here hitting it (issue #24: "units stand around while enemies
+    // attack them, the nearest enemy must always be attacked"). An enemy landing hits on
+    // us is by definition adjacent and reachable, a strictly better target than one we
+    // can't close on. A unit already trading blows (inCombat) keeps its target; HOLD-
+    // position units (order "hold") never leave their post.
     const attacker = this.units.get(attackerId);
-    if (target.order === "idle" && target.weapon && !target.returning && attacker) {
+    const notFighting = target.order === "idle" || (target.order === "attack" && !target.inCombat);
+    if (notFighting && target.weapon && !target.returning && attacker && this.hostile(target, attacker) && attacker.id !== target.targetId) {
       this.issueAttack(target.id, attackerId);
     }
     // Creep "call for help" (Battle.net creep basics): attacking one creep rallies
