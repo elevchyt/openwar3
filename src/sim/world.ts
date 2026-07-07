@@ -1347,18 +1347,100 @@ export class SimWorld {
     u.yieldT = 0; // no longer moving — drop any pending give-way pause
     u.path = [];
     if (u.footprint <= 0 || u.hasReservation) return;
+    const n = u.footprint;
     let sx = u.x;
     let sy = u.y;
     if (snap) {
-      [sx, sy] = this.grid.snapForFootprint(u.x, u.y, u.footprint);
+      [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
+      let [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+      // If this tile is already reserved (two units the same distance from one free
+      // tile both tried to land on it — issue #24), settle onto the nearest FREE tile
+      // instead of stacking. Deterministic priority: whoever settled first keeps the
+      // tile (its reservation is already down), later arrivals fall to open tiles
+      // around it. A one-shot snap, not a per-tick shuffle, so it never oscillates.
+      // Skipped for units coming to rest IN COMBAT: an attacker settles wherever it is
+      // in its strike band (the footprint-aware nudge already keeps it off others' tiles),
+      // and snapping it to a free tile could land it a hair past its own re-chase leash —
+      // making it walk↔settle forever right at the range edge.
+      const combat = u.order === "attack" || u.order === "attackmove" || u.order === "hold" || u.order === "cast";
+      if (!combat && !this.blockFree(cx0, cy0, n)) {
+        const free = this.nearestFreeBlock(sx, sy, n);
+        if (free) {
+          [sx, sy] = free;
+          [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+        }
+      }
       u.x = sx;
       u.y = sy;
+      this.grid.reserve(cx0, cy0, n);
+      u.resX = cx0;
+      u.resY = cy0;
+      u.hasReservation = true;
+      return;
     }
-    const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, u.footprint);
-    this.grid.reserve(cx0, cy0, u.footprint);
+    // snap=false: reserve exactly where the unit stands (worker parked at a resource).
+    const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+    this.grid.reserve(cx0, cy0, n);
     u.resX = cx0;
     u.resY = cy0;
     u.hasReservation = true;
+  }
+
+  /** True if the n×n reservation block at origin (cx0,cy0) is entirely walkable and
+   *  unreserved — i.e. a unit can settle there without overlapping another's tile. */
+  private blockFree(cx0: number, cy0: number, n: number): boolean {
+    for (let y = cy0; y < cy0 + n; y++)
+      for (let x = cx0; x < cx0 + n; x++)
+        if (!this.grid.walkable(x, y) || this.grid.isReserved(x, y)) return false;
+    return true;
+  }
+
+  /** Nearest snap-aligned settle position (world coords) whose reservation block is
+   *  free, spiralling out from the snapped (sx,sy) in whole-cell steps. Uses the SAME
+   *  footprintOrigin the reservation will — so the block it validates is exactly the
+   *  block that gets reserved (no even-footprint off-by-one). Bounded; null if the
+   *  whole neighbourhood is packed (caller then settles in place — a rare overlap beats
+   *  a teleport across the map). */
+  private nearestFreeBlock(sx: number, sy: number, n: number): [number, number] | null {
+    const [scx, scy] = this.grid.worldToCell(sx, sy);
+    const half = n >> 1;
+    const oX0 = scx - half; // the unit's own footprint — exempt from the reachability
+    const oY0 = scy - half; // block-check so it can leave the tile it's overlapping
+    for (let r = 1; r <= 6; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          const wx = sx + dx * PATHING_CELL;
+          const wy = sy + dy * PATHING_CELL;
+          const [cx0, cy0] = this.grid.footprintOrigin(wx, wy, n);
+          if (!this.blockFree(cx0, cy0, n)) continue;
+          // Must be REACHABLE in a straight shot — the line to it crosses no wall and no
+          // other unit's tile. This is what stops a unit at a choke from snapping ACROSS
+          // a plug into unreachable space, while still letting a converging group spread
+          // freely across open ground (issue #24). Distance is otherwise unbounded so a
+          // dense pile still fully spreads.
+          if (this.clearLineTo(sx, sy, wx, wy, oX0, oY0, n)) return [wx, wy];
+        }
+      }
+    }
+    return null;
+  }
+
+  /** True if the straight segment from (sx,sy) to (wx,wy) crosses only walkable,
+   *  unreserved cells (cells inside the mover's own start footprint are exempt, so it
+   *  can step off the tile it's overlapping). A cheap reachability proxy for the short
+   *  relocation hops settle() makes — no full A*. */
+  private clearLineTo(sx: number, sy: number, wx: number, wy: number, oX0: number, oY0: number, n: number): boolean {
+    const dist = Math.hypot(wx - sx, wy - sy);
+    const steps = Math.max(1, Math.ceil(dist / (PATHING_CELL * 0.5)));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [cx, cy] = this.grid.worldToCell(sx + (wx - sx) * t, sy + (wy - sy) * t);
+      if (!this.grid.walkable(cx, cy)) return false;
+      const own = cx >= oX0 && cx < oX0 + n && cy >= oY0 && cy < oY0 + n;
+      if (!own && this.grid.isReserved(cx, cy)) return false;
+    }
+    return true;
   }
 
   /** A unit is about to move: give its reserved cells back. */
@@ -4670,7 +4752,7 @@ export class SimWorld {
           if (!this.pathTo(u, nx, ny)) this.stop(u.id);
           continue;
         }
-        this.settle(u); // arrival: snap to the cell grid and reserve
+        this.settle(u); // arrival: snap onto the grid (to a free tile if this one's taken)
         // A plain move ends here. An attack-move only ends when it has actually
         // reached its destination — a path that ended mid-chase (or short of the
         // goal) stays an attack-move so tickAttackMove keeps fighting/advancing.
@@ -4764,6 +4846,7 @@ export class SimWorld {
       }
     }
   }
+
 
   // Fan stopped air units apart (issue #31). Flyers cruise with no collision (they
   // fly over everything), so a moving group is a single point and they stack exactly
