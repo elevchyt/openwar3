@@ -313,7 +313,13 @@ export class MapViewerScene {
   // Workers waiting for their build site to clear of units → seconds waited so far.
   private buildWait = new Map<number, number>();
   private meleeTeams = new Map<number, number>(); // owner slot → team
-  private startMarkersHidden = false; // hide sloc props once units finish loading
+  // Start-location (`sloc`) markers load async: the viewer flips `unitsReady`
+  // synchronously but pushes each Unit into `map.units` only once its model has
+  // finished loading, so a marker can arrive a frame or two after `unitsReady`.
+  // A one-shot hide misses those late ones (they render forever); instead we
+  // re-scan whenever the unit count grows, mirroring RtsController.trySeed. -1
+  // means "not scanned yet" so the first real count always triggers a pass.
+  private lastMarkerScanCount = -1;
   // Flat selection-circle model instances, rendered on the terrain so geometry
   // occludes the far side (unlike a DOM overlay drawn on top).
   private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
@@ -460,7 +466,7 @@ export class MapViewerScene {
     this.simBuildingSplats.clear();
     this.rts?.dispose();
     this.rts = null;
-    this.startMarkersHidden = false;
+    this.lastMarkerScanCount = -1;
     this.buildingFootprints.clear();
     this.rallyFlag = null;
     this.rallyFlagModel = null;
@@ -689,6 +695,12 @@ export class MapViewerScene {
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     const races = this.beginMatch(config, 500, 150); // WC3 melee start resources
+    // Clear the creep camps the map placed on each USED start location so bases
+    // spawn on clean ground (blizzard.j MeleeClearExcessUnits). config.slots holds
+    // only the playing slots (open/closed are filtered out in the lobby), so unused
+    // start locations keep their camps — the seeding scans read these zones. Set
+    // now, synchronously, before the first frame runs trySeed on any creep.
+    this.rts.setStartLocationClearZones(config.slots.map((s) => ({ x: s.startX, y: s.startY })));
     for (const slot of config.slots) {
       const roster = STARTING_UNITS[races.get(slot.id) ?? "human"];
       const workerTotal = roster
@@ -2761,10 +2773,16 @@ export class MapViewerScene {
         this.tickPendingBuild(dt / 1000); // seconds, matching the sim's clock
         this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
       }
-      // Map units load async — hide the start-location props once they're all in.
-      if (!this.startMarkersHidden && this.viewer.map?.unitsReady) {
-        this.hideStartLocations();
-        this.startMarkersHidden = true;
+      // Map units load async — hide the start-location props as they stream in.
+      // Re-scan whenever the unit count grows so `sloc` markers that finish
+      // loading a frame or two after `unitsReady` are still hidden (see the
+      // lastMarkerScanCount field), instead of rendering for the whole match.
+      if (this.viewer.map?.unitsReady) {
+        const n = this.viewer.map.units.length;
+        if (n !== this.lastMarkerScanCount) {
+          this.lastMarkerScanCount = n;
+          this.hideStartLocations();
+        }
       }
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);

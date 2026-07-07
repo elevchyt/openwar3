@@ -365,6 +365,16 @@ export class RtsController {
   private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
   private creepData: Array<{ x: number; y: number; aggro: number; drops?: Array<{ items: Array<{ id: string; chance: number }> }> }> = []; // Neutral Hostile guard/aggro/drop data (from the doo)
   private seeded = false; // true once trySeed has run at least one scan (creepCamps gate)
+  // Melee start-location clear zones (blizzard.j MeleeClearExcessUnits): each USED
+  // start location clears the map's Neutral Hostile creeps (and non-structure
+  // Neutral Passive critters) within bj_MELEE_CLEAR_UNITS_RADIUS, so a player's
+  // base spawns on clean ground. Unused start locations keep their creep camp
+  // (that's how a 4-player map played by 2 leaves the empty corners creeped).
+  // Set at melee start; empty on custom maps (they run their own triggers).
+  private startClearZones: Array<{ x: number; y: number; r2: number }> = [];
+  // Instances trySeed cleared as excess (never seeded, hidden for good). The fog
+  // pass must skip these too, so managesViewerInstance covers them as well.
+  private clearedInstances = new Set<unknown>();
   // Map-placed unit instances trySeed has already handled (seeded OR deliberately
   // skipped). The viewer pushes each Unit into map.units only AFTER its model
   // finishes loading (async), so we adopt them progressively rather than in a
@@ -436,7 +446,36 @@ export class RtsController {
   /** True if the RTS drives this viewer instance's fog visibility (seeded neutral
    *  shop or creep). The map renderer skips these when fog-hiding static widgets. */
   managesViewerInstance(inst: unknown): boolean {
-    return this.seededInstances.has(inst);
+    return this.seededInstances.has(inst) || this.clearedInstances.has(inst);
+  }
+
+  /** Melee-only: register the USED start locations so trySeed clears the creep
+   *  camps (and non-structure critters) the map placed on them, matching
+   *  blizzard.j MeleeClearExcessUnits (radius bj_MELEE_CLEAR_UNITS_RADIUS = 1500).
+   *  Call before the seeding scans run; unused start locations are simply omitted,
+   *  so their camps survive. */
+  setStartLocationClearZones(centers: Array<{ x: number; y: number }>, radius = 1500): void {
+    const r2 = radius * radius;
+    this.startClearZones = centers.map((c) => ({ x: c.x, y: c.y, r2 }));
+  }
+
+  /** True when (x,y) is within a used start location's melee clear radius. */
+  private inStartClearZone(x: number, y: number): boolean {
+    for (const z of this.startClearZones) {
+      const dx = x - z.x;
+      const dy = y - z.y;
+      if (dx * dx + dy * dy <= z.r2) return true;
+    }
+    return false;
+  }
+
+  /** Remove a map-placed unit's viewer instance as melee "excess" (a creep camp or
+   *  critter sitting on a used start location): hide it for good and take over its
+   *  visibility so the fog pass never shows it again. It is never seeded, so it has
+   *  no sim presence — exactly the effect of blizzard.j RemoveUnit. */
+  private clearExcessInstance(inst: { hide(): void }): void {
+    inst.hide();
+    this.clearedInstances.add(inst);
   }
 
   /** `iseedeadpeople`: reveal the whole map (toggle). A pure override — turning it
@@ -978,6 +1017,13 @@ export class RtsController {
       // it as a static, non-hostile, yellow-ringed selectable — even though it's
       // a building with no walk clip.
       if (this.isNeutralPassiveAt(loc[0], loc[1])) {
+        // MeleeClearExcessUnit clears NON-structure Neutral Passive units (loose
+        // critters) from a used start location, but leaves the structures (shops,
+        // fountains, gold mines) standing. Match that: drop critters, keep buildings.
+        if (!(def?.isBuilding ?? false) && this.inStartClearZone(loc[0], loc[1])) {
+          this.clearExcessInstance(unit.instance);
+          continue;
+        }
         this.seedNeutral(unit, def, loc);
         continue;
       }
@@ -985,6 +1031,13 @@ export class RtsController {
       if (!movetp || movetp === "_" || movetp === "none") continue; // buildings/immovable
       const seqs = unit.instance.model.sequences;
       if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
+      // Neutral Hostile creep sitting on a USED start location: removed so the
+      // player's base spawns clean (blizzard.j MeleeClearExcessUnits). Unused
+      // start locations aren't zones, so their camps survive to guard the corner.
+      if (this.inStartClearZone(loc[0], loc[1])) {
+        this.clearExcessInstance(unit.instance);
+        continue;
+      }
       const anims = buildAnimSet(seqs);
       unit.instance.setBlendTime?.(def?.animBlend ?? 0.15); // per-unit anim cross-fade (issue #8)
       const simId = this.nextId++;
