@@ -338,6 +338,8 @@ export interface SimUnit {
   stuckT: number; // seconds spent blocked while trying to move
   stuckRetries: number; // consecutive stuck-repath attempts without progress
   stallT: number; // seconds an attacker has been unable to close on its target (issue #24)
+  stallAnchorX: number; // position at the start of the current combat-approach window
+  stallAnchorY: number;
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
@@ -441,13 +443,18 @@ const FACING_EPS = 0.35; // radians — must roughly face the target to swing
 // FURTHER than weapon range before it gives chase again — stops the walk/attack
 // animation flip-flop (and position jiggle) at the range boundary.
 const ATTACK_LEASH = 48;
-// Unreachable-target watchdog (issue #24). An attacker that can neither reach
-// striking range nor make progress toward its target for this long has a fully
-// blocked route — it re-decides (fresh surround slot, then a reachable target,
-// else stand & face) instead of spinning A* forever and jiggling just out of
-// range. Longer than a couple of checkStuck windows (0.5s) so the cheaper
-// slot-reassign/repath there gets first crack before we escalate.
-const ATTACK_STALL_TIME = 1.5;
+// Combat-approach watchdog (issue #24). An attacker that neither reaches striking
+// range nor covers real ground toward its target over this window has an
+// effectively blocked route — whether it stands still, or wobbles in and out of a
+// tight crowd (settling and re-pathing every few ticks, which slips past both the
+// per-tick "moving" reset and the 0.5s stuck window). It then re-decides: repath if
+// the target is still reachable, else switch to the nearest target it CAN reach,
+// else stand & face. Net displacement over the whole window (not the "moving" flag)
+// is what makes it survive the wobble's settle/move flapping. ATTACK_PROGRESS is the
+// least ground that still counts as "genuinely closing" — a blocked wobbler nets far
+// less, a unit legitimately marching/chasing far more, so the two never confuse.
+const ATTACK_STALL_TIME = 1.0;
+const ATTACK_PROGRESS = PATHING_CELL * 2; // 64 world units of net travel per window
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
 // Hysteresis for follow (mirrors ATTACK_LEASH): once caught up and parked, the
@@ -1092,6 +1099,8 @@ export class SimWorld {
       | "stuckT"
       | "stuckRetries"
       | "stallT"
+      | "stallAnchorX"
+      | "stallAnchorY"
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
@@ -1209,6 +1218,8 @@ export class SimWorld {
       stuckT: 0,
       stuckRetries: 0,
       stallT: 0,
+      stallAnchorX: unit.x,
+      stallAnchorY: unit.y,
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
@@ -2867,22 +2878,13 @@ export class SimWorld {
       return;
     }
     if (u.order === "attack") {
-      // Blocked short of our attack slot (a unit is in the way). Pick a fresh slot
-      // we actually fit in — steering AROUND the blockers — and head straight for
-      // it, instead of grinding into the unit ahead (which reads as the stuck/
-      // jiggling shuffle). Fall back to a brief settle only if nothing's reachable.
-      const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
-      if (t) {
-        this.assignAttackSlot(u, t);
-        const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
-        const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
-        if (this.pathTo(u, ax, ay)) {
-          u.stuckRetries = 0;
-          return;
-        }
-      }
-      this.settle(u);
-      u.repathT = REPATH_COOLDOWN;
+      // Attack-order approach is owned by the combat-approach watchdog in tickAttack
+      // (issue #24), which measures net progress toward the target over its own window
+      // and re-decides — repath if reachable, else switch to the nearest reachable
+      // target. Don't also handle it here: the two would fight over the same unit with
+      // different timers. (Falling through to the generic handler below would call
+      // stop(), which wrongly drops the attack target.)
+      u.stuckRetries = 0;
       return;
     }
     // Gatherers must NEVER idle mid-job just because they're jostling in a crowd
@@ -2922,19 +2924,26 @@ export class SimWorld {
       return;
     }
     this.engage(u, t);
-    // Unreachable-target watchdog (issue #24). engage() sets inCombat when it's in
-    // striking range and moving when it's actually closing; if it's doing NEITHER —
-    // stuck out of range with a fully blocked route — the chase spins A* every tick
-    // and the unit jiggles a step short of its target (or stands next to it never
-    // swinging, its surround slot walled off). Give the way a chance to open, then
-    // re-decide.
-    if (u.inCombat || u.moving) {
+    // Combat-approach watchdog (issue #24). engage() sets inCombat once it's in
+    // striking range; until then it's chasing. Measure NET ground covered toward the
+    // target over ATTACK_STALL_TIME — not the per-tick "moving" flag, which resets to
+    // "fine" every time a wobbling unit takes its shoved-back step, and not the 0.5s
+    // stuck window, which a unit that settles for a tick each wobble cycle keeps
+    // resetting. A unit genuinely closing (or chasing a runner) covers real ground; a
+    // blocked/wobbling one nets almost nothing — that's when we re-decide.
+    if (u.inCombat) {
       u.stallT = 0;
       return;
     }
+    if (u.stallT === 0) {
+      u.stallAnchorX = u.x;
+      u.stallAnchorY = u.y;
+    }
     u.stallT += dt;
     if (u.stallT < ATTACK_STALL_TIME) return;
+    const moved = Math.hypot(u.x - u.stallAnchorX, u.y - u.stallAnchorY);
     u.stallT = 0;
+    if (moved >= ATTACK_PROGRESS) return; // covering real ground — keep chasing
     this.redecideAttack(u, t);
   }
 
@@ -2962,12 +2971,19 @@ export class SimWorld {
    *  is left, stop grinding and just face the target (WC3 units give up on a target
    *  they can't reach rather than jiggling in place forever). */
   private redecideAttack(u: SimUnit, t: SimUnit): void {
-    // (1) Fresh slot + repath. Clear any chaser cooldown so the repath can fire now.
-    this.assignAttackSlot(u, t);
-    const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
-    const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
-    u.repathT = 0;
-    if (this.pathTo(u, ax, ay)) return; // found a way around — resume the chase
+    // (1) Is the target actually reachable — can we path a foot into weapon range?
+    // Gate on that, NOT on pathTo()'s boolean: pathTo always returns a best-effort
+    // path (one cell toward the goal) even when the goal can't be reached, so a unit
+    // wobbling toward a walled-off slot would "succeed" here every time and never let
+    // go. Only when we can genuinely close do we claim a fresh slot and repath around
+    // whatever blocked our old one.
+    if (this.canReachToAttack(u, t)) {
+      this.assignAttackSlot(u, t);
+      const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
+      const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
+      u.repathT = 0;
+      if (this.pathTo(u, ax, ay)) return; // found a way around — resume the chase
+    }
     // (2) Target unreachable — hand off to a reachable one within our normal
     // acquisition range (creeps use their aggro range and camp threat order).
     const range = u.isCreep ? u.aggroRange : u.weapon ? u.weapon.acquire : 0;
