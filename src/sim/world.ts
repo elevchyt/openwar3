@@ -1482,16 +1482,23 @@ export class SimWorld {
       this.settle(u);
       return;
     }
-    let [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
+    // Reserve the cell block under where the unit ACTUALLY stopped — do NOT snap its
+    // position to the grid corner. For an even footprint that snap can shove a unit up to
+    // half a cell (16 units) AWAY from the target, out of the strike band; it then
+    // re-chases, reaches range, settles, gets snapped away again — the edge-of-range
+    // jiggle, and it can even end up held out of range not attacking (issue #24).
+    let sx = u.x;
+    let sy = u.y;
     let [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
     if (!this.blockFree(cx0, cy0, n)) {
-      // Keep the relocation comfortably inside the strike band so we stay inCombat and
-      // never re-chase: hits connect out to range + ATTACK_LEASH, re-chase triggers past
-      // it, so cap candidates a margin below that.
+      // Our tile is taken — relocate to the nearest free tile still comfortably inside
+      // the strike band (hits connect out to range + ATTACK_LEASH; cap a margin below so
+      // we stay inCombat and don't re-chase). This branch DOES move us (onto that tile).
       const maxGap = u.weapon.range + ATTACK_LEASH * 0.6;
       const free = this.nearestFreeBlockInRange(u, t, n, maxGap);
       if (free) {
-        [sx, sy] = free;
+        sx = free[0];
+        sy = free[1];
         [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
       }
     }
@@ -4899,7 +4906,6 @@ export class SimWorld {
           if (!this.pathTo(u, nx, ny)) this.stop(u.id);
           continue;
         }
-        this.settle(u); // arrival: snap onto the grid (to a free tile if this one's taken)
         // A plain move ends here. An attack-move only ends when it has actually
         // reached its destination — a path that ended mid-chase (or short of the
         // goal) stays an attack-move so tickAttackMove keeps fighting/advancing.
@@ -4907,6 +4913,13 @@ export class SimWorld {
           u.order === "move" ||
           (u.order === "attackmove" && Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= PATHING_CELL * 1.5);
         if (arrived) {
+          // Flip to idle BEFORE settling so a finished attack-move fans out at its
+          // destination exactly like a move does — settle() only spreads onto a free
+          // tile for non-combat orders, and while the order still reads "attackmove" it
+          // would cram every unit onto the one destination tile instead (issue #24: make
+          // attack-move's arrival behave like move). Its en-route fighting is unchanged.
+          u.order = "idle";
+          this.settle(u); // snaps onto the grid, to a free tile if this one's taken (fan-out)
           // Keep the heading the unit travelled with: pin desiredFacing onto the
           // current facing so the shared turning pass (which keeps rotating even
           // a stopped unit toward desiredFacing) has nothing left to do. Without
@@ -4916,7 +4929,8 @@ export class SimWorld {
           // tick), so it lands facing the way it came — as WC3 units do. Belt-and-
           // suspenders alongside path smoothing + the final-nudge guard above.
           u.desiredFacing = u.facing;
-          u.order = "idle";
+        } else {
+          this.settle(u); // attack-move paused mid-chase (or a short move): settle in place
         }
       }
     }
