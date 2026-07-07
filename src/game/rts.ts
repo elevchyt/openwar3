@@ -246,7 +246,6 @@ const BUFF_KIND_LABEL: Record<string, string> = {
   lifesteal: "Life Steal", thorns: "Thorns", hot: "Healing", dot: "Damage",
 };
 const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
-const AIR_EXTRA = 60; // extra world units of altitude on top of UnitData moveheight
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
 // Re-clicking the same single unit this many extra times flips its selection
@@ -1055,6 +1054,7 @@ export class RtsController {
           turnRate: def?.turnRate ?? 0.5,
           radius: def?.collision || 16,
           flying: def?.moveType === "fly",
+          flyHeight: lift(def?.moveHeight ?? 0), // same lift as the Entry, so missiles match the model's altitude
           sightDay: def?.sightDay || 1400,
           sightNight: def?.sightNight || def?.sightDay || 800,
           hp: def?.hitPoints || 100,
@@ -1149,6 +1149,7 @@ export class RtsController {
         turnRate: def?.turnRate ?? 0.5,
         radius: def?.collision || 16,
         flying: false,
+        flyHeight: 0, // neutral-passive entities keep their map-placed Z
         sightDay: def?.sightDay || 1400,
         sightNight: def?.sightNight || def?.sightDay || 800,
         hp: def?.hitPoints || 100,
@@ -1232,6 +1233,7 @@ export class RtsController {
         turnRate: def.turnRate,
         radius: def.collision || 16,
         flying: def.moveType === "fly",
+        flyHeight: lift(def.moveHeight), // same lift as the Entry, so missiles match the model's altitude
         sightDay: def.sightDay || 1400,
         sightNight: def.sightNight || def.sightDay || 800,
         hp: constructionTime > 0 ? (def.hitPoints || 100) * 0.1 : def.hitPoints || 100,
@@ -3350,9 +3352,12 @@ export class RtsController {
   }
 }
 
-// Air units ride a bit above their UnitData moveheight for a clearer silhouette.
+// Flight altitude = the unit's real UnitData `moveheight` (Movement - Height),
+// verified against the 1.27 MPQ: 240 for most fliers, 280 (Gryphon/Chimaera),
+// 325 (Dragons), 150 (Gargoyle); hover units (Abomination/Lich/Ghost) sit at
+// 30–50. No fudge — this is the authentic Z the game floats each unit at.
 function lift(moveHeight: number): number {
-  return moveHeight > 0 ? moveHeight + AIR_EXTRA : 0;
+  return moveHeight > 0 ? moveHeight : 0;
 }
 
 // Weapon types that fire a travelling projectile (vs. instant melee).

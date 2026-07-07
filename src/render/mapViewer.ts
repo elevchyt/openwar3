@@ -1540,9 +1540,8 @@ export class MapViewerScene {
 
   // --- projectiles (missile models) -----------------------------------------
 
-  // Uniform size for ALL selection/hover/order circles (constant width + ring
-  // thickness), and a tiny lift so they sit just above the terrain.
-  private static readonly CIRCLE_SCALE = 1.2;
+  // Rings size to each unit's selRadius (see placeCircle) so they match the click
+  // collider; a tiny lift keeps them just above the terrain.
   private static readonly CIRCLE_LIFT = 13; // sit the rings a bit higher (units + buildings)
   // Multiply-tint for hostile selection/hover rings — cuts the model's softer red
   // toward a harsh, saturated red so enemies read at a glance. Green/blue pushed
@@ -1693,11 +1692,14 @@ export class MapViewerScene {
     inst.show();
     this.loc3[0] = info.x;
     this.loc3[1] = info.y;
-    // Ring size is driven ONLY by sizeToRadius, so an order flash on a target is
-    // the SAME size as hovering/selecting it: units use the constant ring, while
-    // buildings/mines/trees size to their footprint radius. Lifted a hair off the
-    // terrain to avoid z-fight.
-    const scale = info.sizeToRadius ? Math.max(0.7, info.radius / 38) : MapViewerScene.CIRCLE_SCALE;
+    // Ring diameter matches the unit's CLICK/selection collider (drawn at radius
+    // = selRadius by the "Show Colliders" overlay): the ring model's native radius
+    // is ~38 world units, so scale = radius/38 makes its outer edge land on the
+    // collider ring. Units, buildings, mines and items all size the same way now,
+    // so an order flash on a target is the SAME size as hovering/selecting it (a
+    // large-selScale unit no longer gets a ring smaller than its collider). Lifted
+    // a hair off the terrain to avoid z-fight.
+    const scale = Math.max(0.7, info.radius / 38);
     this.loc3[2] = info.z - 14 * scale + MapViewerScene.CIRCLE_LIFT;
     inst.setLocation(this.loc3);
     inst.setUniformScale(scale);

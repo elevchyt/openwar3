@@ -277,6 +277,8 @@ export interface SimUnit {
   turnRate: number; // UnitData turnrate; scaled to rad/sec below
   radius: number; // collision radius (0 = no unit collision)
   flying: boolean; // air units ignore ground pathing & collision
+  flyHeight: number; // altitude above ground the unit floats/draws at (0 for ground);
+  // matches the render lift so missiles launch from / land at the unit's real height
   sightDay: number; // fog-of-war sight radius in daylight (UnitBalance `sight`)
   sightNight: number; // fog-of-war sight radius at night (UnitBalance `nsight`)
   hp: number;
@@ -2327,9 +2329,13 @@ export class SimWorld {
     // Knight's Death Coil from his hand); otherwise from a default missile height so
     // it never leaves from the feet.
     const w = u.weapon;
-    const lz0 = w && w.launchZ > 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
-    const [lx, ly, lz] = launchPoint(u, w?.launchX ?? 0, w?.launchY ?? 0, lz0);
+    const lzLocal = w && w.launchZ > 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
+    const [lx, ly, lz0] = launchPoint(u, w?.launchX ?? 0, w?.launchY ?? 0, lzLocal);
     const t = this.units.get(targetId);
+    // Same height handling as attacks: launch from the caster's altitude, land at
+    // the target's (a flying caster's/target's spell missile tracks their height).
+    const lz = lz0 + u.flyHeight;
+    const impactBase = w && w.impactZ > 0 ? w.impactZ : DEFAULT_MISSILE_HEIGHT;
     const proj: SimProjectile = {
       id,
       x: lx,
@@ -2342,7 +2348,7 @@ export class SimWorld {
       art: def.missileArt,
       spell: { code: def.code, rank, abilityId: def.id },
       startZ: lz,
-      impactZ: w && w.impactZ > 0 ? w.impactZ : DEFAULT_MISSILE_HEIGHT,
+      impactZ: impactBase + (t?.flyHeight ?? 0),
       startDist: t ? Math.hypot(t.x - lx, t.y - ly) : 0,
     };
     this.projectiles.set(id, proj);
@@ -3072,7 +3078,13 @@ export class SimWorld {
     const id = this.nextProjectileId++;
     // Launch from the weapon's model point (local offset rotated by facing), not the
     // unit's feet — e.g. the Archmage's fireball leaves from launchz=66 (his rod).
-    const [lx, ly, lz] = launchPoint(u, w.launchX, w.launchY, w.launchZ);
+    const [lx, ly, lz0] = launchPoint(u, w.launchX, w.launchY, w.launchZ);
+    // Height off the ground: the weapon's local launch offset PLUS the shooter's
+    // flight altitude, so a flyer's missile leaves from the model (not the terrain
+    // beneath it). Likewise the missile aims at the target's altitude on impact —
+    // a shot at an air unit lands at its height, not on the ground below it.
+    const lz = lz0 + u.flyHeight;
+    const impactBase = w.impactZ > 0 ? w.impactZ : lz0;
     const proj: SimProjectile = {
       id,
       x: lx,
@@ -3085,7 +3097,7 @@ export class SimWorld {
       art: w.missileArt,
       attackType: w.attackType,
       startZ: lz,
-      impactZ: w.impactZ > 0 ? w.impactZ : lz,
+      impactZ: impactBase + t.flyHeight,
       startDist: Math.hypot(t.x - lx, t.y - ly),
     };
     this.projectiles.set(id, proj);
