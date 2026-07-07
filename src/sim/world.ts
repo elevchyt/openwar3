@@ -1715,6 +1715,9 @@ export class SimWorld {
     u.stallT = 0; // fresh target — reset the unreachable-target watchdog (issue #24)
     u.gaveUp = false; // no longer holding — a new target may well be reachable
     u.attackStalls = 0;
+    u.repathT = 0; // clear any lingering hold/repath cooldown so we chase the new target
+    // NOW — otherwise a freshly re-acquired enemy (e.g. after the first kill) inherited
+    // the previous target's multi-second hold cooldown and the unit just stood there.
     this.cancelSwing(u); // a fresh target starts a fresh swing
     this.detachBuilder(id);
     // Claim a distinct standing slot around the target so a group swarming one
@@ -3167,7 +3170,7 @@ export class SimWorld {
   // --- combat -------------------------------------------------------------
 
   private tickAttack(u: SimUnit, dt: number): void {
-    const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+    let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (!t || !u.weapon) {
       // Target died or vanished. Don't just stand down: a group that kills its
       // target immediately rolls onto the next hostile still in range, instead of
@@ -3211,6 +3214,28 @@ export class SimWorld {
         u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
         u.repathT = ATTACK_GIVEUP_COOLDOWN; // keep holding — re-check again later
         return;
+      }
+    }
+    // If we're chasing a far / walled-off target while a DIFFERENT enemy is ALREADY within
+    // striking range, hit the one that's right here — a melee unit must never walk past an
+    // enemy it can reach toward one it can't (issue #24: "won't fight even though it can
+    // reach the enemy, especially after the first kill"). Only when we're not already
+    // engaged and our current target isn't itself in reach. Cheap distance scan, filtered
+    // like auto-acquire (visible, no idle creep camp); the switch resets the watchdog so
+    // the rest of this tick runs against the new, in-range target.
+    if (!u.inCombat) {
+      u.acquireT -= dt; // throttle the scan to ~5x/sec (not every tick — it's an O(units) scan)
+      if (u.acquireT <= 0) {
+        u.acquireT = 0.2;
+        const strike = u.weapon.ranged ? u.weapon.range : u.weapon.range + ATTACK_LEASH;
+        const curGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+        if (curGap > strike) {
+          const near = this.acquireTarget(u, strike);
+          if (near && near.id !== t.id) {
+            this.issueAttack(u.id, near.id);
+            t = near;
+          }
+        }
       }
     }
     this.engage(u, t);
@@ -3291,6 +3316,10 @@ export class SimWorld {
     if (w && w.acquire > 0 && !u.isCreep) {
       const next = this.acquireTarget(u, w.acquire);
       if (next) {
+        // Grab the nearest enemy. If it turns out to be walled off, the in-strike-range
+        // switch in tickAttack (cheap) and the stall watchdog (which hands off to the
+        // nearest REACHABLE enemy) take over from here — no need for an A* probe on every
+        // kill, which got expensive in high-churn fights.
         this.issueAttack(u.id, next.id);
         return;
       }
