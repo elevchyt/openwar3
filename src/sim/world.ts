@@ -4576,10 +4576,13 @@ export class SimWorld {
     return this.pathTo(u, u.chaseX, u.chaseY);
   }
 
-  /** WC3-style clearance test for pathfinding: the mover's own n×n cell
-   *  footprint must fit on statically-walkable, unreserved cells at every path
-   *  node. Cells adjacent to the start stay exempt from reservations so a unit
-   *  overlapping others (spawn overflow) can still leave. */
+  /** WC3-style clearance test for pathfinding: the mover's own n×n cell footprint
+   *  must fit on statically-walkable, unreserved cells at every path node. A
+   *  reserved cell is exempt ONLY where it belongs to the unit's OWN starting
+   *  footprint — so a unit that spawned overlapping others (or that another unit
+   *  settled on top of) can still path out of its own cells, without the exemption
+   *  extending to neighbours (a 3×3 margin let a unit hugging a reserved wall route
+   *  straight through it — half the "units squeeze through" of issue #24). */
   private clearanceBlocker(
     self: SimUnit,
     start: [number, number],
@@ -4588,14 +4591,18 @@ export class SimWorld {
     if (n <= 0) return undefined;
     const [sx, sy] = start;
     const half = n >> 1;
+    const ownX0 = sx - half; // the unit's own footprint (reservation-exempt) origin
+    const ownY0 = sy - half;
     return (cx, cy) => {
-      const nearStart = Math.abs(cx - sx) <= 1 && Math.abs(cy - sy) <= 1;
       const cx0 = cx - half;
       const cy0 = cy - half;
       for (let y = cy0; y < cy0 + n; y++) {
         for (let x = cx0; x < cx0 + n; x++) {
           if (!this.grid.walkable(x, y)) return true;
-          if (!nearStart && this.grid.isReserved(x, y)) return true;
+          if (this.grid.isReserved(x, y)) {
+            const own = x >= ownX0 && x < ownX0 + n && y >= ownY0 && y < ownY0 + n;
+            if (!own) return true;
+          }
         }
       }
       return false;
@@ -4823,11 +4830,47 @@ export class SimWorld {
   private nudge(u: SimUnit, dx: number, dy: number): void {
     const nx = u.x + dx;
     const ny = u.y + dy;
-    const [cx, cy] = this.grid.worldToCell(nx, ny);
-    if (this.grid.walkable(cx, cy)) {
-      u.x = nx;
-      u.y = ny;
-    }
+    // Collision separation must honour the pathing grid, not brute-force through it
+    // (issue #24: "units squeeze through others that don't fit"). A shove may only slide
+    // a unit to a spot where its whole FOOTPRINT fits: never onto unwalkable terrain,
+    // and never DEEPER into cells another (settled) unit has reserved. Checking only the
+    // centre cell's walkability — as this did — let repeated shoves in a crowd walk a
+    // unit's centre straight through a standing unit or a gap too small for its body.
+    // "Deeper" (not "any overlap") is deliberate: a unit that a settle() reserved on top
+    // of can still be pushed OUT, and moving units (which hold no reservation) still
+    // separate normally via the circle push — only intrusion into reserved cells is
+    // blocked, which is exactly the grid's "this tile isn't reachable for your size".
+    if (!this.footprintWalkableAt(u, nx, ny)) return;
+    if (this.footprintReservedAt(u, nx, ny) > this.footprintReservedAt(u, u.x, u.y)) return;
+    u.x = nx;
+    u.y = ny;
+  }
+
+  /** True if every cell under `u`'s footprint centred at world (wx,wy) is walkable
+   *  terrain. Footprint-less movers (radius 0 / flyers) test just the centre cell. */
+  private footprintWalkableAt(u: SimUnit, wx: number, wy: number): boolean {
+    const [cx, cy] = this.grid.worldToCell(wx, wy);
+    const n = u.footprint;
+    if (n <= 0) return this.grid.walkable(cx, cy);
+    const half = n >> 1;
+    for (let y = cy - half; y < cy - half + n; y++)
+      for (let x = cx - half; x < cx - half + n; x++)
+        if (!this.grid.walkable(x, y)) return false;
+    return true;
+  }
+
+  /** How many cells under `u`'s footprint centred at (wx,wy) are reserved by settled
+   *  units — the "how far into someone else's space" measure nudge() guards on. */
+  private footprintReservedAt(u: SimUnit, wx: number, wy: number): number {
+    const n = u.footprint;
+    if (n <= 0) return 0;
+    const [cx, cy] = this.grid.worldToCell(wx, wy);
+    const half = n >> 1;
+    let count = 0;
+    for (let y = cy - half; y < cy - half + n; y++)
+      for (let x = cx - half; x < cx - half + n; x++)
+        if (this.grid.isReserved(x, y)) count++;
+    return count;
   }
 }
 
