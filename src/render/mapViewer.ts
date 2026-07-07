@@ -149,6 +149,13 @@ interface HideableWidget {
     show(): void;
     vertexColor?: Float32Array; // MDX instance tint (base colour before fog dimming)
     setVertexColor?(c: ArrayLike<number>): void;
+    // A placed doodad is a full MDX instance/model, but War3MapViewer renders it through a
+    // STATIC batched path: its animation never advances and Widget.update resets any sequence
+    // we set, so we can't play the tree's clips on it directly (see treeActor). We only read
+    // its transform/model to spawn a scene-animated stand-in.
+    localRotation?: Float32Array;
+    localScale?: Float32Array;
+    model?: { sequences: Array<{ name: string; interval?: ArrayLike<number> }>; addInstance?(): SpawnInstance };
   };
 }
 interface W3xMap {
@@ -1421,7 +1428,14 @@ export class MapViewerScene {
   }
 
   private nearestDoodad(x: number, y: number, doodads: HideableWidget[]): { setVertexColor(c: ArrayLike<number>): unknown } | null {
-    let best: { setVertexColor(c: ArrayLike<number>): unknown } | null = null;
+    const w = this.nearestDoodadWidget(x, y, doodads);
+    return w ? (w.instance as unknown as { setVertexColor(c: ArrayLike<number>): unknown }) : null;
+  }
+
+  /** The doodad widget closest to (x,y) within a tile — used to map a sim tree back to
+   *  its rendered instance (harvest blink, chop wobble, fell death, AoE highlight). */
+  private nearestDoodadWidget(x: number, y: number, doodads: HideableWidget[]): HideableWidget | null {
+    let best: HideableWidget | null = null;
     let bestD = 96;
     for (const d of doodads) {
       const loc = d.instance?.localLocation;
@@ -1429,10 +1443,105 @@ export class MapViewerScene {
       const dist = Math.hypot(loc[0] - x, loc[1] - y);
       if (dist < bestD) {
         bestD = dist;
-        best = d.instance as unknown as { setVertexColor(c: ArrayLike<number>): unknown };
+        best = d;
       }
     }
     return best;
+  }
+
+  /** Index of the first sequence whose name matches `re` (tree clips: "stand",
+   *  "stand hit", "death"); -1 if the model has none. */
+  private seqByName(seqs: Array<{ name: string; interval?: ArrayLike<number> }> | undefined, re: RegExp): number {
+    return (seqs ?? []).findIndex((s) => re.test(s.name));
+  }
+
+  // A tree that is being chopped or has been felled is drawn by a spawned, scene-animated
+  // stand-in instance keyed by its (static) placed doodad — because War3MapViewer never
+  // advances a placed doodad's animation and Widget.update resets any sequence we set on it,
+  // so its "stand hit"/"death" clips can't play in place. The stand-in hides the static
+  // doodad and plays the clips; a felled tree's stand-in holds the final "death" frame — the
+  // cut stump WC3 leaves behind. `revertEnd` (>0) is the wobble's end frame, when we drop it
+  // back to the looping "stand"; `dead` stumps are held forever.
+  private treeActors = new Map<HideableWidget, { inst: SpawnInstance; dead: boolean; revertEnd: number }>();
+
+  /** The scene-animated stand-in for a tree doodad, spawned (and the static doodad hidden)
+   *  on first use. null if the doodad has no spawnable model. */
+  private treeActor(widget: HideableWidget): { inst: SpawnInstance; dead: boolean; revertEnd: number } | null {
+    let a = this.treeActors.get(widget);
+    if (a) return a;
+    const map = this.viewer.map;
+    const src = widget.instance;
+    const model = src.model as { sequences: Array<{ name: string; interval?: ArrayLike<number> }>; addInstance?(): SpawnInstance } | undefined;
+    if (!map || !model || typeof model.addInstance !== "function") return null;
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    inst.setLocation(src.localLocation);
+    if (src.localRotation) inst.setRotation(src.localRotation);
+    if (src.localScale && src.localScale[0]) inst.setUniformScale(src.localScale[0]);
+    const stand = this.seqByName(inst.model.sequences, /^stand$/i);
+    if (stand >= 0) {
+      inst.setSequence(stand);
+      inst.setSequenceLoopMode(2); // idle until it wobbles or dies
+    }
+    src.hide(); // the static doodad is replaced by this animated stand-in
+    this.removedWidgets.add(widget); // and the fog pass never re-shows it
+    a = { inst, dead: false, revertEnd: 0 };
+    this.treeActors.set(widget, a);
+    return a;
+  }
+
+  /** Play each chopped tree's "stand hit" wobble once per chop (SimWorld.drainTreeHits),
+   *  then settle it back to "stand". WC3 trees visibly shudder at every axe blow. */
+  private updateTreeActors(): void {
+    const map = this.viewer.map;
+    const world = this.rts?.simWorld;
+    if (!map || !world) return;
+    for (const h of world.drainTreeHits()) {
+      const w = this.nearestDoodadWidget(h.x, h.y, map.doodads);
+      if (!w) continue;
+      const a = this.treeActor(w);
+      if (!a || a.dead) continue;
+      const hit = this.seqByName(a.inst.model.sequences, /stand hit/i);
+      if (hit < 0) continue;
+      a.inst.setSequence(hit);
+      a.inst.setSequenceLoopMode(0); // play the wobble once
+      a.revertEnd = a.inst.model.sequences[hit].interval?.[1] ?? 0;
+    }
+    for (const a of this.treeActors.values()) {
+      if (a.dead || a.revertEnd <= 0 || a.inst.frame < a.revertEnd) continue; // wobble still playing
+      const stand = this.seqByName(a.inst.model.sequences, /^stand$/i);
+      if (stand >= 0) {
+        a.inst.setSequence(stand);
+        a.inst.setSequenceLoopMode(2); // settle into the looping idle
+      }
+      a.revertEnd = 0;
+    }
+  }
+
+  /** Fell a tree's visual: free its pathing footprint, then play the model's "death" clip
+   *  once on its scene-animated stand-in and hold the final frame — the cut stump WC3 leaves
+   *  behind. A model with no death clip (or that can't be spawned) is just hidden. */
+  private fellTreeVisual(nodeId: number, x: number, y: number, doodads: HideableWidget[]): void {
+    const meta = this.nodeFootprints.get(nodeId);
+    if (meta && this.grid) {
+      unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
+      this.nodeFootprints.delete(nodeId);
+    }
+    const w = this.nearestDoodadWidget(x, y, doodads);
+    if (!w) return;
+    const a = this.treeActor(w);
+    if (!a) {
+      w.instance.hide(); // no spawnable model — just remove the tree
+      this.removedWidgets.add(w);
+      return;
+    }
+    const death = this.seqByName(a.inst.model.sequences, /death/i);
+    if (death >= 0) {
+      a.inst.setSequence(death);
+      a.inst.setSequenceLoopMode(0); // play once; the last frame is the stump, held forever
+    }
+    a.dead = true;
+    a.revertEnd = 0;
   }
 
 
@@ -2872,6 +2981,7 @@ export class MapViewerScene {
       this.updateEffects(dt / 1000);
       this.updateAuraEffects();
       this.updateTreePulses(dt / 1000);
+      this.updateTreeActors(); // per-chop "stand hit" wobble on felled/chopped trees' stand-ins
       this.updateProjectiles();
       this.updatePendingBuildGhosts(); // dark-blue ghosts of queued-but-not-started builds
       if (this.placement) this.updateGhost(this.lastMouse.x, this.lastMouse.y); // show/position the ghost each frame (not only on mouse move)
@@ -2880,7 +2990,7 @@ export class MapViewerScene {
       const map = this.viewer.map;
       if (world && map) {
         for (const tree of world.drainFelledTrees()) {
-          this.removeNodeVisual(tree.id, tree.x, tree.y, map.doodads);
+          this.fellTreeVisual(tree.id, tree.x, tree.y, map.doodads); // "death" fall + leave the stump
           this.rts?.onTreeFelled(tree.x, tree.y); // stop blocking fog line-of-sight
         }
         for (const mine of world.drainDepletedMines()) {

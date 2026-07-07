@@ -682,6 +682,10 @@ export class SimWorld {
   // Worker ids whose axe just landed a chop this tick — the renderer plays the
   // chop SFX (worker's lumber-weapon material vs Wood).
   private chops: number[] = [];
+  // Positions of trees that took a (non-felling) chop this tick — the renderer plays
+  // the tree doodad's "stand hit" wobble once per hit (a felling hit plays "death" via
+  // the `felled` queue instead, so it isn't duplicated here).
+  private treeHits: Array<{ x: number; y: number }> = [];
   // Attacker ids whose swing just reached its damage point (fired) this tick — the
   // renderer plays the unit's own attack/fire sound (the SND "K" event on its model:
   // rifleman gunshot, mortar boom, dragon breath). Distinct from the landed-hit clang.
@@ -871,6 +875,15 @@ export class SimWorld {
     if (!this.chops.length) return this.chops;
     const out = this.chops;
     this.chops = [];
+    return out;
+  }
+
+  /** Positions of trees hit (but not felled) by a chop since the last drain — the
+   *  renderer plays each tree's "stand hit" wobble. */
+  drainTreeHits(): Array<{ x: number; y: number }> {
+    if (!this.treeHits.length) return this.treeHits;
+    const out = this.treeHits;
+    this.treeHits = [];
     return out;
   }
 
@@ -3932,7 +3945,7 @@ export class SimWorld {
       tree.lumber -= w.lumberPerChop;
       if (tree.lumber <= 0) {
         this.trees.delete(tree.id);
-        this.felled.push(tree);
+        this.felled.push(tree); // renderer plays "death" + leaves the stump
         // The tree we were chopping just fell. If we aren't full yet, walk to the
         // nearest remaining tree straight away and keep gathering (no idle frame).
         if (w.carryLumber < w.lumberCapacity) {
@@ -3945,6 +3958,8 @@ export class SimWorld {
             return;
           }
         }
+      } else {
+        this.treeHits.push({ x: tree.x, y: tree.y }); // still standing → "stand hit" wobble
       }
     }
     if (w.carryLumber >= w.lumberCapacity) {
