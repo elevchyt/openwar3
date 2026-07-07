@@ -107,6 +107,12 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
   undead: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_Undead.blp",
 };
 
+// Over-bright green a tree flashes while it sits under an armed tree-destroying AoE
+// (Flame Strike) — the doodad counterpart of the green unit-target tint, so the player
+// sees the forest the cast would fell. setVertexColor multiplies the model, so heavy
+// green + suppressed red/blue and RGB >1 makes any canopy or trunk glow valid-target green.
+const AOE_TREE_TINT = [0.2, 2.6, 0.2, 1];
+
 // Selection/hover rings are painted through the ubersplat overlay (tessellated over the
 // terrain corner grid) so a ring conforms to the terrain — warps over slopes/ramps with
 // its whole body visible, like the AoE indicator (issue #34). The overlay draws the ring
@@ -1548,6 +1554,7 @@ export class MapViewerScene {
         this.aoeSplatShown = false;
       }
       this.rts?.setAoeHighlight([]);
+      this.updateAoeTreeHighlight([]);
       return;
     }
     // `scale` is the splat's half-width, so a radius-`area` circle maps directly.
@@ -1555,6 +1562,28 @@ export class MapViewerScene {
     this.aoeSplatShown = true;
     // Green-tint the units this cast would actually affect (applied in applyFogTint).
     this.rts?.setAoeHighlight(this.rts?.aoeTargetIds(hit[0], hit[1]) ?? []);
+    // …and the trees it would fell (Flame Strike), so the forest lights up green too.
+    this.updateAoeTreeHighlight(this.rts?.aoeTreePoints(hit[0], hit[1]) ?? []);
+  }
+
+  // Tree doodads currently glowing green under an armed tree-destroying AoE. Painted
+  // green every frame while armed (so the highlight tracks the cursor) and skipped by
+  // fogWidgets so its 10Hz fog pass doesn't fight the tint; a tree that leaves the set
+  // is no longer skipped, so fogWidgets restores it on its next pass.
+  private aoeTreeInsts = new Set<object>();
+  private updateAoeTreeHighlight(points: Array<{ x: number; y: number }>): void {
+    const map = this.viewer.map;
+    const next = new Set<object>();
+    if (map && points.length) {
+      for (const p of points) {
+        const inst = this.nearestDoodad(p.x, p.y, map.doodads);
+        if (inst) {
+          next.add(inst as object);
+          inst.setVertexColor(AOE_TREE_TINT);
+        }
+      }
+    }
+    this.aoeTreeInsts = next;
   }
 
   private armedAbilityArea(code: string): number {
@@ -3122,6 +3151,7 @@ export class MapViewerScene {
     const tint = (w: HideableWidget): void => {
       const inst = w.instance;
       if (pulsing && pulsing.has(inst)) return;
+      if (this.aoeTreeInsts.has(inst)) return; // green AoE-target tree owns its colour this frame
       const loc = inst.localLocation;
       const [cx, cy] = vision.worldToCell(loc[0], loc[1]);
       const state = vision.cellState(cx, cy);

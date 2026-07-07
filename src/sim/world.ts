@@ -259,7 +259,8 @@ export interface SimTree {
   id: number;
   x: number;
   y: number;
-  lumber: number;
+  lumber: number; // remaining lumber a worker can chop before it falls
+  hp: number; // destructible HP — drained by tree-damaging spells (Flame Strike), not by harvest
 }
 
 export interface SimUnit {
@@ -533,6 +534,11 @@ const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
 const GOLD_PER_TRIP = 10;
 const MINE_TIME = 1.0; // seconds a worker spends inside the mine
 const TREE_LUMBER = 50; // lumber a standard tree yields before falling
+// Tree hit points, separate from lumber: harvesting drains `lumber`, but area
+// spells that list `tree` in Targets Allowed (Flame Strike) burn a tree down by
+// HP. 50 HP, armor "Wood" — DestructableData.slk `ATtr` (Ashenvale Tree Wall),
+// the standard tree destructible; `hp=50`, `targtype=tree`.
+const TREE_HP = 50;
 const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latch
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
@@ -734,7 +740,7 @@ export class SimWorld {
   }
 
   addTree(x: number, y: number, lumber = TREE_LUMBER): SimTree {
-    const tree: SimTree = { id: this.nextNodeId++, x, y, lumber };
+    const tree: SimTree = { id: this.nextNodeId++, x, y, lumber, hp: TREE_HP };
     this.trees.set(tree.id, tree);
     return tree;
   }
@@ -776,6 +782,17 @@ export class SimWorld {
     }
     within.sort((a, b) => a.d - b.d);
     return within.slice(0, Math.max(1, limit)).map((e) => e.t);
+  }
+
+  /** Standing trees within `radius` of a point — the set an area spell that lists
+   *  `tree` in Targets Allowed (Flame Strike) damages, and which the green cast
+   *  preview highlights. */
+  treesInArea(x: number, y: number, radius: number): SimTree[] {
+    const out: SimTree[] = [];
+    for (const t of this.trees.values()) {
+      if (Math.hypot(t.x - x, t.y - y) <= radius) out.push(t);
+    }
+    return out;
   }
 
   nearestMine(x: number, y: number, maxDist: number): SimMine | null {
@@ -2843,6 +2860,11 @@ export class SimWorld {
           if (!this.areaEffectAffects(f.casterId, f.team, f.flags, t)) continue;
           this.landDamage(t, f.damagePerWave, f.casterId, false); // spell damage: ignore armor
         }
+        // Burn down trees too when the ability lists `tree` in Targets Allowed
+        // (Flame Strike's targs1 = ground,enemy,neutral,friend,structure,self,tree,debris —
+        // MPQ AHfs). Each wave deals damagePerWave to a tree's HP; a standard 50-HP tree
+        // falls after ~4 waves of L1 (15/wave), leaving a hole in the forest as in WC3.
+        if (f.flags.includes("tree")) this.damageTreesInArea(f.x, f.y, f.area, f.damagePerWave);
         // Scatter the wave effect at a random point within the area (WC3 drops the
         // ice shards across the whole circle each wave, not just the centre).
         if (f.art) {
@@ -2852,6 +2874,23 @@ export class SimWorld {
         }
       }
       if (f.done >= f.waves) this.spellFields.splice(i, 1);
+    }
+  }
+
+  /** Apply `dmg` to the HP of every tree within `radius`; fell any that hit 0. Felled
+   *  trees go through the same `felled` queue as harvest-felling, so the renderer
+   *  unstamps their pathing, hides the model, and clears the sight blocker. */
+  private damageTreesInArea(x: number, y: number, radius: number, dmg: number): void {
+    let fell: SimTree[] | null = null;
+    for (const t of this.trees.values()) {
+      if (Math.hypot(t.x - x, t.y - y) > radius) continue;
+      t.hp -= dmg;
+      if (t.hp <= 0) (fell ??= []).push(t);
+    }
+    if (!fell) return;
+    for (const t of fell) {
+      this.trees.delete(t.id);
+      this.felled.push(t);
     }
   }
 

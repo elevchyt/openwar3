@@ -2458,6 +2458,18 @@ export class RtsController {
     return this.sim.areaEffectTargets(caster.id, caster.team, flags, wx, wy, cast.area);
   }
 
+  /** Positions of the trees an armed AoE would destroy at (wx,wy) — drives the green
+   *  tree highlight, mirroring aoeTargetIds for units. Non-empty only for a point AoE
+   *  whose targs1 lists `tree` (Flame Strike), so trees light up green exactly when the
+   *  cast would fell them. */
+  aoeTreePoints(wx: number, wy: number): Array<{ x: number; y: number }> {
+    const cast = this.armedCast;
+    if (!cast || cast.target !== "point" || !cast.area) return [];
+    const flags = this.abilityDefByCode(cast.code)?.targetFlags ?? [];
+    if (!flags.includes("tree")) return [];
+    return this.sim.treesInArea(wx, wy, cast.area).map((t) => ({ x: t.x, y: t.y }));
+  }
+
   /** Set which units are highlighted as valid AoE-spell targets (green mesh tint,
    *  applied in applyFogTint). Called each frame while aiming; empty clears it. */
   setAoeHighlight(ids: Iterable<number>): void {
