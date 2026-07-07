@@ -107,6 +107,17 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
   undead: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_Undead.blp",
 };
 
+// Selection/hover ring textures — the same BLPs selectioncircle.mdx draws, painted
+// through the ubersplat overlay instead so a ring conforms to the terrain (warps over
+// slopes/ramps, its whole body always visible) like the AoE indicator (issue #34). The
+// round SelectionCircleUnit for units/mines/items; the square-bracket Building variant
+// for structures. Both are additive glows tinted by alliance (green/red/yellow).
+const RING_TEX_UNIT = "ui\\Feedback\\selectioncircle\\SelectionCircleUnit.blp";
+const RING_TEX_BUILDING = "ui\\Feedback\\selectioncircle\\SelectionCircleBuilding.blp";
+// selectioncircle.mdx's native half-width in world units — the ring's outer edge sat at
+// scale·38, so half-width = scale·38 keeps a ring the same size it used to draw.
+const RING_NATIVE = 38;
+
 // Minimal local typings (mdx-m3-viewer's exports drag in their own gl-matrix).
 // The viewer calls the solver as (src, solverParams) — params carry the map's
 // tileset letter once war3map.w3i is parsed.
@@ -320,12 +331,12 @@ export class MapViewerScene {
   // re-scan whenever the unit count grows, mirroring RtsController.trySeed. -1
   // means "not scanned yet" so the first real count always triggers a pass.
   private lastMarkerScanCount = -1;
-  // Flat selection-circle model instances, rendered on the terrain so geometry
-  // occludes the far side (unlike a DOM overlay drawn on top).
-  private selCircles: Array<SpawnInstance | null> = []; // pool, one per selected unit
-  private previewCircles: Array<SpawnInstance | null> = []; // pool, one per unit under the live drag-box
-  private hoverCircle: SpawnInstance | null = null;
-  private circleModel: SpawnModel | null = null;
+  // Selection/hover/preview/flash rings, painted through a terrain-tessellated splat
+  // overlay so each ring conforms to the ground (issue #34) instead of a flat model
+  // that clips into slopes. Rebuilt every frame; ringKeys tracks the entries live from
+  // the previous frame so stale ones (deselected units, expired flashes) get pruned.
+  private ringSplats: UberSplatOverlay | null = null;
+  private ringKeys = new Set<string>();
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private rallyFlagModel: SpawnModel | null = null; // reused for the smaller queue flags
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
@@ -336,8 +347,10 @@ export class MapViewerScene {
   private reticleUrls = new Map<string, string>(); // tinted WC3 reticle by colour key
   private handUrls = new Map<string, string>(); // tinted race hand cursor by colour key
   private lastMouse = { x: 0, y: 0 };
-  private circleSeq = { friendly: 0, enemy: 1, neutral: 2 };
-  private flashCircles: Array<{ inst: SpawnInstance; t: number }> = [];
+  // Transient harvest-/attack-order ring flashes: a colour + lifetime; the ring itself
+  // is (re)painted into ringSplats each frame it's "on" (see tickFlashCircles).
+  private flashRings: Array<{ id: number; t: number; x: number; y: number; radius: number; color: number[]; sizeToRadius: boolean }> = [];
+  private flashSeq = 0;
   // Order-feedback arrows (Confirmation.mdx), green=move / red=attack-move.
   private arrowModel: SpawnModel | null = null;
   private orderArrows: Array<{ inst: SpawnInstance; t: number }> = [];
@@ -463,6 +476,9 @@ export class MapViewerScene {
     this.disposeFog(); // drop the old map's fog overlay + un-hide its doodads
     this.splats?.dispose();
     this.splats = null;
+    this.ringSplats?.dispose();
+    this.ringSplats = null;
+    this.ringKeys.clear();
     this.simBuildingSplats.clear();
     this.rts?.dispose();
     this.rts = null;
@@ -500,10 +516,15 @@ export class MapViewerScene {
       // Building ground-texture (ubersplat) overlay — needs only terrain + the GL
       // context, both ready here, so build it now (unlike fog, which waits on vision).
       // stampMapPathing (pre-placed buildings) and spawnUnit register splats into it.
-      this.splats = new UberSplatOverlay(this.viewer.gl, terrain, (p) => {
+      const splatLoader = (p: string) => {
         const b = this.vfs.rawBytes(p);
         return b ? blpToCanvas(b) : null;
-      });
+      };
+      this.splats = new UberSplatOverlay(this.viewer.gl, terrain, splatLoader);
+      // Separate overlay for selection/hover rings: same terrain-tessellation, but drawn
+      // as its OWN pass AFTER the building splats so a ring paints on top of a foundation
+      // decal (issue #16) — while still under the units (issue #34).
+      this.ringSplats = new UberSplatOverlay(this.viewer.gl, terrain, splatLoader);
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -1055,9 +1076,9 @@ export class MapViewerScene {
   }
 
   /** Send a freshly-produced unit to its building's rally target: harvest a
-   *  rallied mine/tree (workers only), move to a rallied unit's current spot, or
-   *  move to a plain point. Falls back to the stored point when a smart target
-   *  is gone (mine mined out, tree felled, unit dead — WC3's "last spot"). */
+   *  rallied mine/tree (workers only), follow a rallied unit, or move to a plain
+   *  point. Falls back to the stored point when a smart target is gone (mine mined
+   *  out, tree felled, unit dead — WC3's "last spot"). */
   private applyRally(simId: number, rally: { kind: RallyKind; targetId: number; x: number; y: number }): void {
     const world = this.rts?.simWorld;
     if (!world) return;
@@ -1069,7 +1090,9 @@ export class MapViewerScene {
       if (world.issueHarvest(simId, "lumber", rally.targetId)) return;
     } else if (rally.kind === "unit") {
       const t = world.units.get(rally.targetId);
-      if (t) { world.issueMove(simId, t.x, t.y); return; } // move to its current position
+      // Follow the rallied unit rather than moving to its frozen spawn-time spot,
+      // so the new unit trails the leader as it moves (issue #32).
+      if (t) { world.issueFollow(simId, rally.targetId); return; }
     }
     world.issueMove(simId, rally.x, rally.y);
   }
@@ -1079,13 +1102,9 @@ export class MapViewerScene {
   private async loadSelectionCircles(): Promise<void> {
     const map = this.viewer.map;
     if (!map) return;
-    const model = (await this.viewer.load("UI\\Feedback\\selectioncircle\\selectioncircle.mdx", this.solver)) as SpawnModel | undefined;
-    if (!model) return;
-    this.circleModel = model;
-    const seqs = (model as unknown as { sequences?: Array<{ name: string }> }).sequences ?? [];
-    const idx = (re: RegExp) => Math.max(0, seqs.findIndex((s) => re.test(s.name)));
-    this.circleSeq = { friendly: idx(/^friendly$/i), enemy: idx(/^enemy$/i), neutral: idx(/^neutral$/i) };
-    this.hoverCircle = this.newCircle();
+    // Selection/hover/preview/flash rings are no longer flat MDX models — they're painted
+    // through the ringSplats overlay (terrain-conforming, issue #34). Only the 3D order
+    // feedback (rally flag, queue flags, confirmation arrows) stays as real models below.
     // Move/attack order-confirmation arrows (one model, tinted per order type).
     this.arrowModel = ((await this.viewer.load("UI\\Feedback\\Confirmation\\Confirmation.mdx", this.solver)) as SpawnModel | undefined) ?? null;
     // Preload the local race's cancel-explosion so the first cancel is instant.
@@ -1410,15 +1429,6 @@ export class MapViewerScene {
     return best;
   }
 
-  private newCircle(): SpawnInstance | null {
-    const map = this.viewer.map;
-    if (!this.circleModel || !map) return null;
-    const inst = this.circleModel.addInstance();
-    inst.setScene(map.worldScene);
-    inst.setSequenceLoopMode(2);
-    inst.hide();
-    return inst;
-  }
 
   /** Position/scale/colour the flat selection + hover rings each frame, plus
    *  the transient yellow harvest-order flashes. */
@@ -1433,26 +1443,19 @@ export class MapViewerScene {
     const cast = this.rts?.armedCast ?? null;
     const aiming = !!cast;
     const aoeAiming = !!(cast && cast.target === "point" && cast.area);
+    // The ring keys painted this frame; anything in ringKeys that isn't refreshed here
+    // is a stale ring (deselected unit / expired flash) and gets removed at the end.
+    const live = new Set<string>();
     const rings = aiming ? [] : (this.rts?.selectionRings() ?? []);
-    for (let i = 0; i < rings.length; i++) {
-      // Retry while null (the circle model may not have loaded yet); newCircle
-      // is a no-op returning null until then, so this doesn't leak.
-      if (!this.selCircles[i]) this.selCircles[i] = this.newCircle();
-      this.placeCircle(this.selCircles[i], rings[i], null);
-    }
-    for (let i = rings.length; i < this.selCircles.length; i++) this.selCircles[i]?.hide();
+    for (let i = 0; i < rings.length; i++) this.addRing(`sel-${i}`, rings[i], null, false, live);
     // Live drag-box preview: full-green rings on the units the marquee currently
     // covers, so the player sees the pick before releasing the mouse.
     const preview = aiming ? [] : (this.rts?.previewRings() ?? []);
-    for (let i = 0; i < preview.length; i++) {
-      if (!this.previewCircles[i]) this.previewCircles[i] = this.newCircle();
-      this.placeCircle(this.previewCircles[i], preview[i], null);
-    }
-    for (let i = preview.length; i < this.previewCircles.length; i++) this.previewCircles[i]?.hide();
+    for (let i = 0; i < preview.length; i++) this.addRing(`prev-${i}`, preview[i], null, false, live);
     // hoverRing() already returns null when the hovered unit is selected. Dimmed so
     // a hover ring stays more discrete than the committed selection rings. Kept for a
     // single-target aim (the target indicator); dropped for a point-AoE aim.
-    this.placeCircle(this.hoverCircle, aoeAiming ? null : (this.rts?.hoverRing() ?? null), null, true);
+    this.addRing("hover", aoeAiming ? null : (this.rts?.hoverRing() ?? null), null, true, live);
     // Rally flag at the selected building's rally point.
     if (this.rallyFlag) {
       const rally = this.rts?.selectedRally() ?? null;
@@ -1479,7 +1482,49 @@ export class MapViewerScene {
     }
     for (let i = markers.length; i < this.queueFlags.length; i++) this.queueFlags[i].hide();
     this.updateAoeCircle();
-    this.tickFlashCircles(dt);
+    this.tickFlashCircles(dt, live);
+    // Prune ring overlay entries that weren't repainted this frame.
+    for (const key of this.ringKeys) if (!live.has(key)) this.ringSplats?.remove(key);
+    this.ringKeys = live;
+  }
+
+  /** Paint one selection/hover/preview/flash ring into the terrain-conforming overlay
+   *  (issue #34). `tint` non-null = a flash (its colour carries the ring); otherwise the
+   *  colour is by alliance (green own/allied, red hostile, yellow neutral-passive). `dim`
+   *  fades a hover ring. `live` collects the keys painted this frame for pruning. */
+  private addRing(
+    key: string,
+    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; neutral?: boolean; isBuilding?: boolean } | null,
+    tint: number[] | null,
+    dim: boolean,
+    live: Set<string>,
+  ): void {
+    if (!this.ringSplats || !info) return;
+    // Ring colour — same rules as the old flat model: flashes carry their own tint off a
+    // white base; real rings colour by alliance (own/allied green, else red; neutral-
+    // passive yellow). The overlay MULTIPLIES this into the (white) ring texture.
+    let vcolor: number[];
+    if (tint) {
+      vcolor = tint;
+    } else if (info.neutral) {
+      vcolor = MapViewerScene.NEUTRAL_RING_TINT;
+    } else {
+      const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
+      vcolor = friendly ? MapViewerScene.FRIENDLY_RING_TINT : MapViewerScene.ENEMY_RING_TINT;
+    }
+    // Half-width matches the old model sizing (scale = max(0.7, radius/38), native 38),
+    // so a ring's outer edge still lands on the unit's click collider.
+    const scale = Math.max(0.7, info.radius / 38);
+    const half = scale * RING_NATIVE;
+    // Small rings (workers, critters) get a hair more additive glow so their thin border
+    // reads about as bold as a big unit's — the same nudge the flat model used.
+    const thicken = scale < 1 ? 1 + (1 - scale) * 0.4 : 1;
+    let mult = thicken;
+    if (dim) mult *= MapViewerScene.HOVER_RING_DIM; // hover rings read fainter than a committed selection
+    if (mult !== 1) vcolor = vcolor.map((c) => c * mult);
+    const texture = info.isBuilding ? RING_TEX_BUILDING : RING_TEX_UNIT;
+    this.ringSplats.add(key, info.x, info.y, half, texture, { tint: [vcolor[0], vcolor[1], vcolor[2]], additive: true });
+    live.add(key);
   }
 
   /** AoE cast indicator at the cursor while a point-target area spell (Blizzard,
@@ -1515,39 +1560,35 @@ export class MapViewerScene {
     return def ? def.levelData[Math.min(ab!.level, def.levelData.length) - 1].area || 0 : 0;
   }
 
-  /** Draw + time the harvest-/attack-order flashes (flat ground rings, twice):
-   *  yellow for a harvest target, red for an attack target (colour per request). */
-  private tickFlashCircles(dt: number): void {
+  /** Time the harvest-/attack-order flashes (terrain-conforming ground rings, blinking
+   *  twice): yellow for a harvest target, red for an attack target (colour per request).
+   *  A flash is painted into ringSplats each frame it's "on"; `live` collects its key so
+   *  the frame's prune keeps it, and simply not adding it on an "off" frame hides it. */
+  private tickFlashCircles(dt: number, live: Set<string>): void {
     for (const req of this.rts?.drainFlashes() ?? []) {
-      const inst = this.newCircle();
-      if (!inst) break;
-      this.flashCircles.push({ inst, t: 0.7 });
-      this.placeCircle(inst, { x: req.x, y: req.y, z: req.z, radius: req.radius, owner: -2, team: -2, sizeToRadius: req.sizeToRadius }, req.color);
+      this.flashRings.push({ id: this.flashSeq++, t: 0.7, x: req.x, y: req.y, radius: req.radius, color: req.color, sizeToRadius: req.sizeToRadius });
     }
-    for (let i = this.flashCircles.length - 1; i >= 0; i--) {
-      const f = this.flashCircles[i];
+    for (let i = this.flashRings.length - 1; i >= 0; i--) {
+      const f = this.flashRings[i];
       f.t -= dt;
-      // Two on/off blinks over 0.7s.
-      const on = f.t > 0 && (f.t % 0.35) > 0.12;
-      if (on) f.inst.show();
-      else f.inst.hide();
       if (f.t <= 0) {
-        f.inst.hide();
-        this.flashCircles.splice(i, 1);
+        this.flashRings.splice(i, 1);
+        continue;
       }
+      // Two on/off blinks over 0.7s — paint the ring only on the "on" phase.
+      const on = (f.t % 0.35) > 0.12;
+      if (on) this.addRing(`flash-${f.id}`, { x: f.x, y: f.y, z: 0, radius: f.radius, owner: -2, team: -2 }, f.color, false, live);
     }
   }
 
   // --- projectiles (missile models) -----------------------------------------
 
-  // Rings size to each unit's selRadius (see placeCircle) so they match the click
-  // collider; a tiny lift keeps them just above the terrain.
-  private static readonly CIRCLE_LIFT = 13; // sit the rings a bit higher (units + buildings)
-  // Vertex-colour tints for the alliance selection/hover rings. The tint MULTIPLIES
-  // the model's team texture, so zeroing the off-channels forces each ring to its
-  // pure primary — extreme, unambiguous colours at a glance (green = 0,255,0;
-  // red = 255,0,0; yellow = 255,255,0). Hover rings scale these down (HOVER_RING_DIM)
-  // to stay discrete next to a committed selection.
+  // Rings size to each unit's selRadius (see addRing) so they match the click collider;
+  // the ringSplats overlay lifts them a hair off the terrain to avoid z-fight.
+  // Colour tints for the alliance selection/hover rings. The tint MULTIPLIES the (white)
+  // ring texture, so zeroing the off-channels forces each ring to its pure primary —
+  // extreme, unambiguous colours at a glance (green = 0,1,0; red = 1,0,0; yellow = 1,1,0).
+  // Hover rings scale these down (HOVER_RING_DIM) to stay discrete next to a selection.
   private static readonly FRIENDLY_RING_TINT = [0, 1, 0]; // your/allied units — pure green
   private static readonly ENEMY_RING_TINT = [1, 0, 0]; // hostiles + creeps — pure red
   private static readonly NEUTRAL_RING_TINT = [1, 1, 0]; // neutral-passive (mines/shops) — pure yellow
@@ -1682,61 +1723,6 @@ export class MapViewerScene {
     return (workerId && this.registry.get(workerId)?.icon) || null;
   }
 
-  private placeCircle(
-    inst: SpawnInstance | null,
-    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; sizeToRadius?: boolean; neutral?: boolean } | null,
-    tint: number[] | null,
-    dim = false,
-  ): void {
-    if (!inst) return;
-    if (!info) {
-      inst.hide();
-      return;
-    }
-    inst.show();
-    this.loc3[0] = info.x;
-    this.loc3[1] = info.y;
-    // Ring diameter matches the unit's CLICK/selection collider (drawn at radius
-    // = selRadius by the "Show Colliders" overlay): the ring model's native radius
-    // is ~38 world units, so scale = radius/38 makes its outer edge land on the
-    // collider ring. Units, buildings, mines and items all size the same way now,
-    // so an order flash on a target is the SAME size as hovering/selecting it (a
-    // large-selScale unit no longer gets a ring smaller than its collider). Lifted
-    // a hair off the terrain to avoid z-fight.
-    const scale = Math.max(0.7, info.radius / 38);
-    // Small rings (workers, small critters) draw a thin border; nudge their
-    // additive glow a touch wider so they read about as bold as a large unit's
-    // ring without growing the ring off its collider. Full-size rings unchanged.
-    const thicken = scale < 1 ? 1 + (1 - scale) * 0.4 : 1; // ~1.12x at the 0.7 floor
-    this.loc3[2] = info.z - 14 * scale + MapViewerScene.CIRCLE_LIFT;
-    inst.setLocation(this.loc3);
-    inst.setUniformScale(scale);
-    // Flashes (tinted) use the neutral (white) base so the tint carries the
-    // colour cleanly. Real selection/hover rings colour by alliance: your own
-    // and allied (same-team) units are green, everyone else — including
-    // neutral-hostile creeps — is red.
-    let seq: number;
-    let vcolor = tint ?? [1, 1, 1];
-    if (tint) {
-      seq = this.circleSeq.neutral; // flashes use the neutral base so the tint carries the colour cleanly
-    } else if (info.neutral) {
-      seq = this.circleSeq.neutral; // neutral-passive (gold mine / shop) — pure yellow
-      vcolor = MapViewerScene.NEUTRAL_RING_TINT;
-    } else {
-      const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
-      seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;
-      vcolor = friendly ? MapViewerScene.FRIENDLY_RING_TINT : MapViewerScene.ENEMY_RING_TINT; // pure green / pure red
-    }
-    // Widen small rings a hair (additive glow scales with brightness).
-    if (thicken !== 1) vcolor = vcolor.map((c) => c * thicken);
-    // Hover rings read as a fainter, more "discrete" version of the committed
-    // selection ring: scale the (additive-blended) ring colour down so its glow is
-    // dimmer than a real selection — applies to every colour (green/red/yellow).
-    if (dim) vcolor = vcolor.map((c) => c * MapViewerScene.HOVER_RING_DIM);
-    inst.setVertexColor(vcolor);
-    inst.setSequence(seq);
-    inst.setSequenceLoopMode(2);
-  }
 
   /** Every cell of the building's full (blue) pathTex footprint must be buildable.
    *  We test the UNBUILDABLE footprint — not just the unwalkable red core — so a
@@ -2973,11 +2959,13 @@ export class MapViewerScene {
         fogScene.renderOpaque();
         map.renderWater();
         if (this.splats) this.splats.render(fogScene.camera.viewProjectionMatrix);
+        if (this.ringSplats) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderTranslucent();
       } else {
         // Map not fully ready — fall back to the stock all-in-one path (splats after).
         this.viewer.render();
         if (this.splats && fogScene) this.splats.render(fogScene.camera.viewProjectionMatrix);
+        if (this.ringSplats && fogScene) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
       }
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
       // Building-placement footprint grid (green = buildable, red = obstructed) — drawn
@@ -3013,6 +3001,9 @@ export class MapViewerScene {
     this.rts = null;
     this.splats?.dispose();
     this.splats = null;
+    this.ringSplats?.dispose();
+    this.ringSplats = null;
+    this.ringKeys.clear();
     this.simBuildingSplats.clear();
     this.debug?.dispose();
     this.debug = null;

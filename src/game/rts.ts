@@ -111,6 +111,7 @@ export interface RingInfo {
   team: number;
   sizeToRadius?: boolean; // scale the ring to `radius` (buildings/mines) vs constant
   neutral?: boolean; // neutral-passive (yellow) ring, e.g. a gold mine
+  isBuilding?: boolean; // draw the square bracket ring (SelectionCircleBuilding) vs the round one
 }
 
 // Resolved animation-sequence indices for a unit. Worker carry/chop variants
@@ -119,7 +120,9 @@ interface AnimSet {
   stand: number;
   walk: number;
   attack: number;
-  attackVariants: number[]; // all combat-attack clips; a random one plays per swing
+  attackVariants: number[]; // empty-handed combat-attack clips; a random one plays per swing
+  attackGold: number[]; // "Attack Gold" — the swing while carrying gold (fallback: base attack)
+  attackLumber: number[]; // "Attack Lumber" — the swing while carrying lumber (fallback: base attack)
   death: number;
   standGold: number;
   walkGold: number;
@@ -137,20 +140,27 @@ function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
   const stand = find(/^stand(\s|$|-)/i) >= 0 ? find(/^stand(\s|$|-)/i) : find(/^stand/i);
   const walk = find(/^walk\s*$/i) >= 0 ? find(/^walk\s*$/i) : find(/walk/i);
   const attack = find(/^attack\s*$/i) >= 0 ? find(/^attack\s*$/i) : find(/attack/i);
-  // Every basic combat-attack clip (e.g. "Attack -1"/"Attack -2"), so a random
-  // one can play per swing. Excludes the lumber chop, the Defend stance, hero
-  // Alternate-form attacks, and "Attack Slam" — that clip is reserved for
-  // ability casts (e.g. the Mountain King's bash), not the auto-attack rotation.
-  const attackVariants = seqs
+  // Every *empty-handed* combat-attack clip (e.g. "Attack -1"/"Attack -2"), so a
+  // random one can play per swing. Excludes the carry-attack clips ("Attack Gold"/
+  // "Attack Lumber" — those are picked by carry state, below), the Defend stance,
+  // hero Alternate-form attacks, and "Attack Slam" (reserved for ability casts like
+  // the Mountain King's bash, not the auto-attack rotation). Without the gold/lumber
+  // exclusion an empty-handed worker could randomly swing its "carrying" attack
+  // animation (and a laden one its empty swing) — issue #35.
+  const attackClips = seqs
     .map((s, i) => ({ n: s.name, i }))
-    .filter(({ n }) => /attack/i.test(n) && !/lumber|defend|alternate|slam/i.test(n))
-    .map(({ i }) => i);
+    .filter(({ n }) => /attack/i.test(n) && !/defend|alternate|slam/i.test(n));
+  const attackVariants = attackClips.filter(({ n }) => !/gold|lumber/i.test(n)).map(({ i }) => i);
+  const attackGold = attackClips.filter(({ n }) => /gold/i.test(n)).map(({ i }) => i);
+  const attackLumber = attackClips.filter(({ n }) => /lumber/i.test(n)).map(({ i }) => i);
   const or = (a: number, b: number) => (a >= 0 ? a : b);
   return {
     stand,
     walk,
     attack,
     attackVariants: attackVariants.length ? attackVariants : attack >= 0 ? [attack] : [],
+    attackGold,
+    attackLumber,
     death: find(/^death/i),
     standGold: or(find(/stand gold/i), stand),
     walkGold: or(find(/walk gold/i), walk),
@@ -1413,10 +1423,20 @@ export class RtsController {
           e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
         }
       } else if (attacking) {
-        if (u.swingSeq !== e.lastSwingSeq || !e.anims.attackVariants.includes(e.curSeq)) {
+        // Pick the swing pool matching the worker's carry state so a laden worker
+        // swings its "Attack Gold"/"Attack Lumber" clip and an empty-handed one its
+        // plain attack — never a random mix (issue #35). Carry pools fall back to the
+        // empty-handed variants when a model lacks a carry-attack clip.
+        const w = u.worker;
+        const vs =
+          w && w.carryGold > 0 && e.anims.attackGold.length
+            ? e.anims.attackGold
+            : w && w.carryLumber > 0 && e.anims.attackLumber.length
+              ? e.anims.attackLumber
+              : e.anims.attackVariants;
+        if (u.swingSeq !== e.lastSwingSeq || !vs.includes(e.curSeq)) {
           e.lastSwingSeq = u.swingSeq;
-          const vs = e.anims.attackVariants;
-          const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : e.anims.attack;
+          const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : (vs[0] ?? e.anims.attack);
           e.curSeq = pick;
           e.unit.state = WALK; // non-stand state prevents mdx-m3-viewer's auto-stand
           e.unit.instance.setSequence(pick);
@@ -2377,7 +2397,7 @@ export class RtsController {
       // entities ring yellow.
       // Air units' ring floats at their flight altitude (e.moveHeight matches the
       // model's drawn base), so it hugs the unit instead of sitting on the ground.
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building });
     }
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
@@ -2399,7 +2419,7 @@ export class RtsController {
     for (const id of this.previewIds) {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building });
     }
     return out;
   }
@@ -2411,7 +2431,7 @@ export class RtsController {
     if (this.hovered !== null && !this.selected.has(this.hovered)) {
       const u = this.sim.units.get(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive };
+      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building };
     }
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);

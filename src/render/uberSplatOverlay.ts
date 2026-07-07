@@ -31,13 +31,16 @@ void main() {
 const FRAG_SRC = `
 precision mediump float;
 uniform sampler2D uTex;
+uniform vec3 uTint;
 varying vec2 vUv;
 void main() {
   // Clip to the splat's [0,1] box: cells we tessellated may spill past it.
   if (vUv.x < 0.0 || vUv.x > 1.0 || vUv.y < 0.0 || vUv.y > 1.0) discard;
   vec4 c = texture2D(uTex, vUv);
   if (c.a < 0.01) discard; // skip the fully-transparent margin of the splat texture
-  gl_FragColor = c;
+  // uTint recolours the splat (white = unchanged) — carries the alliance colour of a
+  // selection ring; building/AoE splats pass white so they render as-authored.
+  gl_FragColor = vec4(c.rgb * uTint, c.a);
 }`;
 
 // A hair of world lift + a slope-scaled depth bias so the coplanar decal reliably wins
@@ -56,6 +59,15 @@ interface SplatEntry {
   uvBuf: WebGLBuffer;
   count: number; // vertex count (non-indexed triangles)
   texture: string; // BLP path (key into the texture cache)
+  tint: [number, number, number]; // colour multiplier ([1,1,1] = unchanged)
+  additive: boolean; // ADDITIVE blend (selection-ring glow) vs alpha blend (foundation decal)
+}
+
+/** Per-splat options. `tint` recolours the texture (default white); `additive`
+ *  switches to additive blending for a glowing ring (default alpha blend). */
+export interface SplatOptions {
+  tint?: [number, number, number];
+  additive?: boolean;
 }
 
 interface CachedTexture {
@@ -72,6 +84,7 @@ export class UberSplatOverlay {
   private aUv: number;
   private uViewProj: WebGLUniformLocation;
   private uTex: WebGLUniformLocation;
+  private uTint: WebGLUniformLocation;
   private maxAttribs: number;
   private entries = new Map<string, SplatEntry>();
   private textures = new Map<string, CachedTexture>();
@@ -86,6 +99,7 @@ export class UberSplatOverlay {
     this.aUv = gl.getAttribLocation(this.program, "aUv");
     this.uViewProj = gl.getUniformLocation(this.program, "uViewProj")!;
     this.uTex = gl.getUniformLocation(this.program, "uTex")!;
+    this.uTint = gl.getUniformLocation(this.program, "uTint")!;
   }
 
   has(id: string | number): boolean {
@@ -95,7 +109,7 @@ export class UberSplatOverlay {
   /** Add (or replace) a splat centred at world (x, y): a `2*scale`-wide square of
    *  `texture`, tessellated over the terrain cells it overlaps. Cheap — a building
    *  splat covers only a handful of cells. */
-  add(id: string | number, x: number, y: number, scale: number, texture: string): void {
+  add(id: string | number, x: number, y: number, scale: number, texture: string, opts?: SplatOptions): void {
     const key = String(id);
     this.remove(key); // drop any prior geometry for this id
     const { pos, uv, count } = this.buildGeometry(x, y, scale);
@@ -103,7 +117,7 @@ export class UberSplatOverlay {
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     const uvBuf = createBuffer(gl, gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
-    this.entries.set(key, { posBuf, uvBuf, count, texture });
+    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false });
     // Decode the BLP once (synchronous); the GL texture is uploaded lazily in render().
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });
@@ -202,7 +216,6 @@ export class UberSplatOverlay {
 
     gl.useProgram(this.program);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.depthMask(false); // sit on the world's depth, don't overwrite it (units stay in front)
@@ -220,6 +233,11 @@ export class UberSplatOverlay {
     for (const e of this.entries.values()) {
       const tex = this.resolveTexture(e.texture);
       if (!tex) continue; // texture missing/undecodable — skip
+      // Per-entry blend: additive for glowing selection rings, alpha for foundation
+      // decals. SRC_ALPHA on both so the texture's alpha still shapes the mark.
+      if (e.additive) gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.uniform3fv(this.uTint, e.tint);
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.bindBuffer(gl.ARRAY_BUFFER, e.posBuf);
       gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);

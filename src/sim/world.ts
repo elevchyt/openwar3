@@ -323,6 +323,11 @@ export interface SimUnit {
   // so they hold a spread instead of stacking on the leader's centre and shoving.
   followOffX: number;
   followOffY: number;
+  // Leader to RESUME following after an opportunistic fight ends (issue #32): a
+  // follower that reaches its leader guards it, attacking nearby enemies, but once
+  // the fight is over it returns to trailing instead of going idle. Non-null only
+  // while such a follow-and-fight is in flight; a fresh player order clears it.
+  followLeaderId: number | null;
   // Attack-formation slot: a distinct offset from the TARGET's centre this unit
   // stands at to attack, so a group swarming one enemy fans out around it (WC3
   // surround) instead of lining up. atkOffTarget marks which target the slot was
@@ -1118,6 +1123,7 @@ export class SimWorld {
       | "chaseY"
       | "followOffX"
       | "followOffY"
+      | "followLeaderId"
       | "atkOffX"
       | "atkOffY"
       | "atkOffTarget"
@@ -1241,6 +1247,7 @@ export class SimWorld {
       chaseY: 0,
       followOffX: 0,
       followOffY: 0,
+      followLeaderId: null,
       atkOffX: 0,
       atkOffY: 0,
       atkOffTarget: -1,
@@ -1715,6 +1722,11 @@ export class SimWorld {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || !u.weapon || (!force && !this.hostile(u, t))) return false;
+    // A FRESH attack (from any non-attack state — a player command, idle auto-acquire,
+    // a follower peeling off to fight) drops any pending resume-to-follow. Re-targeting
+    // WITHIN an ongoing fight (reacquire after a kill, switching to a reachable enemy)
+    // leaves it intact — the whole combat episode still belongs to that follow (#32).
+    if (u.order !== "attack") u.followLeaderId = null;
     u.order = "attack";
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
@@ -1835,6 +1847,7 @@ export class SimWorld {
     u.targetId = targetId;
     u.followOffX = offX;
     u.followOffY = offY;
+    u.followLeaderId = null; // fresh follow — no fight in flight yet; tickFollow arms it
     u.inCombat = false;
     u.noCollision = false;
     this.cancelSwing(u);
@@ -1849,6 +1862,7 @@ export class SimWorld {
     if (u) {
       u.order = "idle";
       u.targetId = null;
+      u.followLeaderId = null; // an explicit stop ends any follow-and-guard episode
       u.inCombat = false;
       u.working = false;
       u.atNode = false;
@@ -3045,7 +3059,7 @@ export class SimWorld {
           this.tickGetItem(u); // walk to a ground item / another hero, then pick up / hand over
           break;
         case "follow":
-          this.tickFollow(u);
+          this.tickFollow(u, dt); // trail the leader; guard it against nearby enemies once caught up
           break;
         case "harvest":
           this.tickHarvest(u, dt);
@@ -3329,6 +3343,13 @@ export class SimWorld {
         this.issueAttack(u.id, next.id);
         return;
       }
+    }
+    // A follower that peeled off to guard its leader has cleared the area — return to
+    // trailing it rather than falling idle where it stands (issue #32). The leader may
+    // have moved off during the fight; issueFollow re-homes on it (dead → fall to idle).
+    if (u.followLeaderId !== null && this.units.has(u.followLeaderId)) {
+      this.issueFollow(u.id, u.followLeaderId, u.followOffX, u.followOffY);
+      return;
     }
     this.stop(u.id);
   }
@@ -3696,42 +3717,59 @@ export class SimWorld {
   }
 
   /** Follow a leader: trail it at FOLLOW_GAP, parking when close and re-approaching
-   *  when it moves off. No target acquisition — a follower only follows (WC3). If
-   *  the leader dies/vanishes, stop where we stand. A group told to follow one unit
-   *  carries a formation offset (followOff*) so each holds a distinct slot around
-   *  the leader instead of stacking on its centre and shoving. */
-  private tickFollow(u: SimUnit): void {
+   *  when it moves off. If the leader dies/vanishes, stop where we stand. A group
+   *  told to follow one unit carries a formation offset (followOff*) so each holds a
+   *  distinct slot around the leader instead of stacking on its centre and shoving.
+   *  Once caught up, a follower GUARDS its leader — it strikes an enemy that comes
+   *  within its own acquisition range, then returns to trailing when the fight ends
+   *  (issue #32). While still marching up it never peels off, so it doesn't wander. */
+  private tickFollow(u: SimUnit, dt: number): void {
     const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (!t) {
       this.stop(u.id);
       return;
     }
-    // Fanned follower: home on its slot (leader centre + offset). The slot moves
-    // with the leader, so it trails while keeping its place in the spread.
-    if (u.followOffX !== 0 || u.followOffY !== 0) {
-      const ax = t.x + u.followOffX;
-      const ay = t.y + u.followOffY;
-      const d = Math.hypot(ax - u.x, ay - u.y);
-      // Same hysteresis as the lone case (see below), measured to the slot.
-      const arrive = u.moving ? FOLLOW_SLOT_ARRIVE : FOLLOW_SLOT_ARRIVE + FOLLOW_LEASH;
-      if (d > arrive) {
-        this.chasePoint(u, ax, ay);
-      } else {
-        if (u.moving) this.settle(u);
-        u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x); // face the leader while parked
+    // The point we trail: our formation slot (leader centre + offset) when fanned,
+    // else the leader itself at FOLLOW_GAP. `d` is the distance to it (hull gap in the
+    // lone case). Hysteresis: while parked, tolerate the leader drifting out by
+    // FOLLOW_LEASH before re-chasing, so small leader movement (or the settle snap)
+    // doesn't oscillate the walk↔stand clip — the follow-animation "jiggle".
+    const slotted = u.followOffX !== 0 || u.followOffY !== 0;
+    const ax = slotted ? t.x + u.followOffX : t.x;
+    const ay = slotted ? t.y + u.followOffY : t.y;
+    const d = slotted
+      ? Math.hypot(ax - u.x, ay - u.y)
+      : Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    const arrive = slotted
+      ? u.moving
+        ? FOLLOW_SLOT_ARRIVE
+        : FOLLOW_SLOT_ARRIVE + FOLLOW_LEASH
+      : u.moving
+        ? FOLLOW_GAP
+        : FOLLOW_GAP + FOLLOW_LEASH;
+    const caughtUp = d <= arrive;
+    // Guard the leader: once caught up, peel off to strike the nearest enemy within
+    // our OWN acquisition range (a follower still marching up keeps moving instead of
+    // wandering off). issueAttack switches us to the attack order and arms the resume;
+    // when that fight ends with nothing left in range, reacquireOrStop returns us here.
+    if (caughtUp && u.weapon && u.weapon.acquire > 0 && !u.isCreep) {
+      u.acquireT -= dt; // throttle the O(units) scan (same period as idle auto-acquire)
+      if (u.acquireT <= 0) {
+        u.acquireT = ACQUIRE_PERIOD;
+        const enemy = this.acquireTarget(u, u.weapon.acquire);
+        if (enemy) {
+          const leaderId = u.targetId; // save: issueAttack overwrites targetId with the enemy
+          if (this.issueAttack(u.id, enemy.id)) u.followLeaderId = leaderId; // resume-to-follow
+          return;
+        }
       }
-      return;
     }
-    const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    // Hysteresis: while parked, tolerate the leader drifting out to FOLLOW_GAP +
-    // FOLLOW_LEASH before re-chasing, so small leader movements (or the settle
-    // snap) don't oscillate the walk↔stand clip — the follow-animation "jiggle".
-    const chaseGap = u.moving ? FOLLOW_GAP : FOLLOW_GAP + FOLLOW_LEASH;
-    if (gap > chaseGap) {
-      this.chase(u, t); // approach (chasePoint repaths as the leader strays)
+    if (!caughtUp) {
+      if (slotted) this.chasePoint(u, ax, ay);
+      else this.chase(u, t); // approach (chasePoint repaths as the leader strays)
     } else {
       if (u.moving) this.settle(u); // caught up — hold position near the leader
-      u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+      u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x); // face the leader while parked
     }
   }
 
