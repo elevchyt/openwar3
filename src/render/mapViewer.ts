@@ -2997,6 +2997,23 @@ export class MapViewerScene {
     const vision = this.rts.getVision();
     this.fog.update(vision);
     this.fogWidgets(vision);
+    this.fogItems(vision);
+  }
+
+  /** Conceal ground items outside current sight. Unlike buildings (which persist in
+   *  explored fog as greyed memory), WC3 hides dropped items whenever the area isn't
+   *  currently visible and re-shows them the instant vision returns — so this is a hard
+   *  show/hide on live visibility, not a tint. */
+  private fogItems(vision: VisionMap): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const [id, inst] of this.itemInstances) {
+      const it = world.items.get(id);
+      if (!it) continue;
+      const visible = vision.revealed || vision.stateAt(it.x, it.y) === FogState.Visible;
+      if (visible) inst.show();
+      else inst.hide();
+    }
   }
 
   // Explored (remembered-but-not-seen) props are shown at half brightness, matching
@@ -3124,6 +3141,11 @@ export class MapViewerScene {
     const rings: number[] = [];
     for (const c of this.rts?.debugUnitColliders() ?? []) {
       pushColliderRing(rings, c.x, c.y, c.z, c.radius, COLLIDER_COLORS.click, c.building ? 24 : 16);
+    }
+    // Ground items expose a click/selection radius too — draw it green like a unit's so
+    // it's clear how large (or small, vs a nearby gold mine) an item's pickable area is.
+    for (const c of this.rts?.debugItemColliders() ?? []) {
+      pushColliderRing(rings, c.x, c.y, c.z, c.radius, COLLIDER_COLORS.click, 16);
     }
     this.dbgUnitRings = Float32Array.from(rings);
     this.dbgUnitVerts = rings.length / FLOATS_PER_VERT;

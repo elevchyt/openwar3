@@ -62,8 +62,9 @@ export class ItemRegistry {
   /** Resolve a dropped-item id from a creep's drop set to a concrete item. The id
    *  is either a real item rawcode ("ratf") or a "random item of level N" marker
    *  `Y<class><'I'><level>` (e.g. YkI1) that the World Editor writes for a random
-   *  drop — verified against the bundled melee maps. `l`=Artifact (lv 7-8),
-   *  `k`=Purchasable, `i`=Permanent, `j`=Charged, `Y…`=any. Returns null (no drop)
+   *  drop — verified against the bundled melee maps. `i`=Permanent, `j`=Charged,
+   *  `k`=PowerUp (tomes), `l`=Artifact, `Y…`=any (see RANDOM_CLASS_BY_LETTER).
+   *  Returns null (no drop)
    *  when the id is unknown/empty (e.g. the "gold" coins marker we don't drop). */
   resolveDrop(id: string, rng: () => number): ItemDef | null {
     if (!id) return null;
@@ -82,13 +83,19 @@ export class ItemRegistry {
   }
 }
 
-// Random-drop class-filter letters (the 2nd char of a `Y?I?` marker). Verified by
-// level distribution across the bundled maps: `l` markers appear only at levels 7-8
-// (the Artifact band), `k` dominates level 1 (Purchasable consumables).
+// Random-drop class-filter letters (the 2nd char of a `Y?I?` marker). The letter is
+// `'h' + WC3 item-class index` (Permanent=1, Charged=2, PowerUp=3, Artifact=4), with a
+// literal `Y` meaning "any class". Verified by decoding the drop markers across all 161
+// bundled maps AND cross-checking each letter's level band against the class inventory:
+// `i` (Permanent) spans lv 1-6, `j` (Charged) lv 1-6, `k` (PowerUp = tomes/manuals) is
+// overwhelmingly lv 1-2 (the tome band), `l` (Artifact) appears ONLY at lv 7-8. The
+// earlier `k`=Purchasable guess was wrong: it silently sent every `YkI1`/`YkI2` slot —
+// the single most common drop marker in the game — through the "no items of that class,
+// fall back to any" path, diluting tomes out of existence. `k`=PowerUp fixes tome drops.
 const RANDOM_CLASS_BY_LETTER: Record<string, string | undefined> = {
   i: "Permanent",
   j: "Charged",
-  k: "Purchasable",
+  k: "PowerUp",
   l: "Artifact",
   Y: undefined, // "any class"
 };

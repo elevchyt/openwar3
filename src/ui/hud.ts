@@ -1131,6 +1131,7 @@ export class GameHud {
       this.selCarry.textContent = "";
       this.progressWrap.hidden = true;
       this.selGrid.hidden = true;
+      this.selDesc.hidden = true; // clearing the selection also clears a shown item description
     }
   }
 
@@ -1141,6 +1142,7 @@ export class GameHud {
     this.selSub.textContent = "";
     this.progressWrap.hidden = true;
     this.selCarry.hidden = true;
+    this.selDesc.hidden = true; // a multi-unit recall (e.g. a control group) replaces a selected item
     this.selGridSlots.forEach((slot, i) => {
       const ic = icons[i];
       if (!ic) {

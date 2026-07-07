@@ -1620,20 +1620,13 @@ export class RtsController {
       this.announceSelection();
       return;
     }
-    // No unit under the cursor — a gold mine is clickable too (shows its gold).
+    // No unit under the cursor — a gold mine or a ground item is clickable too.
     const g = this.groundPoint(cssX, cssY);
     if (g) {
-      const m = this.sim.nearestMine(g[0], g[1], 300);
-      if (m) {
-        this.selected.clear();
-        this.primary = null;
-        this.selectedMine = m.id;
-        this.selectedItem = null;
-        this.voiceStreak = 0; // selecting a mine breaks a unit's re-click streak
-        this.lastVoiceId = null;
-        return;
-      }
-      // A ground item is clickable too — selecting it shows its portrait + description.
+      // A ground item is checked FIRST: its pick radius is tight (ITEM_PICK_RADIUS),
+      // while a mine's is broad (300), so an item dropped near a mine would otherwise be
+      // unclickable — the mine under the same click would always win. Directly clicking
+      // the item selects it; clicking the mine elsewhere still selects the mine.
       const it = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
       if (it) {
         this.selected.clear();
@@ -1641,6 +1634,16 @@ export class RtsController {
         this.selectedMine = null;
         this.selectedItem = it.id;
         this.voiceStreak = 0;
+        this.lastVoiceId = null;
+        return;
+      }
+      const m = this.sim.nearestMine(g[0], g[1], 300);
+      if (m) {
+        this.selected.clear();
+        this.primary = null;
+        this.selectedMine = m.id;
+        this.selectedItem = null;
+        this.voiceStreak = 0; // selecting a mine breaks a unit's re-click streak
         this.lastVoiceId = null;
         return;
       }
@@ -1767,10 +1770,11 @@ export class RtsController {
     if (this.hovered === null) {
       const g = this.groundPoint(cssX, cssY);
       if (g) {
-        const m = this.sim.nearestMine(g[0], g[1], 300);
-        this.hoveredMine = m ? m.id : null;
-        // A ground item is hoverable too (yellow ring), when no mine is under the cursor.
-        if (!m) this.hoveredItem = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS)?.id ?? null;
+        // Mirror selectAt's priority: a ground item (tight radius) wins over a mine
+        // (broad radius) so an item near a mine gets its own hover ring, not the mine's.
+        const it = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
+        if (it) this.hoveredItem = it.id;
+        else this.hoveredMine = this.sim.nearestMine(g[0], g[1], 300)?.id ?? null;
       }
     }
   }
@@ -1856,7 +1860,10 @@ export class RtsController {
         this.sim.issueGiveItem(id, armed.slot, picked);
       } else {
         const hit = this.groundHitAt(cssX, cssY);
-        if (hit) this.sim.dropItem(id, armed.slot, hit[0], hit[1]);
+        if (hit) {
+          this.sim.dropItem(id, armed.slot, hit[0], hit[1]);
+          this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move feedback — the hero walks over to drop
+        }
       }
       return true;
     }
@@ -2270,6 +2277,18 @@ export class RtsController {
       const e = this.byId.get(id);
       if (!e) continue;
       out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, building: u.building != null });
+    }
+    return out;
+  }
+
+  /** CLICK/selection colliders for every ground item — drawn (radius ITEM_PICK_RADIUS)
+   *  by the debug overlay so the pickable area an item exposes is visible (it's why an
+   *  item dropped by a gold mine can be hard to hit: its ring, not the mine's, must be
+   *  clicked). Kept separate from unit colliders since items aren't sim units. */
+  debugItemColliders(): Array<{ x: number; y: number; z: number; radius: number }> {
+    const out: Array<{ x: number; y: number; z: number; radius: number }> = [];
+    for (const it of this.sim.items.values()) {
+      out.push({ x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_PICK_RADIUS });
     }
     return out;
   }
