@@ -490,6 +490,12 @@ const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its lead
 const FOLLOW_LEASH = 48;
 const FOLLOW_SLOT_ARRIVE = 24; // how close a fanned follower parks to its formation slot
 const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
+// How far an idle unit will look to JOIN a fight a friend is already in (issue #24). It
+// wider than a unit's own acquisition range (~500) so a back-rank unit rallies to a
+// nearby melee instead of standing idle a few paces behind it, but bounded so an idle
+// unit doesn't sprint across the map to every distant skirmish. Only enemies actively
+// attacking an ally qualify (see assistTarget), so it never wakes a peaceful creep camp.
+const ASSIST_RANGE = 800;
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
 // When two units meet head-on, the lower-priority one pauses for YIELD_TIME so the
@@ -4500,8 +4506,15 @@ export class SimWorld {
     if (u.acquireT > 0) return;
     u.acquireT = ACQUIRE_PERIOD;
     // Creeps pick the highest-threat target (enemy units before buildings); other
-    // units auto-acquire the nearest VISIBLE enemy, skipping idle creep camps.
-    const best = u.isCreep ? this.bestCreepTarget(u, range) : this.acquireTarget(u, range);
+    // units auto-acquire the nearest VISIBLE enemy, skipping idle creep camps. When
+    // nothing's in that unit's own acquisition range, a non-creep also RALLIES to a fight
+    // a nearby friend is already in — an enemy just past its own range that's attacking an
+    // ally (issue #24: "units stand behind after the first kill; they should help friends
+    // fighting nearby"). This is what stops a back-rank unit idling while its group fights
+    // a few paces ahead. Creeps keep their own camp cohesion (campFightTarget) instead.
+    const best = u.isCreep
+      ? this.bestCreepTarget(u, range)
+      : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
     if (best) {
       this.issueAttack(u.id, best.id);
       if (u.isCreep) this.alertCamp(u, best);
@@ -4570,6 +4583,30 @@ export class SimWorld {
       if (gap < bestGap) {
         bestGap = gap;
         best = t;
+      }
+    }
+    return best;
+  }
+
+  /** Assist fallback for an idle unit with no enemy in its own acquisition range: the
+   *  nearest visible enemy within the wider ASSIST_RANGE that is ALREADY fighting one of
+   *  our side (its attack target is an ally). This rallies back-rank units to a fight a
+   *  few paces ahead instead of leaving them idle (issue #24). Because we require the
+   *  enemy to be actively attacking an ally, it never pulls an idle/un-aggroed creep camp
+   *  or an enemy minding its own business — only a fight already underway. */
+  private assistTarget(u: SimUnit, range: number): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestGap = range;
+    for (const e of this.units.values()) {
+      if (e === u || !this.hostile(u, e)) continue;
+      if (e.order !== "attack" || e.targetId === null) continue; // must be actively fighting
+      const victim = this.units.get(e.targetId);
+      if (!victim || this.hostile(u, victim)) continue; // it's attacking one of OUR side
+      if (!this.visibleToTeam(u.team, e.x, e.y)) continue; // fogged → can't see it
+      const gap = Math.hypot(e.x - u.x, e.y - u.y) - u.radius - e.radius;
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = e;
       }
     }
     return best;
