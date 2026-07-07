@@ -29,7 +29,7 @@ interface CreepSeed {
   aggro: number;
   drops: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
-import { STARTING_UNITS, WORKERS, resolveRace, type PlayableRace } from "../data/races";
+import { STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
@@ -702,27 +702,68 @@ export class MapViewerScene {
     // now, synchronously, before the first frame runs trySeed on any creep.
     this.rts.setStartLocationClearZones(config.slots.map((s) => ({ x: s.startX, y: s.startY })));
     for (const slot of config.slots) {
-      const roster = STARTING_UNITS[races.get(slot.id) ?? "human"];
-      const workerTotal = roster
-        .filter((r) => !this.registry.get(r.id)?.isBuilding)
-        .reduce((n, r) => n + r.count, 0);
-      let placed = 0;
-      for (const { id, count } of roster) {
+      const race = races.get(slot.id) ?? "human";
+      // Nearest gold mine to the start location (blizzard.j MeleeFindNearestMine,
+      // bj_MELEE_MINE_SEARCH_RADIUS = 2000). Workers cluster on the mine→hall line;
+      // the hall itself always sits on the start location.
+      const mine = this.nearestMine(slot.startX, slot.startY, 2000);
+      // Main hall(s) at the start location.
+      for (const { id, count } of STARTING_UNITS[race]) {
         const def = this.registry.get(id);
+        if (!def?.isBuilding) continue; // workers are placed from the authentic clusters below
+        for (let i = 0; i < count; i++) await this.spawnUnit(def, slot.startX, slot.startY, slot.id, slot.team);
+      }
+      // Workers in the authentic clump between the hall and the mine (blizzard.j
+      // MeleeStartingUnits*) instead of ringed around the hall.
+      const clusters = MELEE_WORKER_CLUSTERS[race];
+      for (const cluster of clusters) {
+        const def = this.registry.get(cluster.id);
         if (!def) continue;
-        for (let i = 0; i < count; i++) {
-          let x = slot.startX;
-          let y = slot.startY;
-          if (!def.isBuilding) {
-            // Ring the workers around the start location (in front of the hall).
-            const a = (placed++ / Math.max(1, workerTotal)) * Math.PI * 2;
-            x += Math.cos(a) * 300;
-            y += Math.sin(a) * 300;
-          }
-          await this.spawnUnit(def, x, y, slot.id, slot.team);
+        const [cx, cy] = this.meleeClusterCenter(slot.startX, slot.startY, mine, cluster);
+        for (const [ox, oy] of cluster.offsets) {
+          await this.spawnUnit(def, cx + ox * MELEE_UNIT_SPACING, cy + oy * MELEE_UNIT_SPACING, slot.id, slot.team);
         }
       }
+      // Frame the local player on their starting workers, as WC3 does (blizzard.j
+      // centres the camera on the initial peasants, not the town hall).
+      if (slot.id === this.localPlayer && clusters[0]) {
+        const [cx, cy] = this.meleeClusterCenter(slot.startX, slot.startY, mine, clusters[0]);
+        this.target[0] = cx;
+        this.target[1] = cy;
+      }
     }
+  }
+
+  /** Nearest gold mine to (x, y) within `radius`, or null (blizzard.j
+   *  MeleeFindNearestMine). The mine anchors the starting-worker clump. */
+  private nearestMine(x: number, y: number, radius: number): { x: number; y: number } | null {
+    let best: { x: number; y: number } | null = null;
+    let bestD = radius * radius;
+    for (const m of this.rts?.simWorld.mines.values() ?? []) {
+      const d = (m.x - x) ** 2 + (m.y - y) ** 2;
+      if (d <= bestD) {
+        bestD = d;
+        best = { x: m.x, y: m.y };
+      }
+    }
+    return best;
+  }
+
+  /** Centre of a starting-worker clump (blizzard.j MeleeGetProjectedLoc): `dist`
+   *  world units out from the cluster's anchor (mine or hall) toward the other.
+   *  With no mine on the map, fall back to blizzard's no-mine spot: 224u south of
+   *  the hall (workers then clump there instead of by a nonexistent mine). */
+  private meleeClusterCenter(
+    sx: number,
+    sy: number,
+    mine: { x: number; y: number } | null,
+    cluster: WorkerCluster,
+  ): [number, number] {
+    if (!mine) return [sx, sy - 224];
+    const anchor = cluster.anchor === "mine" ? mine : { x: sx, y: sy };
+    const toward = cluster.toward === "mine" ? mine : { x: sx, y: sy };
+    const dir = Math.atan2(toward.y - anchor.y, toward.x - anchor.x);
+    return [anchor.x + cluster.dist * Math.cos(dir), anchor.y + cluster.dist * Math.sin(dir)];
   }
 
   /** Custom / scenario / game-mode start (maps NOT flagged melee). Such a map

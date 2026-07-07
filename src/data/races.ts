@@ -28,6 +28,41 @@ export const STARTING_UNITS: Record<PlayableRace, Array<{ id: string; count: num
   nightelf: [{ id: "etol", count: 1 }, { id: "ewsp", count: 5 }],
 };
 
+// Authentic melee worker placement (blizzard.j MeleeStartingUnits*, verified vs
+// War3x.mpq Scripts\Blizzard.j — see the blizzard-j-melee-template memory). WC3
+// does NOT ring the workers around the town hall: it spawns them in a tight clump
+// on the line between the hall (start location) and the NEAREST GOLD MINE, sitting
+// `dist` world-units out from the mine (the ghoul instead sits out from the hall).
+// Offsets are per-worker (x, y) in multiples of MELEE_UNIT_SPACING around that
+// clump centre. bj_UNIT_FACING = 270° (south) is spawnUnit's default facing.
+export const MELEE_UNIT_SPACING = 64; // blizzard.j `unitSpacing`
+
+export interface WorkerCluster {
+  id: string; // worker rawcode this group places (count = offsets.length)
+  anchor: "mine" | "start"; // project the clump centre FROM here…
+  toward: "start" | "mine"; // …in the direction of here…
+  dist: number; // …by this many world units (blizzard.j MeleeGetProjectedLoc)
+  offsets: Array<[number, number]>; // per-worker (x, y), in MELEE_UNIT_SPACING units
+}
+
+export const MELEE_WORKER_CLUSTERS: Record<PlayableRace, WorkerCluster[]> = {
+  // 5 peasants, projected 320u from the mine back toward the hall.
+  human: [{ id: "hpea", anchor: "mine", toward: "start", dist: 320,
+    offsets: [[0, 1], [1, 0.15], [-1, 0.15], [0.6, -1], [-0.6, -1]] }],
+  // 5 peons, same layout.
+  orc: [{ id: "opeo", anchor: "mine", toward: "start", dist: 320,
+    offsets: [[0, 1], [1, 0.15], [-1, 0.15], [0.6, -1], [-0.6, -1]] }],
+  // 3 acolytes cluster at the mine; the lone ghoul sits 288u out from the hall.
+  undead: [
+    { id: "uaco", anchor: "mine", toward: "start", dist: 320,
+      offsets: [[0, 0.5], [0.65, -0.5], [-0.65, -0.5]] },
+    { id: "ugho", anchor: "start", toward: "mine", dist: 288, offsets: [[0, 0]] },
+  ],
+  // 5 wisps, projected 320u from the mine (blizzard.j uses ±0.58 on the back row).
+  nightelf: [{ id: "ewsp", anchor: "mine", toward: "start", dist: 320,
+    offsets: [[0, 1], [1, 0.15], [-1, 0.15], [0.58, -1], [-0.58, -1]] }],
+};
+
 // Worker harvesting profiles (verified vs community-documented WC3 values:
 // 10 gold/trip; peasant/peon 1 lumber per ~1s chop, capacity 10; ghoul 2/chop
 // capacity 20; wisp 5 per 5s without damaging the tree; acolytes only mine).
