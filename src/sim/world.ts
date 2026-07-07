@@ -337,6 +337,7 @@ export interface SimUnit {
   acquireT: number; // seconds until the next auto-acquire scan
   stuckT: number; // seconds spent blocked while trying to move
   stuckRetries: number; // consecutive stuck-repath attempts without progress
+  stallT: number; // seconds an attacker has been unable to close on its target (issue #24)
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
@@ -440,6 +441,13 @@ const FACING_EPS = 0.35; // radians — must roughly face the target to swing
 // FURTHER than weapon range before it gives chase again — stops the walk/attack
 // animation flip-flop (and position jiggle) at the range boundary.
 const ATTACK_LEASH = 48;
+// Unreachable-target watchdog (issue #24). An attacker that can neither reach
+// striking range nor make progress toward its target for this long has a fully
+// blocked route — it re-decides (fresh surround slot, then a reachable target,
+// else stand & face) instead of spinning A* forever and jiggling just out of
+// range. Longer than a couple of checkStuck windows (0.5s) so the cheaper
+// slot-reassign/repath there gets first crack before we escalate.
+const ATTACK_STALL_TIME = 1.5;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
 // Hysteresis for follow (mirrors ATTACK_LEASH): once caught up and parked, the
@@ -1083,6 +1091,7 @@ export class SimWorld {
       | "acquireT"
       | "stuckT"
       | "stuckRetries"
+      | "stallT"
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
@@ -1199,6 +1208,7 @@ export class SimWorld {
       acquireT: 0,
       stuckT: 0,
       stuckRetries: 0,
+      stallT: 0,
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
@@ -1467,6 +1477,7 @@ export class SimWorld {
     u.order = "attack";
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
+    u.stallT = 0; // fresh target — reset the unreachable-target watchdog (issue #24)
     this.cancelSwing(u); // a fresh target starts a fresh swing
     this.detachBuilder(id);
     // Claim a distinct standing slot around the target so a group swarming one
@@ -1580,6 +1591,8 @@ export class SimWorld {
       u.working = false;
       u.atNode = false;
       u.noCollision = false; // manual stop restores collision
+      u.stallT = 0;
+      u.acquireT = 0; // scan for a new target on the very next idle tick (no ½s lag)
       this.cancelSwing(u);
       this.detachBuilder(id);
       this.settle(u);
@@ -2760,7 +2773,7 @@ export class SimWorld {
           if (!u.moving && u.waypoint < u.path.length) u.moving = true;
           break;
         case "attack":
-          this.tickAttack(u);
+          this.tickAttack(u, dt);
           break;
         case "cast":
           this.tickCast(u, dt); // walk into range, then fire the spell effect
@@ -2898,14 +2911,119 @@ export class SimWorld {
 
   // --- combat -------------------------------------------------------------
 
-  private tickAttack(u: SimUnit): void {
+  private tickAttack(u: SimUnit, dt: number): void {
     const t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (!t || !u.weapon) {
-      // Target died or vanished — go idle where we stand (auto-acquire resumes).
-      this.stop(u.id);
+      // Target died or vanished. Don't just stand down: a group that kills its
+      // target immediately rolls onto the next hostile still in range, instead of
+      // waiting out an idle-scan tick (issue #24 — "especially ranged units" that
+      // out-range a fleeing/dying target and were left standing around).
+      this.reacquireOrStop(u);
       return;
     }
     this.engage(u, t);
+    // Unreachable-target watchdog (issue #24). engage() sets inCombat when it's in
+    // striking range and moving when it's actually closing; if it's doing NEITHER —
+    // stuck out of range with a fully blocked route — the chase spins A* every tick
+    // and the unit jiggles a step short of its target (or stands next to it never
+    // swinging, its surround slot walled off). Give the way a chance to open, then
+    // re-decide.
+    if (u.inCombat || u.moving) {
+      u.stallT = 0;
+      return;
+    }
+    u.stallT += dt;
+    if (u.stallT < ATTACK_STALL_TIME) return;
+    u.stallT = 0;
+    this.redecideAttack(u, t);
+  }
+
+  /** An attacker's target just died/vanished: keep fighting by acquiring the next
+   *  hostile in acquisition range and attacking it; only fall idle when nothing is
+   *  left nearby (WC3 units follow up after a kill). Creeps keep their own guard/
+   *  camp controller, so they just fall idle here and re-engage via tickCreep/
+   *  tickAcquire next tick. */
+  private reacquireOrStop(u: SimUnit): void {
+    const w = u.weapon;
+    if (w && w.acquire > 0 && !u.isCreep) {
+      const next = this.acquireTarget(u, w.acquire);
+      if (next) {
+        this.issueAttack(u.id, next.id);
+        return;
+      }
+    }
+    this.stop(u.id);
+  }
+
+  /** A unit has been unable to close on its attack target for ATTACK_STALL_TIME.
+   *  Re-decide, escalating: (1) claim a fresh surround slot in case ours is walled
+   *  off and repath around the blockers; (2) if the target is genuinely unreachable,
+   *  switch to the nearest hostile we CAN path in to hit; (3) if nothing reachable
+   *  is left, stop grinding and just face the target (WC3 units give up on a target
+   *  they can't reach rather than jiggling in place forever). */
+  private redecideAttack(u: SimUnit, t: SimUnit): void {
+    // (1) Fresh slot + repath. Clear any chaser cooldown so the repath can fire now.
+    this.assignAttackSlot(u, t);
+    const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
+    const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
+    u.repathT = 0;
+    if (this.pathTo(u, ax, ay)) return; // found a way around — resume the chase
+    // (2) Target unreachable — hand off to a reachable one within our normal
+    // acquisition range (creeps use their aggro range and camp threat order).
+    const range = u.isCreep ? u.aggroRange : u.weapon ? u.weapon.acquire : 0;
+    const next = range > 0 ? this.reachableEnemy(u, range, t.id) : null;
+    if (next) {
+      this.issueAttack(u.id, next.id);
+      return;
+    }
+    // (3) Nothing reachable: stand and face rather than churn against the wall.
+    this.settle(u);
+    u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+    u.repathT = REPATH_COOLDOWN;
+  }
+
+  /** Nearest hostile within `range` (excluding `excludeId`) this unit can actually
+   *  path in to strike — the reachability filter the issue asks for. Bounded: only
+   *  the few nearest candidates get an A* probe, and it only runs when a unit has
+   *  already given up on an unreachable target, so the cost is rare. Applies the
+   *  same visibility / un-aggroed-creep gates as normal auto-acquire. */
+  private reachableEnemy(u: SimUnit, range: number, excludeId: number): SimUnit | null {
+    const cands: Array<{ t: SimUnit; gap: number }> = [];
+    for (const t of this.units.values()) {
+      if (t === u || t.id === excludeId || !this.hostile(u, t)) continue;
+      if (t.isCreep && !this.creepAggroed(t)) continue; // don't pull an idle camp
+      if (!this.visibleToTeam(u.team, t.x, t.y)) continue; // never aggro through fog
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      if (gap > range) continue;
+      cands.push({ t, gap });
+    }
+    cands.sort((a, b) => a.gap - b.gap);
+    for (let i = 0; i < cands.length && i < 5; i++) {
+      if (this.canReachToAttack(u, cands[i].t)) return cands[i].t;
+    }
+    return null;
+  }
+
+  /** True when `u` can path to within weapon range of `t` (best-effort A*: the
+   *  closest reachable cell lands in striking distance). Air units and targets
+   *  already in range short-circuit. Releases `u`'s own cell reservation for the
+   *  probe (as pathTo does) so its footprint doesn't block its own start. */
+  private canReachToAttack(u: SimUnit, t: SimUnit): boolean {
+    if (u.flying) return true;
+    const reach = u.weapon ? u.weapon.range : 0;
+    const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    if (gap <= reach) return true;
+    const wasReserved = u.hasReservation;
+    this.unsettle(u);
+    const start = this.grid.worldToCell(u.x, u.y);
+    const blocked = this.clearanceBlocker(u, start);
+    const cells = findPath(this.grid, start, this.grid.worldToCell(t.x, t.y), blocked);
+    if (wasReserved) this.settle(u);
+    if (!cells || cells.length <= 1) return false;
+    const [ecx, ecy] = cells[cells.length - 1];
+    const [ex, ey] = this.grid.cellToWorld(ecx, ecy);
+    const endGap = Math.hypot(t.x - ex, t.y - ey) - u.radius - t.radius;
+    return endGap <= reach + PATHING_CELL;
   }
 
   /** Close to weapon range, then face + swing at the damage point. Shared by
