@@ -1371,19 +1371,35 @@ export class SimWorld {
     let sx = u.x;
     let sy = u.y;
     if (snap) {
+      const combat = u.order === "attack" || u.order === "attackmove" || u.order === "hold" || u.order === "cast";
+      if (combat) {
+        // Combat rest: do NOT snap the position — snapping can shove a unit up to half a
+        // cell out of its strike band and cause the edge-of-range jiggle. Reserve the
+        // block under where it actually stopped; if that's taken, de-conflict onto the
+        // nearest free tile (a snap around allies, terrain-only line so never through a
+        // wall) so blocked/waiting attackers queue instead of stacking (issue #24).
+        let [ccx0, ccy0] = this.grid.footprintOrigin(u.x, u.y, n);
+        if (!this.blockFree(ccx0, ccy0, n)) {
+          const [ssx, ssy] = this.grid.snapForFootprint(u.x, u.y, n);
+          const free = this.nearestFreeBlock(ssx, ssy, n, 6, false);
+          if (free) {
+            u.x = free[0];
+            u.y = free[1];
+            [ccx0, ccy0] = this.grid.footprintOrigin(u.x, u.y, n);
+          }
+        }
+        this.grid.reserve(ccx0, ccy0, n);
+        u.resX = ccx0;
+        u.resY = ccy0;
+        u.hasReservation = true;
+        return;
+      }
+      // Non-combat rest: snap to the grid. If the tile's taken (two units the same
+      // distance from one free tile), settle onto the nearest FREE tile instead of
+      // stacking — a one-shot snap, deterministic (first-settled keeps the tile).
       [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
       let [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
-      // If this tile is already reserved (two units the same distance from one free
-      // tile both tried to land on it — issue #24), settle onto the nearest FREE tile
-      // instead of stacking. Deterministic priority: whoever settled first keeps the
-      // tile (its reservation is already down), later arrivals fall to open tiles
-      // around it. A one-shot snap, not a per-tick shuffle, so it never oscillates.
-      // Skipped for units coming to rest IN COMBAT: an attacker settles wherever it is
-      // in its strike band (the footprint-aware nudge already keeps it off others' tiles),
-      // and snapping it to a free tile could land it a hair past its own re-chase leash —
-      // making it walk↔settle forever right at the range edge.
-      const combat = u.order === "attack" || u.order === "attackmove" || u.order === "hold" || u.order === "cast";
-      if (!combat && !this.blockFree(cx0, cy0, n)) {
+      if (!this.blockFree(cx0, cy0, n)) {
         const free = this.nearestFreeBlock(sx, sy, n);
         if (free) {
           [sx, sy] = free;
@@ -1421,12 +1437,12 @@ export class SimWorld {
    *  block that gets reserved (no even-footprint off-by-one). Bounded; null if the
    *  whole neighbourhood is packed (caller then settles in place — a rare overlap beats
    *  a teleport across the map). */
-  private nearestFreeBlock(sx: number, sy: number, n: number): [number, number] | null {
+  private nearestFreeBlock(sx: number, sy: number, n: number, maxR = 6, unitsBlockLine = true): [number, number] | null {
     const [scx, scy] = this.grid.worldToCell(sx, sy);
     const half = n >> 1;
     const oX0 = scx - half; // the unit's own footprint — exempt from the reachability
     const oY0 = scy - half; // block-check so it can leave the tile it's overlapping
-    for (let r = 1; r <= 6; r++) {
+    for (let r = 1; r <= maxR; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
@@ -1434,12 +1450,13 @@ export class SimWorld {
           const wy = sy + dy * PATHING_CELL;
           const [cx0, cy0] = this.grid.footprintOrigin(wx, wy, n);
           if (!this.blockFree(cx0, cy0, n)) continue;
-          // Must be REACHABLE in a straight shot — the line to it crosses no wall and no
-          // other unit's tile. This is what stops a unit at a choke from snapping ACROSS
-          // a plug into unreachable space, while still letting a converging group spread
-          // freely across open ground (issue #24). Distance is otherwise unbounded so a
-          // dense pile still fully spreads.
-          if (this.clearLineTo(sx, sy, wx, wy, oX0, oY0, n)) return [wx, wy];
+          // Must be REACHABLE in a straight shot — the line to it crosses no wall (and,
+          // when unitsBlockLine, no other unit's tile). This stops a unit at a choke from
+          // snapping ACROSS a plug into unreachable space. Held attackers de-conflicting
+          // among themselves pass unitsBlockLine=false + a small radius: repositioning a
+          // tile or two AROUND an ally is fine (it's a snap, not a walk), only terrain must
+          // not be crossed — otherwise a packed crowd finds no free tile and stacks.
+          if (this.clearLineTo(sx, sy, wx, wy, oX0, oY0, n, unitsBlockLine)) return [wx, wy];
         }
       }
     }
@@ -1450,13 +1467,14 @@ export class SimWorld {
    *  unreserved cells (cells inside the mover's own start footprint are exempt, so it
    *  can step off the tile it's overlapping). A cheap reachability proxy for the short
    *  relocation hops settle() makes — no full A*. */
-  private clearLineTo(sx: number, sy: number, wx: number, wy: number, oX0: number, oY0: number, n: number): boolean {
+  private clearLineTo(sx: number, sy: number, wx: number, wy: number, oX0: number, oY0: number, n: number, unitsBlock = true): boolean {
     const dist = Math.hypot(wx - sx, wy - sy);
     const steps = Math.max(1, Math.ceil(dist / (PATHING_CELL * 0.5)));
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const [cx, cy] = this.grid.worldToCell(sx + (wx - sx) * t, sy + (wy - sy) * t);
       if (!this.grid.walkable(cx, cy)) return false;
+      if (!unitsBlock) continue; // terrain-only line (for a snap-around-allies de-conflict)
       const own = cx >= oX0 && cx < oX0 + n && cy >= oY0 && cy < oY0 + n;
       if (!own && this.grid.isReserved(cx, cy)) return false;
     }
@@ -1495,7 +1513,16 @@ export class SimWorld {
       // the strike band (hits connect out to range + ATTACK_LEASH; cap a margin below so
       // we stay inCombat and don't re-chase). This branch DOES move us (onto that tile).
       const maxGap = u.weapon.range + ATTACK_LEASH * 0.6;
-      const free = this.nearestFreeBlockInRange(u, t, n, maxGap);
+      let free = this.nearestFreeBlockInRange(u, t, n, maxGap);
+      if (!free) {
+        // The whole in-range ring is full. Rather than STACK in range (the "still
+        // squeezing" overlap), back off to the nearest free tile just outside it — the
+        // unit ends up out of range and holds/queues there for a slot to open, an outer
+        // ring, exactly as WC3 does when more units than fit pile onto one target. Terrain-
+        // only line + small radius: a snap around allies, never through a wall.
+        const [ssx, ssy] = this.grid.snapForFootprint(sx, sy, n);
+        free = this.nearestFreeBlock(ssx, ssy, n, 6, false);
+      }
       if (free) {
         sx = free[0];
         sy = free[1];
@@ -3166,7 +3193,7 @@ export class SimWorld {
         u.gaveUp = false;
         u.attackStalls = 0;
       } else if (u.repathT > 0) {
-        if (u.moving) this.settle(u);
+        this.settle(u); // de-conflicting combat settle: queue onto our own tile, no stacking
         u.inCombat = false;
         u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
         return;
@@ -3179,7 +3206,7 @@ export class SimWorld {
           this.issueAttack(u.id, next.id);
           return;
         }
-        if (u.moving) this.settle(u);
+        this.settle(u); // de-conflicting combat settle: queue onto our own tile, no stacking
         u.inCombat = false;
         u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
         u.repathT = ATTACK_GIVEUP_COOLDOWN; // keep holding — re-check again later
@@ -3236,7 +3263,7 @@ export class SimWorld {
    *  hold cooldown grows with the stall streak so a permanently blocked unit stands
    *  progressively stiller; tickAttack's gaveUp branch owns the wait and the exit. */
   private holdAttack(u: SimUnit, t: SimUnit): void {
-    if (u.moving) this.settle(u);
+    this.settle(u); // de-conflicting combat settle: queue onto our own tile, no stacking
     u.gaveUp = true;
     u.inCombat = false;
     u.gaveUpGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;

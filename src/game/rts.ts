@@ -1968,7 +1968,7 @@ export class RtsController {
       for (const id of this.selected) this.order(id, { kind: "patrol", x: hit[0], y: hit[1] }, queued);
       this.queueArrow(hit[0], hit[1], MOVE_ARROW);
     } else if (mode === "attack") {
-      for (const id of this.selected) this.order(id, { kind: "attackmove", x: hit[0], y: hit[1] }, queued);
+      this.groupAttackMove(hit[0], hit[1], queued); // distinct formation slot per unit (like move)
       this.queueArrow(hit[0], hit[1], ATTACK_ARROW); // red a-move feedback
     } else {
       this.groupMove(hit[0], hit[1], queued); // spread the group into a formation
@@ -3154,6 +3154,15 @@ export class RtsController {
   private groupMove(tx: number, ty: number, queued = false): void {
     const targets = this.groupTargets([...this.selected], tx, ty);
     for (const [id, [x, y]] of targets) this.order(id, { kind: "move", x, y }, queued);
+  }
+
+  /** Attack-move the whole selection to a ground point. Same destination logic as
+   *  groupMove — each unit gets a DISTINCT formation slot around the point so they
+   *  spread out there instead of cramming on one tile — but issued as attack-move, so
+   *  each unit fights the nearest enemy in its path and resumes to its slot afterwards. */
+  private groupAttackMove(tx: number, ty: number, queued = false): void {
+    const targets = this.groupTargets([...this.selected], tx, ty);
+    for (const [id, [x, y]] of targets) this.order(id, { kind: "attackmove", x, y }, queued);
   }
 
   /** Queue a target-circle flash — the renderer draws it as a flat ground circle
