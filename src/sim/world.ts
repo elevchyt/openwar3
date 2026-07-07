@@ -458,6 +458,12 @@ const ATTACK_LEASH = 48;
 // unit marching in, or chasing a runner it's keeping pace with, is never mistaken for
 // a stuck wobbler (which does neither). ATTACK_PROGRESS is the least of either that
 // still counts as genuine progress.
+// A* expansion cap for LOCAL combat pathing (chases + reachability probes). The target
+// is always within acquisition range (~25 cells), so a reachable path is found in a few
+// hundred expansions; a bigger flood only ever happens when the target is unreachable,
+// where we want to bail to a best-effort short path fast rather than flood the whole map
+// (the full 8192 cap × 100 units all probing one crowded target was the ~20fps stall).
+const COMBAT_EXPANSIONS = 700;
 const ATTACK_STALL_TIME = 0.6;
 const ATTACK_PROGRESS = PATHING_CELL * 1.5; // 48 world units per window
 // After a unit gives up on an unreachable target with nothing else reachable, it
@@ -3266,7 +3272,7 @@ export class SimWorld {
       const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
       const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
       u.repathT = 0;
-      if (this.pathTo(u, ax, ay)) {
+      if (this.pathTo(u, ax, ay, COMBAT_EXPANSIONS)) {
         u.gaveUp = false; // moving again — not holding
         return; // found a way around — resume the chase
       }
@@ -3324,7 +3330,7 @@ export class SimWorld {
     this.unsettle(u);
     const start = this.grid.worldToCell(u.x, u.y);
     const blocked = this.clearanceBlocker(u, start);
-    const cells = findPath(this.grid, start, this.grid.worldToCell(t.x, t.y), blocked);
+    const cells = findPath(this.grid, start, this.grid.worldToCell(t.x, t.y), blocked, COMBAT_EXPANSIONS);
     if (wasReserved) this.settle(u);
     if (!cells || cells.length <= 1) return false;
     const [ecx, ecy] = cells[cells.length - 1];
@@ -3653,7 +3659,13 @@ export class SimWorld {
   private chasePoint(u: SimUnit, x: number, y: number): void {
     if (u.repathT > 0) return;
     if (u.moving && Math.hypot(x - u.chaseX, y - u.chaseY) < CHASE_REPATH) return;
-    this.pathTo(u, x, y);
+    // Chasing (an attack target or a follow leader) is LOCAL — the thing is within
+    // acquisition/leader range, a couple of dozen cells off. Cap the search low so a
+    // blocked/unreachable chase gives up after a small local flood instead of the full
+    // 8192-cell map flood (issue #24 perf: 100 melee all probing paths to one crowded
+    // target flooded the frame to ~20fps). A best-effort short path is fine here —
+    // chasePoint re-runs as the target moves anyway.
+    this.pathTo(u, x, y, COMBAT_EXPANSIONS);
   }
 
   // --- resource gathering ---------------------------------------------------
@@ -4731,7 +4743,7 @@ export class SimWorld {
 
   /** Set a path toward a world point (straight line for air units). False when
    *  no movement toward the point is possible at all. */
-  private pathTo(u: SimUnit, tx: number, ty: number): boolean {
+  private pathTo(u: SimUnit, tx: number, ty: number, maxExpansions?: number): boolean {
     u.chaseX = tx;
     u.chaseY = ty;
     if (u.flying) {
@@ -4748,7 +4760,7 @@ export class SimWorld {
     this.unsettle(u);
     const start = this.grid.worldToCell(u.x, u.y);
     const blocked = this.clearanceBlocker(u, start);
-    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), blocked);
+    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), blocked, maxExpansions);
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
       if (wasReserved) this.settle(u);

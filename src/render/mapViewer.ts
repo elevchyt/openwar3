@@ -2827,8 +2827,15 @@ export class MapViewerScene {
       }
       // The F10 game menu freezes the simulation (units hold; rendering continues).
       if (!this.paused) {
-        this.tickPendingBuild(dt / 1000); // seconds, matching the sim's clock
-        this.rts?.tick(dt / 1000); // sim runs in seconds; advance + sync before render
+        // Clamp the sim step (not the render/HUD dt). dt is the real inter-frame time, so
+        // a GC hitch, tab-switch, or heavy frame would otherwise feed the sim one giant
+        // step — units teleport and collision resolution overshoots and jitters (issue
+        // #24: the worse the frame rate, the worse the melee "shuffle"). Capping at 50 ms
+        // (≈20 fps) keeps every sim step inside the stable regime the movement/collision
+        // code is tuned for; a slow frame just advances the world a little less.
+        const simDt = Math.min(dt, 50) / 1000;
+        this.tickPendingBuild(simDt); // seconds, matching the sim's clock
+        this.rts?.tick(simDt); // sim runs in seconds; advance + sync before render
       }
       // Map units load async — hide the start-location props as they stream in.
       // Re-scan whenever the unit count grows so `sloc` markers that finish
