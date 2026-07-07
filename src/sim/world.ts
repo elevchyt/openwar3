@@ -1443,6 +1443,82 @@ export class SimWorld {
     return true;
   }
 
+  /** Combat settle: like settle(), but treats an attacker's arrival like a move onto a
+   *  distinct tile (issue #24 — "remove combat clustering; treat combat like movement").
+   *  If the exact tile is contended, spread to the nearest free tile that STILL keeps us
+   *  within striking range of the target — so melee units surround onto their own tiles
+   *  instead of piling up, without landing past their re-chase leash (which would make
+   *  them walk↔settle forever at the range edge). No free in-range tile (the surround is
+   *  full) → settle in place; the slot system parked the extras further out on approach. */
+  private settleSpread(u: SimUnit, t: SimUnit): void {
+    if (u.hasReservation) {
+      u.moving = false;
+      u.yieldT = 0;
+      u.path = [];
+      return;
+    }
+    const n = u.footprint;
+    if (n <= 0 || !u.weapon) {
+      this.settle(u);
+      return;
+    }
+    let [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
+    let [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+    if (!this.blockFree(cx0, cy0, n)) {
+      // Keep the relocation comfortably inside the strike band so we stay inCombat and
+      // never re-chase: hits connect out to range + ATTACK_LEASH, re-chase triggers past
+      // it, so cap candidates a margin below that.
+      const maxGap = u.weapon.range + ATTACK_LEASH * 0.6;
+      const free = this.nearestFreeBlockInRange(u, t, n, maxGap);
+      if (free) {
+        [sx, sy] = free;
+        [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+      }
+    }
+    u.x = sx;
+    u.y = sy;
+    this.grid.reserve(cx0, cy0, n);
+    u.resX = cx0;
+    u.resY = cy0;
+    u.hasReservation = true;
+    u.moving = false;
+    u.yieldT = 0;
+    u.path = [];
+  }
+
+  /** Nearest free settle tile (snap-aligned world pos) whose block is free, reachable in
+   *  a straight shot, AND within `maxGap` of the target — preferring the tile CLOSEST to
+   *  the target within the nearest ring, so attackers pack into a tight surround. */
+  private nearestFreeBlockInRange(u: SimUnit, t: SimUnit, n: number, maxGap: number): [number, number] | null {
+    const [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
+    const half = n >> 1;
+    const [scx, scy] = this.grid.worldToCell(sx, sy);
+    const oX0 = scx - half;
+    const oY0 = scy - half;
+    for (let r = 1; r <= 6; r++) {
+      let best: [number, number] | null = null;
+      let bestGap = Infinity;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          const wx = sx + dx * PATHING_CELL;
+          const wy = sy + dy * PATHING_CELL;
+          const [cx0, cy0] = this.grid.footprintOrigin(wx, wy, n);
+          if (!this.blockFree(cx0, cy0, n)) continue;
+          const gap = Math.hypot(wx - t.x, wy - t.y) - u.radius - t.radius;
+          if (gap > maxGap) continue;
+          if (!this.clearLineTo(sx, sy, wx, wy, oX0, oY0, n)) continue;
+          if (gap < bestGap) {
+            bestGap = gap;
+            best = [wx, wy];
+          }
+        }
+      }
+      if (best) return best; // fill the nearer ring first
+    }
+    return null;
+  }
+
   /** A unit is about to move: give its reserved cells back. */
   private unsettle(u: SimUnit): void {
     if (u.hasReservation) {
@@ -3235,9 +3311,9 @@ export class SimWorld {
       this.chaseToAttack(u, t);
       return;
     }
-    // In range: halt, face the target, swing when ready (rotation itself is
-    // applied by the shared per-tick turning pass).
-    this.settle(u);
+    // In range: halt onto a distinct tile (spread, don't cluster — settleSpread), face
+    // the target, swing when ready (rotation itself is applied by the shared turning pass).
+    this.settleSpread(u, t);
     u.inCombat = true;
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     // Don't start a new swing while facing the wrong way, cooling down, or with a
