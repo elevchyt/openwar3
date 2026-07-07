@@ -4588,25 +4588,30 @@ export class SimWorld {
     return best;
   }
 
-  /** Assist fallback for an idle unit with no enemy in its own acquisition range: the
-   *  nearest visible enemy within the wider ASSIST_RANGE that is ALREADY fighting one of
-   *  our side (its attack target is an ally). This rallies back-rank units to a fight a
-   *  few paces ahead instead of leaving them idle (issue #24). Because we require the
-   *  enemy to be actively attacking an ally, it never pulls an idle/un-aggroed creep camp
-   *  or an enemy minding its own business — only a fight already underway. */
+  /** Assist fallback for an idle unit with no enemy in its own acquisition range: rally to
+   *  a fight a friend is already in. Scans our own side for allies currently ATTACKING an
+   *  enemy and returns the nearest such enemy within the wider ASSIST_RANGE (issue #24:
+   *  back-rank units left idle a few paces behind the fight). Keying off "an ally is
+   *  attacking it" — rather than "it is attacking an ally" — is what makes this fire even
+   *  when the enemy is being focused down and isn't hitting back, and it still can't pull a
+   *  peaceful/un-aggroed creep camp (no ally is attacking those). */
   private assistTarget(u: SimUnit, range: number): SimUnit | null {
     let best: SimUnit | null = null;
     let bestGap = range;
-    for (const e of this.units.values()) {
-      if (e === u || !this.hostile(u, e)) continue;
-      if (e.order !== "attack" || e.targetId === null) continue; // must be actively fighting
-      const victim = this.units.get(e.targetId);
-      if (!victim || this.hostile(u, victim)) continue; // it's attacking one of OUR side
-      if (!this.visibleToTeam(u.team, e.x, e.y)) continue; // fogged → can't see it
-      const gap = Math.hypot(e.x - u.x, e.y - u.y) - u.radius - e.radius;
+    for (const ally of this.units.values()) {
+      if (ally === u || ally.team !== u.team) continue; // one of our own army
+      if (ally.order !== "attack" || ally.targetId === null) continue; // that is fighting
+      const enemy = this.units.get(ally.targetId);
+      if (!enemy || !this.hostile(u, enemy)) continue; // attacking an actual enemy of ours
+      if (!this.visibleToTeam(u.team, enemy.x, enemy.y)) continue; // fogged → can't see it
+      // Distance to the FRIEND that's fighting, not to its enemy — a unit left behind is
+      // near its comrades even when their enemy is farther off, and it should march up to
+      // help. It then attacks the enemy that friend is engaging (and re-targets to whatever
+      // it can actually reach once it arrives, via the in-strike-range switch in tickAttack).
+      const gap = Math.hypot(ally.x - u.x, ally.y - u.y) - u.radius - ally.radius;
       if (gap < bestGap) {
         bestGap = gap;
-        best = e;
+        best = enemy;
       }
     }
     return best;
