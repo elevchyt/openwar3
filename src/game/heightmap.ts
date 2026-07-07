@@ -27,14 +27,24 @@ export function makeHeightSampler(terrain: TerrainData): HeightSampler {
   };
 }
 
-// Highest terrain world-height over a building's axis-aligned footprint rectangle,
-// centred at (cx, cy) with half-extents (halfW, halfH). WC3 seats a structure on the
-// TALLEST terrain level its footprint touches — sampling only the centre (as moving
-// units do) sinks a building into any small hill/slope its far corners sit on (issue
-// #15). Buildings never move, so a caller resolves this once at spawn. Overshooting a
-// hair is harmless (model bases have plenty of skirt height); clipping is not, so we
-// take the max, never an average.
+// Seat height for a building's axis-aligned footprint rectangle, centred at (cx, cy)
+// with half-extents (halfW, halfH). Sampling only the CENTRE (as moving units do)
+// sinks a building into any hill/slope its far corners sit on (issue #15); seating on
+// the TALLEST terrain the footprint touches fixes that but visibly over-lifts a
+// building on even a gentle slope — the max is reached at the far up-slope corner, so
+// a large footprint floats up by ~halfDiagonal * slope. WC3 hides this by flattening
+// the ground under a structure to a plateau; we don't deform terrain, so we instead
+// blend the centre height toward that max by FOOTPRINT_LIFT. That keeps most of the
+// anti-sink protection (model bases have generous skirt height for the small remaining
+// clip) while cutting the exaggerated float roughly in half. Buildings never move, so
+// a caller resolves this once at spawn.
 export type FootprintMaxSampler = (cx: number, cy: number, halfW: number, halfH: number) => number;
+
+// How far to lift a building from its centre-terrain height toward the tallest terrain
+// under its footprint. 1 = full max (old behaviour, over-lifts on slopes); 0 = centre
+// only (sinks on hills). Half keeps buildings out of the ground without the exaggerated
+// perch on small slopes.
+const FOOTPRINT_LIFT = 0.5;
 
 export function makeFootprintMaxSampler(terrain: TerrainData): FootprintMaxSampler {
   const sample = makeHeightSampler(terrain);
@@ -61,7 +71,10 @@ export function makeFootprintMaxSampler(terrain: TerrainData): FootprintMaxSampl
         if (h > m) m = h;
       }
     }
-    return m;
+    // Blend the natural centre height toward the footprint max so gentle slopes don't
+    // perch the building far above the ground it visibly stands on.
+    const centre = sample(cx, cy);
+    return centre + (m - centre) * FOOTPRINT_LIFT;
   };
 }
 
