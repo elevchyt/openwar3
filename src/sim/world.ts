@@ -340,6 +340,8 @@ export interface SimUnit {
   stallT: number; // seconds an attacker has been unable to close on its target (issue #24)
   stallAnchorX: number; // position at the start of the current combat-approach window
   stallAnchorY: number;
+  stallGap: number; // gap to the target at the start of the current combat-approach window
+  gaveUp: boolean; // holding: gave up reaching an unreachable attack target, standing put (issue #24)
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
@@ -443,18 +445,25 @@ const FACING_EPS = 0.35; // radians — must roughly face the target to swing
 // FURTHER than weapon range before it gives chase again — stops the walk/attack
 // animation flip-flop (and position jiggle) at the range boundary.
 const ATTACK_LEASH = 48;
-// Combat-approach watchdog (issue #24). An attacker that neither reaches striking
-// range nor covers real ground toward its target over this window has an
-// effectively blocked route — whether it stands still, or wobbles in and out of a
-// tight crowd (settling and re-pathing every few ticks, which slips past both the
+// Combat-approach watchdog (issue #24). An attacker that neither gets within its
+// strike band nor makes real headway toward its target over this window has an
+// effectively blocked route — whether it stands still or wobbles in and out of a
+// tight crowd (settling/re-pathing every few ticks, which slips past both the
 // per-tick "moving" reset and the 0.5s stuck window). It then re-decides: repath if
 // the target is still reachable, else switch to the nearest target it CAN reach,
-// else stand & face. Net displacement over the whole window (not the "moving" flag)
-// is what makes it survive the wobble's settle/move flapping. ATTACK_PROGRESS is the
-// least ground that still counts as "genuinely closing" — a blocked wobbler nets far
-// less, a unit legitimately marching/chasing far more, so the two never confuse.
-const ATTACK_STALL_TIME = 1.0;
-const ATTACK_PROGRESS = PATHING_CELL * 2; // 64 world units of net travel per window
+// else stand & face. "Headway" is measured two ways over the window — net ground
+// covered AND how much the gap to the target shrank — and either one clears it, so a
+// unit marching in, or chasing a runner it's keeping pace with, is never mistaken for
+// a stuck wobbler (which does neither). ATTACK_PROGRESS is the least of either that
+// still counts as genuine progress.
+const ATTACK_STALL_TIME = 0.6;
+const ATTACK_PROGRESS = PATHING_CELL * 1.5; // 48 world units per window
+// After a unit gives up on an unreachable target with nothing else reachable, it
+// commits to standing for this long before probing again — so a permanently boxed-in
+// unit stands STILL instead of taking a shoved-back step every second (the residual
+// micro-wobble). It still re-checks periodically in case a blocker dies or the target
+// moves into reach.
+const ATTACK_GIVEUP_COOLDOWN = 1.5;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
 // Hysteresis for follow (mirrors ATTACK_LEASH): once caught up and parked, the
@@ -484,7 +493,6 @@ const AIR_FANOUT_SPEED = 0.6;
 // Town Hall reference: 5 peasants take ~53s (from 90s) and cost ~615g (from 385g).
 const SPEED_BUILD_BONUS = 0.17;
 const SPEED_BUILD_SURCHARGE = 0.15;
-const REPATH_COOLDOWN = 0.5; // seconds a blocked chaser waits before repathing
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
 // units may stop and reserve cells across it while it travels. Rather than let a
 // unit grind into that crowd until checkStuck() fires (0.5 s of no progress),
@@ -1101,6 +1109,8 @@ export class SimWorld {
       | "stallT"
       | "stallAnchorX"
       | "stallAnchorY"
+      | "stallGap"
+      | "gaveUp"
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
@@ -1220,6 +1230,8 @@ export class SimWorld {
       stallT: 0,
       stallAnchorX: unit.x,
       stallAnchorY: unit.y,
+      stallGap: 0,
+      gaveUp: false,
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
@@ -1489,6 +1501,7 @@ export class SimWorld {
     u.targetId = targetId;
     u.noCollision = false; // manual control restores collision
     u.stallT = 0; // fresh target — reset the unreachable-target watchdog (issue #24)
+    u.gaveUp = false; // no longer holding — a new target may well be reachable
     this.cancelSwing(u); // a fresh target starts a fresh swing
     this.detachBuilder(id);
     // Claim a distinct standing slot around the target so a group swarming one
@@ -1603,6 +1616,7 @@ export class SimWorld {
       u.atNode = false;
       u.noCollision = false; // manual stop restores collision
       u.stallT = 0;
+      u.gaveUp = false;
       u.acquireT = 0; // scan for a new target on the very next idle tick (no ½s lag)
       this.cancelSwing(u);
       this.detachBuilder(id);
@@ -2900,11 +2914,21 @@ export class SimWorld {
       u.stuckRetries = 0;
       return;
     }
+    const [tx, ty] = [u.chaseX, u.chaseY];
+    // Already about as close to the destination as the crowd allows (within a body or
+    // two): don't keep shoving through the units parked on the goal cell — just stop.
+    // This kills the "wobble at the destination" where a move order aims onto a spot
+    // other units occupy and the mover vibrates against them (issue #24). Only for
+    // plain move/patrol — attack/attackmove/harvest handle their own arrival above.
+    if ((u.order === "move" || u.order === "patrol") && Math.hypot(tx - u.x, ty - u.y) <= PATHING_CELL * 2) {
+      this.stop(u.id);
+      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+      return;
+    }
     // Blocked/orbiting: the blockers may have stopped since the original path
     // was computed — repath around them. A unit that stays stuck (boxed in)
     // stands down after a couple of attempts and just faces where it was
     // ordered — WC3 units never squeeze through crowds.
-    const [tx, ty] = [u.chaseX, u.chaseY];
     if (++u.stuckRetries > 1 || !this.pathTo(u, tx, ty)) {
       this.stop(u.id);
       u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
@@ -2923,27 +2947,71 @@ export class SimWorld {
       this.reacquireOrStop(u);
       return;
     }
+    // Holding after giving up on an unreachable target (issue #24): stand completely
+    // still — do NOT chase — so a boxed-in unit doesn't take a shoved-back probing step
+    // every cooldown (the residual micro-wobble). While committed (repathT ticking) we
+    // just hold and face; when the cooldown lapses we re-evaluate with a PURE A* check
+    // (no movement): target now in reach or reachable again → drop the hold and fight;
+    // a different target reachable → switch; still walled in → re-arm the hold.
+    if (u.gaveUp) {
+      const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+      const band = u.weapon.ranged ? u.weapon.range : u.weapon.range + ATTACK_LEASH;
+      if (gap <= band) {
+        u.gaveUp = false; // it wandered into reach — fight
+      } else if (u.repathT > 0) {
+        if (u.moving) this.settle(u);
+        u.inCombat = false;
+        u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+        return;
+      } else if (this.canReachToAttack(u, t)) {
+        u.gaveUp = false; // a blocker cleared — resume the chase (falls through to engage)
+      } else {
+        const range = u.isCreep ? u.aggroRange : u.weapon.acquire;
+        const next = range > 0 ? this.reachableEnemy(u, range, t.id) : null;
+        if (next) {
+          this.issueAttack(u.id, next.id);
+          return;
+        }
+        if (u.moving) this.settle(u);
+        u.inCombat = false;
+        u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+        u.repathT = ATTACK_GIVEUP_COOLDOWN; // keep holding — re-check again later
+        return;
+      }
+    }
     this.engage(u, t);
-    // Combat-approach watchdog (issue #24). engage() sets inCombat once it's in
-    // striking range; until then it's chasing. Measure NET ground covered toward the
-    // target over ATTACK_STALL_TIME — not the per-tick "moving" flag, which resets to
-    // "fine" every time a wobbling unit takes its shoved-back step, and not the 0.5s
-    // stuck window, which a unit that settles for a tick each wobble cycle keeps
-    // resetting. A unit genuinely closing (or chasing a runner) covers real ground; a
-    // blocked/wobbling one nets almost nothing — that's when we re-decide.
-    if (u.inCombat) {
+    // Combat-approach watchdog (issue #24). Reset the moment we're within the strike
+    // band (range + leash) — genuinely fighting — rather than on engage()'s inCombat
+    // flag, which a unit wobbling right at the range edge flips on/off every tick,
+    // perpetually zeroing the timer. Otherwise measure headway toward the target two
+    // ways: net ground covered, and how much the gap shrank. Either clears it; a
+    // wobbler blocked by other bodies does neither, so it re-decides.
+    const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    // Reset iff engage() counted us "in range" this tick (didn't chase) — same band it
+    // uses: melee attack from within the strike leash, ranged only once actually in
+    // range (leash is just their re-chase hysteresis).
+    const band = u.weapon.ranged ? (u.inCombat ? u.weapon.range + ATTACK_LEASH : u.weapon.range) : u.weapon.range + ATTACK_LEASH;
+    if (gap <= band) {
+      u.stallT = 0;
+      return;
+    }
+    // Committed to standing after giving up (or briefly cooling down after a block):
+    // don't re-probe — engage() is already holding position while repathT ticks down.
+    if (u.repathT > 0) {
       u.stallT = 0;
       return;
     }
     if (u.stallT === 0) {
       u.stallAnchorX = u.x;
       u.stallAnchorY = u.y;
+      u.stallGap = gap;
     }
     u.stallT += dt;
     if (u.stallT < ATTACK_STALL_TIME) return;
     const moved = Math.hypot(u.x - u.stallAnchorX, u.y - u.stallAnchorY);
+    const closed = u.stallGap - gap;
     u.stallT = 0;
-    if (moved >= ATTACK_PROGRESS) return; // covering real ground — keep chasing
+    if (moved >= ATTACK_PROGRESS || closed >= ATTACK_PROGRESS) return; // real headway — keep chasing
     this.redecideAttack(u, t);
   }
 
@@ -2982,20 +3050,26 @@ export class SimWorld {
       const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
       const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
       u.repathT = 0;
-      if (this.pathTo(u, ax, ay)) return; // found a way around — resume the chase
+      if (this.pathTo(u, ax, ay)) {
+        u.gaveUp = false; // moving again — not holding
+        return; // found a way around — resume the chase
+      }
     }
     // (2) Target unreachable — hand off to a reachable one within our normal
     // acquisition range (creeps use their aggro range and camp threat order).
     const range = u.isCreep ? u.aggroRange : u.weapon ? u.weapon.acquire : 0;
     const next = range > 0 ? this.reachableEnemy(u, range, t.id) : null;
     if (next) {
-      this.issueAttack(u.id, next.id);
+      this.issueAttack(u.id, next.id); // issueAttack clears gaveUp
       return;
     }
-    // (3) Nothing reachable: stand and face rather than churn against the wall.
+    // (3) Nothing reachable: enter the holding sub-state — stand and face, committed
+    // for a spell so we don't probe (and get shoved back) every second. tickAttack's
+    // gaveUp branch owns it from here (pure A* re-checks, no movement).
     this.settle(u);
+    u.gaveUp = true;
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
-    u.repathT = REPATH_COOLDOWN;
+    u.repathT = ATTACK_GIVEUP_COOLDOWN;
   }
 
   /** Nearest hostile within `range` (excluding `excludeId`) this unit can actually
@@ -3061,10 +3135,15 @@ export class SimWorld {
       return;
     }
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    // Hysteresis: while already in combat, tolerate a little extra distance before
-    // re-chasing, so a target that jostles across the range edge doesn't make the
-    // unit oscillate walk↔attack (the "jiggling" between animations).
-    const chaseGap = u.inCombat ? w.range + ATTACK_LEASH : w.range;
+    // How close is "close enough to plant and swing". For MELEE this is the full
+    // strike band (range + ATTACK_LEASH) at all times — the same reach tickSwing
+    // actually connects a hit from — so a unit in a crowd stops and attacks the
+    // moment it's within striking distance instead of shoving toward a pixel-exact
+    // surround slot it can't physically reach through the other bodies (issue #24:
+    // the "tries to pass through units, wobbling next to the target without hitting"
+    // report). Ranged units keep the tight range (they stand off and don't surround),
+    // with the leash only as re-chase hysteresis once already in combat.
+    const chaseGap = w.ranged ? (u.inCombat ? w.range + ATTACK_LEASH : w.range) : w.range + ATTACK_LEASH;
     if (gap > chaseGap) {
       u.inCombat = false;
       if (noChase) {
