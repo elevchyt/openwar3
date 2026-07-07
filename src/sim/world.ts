@@ -1729,8 +1729,16 @@ export class SimWorld {
     // ARE the surround positions, giving a full ring of them rather than a tight
     // clump the units overshoot.
     const stand = tr + wr + Math.min(u.weapon ? u.weapon.range : 0, 160);
-    let best: [number, number] | null = null;
+    // Own footprint origin — exempt from the reachability line check so the unit can
+    // step off the tile it's standing on.
+    const half = u.footprint >> 1;
+    const [scx, scy] = this.grid.worldToCell(u.x, u.y);
+    const oX0 = scx - half;
+    const oY0 = scy - half;
+    let best: [number, number] | null = null; // nearest slot we can actually reach
     let bestD = Infinity;
+    let fallback: [number, number] | null = null; // nearest fitting slot, reachable or not
+    let fallbackD = Infinity;
     for (let ring = 0; ring < 8; ring++) {
       const rr = stand + ring * spacing;
       const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
@@ -1750,12 +1758,20 @@ export class SimWorld {
         // building, or a cell reserved by a settled unit) — only offer slots we FIT.
         const [cx, cy] = this.grid.worldToCell(sx, sy);
         if (u.footprint > 0 && !this.grid.footprintFits(cx, cy, u.footprint)) continue;
-        const d = Math.hypot(sx - u.x, sy - u.y); // nearest free slot to us
+        const d = Math.hypot(sx - u.x, sy - u.y);
+        if (d < fallbackD) { fallbackD = d; fallback = [ox, oy]; }
+        // A slot can FIT yet be unreachable — walled off by the ring of attackers around
+        // the target, a free tile we can't get to through the other bodies (the reported
+        // "picks a spot it can't reach for its size"). Require a clear straight approach —
+        // no wall, no other unit's tile between us and the slot — so we head for a slot we
+        // can actually stand in, letting the surround fill from the outside in.
+        if (u.footprint > 0 && !this.clearLineTo(u.x, u.y, sx, sy, oX0, oY0, u.footprint)) continue;
         if (d < bestD) { bestD = d; best = [ox, oy]; }
       }
-      if (best) break; // fill this ring before stepping out to the next
+      if (best) break; // fill this ring (with a reachable slot) before stepping out
     }
-    if (best) { u.atkOffX = best[0]; u.atkOffY = best[1]; }
+    const pick = best ?? fallback;
+    if (pick) { u.atkOffX = pick[0]; u.atkOffY = pick[1]; }
   }
 
   /** Order a unit to FOLLOW another (friendly/neutral/enemy) unit: it trails the
