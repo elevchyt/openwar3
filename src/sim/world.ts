@@ -342,6 +342,8 @@ export interface SimUnit {
   stallAnchorY: number;
   stallGap: number; // gap to the target at the start of the current combat-approach window
   gaveUp: boolean; // holding: gave up reaching an unreachable attack target, standing put (issue #24)
+  gaveUpGap: number; // gap to the target when the hold began — re-evaluate if it moves
+  attackStalls: number; // consecutive combat-approach windows with no headway (forces a hold when high)
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
@@ -464,6 +466,14 @@ const ATTACK_PROGRESS = PATHING_CELL * 1.5; // 48 world units per window
 // micro-wobble). It still re-checks periodically in case a blocker dies or the target
 // moves into reach.
 const ATTACK_GIVEUP_COOLDOWN = 1.5;
+// When an attacker keeps failing to make headway even though A* says the target is
+// reachable — the outer unit of a full surround, where the pathfinder threads the ring's
+// gaps but live collision keeps blocking the last stretch — it stops chasing and HOLDS,
+// with a backoff that grows each time it re-stalls (capped here). A permanently over-
+// surrounded unit thus ends up standing still, re-probing only every few seconds, instead
+// of jittering at the range edge every tick. It leaves the hold the instant it gets into
+// range or the target moves (so it's responsive when the fight actually shifts).
+const ATTACK_HOLD_MAX = 4.0;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
 // Hysteresis for follow (mirrors ATTACK_LEASH): once caught up and parked, the
@@ -1111,6 +1121,8 @@ export class SimWorld {
       | "stallAnchorY"
       | "stallGap"
       | "gaveUp"
+      | "gaveUpGap"
+      | "attackStalls"
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
@@ -1232,6 +1244,8 @@ export class SimWorld {
       stallAnchorY: unit.y,
       stallGap: 0,
       gaveUp: false,
+      gaveUpGap: 0,
+      attackStalls: 0,
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
@@ -1660,6 +1674,7 @@ export class SimWorld {
     u.noCollision = false; // manual control restores collision
     u.stallT = 0; // fresh target — reset the unreachable-target watchdog (issue #24)
     u.gaveUp = false; // no longer holding — a new target may well be reachable
+    u.attackStalls = 0;
     this.cancelSwing(u); // a fresh target starts a fresh swing
     this.detachBuilder(id);
     // Claim a distinct standing slot around the target so a group swarming one
@@ -3116,6 +3131,11 @@ export class SimWorld {
       const band = u.weapon.ranged ? u.weapon.range : u.weapon.range + ATTACK_LEASH;
       if (gap <= band) {
         u.gaveUp = false; // it wandered into reach — fight
+      } else if (Math.abs(gap - u.gaveUpGap) > ATTACK_LEASH) {
+        // The target moved relative to us since we settled to wait — the fight has
+        // shifted, so drop the hold and re-evaluate fresh (don't sit out a stale wait).
+        u.gaveUp = false;
+        u.attackStalls = 0;
       } else if (u.repathT > 0) {
         if (u.moving) this.settle(u);
         u.inCombat = false;
@@ -3151,6 +3171,7 @@ export class SimWorld {
     const band = u.weapon.ranged ? (u.inCombat ? u.weapon.range + ATTACK_LEASH : u.weapon.range) : u.weapon.range + ATTACK_LEASH;
     if (gap <= band) {
       u.stallT = 0;
+      u.attackStalls = 0; // in the fight — clear the stall streak
       return;
     }
     // Committed to standing after giving up (or briefly cooling down after a block):
@@ -3169,8 +3190,29 @@ export class SimWorld {
     const moved = Math.hypot(u.x - u.stallAnchorX, u.y - u.stallAnchorY);
     const closed = u.stallGap - gap;
     u.stallT = 0;
-    if (moved >= ATTACK_PROGRESS || closed >= ATTACK_PROGRESS) return; // real headway — keep chasing
-    this.redecideAttack(u, t);
+    if (moved >= ATTACK_PROGRESS || closed >= ATTACK_PROGRESS) {
+      u.attackStalls = 0; // real headway — keep chasing
+      return;
+    }
+    // No headway this window. redecideAttack repaths/switches while it still looks
+    // reachable; but if we keep stalling anyway (A* threads the surround's gaps, collision
+    // blocks the last stretch — the outer-ring jitter), stop trusting it and HOLD.
+    u.attackStalls++;
+    if (u.attackStalls >= 2) this.holdAttack(u, t);
+    else this.redecideAttack(u, t);
+  }
+
+  /** Stop chasing and hold position facing the target — used when an attacker keeps
+   *  failing to close despite the target looking reachable (see ATTACK_HOLD_MAX). The
+   *  hold cooldown grows with the stall streak so a permanently blocked unit stands
+   *  progressively stiller; tickAttack's gaveUp branch owns the wait and the exit. */
+  private holdAttack(u: SimUnit, t: SimUnit): void {
+    if (u.moving) this.settle(u);
+    u.gaveUp = true;
+    u.inCombat = false;
+    u.gaveUpGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
+    u.repathT = Math.min(ATTACK_GIVEUP_COOLDOWN * Math.max(1, u.attackStalls - 1), ATTACK_HOLD_MAX);
   }
 
   /** An attacker's target just died/vanished: keep fighting by acquiring the next
@@ -3226,6 +3268,7 @@ export class SimWorld {
     // gaveUp branch owns it from here (pure A* re-checks, no movement).
     this.settle(u);
     u.gaveUp = true;
+    u.gaveUpGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     u.repathT = ATTACK_GIVEUP_COOLDOWN;
   }
