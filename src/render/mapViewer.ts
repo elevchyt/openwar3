@@ -1492,12 +1492,15 @@ export class MapViewerScene {
   private static readonly CIRCLE_SCALE = 1.2;
   private static readonly CIRCLE_LIFT = 13; // sit the rings a bit higher (units + buildings)
   // Multiply-tint for hostile selection/hover rings — cuts the model's softer red
-  // toward a harsh, saturated red so enemies read at a glance.
-  private static readonly ENEMY_RING_TINT = [1, 0.16, 0.1];
+  // toward a harsh, saturated red so enemies read at a glance. Green/blue pushed
+  // near-zero (additive blend adds them back as white) for a deeper, purer red.
+  private static readonly ENEMY_RING_TINT = [1, 0.05, 0.03];
   // Brightness scale for HOVER rings (all colours) so a merely-hovered unit reads
-  // as fainter/more discrete than a committed selection ring. The rings blend
-  // additively, so lowering RGB directly softens the glow.
-  private static readonly HOVER_RING_DIM = 0.5;
+  // as slightly fainter than a committed selection ring — but still bold, with a ring
+  // border about as thick as an order/click flash. The rings blend additively, so this
+  // RGB scale drives how wide/bright the glow reads; kept high so hover borders don't
+  // thin out to a faint hairline.
+  private static readonly HOVER_RING_DIM = 0.78;
   // Camera zoom limits (world units of camera distance), WC3-like — not the huge
   // free range we had. MELEE_START opens a touch more zoomed out than before.
   private static readonly ZOOM_MIN = 1500;

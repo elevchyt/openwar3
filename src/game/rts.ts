@@ -273,7 +273,9 @@ const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
 // a friendly/own building, yellow for allied or neutral, red for a hostile one.
 const FLASH_GREEN: [number, number, number] = [0.3, 1, 0.3];
 const FLASH_YELLOW: [number, number, number] = [1, 0.88, 0.2];
-const FLASH_RED: [number, number, number] = [1, 0.2, 0.16];
+// Harsh, saturated red (green/blue near zero) so an attack/hostile click flash reads
+// as aggressively red — matches the accentuated enemy hover/selection ring tint.
+const FLASH_RED: [number, number, number] = [1, 0.08, 0.05];
 const TREE_FLAG_HEIGHT = 180; // lift a queue flag to a tree's canopy top
 const TREE_COLLIDER_HEIGHT = 110; // pick trees against a raised plane so clicking up the trunk/canopy still selects them
 // Max world distance from the click's ground point to a pickable unit. Gates out
@@ -2678,6 +2680,32 @@ export class RtsController {
       const t = picked !== null ? this.sim.units.get(picked) : undefined;
       this.ack(!!(t && prim && !t.building && this.sim.hostile(prim, t)));
     }
+    // Right-click directly on a ground item → send the selected hero(es) to pick it
+    // up. Checked BEFORE the unit-order logic (and with the same tight pick radius as
+    // hover/selection) so a friendly unit standing near the item can't intercept the
+    // click into a "follow" and leave the item on the ground — the intermittent
+    // "sometimes doesn't get picked up". A hostile unit under the cursor still wins
+    // (attacking through an item is the WC3 priority).
+    {
+      const pu = picked !== null ? this.sim.units.get(picked) : undefined;
+      const hostilePick = !!(pu && prim && !pu.building && this.sim.hostile(prim, pu));
+      const g = hostilePick ? null : this.groundPoint(cssX, cssY);
+      const gitem = g ? this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS) : null;
+      if (gitem) {
+        let any = false;
+        for (const id of this.selected) {
+          const u = this.sim.units.get(id);
+          if (this.controls(id) && u?.inventory.length) {
+            if (this.sim.issueGetItem(id, gitem.id)) any = true;
+          }
+        }
+        if (any) {
+          // Yellow (neutral) twin-blink at the item's own hover/selection ring size.
+          this.flashRing(gitem.x, gitem.y, ITEM_RING_RADIUS, FLASH_YELLOW, true);
+          return;
+        }
+      }
+    }
     if (picked !== null && !this.selected.has(picked)) {
       const target = this.sim.units.get(picked);
       if (target) {
@@ -2724,21 +2752,7 @@ export class RtsController {
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
     if (!hit) return;
-    // Right-click a ground item → send the selected hero(es) to pick it up (WC3).
-    const gitem = this.sim.itemAt(hit[0], hit[1], 96);
-    if (gitem) {
-      let any = false;
-      for (const id of this.selected) {
-        const u = this.sim.units.get(id);
-        if (this.controls(id) && u?.inventory.length) {
-          if (this.sim.issueGetItem(id, gitem.id)) any = true;
-        }
-      }
-      if (any) {
-        this.flashRing(gitem.x, gitem.y, 48, FLASH_GREEN, false);
-        return;
-      }
-    }
+    // (A ground item under the cursor was already handled up top, before unit orders.)
     // Workers in the selection right-clicking a resource start harvesting.
     // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
     // lands the ground ray well behind the trunk.
