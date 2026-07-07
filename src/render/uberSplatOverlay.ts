@@ -33,6 +33,7 @@ precision mediump float;
 uniform sampler2D uTex;
 uniform vec3 uTint;
 uniform float uMask;
+uniform float uHalf; // ring outer radius in WORLD units (the splat half-width) — for mask mode
 varying vec2 vUv;
 void main() {
   // Clip to the splat's [0,1] box: cells we tessellated may spill past it.
@@ -45,8 +46,13 @@ void main() {
     // band ourselves gives a crisp, high-contrast ring on ANY terrain at a controllable
     // width, while the tessellated geometry still makes it conform to slopes/ramps.
     vec2 p = (vUv - 0.5) * 2.0;                 // [-1,1] — a circle inscribed in the box
-    float r = length(p);
-    float a = smoothstep(0.84, 0.88, r) * (1.0 - smoothstep(0.98, 1.0, r));
+    float r = length(p) * uHalf;                // WORLD distance from the ring centre
+    // Band width in WORLD units, not a fraction of the radius — otherwise a big building
+    // ring (large half-width) looks many times thicker than a unit's. Capped so a huge
+    // ring stays a thin border; small units keep their (already-good) proportional width.
+    float thick = min(uHalf * 0.16, 8.0);
+    float aa = 1.5;                             // soft edge, world units
+    float a = smoothstep(uHalf - thick - aa, uHalf - thick + aa, r) * (1.0 - smoothstep(uHalf - aa, uHalf + aa, r));
     if (a < 0.02) discard;
     gl_FragColor = vec4(uTint, a);
     return;
@@ -76,6 +82,7 @@ interface SplatEntry {
   tint: [number, number, number]; // colour ([1,1,1] = texture unchanged; the ring's colour when `mask`)
   additive: boolean; // ADDITIVE blend vs alpha blend (default)
   mask: boolean; // draw a PROCEDURAL `tint` ring from UV, ignoring the texture (selection rings)
+  half: number; // the splat half-width in world units (ring outer radius, for `mask`)
 }
 
 /** Per-splat options. `tint` recolours the texture (default white), or is the ring
@@ -104,6 +111,7 @@ export class UberSplatOverlay {
   private uTex: WebGLUniformLocation;
   private uTint: WebGLUniformLocation;
   private uMask: WebGLUniformLocation;
+  private uHalf: WebGLUniformLocation;
   private maxAttribs: number;
   private entries = new Map<string, SplatEntry>();
   private textures = new Map<string, CachedTexture>();
@@ -120,6 +128,7 @@ export class UberSplatOverlay {
     this.uTex = gl.getUniformLocation(this.program, "uTex")!;
     this.uTint = gl.getUniformLocation(this.program, "uTint")!;
     this.uMask = gl.getUniformLocation(this.program, "uMask")!;
+    this.uHalf = gl.getUniformLocation(this.program, "uHalf")!;
   }
 
   has(id: string | number): boolean {
@@ -137,7 +146,7 @@ export class UberSplatOverlay {
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     const uvBuf = createBuffer(gl, gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
-    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false });
+    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false, half: scale });
     // Decode the BLP once (synchronous); the GL texture is uploaded lazily in render().
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });
@@ -259,6 +268,7 @@ export class UberSplatOverlay {
       else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform3fv(this.uTint, e.tint);
       gl.uniform1f(this.uMask, e.mask ? 1 : 0);
+      gl.uniform1f(this.uHalf, e.half);
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.bindBuffer(gl.ARRAY_BUFFER, e.posBuf);
       gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);
