@@ -1949,7 +1949,7 @@ export class RtsController {
           let any = false;
           for (const id of this.selected) if (id !== picked && this.order(id, { kind: "attack", targetId: picked, force: true }, queued)) any = true;
           if (any) {
-            this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius);
+            this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
             return true;
           }
         }
@@ -2373,7 +2373,9 @@ export class RtsController {
       // Buildings get a ring sized to their footprint (a constant tiny ring is
       // hidden under the model); units keep the constant ring. Neutral Passive
       // entities ring yellow.
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
+      // Air units' ring floats at their flight altitude (e.moveHeight matches the
+      // model's drawn base), so it hugs the unit instead of sitting on the ground.
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
     }
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
@@ -2395,7 +2397,7 @@ export class RtsController {
     for (const id of this.previewIds) {
       const u = this.sim.units.get(id);
       const e = this.byId.get(id);
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive });
     }
     return out;
   }
@@ -2407,7 +2409,7 @@ export class RtsController {
     if (this.hovered !== null && !this.selected.has(this.hovered)) {
       const u = this.sim.units.get(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y), radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive };
+      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive };
     }
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);
@@ -2763,13 +2765,14 @@ export class RtsController {
       const target = this.sim.units.get(picked);
       if (target) {
         const selR = this.byId.get(picked)?.selRadius ?? target.radius;
+        const lift = this.byId.get(picked)?.moveHeight ?? 0; // air targets: flash at altitude
         const enemy = prim ? this.sim.hostile(prim, target) : false;
         if (enemy && !target.building) {
           // Hostile UNIT: attack + red flash (constant ring, matching its hover).
           let any = false;
           for (const id of this.selected) if (this.order(id, { kind: "attack", targetId: picked }, queued)) any = true;
           if (any) {
-            this.flashRing(target.x, target.y, selR, FLASH_RED, false);
+            this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
           }
         } else if (target.building) {
@@ -2791,7 +2794,7 @@ export class RtsController {
             if (this.order(id, { kind: "follow", targetId: picked, offX: o?.[0], offY: o?.[1] }, queued)) any = true;
           }
           if (any) {
-            this.flashRing(target.x, target.y, selR, FLASH_GREEN, false); // green follow confirm
+            this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift); // green follow confirm
             return;
           }
         }
@@ -3156,14 +3159,16 @@ export class RtsController {
    *  caller. `big` MUST match how the target's hover/selection ring is sized so the
    *  order flash is the SAME size as hovering it: units use the constant ring
    *  (big=false), buildings/mines/trees size to their footprint radius (big=true). */
-  private flashRing(x: number, y: number, radius: number, color: [number, number, number], big = true): void {
-    this.flashRequests.push({ x, y, z: this.heightAt(x, y), radius, color, sizeToRadius: big });
+  private flashRing(x: number, y: number, radius: number, color: [number, number, number], big = true, lift = 0): void {
+    // `lift` floats the flash to an air target's altitude so it hugs the flyer
+    // instead of blinking on the ground beneath it (matches its selection ring).
+    this.flashRequests.push({ x, y, z: this.heightAt(x, y) + lift, radius, color, sizeToRadius: big });
   }
   private flashTarget(x: number, y: number, radius: number): void {
     this.flashRing(x, y, radius, FLASH_YELLOW); // yellow harvest-target flash (mine/tree → sized)
   }
-  private flashAttack(x: number, y: number, radius: number): void {
-    this.flashRing(x, y, radius, FLASH_RED, false); // red attack-target flash on a unit → constant ring
+  private flashAttack(x: number, y: number, radius: number, lift = 0): void {
+    this.flashRing(x, y, radius, FLASH_RED, false, lift); // red attack-target flash on a unit → constant ring
   }
 
   /** Trees to pulse yellow since the last drain (renderer tints the doodad). */
