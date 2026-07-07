@@ -1543,10 +1543,14 @@ export class MapViewerScene {
   // Rings size to each unit's selRadius (see placeCircle) so they match the click
   // collider; a tiny lift keeps them just above the terrain.
   private static readonly CIRCLE_LIFT = 13; // sit the rings a bit higher (units + buildings)
-  // Multiply-tint for hostile selection/hover rings — cuts the model's softer red
-  // toward a harsh, saturated red so enemies read at a glance. Green/blue pushed
-  // near-zero (additive blend adds them back as white) for a deeper, purer red.
-  private static readonly ENEMY_RING_TINT = [1, 0.05, 0.03];
+  // Vertex-colour tints for the alliance selection/hover rings. The tint MULTIPLIES
+  // the model's team texture, so zeroing the off-channels forces each ring to its
+  // pure primary — extreme, unambiguous colours at a glance (green = 0,255,0;
+  // red = 255,0,0; yellow = 255,255,0). Hover rings scale these down (HOVER_RING_DIM)
+  // to stay discrete next to a committed selection.
+  private static readonly FRIENDLY_RING_TINT = [0, 1, 0]; // your/allied units — pure green
+  private static readonly ENEMY_RING_TINT = [1, 0, 0]; // hostiles + creeps — pure red
+  private static readonly NEUTRAL_RING_TINT = [1, 1, 0]; // neutral-passive (mines/shops) — pure yellow
   // Brightness scale for HOVER rings (all colours) so a merely-hovered unit reads
   // as slightly fainter than a committed selection ring — but still bold, with a ring
   // border about as thick as an order/click flash. The rings blend additively, so this
@@ -1700,6 +1704,10 @@ export class MapViewerScene {
     // large-selScale unit no longer gets a ring smaller than its collider). Lifted
     // a hair off the terrain to avoid z-fight.
     const scale = Math.max(0.7, info.radius / 38);
+    // Small rings (workers, small critters) draw a thin border; nudge their
+    // additive glow a touch wider so they read about as bold as a large unit's
+    // ring without growing the ring off its collider. Full-size rings unchanged.
+    const thicken = scale < 1 ? 1 + (1 - scale) * 0.4 : 1; // ~1.12x at the 0.7 floor
     this.loc3[2] = info.z - 14 * scale + MapViewerScene.CIRCLE_LIFT;
     inst.setLocation(this.loc3);
     inst.setUniformScale(scale);
@@ -1709,12 +1717,18 @@ export class MapViewerScene {
     // neutral-hostile creeps — is red.
     let seq: number;
     let vcolor = tint ?? [1, 1, 1];
-    if (tint || info.neutral) seq = this.circleSeq.neutral; // flashes + neutral-passive (gold mine)
-    else {
+    if (tint) {
+      seq = this.circleSeq.neutral; // flashes use the neutral base so the tint carries the colour cleanly
+    } else if (info.neutral) {
+      seq = this.circleSeq.neutral; // neutral-passive (gold mine / shop) — pure yellow
+      vcolor = MapViewerScene.NEUTRAL_RING_TINT;
+    } else {
       const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
       seq = friendly ? this.circleSeq.friendly : this.circleSeq.enemy;
-      if (!friendly) vcolor = MapViewerScene.ENEMY_RING_TINT; // accentuate hostile rings to a harsh red
+      vcolor = friendly ? MapViewerScene.FRIENDLY_RING_TINT : MapViewerScene.ENEMY_RING_TINT; // pure green / pure red
     }
+    // Widen small rings a hair (additive glow scales with brightness).
+    if (thicken !== 1) vcolor = vcolor.map((c) => c * thicken);
     // Hover rings read as a fainter, more "discrete" version of the committed
     // selection ring: scale the (additive-blended) ring colour down so its glow is
     // dimmer than a real selection — applies to every colour (green/red/yellow).
