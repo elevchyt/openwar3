@@ -3259,10 +3259,11 @@ export class RtsController {
       } else {
         bar.manaTrack.hidden = true;
       }
-      // Hero level badge to the left of the bars.
-      if (e.isHero && e.level > 0) {
+      // Hero level badge to the left of the bars. Read the LIVE level from the sim
+      // unit (u.level) — e.level is the spawn-time level and doesn't track level-ups.
+      if (e.isHero && u.level > 0) {
         bar.level.hidden = false;
-        bar.level.textContent = String(e.level);
+        bar.level.textContent = String(u.level);
       } else {
         bar.level.hidden = true;
       }
