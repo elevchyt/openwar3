@@ -32,14 +32,28 @@ const FRAG_SRC = `
 precision mediump float;
 uniform sampler2D uTex;
 uniform vec3 uTint;
+uniform float uMask;
 varying vec2 vUv;
 void main() {
   // Clip to the splat's [0,1] box: cells we tessellated may spill past it.
   if (vUv.x < 0.0 || vUv.x > 1.0 || vUv.y < 0.0 || vUv.y > 1.0) discard;
+  if (uMask > 0.5) {
+    // Selection ring — drawn PROCEDURALLY, not from the BLP. WC3's SelectionCircle BLP is
+    // a 2px hairline on an opaque black field, authored for additive blend; painted as a
+    // terrain splat it washes out on bright grass (visible only over dark dirt) and dims
+    // further with distance (issue #34 f/u). Drawing a clean, thick, fully-opaque uTint
+    // band ourselves gives a crisp, high-contrast ring on ANY terrain at a controllable
+    // width, while the tessellated geometry still makes it conform to slopes/ramps.
+    vec2 p = (vUv - 0.5) * 2.0;                 // [-1,1] — a circle inscribed in the box
+    float r = length(p);
+    float a = smoothstep(0.84, 0.88, r) * (1.0 - smoothstep(0.98, 1.0, r));
+    if (a < 0.02) discard;
+    gl_FragColor = vec4(uTint, a);
+    return;
+  }
+  // Foundation / AoE splats: the texture as-authored, recoloured by uTint (white = as-is).
   vec4 c = texture2D(uTex, vUv);
   if (c.a < 0.01) discard; // skip the fully-transparent margin of the splat texture
-  // uTint recolours the splat (white = unchanged) — carries the alliance colour of a
-  // selection ring; building/AoE splats pass white so they render as-authored.
   gl_FragColor = vec4(c.rgb * uTint, c.a);
 }`;
 
@@ -59,15 +73,19 @@ interface SplatEntry {
   uvBuf: WebGLBuffer;
   count: number; // vertex count (non-indexed triangles)
   texture: string; // BLP path (key into the texture cache)
-  tint: [number, number, number]; // colour multiplier ([1,1,1] = unchanged)
-  additive: boolean; // ADDITIVE blend (selection-ring glow) vs alpha blend (foundation decal)
+  tint: [number, number, number]; // colour ([1,1,1] = texture unchanged; the ring's colour when `mask`)
+  additive: boolean; // ADDITIVE blend vs alpha blend (default)
+  mask: boolean; // draw a PROCEDURAL `tint` ring from UV, ignoring the texture (selection rings)
 }
 
-/** Per-splat options. `tint` recolours the texture (default white); `additive`
- *  switches to additive blending for a glowing ring (default alpha blend). */
+/** Per-splat options. `tint` recolours the texture (default white), or is the ring
+ *  colour when `mask`; `additive` switches to additive blending (default alpha blend);
+ *  `mask` draws a procedural ring band from the UV (crisp on any terrain) instead of
+ *  sampling the texture — the texture only has to exist so the entry is drawn. */
 export interface SplatOptions {
   tint?: [number, number, number];
   additive?: boolean;
+  mask?: boolean;
 }
 
 interface CachedTexture {
@@ -85,6 +103,7 @@ export class UberSplatOverlay {
   private uViewProj: WebGLUniformLocation;
   private uTex: WebGLUniformLocation;
   private uTint: WebGLUniformLocation;
+  private uMask: WebGLUniformLocation;
   private maxAttribs: number;
   private entries = new Map<string, SplatEntry>();
   private textures = new Map<string, CachedTexture>();
@@ -100,6 +119,7 @@ export class UberSplatOverlay {
     this.uViewProj = gl.getUniformLocation(this.program, "uViewProj")!;
     this.uTex = gl.getUniformLocation(this.program, "uTex")!;
     this.uTint = gl.getUniformLocation(this.program, "uTint")!;
+    this.uMask = gl.getUniformLocation(this.program, "uMask")!;
   }
 
   has(id: string | number): boolean {
@@ -117,7 +137,7 @@ export class UberSplatOverlay {
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     const uvBuf = createBuffer(gl, gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
-    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false });
+    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false });
     // Decode the BLP once (synchronous); the GL texture is uploaded lazily in render().
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });
@@ -238,6 +258,7 @@ export class UberSplatOverlay {
       if (e.additive) gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform3fv(this.uTint, e.tint);
+      gl.uniform1f(this.uMask, e.mask ? 1 : 0);
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.bindBuffer(gl.ARRAY_BUFFER, e.posBuf);
       gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);

@@ -107,11 +107,11 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
   undead: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_Undead.blp",
 };
 
-// Selection/hover ring textures — the same BLPs selectioncircle.mdx draws, painted
-// through the ubersplat overlay instead so a ring conforms to the terrain (warps over
-// slopes/ramps, its whole body always visible) like the AoE indicator (issue #34). The
-// round SelectionCircleUnit for units/mines/items; the square-bracket Building variant
-// for structures. Both are additive glows tinted by alliance (green/red/yellow).
+// Selection/hover rings are painted through the ubersplat overlay (tessellated over the
+// terrain corner grid) so a ring conforms to the terrain — warps over slopes/ramps with
+// its whole body visible, like the AoE indicator (issue #34). The overlay draws the ring
+// PROCEDURALLY in the alliance colour (green/red/yellow); it just needs a real, loadable
+// BLP named per entry so the entry draws (the pixels are ignored — see uberSplatOverlay).
 const RING_TEX_UNIT = "ui\\Feedback\\selectioncircle\\SelectionCircleUnit.blp";
 const RING_TEX_BUILDING = "ui\\Feedback\\selectioncircle\\SelectionCircleBuilding.blp";
 // selectioncircle.mdx's native half-width in world units — the ring's outer edge sat at
@@ -1523,7 +1523,11 @@ export class MapViewerScene {
     if (dim) mult *= MapViewerScene.HOVER_RING_DIM; // hover rings read fainter than a committed selection
     if (mult !== 1) vcolor = vcolor.map((c) => c * mult);
     const texture = info.isBuilding ? RING_TEX_BUILDING : RING_TEX_UNIT;
-    this.ringSplats.add(key, info.x, info.y, half, texture, { tint: [vcolor[0], vcolor[1], vcolor[2]], additive: true });
+    // `mask`: the overlay draws a crisp procedural ring in the vcolor, fully visible on
+    // bright grass as well as dark dirt (the real ring BLP is a hairline built for additive
+    // blend that washes out as a terrain splat — issue #34 f/u). The BLP is still named so
+    // the entry loads/draws; its pixels are ignored.
+    this.ringSplats.add(key, info.x, info.y, half, texture, { tint: [vcolor[0], vcolor[1], vcolor[2]], mask: true });
     live.add(key);
   }
 
@@ -2959,6 +2963,10 @@ export class MapViewerScene {
         fogScene.renderOpaque();
         map.renderWater();
         if (this.splats) this.splats.render(fogScene.camera.viewProjectionMatrix);
+        // Selection rings draw right after the building splats (so a ring paints ON TOP
+        // of a foundation decal — issue #16) and BEFORE the translucent units (so a unit
+        // body draws over its own ring, which reads as sitting under it). Before the fog
+        // so the veil dims it like the ground.
         if (this.ringSplats) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderTranslucent();
       } else {
