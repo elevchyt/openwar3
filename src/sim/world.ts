@@ -2928,7 +2928,10 @@ export class SimWorld {
    *  air units crash without leaving a raisable ground corpse — none of them do. */
   private spawnCorpse(u: SimUnit): void {
     // A summon (isSummon) leaves no corpse even after its timer hits 0 at expiry.
-    if (u.building || u.mechanical || u.isSummon || u.neutralPassive || u.flying) return;
+    // Neutral Passive *buildings* (shops/fountains) are caught by `u.building`; their
+    // mobile kin — critters — are organic and DO leave a decaying corpse (raiseable by
+    // Raise Dead, edible by Cannibalize), just like any other ground unit (issue #39).
+    if (u.building || u.mechanical || u.isSummon || u.flying) return;
     this.corpses.set(this.nextCorpseId, {
       id: this.nextCorpseId,
       deadId: u.id,

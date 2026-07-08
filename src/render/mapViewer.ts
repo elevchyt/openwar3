@@ -285,6 +285,14 @@ export class MapViewerScene {
   private splats: UberSplatOverlay | null = null;
   private uberSplats: UberSplatRegistry | null = null;
   private simBuildingSplats = new Set<number>();
+  // Pre-placed map buildings paint their splat keyed by index (p<i>), not sim id, so the
+  // sim-id reconcile can't prune them when destroyed. Track each with its world position
+  // so we can reconcile it BY POSITION (issue #40): once a live sim building has been seen
+  // at its spot, its later disappearance (the neutral shop/fountain was destroyed) removes
+  // the decal. `seen` guards the progressive seed — the neutral unit loads a couple frames
+  // after the splat is painted, so we must not remove it before it ever exists.
+  private mapBuildingSplats = new Map<string, { x: number; y: number; seen: boolean }>();
+  private mapSplatAccum = 0; // throttles the position reconcile (a few times/sec is plenty)
   private debug: DebugColliders | null = null; // debug collider overlay (lazy)
   private showColliders = false; // debug overlay toggle (bottom-right cheat button)
   private heightSampler: HeightSampler | null = null; // terrain height for the overlay
@@ -527,6 +535,7 @@ export class MapViewerScene {
     this.ringSplats = null;
     this.ringKeys.clear();
     this.simBuildingSplats.clear();
+    this.mapBuildingSplats.clear();
     this.rts?.dispose();
     this.rts = null;
     this.lastMarkerScanCount = -1;
@@ -698,7 +707,11 @@ export class MapViewerScene {
       // splat can be removed when the mine depletes).
       if (u.typeId !== GOLD_MINE_ID) {
         const def = this.registry.get(u.typeId);
-        if (def?.isBuilding && def.uberSplat) this.addBuildingSplat(`p${i}`, def, u.x, u.y);
+        if (def?.isBuilding && def.uberSplat) {
+          this.addBuildingSplat(`p${i}`, def, u.x, u.y);
+          // Track it so the decal is pruned by position if the building is destroyed (issue #40).
+          this.mapBuildingSplats.set(`p${i}`, { x: u.x, y: u.y, seen: false });
+        }
       }
       if (u.typeId === GOLD_MINE_ID) {
         mines.push({ x: u.x, y: u.y, gold: u.goldAmount || 12500 });
@@ -3336,7 +3349,29 @@ export class MapViewerScene {
       // Prune ubersplats whose building has died before we draw them this frame.
       if (this.splats && fogScene) {
         const world = this.rts?.simWorld;
-        if (world) this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
+        if (world) {
+          this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
+          // Pre-placed map buildings (p<i>) are keyed by index, not sim id, so prune them
+          // by POSITION: a neutral shop/fountain the player destroys must lose its ground
+          // decal too (issue #40). A splat is removed only once a live building has been
+          // SEEN at its spot (the neutral unit seeds a few frames after the splat is
+          // painted) — after that, its absence means the building was destroyed.
+          this.mapSplatAccum += dt;
+          if (this.mapBuildingSplats.size && this.mapSplatAccum >= 250) {
+            this.mapSplatAccum = 0;
+            const liveBuildings: Array<{ x: number; y: number }> = [];
+            for (const u of world.units.values()) if (u.building) liveBuildings.push({ x: u.x, y: u.y });
+            // 48u matches rts.isNeutralPassiveAt — the proven tolerance for matching a
+            // war3mapUnits.doo position (what the splat is keyed to) against the seeded
+            // sim unit's localLocation; buildings sit far enough apart not to cross-match.
+            const TOL2 = 48 * 48;
+            for (const [key, s] of this.mapBuildingSplats) {
+              const present = liveBuildings.some((b) => (b.x - s.x) ** 2 + (b.y - s.y) ** 2 <= TOL2);
+              if (present) s.seen = true;
+              else if (s.seen) { this.splats.remove(key); this.mapBuildingSplats.delete(key); }
+            }
+          }
+        }
         for (const id of [...this.simBuildingSplats]) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
       }
       // We replay the w3x map's own render sequence (ground → cliffs → opaque → water →
@@ -3402,6 +3437,7 @@ export class MapViewerScene {
     this.ringSplats = null;
     this.ringKeys.clear();
     this.simBuildingSplats.clear();
+    this.mapBuildingSplats.clear();
     this.debug?.dispose();
     this.debug = null;
     this.pathGridLayer?.dispose();
