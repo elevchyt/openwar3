@@ -273,15 +273,20 @@ export class SoundBoard {
     // As with missiles, effect-folder WAVs have no SLK row — treat them as WANT3D
     // world sounds so a spell cast pans + attenuates from where it's cast.
     const meta = { gain: 0.8, pitch: 1, pitchVar: 0.03, threeD: true, refDist: 800, maxDist: 10000, cutoff: 3500 };
+    // A cast sound is player-initiated and one-per-cast — route it through the
+    // uncapped "spell" channel, NOT the shared weapon-impact pool. That pool sits
+    // at its MAX_IMPACTS cap all through a fight, so casting a spell mid-combat
+    // (Thunder Clap, etc.) used to be silently dropped after the first time the
+    // slots filled — "plays once, then never again" (issue #23). WC3 always plays them.
     for (const art of arts) {
       if (!art) continue;
       const paths = this.folderSounds("cast", art, ["", "1", "Cast", "Target", "Caster", "Death"]);
       if (paths.length) {
-        this.playPool({ paths, ...meta }, "impact", at);
+        this.playPool({ paths, ...meta }, "spell", at);
         return;
       }
     }
-    if (fallback && this.vfs.exists(fallback)) this.playPool({ paths: [fallback], ...meta }, "impact", at);
+    if (fallback && this.vfs.exists(fallback)) this.playPool({ paths: [fallback], ...meta }, "spell", at);
   }
 
   private soundCache = new Map<string, string[]>();
@@ -457,9 +462,11 @@ export class SoundBoard {
   }
 
   /** Play a clip on an overlapping one-shot pool. deaths/impacts are concurrency-
-   *  capped (reserved synchronously so an AoE burst can't slip the cap); ui isn't.
-   *  A WANT3D clip with a world position pans + attenuates around the listener. */
-  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui", at?: SoundPos): void {
+   *  capped (reserved synchronously so an AoE burst can't slip the cap); ui and
+   *  spell aren't — a player-initiated cast sound must never lose its slot to the
+   *  weapon-clang cap mid-fight (issue #23). A WANT3D clip with a world position
+   *  pans + attenuates around the listener regardless of kind. */
+  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui" | "spell", at?: SoundPos): void {
     if (!clip || !clip.paths.length) return;
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return;
