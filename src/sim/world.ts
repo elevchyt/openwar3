@@ -723,6 +723,11 @@ export class SimWorld {
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
   // one-shot gesture (Storm Bolt throw) that plays once.
   private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number }> = [];
+  // Casts whose effect just FIRED this frame (wind-up elapsed → the clap/bolt/etc.
+  // happens now). The renderer plays the ability's cast SOUND off THIS, not off the
+  // cast START — WC3 syncs the sound to the effect at the cast point (issue #23), and
+  // an interrupted wind-up (which never reaches here) correctly makes no sound.
+  private castFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
   // Heroes that just gained a level: renderer plays the level-up nova + sound.
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
@@ -2556,6 +2561,9 @@ export class SimWorld {
       ab.cooldownLeft = lvl.cooldown;
     }
     pc.fired = true;
+    // The effect fires NOW (cast point) — cue its cast sound here so it lands with
+    // the visible clap/bolt, not 0.4s early at the wind-up (issue #23).
+    this.castFires.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId });
     this.resolveCast(u, def, pc);
     pc.channelLeft = this.channelDuration(def, pc.rank);
     // No channel → play the cast backswing recovery (0 = none). A channel holds
@@ -3050,6 +3058,13 @@ export class SimWorld {
     if (!this.castStarts.length) return this.castStarts;
     const out = this.castStarts;
     this.castStarts = [];
+    return out;
+  }
+  /** Casts whose effect FIRED this frame (renderer plays the ability's cast sound). */
+  drainCastFires(): Array<{ casterId: number; code: string; abilityId: string }> {
+    if (!this.castFires.length) return this.castFires;
+    const out = this.castFires;
+    this.castFires = [];
     return out;
   }
   /** Heroes that leveled up this frame (renderer plays the level-up nova). */

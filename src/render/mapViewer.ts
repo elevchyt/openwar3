@@ -3260,16 +3260,23 @@ export class MapViewerScene {
           const y = t ? t.y : fx.y;
           void this.spawnEffect(fx.art, x, y, this.rts!.groundHeightAt(x, y) + (fx.z || 0), fx.life ?? 2);
         }
-        // Cast animations (throw/slam/spell) + the spell's cast/effect sound.
+        // Cast animations (throw/slam/spell) begin at the wind-up.
         for (const c of world.drainCastStarts()) {
           this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
-          const def = this.abilities.get(c.abilityId);
           const caster = world.units.get(c.casterId);
-          const at = caster ? { x: caster.x, y: caster.y, z: this.rts!.groundHeightAt(caster.x, caster.y) } : undefined;
-          if (def) this.sounds?.playSpellSound([def.targetArt, def.casterArt, def.specialArt], SPELL_SOUND_FALLBACK[c.code], at);
           // Blood Mage: hurl one orbiting sphere at Flame Strike / Banish targets (issue #37).
           if (MapViewerScene.SPHERE_THROW_CODES.has(c.code) && caster && this.hasSpheres(caster.typeId))
             this.throwSphere(c.casterId, c.tx, c.ty, c.targetId);
+        }
+        // ...but the cast/effect SOUND fires with the effect at the cast point (issue #23):
+        // it lands with the visible clap/bolt, not 0.4s early at the wind-up, and an
+        // interrupted wind-up (no fire) correctly stays silent.
+        for (const c of world.drainCastFires()) {
+          const def = this.abilities.get(c.abilityId);
+          if (!def) continue;
+          const caster = world.units.get(c.casterId);
+          const at = caster ? { x: caster.x, y: caster.y, z: this.rts!.groundHeightAt(caster.x, caster.y) } : undefined;
+          this.sounds?.playSpellSound([def.targetArt, def.casterArt, def.specialArt], SPELL_SOUND_FALLBACK[c.code], at);
         }
         // Hero level-up nova.
         for (const lu of world.drainLevelUps()) {
