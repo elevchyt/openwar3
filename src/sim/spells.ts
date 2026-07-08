@@ -67,6 +67,8 @@ export interface SpellFieldInit {
   interval: number; // seconds between waves
   casterId: number;
   art: string;
+  delay?: number; // seconds before the FIRST wave (default 0 = fire immediately). Lets a
+  //                 field start after another (Flame Strike's subsiding burn follows the pillar).
 }
 
 /** Where a cast is aimed. */
@@ -592,13 +594,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // before ignition aborts here and leaves just the gong + vortex and a wasted cast —
   // matching WC3 (Liquipedia: Blood Mage). At ignition the plain FlameStrike pillar
   // erupts ONCE (its ~7.2s "birth" clip is the lingering fire), then FlameStrikeEmbers
-  // paint the burning circle: 9 in a ring around the area + 1 at the centre. The burn
-  // field damages `area` (dataA/sec, modelled as 1s waves for Dur=9) — damage only, no
-  // per-wave art, since the pillar + ring already carry the fire.
+  // paint the burning circle: 9 in a ring around the area + 1 at the centre.
+  //
+  // Damage is TWO phases, straight from the MPQ AHfs fields (verified 2026-07 against the
+  // 1.27 SLK + ubertip): the ubertip reads "burns ground units for N damage a second for
+  // 3 seconds. As the pillar of flame subsides, units within the fire continue to take
+  // minor damage." So the pillar deals "Full Damage Dealt" (dataA) every "Full Damage
+  // Interval" (dataB, 0.33s) — L1 15/0.33s ≈ 45 dps, matching the tooltip's 45/80/110 —
+  // for the FIRST THIRD of the duration (Dur=9 → 3s), then the subsiding "Half Damage
+  // Dealt" (dataC) every "Half Damage Interval" (dataD, 1s) for the remaining two-thirds.
+  // The old code spread dataA over the whole 9s as 1s waves (15 dps for 9s), so the burn
+  // did far too little per second and lasted three times too long. Heroes take the shorter
+  // herodur (2.67s) throughout. Damage begins the instant this handler runs — i.e. when the
+  // cast-point wind-up ends — since a field's first wave fires on its next tick (delay 0).
   AHfs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const area = lvl.area || 200;
-    const waves = Math.max(1, Math.round(lvl.duration || 9));
     // Eruption pillar: hold it ~7.2s so the whole "birth" fire plays out, not just 2s.
     api.emitEffect(FLAMESTRIKE_PILLAR, ctx.x, ctx.y, 0, 7.2);
     // Ring of embers marking the burning circle (see reference: a solid ring of flame
@@ -610,7 +621,19 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       const ang = (i / 9) * Math.PI * 2;
       api.emitEffect(FLAMESTRIKE_EMBERS, ctx.x + Math.cos(ang) * ringR, ctx.y + Math.sin(ang) * ringR, 0);
     }
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area, damagePerWave: d(lvl, 0, 15), waves, interval: 1, casterId: caster.id, art: "" });
+    const total = caster.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration || 9;
+    const fullDur = total / 3; // the "3 seconds" full-damage pillar (Dur=9 → 3s)
+    const fullInt = d(lvl, 1, 0.33) || 0.33; // Full Damage Interval
+    const halfInt = d(lvl, 3, 1) || 1; // Half Damage Interval
+    // Full-damage pillar: dataA every dataB, over the first third of the duration.
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area, damagePerWave: d(lvl, 0, 15), waves: Math.max(1, Math.round(fullDur / fullInt)), interval: fullInt, casterId: caster.id, art: "" });
+    // Subsiding "minor damage": dataC every dataD, for the remaining two-thirds — begins
+    // once the pillar fades (delay = fullDur) so the two phases don't overlap.
+    const halfDmg = d(lvl, 2, 0);
+    const halfWaves = Math.max(0, Math.round((total - fullDur) / halfInt));
+    if (halfDmg > 0 && halfWaves > 0) {
+      api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area, damagePerWave: halfDmg, waves: halfWaves, interval: halfInt, delay: fullDur, casterId: caster.id, art: "" });
+    }
   },
 
   // Death and Decay (Lich, ult) — a decay field damaging everything in `area` each

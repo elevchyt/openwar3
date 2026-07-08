@@ -2818,7 +2818,9 @@ export class SimWorld {
     const team = caster?.team ?? 0;
     const ab = caster ? this.findAbility(caster, f.code) : undefined;
     const flags = (ab && this.abilities?.get(ab.id)?.targetFlags) ?? [];
-    this.spellFields.push({ ...f, timer: 0, done: 0, team, flags });
+    // timer counts down to the next wave; seeding it with `delay` (default 0) postpones the
+    // FIRST wave without dropping any (Flame Strike's subsiding burn starts after the pillar).
+    this.spellFields.push({ ...f, timer: f.delay ?? 0, done: 0, team, flags });
   }
 
   /** Would an area effect with `flags` (the ability's targs1), cast by unit `casterId`
