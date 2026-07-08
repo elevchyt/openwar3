@@ -1647,6 +1647,18 @@ export class RtsController {
     return undefined;
   }
 
+  /** The rendered model instance for a unit — for effects that ride the model's
+   *  attachment points (e.g. the Blood Mage's orbiting spheres, issue #37). */
+  unitInstance(simId: number): Instance | undefined {
+    return this.byId.get(simId)?.unit.instance;
+  }
+
+  /** Whether a unit's model is currently hidden (fog of war, or a worker inside a
+   *  gold mine) — so attached effects can hide/show along with it. */
+  unitHidden(simId: number): boolean {
+    return this.byId.get(simId)?.hidden ?? true;
+  }
+
   /** A summoned/raised unit materializes: play its birth clip and lock it out of
    *  acting (sim `spawning`) until the clip finishes. No birth clip → acts at once. */
   beginSummonBirth(simId: number): void {

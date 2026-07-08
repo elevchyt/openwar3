@@ -209,10 +209,40 @@ interface SpawnInstance {
   detach(): boolean; // remove from the scene (projectiles on impact)
   localLocation: Float32Array;
   localRotation: Float32Array;
-  model: { sequences: Array<{ name: string; interval?: ArrayLike<number> }> };
+  worldLocation?: Float32Array; // node's world-space position (valid after a scene update)
+  // Parent this instance to another instance's attachment node (mdx setParent), so
+  // it rides that node's animated transform — how the Blood Mage's spheres orbit.
+  setParent?(node: unknown): unknown;
+  getAttachment?(id: number): unknown; // an attachment node by its model.attachments index
+  model: {
+    sequences: Array<{ name: string; interval?: ArrayLike<number> }>;
+    attachments?: Array<{ name: string }>; // "Sprite First Ref", "Hand Right Ref", …
+  };
 }
 interface SpawnModel {
   addInstance(): SpawnInstance;
+}
+
+// A Blood Mage's orbiting spheres (issue #37). The Sphere ability (Asph) attaches
+// BloodElfBall.mdx to the hero model's three "Sprite N Ref" attachment points; the
+// orbit is baked into the model's animation of those nodes, so parenting one ball to
+// each node gives the circling for free. A spell cast hurls one ball at the target
+// as a missile, and it regrows after a moment.
+interface SphereRig {
+  balls: (SpawnInstance | null)[]; // one per sprite attachment point (orbit instances)
+  attachIdx: number[]; // the model.attachments index each ball rides
+  thrown: SphereThrow[]; // balls currently in flight / regrowing (not orbiting)
+  visible: boolean; // last show/hide state applied (kept in sync with the hero)
+}
+interface SphereThrow {
+  ballIdx: number;
+  phase: "fly" | "regrow";
+  t: number; // seconds elapsed in the current phase
+  flyDur: number; // total flight time (distance / missile speed)
+  regrowLeft: number; // seconds until the ball returns to orbit
+  sx: number; sy: number; sz: number; // launch point (the ball's orbit position)
+  tx: number; ty: number; tz: number; // impact point
+  peak: number; // parabolic arc apex height
 }
 
 const ViewerClass = War3MapViewer as unknown as {
@@ -381,6 +411,10 @@ export class MapViewerScene {
   private projectileModels = new Map<string, SpawnModel | null>();
   private projectileInsts = new Map<number, SpawnInstance>();
   private projectileLoading = new Set<number>();
+  // Blood Mage orbiting spheres (issue #37): one rig per live Blood Mage, keyed by
+  // sim id. Spawned on demand; balls ride the hero model's sprite attachment nodes.
+  private bloodMageSpheres = new Map<number, SphereRig>();
+  private bloodMageSpheresLoading = new Set<number>();
   private mq = new Float32Array(4);
   private loc3 = new Float32Array(3);
   private consoleSkinCache:
@@ -1400,6 +1434,210 @@ export class MapViewerScene {
     inst.setSequenceLoopMode(2); // loop the buff/aura effect for its lifetime
     inst.show();
     this.buffFx.set(key, inst);
+  }
+
+  // --- Blood Mage orbiting spheres (issue #37) ------------------------------
+  // Data from the Sphere ability (Asph) in Units\HumanAbilityFunc.txt:
+  //   Targetart      = Units\Human\HeroBloodElf\BloodElfBall.mdl  (the orbiting ball)
+  //   Targetattachcount = 3, Targetattach = sprite,first / second / third
+  //   Missileart     = BloodElfBall,  Missilespeed = 1400,  Missilearc = 0.05
+  // The hero model carries "Sprite First/Second/Third Ref" nodes whose animation
+  // does the orbiting, so parenting a ball to each gives the circling for free. On a
+  // spell cast one ball is hurled at the target as a missile, then regrows — matching
+  // WC3 ("1 of his sphere will disappear and will return after a while", hive 221265).
+  private static readonly SPHERE_MODEL = "Units\\Human\\HeroBloodElf\\BloodElfBall.mdx"; // Asph Targetart (.mdl → compiled .mdx)
+  private static readonly SPHERE_ABILITY = "Asph"; // the ability that grants the spheres
+  private static readonly SPHERE_THROW_CODES = new Set(["AHfs", "AHbn"]); // Flame Strike, Banish
+  private static readonly SPHERE_SPEED = 1400; // Asph Missilespeed
+  private static readonly SPHERE_ARC = 0.05; // Asph Missilearc (fraction of range → apex)
+  private static readonly SPHERE_REGROW = 1.6; // seconds a thrown ball stays gone after impact
+
+  /** Index of the first sequence whose name matches `re` (-1 if none). */
+  private seqIndex(inst: SpawnInstance, re: RegExp): number {
+    return (inst.model?.sequences ?? []).findIndex((s) => re.test(s.name));
+  }
+
+  /** True for a unit type that carries the Sphere ability (only the Blood Mage in
+   *  stock data, but data-driven so any such unit gets the orbiting spheres). */
+  private hasSpheres(typeId: string): boolean {
+    return this.registry.get(typeId)?.abilities.includes(MapViewerScene.SPHERE_ABILITY) ?? false;
+  }
+
+  /** Keep every Blood Mage's three orbiting spheres alive: spawn rigs on demand,
+   *  advance thrown balls, match visibility to the hero, and prune dead heroes. */
+  private updateBloodMageSpheres(dt: number): void {
+    const world = this.rts?.simWorld;
+    const map = this.viewer.map;
+    if (!world || !map) return;
+    const live = new Set<number>();
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !this.hasSpheres(u.typeId)) continue;
+      live.add(u.id);
+      const rig = this.bloodMageSpheres.get(u.id);
+      if (rig) this.updateSphereRig(u.id, rig, dt);
+      else if (!this.bloodMageSpheresLoading.has(u.id)) {
+        this.bloodMageSpheresLoading.add(u.id);
+        void this.spawnSphereRig(u.id);
+      }
+    }
+    for (const [id, rig] of this.bloodMageSpheres) {
+      if (!live.has(id)) {
+        this.destroySphereRig(rig);
+        this.bloodMageSpheres.delete(id);
+      }
+    }
+  }
+
+  private async spawnSphereRig(simId: number): Promise<void> {
+    const path = MapViewerScene.SPHERE_MODEL;
+    let model = this.effectModels.get(path);
+    if (model === undefined) {
+      model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
+      this.effectModels.set(path, model);
+    }
+    this.bloodMageSpheresLoading.delete(simId);
+    const map = this.viewer.map;
+    const u = this.rts?.simWorld.units.get(simId);
+    const inst = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
+    if (!model || !map || !u || u.hp <= 0 || !inst || this.bloodMageSpheres.has(simId)) return;
+    // Find the three "Sprite N Ref" attachment indices by name (Asph Targetattach =
+    // sprite,first/second/third) rather than hardcoding indices.
+    const atts = inst.model?.attachments ?? [];
+    const attachIdx: number[] = [];
+    for (const key of ["first", "second", "third"]) {
+      const idx = atts.findIndex((a) => new RegExp(`sprite\\s+${key}\\b`, "i").test(a.name));
+      if (idx >= 0) attachIdx.push(idx);
+    }
+    if (!attachIdx.length) return; // not the Blood Mage model (no sprite points)
+    const balls: (SpawnInstance | null)[] = [];
+    for (const idx of attachIdx) {
+      const ball = model.addInstance();
+      ball.setScene(map.worldScene);
+      const stand = this.seqIndex(ball, /^stand/i);
+      ball.setSequence(stand >= 0 ? stand : 0);
+      ball.setSequenceLoopMode(2); // loop the ball's idle/glow while it orbits
+      const node = inst.getAttachment?.(idx);
+      if (node) ball.setParent?.(node); // ride the animated sprite node → orbit for free
+      ball.show();
+      balls.push(ball);
+    }
+    this.bloodMageSpheres.set(simId, { balls, attachIdx, thrown: [], visible: true });
+  }
+
+  private updateSphereRig(simId: number, rig: SphereRig, dt: number): void {
+    const inst = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
+    const hidden = !inst || this.rts!.unitHidden(simId);
+    // Orbiting balls follow their node automatically; only match the hero's visibility.
+    if (hidden !== !rig.visible) {
+      for (let i = 0; i < rig.balls.length; i++) {
+        if (rig.thrown.some((t) => t.ballIdx === i)) continue; // thrown balls set their own visibility
+        if (hidden) rig.balls[i]?.hide();
+        else rig.balls[i]?.show();
+      }
+      rig.visible = !hidden;
+    }
+    for (let k = rig.thrown.length - 1; k >= 0; k--) {
+      const th = rig.thrown[k];
+      const ball = rig.balls[th.ballIdx];
+      if (th.phase === "fly") {
+        th.t += dt;
+        const p = th.flyDur > 0 ? Math.min(1, th.t / th.flyDur) : 1;
+        if (ball) {
+          this.loc3[0] = th.sx + (th.tx - th.sx) * p;
+          this.loc3[1] = th.sy + (th.ty - th.sy) * p;
+          // linear height + a parabolic arc (0 at both ends, peak at mid-flight).
+          this.loc3[2] = th.sz + (th.tz - th.sz) * p + th.peak * 4 * p * (1 - p);
+          ball.setLocation(this.loc3);
+        }
+        if (p >= 1) {
+          if (ball) {
+            const death = this.seqIndex(ball, /death/i); // the ball's impact burst
+            if (death >= 0) {
+              ball.setSequence(death);
+              ball.setSequenceLoopMode(0);
+            }
+            ball.hide();
+          }
+          th.phase = "regrow";
+          th.regrowLeft = MapViewerScene.SPHERE_REGROW;
+        }
+      } else {
+        th.regrowLeft -= dt;
+        if (th.regrowLeft <= 0) {
+          if (ball && inst) {
+            const node = inst.getAttachment?.(rig.attachIdx[th.ballIdx]);
+            if (node) ball.setParent?.(node);
+            this.loc3[0] = this.loc3[1] = this.loc3[2] = 0;
+            ball.setLocation(this.loc3); // sit exactly on the node again
+            const stand = this.seqIndex(ball, /^stand/i);
+            if (stand >= 0) {
+              ball.setSequence(stand);
+              ball.setSequenceLoopMode(2);
+            }
+            if (!hidden) ball.show();
+          }
+          rig.thrown.splice(k, 1);
+        }
+      }
+    }
+  }
+
+  /** Hurl one orbiting sphere at a cast's target as a missile (BloodElfBall, speed
+   *  1400, arc 0.05); it regrows shortly after impact. No-op if the hero has no free
+   *  sphere left to throw. */
+  private throwSphere(simId: number, tx: number, ty: number, targetId: number): void {
+    const rig = this.bloodMageSpheres.get(simId);
+    const world = this.rts?.simWorld;
+    if (!rig || !world) return;
+    const busy = new Set(rig.thrown.map((t) => t.ballIdx));
+    let ballIdx = -1;
+    for (let i = 0; i < rig.balls.length; i++)
+      if (rig.balls[i] && !busy.has(i)) {
+        ballIdx = i;
+        break;
+      }
+    if (ballIdx < 0) return; // every sphere already in flight
+    const ball = rig.balls[ballIdx]!;
+    const caster = world.units.get(simId);
+    // Launch from the ball's current orbit point; fall back to the hero's chest.
+    const wl = ball.worldLocation;
+    let sx: number, sy: number, sz: number;
+    if (wl && (wl[0] || wl[1] || wl[2])) {
+      sx = wl[0];
+      sy = wl[1];
+      sz = wl[2];
+    } else if (caster) {
+      sx = caster.x;
+      sy = caster.y;
+      sz = this.rts!.groundHeightAt(caster.x, caster.y) + 90;
+    } else return;
+    ball.setParent?.(null); // detach from orbit and fly free
+    this.loc3[0] = sx;
+    this.loc3[1] = sy;
+    this.loc3[2] = sz;
+    ball.setLocation(this.loc3);
+    ball.show();
+    const t = targetId ? world.units.get(targetId) : null;
+    const dtx = t ? t.x : tx;
+    const dty = t ? t.y : ty;
+    const dtz = this.rts!.groundHeightAt(dtx, dty) + (t ? 60 : 30); // aim at the body, or just off the ground
+    const dist = Math.hypot(dtx - sx, dty - sy);
+    rig.thrown.push({
+      ballIdx,
+      phase: "fly",
+      t: 0,
+      flyDur: dist > 0 ? dist / MapViewerScene.SPHERE_SPEED : 0.001,
+      regrowLeft: 0,
+      sx, sy, sz,
+      tx: dtx, ty: dty, tz: dtz,
+      peak: MapViewerScene.SPHERE_ARC * dist,
+    });
+  }
+
+  private destroySphereRig(rig: SphereRig): void {
+    for (const ball of rig.balls) ball?.detach();
+    rig.balls.length = 0;
+    rig.thrown.length = 0;
   }
 
   private static readonly TREE_PULSE = 0.7; // two quick blinks over this window
@@ -2983,6 +3221,7 @@ export class MapViewerScene {
       this.updateTreePulses(dt / 1000);
       this.updateTreeActors(); // per-chop "stand hit" wobble on felled/chopped trees' stand-ins
       this.updateProjectiles();
+      this.updateBloodMageSpheres(dt / 1000); // Blood Mage orbiting spheres + thrown balls
       this.updatePendingBuildGhosts(); // dark-blue ghosts of queued-but-not-started builds
       if (this.placement) this.updateGhost(this.lastMouse.x, this.lastMouse.y); // show/position the ghost each frame (not only on mouse move)
       this.updateReticle(this.lastMouse.x, this.lastMouse.y);
@@ -3028,6 +3267,9 @@ export class MapViewerScene {
           const caster = world.units.get(c.casterId);
           const at = caster ? { x: caster.x, y: caster.y, z: this.rts!.groundHeightAt(caster.x, caster.y) } : undefined;
           if (def) this.sounds?.playSpellSound([def.targetArt, def.casterArt, def.specialArt], SPELL_SOUND_FALLBACK[c.code], at);
+          // Blood Mage: hurl one orbiting sphere at Flame Strike / Banish targets (issue #37).
+          if (MapViewerScene.SPHERE_THROW_CODES.has(c.code) && caster && this.hasSpheres(caster.typeId))
+            this.throwSphere(c.casterId, c.tx, c.ty, c.targetId);
         }
         // Hero level-up nova.
         for (const lu of world.drainLevelUps()) {
@@ -3186,6 +3428,9 @@ export class MapViewerScene {
     this.projectileInsts.clear();
     this.projectileLoading.clear();
     this.projectileModels.clear();
+    for (const rig of this.bloodMageSpheres.values()) this.destroySphereRig(rig);
+    this.bloodMageSpheres.clear();
+    this.bloodMageSpheresLoading.clear();
     this.placement = null;
     this.buildSpawning.clear();
     this.buildWait.clear();

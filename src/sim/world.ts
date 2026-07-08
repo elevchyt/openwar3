@@ -722,7 +722,7 @@ export class SimWorld {
   // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
   // one-shot gesture (Storm Bolt throw) that plays once.
-  private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean }> = [];
+  private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number }> = [];
   // Heroes that just gained a level: renderer plays the level-up nova + sound.
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
@@ -2519,7 +2519,9 @@ export class SimWorld {
       // Tell the renderer to play the cast clip and hold it for the whole cast
       // (wind-up + backswing, or wind-up + channel — looped for a channel).
       const hold = pc.castLeft + (channelLen > 0 ? channelLen : u.castBackswing);
-      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 });
+      // tx/ty/targetId let the renderer aim cast-triggered visuals at the target —
+      // e.g. the Blood Mage hurling one of his orbiting spheres (issue #37).
+      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0, tx, ty, targetId: pc.targetId });
       // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's
       // Effectart at the target NOW, as the wind-up begins, so Flame Strike's smoke
       // vortex charges in place and lingers even if the cast is interrupted before
@@ -3044,7 +3046,7 @@ export class SimWorld {
     return out;
   }
   /** Casts that began this frame (renderer plays the cast animation). */
-  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean }> {
+  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number }> {
     if (!this.castStarts.length) return this.castStarts;
     const out = this.castStarts;
     this.castStarts = [];
