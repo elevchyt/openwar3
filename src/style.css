@@ -177,15 +177,16 @@ html, body {
 }
 .unit-hpbar-bars { display: flex; flex-direction: column; gap: 2px; }
 .unit-hpbar-track {
-  position: relative; /* fill + segment overlay are absolutely positioned inside */
+  position: relative; /* fill is absolutely positioned inside */
   height: 9px;
   background: rgba(0, 0, 0, 0.72);
   border: 1px solid rgba(0, 0, 0, 0.9);
   overflow: hidden;
 }
 .unit-hpbar-manatrack { height: 7px; }
-/* Coloured fill (colour set inline from the HP fraction). The vertical gradient is
-   the WC3 sheen: lit at the top, shaded at the bottom, over the flat colour. */
+/* Single solid fill (colour set inline from the HP fraction) — WC3's floating bars
+   read as one continuous bar, not visible slices. The vertical gradient is the WC3
+   sheen: lit at the top, shaded at the bottom, over the flat colour. */
 .unit-hpbar-fill {
   position: absolute;
   left: 0; top: 0; bottom: 0;
@@ -202,10 +203,6 @@ html, body {
   background-image: linear-gradient(to bottom,
     rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.05) 45%, rgba(0, 0, 0, 0.22) 100%);
 }
-/* Segment notches: thin dark dividers overlaid on top of the fill (background set
-   inline from the unit's max HP/mana). Fixed on the track, so the fill recedes past
-   them — the signature WC3 "the bigger the unit, the more notches" read. */
-.unit-hpbar-seg { position: absolute; inset: 0; pointer-events: none; }
 
 /* ---------------------------------------------------------------------------
    In-game HUD (plan §10.1b). Placeholder skin via CSS; real BLP icons and the

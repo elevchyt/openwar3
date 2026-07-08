@@ -200,6 +200,7 @@ interface SpawnInstance {
   setUniformScale(s: number): void;
   setVertexColor(c: ArrayLike<number>): void;
   frame: number;
+  sequenceEnded: boolean; // mdx-m3-viewer: true once a non-looping clip finishes
   hide(): void;
   show(): void;
   setSequence(i: number): void;

@@ -20,6 +20,7 @@ interface Instance {
   localLocation: Float32Array;
   localRotation: Float32Array;
   frame: number;
+  sequenceEnded: boolean; // mdx-m3-viewer: true once a non-looping clip finishes (drives the idle fidget re-roll)
   setLocation(v: ArrayLike<number>): unknown;
   setRotation(q: ArrayLike<number>): unknown;
   setSequence(i: number): unknown;
@@ -119,6 +120,7 @@ export interface RingInfo {
 // fall back to the base clip when a model lacks them.
 interface AnimSet {
   stand: number;
+  standVariants: number[]; // all plain idle stands ("Stand"/"Stand - N"); the idle fidget cycles them
   walk: number;
   attack: number;
   attackVariants: number[]; // empty-handed combat-attack clips; a random one plays per swing
@@ -147,12 +149,12 @@ function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
   // swing/idle is the bug in issue #38), "* Gold"/"* Lumber" (carry pose, chosen by carry
   // state), "Stand Ready"/"Stand Victory"/"Stand Defend"/"Stand Work" and "Attack Defend"
   // /"Attack Alternate"/"Attack Slam" (ability/stance clips, not the idle/attack loop).
-  // Idle-stand *randomization* is left to mdx-m3-viewer's own Widget.update →
-  // randomStandSequence (its filter matches this same "plain stand" set, rarity-weighted);
-  // we only pick the FIRST plain stand as the canonical idle so a.stand is never a swim/carry
-  // clip. Attack swings ARE randomized here (swing-driven, below). Verified against real 1.27a
-  // models — Footman "Stand - 1/2/4", Peasant "Stand/-2/-3/-4", Naga "Stand"+"Stand - 2"
-  // alongside its Swim/Ready variants (issue #38).
+  // `standVariants` is the full plain-stand set; the idle fidget cycles through it (we drive
+  // that ourselves — our units are raw MdxComplexInstances, NOT mdx-m3-viewer Widgets, so its
+  // Widget.update → randomStandSequence never runs). `stand` is the FIRST plain stand, the
+  // canonical idle (never a swim/carry clip). Attack swings ARE randomized here (swing-driven,
+  // below). Verified against real 1.27a models — Footman "Stand - 1/2/4", Peasant
+  // "Stand/-2/-3/-4", Naga "Stand"+"Stand - 2" alongside its Swim/Ready variants (issue #38).
   const PLAIN_STAND = /^stand(\s*-?\s*\d+)?\s*$/i;
   const PLAIN_ATTACK = /^attack(\s*-?\s*\d+)?\s*$/i;
   const standVariants = indices(PLAIN_STAND);
@@ -178,6 +180,7 @@ function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
   const or = (a: number, b: number) => (a >= 0 ? a : b);
   return {
     stand,
+    standVariants: standVariants.length ? standVariants : stand >= 0 ? [stand] : [],
     walk,
     attack,
     attackVariants: attackVariants.length ? attackVariants : attack >= 0 ? [attack] : [],
@@ -281,8 +284,8 @@ const BUFF_KIND_LABEL: Record<string, string> = {
 // comment): 0 = model-based (loops when the clip's own MDX flag says looping — which
 // STAND clips do), 1 = never loop (play once, then hold + set sequenceEnded), 2 = always
 // loop. LOOP_NEVER(0) still plays attack/death clips once because those carry the model's
-// non-looping flag; LOOP_ONCE(1) forces a normally-looping clip (a Stand) to end, which is
-// what lets the viewer's Widget.update re-roll the next random idle stand (issue #38).
+// non-looping flag; LOOP_ONCE(1) forces a normally-looping clip (a Stand) to END so we can
+// re-roll the next idle-stand variant when it finishes (the fidget cycle, issue #38).
 const LOOP_NEVER = 0, LOOP_ONCE = 1, LOOP_ALWAYS = 2;
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
@@ -334,43 +337,17 @@ export interface SelIcon {
   owner: number;
 }
 
-// WC3 floating bars are divided into fixed-size SEGMENTS — the signature notches
-// that let you read a unit's total HP at a glance (a beefier unit shows more
-// notches). Each notch marks off a fixed chunk of max HP/mana; the per-notch size
-// isn't in any data file (segmentation is a pure engine rendering feature, so it
-// "lives in no file format" — CLAUDE.md rule 4). This value is tuned to the game's
-// on-screen segmentation: a Peasant (220 HP) reads as ~4 notches, a Footman
-// (420 HP) ~8, a Grunt (700 HP) ~14. Capped so a high-HP building's bar doesn't
-// dissolve into a smear of sub-pixel lines.
-const HP_PER_SEGMENT = 50;
-const MANA_PER_SEGMENT = 50;
-const MAX_BAR_SEGMENTS = 30;
-
-function segmentCount(max: number, per: number): number {
-  return Math.max(1, Math.min(MAX_BAR_SEGMENTS, Math.round(max / per)));
-}
-
-// A repeating-gradient of thin dark vertical dividers for `n` segments (n-1 internal
-// notches), or "none" for a single segment. Drawn as an overlay ON TOP of the fill so
-// the notches stay fixed on the track while the coloured fill recedes past them.
-function segmentGradient(n: number): string {
-  if (n <= 1) return "none";
-  const seg = 100 / n; // width of one segment, as a % of the track
-  return `repeating-linear-gradient(to right, transparent 0, transparent calc(${seg}% - 1px), rgba(0,0,0,0.55) calc(${seg}% - 1px), rgba(0,0,0,0.55) ${seg}%)`;
-}
-
-// A floating status bar drawn above a unit: a hero level badge (left), a segmented
-// HP bar, and a segmented mana bar below it (for units with mana). Pooled, one per
-// visible unit, so bars are always on screen (WC3's "always show health bars").
+// A floating status bar drawn above a unit: a hero level badge (left), an HP bar,
+// and a mana bar below it (for units with mana). Pooled, one per visible unit, so
+// bars are always on screen (WC3's "always show health bars"). The bars are single
+// solid fills — WC3's floating bars read as one continuous bar, not visible slices.
 interface HpBar {
   root: HTMLDivElement;
   bars: HTMLDivElement;
   level: HTMLDivElement;
   hp: HTMLDivElement;
-  hpSeg: HTMLDivElement;
   manaTrack: HTMLDivElement;
   mana: HTMLDivElement;
-  manaSeg: HTMLDivElement;
 }
 
 function makeHpBar(): HpBar {
@@ -385,20 +362,16 @@ function makeHpBar(): HpBar {
   hpTrack.className = "unit-hpbar-track";
   const hp = document.createElement("div");
   hp.className = "unit-hpbar-fill";
-  const hpSeg = document.createElement("div");
-  hpSeg.className = "unit-hpbar-seg";
-  hpTrack.append(hp, hpSeg);
+  hpTrack.appendChild(hp);
   const manaTrack = document.createElement("div");
   manaTrack.className = "unit-hpbar-track unit-hpbar-manatrack";
   const mana = document.createElement("div");
   mana.className = "unit-hpbar-mana";
-  const manaSeg = document.createElement("div");
-  manaSeg.className = "unit-hpbar-seg";
-  manaTrack.append(mana, manaSeg);
+  manaTrack.appendChild(mana);
   bars.append(hpTrack, manaTrack);
   root.append(level, bars);
   document.body.appendChild(root);
-  return { root, bars, level, hp, hpSeg, manaTrack, mana, manaSeg };
+  return { root, bars, level, hp, manaTrack, mana };
 }
 
 export class RtsController {
@@ -1357,10 +1330,10 @@ export class RtsController {
     this.entries.push(entry);
     this.byId.set(simId, entry);
     if (anims.stand >= 0) {
-      // Play the idle stand ONCE and leave curSeq unset (-1): the widget defaults to IDLE,
-      // so when this clip ends the viewer's Widget.update rolls a random next stand, and the
-      // first idle tick re-applies LOOP_ONCE cleanly. Pinning LOOP_ALWAYS here would loop a
-      // single stand forever (the pre-#38 behaviour), never letting the fidget cycle start.
+      // Play an idle stand on spawn; leave curSeq unset (-1) so the first idle tick starts the
+      // fidget cycle (pickSequence → the idle branch rolls the next variant). LOOP_ONCE so a
+      // model whose stand has >1 variant ends this clip and hands off; single-variant models get
+      // pinned to LOOP_ALWAYS by that same idle branch.
       instance.setSequence(anims.stand);
       instance.setSequenceLoopMode(LOOP_ONCE);
       entry.curSeq = -1;
@@ -1520,23 +1493,37 @@ export class RtsController {
         e.moveEma += (Math.min(ratio, 1) - e.moveEma) * MOVE_EMA_ALPHA;
         const effMoving = u.moving && e.moveEma >= MOVE_ANIM_MIN_RATIO;
         const seq = this.pickSequence(e.anims, u, effMoving);
-        if (seq !== e.curSeq && seq >= 0) {
-          e.curSeq = seq;
-          if (seq === e.anims.stand) {
-            // Plain idle: hand the fidget to mdx-m3-viewer. Play the stand ONCE (LOOP_ONCE)
-            // and mark the widget IDLE — when the clip ends, the viewer's Widget.update rolls
-            // a fresh random "Stand"/"Stand - N" (rarity-weighted; swim/gold/ready excluded by
-            // its own name filter), giving WC3's varied idle without us tracking each variant.
-            // Only the empty-handed idle delegates; carry stands stay pinned below (state WALK
-            // keeps the viewer from overriding "Stand Gold"/"Stand Lumber" with a plain stand).
+        if (seq === e.anims.stand) {
+          // Plain empty-handed idle: fidget through the model's stand variants (WC3's varied
+          // idle). We drive it ourselves — our units are raw MdxComplexInstances, not the
+          // viewer's Widget, so its auto-stand never runs. With >1 variant, play each ONCE and
+          // roll a *different* next one when it ends (setSequence to the same clip wouldn't
+          // restart it, so we'd freeze). With a single variant, just loop it (classic).
+          const inst = e.unit.instance;
+          const vs = e.anims.standVariants;
+          if (vs.length > 1) {
+            const onStand = vs.includes(e.curSeq);
+            if (!onStand || inst.sequenceEnded) {
+              let pick = vs[(Math.random() * vs.length) | 0];
+              if (pick === e.curSeq) pick = vs[(vs.indexOf(pick) + 1) % vs.length];
+              e.curSeq = pick;
+              e.unit.state = IDLE;
+              inst.setSequence(pick);
+              inst.setSequenceLoopMode(LOOP_ONCE);
+            }
+          } else if (e.curSeq !== e.anims.stand) {
+            e.curSeq = e.anims.stand;
             e.unit.state = IDLE;
-            e.unit.instance.setSequence(seq);
-            e.unit.instance.setSequenceLoopMode(LOOP_ONCE);
-          } else {
-            e.unit.state = WALK;
-            e.unit.instance.setSequence(seq);
-            e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
+            inst.setSequence(e.anims.stand);
+            inst.setSequenceLoopMode(LOOP_ALWAYS);
           }
+        } else if (seq !== e.curSeq && seq >= 0) {
+          // Walk / carry-stand: a single looping clip (state WALK keeps the viewer from
+          // overriding a pinned "Stand Gold"/"Stand Lumber" carry pose with a plain stand).
+          e.curSeq = seq;
+          e.unit.state = WALK;
+          e.unit.instance.setSequence(seq);
+          e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
         }
       }
     }
@@ -3464,12 +3451,10 @@ export class RtsController {
       // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy
       // alike — the floating bars aren't team-coloured). CSS adds the vertical sheen.
       bar.hp.style.backgroundColor = frac > 0.6 ? "#3fbf46" : frac > 0.3 ? "#d6b93b" : "#c8402f";
-      bar.hpSeg.style.background = segmentGradient(segmentCount(u.maxHp, HP_PER_SEGMENT));
-      // Mana bar (units/heroes with a mana pool), segmented like the HP bar.
+      // Mana bar (units/heroes with a mana pool).
       if (u.maxMana > 0) {
         bar.manaTrack.hidden = false;
         bar.mana.style.width = `${Math.max(0, Math.min(1, u.mana / u.maxMana)) * 100}%`;
-        bar.manaSeg.style.background = segmentGradient(segmentCount(u.maxMana, MANA_PER_SEGMENT));
       } else {
         bar.manaTrack.hidden = true;
       }
