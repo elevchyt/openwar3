@@ -45,6 +45,7 @@ export interface HudSelection {
   maxMana: number;
   armor: number; // base armour
   armorBonus: number; // green "+N" from buffs/auras
+  invulnerable: boolean; // immune to damage — shows red "Invulnerable" under the armour value (issue #26)
   damageMin: number; // base damage range
   damageMax: number;
   damageBonus: number; // green "+N" attack damage
@@ -221,6 +222,7 @@ export class GameHud {
   private selStats!: HTMLDivElement;
   private attackStat!: StatBlock;
   private armorStat!: StatBlock;
+  private invulnLine!: HTMLDivElement; // red "Invulnerable" under the armour value (issue #26)
   private attrIconEl!: HTMLDivElement; // single icon (the hero's primary attribute)
   private attrLines!: HTMLDivElement;
   private strLine!: HTMLDivElement;
@@ -725,6 +727,13 @@ export class GameHud {
     // column: ONE primary-attribute icon beside the three attribute value lines.
     this.attackStat = makeStatBlock("Damage");
     this.armorStat = makeStatBlock("Armor");
+    // Red "Invulnerable" line directly under the armour value, matching WC3's info
+    // panel for immune units/buildings (goblin merchant, gold mine, …) (issue #26).
+    this.invulnLine = document.createElement("div");
+    this.invulnLine.className = "hud-stat-invuln";
+    this.invulnLine.textContent = "Invulnerable";
+    this.invulnLine.hidden = true;
+    this.armorStat.value.after(this.invulnLine);
     const leftCol = document.createElement("div");
     leftCol.className = "hud-stat-col";
     leftCol.append(this.attackStat.row, this.armorStat.row);
@@ -1010,6 +1019,7 @@ export class GameHud {
       this.selGrid.hidden = true;
       this.selDesc.hidden = true; // only the item branch shows it
       this.xpBar.hidden = true; // only the hero-stats branch below re-shows it
+      this.invulnLine.hidden = true; // only the unit/building stats branch re-shows it
       const constructing = sel.underConstruction;
       const training = sel.isBuilding && !constructing && sel.queueLength > 0;
       this.queueTrainable = training; // reset every frame so a stale flag can't fire a cancel
@@ -1105,6 +1115,7 @@ export class GameHud {
         this.armorStat.row.hidden = false;
         this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType));
         this.armorStat.value.innerHTML = `${sel.armor}${bonusHtml(sel.armorBonus)}`;
+        this.invulnLine.hidden = !sel.invulnerable;
         // Hero attributes: ONE primary-attribute icon beside the three value lines.
         if (sel.isHero) {
           this.attrIconEl.hidden = false;

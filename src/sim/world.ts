@@ -412,7 +412,8 @@ export interface SimUnit {
   buffs: SimBuff[]; // active timed effects
   stunned: boolean; // derived from buffs (cannot act)
   silenced: boolean; // derived from buffs (cannot cast spells)
-  invulnerable: boolean; // derived from buffs (immune to damage + enemy targeting)
+  invulnerable: boolean; // derived from buffs + baseInvulnerable (immune to damage + enemy targeting)
+  baseInvulnerable: boolean; // persistent invulnerability from the unit type's "Invulnerable (Neutral)" ability (Avul) — goblin merchant, gold mine, mercenary camp, tavern, … (issue #26)
   mechanical: boolean; // machines/summons — no raisable corpse, unhealable by Heal
   isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
@@ -1231,6 +1232,7 @@ export class SimWorld {
       | "stunned"
       | "silenced"
       | "invulnerable"
+      | "baseInvulnerable"
       | "mechanical"
       | "isSummon"
       | "spawning"
@@ -1254,7 +1256,7 @@ export class SimWorld {
       | "pendingDrop"
     >,
     building?: BuildingState | null,
-    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; manaRegen?: number; level?: number },
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
   ): SimUnit {
     const hero = opts?.hero;
     const u: SimUnit = {
@@ -1357,7 +1359,8 @@ export class SimWorld {
       buffs: [],
       stunned: false,
       silenced: false,
-      invulnerable: false,
+      invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
+      baseInvulnerable: !!opts?.baseInvulnerable,
       mechanical: !!opts?.mechanical,
       isSummon: false,
       spawning: 0,
@@ -1752,6 +1755,7 @@ export class SimWorld {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || !u.weapon || (!force && !this.hostile(u, t))) return false;
+    if (t.invulnerable) return false; // invulnerable units can't be attacked at all — not even with a forced Attack order (issue #26)
     // A FRESH attack (from any non-attack state — a player command, idle auto-acquire,
     // a follower peeling off to fight) drops any pending resume-to-follow. Re-targeting
     // WITHIN an ongoing fight (reacquire after a kill, switching to a reachable enemy)
@@ -2227,7 +2231,7 @@ export class SimWorld {
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
     u.silenced = silence;
-    u.invulnerable = invuln;
+    u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;
     u.bonusAgi = item.agi;
@@ -3564,8 +3568,8 @@ export class SimWorld {
     if (w && w.acquire > 0) {
       const hadTarget = u.targetId !== null;
       let t = hadTarget ? this.units.get(u.targetId!) : undefined;
-      // Drop the target if it died, turned friendly, or fled past the leash.
-      if (t && (!this.hostile(u, t) || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > w.acquire)) t = undefined;
+      // Drop the target if it died, turned friendly, went invulnerable (Divine Shield resets aggro), or fled past the leash.
+      if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > w.acquire)) t = undefined;
       if (!t) {
         if (hadTarget) u.acquireT = 0; // just lost one — re-scan now, don't creep forward
         u.acquireT -= dt;
@@ -4641,7 +4645,7 @@ export class SimWorld {
     // reach; otherwise re-scan (throttled) for the nearest in-range enemy.
     const reach = w.range + (u.inCombat ? ATTACK_LEASH : 0);
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
-    if (t && (!this.hostile(u, t) || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach)) t = undefined;
+    if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach)) t = undefined;
     if (!t) {
       u.acquireT -= dt;
       if (u.acquireT <= 0) {
@@ -4669,6 +4673,7 @@ export class SimWorld {
     let bestGap = range;
     for (const t of this.units.values()) {
       if (t === u || !this.hostile(u, t)) continue;
+      if (t.invulnerable) continue; // invulnerable enemies (goblin merchant, gold mine, Divine Shield, …) aren't attackable (issue #26)
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
       if (!this.visibleToTeam(u.team, t.x, t.y)) continue; // fogged → can't see it, don't aggro
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;

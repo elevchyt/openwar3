@@ -61,6 +61,7 @@ export interface SelectionInfo {
   maxMana: number;
   armor: number; // BASE armour (level/agility, without buff bonuses)
   armorBonus: number; // green "+N" armour from buffs/auras
+  invulnerable: boolean; // immune to damage — red "Invulnerable" line in the HUD (issue #26)
   damageMin: number; // BASE damage range (without buff bonuses)
   damageMax: number;
   damageBonus: number; // green "+N" attack damage from buffs/auras
@@ -1176,6 +1177,9 @@ export class RtsController {
         depotLumber: false,
       },
       building,
+      // Neutral shops/labs/merchants/taverns carry "Invulnerable (Neutral)" (Avul) in
+      // their abilList — permanently immune + untargetable (issue #26).
+      { baseInvulnerable: !!def?.abilities.includes("Avul") },
     );
     u.neutralPassive = true;
     const entry: Entry = {
@@ -1260,7 +1264,10 @@ export class RtsController {
         depotLumber: DEPOT_IDS.has(def.id),
       },
       building,
-      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), level: def.level },
+      // "Invulnerable (Neutral)" (Avul): neutral buildings — goblin merchant, goblin
+      // laboratory, mercenary camp, tavern, gold mine, marketplace — carry it in their
+      // abilList by default and are permanently immune/untargetable (issue #26).
+      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), level: def.level, baseInvulnerable: def.abilities.includes("Avul") },
     );
     const entry: Entry = {
       simId,
@@ -2188,7 +2195,7 @@ export class RtsController {
     return {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
-      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, damageMin: 0, damageMax: 0, damageBonus: 0,
+      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
       attackType: "", armorType: "", isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: "",
       model: def?.model ?? "", isWorker: false, isBuilding: false,
@@ -2218,7 +2225,7 @@ export class RtsController {
     return {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
-      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, damageMin: 0, damageMax: 0, damageBonus: 0,
+      hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
       attackType: "", armorType: "", isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: "",
       model: def?.model ?? "", isWorker: false, isBuilding: false,
@@ -2252,6 +2259,7 @@ export class RtsController {
       // range = the weapon roll minus the buff portion.
       armor: Math.round(u.armor - u.bonusArmor),
       armorBonus: Math.round(u.bonusArmor),
+      invulnerable: u.invulnerable, // red "Invulnerable" line under the armour value (issue #26)
       damageMin: w ? Math.round(w.damage - u.bonusDamage) + w.dice : 0,
       damageMax: w ? Math.round(w.damage - u.bonusDamage) + w.dice * w.sides : 0,
       damageBonus: Math.round(u.bonusDamage),
