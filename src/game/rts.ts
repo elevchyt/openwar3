@@ -138,22 +138,43 @@ interface AnimSet {
 
 function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
   const find = (re: RegExp): number => seqs.findIndex((s) => re.test(s.name));
-  const stand = find(/^stand(\s|$|-)/i) >= 0 ? find(/^stand(\s|$|-)/i) : find(/^stand/i);
+  const indices = (re: RegExp): number[] =>
+    seqs.map((s, i) => ({ n: s.name, i })).filter(({ n }) => re.test(n)).map(({ i }) => i);
+  // The "plain" idle-stand / auto-attack clips: the base name or a numbered variant
+  // ("Stand", "Stand - 2", "Attack -1"), with NO trailing word. Everything with a WORD
+  // after it is a context/state clip and is deliberately excluded: "* Swim" (only while
+  // swimming — which never happens here, water is unwalkable; a land unit playing its swim
+  // swing/idle is the bug in issue #38), "* Gold"/"* Lumber" (carry pose, chosen by carry
+  // state), "Stand Ready"/"Stand Victory"/"Stand Defend"/"Stand Work" and "Attack Defend"
+  // /"Attack Alternate"/"Attack Slam" (ability/stance clips, not the idle/attack loop).
+  // Idle-stand *randomization* is left to mdx-m3-viewer's own Widget.update →
+  // randomStandSequence (its filter matches this same "plain stand" set, rarity-weighted);
+  // we only pick the FIRST plain stand as the canonical idle so a.stand is never a swim/carry
+  // clip. Attack swings ARE randomized here (swing-driven, below). Verified against real 1.27a
+  // models — Footman "Stand - 1/2/4", Peasant "Stand/-2/-3/-4", Naga "Stand"+"Stand - 2"
+  // alongside its Swim/Ready variants (issue #38).
+  const PLAIN_STAND = /^stand(\s*-?\s*\d+)?\s*$/i;
+  const PLAIN_ATTACK = /^attack(\s*-?\s*\d+)?\s*$/i;
+  const standVariants = indices(PLAIN_STAND);
+  const attackVariants = indices(PLAIN_ATTACK);
+  const stand = standVariants.length
+    ? standVariants[0]
+    : find(/^stand(\s|$|-)/i) >= 0
+      ? find(/^stand(\s|$|-)/i)
+      : find(/^stand/i);
   const walk = find(/^walk\s*$/i) >= 0 ? find(/^walk\s*$/i) : find(/walk/i);
-  const attack = find(/^attack\s*$/i) >= 0 ? find(/^attack\s*$/i) : find(/attack/i);
-  // Every *empty-handed* combat-attack clip (e.g. "Attack -1"/"Attack -2"), so a
-  // random one can play per swing. Excludes the carry-attack clips ("Attack Gold"/
-  // "Attack Lumber" — those are picked by carry state, below), the Defend stance,
-  // hero Alternate-form attacks, and "Attack Slam" (reserved for ability casts like
-  // the Mountain King's bash, not the auto-attack rotation). Without the gold/lumber
-  // exclusion an empty-handed worker could randomly swing its "carrying" attack
-  // animation (and a laden one its empty swing) — issue #35.
-  const attackClips = seqs
+  const attack = attackVariants.length
+    ? attackVariants[0]
+    : find(/^attack\s*$/i) >= 0
+      ? find(/^attack\s*$/i)
+      : find(/attack/i);
+  // Carry-attack swings, chosen by the worker's carried resource (issue #35). "* Swim"
+  // is excluded here too so a laden worker never swings a swim clip.
+  const carryAttack = seqs
     .map((s, i) => ({ n: s.name, i }))
-    .filter(({ n }) => /attack/i.test(n) && !/defend|alternate|slam/i.test(n));
-  const attackVariants = attackClips.filter(({ n }) => !/gold|lumber/i.test(n)).map(({ i }) => i);
-  const attackGold = attackClips.filter(({ n }) => /gold/i.test(n)).map(({ i }) => i);
-  const attackLumber = attackClips.filter(({ n }) => /lumber/i.test(n)).map(({ i }) => i);
+    .filter(({ n }) => /attack/i.test(n) && !/defend|alternate|slam|swim/i.test(n));
+  const attackGold = carryAttack.filter(({ n }) => /gold/i.test(n)).map(({ i }) => i);
+  const attackLumber = carryAttack.filter(({ n }) => /lumber/i.test(n)).map(({ i }) => i);
   const or = (a: number, b: number) => (a >= 0 ? a : b);
   return {
     stand,
@@ -256,7 +277,13 @@ const BUFF_KIND_LABEL: Record<string, string> = {
   damagePct: "Bonus Damage", haste: "Haste", manaRegen: "Mana Regeneration", hpRegen: "Health Regeneration",
   lifesteal: "Life Steal", thorns: "Thorns", hot: "Healing", dot: "Damage",
 };
-const LOOP_NEVER = 0, LOOP_ALWAYS = 2; // mdx-m3-viewer sequence loop modes
+// mdx-m3-viewer sequence loop modes (per its ModelInstance code, NOT its stale doc
+// comment): 0 = model-based (loops when the clip's own MDX flag says looping — which
+// STAND clips do), 1 = never loop (play once, then hold + set sequenceEnded), 2 = always
+// loop. LOOP_NEVER(0) still plays attack/death clips once because those carry the model's
+// non-looping flag; LOOP_ONCE(1) forces a normally-looping clip (a Stand) to end, which is
+// what lets the viewer's Widget.update re-roll the next random idle stand (issue #38).
+const LOOP_NEVER = 0, LOOP_ONCE = 1, LOOP_ALWAYS = 2;
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
 // Re-clicking the same single unit this many extra times flips its selection
@@ -1299,9 +1326,13 @@ export class RtsController {
     this.entries.push(entry);
     this.byId.set(simId, entry);
     if (anims.stand >= 0) {
+      // Play the idle stand ONCE and leave curSeq unset (-1): the widget defaults to IDLE,
+      // so when this clip ends the viewer's Widget.update rolls a random next stand, and the
+      // first idle tick re-applies LOOP_ONCE cleanly. Pinning LOOP_ALWAYS here would loop a
+      // single stand forever (the pre-#38 behaviour), never letting the fidget cycle start.
       instance.setSequence(anims.stand);
-      instance.setSequenceLoopMode(LOOP_ALWAYS);
-      entry.curSeq = anims.stand;
+      instance.setSequenceLoopMode(LOOP_ONCE);
+      entry.curSeq = -1;
     }
     return simId;
   }
@@ -1460,9 +1491,21 @@ export class RtsController {
         const seq = this.pickSequence(e.anims, u, effMoving);
         if (seq !== e.curSeq && seq >= 0) {
           e.curSeq = seq;
-          e.unit.state = seq === e.anims.stand ? IDLE : WALK;
-          e.unit.instance.setSequence(seq);
-          e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
+          if (seq === e.anims.stand) {
+            // Plain idle: hand the fidget to mdx-m3-viewer. Play the stand ONCE (LOOP_ONCE)
+            // and mark the widget IDLE — when the clip ends, the viewer's Widget.update rolls
+            // a fresh random "Stand"/"Stand - N" (rarity-weighted; swim/gold/ready excluded by
+            // its own name filter), giving WC3's varied idle without us tracking each variant.
+            // Only the empty-handed idle delegates; carry stands stay pinned below (state WALK
+            // keeps the viewer from overriding "Stand Gold"/"Stand Lumber" with a plain stand).
+            e.unit.state = IDLE;
+            e.unit.instance.setSequence(seq);
+            e.unit.instance.setSequenceLoopMode(LOOP_ONCE);
+          } else {
+            e.unit.state = WALK;
+            e.unit.instance.setSequence(seq);
+            e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
+          }
         }
       }
     }
