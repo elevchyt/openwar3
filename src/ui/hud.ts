@@ -155,6 +155,9 @@ export interface HudDriver {
   /** Debug cheat: top up gold/lumber/food, or toggle fast build/train. Returns
    *  the resulting on/off state (only meaningful for "fastbuild"). */
   cheat(kind: "gold" | "lumber" | "food" | "fastbuild"): boolean;
+  /** Debug cheat on the current selection: refill HP/MP to full, or clear every
+   *  ability + item cooldown, on each selected unit. */
+  cheatSelected(kind: "hp" | "mp" | "cooldown"): void;
   /** Toggle the debug collider overlay (click/pathing/fog obstruction). Returns the
    *  resulting on/off state so the caller can show/hide the legend. */
   toggleColliders(): boolean;
@@ -543,6 +546,16 @@ export class GameHud {
       return b;
     };
     panel.append(mk("+5000 Gold", "gold"), mk("+5000 Lumber", "lumber"), mk("+Food", "food"), mk("Fast Build", "fastbuild"));
+
+    // Selection cheats: refill the selected unit(s)' HP/MP or wipe their cooldowns.
+    const mkSel = (label: string, kind: "hp" | "mp" | "cooldown") => {
+      const b = document.createElement("button");
+      b.className = "hud-cheat-btn";
+      b.textContent = label;
+      b.onclick = () => this.driver.cheatSelected(kind);
+      return b;
+    };
+    panel.append(mkSel("Full HP", "hp"), mkSel("Full MP", "mp"), mkSel("Reset Cooldown", "cooldown"));
 
     // Collider debug overlay toggle + a colour legend (hidden until turned on).
     const legend = document.createElement("div");

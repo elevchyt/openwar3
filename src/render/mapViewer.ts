@@ -2292,6 +2292,7 @@ export class MapViewerScene {
       minimapImage: () => this.minimap,
       consoleSkin: () => this.consoleSkin(),
       cheat: (kind) => this.rts?.cheat(kind) ?? false,
+      cheatSelected: (kind) => this.rts?.cheatSelected(kind),
       toggleColliders: () => (this.showColliders = !this.showColliders),
       togglePathing: () => (this.showPathing = !this.showPathing),
     };

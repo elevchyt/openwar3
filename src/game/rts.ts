@@ -2680,6 +2680,21 @@ export class RtsController {
     return false;
   }
 
+  /** Debug cheats acting on the current selection: refill HP or MP to full, or
+   *  clear every ability (and item) cooldown, on each selected living unit. */
+  cheatSelected(kind: "hp" | "mp" | "cooldown"): void {
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (!u || u.hp <= 0) continue;
+      if (kind === "hp") u.hp = u.maxHp;
+      else if (kind === "mp") u.mana = u.maxMana;
+      else {
+        for (const ab of u.abilities) ab.cooldownLeft = 0;
+        for (const it of u.inventory) if (it) it.cooldownLeft = 0;
+      }
+    }
+  }
+
   /** Minimap dots: world positions + owners of living units the local team can
    *  see. Your own units always show; fogged enemies/neutrals are dropped so the
    *  minimap hides enemy movements exactly like the main view. Creep camps and
