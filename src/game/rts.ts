@@ -334,16 +334,43 @@ export interface SelIcon {
   owner: number;
 }
 
-// A floating status bar drawn above a unit: a hero level badge (left), an HP bar,
-// and a mana bar below it (for units with mana). Pooled, one per visible unit, so
-// bars are always on screen (WC3's "always show health bars").
+// WC3 floating bars are divided into fixed-size SEGMENTS — the signature notches
+// that let you read a unit's total HP at a glance (a beefier unit shows more
+// notches). Each notch marks off a fixed chunk of max HP/mana; the per-notch size
+// isn't in any data file (segmentation is a pure engine rendering feature, so it
+// "lives in no file format" — CLAUDE.md rule 4). This value is tuned to the game's
+// on-screen segmentation: a Peasant (220 HP) reads as ~4 notches, a Footman
+// (420 HP) ~8, a Grunt (700 HP) ~14. Capped so a high-HP building's bar doesn't
+// dissolve into a smear of sub-pixel lines.
+const HP_PER_SEGMENT = 50;
+const MANA_PER_SEGMENT = 50;
+const MAX_BAR_SEGMENTS = 30;
+
+function segmentCount(max: number, per: number): number {
+  return Math.max(1, Math.min(MAX_BAR_SEGMENTS, Math.round(max / per)));
+}
+
+// A repeating-gradient of thin dark vertical dividers for `n` segments (n-1 internal
+// notches), or "none" for a single segment. Drawn as an overlay ON TOP of the fill so
+// the notches stay fixed on the track while the coloured fill recedes past them.
+function segmentGradient(n: number): string {
+  if (n <= 1) return "none";
+  const seg = 100 / n; // width of one segment, as a % of the track
+  return `repeating-linear-gradient(to right, transparent 0, transparent calc(${seg}% - 1px), rgba(0,0,0,0.55) calc(${seg}% - 1px), rgba(0,0,0,0.55) ${seg}%)`;
+}
+
+// A floating status bar drawn above a unit: a hero level badge (left), a segmented
+// HP bar, and a segmented mana bar below it (for units with mana). Pooled, one per
+// visible unit, so bars are always on screen (WC3's "always show health bars").
 interface HpBar {
   root: HTMLDivElement;
   bars: HTMLDivElement;
   level: HTMLDivElement;
   hp: HTMLDivElement;
+  hpSeg: HTMLDivElement;
   manaTrack: HTMLDivElement;
   mana: HTMLDivElement;
+  manaSeg: HTMLDivElement;
 }
 
 function makeHpBar(): HpBar {
@@ -358,16 +385,20 @@ function makeHpBar(): HpBar {
   hpTrack.className = "unit-hpbar-track";
   const hp = document.createElement("div");
   hp.className = "unit-hpbar-fill";
-  hpTrack.appendChild(hp);
+  const hpSeg = document.createElement("div");
+  hpSeg.className = "unit-hpbar-seg";
+  hpTrack.append(hp, hpSeg);
   const manaTrack = document.createElement("div");
   manaTrack.className = "unit-hpbar-track unit-hpbar-manatrack";
   const mana = document.createElement("div");
   mana.className = "unit-hpbar-mana";
-  manaTrack.appendChild(mana);
+  const manaSeg = document.createElement("div");
+  manaSeg.className = "unit-hpbar-seg";
+  manaTrack.append(mana, manaSeg);
   bars.append(hpTrack, manaTrack);
   root.append(level, bars);
   document.body.appendChild(root);
-  return { root, bars, level, hp, manaTrack, mana };
+  return { root, bars, level, hp, hpSeg, manaTrack, mana, manaSeg };
 }
 
 export class RtsController {
@@ -3430,11 +3461,15 @@ export class RtsController {
       n++;
       const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
       bar.hp.style.width = `${frac * 100}%`;
-      bar.hp.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
-      // Mana bar (units/heroes with a mana pool).
+      // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy
+      // alike — the floating bars aren't team-coloured). CSS adds the vertical sheen.
+      bar.hp.style.backgroundColor = frac > 0.6 ? "#3fbf46" : frac > 0.3 ? "#d6b93b" : "#c8402f";
+      bar.hpSeg.style.background = segmentGradient(segmentCount(u.maxHp, HP_PER_SEGMENT));
+      // Mana bar (units/heroes with a mana pool), segmented like the HP bar.
       if (u.maxMana > 0) {
         bar.manaTrack.hidden = false;
         bar.mana.style.width = `${Math.max(0, Math.min(1, u.mana / u.maxMana)) * 100}%`;
+        bar.manaSeg.style.background = segmentGradient(segmentCount(u.maxMana, MANA_PER_SEGMENT));
       } else {
         bar.manaTrack.hidden = true;
       }
