@@ -67,6 +67,8 @@ export interface SpellFieldInit {
   interval: number; // seconds between waves
   casterId: number;
   art: string;
+  artPerWave?: number; // how many copies of `art` to scatter across the area each wave (default 1).
+  //                      WC3's Blizzard rains a handful of shards per wave, not a single one.
   delay?: number; // seconds before the FIRST wave (default 0 = fire immediately). Lets a
   //                 field start after another (Flame Strike's subsiding burn follows the pillar).
 }
@@ -281,7 +283,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     // Blizzard ships no effect-art field in the data — use the known shard model.
     const art = def.areaArt || def.targetArt || FIELD_ART[def.code] || "";
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area, damagePerWave: d(lvl, 1, 30), waves: d(lvl, 0, 6), interval: d(lvl, 3, 0.5) || 0.5, casterId: caster.id, art });
+    // A wave is a shower of shards across the circle, not one shard: WC3 drops a
+    // cluster of BlizzardTarget hits per wave. 6 reads right at Blizzard's 200 area.
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area, damagePerWave: d(lvl, 1, 30), waves: d(lvl, 0, 6), interval: d(lvl, 3, 0.5) || 0.5, casterId: caster.id, art, artPerWave: 6 });
   },
 
   // Heal (Priest) — restore dataA HP to a friendly living, non-mechanical unit.

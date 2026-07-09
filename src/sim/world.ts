@@ -2898,12 +2898,20 @@ export class SimWorld {
         // MPQ AHfs). Each wave deals damagePerWave to a tree's HP; a standard 50-HP tree
         // falls after ~4 waves of L1 (15/wave), leaving a hole in the forest as in WC3.
         if (f.flags.includes("tree")) this.damageTreesInArea(f.x, f.y, f.area, f.damagePerWave);
-        // Scatter the wave effect at a random point within the area (WC3 drops the
-        // ice shards across the whole circle each wave, not just the centre).
+        // Scatter the wave effect over the area (WC3 drops the ice shards across the
+        // whole circle each wave, not just the centre). `artPerWave` copies land per
+        // wave — Blizzard rains a cluster of 6, most fields just one. Each shard gets
+        // its own sqrt-weighted radius so hits spread evenly over the disc, and the
+        // angles are spaced one-per-sector (with jitter inside the sector) so a wave
+        // never bunches all six shards on one side of the circle.
         if (f.art) {
-          const ang = this.rng() * Math.PI * 2;
-          const r = f.area * Math.sqrt(this.rng());
-          this.spellEffects.push({ art: f.art, x: f.x + Math.cos(ang) * r, y: f.y + Math.sin(ang) * r, targetId: 0, z: 0 });
+          const n = f.artPerWave ?? 1;
+          const base = this.rng() * Math.PI * 2;
+          for (let s = 0; s < n; s++) {
+            const ang = base + ((s + this.rng()) * Math.PI * 2) / n;
+            const r = f.area * Math.sqrt(this.rng());
+            this.spellEffects.push({ art: f.art, x: f.x + Math.cos(ang) * r, y: f.y + Math.sin(ang) * r, targetId: 0, z: 0 });
+          }
         }
       }
       if (f.done >= f.waves) this.spellFields.splice(i, 1);
