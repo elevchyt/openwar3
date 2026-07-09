@@ -282,8 +282,7 @@ export class GameHud {
   private idleWorkerBadge!: HTMLButtonElement;
   private idleWorkerCount!: HTMLSpanElement;
   private idleIconSet = false; // worker icon lazily applied once
-  private cmdTooltip!: HTMLDivElement;
-  private invTooltip!: HTMLDivElement;
+  private cmdTooltip!: HTMLDivElement; // the ONE tooltip slab, above the command card
   private invHover = -1; // inventory slot under the cursor (-1 = none), so its tooltip can refresh
   private cmdSlots: HTMLButtonElement[] = [];
   private cmdLabels: HTMLSpanElement[] = []; // per-slot fallback text (icon-less buttons)
@@ -899,12 +898,6 @@ export class GameHud {
   private buildInventory(skinned: boolean): HTMLDivElement {
     const inv = document.createElement("div");
     inv.className = "hud-inventory";
-    // Item tooltip, hovering above the inventory panel exactly as the command
-    // card's does above its grid (same slab, same anchoring).
-    this.invTooltip = document.createElement("div");
-    this.invTooltip.className = "hud-tooltip hud-inv-tooltip";
-    this.invTooltip.hidden = true;
-    inv.appendChild(this.invTooltip);
     if (!skinned) {
       // The console art draws its own inventory title.
       const title = document.createElement("div");
@@ -923,8 +916,9 @@ export class GameHud {
     this.invCdText = [];
     for (let i = 0; i < 6; i++) {
       const btn = document.createElement("button");
-      btn.className = "hud-slot hud-inv-slot";
-      btn.disabled = true;
+      btn.className = "hud-slot hud-inv-slot empty";
+      // NOT `disabled` — an empty slot must still take a click, because that's how
+      // you move a carried item INTO it. `.empty` styles it as inert instead.
       const cd = document.createElement("div");
       cd.className = "hud-cmd-cd";
       cd.hidden = true;
@@ -943,7 +937,7 @@ export class GameHud {
       btn.onpointerenter = () => this.showItemTooltip(i);
       btn.onpointerleave = () => {
         this.invHover = -1;
-        this.invTooltip.hidden = true;
+        this.cmdTooltip.hidden = true;
       };
       grid.appendChild(btn);
       this.invSlots.push(btn);
@@ -955,21 +949,22 @@ export class GameHud {
     return inv;
   }
 
-  /** Item tooltip for inventory slot `i`: the item's name over its description,
-   *  in the same slab the command card uses. An empty slot shows nothing. */
+  /** Item tooltip for inventory slot `i`. Every HUD tooltip — ability, order,
+   *  build, item — is the SAME slab in the SAME place, above the command card, so
+   *  the eye never has to hunt for it. An empty slot shows nothing. */
   private showItemTooltip(i: number): void {
     this.invHover = i;
     const s = this.driver.inventory()[i] ?? null;
     if (!s) {
-      this.invTooltip.hidden = true;
+      this.cmdTooltip.hidden = true;
       return;
     }
     // A charged item (potions, scrolls, wands) says how many uses are left, the way
     // WC3 appends the count to the item's name in the tooltip.
     const title = escapeHtml(s.charges > 0 ? `${s.name} (${s.charges})` : s.name);
     const desc = s.desc ? `<div class="hud-tooltip-desc">${escapeHtml(s.desc)}</div>` : "";
-    this.invTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}`;
-    this.invTooltip.hidden = false;
+    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}`;
+    this.cmdTooltip.hidden = false;
   }
 
   /** Rebuild the hero inventory slots from the driver's current inventory. Cheap
@@ -996,12 +991,12 @@ export class GameHud {
       const btn = this.invSlots[i];
       const s = inv[i] ?? null;
       if (!s) {
-        btn.disabled = true;
+        btn.classList.add("empty");
         btn.style.backgroundImage = "";
         this.invCount[i].textContent = "";
         continue;
       }
-      btn.disabled = false;
+      btn.classList.remove("empty");
       btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
       this.invCount[i].textContent = s.charges > 0 ? String(s.charges) : "";
     }
@@ -1063,8 +1058,9 @@ export class GameHud {
     this.cmdKey = key;
     // The card changed (e.g. a building was cancelled and its buttons vanished):
     // hide any hover tooltip so it doesn't linger over the now-empty slot — a
-    // removed button never fires pointerleave.
-    this.cmdTooltip.hidden = true;
+    // removed button never fires pointerleave. An inventory hover owns the same
+    // slab and its slot didn't go anywhere, so leave that one alone.
+    if (this.invHover < 0) this.cmdTooltip.hidden = true;
     for (let i = 0; i < this.cmdSlots.length; i++) {
       const btn = this.cmdSlots[i];
       btn.disabled = true;

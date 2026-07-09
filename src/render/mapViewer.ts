@@ -406,6 +406,7 @@ export class MapViewerScene {
   private selectBoxEl: HTMLDivElement | null = null;
   private cursorStyleEl: HTMLStyleElement | null = null;
   private reticleEl: HTMLDivElement | null = null; // follows the cursor while armed
+  private carryEl: HTMLDivElement | null = null; // the item icon "held" by the hand while moving it
   private cursorSheet: HTMLCanvasElement | null = null; // race cursor sprite sheet
   private reticleUrls = new Map<string, string>(); // tinted WC3 reticle by colour key
   private handUrls = new Map<string, string>(); // tinted race hand cursor by colour key
@@ -3475,6 +3476,7 @@ export class MapViewerScene {
     this.portraitViewer?.stop();
     document.body.classList.remove("reticle-on"); // restore the OS/WC3 cursor
     this.hideCursorOverlay();
+    this.updateCarriedItem(-1, 0, 0); // never leave an item stuck to the cursor
   }
 
   /** Release the viewer's blob URLs (call when discarding the scene). */
@@ -3508,6 +3510,8 @@ export class MapViewerScene {
     this.selectBoxEl = null;
     this.reticleEl?.remove();
     this.reticleEl = null;
+    this.carryEl?.remove();
+    this.carryEl = null;
     this.cursorStyleEl?.remove();
     this.cursorStyleEl = null;
     for (const g of this.buildGhosts.values()) g.hide();
@@ -3532,7 +3536,7 @@ export class MapViewerScene {
     this.cursorSheet = null;
     this.reticleUrls.clear();
     this.handUrls.clear();
-    document.body.classList.remove("reticle-on");
+    document.body.classList.remove("reticle-on", "carrying-item");
     document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
@@ -4013,6 +4017,16 @@ export class MapViewerScene {
   private updateReticle(cssX: number, cssY: number): void {
     if (!this.rts) return this.hideCursorOverlay();
     const mode = this.rts.orderMode;
+    // Carrying an item (right-clicked in the inventory to move it): the cursor stays
+    // the plain WC3 hand — no reticle — and the item's icon rides along at half size,
+    // as if the gauntlet were holding it. Handled before everything else so no hover
+    // tint or armed-order reticle can steal the cursor while you're carrying.
+    const carrySlot = mode === "item" && this.rts.armedItem?.mode === "move" ? this.rts.armedItem.slot : -1;
+    this.updateCarriedItem(carrySlot, cssX, cssY);
+    if (carrySlot >= 0) {
+      document.body.classList.remove("reticle-on"); // let the OS hand cursor show through
+      return this.hideCursorOverlay();
+    }
     const hover = this.rts.hoverInfo();
     let kind: "reticle" | "hand" | null = null;
     let colorKey: "green" | "yellow" | "red" = "green";
@@ -4042,6 +4056,29 @@ export class MapViewerScene {
     el.style.top = `${cssY}px`;
     el.style.backgroundImage = `url(${url})`;
     el.className = `order-reticle ${kind} pulse`;
+  }
+
+  /** Show/hide the half-size item icon that follows the hand while an inventory item
+   *  is armed for a move. `slot` < 0 hides it. It follows the cursor everywhere —
+   *  over the map AND the console — because every one of those is a legal drop
+   *  target (another slot, the ground, an allied hero). */
+  private updateCarriedItem(slot: number, cssX: number, cssY: number): void {
+    const icon = slot >= 0 ? this.rts?.inventorySlots()[slot]?.icon : "";
+    const url = icon ? this.blpIcon(icon) : null;
+    document.body.classList.toggle("carrying-item", slot >= 0);
+    if (!url) {
+      if (this.carryEl) this.carryEl.hidden = true;
+      return;
+    }
+    if (!this.carryEl) {
+      this.carryEl = document.createElement("div");
+      this.carryEl.className = "carried-item";
+      document.body.appendChild(this.carryEl);
+    }
+    this.carryEl.hidden = false;
+    this.carryEl.style.left = `${cssX}px`;
+    this.carryEl.style.top = `${cssY}px`;
+    this.carryEl.style.backgroundImage = `url(${url})`;
   }
 
   private hideCursorOverlay(): void {

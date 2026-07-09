@@ -732,6 +732,21 @@ body.in-game .menu-panel { display: none; }
   z-index: 7;
   image-rendering: pixelated;
 }
+/* The item icon carried by the hand while moving it between inventory slots: half
+   the 32px cursor, tucked just below/right of the gauntlet's grip so the hand looks
+   like it's holding it. Never captures the pointer — the drop target underneath does. */
+.carried-item {
+  position: fixed;
+  width: 16px;
+  height: 16px;
+  transform: translate(6px, 8px);
+  background: center / contain no-repeat;
+  pointer-events: none;
+  z-index: 9;
+  image-rendering: pixelated;
+  border: 1px solid rgba(216, 180, 90, 0.7);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
 .order-reticle.reticle { transform: translate(-50%, -50%); } /* centred on the point */
 .order-reticle.hand { transform: translate(-3px, -3px); } /* hotspot near the tip */
 /* Pulse the COLOUR intensity only — never opacity, never size. brightness()
@@ -955,14 +970,6 @@ body.in-game .menu-panel { display: none; }
   border: 1px solid rgba(216, 180, 90, 0.2);
   border-radius: 4px;
   background: rgba(8, 7, 4, 0.6);
-  position: relative; /* anchors the item tooltip above the panel */
-}
-/* The inventory column is narrower than the tooltip, so pin the tooltip's RIGHT
-   edge to it and let it grow leftward over the info panel — anchoring the left
-   edge (as the command card does) would push it out under the command card. */
-.hud-inv-tooltip {
-  left: auto;
-  right: -4px;
 }
 .hud-inv-title { font-size: 12px; color: var(--gold); margin-bottom: 6px; text-align: center; }
 .hud-inv-grid {
@@ -1002,8 +1009,11 @@ body.in-game .menu-panel { display: none; }
   background-position: center;
   color: transparent;
 }
-.hud-inv-slot:disabled { cursor: default; }
-.hud-inv-slot:not(:disabled):hover { border-color: var(--gold); }
+/* An EMPTY slot stays clickable (it's a drop target for a carried item) but reads
+   as inert: no hover highlight until you're actually carrying something. */
+.hud-inv-slot.empty { cursor: default; }
+.hud-inv-slot:not(.empty):hover,
+body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 .hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }
 
 .hud-cmd {
