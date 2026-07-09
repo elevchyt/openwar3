@@ -264,6 +264,52 @@ export class VisionMap {
     }
   }
 
+  /** Can a unit standing at (fromX, fromY) SEE the point (toX, toY)? One ray, the same
+   *  running-horizon rule `castRay` uses to paint the fog: every cell along the way
+   *  raises the horizon by its BLOCK height (terrain + trees), and the target is seen
+   *  only if its ground still rises to that horizon. This is what stops a creep from
+   *  aggroing a hero through a treeline — the fog already hid him, now the creep is
+   *  blind to him too (issue #45 follow-up).
+   *
+   *  `flying` (either end airborne) skips the test: a flyer looks over the treeline,
+   *  and a flyer is seen over it. With no height field installed (headless sim, no
+   *  terrain) nothing blocks. */
+  hasLineOfSight(fromX: number, fromY: number, toX: number, toY: number, flying = false): boolean {
+    const ground = this.ground;
+    const block = this.block;
+    if (flying || !ground || !block) return true;
+    const [ox, oy] = this.worldToCell(fromX, fromY);
+    const [tcx, tcy] = this.worldToCell(toX, toY);
+    if (!this.inBounds(ox, oy) || !this.inBounds(tcx, tcy)) return true;
+    if (ox === tcx && oy === tcy) return true; // same cell — always sees itself
+    const eyeH = ground[oy * this.width + ox] + EYE_BONUS;
+    const dx = tcx - ox;
+    const dy = tcy - oy;
+    const steps = Math.max(Math.abs(dx), Math.abs(dy));
+    const ix = dx / steps;
+    const iy = dy / steps;
+    let x = ox + 0.5;
+    let y = oy + 0.5;
+    let maxAngle = -Infinity;
+    for (let s = 1; s <= steps; s++) {
+      x += ix;
+      y += iy;
+      const cx = Math.floor(x);
+      const cy = Math.floor(y);
+      if (!this.inBounds(cx, cy)) return false;
+      const i = cy * this.width + cx;
+      const ddx = cx - ox;
+      const ddy = cy - oy;
+      const dWorld = Math.sqrt(ddx * ddx + ddy * ddy) * VISION_CELL;
+      // The target's own cell: seen if its ground clears the horizon built up on the way.
+      // (Its own block height is irrelevant — a unit under a tree is not hidden by it.)
+      if (cx === tcx && cy === tcy) return (ground[i] - eyeH) / dWorld >= maxAngle - ANGLE_EPS;
+      const aBlock = (block[i] - eyeH) / dWorld;
+      if (aBlock > maxAngle) maxAngle = aBlock;
+    }
+    return true;
+  }
+
   worldToCell(wx: number, wy: number): [number, number] {
     return [
       Math.floor((wx - this.originX) / VISION_CELL),

@@ -462,6 +462,10 @@ export class RtsController {
     // modelled, so other teams pass through as visible (unchanged behaviour).
     this.sim.visibleToTeam = (team, x, y) =>
       team !== this.localTeam || this.vision.stateAt(x, y) === FogState.Visible;
+    // …and on terrain: a treeline or cliff between watcher and target blinds the watcher,
+    // whatever team it's on. This is what stops ranged creeps shooting a hero standing on
+    // the far side of a forest they cannot see through.
+    this.sim.lineOfSight = (x1, y1, x2, y2, flying) => this.vision.hasLineOfSight(x1, y1, x2, y2, flying);
   }
 
   dispose(): void {

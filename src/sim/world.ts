@@ -722,6 +722,9 @@ export class SimWorld {
   // only the local player's team is fog-modelled, so other teams pass through as
   // visible (see rts.ts, which wires this to the per-team VisionMap).
   visibleToTeam: (team: number, x: number, y: number) => boolean = () => true;
+  /** Does anything (treeline, high ground) stand between these two points? Injected by
+   *  rts from the VisionMap's height field; defaults to open ground for headless sims. */
+  lineOfSight: (fromX: number, fromY: number, toX: number, toY: number, flying: boolean) => boolean = () => true;
   /** Live fogged-attacker reveals, keyed `attackerId:victimTeam` so a unit shooting two
    *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
   private attackReveals = new Map<string, AttackReveal>();
@@ -3596,9 +3599,9 @@ export class SimWorld {
     for (const t of this.units.values()) {
       if (t === u || t.id === excludeId || !this.hostile(u, t)) continue;
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't pull an idle camp
-      if (!this.canSee(u, t)) continue; // never aggro what we cannot see (sight + fog)
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap > range) continue;
+      if (!this.canSee(u, t)) continue; // never aggro what we cannot see (sight + fog + LOS)
       cands.push({ t, gap });
     }
     cands.sort((a, b) => a.gap - b.gap);
@@ -3747,12 +3750,11 @@ export class SimWorld {
     let bestGap = range;
     for (const t of this.units.values()) {
       if (t === u || !this.hostile(u, t)) continue;
-      if (needSight && !this.canSee(u, t)) continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = t;
-      }
+      if (gap >= bestGap) continue;
+      if (needSight && !this.canSee(u, t)) continue;
+      bestGap = gap;
+      best = t;
     }
     return best;
   }
@@ -3772,10 +3774,16 @@ export class SimWorld {
    *  aggroing through the fog because no creep path consulted sight at all). Then the
    *  player's shared team vision (`visibleToTeam`), so nothing aggros an enemy its own
    *  side hasn't revealed. Non-local teams pass that second gate — only the local team's
-   *  fog is modelled — so for creeps this is purely the sight check. */
+   *  fog is modelled — so for creeps this is purely eyes and terrain.
+   *
+   *  Last and most expensive, LINE OF SIGHT: a treeline or a cliff between the two
+   *  blinds the watcher exactly as it blanks the fog map. Ranged creeps were shooting
+   *  heroes straight through a forest they could not see over. Ordered last, and after
+   *  each caller's range test, so the ray is only cast for a target already worth it. */
   private canSee(u: SimUnit, t: SimUnit): boolean {
     if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > this.sightOf(u)) return false;
-    return this.visibleToTeam(u.team, t.x, t.y);
+    if (!this.visibleToTeam(u.team, t.x, t.y)) return false;
+    return this.lineOfSight(u.x, u.y, t.x, t.y, u.flying || t.flying);
   }
 
   /** How much of a threat a target is to a creep, for target selection: armed
@@ -3797,9 +3805,9 @@ export class SimWorld {
     let bestGap = Infinity;
     for (const t of this.units.values()) {
       if (t === u || !this.hostile(u, t)) continue;
-      if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap > range) continue;
+      if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
       const tier = this.threatTier(t);
       if (tier > bestTier || (tier === bestTier && gap < bestGap)) {
         bestTier = tier;
@@ -4874,12 +4882,11 @@ export class SimWorld {
       if (t === u || !this.hostile(u, t)) continue;
       if (t.invulnerable) continue; // invulnerable enemies (goblin merchant, gold mine, Divine Shield, …) aren't attackable (issue #26)
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
-      if (!this.canSee(u, t)) continue; // out of sight (or fogged) → don't aggro
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = t;
-      }
+      if (gap >= bestGap) continue;
+      if (!this.canSee(u, t)) continue; // out of sight (fog, night, or a treeline) → don't aggro
+      bestGap = gap;
+      best = t;
     }
     return best;
   }
@@ -4899,16 +4906,15 @@ export class SimWorld {
       if (ally.order !== "attack" || ally.targetId === null) continue; // that is fighting
       const enemy = this.units.get(ally.targetId);
       if (!enemy || !this.hostile(u, enemy)) continue; // attacking an actual enemy of ours
-      if (!this.canSee(u, enemy)) continue; // out of sight (or fogged) → can't join that fight
       // Distance to the FRIEND that's fighting, not to its enemy — a unit left behind is
       // near its comrades even when their enemy is farther off, and it should march up to
       // help. It then attacks the enemy that friend is engaging (and re-targets to whatever
       // it can actually reach once it arrives, via the in-strike-range switch in tickAttack).
       const gap = Math.hypot(ally.x - u.x, ally.y - u.y) - u.radius - ally.radius;
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = enemy;
-      }
+      if (gap >= bestGap) continue;
+      if (!this.canSee(u, enemy)) continue; // out of sight (fog/night/treeline) → can't join that fight
+      bestGap = gap;
+      best = enemy;
     }
     return best;
   }
