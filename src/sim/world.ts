@@ -3393,14 +3393,25 @@ export class SimWorld {
 
   // --- combat -------------------------------------------------------------
 
+  /** On a harvest round-trip: walking out to the node, working it, or hauling the
+   *  load back to a depot. A worker mid-trip keeps working — it doesn't look up from
+   *  the tree to fight (issue #41). This is what keeps the Ghoul, which is NOT
+   *  Peon-classified and so fights like a soldier when it has nothing better to do,
+   *  from abandoning the lumber line the moment a skirmish breaks out beside it. */
+  private harvesting(u: SimUnit): boolean {
+    return !!u.worker && (u.order === "harvest" || u.order === "return");
+  }
+
   /** How far this unit will auto-acquire a target: the weapon's acquisition range
    *  (UnitWeapons.slk `acquire`), or a creep's own aggro range (its map-placed
-   *  targetAcquisition). Workers never auto-acquire anything (issue #41) — 0 here
-   *  keeps them out of every automatic path: idle scans, assist, attack-move,
-   *  post-kill re-acquire, and the switch to a reachable enemy. An explicit attack
-   *  order goes through issueAttack and doesn't consult this. */
+   *  targetAcquisition). Zero — never auto-acquires — for a worker: always for the
+   *  Peon-classified ones, and while on a harvest trip for anything else that
+   *  harvests (the Ghoul). 0 here keeps them out of every automatic path: idle
+   *  scans, assist, attack-move, post-kill re-acquire, and the switch to a reachable
+   *  enemy. An explicit attack order goes through issueAttack and doesn't consult
+   *  this, so you can always pull a worker off the line and into a fight. */
   private acquireRange(u: SimUnit): number {
-    if (u.isPeon) return 0;
+    if (u.isPeon || this.harvesting(u)) return 0;
     if (u.isCreep) return u.aggroRange;
     return u.weapon ? u.weapon.acquire : 0;
   }
@@ -4386,10 +4397,14 @@ export class SimWorld {
     // us is by definition adjacent and reachable, a strictly better target than one we
     // can't close on. A unit already trading blows (inCombat) keeps its target; HOLD-
     // position units (order "hold") never leave their post. Workers never return fire —
-    // a peasant being cut down just stands there until you order it to fight (issue #41).
+    // a peasant being cut down just stands there until you order it to fight, and a Ghoul
+    // on a lumber trip keeps chopping through the blows (issue #41). The harvest check is
+    // belt-and-braces: a harvesting unit isn't "notFighting" today, but the rule belongs
+    // next to the one it mirrors in acquireRange.
     const attacker = this.units.get(attackerId);
     const notFighting = target.order === "idle" || (target.order === "attack" && !target.inCombat);
-    if (notFighting && target.weapon && !target.isPeon && !target.returning && attacker && this.hostile(target, attacker) && attacker.id !== target.targetId) {
+    const passive = target.isPeon || this.harvesting(target);
+    if (notFighting && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker) && attacker.id !== target.targetId) {
       this.issueAttack(target.id, attackerId);
     }
     // Creep "call for help" (Battle.net creep basics): attacking one creep rallies
