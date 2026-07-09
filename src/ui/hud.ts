@@ -283,6 +283,8 @@ export class GameHud {
   private idleWorkerCount!: HTMLSpanElement;
   private idleIconSet = false; // worker icon lazily applied once
   private cmdTooltip!: HTMLDivElement;
+  private invTooltip!: HTMLDivElement;
+  private invHover = -1; // inventory slot under the cursor (-1 = none), so its tooltip can refresh
   private cmdSlots: HTMLButtonElement[] = [];
   private cmdLabels: HTMLSpanElement[] = []; // per-slot fallback text (icon-less buttons)
   private cmdCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
@@ -897,6 +899,12 @@ export class GameHud {
   private buildInventory(skinned: boolean): HTMLDivElement {
     const inv = document.createElement("div");
     inv.className = "hud-inventory";
+    // Item tooltip, hovering above the inventory panel exactly as the command
+    // card's does above its grid (same slab, same anchoring).
+    this.invTooltip = document.createElement("div");
+    this.invTooltip.className = "hud-tooltip hud-inv-tooltip";
+    this.invTooltip.hidden = true;
+    inv.appendChild(this.invTooltip);
     if (!skinned) {
       // The console art draws its own inventory title.
       const title = document.createElement("div");
@@ -931,6 +939,12 @@ export class GameHud {
         e.preventDefault();
         this.driver.moveInventory(i);
       };
+      // A slot with no item shows nothing (WC3 doesn't tooltip an empty pocket).
+      btn.onpointerenter = () => this.showItemTooltip(i);
+      btn.onpointerleave = () => {
+        this.invHover = -1;
+        this.invTooltip.hidden = true;
+      };
       grid.appendChild(btn);
       this.invSlots.push(btn);
       this.invCount.push(count);
@@ -939,6 +953,23 @@ export class GameHud {
     }
     inv.appendChild(grid);
     return inv;
+  }
+
+  /** Item tooltip for inventory slot `i`: the item's name over its description,
+   *  in the same slab the command card uses. An empty slot shows nothing. */
+  private showItemTooltip(i: number): void {
+    this.invHover = i;
+    const s = this.driver.inventory()[i] ?? null;
+    if (!s) {
+      this.invTooltip.hidden = true;
+      return;
+    }
+    // A charged item (potions, scrolls, wands) says how many uses are left, the way
+    // WC3 appends the count to the item's name in the tooltip.
+    const title = escapeHtml(s.charges > 0 ? `${s.name} (${s.charges})` : s.name);
+    const desc = s.desc ? `<div class="hud-tooltip-desc">${escapeHtml(s.desc)}</div>` : "";
+    this.invTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}`;
+    this.invTooltip.hidden = false;
   }
 
   /** Rebuild the hero inventory slots from the driver's current inventory. Cheap
@@ -967,15 +998,16 @@ export class GameHud {
       if (!s) {
         btn.disabled = true;
         btn.style.backgroundImage = "";
-        btn.title = "";
         this.invCount[i].textContent = "";
         continue;
       }
       btn.disabled = false;
       btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
-      btn.title = s.name;
       this.invCount[i].textContent = s.charges > 0 ? String(s.charges) : "";
     }
+    // The slot under the cursor just changed (a charge spent, the item swapped or
+    // used up) — re-render its tooltip in place rather than leave a stale one.
+    if (this.invHover >= 0) this.showItemTooltip(this.invHover);
   }
 
   private buildCommandCard(): HTMLDivElement {

@@ -72,6 +72,16 @@ export interface SpellFieldInit {
   waveSound?: boolean; // cue the art's folder WAV once per wave (Blizzard's shard fall).
   delay?: number; // seconds before the FIRST wave (default 0 = fire immediately). Lets a
   //                 field start after another (Flame Strike's subsiding burn follows the pillar).
+  maxDamagePerWave?: number; // "Maximum Damage per Wave" (DataF): the total a single wave may
+  //                            deal across everything it hits. Over that, the wave splits its
+  //                            budget evenly — Blizzard's 30/wave hits 5 units for full, 10 for 15.
+  buildingReduction?: number; // "Building Reduction" (DataD): fraction of the wave's damage a
+  //                             BUILDING shrugs off (0.5 → structures take half).
+  dot?: { dps: number; duration: number; heroDuration: number; group: string; art: string }; // per-wave
+  //       burn left on everything the wave hits (Rain of Fire's "and N damage per second for 3 seconds").
+  impactDelay?: number; // seconds between a wave's art SPAWNING and its damage landing. The shard
+  //                       is a falling model, and WC3 hurts you when it hits the ground, not when
+  //                       it appears in the sky. See SHARD_FALL.
 }
 
 /** Where a cast is aimed. */
@@ -83,10 +93,22 @@ export interface CastContext {
 
 type Handler = (api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, ctx: CastContext) => void;
 
-/** Curated effect models for spell fields whose art isn't in the ability data. */
+/** Curated effect models for spell fields whose art isn't in the ability data.
+ *  (Neither ability names one: MPQ HumanAbilityFunc [AHbz] / NeutralAbilityFunc
+ *  [ANrf] both have an empty Casterart and no Target/Special art at all.) */
 const FIELD_ART: Record<string, string> = {
   AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardTarget.mdx",
+  ANrf: "Abilities\\Spells\\Demon\\RainOfFire\\RainOfFireTarget.mdx",
 };
+
+/** When a shard's damage lands, measured off the models themselves: in BOTH
+ *  BlizzardTarget.mdx and RainOfFireTarget.mdx (the same rig, reskinned) the falling
+ *  helper `Dummy01` drops from z=+161 to the ground over 33→833ms, and the impact
+ *  burst emitters (BlizParticle01x, Rain of Fire's Sphere1x debris) switch their
+ *  visibility on at exactly 800ms. The rest of the 3.3s "Birth" clip is the ice/fire
+ *  lingering on the ground. So a wave hurts you 0.8s after it appears in the sky —
+ *  you can walk out from under a Blizzard you see coming. */
+const SHARD_FALL = 0.8;
 
 // Flame Strike models, straight from the 1.27 MPQ (War3x, Abilities\Spells\Human\
 // FlameStrike\). The ability's Specialart lists FlameStrike1,FlameStrike2,FlameStrike
@@ -106,20 +128,50 @@ function d(lvl: AbilityLevel, i: number, def = 0): number {
   return v === undefined || Number.isNaN(v) ? def : v;
 }
 
+/** Blizzard and Rain of Fire are the SAME engine ability with different numbers:
+ *  MPQ Units\AbilityMetaData.slk gives their Data columns one shared row
+ *  (`useSpecific=ahbz,acbz,anrf,acrf`), so both read
+ *    DataA "Number of Waves"  DataB "Damage"  DataC "Number of Shards"
+ *    DataD "Building Reduction"  DataE "Damage Per Second"  DataF "Maximum Damage per Wave".
+ *  Neither the Duration column nor any Data column holds the gap between waves —
+ *  it's fixed in the engine at one second (Liquipedia "Blizzard": "Wave Duration:
+ *  1 second"), so Blizzard's 6 waves fill its 6s channel and cooldown exactly. */
+export const WAVE_FIELDS = new Set(["AHbz", "ANrf"]);
+const WAVE_INTERVAL = 1; // seconds between waves — engine constant, in no data file
+
 /** Wave schedule for a repeating area field, shared by the spell handler (which
  *  registers the field) and `channelDuration` (which locks the caster for exactly as
- *  long as the waves run) so the two can never drift apart.
- *
- *  Blizzard's Duration column times ONE WAVE, not the whole channel: MPQ
- *  Units\AbilityData.slk AHbz has dur1/2/3 = 1 alongside a 6s cooldown, and
- *  Liquipedia (liquipedia.net/warcraft/Blizzard) lists "Wave Duration: 1 second".
- *  So its 6 waves land a second apart and the Archmage channels 6s — exactly the
- *  cooldown, as in WC3. Other fields (Rain of Fire, …) space waves by dataD. */
-export function waveSchedule(code: string, lvl: AbilityLevel): { waves: number; interval: number } {
-  return {
-    waves: d(lvl, 0, 6),
-    interval: code === "AHbz" ? lvl.duration || 1 : d(lvl, 3, 0.5) || 0.5,
-  };
+ *  long as the waves run) so the two can never drift apart. Rain of Fire's Duration
+ *  column is its BURN duration (3s), not its channel — the channel is waves × 1s,
+ *  which is why both spells must come through here rather than read `duration`. */
+export function waveSchedule(lvl: AbilityLevel): { waves: number; interval: number } {
+  return { waves: d(lvl, 0, 6), interval: WAVE_INTERVAL };
+}
+
+/** Blizzard / Rain of Fire: register the repeating wave field both of them are.
+ *  Every number comes from the shared data row (see WAVE_FIELDS); `defaultDamage`
+ *  only covers a custom ability that left DataB blank. */
+function waveField(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, ctx: CastContext, defaultDamage: number): void {
+  const lvl = def.levelData[rank - 1];
+  const { waves, interval } = waveSchedule(lvl);
+  const dps = d(lvl, 4, 0); // DataE — Rain of Fire burns, Blizzard's is 0
+  api.addSpellField({
+    code: def.code,
+    x: ctx.x,
+    y: ctx.y,
+    area: lvl.area || 200,
+    damagePerWave: d(lvl, 1, defaultDamage),
+    waves,
+    interval,
+    casterId: caster.id,
+    art: def.areaArt || def.targetArt || FIELD_ART[def.code] || "",
+    artPerWave: Math.max(1, d(lvl, 2, 6)), // DataC "Number of Shards": 6/7/10 by rank
+    waveSound: true,
+    impactDelay: SHARD_FALL,
+    buildingReduction: d(lvl, 3, 0), // DataD
+    maxDamagePerWave: d(lvl, 5, 0), // DataF (0 = uncapped)
+    dot: dps > 0 ? { dps, duration: lvl.duration || 3, heroDuration: lvl.heroDuration || lvl.duration || 3, group: def.code, art: def.buffArt } : undefined,
+  });
 }
 
 // --- targeting helpers (shared by the hero spell handlers) -----------------
@@ -294,25 +346,26 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.requestSummon(lvl.summon, caster.x, caster.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 60, caster.id);
   },
 
-  // Blizzard — channelled: 6 waves, each dealing dataB damage in `area`, one second
-  // apart (registered as a repeating field; see tickSpellFields / waveSchedule).
-  AHbz: (api, caster, def, rank, ctx) => {
-    const lvl = def.levelData[rank - 1];
-    // Blizzard ships no effect-art field in the data — use the known shard model.
-    // (It ships no SOUND field either: MPQ HumanAbilityFunc.txt [AHbz] has an EMPTY
-    // Casterart and no Target/Special art at all, and BlizzardTarget.mdx carries no
-    // SND event objects. So neither of our sound paths — ability-art folder scan,
-    // model SND events — could find anything, and Blizzard played silent. Its WAVs
-    // sit unclaimed in the ability's own folder next to the shard model:
-    // BlizzardTarget1/2/3.wav (the 3s shard fall, one per wave) and BlizzardLoop1.wav
-    // (the 4s wind bed, looped for the channel — started by the renderer off
-    // activeSpellFields). `waveSound` cues the former from the art's folder.
-    const art = def.areaArt || def.targetArt || FIELD_ART[def.code] || "";
-    // A wave is a shower of shards across the circle, not one shard: WC3 drops a
-    // cluster of BlizzardTarget hits per wave. 6 reads right at Blizzard's 200 area.
-    const { waves, interval } = waveSchedule(def.code, lvl); // 6 waves, 1s apart
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area, damagePerWave: d(lvl, 1, 30), waves, interval, casterId: caster.id, art, artPerWave: 6, waveSound: true });
-  },
+  // Blizzard — channelled: DataA waves of DataB damage in `area`, a second apart
+  // (registered as a repeating field; see tickSpellFields / waveSchedule).
+  //
+  // Blizzard ships no effect-art field in the data — use the known shard model.
+  // (It ships no SOUND field either: MPQ HumanAbilityFunc.txt [AHbz] has an EMPTY
+  // Casterart and no Target/Special art at all, and BlizzardTarget.mdx carries no
+  // SND event objects. So neither of our sound paths — ability-art folder scan,
+  // model SND events — could find anything, and Blizzard played silent. Its WAVs
+  // sit unclaimed in the ability's own folder next to the shard model:
+  // BlizzardTarget1/2/3.wav (the 3s shard fall, one per wave) and BlizzardLoop1.wav
+  // (the 4s wind bed, looped for the channel — started by the renderer off
+  // activeSpellFields). `waveSound` cues the former from the art's folder.
+  AHbz: (api, caster, def, rank, ctx) => waveField(api, caster, def, rank, ctx, 30),
+
+  // Rain of Fire (Pit Lord) — Blizzard's twin (same engine ability, same six data
+  // columns), but each wave also leaves a burn: DataE damage per second for the
+  // ability's Duration (MPQ NeutralAbilityStrings [ANrf]: "Each wave deals <DataB>
+  // initial damage and <DataE> damage per second for <Dur> seconds. Lasts for <DataA>
+  // waves."). Blizzard's DataE is 0, so the same code path leaves no burn there.
+  ANrf: (api, caster, def, rank, ctx) => waveField(api, caster, def, rank, ctx, 25),
 
   // Heal (Priest) — restore dataA HP to a friendly living, non-mechanical unit.
   Ahea: (api, caster, def, rank, ctx) => {
@@ -611,12 +664,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // --- point-AoE fields (Blizzard-style repeating waves) ---
-
-  // Rain of Fire (Pit Lord) — dataA waves of dataB damage in `area`, dataD apart.
-  ANrf: (api, caster, def, rank, ctx) => {
-    const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 200, damagePerWave: d(lvl, 1, 25), waves: d(lvl, 0, 6), interval: d(lvl, 3, 0.5) || 0.5, casterId: caster.id, art: def.areaArt || def.targetArt });
-  },
+  // (Blizzard AHbz and Rain of Fire ANrf both live up with the Archmage's spells.)
 
   // Flame Strike (Blood Mage) — reached only when the 1.33s cast wind-up FINISHES
   // (MPQ AHfs Cast=1.33). The wind-up drops the FlameStrikeTarget "beware" vortex and

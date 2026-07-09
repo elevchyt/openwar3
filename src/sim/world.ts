@@ -2,7 +2,7 @@ import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
-import { SPELL_HANDLERS, AURA_BUFFS, waveSchedule, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, waveSchedule, WAVE_FIELDS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -2607,13 +2607,14 @@ export class SimWorld {
    *  wave field the handler schedules so the caster channels exactly as long as the
    *  effect lasts: the ability's Duration for the timed fields (Tranquility 30s,
    *  Starfall 45s, Death and Decay 35s, Stampede/Earthquake), or waves × interval for
-   *  the wave fields. Blizzard is a wave field even though its Duration is non-zero —
-   *  that column times ONE wave (1s), not the channel; see `waveSchedule`. */
+   *  the wave fields. A wave field's Duration column is NEVER its channel: Blizzard's
+   *  is 0 and Rain of Fire's 3 is how long its burn lingers — the Pit Lord channels
+   *  6/8/10s (one second per wave), not 3. See `waveSchedule`. */
   private channelDuration(def: AbilityDef, rank: number): number {
     if (!CHANNELED.has(def.code)) return 0;
     const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
-    if (lvl.duration > 0 && def.code !== "AHbz") return lvl.duration;
-    const { waves, interval } = waveSchedule(def.code, lvl);
+    if (lvl.duration > 0 && !WAVE_FIELDS.has(def.code)) return lvl.duration;
+    const { waves, interval } = waveSchedule(lvl);
     return waves * interval;
   }
 
@@ -2834,6 +2835,12 @@ export class SimWorld {
 
   private spellFields: Array<SpellFieldInit & { timer: number; done: number; team: number; flags: string[] }> = [];
 
+  /** Waves that have been thrown but haven't hit the ground yet (see SHARD_FALL).
+   *  They live OUTSIDE their field on purpose: shards already in the air still land
+   *  when the channel is broken, so a Blizzard cancelled the instant before impact
+   *  still deals that last wave. */
+  private waveImpacts: Array<{ t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"] }> = [];
+
   private addSpellFieldInternal(f: SpellFieldInit): void {
     // Capture the caster's team + the ability's Targets Allowed (targs1) NOW, so the
     // field keeps affecting the right allegiances even after the caster dies mid-channel.
@@ -2906,17 +2913,25 @@ export class SimWorld {
       if (f.timer <= 0) {
         f.timer = f.interval;
         f.done++;
-        for (const t of this.unitsInAreaInternal(f.x, f.y, f.area)) {
-          // Hit whoever the ability's targs1 allows — enemy-only for Starfall/Stampede,
-          // but everyone (incl. your own units) for Flame Strike/Blizzard/Death&Decay.
-          if (!this.areaEffectAffects(f.casterId, f.team, f.flags, t)) continue;
-          this.landDamage(t, f.damagePerWave, f.casterId, false); // spell damage: ignore armor
-        }
-        // Burn down trees too when the ability lists `tree` in Targets Allowed
-        // (Flame Strike's targs1 = ground,enemy,neutral,friend,structure,self,tree,debris —
-        // MPQ AHfs). Each wave deals damagePerWave to a tree's HP; a standard 50-HP tree
-        // falls after ~4 waves of L1 (15/wave), leaving a hole in the forest as in WC3.
-        if (f.flags.includes("tree")) this.damageTreesInArea(f.x, f.y, f.area, f.damagePerWave);
+        // The wave's damage lands when the wave does. A field with `impactDelay`
+        // (Blizzard, Rain of Fire) throws its shards now and hurts on impact, 0.8s
+        // later; every other field (Flame Strike's burn, Starfall, …) has no falling
+        // art and detonates immediately.
+        const impact = {
+          t: f.impactDelay ?? 0,
+          x: f.x,
+          y: f.y,
+          area: f.area,
+          damage: f.damagePerWave,
+          casterId: f.casterId,
+          team: f.team,
+          flags: f.flags,
+          maxDamage: f.maxDamagePerWave ?? 0,
+          buildingReduction: f.buildingReduction ?? 0,
+          dot: f.dot,
+        };
+        if (impact.t > 0) this.waveImpacts.push(impact);
+        else this.landWave(impact);
         // Scatter the wave effect over the area (WC3 drops the ice shards across the
         // whole circle each wave, not just the centre). `artPerWave` copies land per
         // wave — Blizzard rains a cluster of 6, most fields just one. Each shard gets
@@ -2938,6 +2953,41 @@ export class SimWorld {
       }
       if (f.done >= f.waves) this.spellFields.splice(i, 1);
     }
+    // Waves in flight: hurt whatever is standing there WHEN THEY LAND, not where the
+    // targets were when the wave was thrown — so stepping out of the circle works.
+    for (let i = this.waveImpacts.length - 1; i >= 0; i--) {
+      const w = this.waveImpacts[i];
+      w.t -= dt;
+      if (w.t > 0) continue;
+      this.waveImpacts.splice(i, 1);
+      this.landWave(w);
+    }
+  }
+
+  /** One wave of a repeating area field hitting the ground. */
+  private landWave(w: (typeof this.waveImpacts)[number]): void {
+    // Hit whoever the ability's targs1 allows — enemy-only for Starfall/Stampede,
+    // but everyone (incl. your own units) for Flame Strike/Blizzard/Death&Decay.
+    const hit = this.unitsInAreaInternal(w.x, w.y, w.area).filter((t) => this.areaEffectAffects(w.casterId, w.team, w.flags, t));
+    // "Maximum Damage per Wave" (DataF): a wave has a damage BUDGET, not just a
+    // per-unit figure. Blizzard's 30-per-wave with a 150 cap hits five units for full
+    // and ten for 15 each — the classic WC3 AoE cap that stops a channelled nuke from
+    // scaling forever with the size of the clump it lands on.
+    const each = w.maxDamage > 0 && hit.length * w.damage > w.maxDamage ? w.maxDamage / hit.length : w.damage;
+    for (const t of hit) {
+      // "Building Reduction" (DataD): structures shrug off this fraction of the wave.
+      const dmg = t.building ? each * (1 - w.buildingReduction) : each;
+      if (dmg > 0) this.landDamage(t, dmg, w.casterId, false); // spell damage: ignore armor
+      // Rain of Fire's burn: every wave (re)lights whatever it hits for DataE dps.
+      if (w.dot && w.dot.dps > 0 && !t.building) {
+        this.applyBuffInternal(t, { kind: "dot", group: w.dot.group, timeLeft: t.isHero && w.dot.heroDuration > 0 ? w.dot.heroDuration : w.dot.duration, sourceId: w.casterId, value: w.dot.dps, art: w.dot.art });
+      }
+    }
+    // Burn down trees too when the ability lists `tree` in Targets Allowed
+    // (Flame Strike's targs1 = ground,enemy,neutral,friend,structure,self,tree,debris —
+    // MPQ AHfs). Each wave deals damagePerWave to a tree's HP; a standard 50-HP tree
+    // falls after ~4 waves of L1 (15/wave), leaving a hole in the forest as in WC3.
+    if (w.flags.includes("tree")) this.damageTreesInArea(w.x, w.y, w.area, w.damage);
   }
 
   /** Apply `dmg` to the HP of every tree within `radius`; fell any that hit 0. Felled

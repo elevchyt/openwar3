@@ -2121,7 +2121,9 @@ export class RtsController {
         itemId: held.itemId,
         icon: def?.icon ?? "",
         name: def?.name ?? held.itemId,
-        desc: "",
+        // The item's own Ubertip, with its <ABIL,Field> placeholders filled in — the
+        // same text the HUD shows for the item lying on the ground.
+        desc: def ? this.resolveItemDesc(def.description) : "",
         charges: held.charges,
         cooldownLeft: held.cooldownLeft,
         cooldownFrac: total > 0 ? Math.max(0, Math.min(1, held.cooldownLeft / total)) : 0,

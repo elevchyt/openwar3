@@ -79,6 +79,7 @@ const SPELL_SOUND_FALLBACK: Record<string, string> = {
 // HumanAbilityFunc.txt [AHbz] has no sound entry at all), so they're named here.
 const FIELD_LOOP_SOUND: Record<string, string> = {
   AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardLoop1.wav", // 4s wind, looped for the 6s channel
+  ANrf: "Abilities\\Spells\\Demon\\RainOfFire\\RainOfFireLoop1.wav", // the roar under the Pit Lord's waves
 };
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
