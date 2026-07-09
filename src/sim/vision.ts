@@ -50,10 +50,11 @@ export class VisionMap {
   private revealAll = false;
   // Line-of-sight height field (world units per cell), installed by setHeightField.
   // `ground` = terrain height for the eye/target; `block` = ground + tree height, the
-  // thing that casts shadows. `treeCount` lets overlapping trees add/remove cleanly.
+  // thing that casts shadows. `treeCount` lets overlapping trees (and the several cells
+  // one big tree covers) add/remove cleanly.
   private ground: Float32Array | null = null;
   private block: Float32Array | null = null;
-  private treeCount: Uint8Array | null = null;
+  private treeCount: Uint16Array | null = null;
 
   constructor(originX: number, originY: number, worldWidth: number, worldHeight: number) {
     this.originX = originX;
@@ -70,7 +71,7 @@ export class VisionMap {
     const n = this.width * this.height;
     this.ground = new Float32Array(n);
     this.block = new Float32Array(n);
-    this.treeCount = new Uint8Array(n);
+    this.treeCount = new Uint16Array(n);
     for (let cy = 0; cy < this.height; cy++) {
       for (let cx = 0; cx < this.width; cx++) {
         const i = cy * this.width + cx;
@@ -83,26 +84,43 @@ export class VisionMap {
     }
   }
 
-  /** Mark the cell at (wx, wy) as holding a vision-blocking tree (a treeline shadows
-   *  the ground behind it). Overlapping trees stack; removeTreeBlocker undoes one. */
-  addTreeBlocker(wx: number, wy: number): void {
-    if (!this.block || !this.treeCount || !this.ground) return;
-    const cx = Math.floor((wx - this.originX) / VISION_CELL);
-    const cy = Math.floor((wy - this.originY) / VISION_CELL);
-    if (!this.inBounds(cx, cy)) return;
-    const i = cy * this.width + cx;
-    this.treeCount[i]++;
-    this.block[i] = this.ground[i] + TREE_BLOCK;
+  /** Mark a vision-blocking tree of half-extent `radius` centred at (wx, wy) — a
+   *  treeline shadows the ground behind it. A tree is NOT a point: harvestable trees
+   *  carry `PathTextures\4x4Default.tga` (128×128 world units) or `2x2Default.tga`
+   *  (64×64), so a 4×4 tree spans four 64-unit vision cells. Stamping only the centre
+   *  cell left three quarters of every big tree transparent and a treeline full of
+   *  holes you could see a creep camp through (#43). Overlapping trees stack;
+   *  removeTreeBlocker undoes one. */
+  addTreeBlocker(wx: number, wy: number, radius = VISION_CELL / 2): void {
+    this.forEachBlockerCell(wx, wy, radius, (i) => {
+      this.treeCount![i]++;
+      this.block![i] = this.ground![i] + TREE_BLOCK;
+    });
   }
 
-  /** A felled tree stops blocking sight once its cell holds no more trees. */
-  removeTreeBlocker(wx: number, wy: number): void {
+  /** A felled tree stops blocking sight once a cell holds no more trees. Pass the
+   *  same radius it was added with, so the exact cells it stamped are released. */
+  removeTreeBlocker(wx: number, wy: number, radius = VISION_CELL / 2): void {
+    this.forEachBlockerCell(wx, wy, radius, (i) => {
+      if (this.treeCount![i] > 0 && --this.treeCount![i] === 0) this.block![i] = this.ground![i];
+    });
+  }
+
+  /** Cells covered by a footprint square: every cell whose CENTRE falls in the
+   *  half-open span [w-radius, w+radius). Centre-in-square (rather than any overlap)
+   *  keeps a treeline watertight without over-blocking — trees on a map share one
+   *  lattice, so their squares tile the plane and each cell centre lands in exactly
+   *  one of them. A degenerate radius still stamps the tree's own cell. */
+  private forEachBlockerCell(wx: number, wy: number, radius: number, fn: (i: number) => void): void {
     if (!this.block || !this.treeCount || !this.ground) return;
-    const cx = Math.floor((wx - this.originX) / VISION_CELL);
-    const cy = Math.floor((wy - this.originY) / VISION_CELL);
-    if (!this.inBounds(cx, cy)) return;
-    const i = cy * this.width + cx;
-    if (this.treeCount[i] > 0 && --this.treeCount[i] === 0) this.block[i] = this.ground[i];
+    const r = Math.max(radius, VISION_CELL / 2);
+    const span = (lo: number, hi: number, origin: number, limit: number): [number, number] => [
+      Math.max(0, Math.ceil((lo - origin) / VISION_CELL - 0.5)),
+      Math.min(limit - 1, Math.ceil((hi - origin) / VISION_CELL - 0.5) - 1),
+    ];
+    const [x0, x1] = span(wx - r, wx + r, this.originX, this.width);
+    const [y0, y1] = span(wy - r, wy + r, this.originY, this.height);
+    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) fn(cy * this.width + cx);
   }
 
   setRevealAll(on: boolean): void {

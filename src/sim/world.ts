@@ -261,6 +261,10 @@ export interface SimTree {
   y: number;
   lumber: number; // remaining lumber a worker can chop before it falls
   hp: number; // destructible HP — drained by tree-damaging spells (Flame Strike), not by harvest
+  // Half-extent of the tree's blocked pathing footprint (world units): 64 for the
+  // usual 4x4Default tree, 32 for a 2x2Default one. The fog's line-of-sight blocker
+  // is stamped over this square, not over the centre point alone (#43).
+  blockRadius: number;
 }
 
 export interface SimUnit {
@@ -749,8 +753,8 @@ export class SimWorld {
     return mine;
   }
 
-  addTree(x: number, y: number, lumber = TREE_LUMBER): SimTree {
-    const tree: SimTree = { id: this.nextNodeId++, x, y, lumber, hp: TREE_HP };
+  addTree(x: number, y: number, lumber = TREE_LUMBER, blockRadius = 64): SimTree {
+    const tree: SimTree = { id: this.nextNodeId++, x, y, lumber, hp: TREE_HP, blockRadius };
     this.trees.set(tree.id, tree);
     return tree;
   }

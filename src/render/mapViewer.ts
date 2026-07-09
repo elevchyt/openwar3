@@ -610,8 +610,10 @@ export class MapViewerScene {
     if (!world) return;
     this.nodeFootprints.clear();
     for (const t of nodes.trees) {
-      const tree = world.addTree(t.x, t.y);
+      // The tree's blocked extent doubles as its fog line-of-sight blocker, so a
+      // 4x4Default tree shadows all four 64-unit vision cells it stands on (#43).
       const fp = this.footprintFor(t.pathTex);
+      const tree = world.addTree(t.x, t.y, undefined, fp ? footprintRadius(fp) || 64 : 64);
       if (fp) this.nodeFootprints.set(tree.id, { fp, x: t.x, y: t.y });
     }
     const minePathTex = this.registry.get("ngol")?.pathTex || "";
@@ -3245,7 +3247,7 @@ export class MapViewerScene {
       if (world && map) {
         for (const tree of world.drainFelledTrees()) {
           this.fellTreeVisual(tree.id, tree.x, tree.y, map.doodads); // "death" fall + leave the stump
-          this.rts?.onTreeFelled(tree.x, tree.y); // stop blocking fog line-of-sight
+          this.rts?.onTreeFelled(tree.x, tree.y, tree.blockRadius); // stop blocking fog line-of-sight
         }
         for (const mine of world.drainDepletedMines()) {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);

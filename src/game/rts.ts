@@ -557,12 +557,13 @@ export class RtsController {
    *  (see hiveworkshop "About high ground advantage" #255594). */
   initVisionBlockers(cliffHeightAt: HeightSampler): void {
     this.vision.setHeightField((x, y) => cliffHeightAt(x, y));
-    for (const tree of this.sim.trees.values()) this.vision.addTreeBlocker(tree.x, tree.y);
+    for (const tree of this.sim.trees.values()) this.vision.addTreeBlocker(tree.x, tree.y, tree.blockRadius);
   }
 
-  /** A tree was felled — it stops blocking sight (harvesting can open a sight line). */
-  onTreeFelled(x: number, y: number): void {
-    this.vision.removeTreeBlocker(x, y);
+  /** A tree was felled — it stops blocking sight (harvesting can open a sight line).
+   *  `radius` must match the one it was stamped with, so it releases its own cells. */
+  onTreeFelled(x: number, y: number, radius: number): void {
+    this.vision.removeTreeBlocker(x, y, radius);
   }
 
   /** Should this unit's model be hidden by the fog of war right now? Your own team
