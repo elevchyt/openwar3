@@ -105,6 +105,22 @@ function d(lvl: AbilityLevel, i: number, def = 0): number {
   return v === undefined || Number.isNaN(v) ? def : v;
 }
 
+/** Wave schedule for a repeating area field, shared by the spell handler (which
+ *  registers the field) and `channelDuration` (which locks the caster for exactly as
+ *  long as the waves run) so the two can never drift apart.
+ *
+ *  Blizzard's Duration column times ONE WAVE, not the whole channel: MPQ
+ *  Units\AbilityData.slk AHbz has dur1/2/3 = 1 alongside a 6s cooldown, and
+ *  Liquipedia (liquipedia.net/warcraft/Blizzard) lists "Wave Duration: 1 second".
+ *  So its 6 waves land a second apart and the Archmage channels 6s — exactly the
+ *  cooldown, as in WC3. Other fields (Rain of Fire, …) space waves by dataD. */
+export function waveSchedule(code: string, lvl: AbilityLevel): { waves: number; interval: number } {
+  return {
+    waves: d(lvl, 0, 6),
+    interval: code === "AHbz" ? lvl.duration || 1 : d(lvl, 3, 0.5) || 0.5,
+  };
+}
+
 // --- targeting helpers (shared by the hero spell handlers) -----------------
 
 /** Live enemies of `caster` within `radius` of a point (excludes buildings unless
@@ -285,7 +301,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const art = def.areaArt || def.targetArt || FIELD_ART[def.code] || "";
     // A wave is a shower of shards across the circle, not one shard: WC3 drops a
     // cluster of BlizzardTarget hits per wave. 6 reads right at Blizzard's 200 area.
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area, damagePerWave: d(lvl, 1, 30), waves: d(lvl, 0, 6), interval: d(lvl, 3, 0.5) || 0.5, casterId: caster.id, art, artPerWave: 6 });
+    const { waves, interval } = waveSchedule(def.code, lvl); // 6 waves, 1s apart
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area, damagePerWave: d(lvl, 1, 30), waves, interval, casterId: caster.id, art, artPerWave: 6 });
   },
 
   // Heal (Priest) — restore dataA HP to a friendly living, non-mechanical unit.

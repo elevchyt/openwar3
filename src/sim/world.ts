@@ -2,7 +2,7 @@ import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
-import { SPELL_HANDLERS, AURA_BUFFS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, waveSchedule, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -2587,15 +2587,15 @@ export class SimWorld {
   /** How long a channelled spell locks its caster (0 = not a channel). Matches the
    *  wave field the handler schedules so the caster channels exactly as long as the
    *  effect lasts: the ability's Duration for the timed fields (Tranquility 30s,
-   *  Starfall 45s, Death and Decay 35s, Stampede/Earthquake), or waves × interval
-   *  for Blizzard (which carries a 0 Duration, so its length lives in dataA/dataD). */
+   *  Starfall 45s, Death and Decay 35s, Stampede/Earthquake), or waves × interval for
+   *  the wave fields. Blizzard is a wave field even though its Duration is non-zero —
+   *  that column times ONE wave (1s), not the channel; see `waveSchedule`. */
   private channelDuration(def: AbilityDef, rank: number): number {
     if (!CHANNELED.has(def.code)) return 0;
     const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
-    if (lvl.duration > 0) return lvl.duration;
-    const waves = lvl.data[0];
-    const interval = lvl.data[3] || 0.5;
-    return (Number.isFinite(waves) && waves > 0 ? waves : 6) * interval;
+    if (lvl.duration > 0 && def.code !== "AHbz") return lvl.duration;
+    const { waves, interval } = waveSchedule(def.code, lvl);
+    return waves * interval;
   }
 
   /** Deliver a cast's effect: launch the spell missile (if the ability has one)
