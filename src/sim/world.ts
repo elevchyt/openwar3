@@ -661,6 +661,23 @@ const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + 
 // Not in any data file (engine-internal): a sleeping creep only wakes to a hostile
 // that strays very close — far enough that you can still scout past camps at night.
 const SLEEP_WAKE_RANGE = 200; // a sleeping creep wakes if a hostile comes within this
+// Shooting from the dark gives you away. MPQ Units\MiscData.txt `FoggedAttackRevealRadius`
+// (=200, sitting right beside AttackHalfAngle): a unit that lands an attack while hidden
+// in its victim's fog reveals a circle this wide around itself, to the victim's side only.
+// MiscData names no duration for it, so the blow buys the attacker's position one second,
+// re-stamped by every following blow (issue #45).
+const FOGGED_ATTACK_REVEAL_RADIUS = 200;
+const FOGGED_ATTACK_REVEAL_TIME = 1;
+
+/** A hidden attacker's position, given away to one team for a moment. */
+export interface AttackReveal {
+  x: number;
+  y: number;
+  radius: number;
+  team: number; // the side that gets to see it — the one that was hit
+  flying: boolean;
+  timeLeft: number;
+}
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
@@ -705,6 +722,9 @@ export class SimWorld {
   // only the local player's team is fog-modelled, so other teams pass through as
   // visible (see rts.ts, which wires this to the per-team VisionMap).
   visibleToTeam: (team: number, x: number, y: number) => boolean = () => true;
+  /** Live fogged-attacker reveals, keyed `attackerId:victimTeam` so a unit shooting two
+   *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
+  private attackReveals = new Map<string, AttackReveal>();
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   private nextNodeId = 1;
@@ -3181,6 +3201,7 @@ export class SimWorld {
 
   tick(dt: number): void {
     this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % 24;
+    this.tickAttackReveals(dt);
     this.tickBuildings(dt);
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
     for (const u of this.units.values()) {
@@ -3575,7 +3596,7 @@ export class SimWorld {
     for (const t of this.units.values()) {
       if (t === u || t.id === excludeId || !this.hostile(u, t)) continue;
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't pull an idle camp
-      if (!this.visibleToTeam(u.team, t.x, t.y)) continue; // never aggro through fog
+      if (!this.canSee(u, t)) continue; // never aggro what we cannot see (sight + fog)
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap > range) continue;
       cands.push({ t, gap });
@@ -3689,7 +3710,9 @@ export class SimWorld {
         u.acquireT -= dt;
         if (u.acquireT <= 0) {
           u.acquireT = ACQUIRE_PERIOD;
-          t = this.nearestEnemy(u, w.acquire) ?? undefined;
+          // Sight-gated: an attack-moving army engages what it can SEE, not whatever
+          // the sim knows is out there in the fog ahead of it (issue #45).
+          t = this.nearestEnemy(u, w.acquire, true) ?? undefined;
         }
       }
       if (t) {
@@ -3719,11 +3742,12 @@ export class SimWorld {
   }
 
   /** Nearest hostile within `range` (gap measured hull-to-hull), or null. */
-  private nearestEnemy(u: SimUnit, range: number): SimUnit | null {
+  private nearestEnemy(u: SimUnit, range: number, needSight = false): SimUnit | null {
     let best: SimUnit | null = null;
     let bestGap = range;
     for (const t of this.units.values()) {
       if (t === u || !this.hostile(u, t)) continue;
+      if (needSight && !this.canSee(u, t)) continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap < bestGap) {
         bestGap = gap;
@@ -3731,6 +3755,27 @@ export class SimWorld {
       }
     }
     return best;
+  }
+
+  /** This unit's sight radius right now: UnitBalance `sight` by day, `nsight` after
+   *  dark (the same radii that lift the fog for the player). */
+  private sightOf(u: SimUnit): number {
+    return (this.isDay ? u.sightDay : u.sightNight) || u.sightDay || 800;
+  }
+
+  /** Can `u` actually SEE `t`? Every auto-acquisition asks this; an explicit attack
+   *  order and return fire never do (a struck unit always turns on whoever hit it).
+   *
+   *  Two gates. First the unit's OWN eyes: nothing is acquired beyond its sight radius,
+   *  which shrinks at night — that's why an army can slip past a creep camp in the dark
+   *  even though the camp's acquisition range hasn't changed (issue #45: creeps were
+   *  aggroing through the fog because no creep path consulted sight at all). Then the
+   *  player's shared team vision (`visibleToTeam`), so nothing aggros an enemy its own
+   *  side hasn't revealed. Non-local teams pass that second gate — only the local team's
+   *  fog is modelled — so for creeps this is purely the sight check. */
+  private canSee(u: SimUnit, t: SimUnit): boolean {
+    if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > this.sightOf(u)) return false;
+    return this.visibleToTeam(u.team, t.x, t.y);
   }
 
   /** How much of a threat a target is to a creep, for target selection: armed
@@ -3752,6 +3797,7 @@ export class SimWorld {
     let bestGap = Infinity;
     for (const t of this.units.values()) {
       if (t === u || !this.hostile(u, t)) continue;
+      if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap > range) continue;
       const tier = this.threatTier(t);
@@ -4236,6 +4282,44 @@ export class SimWorld {
     }
   }
 
+  /** An attacker the victim's side cannot see has just hit it: give away where the blow
+   *  came from (FOGGED_ATTACK_REVEAL_RADIUS) for FOGGED_ATTACK_REVEAL_TIME, refreshed by
+   *  each further blow. The reveal is stamped at the attacker's position AT THE MOMENT of
+   *  the hit and stays put — you learn where it shot from, not where it ran to. It also
+   *  outlives the attacker by its second, so a killing blow from the dark still points at
+   *  the shooter. Attacks the victim's side can already see cost nothing. */
+  private revealFoggedAttacker(attackerId: number, target: SimUnit): void {
+    const attacker = this.units.get(attackerId);
+    if (!attacker || !this.hostile(attacker, target)) return;
+    const key = `${attackerId}:${target.team}`;
+    // Only a blow from HIDDEN cover opens a reveal. Once one is open, every further blow
+    // re-stamps it without re-testing visibility — because the reveal itself is what's
+    // making the attacker visible, and re-testing would refuse to refresh it, leaving the
+    // attacker to blink out every second while it kept firing.
+    if (!this.attackReveals.has(key) && this.visibleToTeam(target.team, attacker.x, attacker.y)) return;
+    this.attackReveals.set(key, {
+      x: attacker.x,
+      y: attacker.y,
+      radius: FOGGED_ATTACK_REVEAL_RADIUS,
+      team: target.team,
+      flying: attacker.flying,
+      timeLeft: FOGGED_ATTACK_REVEAL_TIME,
+    });
+  }
+
+  /** Age out the fogged-attacker reveals (see revealFoggedAttacker). */
+  private tickAttackReveals(dt: number): void {
+    for (const [key, r] of this.attackReveals) {
+      r.timeLeft -= dt;
+      if (r.timeLeft <= 0) this.attackReveals.delete(key);
+    }
+  }
+
+  /** The circles a hidden attacker's blows are currently lighting up, for the fog pass. */
+  activeAttackReveals(): Iterable<AttackReveal> {
+    return this.attackReveals.values();
+  }
+
   /** Apply FINAL (post-reduction) damage: death, return fire, and (for physical
    *  hits) the impact SFX. Spell damage calls this directly with recordHit=false —
    *  WC3 ability damage ignores the armor value and plays its own effects. Returns
@@ -4248,6 +4332,7 @@ export class SimWorld {
     amount = this.absorbWithManaShield(target, amount);
     if (amount <= 0) return 0;
     if (recordHit) this.hits.push({ attackerId, targetId: target.id });
+    this.revealFoggedAttacker(attackerId, target);
     target.hp -= amount;
     if (target.hp <= 0) {
       this.kill(target, attackerId);
@@ -4789,7 +4874,7 @@ export class SimWorld {
       if (t === u || !this.hostile(u, t)) continue;
       if (t.invulnerable) continue; // invulnerable enemies (goblin merchant, gold mine, Divine Shield, …) aren't attackable (issue #26)
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
-      if (!this.visibleToTeam(u.team, t.x, t.y)) continue; // fogged → can't see it, don't aggro
+      if (!this.canSee(u, t)) continue; // out of sight (or fogged) → don't aggro
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap < bestGap) {
         bestGap = gap;
@@ -4814,7 +4899,7 @@ export class SimWorld {
       if (ally.order !== "attack" || ally.targetId === null) continue; // that is fighting
       const enemy = this.units.get(ally.targetId);
       if (!enemy || !this.hostile(u, enemy)) continue; // attacking an actual enemy of ours
-      if (!this.visibleToTeam(u.team, enemy.x, enemy.y)) continue; // fogged → can't see it
+      if (!this.canSee(u, enemy)) continue; // out of sight (or fogged) → can't join that fight
       // Distance to the FRIEND that's fighting, not to its enemy — a unit left behind is
       // near its comrades even when their enemy is farther off, and it should march up to
       // help. It then attacks the enemy that friend is engaging (and re-targets to whatever
@@ -4911,7 +4996,7 @@ export class SimWorld {
     // finishes at — the gap between them is the hysteresis that stops the settle
     // snap from re-triggering a return every tick (the return "jiggle").
     u.strayT = 0;
-    if (u.order === "idle" && dist > CREEP_RETURN_TRIGGER && !this.nearestEnemy(u, u.aggroRange)) {
+    if (u.order === "idle" && dist > CREEP_RETURN_TRIGGER && !this.nearestEnemy(u, u.aggroRange, true)) {
       // About to walk home — but if a camp-mate is still fighting, go help instead
       // of standing down while the camp is engaged.
       const help = u.weapon ? this.campFightTarget(u) : null;

@@ -548,6 +548,13 @@ export class RtsController {
       const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
       this.vision.reveal(u.x, u.y, r, u.flying); // flyers see over terrain/trees
     }
+    // An enemy that shot at us out of the fog gives its position away for a second
+    // (MiscData FoggedAttackRevealRadius) — so you see what is hitting you, and it
+    // fades again if it stops. `flying` reveals over the treeline it fired through.
+    for (const r of this.sim.activeAttackReveals()) {
+      if (r.team !== this.localTeam) continue; // only OUR side learns where it came from
+      this.vision.reveal(r.x, r.y, r.radius, r.flying);
+    }
   }
 
   /** Install the fog's line-of-sight height field + tree blockers, so vision is
