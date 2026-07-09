@@ -732,13 +732,12 @@ body.in-game .menu-panel { display: none; }
   z-index: 7;
   image-rendering: pixelated;
 }
-/* The item icon carried by the hand while moving it between inventory slots: half
-   the 32px cursor, tucked just below/right of the gauntlet's grip so the hand looks
-   like it's holding it. Never captures the pointer — the drop target underneath does. */
+/* The item icon carried by the hand while moving it between inventory slots, tucked
+   just below/right of the gauntlet's grip so the hand looks like it's holding it. Its
+   size is set in JS from the live inventory slot (CARRIED_ITEM_SCALE), since the
+   console scales with the window. Never captures the pointer — the drop target does. */
 .carried-item {
   position: fixed;
-  width: 16px;
-  height: 16px;
   transform: translate(6px, 8px);
   background: center / contain no-repeat;
   pointer-events: none;

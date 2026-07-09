@@ -82,6 +82,9 @@ const FIELD_LOOP_SOUND: Record<string, string> = {
   ANrf: "Abilities\\Spells\\Demon\\RainOfFire\\RainOfFireLoop1.wav", // the roar under the Pit Lord's waves
 };
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
+// The item icon carried on the cursor while moving it, as a fraction of an inventory
+// slot: just under it, so the hand looks like it's holding that same icon.
+const CARRIED_ITEM_SCALE = 0.85;
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 // Command-card icons that aren't tied to a specific unit/ability: the order row
 // (Move/Stop/Hold/Attack/Patrol), a worker's Build/Repair, Cancel, and the four
@@ -407,6 +410,7 @@ export class MapViewerScene {
   private cursorStyleEl: HTMLStyleElement | null = null;
   private reticleEl: HTMLDivElement | null = null; // follows the cursor while armed
   private carryEl: HTMLDivElement | null = null; // the item icon "held" by the hand while moving it
+  private lastCursor = { x: 0, y: 0 }; // viewport cursor position, tracked everywhere (see trackCursor)
   private cursorSheet: HTMLCanvasElement | null = null; // race cursor sprite sheet
   private reticleUrls = new Map<string, string>(); // tinted WC3 reticle by colour key
   private handUrls = new Map<string, string>(); // tinted race hand cursor by colour key
@@ -4022,7 +4026,9 @@ export class MapViewerScene {
     // as if the gauntlet were holding it. Handled before everything else so no hover
     // tint or armed-order reticle can steal the cursor while you're carrying.
     const carrySlot = mode === "item" && this.rts.armedItem?.mode === "move" ? this.rts.armedItem.slot : -1;
-    this.updateCarriedItem(carrySlot, cssX, cssY);
+    // Positioned off lastCursor, not the passed-in map coords: the move is armed by a
+    // right-click on the HUD, where lastMouse hasn't been updated.
+    this.updateCarriedItem(carrySlot, this.lastCursor.x, this.lastCursor.y);
     if (carrySlot >= 0) {
       document.body.classList.remove("reticle-on"); // let the OS hand cursor show through
       return this.hideCursorOverlay();
@@ -4073,7 +4079,18 @@ export class MapViewerScene {
     if (!this.carryEl) {
       this.carryEl = document.createElement("div");
       this.carryEl.className = "carried-item";
+      this.carryEl.hidden = true; // so the sizing below runs on this first show too
       document.body.appendChild(this.carryEl);
+    }
+    if (this.carryEl.hidden) {
+      // Sized off the REAL inventory slot (the console scales with the window), a
+      // touch smaller than the icon it was picked up from — so it reads as the same
+      // item, held, rather than a second icon. Measured only on pick-up: reading
+      // clientWidth every frame would force a layout.
+      const slotPx = document.querySelector(".hud-inv-slot")?.clientWidth || 32;
+      const px = Math.max(12, Math.round(slotPx * CARRIED_ITEM_SCALE));
+      this.carryEl.style.width = `${px}px`;
+      this.carryEl.style.height = `${px}px`;
     }
     this.carryEl.hidden = false;
     this.carryEl.style.left = `${cssX}px`;
@@ -4235,6 +4252,17 @@ export class MapViewerScene {
     });
     // Pointer over an interactive HUD element (which swallows the canvas move
     // events): clear the hover so the reticle hides and the normal cursor shows.
+    // Where the pointer is, ALWAYS — unlike `lastMouse`, which only tracks the canvas
+    // (and the HUD once an order is armed). A right-click that arms an item move
+    // happens over the HUD with nothing armed yet, so lastMouse is stale there and the
+    // carried icon would sit at the last map position until you moved the mouse.
+    const trackCursor = (e: PointerEvent | MouseEvent) => {
+      this.lastCursor.x = e.clientX;
+      this.lastCursor.y = e.clientY;
+    };
+    window.addEventListener("pointermove", trackCursor, { capture: true });
+    window.addEventListener("pointerdown", trackCursor, { capture: true });
+    window.addEventListener("contextmenu", trackCursor, { capture: true });
     window.addEventListener("pointermove", (e) => {
       // Self-heal a stuck drag even while the pointer is off the canvas (over the
       // HUD): still "dragging" with the left button not held means the pointerup
