@@ -4071,6 +4071,19 @@ export class MapViewerScene {
         return;
       }
       if (e.button === 0) {
+        // WC3 commits a targeted order the instant the button goes DOWN — the
+        // build placement, the attack-move point, the spell's aim click. Doing it
+        // on pointerup instead (as we used to) meant a fast click that slid a few
+        // pixels tripped the drag threshold and the order was silently dropped
+        // (issue #44). Neither of these can drag, so they never start one.
+        if (this.placement) {
+          this.placeBuilding(e.offsetX, e.offsetY, e.shiftKey);
+          return;
+        }
+        if (this.rts?.orderMode) {
+          if (this.rts.orderClickAt(e.offsetX, e.offsetY, e.shiftKey)) this.hud?.clearOrderMode();
+          return;
+        }
         this.dragging = true;
         this.downX = e.offsetX;
         this.downY = e.offsetY;
@@ -4095,12 +4108,11 @@ export class MapViewerScene {
         // A drag cancelled out from under us (e.g. by a right-click) consumes this
         // left-up without selecting anything.
         if (!this.rts || !wasDragging) return;
-        if (this.placement) {
-          if (!this.moved) this.placeBuilding(e.offsetX, e.offsetY, e.shiftKey);
-        } else if (this.rts.orderMode) {
-          // An armed command-card order (Move/Attack) consumes the click.
-          if (!this.moved && this.rts.orderClickAt(e.offsetX, e.offsetY, e.shiftKey)) this.hud?.clearOrderMode();
-        } else if (this.moved) {
+        // Box vs click is decided by where the button came UP, not by whether the
+        // cursor ever twitched: a fast click that slides past the threshold and
+        // back is still a click, and a drag that returns to its origin encloses
+        // nothing worth boxing.
+        if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > DRAG_SLOP) {
           // A left-drag is a rectangle selection of the player's own units
           // (Shift held → add the boxed units to the current selection).
           this.rts.selectBox(this.downX, this.downY, e.offsetX, e.offsetY, e.shiftKey);
@@ -4135,8 +4147,10 @@ export class MapViewerScene {
         // drag so the marquee can't stick to the cursor with no button pressed.
         if (!(e.buttons & 1)) this.cancelDrag();
         else {
-          if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > 4) this.moved = true;
-          if (this.moved && !this.placement && !this.rts?.orderMode) this.updateSelectBox(e.offsetX, e.offsetY);
+          // `moved` only decides whether to *draw* the marquee; pointerup re-measures
+          // the real distance to decide whether it selects a box or a point.
+          if (Math.hypot(e.offsetX - this.downX, e.offsetY - this.downY) > DRAG_SLOP) this.moved = true;
+          if (this.moved) this.updateSelectBox(e.offsetX, e.offsetY);
         }
       }
       if (!this.dragging) this.rts?.hoverAt(e.offsetX, e.offsetY);
@@ -4225,6 +4239,11 @@ function zQuat(out: Float32Array, angle: number): void {
 // ghost avoids by not tinting at all); "hard" dark blue is opaque anyway.
 const PENDING_GHOST_TINT = [0.12, 0.22, 0.85, 1.0] as const;
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
+// Dead zone (CSS px) a left-press must leave before it counts as a drag-select
+// rather than a click. Mice wobble a pixel or three during a fast click, so a
+// tight zone turns clicks into empty one-pixel marquees (issue #44).
+const DRAG_SLOP = 6;
+
 const TREE_CLICK_RADIUS = 40; // approx harvest-click radius drawn for each tree
 const PATH_LIFT = 18; // path lines sit above the grid/blocked overlay so they read on top
 const EMPTY_VERTS = new Float32Array(0); // clears a persistent OverlayLayer (verts = 0)

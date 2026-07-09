@@ -353,6 +353,20 @@ export class GameHud {
     this.updateIdleWorkers();
   }
 
+  /** Redraw the selection-dependent panels right now rather than on the next
+   *  animation frame. A control-group or hero hotkey should read as instant: the
+   *  selection changed inside this keydown, so the portrait, stats and command
+   *  card can follow it in the same tick instead of trailing the sim by a frame.
+   *  Priming `lastSelId` keeps frame() from redoing the work a moment later. */
+  private refreshSelectionNow(): void {
+    if (this.root.hidden) return;
+    this.lastSelId = this.driver.selection()?.id ?? null;
+    this.textT = 0;
+    this.updateTexts();
+    this.refreshCommandCard();
+    this.refreshInventory();
+  }
+
   /** Show/hide the idle-worker button and update its count; apply the race worker
    *  icon once it's known. */
   private updateIdleWorkers(): void {
@@ -393,9 +407,15 @@ export class GameHud {
   private onKey = (e: KeyboardEvent): void => {
     if (this.root.hidden) return;
     if (document.body.classList.contains("game-menu-open")) return; // F10 menu is modal
+    // Held keys auto-repeat ~30×/s. None of the hotkeys below are hold-to-repeat
+    // commands (camera panning reads its own key set), and letting them repeat
+    // both spams selection voice lines and makes every held key look like a
+    // double-tap, snapping the camera to the group.
+    if (e.repeat) return;
     if (e.key === "Tab") {
       e.preventDefault(); // Tab cycles the focused sub-group; Shift+Tab reverses
       this.driver.cycleFocus(e.shiftKey);
+      this.refreshSelectionNow();
       return;
     }
     if (e.key === "Escape") {
@@ -406,12 +426,14 @@ export class GameHud {
     if (e.key === "F8" || e.key === "`" || e.key === "~") {
       e.preventDefault();
       this.driver.cycleIdleWorker();
+      this.refreshSelectionNow();
       return;
     }
     // Hero hotkeys F1/F2/F3: select the hero (double-tap centres the camera).
     if (e.key === "F1" || e.key === "F2" || e.key === "F3") {
       e.preventDefault();
       this.driver.selectHero(Number(e.key[1]) - 1, this.tapAgain(e.key));
+      this.refreshSelectionNow();
       return;
     }
     // Control groups on the number row 1-0: Ctrl assigns, Shift appends, a plain
@@ -425,6 +447,7 @@ export class GameHud {
       if (e.ctrlKey || e.metaKey) this.driver.assignControlGroup(n);
       else if (e.shiftKey) this.driver.appendControlGroup(n);
       else this.driver.recallControlGroup(n, this.tapAgain(n));
+      this.refreshSelectionNow();
       return;
     }
     // NumPad maps to the 2×3 inventory grid (WC3): 7/8 top, 4/5 middle, 1/2 bottom.
@@ -903,7 +926,7 @@ export class GameHud {
       const count = document.createElement("span");
       count.className = "hud-cmd-count";
       btn.append(cd, count);
-      btn.onclick = () => this.driver.useInventory(i);
+      onPress(btn, () => this.driver.useInventory(i));
       btn.oncontextmenu = (e) => {
         e.preventDefault();
         this.driver.moveInventory(i);
@@ -1017,7 +1040,7 @@ export class GameHud {
       btn.classList.remove("armed", "cant-afford");
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
-      btn.onclick = null;
+      onPress(btn, null);
       btn.onpointerenter = null;
       btn.onpointerleave = null;
     }
@@ -1031,7 +1054,7 @@ export class GameHud {
       if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
       else this.cmdLabels[idx].textContent = c.name.slice(0, 4);
       if (c.count && c.count > 0) this.cmdCount[idx].textContent = String(c.count);
-      btn.onclick = () => this.driver.runCommand(c.id);
+      onPress(btn, () => this.driver.runCommand(c.id));
       btn.onpointerenter = () => this.showTooltip(c);
       btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
     }
@@ -1241,7 +1264,7 @@ export class GameHud {
       const ic = icons[i];
       if (!ic) {
         slot.hidden = true;
-        slot.onclick = null;
+        onPress(slot, null);
         slot.ondblclick = null;
         return;
       }
@@ -1257,7 +1280,7 @@ export class GameHud {
       // Shift+click removes just this unit from the selection; otherwise a plain click
       // focuses this unit's sub-group (like Tab), and clicking again (group now focused)
       // drills down to just this unit.
-      slot.onclick = (e) => {
+      onPress(slot, (e) => {
         if (this.driver.tryTargetArmedAt(ic.simId)) {
           this.clearOrderMode();
           return;
@@ -1267,7 +1290,8 @@ export class GameHud {
           return;
         }
         this.driver.selectGridUnit(ic.simId);
-      };
+        this.refreshSelectionNow();
+      });
       slot.ondblclick = null;
     });
   }
@@ -1429,6 +1453,22 @@ function infocard(kind: "attack" | "armor", type: string): string {
 }
 function attrIcon(kind: "str" | "agi" | "int"): string {
   return `UI\\Widgets\\Console\\Human\\infocard-heroattributes-${kind}.blp`;
+}
+
+/** Bind a console button to fire the moment it's PRESSED, the way WC3's command
+ *  card does. A DOM `click` only lands if the press and the release both happen
+ *  over the button, so a fast click that drifts a pixel onto the frame art beside
+ *  it is swallowed — half of issue #44. preventDefault also keeps the press from
+ *  focusing the button, so a later Space/Enter can't re-fire it. Pass null to
+ *  unbind a slot. */
+function onPress(el: HTMLElement, fn: ((e: PointerEvent) => void) | null): void {
+  el.onpointerdown = fn
+    ? (e) => {
+        if (e.button !== 0) return; // right-click has its own (contextmenu) meaning
+        e.preventDefault();
+        fn(e);
+      }
+    : null;
 }
 
 function escapeHtml(s: string): string {
