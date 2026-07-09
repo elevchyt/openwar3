@@ -340,6 +340,10 @@ export class MapViewerScene {
   private localRace: PlayableRace = "human";
   // Footprints of registered resource nodes, for unstamping on removal.
   private nodeFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
+  // Fog footprint half-extent of each tree, keyed by its rounded world position — the
+  // doodad widgets stream in async, so we can't hold instance refs here. Lets fogWidgets
+  // light a tree from ANY cell it covers rather than one self-shadowed origin cell (#43).
+  private treeFogRadius = new Map<string, number>();
   // Stamped footprints of spawned buildings, for unstamping when cancelled.
   private buildingFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
   // Animated portrait of the selected unit (own small viewer + canvas).
@@ -609,11 +613,14 @@ export class MapViewerScene {
     const world = this.rts?.simWorld;
     if (!world) return;
     this.nodeFootprints.clear();
+    this.treeFogRadius.clear();
     for (const t of nodes.trees) {
       // The tree's blocked extent doubles as its fog line-of-sight blocker, so a
       // 4x4Default tree shadows all four 64-unit vision cells it stands on (#43).
       const fp = this.footprintFor(t.pathTex);
-      const tree = world.addTree(t.x, t.y, undefined, fp ? footprintRadius(fp) || 64 : 64);
+      const blockRadius = fp ? footprintRadius(fp) || 64 : 64;
+      const tree = world.addTree(t.x, t.y, undefined, blockRadius);
+      this.treeFogRadius.set(fogKey(t.x, t.y), blockRadius);
       if (fp) this.nodeFootprints.set(tree.id, { fp, x: t.x, y: t.y });
     }
     const minePathTex = this.registry.get("ngol")?.pathTex || "";
@@ -3555,8 +3562,12 @@ export class MapViewerScene {
       if (pulsing && pulsing.has(inst)) return;
       if (this.aoeTreeInsts.has(inst)) return; // green AoE-target tree owns its colour this frame
       const loc = inst.localLocation;
-      const [cx, cy] = vision.worldToCell(loc[0], loc[1]);
-      const state = vision.cellState(cx, cy);
+      // Light a prop from the BRIGHTEST cell of its footprint, not the one cell holding
+      // its origin. A tree blocks sight on every cell it covers, so a 4×4 tree shadows
+      // its own back half — and its origin sits exactly where its four cells meet, so
+      // the floor() in worldToCell often landed on a self-shadowed one and drew a
+      // front-line tree as explored-grey (#43). Props with no footprint use their cell.
+      const state = vision.bestStateAt(loc[0], loc[1], this.treeFogRadius.get(fogKey(loc[0], loc[1])) ?? 0);
       if (state === FogState.Unexplored) {
         inst.hide(); // never seen — don't even hint at what's there
         return;
@@ -4191,6 +4202,13 @@ function standSequence(seqs: Array<{ name: string }>): number {
 }
 
 // Quaternion for a rotation `angle` about +Z (WC3 units are Z-up), into `out`.
+/** Position key for `treeFogRadius`. The sim tree and its rendered doodad are seeded
+ *  from the same war3map.doo record, so rounding to a whole world unit matches them
+ *  exactly while tolerating float round-tripping through the widget's localLocation. */
+function fogKey(x: number, y: number): string {
+  return `${Math.round(x)},${Math.round(y)}`;
+}
+
 function zQuat(out: Float32Array, angle: number): void {
   const half = angle / 2;
   out[0] = 0;

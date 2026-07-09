@@ -114,13 +114,39 @@ export class VisionMap {
   private forEachBlockerCell(wx: number, wy: number, radius: number, fn: (i: number) => void): void {
     if (!this.block || !this.treeCount || !this.ground) return;
     const r = Math.max(radius, VISION_CELL / 2);
-    const span = (lo: number, hi: number, origin: number, limit: number): [number, number] => [
+    const [x0, x1] = this.cellSpan(wx - r, wx + r, this.originX, this.width);
+    const [y0, y1] = this.cellSpan(wy - r, wy + r, this.originY, this.height);
+    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) fn(cy * this.width + cx);
+  }
+
+  /** Clamped range of cells whose CENTRE falls in the half-open world span [lo, hi). */
+  private cellSpan(lo: number, hi: number, origin: number, limit: number): [number, number] {
+    return [
       Math.max(0, Math.ceil((lo - origin) / VISION_CELL - 0.5)),
       Math.min(limit - 1, Math.ceil((hi - origin) / VISION_CELL - 0.5) - 1),
     ];
-    const [x0, x1] = span(wx - r, wx + r, this.originX, this.width);
-    const [y0, y1] = span(wy - r, wy + r, this.originY, this.height);
-    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) fn(cy * this.width + cx);
+  }
+
+  /** The BRIGHTEST fog state over the footprint square of half-extent `radius` centred
+   *  at (wx, wy) — i.e. the same cells addTreeBlocker stamps. A tall prop is *seen* if
+   *  any cell it stands on is seen. A 4×4 tree spans four vision cells and shadows its
+   *  own back half, so asking one arbitrary origin cell drew front-line trees as fogged
+   *  grey (#43 follow-up); the ground under them is legitimately dark, the tree is not.
+   *  `radius <= 0` degrades to the single cell at (wx, wy). */
+  bestStateAt(wx: number, wy: number, radius: number): FogState {
+    if (this.revealAll) return FogState.Visible;
+    if (radius <= 0) return this.stateAt(wx, wy);
+    const [x0, x1] = this.cellSpan(wx - radius, wx + radius, this.originX, this.width);
+    const [y0, y1] = this.cellSpan(wy - radius, wy + radius, this.originY, this.height);
+    let best = FogState.Unexplored;
+    for (let cy = y0; cy <= y1; cy++) {
+      for (let cx = x0; cx <= x1; cx++) {
+        const s = this.cellState(cx, cy);
+        if (s > best) best = s;
+        if (best === FogState.Visible) return best;
+      }
+    }
+    return best;
   }
 
   setRevealAll(on: boolean): void {
