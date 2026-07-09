@@ -207,7 +207,29 @@ function campColor(level: number): string {
 // The real WC3 minimap house glyph for neutral buildings (yellow house on clear).
 const NEUTRAL_BUILDING_ICON = "UI\\Minimap\\MiniMap-NeutralBuilding.blp";
 
-const MINIMAP_SIZE = 168; // css px
+/** Crop war3mapMap.blp down to the map itself.
+ *
+ *  The World Editor always writes a SQUARE minimap image (256×256 in every 1.27a
+ *  melee map) with the map contain-fitted into it and the leftover margins left
+ *  fully transparent. Verified against the real maps: (2)BootyBay is 193×97 tiles
+ *  (2:1), and its alpha goes solid at y=64 = (256 − 256/2) / 2; (2)PlunderIsle is
+ *  97×129 (3:4) and goes solid at x=32 = (256 − 256·3/4) / 2. So the margins are
+ *  exactly the letterbox, and cropping them leaves a canvas whose aspect equals
+ *  the map's — which lets the dots canvas and the click→pan mapping share one
+ *  rect with the picture. */
+function cropMinimapLetterbox(src: HTMLCanvasElement, aspect: number): HTMLCanvasElement {
+  const sw = aspect >= 1 ? src.width : Math.round(src.width * aspect);
+  const sh = aspect >= 1 ? Math.round(src.height / aspect) : src.height;
+  if (sw >= src.width && sh >= src.height) return src; // square map: no letterbox
+  const out = document.createElement("canvas");
+  out.width = sw;
+  out.height = sh;
+  const sx = (src.width - sw) / 2, sy = (src.height - sh) / 2;
+  out.getContext("2d")!.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  return out;
+}
+
+const MINIMAP_SIZE = 168; // px along the minimap canvas's LONGEST side
 const DOTS_PERIOD = 100; // ms between minimap dot redraws
 const TEXT_PERIOD = 250; // ms between resource/info text refreshes
 
@@ -250,6 +272,13 @@ export class GameHud {
   private portrait!: HTMLDivElement;
   private portraitCanvasEl!: HTMLCanvasElement;
   private dotsCanvas!: HTMLCanvasElement;
+  // Minimap frame (the console zone) and the map picture contain-fitted inside it.
+  private minimapBox?: HTMLDivElement;
+  private minimapView?: HTMLDivElement;
+  private minimapResize?: ResizeObserver;
+  private minimapAspect = 1; // map width / height
+  private mmW = MINIMAP_SIZE; // dots-canvas backing store, sized to the map's aspect
+  private mmH = MINIMAP_SIZE;
   private idleWorkerBadge!: HTMLButtonElement;
   private idleWorkerCount!: HTMLSpanElement;
   private idleIconSet = false; // worker icon lazily applied once
@@ -282,6 +311,7 @@ export class GameHud {
 
   dispose(): void {
     window.removeEventListener("keydown", this.onKey);
+    this.minimapResize?.disconnect();
     this.root.remove();
   }
 
@@ -611,18 +641,43 @@ export class GameHud {
   private buildMinimap(): HTMLDivElement {
     const box = document.createElement("div");
     box.className = "hud-minimap";
+    this.minimapBox = box;
+
+    // The map's aspect drives everything below: the picture, the dots canvas and
+    // the click→pan mapping all live on one rect — the map contain-fitted into the
+    // frame and centred, so a square map fills the frame and a 3:4 map pillarboxes
+    // rather than stretching (issue #42).
+    const [, , mapW, mapH] = this.driver.mapBounds();
+    const aspect = mapW > 0 && mapH > 0 ? mapW / mapH : 1;
+    this.minimapAspect = aspect;
+    this.mmW = aspect >= 1 ? MINIMAP_SIZE : Math.round(MINIMAP_SIZE * aspect);
+    this.mmH = aspect >= 1 ? Math.round(MINIMAP_SIZE / aspect) : MINIMAP_SIZE;
+
+    const view = document.createElement("div");
+    view.className = "hud-minimap-view";
+    this.minimapView = view;
+    box.appendChild(view);
+
     const image = this.driver.minimapImage();
     if (image) {
-      image.className = "hud-minimap-img";
-      box.appendChild(image);
+      const cropped = cropMinimapLetterbox(image, aspect);
+      cropped.className = "hud-minimap-img";
+      view.appendChild(cropped);
     }
     this.dotsCanvas = document.createElement("canvas");
     this.dotsCanvas.className = "hud-minimap-dots";
-    this.dotsCanvas.width = MINIMAP_SIZE;
-    this.dotsCanvas.height = MINIMAP_SIZE;
-    box.appendChild(this.dotsCanvas);
-    box.addEventListener("pointerdown", (e) => {
-      const rect = box.getBoundingClientRect();
+    this.dotsCanvas.width = this.mmW;
+    this.dotsCanvas.height = this.mmH;
+    view.appendChild(this.dotsCanvas);
+
+    // The frame is sized in percentages of the console art, so its pixel size moves
+    // with the window; re-fit the view whenever it does.
+    this.fitMinimap();
+    this.minimapResize = new ResizeObserver(() => this.fitMinimap());
+    this.minimapResize.observe(box);
+
+    view.addEventListener("pointerdown", (e) => {
+      const rect = view.getBoundingClientRect();
       const u = (e.clientX - rect.left) / rect.width;
       const v = (e.clientY - rect.top) / rect.height;
       const [ox, oy, w, h] = this.driver.mapBounds();
@@ -644,6 +699,21 @@ export class GameHud {
     });
     box.appendChild(this.idleWorkerBadge);
     return box;
+  }
+
+  /** Contain-fit the map picture inside the minimap frame and centre it: scale it up
+   *  until one axis touches the frame, never stretching the other past its aspect.
+   *  CSS can't express this (`aspect-ratio` loses to an explicit width/height once
+   *  max-width/max-height clamp), so the rect is measured here. */
+  private fitMinimap(): void {
+    const box = this.minimapBox, view = this.minimapView;
+    if (!box || !view) return;
+    const bw = box.clientWidth, bh = box.clientHeight;
+    if (bw <= 0 || bh <= 0) return; // frame not laid out yet (e.g. HUD hidden)
+    let w = bw, h = bw / this.minimapAspect;
+    if (h > bh) { h = bh; w = bh * this.minimapAspect; }
+    view.style.width = `${w}px`;
+    view.style.height = `${h}px`;
   }
 
   private buildInfoPanel(): { portraitWrap: HTMLDivElement; infoText: HTMLDivElement } {
@@ -1230,13 +1300,13 @@ export class GameHud {
     }
   }
 
-  private fogImage: ImageData | null = null; // reused fog-of-war mask (MINIMAP_SIZE²)
+  private fogImage: ImageData | null = null; // reused fog-of-war mask (mmW × mmH)
   private houseIcon: HTMLImageElement | null = null; // neutral-building glyph (lazy-loaded)
   private houseIconReady = false;
 
   private drawDots(): void {
     const ctx = this.dotsCanvas.getContext("2d")!;
-    ctx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+    ctx.clearRect(0, 0, this.mmW, this.mmH);
     const [ox, oy, w, h] = this.driver.mapBounds();
     this.paintFog(ctx, ox, oy, w, h); // black/grey fog under the markers (own units always shown)
     // Persistent map markers ride ON TOP of the fog veil — bright once explored.
@@ -1254,7 +1324,7 @@ export class GameHud {
   private toMini(x: number, y: number, ox: number, oy: number, w: number, h: number): [number, number] | null {
     const u = (x - ox) / w, v = 1 - (y - oy) / h;
     if (u < 0 || u > 1 || v < 0 || v > 1) return null;
-    return [u * MINIMAP_SIZE, v * MINIMAP_SIZE];
+    return [u * this.mmW, v * this.mmH];
   }
 
   /** Creep-camp difficulty dots: one per camp, coloured by combined level, with a
@@ -1277,7 +1347,7 @@ export class GameHud {
   private drawNeutralBuildings(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
     this.ensureHouseIcon();
     if (!this.houseIconReady || !this.houseIcon) return;
-    const s = 11; // glyph size in the 168-px minimap space
+    const s = 11; // glyph size in the minimap canvas's pixel space (longest side = 168)
     for (const b of this.driver.neutralBuildings()) {
       const p = this.toMini(b.x, b.y, ox, oy, w, h);
       if (!p) continue;
@@ -1301,15 +1371,15 @@ export class GameHud {
    *  dimmed), and currently-visible is left clear. Written straight into an ImageData
    *  so it costs one putImageData per redraw (throttled to DOTS_PERIOD). */
   private paintFog(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
-    const img = (this.fogImage ??= ctx.createImageData(MINIMAP_SIZE, MINIMAP_SIZE));
+    const img = (this.fogImage ??= ctx.createImageData(this.mmW, this.mmH));
     const px = img.data;
-    for (let py = 0; py < MINIMAP_SIZE; py++) {
-      const wy = oy + (1 - py / MINIMAP_SIZE) * h; // minimap is north-up (v inverted)
-      for (let x = 0; x < MINIMAP_SIZE; x++) {
-        const wx = ox + (x / MINIMAP_SIZE) * w;
+    for (let py = 0; py < this.mmH; py++) {
+      const wy = oy + (1 - py / this.mmH) * h; // minimap is north-up (v inverted)
+      for (let x = 0; x < this.mmW; x++) {
+        const wx = ox + (x / this.mmW) * w;
         const state = this.driver.fogAt(wx, wy);
         const a = state === 0 ? 255 : state === 1 ? 140 : 0; // black / grey veil / clear
-        px[(py * MINIMAP_SIZE + x) * 4 + 3] = a; // RGB stay 0 → the veil is black
+        px[(py * this.mmW + x) * 4 + 3] = a; // RGB stay 0 → the veil is black
       }
     }
     ctx.putImageData(img, 0, 0);

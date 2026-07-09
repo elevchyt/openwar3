@@ -453,12 +453,18 @@ body.in-game .menu-panel { display: none; }
 }
 .hud-zone { position: absolute; pointer-events: auto; }
 
+/* The minimap frame. The map picture inside it (.hud-minimap-view) is contain-fitted
+   to the map's aspect and centred on both axes, so a square map fills the frame while
+   a non-square one letterboxes over this dark backing rather than stretching (#42).
+   The fit is measured in GameHud.fitMinimap — CSS can't express contain here. */
 .hud-minimap {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 168px;
   height: 156px;
   align-self: center;
-  border: 1px solid var(--border);
   background: #060806;
   overflow: visible; /* let the idle-worker button sit ABOVE the minimap */
   cursor: crosshair;
@@ -466,7 +472,11 @@ body.in-game .menu-panel { display: none; }
 .hud-console-skinned .hud-minimap {
   width: auto;
   height: auto;
-  border: none;
+}
+.hud-minimap-view {
+  position: relative;
+  box-sizing: border-box;
+  border: 1px solid #6b6b6b; /* discrete hairline around the map itself */
 }
 .hud-minimap-img,
 .hud-minimap-dots {
