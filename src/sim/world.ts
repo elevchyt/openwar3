@@ -721,7 +721,7 @@ export class SimWorld {
   private unitDrops = new Map<number, ItemDropSet[]>();
   // --- spell / ability event channels drained by the renderer each frame ---
   // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt).
-  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number }> = [];
+  private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> = [];
   // A unit began casting: renderer plays the cast animation (spell/throw/slam) and
   // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
@@ -2910,7 +2910,10 @@ export class SimWorld {
           for (let s = 0; s < n; s++) {
             const ang = base + ((s + this.rng()) * Math.PI * 2) / n;
             const r = f.area * Math.sqrt(this.rng());
-            this.spellEffects.push({ art: f.art, x: f.x + Math.cos(ang) * r, y: f.y + Math.sin(ang) * r, targetId: 0, z: 0 });
+            // `sound` cues the art's folder WAV — ONCE per wave (on the first shard),
+            // not once per shard: six overlapping 3s BlizzardTarget clips a second
+            // would be a wall of noise, where WC3 gives one shard-fall per wave.
+            this.spellEffects.push({ art: f.art, x: f.x + Math.cos(ang) * r, y: f.y + Math.sin(ang) * r, targetId: 0, z: 0, sound: f.waveSound && s === 0 });
           }
         }
       }
@@ -3063,8 +3066,16 @@ export class SimWorld {
 
   // === drains (renderer pulls these each frame) =============================
 
+  /** Repeating area fields running RIGHT NOW (Blizzard, Rain of Fire, …). Unlike the
+   *  drain* channels this is a live view, not a one-shot queue: the renderer polls it
+   *  each frame to sustain a channel's looping bed and to stop it the moment the field
+   *  ends — whether it exhausted its waves or the caster was interrupted. */
+  activeSpellFields(): Array<{ code: string; x: number; y: number }> {
+    return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y }));
+  }
+
   /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
-  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number }> {
+  drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> {
     if (!this.spellEffects.length) return this.spellEffects;
     const out = this.spellEffects;
     this.spellEffects = [];

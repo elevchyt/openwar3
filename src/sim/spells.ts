@@ -69,6 +69,7 @@ export interface SpellFieldInit {
   art: string;
   artPerWave?: number; // how many copies of `art` to scatter across the area each wave (default 1).
   //                      WC3's Blizzard rains a handful of shards per wave, not a single one.
+  waveSound?: boolean; // cue the art's folder WAV once per wave (Blizzard's shard fall).
   delay?: number; // seconds before the FIRST wave (default 0 = fire immediately). Lets a
   //                 field start after another (Flame Strike's subsiding burn follows the pillar).
 }
@@ -293,16 +294,24 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.requestSummon(lvl.summon, caster.x, caster.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 60, caster.id);
   },
 
-  // Blizzard — channelled: dataA waves, each dealing dataB damage in `area`,
-  // dataD seconds apart (registered as a repeating field; see tickSpellFields).
+  // Blizzard — channelled: 6 waves, each dealing dataB damage in `area`, one second
+  // apart (registered as a repeating field; see tickSpellFields / waveSchedule).
   AHbz: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     // Blizzard ships no effect-art field in the data — use the known shard model.
+    // (It ships no SOUND field either: MPQ HumanAbilityFunc.txt [AHbz] has an EMPTY
+    // Casterart and no Target/Special art at all, and BlizzardTarget.mdx carries no
+    // SND event objects. So neither of our sound paths — ability-art folder scan,
+    // model SND events — could find anything, and Blizzard played silent. Its WAVs
+    // sit unclaimed in the ability's own folder next to the shard model:
+    // BlizzardTarget1/2/3.wav (the 3s shard fall, one per wave) and BlizzardLoop1.wav
+    // (the 4s wind bed, looped for the channel — started by the renderer off
+    // activeSpellFields). `waveSound` cues the former from the art's folder.
     const art = def.areaArt || def.targetArt || FIELD_ART[def.code] || "";
     // A wave is a shower of shards across the circle, not one shard: WC3 drops a
     // cluster of BlizzardTarget hits per wave. 6 reads right at Blizzard's 200 area.
     const { waves, interval } = waveSchedule(def.code, lvl); // 6 waves, 1s apart
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area, damagePerWave: d(lvl, 1, 30), waves, interval, casterId: caster.id, art, artPerWave: 6 });
+    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area, damagePerWave: d(lvl, 1, 30), waves, interval, casterId: caster.id, art, artPerWave: 6, waveSound: true });
   },
 
   // Heal (Priest) — restore dataA HP to a friendly living, non-mechanical unit.

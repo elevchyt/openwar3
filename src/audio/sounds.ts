@@ -280,7 +280,9 @@ export class SoundBoard {
     // slots filled — "plays once, then never again" (issue #23). WC3 always plays them.
     for (const art of arts) {
       if (!art) continue;
-      const paths = this.folderSounds("cast", art, ["", "1", "Cast", "Target", "Caster", "Death"]);
+      // "2"/"3" pick up the numbered variants WC3 ships for a repeated effect sound
+      // (BlizzardTarget1/2/3.wav) — playPool then picks one at random per cast/wave.
+      const paths = this.folderSounds("cast", art, ["", "1", "2", "3", "Cast", "Target", "Caster", "Death"]);
       if (paths.length) {
         this.playPool({ paths, ...meta }, "spell", at);
         return;
@@ -424,6 +426,40 @@ export class SoundBoard {
       const src = this.loops.get(name);
       if (!src) return;
       this.loops.delete(name);
+      try { src.stop(); } catch { /* not started yet / already stopped */ }
+    }
+  }
+
+  /** Start/stop a looping WAV given straight by PATH, positioned in the world — the
+   *  sustained bed under a channelled spell (Blizzard's BlizzardLoop1.wav). Distinct
+   *  from `setLoop`, which resolves a named row out of UISounds.slk; these effect-folder
+   *  WAVs have no SLK row at all. Idempotent, and keyed so each caster loops separately.
+   *  The panner is placed once at `at` — a channelled field never moves. */
+  setPathLoop(key: string, path: string, on: boolean, at?: SoundPos): void {
+    if (on) {
+      if (this.loops.has(key)) return;
+      if (!path || !this.vfs.exists(path)) return;
+      this.unlock();
+      if (!this.ctx || !this.master || this.ctx.state !== "running") return;
+      const placeholder = {} as AudioBufferSourceNode;
+      this.loops.set(key, placeholder); // reserve synchronously so we don't double-start
+      const clip: Clip = { paths: [path], gain: 0.6, pitch: 1, pitchVar: 0, threeD: true, refDist: 800, maxDist: 10000, cutoff: 0 };
+      void this.buffer(path).then((buf) => {
+        // Bail if the loop was stopped (or restarted) while the WAV was decoding —
+        // otherwise a Blizzard cancelled mid-load leaves its wind howling forever.
+        if (!buf || !this.ctx || !this.master || this.loops.get(key) !== placeholder) return;
+        const src = this.source(buf, clip);
+        src.loop = true;
+        const g = src.connect(this.gain(clip.gain));
+        if (at && this.listener) g.connect(this.panner(clip, at)).connect(this.master);
+        else g.connect(this.master);
+        this.loops.set(key, src);
+        src.start();
+      });
+    } else {
+      const src = this.loops.get(key);
+      if (!src) return;
+      this.loops.delete(key);
       try { src.stop(); } catch { /* not started yet / already stopped */ }
     }
   }

@@ -74,6 +74,12 @@ const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // h
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
   AHds: "Abilities\\Spells\\Human\\DivineShield\\DivineShield.wav",
 };
+// The looping bed a channelled area field lays down for as long as it runs. WC3 ships
+// these WAVs beside the effect model but references them from no data field (MPQ
+// HumanAbilityFunc.txt [AHbz] has no sound entry at all), so they're named here.
+const FIELD_LOOP_SOUND: Record<string, string> = {
+  AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardLoop1.wav", // 4s wind, looped for the 6s channel
+};
 const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
 const BUILD_CLEAR_TIMEOUT = 2; // seconds a builder waits for units to vacate before giving up
 // Command-card icons that aren't tied to a specific unit/ability: the order row
@@ -1263,6 +1269,32 @@ export class MapViewerScene {
       return iv && iv[0] >= 0 && iv[0] < 1e7 && iv[1] > iv[0];
     });
     return sane >= 0 ? sane : 0;
+  }
+
+  /** Loop keys of the channelled fields that were running last frame, so a field that
+   *  has since ended can have its bed stopped (`FIELD_LOOP_SOUND`). */
+  private fieldLoops = new Set<string>();
+
+  /** Reconcile the looping bed of every running channelled field against last frame:
+   *  start one for each new field, stop the ones whose field is gone. Keyed by code +
+   *  position so two simultaneous Blizzards each howl at their own spot. */
+  private updateFieldLoops(fields: Array<{ code: string; x: number; y: number }>): void {
+    const live = new Set<string>();
+    for (const f of fields) {
+      const wav = FIELD_LOOP_SOUND[f.code];
+      if (!wav) continue;
+      const key = `${f.code}|${Math.round(f.x)}|${Math.round(f.y)}`;
+      live.add(key);
+      if (!this.fieldLoops.has(key)) {
+        this.fieldLoops.add(key);
+        this.sounds?.setPathLoop(key, wav, true, { x: f.x, y: f.y, z: this.rts!.groundHeightAt(f.x, f.y) });
+      }
+    }
+    for (const key of this.fieldLoops) {
+      if (live.has(key)) continue;
+      this.fieldLoops.delete(key);
+      this.sounds?.setPathLoop(key, "", false);
+    }
   }
 
   /** Play a one-shot spawn-effect model (its "Birth" clip) at a point, then detach it
@@ -3282,8 +3314,16 @@ export class MapViewerScene {
           const t = fx.targetId ? world.units.get(fx.targetId) : null;
           const x = t ? t.x : fx.x;
           const y = t ? t.y : fx.y;
-          void this.spawnEffect(fx.art, x, y, this.rts!.groundHeightAt(x, y) + (fx.z || 0), fx.life ?? 2);
+          const z = this.rts!.groundHeightAt(x, y);
+          void this.spawnEffect(fx.art, x, y, z + (fx.z || 0), fx.life ?? 2);
+          // A wave field asked for its shard-fall sound (Blizzard): the WAV lives in
+          // the effect model's own folder, so resolve it off the art like a cast sound.
+          if (fx.sound) this.sounds?.playSpellSound([fx.art], undefined, { x, y, z });
         }
+        // Sustain the looping bed under each running channelled field, and drop it the
+        // frame the field ends — waves exhausted OR caster interrupted (world tears the
+        // field down either way, so this needs no interrupt handling of its own).
+        this.updateFieldLoops(world.activeSpellFields());
         // Cast animations (throw/slam/spell) begin at the wind-up.
         for (const c of world.drainCastStarts()) {
           this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
