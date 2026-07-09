@@ -1007,6 +1007,7 @@ export class SimWorld {
     const u = this.units.get(id);
     const b = this.units.get(buildingId);
     if (!u || !u.worker || !b?.building || b.building.constructionLeft > 0 || b.hp >= b.maxHp) return false;
+    if (this.castLocked(u)) return false;
     this.detachBuilder(id); // clears any prior repair/build first
     u.order = "repair";
     u.targetId = null;
@@ -1673,7 +1674,7 @@ export class SimWorld {
    *  only turns to face the point — WC3 does exactly this. */
   issueMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
-    if (!u) return false;
+    if (!u || this.castLocked(u)) return false;
     u.order = "move";
     u.targetId = null;
     u.inCombat = false;
@@ -1701,7 +1702,7 @@ export class SimWorld {
    *  route (WC3 A-click). Behaves like a move for pathing/arrival. */
   issueAttackMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
-    if (!u) return false;
+    if (!u || this.castLocked(u)) return false;
     u.order = "attackmove";
     u.targetId = null;
     u.inCombat = false;
@@ -1721,7 +1722,7 @@ export class SimWorld {
    *  back and forth; combat units acquire enemies along the way). */
   issuePatrol(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
-    if (!u) return false;
+    if (!u || this.castLocked(u)) return false;
     u.order = "patrol";
     u.targetId = null;
     u.inCombat = false;
@@ -1744,7 +1745,7 @@ export class SimWorld {
    *  attacks any hostile that comes within its weapon range (WC3 Hold, issue #17). */
   issueHold(id: number): boolean {
     const u = this.units.get(id);
-    if (!u) return false;
+    if (!u || this.castLocked(u)) return false;
     u.order = "hold";
     u.targetId = null;
     u.inCombat = false;
@@ -1764,6 +1765,7 @@ export class SimWorld {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || !u.weapon || (!force && !this.hostile(u, t))) return false;
+    if (this.castLocked(u)) return false; // mid-wind-up: only Stop breaks a cast
     if (t.invulnerable) return false; // invulnerable units can't be attacked at all — not even with a forced Attack order (issue #26)
     // A FRESH attack (from any non-attack state — a player command, idle auto-acquire,
     // a follower peeling off to fight) drops any pending resume-to-follow. Re-targeting
@@ -1885,7 +1887,7 @@ export class SimWorld {
   issueFollow(id: number, targetId: number, offX = 0, offY = 0): boolean {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
-    if (!u || !t || u === t || u.speed <= 0) return false;
+    if (!u || !t || u === t || u.speed <= 0 || this.castLocked(u)) return false;
     u.order = "follow";
     u.targetId = targetId;
     u.followOffX = offX;
@@ -1900,10 +1902,24 @@ export class SimWorld {
     return true;
   }
 
+  /** True while a cast's WIND-UP is running (the cast-point timer, after facing
+   *  is done and before the effect fires). WC3 locks the caster in for it: the
+   *  spell is committed to and only an explicit Stop aborts it — a move/attack/
+   *  another cast issued mid-wind-up is dropped, not obeyed. Before the wind-up
+   *  (walking into range, turning to face) the caster re-tasks freely, and after
+   *  the effect has fired the channel/backswing cancel for free (animation
+   *  canceling), so neither phase is locked. Stuns still interrupt regardless
+   *  (interruptForStun). */
+  private castLocked(u: SimUnit): boolean {
+    const pc = u.pendingCast;
+    return u.order === "cast" && pc !== null && pc.started && !pc.fired;
+  }
+
   stop(id: number): void {
     const u = this.units.get(id);
     if (u) {
       u.order = "idle";
+      u.pendingCast = null; // the one command that aborts a locked-in wind-up
       u.targetId = null;
       u.followLeaderId = null; // an explicit stop ends any follow-and-guard episode
       u.inCombat = false;
@@ -1965,7 +1981,7 @@ export class SimWorld {
    *  gold/lumber are the already-spent cost, refunded if the build is abandoned. */
   issueBuildNew(id: number, defId: string, x: number, y: number, gold: number, lumber: number): void {
     const u = this.units.get(id);
-    if (!u) return;
+    if (!u || this.castLocked(u)) return;
     u.buildPending = { defId, x, y, gold, lumber };
     if (!this.issueMove(id, x, y)) u.moving = false; // already at the site → raise now
   }
@@ -1973,6 +1989,8 @@ export class SimWorld {
   /** Execute an order right now, replacing whatever the unit is doing and its
    *  whole queue (every fresh, non-shift order goes through here). */
   issueOrder(id: number, order: QueuedOrder): boolean {
+    const u = this.units.get(id);
+    if (u && this.castLocked(u)) return false; // don't even drop the queue for an ignored order
     this.clearQueue(id);
     return this.dispatch(id, order);
   }
@@ -2008,7 +2026,7 @@ export class SimWorld {
    *  it — later trips re-form the mine→hall line via mineApproach as before. */
   issueHarvest(id: number, kind: "gold" | "lumber", nodeId: number, ax?: number, ay?: number): boolean {
     const u = this.units.get(id);
-    if (!u || !u.worker) return false;
+    if (!u || !u.worker || this.castLocked(u)) return false;
     if (kind === "gold" && (!u.worker.gold || !this.mines.has(nodeId))) return false;
     if (kind === "lumber" && (!u.worker.lumber || !this.trees.has(nodeId))) return false;
     u.order = "harvest";
@@ -2406,6 +2424,7 @@ export class SimWorld {
   issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0): boolean {
     const u = this.units.get(unitId);
     if (!u || u.stunned || u.silenced || !this.abilities) return false;
+    if (this.castLocked(u)) return false; // already committed to a spell — see castLocked
     const ab = this.findAbility(u, code);
     if (!ab) return false;
     const def = this.abilities.get(ab.id);
@@ -4378,7 +4397,7 @@ export class SimWorld {
   issueGetItem(unitId: number, itemId: number): boolean {
     const u = this.units.get(unitId);
     const it = this.items.get(itemId);
-    if (!u || !it || !u.inventory.length) return false;
+    if (!u || !it || !u.inventory.length || this.castLocked(u)) return false;
     u.getItemId = itemId;
     u.pendingGive = null;
     u.order = "getitem";
@@ -4400,7 +4419,7 @@ export class SimWorld {
   issueGiveItem(fromId: number, slot: number, toId: number): boolean {
     const u = this.units.get(fromId);
     const to = this.units.get(toId);
-    if (!u || !to || !u.inventory[slot] || !to.inventory.length) return false;
+    if (!u || !to || !u.inventory[slot] || !to.inventory.length || this.castLocked(u)) return false;
     u.pendingGive = { toId, slot };
     u.getItemId = 0;
     u.order = "getitem";
