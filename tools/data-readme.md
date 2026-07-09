@@ -7,7 +7,7 @@ Generated from the four MPQ archives in this folder's parent:
 
 ```bash
 pnpm data:extract    # unpack the archives  (tools/extract-mpq.mjs)
-pnpm data:browse     # build + serve the data browser
+pnpm data:browse     # build + open the data browser
 ```
 
 Re-run any time; `merged/`, `by-archive/`, `_index/`, `index.html` and this README are all regenerated.
@@ -22,16 +22,18 @@ README is the map of *what is on disk here*, and of what you still have to build
 
 ## The data browser
 
-```bash
-pnpm data:browse
-```
+**Just open `index.html`.** Double-click it, or run `pnpm data:browse` to rebuild and open it.
 
-`index.html` is a dark, self-contained codex over everything in `merged/`: a categorised file tree, a
-description of **what each file is**, filterable grids for the 63 `.slk` tables (filter rows by rawcode,
-columns by name), and a searchable source view for the JASS/AI/FDF/strings files. No dependencies, no build
-step — but it does `fetch()` the data files beside it, and browsers block that over `file://`, so it must be
-served. `pnpm data:browse` does that for you (`tools/serve-data.mjs`, zero-dep, `127.0.0.1:8787` —
-deliberately clear of Vite's 5173+ range). `pnpm data:build` rebuilds just the page.
+It's a dark, fully self-contained codex over everything in `merged/`: a categorised file tree, a description
+of **what each file is**, filterable grids for the 63 `.slk` tables (filter rows by rawcode, columns by name),
+and a searchable source view for the JASS/AI/FDF/strings files.
+
+No server, no dependencies, no network. Every file's bytes are embedded in the page as one gzipped blob
+(9.8 MB of text → 1.4 MB gzip → a 2.0 MB `index.html`), inflated in the browser with `DecompressionStream`
+on first use. The alternative — `fetch()`ing the files next to it — is dead on arrival over `file://`, which
+is exactly how you'll open it. Needs Chrome 80+ / Firefox 113+ / Safari 16.4+.
+
+`pnpm data:build` rebuilds the page without opening it.
 
 ---
 

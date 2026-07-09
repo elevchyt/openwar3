@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "data:extract": "node --max-old-space-size=8192 tools/extract-mpq.mjs",
     "data:build": "node tools/build-data-browser.mjs",
-    "data:browse": "node tools/build-data-browser.mjs && node tools/serve-data.mjs"
+    "data:browse": "node tools/build-data-browser.mjs --open"
   },
   "dependencies": {
     "events": "^3.3.0",

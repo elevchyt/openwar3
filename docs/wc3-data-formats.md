@@ -147,7 +147,8 @@ exact recipe (and the backslash-escaping gotcha — author these scripts with th
 ### Unpacking the data tables to disk
 
 ```bash
-node tools/extract-mpq.mjs
+pnpm data:extract    # unpack the archives
+pnpm data:browse     # build + open the data browser
 ```
 
 Writes every text/data file (`.slk`/`.txt`/`.j`/`.ai`/`.fdf`) to `Warcraft III/ExtractedData/`, which is
@@ -155,7 +156,12 @@ gitignored along with the rest of `Warcraft III/`. You get `merged/` (the effect
 generated `.csv` beside each `.slk`), `by-archive/` (byte-exact originals, to see who overrides what), and
 `_index/` (filename listings for **all** 17,362 files, so you can grep for a model/icon/sound path without
 unpacking the binary assets). The generated `ExtractedData/README.md` documents what every file is, and which
-parts of the engine the data *doesn't* give you.
+parts of the engine the data *doesn't* give you — its source of truth is `tools/data-readme.md`, since the
+folder is wiped on re-extract.
+
+`ExtractedData/index.html` is a self-contained browser over the merged data (filterable SLK grids, searchable
+JASS/FDF source, per-file docs). It embeds every file as a gzipped blob rather than fetching them, because
+`fetch()` is blocked on `file://` — which is how you'll open it.
 
 Two MPQ facts that tool had to deal with, worth knowing before you write your own:
 

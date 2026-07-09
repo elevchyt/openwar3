@@ -1,16 +1,23 @@
 // Build `Warcraft III/ExtractedData/index.html` — a dark, self-contained browser for
 // the unpacked WC3 data tables.
 //
-//   node tools/extract-mpq.mjs        # first: unpack the archives
-//   node tools/build-data-browser.mjs # then: build the page
-//   node tools/serve-data.mjs         # then: serve + open it
+//   node tools/extract-mpq.mjs                 # first: unpack the archives
+//   node tools/build-data-browser.mjs [--open] # then: build the page and open it
 //
-// The page embeds a manifest (file tree, sizes, archive provenance, SLK column names,
-// and a curated description of what each file IS) and lazily fetches file contents.
+// The page is fully self-contained: it embeds a manifest (file tree, sizes, archive
+// provenance, SLK column names, and a curated description of what each file IS) AND
+// the file contents themselves, as one gzipped blob the browser inflates on demand.
+//
+// Why embed rather than fetch(): the natural thing to do with an .html file is to
+// double-click it, and browsers block fetch() on file:// — so a fetching page is
+// dead on arrival exactly when you most want it. The corpus is ~9.8 MB of text,
+// which gzips to ~1.4 MB (~1.8 MB base64), so embedding is cheap.
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
+import { spawn } from 'node:child_process';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT = join(REPO, 'Warcraft III', 'ExtractedData');
@@ -178,6 +185,19 @@ function csvHeader(text) {
   return cells;
 }
 
+// The payload: every file's bytes, concatenated. Each manifest entry records its
+// [offset, length] so the page can slice one file out without splitting the blob.
+// Kept as raw bytes rather than a JSON string of text so the browser can decode
+// windows-1252 itself — the WC3 data files are cp1252, not UTF-8.
+const chunks = [];
+let offset = 0;
+function stash(bytes) {
+  chunks.push(bytes);
+  const at = offset;
+  offset += bytes.length;
+  return [at, bytes.length];
+}
+
 const files = [];
 for (const full of walk(MERGED).sort((a, b) => a.localeCompare(b))) {
   const rel = relative(MERGED, full).replace(/\\/g, '/');
@@ -190,11 +210,16 @@ for (const full of walk(MERGED).sort((a, b) => a.localeCompare(b))) {
   const arch = provenance.get(rel.toLowerCase());
   if (arch) entry.archives = arch;
 
+  // A .slk is shown through its generated .csv; everything else through its own bytes.
+  if (ext !== 'slk') entry.at = stash(readFileSync(full));
+
   if (ext === 'slk') {
     const csv = full.replace(/\.slk$/i, '.csv');
     if (existsSync(csv)) {
-      const raw = readFileSync(csv, 'utf8');
+      const bytes = readFileSync(csv);
+      const raw = bytes.toString('utf8');
       entry.csv = rel.replace(/\.slk$/i, '.csv');
+      entry.at = stash(bytes);
       entry.columns = csvHeader(raw);
       entry.rows = Math.max(0, raw.split('\n').filter((l) => l.trim()).length - 1);
     }
@@ -213,9 +238,17 @@ console.log(`manifest: ${stats.files} files, ${stats.tables} tables, ${(stats.by
 const undocumented = files.filter((f) => !f.doc).length;
 console.log(`${files.length - undocumented} documented, ${undocumented} fall back to their category`);
 
+const blob = Buffer.concat(chunks);
+const gz = gzipSync(blob, { level: 9 });
+const PAYLOAD = gz.toString('base64');
+console.log(
+  `payload: ${(blob.length / 1e6).toFixed(1)} MB -> ${(gz.length / 1e6).toFixed(1)} MB gzip ` +
+    `-> ${(PAYLOAD.length / 1e6).toFixed(1)} MB base64`,
+);
+
 // Escape `<` so a doc string can never close the <script> block it's embedded in.
 const MANIFEST = JSON.stringify({ files, stats }).replace(/</g, '\\u003c');
-writeFileSync(join(ROOT, 'index.html'), page(MANIFEST));
+writeFileSync(join(ROOT, 'index.html'), page(MANIFEST, PAYLOAD));
 console.log(`wrote ${join(ROOT, 'index.html')}`);
 
 // ExtractedData/ is gitignored and gets wiped by re-extraction, so the README's source
@@ -224,13 +257,22 @@ const README_SRC = join(REPO, 'tools', 'data-readme.md');
 writeFileSync(join(ROOT, 'README.md'), readFileSync(README_SRC));
 console.log(`wrote ${join(ROOT, 'README.md')} (from tools/data-readme.md)`);
 
+if (process.argv.includes('--open')) {
+  const target = join(ROOT, 'index.html');
+  const [cmd, args] =
+    process.platform === 'win32' ? ['cmd', ['/c', 'start', '', target]]
+    : process.platform === 'darwin' ? ['open', [target]]
+    : ['xdg-open', [target]];
+  spawn(cmd, args, { stdio: 'ignore', detached: true }).unref();
+}
+
 // ---------------------------------------------------------------------------
 // The page. Self-contained: no CDN, no external fonts, no build step.
 // Aesthetic: WC3's own codex — dark stone, gold rules, a serif display face
 // (Friz Quadrata is Blizzard's; Palatino/Book Antiqua is the closest stock stand-in)
 // paired with a monospace face for the data itself.
 // ---------------------------------------------------------------------------
-function page(manifest) {
+function page(manifest, payload) {
   return `<!doctype html>
 <html lang="en" data-theme="dark">
 <head>
@@ -426,6 +468,7 @@ pre.src mark{background:var(--gold-dim);color:var(--stone-900);border-radius:2px
 </nav>
 <main id="main"><div id="pad"></div></main>
 
+<script id="payload" type="application/gzip-base64">${payload}</script>
 <script>
 const DATA = ${manifest};
 const pad = document.getElementById('pad');
@@ -507,31 +550,44 @@ function header(f) {
 // Only backticks -> <code>. The doc strings are ours, but escape first regardless.
 const md = s => esc(s).replace(/\`([^\`]+)\`/g, '<code>$1</code>');
 
+/* ---------- payload: one gzipped blob of every file, inflated once ---------- */
+let BLOB = null;
+async function blob() {
+  if (BLOB) return BLOB;
+  const b64 = document.getElementById('payload').textContent.trim();
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  if (typeof DecompressionStream === 'function') {
+    const stream = new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'));
+    BLOB = new Uint8Array(await new Response(stream).arrayBuffer());
+  } else {
+    throw new Error('this browser has no DecompressionStream (needs Chrome 80+ / Firefox 113+ / Safari 16.4+)');
+  }
+  return BLOB;
+}
+
+// The .csv twins are written UTF-8 by the extractor; the original WC3 files are cp1252.
+const readFile = async f => {
+  const all = await blob();
+  const [at, len] = f.at;
+  return new TextDecoder(f.csv ? 'utf-8' : 'windows-1252').decode(all.subarray(at, at + len));
+};
+
 async function render(f) {
-  pad.innerHTML = header(f) + '<div class="loading">reading…</div>';
+  pad.innerHTML = header(f) + '<div class="loading">' + (BLOB ? 'reading…' : 'inflating data…') + '</div>';
   pad.parentElement.scrollTop = 0;
-  const target = f.csv || f.path;
   let text;
   try {
-    const res = await fetch(target.split('/').map(encodeURIComponent).join('/').replace(/^/, 'merged/'));
-    if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-    text = await res.text();
+    text = await readFile(f);
   } catch (err) {
-    pad.innerHTML = header(f) + fileProtoWarning(err);
+    pad.innerHTML = header(f) + '<div class="err">could not read file — ' + esc(err.message) + '</div>';
     return;
   }
   pad.innerHTML = header(f) + (f.csv ? tableView(text, f) : textView(text, f));
   wire(f, text);
 }
 
-function fileProtoWarning(err) {
-  if (location.protocol === 'file:') {
-    return '<div class="warn"><b>Serve this folder over http.</b><br>'
-      + 'Browsers block <code>fetch()</code> on <code>file://</code>, so the page can\\'t read the data next to it. From the repo root:'
-      + '<pre>pnpm data:browse</pre></div>';
-  }
-  return '<div class="err">could not read file — ' + esc(err.message) + '</div>';
-}
+// Open the file itself in a new tab. Works from file:// too — it's a navigation, not a fetch.
+const openRaw = rel => open('merged/' + rel.split('/').map(encodeURIComponent).join('/'), '_blank');
 
 /* ---------- table ---------- */
 const PAGE = 400;
@@ -601,12 +657,12 @@ function wire(f, text) {
     const draw = () => drawTable(f, rq.value.trim(), cq.value.trim());
     rq.addEventListener('input', draw);
     cq.addEventListener('input', draw);
-    document.getElementById('csv').onclick = () => open('merged/' + f.csv, '_blank');
+    document.getElementById('csv').onclick = () => openRaw(f.csv);
     draw();
   } else {
     const src = document.getElementById('src');
     src.innerHTML = highlight(text, f.ext);
-    document.getElementById('raw').onclick = () => open('merged/' + f.path, '_blank');
+    document.getElementById('raw').onclick = () => openRaw(f.path);
     document.getElementById('tq').addEventListener('input', e => {
       const q = e.target.value;
       if (!q) { src.innerHTML = highlight(text, f.ext); return; }
@@ -633,8 +689,7 @@ function home() {
     + '<div class="stat"><div class="v">' + (DATA.stats.bytes/1048576).toFixed(1) + '<span style="font-size:16px"> MB</span></div><div class="k">Unpacked</div></div>'
     + '<div class="stat"><div class="v">4</div><div class="k">Archives</div></div>'
     + '</div></div>'
-    + (location.protocol === 'file:' ? fileProtoWarning(new Error('file://')) : '')
-    + '<div class="doc">Pick a file from the codex on the left. Tables get a sortable, filterable grid — filter rows by rawcode (<code>hfoo</code>) and columns by name (<code>cool</code>). Scripts and strings get a searchable source view.</div>';
+    + '<div class="doc">Pick a file from the codex on the left. Tables get a filterable grid — filter rows by rawcode (<code>hfoo</code>) and columns by name (<code>cool</code>). Scripts and strings get a searchable source view. Every file is embedded in this page, so it works offline, straight off the filesystem.</div>';
 }
 
 renderTree();
