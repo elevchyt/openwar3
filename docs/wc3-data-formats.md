@@ -143,3 +143,24 @@ the **flag**, not a script scan, is authoritative (Monolith runs as custom). `sr
 Reuse the app's parser from a Node CJS script **run from the repo root** (so `node_modules` resolves), load
 the MPQs in patch order, and read rows via `MappedData`. See the memory note *"Verify WC3 asset paths"* for the
 exact recipe (and the backslash-escaping gotcha — author these scripts with the Write tool, not a bash heredoc).
+
+### Unpacking the data tables to disk
+
+```bash
+node tools/extract-mpq.mjs
+```
+
+Writes every text/data file (`.slk`/`.txt`/`.j`/`.ai`/`.fdf`) to `Warcraft III/ExtractedData/`, which is
+gitignored along with the rest of `Warcraft III/`. You get `merged/` (the effective, patch-wins copy, with a
+generated `.csv` beside each `.slk`), `by-archive/` (byte-exact originals, to see who overrides what), and
+`_index/` (filename listings for **all** 17,362 files, so you can grep for a model/icon/sound path without
+unpacking the binary assets). The generated `ExtractedData/README.md` documents what every file is, and which
+parts of the engine the data *doesn't* give you.
+
+Two MPQ facts that tool had to deal with, worth knowing before you write your own:
+
+- **`War3Patch.mpq` ships no `(listfile)`.** All 576 of its blocks are anonymous, so listing tools show you
+  nothing. The hash table still resolves names, so recover its contents by probing it with the names found in
+  the other three archives (`archive.has(path)` is reliable when listing is not).
+- **MPQ name hashing is case-insensitive**, so case-variant spellings (`…\Orc\Earthquake\…` vs `…\EarthQuake\…`)
+  alias onto one block — probing the patch yields 578 name spellings for 576 blocks.
