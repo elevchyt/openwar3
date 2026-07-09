@@ -419,6 +419,14 @@ export interface SimUnit {
   invulnerable: boolean; // derived from buffs + baseInvulnerable (immune to damage + enemy targeting)
   baseInvulnerable: boolean; // persistent invulnerability from the unit type's "Invulnerable (Neutral)" ability (Avul) — goblin merchant, gold mine, mercenary camp, tavern, … (issue #26)
   mechanical: boolean; // machines/summons — no raisable corpse, unhealable by Heal
+  // A worker, from the unit type's "Peon" classification (UnitBalance.slk `type`,
+  // JASS's UNIT_TYPE_PEON): exactly the 9 harvest-and-build units — Peasant, Peon,
+  // Acolyte, Wisp and the 5 neutral variants. Workers NEVER auto-acquire a target:
+  // they ignore fights around them and only attack when explicitly ordered to
+  // (issue #41). The Ghoul harvests lumber but is not Peon-classified, so it fights
+  // like any other soldier — which is why the classification, not "can harvest", is
+  // the flag to key off.
+  isPeon: boolean;
   isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
@@ -1267,6 +1275,7 @@ export class SimWorld {
       | "invulnerable"
       | "baseInvulnerable"
       | "mechanical"
+      | "isPeon"
       | "isSummon"
       | "spawning"
       | "summonLeft"
@@ -1289,7 +1298,7 @@ export class SimWorld {
       | "pendingDrop"
     >,
     building?: BuildingState | null,
-    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
   ): SimUnit {
     const hero = opts?.hero;
     const u: SimUnit = {
@@ -1395,6 +1404,7 @@ export class SimWorld {
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
       baseInvulnerable: !!opts?.baseInvulnerable,
       mechanical: !!opts?.mechanical,
+      isPeon: !!opts?.isPeon,
       isSummon: false,
       spawning: 0,
       summonLeft: 0,
@@ -3383,6 +3393,18 @@ export class SimWorld {
 
   // --- combat -------------------------------------------------------------
 
+  /** How far this unit will auto-acquire a target: the weapon's acquisition range
+   *  (UnitWeapons.slk `acquire`), or a creep's own aggro range (its map-placed
+   *  targetAcquisition). Workers never auto-acquire anything (issue #41) — 0 here
+   *  keeps them out of every automatic path: idle scans, assist, attack-move,
+   *  post-kill re-acquire, and the switch to a reachable enemy. An explicit attack
+   *  order goes through issueAttack and doesn't consult this. */
+  private acquireRange(u: SimUnit): number {
+    if (u.isPeon) return 0;
+    if (u.isCreep) return u.aggroRange;
+    return u.weapon ? u.weapon.acquire : 0;
+  }
+
   private tickAttack(u: SimUnit, dt: number): void {
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (!t || !u.weapon) {
@@ -3417,7 +3439,7 @@ export class SimWorld {
       } else if (this.canReachToAttack(u, t)) {
         u.gaveUp = false; // a blocker cleared — resume the chase (falls through to engage)
       } else {
-        const range = u.isCreep ? u.aggroRange : u.weapon.acquire;
+        const range = this.acquireRange(u);
         const next = range > 0 ? this.reachableEnemy(u, range, t.id) : null;
         if (next) {
           this.issueAttack(u.id, next.id);
@@ -3436,8 +3458,9 @@ export class SimWorld {
     // reach the enemy, especially after the first kill"). Only when we're not already
     // engaged and our current target isn't itself in reach. Cheap distance scan, filtered
     // like auto-acquire (visible, no idle creep camp); the switch resets the watchdog so
-    // the rest of this tick runs against the new, in-range target.
-    if (!u.inCombat) {
+    // the rest of this tick runs against the new, in-range target. A worker keeps the
+    // target it was ordered onto — it never picks up a fight of its own (issue #41).
+    if (!u.inCombat && !u.isPeon) {
       u.acquireT -= dt; // throttle the scan to ~5x/sec (not every tick — it's an O(units) scan)
       if (u.acquireT <= 0) {
         u.acquireT = 0.2;
@@ -3498,7 +3521,7 @@ export class SimWorld {
       // and fight instead — a unit must never stand idle beside an enemy it could attack
       // just because its ORIGINAL target is walled off (issue #24: "the nearest enemy must
       // always be attacked"). Only hold when nothing reachable remains.
-      const range = u.isCreep ? u.aggroRange : u.weapon.acquire;
+      const range = this.acquireRange(u);
       const next = range > 0 ? this.reachableEnemy(u, range, t.id) : null;
       if (next) this.issueAttack(u.id, next.id);
       else this.holdAttack(u, t);
@@ -3526,9 +3549,9 @@ export class SimWorld {
    *  camp controller, so they just fall idle here and re-engage via tickCreep/
    *  tickAcquire next tick. */
   private reacquireOrStop(u: SimUnit): void {
-    const w = u.weapon;
-    if (w && w.acquire > 0 && !u.isCreep) {
-      const next = this.acquireTarget(u, w.acquire);
+    const acq = this.acquireRange(u);
+    if (acq > 0 && !u.isCreep) {
+      const next = this.acquireTarget(u, acq);
       if (next) {
         // Grab the nearest enemy. If it turns out to be walled off, the in-strike-range
         // switch in tickAttack (cheap) and the stall watchdog (which hands off to the
@@ -3573,7 +3596,7 @@ export class SimWorld {
     }
     // (2) Target unreachable — hand off to a reachable one within our normal
     // acquisition range (creeps use their aggro range and camp threat order).
-    const range = u.isCreep ? u.aggroRange : u.weapon ? u.weapon.acquire : 0;
+    const range = this.acquireRange(u);
     const next = range > 0 ? this.reachableEnemy(u, range, t.id) : null;
     if (next) {
       this.issueAttack(u.id, next.id); // issueAttack clears gaveUp
@@ -3692,7 +3715,7 @@ export class SimWorld {
    *  attacking, and acquiring the next the moment one dies), advancing toward the
    *  destination only when nothing is left to fight nearby (WC3 A-move). */
   private tickAttackMove(u: SimUnit, dt: number): void {
-    const w = u.weapon;
+    const acq = this.acquireRange(u); // 0 for a worker — it just walks the route (issue #41)
     // Committed to a swing (see engage): stand still through the wind-up rather than
     // advancing toward the attack-move destination — a target fleeing past acquire
     // range mustn't drag the unit into walking while its strike is still pending.
@@ -3703,11 +3726,11 @@ export class SimWorld {
       if (st) u.desiredFacing = Math.atan2(st.y - u.y, st.x - u.x);
       return;
     }
-    if (w && w.acquire > 0) {
+    if (acq > 0) {
       const hadTarget = u.targetId !== null;
       let t = hadTarget ? this.units.get(u.targetId!) : undefined;
       // Drop the target if it died, turned friendly, went invulnerable (Divine Shield resets aggro), or fled past the leash.
-      if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > w.acquire)) t = undefined;
+      if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > acq)) t = undefined;
       if (!t) {
         if (hadTarget) u.acquireT = 0; // just lost one — re-scan now, don't creep forward
         u.acquireT -= dt;
@@ -3715,7 +3738,7 @@ export class SimWorld {
           u.acquireT = ACQUIRE_PERIOD;
           // Sight-gated: an attack-moving army engages what it can SEE, not whatever
           // the sim knows is out there in the fog ahead of it (issue #45).
-          t = this.nearestEnemy(u, w.acquire, true) ?? undefined;
+          t = this.nearestEnemy(u, acq, true) ?? undefined;
         }
       }
       if (t) {
@@ -3976,11 +3999,12 @@ export class SimWorld {
     // our OWN acquisition range (a follower still marching up keeps moving instead of
     // wandering off). issueAttack switches us to the attack order and arms the resume;
     // when that fight ends with nothing left in range, reacquireOrStop returns us here.
-    if (caughtUp && u.weapon && u.weapon.acquire > 0 && !u.isCreep) {
+    const acq = u.isCreep ? 0 : this.acquireRange(u);
+    if (caughtUp && acq > 0) {
       u.acquireT -= dt; // throttle the O(units) scan (same period as idle auto-acquire)
       if (u.acquireT <= 0) {
         u.acquireT = ACQUIRE_PERIOD;
-        const enemy = this.acquireTarget(u, u.weapon.acquire);
+        const enemy = this.acquireTarget(u, acq);
         if (enemy) {
           const leaderId = u.targetId; // save: issueAttack overwrites targetId with the enemy
           if (this.issueAttack(u.id, enemy.id)) u.followLeaderId = leaderId; // resume-to-follow
@@ -4361,10 +4385,11 @@ export class SimWorld {
     // attack them, the nearest enemy must always be attacked"). An enemy landing hits on
     // us is by definition adjacent and reachable, a strictly better target than one we
     // can't close on. A unit already trading blows (inCombat) keeps its target; HOLD-
-    // position units (order "hold") never leave their post.
+    // position units (order "hold") never leave their post. Workers never return fire —
+    // a peasant being cut down just stands there until you order it to fight (issue #41).
     const attacker = this.units.get(attackerId);
     const notFighting = target.order === "idle" || (target.order === "attack" && !target.inCombat);
-    if (notFighting && target.weapon && !target.returning && attacker && this.hostile(target, attacker) && attacker.id !== target.targetId) {
+    if (notFighting && target.weapon && !target.isPeon && !target.returning && attacker && this.hostile(target, attacker) && attacker.id !== target.targetId) {
       this.issueAttack(target.id, attackerId);
     }
     // Creep "call for help" (Battle.net creep basics): attacking one creep rallies
@@ -4803,7 +4828,7 @@ export class SimWorld {
   private tickAcquire(u: SimUnit, dt: number): void {
     if (!u.weapon) return;
     if (u.isCreep && (u.asleep || u.returning)) return;
-    const range = u.isCreep ? u.aggroRange : u.weapon.acquire;
+    const range = this.acquireRange(u);
     if (range <= 0) return;
     u.acquireT -= dt;
     if (u.acquireT > 0) return;
@@ -4834,7 +4859,9 @@ export class SimWorld {
    *  chase — the unit stays planted where Hold was issued (issue #17). */
   private tickHold(u: SimUnit, dt: number): void {
     const w = u.weapon;
-    if (!w || w.range <= 0) {
+    if (!w || w.range <= 0 || u.isPeon) {
+      // A worker holds its ground without swinging at anything: no auto-acquisition,
+      // on Hold as anywhere else (issue #41).
       u.inCombat = false;
       this.settle(u);
       return;

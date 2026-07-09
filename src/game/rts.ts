@@ -1125,7 +1125,7 @@ export class RtsController {
           depotLumber: false,
         },
         null,
-        { level: def?.level ?? 0, mechanical: def?.classification.includes("mechanical") ?? false },
+        { level: def?.level ?? 0, mechanical: def?.classification.includes("mechanical") ?? false, isPeon: def?.classification.includes("peon") ?? false },
       );
       // Map-placed movable units are Neutral Hostile creeps: give them guard AI —
       // home post at the spawn, an aggro range from the map's per-creep target-
@@ -1310,7 +1310,10 @@ export class RtsController {
       // "Invulnerable (Neutral)" (Avul): neutral buildings — goblin merchant, goblin
       // laboratory, mercenary camp, tavern, gold mine, marketplace — carry it in their
       // abilList by default and are permanently immune/untargetable (issue #26).
-      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), level: def.level, baseInvulnerable: def.abilities.includes("Avul") },
+      // "Peon" classification = a worker: it never auto-acquires a target, so it won't
+      // join a fight it wasn't explicitly ordered into (issue #41). Note the Ghoul
+      // harvests lumber but is NOT Peon-classified — it fights like any other unit.
+      { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), level: def.level, baseInvulnerable: def.abilities.includes("Avul") },
     );
     const entry: Entry = {
       simId,
