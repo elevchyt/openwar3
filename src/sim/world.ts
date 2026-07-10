@@ -721,8 +721,10 @@ export class SimWorld {
   // A unit began casting: renderer plays the cast animation (spell/throw/slam) and
   // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
-  // one-shot gesture (Storm Bolt throw) that plays once.
-  private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number }> = [];
+  // one-shot gesture (Storm Bolt throw) that plays once. `warnArt` is the "beware"
+  // model dropped at tx,ty this same instant (PRECAST_WARNING) — the renderer sounds
+  // that model here, at the wind-up, since that is when WC3's model plays its clip.
+  private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> = [];
   // Casts whose effect just FIRED this frame (wind-up elapsed → the clap/bolt/etc.
   // happens now). The renderer plays the ability's cast SOUND off THIS, not off the
   // cast START — WC3 syncs the sound to the effect at the cast point (issue #23), and
@@ -2545,9 +2547,10 @@ export class SimWorld {
       // Tell the renderer to play the cast clip and hold it for the whole cast
       // (wind-up + backswing, or wind-up + channel — looped for a channel).
       const hold = pc.castLeft + (channelLen > 0 ? channelLen : u.castBackswing);
+      const warnArt = PRECAST_WARNING.has(pc.code) ? def.effectArt : "";
       // tx/ty/targetId let the renderer aim cast-triggered visuals at the target —
       // e.g. the Blood Mage hurling one of his orbiting spheres (issue #37).
-      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0, tx, ty, targetId: pc.targetId });
+      this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0, tx, ty, targetId: pc.targetId, warnArt });
       // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's
       // Effectart at the target NOW, as the wind-up begins, so Flame Strike's smoke
       // vortex charges in place and lingers even if the cast is interrupted before
@@ -3147,7 +3150,7 @@ export class SimWorld {
     return out;
   }
   /** Casts that began this frame (renderer plays the cast animation). */
-  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number }> {
+  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> {
     if (!this.castStarts.length) return this.castStarts;
     const out = this.castStarts;
     this.castStarts = [];

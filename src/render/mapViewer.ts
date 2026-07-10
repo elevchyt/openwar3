@@ -3487,6 +3487,11 @@ export class MapViewerScene {
         // Cast animations (throw/slam/spell) begin at the wind-up.
         for (const c of world.drainCastStarts()) {
           this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
+          // A delayed-strike spell drops its "beware" art as the wind-up STARTS, and the
+          // sound rides that model: FlameStrikeTarget.mdx fires its SND…AHFT event at frame
+          // 0 of its birth clip, so Flame Strike's rising howl begins with the cast point's
+          // timer — not 1.33s later at ignition (which sounds the pillar's own AHFS event).
+          if (c.warnArt) this.sounds?.playModelSound(c.warnArt, { x: c.tx, y: c.ty, z: this.rts!.groundHeightAt(c.tx, c.ty) });
           const caster = world.units.get(c.casterId);
           // Blood Mage: hurl one orbiting sphere at Flame Strike / Banish targets (issue #37).
           if (MapViewerScene.SPHERE_THROW_CODES.has(c.code) && caster && this.hasSpheres(caster.typeId))

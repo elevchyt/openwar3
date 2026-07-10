@@ -75,14 +75,16 @@ interface Clip {
   cutoff: number; // DistanceCutoff — WC3 doesn't play the sound at all beyond this
 }
 
-/** Weapon sounds embedded in a unit/missile MODEL as SND event objects, resolved via
- *  AnimLookups (4-char code → label) → AnimSounds (label → clip). Categorised by the
- *  event code's leading letter: K = the unit's own attack/fire sound; M = a missile's
- *  launch/impact whoosh. (D death / A ability events are handled by other channels.) */
+/** Weapon/spell sounds embedded in a unit/missile/effect MODEL as SND event objects,
+ *  resolved via AnimLookups (4-char code → label) → AnimSounds (label → clip). Categorised
+ *  by the event code's leading letter: K = the unit's own attack/fire sound; M = a missile's
+ *  launch/impact whoosh; A = an ability/effect sound. (D death is handled by the unit's
+ *  sound-set label.) */
 interface ModelSounds {
   attack: Clip[]; // K events — the unit's fire sound (played at the swing's damage point)
   launch: Clip[]; // M events whose label is a "…Launch"
   impact: Clip[]; // M events whose label is a "…Hit"/"…Impact" (or a single generic missile sound)
+  ability: Clip[]; // A events — the sound the effect model itself plays when it appears
 }
 
 /** The 3D listener frame, in WC3 world space (Z up). Position sits at the camera's
@@ -267,10 +269,27 @@ export class SoundBoard {
     if (clips.length) this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
   }
 
-  /** Play a spell's cast/effect sound — a WAV that ships in the effect model's own
-   *  folder (HolyBoltSpecialArt.mdx → HolyBolt.wav, HealTarget.mdx → HealTarget.wav,
-   *  AvatarCaster.mdx → Avatar.wav, …). Tries each art path, then a curated fallback. */
+  /** Play the sound an EFFECT MODEL carries itself — an SND "A" event object, fired by
+   *  WC3 at the moment that model's clip plays. This is the authentic chain and beats any
+   *  folder guess: Flame Strike's warning vortex (FlameStrikeTarget.mdx) holds SND…AHFT →
+   *  AnimLookups → AnimSounds "FlameStrikeTarget" → FlameStrikeTargetWaveNonLoop1.wav,
+   *  while its pillar (FlameStrike1.mdx) holds SND…AHFS → FlameStrikeBirth1.wav. Both WAVs
+   *  sit in the same folder, so a folder scan can only guess between them.
+   *  @returns whether the model carried such an event (and the clip was cued). */
+  playModelSound(art: string, at?: SoundPos): boolean {
+    if (!art) return false;
+    const clips = this.resolveModelSounds(art).ability;
+    if (!clips.length) return false;
+    this.playPool(clips[(Math.random() * clips.length) | 0], "spell", at);
+    return true;
+  }
+
+  /** Play a spell's cast/effect sound. Prefers the effect model's own embedded SND "A"
+   *  event (see playModelSound), and only then falls back to a WAV that ships in the
+   *  effect model's folder (HolyBoltSpecialArt.mdx → HolyBolt.wav, HealTarget.mdx →
+   *  HealTarget.wav, AvatarCaster.mdx → Avatar.wav, …), then a curated fallback path. */
   playSpellSound(arts: string[], fallback?: string, at?: SoundPos): void {
+    for (const art of arts) if (art && this.playModelSound(art, at)) return;
     // As with missiles, effect-folder WAVs have no SLK row — treat them as WANT3D
     // world sounds so a spell cast pans + attenuates from where it's cast.
     const meta = { gain: 0.8, pitch: 1, pitchVar: 0.03, threeD: true, refDist: 800, maxDist: 10000, cutoff: 3500 };
@@ -325,17 +344,17 @@ export class SoundBoard {
   }
 
   private modelSounds = new Map<string, ModelSounds>();
-  /** Resolve a unit/missile model's embedded weapon sounds — the SND event objects
-   *  WC3 fires during the attack/flight animation. The 4-char event code (e.g. "KRIF")
-   *  maps through AnimLookups (→ SoundLabel) then AnimSounds (→ WAVs + 3D metadata).
-   *  Cached per model path — the MDX is parsed once, lazily on first use. We only
-   *  care about K (the unit's fire sound) and M (a missile's launch/impact) events;
-   *  D (death) is played via the unit's sound-set label, A (ability) by the spell code. */
+  /** Resolve a model's embedded sounds — the SND event objects WC3 fires during the
+   *  attack/flight/effect animation. The 4-char event code (e.g. "KRIF") maps through
+   *  AnimLookups (→ SoundLabel) then AnimSounds (→ WAVs + 3D metadata). Cached per model
+   *  path — the MDX is parsed once, lazily on first use. We take K (a unit's fire sound),
+   *  M (a missile's launch/impact) and A (an effect model's own spell sound); D (death) is
+   *  played via the unit's sound-set label instead. */
   private resolveModelSounds(modelArt: string): ModelSounds {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [] };
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [] };
     this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
     const bytes = this.vfs.rawBytes(modelArt);
     if (!bytes) return out;
@@ -352,7 +371,7 @@ export class SoundBoard {
       if (evt.name.substring(0, 3) !== "SND") continue;
       const id = evt.name.substring(4);
       const cat = id[0]; // K = attack, M = missile, D = death, A = ability
-      if (cat !== "K" && cat !== "M") continue;
+      if (cat !== "K" && cat !== "M" && cat !== "A") continue;
       const actual = lookups?.index.get(id.toLowerCase()) ?? id;
       const lrow = lookups?.data.getRow(actual) as { string(k: string): string | undefined } | undefined;
       const label = lrow?.string("SoundLabel");
@@ -360,6 +379,7 @@ export class SoundBoard {
       const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
       if (!clip) continue;
       if (cat === "K") out.attack.push(clip);
+      else if (cat === "A") out.ability.push(clip);
       else if (/launch/i.test(label)) out.launch.push(clip);
       else out.impact.push(clip); // "…Hit"/"…Impact", or a single generic missile sound
     }
