@@ -6,7 +6,7 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
-import { PathingGrid, parseWpm, footprintCells, PATHING_CELL } from "../sim/pathing";
+import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
@@ -1050,10 +1050,10 @@ export class MapViewerScene {
   private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<number | null> {
     const map = this.viewer.map;
     if (!map || !this.rts) return null;
-    // Buildings snap to the pathing grid so their stamped footprint lands on
-    // whole cells (WC3 building placement is grid-aligned).
+    // Buildings snap to WC3's 64-unit BUILD grid, so their stamped footprint lands on
+    // whole build cells (an even pathing-cell boundary) exactly as the original does.
     const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
-    if (fp && this.grid) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
+    if (fp && this.grid) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
 
     const model = await this.viewer.load(def.model, this.solver);
     if (!model) return null;
@@ -1090,7 +1090,7 @@ export class MapViewerScene {
     const hit = this.rts.groundPoint(cssX, cssY);
     if (!hit) return;
     let [x, y] = hit;
-    if (p.fp) [x, y] = this.grid.snapForFootprintRect(x, y, p.fp.w, p.fp.h);
+    if (p.fp) [x, y] = this.grid.snapForBuildingRect(x, y, p.fp.w, p.fp.h);
     if (!this.placementValid(x, y)) return; // invalid site — keep placing
     const stash = this.rts.stashFor(this.localPlayer);
     if (stash.gold < p.def.goldCost || stash.lumber < p.def.lumberCost) return;
@@ -2231,7 +2231,7 @@ export class MapViewerScene {
     }
     let [x, y] = hit;
     const fp = this.placement.fp;
-    if (fp) [x, y] = this.grid.snapForFootprintRect(x, y, fp.w, fp.h);
+    if (fp) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
     // Rebuild the green/red footprint collider grid under the ghost.
     this.rebuildPlacementFootprint(x, y);
     if (this.buildGhost) {
@@ -2262,10 +2262,13 @@ export class MapViewerScene {
   }
 
   /** Rebuild the placement footprint grid batch centred on world (x, y): one terrain-
-   *  hugging quad per cell of the building's full (blue) footprint, green where that
-   *  cell is buildable and red where it's obstructed — the exact per-cell `buildable`
-   *  test placementValid uses, so the grid shows the true reserved footprint (walkable
-   *  border included), not just the unwalkable core. Drawn by the frame loop. */
+   *  hugging quad per BUILD cell (64u — WC3's placement square, 2×2 pathing cells) of
+   *  the building's full (blue) footprint, green where buildable and red where
+   *  obstructed. A square is drawn if any of its pathing cells belongs to the reserved
+   *  footprint and turns red if any of them is blocked, so it shows exactly what the
+   *  per-cell `buildable` test in placementValid decides — at the resolution the
+   *  original game draws it (the Altar of Kings, 10×10 pathing cells, reads as the 5×5
+   *  square it is in WC3). Drawn by the frame loop. */
   private rebuildPlacementFootprint(x: number, y: number): void {
     const p = this.placement;
     const h = this.heightSampler;
@@ -2276,15 +2279,25 @@ export class MapViewerScene {
     const fp = p.fp;
     const [ox, oy] = this.grid.origin;
     // Low-corner cell of the footprint — same centring as placementValid / stampFootprint.
+    // snapForBuildingRect keeps it even, so build squares tile the footprint exactly.
     const [bx, by] = this.grid.worldToCell(x - (fp.w * PATHING_CELL) / 2, y - (fp.h * PATHING_CELL) / 2);
+    const n = BUILD_CELL_CELLS;
     const cells: number[] = [];
-    for (let cy = 0; cy < fp.h; cy++) {
-      for (let cx = 0; cx < fp.w; cx++) {
-        if (!fp.buildBlocked[cy * fp.w + cx]) continue; // the full reserved footprint
-        const gx = bx + cx, gy = by + cy;
-        const color = this.grid.buildable(gx, gy) ? COLLIDER_COLORS.buildable : COLLIDER_COLORS.unbuildable;
-        const x0 = ox + gx * PATHING_CELL, y0 = oy + gy * PATHING_CELL;
-        pushColliderQuad(cells, x0, y0, x0 + PATHING_CELL, y0 + PATHING_CELL, h, color);
+    for (let sy = 0; sy < fp.h; sy += n) {
+      for (let sx = 0; sx < fp.w; sx += n) {
+        let reserved = false;
+        let blocked = false;
+        for (let cy = sy; cy < Math.min(sy + n, fp.h); cy++) {
+          for (let cx = sx; cx < Math.min(sx + n, fp.w); cx++) {
+            if (!fp.buildBlocked[cy * fp.w + cx]) continue; // the full reserved footprint
+            reserved = true;
+            if (!this.grid.buildable(bx + cx, by + cy)) blocked = true;
+          }
+        }
+        if (!reserved) continue;
+        const color = blocked ? COLLIDER_COLORS.unbuildable : COLLIDER_COLORS.buildable;
+        const x0 = ox + (bx + sx) * PATHING_CELL, y0 = oy + (by + sy) * PATHING_CELL;
+        pushColliderQuad(cells, x0, y0, x0 + BUILD_CELL, y0 + BUILD_CELL, h, color);
       }
     }
     this.placeCells = Float32Array.from(cells);

@@ -10,6 +10,14 @@ import wpm from "mdx-m3-viewer/dist/cjs/parsers/w3x/wpm";
 
 export const PATHING_CELL = 32;
 
+/** WC3's BUILD grid: 64 world units, two pathing cells a side, half a terrain tile.
+ *  Buildings snap to it and the placement ghost draws one green/red square per build
+ *  cell — which is why a barracks (12×12 pathing cells) is the "6×6 building" the
+ *  community calls it, with a 1-square pathing buffer (wc3c.net 897815, warcraft3.info
+ *  article 423). Pathfinding still runs on the 32-unit cells. */
+export const BUILD_CELL = 64;
+export const BUILD_CELL_CELLS = BUILD_CELL / PATHING_CELL; // pathing cells per build cell
+
 /** The two war3map.wpm bits we act on. They are independent channels — a cliff face
  *  sets both, but ~14% of walkable cells set Unbuildable alone (slopes, the margin a
  *  production building leaves walkable around itself). Never collapse them into one. */
@@ -90,12 +98,28 @@ export class PathingGrid {
     return this.snapForFootprintRect(wx, wy, n, n);
   }
 
-  /** Rectangular variant for building footprints (w×h cells). */
+  /** Rectangular variant (w×h cells) — unit footprints, cell-grid aligned. */
   snapForFootprintRect(wx: number, wy: number, w: number, h: number): [number, number] {
     const snap = (v: number, origin: number, cells: number) =>
       cells % 2 === 1
         ? origin + (Math.floor((v - origin) / PATHING_CELL) + 0.5) * PATHING_CELL
         : origin + Math.round((v - origin) / PATHING_CELL) * PATHING_CELL;
+    return [snap(wx, this.originX, w), snap(wy, this.originY, h)];
+  }
+
+  /** Snap a building of w×h pathing cells to the BUILD grid, not the pathing grid.
+   *  WC3 places buildings on 64-unit squares (two pathing cells a side) — the green
+   *  squares you see under the placement ghost. So a barracks (`12x12Simple.tga`) is
+   *  the "6×6 building" everyone calls it, and the Altar of Kings (`10x10Simple.tga`)
+   *  is 5×5, not 10×10. Equivalent statement: the footprint's low-corner cell index is
+   *  always EVEN. Solving `origin + 2k·32 = centre − 16w` for the centre gives
+   *  `centre = origin + 64k + 16w`, i.e. an even half-width (farm, 4 cells) lands on a
+   *  build-square corner and an odd one (altar, 10 cells → 5 squares) on its centre. */
+  snapForBuildingRect(wx: number, wy: number, w: number, h: number): [number, number] {
+    const snap = (v: number, origin: number, cells: number) => {
+      const half = (cells * PATHING_CELL) / 2;
+      return origin + Math.round((v - origin - half) / BUILD_CELL) * BUILD_CELL + half;
+    };
     return [snap(wx, this.originX, w), snap(wy, this.originY, h)];
   }
 
