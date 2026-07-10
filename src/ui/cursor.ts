@@ -25,7 +25,9 @@ export function applyMenuCursor(vfs: DataSource): void {
     styleEl = document.createElement("style");
     document.head.appendChild(styleEl);
   }
-  // Hotspot near the gauntlet's fingertip (top-left), matching applyRaceCursor. The
-  // in-game race cursor uses !important, so it still wins during a match.
-  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: url(${url}) 3 3, auto; }`;
+  // Hotspot near the gauntlet's fingertip (top-left), matching applyRaceCursor. Use
+  // !important so the hand shows in every state (buttons, hovers) — the reference menu
+  // never changes the cursor. The in-game race cursor is also !important and scoped to
+  // body.in-game, so it still wins during a match.
+  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: url(${url}) 3 3, auto !important; }`;
 }

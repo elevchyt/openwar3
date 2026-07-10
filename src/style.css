@@ -1289,9 +1289,8 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 
 .fdf-button {
   pointer-events: auto;
-  cursor: pointer;
+  /* No cursor override — the WC3 hand cursor (ui/cursor.ts) stays in every state. */
 }
-.fdf-button:active { transform: translateY(1px); }
 .fdf-button:focus-visible { outline: none; }
 .fdf-button:hover .fdf-button-glow { opacity: 1; }
 
@@ -1299,10 +1298,19 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   position: absolute;
   inset: 0;
   opacity: 0;
-  transition: opacity 0.1s ease;
+  transition: opacity 0.08s ease;
   pointer-events: none;
   mix-blend-mode: screen; /* mirrors the game's ADD-mode mouse-over highlight */
 }
+
+/* Pressed state: the FDF's Down backdrop, shown while the button is held, plus the
+   ButtonPushedTextOffset nudge on the label — matching the reference press look. */
+.fdf-pushed {
+  opacity: 0;
+  pointer-events: none;
+}
+.fdf-button:active .fdf-pushed { opacity: 1; }
+.fdf-button:active .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
 
 body.in-game .fdf-screen,
 body.menu-suspended .fdf-screen,

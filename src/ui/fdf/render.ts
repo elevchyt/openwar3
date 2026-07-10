@@ -135,9 +135,9 @@ function renderFrame(
   parentEl: HTMLElement,
   ctx: RenderCtx,
   parentAbs: { left: number; top: number } = { left: 0, top: 0 },
-): void {
+): HTMLElement | null {
   const f = node.frame;
-  if (f.name && ctx.hidden.has(f.name)) return; // WC3 glue scripts hide these sub-panels
+  if (f.name && ctx.hidden.has(f.name)) return null; // WC3 glue scripts hide these sub-panels
   const px = toPixels(node, ctx.fit);
   const el = document.createElement("div");
   el.className = "fdf-frame";
@@ -162,15 +162,66 @@ function renderFrame(
 
   parentEl.appendChild(el);
   const abs = { left: px.left, top: px.top };
-  // A button's Control* backdrops are per-state layers, not siblings: render only the
-  // normal ControlBackdrop face + the text; the pushed/disabled/highlight variants are
-  // handled on hover/press, not always drawn (they'd stack into one dark block).
-  const skip = isButton ? stateLayerNames(f) : null;
-  for (const child of node.children) {
-    if (skip && child.frame.name && skip.has(child.frame.name)) continue;
-    renderFrame(child, el, ctx, abs);
+
+  if (isButton) {
+    renderButtonLayers(el, node, f, px, ctx, abs);
+  } else {
+    for (const child of node.children) renderFrame(child, el, ctx, abs);
   }
-  if (isButton) appendGlow(el, f, ctx); // mouse-over highlight, on top of the face
+  return el;
+}
+
+/** Render a button's layers in paint order: normal face → pushed face (shown on
+ *  :active) → mouse-over glow (shown on :hover) → the label on top. The FDF holds
+ *  the states as sibling backdrops referenced by ControlBackdrop/ControlPushedBackdrop
+ *  etc.; drawing them all at once would just stack into one block, so we split them. */
+function renderButtonLayers(
+  el: HTMLElement,
+  node: LaidOutFrame,
+  f: FdfFrame,
+  px: { width: number; height: number },
+  ctx: RenderCtx,
+  abs: { left: number; top: number },
+): void {
+  const baseName = strProp(f, "ControlBackdrop");
+  const pushedName = strProp(f, "ControlPushedBackdrop");
+  const stateNames = stateLayerNames(f);
+  const baseChild = baseName ? node.children.find((c) => c.frame.name === baseName) : undefined;
+
+  // 1) normal face
+  if (baseChild) renderFrame(baseChild, el, ctx, abs);
+
+  // 2) pushed face (a composited overlay toggled by :active)
+  const pushedChild = pushedName ? node.children.find((c) => c.frame.name === pushedName) : undefined;
+  if (pushedChild) {
+    const canvas = compositeBackdrop(pushedChild.frame, Math.round(px.width), Math.round(px.height), ctx);
+    if (canvas) {
+      canvas.className = "fdf-pushed";
+      canvas.style.position = "absolute";
+      canvas.style.inset = "0";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      el.appendChild(canvas);
+    }
+  }
+
+  // 3) mouse-over glow
+  appendGlow(el, f, ctx);
+
+  // 4) the label + any remaining children (drawn last → on top)
+  const textName = strProp(f, "ButtonText");
+  const push = firstProp(f, "ButtonPushedTextOffset")?.args;
+  if (push && push.length >= 2) {
+    el.style.setProperty("--push-x", `${(push[0].n ?? 0) * ctx.fit.scale}px`);
+    el.style.setProperty("--push-y", `${-(push[1].n ?? 0) * ctx.fit.scale}px`);
+  }
+  for (const child of node.children) {
+    const nm = child.frame.name;
+    if (child === baseChild) continue;
+    if (nm && stateNames.has(nm)) continue; // pushed/disabled/highlight handled above
+    const childEl = renderFrame(child, el, ctx, abs);
+    if (childEl && nm && nm === textName) childEl.classList.add("fdf-btn-text");
+  }
 }
 
 /** Names of a button's non-default state backdrops/highlights (rendered only on state). */
@@ -220,17 +271,22 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   const edge = ctx.blpCanvas(strProp(f, "BackdropEdgeFile") ?? "");
 
   if (bg) {
-    // Fill the (inset) interior with the background. BackdropBackgroundSize is the
-    // tile's world size; scale to px so an icon backdrop (e.g. the search-region
-    // magnifying glass, 64×64 at size 0.031) shows whole instead of cropped/native.
-    const ix = inset, iy = inset, iw = w - inset * 2, ih = h - inset * 2;
-    const bgSizeWorld = prop(f, "BackdropBackgroundSize");
-    const tileW = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.width;
-    const tileH = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.height;
-    g.save();
-    g.beginPath(); g.rect(ix, iy, Math.max(0, iw), Math.max(0, ih)); g.clip();
-    for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
-    g.restore();
+    // Fill the (inset) interior. With BackdropTileBackground the background tiles
+    // (the dark button face); without it the background is a single image stretched
+    // to fill (an icon like the search-region magnifying glass), so it fits its
+    // container instead of tiling/cropping at native pixels.
+    const ix = inset, iy = inset, iw = Math.max(0, w - inset * 2), ih = Math.max(0, h - inset * 2);
+    if (f.props.some((p) => p.key === "BackdropTileBackground")) {
+      const bgSizeWorld = prop(f, "BackdropBackgroundSize");
+      const tileW = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.width;
+      const tileH = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.height;
+      g.save();
+      g.beginPath(); g.rect(ix, iy, iw, ih); g.clip();
+      for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
+      g.restore();
+    } else {
+      g.drawImage(bg, ix, iy, iw, ih);
+    }
   }
 
   if (edge) {
@@ -293,9 +349,9 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   span.style.textAlign = jh === "JUSTIFYRIGHT" ? "right" : jh === "JUSTIFYCENTER" ? "center" : "left";
 }
 
-/** Wire a button frame's click/shortcut handlers. */
+/** Wire a button frame's click/shortcut handlers. The cursor stays the WC3 hand at
+ *  all times (see ui/cursor.ts) — no per-element pointer, per the reference. */
 function wireButton(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
-  el.style.cursor = "pointer";
   el.classList.add("fdf-button");
 
   const handler = ctx.handlers[f.name];
