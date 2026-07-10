@@ -1201,3 +1201,107 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   color: #9aa4b4;
   cursor: pointer;
 }
+
+/* --- Load-files gate (issue #54) ------------------------------------------------
+   Shown BEFORE the main menu: the game files are required to build the menu, so we
+   prompt for them first. Zero-asset by necessity (no install is mounted yet), so
+   this screen is our own styled DOM over the flying 3D background. */
+.load-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.load-gate-panel {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: min(460px, 84vw);
+  padding: 40px 44px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+}
+
+.load-gate-title {
+  margin: 0;
+  font-size: 30px;
+  letter-spacing: 3px;
+  color: var(--gold);
+  text-shadow: 0 2px 8px #000;
+}
+
+.load-gate-sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #c7cedb;
+}
+
+.load-gate-btn {
+  margin-top: 6px;
+  padding: 16px 30px;
+  font: inherit;
+  font-size: 17px;
+  letter-spacing: 0.5px;
+  color: #1a1206;
+  background: linear-gradient(#e7c877, #c79a3f);
+  border: 1px solid #6a531d;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: filter 0.12s, transform 0.12s;
+}
+.load-gate-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.load-gate-btn:active { transform: translateY(1px); }
+.load-gate-btn:disabled { filter: grayscale(0.6) brightness(0.8); cursor: default; transform: none; }
+
+.load-gate-status {
+  min-height: 16px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9aa4b4;
+}
+.load-gate-status.error { color: #e07a6a; }
+
+/* --- FDF-driven frames (issue #54): the WC3 UI system, built from UI\FrameDef\*.fdf.
+   Frames are absolutely positioned over the 3D background; only interactive frames
+   take pointer events so the terrain stays draggable in the empty areas. */
+.fdf-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  user-select: none;
+}
+.fdf-frame { pointer-events: none; }
+
+.fdf-button {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.fdf-button:active { transform: translateY(1px); }
+.fdf-button:focus-visible { outline: none; }
+.fdf-button:hover .fdf-button-glow { opacity: 1; }
+
+.fdf-button-glow {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  pointer-events: none;
+  mix-blend-mode: screen; /* mirrors the game's ADD-mode mouse-over highlight */
+}
+
+body.in-game .fdf-screen,
+body.menu-suspended .fdf-screen,
+body.in-game .load-gate { display: none; }

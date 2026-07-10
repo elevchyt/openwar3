@@ -2,6 +2,10 @@ import "./style.css";
 import { AssetResolver } from "./assets/resolver";
 import { decodeBlp } from "./assets/blp";
 import { mountMainMenu } from "./ui/mainMenu";
+import { mountFdfMainMenu } from "./ui/fdfMainMenu";
+import { mountLoadGate, type GateLoad } from "./ui/gate";
+import type { FdfScreen } from "./ui/fdf/render";
+import type { DataSource } from "./vfs/types";
 import { showLobby, type MeleeConfig } from "./ui/lobby";
 import { parseMapInfo } from "./world/mapInfo";
 import { TerrainScene } from "./render/scene";
@@ -76,14 +80,17 @@ async function singlePlayer(): Promise<void> {
   bgCanvas.hidden = true;
   modelCanvas.hidden = true;
   mapCanvas.hidden = true;
+  document.body.classList.add("menu-suspended"); // hide the main menu behind the lobby
   const teardown = showLobby(ui, info, {
     onCancel: () => {
       teardown();
+      document.body.classList.remove("menu-suspended");
       showTerrain();
     },
     onStart: async (config) => {
       meleeConfig = config;
       teardown();
+      document.body.classList.remove("menu-suspended");
       await enterMap(bytes, info.name);
       // Melee maps get the standard setup (town hall + workers, melee rules);
       // custom/scenario maps run their own triggers instead (see mapKind.ts).
@@ -139,7 +146,36 @@ function exitToMenu(): void {
   showTerrain();
 }
 
-mountMainMenu(ui, resolver, { onSinglePlayer: singlePlayer });
+// Boot flow (issue #54): the WC3 menus are constructed from the install's own
+// UI\FrameDef\*.fdf files, so we gate on loading the game files first — a single
+// button over the flying terrain — then build the FDF main menu and continue.
+let mainMenu: FdfScreen | null = null;
+let gate: { dispose(): void } | null = null;
+
+/** Build the authentic FDF-driven main menu; fall back to the flat skin if the
+ *  install lacks the glue files or the FDF fails to construct. */
+async function showMainMenu(vfs: DataSource): Promise<void> {
+  try {
+    mainMenu = await mountFdfMainMenu(ui, vfs, {
+      onSinglePlayer: singlePlayer,
+      onQuit: () => window.close(),
+    });
+  } catch (err) {
+    console.warn("[OpenWar3] FDF main menu unavailable, using flat menu:", err);
+    mountMainMenu(ui, resolver, { onSinglePlayer: singlePlayer });
+  }
+}
+
+/** Hand off from the load gate to the main menu once the archives are mounted. */
+function onFilesLoaded(load: GateLoad): void {
+  resolver.setInstall(load.vfs);
+  ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {}).vfs = load.vfs;
+  gate?.dispose();
+  gate = null;
+  void showMainMenu(load.vfs);
+}
+
+gate = mountLoadGate(ui, onFilesLoaded);
 
 // Console hooks for the phase exit criteria (see README "Testing manually").
 (window as unknown as { openwar3: Record<string, unknown> }).openwar3 = {
@@ -151,4 +187,5 @@ mountMainMenu(ui, resolver, { onSinglePlayer: singlePlayer });
   showTerrain,
   loadMap: async (file: File) => enterMap(new Uint8Array(await file.arrayBuffer()), file.name),
   meleeConfig: () => meleeConfig,
+  mainMenu: () => mainMenu,
 };
