@@ -30,6 +30,9 @@ export function mountFdfMainMenu(
     // glue script hides it), but the little search-region button (magnifying glass)
     // next to Online is kept — the developer wants it shown even without region logic.
     hidden: ["RealmSelect"],
+    // Wider buttons than the 4:3-authored FDF, to fill the widescreen chain panel
+    // (text stays its FDF size — only the widget widens).
+    buttonWidthScale: 1.35,
     // "Battle.net" is intentionally "Online": OpenWar3 multiplayer targets our own
     // server, not Blizzard's (matches the flat-menu note in mainMenu.ts / plan §10.1).
     textOverrides: { BattleNetButtonText: "Online" },

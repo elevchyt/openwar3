@@ -36,6 +36,8 @@ export interface FdfScreenOptions {
   sprites?: Record<string, string>;
   /** Frame names to skip (WC3's glue scripts hide these sub-panels initially). */
   hidden?: string[];
+  /** Widen the button widgets by this factor (text size unchanged). Default 1. */
+  buttonWidthScale?: number;
 }
 
 /** A mounted FDF screen: a full-viewport overlay that relayouts on resize. */
@@ -73,7 +75,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     const fit = fitBox(window.innerWidth, window.innerHeight);
     // Root fills the full screen width (worldW × 0.6) so TOPRIGHT-anchored frames land
     // on the screen's right edge, not a centred 4:3 box's right edge.
-    const { tree } = layout(root, { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT });
+    const { tree } = layout(root, { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT }, opts.buttonWidthScale ?? 1);
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas,
       handlers: opts.handlers ?? {},

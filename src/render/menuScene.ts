@@ -83,10 +83,10 @@ export class MenuScene {
     camPanX: -30, // pan the eye+target screen-right (world units)
     camPanY: -140, // pan the eye+target screen-up (world units)
     camFov: 0.76, // field-of-view multiplier
-    panelCx: -0.125, // panel ortho window centre (panel [0,1] space)
-    panelCy: -0.185,
-    panelHalfX: 0.42, // panel ortho half-width  (smaller = wider panel)
-    panelHalfY: 0.42, // panel ortho half-height (smaller = taller panel)
+    panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
+    panelCy: -0.2,
+    panelHalfX: 0.61, // panel ortho half-width
+    panelHalfY: 0.3, // panel ortho half-height (smaller = taller/zoomed panel)
   };
 
   /** Apply the current `tuning` values (called by the debug controls after a change). */
@@ -203,18 +203,21 @@ export class MenuScene {
     }
     this.scene3d.viewport.set([0, 0, w, h]);
 
-    // Panels: ortho over the panel's [0,1]² screen space, rendered across the WHOLE
-    // canvas (not a centred 4:3 sub-rect) so the panel can be positioned anywhere,
-    // including hard against the right screen edge, without the GL scissor clipping it.
-    // panelCx/Cy place it and panelHalfX/HalfY size + stretch it (independent, so the
-    // 4:3-authored panel can frame the buttons on a 16:9 screen).
+    // Panel: rendered into a HEIGHT-BASED, RIGHT-ANCHORED viewport so it scales and
+    // sits exactly like the FDF buttons (which also scale by height and anchor to the
+    // screen's right edge) — the two stay locked together at any screen size/aspect,
+    // instead of the panel stretching with the screen width. The viewport width tracks
+    // the height via the tuned window aspect (panelHalfX/panelHalfY), so the panel keeps
+    // its proportions; panelCx/Cy place the content within it.
+    const panelAspect = t.panelHalfX / t.panelHalfY;
+    const pVw = h * panelAspect;
     this.scenePanel.camera.ortho(t.panelCx - t.panelHalfX, t.panelCx + t.panelHalfX, t.panelCy - t.panelHalfY, t.panelCy + t.panelHalfY, 1, 2000);
     this.scenePanel.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),
       new Float32Array([0.5, 0.5, 0]),
       new Float32Array([0, 1, 0]),
     );
-    this.scenePanel.viewport.set([0, 0, w, h]);
+    this.scenePanel.viewport.set([w - pVw, 0, pVw, h]);
   }
 
   private syncCanvasSize(): void {

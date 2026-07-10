@@ -92,9 +92,31 @@ function buildTree(frame: FdfFrame, parent: LaidOutFrame | null): LaidOutFrame {
  * reference a sibling that hasn't been placed yet (e.g. buttons chain BOTTOMRIGHT
  * off the button above). Returns a flat name→node index for handler binding.
  */
+const BUTTON_TYPES = new Set(["GLUETEXTBUTTON", "GLUEBUTTON", "TEXTBUTTON", "BUTTON", "GLUECHECKBOX"]);
+
+/** Widen each button widget (the button frame + its ornate BACKDROP parent) by
+ *  `scale`, before the layout is solved. Text is unaffected — its size comes from
+ *  FrameFont, not the frame width, so it just recentres in the wider button. */
+function scaleButtonWidths(root: LaidOutFrame, scale: number): void {
+  const done = new Set<LaidOutFrame>();
+  const widen = (n: LaidOutFrame): void => {
+    if (done.has(n) || Number.isNaN(n.w)) return;
+    n.w *= scale;
+    done.add(n);
+  };
+  (function walk(n: LaidOutFrame): void {
+    if (BUTTON_TYPES.has(n.frame.type)) {
+      widen(n);
+      if (n.parent && n.parent.frame.type === "BACKDROP") widen(n.parent);
+    }
+    n.children.forEach(walk);
+  })(root);
+}
+
 export function layout(
   root: FdfFrame,
   box: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: UI_WIDTH, h: UI_HEIGHT },
+  buttonWidthScale = 1,
 ): { tree: LaidOutFrame; byName: Map<string, LaidOutFrame> } {
   const tree = buildTree(root, null);
   // Root fills its box.
@@ -102,6 +124,8 @@ export function layout(
   if (Number.isNaN(tree.w)) tree.w = box.w;
   if (Number.isNaN(tree.h)) tree.h = box.h;
   tree.placed = true;
+
+  if (buttonWidthScale !== 1) scaleButtonWidths(tree, buttonWidthScale);
 
   // Index every node by name for sibling lookups + handler binding.
   const byName = new Map<string, LaidOutFrame>();
