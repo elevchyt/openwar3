@@ -422,8 +422,11 @@ body.in-game .menu-panel { display: none; }
   pointer-events: auto;
 }
 
-/* Plain black background rectangle matching the console dimensions. This
-   element intentionally has no skin artwork — it's a simple black block. */
+/* The backing behind the portrait / info / inventory sockets of the console art.
+   It is FLAT BLACK, not the warm dark brown a gradient gave it: in the original
+   game everything behind the info panel (the hero's name, XP bar, damage/armor and
+   STR/AGI/INT lines) reads as pure black through the frame's cut-outs (issue #50).
+   This element intentionally carries no skin artwork — it's a simple black block. */
 .hud-console-background {
   position: absolute;
   left: 20%;
@@ -435,7 +438,7 @@ body.in-game .menu-panel { display: none; }
   grid-template-columns: 190px 120px 1fr 170px 240px;
   gap: 8px;
   padding: 8px 10px;
-  background: linear-gradient(rgba(20, 17, 10, 0) 0, #14110a 14px, #0c0a06);
+  background: #000;
   pointer-events: auto;
 }
 
@@ -629,8 +632,12 @@ body.in-game .menu-panel { display: none; }
 
 /* Ability tooltip floating above the command card. */
 .hud-command { position: relative; }
-/* WC3 command tooltip: a translucent blue-grey slab, white title with the hotkey
-   letter in gold, real resource icons on the cost line, grey description. */
+/* WC3 command tooltip: the game's own slab — a flat translucent slate fill
+   (human-tooltip-background.blp) inside a gold nine-patch border re-sliced from
+   human-tooltip-border.blp. White title with the hotkey letter gilded by the
+   Tip string's own |cffffcc00 markup, ToolTip*Icon glyphs on the cost line, and
+   the Ubertip body with its colour runs and |n breaks intact (issue #50).
+   The pre-skin values below are the placeholder used when no install is mounted. */
 .hud-tooltip {
   position: absolute;
   left: -4px;
@@ -649,11 +656,33 @@ body.in-game .menu-panel { display: none; }
   pointer-events: none;
   z-index: 6;
 }
-.hud-tooltip-title { font-size: 14px; color: #f2f4f8; margin-bottom: 4px; }
-.hud-tooltip-title b { color: #f0c850; font-weight: 400; }
-.hud-tooltip-desc { font-size: 12.5px; color: #c3cad6; line-height: 1.4; }
+/* With the real art: drop the placeholder outline and frame the slab with the
+   gold nine-patch. It rides on a pseudo-element pulled 3px OUTSIDE the fill,
+   because the engine insets the backdrop background from its border the same way
+   (BackdropBackgroundInsets 0.005 against BackdropCornerSize 0.016). The fill's
+   rounded corners then tuck behind the border art's arcs. */
+.hud-tooltip.skinned {
+  background: var(--hud-tooltip-fill);
+  border: none;
+  border-radius: 5px;
+  box-shadow: none;
+  padding: 9px 12px;
+}
+.hud-tooltip.skinned::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 10px solid transparent;
+  border-image: var(--hud-tooltip-border) 16 / 10px stretch;
+  pointer-events: none;
+}
+.hud-tooltip-title { font-size: 14px; color: #fff; margin-bottom: 4px; }
+.hud-tooltip-title b { color: #ffcc00; font-weight: 400; } /* the |cffffcc00 hotkey gold */
+.hud-tooltip-desc { font-size: 12.5px; color: #fff; line-height: 1.4; }
+.hud-tooltip-desc + .hud-tooltip-desc { margin-top: 6px; }
 .hud-tooltip-cost { font-size: 13px; margin-bottom: 4px; display: flex; gap: 16px; }
-.tt-cost-item { display: inline-flex; align-items: center; gap: 4px; color: #f0c850; }
+.tt-cost-item { display: inline-flex; align-items: center; gap: 4px; color: #fed312; } /* WC3 tooltip gold */
+.tt-cost-item.short { color: #ff2020; } /* can't pay it right now — WC3 reddens the number */
 .tt-cost-icon { width: 16px; height: 16px; display: block; }
 
 /* Command button that the player can't currently afford. */
@@ -1036,6 +1065,36 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   box-shadow: 0 0 6px rgba(70, 224, 90, 0.5) inset;
   color: #bff3b8;
 }
+
+/* The command-card highlight: WC3's own green glow border, human-activebutton.blp
+   (issue #50). It wears black everywhere but the rim, which is exactly what an
+   ADDITIVE draw wants — `screen` leaves the icon untouched and lights only the
+   edge, so no scaled 1px outline can smear it. A button gets it while the cursor
+   is over it and while it is armed (an order awaiting a target, autocast on).
+   With the art present these rules replace the gold outline above. */
+.hud-activebutton-skinned .hud-cmd:not(:disabled):hover,
+.hud-activebutton-skinned .hud-cmd.armed,
+.hud-activebutton-skinned .hud-inv-slot:not(.empty):hover,
+body.carrying-item .hud-activebutton-skinned .hud-inv-slot:hover {
+  border-color: rgba(216, 180, 90, 0.25);
+  box-shadow: none;
+}
+.hud-activebutton-skinned .hud-cmd::before,
+.hud-activebutton-skinned .hud-inv-slot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--hud-activebutton);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  mix-blend-mode: screen;
+  opacity: 0;
+  pointer-events: none;
+}
+.hud-activebutton-skinned .hud-cmd:not(:disabled):hover::before,
+.hud-activebutton-skinned .hud-cmd.armed::before,
+.hud-activebutton-skinned .hud-inv-slot:not(.empty):hover::before { opacity: 1; }
+body.carrying-item .hud-activebutton-skinned .hud-inv-slot:hover::before { opacity: 1; }
 
 /* No crosshair when an order is armed — the WC3 cursor is forced everywhere
    in-game (see applyRaceCursor), so we never override it here. */

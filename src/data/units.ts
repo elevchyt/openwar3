@@ -33,7 +33,12 @@ export interface UnitDef {
   lumberSound: string; // unitUI "weap2" 2nd-weapon base — workers' chop ("AxeMediumChop"); "" = none
   armorSound: string; // unitUI "armor" material struck ("Metal"/"Flesh"/…) → combat-sound suffix
   icon: string; // command-card BTN icon path (from UnitFunc "art")
-  description: string; // command-card tooltip text (UnitStrings "Ubertip"), cleaned
+  description: string; // command-card tooltip body (UnitStrings "Ubertip"), WC3 markup intact
+  // The command-card tooltip TITLE, exactly as the game writes it (UnitStrings
+  // "Tip"): "Train |cffffcc00P|reasant" / "Build |cffffcc00F|rarm". It already
+  // carries the Train/Build verb and gilds the hotkey letter, so the HUD renders
+  // it verbatim rather than re-deriving either.
+  tip: string;
   hotkey: string; // command hotkey letter (UnitStrings "Hotkey")
   buttonX: number; // command-card grid column (0-3), from "buttonpos"
   buttonY: number; // command-card grid row (0-2)
@@ -239,7 +244,8 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The
       // description was previously read from `fn` → always empty → generic fallback.
-      description: strings ? cleanTip(str(strings, "Ubertip")) : "",
+      description: strings ? rawTip(str(strings, "Ubertip")) : "",
+      tip: strings ? rawTip(str(strings, "Tip")) : "",
       hotkey: strings ? (str(strings, "Hotkey").trim()[0] ?? "").toUpperCase() : "",
       buttonX: bx,
       buttonY: by,
@@ -313,15 +319,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
   return new UnitRegistry(defs);
 }
 
-// WC3 tooltip text (Ubertip) uses |cAARRGGBB…|r colour codes and |n line breaks.
-// Strip the colour markup and normalize breaks/whitespace for plain display.
-function cleanTip(v: string): string {
-  return v
-    .replace(/\|c[0-9a-fA-F]{8}/g, "")
-    .replace(/\|r/g, "")
-    .replace(/\|n/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+// WC3 tooltip text (Tip/Ubertip) uses |cAARRGGBB…|r colour codes and |n line
+// breaks. That markup IS the tooltip's formatting, so only the surrounding quotes
+// the reader leaves on come off here; the HUD renders the rest (src/ui/wc3Text.ts).
+function rawTip(v: string): string {
+  return v.replace(/^"|"$/g, "").trim();
 }
 
 // "missileart" from UnitFunc.txt is a .mdl model path. It may be comma-separated

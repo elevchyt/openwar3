@@ -2337,6 +2337,10 @@ export class MapViewerScene {
       icon: (kind) => this.resourceIcon(kind),
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
       blpUrl: (path) => this.blpIcon(path),
+      blpCanvas: (path) => {
+        const bytes = this.vfs.rawBytes(path);
+        return bytes ? blpToCanvas(bytes) : null;
+      },
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
@@ -2621,7 +2625,7 @@ export class MapViewerScene {
   // --- command card ---------------------------------------------------------
 
   private cmd(over: Partial<CommandButton>): CommandButton {
-    return { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, col: 0, row: 0, disabled: false, active: false, ...over };
+    return { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, mana: 0, col: 0, row: 0, disabled: false, active: false, ...over };
   }
 
   /** Hero types the local player already has or is producing — owned hero units,
@@ -2677,6 +2681,7 @@ export class MapViewerScene {
         const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
         out.push(this.cmd({
           id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
+          tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
           desc: d.description || `Trains a ${d.name}.`, gold, lumber, food: d.foodUsed,
           col: d.buttonX, row: d.buttonY, disabled: !afford || (d.isHero && atHeroCap),
         }));
@@ -2702,6 +2707,7 @@ export class MapViewerScene {
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
         out.push(this.cmd({
           id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
+          tip: d.tip, // "Build |cffffcc00F|rarm" — the verb is already in the game's Tip
           desc: d.description || `Builds ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: 0,
           col: d.buttonX, row: d.buttonY, disabled: !afford,
         }));
@@ -2725,16 +2731,25 @@ export class MapViewerScene {
           const nextRank = ab.level + 1;
           const need = requiredHeroLevel(def, nextRank);
           const canLearn = su.skillPoints > 0 && !maxed && su.level >= need;
-          const desc = maxed
-            ? `${def.name} is fully learned (rank ${def.levels}).`
-            : su.level < need
-              ? `Requires Hero Level ${need} to learn ${def.name} (rank ${nextRank}).`
-              : `Learn ${def.name} — Rank ${nextRank}.  ${this.abilityDesc(def, nextRank)}`;
+          // The learn page has its own pair of strings in AbilityStrings: Researchtip
+          // ("Learn Holy Ligh|cffffcc00t|r - [|cffffcc00Level %d|r]") and Researchubertip,
+          // which spells out what every rank does. Use them, and add the game's own
+          // "Hero level:" requirement line (GlobalStrings REQUIREDLEVELTOOLTIP) while
+          // the hero is too low to take the next rank.
+          const shown = Math.min(nextRank, def.levels);
+          const tip = def.researchTip
+            ? def.researchTip.replace(/%d/g, String(shown))
+            : `Learn ${def.name} - [Level ${shown}]`;
+          const body = def.researchUberTip
+            ? this.resolveTip(def.researchUberTip, def, shown)
+            : this.abilityDesc(def, shown);
+          const desc = maxed || su.level >= need ? body : `${body}|n|n|cffffcc00Hero level: ${need}|r`;
           out.push(this.cmd({
             id: canLearn ? `learn:${ab.id}` : "noop",
             icon: this.blpIcon(def.icon),
             name: maxed ? `${def.name} (Max)` : `+ ${def.name} [${ab.level}/${def.levels}]`,
             hotkey: def.hotkey,
+            tip: maxed ? `${def.name} - [|cffffcc00Level ${def.levels}|r]` : tip,
             desc,
             col, row, disabled: !canLearn,
           }));
@@ -2765,26 +2780,36 @@ export class MapViewerScene {
 
   /** Fixed command-card slots for a hero's abilities: basics fill columns 0–2 of
    *  the bottom row in learn-list order, the ultimate takes column 3. Non-heroes
-  /** Tooltip text for a spell button: mana/cooldown + the per-rank ubertip (with
-   *  its `<code,Field>` placeholders resolved to the real values). */
+  /** Tooltip body for a spell button: the per-rank Ubertip, with its `<code,Field>`
+   *  placeholders resolved to the real values. The mana cost rides the tooltip's cost
+   *  row (with the game's own ToolTipManaIcon) rather than being prepended here —
+   *  and cooldown is deliberately absent, because classic WC3 never shows it in a
+   *  tooltip (GlobalStrings.fdf has no cooldown label; the radial sweep is the tell). */
   private abilityDesc(def: AbilityDef, rank: number): string {
-    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
-    const head: string[] = [];
-    if (lvl.cost > 0) head.push(`Mana ${lvl.cost}`);
-    if (lvl.cooldown > 0) head.push(`Cooldown ${lvl.cooldown}s`);
     const raw = def.uberTips[Math.min(rank, def.uberTips.length) - 1] || def.uberTips[0] || "";
-    const body = this.resolveTip(raw, def, rank);
-    return [head.join("  •  "), body].filter(Boolean).join("  —  ");
+    return this.resolveTip(raw, def, rank);
+  }
+
+  /** Tooltip title for a spell button: the game's own per-rank `Tip` string, which
+   *  already gilds the hotkey letter and appends " - [Level N]". */
+  private abilityTip(def: AbilityDef, rank: number): string {
+    return def.tips[Math.min(rank, def.tips.length) - 1] || def.tips[0] || def.name;
   }
 
   /** Replace WC3 tooltip references `<AbilCode,Field>` (and `,%` variants) with the
-   *  computed value for the shown rank — e.g. "heal for <AHhb,DataA1>" → "heal for
-   *  200". Unknown refs collapse to empty rather than leaking angle-bracket tokens. */
+   *  computed value — e.g. "heal for <AHhb,DataA1>" → "heal for 200". The field name
+   *  names its own rank in its trailing digit (`DataA1`/`DataA2`/`DataA3`), and that
+   *  digit wins: a Researchubertip lists every rank in one string ("Level 1 - <…A1>,
+   *  Level 2 - <…A2>"), so resolving them all against the shown rank would print the
+   *  same number three times. `rank` is only the fallback for an undigited field.
+   *  Unknown refs collapse to empty rather than leaking angle-bracket tokens. */
   private resolveTip(text: string, def: AbilityDef, rank: number): string {
     if (!text.includes("<")) return text;
     return text.replace(/<([^,>]+),([^,>]+?)(,%)?>/g, (_m, code: string, field: string, pct?: string) => {
       const d = this.abilities.get(code.trim()) ?? def;
-      const lvl = d.levelData[Math.min(rank, d.levelData.length) - 1];
+      const named = /(\d+)$/.exec(field.trim());
+      const lv = named ? Number(named[1]) : rank;
+      const lvl = d.levelData[Math.min(Math.max(lv, 1), d.levelData.length) - 1];
       const v = tipFieldValue(lvl, field.trim());
       if (v === null || Number.isNaN(v)) return "";
       const n = pct ? v * 100 : v;
@@ -2815,7 +2840,9 @@ export class MapViewerScene {
         icon: this.blpIcon(def.icon),
         name: def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
         hotkey: def.hotkey,
+        tip: this.abilityTip(def, ab.level),
         desc: this.abilityDesc(def, ab.level),
+        mana: lvl.cost,
         col, row,
         // Cooldown is shown by the radial overlay, not the greyed "can't afford"
         // look (a click while on cooldown is harmlessly rejected by the sim).

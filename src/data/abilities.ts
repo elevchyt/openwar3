@@ -48,8 +48,13 @@ export interface AbilityDef {
   learnX: number; // learn-skill page column (researchbuttonpos — usually row 0)
   learnY: number; // learn-skill page row
   research: boolean; // shown in the learn-skill page (hero ability)
-  tips: string[]; // per-level short tooltips (Tip)
-  uberTips: string[]; // per-level long tooltips (Ubertip)
+  // Tooltip strings, WC3 markup intact (`|cffffcc00`/`|r`/`|n` — rendered by
+  // src/ui/wc3Text.ts). `Tip` is the tooltip TITLE the game itself writes, gilded
+  // hotkey letter and rank suffix included: "Holy Ligh|cffffcc00t|r - [|cffffcc00Level 1|r]".
+  tips: string[]; // per-level titles (Tip)
+  uberTips: string[]; // per-level bodies (Ubertip)
+  researchTip: string; // learn-skill page title (Researchtip); "%d" = the rank being learned
+  researchUberTip: string; // learn-skill page body (Researchubertip) — lists every rank
   levelData: AbilityLevel[]; // index 0 = rank 1
   // Effect model paths (from AbilityFunc) — the renderer plays these on cast.
   missileArt: string; // travelling projectile (Storm Bolt hammer, Death Coil orb)
@@ -299,8 +304,10 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       learnX: lx,
       learnY: ly,
       research: num(r, "hero", 0) === 1,
-      tips: splitList(s ? str(s, "Tip") : ""),
+      tips: splitTips(s ? str(s, "Tip") : ""),
       uberTips: splitList(s ? str(s, "Ubertip") : ""),
+      researchTip: rawTip(s ? str(s, "Researchtip") : ""),
+      researchUberTip: rawTip(s ? str(s, "Researchubertip") : ""),
       levelData,
       missileArt: mdlPath(f ? str(f, "Missileart") : ""),
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
@@ -351,25 +358,32 @@ export function requiredHeroLevel(def: AbilityDef, rank: number): number {
   return Math.max(1, def.reqLevel) + skip * (rank - 1);
 }
 
-// AbilityStrings pack per-level tooltips as a quoted, comma-separated list
+// AbilityStrings pack per-level Ubertips as a QUOTED, comma-separated list
 // `"level 1","level 2","level 3"` — but the SLK reader strips the OUTER quotes,
 // leaving `level 1","level 2","level 3`. Split on the `","` separator (not quote
 // pairs — that matched the `","` gap and returned commas) and trim stray quotes.
+// A single-level ability has no separator left, so it stays one entry — which is
+// why this must NOT split on bare commas: an Ubertip sentence is full of them.
 function splitList(v: string): string[] {
   if (!v) return [];
   return v
     .split(/",\s*"/)
-    .map((p) => cleanTip(p.replace(/^"|"$/g, "")))
+    .map((p) => rawTip(p))
     .filter(Boolean);
 }
 
-function cleanTip(v: string): string {
-  return v
-    .replace(/\|c[0-9a-fA-F]{8}/g, "")
-    .replace(/\|r/g, "")
-    .replace(/\|n/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+// `Tip`, unlike `Ubertip`, is an UNQUOTED comma-separated list — one title per rank
+// (`AHbz`: "|cffffcc00B|rlizzard - [|cffffcc00Level 1|r],…"). No stock Tip contains a
+// literal comma, so a bare split is safe here and splitList's `","` rule is not.
+function splitTips(v: string): string[] {
+  if (!v) return [];
+  return v.split(",").map((p) => rawTip(p)).filter(Boolean);
+}
+
+// Keep the WC3 markup — it's the tooltip's formatting (src/ui/wc3Text.ts). Only the
+// quotes the reader leaves on come off.
+function rawTip(v: string): string {
+  return v.replace(/^"|"$/g, "").trim();
 }
 
 /** A buff's own persistent TargetArt, read from its `[B….]` section in the same

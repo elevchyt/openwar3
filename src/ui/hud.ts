@@ -5,6 +5,7 @@
 // used when available (asset-resolver philosophy: authentic when present).
 
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
+import { escapeHtml, wc3ToHtml } from "./wc3Text";
 
 export type OrderMode = "move" | "attack" | null;
 
@@ -14,10 +15,15 @@ export interface CommandButton {
   icon: string | null; // data URL
   name: string;
   hotkey: string;
-  desc: string;
+  /** The tooltip TITLE as the game itself writes it (UnitStrings/AbilityStrings
+   *  `Tip`), WC3 markup intact: "Train |cffffcc00P|reasant". Absent for the
+   *  hand-written orders (Move/Stop/…), which fall back to name + hotkey. */
+  tip?: string;
+  desc: string; // tooltip body (Ubertip), WC3 markup intact
   gold: number;
   lumber: number;
   food: number;
+  mana?: number; // spell mana cost — shown on the cost row with the game's mana icon
   col: number; // 0–3
   row: number; // 0–2
   disabled: boolean;
@@ -148,6 +154,10 @@ export interface HudDriver {
   commandIcon(name: string): string | null;
   /** Data URL for an arbitrary BLP path (e.g. a unit's command icon), or null. */
   blpUrl(path: string): string | null;
+  /** An arbitrary BLP decoded to a canvas, for chrome that needs pixel work — the
+   *  tooltip border ships as an 8-tile strip that has to be re-sliced. Null if the
+   *  file isn't in the mounted archives. */
+  blpCanvas(path: string): HTMLCanvasElement | null;
   /** Current game time for the clock (hour 0–24, day/night flag). */
   dayNight(): { hour: number; isDay: boolean };
   /** Take over the top-bar clock slot with the race's real TimeIndicator model, sizing
@@ -212,6 +222,68 @@ function campColor(level: number): string {
 // The real WC3 minimap house glyph for neutral buildings (yellow house on clear).
 const NEUTRAL_BUILDING_ICON = "UI\\Minimap\\MiniMap-NeutralBuilding.blp";
 
+// Console + tooltip chrome, straight out of the archives. Blizzard only ships the
+// "Human" variant of these widget textures — every race's console draws them (same
+// as the infocard-* icons below), so the path is not race-qualified.
+//
+//  · human-activebutton.blp   the green glow border a command button wears while it
+//                             is highlighted or armed (issue #50). Solid black in the
+//                             middle, so it composites additively (`screen`) over the
+//                             icon and only the rim lights up.
+//  · human-tooltip-*.blp      the tooltip slab: a flat translucent slate fill and a
+//                             gold border shipped as an 8-tile 128×16 strip.
+//  · ToolTip*Icon.blp         the cost-row icons (this is why they exist — they are
+//                             NOT the top-bar resource icons).
+const ACTIVE_BUTTON = "UI\\Widgets\\Console\\Human\\CommandButton\\human-activebutton.blp";
+const TOOLTIP_BORDER = "UI\\Widgets\\ToolTips\\Human\\human-tooltip-border.blp";
+const TOOLTIP_BACKGROUND = "UI\\Widgets\\ToolTips\\Human\\human-tooltip-background.blp";
+const TOOLTIP_COST_ICON = {
+  gold: "UI\\Widgets\\ToolTips\\Human\\ToolTipGoldIcon.blp",
+  lumber: "UI\\Widgets\\ToolTips\\Human\\ToolTipLumberIcon.blp",
+  supply: "UI\\Widgets\\ToolTips\\Human\\ToolTipSupplyIcon.blp",
+  mana: "UI\\Widgets\\ToolTips\\Human\\ToolTipManaIcon.blp",
+} as const;
+
+// The tooltip border strip is 8 square tiles laid out left-to-right, in the order
+// the engine's BACKDROP frames name them (UI\FrameDef\Glue\BattleNetChatActionMenu.fdf
+// draws the identical bnet-tooltip-border with BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R"):
+// left, right, top, bottom, then the four corners. The two horizontal edges are
+// stored as VERTICAL bars and the engine rotates them a quarter-turn clockwise —
+// re-slice the strip into a 3×3 nine-patch CSS can drive with `border-image`.
+const BORDER_TILE = 16;
+function sliceTooltipBorder(strip: HTMLCanvasElement): string | null {
+  if (strip.width < BORDER_TILE * 8 || strip.height < BORDER_TILE) return null;
+  const out = document.createElement("canvas");
+  out.width = out.height = BORDER_TILE * 3;
+  const ctx = out.getContext("2d")!;
+  const tile = (index: number, dx: number, dy: number, rotate = false): void => {
+    ctx.save();
+    ctx.translate(dx, dy);
+    if (rotate) {
+      ctx.translate(BORDER_TILE, 0); // quarter-turn clockwise about the tile's centre
+      ctx.rotate(Math.PI / 2);
+    }
+    ctx.drawImage(strip, index * BORDER_TILE, 0, BORDER_TILE, BORDER_TILE, 0, 0, BORDER_TILE, BORDER_TILE);
+    ctx.restore();
+  };
+  tile(4, 0, 0); // upper-left        tile(2, top)        tile(5, upper-right)
+  tile(2, BORDER_TILE, 0, true);
+  tile(5, BORDER_TILE * 2, 0);
+  tile(0, 0, BORDER_TILE); // left     (centre stays clear) tile(1, right)
+  tile(1, BORDER_TILE * 2, BORDER_TILE);
+  tile(6, 0, BORDER_TILE * 2); // bottom-left  tile(3, bottom)  tile(7, bottom-right)
+  tile(3, BORDER_TILE, BORDER_TILE * 2, true);
+  tile(7, BORDER_TILE * 2, BORDER_TILE * 2);
+  return out.toDataURL();
+}
+
+/** The tooltip fill is a flat colour stored as a 64×64 texture — read its one pixel
+ *  rather than hardcoding it. (1.27a: rgba(24, 34, 49, 195).) */
+function tooltipFill(bg: HTMLCanvasElement): string | null {
+  const p = bg.getContext("2d")!.getImageData(0, 0, 1, 1).data;
+  return `rgba(${p[0]}, ${p[1]}, ${p[2]}, ${(p[3] / 255).toFixed(3)})`;
+}
+
 /** Crop war3mapMap.blp down to the map itself.
  *
  *  The World Editor always writes a SQUARE minimap image (256×256 in every 1.27a
@@ -233,6 +305,10 @@ function cropMinimapLetterbox(src: HTMLCanvasElement, aspect: number): HTMLCanva
   out.getContext("2d")!.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
   return out;
 }
+
+// WC3 maps the 2×3 inventory onto the numpad's matching 2×3 block: 7/8 top, 4/5
+// middle, 1/2 bottom. Drives both the hotkeys and the tooltip's "(NumPad 7)" hint.
+const INVENTORY_NUMPAD: readonly number[] = [7, 8, 4, 5, 1, 2];
 
 const MINIMAP_SIZE = 168; // px along the minimap canvas's LONGEST side
 const DOTS_PERIOD = 100; // ms between minimap dot redraws
@@ -312,7 +388,38 @@ export class GameHud {
     const skin = driver.consoleSkin();
     this.root.append(this.buildTopBar(skin), this.buildConsole(skin), this.buildCheatPanel());
     parent.appendChild(this.root);
+    this.applyWidgetSkin();
     window.addEventListener("keydown", this.onKey);
+  }
+
+  /** Hand the real console/tooltip textures to the stylesheet as custom properties.
+   *  Each is optional: without a mounted install the CSS keeps its own placeholder
+   *  chrome, so the `.skinned` classes gate every rule that needs the art. */
+  private applyWidgetSkin(): void {
+    const active = this.driver.blpUrl(ACTIVE_BUTTON);
+    if (active) {
+      this.root.style.setProperty("--hud-activebutton", `url(${active})`);
+      this.root.classList.add("hud-activebutton-skinned");
+    }
+    const strip = this.driver.blpCanvas(TOOLTIP_BORDER);
+    const border = strip ? sliceTooltipBorder(strip) : null;
+    const bg = this.driver.blpCanvas(TOOLTIP_BACKGROUND);
+    const fill = bg ? tooltipFill(bg) : null;
+    if (border && fill) {
+      this.root.style.setProperty("--hud-tooltip-border", `url(${border})`);
+      this.root.style.setProperty("--hud-tooltip-fill", fill);
+      this.cmdTooltip.classList.add("skinned");
+    }
+  }
+
+  /** One cost-row entry: the game's own tooltip icon plus the amount, turning red
+   *  when the player can't currently pay it (WC3 tints the number, not the icon). */
+  private costItem(kind: keyof typeof TOOLTIP_COST_ICON, value: number, available: number): string {
+    if (!value) return "";
+    const url = this.driver.blpUrl(TOOLTIP_COST_ICON[kind]);
+    const icon = url ? `<img class="tt-cost-icon" src="${url}" alt="${kind}">` : "";
+    const short = value > available ? " short" : "";
+    return `<span class="tt-cost-item${short}">${icon}${value}</span>`;
   }
 
   dispose(): void {
@@ -456,12 +563,13 @@ export class GameHud {
       this.refreshSelectionNow();
       return;
     }
-    // NumPad maps to the 2×3 inventory grid (WC3): 7/8 top, 4/5 middle, 1/2 bottom.
-    // Key off `e.code` so NumLock-off symbols don't interfere.
-    const numpad: Record<string, number> = { Numpad7: 0, Numpad8: 1, Numpad4: 2, Numpad5: 3, Numpad1: 4, Numpad2: 5 };
-    if (e.code in numpad) {
+    // NumPad maps to the 2×3 inventory grid (INVENTORY_NUMPAD). Key off `e.code` so
+    // NumLock-off symbols don't interfere.
+    const numpad = /^Numpad([0-9])$/.exec(e.code);
+    const slot = numpad ? INVENTORY_NUMPAD.indexOf(Number(numpad[1])) : -1;
+    if (slot >= 0) {
       e.preventDefault();
-      this.driver.useInventory(numpad[e.code]);
+      this.driver.useInventory(slot);
       return;
     }
     // Trigger the command whose hotkey matches the pressed key.
@@ -961,7 +1069,12 @@ export class GameHud {
 
   /** Item tooltip for inventory slot `i`. Every HUD tooltip — ability, order,
    *  build, item — is the SAME slab in the SAME place, above the command card, so
-   *  the eye never has to hunt for it. An empty slot shows nothing. */
+   *  the eye never has to hunt for it. An empty slot shows nothing.
+   *
+   *  Title and footer follow the game's own format strings (UI\FrameDef\GlobalStrings.fdf):
+   *  ITEM_NAME_HOTKEY "%s (|cfffed312NumPad %u|r)" and, for anything with an active
+   *  effect, ITEM_USE_TOOLTIP "|CFFFED312Left-Click to Use|R". The remaining charges
+   *  live on the slot's corner badge, as in WC3 — not in the name. */
   private showItemTooltip(i: number): void {
     this.invHover = i;
     const s = this.driver.inventory()[i] ?? null;
@@ -969,11 +1082,10 @@ export class GameHud {
       this.cmdTooltip.hidden = true;
       return;
     }
-    // A charged item (potions, scrolls, wands) says how many uses are left, the way
-    // WC3 appends the count to the item's name in the tooltip.
-    const title = escapeHtml(s.charges > 0 ? `${s.name} (${s.charges})` : s.name);
-    const desc = s.desc ? `<div class="hud-tooltip-desc">${escapeHtml(s.desc)}</div>` : "";
-    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}`;
+    const title = wc3ToHtml(`${s.name} (|cfffed312NumPad ${INVENTORY_NUMPAD[i]}|r)`);
+    const desc = s.desc ? `<div class="hud-tooltip-desc">${wc3ToHtml(s.desc)}</div>` : "";
+    const use = s.usable ? `<div class="hud-tooltip-desc">${wc3ToHtml("|cfffed312Left-Click to Use|r")}</div>` : "";
+    this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${title}</div>${desc}${use}`;
     this.cmdTooltip.hidden = false;
   }
 
@@ -1116,23 +1228,23 @@ export class GameHud {
     }
   }
 
+  /** A command tooltip, built the way the game builds it: the `Tip` string as the
+   *  title (its markup already gilds the hotkey letter and prefixes "Train"/"Build"),
+   *  then a cost row of ToolTip*Icon glyphs, then the `Ubertip` body with its colour
+   *  runs and `|n` breaks intact. Where a button has no game string behind it (the
+   *  hand-written Move/Stop/… orders) the name + hotkey stand in. */
   private showTooltip(c: CommandButton): void {
-    // Title: "Build " prefix for build orders, with the hotkey letter picked out
-    // in gold inside the name (like the WC3 tooltip).
-    const prefix = c.id.startsWith("build:") ? "Build " : "";
-    const title = highlightHotkey(prefix + c.name, c.hotkey);
-    // Cost: the REAL gold/lumber/food icons (same as the top resource bar) + the
-    // amount, not placeholder glyphs.
-    const costItem = (kind: "gold" | "lumber" | "supply", value: number): string => {
-      if (!value) return "";
-      const url = this.driver.icon(kind);
-      const icon = url ? `<img class="tt-cost-icon" src="${url}" alt="${kind}">` : "";
-      return `<span class="tt-cost-item">${icon}${value}</span>`;
-    };
-    const costs = costItem("gold", c.gold) + costItem("lumber", c.lumber) + costItem("supply", c.food);
+    const title = c.tip ? wc3ToHtml(c.tip) : highlightHotkey(c.id.startsWith("build:") ? `Build ${c.name}` : c.name, c.hotkey);
+    const r = this.driver.resources();
+    const sel = this.driver.selection();
+    const costs =
+      this.costItem("gold", c.gold, r.gold) +
+      this.costItem("lumber", c.lumber, r.lumber) +
+      this.costItem("supply", c.food, r.foodMax - r.foodUsed) +
+      this.costItem("mana", c.mana ?? 0, sel?.mana ?? 0);
     const cost = costs ? `<div class="hud-tooltip-cost">${costs}</div>` : "";
     this.cmdTooltip.innerHTML =
-      `<div class="hud-tooltip-title">${title}</div>${cost}<div class="hud-tooltip-desc">${escapeHtml(c.desc)}</div>`;
+      `<div class="hud-tooltip-title">${title}</div>${cost}<div class="hud-tooltip-desc">${wc3ToHtml(c.desc)}</div>`;
     this.cmdTooltip.hidden = false;
   }
 
@@ -1174,7 +1286,7 @@ export class GameHud {
         this.selSub.textContent = "";
         this.selCarry.hidden = true;
         this.selDesc.hidden = false;
-        this.selDesc.textContent = sel.description;
+        this.selDesc.innerHTML = wc3ToHtml(sel.description); // Ubertip markup, as in-game
         this.attrIconEl.hidden = true;
         this.attrLines.hidden = true;
       } else if (sel.isMine) {
@@ -1534,12 +1646,10 @@ function onPress(el: HTMLElement, fn: ((e: PointerEvent) => void) | null): void 
     : null;
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
-}
-
 // Highlight the hotkey letter (first occurrence, case-insensitive) in gold inside
-// the title, e.g. "Build <b>A</b>ltar of Kings" — the WC3 tooltip convention.
+// the title, e.g. "Build <b>A</b>ltar of Kings" — the WC3 tooltip convention. Only
+// needed for the buttons with no game `Tip` string behind them; a real Tip already
+// carries `|cffffcc00`…`|r` around the letter.
 function highlightHotkey(name: string, hotkey: string): string {
   if (!hotkey || hotkey.length !== 1) return escapeHtml(name);
   const idx = name.toUpperCase().indexOf(hotkey.toUpperCase());

@@ -15,7 +15,7 @@ import type { DataSource } from "../vfs/types";
 export interface ItemDef {
   id: string; // item rawcode
   name: string;
-  description: string; // Ubertip — shown on the HUD when the ground item is selected
+  description: string; // Ubertip, WC3 markup intact — shown on the HUD when the ground item is selected
   icon: string; // command-button BLP path (ItemFunc "Art")
   model: string; // ground model (.mdx) shown where the item lies (ItemData "file")
   scale: number; // ground-model scale
@@ -132,7 +132,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
     defs.set(id, {
       id,
       name: (s && str(s, "Name")) || id,
-      description: cleanTip(s ? str(s, "Ubertip") : ""),
+      description: rawTip(s ? str(s, "Ubertip") : ""),
       icon: f ? str(f, "Art") : "",
       model: itemModel(str(r, "file")),
       scale: num(r, "scale", 1),
@@ -163,17 +163,12 @@ function itemModel(v: string): string {
   return /\.mdx$/i.test(p) ? p : `${p}.mdx`;
 }
 
-// Strip WC3 tooltip markup (colour codes, line breaks) and the surrounding quotes
-// the SLK reader leaves on. `<ABIL,Field>` value placeholders are kept for the sim
-// to resolve against the ability data (e.g. a potion's heal amount).
-function cleanTip(v: string): string {
-  return v
-    .replace(/^"|"$/g, "")
-    .replace(/\|c[0-9a-fA-F]{8}/g, "")
-    .replace(/\|r/g, "")
-    .replace(/\|n/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+// Strip only the surrounding quotes the SLK reader leaves on. The WC3 markup
+// (`|cAARRGGBB`, `|r`, `|n`) is the tooltip's own formatting and is kept for the
+// HUD to render (src/ui/wc3Text.ts); so are the `<ABIL,Field>` value placeholders,
+// which the sim resolves against the ability data (e.g. a potion's heal amount).
+function rawTip(v: string): string {
+  return v.replace(/^"|"$/g, "").trim();
 }
 
 function str(row: Row, key: string): string {
