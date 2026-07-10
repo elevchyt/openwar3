@@ -109,6 +109,36 @@ All three files are transcribed **once**, key-for-key, into `src/data/gameplayCo
 XP curves are *computed* from those raw lists and formulas rather than re-typed. `pnpm data:verify` re-reads the real
 files and fails on any drift.
 
+## Day/night cycle (the lighting lives in models, not in a table)
+
+The clock itself is three numbers in `Units\MiscData.txt` — `DayLength` = 480 real seconds per `DayHours` = 24
+game hours, daylight between `Dawn` (6) and `Dusk` (18). Everything the player *sees* of the cycle is authored
+as **MDX**, and read at runtime in `src/render/dayNight.ts` and `src/render/timeIndicator.ts`:
+
+| What | Where | How it's driven |
+|---|---|---|
+| World lighting | `Environment\DNC\DNC<Tileset>\DNC<Tileset>Terrain.mdx` and `…Unit.mdx` | One `Directional` light, `FDirectSun` |
+| Which pair a map uses | `UI\WorldEditData.txt` `[TerrainLights]` / `[UnitLights]`, keyed by the `war3map.w3e` tileset letter | Absent letter ⇒ Lordaeron (the file says so) |
+| The top-bar clock | `UI\war3skins.txt` `TimeOfDayIndicator` → `UI\Console\<Race>\<Race>UI-TimeIndicator.mdx` | Orb + frame ring + the 8 dots |
+
+Each of these models has a single 60 000 ms `Stand` sequence that maps onto the **whole 24-hour day**: the engine
+never plays it, it seeks to `frame = hour / DayHours × 60000`. Their keyframes land on 15 000 ms and 45 000 ms —
+i.e. exactly `Dawn` and `Dusk`. So:
+
+- The sun's colour comes off the light's `KLAC` (Color) and `KLBC` (AmbColor) tracks; `KGRT` holds a single frame,
+  so the sun **never moves** — only its colour changes. `q · (0, 0, 1)` gives the vector toward it,
+  `(-0.68, -0.41, 0.62)` outdoors (which is what HiveWE and mdx-m3-viewer hard-coded as `vec3(-0.3, -0.3, 0.25)`).
+- Shading is WC3's fixed function: `clamp(ambColor·ambIntensity + color·intensity·max(N·L, 0), 0, 1)`, modulating
+  the texel. Terrain and units share the colours but not `ambIntensity` (Lordaeron: 0.2 vs 0.3), so models sit
+  flatter than the ground. Lordaeron's midnight sun is `(0.80, 0.53, 0.31)` — night is *warm and dim*, not blue.
+- The clock's eight dots are additive glow quads on bones `"1"`…`"8"`, each with a **step** alpha track that
+  switches it on 1.5 game-hours further into the half-cycle than the last; all eight blank at Dawn and Dusk.
+- `Scripts\Blizzard.j` `InitDNCSounds()` cries `RoosterSound` at Dawn and `WolfSound` at Dusk
+  (`UI\SoundInfo\AmbienceSounds.slk` → `Sound\Time\DaybreakRooster.wav`, `Sound\Time\DuskWolf.wav`).
+
+Cave tilesets (`D`, `G`) point at DNC models with no colour tracks and a near-vertical sun: underground has no
+day or night.
+
 ## Tech tree (who builds/trains what)
 
 WC3 encodes build/train relationships in **ability object-data** (`Abui`/`Aneu`/sold-unit lists on shops),
@@ -128,6 +158,7 @@ WC3's data is inconsistent, e.g. sound-set `AltarofKings` → ack row `AltarOfKi
 | `UI\SoundInfo\AnimSounds.slk` | `<label>Death` | Death cries |
 | `UI\SoundInfo\UnitCombatSounds.slk` | `<weap><armor>` | Weapon-impact + chop clangs (e.g. `MetalMediumSlice`+`Flesh`) |
 | `UI\SoundInfo\UISounds.slk` | `<name>` | Interface sounds (button click, rally, error, construction loop) |
+| `UI\SoundInfo\AmbienceSounds.slk` | `<name>` | Ambience beds + the dawn/dusk cries (`RoosterSound`, `WolfSound`) |
 
 Each row gives `DirectoryBase` + `FileNames` (comma-separated random variants), `Volume`, `Pitch`, flags.
 Missile launch/impact sounds are **not** in these tables — they ship as WAVs inside the missile model's own

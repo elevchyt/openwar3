@@ -365,6 +365,14 @@ body.in-game .menu-panel { display: none; }
   inset: 0;
   background: center / contain no-repeat;
 }
+/* The real TimeIndicator model, rendered live on its own transparent canvas.
+   Its aspect ratio is set from the model, on .hud-clock-skinned. */
+.hud-clock-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
 
 .hud-resources {
   display: flex;

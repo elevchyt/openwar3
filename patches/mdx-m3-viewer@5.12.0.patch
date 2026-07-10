@@ -324,6 +324,30 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
          }
      }
      return offset;
+diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..f8d921ab6570b2c03ffb783c4ab49edf0606d18b 100644
+--- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
++++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
+@@ -45,6 +45,19 @@ class BatchGroup {
+             gl.uniform1f(uniforms['u_hasBones'], 0);
+         }
+         gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
++        // OpenWar3: the scene's day/night light for models (Environment\DNC\*Unit.mdx).
++        // Only the SD shader declares these; on HD/other shaders the lookup misses and
++        // the uniform call is a no-op. Scenes without a cycle keep dncEnabled = 0.
++        const dncUnit = scene.dncUnit;
++        if (scene.dncEnabled && dncUnit) {
++            gl.uniform1f(uniforms['u_dncEnabled'], 1);
++            gl.uniform3fv(uniforms['u_dncAmbient'], dncUnit.ambient);
++            gl.uniform3fv(uniforms['u_dncDiffuse'], dncUnit.diffuse);
++            gl.uniform3fv(uniforms['u_dncLightDir'], dncUnit.direction);
++        }
++        else {
++            gl.uniform1f(uniforms['u_dncEnabled'], 0);
++        }
+         gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
+         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
+         if (isHd) {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb9f8a68a3 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
@@ -507,8 +531,52 @@ index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb
      getBounds() {
          const model = this.model;
          if (this.sequence === -1) {
+diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
+index 235f29101256617d34587316e8f40984a8f95685..2ef29cbd52b40200fbd5ce7bf8849c6e5bb60dac 100644
+--- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
++++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
+@@ -11,6 +11,16 @@ uniform sampler2D u_texture;
+ uniform float u_filterMode;
+ uniform bool u_unshaded;
+ 
++// OpenWar3: day/night cycle, from the tileset's Environment\DNC\*Unit.mdx light
++// (src/render/dayNight.ts). Same colours the terrain gets, but a higher ambient
++// intensity — Blizzard authored units to sit flatter than the ground. u_dncEnabled
++// is 0 for scenes with no cycle (the portrait bust, the HUD clock), which keeps
++// mdx-m3-viewer's stock near-flat lambert below.
++uniform float u_dncEnabled;
++uniform vec3 u_dncAmbient;
++uniform vec3 u_dncDiffuse;
++uniform vec3 u_dncLightDir;
++
+ varying vec2 v_uv;
+ varying vec3 v_normal;
+ varying vec4 v_color;
+@@ -62,10 +72,18 @@ void lambert() {
+   vec4 color = getDiffuseColor();
+ 
+   if (!u_unshaded) {
+-    float lambertFactor = clamp(dot(v_normal, v_lightDir), 0.0, 1.0);
+-    lambertFactor = clamp(lambertFactor + 0.7, 0.0, 1.0);
+-
+-    color.rgb *= lambertFactor;
++    if (u_dncEnabled > 0.5) {
++      // WC3's fixed-function lighting: ambient + diffuse*N·L, clamped per channel.
++      // v_normal is already world space (the vertex shader skins into world space
++      // and gl_Position needs no model matrix), so N·L is a plain world-space dot.
++      float ndotl = max(dot(normalize(v_normal), u_dncLightDir), 0.0);
++      color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * ndotl, 0.0, 1.0);
++    } else {
++      float lambertFactor = clamp(dot(v_normal, v_lightDir), 0.0, 1.0);
++      lambertFactor = clamp(lambertFactor + 0.7, 0.0, 1.0);
++
++      color.rgb *= lambertFactor;
++    }
+   }
+ 
+   gl_FragColor = color;
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..ae4d63d4f3e02a816255f2c51719c6928bf9505d 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..4019d557a1b9f3d0459fdb11f011b7f3c749c967 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -168,7 +168,11 @@ class War3MapViewerMap {
@@ -689,7 +757,31 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..ae4d63d4f3e02a816255f2c51719c692
                              }
                          });
                      }
-@@ -612,6 +747,18 @@ class War3MapViewerMap {
+@@ -503,6 +638,7 @@ class War3MapViewerMap {
+             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+             webgl.useShader(shader);
+             gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
++            this.setDayNightUniforms(uniforms); // OpenWar3: day/night shading
+             gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
+             gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
+             gl.uniform1i(uniforms['u_heightMap'], 15);
+@@ -558,6 +694,7 @@ class War3MapViewerMap {
+             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+             webgl.useShader(shader);
+             gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
++            this.setDayNightUniforms(uniforms); // OpenWar3: day/night shading
+             gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
+             gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
+             gl.uniform1i(uniforms['u_heightMap'], 0);
+@@ -599,6 +736,7 @@ class War3MapViewerMap {
+             gl.disable(gl.BLEND);
+             shader.use();
+             gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
++            this.setDayNightUniforms(uniforms); // OpenWar3: day/night shading
+             gl.uniform1i(uniforms['u_heightMap'], 0);
+             gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
+             gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
+@@ -612,6 +750,18 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -708,10 +800,29 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..ae4d63d4f3e02a816255f2c51719c692
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +818,24 @@ class War3MapViewerMap {
+@@ -671,6 +821,43 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
++    /**
++     * OpenWar3: feed the ground/cliff/water shaders the scene's day/night light,
++     * sampled from the tileset's Environment\DNC\*Terrain.mdx (src/render/dayNight.ts).
++     * All three passes take the TERRAIN light; models take the unit one (mdx/batchgroup).
++     */
++    setDayNightUniforms(uniforms) {
++        const gl = this.viewer.gl;
++        const scene = this.worldScene;
++        const dnc = scene.dncTerrain;
++        if (scene.dncEnabled && dnc) {
++            gl.uniform1f(uniforms['u_dncEnabled'], 1);
++            gl.uniform3fv(uniforms['u_dncAmbient'], dnc.ambient);
++            gl.uniform3fv(uniforms['u_dncDiffuse'], dnc.diffuse);
++            gl.uniform3fv(uniforms['u_dncLightDir'], dnc.direction);
++        }
++        else {
++            gl.uniform1f(uniforms['u_dncEnabled'], 0);
++        }
++    }
 +    /**
 +     * OpenWar3: is the tile at the given column and row a ramp entrance?
 +     * All four corners carry the w3e ramp flag and the layers differ
@@ -734,10 +845,10 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..ae4d63d4f3e02a816255f2c51719c692
       * Is the tile at the given column and row water?
       */
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-index c2a27060799ff26b5c86ccedd0bedda2d6a54746..825d0d740f23e7e1369564d6f99688b98f779773 100644
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..2d2194a87aba72326f202bfaca991b2218bdbaf1 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-@@ -9,6 +9,15 @@ ${precision_glsl_1.default}
+@@ -9,6 +9,24 @@ ${precision_glsl_1.default}
  uniform sampler2D u_texture1;
  uniform sampler2D u_texture2;
  
@@ -750,13 +861,28 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..825d0d740f23e7e1369564d6f99688b9
 +uniform vec4 u_fogParams;
 +uniform float u_fogEnabled;
 +
++// OpenWar3: day/night cycle, from the tileset's Environment\DNC\*Terrain.mdx light —
++// the same values the ground pass gets, so a cliff face and the grass on top of it
++// darken together. See ground.frag. Cliff instances are translation-only, so a_normal
++// is already world space.
++uniform float u_dncEnabled;
++uniform vec3 u_dncAmbient;
++uniform vec3 u_dncDiffuse;
++uniform vec3 u_dncLightDir;
++
  varying vec3 v_normal;
  varying vec2 v_uv;
  varying float v_texture;
-@@ -35,6 +44,12 @@ void main() {
+@@ -35,6 +53,18 @@ void main() {
  
    // color *= clamp(dot(normal, lightDirection) + 0.45, 0.1, 1.0);
  
++  // OpenWar3: day/night shading (ambient + diffuse*N·L), before the fog dimming.
++  if (u_dncEnabled > 0.5) {
++    float ndotl = max(dot(normalize(v_normal), u_dncLightDir), 0.0);
++    color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * ndotl, 0.0, 1.0);
++  }
++
 +  // OpenWar3: dim the cliff by the fog-of-war brightness at this fragment's world XY.
 +  if (u_fogEnabled > 0.5) {
 +    vec2 fogUv = (v_position.xy - u_fogParams.xy) * u_fogParams.zw;
@@ -766,3 +892,99 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..825d0d740f23e7e1369564d6f99688b9
    gl_FragColor = color;
  }
  `;
+diff --git a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
+index 70449d8d52f46ac83662d302c94dcee8e29147e7..bfb2747475d1d31265581e8b83a74492c172cd8f 100644
+--- a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
++++ b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
+@@ -6,12 +6,21 @@ ${precision_glsl_1.default}
+ 
+ uniform sampler2D u_tilesets[15];
+ 
++// OpenWar3: day/night cycle. The stock shader hard-coded a light direction and then
++// commented the lighting out entirely, leaving the ground fullbright at every hour.
++// These come from the tileset's Environment\DNC\*Terrain.mdx light, sampled at the
++// current time of day (src/render/dayNight.ts): u_dncAmbient is ambColor*ambIntensity,
++// u_dncDiffuse is color*intensity, u_dncLightDir points toward the sun. u_dncEnabled
++// is 0 when no cycle is installed, which keeps the stock fullbright look.
++uniform float u_dncEnabled;
++uniform vec3 u_dncAmbient;
++uniform vec3 u_dncDiffuse;
++uniform vec3 u_dncLightDir;
++
+ varying vec4 v_tilesets;
+ varying vec2 v_uv[4];
+ varying vec3 v_normal;
+ 
+-const vec3 lightDirection = normalize(vec3(-0.3, -0.3, 0.25));
+-
+ vec4 sample(float tileset, vec2 uv) {
+   // 1.0 - 1.0 == 0.0 is not always true.
+   int i = int(tileset - 0.6);
+@@ -70,7 +79,14 @@ void main() {
+     color = blend(color, v_tilesets[3], v_uv[3]);
+   }
+ 
+-  //color *= clamp(dot(v_normal, lightDirection) + 0.45, 0.0, 1.0);
++  // OpenWar3: WC3's fixed-function lighting — ambient + diffuse*N·L, clamped per
++  // channel, modulating the texel. At noon that saturates to white (the ground reads
++  // as its raw texture); at midnight Lordaeron's sun sinks to (0.80, 0.53, 0.31),
++  // which is exactly the warm dim brown the real game paints.
++  if (u_dncEnabled > 0.5) {
++    float ndotl = max(dot(normalize(v_normal), u_dncLightDir), 0.0);
++    color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * ndotl, 0.0, 1.0);
++  }
+ 
+   gl_FragColor = vec4(color.rgb, 1.0);
+ }
+diff --git a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
+index 6f31791753b2bf146060b8adfb44767cc468be55..87798e5cef84ef8a250a15961389f561f2754f76 100644
+--- a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
++++ b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
+@@ -6,11 +6,25 @@ ${precision_glsl_1.default}
+ 
+ uniform sampler2D u_waterTexture;
+ 
++// OpenWar3: day/night cycle, the same terrain light the ground and cliffs take.
++// The water sheet is flat, so its normal is world +Z and N·L collapses to the
++// sun direction's z. Alpha (the shore fade from Water.slk) must not be dimmed.
++uniform float u_dncEnabled;
++uniform vec3 u_dncAmbient;
++uniform vec3 u_dncDiffuse;
++uniform vec3 u_dncLightDir;
++
+ varying vec2 v_uv;
+ varying vec4 v_color;
+ 
+ void main() {
+-  gl_FragColor = texture2D(u_waterTexture, v_uv) * v_color;
++  vec4 color = texture2D(u_waterTexture, v_uv) * v_color;
++
++  if (u_dncEnabled > 0.5) {
++    color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * max(u_dncLightDir.z, 0.0), 0.0, 1.0);
++  }
++
++  gl_FragColor = color;
+ }
+ `;
+ exports.default = shader;
+diff --git a/dist/cjs/viewer/scene.js b/dist/cjs/viewer/scene.js
+index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367ea8adfaa8 100644
+--- a/dist/cjs/viewer/scene.js
++++ b/dist/cjs/viewer/scene.js
+@@ -52,6 +52,16 @@ class Scene {
+          * Affects HD MDX and M3 models.
+          */
+         this.lightPosition = gl_matrix_1.vec3.fromValues(0, 0, 10000);
++        // OpenWar3: the tileset's day/night-cycle light, sampled per frame from the
++        // Environment\DNC\* models (src/render/dayNight.ts). Terrain and units carry
++        // the same colours but different ambient intensities, so each is set on its
++        // own draw: ground/cliffs take dncTerrain, MDX instances take dncUnit.
++        // Both are `null` until a host installs them, and every shader falls back to
++        // its stock unlit path when dncEnabled is 0 — so other scenes (the portrait
++        // bust, the HUD clock) are untouched.
++        this.dncEnabled = 0;
++        this.dncTerrain = null; // { ambient: vec3, diffuse: vec3, direction: vec3 }
++        this.dncUnit = null;
+         this.viewer = viewer;
+         const canvas = viewer.canvas;
+         const width = canvas.width;

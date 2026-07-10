@@ -53,6 +53,7 @@ const ACK_TABLE = "UI\\SoundInfo\\UnitAckSounds.slk";
 const ANIM_TABLE = "UI\\SoundInfo\\AnimSounds.slk";
 const COMBAT_TABLE = "UI\\SoundInfo\\UnitCombatSounds.slk";
 const UI_TABLE = "UI\\SoundInfo\\UISounds.slk";
+const AMBIENCE_TABLE = "UI\\SoundInfo\\AmbienceSounds.slk"; // dawn/dusk cries, weather beds
 const ANIMLOOKUPS_TABLE = "UI\\SoundInfo\\AnimLookups.slk"; // SND event code → SoundLabel
 // (SoundLabel → WAVs + 3D metadata is AnimSounds.slk — already loaded under the "anim" tag.)
 
@@ -124,7 +125,7 @@ export class SoundBoard {
   onVoiceStart: ((label: string, durationSec: number) => void) | null = null;
 
   constructor(private vfs: DataSource) {
-    for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE], ["animlookups", ANIMLOOKUPS_TABLE]] as const) {
+    for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE], ["ambience", AMBIENCE_TABLE], ["animlookups", ANIMLOOKUPS_TABLE]] as const) {
       this.tables.set(tag, this.loadTable(path));
     }
   }
@@ -401,6 +402,13 @@ export class SoundBoard {
    *  rally point, error, …) as a fire-and-forget one-shot. */
   playUi(name: string): void {
     this.playPool(this.resolve("ui", name), "ui");
+  }
+
+  /** Play a named ambience sound from AmbienceSounds.slk. Blizzard.j's InitDNCSounds
+   *  uses two of these: "RoosterSound" at dawn, "WolfSound" at dusk. Not positional
+   *  (the rows carry no WANT3D flag) — the whole map hears them. */
+  playAmbience(name: string): void {
+    this.playPool(this.resolve("ambience", name), "ui");
   }
 
   /** Start/stop a named looping sound (e.g. building construction). Idempotent. */

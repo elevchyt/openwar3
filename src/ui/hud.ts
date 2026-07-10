@@ -150,6 +150,9 @@ export interface HudDriver {
   blpUrl(path: string): string | null;
   /** Current game time for the clock (hour 0–24, day/night flag). */
   dayNight(): { hour: number; isDay: boolean };
+  /** Take over the top-bar clock slot with the race's real TimeIndicator model, sizing
+   *  and driving it from the host's own render loop. False → use the atlas fallback. */
+  mountClock(slot: HTMLElement): boolean;
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
   minimapImage(): HTMLCanvasElement | null;
   /** Race console atlas crops (UI\Console\<Race>UITile01–04) or null. */
@@ -488,12 +491,17 @@ export class GameHud {
       menus.appendChild(b);
     }
 
-    // Day/night clock — the circular medallion (its own atlas crop) with the
-    // rotating sun/moon disc behind its transparent centre.
+    // Day/night clock. WC3's real widget is a per-race MDX scene (war3skins.txt
+    // `TimeOfDayIndicator`): a rotating sun/moon orb inside a frame ring, ringed by
+    // eight dots that light one by one as the half-cycle runs down. The host mounts
+    // and drives it (render/timeIndicator.ts). Without an install to render it from,
+    // fall back to the console atlas' medallion crop and its sun/moon strip.
     const clock = document.createElement("div");
     clock.className = "hud-clock";
     clock.title = "Day/night cycle";
-    if (skin) {
+    if (this.driver.mountClock(clock)) {
+      clock.classList.add("hud-clock-skinned");
+    } else if (skin) {
       clock.classList.add("hud-clock-skinned");
       clock.style.aspectRatio = String(skin.clockAspect);
       if (skin.timeUrl) {

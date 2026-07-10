@@ -22,6 +22,8 @@ import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplat
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { MELEE, MISC_GAME } from "../data/gameplayConstants";
+import { DayNightCycle, type DayNightLight } from "./dayNight";
+import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
 
 /** Per-creep seed data collected from the map (guard post + drop table). */
 interface CreepSeed {
@@ -96,6 +98,11 @@ const FIXED_CARD_ICONS = [
   "BTNHumanBuild", "BTNRepair", "BTNCancel",
   "BTNRallyPoint", "BTNOrcRallyPoint", "BTNRallyPointUndead", "BTNRallyPointNightElf",
 ];
+// Blizzard.j's InitDNCSounds(): a rooster crows the moment the clock reaches Dawn, a
+// wolf howls at Dusk. Both are rows of UI\SoundInfo\AmbienceSounds.slk, playing
+// Sound\Time\DaybreakRooster.wav and Sound\Time\DuskWolf.wav.
+const DAWN_SOUND = "RoosterSound";
+const DUSK_SOUND = "WolfSound";
 const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
 const TAVERN_HIRE_TIME = 0; // tavern heroes are HIRED instantly — no build time, the hero just spawns (pops next tick)
 
@@ -152,6 +159,11 @@ interface Scene {
   startFrame(): void;
   renderOpaque(): void;
   renderTranslucent(): void;
+  // OpenWar3 patch hook: the day/night light the ground/cliff and model shaders read
+  // (see src/render/dayNight.ts). Left at 0/null on scenes with no cycle.
+  dncEnabled: number;
+  dncTerrain: DayNightLight | null;
+  dncUnit: DayNightLight | null;
 }
 interface HideableWidget {
   instance: {
@@ -290,6 +302,16 @@ export class MapViewerScene {
   // their cell is explored). Rebuilt per map; updated a few times a second.
   private fog: FogOverlay | null = null;
   private fogTerrain: TerrainData | null = null; // corner grid the fog mesh is built on
+  // The tileset's day/night lighting (issue #47), loaded from Environment\DNC\* on map
+  // load. Null when the install can't supply it — the world then keeps the viewer's
+  // stock fullbright shading rather than going black.
+  private dayNight: DayNightCycle | null = null;
+  // The top-bar day/night medallion — the real UI\Console\<Race>\<Race>UI-TimeIndicator
+  // model on its own canvas, scrubbed to the sim clock each frame (issue #47).
+  private clock: TimeIndicatorClock | null = null;
+  // Last frame's daylight flag, so crossing Dawn/Dusk can cry once. null = not yet
+  // sampled, which suppresses a spurious cry on the first frame of a match.
+  private wasDay: boolean | null = null;
   // Building ground textures (ubersplats): the dirt/foundation decals under buildings
   // + gold mines (issue #12). Built at map load (needs only terrain + gl). uberSplats
   // resolves a building's `uberSplat` code → texture + scale. simBuildingSplats tracks
@@ -556,6 +578,7 @@ export class MapViewerScene {
     this.mapBuildingSplats.clear();
     this.rts?.dispose();
     this.rts = null;
+    this.dayNight = null;
     this.lastMarkerScanCount = -1;
     this.buildingFootprints.clear();
     this.rallyFlag = null;
@@ -587,6 +610,8 @@ export class MapViewerScene {
     if (w3e && wpm) {
       const terrain = parseW3E(w3e);
       this.fogTerrain = terrain; // corner grid for the fog overlay mesh
+      // The tileset picks which DNC light models shade this map (WorldEditData.txt).
+      this.dayNight = DayNightCycle.load(this.vfs, terrain.tileset);
       // Building ground-texture (ubersplat) overlay — needs only terrain + the GL
       // context, both ready here, so build it now (unlike fog, which waits on vision).
       // stampMapPathing (pre-placed buildings) and spawnUnit register splats into it.
@@ -2312,7 +2337,8 @@ export class MapViewerScene {
       icon: (kind) => this.resourceIcon(kind),
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
       blpUrl: (path) => this.blpIcon(path),
-      dayNight: () => this.rts?.timeOfDay() ?? { hour: 8, isDay: true },
+      dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
+      mountClock: (slot) => this.mountClock(slot),
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
       selectGridUnit: (simId) => this.rts?.selectGridUnit(simId),
       deselectUnit: (simId) => this.rts?.deselectUnit(simId),
@@ -2372,6 +2398,61 @@ export class MapViewerScene {
         this.onExit?.();
       },
     });
+  }
+
+  /** Give the HUD's clock slot the local race's real TimeIndicator model, on its own
+   *  little canvas. We drive it from this scene's frame loop (see updateClock) rather
+   *  than letting it play, because its animation IS the day/night clock. */
+  private mountClock(slot: HTMLElement): boolean {
+    this.clock?.dispose();
+    this.clock = null;
+    if (!this.vfs.exists(timeIndicatorPath(this.localRace))) return false;
+    const canvas = document.createElement("canvas");
+    canvas.className = "hud-clock-canvas";
+    slot.appendChild(canvas);
+    // The medallion is wider than it is tall; hold the model's own aspect so the
+    // gargoyle frame is never stretched. A provisional 2:1 gives the canvas a width
+    // to lay out with before the model has loaded and told us the real ratio.
+    slot.style.aspectRatio = "2";
+    const clock = new TimeIndicatorClock(canvas, this.vfs);
+    void clock.load(this.localRace).then((ok) => {
+      if (!ok) return;
+      slot.style.aspectRatio = String(clock.aspect);
+      this.clock = clock;
+    });
+    return true;
+  }
+
+  /** Scrub the clock widget to the sim's hour, and cry once when the clock crosses
+   *  Dawn or Dusk. The widget's 60-second "Stand" clip spans a whole 24-hour day, so
+   *  `hour` alone decides every dot, the orb's spin and the sunrise flare; `dt` only
+   *  feeds the model's real-time glow pulse. */
+  private updateClock(dt: number): void {
+    const tod = this.rts?.timeOfDay();
+    this.clock?.render(tod?.hour ?? MELEE.MELEE_STARTING_TOD, dt);
+    if (!tod) {
+      this.wasDay = null; // no match running; re-arm for the next one
+      return;
+    }
+    if (this.wasDay !== null && this.wasDay !== tod.isDay) {
+      this.sounds?.playAmbience(tod.isDay ? DAWN_SOUND : DUSK_SOUND);
+    }
+    this.wasDay = tod.isDay;
+  }
+
+  /** Sample the tileset's day/night light at the sim's current hour and hand it to the
+   *  world scene, which the (patched) ground, cliff and model shaders read (issue #47).
+   *  Before a match starts there is no sim clock, so the map previews at the melee
+   *  opening hour, 08:00 (Blizzard.j bj_MELEE_STARTING_TOD). */
+  private applyDayNight(scene: Scene): void {
+    if (!this.dayNight) {
+      scene.dncEnabled = 0;
+      return;
+    }
+    const { terrain, unit } = this.dayNight.sample(this.rts?.timeOfDay().hour ?? MELEE.MELEE_STARTING_TOD);
+    scene.dncTerrain = terrain;
+    scene.dncUnit = unit;
+    scene.dncEnabled = 1;
   }
 
   /** The console tiles are a texture ATLAS (verified by rendering it out): the
@@ -3247,6 +3328,7 @@ export class MapViewerScene {
       this.updateCamera();
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
+      this.updateClock(dt);
       this.updatePortrait();
       // Re-scan for new on-map unit types (trained units, scouted enemies) a couple
       // times a second and warm their portraits before they're clicked.
@@ -3404,6 +3486,7 @@ export class MapViewerScene {
       }
       this.viewer.startFrame();
       const fogScene = map?.worldScene;
+      if (fogScene) this.applyDayNight(fogScene);
       // Prune ubersplats whose building has died before we draw them this frame.
       if (this.splats && fogScene) {
         const world = this.rts?.simWorld;
@@ -3490,6 +3573,8 @@ export class MapViewerScene {
     this.stop();
     this.rts?.dispose();
     this.rts = null;
+    this.clock?.dispose();
+    this.clock = null;
     this.splats?.dispose();
     this.splats = null;
     this.ringSplats?.dispose();
