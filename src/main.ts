@@ -41,6 +41,7 @@ terrain.setDoodads([]);
 let modelScene: ModelViewerScene | null = null;
 let mapScene: MapViewerScene | null = null;
 let menuScene: MenuScene | null = null;
+let menuDebug: { dispose(): void } | null = null;
 let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer (next)
 
 type Which = "none" | "menubg" | "bg" | "model" | "map";
@@ -66,6 +67,12 @@ async function showMenuBackground(vfs: DataSource | null): Promise<void> {
     }
     show("menubg");
     menuScene.start();
+    // Opt-in on-screen framing controls (?menudebug) — tune the camera/panel, then
+    // "Log values" to print numbers to bake into MenuScene.tuning.
+    if (menuScene && !menuDebug && new URLSearchParams(location.search).has("menudebug")) {
+      const { mountMenuDebug } = await import("./ui/menuDebug");
+      menuDebug = mountMenuDebug(ui, menuScene);
+    }
   } catch (err) {
     console.warn("[OpenWar3] main-menu 3D scene unavailable:", err);
     show("none"); // empty background

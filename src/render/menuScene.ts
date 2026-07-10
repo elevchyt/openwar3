@@ -82,21 +82,25 @@ export class MenuScene {
   private instances: MdxInstance[] = [];
   private raf = 0;
   private last = 0;
-  // Panel ortho tuning (window centre + half-size in the panel's [0,1] space); baked
-  // after aligning the sprite panel's button slots to the FDF buttons in-browser (the
-  // panel is posed by bone animation, so this can't be derived from its bind pose).
-  panelCx = -0.1;
-  panelCy = -0.185;
-  panelHalf = 0.42;
 
-  bgZoom = MENU_CAM_ZOOM;
+  // Live-tunable framing (exposed for the on-screen debug controls; values baked from
+  // in-browser tuning against the reference). The panel is posed by bone animation, so
+  // its ortho window can't be derived from the bind pose — it's tuned by eye. panelHalfX
+  // / panelHalfY are independent so the [0,1]²-authored (4:3) panel can be stretched to
+  // frame the buttons on a 16:9 screen.
+  readonly tuning = {
+    camZoom: MENU_CAM_ZOOM, // dolly the eye toward the target (<1 closer)
+    camPanX: 0, // pan the eye+target screen-right (world units)
+    camPanY: 0, // pan the eye+target screen-up (world units)
+    camFov: 1, // field-of-view multiplier
+    panelCx: -0.1, // panel ortho window centre (panel [0,1] space)
+    panelCy: -0.185,
+    panelHalfX: 0.42, // panel ortho half-width  (smaller = wider panel)
+    panelHalfY: 0.42, // panel ortho half-height (smaller = taller panel)
+  };
 
-  /** Live-tuning hooks: shift/scale the panel ortho or the background dolly, reframe. */
-  tunePanel(cx: number, cy: number, half: number): void {
-    this.panelCx = cx; this.panelCy = cy; this.panelHalf = half;
-    this.frameCameras();
-  }
-  tuneBg(zoom: number): void { this.bgZoom = zoom; this.frameCameras(); }
+  /** Apply the current `tuning` values (called by the debug controls after a change). */
+  applyTuning(): void { this.frameCameras(); }
 
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
     // Size the drawing buffer before the viewer reads it — directly, not via
@@ -185,32 +189,39 @@ export class MenuScene {
     const w = this.canvas.width || 1;
     const h = this.canvas.height || 1;
 
-    // Background: the model's authored camera, dollied in to fill a widescreen frame.
+    const t = this.tuning;
+
+    // Background: the model's authored camera, dollied in and panned to frame the scene.
     const cam = this.bgModel?.cameras?.[0];
     if (cam) {
-      this.scene3d.camera.perspective(cam.fieldOfView, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
-      const tgt = new Float32Array(cam.targetPosition as ArrayLike<number>);
-      const z = this.bgZoom;
-      const eye = new Float32Array([
-        tgt[0] + (cam.position[0] - tgt[0]) * z,
-        tgt[1] + (cam.position[1] - tgt[1]) * z,
-        tgt[2] + (cam.position[2] - tgt[2]) * z,
-      ]);
-      this.scene3d.camera.moveToAndFace(eye, tgt, new Float32Array([0, 0, 1])); // Z up
+      this.scene3d.camera.perspective(cam.fieldOfView * t.camFov, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
+      const tgt = [cam.targetPosition[0], cam.targetPosition[1], cam.targetPosition[2]];
+      const eye = [
+        tgt[0] + (cam.position[0] - tgt[0]) * t.camZoom,
+        tgt[1] + (cam.position[1] - tgt[1]) * t.camZoom,
+        tgt[2] + (cam.position[2] - tgt[2]) * t.camZoom,
+      ];
+      // Pan eye+target along the camera's screen axes (right, up) with Z as world up.
+      const fwd = norm([tgt[0] - eye[0], tgt[1] - eye[1], tgt[2] - eye[2]]);
+      const right = norm(cross(fwd, [0, 0, 1]));
+      const up = cross(right, fwd);
+      for (let i = 0; i < 3; i++) {
+        const d = right[i] * t.camPanX + up[i] * t.camPanY;
+        eye[i] += d; tgt[i] += d;
+      }
+      this.scene3d.camera.moveToAndFace(new Float32Array(eye), new Float32Array(tgt), new Float32Array([0, 0, 1]));
     }
     this.scene3d.viewport.set([0, 0, w, h]);
 
     // Panels: ortho over [0,1]², rendered into the centred 4:3 sub-rect so the panel
-    // slots line up with the FDF buttons (which letterbox to the same box).
+    // slots line up with the FDF buttons (which letterbox to the same box). Independent
+    // half-width/height lets the 4:3-authored panel stretch to frame 16:9 buttons.
     const scale = Math.min(w / UI_W, h / UI_H);
     const boxW = UI_W * scale;
     const boxH = UI_H * scale;
     const offX = (w - boxW) / 2;
     const offY = (h - boxH) / 2; // GL viewport y is from the bottom; the box is centred
-    // Ortho window over the panel's [0,1] space; panelCx/Cy/Half align the animated
-    // panel to the FDF buttons (the sprite panel is posed by bones, not its bind pose).
-    const c = this.panelCx, cy = this.panelCy, hw = this.panelHalf;
-    this.scenePanel.camera.ortho(c - hw, c + hw, cy - hw, cy + hw, 1, 2000);
+    this.scenePanel.camera.ortho(t.panelCx - t.panelHalfX, t.panelCx + t.panelHalfX, t.panelCy - t.panelHalfY, t.panelCy + t.panelHalfY, 1, 2000);
     this.scenePanel.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),
       new Float32Array([0.5, 0.5, 0]),
@@ -228,4 +239,13 @@ export class MenuScene {
       this.frameCameras(); // viewports + aspect follow the new size (fixes F11 black margins)
     }
   }
+}
+
+type V3 = [number, number, number];
+function cross(a: V3, b: V3): V3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function norm(a: V3): V3 {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
 }

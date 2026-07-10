@@ -1315,3 +1315,39 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 body.in-game .fdf-screen,
 body.menu-suspended .fdf-screen,
 body.in-game .load-gate { display: none; }
+
+/* Opt-in menu tuning controls (?menudebug) — sliders for the 3D camera + sprite panel. */
+.menu-debug {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  width: 250px;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: #e8e2d0;
+  background: rgba(6, 9, 14, 0.86);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  backdrop-filter: blur(3px);
+}
+.menu-debug.collapsed .menu-debug-row { display: none; }
+.menu-debug-title { font-size: 12px; color: var(--gold); margin-bottom: 8px; letter-spacing: 1px; }
+.menu-debug-row { display: block; margin-bottom: 7px; }
+.menu-debug-head { display: flex; justify-content: space-between; margin-bottom: 2px; }
+.menu-debug-label { color: #b8c0cf; }
+.menu-debug-val { color: var(--gold); font-variant-numeric: tabular-nums; }
+.menu-debug-row input[type="range"] { width: 100%; }
+.menu-debug-actions { display: flex; gap: 8px; margin-top: 6px; }
+.menu-debug-btn {
+  flex: 1;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: #1a1206;
+  background: linear-gradient(#e7c877, #c79a3f);
+  border: 1px solid #6a531d;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.menu-debug-btn:hover { filter: brightness(1.08); }
