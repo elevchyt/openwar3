@@ -432,7 +432,7 @@ body.in-game .menu-panel { display: none; }
   left: 20%;
   right: 0;
   bottom: 0;
-  height: 22%;
+  height: 20%;
   width: 50%;
   display: grid;
   grid-template-columns: 190px 120px 1fr 170px 240px;
