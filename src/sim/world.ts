@@ -453,6 +453,7 @@ export interface SimUnit {
   canSleep: boolean; // sleeps at night when guarding at home (UnitData `cansleep`)
   asleep: boolean; // currently asleep (won't auto-acquire; wakes on damage/proximity/camp)
   returning: boolean; // leashing back to the guard point (ignores enemies until home)
+  campHelper: boolean; // fighting only because a camp-mate called for help (may not call for help itself)
   strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
   returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
@@ -1256,6 +1257,7 @@ export class SimWorld {
       | "canSleep"
       | "asleep"
       | "returning"
+      | "campHelper"
       | "strayT"
       | "returnBestDist"
       | "returnStuckT"
@@ -1387,6 +1389,7 @@ export class SimWorld {
       canSleep: false,
       asleep: false,
       returning: false,
+      campHelper: false,
       strayT: 0,
       returnBestDist: 0,
       returnStuckT: 0,
@@ -4352,6 +4355,7 @@ export class SimWorld {
     if (target.isCreep) {
       target.asleep = false;
       target.strayT = 0;
+      target.campHelper = false; // being hit makes it an originator: it may now call for help
     }
     // Retaliate: an armed victim turns on its attacker (WC3 return fire), unless the
     // attacker died mid-flight or the victim is a creep leashing home (it prioritises
@@ -4825,12 +4829,18 @@ export class SimWorld {
       : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
     if (best) {
       this.issueAttack(u.id, best.id);
-      if (u.isCreep) this.alertCamp(u, best);
+      if (u.isCreep) {
+        u.campHelper = false; // saw it with its own eyes, inside its own aggro range
+        this.alertCamp(u, best);
+      }
     } else if (u.isCreep) {
       // Nothing in our own aggro range, but if a camp-mate is still fighting, go
       // help — no creep sits idle at the post while its camp is in a fight.
       const help = this.campFightTarget(u);
-      if (help) this.issueAttack(u.id, help.id);
+      if (help) {
+        this.issueAttack(u.id, help.id);
+        u.campHelper = true; // answering the shout — don't relay it onward
+      }
     }
   }
 
@@ -4977,6 +4987,7 @@ export class SimWorld {
         const best = this.bestCreepTarget(u, u.aggroRange);
         if (best && best.id !== cur.id && this.threatTier(best) > this.threatTier(cur)) {
           this.issueAttack(u.id, best.id);
+          u.campHelper = false; // picked this one out of its own aggro range
         }
       }
       if (dist >= MAX_GUARD_DISTANCE) {
@@ -5015,6 +5026,7 @@ export class SimWorld {
       const help = u.weapon ? this.campFightTarget(u) : null;
       if (help) {
         this.issueAttack(u.id, help.id);
+        u.campHelper = true; // answering the shout — don't relay it onward
         return false;
       }
       this.beginCreepReturn(u);
@@ -5028,6 +5040,7 @@ export class SimWorld {
     u.returning = true;
     u.targetId = null;
     u.inCombat = false;
+    u.campHelper = false; // out of the fight — back to guarding on its own account
     this.cancelSwing(u);
     u.strayT = 0;
     u.returnBestDist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
@@ -5088,13 +5101,24 @@ export class SimWorld {
   /** Camp cohesion (MiscGame CreepCallForHelp): a creep that engages a target
    *  wakes every sleeping camp-mate and pulls idle ones onto the same target —
    *  "a creep camp acts as one unit; attack one and they all attack" (Battle.net
-   *  creep basics). Leashing camp-mates are left alone. */
+   *  creep basics). Leashing camp-mates are left alone.
+   *
+   *  The call travels exactly ONE hop: everyone it rouses is flagged `campHelper`,
+   *  and a helper never calls for help itself. Without that flag the shout relays —
+   *  a helper is on an attack order, so the NEXT camp's idle creeps see it through
+   *  campFightTarget and join, and theirs after that (issue #55: a creep 2200 units
+   *  from the player, four times its own aggro range, charging out of a camp nobody
+   *  touched). A creep that acquires a target itself, or that gets hit, becomes an
+   *  originator again and may shout — which is the real CallForHelp rule. */
   private alertCamp(u: SimUnit, target: SimUnit): void {
     for (const c of this.units.values()) {
       if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
       if (!this.sameCamp(c, u)) continue;
       c.asleep = false; // rouse the camp
-      if (c.order === "idle" && c.weapon && this.hostile(c, target)) this.issueAttack(c.id, target.id);
+      if (c.order === "idle" && c.weapon && this.hostile(c, target)) {
+        this.issueAttack(c.id, target.id);
+        c.campHelper = true; // came for a camp-mate's shout — must not relay it
+      }
     }
   }
 
@@ -5102,10 +5126,14 @@ export class SimWorld {
    *  keep the camp committed as one: while any member is engaged, the rest rejoin
    *  rather than idling at the post or peeling off home — even when the fight has
    *  been kited out near the leash limit (the exact case where a lone creep used to
-   *  be left fighting while its camp sat back). */
+   *  be left fighting while its camp sat back).
+   *
+   *  Only an ORIGINATOR anchors the camp — one that acquired the enemy inside its own
+   *  aggro range or was struck by it. A camp-mate that is itself only answering a shout
+   *  (campHelper) is skipped, so the call can't hop from camp to camp (issue #55). */
   private campFightTarget(u: SimUnit): SimUnit | null {
     for (const c of this.units.values()) {
-      if (c === u || !c.isCreep || c.hp <= 0 || c.returning) continue;
+      if (c === u || !c.isCreep || c.hp <= 0 || c.returning || c.campHelper) continue;
       if (c.order !== "attack" || c.targetId === null) continue;
       if (!this.sameCamp(c, u)) continue;
       const t = this.units.get(c.targetId);
