@@ -91,11 +91,11 @@ export class MenuScene {
     panelHalfY: 0.3, // panel ortho half-height (smaller = taller/zoomed panel)
     panelStretchX: 1.32, // widen the container horizontally beyond its natural aspect
     // Distance-fog haze on the icy background (world units from the eye; rgb 0..1).
-    fogStart: 2500,
-    fogEnd: 9000,
-    fogR: 0.72,
-    fogG: 0.73,
-    fogB: 0.82,
+    fogStart: 3100,
+    fogEnd: 3500,
+    fogR: 0.71,
+    fogG: 0.71,
+    fogB: 0.81,
   };
 
   /** Apply the current `tuning` values (called by the debug controls after a change). */
