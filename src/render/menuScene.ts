@@ -81,21 +81,21 @@ export class MenuScene {
   // / panelHalfY are independent so the [0,1]²-authored (4:3) panel can be stretched to
   // frame the buttons on a 16:9 screen.
   readonly tuning = {
-    camZoom: 0.86, // dolly the eye toward the target (<1 closer)
-    camPanX: -30, // pan the eye+target screen-right (world units)
+    camZoom: 0.88, // dolly the eye toward the target (<1 closer)
+    camPanX: 0, // pan the eye+target screen-right (world units)
     camPanY: -140, // pan the eye+target screen-up (world units)
-    camFov: 0.76, // field-of-view multiplier
+    camFov: 0.67, // field-of-view multiplier
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
     panelHalfY: 0.3, // panel ortho half-height (smaller = taller/zoomed panel)
     panelStretchX: 1.32, // widen the container horizontally beyond its natural aspect
     // Distance-fog haze on the icy background (world units from the eye; rgb 0..1).
-    fogStart: 3100,
-    fogEnd: 3500,
-    fogR: 0.71,
-    fogG: 0.71,
-    fogB: 0.81,
+    fogStart: 2700,
+    fogEnd: 4200,
+    fogR: 0.62,
+    fogG: 0.63,
+    fogB: 0.77,
   };
 
   /** Apply the current `tuning` values (called by the debug controls after a change). */
