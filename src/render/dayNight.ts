@@ -14,7 +14,7 @@ import { MISC_DATA } from "../data/gameplayConstants";
 // Verified against the real 1.27a MPQs: every outdoor DNC model keys its transitions
 // at exactly 15 000 ms and 45 000 ms — i.e. game hours 6 and 18, MiscData's Dawn and
 // Dusk. The light's rotation track (KGRT) has a single frame, so the sun never moves;
-// only its colour does.
+// only its colour does — and that colour is stored BGR (see sample()).
 //
 // Which model a map uses is UI\WorldEditData.txt's job, keyed by the w3e tileset
 // letter, with its own note: "If a tileset does not have an entry for a terrain/unit
@@ -211,13 +211,24 @@ class LightSampler {
       ambIntensity = s[0];
     }
 
+    // MDX stores a light's colours as BGR, not RGB — the same quirk as its geoset
+    // colours (which mdx-m3-viewer swizzles as `u_geosetColor.bgra`). Neither the
+    // parser nor Warsmash swizzles the LIGHT colours, so reading them straight gives
+    // every tileset a mirror-image night: Lordaeron's moonlight comes out sepia
+    // (0.80, 0.53, 0.31) instead of blue (0.31, 0.53, 0.80).
+    //
+    // Verified against the real 1.27a game: `daylightsavings 12` vs `daylightsavings 1`
+    // on Lordaeron Summer darkens flat ground by (0.385, 0.595, 0.840) per channel.
+    // Swapped, this code predicts (0.380, 0.586, 0.841); unswapped it predicts the
+    // reverse. It also makes Ashenvale's night blue moonlight and Felwood's a sickly
+    // green, which is what those tilesets are famous for.
     if (this.colorT) sampleTrack(this.colorT, t, s, 3);
     else s.set(light.color);
-    for (let i = 0; i < 3; i++) this.out.diffuse[i] = s[i] * intensity;
+    for (let i = 0; i < 3; i++) this.out.diffuse[i] = s[2 - i] * intensity;
 
     if (this.ambColorT) sampleTrack(this.ambColorT, t, s, 3);
     else s.set(light.ambientColor);
-    for (let i = 0; i < 3; i++) this.out.ambient[i] = s[i] * ambIntensity;
+    for (let i = 0; i < 3; i++) this.out.ambient[i] = s[2 - i] * ambIntensity;
 
     return this.out;
   }

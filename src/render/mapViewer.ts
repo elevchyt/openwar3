@@ -611,7 +611,7 @@ export class MapViewerScene {
       const terrain = parseW3E(w3e);
       this.fogTerrain = terrain; // corner grid for the fog overlay mesh
       // The tileset picks which DNC light models shade this map (WorldEditData.txt).
-      this.dayNight = DayNightCycle.load(this.vfs, terrain.tileset);
+      this.dayNight = DayNightCycle.load(this.vfs, lightEnvironment(archive, terrain.tileset));
       // Building ground-texture (ubersplat) overlay — needs only terrain + the GL
       // context, both ready here, so build it now (unlike fog, which waits on vision).
       // stampMapPathing (pre-placed buildings) and spawnUnit register splats into it.
@@ -4440,6 +4440,24 @@ const DRAG_SLOP = 6;
 const TREE_CLICK_RADIUS = 40; // approx harvest-click radius drawn for each tree
 const PATH_LIFT = 18; // path lines sit above the grid/blocked overlay so they read on top
 const EMPTY_VERTS = new Float32Array(0); // clears a persistent OverlayLayer (verts = 0)
+
+/** Which tileset's DNC lights shade this map. The World Editor lets a map pick a light
+ *  environment independent of its terrain (Scenario → Map Options → Light Environment);
+ *  `war3map.w3i` stores NUL when it just follows the tileset, which most melee maps do
+ *  (Terenas Stand is one that sets it). Falls back to the w3e tileset. */
+function lightEnvironment(archive: DataSource, tileset: string): string {
+  const bytes = archive.rawBytes("war3map.w3i");
+  if (!bytes) return tileset;
+  try {
+    const info = new w3iParser.File();
+    info.load(bytes);
+    const letter = info.lightEnvironmentTileset;
+    if (letter && letter !== "\0") return letter;
+  } catch {
+    // Pre-TFT w3i (version 18) has no such field — the tileset it is.
+  }
+  return tileset;
+}
 
 function pushColliderVert(a: number[], x: number, y: number, z: number, c: readonly number[]): void {
   a.push(x, y, z, c[0], c[1], c[2], c[3]);

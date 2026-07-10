@@ -128,16 +128,31 @@ i.e. exactly `Dawn` and `Dusk`. So:
 - The sun's colour comes off the light's `KLAC` (Color) and `KLBC` (AmbColor) tracks; `KGRT` holds a single frame,
   so the sun **never moves** — only its colour changes. `q · (0, 0, 1)` gives the vector toward it,
   `(-0.68, -0.41, 0.62)` outdoors (which is what HiveWE and mdx-m3-viewer hard-coded as `vec3(-0.3, -0.3, 0.25)`).
+- **A light's colours are stored BGR, not RGB.** Same quirk as MDX geoset colours (mdx-m3-viewer swizzles those
+  as `u_geosetColor.bgra`), but neither it nor Warsmash swizzles the *light* colours — so both render every
+  tileset's night as its own mirror image. Read straight, Lordaeron's midnight sun is a sepia `(0.80, 0.53, 0.31)`;
+  swapped, it is the blue moonlight `(0.31, 0.53, 0.80)` the game actually draws. Ashenvale likewise becomes blue
+  and Felwood a sickly green. Confirmed in the real 1.27a client: `daylightsavings 12` vs `daylightsavings 1` on
+  Lordaeron Summer darkens flat ground by exactly `(0.385, 0.595, 0.840)` per channel.
 - Shading is WC3's fixed function: `clamp(ambColor·ambIntensity + color·intensity·max(N·L, 0), 0, 1)`, modulating
-  the texel. Terrain and units share the colours but not `ambIntensity` (Lordaeron: 0.2 vs 0.3), so models sit
-  flatter than the ground. Lordaeron's midnight sun is `(0.80, 0.53, 0.31)` — night is *warm and dim*, not blue.
+  the texel — but **only where the layer is not `Unshaded`** (flag `0x1`). Blizzard marks the team-colour layer
+  (replaceable 1), the team glow (replaceable 2) and effect glows Unshaded, so they stay lit at midnight.
+  Terrain and units share the colours but not `ambIntensity` (Lordaeron: 0.2 vs 0.3), so models sit flatter than
+  the ground.
 - The clock's eight dots are additive glow quads on bones `"1"`…`"8"`, each with a **step** alpha track that
   switches it on 1.5 game-hours further into the half-cycle than the last; all eight blank at Dawn and Dusk.
 - `Scripts\Blizzard.j` `InitDNCSounds()` cries `RoosterSound` at Dawn and `WolfSound` at Dusk
   (`UI\SoundInfo\AmbienceSounds.slk` → `Sound\Time\DaybreakRooster.wav`, `Sound\Time\DuskWolf.wav`).
 
+A map may override the tileset's choice with `war3map.w3i`'s **Light Environment** (World Editor → Scenario →
+Map Options); the field is NUL when it just follows the tileset, which most melee maps do.
+
 Cave tilesets (`D`, `G`) point at DNC models with no colour tracks and a near-vertical sun: underground has no
 day or night.
+
+> To check any of this against the real client: in a single-player game, `daylightsavings <hour>` sets the time of
+> day (`0` is read as "no argument" and toggles the cycle instead — use `1`). `PrintScreen` writes a `.tga` into
+> `Warcraft III/Screenshots/`. Two shots at a fixed camera give you the per-channel ratio with textures cancelled out.
 
 ## Tech tree (who builds/trains what)
 

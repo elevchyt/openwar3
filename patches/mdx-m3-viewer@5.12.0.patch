@@ -348,6 +348,25 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..f8d921ab6570b2c03ffb783c4ab49edf
          gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
          if (isHd) {
+diff --git a/dist/cjs/viewer/handlers/mdx/layer.js b/dist/cjs/viewer/handlers/mdx/layer.js
+index 0d26837b8214841c35ccc52702bb9593a1cc18fc..f7c9114fddda9acaf1584e66553ff54008f10942 100644
+--- a/dist/cjs/viewer/handlers/mdx/layer.js
++++ b/dist/cjs/viewer/handlers/mdx/layer.js
+@@ -50,7 +50,13 @@ class Layer extends animatedobject_1.default {
+     }
+     bind(shader) {
+         const gl = this.model.viewer.gl;
+-        // gl.uniform1f(shader.uniforms.u_unshaded, this.unshaded);
++        // OpenWar3: bind the layer's Unshaded flag, which the stock code left commented
++        // out. It didn't matter while sd.frag's "lighting" was a near-flat 0.7..1.0
++        // lambert, but the day/night cycle now really darkens models — and WC3 marks a
++        // unit's TEAM COLOUR layer (replaceable 1), its team glow (replaceable 2) and
++        // its effect glows as Unshaded so they stay lit at midnight. Warsmash's mdx
++        // shader does the same (`if (!u_unshaded) { ...lightSystem... }`).
++        gl.uniform1f(shader.uniforms['u_unshaded'], this.unshaded ? 1 : 0);
+         gl.uniform1f(shader.uniforms['u_filterMode'], this.filterMode);
+         if (this.blended) {
+             gl.enable(gl.BLEND);
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb9f8a68a3 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
