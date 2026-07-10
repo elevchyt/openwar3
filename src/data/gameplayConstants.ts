@@ -227,6 +227,28 @@ export const MISC_DATA = {
   TradingIncLarge: 200,
 } as const;
 
+/** `UI\MiscData.txt` [Minimap] + [FogOfWar]. The minimap's own palette: how a creep
+ *  camp's marker is coloured and sized by the camp's combined level, and the colour
+ *  every non-player unit's dot is drawn in. Colours are the file's own **ARGB**.
+ *
+ *  Confirmed against the real 1.27a client (a fresh melee game on Booty Bay): the
+ *  creep marker is a flat ellipse in `MinimapWeakCampColor` and the creep / neutral
+ *  dots sample as exactly `#000032` — `FogColorCreepNormal` with its alpha dropped.
+ *  `MinimapCampPulseScale` (the marker's idle pulse) is not modelled. */
+export const MINIMAP = {
+  /** Combined camp level at which the marker turns orange, then red. */
+  MinimapMiddleCampThreshold: 10,
+  MinimapToughCampThreshold: 20,
+  /** Middle and tough camps draw their marker this much larger than a weak one. */
+  MinimapMiddleCampScale: 1.3,
+  MinimapWeakCampColor: [255, 0, 200, 0],
+  MinimapMiddleCampColor: [255, 255, 128, 0],
+  MinimapToughCampColor: [255, 220, 0, 0],
+  /** Minimap dot colour for Neutral Hostile creeps — and, in the client, for every
+   *  other unowned unit (gold mines, shops, critters) too. */
+  FogColorCreepNormal: [255, 0, 0, 50],
+} as const;
+
 /** `Scripts\Blizzard.j` `bj_*` constants (the `bj_` prefix dropped). Blizzard's own
  *  JASS melee template — the ground truth for how a melee game is set up. `_V1` is
  *  the Frozen Throne value; `_V0` is the Reign of Chaos one it replaced. */
@@ -380,3 +402,26 @@ export function creepXpFactor(heroLevel: number): number {
 
 /** Game hours elapsed per real second — a 24-hour Azeroth day in 480 real seconds. */
 export const GAME_HOURS_PER_SEC = MISC_DATA.DayHours / MISC_DATA.DayLength;
+
+/** `[a, r, g, b]` → a CSS colour. The alpha in `UI\MiscData.txt` is always 255 for
+ *  the entries we use, so it is dropped rather than emitted as `rgba(…)`. */
+const cssColor = ([, r, g, b]: readonly number[]): string => `rgb(${r},${g},${b})`;
+
+/** Minimap dot colour for creeps and every other unowned unit. */
+export const NEUTRAL_DOT_COLOR = cssColor(MINIMAP.FogColorCreepNormal);
+
+/** A creep camp's minimap marker, from its combined creep level. */
+export function campMarker(level: number): { color: string; scale: number } {
+  const tough = level >= MINIMAP.MinimapToughCampThreshold;
+  const middle = level >= MINIMAP.MinimapMiddleCampThreshold;
+  return {
+    color: cssColor(
+      tough ? MINIMAP.MinimapToughCampColor
+      : middle ? MINIMAP.MinimapMiddleCampColor
+      : MINIMAP.MinimapWeakCampColor,
+    ),
+    // "MiddleCampScale" is the one size step the file defines: weak camps draw at
+    // 1×, everything from the middle threshold up draws larger.
+    scale: middle ? MINIMAP.MinimapMiddleCampScale : 1,
+  };
+}

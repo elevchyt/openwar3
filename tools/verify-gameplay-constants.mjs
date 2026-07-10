@@ -2,9 +2,9 @@
 //
 //   pnpm data:verify
 //
-// Every key in MISC_GAME / MISC_DATA / MELEE is looked up in the file it claims to
-// come from — Units\MiscGame.txt, Units\MiscData.txt, Scripts\Blizzard.j — and the
-// values compared numerically. A transcription that drifts from the MPQ (or a value
+// Every key in MISC_GAME / MISC_DATA / MELEE / MINIMAP is looked up in the file it
+// claims to come from — Units\MiscGame.txt, Units\MiscData.txt, Scripts\Blizzard.j,
+// UI\MiscData.txt — and the values compared numerically. A transcription that drifts from the MPQ (or a value
 // a patch changed under us) fails here instead of quietly mis-simulating the game.
 //
 // Needs the archives unpacked: `pnpm data:extract` first. ExtractedData/ is
@@ -73,6 +73,8 @@ const files = {
   MISC_GAME: { label: "Units\\MiscGame.txt", data: parseMiscIni(read(path.join(merged, "Units", "MiscGame.txt"))) },
   MISC_DATA: { label: "Units\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "Units", "MiscData.txt"))) },
   MELEE: { label: "Scripts\\Blizzard.j", data: parseJassConstants(read(path.join(merged, "Scripts", "Blizzard.j"))) },
+  // Note the different MiscData.txt: the minimap's palette lives in the *UI* one.
+  MINIMAP: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
 };
 
 // MELEE keys drop the `bj_` prefix; MELEE_UNIT_SPACING is a local, not a constant.

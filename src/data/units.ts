@@ -52,6 +52,12 @@ export interface UnitDef {
   // building. "" (SLK "_") = no splat. Resolved to a texture + scale via
   // loadUberSplatRegistry (src/data/ubersplats.ts).
   uberSplat: string;
+  // unitUI "nbmmIcon" — WE: "Art - Neutral Building - Show Minimap Icon". Set on the
+  // neutral buildings a player can actually *use* (taverns, shops, mercenary camps,
+  // fountains, laboratories, waygates, dragon roosts); clear on the scenery ones
+  // (murloc/gnoll/troll huts, city buildings, centaur tents). Only the former get a
+  // house glyph on the minimap.
+  minimapIcon: boolean;
   speed: number; // world units / second
   turnRate: number; // radians-ish per second scale (UnitData turnrate)
   moveHeight: number; // fly altitude above ground (0 for ground units)
@@ -255,6 +261,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
       uberSplat: u ? str(u, "uberSplat") : "", // building ground-texture code (UberSplatData.slk)
+      minimapIcon: (u ? num(u, "nbmmIcon", 0) : 0) === 1,
       speed: b ? num(b, "spd", 0) : 0,
       turnRate: d ? num(d, "turnrate", 0.5) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,

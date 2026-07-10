@@ -2741,16 +2741,14 @@ export class RtsController {
 
   /** Minimap dots: world positions + owners of living units the local team can
    *  see. Your own units always show; fogged enemies/neutrals are dropped so the
-   *  minimap hides enemy movements exactly like the main view. Creep camps and
-   *  neutral buildings are pulled out here — they get their own persistent camp
-   *  circles / house icons (creepCamps / neutralBuildings) instead of unit dots. */
+   *  minimap hides enemy movements exactly like the main view. Creeps and neutral
+   *  buildings dot the minimap like anything else — the camp markers and house
+   *  glyphs (creepCamps / minimapIcons) are drawn *under* them, not instead. */
   dots(): Array<{ x: number; y: number; owner: number }> {
     const out: Array<{ x: number; y: number; owner: number }> = [];
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
       if (!u) continue;
-      if (u.isCreep) continue; // shown as a camp difficulty circle
-      if (u.neutralPassive && u.building != null) continue; // shown as a house icon
       if (!e.hidden || (u.team === this.localTeam && !u.neutralPassive)) {
         out.push({ x: u.x, y: u.y, owner: u.owner });
       }
@@ -2805,39 +2803,49 @@ export class RtsController {
   }
 
   /** Creep-camp difficulty markers for the minimap: camp centre + fixed combined
-   *  level. A camp shows once its location has been explored and disappears once
-   *  every creep in it is dead (WC3 clears the marker when the camp is wiped). */
+   *  level. Fog does NOT gate them — a fresh melee game in the real 1.27a client
+   *  paints every camp's dot before a single tile has been explored (that is how
+   *  you scout expansions from the lobby). The marker is a stand-in for creeps you
+   *  cannot see, so it yields to the creeps' own dots once the camp is in sight,
+   *  and disappears for good once every creep in it is dead. */
   creepCamps(): Array<{ x: number; y: number; level: number }> {
     if (!this.seeded) return [];
     if (this.creepCampData === null) this.creepCampData = this.buildCreepCamps();
     const out: Array<{ x: number; y: number; level: number }> = [];
     for (const camp of this.creepCampData) {
       if (!camp.members.some((id) => this.sim.units.has(id))) continue; // camp cleared
-      if (!this.pointExplored(camp.x, camp.y)) continue;
+      if (this.vision.stateAt(camp.x, camp.y) === FogState.Visible) continue; // creeps speak for themselves
       out.push({ x: camp.x, y: camp.y, level: camp.level });
     }
     return out;
   }
 
-  /** Neutral-passive BUILDINGS (taverns, goblin merchant/lab, mercenary camps,
-   *  fountains…) for the minimap house icon. Critters (non-buildings) are left as
-   *  plain neutral dots. Shown once the building's location has been explored. */
-  neutralBuildings(): Array<{ x: number; y: number }> {
-    const out: Array<{ x: number; y: number }> = [];
+  // Minimap glyphs the client paints over the map picture whatever the fog says —
+  // both were plainly visible over unexplored ground in a fresh 1.27a melee game.
+  //
+  //  · Gold mines wear `MiniMap-Goldmine.mdx`'s texture. (The client swaps in
+  //    `minimap-gold-haunted`/`-entangled` once a mine is claimed; we do not model
+  //    the claimed-mine unit yet, so every mine draws the plain icon.)
+  //  · A neutral building wears the house glyph only if its unitUI row sets
+  //    `nbmmIcon` — the useful ones (tavern, shops, mercenary camp, fountains,
+  //    goblin laboratory) do; the scenery ones (murloc/gnoll huts, city buildings)
+  //    do not, and fall through to a plain neutral dot like any other unit.
+  private static readonly ICON_GOLD_MINE = "UI\\MiniMap\\minimap-gold.blp";
+  private static readonly ICON_NEUTRAL_BUILDING = "UI\\MiniMap\\MiniMap-NeutralBuilding.blp";
+
+  /** Persistent minimap glyphs: each world position and the BLP to stamp there. */
+  minimapIcons(): Array<{ x: number; y: number; icon: string }> {
+    const out: Array<{ x: number; y: number; icon: string }> = [];
+    for (const m of this.sim.mines.values()) {
+      out.push({ x: m.x, y: m.y, icon: RtsController.ICON_GOLD_MINE });
+    }
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
       if (!u || !u.neutralPassive || u.building == null) continue;
-      if (!this.pointExplored(u.x, u.y)) continue;
-      out.push({ x: u.x, y: u.y });
+      if (!this.registry.get(e.typeId)?.minimapIcon) continue;
+      out.push({ x: u.x, y: u.y, icon: RtsController.ICON_NEUTRAL_BUILDING });
     }
     return out;
-  }
-
-  /** Has this world point ever been seen? Camp circles + neutral-building icons
-   *  persist on the minimap once explored, even after the area falls back to fog
-   *  (like WC3's last-seen building memory). */
-  private pointExplored(wx: number, wy: number): boolean {
-    return this.vision.stateAt(wx, wy) !== FogState.Unexplored;
   }
 
   /** True if this unit belongs to the local player (the only units they may
