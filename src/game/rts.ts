@@ -2740,16 +2740,19 @@ export class RtsController {
   }
 
   /** Minimap dots: world positions + owners of living units the local team can
-   *  see. Your own units always show; fogged enemies/neutrals are dropped so the
-   *  minimap hides enemy movements exactly like the main view. Creeps and neutral
-   *  buildings dot the minimap like anything else — the camp markers and house
-   *  glyphs (creepCamps / minimapIcons) are drawn *under* them, not instead. */
+   *  see. Your own units always show; fogged enemies and creeps are dropped so the
+   *  minimap hides their movements exactly like the main view.
+   *
+   *  Neutral PASSIVE units never dot the minimap. Critters, murloc huts and the
+   *  shops alike are furniture: the ones worth finding already carry a glyph of
+   *  their own (minimapIcons), and the rest would only speckle the map. Creeps do
+   *  get a dot once visible — and their camp marker steps aside for it. */
   dots(): Array<{ x: number; y: number; owner: number }> {
     const out: Array<{ x: number; y: number; owner: number }> = [];
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
-      if (!u) continue;
-      if (!e.hidden || (u.team === this.localTeam && !u.neutralPassive)) {
+      if (!u || u.neutralPassive) continue;
+      if (!e.hidden || u.team === this.localTeam) {
         out.push({ x: u.x, y: u.y, owner: u.owner });
       }
     }
@@ -2806,15 +2809,17 @@ export class RtsController {
    *  level. Fog does NOT gate them — a fresh melee game in the real 1.27a client
    *  paints every camp's dot before a single tile has been explored (that is how
    *  you scout expansions from the lobby). The marker is a stand-in for creeps you
-   *  cannot see, so it yields to the creeps' own dots once the camp is in sight,
-   *  and disappears for good once every creep in it is dead. */
+   *  cannot see, so it yields the moment any of them is: exactly then `dots()`
+   *  starts drawing that creep, and the two must never show at once. Gone for good
+   *  once every creep in the camp is dead. */
   creepCamps(): Array<{ x: number; y: number; level: number }> {
     if (!this.seeded) return [];
     if (this.creepCampData === null) this.creepCampData = this.buildCreepCamps();
     const out: Array<{ x: number; y: number; level: number }> = [];
     for (const camp of this.creepCampData) {
-      if (!camp.members.some((id) => this.sim.units.has(id))) continue; // camp cleared
-      if (this.vision.stateAt(camp.x, camp.y) === FogState.Visible) continue; // creeps speak for themselves
+      const alive = camp.members.filter((id) => this.sim.units.has(id));
+      if (alive.length === 0) continue; // camp cleared
+      if (alive.some((id) => !this.byId.get(id)?.hidden)) continue; // a creep is in sight — it speaks for itself
       out.push({ x: camp.x, y: camp.y, level: camp.level });
     }
     return out;

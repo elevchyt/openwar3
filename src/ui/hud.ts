@@ -1488,8 +1488,8 @@ export class GameHud {
     // whatever the fog says — the real client paints them from the opening frame.
     this.drawCreepCamps(ctx, ox, oy, w, h);
     this.drawMapGlyphs(ctx, ox, oy, w, h);
-    // Unit dots last: in the client a gold mine's yellow blob and a tavern's house
-    // both carry the owning unit's dot in their middle.
+    // Unit dots last, so a creep's dot sits over whatever it is standing on. Neutral
+    // passives are absent from dots() — a glyph, or nothing, marks those.
     const d = UNIT_DOT / 2;
     for (const dot of this.driver.dots()) {
       const p = this.toMini(dot.x, dot.y, ox, oy, w, h);
