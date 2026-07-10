@@ -1,5 +1,6 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import type { DataSource } from "../vfs/types";
+import { MISC_GAME } from "./gameplayConstants";
 
 // Ability data registry (plan §4, spells slice). Merges WC3's AbilityData.slk
 // (numbers), per-race AbilityFunc.txt (icon/effect art/buttonpos) and
@@ -342,10 +343,11 @@ export function tipFieldValue(lvl: AbilityLevel, field: string): number | null {
   }
 }
 
-/** Hero level required to learn a given rank (1-based) of an ability. Basics use
- *  a 2-level skip (ranks at hero 1/3/5); ultimates carry reqLevel 6 directly. */
+/** Hero level required to learn a given rank (1-based) of an ability — MiscGame's
+ *  "baseReq + levelSkip*abilityLevel". Basics take the default 2-level skip (ranks
+ *  at hero 1/3/5); ultimates carry reqLevel 6 directly. */
 export function requiredHeroLevel(def: AbilityDef, rank: number): number {
-  const skip = def.levelSkip > 0 ? def.levelSkip : 2;
+  const skip = def.levelSkip > 0 ? def.levelSkip : MISC_GAME.HeroAbilityLevelSkip;
   return Math.max(1, def.reqLevel) + skip * (rank - 1);
 }
 

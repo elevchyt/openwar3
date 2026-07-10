@@ -2,6 +2,18 @@ import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
+import { AttackType, ArmorType, PrimaryAttribute } from "../data/enums";
+import {
+  MISC_DATA,
+  MISC_GAME,
+  MELEE,
+  GAME_HOURS_PER_SEC,
+  armorDamageReduction,
+  creepXpFactor,
+  damageMultiplier,
+  grantedXp,
+  xpToReachLevel,
+} from "../data/gameplayConstants";
 import { SPELL_HANDLERS, AURA_BUFFS, waveSchedule, WAVE_FIELDS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
@@ -21,7 +33,7 @@ export interface SimWeapon {
   ranged: boolean; // fires a travelling projectile instead of hitting instantly
   missileArt: string; // projectile model path (renderer), "" = invisible
   missileSpeed: number; // projectile travel speed (world units/sec)
-  attackType: string; // UnitWeapons atkType1 (normal/pierce/siege/magic/chaos/hero) → damage table
+  attackType: AttackType; // UnitWeapons atkType1 → picks the damage-table row
   // Projectile launch offset (LOCAL frame: x forward, y left, z up; rotated by facing)
   // and impact height — UnitWeapons.slk launchx/y/z, impactz. The missile leaves from
   // launchZ (e.g. the Archmage's rod at 66) rather than the unit's feet.
@@ -48,7 +60,7 @@ export interface SimProjectile {
   startZ: number;
   impactZ: number;
   startDist: number;
-  attackType?: string; // attacker's weapon attack type, carried so the damage-table
+  attackType?: AttackType; // attacker's weapon attack type, carried so the damage-table
   // multiplier is correct even if the attacker dies before the arrow lands
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
   // instead of dealing plain `damage` — the base code + rank to dispatch.
@@ -179,7 +191,7 @@ export interface HeroInit {
   strPerLevel: number;
   agiPerLevel: number;
   intPerLevel: number;
-  primaryAttr: "STR" | "AGI" | "INT" | "";
+  primaryAttr: PrimaryAttribute;
 }
 
 /** Active repair job on a worker: restore a building's HP over time for a
@@ -291,7 +303,7 @@ export interface SimUnit {
   mana: number;
   maxMana: number;
   armor: number;
-  armorType: string; // UnitBalance defType (none/small/medium/large/fort/hero/divine) → damage table
+  armorType: ArmorType; // UnitBalance defType → picks the damage-table column
   weapon: SimWeapon | null;
   // Ability cast animation timing (UnitWeapons.slk castpt/castbsw), per-unit — not
   // per-weapon, so a weaponless pure caster still has them. castPoint = wind-up
@@ -386,7 +398,7 @@ export interface SimUnit {
   level: number; // hero level (0 for non-heroes)
   xp: number; // hero experience
   skillPoints: number; // unspent skill points (1 gained per level)
-  primaryAttr: "STR" | "AGI" | "INT" | "";
+  primaryAttr: PrimaryAttribute;
   baseStr: number; // level-1 attributes (growth is added per level)
   baseAgi: number;
   baseInt: number;
@@ -452,8 +464,12 @@ export interface SimUnit {
 }
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
-const ITEM_PICKUP_RANGE = 100; // hull-gap within which a hero can grab a ground item / hand one over
-const ITEM_DROP_RANGE = 150; // WC3 Gameplay Constant "Item Drop Distance" — max radius a drop lands from the unit
+// Hero inventory reach, straight from the Gameplay Constants. Note that picking an
+// item up reaches FURTHER than dropping one does (150 vs 100) — they are separate
+// constants in the game, not one shared radius.
+const ITEM_PICKUP_RANGE = MISC_GAME.PickupItemRange;
+const ITEM_GIVE_RANGE = MISC_GAME.GiveItemRange;
+const ITEM_DROP_RANGE = MISC_GAME.DropItemRange;
 // A move ordered within this distance of the unit only turns it in place (WC3
 // doesn't shuffle a unit a few pixels — it just pivots to face the point).
 const MOVE_MIN_DIST = 40;
@@ -557,61 +573,21 @@ const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
 
 // --- hero XP / leveling ---
-// Every constant here is the real WC3 (TFT 1.27a) value, read straight from the
-// MPQ ground truth `Units\MiscGame.txt` / `Units\MiscData.txt` (verified against
-// the local War3x.mpq/War3Patch.mpq — the patch layer wins). Cross-checked with
-// Liquipedia: Experience + warcraft3.info article 232 (docs/REFERENCES.md).
-const MAX_HERO_LEVEL = 10; // MiscData MaxHeroLevel=10
-// XP a KILL grants, indexed by the victim's level (1-based). Two separate tables,
-// exactly as the engine keeps them:
-//   • normal units — MiscGame GrantNormalXP=25 + formula (A=1,B=5,C=5), i.e.
-//     xp[L] = xp[L-1] + 5·(L+1): 25/40/60/85/115/150/190/235/285/340.
-//   • enemy HEROES — MiscGame GrantHeroXP=100,120,160,220,300 + formula
-//     (A=1,B=0,C=100 → +100 per level past the table): 100/120/160/220/300/
-//     400/500/600/700/800. Killing an enemy hero is worth far more than a unit.
-// Buildings grant none (MiscGame BuildingKillsGiveExp=0) — filtered before lookup.
-const KILL_XP = [0, 25, 40, 60, 85, 115, 150, 190, 235, 285, 340];
-const HERO_KILL_XP = [0, 100, 120, 160, 220, 300, 400, 500, 600, 700, 800];
-// Creeps (Neutral Hostile) grant reduced XP by the KILLING hero's level, so a high
-// hero stops farming camps: MiscGame HeroFactorXP=80,70,60,50,0 (%) for levels 1–5,
-// 0% at level 5+. Index = hero level (index 0 unused; heroes are always level ≥1).
-const CREEP_XP_FACTOR = [0.8, 0.8, 0.7, 0.6, 0.5, 0, 0, 0, 0, 0, 0];
-const XP_SHARE_RANGE = 1200; // MiscData/MiscGame HeroExpRange=1200: heroes within this of a kill share its XP (else global — GlobalExperience=1)
-const SUMMON_XP_FACTOR = 0.5; // summoned victims grant half XP
-// WC3 (TFT 1.27a) attack-type vs armor-type damage multiplier table. Source: the
-// official classic Battle.net basics page, "Armor and Weapon Types" (the Frozen
-// Throne chart) — https://classic.battle.net/war3/basics/armorandweapontypes.shtml
-// — cross-checked against Liquipedia. NB the classic TFT values differ from
-// Reforged 2.x (e.g. Pierce vs Heavy is 1.0 here, 0.9 in 2.x). Rows = weapon
-// attack type (UnitWeapons `atkType1`); cols = armor type (UnitBalance `defType`).
-// Divine (campaign-only) takes 5% from everything but Chaos (per Liquipedia; the
-// official chart omits it). Unknown attack/armor pairs default to 1.0 (no change).
-const DAMAGE_TABLE: Record<string, Record<string, number>> = {
-  //         none  small(light) medium large(heavy) fort  hero  divine
-  normal: { none: 1.0, small: 1.0, medium: 1.5, large: 1.0, fort: 0.7, hero: 1.0, divine: 0.05 },
-  pierce: { none: 1.5, small: 2.0, medium: 0.75, large: 1.0, fort: 0.35, hero: 0.5, divine: 0.05 },
-  siege: { none: 1.5, small: 1.0, medium: 0.5, large: 1.0, fort: 1.5, hero: 0.5, divine: 0.05 },
-  magic: { none: 1.0, small: 1.25, medium: 0.75, large: 2.0, fort: 0.35, hero: 0.5, divine: 0.05 },
-  chaos: { none: 1.0, small: 1.0, medium: 1.0, large: 1.0, fort: 1.0, hero: 1.0, divine: 1.0 },
-  hero: { none: 1.0, small: 1.0, medium: 1.0, large: 1.0, fort: 0.5, hero: 1.0, divine: 0.05 },
-  spells: { none: 1.0, small: 1.0, medium: 1.0, large: 1.0, fort: 1.0, hero: 0.7, divine: 0.05 },
-};
+// The tables and thresholds live in data/gameplayConstants (Units\MiscGame.txt),
+// derived from the game's own base lists + `f(x) = A·f(x-1) + B·x + C` formulas.
+// Cross-checked with Liquipedia: Experience + warcraft3.info article 232.
+const MAX_HERO_LEVEL = MISC_GAME.MaxHeroLevel;
+/** Heroes within this of a kill share its XP; with none in range, GlobalExperience=1
+ *  spreads it across all the killer's heroes instead. */
+const XP_SHARE_RANGE = MISC_GAME.HeroExpRange;
+const SUMMON_XP_FACTOR = MISC_GAME.SummonedKillFactor;
 
-/** Damage multiplier for a weapon `attackType` striking an `armorType`. Missing/
- *  unknown types fall back to 1.0 so unrecognised data degrades to plain damage. */
-function damageMultiplier(attackType: string, armorType: string): number {
-  const row = DAMAGE_TABLE[attackType.toLowerCase()];
-  if (!row) return 1;
-  const m = row[armorType.toLowerCase()];
-  return m === undefined ? 1 : m;
-}
-
-// Attribute → stat conversions (Liquipedia Hero): verified against UnitBalance.
-const HP_PER_STR = 25;
-const MANA_PER_INT = 15;
-const ARMOR_PER_AGI = 0.3;
-const REGEN_PER_STR = 0.05; // hp/sec per Strength point
-const REGEN_PER_INT = 0.05; // mana/sec per Intelligence point
+// Attribute → stat conversions (MiscGame Str/Int/Agi bonuses; Liquipedia: Hero).
+const HP_PER_STR = MISC_GAME.StrHitPointBonus;
+const MANA_PER_INT = MISC_GAME.IntManaBonus;
+const ARMOR_PER_AGI = MISC_GAME.AgiDefenseBonus;
+const REGEN_PER_STR = MISC_GAME.StrRegenBonus; // hp/sec per Strength point
+const REGEN_PER_INT = MISC_GAME.IntRegenBonus; // mana/sec per Intelligence point
 const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
@@ -634,30 +610,20 @@ const PRECAST_WARNING = new Set(["AHfs"]);
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
 // on top; 88s is the full lifetime from the moment of death.
-const CORPSE_TOTAL_TIME = 88;
+const CORPSE_TOTAL_TIME = MISC_DATA.BoneDecayTime;
 
-/** Total XP required to REACH a given hero level (Liquipedia: 50·(L²+L−2)). */
-export function xpForLevel(level: number): number {
-  return 50 * (level * level + level - 2);
-}
+// WC3 day/night (Units\MiscData.txt): a full cycle is DayLength=480 real seconds =
+// DayHours=24 game hours (so one game hour = 20 real seconds); daytime runs from
+// Dawn to Dusk. Melee games open at bj_MELEE_STARTING_TOD = 08:00.
+const DAY_START = MISC_DATA.Dawn;
+const DAY_END = MISC_DATA.Dusk;
 
-// WC3 day/night: a full cycle is 480 real seconds = 24 game hours (so one game
-// hour = 20 real seconds); daytime is 06:00–18:00. Melee games start at 08:00.
-const GAME_HOURS_PER_SEC = 24 / 480;
-const DAY_START = 6;
-const DAY_END = 18;
-
-// Neutral-hostile creep guard/leash AI. Values are the real WC3 gameplay
-// constants from Units\MiscGame.txt (verified against the 1.27 MPQ):
-//   "After a unit has strayed 'GuardDistance' from where it started … and spends
-//    'GuardReturnTime' seconds chasing a target without getting attacked by
-//    anyone, the unit … heads home. If a creep goes beyond 'MaxGuardDistance'
-//    then it always returns home regardless of who's attacking it."
-// (These supersede the ~1.8×-aggro guess — the MPQ wins; see CLAUDE.md.)
-const GUARD_DISTANCE = 600; // strayed this far from home → start the return timer
-const MAX_GUARD_DISTANCE = 1000; // strayed this far → return home unconditionally, even under attack
-const GUARD_RETURN_TIME = 5.0; // MiscGame GuardReturnTime — also the "can't get home, resume fighting" window
-const CREEP_CALL_FOR_HELP = 600; // MiscGame CreepCallForHelp — camp cohesion: one aggros → the whole camp wakes/joins
+// Neutral-hostile creep guard/leash AI, from Units\MiscGame.txt. (These supersede
+// the ~1.8×-aggro guess — the MPQ wins; see CLAUDE.md.)
+const GUARD_DISTANCE = MISC_GAME.GuardDistance; // strayed this far from home → start the return timer
+const MAX_GUARD_DISTANCE = MISC_GAME.MaxGuardDistance; // strayed this far → return home unconditionally, even under attack
+const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
+const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
 const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (reset + can sleep)
 // Hysteresis for the "walk back to post" trigger (mirrors ATTACK_LEASH / FOLLOW_LEASH):
 // a return FINISHES at CREEP_HOME_EPS and settle() then snaps the creep to the grid —
@@ -669,12 +635,10 @@ const CREEP_RETURN_TRIGGER = 128; // 4 cells — safely beyond CREEP_HOME_EPS + 
 // Not in any data file (engine-internal): a sleeping creep only wakes to a hostile
 // that strays very close — far enough that you can still scout past camps at night.
 const SLEEP_WAKE_RANGE = 200; // a sleeping creep wakes if a hostile comes within this
-// Shooting from the dark gives you away. MPQ Units\MiscData.txt `FoggedAttackRevealRadius`
-// (=200, sitting right beside AttackHalfAngle): a unit that lands an attack while hidden
-// in its victim's fog reveals a circle this wide around itself, to the victim's side only.
-// MiscData names no duration for it, so the blow buys the attacker's position one second,
-// re-stamped by every following blow (issue #45).
-const FOGGED_ATTACK_REVEAL_RADIUS = 200;
+// Shooting from the dark gives you away (issue #45). MiscData names no duration for
+// FoggedAttackRevealRadius, so the blow buys the attacker's position one second,
+// re-stamped by every following blow.
+const FOGGED_ATTACK_REVEAL_RADIUS = MISC_DATA.FoggedAttackRevealRadius;
 const FOGGED_ATTACK_REVEAL_TIME = 1;
 
 /** A hidden attacker's position, given away to one team for a moment. */
@@ -694,8 +658,9 @@ export class SimWorld {
   readonly projectiles = new Map<number, SimProjectile>();
   /** Per-player resource stash (gold/lumber). */
   readonly stash = new Map<number, { gold: number; lumber: number }>();
-  /** Time of day in game-hours [0,24); advances every tick. */
-  timeOfDay = 8;
+  /** Time of day in game-hours [0, DayHours); advances every tick. A melee game
+   *  opens at 08:00 (Scripts\Blizzard.j bj_MELEE_STARTING_TOD). */
+  timeOfDay: number = MELEE.MELEE_STARTING_TOD;
   private deaths: number[] = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
@@ -1368,9 +1333,9 @@ export class SimWorld {
       // --- hero / abilities / buffs ---
       isHero: !!hero,
       level: hero?.level ?? opts?.level ?? 0,
-      xp: hero ? xpForLevel(hero.level) : 0,
+      xp: hero ? xpToReachLevel(hero.level) : 0,
       skillPoints: 0, // granted by leveling (initHero sets the starting points)
-      primaryAttr: hero?.primaryAttr ?? "",
+      primaryAttr: hero?.primaryAttr ?? PrimaryAttribute.None,
       baseStr: hero?.str ?? 0,
       baseAgi: hero?.agi ?? 0,
       baseInt: hero?.int ?? 0,
@@ -2228,7 +2193,7 @@ export class SimWorld {
     const dStr = u.isHero ? u.str - Math.floor(u.baseStr) : 0;
     const dAgi = u.isHero ? u.agi - Math.floor(u.baseAgi) : 0;
     const dInt = u.isHero ? u.int - Math.floor(u.baseInt) : 0;
-    const primaryDelta = u.primaryAttr === "STR" ? dStr : u.primaryAttr === "AGI" ? dAgi : u.primaryAttr === "INT" ? dInt : 0;
+    const primaryDelta = u.primaryAttr === PrimaryAttribute.Strength ? dStr : u.primaryAttr === PrimaryAttribute.Agility ? dAgi : u.primaryAttr === PrimaryAttribute.Intelligence ? dInt : 0;
     let armorBonus = 0;
     let manaRegenBonus = 0;
     let damageBonus = 0;
@@ -2781,9 +2746,7 @@ export class SimWorld {
     if (killer && !this.hostile(killer, victim)) return;
     // A slain enemy hero pays out the (much larger) GrantHeroXP table; everything
     // else pays GrantNormalXP. Both are indexed by the victim's own level.
-    const table = victim.isHero ? HERO_KILL_XP : KILL_XP;
-    const victimLevel = Math.max(0, Math.min(table.length - 1, victim.level || 0));
-    let base = table[victimLevel] || 0;
+    let base = grantedXp(victim.level || 0, victim.isHero);
     if (base <= 0) return;
     if (victim.isSummon) base *= SUMMON_XP_FACTOR;
     // Beneficiaries: enemy heroes of the victim within share range (else global).
@@ -2809,7 +2772,7 @@ export class SimWorld {
     for (const h of eligible) {
       let amount = share;
       const isCreep = victim.team === -1; // Neutral Hostile
-      if (isCreep) amount *= CREEP_XP_FACTOR[Math.min(h.level, CREEP_XP_FACTOR.length - 1)] ?? 0;
+      if (isCreep) amount *= creepXpFactor(h.level);
       this.gainXp(h, amount, isCreep);
     }
   }
@@ -2818,14 +2781,14 @@ export class SimWorld {
   gainXp(hero: SimUnit, amount: number, isCreep = false): void {
     if (!hero.isHero || hero.level >= MAX_HERO_LEVEL || amount <= 0) return;
     hero.xp += amount;
-    while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpForLevel(hero.level + 1)) {
+    while (hero.level < MAX_HERO_LEVEL && hero.xp >= xpToReachLevel(hero.level + 1)) {
       this.levelUp(hero);
       // WC3: once a hero reaches a level where creeps grant no XP (HeroFactorXP=0 at
       // level 5+), any surplus that a creep kill pushed past the threshold is dropped
       // — the overshoot came from a creep and must not count (issue #30). The bar sits
       // exactly at the new level's threshold rather than carrying leftover creep XP.
-      if (isCreep && (CREEP_XP_FACTOR[hero.level] ?? 0) === 0) {
-        hero.xp = xpForLevel(hero.level);
+      if (isCreep && creepXpFactor(hero.level) === 0) {
+        hero.xp = xpToReachLevel(hero.level);
         break;
       }
     }
@@ -3213,7 +3176,7 @@ export class SimWorld {
   }
 
   tick(dt: number): void {
-    this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % 24;
+    this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % MISC_DATA.DayHours;
     this.tickAttackReveals(dt);
     this.tickBuildings(dt);
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
@@ -3936,7 +3899,7 @@ export class SimWorld {
           const def = this.abilities?.get(p.spell.abilityId);
           this.applySpellEffect(p.spell.code, p.spell.rank, caster, { targetId: t.id, x: t.x, y: t.y }, def);
         } else {
-          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? "");
+          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None);
           if (dealt > 0) this.applyArrowAutocast(this.units.get(p.sourceId), t); // Searing/Frost/Black/Incinerate arrows
         }
         this.removeProjectile(p.id);
@@ -4243,7 +4206,7 @@ export class SimWorld {
   private dealDamage(attacker: SimUnit, target: SimUnit): void {
     // Critical Strike (Blademaster passive AOcr): a chance to multiply the swing.
     const raw = this.applyCriticalStrike(attacker, this.rollDamage(attacker.weapon!));
-    const dealt = this.applyDamage(target, raw, attacker.id, attacker.weapon?.attackType ?? "");
+    const dealt = this.applyDamage(target, raw, attacker.id, attacker.weapon?.attackType ?? AttackType.None);
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
     // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
@@ -4281,7 +4244,7 @@ export class SimWorld {
     }
   }
 
-  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = ""): number {
+  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None): number {
     // Evasion (Demon Hunter passive AEev): a chance to dodge a physical attack.
     if (this.tryEvade(target)) return 0;
     // WC3 damage table: the weapon's attack type vs the target's armor type scales
@@ -4289,8 +4252,7 @@ export class SimWorld {
     // Fortified, Magic ×2 vs Heavy, …). Applied before the armor-value reduction;
     // both are multiplicative so order is immaterial.
     const typeMult = damageMultiplier(attackType, target.armorType);
-    // WC3 armor reduction: each armor point is worth 6% of pre-armor damage.
-    const reduction = (target.armor * 0.06) / (1 + 0.06 * Math.max(0, target.armor));
+    const reduction = armorDamageReduction(target.armor);
     return this.landDamage(target, rawDamage * typeMult * (1 - reduction), attackerId, true);
   }
 
@@ -4610,7 +4572,7 @@ export class SimWorld {
     u.inCombat = false;
     u.noCollision = false;
     this.cancelSwing(u);
-    if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_PICKUP_RANGE) {
+    if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE) {
       this.transferItem(u, slot, to);
       this.stop(fromId);
     } else {
@@ -4636,7 +4598,7 @@ export class SimWorld {
     if (u.pendingGive) {
       const to = this.units.get(u.pendingGive.toId);
       if (!to || to.hp <= 0 || !u.inventory[u.pendingGive.slot]) { this.stop(u.id); return; }
-      if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_PICKUP_RANGE) {
+      if (Math.hypot(to.x - u.x, to.y - u.y) <= u.radius + to.radius + ITEM_GIVE_RANGE) {
         this.transferItem(u, u.pendingGive.slot, to);
         this.stop(u.id);
       } else if (!u.moving) {

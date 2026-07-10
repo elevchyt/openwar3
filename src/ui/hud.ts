@@ -4,6 +4,8 @@
 // with CSS placeholders; real BLP icons and the map's own minimap image are
 // used when available (asset-resolver philosophy: authentic when present).
 
+import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
+
 export type OrderMode = "move" | "attack" | null;
 
 /** One command-card button (order, build, or train). */
@@ -49,8 +51,8 @@ export interface HudSelection {
   damageMin: number; // base damage range
   damageMax: number;
   damageBonus: number; // green "+N" attack damage
-  attackType: string;
-  armorType: string;
+  attackType: AttackType;
+  armorType: ArmorType;
   isHero: boolean;
   level: number;
   xp: number; // hero current experience
@@ -63,7 +65,7 @@ export interface HudSelection {
   strengthBonus: number; // item contribution (green "+N" / red "-N")
   agilityBonus: number;
   intelligenceBonus: number;
-  primaryAttr: string;
+  primaryAttr: PrimaryAttribute;
   carryGold: number;
   carryLumber: number;
   isBuilding: boolean;
@@ -1254,11 +1256,11 @@ export class GameHud {
         if (sel.isHero) {
           this.attrIconEl.hidden = false;
           this.attrLines.hidden = false;
-          const prim = sel.primaryAttr === "AGI" ? "agi" : sel.primaryAttr === "INT" ? "int" : "str";
+          const prim = sel.primaryAttr === PrimaryAttribute.Agility ? "agi" : sel.primaryAttr === PrimaryAttribute.Intelligence ? "int" : "str";
           this.setIcon(this.attrIconEl, attrIcon(prim));
-          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.strengthBonus, sel.primaryAttr === "STR");
-          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.agilityBonus, sel.primaryAttr === "AGI");
-          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.intelligenceBonus, sel.primaryAttr === "INT");
+          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.strengthBonus, sel.primaryAttr === PrimaryAttribute.Strength);
+          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.agilityBonus, sel.primaryAttr === PrimaryAttribute.Agility);
+          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.intelligenceBonus, sel.primaryAttr === PrimaryAttribute.Intelligence);
         } else {
           this.attrIconEl.hidden = true;
           this.attrLines.hidden = true;
@@ -1473,10 +1475,35 @@ function attrLineHtml(label: string, value: number, bonus: number, primary: bool
 
 // WC3 infocard type icons (real BLPs under UI\Widgets\Console\Human\). Attack/
 // armor types map onto the melee/piercing/… and small/medium/… icon set.
-const ATTACK_ICON: Record<string, string> = { normal: "melee", pierce: "piercing", siege: "siege", magic: "magic", chaos: "chaos", hero: "hero", spells: "magic" };
-const ARMOR_ICON: Record<string, string> = { small: "small", medium: "medium", large: "large", fort: "fortified", hero: "hero", divine: "divine", none: "unarmored", unarmored: "unarmored" };
-function infocard(kind: "attack" | "armor", type: string): string {
-  const suffix = (kind === "attack" ? ATTACK_ICON[type] : ARMOR_ICON[type]) ?? (kind === "attack" ? "melee" : "unarmored");
+// Info-card art suffixes for each attack/armor type. WC3 ships one icon fewer than
+// there are types on each side (UI\Widgets\Console\Human): the Spells attack reuses
+// the Magic art, and Normal armour has no icon at all — no stock unit carries it. A
+// weaponless unit, or one with no defType, falls back to melee / unarmored.
+const ATTACK_ICON: Partial<Record<AttackType, string>> = {
+  [AttackType.Normal]: "melee",
+  [AttackType.Pierce]: "piercing",
+  [AttackType.Siege]: "siege",
+  [AttackType.Magic]: "magic",
+  [AttackType.Chaos]: "chaos",
+  [AttackType.Hero]: "hero",
+  [AttackType.Spells]: "magic",
+};
+const ARMOR_ICON: Partial<Record<ArmorType, string>> = {
+  [ArmorType.Small]: "small",
+  [ArmorType.Medium]: "medium",
+  [ArmorType.Large]: "large",
+  [ArmorType.Fort]: "fortified",
+  [ArmorType.Hero]: "hero",
+  [ArmorType.Divine]: "divine",
+  [ArmorType.None]: "unarmored",
+};
+function infocard(kind: "attack", type: AttackType): string;
+function infocard(kind: "armor", type: ArmorType): string;
+function infocard(kind: "attack" | "armor", type: AttackType | ArmorType): string {
+  const suffix =
+    kind === "attack"
+      ? (ATTACK_ICON[type as AttackType] ?? "melee")
+      : (ARMOR_ICON[type as ArmorType] ?? "unarmored");
   return `UI\\Widgets\\Console\\Human\\infocard-${kind}-${suffix}.blp`;
 }
 function attrIcon(kind: "str" | "agi" | "int"): string {

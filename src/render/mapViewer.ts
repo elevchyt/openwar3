@@ -21,6 +21,7 @@ import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
+import { MELEE, MISC_GAME } from "../data/gameplayConstants";
 
 /** Per-creep seed data collected from the map (guard post + drop table). */
 interface CreepSeed {
@@ -81,7 +82,7 @@ const FIELD_LOOP_SOUND: Record<string, string> = {
   AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardLoop1.wav", // 4s wind, looped for the 6s channel
   ANrf: "Abilities\\Spells\\Demon\\RainOfFire\\RainOfFireLoop1.wav", // the roar under the Pit Lord's waves
 };
-const CANCEL_BUILDING_REFUND = 0.75; // WC3: cancelled building construction returns 75%
+const CANCEL_BUILDING_REFUND = MISC_GAME.ConstructionRefundRate;
 // The item icon carried on the cursor while moving it, as a fraction of an inventory
 // slot: just under it, so the hand looks like it's holding that same icon.
 const CARRIED_ITEM_SCALE = 0.85;
@@ -95,7 +96,7 @@ const FIXED_CARD_ICONS = [
   "BTNHumanBuild", "BTNRepair", "BTNCancel",
   "BTNRallyPoint", "BTNOrcRallyPoint", "BTNRallyPointUndead", "BTNRallyPointNightElf",
 ];
-const MAX_HEROES = 3; // WC3 melee: a player may field at most 3 heroes (altars + tavern combined)
+const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
 const TAVERN_HIRE_TIME = 0; // tavern heroes are HIRED instantly — no build time, the hero just spawns (pops next tick)
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
@@ -797,7 +798,8 @@ export class MapViewerScene {
    *  flagged as melee (see MapInfo.isMelee / src/world/mapKind.ts). */
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
-    const races = this.beginMatch(config, 500, 150); // WC3 melee start resources
+    // The Frozen Throne (_V1) start purse — Reign of Chaos gave 750/200 (_V0).
+    const races = this.beginMatch(config, MELEE.MELEE_STARTING_GOLD_V1, MELEE.MELEE_STARTING_LUMBER_V1);
     // Clear the creep camps the map placed on each USED start location so bases
     // spawn on clean ground (blizzard.j MeleeClearExcessUnits). config.slots holds
     // only the playing slots (open/closed are filtered out in the lobby), so unused
@@ -806,10 +808,10 @@ export class MapViewerScene {
     this.rts.setStartLocationClearZones(config.slots.map((s) => ({ x: s.startX, y: s.startY })));
     for (const slot of config.slots) {
       const race = races.get(slot.id) ?? "human";
-      // Nearest gold mine to the start location (blizzard.j MeleeFindNearestMine,
-      // bj_MELEE_MINE_SEARCH_RADIUS = 2000). Workers cluster on the mine→hall line;
-      // the hall itself always sits on the start location.
-      const mine = this.nearestMine(slot.startX, slot.startY, 2000);
+      // Nearest gold mine to the start location (blizzard.j MeleeFindNearestMine).
+      // Workers cluster on the mine→hall line; the hall itself always sits on the
+      // start location.
+      const mine = this.nearestMine(slot.startX, slot.startY, MELEE.MELEE_MINE_SEARCH_RADIUS);
       // Main hall(s) at the start location.
       for (const { id, count } of STARTING_UNITS[race]) {
         const def = this.registry.get(id);

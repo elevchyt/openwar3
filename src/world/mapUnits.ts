@@ -1,4 +1,5 @@
 import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
+import { FIRST_NEUTRAL_SLOT, PlayerSlot } from "../data/enums";
 
 // Pre-placed units/buildings from war3mapUnits.doo (plan §5 / custom-map support).
 // Every WC3 map — melee or custom — stores its placed units here: creeps, gold
@@ -11,13 +12,8 @@ import unitsdoo from "mdx-m3-viewer/dist/cjs/parsers/w3x/unitsdoo";
 // only the fields the sim/renderer need and tags each entry so callers can route
 // it (start marker vs. gold mine vs. neutral-passive vs. a player's own unit).
 
-// war3mapUnits.doo owner slots (WC3 fixed player indices).
 export const START_LOCATION_ID = "sloc"; // the StartLocation.mdx marker prop
 export const GOLD_MINE_ID = "ngol"; // a gold mine (a resource, not a unit)
-export const PLAYER_NEUTRAL_PASSIVE = 15; // shops, taverns, labs, fountains, critters
-export const PLAYER_NEUTRAL_HOSTILE = 12; // creeps
-export const PLAYER_NEUTRAL_EXTRA = 13; // "Neutral Extra" (rarely used)
-export const PLAYER_NEUTRAL_VICTIM = 14; // "Neutral Victim"
 
 /** One placed unit/building read from war3mapUnits.doo. */
 export interface PlacedUnit {
@@ -57,7 +53,7 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
   }
   return file.units.map((u): PlacedUnit => {
     const player = u.player ?? 0;
-    const neutral = player >= PLAYER_NEUTRAL_HOSTILE;
+    const neutral = player >= FIRST_NEUTRAL_SLOT;
     return {
       typeId: u.id,
       x: u.location[0],
@@ -70,7 +66,7 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
       targetAcquisition: u.targetAcquisition ?? -1,
       heroLevel: u.heroLevel ?? 0,
       neutral,
-      neutralPassive: player === PLAYER_NEUTRAL_PASSIVE,
+      neutralPassive: player === PlayerSlot.NeutralPassive,
       dropSets: (u.droppedItemSets ?? []).map((s) => ({
         items: (s.items ?? []).map((it) => ({ id: it.id, chance: it.chance })),
       })),

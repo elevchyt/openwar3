@@ -1,3 +1,5 @@
+import { MELEE } from "./gameplayConstants";
+
 // Playable races (plan Phase 5.5). Central place for race identity + labels;
 // the melee starting-unit rosters per race will be added here next.
 
@@ -35,7 +37,7 @@ export const STARTING_UNITS: Record<PlayableRace, Array<{ id: string; count: num
 // `dist` world-units out from the mine (the ghoul instead sits out from the hall).
 // Offsets are per-worker (x, y) in multiples of MELEE_UNIT_SPACING around that
 // clump centre. bj_UNIT_FACING = 270° (south) is spawnUnit's default facing.
-export const MELEE_UNIT_SPACING = 64; // blizzard.j `unitSpacing`
+export const MELEE_UNIT_SPACING = MELEE.MELEE_UNIT_SPACING;
 
 export interface WorkerCluster {
   id: string; // worker rawcode this group places (count = offsets.length)

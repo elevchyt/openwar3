@@ -87,6 +87,28 @@ Examples (verified in the 1.27 MPQ): Storm Bolt `AHtb` = `…,enemy,neutral,…`
 Heal `Ahea` = `…,friend,self,neutral,…` (allies/self, never enemy); Holy Light `AHhb` = `…,notself,…`
 (any unit but the caster); Doom `ANdo` = `…,nonhero,…` (cannot target heroes).
 
+## Gameplay constants (the numbers that belong to no unit or ability)
+
+Turn rate, the damage table, XP curves, creep leash distances, hero-inventory reach, day length, corpse decay —
+none of these live in a unit or ability row. The engine keeps them in two INI files (the World Editor edits them
+under **Advanced → Gameplay Constants**), and the melee-game setup in Blizzard's own JASS:
+
+| File | Holds |
+|---|---|
+| `Units\MiscGame.txt` `[Misc]` | Combat (`DefenseArmor`, the seven `DamageBonus*` lists), experience (`GrantHeroXP`, `HeroFactorXP`, the `…FormulaA/B/C` extrapolations), hero attributes (`StrHitPointBonus`, `AgiDefenseBonus`, …), creep leashing (`GuardDistance`, `MaxGuardDistance`, `GuardReturnTime`), inventory ranges, refund rates, revive costs |
+| `Units\MiscData.txt` `[Misc]` | Timing and radii: `BoneDecayTime`, `DayLength`/`Dawn`/`Dusk`, `FollowRange`, `FoggedAttackRevealRadius`, `ChanceToMiss`, `SelectionCircleBaseZ`, `GoldMineMaxGold`, … |
+| `Scripts\Blizzard.j` | The `bj_*` melee constants: `bj_MELEE_STARTING_GOLD_V1` (500), `bj_MELEE_STARTING_LUMBER_V1` (150), `bj_MELEE_HERO_LIMIT` (3), `bj_MELEE_MINE_SEARCH_RADIUS`, `bj_MELEE_CLEAR_UNITS_RADIUS`, `bj_MELEE_STARTING_TOD` (08:00) |
+
+**The damage table is in the MPQ.** `DamageBonusNormal=1.00,1.50,1.00,0.70,1.00,1.00,0.05,1.00` and its six siblings
+are the attack-type rows; the file's own comment gives the column order: `SMALL, MEDIUM, LARGE, FORT, NORMAL, HERO,
+DIVINE, NONE`. Read them from here rather than from the classic battle.net chart (which agrees, but which Reforged
+has since diverged from). Note the World Editor renames three columns in its UI — Small is *Light*, Large is *Heavy*,
+None is *Unarmored* — and `Normal` armour exists in the table but no stock unit carries it.
+
+All three files are transcribed **once**, key-for-key, into `src/data/gameplayConstants.ts`; the damage table and the
+XP curves are *computed* from those raw lists and formulas rather than re-typed. `pnpm data:verify` re-reads the real
+files and fails on any drift.
+
 ## Tech tree (who builds/trains what)
 
 WC3 encodes build/train relationships in **ability object-data** (`Abui`/`Aneu`/sold-unit lists on shops),

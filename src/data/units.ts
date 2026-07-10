@@ -1,5 +1,17 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import type { DataSource } from "../vfs/types";
+import {
+  ArmorType,
+  AttackType,
+  MoveType,
+  PrimaryAttribute,
+  WeaponType,
+  toArmorType,
+  toAttackType,
+  toMoveType,
+  toPrimaryAttribute,
+  toWeaponType,
+} from "./enums";
 
 // Unit data registry (plan §4). Merges WC3's split unit SLK tables into one
 // lookup keyed by unit id — our own data layer, independent of the renderer.
@@ -27,7 +39,7 @@ export interface UnitDef {
   buttonY: number; // command-card grid row (0-2)
   isHero: boolean;
   priority: number; // UnitData `prio`: selection sub-group order (heroes 9, Footman 6, Peasant 1) — higher sorts first & leads the group
-  moveType: string; // foot | fly | horse | hover | float | amph | "" (building/immovable)
+  moveType: MoveType; // UnitData `movetp` (None for buildings/immovable units)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
   // Art - Ground Texture (unitUI "uberSplat"): a 4-char UberSplatData.slk code
@@ -70,9 +82,9 @@ export interface UnitDef {
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   canSleep: boolean; // UnitData `cansleep`: Neutral Hostile creeps of this type sleep at night
-  weaponType: string; // weapTp1: "normal"/"instant" = melee, "missile"/… = ranged
-  attackType: string; // atkType1: normal/pierce/siege/magic/chaos/hero (damage table)
-  armorType: string; // defType: small/medium/large/fort/hero/divine/none
+  weaponType: WeaponType; // weapTp1: Normal/Instant strike at once, the Missile kinds fly
+  attackType: AttackType; // atkType1 → the damage table's row
+  armorType: ArmorType; // defType → the damage table's column
   missileArt: string; // weapon-1 projectile model (MDX path, backslashes) or ""
   missileSpeed: number; // projectile travel speed (world units/sec)
   // Projectile launch offset from the unit's origin, in its LOCAL frame (x forward,
@@ -84,14 +96,14 @@ export interface UnitDef {
   launchY: number;
   launchZ: number;
   impactZ: number;
-  // Hero attributes (0 for non-heroes). primaryAttr is "STR"/"AGI"/"INT" or "".
+  // Hero attributes (0 for non-heroes).
   strength: number;
   agility: number;
   intelligence: number;
   strPerLevel: number; // hero attribute growth per level (STRplus/AGIplus/INTplus)
   agiPerLevel: number;
   intPerLevel: number;
-  primaryAttr: string;
+  primaryAttr: PrimaryAttribute; // None for non-heroes
   level: number;
   abilities: string[]; // innate abilities (UnitAbilities.slk abilList)
   heroAbilities: string[]; // learnable hero abilities in slot order (heroAbilList)
@@ -197,13 +209,19 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     // realdef — Paladin: hp 100 → realhp 650 (100 + STR 22×25). Their attack base
     // also gets the primary attribute (Paladin dmg 0 + STR 22 + 2d6 = 24–34).
     // Verified against the real MPQ UnitBalance.slk.
-    const primary = b ? str(b, "primary") : "";
-    const isHero = primary === "STR" || primary === "AGI" || primary === "INT";
-    const attr = { STR: b ? num(b, "STR", 0) : 0, AGI: b ? num(b, "AGI", 0) : 0, INT: b ? num(b, "INT", 0) : 0 };
+    const primary = toPrimaryAttribute(b ? str(b, "primary") : "");
+    const isHero = primary !== PrimaryAttribute.None; // only heroes carry a primary attribute
+    const strAttr = b ? num(b, "STR", 0) : 0;
+    const agiAttr = b ? num(b, "AGI", 0) : 0;
+    const intAttr = b ? num(b, "INT", 0) : 0;
     const realhp = b ? num(b, "realhp", 0) : 0;
     const realm = b ? num(b, "realm", 0) : 0;
     const realdef = b ? num(b, "realdef", 0) : 0;
-    const primaryVal = isHero ? attr[primary as "STR" | "AGI" | "INT"] : 0;
+    const primaryVal =
+      primary === PrimaryAttribute.Strength ? strAttr
+      : primary === PrimaryAttribute.Agility ? agiAttr
+      : primary === PrimaryAttribute.Intelligence ? intAttr
+      : 0;
 
     defs.set(id, {
       id,
@@ -227,7 +245,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       buttonY: by,
       isHero,
       priority: d ? num(d, "prio", 0) : 0, // UnitData `prio` — WC3 selection-order priority
-      moveType: d ? str(d, "movetp") : "",
+      moveType: toMoveType(d ? str(d, "movetp") : ""),
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
       uberSplat: u ? str(u, "uberSplat") : "", // building ground-texture code (UberSplatData.slk)
@@ -262,9 +280,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackRange: w ? num(w, "rangeN1", 0) : 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       canSleep: (d ? num(d, "cansleep", 0) : 0) === 1,
-      weaponType: w ? str(w, "weapTp1") : "",
-      attackType: w ? str(w, "atkType1") : "",
-      armorType: b ? str(b, "defType") : "",
+      weaponType: toWeaponType(w ? str(w, "weapTp1") : ""),
+      attackType: toAttackType(w ? str(w, "atkType1") : ""),
+      armorType: toArmorType(b ? str(b, "defType") : ""),
       // Missile art + speed live in the per-race UnitFunc.txt (NOT UnitWeapons.slk),
       // as .mdl paths (e.g. Archmage FireBallMissile, Archer ArrowMissile).
       missileArt: fn ? missilePath(str(fn, "missileart")) : "",
@@ -275,13 +293,13 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       launchY: w ? num(w, "launchy", 0) : 0,
       launchZ: w ? num(w, "launchz", 0) : 0,
       impactZ: w ? num(w, "impactz", 0) : 0,
-      strength: attr.STR,
-      agility: attr.AGI,
-      intelligence: attr.INT,
+      strength: strAttr,
+      agility: agiAttr,
+      intelligence: intAttr,
       strPerLevel: b ? num(b, "STRplus", 0) : 0,
       agiPerLevel: b ? num(b, "AGIplus", 0) : 0,
       intPerLevel: b ? num(b, "INTplus", 0) : 0,
-      primaryAttr: isHero ? primary : "",
+      primaryAttr: primary,
       // Heroes spawn at level 1. UnitBalance's `level` for heroes is 5 (their
       // creep-threat/bounty level), which wrongly showed newly-trained heroes as
       // Level 5. With no XP/leveling system yet, pin trained heroes to level 1.

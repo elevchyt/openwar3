@@ -1,9 +1,12 @@
-import { SimWorld, xpForLevel, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
+import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
+import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import { VisionMap, FogState } from "../sim/vision";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
+import { ArmorType, AttackType, MoveType, PrimaryAttribute, isRangedWeapon } from "../data/enums";
+import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef, tipFieldValue } from "../data/abilities";
 import { type ItemRegistry } from "../data/items";
 import { WORKERS, DEPOT_IDS } from "../data/races";
@@ -36,7 +39,9 @@ interface Instance {
 interface MapUnit {
   instance: Instance;
   row?: { string(k: string): string | undefined; number(k: string): number };
-  state: number; // WidgetState: IDLE=0, WALK=1
+  // mdx-m3-viewer's Widget.update() auto-plays a Stand clip whenever state is IDLE,
+  // so anything we drive ourselves (walk, attack, death, cast) must sit in WALK.
+  state: WidgetState;
 }
 interface Camera {
   worldToScreen(out: Float32Array, v: Float32Array, viewport: Float32Array): Float32Array;
@@ -66,8 +71,8 @@ export interface SelectionInfo {
   damageMin: number; // BASE damage range (without buff bonuses)
   damageMax: number;
   damageBonus: number; // green "+N" attack damage from buffs/auras
-  attackType: string; // normal/pierce/siege/magic/chaos/hero
-  armorType: string; // small/medium/large/fort/hero/divine/none
+  attackType: AttackType; // → the damage-table row (info-card icon)
+  armorType: ArmorType; // → the damage-table column (info-card icon)
   isHero: boolean;
   level: number;
   xp: number; // hero current experience
@@ -80,7 +85,7 @@ export interface SelectionInfo {
   strengthBonus: number; // item contribution (green "+N" / red "-N")
   agilityBonus: number;
   intelligenceBonus: number;
-  primaryAttr: string; // "STR"/"AGI"/"INT" or ""
+  primaryAttr: PrimaryAttribute; // None for non-heroes
   model: string;
   isWorker: boolean;
   isBuilding: boolean;
@@ -250,7 +255,6 @@ function findBirthFields(seqs: Array<{ name: string; interval?: ArrayLike<number
   return { birthSeq, birthStart: iv ? iv[0] : 0, birthEnd: iv ? iv[1] : 0 };
 }
 
-const WALK = 1, IDLE = 0;
 // Brightness of a remembered-but-not-seen building in fog — matches the ground veil's
 // EXPLORED_DARK (0.5) so a greyed structure sits at the same dimness as its terrain.
 const FOG_EXPLORED_BRIGHT = 0.5;
@@ -280,13 +284,19 @@ const BUFF_KIND_LABEL: Record<string, string> = {
   damagePct: "Bonus Damage", haste: "Haste", manaRegen: "Mana Regeneration", hpRegen: "Health Regeneration",
   lifesteal: "Life Steal", thorns: "Thorns", hot: "Healing", dot: "Damage",
 };
-// mdx-m3-viewer sequence loop modes (per its ModelInstance code, NOT its stale doc
-// comment): 0 = model-based (loops when the clip's own MDX flag says looping — which
-// STAND clips do), 1 = never loop (play once, then hold + set sequenceEnded), 2 = always
-// loop. LOOP_NEVER(0) still plays attack/death clips once because those carry the model's
-// non-looping flag; LOOP_ONCE(1) forces a normally-looping clip (a Stand) to END so we can
-// re-roll the next idle-stand variant when it finishes (the fidget cycle, issue #38).
-const LOOP_NEVER = 0, LOOP_ONCE = 1, LOOP_ALWAYS = 2;
+// mdx-m3-viewer sequence loop modes, named from its ModelInstance code (its own doc
+// comment is stale). The mode is not "how many times to play" — it decides who wins
+// when the clip ends: the model's own MDX looping flag, or us.
+enum SequenceLoopMode {
+  /** Obey the clip's MDX `nonLooping` flag — Stands loop, Attack/Death clips play once. */
+  ModelDefined = 0,
+  /** Never loop: play once, hold the final frame, raise `sequenceEnded`. Forces a
+   *  normally-looping clip (a Stand) to END so we can re-roll the next idle-stand
+   *  variant when it finishes — the fidget cycle, issue #38. */
+  PlayOnce = 1,
+  /** Always loop, even a clip the model marks non-looping. */
+  Loop = 2,
+}
 // WC3's selection circle diameter ≈ 72 world units at selection scale 1.0.
 const SEL_RADIUS_PER_SCALE = 36;
 // Re-clicking the same single unit this many extra times flips its selection
@@ -496,10 +506,9 @@ export class RtsController {
 
   /** Melee-only: register the USED start locations so trySeed clears the creep
    *  camps (and non-structure critters) the map placed on them, matching
-   *  blizzard.j MeleeClearExcessUnits (radius bj_MELEE_CLEAR_UNITS_RADIUS = 1500).
-   *  Call before the seeding scans run; unused start locations are simply omitted,
-   *  so their camps survive. */
-  setStartLocationClearZones(centers: Array<{ x: number; y: number }>, radius = 1500): void {
+   *  blizzard.j MeleeClearExcessUnits. Call before the seeding scans run; unused
+   *  start locations are simply omitted, so their camps survive. */
+  setStartLocationClearZones(centers: Array<{ x: number; y: number }>, radius = MELEE.MELEE_CLEAR_UNITS_RADIUS): void {
     const r2 = radius * radius;
     this.startClearZones = centers.map((c) => ({ x: c.x, y: c.y, r2 }));
   }
@@ -1107,7 +1116,7 @@ export class RtsController {
           speed: def?.speed || 270, // real movement speed from UnitBalance.slk
           turnRate: def?.turnRate ?? 0.5,
           radius: def?.collision || 16,
-          flying: def?.moveType === "fly",
+          flying: def?.moveType === MoveType.Fly,
           flyHeight: lift(def?.moveHeight ?? 0), // same lift as the Entry, so missiles match the model's altitude
           sightDay: def?.sightDay || 1400,
           sightNight: def?.sightNight || def?.sightDay || 800,
@@ -1116,7 +1125,7 @@ export class RtsController {
           mana: def?.mana ?? 0,
           maxMana: def?.mana ?? 0,
           armor: def?.armor ?? 0,
-          armorType: def?.armorType ?? "",
+          armorType: def?.armorType ?? ArmorType.Unknown,
           weapon: def ? weaponFor(def) : null,
           castPoint: def?.castPoint ?? 0,
           castBackswing: def?.castBackswing ?? 0,
@@ -1211,7 +1220,7 @@ export class RtsController {
         mana: 0,
         maxMana: 0,
         armor: def?.armor ?? 0,
-        armorType: def?.armorType ?? "",
+        armorType: def?.armorType ?? ArmorType.Unknown,
         weapon: null,
         castPoint: 0, // neutral-passive structures never cast
         castBackswing: 0,
@@ -1274,7 +1283,7 @@ export class RtsController {
       ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: trainsFor(def.id).length > 0 }
       : null;
     const hero: HeroInit | undefined = def.isHero
-      ? { level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: (def.primaryAttr as "STR" | "AGI" | "INT") || "" }
+      ? { level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: def.primaryAttr }
       : undefined;
     this.sim.add(
       {
@@ -1289,7 +1298,7 @@ export class RtsController {
         speed: def.speed,
         turnRate: def.turnRate,
         radius: def.collision || 16,
-        flying: def.moveType === "fly",
+        flying: def.moveType === MoveType.Fly,
         flyHeight: lift(def.moveHeight), // same lift as the Entry, so missiles match the model's altitude
         sightDay: def.sightDay || 1400,
         sightNight: def.sightNight || def.sightDay || 800,
@@ -1317,7 +1326,7 @@ export class RtsController {
     );
     const entry: Entry = {
       simId,
-      unit: { instance, state: IDLE },
+      unit: { instance, state: WidgetState.IDLE },
       anims,
       moveHeight: lift(def.moveHeight),
       footHalfW: 0, // set by setBuildingFootprint() once the footprint is stamped
@@ -1346,11 +1355,11 @@ export class RtsController {
     this.byId.set(simId, entry);
     if (anims.stand >= 0) {
       // Play an idle stand on spawn; leave curSeq unset (-1) so the first idle tick starts the
-      // fidget cycle (pickSequence → the idle branch rolls the next variant). LOOP_ONCE so a
+      // fidget cycle (pickSequence → the idle branch rolls the next variant). PlayOnce so a
       // model whose stand has >1 variant ends this clip and hands off; single-variant models get
-      // pinned to LOOP_ALWAYS by that same idle branch.
+      // pinned to Loop by that same idle branch.
       instance.setSequence(anims.stand);
-      instance.setSequenceLoopMode(LOOP_ONCE);
+      instance.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
       entry.curSeq = -1;
     }
     return simId;
@@ -1429,9 +1438,9 @@ export class RtsController {
         if (e.birthSeq >= 0) {
           if (e.curSeq !== e.birthSeq) {
             e.curSeq = e.birthSeq;
-            e.unit.state = WALK; // keep mdx-m3-viewer from auto-standing
+            e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from auto-standing
             e.unit.instance.setSequence(e.birthSeq);
-            e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+            e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
           }
           e.unit.instance.frame = e.birthStart + prog * (e.birthEnd - e.birthStart);
         } else {
@@ -1463,7 +1472,7 @@ export class RtsController {
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
       // the strike gesture matches the damage-point-timed hit/projectile, and
       // units with several attack animations vary them shot to shot. Between swings
-      // the LOOP_NEVER clip holds; everything else loops normally. A unit that walked
+      // the non-looping attack clip holds its last frame; everything else loops. A unit that walked
       // after firing (`swingBroken` — its backswing was move-canceled) does NOT show
       // the attack clip: it stands out the recovery until its next real swing.
       const attacking = u.inCombat && !u.moving && !u.swingBroken && e.anims.attack >= 0;
@@ -1475,9 +1484,9 @@ export class RtsController {
         if (u.chopSeq !== e.lastChopSeq || e.curSeq !== e.anims.chopLumber) {
           e.lastChopSeq = u.chopSeq;
           e.curSeq = e.anims.chopLumber;
-          e.unit.state = WALK;
+          e.unit.state = WidgetState.WALK;
           e.unit.instance.setSequence(e.anims.chopLumber);
-          e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+          e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
         }
       } else if (attacking) {
         // Pick the swing pool matching the worker's carry state so a laden worker
@@ -1495,9 +1504,9 @@ export class RtsController {
           e.lastSwingSeq = u.swingSeq;
           const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : (vs[0] ?? e.anims.attack);
           e.curSeq = pick;
-          e.unit.state = WALK; // non-stand state prevents mdx-m3-viewer's auto-stand
+          e.unit.state = WidgetState.WALK; // non-stand state prevents mdx-m3-viewer's auto-stand
           e.unit.instance.setSequence(pick);
-          e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+          e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
         }
       } else {
         // Smooth the actual/expected displacement so the walk clip only plays
@@ -1522,23 +1531,23 @@ export class RtsController {
               let pick = vs[(Math.random() * vs.length) | 0];
               if (pick === e.curSeq) pick = vs[(vs.indexOf(pick) + 1) % vs.length];
               e.curSeq = pick;
-              e.unit.state = IDLE;
+              e.unit.state = WidgetState.IDLE;
               inst.setSequence(pick);
-              inst.setSequenceLoopMode(LOOP_ONCE);
+              inst.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
             }
           } else if (e.curSeq !== e.anims.stand) {
             e.curSeq = e.anims.stand;
-            e.unit.state = IDLE;
+            e.unit.state = WidgetState.IDLE;
             inst.setSequence(e.anims.stand);
-            inst.setSequenceLoopMode(LOOP_ALWAYS);
+            inst.setSequenceLoopMode(SequenceLoopMode.Loop);
           }
         } else if (seq !== e.curSeq && seq >= 0) {
           // Walk / carry-stand: a single looping clip (state WALK keeps the viewer from
           // overriding a pinned "Stand Gold"/"Stand Lumber" carry pose with a plain stand).
           e.curSeq = seq;
-          e.unit.state = WALK;
+          e.unit.state = WidgetState.WALK;
           e.unit.instance.setSequence(seq);
-          e.unit.instance.setSequenceLoopMode(LOOP_ALWAYS);
+          e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
         }
       }
     }
@@ -1559,10 +1568,10 @@ export class RtsController {
     this.byId.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
-    e.unit.state = WALK; // keep mdx-m3-viewer from overriding the death sequence
+    e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence
     if (e.anims.death >= 0) {
       e.unit.instance.setSequence(e.anims.death);
-      e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
+      e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
       // Adopt the model as the corpse and decay it in place (see tickCorpses).
       // Link to the sim corpse this death created (if any) so a raise spell can
       // hide the model immediately and so the sim's 88s timer drives its removal.
@@ -1665,7 +1674,7 @@ export class RtsController {
     const seq = stage === "flesh" ? c.anims.decayFlesh : c.anims.decayBone;
     if (seq >= 0) {
       c.instance.setSequence(seq);
-      c.instance.setSequenceLoopMode(LOOP_NEVER); // play once, then hold the pose
+      c.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined); // play once, then hold the pose
       c.phase = stage;
       c.phaseT = 0;
     } else if (stage === "flesh") {
@@ -1712,9 +1721,9 @@ export class RtsController {
     if (seq < 0) seq = e.anims.attack;
     if (seq < 0) return;
     e.unit.instance.setSequence(seq);
-    e.unit.instance.setSequenceLoopMode(loop ? LOOP_ALWAYS : LOOP_NEVER);
+    e.unit.instance.setSequenceLoopMode(loop ? SequenceLoopMode.Loop : SequenceLoopMode.ModelDefined);
     e.curSeq = seq;
-    e.unit.state = WALK; // don't let the idle picker immediately override the cast
+    e.unit.state = WidgetState.WALK; // don't let the idle picker immediately override the cast
     e.castAnimT = hold > 0 ? hold : CAST_ANIM_HOLD; // hold the clip for the whole cast
   }
 
@@ -1744,8 +1753,8 @@ export class RtsController {
     const durMs = e.birthEnd - e.birthStart;
     u.spawning = durMs > 0 ? durMs / 1000 : 1;
     e.unit.instance.setSequence(e.birthSeq);
-    e.unit.instance.setSequenceLoopMode(LOOP_NEVER);
-    e.unit.state = WALK; // keep the picker from auto-standing over the birth clip
+    e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
+    e.unit.state = WidgetState.WALK; // keep the picker from auto-standing over the birth clip
     e.curSeq = e.birthSeq;
   }
 
@@ -2286,8 +2295,8 @@ export class RtsController {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: "", armorType: "", isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
-      agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: "",
+      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
@@ -2316,8 +2325,8 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: "", armorType: "", isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
-      agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: "",
+      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
@@ -2353,15 +2362,15 @@ export class RtsController {
       damageMin: w ? Math.round(w.damage - u.bonusDamage) + w.dice : 0,
       damageMax: w ? Math.round(w.damage - u.bonusDamage) + w.dice * w.sides : 0,
       damageBonus: Math.round(u.bonusDamage),
-      attackType: def?.attackType ?? "",
-      armorType: def?.armorType ?? "",
+      attackType: def?.attackType ?? AttackType.None,
+      armorType: def?.armorType ?? ArmorType.Unknown,
       isHero: u.isHero,
       // Heroes carry their LIVE level/attributes on the sim unit (they grow with
       // XP); non-heroes fall back to the data-def values.
       level: u.isHero ? u.level : (def?.level ?? 0),
       xp: u.xp,
-      xpThis: u.isHero ? xpForLevel(u.level) : 0,
-      xpNext: u.isHero ? xpForLevel(u.level + 1) : 0,
+      xpThis: u.isHero ? xpToReachLevel(u.level) : 0,
+      xpNext: u.isHero ? xpToReachLevel(u.level + 1) : 0,
       skillPoints: u.skillPoints,
       // Split base attribute vs the item "+N": the shown number is the natural
       // attribute (growth), the bonus is the item contribution (green/red in the HUD).
@@ -2371,7 +2380,7 @@ export class RtsController {
       strengthBonus: u.isHero ? u.bonusStr : 0,
       agilityBonus: u.isHero ? u.bonusAgi : 0,
       intelligenceBonus: u.isHero ? u.bonusInt : 0,
-      primaryAttr: def?.primaryAttr ?? "",
+      primaryAttr: def?.primaryAttr ?? PrimaryAttribute.None,
       model: e.modelPath,
       isWorker: !!u.worker,
       isBuilding: !!b,
@@ -3516,13 +3525,12 @@ function lift(moveHeight: number): number {
   return moveHeight > 0 ? moveHeight : 0;
 }
 
-// Weapon types that fire a travelling projectile (vs. instant melee).
-const RANGED_WEAPON_TYPES = new Set(["missile", "msplash", "mbounce", "artillery"]);
-
 // A unit's weapon from its registry stats; null when it can't attack.
 function weaponFor(def: UnitDef): SimWeapon | null {
   if (def.attackCooldown <= 0 || def.attackDamage + def.attackDice * def.attackSides <= 0) return null;
-  const ranged = RANGED_WEAPON_TYPES.has(def.weaponType.toLowerCase()) || def.missileArt !== "";
+  // The Rifleman's weapTp1 is "instant" yet he clearly shoots: a missile model on a
+  // nominally instant weapon still flies. Either signal makes the attack ranged.
+  const ranged = isRangedWeapon(def.weaponType) || def.missileArt !== "";
   return {
     damage: def.attackDamage,
     dice: def.attackDice,

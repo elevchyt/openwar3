@@ -9,8 +9,14 @@ import wpm from "mdx-m3-viewer/dist/cjs/parsers/w3x/wpm";
 // 0x08 over their full pathTex footprint to reserve build spacing (see destructibles.ts).
 
 export const PATHING_CELL = 32;
-const UNWALKABLE = 0x02;
-const UNBUILDABLE = 0x08;
+
+/** The two war3map.wpm bits we act on. They are independent channels — a cliff face
+ *  sets both, but ~14% of walkable cells set Unbuildable alone (slopes, the margin a
+ *  production building leaves walkable around itself). Never collapse them into one. */
+export enum PathingFlag {
+  Unwalkable = 0x02,
+  Unbuildable = 0x08,
+}
 
 export interface PathingData {
   width: number;
@@ -117,7 +123,7 @@ export class PathingGrid {
   }
 
   walkable(cx: number, cy: number): boolean {
-    return this.inBounds(cx, cy) && (this.flags[cy * this.width + cx] & UNWALKABLE) === 0;
+    return this.inBounds(cx, cy) && (this.flags[cy * this.width + cx] & PathingFlag.Unwalkable) === 0;
   }
 
   /** True if a building may be founded on this cell: not unbuildable *and* not
@@ -125,27 +131,27 @@ export class PathingGrid {
    *  building's full pathTex footprint; movable-unit reservations are ignored
    *  (our own units scatter when the builder arrives), matching WC3. */
   buildable(cx: number, cy: number): boolean {
-    return this.inBounds(cx, cy) && (this.flags[cy * this.width + cx] & (UNWALKABLE | UNBUILDABLE)) === 0;
+    return this.inBounds(cx, cy) && (this.flags[cy * this.width + cx] & (PathingFlag.Unwalkable | PathingFlag.Unbuildable)) === 0;
   }
 
   /** Mark a cell unwalkable — used to stamp destructible (tree) footprints. */
   block(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= UNWALKABLE;
+    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= PathingFlag.Unwalkable;
   }
 
   /** Clear a stamped cell (felled tree / collapsed mine footprint). */
   unblock(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] &= ~UNWALKABLE;
+    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] &= ~PathingFlag.Unwalkable;
   }
 
   /** Mark/clear a cell unbuildable — building footprints' full (blue) extent, so
    *  the next building can't crowd in and close the walkable corridor between them. */
   blockBuild(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= UNBUILDABLE;
+    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= PathingFlag.Unbuildable;
   }
 
   unblockBuild(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] &= ~UNBUILDABLE;
+    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] &= ~PathingFlag.Unbuildable;
   }
 
   worldToCell(wx: number, wy: number): [number, number] {

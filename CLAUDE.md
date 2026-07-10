@@ -55,8 +55,17 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Git workflow:** commit and push directly to `main` — do **not** create a branch or open a PR unless the developer
   explicitly asks for one. Still commit only when the change is done and verified (`pnpm typecheck` / in-browser as needed).
 - **Build / check:** `pnpm dev` (localhost:5173), `pnpm build` (typecheck + build), `pnpm typecheck`. Run `pnpm typecheck`
-  before considering a change done.
+  before considering a change done. `pnpm data:verify` re-checks `src/data/gameplayConstants.ts` against the unpacked
+  archives — run it after touching that file (needs `pnpm data:extract` first).
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.
+- **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
+  `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
+  under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a
+  literal at its use site, and never hand-transcribe something the game derives — the damage table and the XP curves are
+  computed from the raw `DamageBonus*` lists and `f(x) = A·f(x-1) + B·x + C` formulas so they cannot drift.
+- **Closed SLK domains are enums**, not strings — `AttackType`, `ArmorType`, `WeaponType`, `MoveType`,
+  `PrimaryAttribute`, `PlayerSlot` in [`src/data/enums.ts`](src/data/enums.ts). Parse once at the SLK boundary
+  (`toAttackType(...)`), then let the compiler carry it. A stringly-typed `atkType1` silently degrades to a 1.0 multiplier.
 - Match the surrounding code's comment density and idiom — this codebase documents *why* (and its WC3 source) inline.
