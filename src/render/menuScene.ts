@@ -2,6 +2,7 @@ import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import type { DataSource } from "../vfs/types";
+import { makeFog, type DistFog } from "./fog";
 
 // The main-menu background + chrome (issue #54). WC3 composes the menu from three
 // layers, all animated MDX glue models read from the user's install:
@@ -32,6 +33,7 @@ interface Scene {
   color: Float32Array;
   viewport: Float32Array;
   camera: Camera;
+  distFog?: DistFog; // OpenWar3: read by the patched SD shaders
   removeInstance(instance: unknown): void;
 }
 interface Viewer {
@@ -88,10 +90,21 @@ export class MenuScene {
     panelHalfX: 0.61, // panel ortho half-width
     panelHalfY: 0.3, // panel ortho half-height (smaller = taller/zoomed panel)
     panelStretchX: 1.32, // widen the container horizontally beyond its natural aspect
+    // Distance-fog haze on the icy background (world units from the eye; rgb 0..1).
+    fogStart: 2500,
+    fogEnd: 9000,
+    fogR: 0.72,
+    fogG: 0.73,
+    fogB: 0.82,
   };
 
   /** Apply the current `tuning` values (called by the debug controls after a change). */
-  applyTuning(): void { this.frameCameras(); }
+  applyTuning(): void { this.frameCameras(); this.updateFog(); }
+
+  private updateFog(): void {
+    const t = this.tuning;
+    this.scene3d.distFog = makeFog(t.fogStart, t.fogEnd, t.fogR, t.fogG, t.fogB);
+  }
 
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
     // Size the drawing buffer before the viewer reads it — directly, not via
@@ -136,6 +149,7 @@ export class MenuScene {
     }
 
     this.frameCameras();
+    this.updateFog();
     await this.viewer.whenAllLoaded();
   }
 

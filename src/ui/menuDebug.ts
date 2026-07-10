@@ -23,6 +23,11 @@ const SLIDERS: Slider[] = [
   { key: "panelHalfX", label: "Panel width (½, smaller=wider)", min: 0.15, max: 0.9, step: 0.005 },
   { key: "panelHalfY", label: "Panel height (½, smaller=taller)", min: 0.15, max: 0.9, step: 0.005 },
   { key: "panelStretchX", label: "Panel stretch X", min: 0.7, max: 1.8, step: 0.01 },
+  { key: "fogStart", label: "Fog start (world)", min: 0, max: 12000, step: 100 },
+  { key: "fogEnd", label: "Fog end (world)", min: 0, max: 18000, step: 100 },
+  { key: "fogR", label: "Fog R", min: 0, max: 1, step: 0.01 },
+  { key: "fogG", label: "Fog G", min: 0, max: 1, step: 0.01 },
+  { key: "fogB", label: "Fog B", min: 0, max: 1, step: 0.01 },
 ];
 
 export function mountMenuDebug(root: HTMLElement, scene: MenuScene): { dispose(): void } {

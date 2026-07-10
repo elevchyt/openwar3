@@ -325,10 +325,10 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
      }
      return offset;
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..f8d921ab6570b2c03ffb783c4ab49edf0606d18b 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..fa378ca9cd92a91dff902227f5de768c095e3ebc 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-@@ -45,6 +45,19 @@ class BatchGroup {
+@@ -45,6 +45,32 @@ class BatchGroup {
              gl.uniform1f(uniforms['u_hasBones'], 0);
          }
          gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
@@ -344,6 +344,19 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..f8d921ab6570b2c03ffb783c4ab49edf
 +        }
 +        else {
 +            gl.uniform1f(uniforms['u_dncEnabled'], 0);
++        }
++        // OpenWar3: scene distance fog (src/render/fog.ts → scene.distFog). Same no-op
++        // rule as dnc: only the SD shader declares these uniforms.
++        const distFog = scene.distFog;
++        if (distFog && distFog.enabled) {
++            gl.uniform1f(uniforms['u_distFogEnabled'], 1);
++            gl.uniform1f(uniforms['u_distFogStart'], distFog.start);
++            gl.uniform1f(uniforms['u_distFogEnd'], distFog.end);
++            gl.uniform3fv(uniforms['u_distFogColor'], distFog.color);
++            gl.uniform3fv(uniforms['u_distFogEye'], camera.location);
++        }
++        else {
++            gl.uniform1f(uniforms['u_distFogEnabled'], 0);
 +        }
          gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
@@ -551,10 +564,10 @@ index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb
          const model = this.model;
          if (this.sequence === -1) {
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..2ef29cbd52b40200fbd5ce7bf8849c6e5bb60dac 100644
+index 235f29101256617d34587316e8f40984a8f95685..adb4711453762bea0500a46c23605ae0aa1426a5 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-@@ -11,6 +11,16 @@ uniform sampler2D u_texture;
+@@ -11,12 +11,44 @@ uniform sampler2D u_texture;
  uniform float u_filterMode;
  uniform bool u_unshaded;
  
@@ -568,10 +581,48 @@ index 235f29101256617d34587316e8f40984a8f95685..2ef29cbd52b40200fbd5ce7bf8849c6e
 +uniform vec3 u_dncDiffuse;
 +uniform vec3 u_dncLightDir;
 +
++// OpenWar3: linear distance fog (src/render/fog.ts). Fragments fade toward
++// u_distFogColor between u_distFogStart and u_distFogEnd world units from the eye —
++// the WC3 environment/menu haze. Distinct from the fog-of-war uniforms in the terrain
++// shaders (u_fog*). u_distFogEnabled is 0 for scenes with no fog (keeps stock output).
++uniform float u_distFogEnabled;
++uniform float u_distFogStart;
++uniform float u_distFogEnd;
++uniform vec3 u_distFogColor;
++uniform vec3 u_distFogEye;
++
  varying vec2 v_uv;
  varying vec3 v_normal;
  varying vec4 v_color;
-@@ -62,10 +72,18 @@ void lambert() {
+ varying vec4 v_uvTransRot;
+ varying float v_uvScale;
+ varying vec3 v_lightDir;
++varying vec3 v_worldPos;
++
++// Blend rgb toward the fog colour by camera distance. Additive layers (filterMode
++// 3/4) fade to black instead — black is the additive identity, so distant glows just
++// disappear rather than tint the scene with fog colour.
++vec3 applyDistFog(vec3 rgb, float filterMode) {
++  if (u_distFogEnabled < 0.5) return rgb;
++  float dist = length(u_distFogEye - v_worldPos);
++  float f = clamp((u_distFogEnd - dist) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
++  if (filterMode >= 3.0 && filterMode <= 4.0) return rgb * f;
++  return mix(u_distFogColor, rgb, f);
++}
+ 
+ vec4 getDiffuseColor() {
+   vec2 uv = v_uv;
+@@ -55,19 +87,30 @@ void onlyNormals() {
+ }
+ 
+ void onlyDiffuse() {
+-  gl_FragColor = getDiffuseColor();
++  vec4 color = getDiffuseColor();
++  color.rgb = applyDistFog(color.rgb, u_filterMode);
++  gl_FragColor = color;
+ }
+ 
+ void lambert() {
    vec4 color = getDiffuseColor();
  
    if (!u_unshaded) {
@@ -593,9 +644,32 @@ index 235f29101256617d34587316e8f40984a8f95685..2ef29cbd52b40200fbd5ce7bf8849c6e
 +    }
    }
  
++  color.rgb = applyDistFog(color.rgb, u_filterMode);
    gl_FragColor = color;
+ }
+ 
+diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
+index 49733805785c0ef269901d8928e47a953ada93a9..833ea2e1b74effd8bf47ce48f9268cf38dafa55e 100644
+--- a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
++++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
+@@ -23,6 +23,7 @@ varying vec4 v_color;
+ varying vec4 v_uvTransRot;
+ varying float v_uvScale;
+ varying vec3 v_lightDir;
++varying vec3 v_worldPos; // OpenWar3: world-space position for distance fog (see sd.frag)
+ 
+ ${bonetexture_glsl_1.default}
+ ${transforms_glsl_1.default}
+@@ -41,6 +42,7 @@ void main() {
+   v_uvTransRot = vec4(u_uvTrans, u_uvRot);
+   v_uvScale = u_uvScale;
+   v_lightDir = normalize(u_lightPos - position);
++  v_worldPos = position; // world space (skinned above; gl_Position needs no model matrix)
+ 
+   gl_Position = u_VP * vec4(position, 1.0);
+ }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..4019d557a1b9f3d0459fdb11f011b7f3c749c967 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..cecf65149c8f6ba8bfe96255c96a8df836430afc 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -168,7 +168,11 @@ class War3MapViewerMap {
@@ -776,31 +850,34 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..4019d557a1b9f3d0459fdb11f011b7f3
                              }
                          });
                      }
-@@ -503,6 +638,7 @@ class War3MapViewerMap {
+@@ -503,6 +638,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
 +            this.setDayNightUniforms(uniforms); // OpenWar3: day/night shading
++            this.setDistFogUniforms(uniforms); // OpenWar3: atmospheric distance fog
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -558,6 +694,7 @@ class War3MapViewerMap {
+@@ -558,6 +695,8 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
 +            this.setDayNightUniforms(uniforms); // OpenWar3: day/night shading
++            this.setDistFogUniforms(uniforms); // OpenWar3: atmospheric distance fog
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 0);
-@@ -599,6 +736,7 @@ class War3MapViewerMap {
+@@ -599,6 +738,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
 +            this.setDayNightUniforms(uniforms); // OpenWar3: day/night shading
++            this.setDistFogUniforms(uniforms); // OpenWar3: atmospheric distance fog
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +750,18 @@ class War3MapViewerMap {
+@@ -612,6 +753,18 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
@@ -819,7 +896,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..4019d557a1b9f3d0459fdb11f011b7f3
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +821,43 @@ class War3MapViewerMap {
+@@ -671,6 +824,62 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -840,6 +917,25 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..4019d557a1b9f3d0459fdb11f011b7f3
 +        }
 +        else {
 +            gl.uniform1f(uniforms['u_dncEnabled'], 0);
++        }
++    }
++    /**
++     * OpenWar3: feed the terrain shaders the scene's linear distance fog (the WC3
++     * environment haze; src/render/fog.ts → worldScene.distFog, from the map's w3i).
++     */
++    setDistFogUniforms(uniforms) {
++        const gl = this.viewer.gl;
++        const scene = this.worldScene;
++        const fog = scene.distFog;
++        if (fog && fog.enabled) {
++            gl.uniform1f(uniforms['u_distFogEnabled'], 1);
++            gl.uniform1f(uniforms['u_distFogStart'], fog.start);
++            gl.uniform1f(uniforms['u_distFogEnd'], fog.end);
++            gl.uniform3fv(uniforms['u_distFogColor'], fog.color);
++            gl.uniform3fv(uniforms['u_distFogEye'], scene.camera.location);
++        }
++        else {
++            gl.uniform1f(uniforms['u_distFogEnabled'], 0);
 +        }
 +    }
 +    /**
@@ -864,10 +960,10 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..4019d557a1b9f3d0459fdb11f011b7f3
       * Is the tile at the given column and row water?
       */
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-index c2a27060799ff26b5c86ccedd0bedda2d6a54746..2d2194a87aba72326f202bfaca991b2218bdbaf1 100644
+index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77e6c74119 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-@@ -9,6 +9,24 @@ ${precision_glsl_1.default}
+@@ -9,6 +9,32 @@ ${precision_glsl_1.default}
  uniform sampler2D u_texture1;
  uniform sampler2D u_texture2;
  
@@ -889,10 +985,18 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..2d2194a87aba72326f202bfaca991b22
 +uniform vec3 u_dncDiffuse;
 +uniform vec3 u_dncLightDir;
 +
++// OpenWar3: linear distance fog (environment haze; src/render/fog.ts). Reuses the
++// cliff's world position (v_position). Distinct from the fog-of-war mask above.
++uniform float u_distFogEnabled;
++uniform float u_distFogStart;
++uniform float u_distFogEnd;
++uniform vec3 u_distFogColor;
++uniform vec3 u_distFogEye;
++
  varying vec3 v_normal;
  varying vec2 v_uv;
  varying float v_texture;
-@@ -35,6 +53,18 @@ void main() {
+@@ -35,6 +61,24 @@ void main() {
  
    // color *= clamp(dot(normal, lightDirection) + 0.45, 0.1, 1.0);
  
@@ -900,6 +1004,12 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..2d2194a87aba72326f202bfaca991b22
 +  if (u_dncEnabled > 0.5) {
 +    float ndotl = max(dot(normalize(v_normal), u_dncLightDir), 0.0);
 +    color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * ndotl, 0.0, 1.0);
++  }
++
++  // OpenWar3: atmospheric distance fog (haze), before the fog-of-war dimming.
++  if (u_distFogEnabled > 0.5) {
++    float f = clamp((u_distFogEnd - length(u_distFogEye - v_position)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
++    color.rgb = mix(u_distFogColor, color.rgb, f);
 +  }
 +
 +  // OpenWar3: dim the cliff by the fog-of-war brightness at this fragment's world XY.
@@ -912,10 +1022,10 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..2d2194a87aba72326f202bfaca991b22
  }
  `;
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
-index 70449d8d52f46ac83662d302c94dcee8e29147e7..bfb2747475d1d31265581e8b83a74492c172cd8f 100644
+index 70449d8d52f46ac83662d302c94dcee8e29147e7..7a855a22ef9cb7a1a3f39eb183aecef834869ed6 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
-@@ -6,12 +6,21 @@ ${precision_glsl_1.default}
+@@ -6,11 +6,35 @@ ${precision_glsl_1.default}
  
  uniform sampler2D u_tilesets[15];
  
@@ -930,16 +1040,29 @@ index 70449d8d52f46ac83662d302c94dcee8e29147e7..bfb2747475d1d31265581e8b83a74492
 +uniform vec3 u_dncDiffuse;
 +uniform vec3 u_dncLightDir;
 +
++// OpenWar3: linear distance fog (the WC3 environment haze; src/render/fog.ts). Set on
++// the map render from the w3i fog settings. Distinct from fog-of-war (u_fog*).
++uniform float u_distFogEnabled;
++uniform float u_distFogStart;
++uniform float u_distFogEnd;
++uniform vec3 u_distFogColor;
++uniform vec3 u_distFogEye;
++
  varying vec4 v_tilesets;
  varying vec2 v_uv[4];
  varying vec3 v_normal;
++varying vec3 v_dfPos;
  
 -const vec3 lightDirection = normalize(vec3(-0.3, -0.3, 0.25));
--
++vec3 applyDistFog(vec3 rgb) {
++  if (u_distFogEnabled < 0.5) return rgb;
++  float f = clamp((u_distFogEnd - length(u_distFogEye - v_dfPos)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
++  return mix(u_distFogColor, rgb, f);
++}
+ 
  vec4 sample(float tileset, vec2 uv) {
    // 1.0 - 1.0 == 0.0 is not always true.
-   int i = int(tileset - 0.6);
-@@ -70,7 +79,14 @@ void main() {
+@@ -70,9 +94,16 @@ void main() {
      color = blend(color, v_tilesets[3], v_uv[3]);
    }
  
@@ -953,13 +1076,40 @@ index 70449d8d52f46ac83662d302c94dcee8e29147e7..bfb2747475d1d31265581e8b83a74492
 +    color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * ndotl, 0.0, 1.0);
 +  }
  
-   gl_FragColor = vec4(color.rgb, 1.0);
+-  gl_FragColor = vec4(color.rgb, 1.0);
++  gl_FragColor = vec4(applyDistFog(color.rgb), 1.0);
  }
+ `;
+ exports.default = shader;
+diff --git a/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js b/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js
+index 26a5b4c8758bfb80c62f458fbc4a85293c18060b..a611f04f49f48bf98e308e50653c6f7cb33cd877 100644
+--- a/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js
++++ b/dist/cjs/viewer/handlers/w3x/shaders/ground.vert.js
+@@ -16,6 +16,7 @@ attribute vec4 a_variations;
+ varying vec4 v_tilesets;
+ varying vec2 v_uv[4];
+ varying vec3 v_normal;
++varying vec3 v_dfPos; // OpenWar3: world position for distance fog
+ 
+ vec2 getCell(float variation) {
+   if (variation < 16.0) {
+@@ -58,9 +59,11 @@ void main() {
+ 
+     v_normal = normalize(vec3(hL - hR, hD - hU, 2.0));
+ 
++    v_dfPos = vec3(base * 128.0 + u_offset, height * 128.0);
+     gl_Position = u_VP * vec4(base * 128.0 + u_offset, height * 128.0, 1.0);
+   } else {
+     v_tilesets = vec4(0.0);
++    v_dfPos = vec3(0.0);
+ 
+     v_uv[0] = vec2(0.0);
+     v_uv[1] = vec2(0.0);
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
-index 6f31791753b2bf146060b8adfb44767cc468be55..87798e5cef84ef8a250a15961389f561f2754f76 100644
+index 6f31791753b2bf146060b8adfb44767cc468be55..99f3dfa6a2c5bca2316facb831ff64a47d2d52fe 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
-@@ -6,11 +6,25 @@ ${precision_glsl_1.default}
+@@ -6,11 +6,39 @@ ${precision_glsl_1.default}
  
  uniform sampler2D u_waterTexture;
  
@@ -971,8 +1121,16 @@ index 6f31791753b2bf146060b8adfb44767cc468be55..87798e5cef84ef8a250a15961389f561
 +uniform vec3 u_dncDiffuse;
 +uniform vec3 u_dncLightDir;
 +
++// OpenWar3: linear distance fog (environment haze; src/render/fog.ts).
++uniform float u_distFogEnabled;
++uniform float u_distFogStart;
++uniform float u_distFogEnd;
++uniform vec3 u_distFogColor;
++uniform vec3 u_distFogEye;
++
  varying vec2 v_uv;
  varying vec4 v_color;
++varying vec3 v_dfPos;
  
  void main() {
 -  gl_FragColor = texture2D(u_waterTexture, v_uv) * v_color;
@@ -982,10 +1140,41 @@ index 6f31791753b2bf146060b8adfb44767cc468be55..87798e5cef84ef8a250a15961389f561
 +    color.rgb *= clamp(u_dncAmbient + u_dncDiffuse * max(u_dncLightDir.z, 0.0), 0.0, 1.0);
 +  }
 +
++  // Atmospheric haze — mix rgb only (keep the shore-fade alpha intact).
++  if (u_distFogEnabled > 0.5) {
++    float f = clamp((u_distFogEnd - length(u_distFogEye - v_dfPos)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
++    color.rgb = mix(u_distFogColor, color.rgb, f);
++  }
++
 +  gl_FragColor = color;
  }
  `;
  exports.default = shader;
+diff --git a/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js b/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js
+index 3839c8af5d3f624640e87bec6d447483f9d706bf..534256b241c15604b4bc431cb148bce9a8467642 100644
+--- a/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js
++++ b/dist/cjs/viewer/handlers/w3x/shaders/water.vert.js
+@@ -18,6 +18,7 @@ attribute float a_isWater;
+ 
+ varying vec2 v_uv;
+ varying vec4 v_color;
++varying vec3 v_dfPos; // OpenWar3: world position for distance fog
+ 
+ const float minDepth = 10.0 / 128.0;
+ const float deepLevel = 64.0 / 128.0;
+@@ -41,10 +42,12 @@ void main() {
+       v_color = mix(u_minDeepColor, u_maxDeepColor, value) / 255.0;
+     }
+ 
++    v_dfPos = vec3(base * 128.0 + u_offset, waterHeight * 128.0);
+     gl_Position = u_VP * vec4(base * 128.0 + u_offset, waterHeight * 128.0, 1.0);
+   } else {
+     v_uv = vec2(0.0);
+     v_color = vec4(0.0);
++    v_dfPos = vec3(0.0);
+ 
+     gl_Position = vec4(0.0);
+   }
 diff --git a/dist/cjs/viewer/scene.js b/dist/cjs/viewer/scene.js
 index afd956b8a078be77190d840a7fe5cb4d2c76797a..66de9bb3445643603adc39e0cbec367ea8adfaa8 100644
 --- a/dist/cjs/viewer/scene.js

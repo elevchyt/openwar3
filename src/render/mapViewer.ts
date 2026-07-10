@@ -23,6 +23,7 @@ import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILI
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { MELEE, MISC_GAME } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
+import { makeFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
 
 /** Per-creep seed data collected from the map (guard post + drop table). */
@@ -164,6 +165,9 @@ interface Scene {
   dncEnabled: number;
   dncTerrain: DayNightLight | null;
   dncUnit: DayNightLight | null;
+  // OpenWar3 patch hook: linear distance fog (the map's w3i environment haze) that the
+  // ground/cliff/water and model shaders read (src/render/fog.ts). Undefined = no fog.
+  distFog?: DistFog;
 }
 interface HideableWidget {
   instance: {
@@ -306,6 +310,7 @@ export class MapViewerScene {
   // load. Null when the install can't supply it — the world then keeps the viewer's
   // stock fullbright shading rather than going black.
   private dayNight: DayNightCycle | null = null;
+  private mapFog: DistFog | null = null; // the map's w3i environment fog (distance haze)
   // The top-bar day/night medallion — the real UI\Console\<Race>\<Race>UI-TimeIndicator
   // model on its own canvas, scrubbed to the sim clock each frame (issue #47).
   private clock: TimeIndicatorClock | null = null;
@@ -719,6 +724,14 @@ export class MapViewerScene {
       const info = new w3iParser.File();
       info.load(w3iBytes);
       buildVersion = info.getBuildVersion();
+      // The map's environment fog (w3i): useTerrainFog 0 = off; fogHeight is [z-start,
+      // z-end] camera distance, fogColor is RGBA bytes. Applied to the world scene so the
+      // terrain + units fade to the fog colour with distance, as in the real game.
+      const fi = info as unknown as { useTerrainFog: number; fogHeight: Float32Array; fogColor: Uint8Array };
+      if (fi.useTerrainFog > 0 && fi.fogHeight[1] > fi.fogHeight[0]) {
+        const c = fi.fogColor;
+        this.mapFog = makeFog(fi.fogHeight[0], fi.fogHeight[1], c[0] / 255, c[1] / 255, c[2] / 255);
+      }
     }
     const readBytes = (p: string): Uint8Array | null => this.vfs.rawBytes(p);
 
@@ -2462,6 +2475,7 @@ export class MapViewerScene {
    *  Before a match starts there is no sim clock, so the map previews at the melee
    *  opening hour, 08:00 (Blizzard.j bj_MELEE_STARTING_TOD). */
   private applyDayNight(scene: Scene): void {
+    scene.distFog = this.mapFog ?? undefined; // the map's environment fog (w3i)
     if (!this.dayNight) {
       scene.dncEnabled = 0;
       return;
