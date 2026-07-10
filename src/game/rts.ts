@@ -1147,6 +1147,11 @@ export class RtsController {
       su.guardFacing = su.facing;
       const aggro = this.creepAggroAt(loc[0], loc[1]);
       su.aggroRange = aggro > 0 ? aggro : su.weapon?.acquire ?? def?.acquireRange ?? 0;
+      // Normal (-1) vs Camp (-2) — the World Editor's two-way "Target Acquisition Range"
+      // radio (WorldEditStrings WESTRING_UPROPS_AR_NORMAL / _AR_CAMP). Melee mapmakers put
+      // Normal on the gold-mine guards and Camp on everything else; a Camp creep ignores
+      // the building-placement notification, so you can build beside it in peace.
+      su.campGuard = aggro === -2;
       su.canSleep = def?.canSleep ?? false;
       this.sim.setUnitDrops(simId, this.creepDropsAt(loc[0], loc[1])); // scatter loot on death
       this.seededInstances.add(unit.instance); // RTS drives this creep's fog visibility

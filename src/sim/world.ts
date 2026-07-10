@@ -454,6 +454,8 @@ export interface SimUnit {
   asleep: boolean; // currently asleep (won't auto-acquire; wakes on damage/proximity/camp)
   returning: boolean; // leashing back to the guard point (ignores enemies until home)
   campHelper: boolean; // fighting only because a camp-mate called for help (may not call for help itself)
+  campGuard: boolean; // war3mapUnits.doo targetAcquisition -2 ("Camp") — guards its ground, deaf to new construction
+
   strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
   returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
@@ -625,6 +627,11 @@ const GUARD_DISTANCE = MISC_GAME.GuardDistance; // strayed this far from home �
 const MAX_GUARD_DISTANCE = MISC_GAME.MaxGuardDistance; // strayed this far → return home unconditionally, even under attack
 const GUARD_RETURN_TIME = MISC_GAME.GuardReturnTime; // also the "can't get home, resume fighting" window
 const CREEP_CALL_FOR_HELP = MISC_GAME.CreepCallForHelp; // camp cohesion: one aggros → the whole camp wakes/joins
+// "Radius of creep notification when a new building gets placed" — Units\MiscData.txt's
+// own comment on this constant. Laying a foundation shouts to the creeps around it, quite
+// apart from anyone's acquisition range: this is why a gold mine's guards charge a Peasant
+// who starts an expansion from further out than they'd have noticed him merely walking by.
+const BUILDING_PLACEMENT_NOTIFY_RADIUS = MISC_DATA.BuildingPlacementNotifyRadius;
 const CREEP_HOME_EPS = 64; // within this of the guard point counts as "home" (reset + can sleep)
 // Hysteresis for the "walk back to post" trigger (mirrors ATTACK_LEASH / FOLLOW_LEASH):
 // a return FINISHES at CREEP_HOME_EPS and settle() then snaps the creep to the grid —
@@ -1258,6 +1265,7 @@ export class SimWorld {
       | "asleep"
       | "returning"
       | "campHelper"
+      | "campGuard"
       | "strayT"
       | "returnBestDist"
       | "returnStuckT"
@@ -1390,6 +1398,7 @@ export class SimWorld {
       asleep: false,
       returning: false,
       campHelper: false,
+      campGuard: false,
       strayT: 0,
       returnBestDist: 0,
       returnStuckT: 0,
@@ -1402,6 +1411,10 @@ export class SimWorld {
     };
     this.units.set(u.id, u);
     this.settle(u);
+    // A structure that arrives already finished (a melee start Town Hall, a map-placed
+    // neutral building) was not "placed" in the sense the notification means — only a
+    // fresh foundation with construction left to run shouts at the creeps around it.
+    if (u.building && u.building.constructionLeft > 0) this.notifyCreepsOfPlacement(u);
     if (hero) {
       // Grant the starting skill point(s) for the hero's level and derive stats
       // (HP/mana/armour/damage/regen) from the level-1 attributes.
@@ -5119,6 +5132,34 @@ export class SimWorld {
         this.issueAttack(c.id, target.id);
         c.campHelper = true; // came for a camp-mate's shout — must not relay it
       }
+    }
+  }
+
+  /** Laying a new foundation notifies the creeps around it (MiscData
+   *  BuildingPlacementNotifyRadius = 600) and they come to tear it down. The radius is
+   *  measured from the building's edge, and it is quite separate from acquisition range —
+   *  a creep that would never have noticed a Peasant walking past at 600 charges the
+   *  moment he plants a Town Hall there.
+   *
+   *  Only "Normal" creeps answer. The map's per-creep targetAcquisition is a two-way flag,
+   *  Normal (-1) or Camp (-2), and across every shipped melee map the mapmakers set Normal
+   *  on exactly the camps guarding a gold mine and Camp on all the rest. That lines up with
+   *  what players observe — "all creeps who protect a gold mine will be aggressive and other
+   *  creeps will be passive, so you more safely can build near them" (warcraft3.info,
+   *  "Interacting With Creeps") — so we read Camp as "deaf to construction". The split is an
+   *  inference from those two facts together, not something any file states outright.
+   *
+   *  The notified creep is an originator (it was shouted at directly), so it may call its
+   *  own camp in — that is how one Peasant's foundation brings the whole mine camp. */
+  private notifyCreepsOfPlacement(b: SimUnit): void {
+    for (const c of this.units.values()) {
+      if (!c.isCreep || c.hp <= 0 || c.returning || c.campGuard || !c.weapon) continue;
+      if (!this.hostile(c, b)) continue;
+      if (Math.hypot(b.x - c.x, b.y - c.y) - b.radius > BUILDING_PLACEMENT_NOTIFY_RADIUS) continue;
+      c.asleep = false;
+      c.campHelper = false; // notified in its own right — it may shout for the rest of the camp
+      this.issueAttack(c.id, b.id);
+      this.alertCamp(c, b);
     }
   }
 
