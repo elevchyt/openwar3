@@ -22,6 +22,7 @@ const SLIDERS: Slider[] = [
   { key: "panelCy", label: "Panel centre Y", min: -0.6, max: 0.6, step: 0.005 },
   { key: "panelHalfX", label: "Panel width (½, smaller=wider)", min: 0.15, max: 0.9, step: 0.005 },
   { key: "panelHalfY", label: "Panel height (½, smaller=taller)", min: 0.15, max: 0.9, step: 0.005 },
+  { key: "panelStretchX", label: "Panel stretch X", min: 0.7, max: 1.8, step: 0.01 },
 ];
 
 export function mountMenuDebug(root: HTMLElement, scene: MenuScene): { dispose(): void } {

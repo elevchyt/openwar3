@@ -87,6 +87,7 @@ export class MenuScene {
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
     panelHalfY: 0.3, // panel ortho half-height (smaller = taller/zoomed panel)
+    panelStretchX: 1.14, // widen the container horizontally beyond its natural aspect
   };
 
   /** Apply the current `tuning` values (called by the debug controls after a change). */
@@ -209,8 +210,9 @@ export class MenuScene {
     // instead of the panel stretching with the screen width. The viewport width tracks
     // the height via the tuned window aspect (panelHalfX/panelHalfY), so the panel keeps
     // its proportions; panelCx/Cy place the content within it.
-    const panelAspect = t.panelHalfX / t.panelHalfY;
-    const pVw = h * panelAspect;
+    // width = natural (un-stretched) height-based width × an explicit horizontal
+    // stretch, so the container can be widened without changing its height.
+    const pVw = h * (t.panelHalfX / t.panelHalfY) * t.panelStretchX;
     this.scenePanel.camera.ortho(t.panelCx - t.panelHalfX, t.panelCx + t.panelHalfX, t.panelCy - t.panelHalfY, t.panelCy + t.panelHalfY, 1, 2000);
     this.scenePanel.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),
