@@ -1322,6 +1322,9 @@ body.in-game .load-gate { display: none; }
   top: 12px;
   left: 12px;
   z-index: 10;
+  /* #ui (this panel's parent) is pointer-events:none so the 3D canvas gets mouse
+     input; re-enable events here or the sliders are click-through to the canvas. */
+  pointer-events: auto;
   width: 250px;
   padding: 10px 12px;
   font-size: 11px;
