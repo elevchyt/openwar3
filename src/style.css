@@ -646,7 +646,7 @@ body.in-game .menu-panel { display: none; }
      scaled with height, which made it expand in both directions). The gap has to
      clear the console art's own top edge, which rises well above the card's box —
      at 14px the slab sat right on the stonework. */
-  bottom: calc(100% + 34px);
+  bottom: calc(100% + 48px);
   min-width: 210px;
   max-width: 300px;
   padding: 8px 11px;

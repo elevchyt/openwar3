@@ -2692,7 +2692,9 @@ export class MapViewerScene {
       // A neutral tavern isn't yours to rally, so it gets no rally button.
       if (!isShop && trainsFor(sel.typeId).length) {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
-        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1, active: this.activeCommandId() === "rally" }));
+        // No active state: placing a rally point is an aim, not an order in flight,
+        // and a building has no "current command" to keep it lit afterwards.
+        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1 }));
       }
       if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
       return out;
@@ -2764,14 +2766,14 @@ export class MapViewerScene {
     // is reserved for learned skills/abilities.
     const active = this.activeCommandId();
     out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: active === "move" }));
-    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0 }));
+    out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0, active: active === "stop" }));
     out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0, active: active === "hold" }));
     out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: active === "attack" }));
     out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: active === "patrol" }));
     if (sel.isWorker) {
       // Build sits at the bottom-left of a worker's card (developer spec); Repair
       // next to it. Repair = 35% of build cost / 150% of build time to full HP.
-      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2 }));
+      out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2, active: active === "build" }));
       out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: active === "repair" }));
     }
     this.pushAbilityButtons(sel, out); // learned spells + a hero's Learn Skill button
@@ -2782,28 +2784,24 @@ export class MapViewerScene {
    *  thing the selected unit is doing right now. WC3 highlights exactly one at a
    *  time, so this is a single id rather than a flag per button.
    *
-   *  An order the player has armed but not yet aimed (the Attack cursor waiting for
-   *  its target) counts as current: pressing A lights Attack immediately, and it
-   *  stays lit once the attack-move is under way, because both resolve here to the
-   *  same button. Abilities come back as `ability:<code>` whether or not the button
-   *  is an autocast one — the caller matches on the code, not the button id.
+   *  Read from the SIM, never from the armed-order cursor: a command lights up once
+   *  it has been *given*, not while it is still being aimed. Pressing A and hunting
+   *  for a target leaves the card dark until the click lands and the attack-move is
+   *  actually under way.
    *
-   *  Orders with no button behind them (harvest, follow, walking to an item) light
-   *  nothing, as does an idle unit. */
+   *  A unit with no order of its own is holding still, which is the Stop command —
+   *  so Stop is the resting state of the card, not a blank one. Abilities come back
+   *  as `ability:<code>` whether or not the button is an autocast one; the caller
+   *  matches on the code, not the button id. */
   private activeCommandId(): string | null {
-    const rts = this.rts;
-    if (!rts) return null;
-    switch (rts.orderMode) {
-      case "move": return "move";
-      case "attack": return "attack";
-      case "patrol": return "patrol";
-      case "repair": return "repair";
-      case "rally": return "rally";
-      case "cast": return rts.armedCast ? `ability:${rts.armedCast.code}` : null;
-      case "item": return null; // an armed item lights its inventory slot, not a command
-    }
-    const su = rts.selectedSimUnit();
+    const su = this.rts?.selectedSimUnit();
     if (!su || su.owner !== this.localPlayer) return null;
+    // A worker's build job outlives its order: it walks to the site under `move`
+    // (carrying `buildPending`) and hammers under `idle` (carrying `constructing`).
+    // So the job — not the order — is what keeps Build Structure lit from the moment
+    // the site is placed until the structure is up. Repair likewise.
+    if (su.buildPending || su.constructing) return "build";
+    if (su.repair) return "repair";
     switch (su.order) {
       case "move": return "move";
       // Attack-move and a forced attack share the Attack button, as in the game.
@@ -2813,7 +2811,9 @@ export class MapViewerScene {
       case "hold": return "hold";
       case "repair": return "repair";
       case "cast": return su.pendingCast ? `ability:${su.pendingCast.code}` : null;
-      default: return null;
+      // Idle, and every order with no button behind it (harvest, follow, walking to
+      // an item), rest on Stop.
+      default: return "stop";
     }
   }
 
