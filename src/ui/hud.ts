@@ -27,7 +27,10 @@ export interface CommandButton {
   col: number; // 0–3
   row: number; // 0–2
   disabled: boolean;
-  active: boolean; // armed (e.g. move/attack awaiting a target)
+  /** THE current command of the selected unit — the one button wearing the green
+   *  active border. At most one button in a card ever has this set. */
+  active: boolean;
+  autocast?: boolean; // autocast toggled on: a persistent setting, not the current order
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
@@ -1175,7 +1178,7 @@ export class GameHud {
   private refreshCommandCard(): void {
     const cmds = this.driver.commandCard();
     this.updateCooldownOverlays(cmds); // every frame (cheap) — cmdKey ignores cooldown
-    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}:${c.count ?? 0}`).join("|");
+    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}:${c.autocast}:${c.count ?? 0}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
     // The card changed (e.g. a building was cancelled and its buttons vanished):
@@ -1187,7 +1190,7 @@ export class GameHud {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed", "cant-afford");
+      btn.classList.remove("armed", "autocast", "cant-afford");
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
       onPress(btn, null);
@@ -1200,6 +1203,7 @@ export class GameHud {
       if (!btn) continue;
       btn.disabled = false;
       btn.classList.toggle("armed", c.active);
+      btn.classList.toggle("autocast", !!c.autocast);
       btn.classList.toggle("cant-afford", c.disabled);
       if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
       else this.cmdLabels[idx].textContent = c.name.slice(0, 4);

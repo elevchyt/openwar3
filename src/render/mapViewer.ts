@@ -2692,7 +2692,7 @@ export class MapViewerScene {
       // A neutral tavern isn't yours to rally, so it gets no rally button.
       if (!isShop && trainsFor(sel.typeId).length) {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
-        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1, active: this.rts?.orderMode === "rally" }));
+        out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1, active: this.activeCommandId() === "rally" }));
       }
       if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
       return out;
@@ -2762,20 +2762,59 @@ export class MapViewerScene {
     // WC3 layout (developer spec): top row = Move, Stop, Hold, Attack; Patrol at
     // (0,1); a worker's Build (or a hero's learn-skill) at (3,1); the bottom row
     // is reserved for learned skills/abilities.
-    const armed = this.rts?.orderMode ?? null;
-    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: armed === "move" }));
+    const active = this.activeCommandId();
+    out.push(this.cmd({ id: "move", icon: btnIcon("BTNMove"), name: "Move", hotkey: "M", desc: "Moves the unit to a target point.", col: 0, row: 0, active: active === "move" }));
     out.push(this.cmd({ id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S", desc: "Halts the unit's current order.", col: 1, row: 0 }));
-    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0 }));
-    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: armed === "attack" }));
-    out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: armed === "patrol" }));
+    out.push(this.cmd({ id: "hold", icon: btnIcon("BTNHoldPosition"), name: "Hold Position", hotkey: "H", desc: "Holds the unit's position.", col: 2, row: 0, active: active === "hold" }));
+    out.push(this.cmd({ id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A", desc: "Attacks a target unit, or attack-moves to a point.", col: 3, row: 0, active: active === "attack" }));
+    out.push(this.cmd({ id: "patrol", icon: btnIcon("BTNPatrol"), name: "Patrol", hotkey: "P", desc: "Patrols between here and a target point.", col: 0, row: 1, active: active === "patrol" }));
     if (sel.isWorker) {
       // Build sits at the bottom-left of a worker's card (developer spec); Repair
       // next to it. Repair = 35% of build cost / 150% of build time to full HP.
       out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2 }));
-      out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: armed === "repair" }));
+      out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: active === "repair" }));
     }
     this.pushAbilityButtons(sel, out); // learned spells + a hero's Learn Skill button
     return out;
+  }
+
+  /** Which ONE command button is currently lit with the green active border — the
+   *  thing the selected unit is doing right now. WC3 highlights exactly one at a
+   *  time, so this is a single id rather than a flag per button.
+   *
+   *  An order the player has armed but not yet aimed (the Attack cursor waiting for
+   *  its target) counts as current: pressing A lights Attack immediately, and it
+   *  stays lit once the attack-move is under way, because both resolve here to the
+   *  same button. Abilities come back as `ability:<code>` whether or not the button
+   *  is an autocast one — the caller matches on the code, not the button id.
+   *
+   *  Orders with no button behind them (harvest, follow, walking to an item) light
+   *  nothing, as does an idle unit. */
+  private activeCommandId(): string | null {
+    const rts = this.rts;
+    if (!rts) return null;
+    switch (rts.orderMode) {
+      case "move": return "move";
+      case "attack": return "attack";
+      case "patrol": return "patrol";
+      case "repair": return "repair";
+      case "rally": return "rally";
+      case "cast": return rts.armedCast ? `ability:${rts.armedCast.code}` : null;
+      case "item": return null; // an armed item lights its inventory slot, not a command
+    }
+    const su = rts.selectedSimUnit();
+    if (!su || su.owner !== this.localPlayer) return null;
+    switch (su.order) {
+      case "move": return "move";
+      // Attack-move and a forced attack share the Attack button, as in the game.
+      case "attackmove":
+      case "attack": return "attack";
+      case "patrol": return "patrol";
+      case "hold": return "hold";
+      case "repair": return "repair";
+      case "cast": return su.pendingCast ? `ability:${su.pendingCast.code}` : null;
+      default: return null;
+    }
   }
 
   /** Fixed command-card slots for a hero's abilities: basics fill columns 0–2 of
@@ -2824,7 +2863,7 @@ export class MapViewerScene {
     if (!this.rts) return;
     const su = this.rts.simWorld.units.get(sel.id);
     if (!su || su.owner !== this.localPlayer) return;
-    const armedCode = this.rts.armedCast?.code ?? null;
+    const active = this.activeCommandId();
     for (const ab of su.abilities) {
       if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
       const def = this.abilities.get(ab.id);
@@ -2847,7 +2886,11 @@ export class MapViewerScene {
         // Cooldown is shown by the radial overlay, not the greyed "can't afford"
         // look (a click while on cooldown is harmlessly rejected by the sim).
         disabled: passive || noMana,
-        active: armedCode === ab.code || (def.autocast && ab.autocastOn),
+        // The green border marks the spell the unit is casting (or has armed) right
+        // now — it is NOT the autocast toggle, which is a persistent setting and
+        // gets its own indicator, so the two can never both claim the border.
+        active: active === `ability:${ab.code}`,
+        autocast: def.autocast && ab.autocastOn,
         cooldownLeft: onCd ? ab.cooldownLeft : 0,
         cooldownFrac: onCd && lvl.cooldown > 0 ? Math.max(0, Math.min(1, ab.cooldownLeft / lvl.cooldown)) : 0,
       }));

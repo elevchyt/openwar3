@@ -643,8 +643,10 @@ body.in-game .menu-panel { display: none; }
   left: -4px;
   /* Anchor the BOTTOM edge a fixed gap above the command card so the tooltip
      only ever grows UPWARD as its text gets taller (a percentage transform
-     scaled with height, which made it expand in both directions). */
-  bottom: calc(100% + 14px);
+     scaled with height, which made it expand in both directions). The gap has to
+     clear the console art's own top edge, which rises well above the card's box —
+     at 14px the slab sat right on the stonework. */
+  bottom: calc(100% + 34px);
   min-width: 210px;
   max-width: 300px;
   padding: 8px 11px;
@@ -1069,18 +1071,17 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 /* The command-card highlight: WC3's own green glow border, human-activebutton.blp
    (issue #50). It wears black everywhere but the rim, which is exactly what an
    ADDITIVE draw wants — `screen` leaves the icon untouched and lights only the
-   edge, so no scaled 1px outline can smear it. A button gets it while the cursor
-   is over it and while it is armed (an order awaiting a target, autocast on).
-   With the art present these rules replace the gold outline above. */
-.hud-activebutton-skinned .hud-cmd:not(:disabled):hover,
-.hud-activebutton-skinned .hud-cmd.armed,
-.hud-activebutton-skinned .hud-inv-slot:not(.empty):hover,
-body.carrying-item .hud-activebutton-skinned .hud-inv-slot:hover {
+   edge, so no scaled 1px outline can smear it.
+
+   It marks THE CURRENT COMMAND and nothing else: the order the unit is carrying out
+   (attack-move keeps Attack lit for the whole walk), or the order armed and waiting
+   for its target. Never a hover, and never more than one button at a time — the card
+   is built so at most one button carries `.armed`. */
+.hud-activebutton-skinned .hud-cmd.armed {
   border-color: rgba(216, 180, 90, 0.25);
   box-shadow: none;
 }
-.hud-activebutton-skinned .hud-cmd::before,
-.hud-activebutton-skinned .hud-inv-slot::before {
+.hud-activebutton-skinned .hud-cmd::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1091,10 +1092,14 @@ body.carrying-item .hud-activebutton-skinned .hud-inv-slot:hover {
   opacity: 0;
   pointer-events: none;
 }
-.hud-activebutton-skinned .hud-cmd:not(:disabled):hover::before,
-.hud-activebutton-skinned .hud-cmd.armed::before,
-.hud-activebutton-skinned .hud-inv-slot:not(.empty):hover::before { opacity: 1; }
-body.carrying-item .hud-activebutton-skinned .hud-inv-slot:hover::before { opacity: 1; }
+.hud-activebutton-skinned .hud-cmd.armed::before { opacity: 1; }
+
+/* Autocast left ON is a standing setting, not the current order, so it can't wear
+   the green border (only one command is current). It gets its own quieter ring. */
+.hud-cmd.autocast:not(.armed) {
+  border-color: #6fe06a;
+  box-shadow: 0 0 4px rgba(70, 224, 90, 0.35) inset;
+}
 
 /* No crosshair when an order is armed — the WC3 cursor is forced everywhere
    in-game (see applyRaceCursor), so we never override it here. */
