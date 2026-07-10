@@ -26,10 +26,10 @@ export function mountFdfMainMenu(
     vfs,
     fdfPath: "UI\\FrameDef\\Glue\\MainMenu.fdf",
     rootFrame: "MainMenuFrame",
-    // The realm-select sub-panel + realm icon button are defined in the FDF but the
-    // engine's glue script keeps them hidden until you enter Battle.net (which we don't
-    // ship). Hide them the same way, leaving the clean button column.
-    hidden: ["RealmSelect", "RealmButton"],
+    // The realm-select sub-panel is hidden until you enter Battle.net (as the engine's
+    // glue script hides it), but the little search-region button (magnifying glass)
+    // next to Online is kept — the developer wants it shown even without region logic.
+    hidden: ["RealmSelect"],
     // "Battle.net" is intentionally "Online": OpenWar3 multiplayer targets our own
     // server, not Blizzard's (matches the flat-menu note in mainMenu.ts / plan §10.1).
     textOverrides: { BattleNetButtonText: "Online" },

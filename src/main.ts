@@ -14,35 +14,62 @@ import { makePlaceholderTerrain } from "./world/placeholderTerrain";
 import { loadMapBytes } from "./world/map";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
 import { MapViewerScene } from "./render/mapViewer";
+import { MenuScene } from "./render/menuScene";
+import { applyMenuCursor } from "./ui/cursor";
 
-// Entry point (plan §6). Three WebGL scenes, one visible at a time:
-//   #bg    — Phase 2 placeholder terrain (WebGL2), the zero-asset fallback
-//   #model — Phase 3 single animated MDX unit (mdx-m3-viewer)
-//   #map   — authentic full map + our sim (War3MapViewer)
+// Entry point (plan §6). WebGL scenes, one visible at a time:
+//   #menubg — the animated main-menu glue scene (issue #54), behind the FDF menu
+//   #bg     — Phase 2 placeholder terrain (WebGL2), the zero-asset fallback
+//   #model  — Phase 3 single animated MDX unit (mdx-m3-viewer)
+//   #map    — authentic full map + our sim (War3MapViewer)
+// Boot shows nothing (an empty black background under the load gate) until the game
+// files are imported — the menu's 3D scene is one of those files.
 const bgCanvas = document.getElementById("bg") as HTMLCanvasElement;
+const menuBgCanvas = document.getElementById("menubg") as HTMLCanvasElement;
 const modelCanvas = document.getElementById("model") as HTMLCanvasElement;
 const mapCanvas = document.getElementById("map") as HTMLCanvasElement;
 const ui = document.getElementById("ui") as HTMLElement;
 
 const resolver = new AssetResolver(null);
 
+// Placeholder terrain is now only the zero-asset map fallback (kept idle until then),
+// not the menu background — the menu uses the real MainMenu3D glue scene once loaded.
 const terrain = new TerrainScene(bgCanvas);
 terrain.setTerrain(buildTerrainMesh(makePlaceholderTerrain()));
 terrain.setDoodads([]);
-terrain.start();
 
 let modelScene: ModelViewerScene | null = null;
 let mapScene: MapViewerScene | null = null;
+let menuScene: MenuScene | null = null;
 let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer (next)
 
-type Which = "bg" | "model" | "map";
+type Which = "none" | "menubg" | "bg" | "model" | "map";
 function show(which: Which): void {
+  menuBgCanvas.hidden = which !== "menubg";
   bgCanvas.hidden = which !== "bg";
   modelCanvas.hidden = which !== "model";
   mapCanvas.hidden = which !== "map";
+  if (which !== "menubg") menuScene?.stop();
   if (which !== "bg") terrain.stop();
   if (which !== "model") modelScene?.stop();
   if (which !== "map") mapScene?.stop();
+}
+
+/** Show the animated main-menu 3D scene behind the menu (built on first use). Falls
+ *  back to an empty background if the glue model is missing/fails to load. */
+async function showMenuBackground(vfs: DataSource | null): Promise<void> {
+  if (!vfs) { show("none"); return; }
+  try {
+    if (!menuScene) {
+      menuScene = new MenuScene(menuBgCanvas, vfs);
+      await menuScene.load();
+    }
+    show("menubg");
+    menuScene.start();
+  } catch (err) {
+    console.warn("[OpenWar3] main-menu 3D scene unavailable:", err);
+    show("none"); // empty background
+  }
 }
 
 /** Load a map's bytes into the right scene (authentic with an install, else placeholder). */
@@ -77,7 +104,9 @@ async function singlePlayer(): Promise<void> {
   terrain.stop();
   mapScene?.stop();
   modelScene?.stop();
+  menuScene?.stop();
   bgCanvas.hidden = true;
+  menuBgCanvas.hidden = true;
   modelCanvas.hidden = true;
   mapCanvas.hidden = true;
   document.body.classList.add("menu-suspended"); // hide the main menu behind the lobby
@@ -85,7 +114,7 @@ async function singlePlayer(): Promise<void> {
     onCancel: () => {
       teardown();
       document.body.classList.remove("menu-suspended");
-      showTerrain();
+      void showMenuBackground(resolver.installSource); // back to the animated menu scene
     },
     onStart: async (config) => {
       meleeConfig = config;
@@ -136,14 +165,14 @@ function showTerrain(): void {
   terrain.start();
 }
 
-/** Leave the current match (F10 → End Game): tear down the map scene and return
- *  to the main menu over the placeholder terrain. A fresh scene is built next game. */
+/** Leave the current match (F10 → End Game): tear down the map scene and return to
+ *  the main menu over its animated 3D scene. A fresh scene is built next game. */
 function exitToMenu(): void {
   mapScene?.dispose();
   mapScene = null;
   meleeConfig = null;
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
-  showTerrain();
+  void showMenuBackground(resolver.installSource);
 }
 
 // Boot flow (issue #54): the WC3 menus are constructed from the install's own
@@ -172,7 +201,9 @@ function onFilesLoaded(load: GateLoad): void {
   ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {}).vfs = load.vfs;
   gate?.dispose();
   gate = null;
-  void showMainMenu(load.vfs);
+  applyMenuCursor(load.vfs); // WC3 human hand cursor in the menus
+  void showMenuBackground(load.vfs); // animated MainMenu3D scene behind the menu
+  void showMainMenu(load.vfs); // build the FDF main menu over it
 }
 
 gate = mountLoadGate(ui, onFilesLoaded);
@@ -188,4 +219,5 @@ gate = mountLoadGate(ui, onFilesLoaded);
   loadMap: async (file: File) => enterMap(new Uint8Array(await file.arrayBuffer()), file.name),
   meleeConfig: () => meleeConfig,
   mainMenu: () => mainMenu,
+  menuScene: () => menuScene,
 };

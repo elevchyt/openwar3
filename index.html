@@ -7,9 +7,11 @@
     <title>OpenWar3</title>
   </head>
   <body>
-    <canvas id="bg"></canvas>
+    <canvas id="bg" hidden></canvas>
     <!-- mdx-m3-viewer owns its own WebGL1 context, so its renderers each get a
-         dedicated canvas: single models (Phase 3) and full maps (authentic). -->
+         dedicated canvas: the animated main-menu glue scene (issue #54), single
+         models (Phase 3) and full maps (authentic). -->
+    <canvas id="menubg" hidden></canvas>
     <canvas id="model" hidden></canvas>
     <canvas id="map" hidden></canvas>
     <div id="ui"></div>

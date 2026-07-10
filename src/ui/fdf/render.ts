@@ -220,12 +220,16 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   const edge = ctx.blpCanvas(strProp(f, "BackdropEdgeFile") ?? "");
 
   if (bg) {
-    // Fill the (inset) interior, tiled — the 32×32 background is near-solid so a
-    // stretch reads the same; tile to stay faithful to BackdropTileBackground.
+    // Fill the (inset) interior with the background. BackdropBackgroundSize is the
+    // tile's world size; scale to px so an icon backdrop (e.g. the search-region
+    // magnifying glass, 64×64 at size 0.031) shows whole instead of cropped/native.
     const ix = inset, iy = inset, iw = w - inset * 2, ih = h - inset * 2;
+    const bgSizeWorld = prop(f, "BackdropBackgroundSize");
+    const tileW = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.width;
+    const tileH = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.height;
     g.save();
     g.beginPath(); g.rect(ix, iy, Math.max(0, iw), Math.max(0, ih)); g.clip();
-    for (let y = iy; y < iy + ih; y += bg.height) for (let x = ix; x < ix + iw; x += bg.width) g.drawImage(bg, x, y);
+    for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
     g.restore();
   }
 
