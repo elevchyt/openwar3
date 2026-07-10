@@ -200,20 +200,26 @@ function placeByTwoPoints(
   n.placed = true;
 }
 
-/** Convert the 0.8×0.6-space UI box to a centered, letterboxed pixel box. */
-export function fitBox(viewportW: number, viewportH: number): { scale: number; offX: number; offY: number } {
-  const scale = Math.min(viewportW / UI_WIDTH, viewportH / UI_HEIGHT);
-  return { scale, offX: (viewportW - UI_WIDTH * scale) / 2, offY: (viewportH - UI_HEIGHT * scale) / 2 };
+/**
+ * Fit the UI to the viewport. The UI is scaled by HEIGHT (0.6 → screen height) and
+ * fills the full width — the world space becomes `worldW × 0.6` where worldW = the
+ * viewport's aspect × 0.6. So a frame anchored to the root's TOPRIGHT lands on the
+ * SCREEN's right edge (like WC3's own widescreen glue), instead of on the right edge
+ * of a centred 4:3 box. Pass `worldW` as the root frame's width to `layout()`.
+ */
+export function fitBox(viewportW: number, viewportH: number): { scale: number; worldW: number } {
+  const scale = viewportH / UI_HEIGHT; // height-based → fills the screen height, no letterbox
+  return { scale, worldW: viewportW / scale };
 }
 
 /** World rect (y-up, bottom-left origin) → CSS pixel rect (y-down, top-left origin). */
 export function toPixels(
   n: LaidOutFrame,
-  fit: { scale: number; offX: number; offY: number },
+  fit: { scale: number },
 ): { left: number; top: number; width: number; height: number } {
   return {
-    left: fit.offX + n.x * fit.scale,
-    top: fit.offY + (UI_HEIGHT - (n.y + n.h)) * fit.scale,
+    left: n.x * fit.scale,
+    top: (UI_HEIGHT - (n.y + n.h)) * fit.scale,
     width: n.w * fit.scale,
     height: n.h * fit.scale,
   };

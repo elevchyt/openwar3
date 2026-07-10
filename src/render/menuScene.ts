@@ -21,16 +21,6 @@ const ROC_MENU = "UI\\Glues\\MainMenu\\MainMenu3d\\MainMenu3d.mdx";
 const PANELS_TFT = ["UI\\Glues\\SpriteLayers\\Expansion\\TopRightPanel-Expansion.mdx"];
 const PANELS_ROC = ["UI\\Glues\\SpriteLayers\\TopRightPanel.mdx"];
 
-// The UI's design space is 0.8×0.6 (4:3). Both the sprite panels (mapped from their
-// [0,1]² screen space) and the FDF menu letterbox to this centred box, so they align.
-const UI_W = 0.8;
-const UI_H = 0.6;
-
-// Dolly the background eye this fraction toward its target (<1 = closer), tuned so the
-// 4:3-authored icy scene frames like the original (tower size, ocean fills the base)
-// while still filling a widescreen frame.
-const MENU_CAM_ZOOM = 0.88;
-
 type Solver = (src: unknown) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
@@ -89,11 +79,11 @@ export class MenuScene {
   // / panelHalfY are independent so the [0,1]²-authored (4:3) panel can be stretched to
   // frame the buttons on a 16:9 screen.
   readonly tuning = {
-    camZoom: MENU_CAM_ZOOM, // dolly the eye toward the target (<1 closer)
-    camPanX: 0, // pan the eye+target screen-right (world units)
-    camPanY: 0, // pan the eye+target screen-up (world units)
-    camFov: 1, // field-of-view multiplier
-    panelCx: -0.1, // panel ortho window centre (panel [0,1] space)
+    camZoom: 0.86, // dolly the eye toward the target (<1 closer)
+    camPanX: -30, // pan the eye+target screen-right (world units)
+    camPanY: -140, // pan the eye+target screen-up (world units)
+    camFov: 0.76, // field-of-view multiplier
+    panelCx: -0.125, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.185,
     panelHalfX: 0.42, // panel ortho half-width  (smaller = wider panel)
     panelHalfY: 0.42, // panel ortho half-height (smaller = taller panel)
@@ -213,21 +203,18 @@ export class MenuScene {
     }
     this.scene3d.viewport.set([0, 0, w, h]);
 
-    // Panels: ortho over [0,1]², rendered into the centred 4:3 sub-rect so the panel
-    // slots line up with the FDF buttons (which letterbox to the same box). Independent
-    // half-width/height lets the 4:3-authored panel stretch to frame 16:9 buttons.
-    const scale = Math.min(w / UI_W, h / UI_H);
-    const boxW = UI_W * scale;
-    const boxH = UI_H * scale;
-    const offX = (w - boxW) / 2;
-    const offY = (h - boxH) / 2; // GL viewport y is from the bottom; the box is centred
+    // Panels: ortho over the panel's [0,1]² screen space, rendered across the WHOLE
+    // canvas (not a centred 4:3 sub-rect) so the panel can be positioned anywhere,
+    // including hard against the right screen edge, without the GL scissor clipping it.
+    // panelCx/Cy place it and panelHalfX/HalfY size + stretch it (independent, so the
+    // 4:3-authored panel can frame the buttons on a 16:9 screen).
     this.scenePanel.camera.ortho(t.panelCx - t.panelHalfX, t.panelCx + t.panelHalfX, t.panelCy - t.panelHalfY, t.panelCy + t.panelHalfY, 1, 2000);
     this.scenePanel.camera.moveToAndFace(
       new Float32Array([0.5, 0.5, 1000]),
       new Float32Array([0.5, 0.5, 0]),
       new Float32Array([0, 1, 0]),
     );
-    this.scenePanel.viewport.set([offX, offY, boxW, boxH]);
+    this.scenePanel.viewport.set([0, 0, w, h]);
   }
 
   private syncCanvasSize(): void {

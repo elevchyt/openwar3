@@ -3,7 +3,7 @@ import { blpToCanvas } from "../../render/blputil";
 import { wc3ToHtml } from "../wc3Text";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, strProp } from "./library";
-import { fitBox, layout, toPixels, type LaidOutFrame } from "./layout";
+import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
 
 // FDF → DOM renderer (issue #54). Builds the game's frames as absolutely-positioned
 // DOM over the 3D background: BACKDROP as composited chrome from the real BLPs,
@@ -71,7 +71,9 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     overlay.textContent = "";
     shortcuts.clear();
     const fit = fitBox(window.innerWidth, window.innerHeight);
-    const { tree } = layout(root);
+    // Root fills the full screen width (worldW × 0.6) so TOPRIGHT-anchored frames land
+    // on the screen's right edge, not a centred 4:3 box's right edge.
+    const { tree } = layout(root, { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT });
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas,
       handlers: opts.handlers ?? {},
@@ -116,7 +118,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
 
 interface RenderCtx {
   lib: FdfLibrary;
-  fit: { scale: number; offX: number; offY: number };
+  fit: { scale: number; worldW: number };
   blpCanvas: (path: string) => HTMLCanvasElement | null;
   handlers: FdfScreenHandlers;
   textOverrides: Record<string, string>;
