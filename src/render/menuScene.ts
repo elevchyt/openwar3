@@ -61,7 +61,7 @@ interface MdxModel {
   addInstance(): MdxInstance;
 }
 
-const ViewerClass = ModelViewerCtor as unknown as { new (canvas: HTMLCanvasElement): Viewer };
+const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElement): Viewer };
 
 export class MenuScene {
   private viewer: Viewer;
@@ -87,7 +87,7 @@ export class MenuScene {
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
     panelHalfY: 0.3, // panel ortho half-height (smaller = taller/zoomed panel)
-    panelStretchX: 1.2, // widen the container horizontally beyond its natural aspect
+    panelStretchX: 1.32, // widen the container horizontally beyond its natural aspect
   };
 
   /** Apply the current `tuning` values (called by the debug controls after a change). */
