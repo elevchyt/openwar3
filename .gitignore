@@ -11,3 +11,6 @@ Warcraft III/
 *.w3n
 *.mdx
 *.blp
+
+# JASS interpreter throwaway build (tools/tsconfig.jass.json → CJS for headless tests)
+.jass-build/

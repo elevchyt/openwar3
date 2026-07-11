@@ -1,0 +1,30 @@
+{
+  "//": "Throwaway config: compile the PURE JASS interpreter modules (no browser/vfs deps) to CommonJS in a temp dir so headless Node tests can drive them. Strict typechecking of these files is done by the main `pnpm typecheck` (tsconfig.json includes src/). See docs/triggers.md / tools/jass-corpus-test.cjs.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "types": [],
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "..",
+    "outDir": "../.jass-build",
+    "noEmit": false
+  },
+  "files": [
+    "../src/jass/ast.ts",
+    "../src/jass/lexer.ts",
+    "../src/jass/parser.ts",
+    "../src/jass/values.ts",
+    "../src/jass/runtime.ts",
+    "../src/jass/interpreter.ts",
+    "../src/jass/natives/index.ts",
+    "../src/jass/natives/config.ts",
+    "../src/jass/natives/world.ts",
+    "../src/jass/headless.ts"
+  ]
+}

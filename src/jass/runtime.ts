@@ -1,0 +1,229 @@
+// JASS runtime state (Phase 7 — issue #33; see docs/triggers.md).
+//
+// Holds everything a running map script needs that isn't the AST: the handle
+// table (opaque reference ids → JS objects), the player table + accumulated map
+// setup (what config() builds), globals/arrays, the function & native registries,
+// a seeded RNG (determinism for future server-authoritative MP — Phase 8), and a
+// thin, optional bridge to our actual engine (EngineHooks). The interpreter drives
+// this; natives read/write it. Keeping the runtime free of any renderer/vfs import
+// is deliberate — the interpreter must stay engine-agnostic (bridge, not fork).
+
+import type { FunctionDecl } from "./ast";
+import { type JassValue, JNULL, jHandle } from "./values";
+
+/** A player slot as config() fills it in (mirrors the SetPlayer* natives). */
+export interface JassPlayer {
+  index: number; // 0–15
+  handleId: number; // its entry in the handle table
+  color: number; // ConvertPlayerColor index (0–11)
+  controller: number; // MAP_CONTROL_*: 1 user, 2 computer, 3 rescuable, 4 neutral
+  race: number; // RACE_PREF_* index
+  raceSelectable: boolean;
+  team: number; // SetPlayerTeam (defaults to own index)
+  startLocation: number; // SetPlayerStartLocation index (-1 = unset)
+  forcedStartLocation: boolean;
+}
+
+/** A unit created by the script (CreateUnit). Kept so main()/CreateAllUnits can be
+ *  cross-checked against war3mapUnits.doo (the 7.2 oracle) even with no engine
+ *  attached, and so bridge lookups can map a unit handle back to our sim id. */
+export interface JassUnit {
+  handleId: number;
+  player: number;
+  typeId: string; // 4-char rawcode (e.g. "hfoo")
+  x: number;
+  y: number;
+  facing: number;
+  simId: number; // our engine's sim id, or -1 when running headless
+}
+
+/** What config() (and the setup natives) accumulate — the map's declared player
+ *  setup + start locations. Cross-checked against war3map.w3i (the free oracle). */
+export interface MapSetup {
+  mapName: string;
+  mapDescription: string;
+  numPlayers: number;
+  numTeams: number;
+  placement: number; // MAP_PLACEMENT_*
+  startLocations: Map<number, { x: number; y: number }>;
+  players: Map<number, JassPlayer>;
+}
+
+/** The engine operations JASS natives call into. Implemented by src/jass/bridge.ts
+ *  over SimWorld/RtsController; every method is optional so the interpreter runs
+ *  headlessly (config-only, or corpus tests) with no engine attached. `typeId` is
+ *  the 4-char rawcode string (e.g. "hfoo"); unit ids are our engine's sim ids. */
+export interface EngineHooks {
+  createUnit?(player: number, typeId: string, x: number, y: number, facing: number): number;
+  setResourceAmount?(unitId: number, amount: number): void;
+  setUnitAcquireRange?(unitId: number, range: number): void;
+  setUnitState?(unitId: number, whichState: number, value: number): void;
+  setUnitColor?(unitId: number, color: number): void;
+  removeUnit?(unitId: number): void;
+  hideUnit?(unitId: number, hidden: boolean): void;
+  displayText?(player: number, msg: string): void;
+  createTextTag?(text: string, x: number, y: number, z: number, color: number): number;
+}
+
+/** Opaque handle store: integer ids → backing JS objects, with interning so
+ *  stable references (players, enum constants like PLAYER_COLOR_RED) return the
+ *  same id every time — which makes JASS `==` on them work by id equality. */
+class HandleTable {
+  private nextId = 1;
+  private table = new Map<number, unknown>();
+  private interned = new Map<string, number>();
+
+  alloc(obj: unknown): number {
+    const id = this.nextId++;
+    this.table.set(id, obj);
+    return id;
+  }
+  get(id: number): unknown {
+    return this.table.get(id);
+  }
+  free(id: number): void {
+    this.table.delete(id);
+  }
+  intern(key: string, make: () => unknown): number {
+    const existing = this.interned.get(key);
+    if (existing !== undefined) return existing;
+    const id = this.alloc(make());
+    this.interned.set(key, id);
+    return id;
+  }
+}
+
+/** A boxed JASS array (fixed 8192 slots in the real engine — JASS_MAX_ARRAY_SIZE).
+ *  Sparse map + a per-type default so unset slots read as 0/0.0/false/null. */
+export class JassArray {
+  private data = new Map<number, JassValue>();
+  constructor(public readonly elemType: string, private makeDefault: () => JassValue) {}
+  get(i: number): JassValue {
+    return this.data.get(i) ?? this.makeDefault();
+  }
+  set(i: number, v: JassValue): void {
+    this.data.set(i, v);
+  }
+}
+
+/** mulberry32 — a tiny deterministic PRNG. JASS GetRandomInt/Real must be
+ *  reproducible for replays / server-authoritative sync, so we never use
+ *  Math.random(). Seed is fixed unless the host overrides it. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export class Runtime {
+  readonly handles = new HandleTable();
+  readonly setup: MapSetup = {
+    mapName: "",
+    mapDescription: "",
+    numPlayers: 0,
+    numTeams: 0,
+    placement: 0,
+    startLocations: new Map(),
+    players: new Map(),
+  };
+  /** Global variables (name → value) and arrays (name → JassArray). */
+  readonly globals = new Map<string, JassValue>();
+  readonly globalArrays = new Map<string, JassArray>();
+  /** User functions and engine natives, by name. */
+  readonly functions = new Map<string, FunctionDecl>();
+  readonly natives = new Map<string, (ctx: NativeCtx, args: JassValue[]) => JassValue>();
+  /** A native's declared return type (from common.j) — so an unimplemented native
+   *  can still return a correctly-typed default instead of undefined. */
+  readonly nativeReturns = new Map<string, string>();
+  private warned = new Set<string>();
+
+  /** Event-response stack (thread-local in the real engine): each fired trigger
+   *  pushes a frame so GetTriggerUnit/GetEnteringUnit/… read the current event. */
+  readonly eventStack: Array<Map<string, JassValue>> = [];
+
+  /** Units the script has created (CreateUnit), in creation order. */
+  readonly units: JassUnit[] = [];
+
+  /** The selected game type (common.j ConvertGameType index): 1 = MELEE,
+   *  4 = USE_MAP_SETTINGS (custom). Drives blizzard.j InitGenericPlayerSlots and
+   *  GetGameTypeSelected — the host sets it from the map's melee flag. */
+  gameType = 4;
+
+  readonly random: () => number;
+  hooks: EngineHooks | null = null;
+
+  constructor(seed = 0x9e3779b9) {
+    this.random = mulberry32(seed);
+  }
+
+  /** A stable, interned player handle for slot `index` (Player(i) returns the same
+   *  handle every call). The backing object is its JassPlayer setup record. */
+  playerHandle(index: number): JassValue {
+    const id = this.handles.intern(`player:${index}`, () => this.ensurePlayer(index));
+    return jHandle(id, "player");
+  }
+  ensurePlayer(index: number): JassPlayer {
+    let p = this.setup.players.get(index);
+    if (!p) {
+      p = {
+        index,
+        handleId: 0,
+        color: index,
+        controller: 4, // default neutral until config sets it
+        race: 0,
+        raceSelectable: false,
+        team: index,
+        startLocation: -1,
+        forcedStartLocation: false,
+      };
+      this.setup.players.set(index, p);
+    }
+    return p;
+  }
+
+  /** An interned handle for an enum-like constant (playercolor, race, mapcontrol,
+   *  …). `index` is the constant's integer value; equality then works by id. */
+  enumHandle(kind: string, index: number): JassValue {
+    const id = this.handles.intern(`${kind}:${index}`, () => ({ kind, index }));
+    return jHandle(id, kind);
+  }
+  /** Read the integer index out of an enum-like handle (or -1). */
+  enumIndex(v: JassValue): number {
+    if (v.k !== "handle") return -1;
+    const obj = this.handles.get(v.h) as { index?: number } | undefined;
+    return obj?.index ?? -1;
+  }
+
+  /** Resolve a handle value to its backing JS object (or undefined). */
+  data<T>(v: JassValue): T | undefined {
+    return v.k === "handle" ? (this.handles.get(v.h) as T | undefined) : undefined;
+  }
+
+  /** Log an unimplemented/failed native once (never spam; never crash the map). */
+  warnOnce(name: string, detail?: string): void {
+    if (this.warned.has(name)) return;
+    this.warned.add(name);
+    console.info(`[jass] native '${name}' not implemented — safe default${detail ? ` (${detail})` : ""}`);
+  }
+
+  /** The current event-response value (top frame), or null. */
+  eventResponse(key: string): JassValue {
+    for (let i = this.eventStack.length - 1; i >= 0; i--) {
+      const v = this.eventStack[i].get(key);
+      if (v) return v;
+    }
+    return JNULL;
+  }
+}
+
+/** Context handed to every native: the runtime plus a way to call back into JASS
+ *  (needed by ConditionalTriggerExecute, ForForce, TriggerEvaluate, Filter, …). */
+export interface NativeCtx {
+  rt: Runtime;
+  call(fnName: string, args: JassValue[]): JassValue;
+}

@@ -17,10 +17,11 @@ import type { MpqDataSource } from "../vfs/mpq";
 //              InitGlobals(), InitCustomTriggers(), RunInitializationTriggers()
 // For a MELEE map the World Editor emits a "Melee Initialization" trigger whose
 // actions call the standard Blizzard melee library (MeleeStartingUnits, etc.);
-// a custom map runs its own trigger logic instead. We don't execute the script
-// yet — this module just reads it and detects the melee-init calls so callers
-// can tell melee from custom (see src/world/mapKind.ts) and so a future JASS/Lua
-// interpreter has the source in hand.
+// a custom map runs its own trigger logic instead. This module just READS the
+// script and detects the melee-init calls so callers can tell melee from custom
+// (see src/world/mapKind.ts). The interpreter that actually EXECUTES the script
+// lives in src/jass/ (Phase 7 — issue #33; loaded via src/jass/index.ts, tracked
+// in docs/triggers.md): it already runs config() live on custom maps.
 
 export type ScriptLanguage = "jass" | "lua" | "none";
 

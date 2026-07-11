@@ -415,6 +415,12 @@ export class RtsController {
   private previewIds: number[] = []; // units under the live drag-box (marquee preview rings)
   private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
   private creepData: Array<{ x: number; y: number; aggro: number; drops?: Array<{ items: Array<{ id: string; chance: number }> }> }> = []; // Neutral Hostile guard/aggro/drop data (from the doo)
+  // Custom-map pre-placed PLAYER units (war3mapUnits.doo, owner slots 0–11). Unlike
+  // creeps (owner -1) these are seeded OWNED + simulated, so the local player's own
+  // units lift the fog of war (issue #33) and are selectable/commandable. Empty on
+  // melee maps (which pre-place no player units — WC3 spawns those at runtime).
+  private playerSeeds: Array<{ x: number; y: number; owner: number; team: number }> = [];
+  private seedingEnabled = false; // gate: don't adopt map units until start setup (teams/local player) is ready
   private seeded = false; // true once trySeed has run at least one scan (creepCamps gate)
   // Melee start-location clear zones (blizzard.j MeleeClearExcessUnits): each USED
   // start location clears the map's Neutral Hostile creeps (and non-structure
@@ -757,6 +763,26 @@ export class RtsController {
     return [];
   }
 
+  /** Register the world positions + owner/team of pre-placed PLAYER units (custom
+   *  maps, war3mapUnits.doo owner 0–11). trySeed matches each rendered unit to this
+   *  and adopts it as an OWNED sim unit (see seedPlayerUnit / issue #33). */
+  setPlayerUnitSeeds(seeds: Array<{ x: number; y: number; owner: number; team: number }>): void {
+    this.playerSeeds = seeds;
+  }
+
+  /** The owner/team of a pre-placed player unit at a position, or null. */
+  private playerSeedAt(x: number, y: number): { owner: number; team: number } | null {
+    for (const p of this.playerSeeds) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return { owner: p.owner, team: p.team };
+    return null;
+  }
+
+  /** Open the seeding gate. Called once start setup (start locations / teams / local
+   *  player / player seeds) is fully configured, so trySeed never adopts a map unit
+   *  with stale owner/team data. Both startMelee and startCustom call this. */
+  enableSeeding(): void {
+    this.seedingEnabled = true;
+  }
+
   /** Remove a unit from the selection (keeping the primary consistent). */
   private deselect(id: number): void {
     this.selected.delete(id);
@@ -1066,6 +1092,7 @@ export class RtsController {
    *  saw an empty list. Instead we re-scan whenever the count grows and adopt each
    *  instance exactly once, so late-loading units are still picked up. */
   private trySeed(): void {
+    if (!this.seedingEnabled) return; // wait until start setup configured teams/owners
     if (!this.host.unitsReady()) return;
     const units = this.host.units();
     if (units.length === this.lastSeenUnitCount) return; // no new instances since the last scan
@@ -1075,6 +1102,15 @@ export class RtsController {
       this.processedInstances.add(unit.instance);
       const loc = unit.instance.localLocation;
       const def = this.registry.get(unit.row?.string("unitid") ?? "");
+      // Pre-placed PLAYER unit (custom map, owner 0–11): adopt it as an OWNED,
+      // simulated unit (issue #33) — this is what gives the local player vision of
+      // and control over their own units. Checked before the neutral/creep branches
+      // (owners are disjoint) and before the movetp gate (so owned buildings seed too).
+      const seed = def ? this.playerSeedAt(loc[0], loc[1]) : null;
+      if (seed) {
+        this.seedPlayerUnit(unit, def!, loc, seed.owner, seed.team);
+        continue;
+      }
       // Neutral Passive (shops/taverns/labs/merchants/fountains/critters): seed
       // it as a static, non-hostile, yellow-ringed selectable — even though it's
       // a building with no walk clip.
@@ -1268,6 +1304,18 @@ export class RtsController {
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
+  }
+
+  /** Adopt a pre-placed PLAYER unit (custom map) as an OWNED, simulated unit by
+   *  reusing the viewer's already-rendered .doo instance — the same instance-reuse
+   *  trySeed does for creeps, but owned instead of neutral. This is what lifts the
+   *  fog over the local player's own units and makes them selectable (issue #33).
+   *  addUnit builds the full sim unit (buildings included) from the instance; we
+   *  hand its fog visibility to the RTS so the static-widget pass doesn't fight it. */
+  private seedPlayerUnit(unit: MapUnit, def: UnitDef, loc: Float32Array, owner: number, team: number): void {
+    const facing = quatToZ(unit.instance.localRotation);
+    this.addUnit(unit.instance, def, loc[0], loc[1], facing, owner, team);
+    this.seededInstances.add(unit.instance); // RTS now drives this unit's fog visibility
   }
 
   /** Add a freshly-spawned unit (instance already attached to the scene) — used

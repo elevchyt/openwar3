@@ -13,7 +13,9 @@
     "data:extract": "node --max-old-space-size=8192 tools/extract-mpq.mjs",
     "data:build": "node tools/build-data-browser.mjs",
     "data:browse": "node tools/build-data-browser.mjs --open",
-    "data:verify": "node tools/verify-gameplay-constants.mjs"
+    "data:verify": "node tools/verify-gameplay-constants.mjs",
+    "jass:coverage": "node tools/native-coverage.mjs",
+    "jass:test": "tsc -p tools/tsconfig.jass.json && node tools/jass-corpus-test.cjs"
   },
   "dependencies": {
     "events": "^3.3.0",

@@ -1,5 +1,12 @@
 # Phase 7 — Triggers / JASS execution plan
 
+> **Status & progress:** see **[`triggers.md`](triggers.md)** — the living tracker (issue #33). As of now the
+> lexer/parser (7.0), interpreter + `config()` (7.1), and `CreateUnit`/`CreateAllUnits` bring-up (7.2, headless) are
+> **done**, and custom maps now seed their pre-placed player units owned so the local player has vision (the issue's
+> reported bug). This file is the architecture/design; `triggers.md` is what's built and how to verify it
+> (`pnpm jass:test` / `pnpm jass:coverage`).
+
+
 **Goal:** run a Warcraft III map's own compiled script so the engine sets a map up the way the real game does —
 instead of our hard-coded melee roster. This is the "understand and translate the triggers" work; melee/custom
 *classification* (Phase 6.5) is already done — see [`wc3-data-formats.md`](wc3-data-formats.md) and

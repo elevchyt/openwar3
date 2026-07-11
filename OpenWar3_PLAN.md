@@ -938,6 +938,12 @@ this from `blizzard.j` melee triggers; we reimplement it natively):
 - **Exit:** a local melee skirmish vs a dumb AI or a second local player.
 
 ### Phase 7 — Triggers / JASS (very large — defer until custom/campaign maps)
+- **Started (issue #33). Progress tracker: [`docs/triggers.md`](docs/triggers.md); design:
+  [`docs/phase7-triggers-jass-plan.md`](docs/phase7-triggers-jass-plan.md).** Done so far: the JASS lexer/parser
+  (`src/jass/`, parses all 165 bundled `war3map.j` + common.j/blizzard.j), a tree-walking interpreter running
+  `config()` (validated vs `war3map.w3i`) and `CreateAllUnits()` (validated vs `war3mapUnits.doo`), and a live
+  custom-map fix that seeds pre-placed player units owned so the local player has vision. Verify: `pnpm jass:test`
+  / `pnpm jass:coverage`.
 - **Detailed, data-grounded plan: [`docs/phase7-triggers-jass-plan.md`](docs/phase7-triggers-jass-plan.md)** —
   architecture (`src/jass/`), the verified JASS surface (common.j = 1160 natives / 91 types; blizzard.j = 923 funcs;
   only 335 natives used across the 161 bundled maps), a prioritized native list, and phased milestones with exit

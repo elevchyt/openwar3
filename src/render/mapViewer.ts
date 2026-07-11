@@ -9,7 +9,8 @@ import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
-import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
+import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
+import { loadMapScript } from "../jass/index";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
@@ -419,6 +420,11 @@ export class MapViewerScene {
   // Workers waiting for their build site to clear of units → seconds waited so far.
   private buildWait = new Map<number, number>();
   private meleeTeams = new Map<number, number>(); // owner slot → team
+  // Custom maps only: the map's pre-placed player units (from war3mapUnits.doo) and
+  // its own archive (to read war3map.j). startCustom seeds the units OWNED so the
+  // local player has vision/control (issue #33) and runs the map's config() (Phase 7).
+  private mapPlayerUnits: Array<{ x: number; y: number; owner: number }> = [];
+  private mapArchive: MpqDataSource | null = null;
   // Start-location (`sloc`) markers load async: the viewer flips `unitsReady`
   // synchronously but pushes each Unit into `map.units` only once its model has
   // finished loading, so a marker can arrive a frame or two after `unitsReady`.
@@ -620,6 +626,7 @@ export class MapViewerScene {
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
+    this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
     const minimapBytes = archive.rawBytes("war3mapMap.blp");
     this.minimap = minimapBytes ? blpToCanvas(minimapBytes) : null;
     const w3e = archive.rawBytes("war3map.w3e");
@@ -666,6 +673,7 @@ export class MapViewerScene {
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
+      this.mapPlayerUnits = nodes.players; // pre-placed player units → seeded owned in startCustom (issue #33)
     }
   }
 
@@ -732,11 +740,12 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[] } {
+  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }> } {
     const trees: Array<{ x: number; y: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
     const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
     const creeps: CreepSeed[] = []; // Neutral Hostile (player 12+) guard + drop data
+    const players: Array<{ x: number; y: number; owner: number }> = []; // pre-placed player units (custom maps)
     let buildVersion = 0;
     const w3iBytes = archive.rawBytes("war3map.w3i");
     if (w3iBytes) {
@@ -805,9 +814,14 @@ export class MapViewerScene {
         // (-1/-2 → the unit's default, resolved at seed time). x,y is its guard post.
         // Its dropped-item table rides along so the sim can scatter loot on death.
         creeps.push({ x: u.x, y: u.y, aggro: u.targetAcquisition, drops: u.dropSets });
+      } else if (u.typeId !== START_LOCATION_ID) {
+        // Owned by a real player slot (0–11) — a custom/campaign map's own units.
+        // Seeded OWNED so the local player sees + controls them (issue #33); start-
+        // location markers (sloc) are excluded (they aren't real units).
+        players.push({ x: u.x, y: u.y, owner: u.player });
       }
     }
-    return { trees, mines, neutral, creeps };
+    return { trees, mines, neutral, creeps, players };
   }
 
   private slkText(path: string): string {
@@ -863,6 +877,7 @@ export class MapViewerScene {
     // start locations keep their camps — the seeding scans read these zones. Set
     // now, synchronously, before the first frame runs trySeed on any creep.
     this.rts.setStartLocationClearZones(config.slots.map((s) => ({ x: s.startX, y: s.startY })));
+    this.rts.enableSeeding(); // clear zones set → let trySeed adopt creeps (melee pre-places no player units)
     for (const slot of config.slots) {
       const race = races.get(slot.id) ?? "human";
       // Nearest gold mine to the start location (blizzard.j MeleeFindNearestMine).
@@ -928,23 +943,55 @@ export class MapViewerScene {
     return [anchor.x + cluster.dist * Math.cos(dir), anchor.y + cluster.dist * Math.sin(dir)];
   }
 
-  /** Custom / scenario / game-mode start (maps NOT flagged melee). Such a map
-   *  sets up its own game — starting units, heroes, resources, win conditions —
-   *  from its triggers (war3map.j, read by src/world/triggers.ts). We don't run
-   *  a JASS/Lua interpreter yet (plan Phase 7), so we deliberately do NOT inject
-   *  the melee starting roster here: dropping town halls + workers on a scenario
-   *  map (the old always-melee behaviour) is wrong. The map's own pre-placed
-   *  units already render via War3MapViewer; making them controllable is part of
-   *  the trigger work. For now we just bring up the camera/HUD over the map. */
-  async startCustom(_config: MeleeConfig): Promise<void> {
+  /** Custom / scenario / game-mode start (maps NOT flagged melee). Such a map sets
+   *  up its own game — starting units, heroes, resources, regions, win conditions —
+   *  from its own triggers (war3map.j). Unlike a melee map we do NOT inject the
+   *  town-hall-and-workers roster (that was the old always-melee bug on scenario
+   *  maps). Instead (issue #33 / Phase 7):
+   *   1. Adopt the map's pre-placed PLAYER units as OWNED, simulated units, so the
+   *      local player has vision of and control over their own units (the reported
+   *      "no vision of our own units on custom maps" bug) instead of a black map.
+   *   2. Run the map's own config() through our JASS interpreter (src/jass/) — the
+   *      first live use of the trigger engine on the real script. Best-effort: a
+   *      script problem must never abort the match. */
+  async startCustom(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
-    // Custom maps get their starting resources from triggers we can't run yet,
-    // so seed empty stashes rather than the melee 500/150 default.
-    this.beginMatch(_config, 0, 0);
-    console.info(
-      "[openwar3] Custom map loaded — melee initialization skipped. " +
-        "Trigger execution (war3map.j → our engine) is plan Phase 7 and not yet implemented.",
-    );
+    // Custom maps get their starting resources from triggers (not the melee default),
+    // so seed empty stashes; the map's own script grants gold/lumber where it wants.
+    this.beginMatch(config, 0, 0);
+
+    // Seed the pre-placed player units OWNED. Team comes from teamOf(owner), so the
+    // local player's units share the local team and lift the fog (updateVision keys
+    // on team); other slots' units exist too but stay fogged like any other player.
+    const seeds = this.mapPlayerUnits.map((p) => ({ x: p.x, y: p.y, owner: p.owner, team: this.teamOf(p.owner) }));
+    this.rts.setPlayerUnitSeeds(seeds);
+
+    // Run the map's own config() (Phase 7). Read-only for now — it validates the
+    // interpreter live against the real common.j/blizzard.j and is the seam for
+    // running the rest of the script (main()/triggers) in later milestones.
+    this.runMapScriptConfig();
+
+    this.rts.enableSeeding(); // owners/teams configured → let trySeed adopt map units
+    console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33).`);
+  }
+
+  /** Run the map's config() through the JASS interpreter (Phase 7 — issue #33).
+   *  Best-effort and non-fatal: logs the declared player/start-location setup so we
+   *  can confirm the interpreter runs on the real script; a failure is swallowed so
+   *  the match continues (the units were already seeded from war3mapUnits.doo). */
+  private runMapScriptConfig(): void {
+    if (!this.mapArchive) return;
+    try {
+      const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false });
+      if (!engine) return;
+      const s = engine.setup;
+      console.info(
+        `[jass] config() ran — ${s.players.size} players, ${s.startLocations.size} start locations, ` +
+          `placement=${s.placement} (Phase 7 trigger engine).`,
+      );
+    } catch (err) {
+      console.warn("[jass] map config() failed (non-fatal):", err);
+    }
   }
 
   /** Hide the map's start-location marker props (the `sloc` StartLocation.mdx
