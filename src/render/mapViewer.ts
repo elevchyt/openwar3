@@ -22,7 +22,7 @@ import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { applyMapUnitData, applyMapAbilityData } from "../data/objectData";
+import { applyMapUnitData, applyMapAbilityData, applyMapItemData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -1039,6 +1039,7 @@ export class MapViewerScene {
   private loadMapObjectData(): void {
     this.registry.clearCustom();
     this.abilities.clearCustom();
+    this.items.clearCustom();
     if (!this.mapArchive) return;
     const wts = this.mapArchive.rawBytes("war3map.wts") ?? this.mapArchive.rawBytes("war3map\\wts") ?? undefined;
     try {
@@ -1053,6 +1054,12 @@ export class MapViewerScene {
       if (w3a && meta) console.info(`[jass] custom object data: ${applyMapAbilityData(this.abilities, w3a, meta, wts)} custom abilit(ies) (war3map.w3a).`);
     } catch (err) {
       console.warn("[jass] custom ability data failed (non-fatal):", err);
+    }
+    try {
+      const w3t = this.mapArchive.rawBytes("war3map.w3t") ?? this.mapArchive.rawBytes("war3map\\w3t");
+      if (w3t) console.info(`[jass] custom object data: ${applyMapItemData(this.items, w3t, wts)} custom item(s) (war3map.w3t).`);
+    } catch (err) {
+      console.warn("[jass] custom item data failed (non-fatal):", err);
     }
   }
 
@@ -3902,6 +3909,7 @@ export class MapViewerScene {
     this.mapScript = null;
     this.registry.clearCustom(); // drop this map's custom object data
     this.abilities.clearCustom();
+    this.items.clearCustom();
     this.gameMenu?.dispose();
     this.gameMenu = null;
     this.paused = false;

@@ -361,5 +361,39 @@ console.log('\n[7.8] Custom ability data (war3map.w3a → custom abilities)');
   }
 }
 
+// --- 7.9: custom item data — war3map.w3t flat overrides ---
+console.log('\n[7.9] Custom item data (war3map.w3t → custom items)');
+{
+  const candy = join(WC3, 'Maps', 'FrozenThrone', 'Scenario', "(10)ExtremeCandyWar2004.w3x");
+  if (existsSync(candy)) {
+    const { ItemRegistry } = require(join(BUILD, '..', 'data', 'items.js'));
+    const { applyMapItemData } = require(join(BUILD, '..', 'data', 'objectData.js'));
+    const wc = openArchive(candy);
+    const w3t = readBytes(wc, 'war3map.w3t');
+    const wts = readBytes(wc, 'war3map.wts');
+    // Minimal base item (evtl) for I000 to clone.
+    const baseItem = {
+      id: 'evtl', name: 'Base', description: '', icon: '', model: 'x.mdx', scale: 1, gold: 0, lumber: 0, level: 1,
+      classType: 'Permanent', abilities: [], charges: 0, cooldownGroup: '', usable: false, perishable: false,
+      powerup: false, droppable: true, pawnable: true, pickRandom: false, maxHp: 75,
+    };
+    const reg = new ItemRegistry(new Map([['evtl', baseItem]]));
+    const count = applyMapItemData(reg, w3t, wts);
+    const it = reg.get('I000');
+    if (count > 0) ok(`applied ${count} custom item(s) from war3map.w3t`);
+    else fail(`applyMapItemData installed 0 items`);
+    if (it && it.classType === 'Artifact') ok(`I000 class override applied (Artifact)`);
+    else fail(`I000 class: ${it && it.classType} (want Artifact)`);
+    if (it && it.abilities.includes('AIda')) ok(`I000 carries its granted ability (AIda)`);
+    else fail(`I000 abilities: ${it && JSON.stringify(it.abilities)} (want AIda)`);
+    if (it && it.usable === true) ok(`I000 usable flag applied`);
+    else fail(`I000 usable: ${it && it.usable} (want true)`);
+    if (it && it.name && it.name !== 'TRIGSTR_1214' && it.name !== 'Base') ok(`I000 name resolves via wts ("${it.name}")`);
+    else fail(`I000 name: ${it && it.name} (want a resolved string)`);
+  } else {
+    console.log('  (ExtremeCandyWar2004 not present — skipped)');
+  }
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

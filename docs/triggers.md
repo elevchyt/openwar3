@@ -24,12 +24,13 @@
 | 7.2b | live `CreateUnit`/`RemoveUnit`/`KillUnit` → real sim+render units | ✅ done (live, base units) | trigger-spawned footmen + Paladin hero render live; wisp `RemoveUnit`'d on region enter (screenshots) |
 | 7.2c | **Custom object data** (`war3map.w3u`) → custom **unit** types | ✅ done (live) | §7.7 headless (EC12 → Shandris model, wts name); WarChasers Archer pedestal spawns its custom hero (screenshots) |
 | 7.2d | **Custom ability data** (`war3map.w3a`, level-indexed) | ✅ done (live) | §7.8 headless (A000 inherits base `code`, area 425, DataA via meta); resolves live in-browser |
-| — | Custom item/destructable data (`.w3t`/`.w3b`/`.w3q`) | ⬜ next | a custom item resolves |
+| 7.2e | **Custom item data** (`war3map.w3t`) | ✅ done (live) | §7.9 headless (I000 "Kael's Will" → Artifact, ability AIda, usable); resolves live in-browser |
+| — | Custom destructable/upgrade/buff data (`.w3b`/`.w3q`/`.w3h`) | ⬜ optional | lower-priority — only maps using them need it |
 | 7.4c | pump remaining sim events (unit-death, damage, orders) live | ⬜ next | a death/attack-triggered action fires in-game |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7 unit + 7.8 ability object data) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 unit/ability/item object data) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 ---
 
@@ -257,13 +258,14 @@ A trigger's `CreateUnit` now puts a **real** unit on the map, and `RemoveUnit`/`
 Verified **live** on WarChasers: trigger-spawned base units (2 footmen + a Paladin hero) render with HP/mana bars,
 selection rings, and team colour; driving the wisp onto the Archer region `RemoveUnit`'d it (count −1).
 
-## Custom object data (7.2c/7.2d — done live: units + abilities)
+## Custom object data (7.2c/7.2d/7.2e — done live: units + abilities + items)
 
 Custom maps define their own types in the object-data files: a *custom* table (a NEW 4-char id based on a base-game
 type + field overrides) and an *original* table (overrides on a base type in place). Our registries only ship the
 base-game types, so custom rawcodes weren't found. Built in **`src/data/objectData.ts`** + per-map overlays on
-`UnitRegistry`/`AbilityRegistry` (a `custom` map that `get()` checks first; `clearCustom()` on map change so no map
-leaks into the next). `mapViewer.loadMapObjectData()` runs at the top of `startCustom`.
+`UnitRegistry`/`AbilityRegistry`/`ItemRegistry` (a `custom` map that `get()` checks first; `clearCustom()` on map change
+so no map leaks into the next — `ItemRegistry` also rebuilds its random-drop `byLevel` index). `mapViewer
+.loadMapObjectData()` runs all three at the top of `startCustom`.
 
 - **Units — `applyMapUnitData(registry, w3u, wts)`** parses `war3map.w3u` (mdx-m3-viewer `War3MapW3u`), clones the base
   `UnitDef`, applies overrides, installs it. Field codes are 4-char META ids (`umdl`=model, `unam`=name, `uhpm`=HP,
@@ -276,16 +278,24 @@ leaks into the next). `mapViewer.loadMapObjectData()` runs at the top of `startC
   the target (`Area`, `Cool`, `Data`, …) and `data` gives the DataA..I slot (1–9); the modification's `levelOrVariation`
   is the rank. The clone keeps the base's **`code`** (the sim's dispatch key), so a custom "Super Holy Light" still runs
   Holy Light's behaviour with the overridden numbers.
+- **Items — `applyMapItemData(registry, w3t, wts)`** parses `war3map.w3t` (flat, no level data — reuses `War3MapW3u`),
+  clones the base `ItemDef`, and applies overrides via a direct code map (`unam`=name, `iabi`=granted abilities,
+  `icla`=class, `igol`=gold, `iusa`=usable, …). Items have no MetaData SLK, so — as with units — the codes map directly.
+  An item's *behaviour* rides on the abilities it carries (`iabi` → dispatched off each ability's `code`), so a custom
+  item works as long as those base abilities are known.
 
-Verified (`pnpm jass:test` §7.7/§7.8): WarChasers' `EC12` → Shandris model + wts name + inherited `isHero`;
-ExtremeCandyWar's `A000` inherits its base `code`, applies a level-1 `area == 425`, and routes its `Oar1` DataA override
-to `data[0]`. Verified **live**: the Archer pedestal spawns the real Shandris-model hero (screenshots); a custom ability
-resolves in-browser with the right code/area/data. (Names/tooltips resolve `TRIGSTR_` refs via `war3map.wts`.)
+Verified (`pnpm jass:test` §7.7/§7.8/§7.9): WarChasers' `EC12` → Shandris model + wts name + inherited `isHero`;
+ExtremeCandyWar's `A000` ability inherits its base `code` + level-1 `area == 425` + `Oar1` DataA → `data[0]`; its `I000`
+item resolves to "Kael's Will" (Artifact, grants ability `AIda`, usable). Verified **live**: the Archer pedestal spawns
+the real Shandris-model hero (screenshots); the custom ability + item both resolve in-browser with the right fields.
+(Names/tooltips resolve `TRIGSTR_` refs via `war3map.wts`.)
 
 ## What's NOT done yet (next tasks — keep this list honest)
 
-- **Custom item/destructable/upgrade data** — the same object-data mechanism for `war3map.w3t` (items, `War3MapW3u`),
-  `.w3b` (destructables, `War3MapW3u`), `.w3q` (upgrades, `War3MapW3d`). Units (`.w3u`) + abilities (`.w3a`) are done.
+- **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
+  `War3MapW3u`), `.w3q` (upgrades, `War3MapW3d`), `.w3h` (buffs, `War3MapW3u`). Lower priority: only maps that create
+  custom destructables (via `CreateDestructable`) / research custom upgrades need them. Units + abilities + items — the
+  gameplay-critical trio — are done.
 - **Custom-ability *behaviour*** — object data now gives a custom ability its real numbers, but only abilities whose base
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).

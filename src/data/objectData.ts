@@ -21,6 +21,7 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType } from "./enums";
 import type { UnitDef, UnitRegistry } from "./units";
 import { mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
+import type { ItemDef, ItemRegistry } from "./items";
 import { parseWts } from "../jass/wts";
 
 type Val = number | string;
@@ -250,6 +251,76 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     if (!base) continue;
     const def = cloneAbility(base, obj.oldId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr);
+    registry.setCustom(obj.oldId, def);
+    count++;
+  }
+  return count;
+}
+
+// --- custom items (war3map.w3t) -------------------------------------------------
+//
+// Items are flat (no level data — the War3MapW3u parser, like units) and have no
+// separate MetaData SLK, so — as with units — we map the 4-char field codes to
+// ItemDef fields directly. An item's *behaviour* rides on the abilities it carries
+// (`iabi` → abilList), dispatched off the base ability `code` in the sim, so the
+// crucial fields are the ability list, class, name, and cost.
+
+const bool = (v: Val): boolean => n(v) === 1;
+
+const ITEM_SETTERS: Record<string, (d: ItemDef, v: Val) => void> = {
+  iico: (d, v) => { d.icon = s(v).replace(/\//g, "\\"); },
+  ifil: (d, v) => { d.model = normModel(s(v)); },
+  isca: (d, v) => { d.scale = n(v); },
+  igol: (d, v) => { d.gold = n(v); },
+  ilum: (d, v) => { d.lumber = n(v); },
+  ilev: (d, v) => { d.level = n(v); },
+  icla: (d, v) => { d.classType = s(v); },
+  iabi: (d, v) => { d.abilities = s(v).split(",").map((x) => x.trim()).filter((x) => x && x !== "_" && x !== "-"); },
+  iuse: (d, v) => { d.charges = n(v); },
+  icid: (d, v) => { d.cooldownGroup = s(v); },
+  iusa: (d, v) => { d.usable = bool(v); },
+  iper: (d, v) => { d.perishable = bool(v); },
+  ipow: (d, v) => { d.powerup = bool(v); },
+  idrp: (d, v) => { d.droppable = bool(v); },
+  ipaw: (d, v) => { d.pawnable = bool(v); },
+  iprn: (d, v) => { d.pickRandom = bool(v); },
+  ihtp: (d, v) => { d.maxHp = n(v); },
+};
+
+function cloneItem(base: ItemDef, id: string): ItemDef {
+  return { ...base, id, abilities: [...base.abilities] };
+}
+
+/**
+ * Load a map's war3map.w3t custom items into the registry overlay. Returns how many
+ * were installed. `wtsBytes` resolves TRIGSTR_ name/tooltip refs.
+ */
+export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+  const trigStr = makeTrigStr(wtsBytes);
+  const w3t = new War3MapW3u(); // items reuse the flat unit parser (no level data)
+  w3t.load(w3tBytes);
+  let count = 0;
+
+  const applyItemMods = (def: ItemDef, mods: AbilMod[]): void => {
+    for (const m of mods) {
+      if (m.id === "unam") { def.name = trigStr(s(m.value)); continue; }
+      if (m.id === "utub" || m.id === "ides") { def.description = trigStr(s(m.value)); continue; } // Ubertip / Description
+      ITEM_SETTERS[m.id]?.(def, m.value);
+    }
+  };
+  for (const obj of w3t.customTable.objects) {
+    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    if (!base) continue;
+    const def = cloneItem(base, obj.newId);
+    applyItemMods(def, obj.modifications as AbilMod[]);
+    registry.setCustom(obj.newId, def);
+    count++;
+  }
+  for (const obj of w3t.originalTable.objects) {
+    const base = registry.base(obj.oldId);
+    if (!base) continue;
+    const def = cloneItem(base, obj.oldId);
+    applyItemMods(def, obj.modifications as AbilMod[]);
     registry.setCustom(obj.oldId, def);
     count++;
   }

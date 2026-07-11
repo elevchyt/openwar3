@@ -38,8 +38,14 @@ export interface ItemDef {
 export class ItemRegistry {
   /** Items eligible for random-drop tables, indexed by level then class. */
   private byLevel = new Map<number, ItemDef[]>();
-  constructor(private defs: Map<string, ItemDef>) {
-    for (const d of defs.values()) {
+  // Per-map custom overlay from war3map.w3t (see src/data/objectData.ts), mirroring
+  // UnitRegistry: get() checks it first; cleared on map change.
+  constructor(private defs: Map<string, ItemDef>, private custom = new Map<string, ItemDef>()) {
+    this.rebuildByLevel();
+  }
+  private rebuildByLevel(): void {
+    this.byLevel.clear();
+    for (const d of new Map([...this.defs, ...this.custom]).values()) {
       if (!d.droppable || !d.pickRandom) continue;
       const list = this.byLevel.get(d.level) ?? [];
       list.push(d);
@@ -47,16 +53,28 @@ export class ItemRegistry {
     }
   }
   get(id: string): ItemDef | undefined {
-    return this.defs.get(id);
+    return this.custom.get(id) ?? this.defs.get(id);
   }
   has(id: string): boolean {
-    return this.defs.has(id);
+    return this.custom.has(id) || this.defs.has(id);
   }
   get size(): number {
-    return this.defs.size;
+    return new Set([...this.defs.keys(), ...this.custom.keys()]).size;
   }
   all(): ItemDef[] {
-    return [...this.defs.values()];
+    return [...new Map([...this.defs, ...this.custom]).values()];
+  }
+  /** The base (install) def for `id`, ignoring the custom overlay. */
+  base(id: string): ItemDef | undefined {
+    return this.defs.get(id);
+  }
+  setCustom(id: string, def: ItemDef): void {
+    this.custom.set(id, def);
+    this.rebuildByLevel(); // a custom droppable/random item joins the drop tables
+  }
+  clearCustom(): void {
+    this.custom.clear();
+    this.rebuildByLevel();
   }
 
   /** Resolve a dropped-item id from a creep's drop set to a concrete item. The id
