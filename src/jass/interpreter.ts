@@ -32,10 +32,24 @@ export interface DeathEvent {
   victim: UnitSnapshot;
   killer: UnitSnapshot | null;
 }
+/** One damage instance: the unit hit, the damaging unit (null = environment), amount. */
+export interface DamageEvent {
+  target: UnitSnapshot;
+  source: UnitSnapshot | null;
+  amount: number;
+}
+/** One attack committed: the unit attacked + its attacker. */
+export interface AttackEvent {
+  attacked: UnitSnapshot;
+  attacker: UnitSnapshot;
+}
 
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
+const EVENT_UNIT_DAMAGED = 52;
+const EVENT_PLAYER_UNIT_ATTACKED = 18;
+const EVENT_UNIT_ATTACKED = 62;
 
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
@@ -477,25 +491,62 @@ export class Interpreter {
     for (const d of deaths) {
       const victim = this.rt.unitForSim(d.victim);
       const killer = d.killer ? this.rt.unitForSim(d.killer) : JNULL;
-      const vh = victim.k === "handle" ? victim.h : -1;
       const responses = new Map<string, JassValue>([["DyingUnit", victim], ["TriggerUnit", victim], ["KillingUnit", killer]]);
-      // Snapshot the reg list — an action may register/destroy triggers mid-dispatch.
-      for (const reg of [...this.rt.triggerRegs]) {
-        let match = false;
-        if (reg.kind === "unitDeath") {
-          match = reg.params[0]?.k === "handle" && reg.params[0].h === vh;
-        } else if (reg.kind === "unitEvent") {
-          match = reg.params[0]?.k === "handle" && reg.params[0].h === vh && this.rt.enumIndex(reg.params[1] ?? JNULL) === EVENT_UNIT_DEATH;
-        } else if (reg.kind === "playerUnitEvent") {
-          match = this.rt.enumIndex(reg.params[1] ?? JNULL) === EVENT_PLAYER_UNIT_DEATH
-            && this.rt.data<JassPlayer>(reg.params[0])?.index === d.victim.owner
-            && this.eventFilterPasses(reg.params[2], victim);
-        }
-        if (!match) continue;
-        const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
-        if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
-      }
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "unitDeath" && this.paramUnitIs(reg, victim)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DEATH) && this.paramUnitIs(reg, victim)) ||
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DEATH, d.victim.owner, victim)));
     }
+  }
+
+  /** Pump damage events (7.4c) — EVENT_UNIT_DAMAGED on the struck unit, with
+   *  GetEventDamage / GetEventDamageSource. (1.27 has no per-player damage event.) */
+  pumpDamageEvents(events: ReadonlyArray<DamageEvent>): void {
+    for (const e of events) {
+      const target = this.rt.unitForSim(e.target);
+      const source = e.source ? this.rt.unitForSim(e.source) : JNULL;
+      const responses = new Map<string, JassValue>([["TriggerUnit", target], ["EventDamageSource", source], ["EventDamage", jReal(e.amount)]]);
+      this.dispatchToRegs(responses, (reg) => reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DAMAGED) && this.paramUnitIs(reg, target));
+    }
+  }
+
+  /** Pump attack events (7.4c) — EVENT_UNIT_ATTACKED (specific unit) + the common
+   *  EVENT_PLAYER_UNIT_ATTACKED (per player), with GetAttacker. */
+  pumpAttackEvents(events: ReadonlyArray<AttackEvent>): void {
+    for (const e of events) {
+      const attacked = this.rt.unitForSim(e.attacked);
+      const attacker = this.rt.unitForSim(e.attacker);
+      const responses = new Map<string, JassValue>([["TriggerUnit", attacked], ["Attacker", attacker]]);
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_ATTACKED) && this.paramUnitIs(reg, attacked)) ||
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_ATTACKED, e.attacked.owner, attacked)));
+    }
+  }
+
+  /** Fire every registration matching `pred` with the given responses. Snapshots the
+   *  reg list first — an action may register/destroy triggers mid-dispatch. */
+  private dispatchToRegs(responses: Map<string, JassValue>, pred: (reg: TriggerReg) => boolean): void {
+    for (const reg of [...this.rt.triggerRegs]) {
+      if (!pred(reg)) continue;
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+    }
+  }
+
+  /** A registration's subject unit (params[0]) is the given handle. */
+  private paramUnitIs(reg: TriggerReg, unit: JassValue): boolean {
+    return reg.params[0]?.k === "handle" && unit.k === "handle" && reg.params[0].h === unit.h;
+  }
+  /** A registration's event enum (params[1]) has the given ConvertUnitEvent index. */
+  private unitEventIs(reg: TriggerReg, index: number): boolean {
+    return this.rt.enumIndex(reg.params[1] ?? JNULL) === index;
+  }
+  /** A player-unit-event registration matches: right event index, the subject's owner,
+   *  and its optional boolexpr filter (params[2]) passes. */
+  private playerUnitEventMatches(reg: TriggerReg, eventIndex: number, owner: number, unit: JassValue): boolean {
+    return this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex
+      && this.rt.data<JassPlayer>(reg.params[0])?.index === owner
+      && this.eventFilterPasses(reg.params[2], unit);
   }
 }
 

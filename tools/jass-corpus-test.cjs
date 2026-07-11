@@ -435,5 +435,66 @@ endfunction`;
   else fail(`GetKillingUnit type: ${killerType && killerType.n} (want ${rawcodeToInt('hpea')})`);
 }
 
+// --- 7.11: combat events (damage + attacked — 7.4c) ---
+console.log('\n[7.11] Combat events (Interpreter.pumpDamageEvents / pumpAttackEvents)');
+{
+  const { rawcodeToInt } = require(join(BUILD, 'lexer.js'));
+  const SRC = `
+globals
+    unit    udg_target = null
+    integer udg_dmgHits    = 0
+    real    udg_dmg        = 0.0
+    integer udg_dmgSrc     = 0
+    integer udg_atkHits    = 0
+    integer udg_attacker   = 0
+endglobals
+function OnDamage takes nothing returns nothing
+    set udg_dmgHits = udg_dmgHits + 1
+    set udg_dmg     = GetEventDamage()
+    set udg_dmgSrc  = GetUnitTypeId( GetEventDamageSource() )
+endfunction
+function OnAttacked takes nothing returns nothing
+    set udg_atkHits  = udg_atkHits + 1
+    set udg_attacker = GetUnitTypeId( GetAttacker() )
+endfunction
+function InitCombat takes nothing returns nothing
+    local trigger td = CreateTrigger()
+    local trigger ta = CreateTrigger()
+    call TriggerAddAction( td, function OnDamage )
+    call TriggerAddAction( ta, function OnAttacked )
+    call TriggerRegisterUnitEvent( td, udg_target, ConvertUnitEvent(52) )        // EVENT_UNIT_DAMAGED
+    call TriggerRegisterPlayerUnitEvent( ta, Player(0), ConvertPlayerUnitEvent(18), null ) // ATTACKED
+endfunction`;
+  const interp = buildInterpreter([SRC]);
+  // The damaged unit's handle must exist before it's registered on.
+  const targetH = interp.rt.unitForSim({ id: 5, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 });
+  interp.rt.globals.set('udg_target', targetH);
+  interp.run('InitCombat', []);
+
+  // Unit 5 takes 37 damage from an 'hpea'.
+  interp.pumpDamageEvents([{ target: { id: 5, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, source: { id: 6, typeId: 'hpea', owner: 1, x: 0, y: 0, facing: 0 }, amount: 37 }]);
+  // Damage to a DIFFERENT unit must NOT fire the unit-5 registration.
+  interp.pumpDamageEvents([{ target: { id: 9, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, source: null, amount: 99 }]);
+  // A player-0 unit is attacked by an 'ogru'; a player-1 unit's attack must NOT fire.
+  interp.pumpAttackEvents([{ attacked: { id: 5, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, attacker: { id: 7, typeId: 'ogru', owner: 1, x: 0, y: 0, facing: 0 } }]);
+  interp.pumpAttackEvents([{ attacked: { id: 8, typeId: 'hfoo', owner: 1, x: 0, y: 0, facing: 0 }, attacker: { id: 7, typeId: 'ogru', owner: 1, x: 0, y: 0, facing: 0 } }]);
+
+  const dh = interp.rt.globals.get('udg_dmgHits');
+  const dmg = interp.rt.globals.get('udg_dmg');
+  const dsrc = interp.rt.globals.get('udg_dmgSrc');
+  const ah = interp.rt.globals.get('udg_atkHits');
+  const atk = interp.rt.globals.get('udg_attacker');
+  if (dh && dh.n === 1) ok(`EVENT_UNIT_DAMAGED fired for the struck unit only (not another unit's damage)`);
+  else fail(`damage hits: ${dh && dh.n} (want 1)`);
+  if (dmg && Math.abs(dmg.n - 37) < 1e-6) ok(`GetEventDamage() == 37`);
+  else fail(`GetEventDamage: ${dmg && dmg.n} (want 37)`);
+  if (dsrc && dsrc.n === rawcodeToInt('hpea')) ok(`GetEventDamageSource() is the damager ('hpea')`);
+  else fail(`GetEventDamageSource: ${dsrc && dsrc.n} (want ${rawcodeToInt('hpea')})`);
+  if (ah && ah.n === 1) ok(`EVENT_PLAYER_UNIT_ATTACKED fired for the owner-matched attack only`);
+  else fail(`attack hits: ${ah && ah.n} (want 1)`);
+  if (atk && atk.n === rawcodeToInt('ogru')) ok(`GetAttacker() is the attacker ('ogru')`);
+  else fail(`GetAttacker: ${atk && atk.n} (want ${rawcodeToInt('ogru')})`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

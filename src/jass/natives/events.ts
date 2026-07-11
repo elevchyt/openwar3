@@ -112,6 +112,11 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetExpiredTimer", (c) => resp(c, "ExpiredTimer"));
   def(rt, "GetTriggerWidget", (c) => resp(c, "TriggerWidget"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
+  def(rt, "GetEventDamageSource", (c) => resp(c, "EventDamageSource")); // EVENT_UNIT_DAMAGED
+  def(rt, "GetEventDamage", (c) => {
+    const v = resp(c, "EventDamage");
+    return v.k === "real" ? v : jReal(0);
+  });
 
   // --- run a trigger from script (used by RunInitializationTriggers etc.) ---
   const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean =>

@@ -1074,8 +1074,18 @@ export class MapViewerScene {
       const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false, runMain: true, hooks: this.textHooks() });
       if (!engine) return;
       this.scriptSpawnLive = true; // init done → trigger CreateUnit now spawns for real
-      this.mapScript = engine; // pumped each tick (timers + enter/leave-region + death events — 7.4b/c)
-      if (this.rts) this.rts.simWorld.captureDeaths = true; // record deaths so death-triggered actions fire
+      this.mapScript = engine; // pumped each tick (timers + region + death/damage/attack events — 7.4b/c)
+      // Tell the sim which combat events to record — only if the script listens (so a
+      // map with no death/damage/attack triggers pays nothing). Event indices from
+      // common.j: DEATH 53/20, DAMAGED 52, ATTACKED 62/18.
+      if (this.rts) {
+        const rt = engine.interp.rt;
+        const idx = (r: { params: unknown[] }): number => (r.params[1] ? rt.enumIndex(r.params[1] as never) : -1);
+        const sw = this.rts.simWorld;
+        sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath" || (r.kind === "unitEvent" && idx(r) === 53) || (r.kind === "playerUnitEvent" && idx(r) === 20));
+        sw.captureDamage = rt.triggerRegs.some((r) => r.kind === "unitEvent" && idx(r) === 52);
+        sw.captureAttacks = rt.triggerRegs.some((r) => (r.kind === "unitEvent" && idx(r) === 62) || (r.kind === "playerUnitEvent" && idx(r) === 18));
+      }
       const s = engine.setup;
       const trigs = engine.interp.rt.triggerRegs.length;
       console.info(
@@ -1096,9 +1106,15 @@ export class MapViewerScene {
     if (!engine || !this.rts) return;
     try {
       engine.interp.advanceTime(dt); // timers (TriggerRegisterTimerExpireEvent + TimerStart handlers)
-      // Deaths this tick → EVENT_UNIT_DEATH / EVENT_PLAYER_UNIT_DEATH (7.4c).
-      const deaths = this.rts.simWorld.drainDeathEvents();
+      // Combat events this tick (7.4c). Each drain is empty unless the sim was told to
+      // record that kind (capture* flags), so a map that doesn't listen pays nothing.
+      const sw = this.rts.simWorld;
+      const deaths = sw.drainDeathEvents();
       if (deaths.length) engine.interp.pumpUnitDeaths(deaths);
+      const damage = sw.drainDamageEvents();
+      if (damage.length) engine.interp.pumpDamageEvents(damage);
+      const attacks = sw.drainAttackEvents();
+      if (attacks.length) engine.interp.pumpAttackEvents(attacks);
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
         const snap: UnitSnapshot[] = [];

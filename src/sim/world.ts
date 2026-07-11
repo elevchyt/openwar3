@@ -283,9 +283,10 @@ export interface SimTree {
   blockRadius: number;
 }
 
-/** A frozen snapshot of a unit for a death event (the unit is gone next tick). Just
- *  enough for the trigger engine to mint a JASS unit handle (GetDyingUnit/…). */
-export interface DeathUnitInfo {
+/** A frozen snapshot of a unit for a trigger event (death/damage/attack). Just enough
+ *  for the trigger engine to mint a JASS unit handle (GetDyingUnit/GetEventDamageSource
+ *  /GetAttacker/…) even after the unit is gone. */
+export interface EventUnitInfo {
   id: number;
   typeId: string;
   owner: number;
@@ -293,7 +294,7 @@ export interface DeathUnitInfo {
   y: number;
   facing: number;
 }
-const deathInfo = (u: SimUnit): DeathUnitInfo => ({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+const eventInfo = (u: SimUnit): EventUnitInfo => ({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
 
 export interface SimUnit {
   id: number;
@@ -687,11 +688,15 @@ export class SimWorld {
    *  opens at 08:00 (Scripts\Blizzard.j bj_MELEE_STARTING_TOD). */
   timeOfDay: number = MELEE.MELEE_STARTING_TOD;
   private deaths: number[] = [];
-  /** Whether to record death events for the trigger engine (set by the host when a
-   *  map script wants EVENT_UNIT_DEATH / EVENT_PLAYER_UNIT_DEATH). Off for melee, so
-   *  those matches don't accumulate death snapshots nobody drains. */
+  /** Whether to record death/damage/attack events for the trigger engine (the host
+   *  sets each only when the loaded script actually registers that event kind — off
+   *  for melee and for maps that don't listen, so nothing accumulates unread). */
   captureDeaths = false;
-  private deathEvents: Array<{ victim: DeathUnitInfo; killer: DeathUnitInfo | null }> = [];
+  captureDamage = false;
+  captureAttacks = false;
+  private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
+  private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
+  private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -1725,10 +1730,28 @@ export class SimWorld {
 
   /** Death events (victim + killer snapshots) since the last drain, for the trigger
    *  engine. Only populated when `captureDeaths` is set (a script is listening). */
-  drainDeathEvents(): Array<{ victim: DeathUnitInfo; killer: DeathUnitInfo | null }> {
+  drainDeathEvents(): Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> {
     if (!this.deathEvents.length) return this.deathEvents;
     const out = this.deathEvents;
     this.deathEvents = [];
+    return out;
+  }
+
+  /** Damage events (EVENT_UNIT_DAMAGED) since the last drain — only when a script
+   *  registered that event (`captureDamage`). */
+  drainDamageEvents(): Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> {
+    if (!this.damageEvents.length) return this.damageEvents;
+    const out = this.damageEvents;
+    this.damageEvents = [];
+    return out;
+  }
+
+  /** Attack events (EVENT_(PLAYER_)UNIT_ATTACKED) since the last drain — only when a
+   *  script registered that event (`captureAttacks`). */
+  drainAttackEvents(): Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> {
+    if (!this.attackEvents.length) return this.attackEvents;
+    const out = this.attackEvents;
+    this.attackEvents = [];
     return out;
   }
 
@@ -3782,6 +3805,8 @@ export class SimWorld {
     u.swingBroken = false; // a genuine new swing always animates (clears any prior break)
     u.swingTargetId = t.id;
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
+    // EVENT_(PLAYER_)UNIT_ATTACKED fires as the attacker commits a swing at the target.
+    if (this.captureAttacks) this.attackEvents.push({ attacked: eventInfo(t), attacker: eventInfo(u) });
   }
 
   /** Attack-move: fight any hostiles within acquisition range FIRST (chasing +
@@ -4442,6 +4467,12 @@ export class SimWorld {
     if (amount <= 0) return 0;
     if (recordHit) this.hits.push({ attackerId, targetId: target.id });
     this.revealFoggedAttacker(attackerId, target);
+    // EVENT_UNIT_DAMAGED: the amount that actually landed (after mana shield), with
+    // the source. Captured before the hp subtraction so the target snapshot is live.
+    if (this.captureDamage) {
+      const src = attackerId ? this.units.get(attackerId) : undefined;
+      this.damageEvents.push({ target: eventInfo(target), source: src ? eventInfo(src) : null, amount });
+    }
     target.hp -= amount;
     if (target.hp <= 0) {
       this.kill(target, attackerId);
@@ -4548,7 +4579,7 @@ export class SimWorld {
     // now — the victim is gone from `units` next tick, and the killer may move/die.
     if (this.captureDeaths) {
       const killer = killerId ? this.units.get(killerId) : undefined;
-      this.deathEvents.push({ victim: deathInfo(u), killer: killer ? deathInfo(killer) : null });
+      this.deathEvents.push({ victim: eventInfo(u), killer: killer ? eventInfo(killer) : null });
     }
     this.unitDrops.delete(u.id);
   }
