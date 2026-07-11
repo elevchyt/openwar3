@@ -58,6 +58,19 @@ export interface UnitDef {
   // (murloc/gnoll/troll huts, city buildings, centaur tents). Only the former get a
   // house glyph on the minimap.
   minimapIcon: boolean;
+  // Unit shadow blob (unitUI shadow columns) — WC3's cheap "shadow system": a soft,
+  // directional shadow decal painted on the terrain under the unit. `unitShadow` names a
+  // texture in ReplaceableTextures\Shadows\ (Shadow, ShadowFlyer, …); "" = none (SLK "_"),
+  // as on buildings (which carry `buildingShadow` instead). The quad is shadowW×shadowH
+  // world units with its MIN corner at (unit − shadowX, unit − shadowY): a Footman's 140²
+  // blob with a 50 offset centres at +20,+20 — north-east, i.e. the top-right screen
+  // direction WC3 always casts. Verified against War3.mpq UnitUI.slk.
+  unitShadow: string;
+  buildingShadow: string; // per-building baked shadow texture (unitUI "buildingShadow"); "" = none
+  shadowW: number;
+  shadowH: number;
+  shadowX: number;
+  shadowY: number;
   speed: number; // world units / second
   turnRate: number; // radians-ish per second scale (UnitData turnrate)
   moveHeight: number; // fly altitude above ground (0 for ground units)
@@ -262,6 +275,13 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       pathTex: d ? str(d, "pathTex") : "",
       uberSplat: u ? str(u, "uberSplat") : "", // building ground-texture code (UberSplatData.slk)
       minimapIcon: (u ? num(u, "nbmmIcon", 0) : 0) === 1,
+      // Shadow decal art + geometry (see UnitDef). "_" (SLK "none") → "".
+      unitShadow: u ? shadowName(str(u, "unitShadow")) : "",
+      buildingShadow: u ? shadowName(str(u, "buildingShadow")) : "",
+      shadowW: u ? num(u, "shadowW", 0) : 0,
+      shadowH: u ? num(u, "shadowH", 0) : 0,
+      shadowX: u ? num(u, "shadowX", 0) : 0,
+      shadowY: u ? num(u, "shadowY", 0) : 0,
       speed: b ? num(b, "spd", 0) : 0,
       turnRate: d ? num(d, "turnrate", 0.5) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,
@@ -355,6 +375,10 @@ function parseButtonPos(v: string): [number, number] {
 function str(row: Row, key: string): string {
   const v = row.string(key);
   return v === undefined || v === "-" ? "" : v;
+}
+// Shadow texture code as stored in UnitUI.slk: "_" is the SLK's "none" sentinel → "".
+function shadowName(v: string): string {
+  return v === "_" ? "" : v;
 }
 function num(row: Row, key: string, fallback: number): number {
   const v = row.string(key);

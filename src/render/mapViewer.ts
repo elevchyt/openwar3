@@ -13,6 +13,7 @@ import { parseMapUnits, GOLD_MINE_ID } from "../world/mapUnits";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
+import { ShadowOverlay } from "./shadowOverlay";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
@@ -431,6 +432,11 @@ export class MapViewerScene {
   // the previous frame so stale ones (deselected units, expired flashes) get pruned.
   private ringSplats: UberSplatOverlay | null = null;
   private ringKeys = new Set<string>();
+  // Unit shadows (issue #58): the cheap directional blob shadow each mobile unit casts on
+  // the terrain. Its own batched GL pass (src/render/shadowOverlay.ts) — rebuilt every
+  // frame from the visible units, drawn under the units and dimmed by the fog like the
+  // ground. Built at map load alongside the splats (needs only terrain + gl).
+  private shadows: ShadowOverlay | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private rallyFlagModel: SpawnModel | null = null; // reused for the smaller queue flags
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
@@ -579,6 +585,8 @@ export class MapViewerScene {
     this.ringSplats?.dispose();
     this.ringSplats = null;
     this.ringKeys.clear();
+    this.shadows?.dispose();
+    this.shadows = null;
     this.simBuildingSplats.clear();
     this.mapBuildingSplats.clear();
     this.rts?.dispose();
@@ -629,6 +637,8 @@ export class MapViewerScene {
       // as its OWN pass AFTER the building splats so a ring paints on top of a foundation
       // decal (issue #16) — while still under the units (issue #34).
       this.ringSplats = new UberSplatOverlay(this.viewer.gl, terrain, splatLoader);
+      // Unit shadow overlay (issue #58) — same terrain + BLP loader as the splats.
+      this.shadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -3623,10 +3633,16 @@ export class MapViewerScene {
       // which are flat MDX ground decals in the translucent pass — paint ON TOP of the
       // ubersplats instead of under them (issue #16), while the splats still sit on the
       // terrain. Splats draw before the fog so the veil dims them like the ground.
+      // Rebuild the unit shadow batch from the visible units (cheap — see updateShadowBatch).
+      if (this.shadows) this.updateShadowBatch();
       if (map && fogScene && map.anyReady) {
         fogScene.startFrame();
         map.renderGround();
         map.renderCliffs();
+        // Unit shadows sit on the terrain UNDER the units, so draw them right after the
+        // ground/cliffs and BEFORE the opaque units — a unit body then paints over its own
+        // shadow. Before the fog so the veil dims them like the ground.
+        if (this.shadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderOpaque();
         map.renderWater();
         if (this.splats) this.splats.render(fogScene.camera.viewProjectionMatrix);
@@ -3637,8 +3653,10 @@ export class MapViewerScene {
         if (this.ringSplats) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderTranslucent();
       } else {
-        // Map not fully ready — fall back to the stock all-in-one path (splats after).
+        // Map not fully ready — fall back to the stock all-in-one path (overlays after).
         this.viewer.render();
+        // Depth-test (depthMask off) keeps units in front of their shadow even drawn late.
+        if (this.shadows && fogScene) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.splats && fogScene) this.splats.render(fogScene.camera.viewProjectionMatrix);
         if (this.ringSplats && fogScene) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
       }
@@ -3682,6 +3700,8 @@ export class MapViewerScene {
     this.ringSplats?.dispose();
     this.ringSplats = null;
     this.ringKeys.clear();
+    this.shadows?.dispose();
+    this.shadows = null;
     this.simBuildingSplats.clear();
     this.mapBuildingSplats.clear();
     this.debug?.dispose();
@@ -3787,6 +3807,28 @@ export class MapViewerScene {
    *  behind a treeline vanish (the treeline blocks their sight in the vision grid), the
    *  way WC3 hides forest interiors. Iterated in full each tick (a few thousand widgets,
    *  cheap) so props that stream in async are already fogged and re-brighten on sight. */
+  // All unit shadow textures live here (unitUI.slk `unitShadow` names the file stem).
+  private static readonly SHADOW_DIR = "ReplaceableTextures\\Shadows\\";
+
+  /** Rebuild this frame's unit-shadow batch: one soft blob decal per VISIBLE mobile unit,
+   *  sized + offset straight from its UnitDef shadow data (unitUI.slk) and painted on the
+   *  terrain by ShadowOverlay. Corpses, buildings (their footprint decal grounds them),
+   *  and fogged/mined units are skipped — a fogged enemy's shadow must not reveal it.
+   *  Cheap: a beginFrame + one small tessellation per unit, all drawn later in ~one call
+   *  per shadow texture (Shadow / ShadowFlyer). */
+  private updateShadowBatch(): void {
+    const world = this.rts?.simWorld;
+    if (!this.shadows || !world) return;
+    this.shadows.beginFrame();
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || u.building) continue;
+      const def = this.registry.get(u.typeId);
+      if (!def || !def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
+      if (this.rts!.unitHidden(u.id)) continue; // fogged / in a gold mine — don't draw its shadow
+      this.shadows.add(u.x, u.y, def.shadowW, def.shadowH, def.shadowX, def.shadowY, MapViewerScene.SHADOW_DIR + def.unitShadow + ".blp");
+    }
+  }
+
   private fogWidgets(vision: VisionMap): void {
     const map = this.viewer.map;
     if (!map) return;
