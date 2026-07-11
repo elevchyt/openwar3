@@ -83,8 +83,18 @@ export function registerConfigNatives(rt: Runtime): void {
   // The selected game type gates blizzard.j's generic slot init (melee vs custom).
   def(rt, "GetGameTypeSelected", (c) => c.rt.enumHandle("GameType", c.rt.gameType));
 
-  // --- player-state / alliance stubs used during setup (safe no-ops/defaults) ---
-  def(rt, "SetPlayerState", () => JNULL);
+  // --- player resources / state (SetPlayerState & the AdjustPlayerState*BJ family
+  //     ride on these two). `state` is the raw playerstate index — the sim maps
+  //     1 = gold, 2 = lumber, 4/5 = food cap/used (see the bridge in mapViewer). ---
+  def(rt, "SetPlayerState", (c, a) => {
+    const p = player(c, a[0]);
+    if (p) c.rt.hooks?.setPlayerState?.(p.index, c.rt.enumIndex(a[1]), asInt(a[2]));
+    return JNULL;
+  });
+  def(rt, "GetPlayerState", (c, a) => {
+    const p = player(c, a[0]);
+    return jInt(p ? c.rt.hooks?.getPlayerState?.(p.index, c.rt.enumIndex(a[1])) ?? 0 : 0);
+  });
   def(rt, "SetPlayerAlliance", () => JNULL);
   def(rt, "SetPlayerAllianceStateBJ", () => JNULL);
   // SetPlayerName is implemented in natives/text.ts (it feeds GetPlayerName).

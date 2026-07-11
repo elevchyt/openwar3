@@ -140,10 +140,15 @@ export interface EngineHooks {
   setResourceAmount?(unitId: number, amount: number): void;
   setUnitAcquireRange?(unitId: number, range: number): void;
   setUnitState?(unitId: number, whichState: number, value: number): void;
+  getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
   setUnitColor?(unitId: number, color: number): void;
   removeUnit?(unitId: number): void; // RemoveUnit — no death/corpse
   killUnit?(unitId: number): void; // KillUnit — death animation + corpse
   hideUnit?(unitId: number, hidden: boolean): void;
+  /** Player resource / state: SetPlayerState & GetPlayerState. `state` is the raw
+   *  playerstate index (1 = gold, 2 = lumber, 4 = food cap, 5 = food used). */
+  setPlayerState?(player: number, state: number, value: number): void;
+  getPlayerState?(player: number, state: number): number;
   /** On-screen chat/message line (DisplayTextToPlayer & the timed variant). `duration`
    *  is seconds for the timed native, or < 0 for the untimed one (host default). Only
    *  the local player's messages should reach the HUD (the BJ force helpers gate that). */

@@ -496,5 +496,36 @@ endfunction`;
   else fail(`GetAttacker: ${atk && atk.n} (want ${rawcodeToInt('ogru')})`);
 }
 
+// --- 7.12: trigger effects land — player resources through the real BJs ---
+console.log('\n[7.12] Trigger effects: player resources (SetPlayerState + the AdjustPlayerState*BJ family)');
+{
+  // A tiny sim stash the hook reads/writes, exactly like mapViewer's bridge.
+  const stash = {};
+  const of = (p) => (stash[p] ??= { gold: 0, lumber: 0 });
+  const hooks = {
+    setPlayerState: (p, state, value) => { if (state === 1) of(p).gold = value; else if (state === 2) of(p).lumber = value; },
+    getPlayerState: (p, state) => (state === 1 ? of(p).gold : state === 2 ? of(p).lumber : 0),
+  };
+  const SRC = `
+globals
+    integer udg_readGold = 0
+endglobals
+function RunEcon takes nothing returns nothing
+    call SetPlayerState( Player(0), PLAYER_STATE_RESOURCE_GOLD, 500 )
+    call AdjustPlayerStateBJ( 150, Player(0), PLAYER_STATE_RESOURCE_GOLD )   // +150 gold
+    call SetPlayerStateBJ( Player(0), PLAYER_STATE_RESOURCE_LUMBER, 300 )    // lumber := 300
+    set udg_readGold = GetPlayerState( Player(0), PLAYER_STATE_RESOURCE_GOLD )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('RunEcon', []);
+  const readGold = interp.rt.globals.get('udg_readGold');
+  if (of(0).gold === 650) ok(`SetPlayerState + AdjustPlayerStateBJ → gold 500 then +150 == 650`);
+  else fail(`gold: ${of(0).gold} (want 650)`);
+  if (of(0).lumber === 300) ok(`SetPlayerStateBJ (adjust from GetPlayerState) → lumber == 300`);
+  else fail(`lumber: ${of(0).lumber} (want 300)`);
+  if (readGold && readGold.n === 650) ok(`GetPlayerState reads the live value back (650)`);
+  else fail(`GetPlayerState: ${readGold && readGold.n} (want 650)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

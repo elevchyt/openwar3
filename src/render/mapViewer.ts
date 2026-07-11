@@ -1018,6 +1018,37 @@ export class MapViewerScene {
       createUnit: (player, typeId, x, y, facing) => (this.scriptSpawnLive ? this.spawnScriptUnit(player, typeId, x, y, facing) : -1),
       removeUnit: (id) => this.rts?.removeUnit(id),
       killUnit: (id) => this.rts?.killUnit(id),
+      // Player resources: SetPlayerState/GetPlayerState → the sim stash. This is what
+      // grants a custom map its starting gold/lumber (its init triggers set it). Food
+      // is derived from units, so it's read-only. state: 1=gold 2=lumber 4=cap 5=used.
+      setPlayerState: (p, state, value) => {
+        const sw = this.rts?.simWorld;
+        if (!sw) return;
+        if (state === 1) sw.stashOf(p).gold = value;
+        else if (state === 2) sw.stashOf(p).lumber = value;
+      },
+      getPlayerState: (p, state) => {
+        if (!this.rts) return 0;
+        if (state === 1) return Math.floor(this.rts.simWorld.stashOf(p).gold);
+        if (state === 2) return Math.floor(this.rts.simWorld.stashOf(p).lumber);
+        if (state === 4) return this.rts.foodFor(p).made; // FOOD_CAP
+        if (state === 5) return this.rts.foodFor(p).used; // FOOD_USED
+        return 0;
+      },
+      // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
+      setUnitState: (id, state, value) => {
+        const u = this.rts?.simWorld.units.get(id);
+        if (!u) return;
+        if (state === 0) u.hp = Math.max(0, Math.min(u.maxHp, value));
+        else if (state === 1) u.maxHp = Math.max(1, value);
+        else if (state === 2) u.mana = Math.max(0, Math.min(u.maxMana, value));
+        else if (state === 3) u.maxMana = Math.max(0, value);
+      },
+      getUnitState: (id, state) => {
+        const u = this.rts?.simWorld.units.get(id);
+        if (!u) return 0;
+        return state === 0 ? u.hp : state === 1 ? u.maxHp : state === 2 ? u.mana : state === 3 ? u.maxMana : 0;
+      },
     };
   }
 
