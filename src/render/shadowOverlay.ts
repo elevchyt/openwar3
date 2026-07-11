@@ -47,6 +47,11 @@ void main() {
   if (vUv.x < 0.0 || vUv.x > 1.0 || vUv.y < 0.0 || vUv.y > 1.0) discard;
   // The shadow BLP is black RGB + an alpha blob; alpha is the coverage.
   float a = texture2D(uTex, vUv).a * uStrength;
+  // Feather the box border to 0 so a texture that fills its bounds (the building shadows,
+  // whose alpha runs right to the edge) fades out instead of ending on a hard rectangle.
+  // Unit blobs already go transparent well inside their box, so this trims nothing visible.
+  float edge = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
+  a *= smoothstep(0.0, 0.10, edge);
   if (a < 0.004) discard;
   gl_FragColor = vec4(0.0, 0.0, 0.0, a);
 }`;
@@ -57,16 +62,19 @@ const LIFT = 2;
 const POLYGON_OFFSET_FACTOR = -2;
 const POLYGON_OFFSET_UNITS = -4;
 
-// Extra world-space shove toward the top-right (+X north-east, +Y up on WC3's fixed
-// north-up camera) on TOP of each shadow's authentic shadowX/Y centring. The game's own
-// offset is only ~10-20u, which reads as "under the unit"; the developer wanted the cast
-// to sit more clearly up-right (issue #58 f/u), so we push a bit further. Tuned live.
-const DIR_PUSH = 36;
+// Extra world-space shove toward the top-right on TOP of each shadow's authentic shadowX/Y
+// centring — the game's own offset (~10-20u) reads as "straight under the unit". The push
+// is ASYMMETRIC: mostly EAST (+X = screen-right), only a little NORTH (+Y = screen-up).
+// A tall unit body occupies the screen-up direction, so a big +Y offset just hides the cast
+// behind the model; pushing east keeps it clear of the (thin) body and clearly to the right.
+// Tuned live (issue #58 f/u) — +36 both ways detached it, +20 both ways vanished behind units.
+const DIR_PUSH_X = 24;
+const DIR_PUSH_Y = 14;
 
 // Overall darkness. WC3 shadow blobs top out near 0.75 alpha in the texture, so this
-// scale gives ~0.55 peak — a soft, clearly-read contact shadow like the game's, not a
+// scale gives ~0.6 peak — a soft, clearly-read contact shadow like the game's, not a
 // hard black splotch. Tuned live against the real client's shadows (issue #58).
-const DEFAULT_STRENGTH = 0.75;
+const DEFAULT_STRENGTH = 0.8;
 
 type GL = WebGLRenderingContext;
 
@@ -102,6 +110,10 @@ export class ShadowOverlay {
   private uStrength: WebGLUniformLocation;
   private maxAttribs: number;
   private strength = DEFAULT_STRENGTH;
+  // Runtime-tunable top-right push (see DIR_PUSH_X/Y). Instance fields so it can be A/B'd
+  // live in the browser; defaults baked from the live tuning.
+  dirPushX = DIR_PUSH_X;
+  dirPushY = DIR_PUSH_Y;
   private batches = new Map<string, Batch>(); // key = texture path
   private textures = new Map<string, CachedTexture>();
 
@@ -131,9 +143,9 @@ export class ShadowOverlay {
   add(x: number, y: number, w: number, h: number, shadowX: number, shadowY: number, texture: string): void {
     if (w <= 0 || h <= 0 || !texture) return;
     const batch = this.batchFor(texture);
-    // Box min corner = (unit − shadowX, unit − shadowY), then DIR_PUSH shoves the whole
-    // box toward the top-right so the cast reads clearly up-right (see DIR_PUSH).
-    this.tessellate(batch, x - shadowX + DIR_PUSH, y - shadowY + DIR_PUSH, w, h);
+    // Box min corner = (unit − shadowX, unit − shadowY), then the (asymmetric) push shoves
+    // the whole box toward the top-right so the cast reads clearly up-right (see DIR_PUSH_*).
+    this.tessellate(batch, x - shadowX + this.dirPushX, y - shadowY + this.dirPushY, w, h);
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });
     }

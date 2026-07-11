@@ -432,11 +432,13 @@ export class MapViewerScene {
   // the previous frame so stale ones (deselected units, expired flashes) get pruned.
   private ringSplats: UberSplatOverlay | null = null;
   private ringKeys = new Set<string>();
-  // Unit shadows (issue #58): the cheap directional blob shadow each mobile unit casts on
-  // the terrain. Its own batched GL pass (src/render/shadowOverlay.ts) — rebuilt every
-  // frame from the visible units, drawn under the units and dimmed by the fog like the
-  // ground. Built at map load alongside the splats (needs only terrain + gl).
+  // Shadows (issue #58): the cheap directional blob shadow each unit casts on the terrain.
+  // Its own batched GL pass (src/render/shadowOverlay.ts) — rebuilt every frame from the
+  // visible units, dimmed by the fog like the ground. UNITS and BUILDINGS use separate
+  // overlays so they can draw at different points in the frame (units before the models,
+  // buildings after the foundation decals — see the render loop).
   private shadows: ShadowOverlay | null = null;
+  private buildingShadows: ShadowOverlay | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private rallyFlagModel: SpawnModel | null = null; // reused for the smaller queue flags
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
@@ -587,6 +589,8 @@ export class MapViewerScene {
     this.ringKeys.clear();
     this.shadows?.dispose();
     this.shadows = null;
+    this.buildingShadows?.dispose();
+    this.buildingShadows = null;
     this.simBuildingSplats.clear();
     this.mapBuildingSplats.clear();
     this.rts?.dispose();
@@ -637,8 +641,13 @@ export class MapViewerScene {
       // as its OWN pass AFTER the building splats so a ring paints on top of a foundation
       // decal (issue #16) — while still under the units (issue #34).
       this.ringSplats = new UberSplatOverlay(this.viewer.gl, terrain, splatLoader);
-      // Unit shadow overlay (issue #58) — same terrain + BLP loader as the splats.
+      // Shadow overlays (issue #58) — same terrain + BLP loader as the splats. Two passes
+      // because they need OPPOSITE render orders: unit shadows draw BEFORE the units (the
+      // top-right cast falls north = behind the unit, so drawing after would let the body
+      // occlude it), while building shadows draw AFTER the ubersplats so they darken the
+      // foundation decal, not just the grass around it.
       this.shadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
+      this.buildingShadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -3639,25 +3648,28 @@ export class MapViewerScene {
         fogScene.startFrame();
         map.renderGround();
         map.renderCliffs();
-        // Unit shadows sit on the terrain UNDER the units, so draw them right after the
-        // ground/cliffs and BEFORE the opaque units — a unit body then paints over its own
-        // shadow. Before the fog so the veil dims them like the ground.
+        // Unit shadows draw BEFORE the opaque units: the top-right cast falls north (away
+        // from the camera), so it must be laid down first or the unit body would occlude it.
         if (this.shadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderOpaque();
         map.renderWater();
         if (this.splats) this.splats.render(fogScene.camera.viewProjectionMatrix);
-        // Selection rings draw right after the building splats (so a ring paints ON TOP
-        // of a foundation decal — issue #16) and BEFORE the translucent units (so a unit
-        // body draws over its own ring, which reads as sitting under it). Before the fog
-        // so the veil dims it like the ground.
+        // Building shadows draw AFTER the foundation decals so a building's shadow darkens
+        // its own ubersplat, not just the grass around it (issue #58 f/u). The building
+        // body (opaque, already drawn) still occludes it at the base via depth.
+        if (this.buildingShadows) this.buildingShadows.render(fogScene.camera.viewProjectionMatrix);
+        // Selection rings draw right after the shadows/splats (so a ring paints ON TOP of a
+        // foundation decal — issue #16) and BEFORE the translucent units (so a unit body
+        // draws over its own ring, which reads as sitting under it).
         if (this.ringSplats) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderTranslucent();
       } else {
-        // Map not fully ready — fall back to the stock all-in-one path (overlays after).
+        // Map not fully ready — fall back to the stock all-in-one path. Depth-test (depthMask
+        // off) keeps units in front of both shadow passes even when drawn late.
         this.viewer.render();
-        // Depth-test (depthMask off) keeps units in front of their shadow even drawn late.
         if (this.shadows && fogScene) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.splats && fogScene) this.splats.render(fogScene.camera.viewProjectionMatrix);
+        if (this.buildingShadows && fogScene) this.buildingShadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.ringSplats && fogScene) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
       }
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
@@ -3702,6 +3714,8 @@ export class MapViewerScene {
     this.ringKeys.clear();
     this.shadows?.dispose();
     this.shadows = null;
+    this.buildingShadows?.dispose();
+    this.buildingShadows = null;
     this.simBuildingSplats.clear();
     this.mapBuildingSplats.clear();
     this.debug?.dispose();
@@ -3820,24 +3834,25 @@ export class MapViewerScene {
    *  call per shadow texture. */
   private updateShadowBatch(): void {
     const world = this.rts?.simWorld;
-    if (!this.shadows || !world) return;
+    if (!this.shadows || !this.buildingShadows || !world) return;
     this.shadows.beginFrame();
+    this.buildingShadows.beginFrame();
     for (const u of world.units.values()) {
       if (u.hp <= 0) continue; // corpses cast no shadow
       const def = this.registry.get(u.typeId);
       if (!def) continue;
       if (this.rts!.unitHidden(u.id)) continue; // fogged / in a gold mine — don't draw its shadow
       if (u.building) {
-        // Building: baked shadow texture stretched over the footprint (≈ its ground size).
+        // Building: baked shadow texture stretched over the footprint (≈ its ground size),
+        // into the SEPARATE overlay that draws after the foundation decals.
         if (!def.buildingShadow || !def.pathTex) continue;
         const fp = this.footprintFor(def.pathTex);
         if (!fp) continue;
-        // A building shadow reaches a little past the base; centre the quad on the footprint
-        // (shadowX/Y = half-size) so only DIR_PUSH offsets it, and the texture's own baked
-        // shape carries the cast direction.
+        // Centre the quad on the footprint (shadowX/Y = half-size) so only DIR_PUSH offsets
+        // it; the texture's own baked shape carries the cast direction.
         const w = fp.w * PATHING_CELL * MapViewerScene.BUILDING_SHADOW_SCALE;
         const h = fp.h * PATHING_CELL * MapViewerScene.BUILDING_SHADOW_SCALE;
-        this.shadows.add(u.x, u.y, w, h, w / 2, h / 2, MapViewerScene.SHADOW_DIR + def.buildingShadow + ".blp");
+        this.buildingShadows.add(u.x, u.y, w, h, w / 2, h / 2, MapViewerScene.SHADOW_DIR + def.buildingShadow + ".blp");
         continue;
       }
       if (!def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
