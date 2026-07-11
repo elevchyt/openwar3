@@ -18,12 +18,14 @@
 | 7.2 | `CreateUnit` + world bring-up | ✅ done (headless) | `CreateAllUnits()` count == `war3mapUnits.doo` (PlunderIsle 82==82) |
 | — | **Vision on custom maps** (issue #33 bug) | ✅ done (live) | pre-placed player units seeded owned → fog lifts (screenshots) |
 | 7.4a | Event runtime core (ECA firing, event responses, **timers**) | ✅ done (headless) | periodic timer fires its trigger 3×; one-shot once; `GetExpiredTimer` correct |
+| 7.6 | **Text logic + text actions** (messages, floating text, forces, strings, `.wts`) | ✅ done (live) | full BJ text path end-to-end (§7.5); WarChasers welcome/HINT text in the HUD (screenshots) |
+| — | **`main()` runs live** (display-only hooks) | ✅ done (live) | custom-map init triggers fire; 296 trigger regs on WarChasers; no duplicate units |
 | 7.2b | live `CreateUnit` → new sim units (replace .doo adoption) | ⬜ next | — |
-| 7.4b | pump sim events (enter-region, unit-death) live from `rts.tick` | ⬜ next | a scripted trigger fires in-game |
+| 7.4b | pump sim events (enter-region, unit-death, **timers**) live from `rts.tick` | ⬜ next | a scripted mid-game trigger fires in-game |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (110/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 ---
 
@@ -47,12 +49,12 @@ vendored — see the legal boundary in `CLAUDE.md`):
 The engine calls two entry points, then pumps events:
 
 ```
-config()   // SetPlayers/SetTeams/DefineStartLocation/InitCustomPlayerSlots — player + map setup
-main()
+config()   // SetPlayers/SetTeams/DefineStartLocation/InitCustomPlayerSlots — player + map setup      [runs live]
+main()                                                                                                 [runs live, 7.6]
   SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
-  CreateAllUnits()             // CreateUnit(...) per pre-placed unit (mirrors war3mapUnits.doo)
-  InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()
-// then: registered triggers fire on unit/player/region/timer events (milestone 7.4)
+  CreateAllUnits()             // CreateUnit(...) per pre-placed unit — records rows only (display-only hooks; 7.2b)
+  InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
+// then: registered triggers fire on unit/player/region/timer events — NOT pumped live yet (milestone 7.4b)
 ```
 
 ---
@@ -71,11 +73,14 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `runtime.ts` | handle table (interned player/enum handles), `MapSetup`, globals/arrays, function+native registries, seeded RNG, `EngineHooks` bridge |
 | `interpreter.ts` | tree-walker: call frames, `and`/`or` **do not short-circuit** (JASS gotcha), type-directed arithmetic, safe defaults, loop/recursion caps |
 | `natives/config.ts` | `config()` + player-setup natives → `MapSetup` |
-| `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, **floating text** (`CreateTextTag`…), `DisplayText…` |
+| `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, unit queries |
 | `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
+| `natives/forces.ts` | **forces** (player groups): `CreateForce`/`ForceAddPlayer`/`IsPlayerInForce`/`ForForce`/`ForceEnum*` + `GetEnumPlayer`/`GetFilterPlayer` — the target of the "Text Message" actions (7.6) |
+| `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
+| `wts.ts` | `parseWts` — the map's `war3map.wts` trigger-string table (resolves `TRIGSTR_nnn` placeholders to authored text) |
 | `natives/index.ts` | registry: enum constructors (`Convert*`) + utility natives (`I2S`, `GetRandomInt`, camera/env no-ops); calls the group registrars |
-| `headless.ts` | engine-free entry: `buildInterpreter(sources)` for tests/tooling |
-| `index.ts` | **app-facing** loader: reads `common.j`/`blizzard.j`/`war3map.j` via the VFS, runs `config()` |
+| `headless.ts` | engine-free entry: `buildInterpreter(sources, { wts })` for tests/tooling |
+| `index.ts` | **app-facing** loader: reads `common.j`/`blizzard.j`/`war3map.j`/`war3map.wts` via the VFS, runs `config()` (+ `main()` with display hooks) |
 
 **Never hard-crash the map.** An unimplemented native falls back to a typed default from its `common.j` return type;
 a missing function/variable logs once and returns null; runaway loops/recursion are capped. This is why a map that
@@ -102,8 +107,8 @@ Verified live on WarChasers (`?dev` + agent-browser): local player owns its sele
 black beyond; `config()` ran on the real script (5 players, 5 start locations); 278 player units seeded owned. Melee
 (Echo Isles) unchanged: town hall + 5 workers + 91 creeps, fog correct.
 
-> The live `startCustom` also runs the map's `config()` through the interpreter (read-only for now) — the first live
-> use of the trigger engine on a real script, and the seam for running `main()`/triggers in 7.2b+.
+> The live `startCustom` runs the map's `config()` **and `main()`** through the interpreter (`runMapScript`, with
+> display-only hooks) — see 7.6 below. That fires the map's init triggers, so its welcome text now shows in the HUD.
 
 ### Custom-vs-melee behaviour — known differences
 
@@ -120,9 +125,11 @@ freshly spawned like the melee roster, a few behaviours differ. Watch for these 
   / `def.level` (not the editor's placed values). Minor; refine when it matters.
 - **Adopted buildings don't get footprint seating** (`setBuildingFootprint`), so an owned pre-placed building on a
   slope keeps its `.doo` Z (may clip). Minor.
-- **No starting resources / no scripted AI** — custom maps grant gold/lumber and drive unit behaviour from their
-  triggers, which we don't run yet (7.4). So a custom map starts at 0/0 and its units act as generic auto-acquiring
-  melee units, not their scripted selves. Expected until the event runtime lands.
+- **Init triggers run, but nothing pumps mid-game events yet.** `main()` now runs live with **display-only hooks**
+  (see 7.6 below), so a custom map's "Map Initialization" triggers fire — welcome/quest **text appears**, triggers
+  register, `bj_FORCE_*` populate. But we don't yet pump `advanceTime`/`fireEvent` from `rts.tick` (7.4b), so timed
+  and unit-event triggers don't fire, and resource-granting natives (`SetPlayerState`, …) are still no-ops — so a
+  custom map still starts at 0/0 and its units act as generic auto-acquiring melee units, not their scripted selves.
 
 ---
 
@@ -174,15 +181,50 @@ responses** (`GetTriggerUnit`, `GetEnteringUnit`, `GetExpiredTimer`, …) the ac
 Verified (`pnpm jass:test` §7.4): a periodic 1s timer fires its trigger exactly 3× over 3.5s with the correct
 `GetExpiredTimer`, and a one-shot timer fires exactly once regardless of elapsed time.
 
+## Text logic + text actions (7.6 — done, live)
+
+The GUI's **"Text Message"** and **"Floating Text"** actions plus the **string functions** they build messages from.
+This is the first trigger subsystem wired all the way to the screen — the map's own init triggers now put text in
+the HUD. Built:
+
+- **`src/jass/natives/text.ts`** — the two "text" families:
+  - **Text actions:** on-screen messages (`DisplayTextToPlayer`/`DisplayTimedTextToPlayer`/`ClearTextMessages`) via
+    the `displayText`/`clearText` engine hooks; **floating text** (`CreateTextTag` + all its setters) stored as live
+    `TextTagObj`s in `runtime.textTags` for a renderer to poll (not push-emitted per setter — the BJ helpers set text
+    *before* position, so an eager emit would snapshot the tag mid-configuration).
+  - **Text logic:** names (`GetPlayerName`/`SetPlayerName`, `GetUnitName`/`GetObjectName`/`GetHeroProperName` via the
+    `unitName`/`objectName` data hooks), a real 32-bit `StringHash` (FNV-1a), and identity `GetLocalizedString`/`Hotkey`.
+- **`src/jass/natives/forces.ts`** — **forces** (player groups) are a prerequisite: the GUI "Game - Display text"
+  action compiles to `DisplayTextToForce(GetPlayersAll(), msg)`, and blizzard.j gates every force-targeted text helper
+  on `IsPlayerInForce(GetLocalPlayer(), toForce)`. Once `CreateForce`/`ForceEnumPlayers`/`ForForce`/… exist,
+  blizzard.j's own `InitBlizzardGlobals` populates `bj_FORCE_ALL_PLAYERS`/`bj_FORCE_PLAYER[]` for free.
+- **`src/jass/wts.ts`** — `parseWts`: the World Editor doesn't inline authored strings, it emits `TRIGSTR_nnn`
+  placeholders and ships the text in `war3map.wts`. `Runtime.resolveTrigStr` swaps them in at the interpreter's
+  string-literal choke point, so `"TRIGSTR_019"` renders as *"The gates have been opened…"*.
+- **`src/render/mapViewer.ts`** — `runMapScript()` runs `config()` **+ `main()`** with **display-only hooks** (no
+  `createUnit`, so unit placement still comes from `.doo` adoption — 7.2b unchanged). `main()` → `InitBlizzard` →
+  `RunInitializationTriggers` fires the map's "Map Initialization" triggers, so welcome/quest text appears.
+- **`src/ui/hud.ts`** — a WC3-style message log in the upper-left; `formatColorCodes` honours `|cAARRGGBB…|r` colour
+  runs and `|n` breaks.
+
+Verified (`pnpm jass:test` §7.5): `DisplayTextToForce`/timed reach the local player through `bj_FORCE_ALL_PLAYERS`,
+`ClearTextMessagesBJ` clears once, `CreateTextTagLocBJ` builds a tag (size→height 0.023), `SubStringBJ`/`GetPlayerName`/
+`StringHashBJ` return the right values — all through the **real** blizzard.j BJs. Verified **live** on WarChasers: its
+welcome line + four `|cff32cd32HINT|r` hints render in the HUD from the map's own init triggers (296 trigger
+registrations, 19 timers, 374 unit rows recorded; `main()` runs in ~100 ms; no duplicate units).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
-- **7.4b** wire the live pump: run the map's `InitCustomTriggers`/`RunInitializationTriggers` in-game and pump
-  `advanceTime` + `fireEvent` (enter-region, unit-death) from `rts.tick`, so real map triggers fire live. Blocked on
-  7.2b because running `main()` live also runs `CreateAllUnits`/`CreateRegions` — must reconcile with the current
-  `.doo` adoption first (else duplicate units / null `gg_rct_*` regions).
+- **7.4b** pump the runtime from `rts.tick`: call `advanceTime(dt)` (timers) + `fireEvent` (enter-region, unit-death)
+  each sim tick, so real map triggers fire *mid-game* — not just at init. `main()` already runs live (7.6) and
+  registers the triggers/timers; the missing piece is the per-tick pump and raising sim events into `fireEvent`. Still
+  partly entangled with 7.2b: the live pump wants `gg_rct_*` regions + real units, and `CreateAllUnits` currently only
+  records rows (display-only hooks) so `.doo` adoption stays authoritative.
 - **7.2b** route live unit creation through `CreateUnit` (currently the vision fix adopts `.doo` instances; the
-  interpreter's `CreateUnit` runs headless only).
+  interpreter's `CreateUnit` records a row but spawns nothing live — display-only hooks).
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.
-- **Natives on demand** — regions/groups/forces, weather, sound, cameras, cinematics, multiboard, gamecache. Use
-  `pnpm jass:coverage` to prioritise.
+- **Natives on demand** — regions, groups, weather, sound, cameras, cinematics (transmissions), multiboard, quests,
+  gamecache. Use `pnpm jass:coverage` to prioritise (110/335 used natives implemented).
+- **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them
+  in 3D yet (no world-space text pass). On-screen messages *are* rendered (HUD message log).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

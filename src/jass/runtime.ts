@@ -26,6 +26,32 @@ export interface BoolExpr {
   fn: string;
 }
 
+/** A floating text tag (CreateTextTag — the "Floating Text" trigger actions). A
+ *  live, mutable object the renderer polls (source of truth is this record, not a
+ *  one-shot push hook — WC3 renders a text tag continuously as its setters mutate
+ *  it, so an eager "emit on SetTextTagText" would snapshot it mid-configuration,
+ *  e.g. before CreateTextTagLocBJ has set the position). `height`/`size` are the
+ *  screen-relative font height the natives store; the BJ helpers scale from a font
+ *  "size" via TextTagSize2Height (size 10 → 0.023). */
+export interface TextTagObj {
+  handleId: number;
+  text: string;
+  x: number;
+  y: number;
+  z: number; // height offset above the terrain/unit
+  size: number; // screen-relative font height (SetTextTagText's `height` arg)
+  color: number; // 0xAARRGGBB
+  visible: boolean;
+  permanent: boolean;
+  lifespan: number; // seconds (0 = use permanent/engine default)
+  age: number;
+  velX: number;
+  velY: number;
+  suspended: boolean;
+  followUnit: number; // sim id of the unit it tracks (SetTextTagPosUnit), or -1
+  dead: boolean; // DestroyTextTag'd — the renderer should drop it
+}
+
 /** A game timer (CreateTimer/TimerStart). Pumped by Interpreter.advanceTime from
  *  the sim tick; on expiry it runs its handler code and fires any trigger
  *  registered on it (TriggerRegisterTimerExpireEvent). */
@@ -59,6 +85,7 @@ export interface JassPlayer {
   team: number; // SetPlayerTeam (defaults to own index)
   startLocation: number; // SetPlayerStartLocation index (-1 = unset)
   forcedStartLocation: boolean;
+  name?: string; // SetPlayerName; GetPlayerName defaults to "Player N" (see playerName)
 }
 
 /** A unit created by the script (CreateUnit). Kept so main()/CreateAllUnits can be
@@ -98,8 +125,17 @@ export interface EngineHooks {
   setUnitColor?(unitId: number, color: number): void;
   removeUnit?(unitId: number): void;
   hideUnit?(unitId: number, hidden: boolean): void;
-  displayText?(player: number, msg: string): void;
-  createTextTag?(text: string, x: number, y: number, z: number, color: number): number;
+  /** On-screen chat/message line (DisplayTextToPlayer & the timed variant). `duration`
+   *  is seconds for the timed native, or < 0 for the untimed one (host default). Only
+   *  the local player's messages should reach the HUD (the BJ force helpers gate that). */
+  displayText?(player: number, msg: string, duration: number): void;
+  /** Clear the on-screen messages (ClearTextMessages / the BJ force variant). */
+  clearText?(player: number): void;
+  /** Resolve a unit's display name (GetUnitName / GetHeroProperName) from our data
+   *  tables — the interpreter only knows the rawcode, the engine knows the name. */
+  unitName?(unitId: number): string | undefined;
+  /** Resolve an object (unit/ability/…) name from its rawcode (GetObjectName). */
+  objectName?(typeId: string): string | undefined;
 }
 
 /** Opaque handle store: integer ids → backing JS objects, with interning so
@@ -187,11 +223,18 @@ export class Runtime {
    *  the sim raises an event, and the live timers advanceTime() pumps. */
   readonly triggerRegs: TriggerReg[] = [];
   readonly timers: TimerObj[] = [];
+  /** Live floating text tags (CreateTextTag). The renderer polls this list; dead
+   *  entries (DestroyTextTag) are flagged so it can drop them. */
+  readonly textTags: TextTagObj[] = [];
   /** Seconds of game time elapsed (advanced from the sim tick). */
   gameTime = 0;
 
   /** Units the script has created (CreateUnit), in creation order. */
   readonly units: JassUnit[] = [];
+
+  /** war3map.wts trigger-string table (id → text). The compiled script refers to
+   *  authored strings by placeholder ("TRIGSTR_019"); resolveTrigStr swaps them in. */
+  readonly trigStrings = new Map<number, string>();
 
   /** The selected game type (common.j ConvertGameType index): 1 = MELEE,
    *  4 = USE_MAP_SETTINGS (custom). Drives blizzard.j InitGenericPlayerSlots and
@@ -228,6 +271,21 @@ export class Runtime {
       this.setup.players.set(index, p);
     }
     return p;
+  }
+
+  /** Resolve a "TRIGSTR_nnn" placeholder to its war3map.wts text (the World Editor
+   *  refers to authored strings by id). Non-placeholder strings pass through, as do
+   *  ids with no table entry (best-effort — keep the raw string rather than blank). */
+  resolveTrigStr(s: string): string {
+    if (this.trigStrings.size === 0 || !s.startsWith("TRIGSTR_")) return s;
+    const id = parseInt(s.slice("TRIGSTR_".length), 10);
+    return Number.isNaN(id) ? s : this.trigStrings.get(id) ?? s;
+  }
+
+  /** A player's display name: SetPlayerName's value, else WC3's "Player N" default
+   *  (1-based, so slot 0 → "Player 1"). Used by GetPlayerName. */
+  playerName(index: number): string {
+    return this.setup.players.get(index)?.name ?? `Player ${index + 1}`;
   }
 
   /** An interned handle for an enum-like constant (playercolor, race, mapcontrol,

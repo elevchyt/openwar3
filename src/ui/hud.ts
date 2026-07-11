@@ -251,6 +251,40 @@ const TOOLTIP_COST_ICON = {
 // left, right, top, bottom, then the four corners. The two horizontal edges are
 // stored as VERTICAL bars and the engine rotates them a quarter-turn clockwise —
 // re-slice the strip into a 3×3 nine-patch CSS can drive with `border-image`.
+// On-screen message log tuning.
+const MSG_MAX = 16; // max lines kept on screen at once (WC3 scrolls the oldest off)
+const MSG_DEFAULT_SECS = 12; // how long an untimed DisplayTextToPlayer line lingers
+
+/** Escape HTML, then translate WC3 text colour codes to spans: `|cAARRGGBB…|r`
+ *  wraps a coloured run (alpha ignored), `|n`/`|N` is a line break, `||` a literal
+ *  pipe. Anything malformed is left as text. Any spans left open are closed. */
+function formatColorCodes(text: string): string {
+  const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let out = "";
+  let open = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "|" && i + 1 < text.length) {
+      const n = text[i + 1];
+      if (n === "|") { out += "|"; i += 1; continue; }
+      if (n === "n" || n === "N") { out += "<br>"; i += 1; continue; }
+      if (n === "r" || n === "R") { if (open > 0) { out += "</span>"; open--; } i += 1; continue; }
+      if ((n === "c" || n === "C") && i + 9 < text.length) {
+        const hex = text.slice(i + 2, i + 10);
+        if (/^[0-9a-fA-F]{8}$/.test(hex)) {
+          out += `<span style="color:#${hex.slice(2)}">`;
+          open++;
+          i += 9;
+          continue;
+        }
+      }
+    }
+    out += esc(ch);
+  }
+  while (open-- > 0) out += "</span>";
+  return out;
+}
+
 const BORDER_TILE = 16;
 function sliceTooltipBorder(strip: HTMLCanvasElement): string | null {
   if (strip.width < BORDER_TILE * 8 || strip.height < BORDER_TILE) return null;
@@ -382,12 +416,16 @@ export class GameHud {
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
   private lastSelId: number | null = null; // force a text refresh when selection changes
+  // On-screen message area (the "Game - Display text" trigger action target) — a
+  // stack of chat/quest lines in the upper-left, oldest scrolling off the top.
+  private msgLog!: HTMLDivElement;
+  private msgTimers = new Set<number>(); // pending auto-remove timeouts, cleared on dispose
 
   constructor(parent: HTMLElement, private driver: HudDriver) {
     this.root = document.createElement("div");
     this.root.className = "hud";
     const skin = driver.consoleSkin();
-    this.root.append(this.buildTopBar(skin), this.buildConsole(skin), this.buildCheatPanel());
+    this.root.append(this.buildTopBar(skin), this.buildConsole(skin), this.buildCheatPanel(), this.buildMessageLog());
     parent.appendChild(this.root);
     this.applyWidgetSkin();
     window.addEventListener("keydown", this.onKey);
@@ -426,6 +464,8 @@ export class GameHud {
   dispose(): void {
     window.removeEventListener("keydown", this.onKey);
     this.minimapResize?.disconnect();
+    for (const id of this.msgTimers) clearTimeout(id);
+    this.msgTimers.clear();
     this.root.remove();
   }
 
@@ -779,6 +819,41 @@ export class GameHud {
     };
     panel.append(pathBtn, pathLegend);
     return panel;
+  }
+
+  /** The upper-left message stack that the map's "Game - Display text" trigger
+   *  actions write into (via the JASS text natives → the engine `displayText` hook). */
+  private buildMessageLog(): HTMLDivElement {
+    this.msgLog = document.createElement("div");
+    this.msgLog.className = "hud-msglog";
+    return this.msgLog;
+  }
+
+  /** Show one on-screen message line (DisplayTextToPlayer & the timed variant).
+   *  `duration` is seconds for the timed action, or < 0 for the untimed one — which
+   *  in WC3 lingers, so we give it a generous default and let it scroll off. WC3
+   *  colour codes (`|cAARRGGBB…|r`, `|n`) are honoured. Newest line sits at the
+   *  bottom; we keep the last MSG_MAX so the stack can't grow without bound. */
+  showMessage(text: string, duration: number): void {
+    if (!text) return;
+    const line = document.createElement("div");
+    line.className = "hud-msgline";
+    line.innerHTML = formatColorCodes(text);
+    this.msgLog.append(line);
+    while (this.msgLog.childElementCount > MSG_MAX) this.msgLog.firstElementChild?.remove();
+    const secs = duration >= 0 ? duration : MSG_DEFAULT_SECS;
+    const id = window.setTimeout(() => {
+      line.remove();
+      this.msgTimers.delete(id);
+    }, Math.max(0.5, secs) * 1000);
+    this.msgTimers.add(id);
+  }
+
+  /** Clear every on-screen message (the ClearTextMessages action). */
+  clearMessages(): void {
+    for (const id of this.msgTimers) clearTimeout(id);
+    this.msgTimers.clear();
+    this.msgLog.replaceChildren();
   }
 
   private buildMinimap(): HTMLDivElement {

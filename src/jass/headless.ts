@@ -9,12 +9,15 @@ import { Interpreter } from "./interpreter";
 import { parseJass } from "./parser";
 import { registerNatives } from "./natives/index";
 import { Runtime, type EngineHooks } from "./runtime";
+import { parseWts } from "./wts";
 
 export interface HeadlessOptions {
   /** common.j ConvertGameType index: 1 = melee, 4 = use-map-settings (default). */
   gameType?: number;
   hooks?: EngineHooks;
   seed?: number;
+  /** Raw war3map.wts text — the map's trigger-string table (resolves TRIGSTR_nnn). */
+  wts?: string;
 }
 
 /** Parse + load the given sources (in order), register natives, and initialise
@@ -23,6 +26,7 @@ export function buildInterpreter(sources: string[], opts: HeadlessOptions = {}):
   const rt = new Runtime(opts.seed);
   rt.gameType = opts.gameType ?? 4;
   rt.hooks = opts.hooks ?? null;
+  if (opts.wts) for (const [id, text] of parseWts(opts.wts)) rt.trigStrings.set(id, text);
   registerNatives(rt);
   const interp = new Interpreter(rt);
   for (const src of sources) interp.load(parseJass(src));

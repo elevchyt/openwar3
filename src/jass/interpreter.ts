@@ -185,7 +185,9 @@ export class Interpreter {
       case "real":
         return jReal(e.value);
       case "string":
-        return jStr(e.value);
+        // Resolve World-Editor "TRIGSTR_nnn" placeholders from war3map.wts (no-op
+        // for ordinary strings / when no table is loaded).
+        return jStr(this.rt.resolveTrigStr(e.value));
       case "bool":
         return jBool(e.value);
       case "null":

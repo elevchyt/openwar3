@@ -11,6 +11,7 @@ import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript } from "../jass/index";
+import type { EngineHooks } from "../jass/runtime";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
@@ -966,31 +967,51 @@ export class MapViewerScene {
     const seeds = this.mapPlayerUnits.map((p) => ({ x: p.x, y: p.y, owner: p.owner, team: this.teamOf(p.owner) }));
     this.rts.setPlayerUnitSeeds(seeds);
 
-    // Run the map's own config() (Phase 7). Read-only for now — it validates the
-    // interpreter live against the real common.j/blizzard.j and is the seam for
-    // running the rest of the script (main()/triggers) in later milestones.
-    this.runMapScriptConfig();
+    // Run the map's own script (Phase 7). config() sets players/start-locations;
+    // main() (with display-only hooks) fires the map's initialization triggers, so
+    // its welcome text / quest messages appear in the HUD message log.
+    this.runMapScript();
 
     this.rts.enableSeeding(); // owners/teams configured → let trySeed adopt map units
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33).`);
   }
 
-  /** Run the map's config() through the JASS interpreter (Phase 7 — issue #33).
-   *  Best-effort and non-fatal: logs the declared player/start-location setup so we
-   *  can confirm the interpreter runs on the real script; a failure is swallowed so
-   *  the match continues (the units were already seeded from war3mapUnits.doo). */
-  private runMapScriptConfig(): void {
+  /** The engine bridge the JASS interpreter's text actions call into. Display-only:
+   *  we deliberately omit `createUnit` so main()'s CreateAllUnits records rows but
+   *  spawns nothing (unit placement still comes from war3mapUnits.doo adoption —
+   *  7.2b unchanged). Only the LOCAL player's messages (slot 0, our GetLocalPlayer)
+   *  reach the HUD — the BJ force helpers already gate on that, so a per-player loop
+   *  won't spam duplicates. */
+  private textHooks(): EngineHooks {
+    return {
+      // `duration` is seconds (timed action) or < 0 (untimed) — showMessage handles both.
+      displayText: (player, msg, duration) => {
+        if (player === 0) this.hud?.showMessage(msg, duration);
+      },
+      clearText: (player) => {
+        if (player === 0) this.hud?.clearMessages();
+      },
+      // GetObjectName / GetUnitName resolve rawcodes to their real data-table names.
+      objectName: (typeId) => this.registry.get(typeId)?.name,
+    };
+  }
+
+  /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue
+   *  #33). Best-effort and non-fatal: a script error is swallowed so the match
+   *  continues (units were already seeded from war3mapUnits.doo). */
+  private runMapScript(): void {
     if (!this.mapArchive) return;
     try {
-      const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false });
+      const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false, runMain: true, hooks: this.textHooks() });
       if (!engine) return;
       const s = engine.setup;
+      const trigs = engine.interp.rt.triggerRegs.length;
       console.info(
-        `[jass] config() ran — ${s.players.size} players, ${s.startLocations.size} start locations, ` +
-          `placement=${s.placement} (Phase 7 trigger engine).`,
+        `[jass] config()+main() ran — ${s.players.size} players, ${s.startLocations.size} start locations, ` +
+          `${trigs} event registration(s) (Phase 7 trigger engine).`,
       );
     } catch (err) {
-      console.warn("[jass] map config() failed (non-fatal):", err);
+      console.warn("[jass] map script failed (non-fatal):", err);
     }
   }
 

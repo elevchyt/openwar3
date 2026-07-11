@@ -10,6 +10,8 @@ import type { NativeCtx, Runtime } from "../runtime";
 import { asInt, asNum, asStr, jInt, jReal, jStr, JNULL, type JassValue } from "../values";
 import { registerConfigNatives } from "./config";
 import { registerEventNatives } from "./events";
+import { registerForceNatives } from "./forces";
+import { registerTextNatives } from "./text";
 import { registerWorldNatives } from "./world";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -46,7 +48,7 @@ function registerUtilNatives(rt: Runtime): void {
   def(rt, "SubString", (_c, a) => jStr(asStr(a[0]).substring(asInt(a[1]), asInt(a[2]))));
   def(rt, "StringLength", (_c, a) => jInt(asStr(a[0]).length));
   def(rt, "StringCase", (_c, a) => jStr(a[1].k === "bool" && a[1].b ? asStr(a[0]).toUpperCase() : asStr(a[0]).toLowerCase()));
-  def(rt, "StringHash", () => jInt(0));
+  // StringHash lives in natives/text.ts (a real 32-bit hash, not a 0 stub).
   def(rt, "GetHandleId", (_c, a) => jInt(a[0].k === "handle" ? a[0].h : 0));
   def(rt, "GetRandomInt", (c, a) => {
     const lo = asInt(a[0]), hi = asInt(a[1]);
@@ -79,5 +81,7 @@ export function registerNatives(rt: Runtime): void {
   registerConfigNatives(rt);
   registerWorldNatives(rt);
   registerEventNatives(rt);
+  registerForceNatives(rt);
+  registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
   registerUtilNatives(rt);
 }

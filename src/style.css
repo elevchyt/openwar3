@@ -223,6 +223,34 @@ body.in-game .menu-panel { display: none; }
   user-select: none;
 }
 
+/* On-screen message log — the "Game - Display text" trigger action target.
+   WC3 shows these in the upper-left, below the resource bar, oldest on top. */
+.hud-msglog {
+  position: absolute;
+  top: 60px;
+  left: 16px;
+  max-width: 46%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  z-index: 4;
+}
+.hud-msgline {
+  font-family: var(--game-font);
+  font-size: 13px;
+  line-height: 1.35;
+  color: #f4f0e0;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: hud-msg-in 140ms ease-out;
+}
+@keyframes hud-msg-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+
 /* Debug cheat panel — a small floating stack in the bottom-right corner. */
 .hud-cheats {
   position: absolute;

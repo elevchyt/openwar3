@@ -187,5 +187,63 @@ endfunction`;
   else fail(`one-shot timer: n=${n && n.n} (want 1)`);
 }
 
+// --- 7.5: text logic + text actions — end-to-end through the real blizzard.j BJs ---
+console.log('\n[7.5] Text logic + text actions (forces → messages, floating text, strings)');
+{
+  // Capture on-screen text/clear via the engine hook, exactly as the live HUD does.
+  const lines = [];
+  let cleared = 0;
+  const hooks = {
+    displayText: (p, msg, dur) => lines.push({ p, msg, dur }),
+    clearText: () => { cleared++; },
+  };
+  // A script that drives the GUI-compiled shapes: the "Game - Display text" action
+  // (DisplayTextToForce), its timed + clear variants, a Floating Text action
+  // (CreateTextTagLocBJ), and text-logic functions (SubStringBJ/GetPlayerName/
+  // StringHashBJ). All run through the actual blizzard.j on top of our natives.
+  const SRC = `
+globals
+    texttag udg_tt   = null
+    string  udg_sub  = ""
+    string  udg_name = ""
+    integer udg_hash = 0
+endglobals
+function RunText takes nothing returns nothing
+    call DisplayTextToForce( GetPlayersAll(), "Hello, world!" )
+    call DisplayTimedTextToForce( GetPlayersAll(), 5.0, "Timed message" )
+    call ClearTextMessagesBJ( GetPlayersAll() )
+    set udg_tt   = CreateTextTagLocBJ( "Float!", null, 0.0, 10.0, 100.0, 100.0, 100.0, 0.0 )
+    set udg_sub  = SubStringBJ( "Warcraft", 1, 3 )
+    set udg_name = GetPlayerName( Player(0) )
+    set udg_hash = StringHashBJ( "abc" )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('InitBlizzardGlobals', []); // populates bj_FORCE_ALL_PLAYERS via our force natives
+  interp.run('RunText', []);
+
+  const msgsOk = lines.length === 2 &&
+    lines[0].msg === 'Hello, world!' && lines[0].dur < 0 &&
+    lines[1].msg === 'Timed message' && lines[1].dur === 5;
+  if (msgsOk) ok(`DisplayTextToForce/Timed reached the local player (untimed + 5s) through bj_FORCE_ALL_PLAYERS`);
+  else fail(`text-to-force: got ${JSON.stringify(lines)}`);
+  if (cleared === 1) ok(`ClearTextMessagesBJ cleared the local player's messages once`);
+  else fail(`ClearTextMessagesBJ: cleared=${cleared} (want 1)`);
+
+  const tags = interp.rt.textTags;
+  if (tags.length === 1 && tags[0].text === 'Float!' && Math.abs(tags[0].size - 0.023) < 1e-6) {
+    ok(`CreateTextTagLocBJ built a floating text tag ("Float!", size→height 0.023)`);
+  } else fail(`floating text: ${JSON.stringify(tags)}`);
+
+  const sub = interp.rt.globals.get('udg_sub');
+  const name = interp.rt.globals.get('udg_name');
+  const hash = interp.rt.globals.get('udg_hash');
+  if (sub && sub.s === 'War') ok(`SubStringBJ("Warcraft",1,3) == "War"`);
+  else fail(`SubStringBJ: got ${sub && sub.s}`);
+  if (name && name.s === 'Player 1') ok(`GetPlayerName(Player(0)) == "Player 1"`);
+  else fail(`GetPlayerName: got ${name && name.s}`);
+  if (hash && hash.n !== 0) ok(`StringHashBJ("abc") is a stable non-zero hash (${hash.n})`);
+  else fail(`StringHashBJ: got ${hash && hash.n} (want non-zero)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -7,7 +7,7 @@
 // is pure declaration, so it runs identically headless or live.
 
 import type { JassPlayer, NativeCtx, Runtime } from "../runtime";
-import { asInt, asNum, asStr, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asNum, asStr, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -87,6 +87,5 @@ export function registerConfigNatives(rt: Runtime): void {
   def(rt, "SetPlayerState", () => JNULL);
   def(rt, "SetPlayerAlliance", () => JNULL);
   def(rt, "SetPlayerAllianceStateBJ", () => JNULL);
-  def(rt, "SetPlayerName", () => JNULL);
-  def(rt, "GetPlayers", () => jBool(false)); // returns a force in real JASS; unused during setup
+  // SetPlayerName is implemented in natives/text.ts (it feeds GetPlayerName).
 }

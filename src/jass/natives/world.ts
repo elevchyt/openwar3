@@ -1,15 +1,15 @@
 // World bring-up natives (Phase 7 — issue #33; see docs/triggers.md).
 //
 // The natives main() → CreateAllUnits() calls to place every pre-placed unit
-// (CreateUnit is called ~25k times across the bundled corpus), plus resource/state
-// setters and the floating-text natives (the issue's "start with simple stuff like
-// floating text" example). Each one that changes the world calls through the
+// (CreateUnit is called ~25k times across the bundled corpus), plus the resource/
+// state setters and unit queries. Each one that changes the world calls through the
 // optional EngineHooks bridge; with no bridge attached (headless tests) they still
 // record into the runtime so CreateAllUnits can be counted against war3mapUnits.doo.
+// (The text actions — floating text + on-screen messages — moved to natives/text.ts.)
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import type { JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, type JassValue } from "../values";
+import { asInt, asNum, jBool, jHandle, jInt, JNULL, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -81,66 +81,6 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "GetUnitY", (c, a) => ({ k: "real", n: unit(c, a[0])?.y ?? 0 }));
   def(rt, "IsUnitHidden", () => jBool(false));
   def(rt, "IsUnitType", () => jBool(false));
-
-  // --- floating text (text tags) — the issue's starter example ---
-  interface TextTag {
-    text: string;
-    x: number;
-    y: number;
-    z: number;
-    color: number;
-    visible: boolean;
-  }
-  const emit = (c: NativeCtx, tt: TextTag): void => {
-    if (tt.visible && tt.text) c.rt.hooks?.createTextTag?.(tt.text, tt.x, tt.y, tt.z, tt.color);
-  };
-  def(rt, "CreateTextTag", (c) => {
-    const tt: TextTag = { text: "", x: 0, y: 0, z: 0, color: 0xffffffff, visible: true };
-    return jHandle(c.rt.handles.alloc(tt), "texttag");
-  });
-  def(rt, "SetTextTagText", (c, a) => {
-    const tt = c.rt.data<TextTag>(a[0]);
-    if (tt) {
-      tt.text = asStr(a[1]);
-      emit(c, tt);
-    }
-    return JNULL;
-  });
-  def(rt, "SetTextTagPos", (c, a) => {
-    const tt = c.rt.data<TextTag>(a[0]);
-    if (tt) {
-      tt.x = asNum(a[1]);
-      tt.y = asNum(a[2]);
-      tt.z = asNum(a[3]);
-    }
-    return JNULL;
-  });
-  def(rt, "SetTextTagPosUnit", () => JNULL);
-  def(rt, "SetTextTagColor", (c, a) => {
-    const tt = c.rt.data<TextTag>(a[0]);
-    if (tt) {
-      const r = asInt(a[1]) & 0xff, g = asInt(a[2]) & 0xff, b = asInt(a[3]) & 0xff, al = asInt(a[4]) & 0xff;
-      tt.color = ((al << 24) | (r << 16) | (g << 8) | b) >>> 0;
-    }
-    return JNULL;
-  });
-  def(rt, "SetTextTagVisibility", (c, a) => {
-    const tt = c.rt.data<TextTag>(a[0]);
-    if (tt) {
-      tt.visible = a[1].k === "bool" && a[1].b;
-      emit(c, tt);
-    }
-    return JNULL;
-  });
-  def(rt, "DestroyTextTag", () => JNULL);
-
-  // --- on-screen messages (DisplayTextToPlayer family) ---
-  def(rt, "DisplayTextToPlayer", (c, a) => {
-    c.rt.hooks?.displayText?.(c.rt.data<JassPlayer>(a[0])?.index ?? 0, asStr(a[3]));
-    return JNULL;
-  });
-  def(rt, "DisplayTimedTextToPlayer", (c, a) => {
-    c.rt.hooks?.displayText?.(c.rt.data<JassPlayer>(a[0])?.index ?? 0, asStr(a[4]));
-    return JNULL;
-  });
+  // Floating text tags + on-screen messages (the "text actions") live in
+  // natives/text.ts alongside the string/name text-logic natives.
 }
