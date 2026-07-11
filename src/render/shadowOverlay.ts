@@ -74,7 +74,7 @@ const DIR_PUSH_Y = 14;
 // Overall darkness. WC3 shadow blobs top out near 0.75 alpha in the texture, so this
 // scale gives ~0.6 peak — a soft, clearly-read contact shadow like the game's, not a
 // hard black splotch. Tuned live against the real client's shadows (issue #58).
-const DEFAULT_STRENGTH = 0.8;
+const DEFAULT_STRENGTH = 0.32;
 
 type GL = WebGLRenderingContext;
 
