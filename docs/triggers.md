@@ -22,12 +22,13 @@
 | — | **`main()` runs live** (display-only hooks) | ✅ done (live) | custom-map init triggers fire; 296 trigger regs on WarChasers; no duplicate units |
 | 7.4b | **Live event pump** (enter/leave-**region** + **timers** from `rts.tick`) | ✅ done (live) | §7.6 headless (enter 2×, leave 1×, `GetEnteringUnit` live pos); WarChasers wisp entering the Archer region fires its trigger (screenshots) |
 | 7.2b | live `CreateUnit`/`RemoveUnit`/`KillUnit` → real sim+render units | ✅ done (live, base units) | trigger-spawned footmen + Paladin hero render live; wisp `RemoveUnit`'d on region enter (screenshots) |
-| — | **Custom object data** (`war3map.w3u/…`) → custom unit/ability types | ⬜ next | a custom-map hero (WarChasers `EC12`) spawns from its own trigger |
+| 7.2c | **Custom object data** (`war3map.w3u`) → custom **unit** types | ✅ done (live) | §7.7 headless (EC12 → Shandris model, wts name); WarChasers Archer pedestal spawns its custom hero (screenshots) |
+| — | Custom **ability**/item/destructable data (`.w3a`/`.w3t`/`.w3b`) | ⬜ next | a custom ability/item resolves |
 | 7.4c | pump remaining sim events (unit-death, damage, orders) live | ⬜ next | a death/attack-triggered action fires in-game |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7 object data) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 ---
 
@@ -253,14 +254,33 @@ A trigger's `CreateUnit` now puts a **real** unit on the map, and `RemoveUnit`/`
   to the render side by the existing `drainRemovals`/`drainDeaths` → `onRemove`/`onDeath` path.
 
 Verified **live** on WarChasers: trigger-spawned base units (2 footmen + a Paladin hero) render with HP/mana bars,
-selection rings, and team colour; driving the wisp onto the Archer region `RemoveUnit`'d it (count −1). The Archer
-trigger's own `CreateUnit('EC12', …)` no-ops because `EC12` is a **custom** WarChasers hero (see next task).
+selection rings, and team colour; driving the wisp onto the Archer region `RemoveUnit`'d it (count −1).
+
+## Custom object data (7.2c — done live, units)
+
+Custom maps define their own unit types in **`war3map.w3u`**: a *custom* table (a NEW 4-char id based on a base-game
+type + field overrides) and an *original* table (overrides applied to a base type in place). Our `UnitRegistry` only
+ships the base-game types, so a custom rawcode wasn't found and its `CreateUnit` no-op'd. Built in
+**`src/data/objectData.ts`** + `UnitRegistry`:
+
+- **`applyMapUnitData(registry, w3u, wts)`** — parses the map's `war3map.w3u` (mdx-m3-viewer `War3MapW3u`), clones the
+  base `UnitDef`, applies the field overrides, and installs the result into the registry. Field codes are 4-char META
+  ids (`umdl` = model, `unam` = name, `uhpm` = HP, `uabi`/`uhab` = abilities, …), mapped to `UnitDef` fields directly —
+  each code + meaning verified against `Units\UnitMetaData.slk`. Unmapped codes are ignored (the base value carries
+  through — safe: an unhandled tint never stops a spawn). Names/tooltips resolve `TRIGSTR_` refs via `war3map.wts`.
+- **Per-map overlay** — `UnitRegistry` keeps custom defs in a separate `custom` map that `get()` checks first;
+  `clearCustom()` drops it on map change so one map's data never leaks into the next. `mapViewer.loadMapUnitData()`
+  runs it at the top of `startCustom`, so both `.doo` adoption and trigger `CreateUnit` see custom types.
+
+Verified (`pnpm jass:test` §7.7): WarChasers' `EC12` resolves to the Shandris model, name "Snake Aes" (from the wts),
+and `isHero` inherited from its base; `clearCustom()` drops the overlay. Verified **live**: the Archer pedestal trigger's
+`CreateUnit('EC12')` now spawns a real Shandris-model hero (HP/mana bars, level badge) where before it no-op'd.
 
 ## What's NOT done yet (next tasks — keep this list honest)
 
-- **Custom object data** — custom maps define their own units/abilities/items in `war3map.w3u`/`.w3t`/`.w3a`/… (a base
-  type id + field overrides). Our `UnitRegistry` only has the base-game types, so a custom unit id (`EC12`) isn't found
-  and its `CreateUnit` no-ops. Load + merge the map's object data into the registries so custom types spawn.
+- **Custom ability/item/destructable data** — the same object-data mechanism for `war3map.w3a` (abilities — has level
+  data, so `useOptionalInts`), `.w3t` (items), `.w3b` (destructables), `.w3q` (upgrades). Units (`.w3u`) are done; a
+  custom unit that references a custom ability still won't get that ability's real fields.
 - **7.4c** pump the remaining sim events — **unit-death** (`TriggerRegisterDeathEvent`), damage, orders, unit-state —
   from `rts.tick` into `Interpreter.fireEvent`, the way regions/timers already are.
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.

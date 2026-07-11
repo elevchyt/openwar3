@@ -293,5 +293,37 @@ endfunction`;
   else fail(`GetEnteringUnit live pos: GetUnitX == ${ex && ex.n} (want 50)`);
 }
 
+// --- 7.7: custom object data — war3map.w3u custom units resolve with overrides ---
+console.log('\n[7.7] Custom object data (war3map.w3u → custom unit types)');
+if (existsSync(warchasers)) {
+  const { UnitRegistry } = require(join(BUILD, '..', 'data', 'units.js'));
+  const { applyMapUnitData } = require(join(BUILD, '..', 'data', 'objectData.js'));
+  const wc = openArchive(warchasers);
+  const w3u = readBytes(wc, 'war3map.w3u');
+  const wts = readBytes(wc, 'war3map.wts');
+  // A minimal base type for EC12's base (Emoo); applyMapUnitData clones + overrides it.
+  const base = {
+    id: 'Emoo', name: 'Base', model: 'units\\base.mdx', isHero: true, primaryAttr: 0,
+    strength: 20, agility: 20, intelligence: 20, abilities: [], heroAbilities: [], classification: [],
+  };
+  const reg = new UnitRegistry(new Map([['Emoo', base]]));
+  const count = applyMapUnitData(reg, w3u, wts);
+  const ec = reg.get('EC12');
+  if (count > 0) ok(`applied ${count} custom unit type(s) from war3map.w3u`);
+  else fail(`applyMapUnitData installed 0 custom units`);
+  if (ec && /Shandris/i.test(ec.model)) ok(`EC12 overrides its model (${ec.model})`);
+  else fail(`EC12 model: ${ec && ec.model} (want a Shandris path)`);
+  if (ec && ec.name === 'Snake Aes') ok(`EC12 name resolves via war3map.wts ("${ec.name}")`);
+  else fail(`EC12 name: ${ec && ec.name} (want "Snake Aes" from the wts)`);
+  if (ec && ec.isHero === true) ok(`EC12 inherits isHero from its base type`);
+  else fail(`EC12 isHero: ${ec && ec.isHero} (want true)`);
+  // Overlay is per-map: clearCustom drops it so the next map starts clean.
+  reg.clearCustom();
+  if (reg.get('EC12') === undefined) ok(`clearCustom() drops the per-map overlay`);
+  else fail(`clearCustom left EC12 resolvable`);
+} else {
+  console.log('  (WarChasers not present — skipped)');
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -26,6 +26,7 @@
     "../src/jass/natives/config.ts",
     "../src/jass/natives/world.ts",
     "../src/jass/natives/events.ts",
-    "../src/jass/headless.ts"
+    "../src/jass/headless.ts",
+    "../src/data/objectData.ts"
   ]
 }

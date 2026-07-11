@@ -140,22 +140,39 @@ interface Row {
 }
 
 export class UnitRegistry {
-  constructor(private defs: Map<string, UnitDef>) {}
+  // Base (install) defs are immutable; a per-MAP overlay holds custom types + field
+  // overrides from the map's war3map.w3u (see src/data/objectData.ts). get() checks the
+  // overlay first, so a custom unit id resolves and an original-table override wins.
+  // Cleared on map change (clearCustom) so one map's data never leaks into the next.
+  constructor(private defs: Map<string, UnitDef>, private custom = new Map<string, UnitDef>()) {}
 
   get(id: string): UnitDef | undefined {
-    return this.defs.get(id);
+    return this.custom.get(id) ?? this.defs.get(id);
   }
   has(id: string): boolean {
-    return this.defs.has(id);
+    return this.custom.has(id) || this.defs.has(id);
   }
   all(): UnitDef[] {
-    return [...this.defs.values()];
+    return [...new Map([...this.defs, ...this.custom]).values()]; // custom overrides base by id
   }
   get size(): number {
-    return this.defs.size;
+    return new Set([...this.defs.keys(), ...this.custom.keys()]).size;
   }
   byRace(race: string): UnitDef[] {
     return this.all().filter((d) => d.race === race);
+  }
+  /** The base (install) def for `id`, ignoring the custom overlay — the thing a
+   *  custom unit clones from. */
+  base(id: string): UnitDef | undefined {
+    return this.defs.get(id);
+  }
+  /** Add/override a def in the per-map overlay (custom object data). */
+  setCustom(id: string, def: UnitDef): void {
+    this.custom.set(id, def);
+  }
+  /** Drop all custom-object-data overrides (on map change). */
+  clearCustom(): void {
+    this.custom.clear();
   }
 }
 
