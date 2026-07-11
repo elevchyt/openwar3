@@ -16,8 +16,11 @@
 // is safe: an unhandled tint or tooltip field never stops the unit from spawning.
 
 import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
+import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
+import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType } from "./enums";
 import type { UnitDef, UnitRegistry } from "./units";
+import { mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import { parseWts } from "../jass/wts";
 
 type Val = number | string;
@@ -107,13 +110,18 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
  * how many custom types were installed. `wtsBytes` (war3map.wts) resolves TRIGSTR_
  * name references; without it names stay as their raw key.
  */
-export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+/** Build a TRIGSTR_-resolver from a map's war3map.wts bytes (identity if none). */
+function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
   const table = wtsBytes ? parseWts(new TextDecoder("utf-8").decode(wtsBytes)) : null;
-  const trigStr = (v: string): string => {
+  return (v: string): string => {
     if (!table || !v.startsWith("TRIGSTR_")) return v;
     const id = parseInt(v.slice("TRIGSTR_".length), 10);
     return Number.isNaN(id) ? v : table.get(id) ?? v;
   };
+}
+
+export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+  const trigStr = makeTrigStr(wtsBytes);
 
   const w3u = new War3MapW3u();
   w3u.load(w3uBytes);
@@ -134,6 +142,114 @@ export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, w
     if (!base) continue;
     const def = cloneDef(base, obj.oldId);
     applyMods(def, obj.modifications, trigStr);
+    registry.setCustom(obj.oldId, def);
+    count++;
+  }
+  return count;
+}
+
+// --- custom abilities (war3map.w3a) --------------------------------------------
+//
+// Abilities are level-indexed (a field has a value per rank) and their DataA..DataI
+// columns use PER-ABILITY field codes (Holy Light's heal amount is `Hhb1`, Critical
+// Strike's chance is `Ocr1`), so — unlike units — we can't hard-map codes. Instead we
+// route every override through Units\AbilityMetaData.slk: its `field` column names the
+// target (`Area`, `Cool`, `Data`, …) and `data` gives the DataA..I slot (1–9). The
+// modification's `levelOrVariation` is the rank (0 = level-independent).
+
+interface AbilMod { id: string; levelOrVariation: number; value: Val }
+
+const emptyLevel = (): AbilityLevel => ({
+  cost: 0, cooldown: 0, duration: 0, heroDuration: 0, castRange: 0, area: 0, castTime: 0,
+  data: new Array(9).fill(NaN), buffs: [], summon: "",
+});
+const cloneLevel = (l: AbilityLevel): AbilityLevel => ({ ...l, data: [...l.data], buffs: [...l.buffs] });
+
+function cloneAbility(base: AbilityDef, id: string): AbilityDef {
+  return {
+    ...base, id,
+    levelData: base.levelData.map(cloneLevel),
+    tips: [...base.tips], uberTips: [...base.uberTips], targetFlags: [...base.targetFlags], animNames: [...base.animNames],
+  };
+}
+
+/** Apply one custom ability's modifications, routed through AbilityMetaData. */
+function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, trigStr: (v: string) => string): void {
+  // Grow levelData to cover the highest rank any override touches (+ an `alev` bump).
+  let maxLevel = def.levels;
+  for (const m of mods) {
+    maxLevel = Math.max(maxLevel, m.levelOrVariation);
+    if (m.id === "alev") maxLevel = Math.max(maxLevel, n(m.value));
+  }
+  while (def.levelData.length < maxLevel) def.levelData.push(cloneLevel(def.levelData[def.levelData.length - 1] ?? emptyLevel()));
+  if (maxLevel > def.levels) def.levels = maxLevel;
+
+  for (const m of mods) {
+    const row = meta.getRow(m.id) as { string(k: string): string | undefined } | undefined;
+    if (!row) continue;
+    const field = row.string("field") ?? "";
+    const lvl = def.levelData[Math.max(0, m.levelOrVariation - 1)];
+    switch (field) {
+      // Level-independent.
+      case "Name": def.name = trigStr(s(m.value)); break;
+      case "Art": def.icon = s(m.value).replace(/\//g, "\\"); break;
+      case "hero": def.isHero = n(m.value) === 1; def.research = def.isHero; break;
+      case "levels": def.levels = n(m.value); break;
+      case "Hotkey": def.hotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); break;
+      case "Missileart": def.missileArt = mdlPath(s(m.value)); break;
+      case "CasterArt": def.casterArt = mdlPath(s(m.value)); break;
+      case "TargetArt": def.targetArt = mdlPath(s(m.value)); break;
+      case "SpecialArt": def.specialArt = mdlPath(s(m.value)); break;
+      case "Effectart": def.effectArt = mdlPath(s(m.value)); break;
+      case "Areaeffectart": def.areaArt = mdlPath(s(m.value)); break;
+      // Per-level.
+      case "Area": if (lvl) lvl.area = n(m.value); break;
+      case "Cool": if (lvl) lvl.cooldown = n(m.value); break;
+      case "Cost": if (lvl) lvl.cost = n(m.value); break;
+      case "Dur": if (lvl) lvl.duration = n(m.value); break;
+      case "HeroDur": if (lvl) lvl.heroDuration = n(m.value); break;
+      case "Rng": if (lvl) lvl.castRange = n(m.value); break;
+      case "Cast": if (lvl) lvl.castTime = n(m.value); break;
+      case "targs": def.targetFlags = s(m.value).split(",").map((x) => x.trim()).filter((x) => x && x !== "_"); break;
+      case "Tip": def.tips[Math.max(0, m.levelOrVariation - 1)] = trigStr(s(m.value)); break;
+      case "Ubertip": def.uberTips[Math.max(0, m.levelOrVariation - 1)] = trigStr(s(m.value)); break;
+      case "Data": {
+        // DataA..DataI slot from the meta `data` column (1–9). Behaviour (Holy Light's
+        // heal, Critical Strike's chance) reads these off `code`, which the clone kept.
+        const slot = parseInt(row.string("data") ?? "0", 10) - 1;
+        if (lvl && slot >= 0 && slot < lvl.data.length) lvl.data[slot] = n(m.value);
+        break;
+      }
+      default: break; // unhandled field (race, buttonpos, buff art, …) — inherit from base
+    }
+  }
+}
+
+/**
+ * Load a map's war3map.w3a custom abilities into the registry overlay. Returns how
+ * many were installed. `metaBytes` = the install's Units\AbilityMetaData.slk (routes
+ * each 4-char field code to its column/data slot); without it nothing can be applied.
+ */
+export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Array, metaBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+  const meta = new MappedData(new TextDecoder("windows-1252").decode(metaBytes));
+  const trigStr = makeTrigStr(wtsBytes);
+  const w3a = new War3MapW3d();
+  w3a.load(w3aBytes);
+  let count = 0;
+
+  for (const obj of w3a.customTable.objects) {
+    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    if (!base) continue; // base ability unknown — skip (the clone would have no `code`)
+    const def = cloneAbility(base, obj.newId);
+    applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr);
+    registry.setCustom(obj.newId, def);
+    count++;
+  }
+  for (const obj of w3a.originalTable.objects) {
+    const base = registry.base(obj.oldId);
+    if (!base) continue;
+    const def = cloneAbility(base, obj.oldId);
+    applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr);
     registry.setCustom(obj.oldId, def);
     count++;
   }

@@ -22,7 +22,7 @@ import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { applyMapUnitData } from "../data/objectData";
+import { applyMapUnitData, applyMapAbilityData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -977,10 +977,10 @@ export class MapViewerScene {
     // so seed empty stashes; the map's own script grants gold/lumber where it wants.
     this.beginMatch(config, 0, 0);
 
-    // Merge the map's custom object data (war3map.w3u) into the registry so custom
-    // unit types (e.g. a Shandris-based hero) resolve for both .doo adoption and
-    // trigger CreateUnit. Per-map overlay — cleared first so no map leaks into another.
-    this.loadMapUnitData();
+    // Merge the map's custom object data (war3map.w3u units + war3map.w3a abilities)
+    // into the registries so custom types (e.g. a Shandris-based hero) resolve for both
+    // .doo adoption and trigger CreateUnit. Per-map overlay — cleared first.
+    this.loadMapObjectData();
 
     // Seed the pre-placed player units OWNED. Team comes from teamOf(owner), so the
     // local player's units share the local team and lift the fog (updateVision keys
@@ -1033,20 +1033,26 @@ export class MapViewerScene {
     return simId;
   }
 
-  /** Merge the map's war3map.w3u custom units into the registry overlay (Phase 7 —
-   *  issue #33). Best-effort: a missing/bad object-data file just means the map runs
-   *  with base-game types only. Clears any previous map's overlay first. */
-  private loadMapUnitData(): void {
+  /** Merge the map's custom object data (war3map.w3u units + war3map.w3a abilities)
+   *  into the registry overlays (Phase 7 — issue #33). Best-effort: a missing/bad file
+   *  just means the map runs with base-game types only. Clears prior overlays first. */
+  private loadMapObjectData(): void {
     this.registry.clearCustom();
+    this.abilities.clearCustom();
     if (!this.mapArchive) return;
+    const wts = this.mapArchive.rawBytes("war3map.wts") ?? this.mapArchive.rawBytes("war3map\\wts") ?? undefined;
     try {
       const w3u = this.mapArchive.rawBytes("war3map.w3u") ?? this.mapArchive.rawBytes("war3map\\w3u");
-      if (!w3u) return;
-      const wts = this.mapArchive.rawBytes("war3map.wts") ?? this.mapArchive.rawBytes("war3map\\wts") ?? undefined;
-      const count = applyMapUnitData(this.registry, w3u, wts);
-      console.info(`[jass] custom object data: ${count} custom unit type(s) from war3map.w3u.`);
+      if (w3u) console.info(`[jass] custom object data: ${applyMapUnitData(this.registry, w3u, wts)} custom unit type(s) (war3map.w3u).`);
     } catch (err) {
-      console.warn("[jass] custom object data failed (non-fatal):", err);
+      console.warn("[jass] custom unit data failed (non-fatal):", err);
+    }
+    try {
+      const w3a = this.mapArchive.rawBytes("war3map.w3a") ?? this.mapArchive.rawBytes("war3map\\w3a");
+      const meta = this.vfs.rawBytes("Units\\AbilityMetaData.slk");
+      if (w3a && meta) console.info(`[jass] custom object data: ${applyMapAbilityData(this.abilities, w3a, meta, wts)} custom abilit(ies) (war3map.w3a).`);
+    } catch (err) {
+      console.warn("[jass] custom ability data failed (non-fatal):", err);
     }
   }
 
@@ -3895,6 +3901,7 @@ export class MapViewerScene {
     this.hud = null;
     this.mapScript = null;
     this.registry.clearCustom(); // drop this map's custom object data
+    this.abilities.clearCustom();
     this.gameMenu?.dispose();
     this.gameMenu = null;
     this.paused = false;

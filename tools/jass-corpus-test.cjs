@@ -325,5 +325,41 @@ if (existsSync(warchasers)) {
   console.log('  (WarChasers not present — skipped)');
 }
 
+// --- 7.8: custom ability data — war3map.w3a level-indexed overrides ---
+console.log('\n[7.8] Custom ability data (war3map.w3a → custom abilities)');
+{
+  const candy = join(WC3, 'Maps', 'FrozenThrone', 'Scenario', "(10)ExtremeCandyWar2004.w3x");
+  const abMetaPath = join(WC3, 'ExtractedData', 'merged', 'Units', 'AbilityMetaData.slk');
+  if (existsSync(candy) && existsSync(abMetaPath)) {
+    const { AbilityRegistry } = require(join(BUILD, '..', 'data', 'abilities.js'));
+    const { applyMapAbilityData } = require(join(BUILD, '..', 'data', 'objectData.js'));
+    const wc = openArchive(candy);
+    const w3a = readBytes(wc, 'war3map.w3a');
+    const wts = readBytes(wc, 'war3map.wts');
+    const abMeta = readFileSync(abMetaPath);
+    // Minimal base ability (Aoar) for A000 to clone; applyMapAbilityData layers overrides on.
+    const lvl = () => ({ cost: 0, cooldown: 0, duration: 0, heroDuration: 0, castRange: 0, area: 0, castTime: 0, data: new Array(9).fill(NaN), buffs: [], summon: '' });
+    const baseAb = {
+      id: 'Aoar', code: 'Aoar', isHero: false, isItem: false, levels: 1, reqLevel: 0, levelSkip: 0, target: 'passive',
+      targetFlags: [], autocast: false, name: 'Base', icon: '', hotkey: '', buttonX: 0, buttonY: 0, learnX: 0, learnY: 0,
+      research: false, tips: [], uberTips: [], researchTip: '', researchUberTip: '', levelData: [lvl()],
+      missileArt: '', targetArt: '', casterArt: '', specialArt: '', effectArt: '', areaArt: '', buffArt: '', animNames: [],
+    };
+    const reg = new AbilityRegistry(new Map([['Aoar', baseAb]]));
+    const count = applyMapAbilityData(reg, w3a, abMeta, wts);
+    const a0 = reg.get('A000');
+    if (count > 0) ok(`applied ${count} custom abilit(y/ies) based on known bases`);
+    else fail(`applyMapAbilityData installed 0 abilities`);
+    if (a0 && a0.code === 'Aoar') ok(`A000 inherits its base ability's code (dispatch key) = Aoar`);
+    else fail(`A000 code: ${a0 && a0.code} (want Aoar)`);
+    if (a0 && a0.levelData[0] && a0.levelData[0].area === 425) ok(`A000 area override applied (level 1 area == 425)`);
+    else fail(`A000 area: ${a0 && a0.levelData[0] && a0.levelData[0].area} (want 425)`);
+    if (a0 && a0.levelData[0] && Math.abs(a0.levelData[0].data[0] - 0.03) < 1e-3) ok(`A000 DataA override routed via meta (Oar1 → data[0] ≈ 0.03)`);
+    else fail(`A000 data[0]: ${a0 && a0.levelData[0] && a0.levelData[0].data[0]} (want ≈0.03)`);
+  } else {
+    console.log('  (ExtremeCandyWar2004 / AbilityMetaData not present — skipped)');
+  }
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -212,18 +212,31 @@ interface Row {
 }
 
 export class AbilityRegistry {
-  constructor(private defs: Map<string, AbilityDef>) {}
+  // Per-map custom overlay from war3map.w3a (see src/data/objectData.ts), mirroring
+  // UnitRegistry: get() checks it first; cleared on map change.
+  constructor(private defs: Map<string, AbilityDef>, private custom = new Map<string, AbilityDef>()) {}
   get(id: string): AbilityDef | undefined {
-    return this.defs.get(id);
+    return this.custom.get(id) ?? this.defs.get(id);
   }
   has(id: string): boolean {
-    return this.defs.has(id);
+    return this.custom.has(id) || this.defs.has(id);
   }
   get size(): number {
-    return this.defs.size;
+    return new Set([...this.defs.keys(), ...this.custom.keys()]).size;
   }
   all(): AbilityDef[] {
-    return [...this.defs.values()];
+    return [...new Map([...this.defs, ...this.custom]).values()];
+  }
+  /** The base (install) def for `id`, ignoring the custom overlay — what a custom
+   *  ability clones from. */
+  base(id: string): AbilityDef | undefined {
+    return this.defs.get(id);
+  }
+  setCustom(id: string, def: AbilityDef): void {
+    this.custom.set(id, def);
+  }
+  clearCustom(): void {
+    this.custom.clear();
   }
 }
 
@@ -398,7 +411,7 @@ function buffTargetArt(func: MappedData, buffId: string): string {
 
 // Effect-art fields are ".mdl" model paths (comma-lists sometimes). Take the
 // first, normalise to the compiled ".mdx" the MPQ actually ships.
-function mdlPath(v: string): string {
+export function mdlPath(v: string): string {
   if (!v) return "";
   const pick = v.split(",")[0]?.trim();
   if (!pick) return "";
