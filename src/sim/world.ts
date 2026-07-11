@@ -695,9 +695,11 @@ export class SimWorld {
   captureDeaths = false;
   captureDamage = false;
   captureAttacks = false;
+  captureOrders = false;
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
   private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
+  private orderEvents: Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null }> = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -1755,6 +1757,27 @@ export class SimWorld {
     if (!this.attackEvents.length) return this.attackEvents;
     const out = this.attackEvents;
     this.attackEvents = [];
+    return out;
+  }
+
+  /** Record an ISSUED-order event (EVENT_(PLAYER_)UNIT_ISSUED_ORDER/POINT/TARGET) — only
+   *  when a script is listening (`captureOrders`). Called at the EXPLICIT-order boundaries
+   *  (trigger IssueXOrder + the player command router), never the internal-AI issue* calls,
+   *  so auto-acquisition retargeting stays silent, matching WC3. `kind` picks the event
+   *  family; `target` is the ordered unit (target orders) else null. */
+  noteOrder(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): void {
+    if (!this.captureOrders) return;
+    const u = this.units.get(unitId);
+    if (!u) return;
+    const t = targetId ? this.units.get(targetId) : undefined;
+    this.orderEvents.push({ unit: eventInfo(u), orderId, kind, x, y, target: t ? eventInfo(t) : null });
+  }
+  /** Issued-order events since the last drain — only when a script registered one
+   *  (`captureOrders`). Same shape/lifecycle as the death/damage/attack drains. */
+  drainOrderEvents(): Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null }> {
+    if (!this.orderEvents.length) return this.orderEvents;
+    const out = this.orderEvents;
+    this.orderEvents = [];
     return out;
   }
 

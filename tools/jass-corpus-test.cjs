@@ -622,5 +622,92 @@ endfunction`;
   else fail(`Get*: X ${rx && rx.n} facing ${rf && rf.n} speed ${rs && rs.n} (want 512/180/400)`);
 }
 
+// --- 7.14: trigger orders — issue natives + order events + vocabulary ---
+console.log('\n[7.14] Trigger orders (IssueXOrder → sim; EVENT_..._ISSUED_ORDER; OrderId vocabulary)');
+{
+  const { rawcodeToInt } = require(join(BUILD, 'lexer.js'));
+  // Part A: the issue-order natives reach the bridge with the right order id + kind + point/target.
+  let nextId = 200;
+  const issued = [];
+  const hooks = {
+    createUnit: () => nextId++,
+    issueUnitOrder: (unitId, orderId, kind, x, y, targetId) => (issued.push({ unitId, orderId, kind, x, y, targetId }), true),
+    getUnitCurrentOrder: () => 851986, // "move"
+  };
+  const SRC_A = `
+globals
+    unit    udg_u    = null
+    unit    udg_tgt  = null
+    integer udg_oid  = 0
+    string  udg_ostr = ""
+    integer udg_cur  = 0
+endglobals
+function InitOrders takes nothing returns nothing
+    set udg_u   = CreateUnit( Player(0), 'hfoo', 0.0, 0.0, 0.0 )
+    set udg_tgt = CreateUnit( Player(1), 'hpea', 0.0, 0.0, 0.0 )
+    call IssuePointOrder( udg_u, "attack", 512.0, 256.0 )
+    call IssueTargetOrder( udg_u, "smart", udg_tgt )
+    call IssueImmediateOrder( udg_u, "stop" )
+    set udg_oid  = OrderId( "move" )
+    set udg_ostr = OrderId2String( 851983 )
+    set udg_cur  = GetUnitCurrentOrder( udg_u )
+endfunction`;
+  const interpA = buildInterpreter([COMMON_J, BLIZZARD_J, SRC_A], { hooks });
+  interpA.run('InitOrders', []);
+  const pt = issued.find((o) => o.kind === 'point');
+  const tg = issued.find((o) => o.kind === 'target');
+  const im = issued.find((o) => o.kind === 'immediate');
+  if (pt && pt.orderId === 851983 && pt.x === 512 && pt.y === 256) ok(`IssuePointOrder("attack",512,256) → bridge (id 851983, point)`);
+  else fail(`point order: ${JSON.stringify(pt)}`);
+  if (tg && tg.orderId === 851971 && tg.targetId === 201) ok(`IssueTargetOrder("smart", tgt) → bridge (id 851971, target 201)`);
+  else fail(`target order: ${JSON.stringify(tg)}`);
+  if (im && im.orderId === 851972) ok(`IssueImmediateOrder("stop") → bridge (id 851972, immediate)`);
+  else fail(`immediate order: ${JSON.stringify(im)}`);
+  const oid = interpA.rt.globals.get('udg_oid'), ostr = interpA.rt.globals.get('udg_ostr'), cur = interpA.rt.globals.get('udg_cur');
+  if (oid && oid.n === 851986) ok(`OrderId("move") == 851986`); else fail(`OrderId: ${oid && oid.n}`);
+  if (ostr && ostr.s === 'attack') ok(`OrderId2String(851983) == "attack"`); else fail(`OrderId2String: ${ostr && ostr.s}`);
+  if (cur && cur.n === 851986) ok(`GetUnitCurrentOrder → 851986 (live via bridge)`); else fail(`GetUnitCurrentOrder: ${cur && cur.n}`);
+
+  // Part B: the order EVENTS dispatch with the right responses (Interpreter.pumpOrderEvents).
+  const SRC_B = `
+globals
+    integer udg_ptHits  = 0
+    integer udg_tgHits  = 0
+    integer udg_ordId   = 0
+    real    udg_px      = 0.0
+    integer udg_tgtType = 0
+endglobals
+function OnPoint takes nothing returns nothing
+    set udg_ptHits = udg_ptHits + 1
+    set udg_ordId  = GetIssuedOrderId()
+    set udg_px     = GetOrderPointX()
+endfunction
+function OnTarget takes nothing returns nothing
+    set udg_tgHits  = udg_tgHits + 1
+    set udg_tgtType = GetUnitTypeId( GetOrderTargetUnit() )
+endfunction
+function InitEvt takes nothing returns nothing
+    local trigger tp = CreateTrigger()
+    local trigger tt = CreateTrigger()
+    call TriggerAddAction( tp, function OnPoint )
+    call TriggerAddAction( tt, function OnTarget )
+    call TriggerRegisterPlayerUnitEvent( tp, Player(0), ConvertPlayerUnitEvent(39), null ) // ISSUED_POINT_ORDER
+    call TriggerRegisterPlayerUnitEvent( tt, Player(0), ConvertPlayerUnitEvent(40), null ) // ISSUED_TARGET_ORDER
+endfunction`;
+  const interpB = buildInterpreter([SRC_B]);
+  interpB.run('InitEvt', []);
+  interpB.pumpOrderEvents([{ unit: { id: 5, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, orderId: 851983, kind: 'point', x: 640, y: 128, target: null }]);
+  interpB.pumpOrderEvents([{ unit: { id: 5, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, orderId: 851971, kind: 'target', x: 0, y: 0, target: { id: 6, typeId: 'hpea', owner: 1, x: 0, y: 0, facing: 0 } }]);
+  // A player-1 unit's order must NOT fire the player-0 registration.
+  interpB.pumpOrderEvents([{ unit: { id: 7, typeId: 'hfoo', owner: 1, x: 0, y: 0, facing: 0 }, orderId: 851986, kind: 'point', x: 0, y: 0, target: null }]);
+  const ptHits = interpB.rt.globals.get('udg_ptHits'), tgHits = interpB.rt.globals.get('udg_tgHits');
+  const ordId = interpB.rt.globals.get('udg_ordId'), px = interpB.rt.globals.get('udg_px'), tgtType = interpB.rt.globals.get('udg_tgtType');
+  if (ptHits && ptHits.n === 1) ok(`ISSUED_POINT_ORDER fired for the owner-matched order only`); else fail(`point hits: ${ptHits && ptHits.n} (want 1)`);
+  if (ordId && ordId.n === 851983) ok(`GetIssuedOrderId() == 851983 (attack)`); else fail(`order id: ${ordId && ordId.n}`);
+  if (px && Math.abs(px.n - 640) < 1e-6) ok(`GetOrderPointX() == 640`); else fail(`point x: ${px && px.n}`);
+  if (tgHits && tgHits.n === 1) ok(`ISSUED_TARGET_ORDER fired once`); else fail(`target hits: ${tgHits && tgHits.n}`);
+  if (tgtType && tgtType.n === rawcodeToInt('hpea')) ok(`GetOrderTargetUnit() is the peasant target`); else fail(`target type: ${tgtType && tgtType.n}`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

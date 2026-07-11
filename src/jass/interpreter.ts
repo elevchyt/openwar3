@@ -43,6 +43,16 @@ export interface AttackEvent {
   attacked: UnitSnapshot;
   attacker: UnitSnapshot;
 }
+/** One issued order: the ordered unit, the order id, its kind (immediate/point/target),
+ *  the point (point orders), and the target unit (target orders, else null). */
+export interface OrderEvent {
+  unit: UnitSnapshot;
+  orderId: number;
+  kind: "immediate" | "point" | "target";
+  x: number;
+  y: number;
+  target: UnitSnapshot | null;
+}
 
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
 const EVENT_UNIT_DEATH = 53;
@@ -50,6 +60,13 @@ const EVENT_PLAYER_UNIT_DEATH = 20;
 const EVENT_UNIT_DAMAGED = 52;
 const EVENT_PLAYER_UNIT_ATTACKED = 18;
 const EVENT_UNIT_ATTACKED = 62;
+// Issued-order events: no-target (38/75), point-target (39/76), unit-target (40/77).
+const EVENT_PLAYER_UNIT_ISSUED_ORDER = 38;
+const EVENT_PLAYER_UNIT_ISSUED_POINT_ORDER = 39;
+const EVENT_PLAYER_UNIT_ISSUED_TARGET_ORDER = 40;
+const EVENT_UNIT_ISSUED_ORDER = 75;
+const EVENT_UNIT_ISSUED_POINT_ORDER = 76;
+const EVENT_UNIT_ISSUED_TARGET_ORDER = 77;
 
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
@@ -524,6 +541,31 @@ export class Interpreter {
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_ATTACKED) && this.paramUnitIs(reg, attacked)) ||
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_ATTACKED, e.attacked.owner, attacked)));
+    }
+  }
+
+  /** Pump issued-order events (7.14) — EVENT_(PLAYER_)UNIT_ISSUED_ORDER (no target, 38/75),
+   *  _POINT_ORDER (point, 39/76), or _TARGET_ORDER (unit, 40/77), matched by the ordered
+   *  unit's owner (player events) or the subject unit (unit events). Sets GetIssuedOrderId
+   *  + GetOrderPointX/Y (point) / GetOrderTargetUnit (target). Fed by both the trigger
+   *  IssueXOrder natives and the player command router. */
+  pumpOrderEvents(events: ReadonlyArray<OrderEvent>): void {
+    for (const e of events) {
+      const unit = this.rt.unitForSim(e.unit);
+      const target = e.target ? this.rt.unitForSim(e.target) : JNULL;
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", unit],
+        ["OrderedUnit", unit],
+        ["IssuedOrderId", jInt(e.orderId)],
+        ["OrderPointX", jReal(e.x)],
+        ["OrderPointY", jReal(e.y)],
+        ["OrderTargetUnit", target],
+      ]);
+      const playerEvt = e.kind === "immediate" ? EVENT_PLAYER_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_PLAYER_UNIT_ISSUED_POINT_ORDER : EVENT_PLAYER_UNIT_ISSUED_TARGET_ORDER;
+      const unitEvt = e.kind === "immediate" ? EVENT_UNIT_ISSUED_ORDER : e.kind === "point" ? EVENT_UNIT_ISSUED_POINT_ORDER : EVENT_UNIT_ISSUED_TARGET_ORDER;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.unit.owner, unit)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, unit)));
     }
   }
 

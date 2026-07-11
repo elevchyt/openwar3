@@ -8,8 +8,9 @@
 // (The text actions — floating text + on-screen messages — moved to natives/text.ts.)
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
+import { orderIdToString, orderStringToId } from "../orders";
 import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asInt, asNum, jBool, jHandle, jInt, JNULL, type JassValue } from "../values";
+import { asInt, asNum, jBool, jHandle, jInt, JNULL, jStr, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -172,6 +173,40 @@ export function registerWorldNatives(rt: Runtime): void {
     const u = unit(c, a[0]);
     if (u && u.simId >= 0) c.rt.hooks?.setUnitTurnSpeed?.(u.simId, asNum(a[1]));
     return JNULL;
+  });
+
+  // --- orders (7.14): a trigger tells a unit what to do; the sim carries it out ---
+  // Route an order (generic id + target kind) through the bridge to the sim's issue*
+  // commands. IssueXOrder returns true when the order took. A no-sim / unknown unit → false.
+  const orderStr = (v: JassValue): string => (v.k === "string" ? v.s : "");
+  const issue = (c: NativeCtx, unitV: JassValue, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
+    const u = unit(c, unitV);
+    if (!u || u.simId < 0) return jBool(false);
+    const t = kind === "target" ? unit(c, targetV) : undefined;
+    return jBool(c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, kind, x, y, t?.simId ?? 0) ?? false);
+  };
+  def(rt, "IssueImmediateOrder", (c, a) => issue(c, a[0], orderStringToId(orderStr(a[1])), "immediate", 0, 0, JNULL));
+  def(rt, "IssueImmediateOrderById", (c, a) => issue(c, a[0], asInt(a[1]), "immediate", 0, 0, JNULL));
+  def(rt, "IssuePointOrder", (c, a) => issue(c, a[0], orderStringToId(orderStr(a[1])), "point", asNum(a[2]), asNum(a[3]), JNULL));
+  def(rt, "IssuePointOrderById", (c, a) => issue(c, a[0], asInt(a[1]), "point", asNum(a[2]), asNum(a[3]), JNULL));
+  def(rt, "IssuePointOrderLoc", (c, a) => {
+    const loc = c.rt.data<{ x: number; y: number }>(a[2]);
+    return issue(c, a[0], orderStringToId(orderStr(a[1])), "point", loc?.x ?? 0, loc?.y ?? 0, JNULL);
+  });
+  def(rt, "IssuePointOrderByIdLoc", (c, a) => {
+    const loc = c.rt.data<{ x: number; y: number }>(a[2]);
+    return issue(c, a[0], asInt(a[1]), "point", loc?.x ?? 0, loc?.y ?? 0, JNULL);
+  });
+  def(rt, "IssueTargetOrder", (c, a) => issue(c, a[0], orderStringToId(orderStr(a[1])), "target", 0, 0, a[2]));
+  def(rt, "IssueTargetOrderById", (c, a) => issue(c, a[0], asInt(a[1]), "target", 0, 0, a[2]));
+
+  // Order id ↔ string vocabulary (OrderId/String2OrderId → int, OrderId2String → string).
+  def(rt, "OrderId", (_c, a) => jInt(orderStringToId(orderStr(a[0]))));
+  def(rt, "String2OrderId", (_c, a) => jInt(orderStringToId(orderStr(a[0]))));
+  def(rt, "OrderId2String", (_c, a) => jStr(orderIdToString(asInt(a[0]))));
+  def(rt, "GetUnitCurrentOrder", (c, a) => {
+    const u = unit(c, a[0]);
+    return jInt(u && u.simId >= 0 ? c.rt.hooks?.getUnitCurrentOrder?.(u.simId) ?? 0 : 0);
   });
 
   // --- unit queries ---

@@ -1,6 +1,7 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
+import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import { VisionMap, FogState } from "../sim/vision";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -2362,6 +2363,7 @@ export class RtsController {
       if (!this.controls(id)) continue; // only your own units obey Stop
       this.sim.clearQueue(id);
       this.sim.stop(id);
+      this.sim.noteOrder(id, ORDER_IDS.stop, "immediate", 0, 0, 0); // ISSUED_ORDER for the trigger engine
     }
   }
 
@@ -2373,6 +2375,7 @@ export class RtsController {
       if (!this.controls(id)) continue; // only your own units obey Hold
       this.sim.clearQueue(id);
       this.sim.issueHold(id);
+      this.sim.noteOrder(id, ORDER_IDS.holdposition, "immediate", 0, 0, 0); // ISSUED_ORDER for the trigger engine
     }
   }
 
@@ -2990,11 +2993,80 @@ export class RtsController {
    *  keeps enemy/neutral/creep units uncommandable. */
   private order(id: number, o: QueuedOrder, queued: boolean): boolean {
     if (!this.controls(id)) return false;
+    this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
     if (queued) {
       this.sim.queueOrder(id, o);
       return true;
     }
     return this.sim.issueOrder(id, o);
+  }
+
+  /** Record a player-issued group order (move / attack / attack-move / patrol / follow)
+   *  for the trigger engine's ISSUED-order events. A no-op unless a script is listening
+   *  (`sim.captureOrders`). Harvest/build/rally aren't mapped to a generic order id. */
+  private notePlayerOrder(id: number, o: QueuedOrder): void {
+    switch (o.kind) {
+      case "move":
+        this.sim.noteOrder(id, ORDER_IDS.move, "point", o.x, o.y, 0);
+        break;
+      case "attackmove":
+        this.sim.noteOrder(id, ORDER_IDS.attack, "point", o.x, o.y, 0);
+        break;
+      case "patrol":
+        this.sim.noteOrder(id, ORDER_IDS.patrol, "point", o.x, o.y, 0);
+        break;
+      case "attack":
+        this.sim.noteOrder(id, ORDER_IDS.attack, "target", 0, 0, o.targetId);
+        break;
+      case "follow":
+        this.sim.noteOrder(id, ORDER_IDS.smart, "target", 0, 0, o.targetId);
+        break;
+    }
+  }
+
+  /** JASS IssueXOrder → the sim (Phase 7 — issue #33). Maps a generic order id + target
+   *  kind to the matching sim command so a trigger-issued unit actually marches/attacks,
+   *  then records the ISSUED-order event. Unlike the player `order()` path this does NOT
+   *  gate on ownership — a trigger can command any unit. Returns whether the order took. */
+  issueUnitOrder(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
+    const s = orderIdToString(orderId);
+    let ok = false;
+    if (kind === "point") {
+      if (s === "attack" || s === "attackground") ok = this.sim.issueAttackMove(unitId, x, y);
+      else if (s === "patrol") ok = this.sim.issuePatrol(unitId, x, y);
+      else ok = this.sim.issueMove(unitId, x, y); // move / smart / unknown-point → move
+    } else if (kind === "target") {
+      const u = this.sim.units.get(unitId);
+      const t = this.sim.units.get(targetId);
+      if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true);
+      // smart on a unit: attack a hostile (incl. team -1 creeps), else follow (ally/neutral).
+      else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false) : this.sim.issueFollow(unitId, targetId);
+    } else {
+      if (s === "stop") (this.sim.stop(unitId), (ok = true));
+      else if (s === "holdposition") ok = this.sim.issueHold(unitId);
+    }
+    if (ok) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
+    return ok;
+  }
+
+  /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */
+  currentOrderId(unitId: number): number {
+    const u = this.sim.units.get(unitId);
+    if (!u) return 0;
+    switch (u.order) {
+      case "move":
+      case "follow":
+        return ORDER_IDS.move;
+      case "attack":
+      case "attackmove":
+        return ORDER_IDS.attack;
+      case "patrol":
+        return ORDER_IDS.patrol;
+      case "hold":
+        return ORDER_IDS.holdposition;
+      default:
+        return 0; // idle / harvest / cast / repair / getitem / return → no generic id
+    }
   }
 
   /** Right-click: order the whole selection. Attack a hostile under the cursor;

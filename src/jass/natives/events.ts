@@ -15,7 +15,7 @@
 // advanceTime. Registration here + firing there keeps natives free of the eval loop.
 
 import type { BoolExpr, NativeCtx, Runtime, TimerObj, TriggerObj } from "../runtime";
-import { asNum, jBool, jHandle, JNULL, jReal, type JassValue } from "../values";
+import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -119,6 +119,28 @@ export function registerEventNatives(rt: Runtime): void {
     const v = resp(c, "EventDamage");
     return v.k === "real" ? v : jReal(0);
   });
+  // Issued-order responses (EVENT_..._ISSUED_ORDER/POINT/TARGET — 7.14).
+  def(rt, "GetIssuedOrderId", (c) => {
+    const v = resp(c, "IssuedOrderId");
+    return v.k === "int" ? v : jInt(0);
+  });
+  def(rt, "GetOrderPointX", (c) => {
+    const v = resp(c, "OrderPointX");
+    return v.k === "real" ? v : jReal(0);
+  });
+  def(rt, "GetOrderPointY", (c) => {
+    const v = resp(c, "OrderPointY");
+    return v.k === "real" ? v : jReal(0);
+  });
+  def(rt, "GetOrderPointLoc", (c) => {
+    const x = resp(c, "OrderPointX");
+    const y = resp(c, "OrderPointY");
+    const l = { handleId: 0, x: x.k === "real" ? x.n : 0, y: y.k === "real" ? y.n : 0 };
+    l.handleId = c.rt.handles.alloc(l);
+    return jHandle(l.handleId, "location");
+  });
+  def(rt, "GetOrderTarget", (c) => resp(c, "OrderTargetUnit")); // widget = the ordered unit target
+  def(rt, "GetOrderTargetUnit", (c) => resp(c, "OrderTargetUnit"));
 
   // --- run a trigger from script (used by RunInitializationTriggers etc.) ---
   const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean =>

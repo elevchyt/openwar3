@@ -29,11 +29,12 @@
 | 7.4c | **Death + combat events** (`DEATH`/`DAMAGED`/`ATTACKED`) live from `rts.tick` | ✅ done (live) | §7.10/§7.11 headless (owner/unit-matched, `GetDyingUnit`/`GetEventDamage`/`GetAttacker`); Candy: 90 attack-trigger fires + 30 damage events on live combat |
 | 7.7 | **Trigger effects land** (`SetPlayerState` resources, `SetUnitState` HP/mana) | ✅ done (live) | §7.12 headless (BJ resource family → gold 650, lumber 300); Candy grants 300 gold + income ticks in the HUD (screenshots) |
 | 7.13 | **Unit-mutation effects** (`SetUnitPosition`/`X`/`Y`/`Loc`, `SetUnitFacing[Timed]`, `SetUnitOwner` + **change-owner event**, `PauseUnit`/`IsUnitPaused`, `SetUnitScale`/`VertexColor`/`FlyHeight`/`MoveSpeed`/`TurnSpeed`/`TimeScale`, `SetUnitColor`, live `Get*`) | ✅ done (live) | §7.13 headless (every effect recorded in a mock sim; `EVENT_PLAYER_UNIT_CHANGE_OWNER` fires w/ `GetChangingUnitPrevOwner`; `Get*` read live); Echo Isles: a unit visibly scaled/tinted/reowned (screenshots) |
-| — | remaining effect natives (add/remove ability, `SetHeroLevel`/XP, weather, …) + remaining events (orders, unit-state, construct/train) | ⬜ next | a trigger issues an order / a hero levels |
+| 7.14 | **Trigger orders** — `Issue{Immediate,Point,Target}Order`(+`ById`/`Loc`) → the sim marches/attacks; `OrderId`/`OrderId2String`/`String2OrderId`/`GetUnitCurrentOrder`; **`EVENT_..._ISSUED_ORDER`/`POINT`/`TARGET`** (38/39/40 + unit 75/76/77) w/ `GetIssuedOrderId`/`GetOrderPointX/Y`/`GetOrderTargetUnit` | ✅ done (live) | §7.14 headless (issue natives → bridge w/ right id+kind+target; order events dispatch owner-matched; vocabulary round-trips); Echo Isles: a trigger marches a squad of peasants (screenshots) |
+| — | remaining effect natives (add/remove ability, `SetHeroLevel`/XP, weather, …) + remaining events (unit-state, construct/train, spell-cast) | ⬜ next | a hero levels / a spell-cast trigger fires |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 ---
 
@@ -357,6 +358,39 @@ change-owner trigger fires once with `GetChangingUnitPrevOwner == Player(2)`; `G
 re-owned to player 1 so its team colour changes **and the food count drops 5/12 → 4/12** (ownership is real), the town
 hall scaled up (screenshots).
 
+## Trigger orders (7.14 — done, live)
+
+The event bookend to the effects: a trigger tells a unit **what to do** (`IssueXOrder`) and reacts when **any** unit is
+issued an order (`EVENT_..._ISSUED_ORDER`). This is the TD/spawn unlock — trigger-created units can now march and fight.
+Built:
+
+- **`src/jass/orders.ts`** — the order string↔id vocabulary (`ORDER_IDS`): the generic movement/attack orders keyed to
+  the real engine constants (the 0x000D0000 block — `move` 851986, `attack` 851983, `smart` 851971, `stop` 851972,
+  `patrol` 851990, `holdposition` 851993), so a GUI comparison (`GetIssuedOrderId() == OrderId("attack")`) *and* a
+  hand-coded literal both match. Ability-based orders (a spell's "Order String") aren't in the table — `OrderId` returns
+  0 for anything unknown, exactly like the engine.
+- **`src/jass/natives/world.ts`** — `Issue{Immediate,Point,Target}Order` (+ `ById` / `PointLoc` variants), routed through
+  the bridge; `OrderId`/`String2OrderId`/`OrderId2String`/`GetUnitCurrentOrder`.
+- **`src/game/rts.ts` `issueUnitOrder`** — maps a generic order id + target kind to the sim's existing `issue*` commands
+  (point `attack`→`issueAttackMove`, `patrol`→`issuePatrol`, else `issueMove`; target `attack`→`issueAttack(force)`,
+  smart-on-a-unit → `issueAttack` for enemies / `issueFollow` for allies; immediate `stop`/`holdposition`). Unlike the
+  player `order()` path it does **not** gate on ownership — a trigger can command any unit.
+- **Order events — captured in the sim, drained in the interpreter** (same shape as death/damage/attack, 7.4c). The
+  crux: capture happens **only at explicit-order boundaries** — the `IssueXOrder` natives and the player command router
+  (`order()` for move/attack/attack-move/patrol/follow, plus `stopSelected`/`holdSelected`) — **never** the sim's shared
+  `issue*` methods, which the internal AI (auto-acquire, creep guard, retaliation) also calls. So auto-acquisition
+  retargeting stays silent, matching WC3. `SimWorld.noteOrder` buffers (gated by `captureOrders`); `drainOrderEvents` +
+  `Interpreter.pumpOrderEvents` dispatch to `EVENT_(PLAYER_)UNIT_ISSUED_ORDER` (38/75, no target), `_POINT_ORDER`
+  (39/76), `_TARGET_ORDER` (40/77), with `GetIssuedOrderId`/`GetOrderPointX/Y`/`GetOrderPointLoc`/`GetOrderTargetUnit`.
+
+Verified (`pnpm jass:test` §7.14): the issue natives reach the bridge with the right id + kind + point/target
+(`IssuePointOrder("attack",512,256)` → 851983/point, `IssueTargetOrder("smart",tgt)` → 851971/target, `stop` → 851972/
+immediate); `OrderId("move")==851986`, `OrderId2String(851983)=="attack"`, `GetUnitCurrentOrder` live; and the events
+dispatch owner-matched — `ISSUED_POINT_ORDER` fires only for the owning player with `GetIssuedOrderId==851983` /
+`GetOrderPointX==640`, `ISSUED_TARGET_ORDER` fires once with `GetOrderTargetUnit` the right unit. Verified **live** on
+Echo Isles: a trigger `IssuePointOrder` marched a 5-peasant squad across the map in formation (idle → move 851986 →
+attack-move 851983, positions advancing ~2100 units), then `PauseUnit` froze them mid-stride (screenshots).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -369,11 +403,11 @@ hall scaled up (screenshots).
 - **More effect natives** — 7.7 + 7.13 cover resources, unit-state, and the unit-mutation set (move/facing/owner/pause/
   scale/colour/fly-height/speed). Still no-ops: `UnitAddAbility`/`UnitRemoveAbility`, `SetHeroLevel`/`AddHeroXP`,
   `SetUnitAnimation`, weather, etc. Each is a small bridge method away — wire on demand as maps hit them.
-- **Remaining sim events** — timers, region, death, **damage**, and **attacked** pump live (7.4b/c); still to wire from
-  `rts.tick`: **orders** (`EVENT_PLAYER_UNIT_ISSUED_*ORDER` — needs `GetIssuedOrderId`/`GetOrderTarget*`), **unit-state**
-  (`EVENT_UNIT_STATE_LIMIT` — HP/mana threshold crossings), **construction/train finished**
-  (`EVENT_PLAYER_UNIT_CONSTRUCT_FINISH`/`TRAIN_FINISH`), **spell cast** (`EVENT_PLAYER_UNIT_SPELL_*`). Same shape as
-  `pumpDamageEvents` — snapshot the event in the sim (with its id/target), drain + dispatch in the interpreter.
+- **Remaining sim events** — timers, region, death, **damage**, **attacked**, and **orders** pump live (7.4b/c, 7.14);
+  still to wire from `rts.tick`: **unit-state** (`EVENT_UNIT_STATE_LIMIT` — HP/mana threshold crossings),
+  **construction/train finished** (`EVENT_PLAYER_UNIT_CONSTRUCT_FINISH`/`TRAIN_FINISH`), **spell cast**
+  (`EVENT_PLAYER_UNIT_SPELL_*`). Same shape as `pumpDamageEvents`/`pumpOrderEvents` — snapshot the event in the sim
+  (with its id/target), drain + dispatch in the interpreter.
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.
 - **Natives on demand** — groups, weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
   Use `pnpm jass:coverage` to prioritise (125/335 used natives implemented).

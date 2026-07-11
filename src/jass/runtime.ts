@@ -164,6 +164,12 @@ export interface EngineHooks {
   getUnitX?(unitId: number): number;
   getUnitY?(unitId: number): number;
   getUnitFacing?(unitId: number): number;
+  // --- orders (7.14): IssueXOrder → sim; GetUnitCurrentOrder ← sim ---
+  /** Issue{Immediate,Point,Target}Order — order id + target kind → the matching sim
+   *  command (a trigger-issued unit marches/attacks). Returns whether the order took. */
+  issueUnitOrder?(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
+  /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */
+  getUnitCurrentOrder?(unitId: number): number;
   /** Player resource / state: SetPlayerState & GetPlayerState. `state` is the raw
    *  playerstate index (1 = gold, 2 = lumber, 4 = food cap, 5 = food used). */
   setPlayerState?(player: number, state: number, value: number): void;

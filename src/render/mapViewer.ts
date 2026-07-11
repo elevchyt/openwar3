@@ -1077,6 +1077,9 @@ export class MapViewerScene {
       getUnitX: (id) => this.rts?.simWorld.getUnitX(id) ?? 0,
       getUnitY: (id) => this.rts?.simWorld.getUnitY(id) ?? 0,
       getUnitFacing: (id) => this.rts?.simWorld.getUnitFacing(id) ?? 0,
+      // Orders (7.14): trigger issue → the sim; current order ← the sim.
+      issueUnitOrder: (id, orderId, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, kind, x, y, targetId) ?? false,
+      getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
     };
   }
 
@@ -1144,6 +1147,12 @@ export class MapViewerScene {
         sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath" || (r.kind === "unitEvent" && idx(r) === 53) || (r.kind === "playerUnitEvent" && idx(r) === 20));
         sw.captureDamage = rt.triggerRegs.some((r) => r.kind === "unitEvent" && idx(r) === 52);
         sw.captureAttacks = rt.triggerRegs.some((r) => (r.kind === "unitEvent" && idx(r) === 62) || (r.kind === "playerUnitEvent" && idx(r) === 18));
+        // ISSUED-order events: player 38/39/40, unit 75/76/77 (common.j ConvertPlayer/UnitEvent).
+        sw.captureOrders = rt.triggerRegs.some(
+          (r) =>
+            (r.kind === "playerUnitEvent" && idx(r) >= 38 && idx(r) <= 40) ||
+            (r.kind === "unitEvent" && idx(r) >= 75 && idx(r) <= 77),
+        );
       }
       const s = engine.setup;
       const trigs = engine.interp.rt.triggerRegs.length;
@@ -1174,6 +1183,8 @@ export class MapViewerScene {
       if (damage.length) engine.interp.pumpDamageEvents(damage);
       const attacks = sw.drainAttackEvents();
       if (attacks.length) engine.interp.pumpAttackEvents(attacks);
+      const orders = sw.drainOrderEvents();
+      if (orders.length) engine.interp.pumpOrderEvents(orders);
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
         const snap: UnitSnapshot[] = [];
