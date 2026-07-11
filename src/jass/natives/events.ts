@@ -109,6 +109,8 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetKillingUnit", (c) => resp(c, "KillingUnit"));
   def(rt, "GetAttacker", (c) => resp(c, "Attacker"));
   def(rt, "GetTriggerPlayer", (c) => resp(c, "TriggerPlayer"));
+  def(rt, "GetChangingUnit", (c) => resp(c, "ChangingUnit")); // EVENT_PLAYER_UNIT_CHANGE_OWNER
+  def(rt, "GetChangingUnitPrevOwner", (c) => resp(c, "ChangingUnitPrevOwner"));
   def(rt, "GetExpiredTimer", (c) => resp(c, "ExpiredTimer"));
   def(rt, "GetTriggerWidget", (c) => resp(c, "TriggerWidget"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters

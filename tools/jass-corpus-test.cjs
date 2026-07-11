@@ -527,5 +527,100 @@ endfunction`;
   else fail(`GetPlayerState: ${readGold && readGold.n} (want 650)`);
 }
 
+// --- 7.13: unit-mutation effects (7.7 cont.) — a trigger visibly alters a unit ---
+console.log('\n[7.13] Unit-mutation effects (position/facing/owner/pause/scale/color/flyHeight/speed + change-owner)');
+{
+  // A tiny mock sim keyed by simId — CreateUnit assigns an id and a record the effect
+  // hooks mutate, exactly like mapViewer's bridge over SimWorld/RtsController.
+  let nextId = 100;
+  const sim = {};
+  const rec = (id) => sim[id];
+  const hooks = {
+    createUnit: (player, typeId, x, y, facing) => {
+      const id = nextId++;
+      sim[id] = { player, typeId, x, y, facing: (facing * Math.PI) / 180, scale: 1, color: null, flyHeight: 0, speed: 0, turn: 0, paused: false };
+      return id;
+    },
+    setUnitPosition: (id, x, y) => { rec(id).x = x; rec(id).y = y; },
+    setUnitFacing: (id, rad, instant) => { rec(id).facing = rad; rec(id).facingInstant = instant; },
+    setUnitOwner: (id, player, changeColor) => { rec(id).player = player; rec(id).changeColor = changeColor; },
+    pauseUnit: (id, flag) => { rec(id).paused = flag; },
+    isUnitPaused: (id) => rec(id).paused,
+    setUnitScale: (id, s) => { rec(id).scale = s; },
+    setUnitVertexColor: (id, r, g, b, a) => { rec(id).color = [r, g, b, a]; },
+    setUnitFlyHeight: (id, h) => { rec(id).flyHeight = h; },
+    getUnitFlyHeight: (id) => rec(id).flyHeight,
+    setUnitMoveSpeed: (id, s) => { rec(id).speed = s; },
+    getUnitMoveSpeed: (id) => rec(id).speed,
+    setUnitTurnSpeed: (id, t) => { rec(id).turn = t; },
+    getUnitX: (id) => rec(id).x,
+    getUnitY: (id) => rec(id).y,
+    getUnitFacing: (id) => rec(id).facing,
+  };
+  const SRC = `
+globals
+    unit    udg_u          = null
+    integer udg_owned      = 0
+    integer udg_prevOwner  = -1
+    real    udg_readX       = 0.0
+    real    udg_readFace    = 0.0
+    real    udg_readSpeed   = 0.0
+    boolean udg_wasPaused   = false
+endglobals
+function OnChangeOwner takes nothing returns nothing
+    set udg_owned     = udg_owned + 1
+    set udg_prevOwner = GetPlayerId( GetChangingUnitPrevOwner() )
+endfunction
+function InitFx takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    call TriggerAddAction( t, function OnChangeOwner )
+    call TriggerRegisterPlayerUnitEvent( t, Player(2), ConvertPlayerUnitEvent(270), null ) // CHANGE_OWNER
+    set udg_u = CreateUnit( Player(2), 'hfoo', 0.0, 0.0, 90.0 )
+endfunction
+function RunFx takes nothing returns nothing
+    call SetUnitX( udg_u, 512.0 )
+    call SetUnitY( udg_u, 256.0 )
+    call SetUnitFacing( udg_u, 180.0 )
+    call SetUnitScale( udg_u, 1.5, 1.5, 1.5 )
+    call SetUnitVertexColor( udg_u, 255, 0, 0, 255 )
+    call SetUnitFlyHeight( udg_u, 200.0, 0.0 )
+    call SetUnitMoveSpeed( udg_u, 400.0 )
+    call PauseUnit( udg_u, true )
+    set udg_wasPaused = IsUnitPaused( udg_u )
+    call SetUnitOwner( udg_u, Player(5), true )
+    set udg_readX     = GetUnitX( udg_u )
+    set udg_readFace  = GetUnitFacing( udg_u )
+    set udg_readSpeed = GetUnitMoveSpeed( udg_u )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('InitFx', []);
+  interp.run('RunFx', []);
+  const u = sim[100];
+  const g = (n) => interp.rt.globals.get(n);
+  if (u && u.x === 512 && u.y === 256) ok(`SetUnitX/Y teleported the sim unit (512, 256)`);
+  else fail(`position: ${u && u.x},${u && u.y} (want 512,256)`);
+  if (u && Math.abs(u.facing - Math.PI) < 1e-6 && u.facingInstant === true) ok(`SetUnitFacing set the sim facing to 180° (π rad), instant`);
+  else fail(`facing: ${u && u.facing} (want ${Math.PI})`);
+  if (u && u.scale === 1.5) ok(`SetUnitScale applied (1.5)`);
+  else fail(`scale: ${u && u.scale} (want 1.5)`);
+  if (u && u.color && u.color[0] === 1 && u.color[1] === 0 && u.color[2] === 0 && u.color[3] === 1) ok(`SetUnitVertexColor 255,0,0,255 → [1,0,0,1]`);
+  else fail(`color: ${u && JSON.stringify(u.color)} (want [1,0,0,1])`);
+  if (u && u.flyHeight === 200) ok(`SetUnitFlyHeight applied (200)`);
+  else fail(`flyHeight: ${u && u.flyHeight} (want 200)`);
+  if (u && u.speed === 400) ok(`SetUnitMoveSpeed applied (400)`);
+  else fail(`speed: ${u && u.speed} (want 400)`);
+  const wp = g('udg_wasPaused');
+  if (u && u.paused === true && wp && wp.b === true) ok(`PauseUnit + IsUnitPaused round-trip (true)`);
+  else fail(`paused: sim ${u && u.paused} / IsUnitPaused ${wp && wp.b} (want true/true)`);
+  if (u && u.player === 5 && u.changeColor === true) ok(`SetUnitOwner reassigned owner (5) + changed colour`);
+  else fail(`owner: ${u && u.player} changeColor ${u && u.changeColor} (want 5/true)`);
+  const owned = g('udg_owned'), prev = g('udg_prevOwner');
+  if (owned && owned.n === 1 && prev && prev.n === 2) ok(`EVENT_PLAYER_UNIT_CHANGE_OWNER fired once; GetChangingUnitPrevOwner == Player(2)`);
+  else fail(`change-owner: fired ${owned && owned.n} prevOwner ${prev && prev.n} (want 1/2)`);
+  const rx = g('udg_readX'), rf = g('udg_readFace'), rs = g('udg_readSpeed');
+  if (rx && rx.n === 512 && rf && Math.abs(rf.n - 180) < 1e-4 && rs && rs.n === 400) ok(`Get* read live sim values back (X 512, facing 180°, speed 400)`);
+  else fail(`Get*: X ${rx && rx.n} facing ${rf && rf.n} speed ${rs && rs.n} (want 512/180/400)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -75,7 +75,11 @@ export class Interpreter {
   private readonly ctx: NativeCtx;
 
   constructor(public readonly rt: Runtime) {
-    this.ctx = { rt, call: (name, args) => this.callFunction(name, args) };
+    this.ctx = {
+      rt,
+      call: (name, args) => this.callFunction(name, args),
+      fireEvent: (kind, responses, matches) => this.fireEvent(kind, responses, matches),
+    };
   }
 
   /** Register a program's natives/functions and collect its global declarations

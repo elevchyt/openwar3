@@ -141,10 +141,29 @@ export interface EngineHooks {
   setUnitAcquireRange?(unitId: number, range: number): void;
   setUnitState?(unitId: number, whichState: number, value: number): void;
   getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
-  setUnitColor?(unitId: number, color: number): void;
+  setUnitColor?(unitId: number, color: number): void; // SetUnitColor — team-colour tint
   removeUnit?(unitId: number): void; // RemoveUnit — no death/corpse
   killUnit?(unitId: number): void; // KillUnit — death animation + corpse
   hideUnit?(unitId: number, hidden: boolean): void;
+  // --- unit-mutation effects (7.7 cont. — a trigger visibly moves/alters a unit) ---
+  setUnitPosition?(unitId: number, x: number, y: number): void; // SetUnitPosition/X/Y/Loc (teleport)
+  setUnitFacing?(unitId: number, facingRad: number, instant: boolean): void; // SetUnitFacing[Timed]
+  setUnitOwner?(unitId: number, player: number, changeColor: boolean): void; // SetUnitOwner
+  pauseUnit?(unitId: number, flag: boolean): void; // PauseUnit
+  isUnitPaused?(unitId: number): boolean; // IsUnitPaused
+  setUnitScale?(unitId: number, scale: number): void; // SetUnitScale (render)
+  setUnitVertexColor?(unitId: number, r: number, g: number, b: number, a: number): void; // SetUnitVertexColor (0–1)
+  setUnitFlyHeight?(unitId: number, height: number): void; // SetUnitFlyHeight
+  getUnitFlyHeight?(unitId: number): number; // GetUnitFlyHeight
+  setUnitMoveSpeed?(unitId: number, speed: number): void; // SetUnitMoveSpeed
+  getUnitMoveSpeed?(unitId: number): number; // GetUnitMoveSpeed
+  setUnitTurnSpeed?(unitId: number, turn: number): void; // SetUnitTurnSpeed
+  setUnitTimeScale?(unitId: number, scale: number): void; // SetUnitTimeScale (animation rate)
+  // Live position/facing reads — a script-created unit's JASS handle otherwise keeps
+  // its spawn-time values, so route Get* through the sim when a sim id is attached.
+  getUnitX?(unitId: number): number;
+  getUnitY?(unitId: number): number;
+  getUnitFacing?(unitId: number): number;
   /** Player resource / state: SetPlayerState & GetPlayerState. `state` is the raw
    *  playerstate index (1 = gold, 2 = lumber, 4 = food cap, 5 = food used). */
   setPlayerState?(player: number, state: number, value: number): void;
@@ -377,4 +396,9 @@ export class Runtime {
 export interface NativeCtx {
   rt: Runtime;
   call(fnName: string, args: JassValue[]): JassValue;
+  /** Fire a sim-style event to matching registrations right now (synchronously),
+   *  from inside a native — used by SetUnitOwner to raise EVENT_PLAYER_UNIT_CHANGE_OWNER
+   *  the moment the owner changes. Provided by the interpreter; absent when a native
+   *  runs with no interpreter attached (safe no-op). */
+  fireEvent?(kind: string, responses: Map<string, JassValue>, matches?: (params: JassValue[]) => boolean): void;
 }

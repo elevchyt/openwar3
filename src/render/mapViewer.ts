@@ -1049,6 +1049,34 @@ export class MapViewerScene {
         if (!u) return 0;
         return state === 0 ? u.hp : state === 1 ? u.maxHp : state === 2 ? u.mana : state === 3 ? u.maxMana : 0;
       },
+      // --- unit-mutation effects (7.7 cont.) — a trigger visibly moves/alters a unit ---
+      setUnitPosition: (id, x, y) => this.rts?.simWorld.setUnitPosition(id, x, y),
+      setUnitFacing: (id, rad, instant) => this.rts?.simWorld.setUnitFacing(id, rad, instant),
+      // SetUnitOwner: reassign in the sim (team decides allegiance/vision), then re-tint
+      // the team-coloured model parts to the new slot's colour if changeColor is set.
+      setUnitOwner: (id, player, changeColor) => {
+        if (!this.rts) return;
+        this.rts.simWorld.setUnitOwner(id, player, this.teamOf(player));
+        if (changeColor) this.rts.setUnitTeamColor(id, player);
+      },
+      setUnitColor: (id, color) => this.rts?.setUnitTeamColor(id, color),
+      pauseUnit: (id, flag) => this.rts?.simWorld.pauseUnit(id, flag),
+      isUnitPaused: (id) => this.rts?.simWorld.isUnitPaused(id) ?? false,
+      setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
+      setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
+      // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
+      setUnitFlyHeight: (id, height) => {
+        this.rts?.simWorld.setUnitFlyHeight(id, height);
+        this.rts?.setUnitFlyHeight(id, height);
+      },
+      getUnitFlyHeight: (id) => this.rts?.simWorld.getUnitFlyHeight(id) ?? 0,
+      setUnitMoveSpeed: (id, speed) => this.rts?.simWorld.setUnitMoveSpeed(id, speed),
+      getUnitMoveSpeed: (id) => this.rts?.simWorld.getUnitMoveSpeed(id) ?? 0,
+      setUnitTurnSpeed: (id, turn) => this.rts?.simWorld.setUnitTurnSpeed(id, turn),
+      setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
+      getUnitX: (id) => this.rts?.simWorld.getUnitX(id) ?? 0,
+      getUnitY: (id) => this.rts?.simWorld.getUnitY(id) ?? 0,
+      getUnitFacing: (id) => this.rts?.simWorld.getUnitFacing(id) ?? 0,
     };
   }
 

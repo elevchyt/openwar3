@@ -444,6 +444,7 @@ export interface SimUnit {
   abilities: SimAbility[]; // learned/innate abilities
   buffs: SimBuff[]; // active timed effects
   stunned: boolean; // derived from buffs (cannot act)
+  paused: boolean; // JASS PauseUnit: frozen — no orders, movement, or turning (cinematics)
   silenced: boolean; // derived from buffs (cannot cast spells)
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
   invulnerable: boolean; // derived from buffs + baseInvulnerable (immune to damage + enemy targeting)
@@ -1296,6 +1297,7 @@ export class SimWorld {
       | "abilities"
       | "buffs"
       | "stunned"
+      | "paused"
       | "silenced"
       | "ethereal"
       | "invulnerable"
@@ -1428,6 +1430,7 @@ export class SimWorld {
       abilities: opts?.abilities ?? [],
       buffs: [],
       stunned: false,
+      paused: false,
       silenced: false,
       ethereal: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
@@ -3235,6 +3238,78 @@ export class SimWorld {
     if (!u.flying) this.settle(u);
   }
 
+  // === JASS trigger effects (Phase 7 — issue #33; see docs/triggers.md) ======
+  // Small, public entry points the interpreter's EngineHooks bridge calls to mutate
+  // a unit from a trigger action (SetUnitPosition/Facing/Owner/MoveSpeed/…). The
+  // render-only properties (scale, vertex colour, fly height) live on RtsController.
+
+  /** JASS SetUnitPosition / SetUnitX / SetUnitY — teleport with pathing re-settle. */
+  setUnitPosition(id: number, x: number, y: number): void {
+    const u = this.units.get(id);
+    if (u) this.teleportUnit(u, x, y);
+  }
+  /** JASS SetUnitFacing[Timed] — instant sets both facing + target so it doesn't turn
+   *  back; timed sets only the target so it rotates there at the unit's turn rate. */
+  setUnitFacing(id: number, rad: number, instant: boolean): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    u.desiredFacing = rad;
+    if (instant) u.facing = rad;
+  }
+  /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). */
+  setUnitOwner(id: number, owner: number, team: number): void {
+    const u = this.units.get(id);
+    if (u) {
+      u.owner = owner;
+      u.team = team;
+    }
+  }
+  /** JASS SetUnitMoveSpeed — the current move speed (buffs recompute from baseSpeed,
+   *  so set the base too or a slow/haste tick would immediately overwrite it). */
+  setUnitMoveSpeed(id: number, speed: number): void {
+    const u = this.units.get(id);
+    if (u) u.speed = u.baseSpeed = speed;
+  }
+  /** JASS SetUnitTurnSpeed — same 0..1 scale as UnitData `turnRate`. */
+  setUnitTurnSpeed(id: number, turn: number): void {
+    const u = this.units.get(id);
+    if (u) u.turnRate = turn;
+  }
+  /** JASS SetUnitFlyHeight — the sim altitude (missiles launch/land here); the render
+   *  lift is kept in step by RtsController.setUnitFlyHeight. */
+  setUnitFlyHeight(id: number, height: number): void {
+    const u = this.units.get(id);
+    if (u) u.flyHeight = height;
+  }
+  /** JASS PauseUnit — freeze/unfreeze; halts movement immediately on pause. */
+  pauseUnit(id: number, flag: boolean): void {
+    const u = this.units.get(id);
+    if (u) {
+      u.paused = flag;
+      if (flag) u.moving = false;
+    }
+  }
+  isUnitPaused(id: number): boolean {
+    return this.units.get(id)?.paused ?? false;
+  }
+  // Live reads for the Get* natives (a script-created unit's JASS handle otherwise
+  // keeps its spawn-time position/facing — the sim value is the current one).
+  getUnitX(id: number): number {
+    return this.units.get(id)?.x ?? 0;
+  }
+  getUnitY(id: number): number {
+    return this.units.get(id)?.y ?? 0;
+  }
+  getUnitFacing(id: number): number {
+    return this.units.get(id)?.facing ?? 0;
+  }
+  getUnitMoveSpeed(id: number): number {
+    return this.units.get(id)?.speed ?? 0;
+  }
+  getUnitFlyHeight(id: number): number {
+    return this.units.get(id)?.flyHeight ?? 0;
+  }
+
   // === drains (renderer pulls these each frame) =============================
 
   /** Repeating area fields running RIGHT NOW (Blizzard, Rain of Fire, …). Unlike the
@@ -3303,6 +3378,7 @@ export class SimWorld {
       }
       u.prevX = u.x;
       u.prevY = u.y;
+      if (u.paused) continue; // PauseUnit: no orders/movement/turning until unpaused
       if (u.spawning > 0) {
         u.spawning -= dt; // still materializing (playing its birth clip) — can't act
         continue;
@@ -3368,7 +3444,7 @@ export class SimWorld {
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
       // (or stands attacking) still finishes rotating to its desired heading.
-      if (u.facing !== u.desiredFacing) {
+      if (u.facing !== u.desiredFacing && !u.paused) {
         u.facing = turnToward(u.facing, u.desiredFacing, turnSpeed(u.turnRate) * dt);
       }
       this.tickSwing(u, dt); // land pending strikes at their damage point

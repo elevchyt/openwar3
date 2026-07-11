@@ -28,11 +28,12 @@
 | — | Custom destructable/upgrade/buff data (`.w3b`/`.w3q`/`.w3h`) | ⬜ optional | lower-priority — only maps using them need it |
 | 7.4c | **Death + combat events** (`DEATH`/`DAMAGED`/`ATTACKED`) live from `rts.tick` | ✅ done (live) | §7.10/§7.11 headless (owner/unit-matched, `GetDyingUnit`/`GetEventDamage`/`GetAttacker`); Candy: 90 attack-trigger fires + 30 damage events on live combat |
 | 7.7 | **Trigger effects land** (`SetPlayerState` resources, `SetUnitState` HP/mana) | ✅ done (live) | §7.12 headless (BJ resource family → gold 650, lumber 300); Candy grants 300 gold + income ticks in the HUD (screenshots) |
-| — | more effect natives (owner/position/pause, add/remove ability, …) + remaining events (orders, unit-state, construct/train) | ⬜ next | a trigger visibly modifies a unit in-game |
+| 7.13 | **Unit-mutation effects** (`SetUnitPosition`/`X`/`Y`/`Loc`, `SetUnitFacing[Timed]`, `SetUnitOwner` + **change-owner event**, `PauseUnit`/`IsUnitPaused`, `SetUnitScale`/`VertexColor`/`FlyHeight`/`MoveSpeed`/`TurnSpeed`/`TimeScale`, `SetUnitColor`, live `Get*`) | ✅ done (live) | §7.13 headless (every effect recorded in a mock sim; `EVENT_PLAYER_UNIT_CHANGE_OWNER` fires w/ `GetChangingUnitPrevOwner`; `Get*` read live); Echo Isles: a unit visibly scaled/tinted/reowned (screenshots) |
+| — | remaining effect natives (add/remove ability, `SetHeroLevel`/XP, weather, …) + remaining events (orders, unit-state, construct/train) | ⬜ next | a trigger issues an order / a hero levels |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 ---
 
@@ -135,9 +136,9 @@ freshly spawned like the melee roster, a few behaviours differ. Watch for these 
   slope keeps its `.doo` Z (may clip). Minor.
 - **Custom maps now run their own script live** — `main()` fires the init triggers (text/quests, `bj_FORCE_*`,
   `SetPlayerState` resources), the runtime pumps live (timers + region + death/damage/attacked events — 7.4b/c), and
-  trigger `CreateUnit`/`RemoveUnit`/resource/unit-state actions land. What's still missing is per-*effect* breadth: only
-  the natives we've wired mutate the game (see the effect table in 7.7 below) — an unwired action (add ability, change
-  owner, weather, …) no-ops, so a map leaning on those won't be fully faithful yet.
+  trigger `CreateUnit`/`RemoveUnit`/resource/unit-state/unit-mutation actions land. What's still missing is per-*effect*
+  breadth: only the natives we've wired mutate the game (see the effect tables in 7.7 / 7.13 below) — an unwired action
+  (add ability, hero level, weather, …) no-ops, so a map leaning on those won't be fully faithful yet.
 
 ---
 
@@ -320,6 +321,42 @@ no extra plumbing. Verified (`pnpm jass:test` §7.12): `SetPlayerState` + `Adjus
 `GetPlayerState` through the real BJs → gold 650, lumber 300. Verified **live**: ExtremeCandyWar's init triggers grant
 300 starting gold to each player (custom maps used to sit at 0/0), and it ticks up as the map's income timer fires.
 
+## Unit-mutation effects (7.13 — done, live)
+
+The natives that make a trigger **visibly move / re-own / restyle a unit** — the second half of the 7.7 effect thread.
+Each is a tiny bridge method; the sim already had most of the primitives (`teleportUnit`, `changeOwner`, per-unit
+`facing`/`speed`). Built:
+
+- **`src/jass/natives/world.ts`** — the effect natives, all routed through `EngineHooks`:
+  - **Movement:** `SetUnitX`/`SetUnitY`/`SetUnitPosition`/`SetUnitPositionLoc` → `SimWorld.setUnitPosition` (the existing
+    `teleportUnit`: instant relocate + pathing re-settle). `SetUnitFacing` (instant) / `SetUnitFacingTimed` (turns at the
+    unit's turn rate) → `setUnitFacing`. JASS angles are **degrees**; the sim is radians (converted at the boundary).
+  - **Ownership:** `SetUnitOwner` → `setUnitOwner` (owner **+ team**, so allegiance/vision follow) and, when `changeColor`,
+    re-tints the team-coloured model parts. It also fires **`EVENT_PLAYER_UNIT_CHANGE_OWNER`** (id 270) synchronously via a
+    new `NativeCtx.fireEvent`, with `GetChangingUnit`/`GetChangingUnitPrevOwner`/`GetTriggerPlayer` set (matched on the
+    losing player — the common "any unit" registration covers every slot). `SetUnitColor` (previously a silent no-op — the
+    hook was missing) now re-tints too.
+  - **State:** `PauseUnit`/`IsUnitPaused` → a new `SimUnit.paused` flag gated in `tick` (no orders), `tickMovement` (halts),
+    and the turning pass (freezes heading) — exactly like the `stunned` gate.
+  - **Appearance (render-only, on `RtsController`):** `SetUnitScale` (Entry `baseScale`), `SetUnitVertexColor` (0–255 → 0–1
+    model tint, re-applied over the fog-dim pass), `SetUnitFlyHeight` (sim altitude **and** the render Z lift),
+    `SetUnitTimeScale` (animation rate).
+  - **Speed/turn:** `SetUnitMoveSpeed` (sets `speed` **and** `baseSpeed`, else a slow/haste recompute would overwrite it),
+    `SetUnitTurnSpeed`.
+  - **Live `Get*`:** `GetUnitX`/`Y`/`Facing`/`MoveSpeed`/`FlyHeight` now prefer the **sim's live** value over the JASS
+    handle's spawn-time field (a script-created unit's handle otherwise never updates as the unit moves).
+- **`src/render/mapViewer.ts` `textHooks()`** — the bridge: sim mutators via `rts.simWorld`, render-only via `rts`
+  (`setUnitScale`/`setUnitVertexColor`/`setUnitFlyHeight`/`setUnitTimeScale`/`setUnitTeamColor`). `SetUnitOwner` resolves
+  the new team via `teamOf(player)`.
+
+Verified (`pnpm jass:test` §7.13): a `CreateUnit`'d unit driven through the real `common.j`/`blizzard.j` — `SetUnitX/Y`
+→ (512,256), `SetUnitFacing` → π, `SetUnitScale` → 1.5, `SetUnitVertexColor` 255,0,0,255 → [1,0,0,1], `SetUnitFlyHeight`
+→ 200, `SetUnitMoveSpeed` → 400, `PauseUnit`+`IsUnitPaused` round-trip, `SetUnitOwner` → owner 5 + colour, and the
+change-owner trigger fires once with `GetChangingUnitPrevOwner == Player(2)`; `Get*` read the live values back. Verified
+**live** on Echo Isles (driven through the actual `EngineHooks`): a peasant scaled ×2.6 (giant), one tinted red, one
+re-owned to player 1 so its team colour changes **and the food count drops 5/12 → 4/12** (ownership is real), the town
+hall scaled up (screenshots).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -329,9 +366,9 @@ no extra plumbing. Verified (`pnpm jass:test` §7.12): `SetPlayerState` + `Adjus
 - **Custom-ability *behaviour*** — object data now gives a custom ability its real numbers, but only abilities whose base
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).
-- **More effect natives** — the 7.7 table is a start; still no-ops: `SetUnitOwner`, `SetUnitPosition`/`SetUnitX/Y`,
-  `PauseUnit`, `UnitAddAbility`/`UnitRemoveAbility`, `SetUnitFlyHeight`, `SetHeroLevel`/`AddHeroXP`, weather, etc. Each is
-  a small bridge method away — wire on demand as maps hit them.
+- **More effect natives** — 7.7 + 7.13 cover resources, unit-state, and the unit-mutation set (move/facing/owner/pause/
+  scale/colour/fly-height/speed). Still no-ops: `UnitAddAbility`/`UnitRemoveAbility`, `SetHeroLevel`/`AddHeroXP`,
+  `SetUnitAnimation`, weather, etc. Each is a small bridge method away — wire on demand as maps hit them.
 - **Remaining sim events** — timers, region, death, **damage**, and **attacked** pump live (7.4b/c); still to wire from
   `rts.tick`: **orders** (`EVENT_PLAYER_UNIT_ISSUED_*ORDER` — needs `GetIssuedOrderId`/`GetOrderTarget*`), **unit-state**
   (`EVENT_UNIT_STATE_LIMIT` — HP/mana threshold crossings), **construction/train finished**

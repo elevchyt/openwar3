@@ -8,7 +8,7 @@
 // (The text actions — floating text + on-screen messages — moved to natives/text.ts.)
 
 import { intToRawcode, rawcodeToInt } from "../lexer";
-import type { JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
+import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
 import { asInt, asNum, jBool, jHandle, jInt, JNULL, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -78,11 +78,123 @@ export function registerWorldNatives(rt: Runtime): void {
     return JNULL;
   });
 
+  // --- unit-mutation effects (7.7 cont.): a trigger visibly moves/alters a unit ---
+  // Keep the JassUnit handle's own x/y/facing in step with the sim write so a headless
+  // run (no bridge) still reflects it, and GetUnit* has a fallback.
+  const DEG = Math.PI / 180; // JASS facing/angles are in degrees; the sim uses radians.
+  // The unit's live (x,y) — sim value when attached, else the handle's last-known.
+  const posOf = (c: NativeCtx, u: JassUnit): [number, number] => [
+    u.simId >= 0 ? c.rt.hooks?.getUnitX?.(u.simId) ?? u.x : u.x,
+    u.simId >= 0 ? c.rt.hooks?.getUnitY?.(u.simId) ?? u.y : u.y,
+  ];
+  const move = (c: NativeCtx, u: JassUnit, x: number, y: number): void => {
+    u.x = x;
+    u.y = y;
+    if (u.simId >= 0) c.rt.hooks?.setUnitPosition?.(u.simId, x, y);
+  };
+  def(rt, "SetUnitX", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, asNum(a[1]), posOf(c, unit(c, a[0])!)[1]), JNULL));
+  def(rt, "SetUnitY", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, posOf(c, unit(c, a[0])!)[0], asNum(a[1])), JNULL));
+  def(rt, "SetUnitPosition", (c, a) => (unit(c, a[0]) && move(c, unit(c, a[0])!, asNum(a[1]), asNum(a[2])), JNULL));
+  def(rt, "SetUnitPositionLoc", (c, a) => {
+    const u = unit(c, a[0]);
+    const loc = c.rt.data<{ x: number; y: number }>(a[1]);
+    if (u && loc) move(c, u, loc.x, loc.y);
+    return JNULL;
+  });
+  const face = (c: NativeCtx, u: JassUnit, deg: number, instant: boolean): void => {
+    if (instant) u.facing = deg;
+    if (u.simId >= 0) c.rt.hooks?.setUnitFacing?.(u.simId, deg * DEG, instant);
+  };
+  def(rt, "SetUnitFacing", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), true), JNULL));
+  def(rt, "SetUnitFacingTimed", (c, a) => (unit(c, a[0]) && face(c, unit(c, a[0])!, asNum(a[1]), false), JNULL));
+
+  def(rt, "SetUnitOwner", (c, a) => {
+    const u = unit(c, a[0]);
+    if (!u) return JNULL;
+    const newOwner = c.rt.data<JassPlayer>(a[1])?.index ?? asInt(a[1]);
+    const changeColor = a[2]?.k === "bool" && a[2].b;
+    const prev = u.player;
+    u.player = newOwner;
+    if (u.simId >= 0) c.rt.hooks?.setUnitOwner?.(u.simId, newOwner, changeColor);
+    // EVENT_PLAYER_UNIT_CHANGE_OWNER = ConvertPlayerUnitEvent(270). Fire it for the
+    // losing player's registration (the common "any unit" reg covers every slot).
+    if (prev !== newOwner) {
+      const resp = new Map<string, JassValue>([
+        ["ChangingUnit", a[0]],
+        ["TriggerUnit", a[0]],
+        ["ChangingUnitPrevOwner", c.rt.playerHandle(prev)],
+        ["TriggerPlayer", c.rt.playerHandle(prev)],
+      ]);
+      c.fireEvent?.("playerUnitEvent", resp, (p) => c.rt.enumIndex(p[1] ?? JNULL) === 270 && c.rt.data<JassPlayer>(p[0])?.index === prev);
+    }
+    return JNULL;
+  });
+
+  def(rt, "PauseUnit", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.pauseUnit?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  def(rt, "IsUnitPaused", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(u && u.simId >= 0 ? c.rt.hooks?.isUnitPaused?.(u.simId) ?? false : false);
+  });
+
+  def(rt, "SetUnitScale", (c, a) => {
+    // WC3 scales the model uniformly by scaleX (scaleY/scaleZ are ignored on ground models).
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitScale?.(u.simId, asNum(a[1]));
+    return JNULL;
+  });
+  def(rt, "SetUnitVertexColor", (c, a) => {
+    // JASS passes 0–255 per channel; the render tint is 0–1.
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitVertexColor?.(u.simId, asInt(a[1]) / 255, asInt(a[2]) / 255, asInt(a[3]) / 255, asInt(a[4]) / 255);
+    return JNULL;
+  });
+  def(rt, "SetUnitTimeScale", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitTimeScale?.(u.simId, asNum(a[1]));
+    return JNULL;
+  });
+  def(rt, "SetUnitFlyHeight", (c, a) => {
+    // takes unit, real newHeight, real rate — we apply instantly (rate ignored).
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitFlyHeight?.(u.simId, asNum(a[1]));
+    return JNULL;
+  });
+  def(rt, "SetUnitMoveSpeed", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitMoveSpeed?.(u.simId, asNum(a[1]));
+    return JNULL;
+  });
+  def(rt, "SetUnitTurnSpeed", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitTurnSpeed?.(u.simId, asNum(a[1]));
+    return JNULL;
+  });
+
   // --- unit queries ---
+  // Prefer the sim's live value when a bridge is attached; fall back to the handle's
+  // last-known field (the only value available headlessly / before any pump).
+  const liveNum = (c: NativeCtx, u: JassUnit | undefined, fromHook: (h: EngineHooks, id: number) => number | undefined, fromHandle: (u: JassUnit) => number): number => {
+    if (!u) return 0;
+    if (u.simId >= 0 && c.rt.hooks) {
+      const v = fromHook(c.rt.hooks, u.simId);
+      if (v !== undefined) return v;
+    }
+    return fromHandle(u);
+  };
+  const rad2deg = (r: number | undefined): number | undefined => (r === undefined ? undefined : (r * 180) / Math.PI);
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
   def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? 15));
-  def(rt, "GetUnitX", (c, a) => ({ k: "real", n: unit(c, a[0])?.x ?? 0 }));
-  def(rt, "GetUnitY", (c, a) => ({ k: "real", n: unit(c, a[0])?.y ?? 0 }));
+  // Position/facing prefer the live sim value (a script-created unit's handle keeps its
+  // spawn-time x/y/facing; an adopted unit's is only refreshed on the event pump).
+  def(rt, "GetUnitX", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitX?.(id), (u) => u.x) }));
+  def(rt, "GetUnitY", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitY?.(id), (u) => u.y) }));
+  def(rt, "GetUnitFacing", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => rad2deg(h.getUnitFacing?.(id)), (u) => u.facing) }));
+  def(rt, "GetUnitMoveSpeed", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitMoveSpeed?.(id), () => 0) }));
+  def(rt, "GetUnitFlyHeight", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitFlyHeight?.(id), () => 0) }));
   def(rt, "IsUnitHidden", () => jBool(false));
   def(rt, "IsUnitType", () => jBool(false));
   // Floating text tags + on-screen messages (the "text actions") live in

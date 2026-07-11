@@ -29,6 +29,7 @@ interface Instance {
   setSequence(i: number): unknown;
   setSequenceLoopMode(m: number): unknown;
   setUniformScale(s: number): unknown;
+  setTeamColor?(id: number): unknown; // re-tint team-coloured parts (SetUnitColor/SetUnitOwner)
   setBlendTime?(seconds: number): unknown; // per-unit animation cross-fade (UnitUI `blend`)
   hide(): void;
   show(): void;
@@ -1444,6 +1445,42 @@ export class RtsController {
   /** Kill a unit (JASS KillUnit): plays the death animation + leaves a corpse. */
   killUnit(simId: number): void {
     this.sim.killUnit(simId);
+  }
+
+  // --- JASS render-only unit effects (Phase 7 — issue #33) -------------------
+  // Scale, vertex colour, fly-height lift and team colour are pure render state on
+  // the Entry (the sim doesn't care), so the mutators live here, not in SimWorld.
+
+  /** JASS SetUnitScale — the model's full-size scale (the render loop re-applies it,
+   *  and building-birth scaling layers on top). WC3 uses scaleX uniformly. */
+  setUnitScale(simId: number, scale: number): void {
+    const e = this.byId.get(simId);
+    if (e) e.baseScale = scale > 0 ? scale : 1;
+  }
+  /** JASS SetUnitVertexColor — the model's own tint (0–1), which fog dimming then
+   *  multiplies. Reset fogTintB so applyFogTint re-emits with the new base. */
+  setUnitVertexColor(simId: number, r: number, g: number, b: number, a: number): void {
+    const e = this.byId.get(simId);
+    if (!e) return;
+    e.baseColor = new Float32Array([r, g, b, a]);
+    e.fogTintB = NaN; // force applyFogTint to re-apply next frame
+    e.unit.instance.setVertexColor?.([r, g, b, a]);
+  }
+  /** JASS SetUnitFlyHeight (render half) — the Z lift the render loop adds; the sim
+   *  altitude is set alongside in SimWorld.setUnitFlyHeight. */
+  setUnitFlyHeight(simId: number, height: number): void {
+    const e = this.byId.get(simId);
+    if (e) e.moveHeight = height > 0 ? height : 0;
+  }
+  /** JASS SetUnitTimeScale — the model animation playback rate. */
+  setUnitTimeScale(simId: number, scale: number): void {
+    const inst = this.byId.get(simId)?.unit.instance as { timeScale?: number } | undefined;
+    if (inst) inst.timeScale = scale;
+  }
+  /** JASS SetUnitColor / SetUnitOwner's changeColor — re-tint the team-coloured
+   *  model parts to a player-colour index (our slot doubles as the colour). */
+  setUnitTeamColor(simId: number, colorIndex: number): void {
+    this.byId.get(simId)?.unit.instance.setTeamColor?.(colorIndex);
   }
 
   /** Record a building's footprint half-extents (WORLD units) so the render loop seats
