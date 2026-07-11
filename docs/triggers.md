@@ -103,6 +103,25 @@ black beyond; `config()` ran on the real script (5 players, 5 start locations); 
 > The live `startCustom` also runs the map's `config()` through the interpreter (read-only for now) — the first live
 > use of the trigger engine on a real script, and the seam for running `main()`/triggers in 7.2b+.
 
+### Custom-vs-melee behaviour — known differences
+
+Because custom-map units are **adopted** (we reuse the viewer's pre-rendered `war3mapUnits.doo` widget) rather than
+freshly spawned like the melee roster, a few behaviours differ. Watch for these when a custom map misbehaves:
+
+- **Walk/attack animations must drive the SAME widget object.** The adopted instance is still a mdx-m3-viewer
+  `Widget` in `map.units`, so the viewer's `Widget.update()` auto-plays a *Stand* clip every frame unless we set
+  `state = WidgetState.WALK` on **that widget object**. `RtsController.addUnit` builds a *fresh* `{instance, state}`
+  wrapper for its entry (correct for melee units, whose instances aren't viewer widgets), so `seedPlayerUnit` must
+  re-point `entry.unit` at the original `map.units` widget — else state writes miss and adopted units freeze in
+  Stand (walk never loops). **Fixed** (`rts.ts seedPlayerUnit`); this is exactly how the creep seed already worked.
+- **`.doo` per-unit HP fraction / mana / hero level are not applied** — adopted units seed at full HP / default mana
+  / `def.level` (not the editor's placed values). Minor; refine when it matters.
+- **Adopted buildings don't get footprint seating** (`setBuildingFootprint`), so an owned pre-placed building on a
+  slope keeps its `.doo` Z (may clip). Minor.
+- **No starting resources / no scripted AI** — custom maps grant gold/lumber and drive unit behaviour from their
+  triggers, which we don't run yet (7.4). So a custom map starts at 0/0 and its units act as generic auto-acquiring
+  melee units, not their scripted selves. Expected until the event runtime lands.
+
 ---
 
 ## Verifying (do this after any trigger change)

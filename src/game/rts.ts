@@ -1314,7 +1314,17 @@ export class RtsController {
    *  hand its fog visibility to the RTS so the static-widget pass doesn't fight it. */
   private seedPlayerUnit(unit: MapUnit, def: UnitDef, loc: Float32Array, owner: number, team: number): void {
     const facing = quatToZ(unit.instance.localRotation);
-    this.addUnit(unit.instance, def, loc[0], loc[1], facing, owner, team);
+    const simId = this.addUnit(unit.instance, def, loc[0], loc[1], facing, owner, team);
+    // The .doo instance is a viewer WIDGET (still in map.units), so mdx-m3-viewer's
+    // Widget.update() keeps auto-playing its Stand clip. We suppress that by writing
+    // `state = WidgetState.WALK` on the SAME widget object the viewer iterates — but
+    // addUnit made a fresh {instance,state} wrapper, so the write landed on the wrong
+    // object and walk/attack/death never stuck (the viewer re-stood it every frame).
+    // Point the entry at the ORIGINAL map.units widget (exactly how the creep seed
+    // works) so our state writes reach the viewer's copy. Without this, adopted units
+    // are frozen in Stand and never loop their walk (regression from issue #33).
+    const e = this.byId.get(simId);
+    if (e) e.unit = unit;
     this.seededInstances.add(unit.instance); // RTS now drives this unit's fog visibility
   }
 
