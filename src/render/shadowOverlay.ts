@@ -57,6 +57,12 @@ const LIFT = 2;
 const POLYGON_OFFSET_FACTOR = -2;
 const POLYGON_OFFSET_UNITS = -4;
 
+// Extra world-space shove toward the top-right (+X north-east, +Y up on WC3's fixed
+// north-up camera) on TOP of each shadow's authentic shadowX/Y centring. The game's own
+// offset is only ~10-20u, which reads as "under the unit"; the developer wanted the cast
+// to sit more clearly up-right (issue #58 f/u), so we push a bit further. Tuned live.
+const DIR_PUSH = 36;
+
 // Overall darkness. WC3 shadow blobs top out near 0.75 alpha in the texture, so this
 // scale gives ~0.55 peak — a soft, clearly-read contact shadow like the game's, not a
 // hard black splotch. Tuned live against the real client's shadows (issue #58).
@@ -125,7 +131,9 @@ export class ShadowOverlay {
   add(x: number, y: number, w: number, h: number, shadowX: number, shadowY: number, texture: string): void {
     if (w <= 0 || h <= 0 || !texture) return;
     const batch = this.batchFor(texture);
-    this.tessellate(batch, x - shadowX, y - shadowY, w, h);
+    // Box min corner = (unit − shadowX, unit − shadowY), then DIR_PUSH shoves the whole
+    // box toward the top-right so the cast reads clearly up-right (see DIR_PUSH).
+    this.tessellate(batch, x - shadowX + DIR_PUSH, y - shadowY + DIR_PUSH, w, h);
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });
     }

@@ -3807,27 +3807,46 @@ export class MapViewerScene {
    *  behind a treeline vanish (the treeline blocks their sight in the vision grid), the
    *  way WC3 hides forest interiors. Iterated in full each tick (a few thousand widgets,
    *  cheap) so props that stream in async are already fogged and re-brighten on sight. */
-  // All unit shadow textures live here (unitUI.slk `unitShadow` names the file stem).
+  // All shadow textures live here (unitUI.slk `unitShadow`/`buildingShadow` name the stem).
   private static readonly SHADOW_DIR = "ReplaceableTextures\\Shadows\\";
 
-  /** Rebuild this frame's unit-shadow batch: one soft blob decal per VISIBLE mobile unit,
-   *  sized + offset straight from its UnitDef shadow data (unitUI.slk) and painted on the
-   *  terrain by ShadowOverlay. Corpses, buildings (their footprint decal grounds them),
-   *  and fogged/mined units are skipped — a fogged enemy's shadow must not reveal it.
-   *  Cheap: a beginFrame + one small tessellation per unit, all drawn later in ~one call
-   *  per shadow texture (Shadow / ShadowFlyer). */
+  /** Rebuild this frame's shadow batch: one soft decal per VISIBLE unit, painted on the
+   *  terrain by ShadowOverlay. Mobile units use a blob sized/offset straight from their
+   *  UnitDef shadow data (unitUI.slk `unitShadow` + shadowW/H/X/Y); BUILDINGS use their
+   *  baked `buildingShadow` texture stretched over their pathing footprint (no size field
+   *  exists, so the footprint is the size), centred and given the same top-right cast.
+   *  Corpses and fogged/mined units are skipped — a fogged enemy's shadow must not reveal
+   *  it. Cheap: a beginFrame + one small tessellation per unit, all drawn later in ~one
+   *  call per shadow texture. */
   private updateShadowBatch(): void {
     const world = this.rts?.simWorld;
     if (!this.shadows || !world) return;
     this.shadows.beginFrame();
     for (const u of world.units.values()) {
-      if (u.hp <= 0 || u.building) continue;
+      if (u.hp <= 0) continue; // corpses cast no shadow
       const def = this.registry.get(u.typeId);
-      if (!def || !def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
+      if (!def) continue;
       if (this.rts!.unitHidden(u.id)) continue; // fogged / in a gold mine — don't draw its shadow
+      if (u.building) {
+        // Building: baked shadow texture stretched over the footprint (≈ its ground size).
+        if (!def.buildingShadow || !def.pathTex) continue;
+        const fp = this.footprintFor(def.pathTex);
+        if (!fp) continue;
+        // A building shadow reaches a little past the base; centre the quad on the footprint
+        // (shadowX/Y = half-size) so only DIR_PUSH offsets it, and the texture's own baked
+        // shape carries the cast direction.
+        const w = fp.w * PATHING_CELL * MapViewerScene.BUILDING_SHADOW_SCALE;
+        const h = fp.h * PATHING_CELL * MapViewerScene.BUILDING_SHADOW_SCALE;
+        this.shadows.add(u.x, u.y, w, h, w / 2, h / 2, MapViewerScene.SHADOW_DIR + def.buildingShadow + ".blp");
+        continue;
+      }
+      if (!def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
       this.shadows.add(u.x, u.y, def.shadowW, def.shadowH, def.shadowX, def.shadowY, MapViewerScene.SHADOW_DIR + def.unitShadow + ".blp");
     }
   }
+  // Building shadows have no size field in the data (unlike units' shadowW/H), so we size
+  // them from the pathing footprint and stretch a touch past the base — tuned live.
+  private static readonly BUILDING_SHADOW_SCALE = 1.25;
 
   private fogWidgets(vision: VisionMap): void {
     const map = this.viewer.map;

@@ -57,6 +57,13 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Build / check:** `pnpm dev` (localhost:5173), `pnpm build` (typecheck + build), `pnpm typecheck`. Run `pnpm typecheck`
   before considering a change done. `pnpm data:verify` re-checks `src/data/gameplayConstants.ts` against the unpacked
   archives — run it after touching that file (needs `pnpm data:extract` first).
+- **Show your work with screenshots — often.** Anything visual (rendering, HUD, camera, effects, terrain, shadows, fog,
+  UI) must be previewed in the REAL running game and the screenshots **sent to the developer** so they can see how it
+  looks as you go — don't just describe it or keep the shots to yourself. Drive the app live per the `live-browser-testing`
+  memory (temp `?dev=` auto-mount + `agent-browser` screenshot; `(2)EchoIsles.w3x` is the canonical test map), and use
+  `SendUserFile` to deliver the images. Send **multiple** shots — a framed overview plus tight close-ups (crop/upscale
+  with ffmpeg), before/after when you change a value, and a fresh shot after each meaningful tweak — rather than one
+  final image. Keep the developer in the loop visually throughout the task, not only at the end.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.
