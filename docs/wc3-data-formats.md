@@ -181,17 +181,88 @@ folder (e.g. `Abilities\Weapons\BloodElfMissile\BloodMageRangedAttack.wav`), mat
 
 ## Maps (`.w3m` / `.w3x`)
 
-A map is itself an MPQ containing chunk files. The ones OpenWar3 reads (`src/world/`):
+A map is **itself an MPQ archive** — same container format as `War3.mpq`, just holding a map's own chunk
+files rather than the game's. Open one with the same reader (`src/vfs/`). The only difference between the two
+extensions is the game version they target: **`.w3m` = Reign of Chaos** maps (also playable in TFT);
+**`.w3x` = Frozen Throne** maps (TFT-only, may use expansion content). Both have the identical internal
+layout. This manifest is the full set of chunk files a map can contain, per thehelper.net's *"Explanation of
+w3m and w3x files"* thread (#35292), cross-checked against the bundled 1.27a maps; the **OpenWar3** column
+names the parser where we read it (all under `src/world/`, wired through `src/vfs/`).
+
+### Terrain, pathing & minimap
+
+| File | Content | OpenWar3 |
+|---|---|---|
+| `war3map.w3e` | **Terrain**: per-corner tile texture, cliff/ramp level, height and water — the ground itself | `terrain.ts` |
+| `war3map.wpm` | **Pathing map**: per-cell walkable/buildable/flyable bits (red = unwalkable, blue = unbuildable) | `map.ts` → `PathingGrid` |
+| `war3mapPath.tga` | Legacy image-form pathing map some older RoC maps ship instead of/alongside `.wpm` | — |
+| `war3map.shd` | **Shadow map**: a coarse (16 px/tile) static terrain-shadow mask | — |
+| `war3mapMap.blp` | Rendered **minimap** image (BLP) | `map.ts` (preview) |
+| `war3mapMap.b00` | A mip/variant of the minimap image | — |
+| `war3map.mmp` | **Menu minimap**: start-location & icon positions drawn on the lobby preview | — |
+| `war3mapPreview.tga` / `war3mapMap.tga` | Loading-screen / terrain preview images | — |
+
+### Placed objects
+
+| File | Content | OpenWar3 |
+|---|---|---|
+| `war3mapUnits.doo` | **Placed units/buildings** — creeps, gold mines, shops, start locations, player units, with drop tables/inventory | `mapUnits.ts` |
+| `war3map.doo` | **Placed doodads/destructibles** — trees, rocks, decorative props | `doodads.ts` |
+
+Both `.doo` files share the "doodad object" container format but different record layouts.
+
+### Map info & configuration
+
+| File | Content | OpenWar3 |
+|---|---|---|
+| `war3map.w3i` | **Map info**: name, author, players, forces/teams, start locations, camera bounds, tech-tree tweaks, and the **flags** bitfield (melee-vs-custom, see below) | `mapInfo.ts` |
+| `war3mapMisc.txt` | Per-map **Gameplay Constants** overrides (a map's edits to `MiscGame`/`MiscData` values) | — |
+| `war3mapSkin.txt` | Per-map **interface/skin** overrides (custom UI art, command-string tweaks) | — |
+| `war3mapExtra.txt` | Extra map properties (weather, sound-environment defaults) | — |
+| `war3map.imp` | **Import list** — records every user-imported asset (`war3mapImported\…`) so a re-save keeps them | — |
+
+### Triggers & script
+
+| File | Content | OpenWar3 |
+|---|---|---|
+| `war3map.j` | **Compiled trigger script** (JASS2; Lua on Reforged). What the engine actually runs | `triggers.ts` |
+| `war3map.wtg` | GUI **trigger tree**: categories, variables, event-condition-action definitions (editor source) | scanned in `triggers.ts` |
+| `war3map.wct` | **Custom text** attached to those triggers (editor source) | — |
+| `war3map.wts` | **Trigger string table**: the `TRIGSTR_###` values that `.w3i`/object data reference | `mapInfo.ts` (string resolve) |
+
+The editor keeps `.wtg`/`.wct` as its source-of-truth and *compiles* them to `war3map.j`; the running game
+executes the `.j`, never the `.wtg`.
+
+### Audio, cameras & regions
+
+| File | Content | OpenWar3 |
+|---|---|---|
+| `war3map.w3s` | **Sound definitions**: the map's declared sounds/ambience (paths, volume, 3-D flags) | — |
+| `war3map.w3r` | **Regions**: named rectangles + their weather effect / ambient-sound bindings | — |
+| `war3map.w3c` | **Cameras**: authored camera presets | — |
+
+### Custom object data (World Editor "object editor" edits)
+
+Each is a binary table of *modifications* layered on the base game data — present only when a map actually
+customises that object class. OpenWar3 runs the stock melee tables, so it doesn't read these yet (a custom-map
+concern for the future JASS/object-data pass):
+
+| File | Class | | File | Class |
+|---|---|---|---|---|
+| `war3map.w3u` | Units | | `war3map.w3d` | Doodads |
+| `war3map.w3t` | Items | | `war3map.w3h` | Buffs/effects |
+| `war3map.w3a` | Abilities | | `war3map.w3q` | Upgrades |
+| `war3map.w3b` | Destructibles | | | |
+
+### MPQ archive metadata
+
+Not map data proper — the container's own bookkeeping, common to every MPQ:
 
 | File | Content |
 |---|---|
-| `war3map.w3e` | Terrain: tiles, cliff/ramp/height/water per corner |
-| `war3mapUnits.doo` | **Placed units/buildings** (creeps, gold mines, shops, start locations, player units) — parsed in `src/world/mapUnits.ts` |
-| `war3map.doo` | Placed doodads/destructibles (trees, etc.) |
-| `war3map.w3i` | Map info: name, players, teams, start locations, **flags** (see below) — parsed in `src/world/mapInfo.ts` |
-| `war3map.j` | **Compiled trigger script** (JASS; Lua on Reforged). What the engine actually runs — read in `src/world/triggers.ts` |
-| `war3map.wtg` / `war3map.wct` | GUI trigger tree + custom text. Editor-only source; the game runs the compiled `.j`, not these |
-| `war3mapMap.blp` | Preview minimap image |
+| `(listfile)` | Internal filename directory (often incomplete or absent — see the probing note above) |
+| `(attributes)` | Per-block CRC32 checksums + modification timestamps |
+| `(signature)` | Legacy weak archive signature |
 
 Player **15** is Neutral Passive (shops, taverns, fountains, critters); neutral-hostile creeps use other slots.
 

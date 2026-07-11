@@ -72,6 +72,11 @@ Practical notes:
   User **A Void** dumped the C++ source strings and the `Game.pdb` source tree out of `Game.dll`, exposing the real
   class names (`CUnit`, `CAbility*`, `CWidget`, `CGameUI`, the `frame`/`framedef`/`fdfile` FDF UI system, the `glue`
   menus) and the data-file/asset names the engine reads. Use it to name/shape our subsystems to match the original.
+- **Map (`.w3m`/`.w3x`) internal file manifest.** [thehelper.net "Explanation of w3m and w3x files" (35292)](https://www.thehelper.net/threads/explanation-of-w3m-and-w3x-files.35292/)
+  — a plain-language index of every chunk file inside a map MPQ (terrain `.w3e`, pathing `.wpm`, placed
+  objects `.doo`, info `.w3i`, triggers `.j`/`.wtg`/`.wct`/`.wts`, the `.w3u`…`.w3q` object-data tables, etc.).
+  Written up (cross-checked against the bundled maps, OpenWar3's parsers noted) in the **Maps** section of
+  [`wc3-data-formats.md`](wc3-data-formats.md). Complements the `w3x-spec` byte-layout reference above.
 - **Unit selection = collision shapes, not the mesh.** WC3 picks a unit by its model's
   **CollisionShape** (box/sphere), sized from the pathing/collision value — clicking the mesh is
   wrong. Our picker uses the unit's collision + selection-scale radius projected to screen.
