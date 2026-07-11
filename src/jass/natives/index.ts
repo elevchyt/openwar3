@@ -7,8 +7,9 @@
 // (CLAUDE.md "never hard-crash the map"). Grow coverage with tools/native-coverage.mjs.
 
 import type { NativeCtx, Runtime } from "../runtime";
-import { asInt, asNum, asStr, jBool, jHandle, jInt, jReal, jStr, JNULL, type JassValue } from "../values";
+import { asInt, asNum, asStr, jInt, jReal, jStr, JNULL, type JassValue } from "../values";
 import { registerConfigNatives } from "./config";
+import { registerEventNatives } from "./events";
 import { registerWorldNatives } from "./world";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -30,94 +31,6 @@ const CONVERT_NATIVES = [
   "ConvertTexMapFlags", "ConvertUnitEvent", "ConvertUnitState", "ConvertUnitType",
   "ConvertVersion", "ConvertVolumeGroup", "ConvertWeaponType", "ConvertWidgetEvent",
 ];
-
-/** A minimal trigger object. This session records events/conditions/actions but
- *  does not yet pump runtime events (that's milestone 7.4) — enough to run a map's
- *  InitCustomTriggers + RunInitializationTriggers without crashing, and to fire an
- *  init trigger's actions (the melee library, victory setup, …) via
- *  ConditionalTriggerExecute. */
-interface Trigger {
-  actions: string[]; // function names added via TriggerAddAction
-  conditions: string[]; // function names wrapped by TriggerAddCondition
-  events: unknown[]; // recorded registrations (unpumped for now)
-  enabled: boolean;
-}
-interface BoolExpr {
-  fn: string;
-}
-
-function registerTriggerNatives(rt: Runtime): void {
-  const trig = (c: NativeCtx, v: JassValue): Trigger | undefined => c.rt.data<Trigger>(v);
-  def(rt, "CreateTrigger", (c) =>
-    jHandle(c.rt.handles.alloc({ actions: [], conditions: [], events: [], enabled: true } as Trigger), "trigger"));
-  def(rt, "DestroyTrigger", (c, a) => (a[0].k === "handle" ? c.rt.handles.free(a[0].h) : void 0, JNULL));
-  def(rt, "EnableTrigger", (c, a) => ((trig(c, a[0]) ?? { enabled: true }).enabled = true, JNULL));
-  def(rt, "DisableTrigger", (c, a) => (trig(c, a[0]) && (trig(c, a[0])!.enabled = false), JNULL));
-  def(rt, "TriggerAddAction", (c, a) => {
-    const t = trig(c, a[0]);
-    if (t && a[1].k === "code") t.actions.push(a[1].fn);
-    return jHandle(0, "triggeraction");
-  });
-  def(rt, "TriggerAddCondition", (c, a) => {
-    const t = trig(c, a[0]);
-    const be = c.rt.data<BoolExpr>(a[1]);
-    if (t && be) t.conditions.push(be.fn);
-    return jHandle(0, "triggercondition");
-  });
-  // Condition/Filter wrap a `code` into a boolexpr; And/Or/Not are boolexpr combinators.
-  def(rt, "Condition", (c, a) => (a[0].k === "code" ? jHandle(c.rt.handles.alloc({ fn: a[0].fn } as BoolExpr), "boolexpr") : JNULL));
-  def(rt, "Filter", (c, a) => (a[0].k === "code" ? jHandle(c.rt.handles.alloc({ fn: a[0].fn } as BoolExpr), "boolexpr") : JNULL));
-  def(rt, "And", (_c, a) => a[0] ?? JNULL);
-  def(rt, "Or", (_c, a) => a[0] ?? JNULL);
-  def(rt, "Not", (_c, a) => a[0] ?? JNULL);
-  def(rt, "DestroyBoolExpr", () => JNULL);
-  // Event registrations — recorded only (7.4 will pump them from the sim tick).
-  for (const name of [
-    "TriggerRegisterUnitEvent", "TriggerRegisterPlayerEvent", "TriggerRegisterPlayerUnitEvent",
-    "TriggerRegisterEnterRectSimple", "TriggerRegisterLeaveRectSimple", "TriggerRegisterEnterRegion",
-    "TriggerRegisterLeaveRegion", "TriggerRegisterTimerEvent", "TriggerRegisterTimerExpireEvent",
-    "TriggerRegisterGameEvent", "TriggerRegisterDialogEvent", "TriggerRegisterDeathEvent",
-    "TriggerRegisterUnitStateEvent", "TriggerRegisterGameStateEvent",
-  ]) {
-    def(rt, name, (c, a) => {
-      const t = trig(c, a[0]);
-      if (t) t.events.push(a.slice(1));
-      return jHandle(0, "event");
-    });
-  }
-  // Fire a trigger's actions now (used by RunInitializationTriggers). Evaluate its
-  // conditions first (ConditionalTriggerExecute); TriggerExecute skips them.
-  const runActions = (c: NativeCtx, t: Trigger): void => {
-    for (const fn of t.actions) {
-      try {
-        c.call(fn, []);
-      } catch (err) {
-        c.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
-      }
-    }
-  };
-  const conditionsPass = (c: NativeCtx, t: Trigger): boolean =>
-    t.conditions.every((fn) => {
-      const r = c.call(fn, []);
-      return r.k === "bool" ? r.b : true;
-    });
-  def(rt, "ConditionalTriggerExecute", (c, a) => {
-    const t = trig(c, a[0]);
-    if (t && t.enabled && conditionsPass(c, t)) runActions(c, t);
-    return JNULL;
-  });
-  def(rt, "TriggerExecute", (c, a) => {
-    const t = trig(c, a[0]);
-    if (t) runActions(c, t);
-    return JNULL;
-  });
-  def(rt, "TriggerEvaluate", (c, a) => {
-    const t = trig(c, a[0]);
-    return jBool(t ? conditionsPass(c, t) : false);
-  });
-  def(rt, "ExecuteFunc", (c, a) => (a[0].k === "string" ? c.call(a[0].s, []) : JNULL));
-  def(rt, "DoNothing", () => JNULL);
-}
 
 /** Cheap, pure utility natives (string/number conversions, RNG, camera/env
  *  no-ops). Safe to run anywhere; they make blizzard.j run more faithfully and cut
@@ -165,6 +78,6 @@ export function registerNatives(rt: Runtime): void {
   }
   registerConfigNatives(rt);
   registerWorldNatives(rt);
-  registerTriggerNatives(rt);
+  registerEventNatives(rt);
   registerUtilNatives(rt);
 }

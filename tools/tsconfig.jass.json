@@ -25,6 +25,7 @@
     "../src/jass/natives/index.ts",
     "../src/jass/natives/config.ts",
     "../src/jass/natives/world.ts",
+    "../src/jass/natives/events.ts",
     "../src/jass/headless.ts"
   ]
 }

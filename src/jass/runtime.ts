@@ -11,6 +11,43 @@
 import type { FunctionDecl } from "./ast";
 import { type JassValue, JNULL, jHandle } from "./values";
 
+/** A trigger object (CreateTrigger) — its conditions + actions (function names)
+ *  and enabled flag. The engine fires it when a registered event occurs (7.4). */
+export interface TriggerObj {
+  handleId: number;
+  actions: string[]; // function names added via TriggerAddAction
+  conditions: string[]; // function names wrapped by TriggerAddCondition
+  enabled: boolean;
+}
+
+/** A `boolexpr` — a condition wrapping a `code` (function ref), from Condition()/
+ *  Filter(). We keep only the function name; And/Or/Not compose these later. */
+export interface BoolExpr {
+  fn: string;
+}
+
+/** A game timer (CreateTimer/TimerStart). Pumped by Interpreter.advanceTime from
+ *  the sim tick; on expiry it runs its handler code and fires any trigger
+ *  registered on it (TriggerRegisterTimerExpireEvent). */
+export interface TimerObj {
+  handleId: number;
+  timeout: number; // seconds
+  periodic: boolean;
+  remaining: number; // seconds until next expiry
+  running: boolean;
+  elapsedTotal: number; // seconds since TimerStart (for TimerGetElapsed)
+  handlerFn: string | null; // the `code` passed to TimerStart, run on expiry
+}
+
+/** One event→trigger registration (TriggerRegister*Event). `kind` is our internal
+ *  event tag; `params` are the extra args (rect, timer, unit, playerunitevent id…)
+ *  the dispatcher matches against when the sim raises that event. */
+export interface TriggerReg {
+  kind: string;
+  trigId: number; // handle id of the registered trigger
+  params: JassValue[];
+}
+
 /** A player slot as config() fills it in (mirrors the SetPlayer* natives). */
 export interface JassPlayer {
   index: number; // 0–15
@@ -145,6 +182,13 @@ export class Runtime {
   /** Event-response stack (thread-local in the real engine): each fired trigger
    *  pushes a frame so GetTriggerUnit/GetEnteringUnit/… read the current event. */
   readonly eventStack: Array<Map<string, JassValue>> = [];
+
+  /** Event→trigger registrations (TriggerRegister*Event) the dispatcher scans when
+   *  the sim raises an event, and the live timers advanceTime() pumps. */
+  readonly triggerRegs: TriggerReg[] = [];
+  readonly timers: TimerObj[] = [];
+  /** Seconds of game time elapsed (advanced from the sim tick). */
+  gameTime = 0;
 
   /** Units the script has created (CreateUnit), in creation order. */
   readonly units: JassUnit[] = [];

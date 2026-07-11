@@ -12,9 +12,9 @@
 //     runaway loop/recursion is capped rather than hanging the browser.
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
-import { Runtime, JassArray, type NativeCtx } from "./runtime";
+import { Runtime, JassArray, type NativeCtx, type TimerObj, type TriggerObj } from "./runtime";
 import {
-  asInt, asNum, asStr, defaultForType, jassEquals, jBool, jInt, jReal, jStr, JNULL, truthy, type JassValue,
+  asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
 
 class ReturnSignal {
@@ -265,11 +265,97 @@ export class Interpreter {
     return jReal(b === 0 ? 0 : asNum(l) / b);
   }
 
-  /** Load, register natives, then initialise globals — the standard boot for a set
-   *  of programs (common.j, blizzard.j, war3map.j). Native registration is done by
-   *  the caller between load() and initGlobals(); this helper just runs a program. */
+  /** Run a top-level function by name (config, main, or any trigger callback). */
   run(fnName: string, args: JassValue[] = []): JassValue {
     return this.callFunction(fnName, args);
+  }
+
+  // --- event runtime (milestone 7.4) ----------------------------------------
+
+  /** Fire a trigger: push its event responses (thread-local), evaluate conditions,
+   *  and run actions if they pass — then pop. This is the ECA execution the whole
+   *  event model routes through (timers here; sim events via fireEvent). A trigger
+   *  action that throws is logged, never propagated (one bad trigger ≠ dead map). */
+  fireTrigger(trig: TriggerObj, responses: Map<string, JassValue>): void {
+    if (!trig.enabled) return;
+    this.rt.eventStack.push(responses);
+    try {
+      const pass = trig.conditions.every((fn) => truthy(this.callFunction(fn, [])));
+      if (pass) {
+        for (const fn of trig.actions) {
+          try {
+            this.callFunction(fn, []);
+          } catch (err) {
+            if (!(err instanceof ReturnSignal)) this.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
+          }
+        }
+      }
+    } finally {
+      this.rt.eventStack.pop();
+    }
+  }
+
+  /** Dispatch a sim-raised event to every trigger registered for `kind` whose
+   *  registration `params` match (the caller supplies both the event responses and
+   *  the matcher). Used by the bridge to raise unit-death / enter-region / … from
+   *  the sim tick. Registrations are indexed by kind in runtime.triggerRegs. */
+  fireEvent(kind: string, responses: Map<string, JassValue>, matches?: (params: JassValue[]) => boolean): void {
+    // Snapshot: an action may add/remove registrations mid-dispatch.
+    const regs = this.rt.triggerRegs.filter((r) => r.kind === kind && (!matches || matches(r.params)));
+    for (const reg of regs) {
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+    }
+  }
+
+  /** Advance game timers by `dt` seconds (pumped from the sim tick). An expired
+   *  timer runs its TimerStart handler code and fires any trigger registered on it
+   *  (TriggerRegisterTimerExpireEvent); periodic timers re-arm. The inner guard
+   *  stops a zero/negative-timeout periodic timer from looping forever in one tick. */
+  advanceTime(dt: number): void {
+    this.rt.gameTime += dt;
+    for (const t of this.rt.timers) {
+      if (!t.running) continue;
+      t.remaining -= dt;
+      t.elapsedTotal += dt;
+      let guard = 0;
+      while (t.running && t.remaining <= 0 && guard++ < 10000) {
+        this.expireTimer(t);
+        if (t.periodic && t.timeout > 0) t.remaining += t.timeout;
+        else {
+          t.running = false;
+          break;
+        }
+      }
+    }
+  }
+
+  private expireTimer(t: TimerObj): void {
+    const responses = new Map<string, JassValue>([["ExpiredTimer", jHandle(t.handleId, "timer")]]);
+    if (t.handlerFn) {
+      this.rt.eventStack.push(responses);
+      try {
+        this.callFunction(t.handlerFn, []);
+      } catch (err) {
+        if (!(err instanceof ReturnSignal)) this.rt.warnOnce(t.handlerFn, `timer handler threw: ${(err as Error).message}`);
+      } finally {
+        this.rt.eventStack.pop();
+      }
+    }
+    for (const reg of this.rt.triggerRegs) {
+      if (reg.kind !== "timerExpire") continue;
+      if (reg.params[0]?.k === "handle" && reg.params[0].h === t.handleId) {
+        const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+        if (trig) this.fireTrigger(trig, responses);
+      }
+    }
+  }
+
+  /** Add the standard GetTriggeringTrigger response for the trigger being fired. */
+  private withTrigger(responses: Map<string, JassValue>, trig: TriggerObj): Map<string, JassValue> {
+    const m = new Map(responses);
+    m.set("TriggeringTrigger", jHandle(trig.handleId, "trigger"));
+    return m;
   }
 }
 

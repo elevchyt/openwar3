@@ -17,9 +17,10 @@
 | 7.1 | Interpreter core + `config()` | ✅ done | config() players/start-locations == `war3map.w3i` (oracle) |
 | 7.2 | `CreateUnit` + world bring-up | ✅ done (headless) | `CreateAllUnits()` count == `war3mapUnits.doo` (PlunderIsle 82==82) |
 | — | **Vision on custom maps** (issue #33 bug) | ✅ done (live) | pre-placed player units seeded owned → fog lifts (screenshots) |
+| 7.4a | Event runtime core (ECA firing, event responses, **timers**) | ✅ done (headless) | periodic timer fires its trigger 3×; one-shot once; `GetExpiredTimer` correct |
 | 7.2b | live `CreateUnit` → new sim units (replace .doo adoption) | ⬜ next | — |
+| 7.4b | pump sim events (enter-region, unit-death) live from `rts.tick` | ⬜ next | a scripted trigger fires in-game |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
-| 7.4 | Trigger/event runtime (pump events from the sim tick) | ⬜ todo | a scripted trigger fires in-game |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` |
 
 Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles) and **`pnpm jass:coverage`** (unimplemented natives by usage).
@@ -71,7 +72,8 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `interpreter.ts` | tree-walker: call frames, `and`/`or` **do not short-circuit** (JASS gotcha), type-directed arithmetic, safe defaults, loop/recursion caps |
 | `natives/config.ts` | `config()` + player-setup natives → `MapSetup` |
 | `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, **floating text** (`CreateTextTag`…), `DisplayText…` |
-| `natives/index.ts` | registry: enum constructors (`Convert*`), trigger core (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), utility natives (`I2S`, `GetRandomInt`, camera/env no-ops) |
+| `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
+| `natives/index.ts` | registry: enum constructors (`Convert*`) + utility natives (`I2S`, `GetRandomInt`, camera/env no-ops); calls the group registrars |
 | `headless.ts` | engine-free entry: `buildInterpreter(sources)` for tests/tooling |
 | `index.ts` | **app-facing** loader: reads `common.j`/`blizzard.j`/`war3map.j` via the VFS, runs `config()` |
 
@@ -155,14 +157,32 @@ Reads only the developer's own local install (`Warcraft III/` is gitignored; we 
 - **[JASS scripting references](REFERENCES.md#jass-scripting-references)** — the JASS Manual BNF (grammar) + Jassbot
   (native lookup).
 
+## The event runtime (7.4a — done, headless)
+
+WC3 triggers are **Event-Condition-Action**: a script `CreateTrigger`s, registers it on an event
+(`TriggerRegister*Event`), and adds conditions/actions; when the event fires the engine sets thread-local **event
+responses** (`GetTriggerUnit`, `GetEnteringUnit`, `GetExpiredTimer`, …) the actions read. Built:
+
+- **`src/jass/natives/events.ts`** — trigger objects, `Condition`/`Filter`/`And`/`Or`/`Not`, the event **registration**
+  natives (recorded into `runtime.triggerRegs`, tagged by an internal `kind`), the event **response** readers, and
+  **timers** (`CreateTimer`/`TimerStart`/`PauseTimer`/`GetExpiredTimer`/…).
+- **`src/jass/interpreter.ts`** — the **firing** engine: `fireTrigger(trig, responses)` (push responses → eval
+  conditions → run actions → pop), `advanceTime(dt)` (pump timers → run handler code + fire `timerExpire` triggers,
+  periodic re-arm), and a general `fireEvent(kind, responses, matcher)` the sim bridge will call for
+  enter-region / unit-death / … Registration lives in natives, firing on the interpreter (it needs the eval loop).
+
+Verified (`pnpm jass:test` §7.4): a periodic 1s timer fires its trigger exactly 3× over 3.5s with the correct
+`GetExpiredTimer`, and a one-shot timer fires exactly once regardless of elapsed time.
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
+- **7.4b** wire the live pump: run the map's `InitCustomTriggers`/`RunInitializationTriggers` in-game and pump
+  `advanceTime` + `fireEvent` (enter-region, unit-death) from `rts.tick`, so real map triggers fire live. Blocked on
+  7.2b because running `main()` live also runs `CreateAllUnits`/`CreateRegions` — must reconcile with the current
+  `.doo` adoption first (else duplicate units / null `gg_rct_*` regions).
 - **7.2b** route live unit creation through `CreateUnit` (currently the vision fix adopts `.doo` instances; the
   interpreter's `CreateUnit` runs headless only).
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.
-- **7.4** the event runtime: pump `TriggerRegister*Event` from the sim tick, set event responses
-  (`GetTriggerUnit`, `GetEnteringUnit`, …), fire conditions/actions. This is what makes floating-text-on-event,
-  region triggers, victory conditions, and full custom maps actually *play*.
-- **Natives on demand** — regions/groups/forces, timers, weather, sound, cameras, cinematics, multiboard, gamecache.
-  Use `pnpm jass:coverage` to prioritise.
+- **Natives on demand** — regions/groups/forces, weather, sound, cameras, cinematics, multiboard, gamecache. Use
+  `pnpm jass:coverage` to prioritise.
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

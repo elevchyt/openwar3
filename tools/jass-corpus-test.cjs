@@ -132,5 +132,60 @@ if (existsSync(plunder)) checkMap('PlunderIsle (melee)', plunder, true);
 const warchasers = join(WC3, 'Maps', 'Scenario', '(4)WarChasers.w3m');
 if (existsSync(warchasers)) checkMap('WarChasers (custom)', warchasers, false);
 
+// --- 7.4: event runtime — a periodic timer fires its trigger (ECA end-to-end) ---
+console.log('\n[7.4] Event runtime (timers → triggers, event responses)');
+{
+  // A synthetic map script: a periodic timer whose trigger action counts firings,
+  // and only when GetExpiredTimer() is the expected timer (proves event responses).
+  const SRC = `
+globals
+    integer udg_count = 0
+    integer udg_wrong = 0
+    timer   udg_t   = null
+    trigger udg_trg = null
+endglobals
+function OnExpire takes nothing returns nothing
+    if ( GetExpiredTimer() == udg_t ) then
+        set udg_count = udg_count + 1
+    else
+        set udg_wrong = udg_wrong + 1
+    endif
+endfunction
+function InitTest takes nothing returns nothing
+    set udg_t   = CreateTimer()
+    set udg_trg = CreateTrigger()
+    call TriggerAddAction( udg_trg, function OnExpire )
+    call TriggerRegisterTimerExpireEvent( udg_trg, udg_t )
+    call TimerStart( udg_t, 1.0, true, null )
+endfunction`;
+  const interp = buildInterpreter([SRC]);
+  interp.run('InitTest', []);
+  interp.advanceTime(3.5); // periodic 1.0s timer → fires at t=1,2,3
+  const count = interp.rt.globals.get('udg_count');
+  const wrong = interp.rt.globals.get('udg_wrong');
+  if (count && count.n === 3 && wrong && wrong.n === 0) ok(`periodic timer fired its trigger 3× in 3.5s, GetExpiredTimer correct`);
+  else fail(`timer/event: count=${count && count.n} (want 3), wrongTimer=${wrong && wrong.n} (want 0)`);
+
+  // A one-shot timer fires exactly once no matter how far time advances.
+  const SRC2 = `
+globals
+    integer udg_n = 0
+    timer   udg_o = null
+endglobals
+function Bump takes nothing returns nothing
+    set udg_n = udg_n + 1
+endfunction
+function Init2 takes nothing returns nothing
+    set udg_o = CreateTimer()
+    call TimerStart( udg_o, 0.5, false, function Bump )
+endfunction`;
+  const i2 = buildInterpreter([SRC2]);
+  i2.run('Init2', []);
+  i2.advanceTime(10.0);
+  const n = i2.rt.globals.get('udg_n');
+  if (n && n.n === 1) ok(`one-shot timer (with handler code) fired exactly once`);
+  else fail(`one-shot timer: n=${n && n.n} (want 1)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);
