@@ -1074,7 +1074,8 @@ export class MapViewerScene {
       const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false, runMain: true, hooks: this.textHooks() });
       if (!engine) return;
       this.scriptSpawnLive = true; // init done → trigger CreateUnit now spawns for real
-      this.mapScript = engine; // pumped each tick (timers + enter/leave-region events — 7.4b)
+      this.mapScript = engine; // pumped each tick (timers + enter/leave-region + death events — 7.4b/c)
+      if (this.rts) this.rts.simWorld.captureDeaths = true; // record deaths so death-triggered actions fire
       const s = engine.setup;
       const trigs = engine.interp.rt.triggerRegs.length;
       console.info(
@@ -1086,22 +1087,26 @@ export class MapViewerScene {
     }
   }
 
-  /** Drive the running map script from the sim tick (Phase 7 — 7.4b): advance its
-   *  timers and pump enter/leave-region events. Best-effort — a throwing trigger is
-   *  swallowed inside the interpreter, but wrap the whole pump too so one bad tick
-   *  can't kill the frame loop. `dt` is seconds (the clamped sim step). */
+  /** Drive the running map script from the sim tick (Phase 7 — 7.4b/c): advance its
+   *  timers and pump enter/leave-region + unit-death events. Best-effort — a throwing
+   *  trigger is swallowed inside the interpreter, but wrap the whole pump too so one
+   *  bad tick can't kill the frame loop. `dt` is seconds (the clamped sim step). */
   private pumpMapScript(dt: number): void {
     const engine = this.mapScript;
     if (!engine || !this.rts) return;
     try {
       engine.interp.advanceTime(dt); // timers (TriggerRegisterTimerExpireEvent + TimerStart handlers)
-      // Only snapshot units if some trigger actually watches a region this tick.
-      if (!engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) return;
-      const snap: UnitSnapshot[] = [];
-      for (const u of this.rts.simWorld.units.values()) {
-        snap.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+      // Deaths this tick → EVENT_UNIT_DEATH / EVENT_PLAYER_UNIT_DEATH (7.4c).
+      const deaths = this.rts.simWorld.drainDeathEvents();
+      if (deaths.length) engine.interp.pumpUnitDeaths(deaths);
+      // Enter/leave-region — only snapshot the world if some trigger watches a region.
+      if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
+        const snap: UnitSnapshot[] = [];
+        for (const u of this.rts.simWorld.units.values()) {
+          snap.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+        }
+        engine.interp.pumpRegions(snap);
       }
-      engine.interp.pumpRegions(snap);
     } catch (err) {
       console.warn("[jass] trigger pump failed (non-fatal):", err);
     }

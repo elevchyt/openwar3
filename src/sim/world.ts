@@ -283,6 +283,18 @@ export interface SimTree {
   blockRadius: number;
 }
 
+/** A frozen snapshot of a unit for a death event (the unit is gone next tick). Just
+ *  enough for the trigger engine to mint a JASS unit handle (GetDyingUnit/…). */
+export interface DeathUnitInfo {
+  id: number;
+  typeId: string;
+  owner: number;
+  x: number;
+  y: number;
+  facing: number;
+}
+const deathInfo = (u: SimUnit): DeathUnitInfo => ({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+
 export interface SimUnit {
   id: number;
   owner: number; // player slot; -1 = map-neutral
@@ -675,6 +687,11 @@ export class SimWorld {
    *  opens at 08:00 (Scripts\Blizzard.j bj_MELEE_STARTING_TOD). */
   timeOfDay: number = MELEE.MELEE_STARTING_TOD;
   private deaths: number[] = [];
+  /** Whether to record death events for the trigger engine (set by the host when a
+   *  map script wants EVENT_UNIT_DEATH / EVENT_PLAYER_UNIT_DEATH). Off for melee, so
+   *  those matches don't accumulate death snapshots nobody drains. */
+  captureDeaths = false;
+  private deathEvents: Array<{ victim: DeathUnitInfo; killer: DeathUnitInfo | null }> = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -1703,6 +1720,15 @@ export class SimWorld {
     if (!this.deaths.length) return this.deaths;
     const out = this.deaths;
     this.deaths = [];
+    return out;
+  }
+
+  /** Death events (victim + killer snapshots) since the last drain, for the trigger
+   *  engine. Only populated when `captureDeaths` is set (a script is listening). */
+  drainDeathEvents(): Array<{ victim: DeathUnitInfo; killer: DeathUnitInfo | null }> {
+    if (!this.deathEvents.length) return this.deathEvents;
+    const out = this.deathEvents;
+    this.deathEvents = [];
     return out;
   }
 
@@ -4516,6 +4542,14 @@ export class SimWorld {
     this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
+    // Record a death event for the trigger engine (Phase 7 — EVENT_UNIT_DEATH /
+    // EVENT_PLAYER_UNIT_DEATH). Only when a script is listening (captureDeaths), so a
+    // melee match with no trigger pump doesn't accumulate these. Snapshot both units
+    // now — the victim is gone from `units` next tick, and the killer may move/die.
+    if (this.captureDeaths) {
+      const killer = killerId ? this.units.get(killerId) : undefined;
+      this.deathEvents.push({ victim: deathInfo(u), killer: killer ? deathInfo(killer) : null });
+    }
     this.unitDrops.delete(u.id);
   }
 

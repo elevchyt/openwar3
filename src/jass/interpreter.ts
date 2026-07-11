@@ -12,7 +12,7 @@
 //     runaway loop/recursion is capped rather than hanging the browser.
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
-import { Runtime, JassArray, type BoolExpr, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg } from "./runtime";
+import { Runtime, JassArray, type BoolExpr, type JassPlayer, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -26,6 +26,16 @@ export interface UnitSnapshot {
   y: number;
   facing: number;
 }
+
+/** One unit death fed to the death pump: the victim + its killer (null if none). */
+export interface DeathEvent {
+  victim: UnitSnapshot;
+  killer: UnitSnapshot | null;
+}
+
+// common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
+const EVENT_UNIT_DEATH = 53;
+const EVENT_PLAYER_UNIT_DEATH = 20;
 
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
@@ -437,22 +447,55 @@ export class Interpreter {
    *  trigger with the right event responses. */
   private fireRegionCrossing(reg: TriggerReg, trig: TriggerObj, u: UnitSnapshot, respKey: string): void {
     const handle = this.rt.unitForSim(u);
-    const filter = reg.params[1];
-    if (filter && filter.k === "handle") {
-      const be = this.rt.handles.get(filter.h) as BoolExpr | undefined;
-      if (be?.fn) {
-        this.rt.eventStack.push(new Map([["FilterUnit", handle]]));
-        let pass = true;
-        try {
-          pass = truthy(this.callFunction(be.fn, []));
-        } finally {
-          this.rt.eventStack.pop();
-        }
-        if (!pass) return;
-      }
-    }
+    if (!this.eventFilterPasses(reg.params[1], handle)) return;
     const responses = new Map<string, JassValue>([["TriggerUnit", handle], [respKey, handle]]);
     this.fireTrigger(trig, this.withTrigger(responses, trig));
+  }
+
+  /** Evaluate an event registration's boolexpr filter (enter-region's 3rd arg, a
+   *  player-unit-event's filter, …) with the subject unit exposed as GetFilterUnit.
+   *  A missing/empty filter passes. */
+  private eventFilterPasses(filter: JassValue | undefined, unit: JassValue): boolean {
+    if (!filter || filter.k !== "handle") return true;
+    const be = this.rt.handles.get(filter.h) as BoolExpr | undefined;
+    if (!be?.fn) return true;
+    this.rt.eventStack.push(new Map([["FilterUnit", unit]]));
+    try {
+      return truthy(this.callFunction(be.fn, []));
+    } finally {
+      this.rt.eventStack.pop();
+    }
+  }
+
+  /** Pump unit-death events from the sim tick (milestone 7.4c). For each death, mint
+   *  the victim + killer handles (GetDyingUnit/GetTriggerUnit/GetKillingUnit) and fire
+   *  every matching registration: a specific-unit `TriggerRegisterDeathEvent`, a
+   *  `TriggerRegisterUnitEvent(unit, EVENT_UNIT_DEATH)`, or the common
+   *  `TriggerRegisterPlayerUnitEvent(player, EVENT_PLAYER_UNIT_DEATH)` (which "a unit
+   *  dies" compiles to, one per player) matched by the victim's owner. */
+  pumpUnitDeaths(deaths: ReadonlyArray<DeathEvent>): void {
+    for (const d of deaths) {
+      const victim = this.rt.unitForSim(d.victim);
+      const killer = d.killer ? this.rt.unitForSim(d.killer) : JNULL;
+      const vh = victim.k === "handle" ? victim.h : -1;
+      const responses = new Map<string, JassValue>([["DyingUnit", victim], ["TriggerUnit", victim], ["KillingUnit", killer]]);
+      // Snapshot the reg list — an action may register/destroy triggers mid-dispatch.
+      for (const reg of [...this.rt.triggerRegs]) {
+        let match = false;
+        if (reg.kind === "unitDeath") {
+          match = reg.params[0]?.k === "handle" && reg.params[0].h === vh;
+        } else if (reg.kind === "unitEvent") {
+          match = reg.params[0]?.k === "handle" && reg.params[0].h === vh && this.rt.enumIndex(reg.params[1] ?? JNULL) === EVENT_UNIT_DEATH;
+        } else if (reg.kind === "playerUnitEvent") {
+          match = this.rt.enumIndex(reg.params[1] ?? JNULL) === EVENT_PLAYER_UNIT_DEATH
+            && this.rt.data<JassPlayer>(reg.params[0])?.index === d.victim.owner
+            && this.eventFilterPasses(reg.params[2], victim);
+        }
+        if (!match) continue;
+        const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+        if (trig) this.fireTrigger(trig, this.withTrigger(responses, trig));
+      }
+    }
   }
 }
 

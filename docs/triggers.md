@@ -26,11 +26,12 @@
 | 7.2d | **Custom ability data** (`war3map.w3a`, level-indexed) | ✅ done (live) | §7.8 headless (A000 inherits base `code`, area 425, DataA via meta); resolves live in-browser |
 | 7.2e | **Custom item data** (`war3map.w3t`) | ✅ done (live) | §7.9 headless (I000 "Kael's Will" → Artifact, ability AIda, usable); resolves live in-browser |
 | — | Custom destructable/upgrade/buff data (`.w3b`/`.w3q`/`.w3h`) | ⬜ optional | lower-priority — only maps using them need it |
-| 7.4c | pump remaining sim events (unit-death, damage, orders) live | ⬜ next | a death/attack-triggered action fires in-game |
+| 7.4c | **Unit-death events** (`EVENT_(PLAYER_)UNIT_DEATH`) live from `rts.tick` | ✅ done (live) | §7.10 headless (owner-matched fire, `GetDyingUnit`/`GetKillingUnit`); killing a unit fires WarChasers/Candy death triggers |
+| — | pump remaining sim events (damage, orders, unit-state) live | ⬜ next | an attack/order-triggered action fires in-game |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 unit/ability/item object data) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 unit/ability/item object data + 7.10 death events) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 ---
 
@@ -59,7 +60,7 @@ main()                                                                          
   SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
   CreateAllUnits()             // records rows only (scriptSpawnLive=false during init, so no dup of the .doo units)
   InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
-// then: rts.tick pumps the runtime → timer + enter/leave-region triggers fire live (7.4b); death/damage/orders pending
+// then: rts.tick pumps the runtime → timer + enter/leave-region + unit-death triggers fire live (7.4b/c); damage/orders pending
 ```
 
 ---
@@ -232,13 +233,20 @@ lives in **`src/render/mapViewer.ts` `pumpMapScript(dt)`**, called from the fram
   `GetEnteringUnit` / `GetLeavingUnit` set (units already inside at registration seed a silent baseline, matching WC3).
   Sim units aren't interpreter-created (they're `.doo`-adopted), so `Runtime.unitForSim` mints a stable `unit` handle
   per sim id, kept live so `GetUnitX`/`GetOwningPlayer` read the current value.
+- **Unit death** (7.4c): `interp.pumpUnitDeaths(deaths)`. The sim records a death event (victim + killer snapshot) in
+  `SimWorld` whenever `kill()` runs — but only while `captureDeaths` is set (the host turns it on when a script loads, so
+  melee doesn't accumulate them). Each tick the pump drains them and fires every matching registration:
+  `TriggerRegisterDeathEvent` (a specific unit), `TriggerRegisterUnitEvent(u, EVENT_UNIT_DEATH)`, and the common
+  `TriggerRegisterPlayerUnitEvent(p, EVENT_PLAYER_UNIT_DEATH)` (what GUI "a unit dies" compiles to, one reg per player)
+  matched by the victim's owner — setting `GetDyingUnit`/`GetTriggerUnit`/`GetKillingUnit`.
 - **Show Regions** (HUD debug button, bottom of the cheat stack): outlines every `gg_rct_*` on the terrain with its
   name centred inside — for eyeballing where the enter/leave triggers fire.
 
-Verified (`pnpm jass:test` §7.6): enter fires on each cross-in and NOT for a unit already inside at registration; leave
-fires once on cross-out with no re-fire while inside; `GetEnteringUnit` is the crossing unit at its live position.
-Verified **live** on WarChasers: driving the wisp onto the Archer pedestal region fires its trigger (whose actions run —
-`CreateUnit` of the selected hero, recorded as rows), re-entry fires again, and standing still doesn't re-fire.
+Verified (`pnpm jass:test` §7.6/§7.10): enter fires on each cross-in and NOT for a unit already inside at registration;
+leave fires once with no re-fire while inside; `GetEnteringUnit` is the crossing unit at its live position; a death fires
+the owner-matched `EVENT_PLAYER_UNIT_DEATH` reg (and not another player's), with `GetDyingUnit`/`GetKillingUnit` correct.
+Verified **live**: driving the wisp onto WarChasers' Archer pedestal fires its trigger (whose actions run — `CreateUnit`
+of the selected hero); killing a unit in ExtremeCandyWar fires its death triggers (7 handlers responded to one death).
 
 ## Live unit creation / removal (7.2b — done live, base-game types)
 
@@ -299,8 +307,10 @@ the real Shandris-model hero (screenshots); the custom ability + item both resol
 - **Custom-ability *behaviour*** — object data now gives a custom ability its real numbers, but only abilities whose base
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).
-- **7.4c** pump the remaining sim events — **unit-death** (`TriggerRegisterDeathEvent`), damage, orders, unit-state —
-  from `rts.tick` into `Interpreter.fireEvent`, the way regions/timers already are.
+- **Remaining sim events** — timers, enter/leave-region, and **unit-death** pump live (7.4b/c); still to wire from
+  `rts.tick`: **damage** (`EVENT_UNIT_DAMAGED`), **attacked** (`EVENT_PLAYER_UNIT_ATTACKED`), **orders**, **unit-state**
+  (HP/mana thresholds), **construction/training finished**. Same shape as `pumpUnitDeaths` — snapshot the event in the
+  sim, drain + dispatch in the interpreter.
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.
 - **Natives on demand** — groups, weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
   Use `pnpm jass:coverage` to prioritise (125/335 used natives implemented).

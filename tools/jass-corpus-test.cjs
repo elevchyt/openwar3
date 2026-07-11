@@ -395,5 +395,45 @@ console.log('\n[7.9] Custom item data (war3map.w3t → custom items)');
   }
 }
 
+// --- 7.10: unit-death events (the live pump — 7.4c) ---
+console.log('\n[7.10] Unit-death events (Interpreter.pumpUnitDeaths)');
+{
+  const { rawcodeToInt } = require(join(BUILD, 'lexer.js'));
+  // "A unit dies" → TriggerRegisterPlayerUnitEvent(p, EVENT_PLAYER_UNIT_DEATH=20). The
+  // action records the count + the dying unit's X + the killer's type id.
+  const SRC = `
+globals
+    integer udg_deaths     = 0
+    real    udg_deadX      = 0.0
+    integer udg_killerType = 0
+endglobals
+function OnDeath takes nothing returns nothing
+    set udg_deaths     = udg_deaths + 1
+    set udg_deadX      = GetUnitX( GetDyingUnit() )
+    set udg_killerType = GetUnitTypeId( GetKillingUnit() )
+endfunction
+function InitDeath takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    call TriggerAddAction( t, function OnDeath )
+    call TriggerRegisterPlayerUnitEvent( t, Player(0), ConvertPlayerUnitEvent(20), null )
+endfunction`;
+  const interp = buildInterpreter([SRC]);
+  interp.run('InitDeath', []);
+  // A player-0 footman dies, killed by a player-1 peasant.
+  interp.pumpUnitDeaths([{ victim: { id: 5, typeId: 'hfoo', owner: 0, x: 100, y: 0, facing: 0 }, killer: { id: 6, typeId: 'hpea', owner: 1, x: 110, y: 0, facing: 0 } }]);
+  // A player-1 unit dies — must NOT fire the player-0 registration.
+  interp.pumpUnitDeaths([{ victim: { id: 7, typeId: 'hfoo', owner: 1, x: 200, y: 0, facing: 0 }, killer: null }]);
+
+  const deaths = interp.rt.globals.get('udg_deaths');
+  const deadX = interp.rt.globals.get('udg_deadX');
+  const killerType = interp.rt.globals.get('udg_killerType');
+  if (deaths && deaths.n === 1) ok(`EVENT_PLAYER_UNIT_DEATH fired once (owner match); other player's death did NOT fire`);
+  else fail(`deaths: ${deaths && deaths.n} (want 1)`);
+  if (deadX && Math.abs(deadX.n - 100) < 1e-6) ok(`GetDyingUnit() is the victim (GetUnitX == 100)`);
+  else fail(`GetDyingUnit X: ${deadX && deadX.n} (want 100)`);
+  if (killerType && killerType.n === rawcodeToInt('hpea')) ok(`GetKillingUnit() is the killer (GetUnitTypeId == 'hpea')`);
+  else fail(`GetKillingUnit type: ${killerType && killerType.n} (want ${rawcodeToInt('hpea')})`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);
