@@ -108,6 +108,9 @@ src/jass/
 `local`, `set`, `call`, `return`, `if/elseif/else/endif`, `loop/exitwhen/endloop`, arrays (`array`), `constant`,
 operators (`+ - * / ==  != > >= < <=`, `and or not`, string `+`), rawcode literals (`'hfoo'` → int), `null`, `true`,
 `false`, function references as `code`/`boolexpr` (`Condition(function Foo)`, `Filter(...)`). No closures, no classes.
+For the formal grammar/type/array-cap rules and a searchable native API, see the **JASS scripting references** in
+[`REFERENCES.md`](REFERENCES.md#jass-scripting-references) (the JASS Manual's BNF for the parser; Jassbot for
+native lookup) — but the `common.j`/`blizzard.j` in the user's MPQs are the authority for exact signatures.
 
 **Event/dispatch model:** `TriggerRegister*Event` records `(eventType, params) → trigger` in `runtime`. The sim
 raises engine events (unit dies/enters region/order issued/timer expires) → `runtime` finds matching triggers, pushes

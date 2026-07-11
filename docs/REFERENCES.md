@@ -107,3 +107,20 @@ Practical notes:
   that's costly to parse). Corrections found: Human Workshop is `harm` (trains hmtm/hgyr/hmtt), Orc
   Raider `orai` is at the Beastiary, the NE hero altar is `eate` (Ancient of War `eaom` trains
   archer/huntress/glaive).
+
+## JASS scripting references
+
+For the JASS side of the engine — the language the map's `war3map.j` is written in and the
+`common.j`/`blizzard.j` libraries the engine runs (see the interpreter plan in
+[`phase7-triggers-jass-plan.md`](phase7-triggers-jass-plan.md)). **Same rule as everywhere else:
+the `Scripts\common.j` / `Scripts\blizzard.j` in the user's own 1.27a MPQs are ground truth** —
+these third-party docs describe the *language and the standard API*, but where a native's exact
+signature or a library function's body matters, read it out of the real MPQ. common.j pins the
+canonical **1160 natives / 91 handle types** and blizzard.j the **923 library funcs** we measured
+(see the plan doc); the docs below are for humans, the MPQ is for the parser.
+
+| Source | What it is | Use it for / gotchas |
+|---|---|---|
+| [**JASS Manual** (jass.sourceforge.net/doc)](https://jass.sourceforge.net/doc/) | A semi-formal, unofficial **language reference** — global declarations, types (arrays, casting), functions, statements, expressions, and a **formal BNF grammar**, plus an API browser | The precise spec for our `lexer.ts`/`parser.ts` (§7.0): grammar edge cases, array-size cap (1024), type-coercion rules, operator/precedence quirks. Explicitly **not** a beginner tutorial. Unofficial — cross-check any interpreter-behaviour claim against the real script running in the game |
+| [**Jassbot** (lep.nrw/jassbot)](https://lep.nrw/jassbot/) | A **Hoogle-style search engine over the JASS2 standard API** — indexes `common.j`, `blizzard.j`, `common.ai`; search by name *or by type signature* (`takes handle returns integer`) | Fast native/BJ lookup while implementing `natives/` — find a native by name, or discover all funcs of a given shape. Also has a CLI + open dataset on GitHub. It indexes **some** patch's scripts, not necessarily 1.27a — confirm signatures against our mounted MPQ before relying on them |
+| [**thehelper.net "JASS: Basic Tutorial"** (view=25715)](https://world-editor-tutorials.thehelper.net/cat_usersubmit.php?view=25715) | A **beginner tutorial** — function calls, local/global variables (the `udg_` global prefix, `bj_`/`gg_` conventions), custom functions, comments (`//`), operators | Orientation for how hand-written and GUI-compiled map scripts are actually shaped (variable naming conventions we'll meet in `war3map.j`), not a spec. For depth defer to the JASS Manual above |
