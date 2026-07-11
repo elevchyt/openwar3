@@ -52,6 +52,24 @@ export interface TextTagObj {
   dead: boolean; // DestroyTextTag'd — the renderer should drop it
 }
 
+/** A rectangular region (Rect / the World-Editor `gg_rct_*` globals). Its bounds
+ *  drive enter/leave-region events: the live pump tests each unit's (x,y) against
+ *  every registered rect and fires the trigger on a crossing. */
+export interface RectObj {
+  handleId: number;
+  minx: number;
+  miny: number;
+  maxx: number;
+  maxy: number;
+}
+
+/** A region (CreateRegion) — a set of rects (RegionAddRect). Cell-granular adds
+ *  (RegionAddCell) are approximated by a 1×1-ish rect around the cell. */
+export interface RegionObj {
+  handleId: number;
+  rects: number[]; // rect handle ids
+}
+
 /** A game timer (CreateTimer/TimerStart). Pumped by Interpreter.advanceTime from
  *  the sim tick; on expiry it runs its handler code and fires any trigger
  *  registered on it (TriggerRegisterTimerExpireEvent). */
@@ -236,6 +254,11 @@ export class Runtime {
    *  authored strings by placeholder ("TRIGSTR_019"); resolveTrigStr swaps them in. */
   readonly trigStrings = new Map<number, string>();
 
+  /** A stable JASS `unit` handle for one of our SIM units (sim id → handle id), so
+   *  the live event pump can hand a trigger a usable GetTriggerUnit/GetEnteringUnit.
+   *  Interned so the same sim unit is always the same handle (JASS `==` works). */
+  private readonly simUnitHandles = new Map<number, number>();
+
   /** The selected game type (common.j ConvertGameType index): 1 = MELEE,
    *  4 = USE_MAP_SETTINGS (custom). Drives blizzard.j InitGenericPlayerSlots and
    *  GetGameTypeSelected — the host sets it from the map's melee flag. */
@@ -271,6 +294,26 @@ export class Runtime {
       this.setup.players.set(index, p);
     }
     return p;
+  }
+
+  /** Intern (or refresh) a JASS `unit` handle backing sim unit `u`. The handle's
+   *  fields (position/owner/facing) are kept live so GetUnitX/GetOwningPlayer read
+   *  the current value. Used by the live enter/leave-region pump — these sim units
+   *  weren't created through the interpreter's CreateUnit (they're .doo-adopted). */
+  unitForSim(u: { id: number; typeId: string; owner: number; x: number; y: number; facing: number }): JassValue {
+    let hid = this.simUnitHandles.get(u.id);
+    if (hid === undefined) {
+      const ju: JassUnit = { handleId: 0, player: u.owner, typeId: u.typeId, x: u.x, y: u.y, facing: u.facing, simId: u.id };
+      ju.handleId = this.handles.alloc(ju);
+      this.simUnitHandles.set(u.id, (hid = ju.handleId));
+    } else {
+      const ju = this.handles.get(hid) as JassUnit;
+      ju.x = u.x;
+      ju.y = u.y;
+      ju.facing = u.facing;
+      ju.player = u.owner;
+    }
+    return jHandle(hid, "unit");
   }
 
   /** Resolve a "TRIGSTR_nnn" placeholder to its war3map.wts text (the World Editor

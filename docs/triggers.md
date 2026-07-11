@@ -20,12 +20,13 @@
 | 7.4a | Event runtime core (ECA firing, event responses, **timers**) | ✅ done (headless) | periodic timer fires its trigger 3×; one-shot once; `GetExpiredTimer` correct |
 | 7.6 | **Text logic + text actions** (messages, floating text, forces, strings, `.wts`) | ✅ done (live) | full BJ text path end-to-end (§7.5); WarChasers welcome/HINT text in the HUD (screenshots) |
 | — | **`main()` runs live** (display-only hooks) | ✅ done (live) | custom-map init triggers fire; 296 trigger regs on WarChasers; no duplicate units |
+| 7.4b | **Live event pump** (enter/leave-**region** + **timers** from `rts.tick`) | ✅ done (live) | §7.6 headless (enter 2×, leave 1×, `GetEnteringUnit` live pos); WarChasers wisp entering the Archer region fires its trigger (screenshots) |
 | 7.2b | live `CreateUnit` → new sim units (replace .doo adoption) | ⬜ next | — |
-| 7.4b | pump sim events (enter-region, unit-death, **timers**) live from `rts.tick` | ⬜ next | a scripted mid-game trigger fires in-game |
+| 7.4c | pump remaining sim events (unit-death, damage, orders) live | ⬜ next | a death/attack-triggered action fires in-game |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (110/335 used natives implemented) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 ---
 
@@ -54,7 +55,7 @@ main()                                                                          
   SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
   CreateAllUnits()             // CreateUnit(...) per pre-placed unit — records rows only (display-only hooks; 7.2b)
   InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
-// then: registered triggers fire on unit/player/region/timer events — NOT pumped live yet (milestone 7.4b)
+// then: rts.tick pumps the runtime → timer + enter/leave-region triggers fire live (7.4b); death/damage/orders pending
 ```
 
 ---
@@ -76,6 +77,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, unit queries |
 | `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
 | `natives/forces.ts` | **forces** (player groups): `CreateForce`/`ForceAddPlayer`/`IsPlayerInForce`/`ForForce`/`ForceEnum*` + `GetEnumPlayer`/`GetFilterPlayer` — the target of the "Text Message" actions (7.6) |
+| `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
 | `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
 | `wts.ts` | `parseWts` — the map's `war3map.wts` trigger-string table (resolves `TRIGSTR_nnn` placeholders to authored text) |
 | `natives/index.ts` | registry: enum constructors (`Convert*`) + utility natives (`I2S`, `GetRandomInt`, camera/env no-ops); calls the group registrars |
@@ -213,18 +215,37 @@ Verified (`pnpm jass:test` §7.5): `DisplayTextToForce`/timed reach the local pl
 welcome line + four `|cff32cd32HINT|r` hints render in the HUD from the map's own init triggers (296 trigger
 registrations, 19 timers, 374 unit rows recorded; `main()` runs in ~100 ms; no duplicate units).
 
+## The live event pump (7.4b — done, live)
+
+`main()` registers triggers on events during init, but nothing fires them until the sim raises those events. The pump
+lives in **`src/render/mapViewer.ts` `pumpMapScript(dt)`**, called from the frame loop each (non-paused) sim step:
+
+- **Timers:** `interp.advanceTime(dt)` (already built in 7.4a) — `TimerStart` handlers + `TriggerRegisterTimerExpireEvent`.
+- **Enter/leave region:** `interp.pumpRegions(unitSnapshots)`. The GUI "Unit enters (region)" action compiles to
+  `TriggerRegisterEnterRectSimple(trig, gg_rct_X)`, so **`src/jass/natives/region.ts`** implements `Rect` (+ the
+  `gg_rct_*` geometry `CreateRegions()` builds in `main()`) and **`Interpreter.pumpRegions`** diffs, each tick, the set
+  of units inside every registered rect against last tick — firing the trigger on a crossing with `GetTriggerUnit` /
+  `GetEnteringUnit` / `GetLeavingUnit` set (units already inside at registration seed a silent baseline, matching WC3).
+  Sim units aren't interpreter-created (they're `.doo`-adopted), so `Runtime.unitForSim` mints a stable `unit` handle
+  per sim id, kept live so `GetUnitX`/`GetOwningPlayer` read the current value.
+- **Show Regions** (HUD debug button, bottom of the cheat stack): outlines every `gg_rct_*` on the terrain with its
+  name centred inside — for eyeballing where the enter/leave triggers fire.
+
+Verified (`pnpm jass:test` §7.6): enter fires on each cross-in and NOT for a unit already inside at registration; leave
+fires once on cross-out with no re-fire while inside; `GetEnteringUnit` is the crossing unit at its live position.
+Verified **live** on WarChasers: driving the wisp onto the Archer pedestal region fires its trigger (whose actions run —
+`CreateUnit` of the selected hero, recorded as rows), re-entry fires again, and standing still doesn't re-fire.
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
-- **7.4b** pump the runtime from `rts.tick`: call `advanceTime(dt)` (timers) + `fireEvent` (enter-region, unit-death)
-  each sim tick, so real map triggers fire *mid-game* — not just at init. `main()` already runs live (7.6) and
-  registers the triggers/timers; the missing piece is the per-tick pump and raising sim events into `fireEvent`. Still
-  partly entangled with 7.2b: the live pump wants `gg_rct_*` regions + real units, and `CreateAllUnits` currently only
-  records rows (display-only hooks) so `.doo` adoption stays authoritative.
 - **7.2b** route live unit creation through `CreateUnit` (currently the vision fix adopts `.doo` instances; the
-  interpreter's `CreateUnit` records a row but spawns nothing live — display-only hooks).
+  interpreter's `CreateUnit` records a row but spawns nothing live — display-only hooks). This is what turns a
+  hero-selection trigger's `CreateUnit` into an actual on-map hero.
+- **7.4c** pump the remaining sim events — **unit-death** (`TriggerRegisterDeathEvent`), damage, orders, unit-state —
+  from `rts.tick` into `Interpreter.fireEvent`, the way regions/timers already are.
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.
-- **Natives on demand** — regions, groups, weather, sound, cameras, cinematics (transmissions), multiboard, quests,
-  gamecache. Use `pnpm jass:coverage` to prioritise (110/335 used natives implemented).
+- **Natives on demand** — groups, weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
+  Use `pnpm jass:coverage` to prioritise (125/335 used natives implemented).
 - **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them
   in 3D yet (no world-space text pass). On-screen messages *are* rendered (HUD message log).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

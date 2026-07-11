@@ -111,6 +111,7 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetTriggerPlayer", (c) => resp(c, "TriggerPlayer"));
   def(rt, "GetExpiredTimer", (c) => resp(c, "ExpiredTimer"));
   def(rt, "GetTriggerWidget", (c) => resp(c, "TriggerWidget"));
+  def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
 
   // --- run a trigger from script (used by RunInitializationTriggers etc.) ---
   const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean =>

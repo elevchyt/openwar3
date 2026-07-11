@@ -184,6 +184,9 @@ export interface HudDriver {
   /** Toggle the "Show Pathing" overlay (pathing grid + moving units' routes).
    *  Returns the resulting on/off state so the caller can show/hide the legend. */
   togglePathing(): boolean;
+  /** Toggle the "Show Regions" overlay (the map's named gg_rct_* trigger regions,
+   *  outlined with a name label inside each). Returns the resulting on/off state. */
+  toggleRegions(): boolean;
 }
 
 // Zone rectangles measured from the rendered console atlas (fractions of the
@@ -818,6 +821,14 @@ export class GameHud {
       pathLegend.hidden = !on;
     };
     panel.append(pathBtn, pathLegend);
+
+    // "Show Regions": outline the map's named trigger regions (gg_rct_*) with their
+    // name inside each — for testing enter/leave-region triggers (Phase 7).
+    const regionBtn = document.createElement("button");
+    regionBtn.className = "hud-cheat-btn";
+    regionBtn.textContent = "Show Regions";
+    regionBtn.onclick = () => regionBtn.classList.toggle("active", this.driver.toggleRegions());
+    panel.append(regionBtn);
     return panel;
   }
 

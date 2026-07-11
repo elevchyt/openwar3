@@ -10,8 +10,9 @@ import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_
 import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
-import { loadMapScript } from "../jass/index";
-import type { EngineHooks } from "../jass/runtime";
+import { loadMapScript, type MapScriptEngine } from "../jass/index";
+import type { EngineHooks, RectObj } from "../jass/runtime";
+import type { UnitSnapshot } from "../jass/interpreter";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
@@ -363,6 +364,15 @@ export class MapViewerScene {
   private pathRouteLayer: OverlayLayer | null = null; // moving units' remaining routes (lines)
   private dbgGridFor: PathingGrid | null = null; // grid the lattice was built for (cache key)
   private dbgBlockAccum = 1e9; // ms since the blocked-cell rebuild (force one on first frame)
+  // "Show Regions" overlay (Phase 7 trigger debug): the map's named gg_rct_* rects,
+  // outlined on the terrain with a floating DOM name label centred in each.
+  private showRegions = false;
+  private regionLayer: OverlayLayer | null = null; // rect outlines (lines)
+  private regionFillLayer: OverlayLayer | null = null; // faint rect fills (triangles)
+  private regionGeomFor: MapScriptEngine | null = null; // map script the geometry was built for (cache key)
+  private regionCache: Array<{ name: string; cx: number; cy: number; cz: number }> = []; // label anchors
+  private regionLabelBox: HTMLDivElement | null = null; // DOM container for the name labels
+  private regionLabelPool: HTMLDivElement[] = []; // reused label elements
   private fogAccum = 0; // ms since the last fog resample (throttle)
   private removedWidgets = new Set<HideableWidget>(); // felled trees / mined-out mines — stay gone, never re-fogged
   private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
@@ -371,6 +381,7 @@ export class MapViewerScene {
   private footprints = new Map<string, Footprint | null>();
   private metrics = new MetricsOverlay();
   private hud: GameHud | null = null;
+  private mapScript: MapScriptEngine | null = null; // the running JASS interpreter (Phase 7), pumped from the frame loop
   private gameMenu: GameMenu | null = null;
   private paused = false; // F10 game menu freezes the sim (rendering continues)
   /** Called when the player picks "End Game" — host tears the match down. */
@@ -1004,6 +1015,7 @@ export class MapViewerScene {
     try {
       const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false, runMain: true, hooks: this.textHooks() });
       if (!engine) return;
+      this.mapScript = engine; // pumped each tick (timers + enter/leave-region events — 7.4b)
       const s = engine.setup;
       const trigs = engine.interp.rt.triggerRegs.length;
       console.info(
@@ -1012,6 +1024,27 @@ export class MapViewerScene {
       );
     } catch (err) {
       console.warn("[jass] map script failed (non-fatal):", err);
+    }
+  }
+
+  /** Drive the running map script from the sim tick (Phase 7 — 7.4b): advance its
+   *  timers and pump enter/leave-region events. Best-effort — a throwing trigger is
+   *  swallowed inside the interpreter, but wrap the whole pump too so one bad tick
+   *  can't kill the frame loop. `dt` is seconds (the clamped sim step). */
+  private pumpMapScript(dt: number): void {
+    const engine = this.mapScript;
+    if (!engine || !this.rts) return;
+    try {
+      engine.interp.advanceTime(dt); // timers (TriggerRegisterTimerExpireEvent + TimerStart handlers)
+      // Only snapshot units if some trigger actually watches a region this tick.
+      if (!engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) return;
+      const snap: UnitSnapshot[] = [];
+      for (const u of this.rts.simWorld.units.values()) {
+        snap.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+      }
+      engine.interp.pumpRegions(snap);
+    } catch (err) {
+      console.warn("[jass] trigger pump failed (non-fatal):", err);
     }
   }
 
@@ -2501,6 +2534,11 @@ export class MapViewerScene {
       cheatSelected: (kind) => this.rts?.cheatSelected(kind),
       toggleColliders: () => (this.showColliders = !this.showColliders),
       togglePathing: () => (this.showPathing = !this.showPathing),
+      toggleRegions: () => {
+        this.showRegions = !this.showRegions;
+        if (!this.showRegions) this.hideRegionLabels();
+        return this.showRegions;
+      },
     };
     this.hud = new GameHud(ui, driver);
     this.gameMenu?.dispose();
@@ -3532,6 +3570,7 @@ export class MapViewerScene {
         const simDt = Math.min(dt, 50) / 1000;
         this.tickPendingBuild(simDt); // seconds, matching the sim's clock
         this.rts?.tick(simDt); // sim runs in seconds; advance + sync before render
+        this.pumpMapScript(simDt); // Phase 7: fire the map's timers + enter/leave-region triggers
       }
       // Map units load async — hide the start-location props as they stream in.
       // Re-scan whenever the unit count grows so `sloc` markers that finish
@@ -3750,6 +3789,7 @@ export class MapViewerScene {
       }
       if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);
       if (this.showPathing && fogScene) this.renderPathing(fogScene.camera.viewProjectionMatrix, dt);
+      if (this.showRegions && fogScene) this.renderRegions(fogScene.camera.viewProjectionMatrix);
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -3793,9 +3833,18 @@ export class MapViewerScene {
     this.pathRouteLayer?.dispose();
     this.pathGridLayer = this.pathBlockedLayer = this.pathRouteLayer = null;
     this.dbgGridFor = null;
+    this.regionLayer?.dispose();
+    this.regionFillLayer?.dispose();
+    this.regionLayer = this.regionFillLayer = null;
+    this.regionGeomFor = null;
+    this.regionCache = [];
+    this.regionLabelBox?.remove();
+    this.regionLabelBox = null;
+    this.regionLabelPool = [];
     this.metrics.dispose();
     this.hud?.dispose();
     this.hud = null;
+    this.mapScript = null;
     this.gameMenu?.dispose();
     this.gameMenu = null;
     this.paused = false;
@@ -4166,6 +4215,107 @@ export class MapViewerScene {
       }
     }
     this.pathRouteLayer.set(Float32Array.from(v), v.length / FLOATS_PER_VERT);
+  }
+
+  /** Draw the "Show Regions" overlay: outline every named trigger region (gg_rct_*)
+   *  on the terrain and float its name label inside it. The rects come from the
+   *  running map script (CreateRegions ran in main() — Phase 7). Outlines are static
+   *  GPU geometry rebuilt once per map; labels re-project each frame (camera moves). */
+  private renderRegions(viewProj: Float32Array): void {
+    if (!this.mapScript) return;
+    const gl = this.viewer.gl;
+    this.debug ??= new DebugColliders(this.viewer.gl);
+    this.regionLayer ??= new OverlayLayer(gl, "line");
+    this.regionFillLayer ??= new OverlayLayer(gl, "tri");
+    if (this.regionGeomFor !== this.mapScript) this.rebuildRegions();
+    this.debug.renderLayers(viewProj, [this.regionFillLayer, this.regionLayer]);
+    this.updateRegionLabels(viewProj);
+  }
+
+  /** Collect the map's named regions from the interpreter (gg_rct_* → rect bounds),
+   *  build the outline (line) + faint-fill (tri) geometry that hugs the terrain, and
+   *  cache each region's centre for its label. Runs once per map (cache-keyed). */
+  private rebuildRegions(): void {
+    this.regionGeomFor = this.mapScript;
+    this.regionCache = [];
+    const h = this.heightSampler;
+    const interp = this.mapScript?.interp;
+    if (!h || !interp || !this.regionLayer || !this.regionFillLayer) {
+      this.regionLayer?.set(EMPTY_VERTS, 0);
+      this.regionFillLayer?.set(EMPTY_VERTS, 0);
+      return;
+    }
+    const lines: number[] = [];
+    const fills: number[] = [];
+    const lift = COLLIDER_LIFT;
+    const outline = REGION_COLORS.outline;
+    const fill = REGION_COLORS.fill;
+    for (const [name, val] of interp.rt.globals) {
+      if (!name.startsWith("gg_rct_") || val.k !== "handle") continue;
+      const r = interp.rt.handles.get(val.h) as RectObj | undefined;
+      if (!r || typeof r.minx !== "number" || typeof r.maxx !== "number") continue;
+      // Terrain-hugging outline: walk each edge in steps sampling ground height, so
+      // the border follows slopes instead of clipping through a hill.
+      const step = Math.max(64, Math.min(256, (r.maxx - r.minx) / 6 || 128));
+      const seg = (x0: number, y0: number, x1: number, y1: number): void => {
+        const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / step));
+        for (let i = 0; i < n; i++) {
+          const ax = x0 + ((x1 - x0) * i) / n, ay = y0 + ((y1 - y0) * i) / n;
+          const bx = x0 + ((x1 - x0) * (i + 1)) / n, by = y0 + ((y1 - y0) * (i + 1)) / n;
+          pushColliderVert(lines, ax, ay, h(ax, ay) + lift, outline);
+          pushColliderVert(lines, bx, by, h(bx, by) + lift, outline);
+        }
+      };
+      seg(r.minx, r.miny, r.maxx, r.miny);
+      seg(r.maxx, r.miny, r.maxx, r.maxy);
+      seg(r.maxx, r.maxy, r.minx, r.maxy);
+      seg(r.minx, r.maxy, r.minx, r.miny);
+      pushColliderQuad(fills, r.minx, r.miny, r.maxx, r.maxy, h, fill);
+      const cx = (r.minx + r.maxx) / 2, cy = (r.miny + r.maxy) / 2;
+      this.regionCache.push({ name: name.slice("gg_rct_".length), cx, cy, cz: h(cx, cy) + lift });
+    }
+    this.regionLayer.set(Float32Array.from(lines), lines.length / FLOATS_PER_VERT);
+    this.regionFillLayer.set(Float32Array.from(fills), fills.length / FLOATS_PER_VERT);
+  }
+
+  /** Position (or hide) a floating DOM label at each region's projected centre. A
+   *  pooled `<div>` per region, reused frame-to-frame; labels behind the camera or
+   *  off-screen are hidden. */
+  private updateRegionLabels(viewProj: Float32Array): void {
+    if (!this.regionLabelBox) {
+      const box = document.createElement("div");
+      box.className = "region-labels";
+      (document.getElementById("ui") ?? document.body).appendChild(box);
+      this.regionLabelBox = box;
+    }
+    const rect = this.canvas.getBoundingClientRect();
+    const W = rect.width, H = rect.height;
+    for (let i = 0; i < this.regionCache.length; i++) {
+      const reg = this.regionCache[i];
+      let el = this.regionLabelPool[i];
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "region-label";
+        this.regionLabelBox.appendChild(el);
+        this.regionLabelPool[i] = el;
+      }
+      const p = projectToScreen(viewProj, reg.cx, reg.cy, reg.cz, W, H);
+      if (!p || p[0] < 0 || p[0] > W || p[1] < 0 || p[1] > H) {
+        el.style.display = "none";
+        continue;
+      }
+      if (el.textContent !== reg.name) el.textContent = reg.name;
+      el.style.display = "";
+      el.style.left = `${rect.left + p[0]}px`;
+      el.style.top = `${rect.top + p[1]}px`;
+    }
+    // Hide any pooled labels beyond the current region count (map changed).
+    for (let i = this.regionCache.length; i < this.regionLabelPool.length; i++) this.regionLabelPool[i].style.display = "none";
+  }
+
+  /** Hide every region label (overlay turned off / match torn down). */
+  private hideRegionLabels(): void {
+    for (const el of this.regionLabelPool) el.style.display = "none";
   }
 
   private disposeFog(): void {
@@ -4678,6 +4828,19 @@ function zQuat(out: Float32Array, angle: number): void {
 // ghost avoids by not tinting at all); "hard" dark blue is opaque anyway.
 const PENDING_GHOST_TINT = [0.12, 0.22, 0.85, 1.0] as const;
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
+// "Show Regions" overlay palette: cyan outline + a faint cyan wash inside each rect.
+const REGION_COLORS = { outline: [0.2, 0.95, 1.0, 0.9] as const, fill: [0.2, 0.85, 1.0, 0.12] as const };
+
+/** Project a world point through a column-major view-projection matrix to canvas
+ *  pixels (origin top-left), or null if it's behind the camera. Used to anchor the
+ *  region-name DOM labels over the 3D scene. */
+function projectToScreen(m: Float32Array, x: number, y: number, z: number, w: number, h: number): [number, number] | null {
+  const cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+  const cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+  const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+  if (cw <= 1e-4) return null; // at/behind the camera plane
+  return [((cx / cw) * 0.5 + 0.5) * w, (1 - ((cy / cw) * 0.5 + 0.5)) * h];
+}
 // Dead zone (CSS px) a left-press must leave before it counts as a drag-select
 // rather than a click. Mice wobble a pixel or three during a fast click, so a
 // tight zone turns clicks into empty one-pixel marquees (issue #44).

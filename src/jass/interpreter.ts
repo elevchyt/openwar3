@@ -12,10 +12,24 @@
 //     runaway loop/recursion is capped rather than hanging the browser.
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
-import { Runtime, JassArray, type NativeCtx, type TimerObj, type TriggerObj } from "./runtime";
+import { Runtime, JassArray, type BoolExpr, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
+
+/** A minimal live view of a sim unit the engine feeds the region pump each tick. */
+export interface UnitSnapshot {
+  id: number;
+  typeId: string;
+  owner: number;
+  x: number;
+  y: number;
+  facing: number;
+}
+
+const isRect = (o: unknown): o is RectObj =>
+  !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
+const isRegion = (o: unknown): o is RegionObj => !!o && Array.isArray((o as RegionObj).rects);
 
 class ReturnSignal {
   constructor(readonly value: JassValue) {}
@@ -358,6 +372,87 @@ export class Interpreter {
     const m = new Map(responses);
     m.set("TriggeringTrigger", jHandle(trig.handleId, "trigger"));
     return m;
+  }
+
+  // --- live enter/leave-region pump (milestone 7.4b) -------------------------
+
+  /** Which sim units were inside each enter/leave registration's rect(s) last pump.
+   *  Keyed by the registration object (stable across ticks) so a crossing is a
+   *  set-difference, not a re-scan. */
+  private readonly regionMembers = new Map<TriggerReg, Set<number>>();
+
+  /** Pump enter/leave-region events from the sim tick: for every enter/leave
+   *  registration, diff the set of units currently inside its rect(s) against last
+   *  tick and fire the trigger on each crossing (GetTriggerUnit + GetEnteringUnit /
+   *  GetLeavingUnit set to the crossing unit). Units already inside when a trigger
+   *  is registered do NOT fire — the first pump for a registration seeds a silent
+   *  baseline, matching WC3. Cheap: O(regs × units) containment checks per tick. */
+  pumpRegions(units: ReadonlyArray<UnitSnapshot>): void {
+    for (const reg of this.rt.triggerRegs) {
+      const entering = reg.kind === "enterRegion";
+      if (!entering && reg.kind !== "leaveRegion") continue;
+      const rects = this.rectsOf(reg.params[0]);
+      if (!rects.length) continue;
+
+      const cur = new Set<number>();
+      for (const u of units) {
+        for (const r of rects) {
+          if (u.x >= r.minx && u.x <= r.maxx && u.y >= r.miny && u.y <= r.maxy) {
+            cur.add(u.id);
+            break;
+          }
+        }
+      }
+      const prev = this.regionMembers.get(reg);
+      this.regionMembers.set(reg, cur);
+      if (!prev) continue; // baseline tick: seed membership without firing
+
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      if (!trig || !trig.enabled) continue;
+      if (entering) {
+        for (const u of units) if (cur.has(u.id) && !prev.has(u.id)) this.fireRegionCrossing(reg, trig, u, "EnteringUnit");
+      } else {
+        for (const id of prev) {
+          if (!cur.has(id)) {
+            const u = units.find((x) => x.id === id);
+            if (u) this.fireRegionCrossing(reg, trig, u, "LeavingUnit");
+          }
+        }
+      }
+    }
+  }
+
+  /** Resolve a registration's region param to its rect bounds (a bare rect, or a
+   *  region's member rects). */
+  private rectsOf(param: JassValue | undefined): RectObj[] {
+    if (!param || param.k !== "handle") return [];
+    const obj = this.rt.handles.get(param.h);
+    if (isRect(obj)) return [obj];
+    if (isRegion(obj)) return obj.rects.map((h) => this.rt.handles.get(h)).filter(isRect);
+    return [];
+  }
+
+  /** Fire one enter/leave crossing: mint the unit handle, honour a boolexpr filter
+   *  (TriggerRegisterEnterRegion's 3rd arg — exposed as GetFilterUnit), then run the
+   *  trigger with the right event responses. */
+  private fireRegionCrossing(reg: TriggerReg, trig: TriggerObj, u: UnitSnapshot, respKey: string): void {
+    const handle = this.rt.unitForSim(u);
+    const filter = reg.params[1];
+    if (filter && filter.k === "handle") {
+      const be = this.rt.handles.get(filter.h) as BoolExpr | undefined;
+      if (be?.fn) {
+        this.rt.eventStack.push(new Map([["FilterUnit", handle]]));
+        let pass = true;
+        try {
+          pass = truthy(this.callFunction(be.fn, []));
+        } finally {
+          this.rt.eventStack.pop();
+        }
+        if (!pass) return;
+      }
+    }
+    const responses = new Map<string, JassValue>([["TriggerUnit", handle], [respKey, handle]]);
+    this.fireTrigger(trig, this.withTrigger(responses, trig));
   }
 }
 

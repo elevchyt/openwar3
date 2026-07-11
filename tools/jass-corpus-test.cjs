@@ -245,5 +245,53 @@ endfunction`;
   else fail(`StringHashBJ: got ${hash && hash.n} (want non-zero)`);
 }
 
+// --- 7.6: enter/leave-region events (the live pump — 7.4b) ---
+console.log('\n[7.6] Region enter/leave events (Interpreter.pumpRegions)');
+{
+  // GUI "Unit enters/leaves (region)" compiles to Register{Enter,Leave}RectSimple on
+  // a Rect. OnEnter/OnLeave count firings and record the crossing unit's live X.
+  const SRC = `
+globals
+    integer udg_enter  = 0
+    integer udg_leave  = 0
+    real    udg_enterX = 0.0
+endglobals
+function OnEnter takes nothing returns nothing
+    set udg_enter  = udg_enter + 1
+    set udg_enterX = GetUnitX( GetEnteringUnit() )
+endfunction
+function OnLeave takes nothing returns nothing
+    set udg_leave = udg_leave + 1
+endfunction
+function InitTest takes nothing returns nothing
+    local rect r = Rect( 0.0, 0.0, 100.0, 100.0 )
+    local trigger te = CreateTrigger()
+    local trigger tl = CreateTrigger()
+    call TriggerAddAction( te, function OnEnter )
+    call TriggerAddAction( tl, function OnLeave )
+    call TriggerRegisterEnterRectSimple( te, r )
+    call TriggerRegisterLeaveRectSimple( tl, r )
+endfunction`;
+  const interp = buildInterpreter([SRC]);
+  interp.run('InitTest', []);
+  const A = (x, y) => ({ id: 1, typeId: 'hfoo', owner: 0, x, y, facing: 0 });
+  const B_in = { id: 2, typeId: 'hpea', owner: 0, x: 50, y: 50, facing: 0 }; // present at baseline
+  interp.pumpRegions([A(-50, -50), B_in]); // baseline: A outside, B already inside → no fire
+  interp.pumpRegions([A(50, 50), B_in]);   // A crosses IN → enter=1 (B present at baseline, no fire)
+  interp.pumpRegions([A(60, 60), B_in]);   // A still inside → no re-fire
+  interp.pumpRegions([A(-50, -50), B_in]); // A crosses OUT → leave=1
+  interp.pumpRegions([A(50, 50), B_in]);   // A crosses IN again → enter=2
+
+  const e = interp.rt.globals.get('udg_enter');
+  const l = interp.rt.globals.get('udg_leave');
+  const ex = interp.rt.globals.get('udg_enterX');
+  if (e && e.n === 2) ok(`enter fired on each cross-in (2×); a unit inside at registration did NOT fire`);
+  else fail(`enter: got ${e && e.n} (want 2)`);
+  if (l && l.n === 1) ok(`leave fired once on cross-out; no re-fire while inside`);
+  else fail(`leave: got ${l && l.n} (want 1)`);
+  if (ex && Math.abs(ex.n - 50) < 1e-6) ok(`GetEnteringUnit() is the crossing unit (GetUnitX == 50)`);
+  else fail(`GetEnteringUnit live pos: GetUnitX == ${ex && ex.n} (want 50)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

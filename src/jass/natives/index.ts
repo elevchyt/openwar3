@@ -11,6 +11,7 @@ import { asInt, asNum, asStr, jInt, jReal, jStr, JNULL, type JassValue } from ".
 import { registerConfigNatives } from "./config";
 import { registerEventNatives } from "./events";
 import { registerForceNatives } from "./forces";
+import { registerRegionNatives } from "./region";
 import { registerTextNatives } from "./text";
 import { registerWorldNatives } from "./world";
 
@@ -82,6 +83,7 @@ export function registerNatives(rt: Runtime): void {
   registerWorldNatives(rt);
   registerEventNatives(rt);
   registerForceNatives(rt);
+  registerRegionNatives(rt);
   registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
   registerUtilNatives(rt);
 }
