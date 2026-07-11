@@ -15,9 +15,17 @@ import { ArmorType, AttackType } from "./enums";
 // -constants.mjs). Keys are verbatim; anything derived from them lives at the bottom
 // of this file, computed rather than re-typed, so the two can never drift apart.
 //
-// Not every key in the two files is here — the ~60 `CanDeactivate*` / `Illusions*`
-// ability-system toggles are omitted until we model those systems. Everything the
-// sim, renderer, or HUD reads should live here rather than as a literal in place.
+// Not every key in the two files is here — MiscGame.txt was audited key-by-key
+// (issue #56) and the remainder are deliberately deferred until the systems they
+// govern exist, so a stray constant never reads as "implemented" when it isn't:
+//   • ability-system toggles — the ~20 `CanDeactivate*`, the `Illusions*` block,
+//     `MagicImmunesResist*`, the `Drain*`/`*Cluster`/`Morph*` behaviour flags;
+//   • hero altar/tavern economics — `HeroMaxAwakenCost*`, `Awaken*Factor`,
+//     `HeroRevive*`/`HeroAwaken*` start-life/mana factors (no altar revival yet);
+//   • misc combat flags — `DefendDeflection`, `AbolishMagicDispelSmart`,
+//     `UnitSaleAggroRange`, `RelativeUpgradeCost`, `DisplayEnemyInventory`.
+// Everything the sim, renderer, or HUD reads should live here rather than as a
+// literal in place.
 
 /** `Units\MiscGame.txt` [Misc]. Combat, experience, hero attributes, refund rates. */
 export const MISC_GAME = {
@@ -43,6 +51,18 @@ export const MISC_GAME = {
   DamageBonusChaos: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
   DamageBonusSpells: [1.0, 1.0, 1.0, 1.0, 1.0, 0.7, 0.05, 1.0],
   DamageBonusHero: [1.0, 1.0, 1.0, 0.5, 1.0, 1.0, 0.05, 1.0],
+
+  // --- ethereal (Banish) ---------------------------------------------------
+  // A banished/ethereal unit's incoming damage is scaled by this per the ATTACKER's
+  // attack type — a SECOND multiplier on top of DamageBonus*. The file's own column
+  // order is different from the DamageBonus rows (no target-armour axis): it is keyed
+  // by attack type — NORMAL, PIERCE, SIEGE, MAGIC, CHAOS, SPELLS, HERO (see
+  // ETHEREAL_ATTACK_ORDER). 0 → immune (every physical type), 1.66 → +66% (Magic &
+  // Spells only). This is why Banish makes a unit untouchable by melee/piercing but
+  // fragile to spellcasters. `EtherealHealBonus` scales healing landed on it the same
+  // ×1.66 way. See etherealDamageMultiplier / ETHEREAL_HEAL_BONUS below.
+  EtherealDamageBonus: [0, 0, 0, 1.66, 0, 1.66, 0],
+  EtherealHealBonus: 1.66,
 
   // --- creep guard / leash ------------------------------------------------
   // The file's own comment: "After a unit has strayed 'GuardDistance' from where it
@@ -320,6 +340,40 @@ export const DAMAGE_TABLE: Readonly<Record<string, Readonly<Record<string, numbe
 export function damageMultiplier(attack: AttackType, armor: ArmorType): number {
   return DAMAGE_TABLE[attack]?.[armor] ?? 1;
 }
+
+/** The attack-type order of the `EtherealDamageBonus` list, per MiscGame.txt's own
+ *  comment ("NORMAL, PIERCE, SIEGE, MAGIC, CHAOS, SPELLS, HERO"). Unlike the
+ *  DamageBonus rows there is no None/target-armour axis — the list is indexed by the
+ *  attacker's attack type alone. */
+const ETHEREAL_ATTACK_ORDER: readonly AttackType[] = [
+  AttackType.Normal,
+  AttackType.Pierce,
+  AttackType.Siege,
+  AttackType.Magic,
+  AttackType.Chaos,
+  AttackType.Spells,
+  AttackType.Hero,
+];
+
+const ETHEREAL_DAMAGE_TABLE: Readonly<Record<string, number>> = Object.fromEntries(
+  ETHEREAL_ATTACK_ORDER.map((atk, i) => [atk, MISC_GAME.EtherealDamageBonus[i]]),
+);
+
+/** Extra multiplier a BANISHED (ethereal) target takes from `attack`, on top of the
+ *  normal damage table: 0 for every physical type (immune to melee/pierce/siege) and
+ *  1.66 for Magic & Spells (+66%). An attack type not in the file's list — most
+ *  notably `None`, used by untyped ability damage — defaults to 1.0 so the hit is
+ *  unchanged (untyped spell damage is boosted explicitly via ETHEREAL_SPELL_BONUS). */
+export function etherealDamageMultiplier(attack: AttackType): number {
+  return ETHEREAL_DAMAGE_TABLE[attack] ?? 1;
+}
+
+/** The multiplier untyped ability damage (`spellDamage`, dealt as AttackType.None)
+ *  applies to an ethereal target — the file's Spells column, ×1.66. */
+export const ETHEREAL_SPELL_BONUS = ETHEREAL_DAMAGE_TABLE[AttackType.Spells];
+
+/** Healing landed on an ethereal target is amplified the same ×1.66 (EtherealHealBonus). */
+export const ETHEREAL_HEAL_BONUS = MISC_GAME.EtherealHealBonus;
 
 /** The share of a hit that `armor` points of armour absorb: `n·k / (1 + k·n)`, with
  *  k = DefenseArmor. Diminishing returns, so armour never reaches 100%. Negative

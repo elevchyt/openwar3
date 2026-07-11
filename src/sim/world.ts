@@ -11,6 +11,8 @@ import {
   armorDamageReduction,
   creepXpFactor,
   damageMultiplier,
+  etherealDamageMultiplier,
+  ETHEREAL_SPELL_BONUS,
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
@@ -108,7 +110,9 @@ export type BuffKind =
   | "sleep" // cannot act (like stun) but wakes the instant it takes damage (Sleep)
   | "silence" // cannot cast spells (Silence, Soul Burn) — can still move & attack
   | "manaShield" // absorb incoming damage into mana instead of hp; value = mana spent per hp
-  | "root"; // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
+  | "root" // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
+  | "ethereal"; // Banish: value = move-slow fraction; can't attack, immune to physical
+  //            damage but takes +66% from Magic/Spells (see u.ethereal, EtherealDamageBonus)
 
 /** An in-progress spell cast (order === "cast"). The lifecycle, matching WC3
  *  (hiveworkshop "Cast Point and Backswing Point" thread 265781): walk into range
@@ -428,6 +432,7 @@ export interface SimUnit {
   buffs: SimBuff[]; // active timed effects
   stunned: boolean; // derived from buffs (cannot act)
   silenced: boolean; // derived from buffs (cannot cast spells)
+  ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
   invulnerable: boolean; // derived from buffs + baseInvulnerable (immune to damage + enemy targeting)
   baseInvulnerable: boolean; // persistent invulnerability from the unit type's "Invulnerable (Neutral)" ability (Avul) — goblin merchant, gold mine, mercenary camp, tavern, … (issue #26)
   mechanical: boolean; // machines/summons — no raisable corpse, unhealable by Heal
@@ -1247,6 +1252,7 @@ export class SimWorld {
       | "buffs"
       | "stunned"
       | "silenced"
+      | "ethereal"
       | "invulnerable"
       | "baseInvulnerable"
       | "mechanical"
@@ -1378,6 +1384,7 @@ export class SimWorld {
       buffs: [],
       stunned: false,
       silenced: false,
+      ethereal: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
       baseInvulnerable: !!opts?.baseInvulnerable,
       mechanical: !!opts?.mechanical,
@@ -1780,7 +1787,7 @@ export class SimWorld {
   issueAttack(id: number, targetId: number, force = false): boolean {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
-    if (!u || !t || u === t || !u.weapon || (!force && !this.hostile(u, t))) return false;
+    if (!u || !t || u === t || !u.weapon || u.ethereal || (!force && !this.hostile(u, t))) return false; // ethereal (Banished) → weapon disabled (issue #49)
     if (this.castLocked(u)) return false; // mid-wind-up: only Stop breaks a cast
     if (t.invulnerable) return false; // invulnerable units can't be attacked at all — not even with a forced Attack order (issue #26)
     // A FRESH attack (from any non-attack state — a player command, idle auto-acquire,
@@ -2225,6 +2232,7 @@ export class SimWorld {
     let thorns = 0;
     let stun = false;
     let silence = false;
+    let ethereal = false;
     let invuln = false;
     for (const b of u.buffs) {
       if (b.kind === "armor") armorBonus += b.value;
@@ -2241,7 +2249,10 @@ export class SimWorld {
         hasteMove = Math.max(hasteMove, b.value);
         hasteAttack = Math.max(hasteAttack, b.value2);
       } else if (b.kind === "root") slowMove = Math.max(slowMove, b.value); // pins movement (can still attack)
-      else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
+      else if (b.kind === "ethereal") {
+        ethereal = true;
+        slowMove = Math.max(slowMove, b.value); // Banish's Movement Speed Reduction (DataA)
+      } else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
       else if (b.kind === "silence") silence = true;
       else if (b.kind === "invuln") invuln = true;
     }
@@ -2274,6 +2285,7 @@ export class SimWorld {
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
     u.silenced = silence;
+    u.ethereal = ethereal; // Banish: weapon disabled + physical immunity (see applyDamage, issueAttack)
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;
@@ -3100,7 +3112,10 @@ export class SimWorld {
     unitsInArea: (x, y, r) => this.unitsInAreaInternal(x, y, r),
     hostile: (a, b) => this.hostile(a, b),
     ally: (a, b) => this.allied(a, b),
-    spellDamage: (t, amount, src) => this.landDamage(t, amount, src, false), // ignores armor
+    // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
+    // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical
+    // immunity (issue #49).
+    spellDamage: (t, amount, src) => this.landDamage(t, t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount, src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -3399,6 +3414,13 @@ export class SimWorld {
   }
 
   private tickAttack(u: SimUnit, dt: number): void {
+    // Banished mid-fight (issue #49): an ethereal unit can't attack — drop the order
+    // and stand down rather than chase a target it can never hit.
+    if (u.ethereal) {
+      this.cancelSwing(u);
+      this.stop(u.id);
+      return;
+    }
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     if (!t || !u.weapon) {
       // Target died or vanished. Don't just stand down: a group that kills its
@@ -3653,6 +3675,15 @@ export class SimWorld {
    *  direct Attack orders and attack-move engagements. `noChase` (Hold Position)
    *  makes the unit strike only what's already in range and never pursue. */
   private engage(u: SimUnit, t: SimUnit, noChase = false): void {
+    // Ethereal (Banished) units can't swing — cancel any pending strike and hold,
+    // never chase (issue #49). Covers the Hold / attack-move callers of engage; the
+    // plain "attack" order is stood down in tickAttack.
+    if (u.ethereal) {
+      this.cancelSwing(u);
+      u.inCombat = false;
+      this.settle(u);
+      return;
+    }
     const w = u.weapon!;
     // Committed to a swing: the attack animation is playing toward its damage point,
     // where the strike/projectile fires (a delayed frame WITHIN the animation). A
@@ -4270,7 +4301,12 @@ export class SimWorld {
     // the hit (Normal +50% vs Medium, Pierce ×2 vs Light/Unarmored, Siege ×1.5 vs
     // Fortified, Magic ×2 vs Heavy, …). Applied before the armor-value reduction;
     // both are multiplicative so order is immaterial.
-    const typeMult = damageMultiplier(attackType, target.armorType);
+    let typeMult = damageMultiplier(attackType, target.armorType);
+    // Banished (ethereal) targets take a SECOND multiplier by the attacker's type:
+    // 0 for every physical type (immune to melee/pierce/siege) and ×1.66 from
+    // Magic/Spells (issue #49, EtherealDamageBonus). A physical auto-attack thus
+    // lands 0 on a banished unit — the melee simply can't hurt it.
+    if (target.ethereal) typeMult *= etherealDamageMultiplier(attackType);
     const reduction = armorDamageReduction(target.armor);
     return this.landDamage(target, rawDamage * typeMult * (1 - reduction), attackerId, true);
   }

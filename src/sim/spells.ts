@@ -572,16 +572,19 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "stun", group: "hex", timeLeft: dur(lvl, t) || 4, sourceId: caster.id, art: def.targetArt });
   },
 
-  // Banish (Blood Mage) — slow a target's movement & attack (and, in WC3, make it
-  // take extra magic damage — approximated by the slow) for the duration. The
-  // banished unit wears the ethereal BanishTarget glow for the whole time — that
-  // model is the buff's own TargetArt (def.buffArt), not the ability's (which is
-  // empty), so the renderer keeps it attached while the buff lasts.
+  // Banish (Blood Mage) — turn a target ETHEREAL for the duration (issue #49). While
+  // ethereal the unit can't attack and takes NO physical damage, but takes +66% from
+  // Magic/Spells (EtherealDamageBonus) — so Banish pulls a unit out of the melee and
+  // hands it to your casters. It also slows movement by DataA ("Movement Speed
+  // Reduction (%)"; DataB is the now-moot attack-speed cut). The banished unit wears
+  // the ethereal BanishTarget glow the whole time — that model is the buff's own
+  // TargetArt (def.buffArt), not the ability's (which is empty), so the renderer keeps
+  // it attached while the buff lasts.
   AHbn: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "slow", group: "banish", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: d(lvl, 0, 0.5), value2: d(lvl, 0, 0.5), art: def.buffArt });
+    api.applyBuff(t, { kind: "ethereal", group: "banish", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: d(lvl, 0, 0.5), art: def.buffArt });
   },
 
   // Doom (Pit Lord, ult) — a heavy damage-over-time curse (dataA/sec).
