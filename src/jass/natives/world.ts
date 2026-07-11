@@ -70,7 +70,7 @@ export function registerWorldNatives(rt: Runtime): void {
   });
   def(rt, "KillUnit", (c, a) => {
     const u = unit(c, a[0]);
-    if (u && u.simId >= 0) c.rt.hooks?.removeUnit?.(u.simId);
+    if (u && u.simId >= 0) c.rt.hooks?.killUnit?.(u.simId);
     return JNULL;
   });
 

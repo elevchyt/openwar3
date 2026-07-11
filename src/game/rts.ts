@@ -1330,14 +1330,21 @@ export class RtsController {
 
   /** Add a freshly-spawned unit (instance already attached to the scene) — used
    *  by melee init to place each race's starting units. Returns the sim id. */
-  addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0): number {
+  /** Reserve a sim id up front — for the async spawn path (a script CreateUnit must
+   *  hand JASS a unit handle synchronously, but the render instance loads later). The
+   *  reserved id is later passed to addUnit so both refer to the same unit. */
+  reserveUnitId(): number {
+    return this.nextId++;
+  }
+
+  addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0, reservedId?: number): number {
     const seqs = instance.model.sequences;
     const anims = buildAnimSet(seqs);
     // Per-unit animation blending: cross-fade between sequences over this unit's
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
     instance.setBlendTime?.(def.animBlend);
-    const simId = this.nextId++;
+    const simId = reservedId ?? this.nextId++;
     const profile = WORKERS[def.id];
     const worker: WorkerState | null = profile ? { ...profile, carryGold: 0, carryLumber: 0 } : null;
     // Structures get building state (construction + a training queue); rally
@@ -1426,6 +1433,17 @@ export class RtsController {
       entry.curSeq = -1;
     }
     return simId;
+  }
+
+  /** Remove a unit outright (JASS RemoveUnit): no death/corpse. The render side drops
+   *  it on the next tick's removal reconcile (onRemove hides the instance). */
+  removeUnit(simId: number): void {
+    this.sim.removeUnit(simId);
+  }
+
+  /** Kill a unit (JASS KillUnit): plays the death animation + leaves a corpse. */
+  killUnit(simId: number): void {
+    this.sim.killUnit(simId);
   }
 
   /** Record a building's footprint half-extents (WORLD units) so the render loop seats

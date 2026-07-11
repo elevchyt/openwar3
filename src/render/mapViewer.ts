@@ -382,6 +382,10 @@ export class MapViewerScene {
   private metrics = new MetricsOverlay();
   private hud: GameHud | null = null;
   private mapScript: MapScriptEngine | null = null; // the running JASS interpreter (Phase 7), pumped from the frame loop
+  // Gate for script CreateUnit → real spawn. FALSE during main()'s CreateAllUnits (so
+  // pre-placed units stay .doo-adopted, no duplicates); TRUE after init, so a trigger's
+  // CreateUnit (hero selection, spawns) puts an actual unit on the map (7.2b).
+  private scriptSpawnLive = false;
   private gameMenu: GameMenu | null = null;
   private paused = false; // F10 game menu freezes the sim (rendering continues)
   /** Called when the player picks "End Game" — host tears the match down. */
@@ -987,12 +991,12 @@ export class MapViewerScene {
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33).`);
   }
 
-  /** The engine bridge the JASS interpreter's text actions call into. Display-only:
-   *  we deliberately omit `createUnit` so main()'s CreateAllUnits records rows but
-   *  spawns nothing (unit placement still comes from war3mapUnits.doo adoption —
-   *  7.2b unchanged). Only the LOCAL player's messages (slot 0, our GetLocalPlayer)
-   *  reach the HUD — the BJ force helpers already gate on that, so a per-player loop
-   *  won't spam duplicates. */
+  /** The engine bridge the JASS interpreter calls into. `createUnit` is gated by
+   *  `scriptSpawnLive`: during main()'s CreateAllUnits it records rows only (pre-placed
+   *  units stay war3mapUnits.doo-adopted — no duplicates), and only AFTER init does a
+   *  trigger's CreateUnit put a real unit on the map (7.2b). Only the LOCAL player's
+   *  messages (slot 0, our GetLocalPlayer) reach the HUD — the BJ force helpers already
+   *  gate on that, so a per-player loop won't spam duplicates. */
   private textHooks(): EngineHooks {
     return {
       // `duration` is seconds (timed action) or < 0 (untimed) — showMessage handles both.
@@ -1004,7 +1008,23 @@ export class MapViewerScene {
       },
       // GetObjectName / GetUnitName resolve rawcodes to their real data-table names.
       objectName: (typeId) => this.registry.get(typeId)?.name,
+      // Trigger-created units (hero selection, spawns) — a real unit once past init.
+      createUnit: (player, typeId, x, y, facing) => (this.scriptSpawnLive ? this.spawnScriptUnit(player, typeId, x, y, facing) : -1),
+      removeUnit: (id) => this.rts?.removeUnit(id),
+      killUnit: (id) => this.rts?.killUnit(id),
     };
+  }
+
+  /** Spawn a unit a trigger created via CreateUnit. The JASS side needs a sim id
+   *  synchronously (to hand back a unit handle), but the model loads async — so we
+   *  reserve the id now and attach the render instance when it's ready. JASS facing is
+   *  in degrees; the sim wants radians. Returns -1 if the type id isn't in our data. */
+  private spawnScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number): number {
+    const def = this.registry.get(typeId);
+    if (!def || !this.rts) return -1;
+    const simId = this.rts.reserveUnitId();
+    void this.spawnUnit(def, x, y, player, this.teamOf(player), 0, (facingDeg * Math.PI) / 180, simId);
+    return simId;
   }
 
   /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue
@@ -1013,8 +1033,11 @@ export class MapViewerScene {
   private runMapScript(): void {
     if (!this.mapArchive) return;
     try {
+      // Records-only through CreateAllUnits (no duplicate spawns); live spawns after.
+      this.scriptSpawnLive = false;
       const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false, runMain: true, hooks: this.textHooks() });
       if (!engine) return;
+      this.scriptSpawnLive = true; // init done → trigger CreateUnit now spawns for real
       this.mapScript = engine; // pumped each tick (timers + enter/leave-region events — 7.4b)
       const s = engine.setup;
       const trigs = engine.interp.rt.triggerRegs.length;
@@ -1180,7 +1203,10 @@ export class MapViewerScene {
     if (s) this.splats.add(key, x, y, s.scale, s.texture);
   }
 
-  private async spawnUnit(def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0): Promise<number | null> {
+  private async spawnUnit(
+    def: UnitDef, x: number, y: number, owner: number, team: number, constructionTime = 0,
+    facing = (3 * Math.PI) / 2, reservedId?: number,
+  ): Promise<number | null> {
     const map = this.viewer.map;
     if (!map || !this.rts) return null;
     // Buildings snap to WC3's 64-unit BUILD grid, so their stamped footprint lands on
@@ -1193,7 +1219,7 @@ export class MapViewerScene {
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
     instance.setTeamColor(owner); // player slot doubles as team color for now
-    const simId = this.rts.addUnit(instance, def, x, y, (3 * Math.PI) / 2, owner, team, constructionTime); // face south
+    const simId = this.rts.addUnit(instance, def, x, y, facing, owner, team, constructionTime, reservedId); // default: face south
 
     // Buildings block pathing: stamp their footprint so units route around them.
     if (fp && this.grid) {

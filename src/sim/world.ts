@@ -1148,6 +1148,29 @@ export class SimWorld {
     return true;
   }
 
+  /** Remove a unit outright — NO death, corpse, XP, or item drops (JASS RemoveUnit
+   *  semantics). Frees its cells/builders and queues the render-side drop (onRemove). */
+  removeUnit(id: number): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    this.refundPendingBuild(u);
+    this.unsettle(u);
+    if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
+    if (u.constructing) this.detachBuilder(u.id);
+    this.units.delete(u.id);
+    this.removals.push(u.id);
+    this.unitDrops.delete(u.id);
+    return true;
+  }
+
+  /** Kill a unit as if slain (death animation + corpse + drops — JASS KillUnit). */
+  killUnit(id: number): boolean {
+    const u = this.units.get(id);
+    if (!u) return false;
+    this.kill(u);
+    return true;
+  }
+
   /** Whether a building is still under construction (renderer/HUD cue). */
   isUnderConstruction(id: number): boolean {
     const b = this.units.get(id)?.building;

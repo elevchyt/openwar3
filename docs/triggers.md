@@ -21,7 +21,8 @@
 | 7.6 | **Text logic + text actions** (messages, floating text, forces, strings, `.wts`) | ✅ done (live) | full BJ text path end-to-end (§7.5); WarChasers welcome/HINT text in the HUD (screenshots) |
 | — | **`main()` runs live** (display-only hooks) | ✅ done (live) | custom-map init triggers fire; 296 trigger regs on WarChasers; no duplicate units |
 | 7.4b | **Live event pump** (enter/leave-**region** + **timers** from `rts.tick`) | ✅ done (live) | §7.6 headless (enter 2×, leave 1×, `GetEnteringUnit` live pos); WarChasers wisp entering the Archer region fires its trigger (screenshots) |
-| 7.2b | live `CreateUnit` → new sim units (replace .doo adoption) | ⬜ next | — |
+| 7.2b | live `CreateUnit`/`RemoveUnit`/`KillUnit` → real sim+render units | ✅ done (live, base units) | trigger-spawned footmen + Paladin hero render live; wisp `RemoveUnit`'d on region enter (screenshots) |
+| — | **Custom object data** (`war3map.w3u/…`) → custom unit/ability types | ⬜ next | a custom-map hero (WarChasers `EC12`) spawns from its own trigger |
 | 7.4c | pump remaining sim events (unit-death, damage, orders) live | ⬜ next | a death/attack-triggered action fires in-game |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
@@ -53,7 +54,7 @@ The engine calls two entry points, then pumps events:
 config()   // SetPlayers/SetTeams/DefineStartLocation/InitCustomPlayerSlots — player + map setup      [runs live]
 main()                                                                                                 [runs live, 7.6]
   SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
-  CreateAllUnits()             // CreateUnit(...) per pre-placed unit — records rows only (display-only hooks; 7.2b)
+  CreateAllUnits()             // records rows only (scriptSpawnLive=false during init, so no dup of the .doo units)
   InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
 // then: rts.tick pumps the runtime → timer + enter/leave-region triggers fire live (7.4b); death/damage/orders pending
 ```
@@ -236,11 +237,30 @@ fires once on cross-out with no re-fire while inside; `GetEnteringUnit` is the c
 Verified **live** on WarChasers: driving the wisp onto the Archer pedestal region fires its trigger (whose actions run —
 `CreateUnit` of the selected hero, recorded as rows), re-entry fires again, and standing still doesn't re-fire.
 
+## Live unit creation / removal (7.2b — done live, base-game types)
+
+A trigger's `CreateUnit` now puts a **real** unit on the map, and `RemoveUnit`/`KillUnit` take it off. Built in
+**`src/render/mapViewer.ts`** + the sim/RTS layer:
+
+- **`createUnit` hook** (`spawnScriptUnit`) — resolves the rawcode in our `UnitRegistry`, then spawns via the existing
+  `spawnUnit` (model instance → `RtsController.addUnit` → sim unit). JASS needs the unit handle *synchronously* but the
+  model loads async, so `RtsController.reserveUnitId()` hands back a sim id up front and `addUnit(..., reservedId)`
+  attaches the render instance to that id when it's ready. JASS facing (degrees) → sim radians.
+- **The `scriptSpawnLive` gate** — the crux of not double-placing pre-placed units. It's `false` while `main()` runs, so
+  `CreateAllUnits()` records `JassUnit` rows only (the `.doo` adoption still owns pre-placed units), and flips `true`
+  once `main()` returns — so only *trigger*-time `CreateUnit` (hero selection, spawns) spawns for real.
+- **`RemoveUnit`/`KillUnit`** — `SimWorld.removeUnit` (no death/corpse) and `killUnit` (death anim + corpse), reconciled
+  to the render side by the existing `drainRemovals`/`drainDeaths` → `onRemove`/`onDeath` path.
+
+Verified **live** on WarChasers: trigger-spawned base units (2 footmen + a Paladin hero) render with HP/mana bars,
+selection rings, and team colour; driving the wisp onto the Archer region `RemoveUnit`'d it (count −1). The Archer
+trigger's own `CreateUnit('EC12', …)` no-ops because `EC12` is a **custom** WarChasers hero (see next task).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
-- **7.2b** route live unit creation through `CreateUnit` (currently the vision fix adopts `.doo` instances; the
-  interpreter's `CreateUnit` records a row but spawns nothing live — display-only hooks). This is what turns a
-  hero-selection trigger's `CreateUnit` into an actual on-map hero.
+- **Custom object data** — custom maps define their own units/abilities/items in `war3map.w3u`/`.w3t`/`.w3a`/… (a base
+  type id + field overrides). Our `UnitRegistry` only has the base-game types, so a custom unit id (`EC12`) isn't found
+  and its `CreateUnit` no-ops. Load + merge the map's object data into the registries so custom types spawn.
 - **7.4c** pump the remaining sim events — **unit-death** (`TriggerRegisterDeathEvent`), damage, orders, unit-state —
   from `rts.tick` into `Interpreter.fireEvent`, the way regions/timers already are.
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.

@@ -141,7 +141,8 @@ export interface EngineHooks {
   setUnitAcquireRange?(unitId: number, range: number): void;
   setUnitState?(unitId: number, whichState: number, value: number): void;
   setUnitColor?(unitId: number, color: number): void;
-  removeUnit?(unitId: number): void;
+  removeUnit?(unitId: number): void; // RemoveUnit — no death/corpse
+  killUnit?(unitId: number): void; // KillUnit — death animation + corpse
   hideUnit?(unitId: number, hidden: boolean): void;
   /** On-screen chat/message line (DisplayTextToPlayer & the timed variant). `duration`
    *  is seconds for the timed native, or < 0 for the untimed one (host default). Only
