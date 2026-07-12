@@ -64,13 +64,15 @@ export function showLobby(
     (info.recommendedPlayers ? ` · suggested: ${info.recommendedPlayers}` : "");
   panel.appendChild(meta);
 
-  // Custom maps set up their game from triggers we don't execute yet (Phase 7),
-  // so warn that this loads the terrain/units without the map's own game logic.
+  // A custom map runs its OWN script rather than the melee setup (Phase 7 — the triggers
+  // do execute now), so it spawns no starting base: the map decides what the player gets.
   if (!info.isMelee) {
     const note = document.createElement("p");
     note.className = "lobby-meta";
     note.style.opacity = "0.7";
-    note.textContent = "Custom map: triggers aren't run yet — melee setup is skipped, so no starting base is spawned.";
+    note.textContent = info.fixedPlayerSettings
+      ? "Custom map: it runs its own triggers, and it fixes the races and teams itself."
+      : "Custom map: it runs its own triggers instead of the melee setup, so no starting base is spawned.";
     panel.appendChild(note);
   }
 
@@ -87,10 +89,23 @@ export function showLobby(
 
     const controller = makeSelect(CONTROLLERS, idx === 0 ? "user" : "computer");
     const race = makeSelect(RACES.map((r) => [r, RACE_LABEL[r]] as [string, string]), slot.defaultRace);
+    // The team comes from the MAP when the map says so (w3i "use custom forces" → PlayerSlot
+    // .team); otherwise every slot opens on its own team, which is the melee free-for-all.
+    // Getting this wrong is not cosmetic: the lobby's teams are what seed the sim's unit
+    // teams and the alliance matrix, so inventing `slot.id + 1` for a co-op map made the
+    // other players' units ENEMIES — on WarChasers, three allied wisps with red health bars,
+    // while the map's own config() had just allied all four of them on team 0.
+    const teams = new Set(info.slots.map((s) => s.team));
     const team = makeSelect(
-      info.slots.map((_, i) => [String(i + 1), `Team ${i + 1}`] as [string, string]),
-      String(slot.id + 1),
+      [...teams].sort((a, b) => a - b).map((t) => [String(t + 1), `Team ${t + 1}`] as [string, string]),
+      String(slot.team + 1),
     );
+    // "Fixed player settings" (w3i 0x0020): the map dictates race and team; the lobby's job
+    // is only to seat players. Show them, don't let them be contradicted.
+    if (info.fixedPlayerSettings) {
+      race.disabled = true;
+      team.disabled = true;
+    }
 
     row.append(label, controller, race, team);
     table.appendChild(row);

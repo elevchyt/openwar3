@@ -1148,12 +1148,34 @@ export class MapViewerScene {
     const seeds = this.mapPlayerUnits.map((p) => ({ x: p.x, y: p.y, owner: p.owner, team: this.teamOf(p.owner) }));
     this.rts.setPlayerUnitSeeds(seeds);
 
+    // The map's units must ALL be in the sim before its script runs — WC3's own order
+    // (main() calls CreateAllUnits before InitCustomTriggers), and the same wait startMelee
+    // already does. Custom maps skipped it, and the whole world the script talks to was
+    // therefore empty when it talked to it. Two consequences, both of them bugs we shipped:
+    //
+    //   • A pre-placed unit's `gg_unit_*` handle bound to NOTHING. CreateUnit inside
+    //     CreateAllUnits only records its row (the unit is already on the map, .doo-adopted)
+    //     and binds the handle to the unit standing at (x, y) — but there was no unit
+    //     standing anywhere yet, so every handle came back with simId -1. WarChasers then
+    //     asks the camera to ride one (`SetCameraTargetControllerNoZForPlayer(Player(0),
+    //     gg_unit_ewsp_0006, …)` — the player's selector wisp) and removes the wisps of the
+    //     slots nobody is playing (`RemoveUnit(gg_unit_ewsp_0007)`); both fell on the floor.
+    //
+    //   • The enter-region baseline (7.4b) was seeded from an EMPTY world. Units already
+    //     inside a rect when its trigger registers must never fire it — in WC3 they can't,
+    //     because they exist first. Ours streamed in afterwards, so every pre-placed unit
+    //     standing in a watched rect counted as ENTERING it. On WarChasers that is not
+    //     cosmetic: each hero pedestal is a rect holding a Circle of Power and a display
+    //     statue, both Neutral Passive, and the Robo-X pedestal's trigger carries no
+    //     "is it a wisp?" condition — so the two of them each spawned a hero for player 15
+    //     on the players' shared hero spawn.
+    this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
+    await this.waitForMapUnits(); // …and every one of them must be adopted before the script runs
+
     // Run the map's own script (Phase 7). config() sets players/start-locations;
     // main() fires the map's initialization triggers, so its welcome text / quest
     // messages appear in the HUD message log.
     this.runMapScript({ melee: false, slots: config.slots });
-
-    this.rts.enableSeeding(); // owners/teams configured → let trySeed adopt map units
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33).`);
   }
 

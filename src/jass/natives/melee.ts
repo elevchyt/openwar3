@@ -59,7 +59,12 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "GetFloatGameState", (c, a) =>
     jReal(c.rt.enumIndex(a[0]) === GAME_STATE_TIME_OF_DAY ? c.rt.hooks?.getTimeOfDay?.() ?? 0 : 0),
   );
-  def(rt, "GetIntegerGameState", () => jInt(0)); // GAME_STATE_DISCONNECTED = 0: nobody has dropped
+  // Answers 0 to every igamestate query, which reads correctly for the ones that matter:
+  // GAME_STATE_DISCONNECTED (1) → 0, nobody has dropped. (The comment here used to name
+  // DISCONNECTED as index 0; common.j numbers DIVINE_INTERVENTION 0 and DISCONNECTED 1 —
+  // harmless, since the stub ignores its argument, but the 7.25 enum gate exists because
+  // that kind of miscount is exactly what went wrong with `mapcontrol`.)
+  def(rt, "GetIntegerGameState", () => jInt(0));
   def(rt, "SetTimeOfDayScale", (c, a) => ((c.rt.timeOfDayScale = asNum(a[0])), JNULL));
   def(rt, "GetTimeOfDayScale", (c) => jReal(c.rt.timeOfDayScale));
 

@@ -3497,5 +3497,154 @@ function formatTimerValueCheck(seconds) {
   return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+// --- 7.25: the enum-index gate — every common.j constant we hard-code, re-derived --------
+//
+// Our Convert* natives are generic (they wrap whatever integer common.j hands them), so a
+// JASS-side constant can never be wrong. What CAN be wrong — and was, for 23 milestones — is
+// an index our own TypeScript hard-codes to compare against. `mapcontrol` was hand-typed as
+// user=1/computer=2 when common.j says 0/1, so GetPlayersByMapControl(MAP_CONTROL_USER) built
+// an EMPTY force and every GUI "for each user player" loop in the corpus silently did nothing.
+//
+// So: derive the truth from common.j and check our sources against it. Nothing here is
+// re-typed by hand — the expected values ARE common.j's. Two passes:
+//
+//   (a) NAME-IDENTICAL — our constants are named after common.j's (EVENT_UNIT_DEATH = 53,
+//       RACE_HUMAN = 1, …), so every `const <COMMON_J_NAME> = <int>` anywhere in src/ is
+//       checked automatically. A constant a FUTURE milestone adds is covered for free.
+//   (b) TABLES — where we group them (MAP_CONTROL.USER, CAMERA_FIELD.ROTATION,
+//       AllianceType.PASSIVE, …) the key is only the tail of the common.j name, so each
+//       table declares its prefix and every key is checked against `<PREFIX>_<KEY>`.
+console.log('\n[7.25] Enum-index gate — every hard-coded common.j index, re-derived from common.j');
+{
+  // Truth: `constant <type> NAME = Convert<Type>(n)` and plain `constant integer NAME = n`.
+  const TRUTH = new Map();
+  const reConv = /constant\s+\w+\s+([A-Z][A-Z0-9_]*)\s*=\s*Convert\w+\s*\(\s*(-?\d+)\s*\)/g;
+  const reInt = /constant\s+integer\s+([A-Z][A-Z0-9_]*)\s*=\s*(-?\d+)\s*$/gm;
+  for (const re of [reConv, reInt]) {
+    let m;
+    while ((m = re.exec(COMMON_J))) TRUTH.set(m[1], parseInt(m[2], 10));
+  }
+  if (TRUTH.size > 300) ok(`common.j parsed: ${TRUTH.size} named enum/integer constants are the oracle`);
+  else fail(`only ${TRUTH.size} constants parsed out of common.j — the gate would be vacuous`);
+
+  const srcFiles = [];
+  (function walk(dir) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.ts')) srcFiles.push(p);
+    }
+  })(join(REPO, 'src'));
+
+  // (a) name-identical constants, anywhere in src/.
+  let checked = 0;
+  const bad = [];
+  // Aliases for the families we abbreviate at the declaration site.
+  const ALIAS = (name) => (name.startsWith('VG_') ? 'SOUND_VOLUMEGROUP_' + name.slice(3) : name);
+  for (const f of srcFiles) {
+    const src = readFileSync(f, 'utf8');
+    const re = /\b(?:const|let|var)\s+([A-Z][A-Z0-9_]{2,})\s*(?::\s*number\s*)?=\s*(-?\d+)\s*;/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const want = TRUTH.get(ALIAS(m[1]));
+      if (want === undefined) continue; // not a common.j name — none of our business
+      checked++;
+      const got = parseInt(m[2], 10);
+      if (got !== want) bad.push(`${f.slice(REPO.length + 1)}: ${m[1]} = ${got}, common.j says ${want}`);
+    }
+  }
+  if (bad.length === 0) ok(`${checked} name-identical constant(s) in src/ all match common.j (EVENT_*, RACE_*, PLAYER_NEUTRAL_*, SOUND_VOLUMEGROUP_* …)`);
+  else for (const b of bad) fail(b);
+
+  // (b) grouped tables: <file, table, common.j prefix>. The table body is read out of the
+  // SOURCE (not imported), so tables outside the interpreter build are covered too.
+  const TABLES = [
+    ['src/jass/runtime.ts', 'MAP_CONTROL', 'MAP_CONTROL'],
+    ['src/jass/natives/camera.ts', 'CAMERA_FIELD', 'CAMERA_FIELD'],
+    ['src/sim/vision.ts', 'JassFogState', 'FOG_OF_WAR'],
+    ['src/sim/alliances.ts', 'AllianceType', 'ALLIANCE'],
+  ];
+  // A table key spells only the TAIL of the common.j name, in the local casing:
+  // MAP_CONTROL.USER → MAP_CONTROL_USER, AllianceType.SharedXp → ALLIANCE_SHARED_XP.
+  const screamingSnake = (k) => k.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+  for (const [file, table, prefix] of TABLES) {
+    const src = readFileSync(join(REPO, file), 'utf8');
+    // `export const X = { A: 0, … }` or `export enum X { A = 0, … }`
+    const body = new RegExp(`(?:const|enum)\\s+${table}\\b[^{]*\\{([\\s\\S]*?)\\}`).exec(src);
+    if (!body) { fail(`${file}: could not find the ${table} table — the gate cannot see it`); continue; }
+    const entries = [...body[1].matchAll(/([A-Za-z][A-Za-z0-9_]*)\s*[:=]\s*(-?\d+)/g)];
+    if (!entries.length) { fail(`${file}: ${table} has no numeric entries`); continue; }
+    const wrong = [];
+    for (const [, key, val] of entries) {
+      const name = `${prefix}_${screamingSnake(key)}`;
+      const want = TRUTH.get(name);
+      if (want === undefined) { wrong.push(`${table}.${key} names no common.j constant (${name})`); continue; }
+      if (parseInt(val, 10) !== want) wrong.push(`${table}.${key} = ${val}, common.j ${name} = ${want}`);
+    }
+    if (wrong.length === 0) ok(`${table} (${file.split('/').pop()}): all ${entries.length} indices == common.j ${prefix}_*`);
+    else for (const w of wrong) fail(w);
+  }
+
+  // The regression itself, stated as a check: had this gate existed, it would have caught it.
+  if (TRUTH.get('MAP_CONTROL_USER') === 0 && TRUTH.get('MAP_CONTROL_COMPUTER') === 1) {
+    ok('common.j: MAP_CONTROL_USER = 0, MAP_CONTROL_COMPUTER = 1 — the pair we had off by one for 23 milestones');
+  } else fail('common.j MAP_CONTROL_USER/COMPUTER did not parse');
+}
+
+// --- 7.25: the enter-region baseline — a unit standing in a rect is not ENTERING it -------
+//
+// WC3's own ordering guarantees this: main() calls CreateAllUnits() BEFORE
+// InitCustomTriggers(), so by the time a trigger registers on a rect, every pre-placed unit
+// inside it is already there and no crossing ever happened. Ours arrive with their models,
+// asynchronously — so startCustom must seed them into the sim and WAIT before running the
+// script (mapViewer.startCustom; startMelee already did). It didn't, and the baseline was
+// therefore computed from an EMPTY world: every pre-placed unit standing in a watched rect
+// counted as ENTERING it on the first pump.
+//
+// On WarChasers that spawned heroes. Each pedestal is a rect holding a Circle of Power and a
+// display statue, both Neutral Passive; the Robo-X pedestal's trigger has no "is it a wisp?"
+// condition (the map's own quirk), so both of them ran it — two Neutral-Passive heroes on the
+// players' shared hero spawn. This pins the invariant the fix restores.
+console.log('\n[7.25] Enter-region baseline (a unit already inside a rect must NOT fire its trigger)');
+{
+  const src = `
+globals
+    trigger t = null
+    integer fired = 0
+    integer lastOwner = -1
+endglobals
+function Act takes nothing returns nothing
+    set fired = fired + 1
+    set lastOwner = GetPlayerId(GetOwningPlayer(GetEnteringUnit()))
+endfunction
+function InitT takes nothing returns nothing
+    set t = CreateTrigger()
+    call TriggerRegisterEnterRectSimple(t, Rect(-100.0, -100.0, 100.0, 100.0))
+    call TriggerAddAction(t, function Act)
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, src]);
+  interp.run('InitT', []);
+  // A pre-placed unit (owner 15, Neutral Passive) standing INSIDE the rect from the first
+  // tick — exactly the Circle of Power on WarChasers' Robo-X pedestal.
+  const statue = { id: 1, typeId: 'ncp2', owner: 15, x: 0, y: 0, facing: 0 };
+  const walker = { id: 2, typeId: 'ewsp', owner: 0, x: 900, y: 900, facing: 0 };
+  interp.pumpRegions([statue, walker]); // baseline tick
+  interp.pumpRegions([statue, walker]);
+  interp.pumpRegions([statue, walker]);
+  const firedByStatue = interp.rt.globals.get('fired')?.n ?? -1;
+  if (firedByStatue === 0) ok('a pre-placed unit standing in the rect never fires its enter trigger (WarChasers: no Neutral-Passive heroes)');
+  else fail(`the standing unit fired the trigger ${firedByStatue}×`);
+
+  // …and a unit that really CROSSES in still fires it, exactly once.
+  walker.x = 0; walker.y = 0;
+  interp.pumpRegions([statue, walker]);
+  interp.pumpRegions([statue, walker]); // still inside — must not fire again
+  const fired = interp.rt.globals.get('fired')?.n ?? -1;
+  const owner = interp.rt.globals.get('lastOwner')?.n ?? -1;
+  if (fired === 1 && owner === 0) ok('a unit that crosses IN fires it exactly once, with GetEnteringUnit\'s owner (player 0, not the statue\'s 15)');
+  else fail(`crossing: fired ${fired}× (want 1), owner ${owner} (want 0)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

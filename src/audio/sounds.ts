@@ -257,6 +257,18 @@ export class SoundBoard {
   private musicVolume = 1; // SetMusicVolume, 0–1 (the native's 0–127 scaled)
   private musicPaused = false; // StopMusic — ResumeMusic restarts the list
   private musicCueing = false; // a track is decoding (see startPendingMusic)
+  /** WC3 has exactly ONE music channel, and every music native (SetMapMusic / PlayMusic /
+   *  PlayThematicMusic / StopMusic) is a bid to own it. Owning it has to be claimed
+   *  SYNCHRONOUSLY, because our tracks are mp3s that decode asynchronously: between asking
+   *  for a track and it starting there is a window in which `this.music` is still null, so
+   *  a second start in that window stopped nothing and BOTH tracks reached src.start().
+   *  Nothing then held the first one's node, so it played to the end, unstoppable, under
+   *  the second. WarChasers opens exactly that way — main()'s `SetMapMusic("Music", true, 0)`
+   *  cues the race playlist, and its init trigger's `PlayMusicBJ(gg_snd_Undead2)` cues
+   *  Undead2 a millisecond later, while the first is still decoding. Hence a generation
+   *  token: a start claims the channel the moment it is asked for, and a decode that lands
+   *  against a stale token is discarded instead of played. */
+  private musicGen = 0;
   private thematic: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
   private skins: Map<string, Map<string, string>> | null = null;
   /** Which war3skins.txt section the music playlists come from — the LOCAL player's
@@ -815,6 +827,8 @@ export class SoundBoard {
     this.musicPaused = true;
     this.fadeOutTrack(this.music, fadeOut);
     this.music = null;
+    this.musicGen++; // a track still decoding must not start up after a StopMusic
+    this.musicCueing = false;
   }
 
   /** ResumeMusic — pick the list back up where StopMusic left it. */
@@ -835,10 +849,18 @@ export class SoundBoard {
   playThematicMusic(file: string, fromMs = 0): void {
     const paths = this.musicPaths(file);
     if (!paths.length) return;
-    this.endThematicMusic(); // only one thematic track at a time
-    this.fadeOutTrack(this.music, true); // duck the map music under it
-    this.music = null;
+    this.fadeOutTrack(this.thematic, true); // only one thematic track at a time
+    this.thematic = null;
+    // A thematic pre-empts the map music, but it is the SAME one channel — so it claims it
+    // the same way, and a map-music track still decoding towards it is dropped rather than
+    // allowed to start up underneath.
+    const gen = this.claimMusicChannel();
+    this.musicCueing = false;
     void this.startTrack(paths[0], fromMs / 1000).then((t) => {
+      if (gen !== this.musicGen) {
+        if (t) try { t.src.stop(); } catch { /* not started */ }
+        return;
+      }
       this.thematic = t;
       if (t) {
         t.src.onended = () => {
@@ -888,10 +910,16 @@ export class SoundBoard {
   private startMusicTrack(offsetSec = 0): void {
     const path = this.musicList[this.musicIndex];
     if (!path || this.thematic) return;
-    this.fadeOutTrack(this.music, false);
-    this.music = null;
+    const gen = this.claimMusicChannel(); // …before the decode, not after it (see musicGen)
     this.musicCueing = true; // the track decodes async — don't let the gate retry double-start it
     void this.startTrack(path, offsetSec).then((t) => {
+      // Someone else asked for the channel while this mp3 was decoding: they own it now, and
+      // this track must never be heard. (Without this it would src.start() into the mix and
+      // nothing would hold its node to stop it again.)
+      if (gen !== this.musicGen) {
+        if (t) try { t.src.stop(); } catch { /* not started */ }
+        return;
+      }
       this.musicCueing = false;
       if (!t || this.musicPaused || this.thematic) {
         if (t) try { t.src.stop(); } catch { /* not started */ }
@@ -907,6 +935,15 @@ export class SoundBoard {
         if (!this.musicPaused) this.startMusicTrack();
       };
     });
+  }
+
+  /** Take ownership of the one music channel: silence whatever holds it and invalidate any
+   *  track still decoding towards it. Returns the caller's generation token — the caller is
+   *  the owner only for as long as `musicGen` still equals it. */
+  private claimMusicChannel(): number {
+    this.fadeOutTrack(this.music, false);
+    this.music = null;
+    return ++this.musicGen;
   }
 
   /** Decode + start one music track on the music bus. Resolves to null if the context

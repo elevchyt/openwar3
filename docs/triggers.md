@@ -41,6 +41,7 @@
 | 7.22 | **Vision, fog and the last panels** — **shared vision + alliances** (`SetPlayerAlliance`/`GetPlayerAlliance` over a real per-pair, per-setting matrix seeded from the lobby's teams; `CripplePlayer`), which finally lets blizzard.j's **`MeleeExposePlayer`** do what the 7.21 cripple timer promised; **BOTH fogs, which are different systems** — the atmospheric haze (`SetTerrainFogEx`/`ResetTerrainFog` → the `scene.distFog` shader) and the fog of war (`CreateFogModifier{Rect,Radius,RadiusLoc}`/`FogModifierStart`/`Stop`/`Destroy`, `SetFogState*`, `FogEnable`/`FogMaskEnable` → the `VisionMap`); **way gates** (`WaygateActivate`/`SetDestination`/`Get*`, a 400×400 box read out of the MPQ); **multiboards** (the grid scoreboard → the game's own `MultiBoard.fdf`). Plus the **record-only handle binding** that all of it turned out to need | ✅ done (live) | §7.22 headless (30 checks through the real blizzard.j BJs + the real `AllianceTable`/`VisionMap`: the matrix seeds from teams and is **directed**, `SetPlayerAllianceStateBJ` allies a pair, `MeleeExposePlayer` → `CripplePlayer` reveals the crippled player to exactly the players not co-allied with them; a fog modifier is created **stopped**, VISIBLE lights ground nobody can see and MASKED blacks out ground a unit stands in; `SetTerrainFogExBJ`'s 0–100 scale vs the native's 0–1; a gate fires on **entering** its box, not standing in it — the ping-pong regression; the multiboard BJ/native **axis swap** and the borrowed item handle). Echo Isles **live**: razing a crippled player's hall drains blizzard.j's clock → *"Revealing Player 2."* and their units show through black fog, while `ALLIANCE_SHARED_VISION` instead **lights the terrain**; Jack-o-Lantern's own green haze; a VISIBLE rect lit out in the unexplored middle of the map. CentaurGrove: a footman walks into the SW gate and comes out the NE one, 10 000 units away. Skibi's Castle TD: its **own** multiboard in the game's own chrome (screenshots) |
 | 7.23 | **Weather — the map's atmosphere** (`AddWeatherEffect` / `EnableWeatherEffect` / `RemoveWeatherEffect`). The **biggest unimplemented family in the corpus — 40 of the 165 maps**, most of them plain MELEE maps, because the World Editor compiles a placed weather region straight into `CreateRegions()`. All three natives were explicit **no-ops**, so 40 maps ran with their rain and snow silently switched off. Not a model and not a shader: one **data-driven particle emitter** whose every parameter is a column of `TerrainArt\Weather.slk` (`src/data/weather.ts` + the `src/render/weather.ts` GL pass) | ✅ done (live) | §7.23 headless (14 checks against the **real** SLK through our **real** parser: all 21 types; the `particles == emrate × lifespan × 20` identity that pins the density; rain is a *tail* streak and snow a *head* billboard; `\|veloc\| × taillen` gives rain a 168-unit dash and moonlight a 3000-unit shaft from the same two columns; the 8×8 cloud atlas; the three-key ramps; created-disabled, and an unknown id doesn't crash the map). Live: Harrow's own heavy snow (4000 flakes, 126 fps), Forestwalk's slanted rain, WarChasers' moonlight shafts and red dungeon fog — all from those maps' own scripts (screenshots) |
 | 7.24 | **Cameras and cinematics — the map's intro actually plays.** The **camera setups** (`CreateCameraSetup` / `CameraSetupSetField` / `CameraSetupSetDestPosition` — 10 maps each, the top of the ranking) and the whole move family they feed (`CameraSetupApply*`, `SetCameraField`, `PanCameraTo[Timed][WithZ]`, `SetCameraTargetController`, `SetCameraRotateMode`, `CameraSetTargetNoise`, `ResetToGameCamera`); **cinematic mode** (`CinematicModeBJ`, 7 maps — the letterbox out of the game's own `CinematicPanel.fdf`, `EnableUserControl`, the frozen day/night clock, the fixed random seed); the **fade** (`CinematicFadeBJ` — 9 maps — over the 7 `SetCineFilter*` natives); **transmissions** (`TransmissionFromUnit[Type]WithNameBJ` → `SetCinematicScene`: the speaker's animated bust, his name in his player colour, his subtitle); and **minimap pings**. Plus `SelectUnit`/`ClearSelection` and a real `SetRandomSeed`. Uncovered a 23-milestone-old bug: **every `mapcontrol` index was off by one**, so `GetPlayersByMapControl(MAP_CONTROL_USER)` — which Monolith wraps its whole intro in — returned an **empty force** | ✅ done (live) | §7.24 headless (24 checks through the real BJs + the real `ScriptCamera`: Monolith's own 7-field intro shot; a 2 s apply is exactly half-way at 1 s and then **lets go**; the degrees-in/**radians**-out asymmetry `GetCurrentCameraSetup` proves; `CinematicModeBJ`'s full checklist, and that it **restores what it saved** — a lying `IsFogEnabled` would switch a map's fog back on; the letterbox does **not** fade at map init (`bj_gameStarted`); `SetRandomSeed(0)` really replays the stream; a fade is alpha 0→255 and its mirror, and blizzard.j arms a timer to take it down; a transmission's 15 s = `bj_NOTHING_SOUND_DURATION` + the map's 10 s, portrait +1.5 s; the pure-red flashy ping knocked to 254; **and the shortest-arc gate**). Live: **(4)Monolith's own intro cinematic plays** — letterbox in, camera on `gg_cam_Monolith_Intro_Shot`, a 6 s drift home under a 6 s fade to black, then the game handed back (HUD, camera, fog, clock). WarChasers' Soul Keeper **transmits** with his bust in the game's own frame; pings pulse on the minimap (screenshots) |
+| 7.25 | **The custom map's world must exist before its script runs.** Three bugs found by playing (4)WarChasers through the lobby, two of them one root: `startCustom` ran the map's script **before** seeding the pre-placed `.doo` units into the sim — the exact ordering 7.3 had already fixed for `startMelee` (WC3's `main()` calls `CreateAllUnits()` before `InitCustomTriggers()`), never carried across. So the script talked to an **empty world**: every `gg_unit_*` handle bound to nothing (**321** of them on WarChasers), and the enter-region baseline was seeded from nothing, so every pre-placed unit standing in a watched rect counted as **ENTERING** it. Plus a third, independent one: the **music channel** was claimed only *after* an mp3 finished decoding, so two starts inside one decode window both reached the speakers | ✅ done (live) | §7.25 headless (the **enum-index gate**: 418 common.j constants parsed as the oracle, every hard-coded index in `src/` re-derived from them — 40 name-identical constants + the `MAP_CONTROL`/`CAMERA_FIELD`/`JassFogState`/`AllianceType` tables — so `mapcontrol`'s 23-milestone off-by-one can never recur; and the **enter-region baseline**: a unit standing in a rect never fires it, a unit that crosses in fires it exactly once with the right `GetEnteringUnit`). WarChasers **live**: the camera rides the player's selector wisp (`camTarget == wispAt`, to the unit) and then his hero; **one** audible music track, not two; **zero** Neutral-Passive heroes (was two); the map's own forces put players 0/1/5/6 on one team, as its `InitCustomTeams` says. Echo Isles unregressed (screenshots) |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (279/335 used natives implemented — and see the caveat: weather sat at a ✓ the whole time) |
 
 Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + **7.4c the
@@ -1543,7 +1544,100 @@ scrolling filter), and the **game-speed multipliers** — `SetGameSpeed` is reco
 (which is all cinematic mode needs) but not applied, because WC3's five speeds are engine
 constants that live in no data file we have and guessing one is exactly what `CLAUDE.md` forbids.
 
+## The custom map's world must exist before its script runs (7.25 — done, live)
+
+Three bugs, reported from playing **(4)WarChasers** through the real lobby: *two soundtracks at once*; *the camera is
+not on my wisp, sits at a strange angle and cannot be panned*; *picking a hero spawns two ENEMY heroes on my hero
+spawn*. Two of the three are **one root**. The bisect (proved from the diff, not by eye — `src/audio/sounds.ts` and
+`src/jass/interpreter.ts` are byte-identical at 9462dc1 and cf638d4, and `startCustom` had the same ordering, while
+`src/jass/natives/camera.ts` is a **new file** in cf638d4):
+
+| Symptom | New in 7.24? | Root |
+|---|---|---|
+| Two soundtracks | **No** — 7.20 | The music channel is claimed *after* the mp3 decodes |
+| Camera wrong / unpannable | **Yes** — but only as a *revealer* | 7.24 made the camera natives real; they then rode a handle bound to nothing |
+| Two enemy heroes | **No** — predates it | The enter-region baseline was seeded from an empty world |
+
+### The shared root: `startCustom` ran the script before the world existed
+
+WC3's `main()` calls `CreateAllUnits()` **before** `InitCustomTriggers()`. 7.3 codified that for melee — `startMelee`
+seeds the `.doo` units and `await waitForMapUnits()`s them all into the sim *before* running the script, because
+otherwise `MeleeFindNearestMine` finds no mine. **`startCustom` never got the same treatment**: it ran the map's script
+first and enabled seeding afterwards. The script therefore talked to an empty world, and two things fell out of it:
+
+- **Every `gg_unit_*` handle bound to nothing.** `CreateUnit` inside `CreateAllUnits` only *records* its row (the unit
+  is already on the map, `.doo`-adopted) and binds the handle to the unit standing at (x, y) — but nothing was standing
+  anywhere yet, so `findPlacedUnit` returned −1. **321 handles on WarChasers**, including all four selector wisps. The
+  map then asks the camera to *ride* one — `SetCameraTargetControllerNoZForPlayer(Player(0), gg_unit_ewsp_0006, …)` —
+  and `RemoveUnit`s the wisps of the slots nobody is playing. Both fell on the floor. With no unit to ride, the camera
+  was left to the `Snap Camera to Player` trigger, which re-applies `gg_cam_CamStart1` **every 2 seconds** — hence a
+  camera pinned to a fixed point (−7718, −9039) that drags back within ~1.5 s of any pan. *The map does intend a locked
+  camera* (it also ships `Player{1,2,6,7} Disallow MouseWheel`); the bug was that it was locked to a **point** instead
+  of to the **player's unit**.
+- **The enter-region baseline was seeded from nothing.** A unit already inside a rect when its trigger registers must
+  never fire it — in WC3 it *can't*, because it exists first. Ours streamed in afterwards, so every pre-placed unit
+  standing in a watched rect counted as **entering** it on the first pump. On WarChasers that is not cosmetic: each hero
+  pedestal is a rect holding a **Circle of Power (`ncp2`) and a display statue of that hero**, both **Neutral Passive
+  (player 15)** — and the Robo-X pedestal's trigger carries **no `== 'ewsp'` condition** (the map's own quirk; the other
+  seven have one). So both of them ran it: `CreateNUnitsAtLoc(1, 'OC10', GetOwningPlayer(GetEnteringUnit()), …)` twice,
+  with the entering unit's owner being **15**. Two Neutral-Passive Robo-X heroes, on `gg_rct_Start2` — the players'
+  shared hero spawn. Exactly two, exactly there. The player only *sees* them when their own hero arrives.
+
+**Fix** (`src/render/mapViewer.ts` `startCustom`): `enableSeeding()` → `await waitForMapUnits()` → *then* `runMapScript`.
+The same three lines `startMelee` has had since 7.3.
+
+### The music channel had no arbiter (`src/audio/sounds.ts`)
+
+WC3 has exactly **one** music channel, and every music native is a bid to own it. Ours claimed it only when the mp3
+finished decoding: `startMusicTrack` stopped `this.music` (still `null` at that point) and then `src.start()`ed on the
+`.then`. Two starts inside one decode window therefore both reached the speakers, and nothing held the first one's node
+to stop it again — it played to the end, orphaned, under the second. WarChasers opens exactly that way:
+
+```
+main():                     call SetMapMusic( "Music", true, 0 )      // the race playlist
+Trig_Initialize_WarChasers: call PlayMusicBJ( gg_snd_Undead2 )        // …~1 ms later, still decoding
+```
+
+**Fix:** a **generation token**. `claimMusicChannel()` silences the incumbent and bumps `musicGen` **synchronously**; a
+decode that lands against a stale token is discarded rather than played. `stopMusic` and `playThematicMusic` claim it
+too. (The same question, asked of the camera, already has an answer: `ScriptCamera` is a single writer where the last
+caller wins — an explicit pan drops the followed unit and `setTargetUnit` drops an in-flight pan.)
+
+### The lobby had no business re-teaming a custom map (Theme A)
+
+Our lobby defaulted every slot to `team = slot.id + 1` — its own team — and `Runtime.applyLobby` wrote that over what
+`config()` had already decided. On WarChasers, whose `InitCustomTeams` allies players **0/1/5/6 on team 0**, that made
+three co-op partners into **enemies**, and their units into hostile ones. The authority is in the map, and the w3i says
+so out loud: flag **`0x0040` "use custom forces"** (set on WarChasers, **not** on Echo Isles or any melee map) plus its
+**FORCE** records — force 0 = players 0/1/5/6, force 1 = player 11 — which is precisely what `InitCustomTeams` restates.
+So `parseMapInfo` now derives `PlayerSlot.team` from the map's forces when that flag is set, and the lobby defaults to
+it (and greys race/team out under `0x0020` "fixed player settings", which WarChasers also sets). Without the flag —
+i.e. every melee map — each slot still opens on its own team, so **melee is untouched**.
+
+The rest of Theme A came back **clean**: an audit of every hard-coded common.j index in `src/` against `Scripts\common.j`
+found `mapcontrol` (fixed in 7.24) to have been the only wrong one. The **7.25 enum-index gate** in
+`tools/jass-corpus-test.cjs` now re-derives them all from common.j so they cannot drift again — and because our
+constants are *named after* common.j's (`EVENT_UNIT_DEATH = 53`), it picks up new ones automatically.
+
+Verified (`pnpm jass:test` §7.25): 418 common.j constants parsed as the oracle; 40 name-identical constants plus the
+`MAP_CONTROL` / `CAMERA_FIELD` / `JassFogState` / `AllianceType` tables all match; a unit standing in a rect never fires
+its enter trigger, and one that crosses in fires it exactly once with the right `GetEnteringUnit`. Verified **live** on
+WarChasers: `camTarget == wispAt` to the unit (the camera rides the selector wisp, then the hero the player picks);
+**one** audible music track where there were two (counted off the live `AudioBufferSourceNode`s, not our own
+bookkeeping); **zero** Neutral-Passive heroes where there were two; all four wisps co-allied on the map's own team.
+Echo Isles: town hall + 5 workers, 500/150, teams unchanged.
+
 ## What's NOT done yet (next tasks — keep this list honest)
+
+- **A pre-placed CUSTOM-type unit is still seeded under its BASE type id** — found while fixing 7.25, not fixed by it.
+  mdx-m3-viewer has no SLK row for a `war3map.w3u` id, so its map-unit row reports the base: WarChasers' `OC10` statue
+  comes back as **`Otch`**, and `trySeed` seeds the sim unit as `Otch`. Two consequences: `findPlacedUnit('OC10', …)`
+  can't match it, so **57 `gg_unit_*` handles on WarChasers are still unbound** (down from 321 — everything base-typed
+  now binds); and the unit gets the *base* def, so a pre-placed custom unit renders and fights as its base type. The fix
+  is to carry the true `unitid` from our own `war3mapUnits.doo` parse (`src/world/mapUnits.ts`) into `trySeed` rather
+  than trusting the viewer's row — a real change to the adoption path, with its own verification (custom models), which
+  is why it isn't bundled into this one.
+
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
   `War3MapW3u`), `.w3q` (upgrades, `War3MapW3d`), `.w3h` (buffs, `War3MapW3u`). Lower priority: only maps that create
