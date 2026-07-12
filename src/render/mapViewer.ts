@@ -17,6 +17,8 @@ import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
+import { WeatherOverlay } from "./weather";
+import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost } from "../game/rts";
@@ -177,6 +179,12 @@ interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
   moveToAndFace(from: Float32Array, to: Float32Array, up: Float32Array): void;
   viewProjectionMatrix: Float32Array; // World → Clip; drives the fog-overlay pass
+  // The eye and its two screen axes (mdx-m3-viewer Camera: location + the X/Y axes in
+  // camera space). The weather pass needs all three to billboard a snowflake at the camera
+  // and to turn a rain streak's flat quad toward it (src/render/weather.ts).
+  location: Float32Array;
+  directionX: Float32Array;
+  directionY: Float32Array;
 }
 interface Scene {
   camera: Camera;
@@ -353,6 +361,9 @@ export class MapViewerScene {
   // resolves a building's `uberSplat` code → texture + scale. simBuildingSplats tracks
   // the ids we register from spawnUnit so they can be pruned when the building dies.
   private splats: UberSplatOverlay | null = null;
+  private weather: WeatherOverlay | null = null; // AddWeatherEffect — rain/snow/fog (7.23)
+  private weatherSampler: HeightSampler | null = null;
+  private weatherDefs: WeatherRegistry | null = null; // TerrainArt\Weather.slk (loaded on first use)
   private uberSplats: UberSplatRegistry | null = null;
   private simBuildingSplats = new Set<number>();
   // Pre-placed map buildings paint their splat keyed by index (p<i>), not sim id, so the
@@ -711,6 +722,11 @@ export class MapViewerScene {
       // foundation decal, not just the grass around it.
       this.shadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
       this.buildingShadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
+      // Weather (7.23) — the map's rain/snow/fog particles. Its own pass, drawn last:
+      // atmosphere sits between the eye and the world. Particles are born at
+      // `height` above the GROUND, so it needs the same terrain sampler the sim uses.
+      this.weatherSampler = makeHeightSampler(terrain);
+      this.weather = new WeatherOverlay(this.viewer.gl, splatLoader, (x, y) => this.weatherSampler!(x, y));
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -1288,6 +1304,15 @@ export class MapViewerScene {
       // Bind a record-only CreateUnit row (inside CreateAllUnits) to the pre-placed unit
       // already standing there, so the script can keep configuring it (7.22).
       findPlacedUnit: (typeId, x, y) => this.findPlacedUnit(typeId, x, y),
+      // --- weather: the map's atmosphere (7.23) ---
+      addWeatherEffect: (effectId, area) => {
+        this.weatherDefs ??= loadWeatherRegistry(this.vfs);
+        const def = this.weatherDefs.get(effectId);
+        if (!def || !this.weather) return -1; // not a weather type we know — the map runs on
+        return this.weather.add(def, area);
+      },
+      enableWeatherEffect: (id, on) => this.weather?.enable(id, on),
+      removeWeatherEffect: (id) => this.weather?.remove(id),
       // --- melee from the script (7.3) ---
       // MeleeStartingVisibility opens a melee game at 08:00 (bj_MELEE_STARTING_TOD).
       setTimeOfDay: (hour) => {
@@ -4574,6 +4599,21 @@ export class MapViewerScene {
         if (this.ringSplats && fogScene) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
       }
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
+      // Weather LAST of the world passes — after the fog-of-war veil, because rain and snow
+      // fall between the eye and the world rather than being part of it: WC3 shows you the
+      // storm over ground you have never explored. Not paused with the sim (the weather keeps
+      // blowing while the game is paused, as it does in the real client) — it advances on the
+      // RENDER clock.
+      if (this.weather && fogScene) {
+        const cam = fogScene.camera;
+        // `dt` in this loop is MILLISECONDS (see portraitWarmAccum > 2000); the emitter's
+        // lifespans/velocities come out of Weather.slk in SECONDS. Feeding it milliseconds
+        // made every particle outlive its lifespan on its very first frame and respawn on
+        // the spot — a field of age-0 particles, re-randomised each frame, that looked like
+        // falling snow in a still screenshot and never actually moved.
+        this.weather.update(dt / 1000, { targetX: this.target[0], targetY: this.target[1], distance: this.distance });
+        this.weather.render(cam.viewProjectionMatrix, cam.location, cam.directionX, cam.directionY);
+      }
       // Building-placement footprint grid (green = buildable, red = obstructed) — drawn
       // over the world while a build is being positioned so the player sees the pathing
       // collider and which cells block the site. Reuses the debug-collider overlay pass.
@@ -4646,6 +4686,8 @@ export class MapViewerScene {
     this.textTags = null;
     this.leaderboard?.dispose();
     this.multiboard?.dispose();
+    this.weather?.dispose();
+    this.weather = null;
     this.leaderboard = null;
     this.timerDialogs?.dispose();
     this.timerDialogs = null;

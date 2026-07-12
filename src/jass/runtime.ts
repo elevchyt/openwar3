@@ -661,6 +661,13 @@ export interface EngineHooks {
   waygateActivate?(unitId: number, active: boolean): void;
   waygateDestination?(unitId: number): { x: number; y: number } | null;
   waygateIsActive?(unitId: number): boolean;
+  // --- weather: the map's atmosphere (7.23) ---
+  /** AddWeatherEffect(where, effectID) — `effectId` is the 4-char rawcode ('SNls', 'RAhr'),
+   *  the key into TerrainArt\Weather.slk. Returns the engine's id, or -1 if the id is not a
+   *  weather type we know. Created DISABLED: the native does not start the effect. */
+  addWeatherEffect?(effectId: string, area: JassRect): number;
+  enableWeatherEffect?(id: number, enabled: boolean): void;
+  removeWeatherEffect?(id: number): void;
   /** Find the sim unit a PRE-PLACED `CreateUnit` row refers to (7.22). Inside
    *  `CreateAllUnits()` we record the row and never spawn (the unit is already on the map,
    *  adopted from war3mapUnits.doo — Runtime.recordOnlySpawnFns), which used to leave the
@@ -669,6 +676,14 @@ export interface EngineHooks {
    *  instead — which is the only reason `WaygateSetDestination(u, …)` on a gate built
    *  inside CreateAllUnits can work at all. Returns -1 when no match stands there. */
   findPlacedUnit?(typeId: string, x: number, y: number): number;
+}
+
+/** A plain world-space rect (a `rect` handle's bounds). */
+export interface JassRect {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
 /** Where a fog modifier applies — a rect or a centre+radius (common.j offers both). */

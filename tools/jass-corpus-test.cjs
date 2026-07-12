@@ -2957,6 +2957,161 @@ endfunction
   } else fail(`suppressed=${rt.multiboardSuppressed}`);
 }
 
+// ===========================================================================
+// 7.23 — Weather: the map's atmosphere.
+//
+// Driven through the REAL TerrainArt\Weather.slk and our REAL parser
+// (src/data/weather.ts), not a fixture — the whole point is that every emitter parameter
+// is the game's, so a test against a hand-written copy of the table would prove nothing.
+// ===========================================================================
+const { loadWeatherRegistry } = require(join(REPO, '.jass-build', 'src', 'data', 'weather.js'));
+
+console.log("\n[7.23] Weather — the map's atmosphere (rain, snow, fog, light rays)");
+{
+  // A DataSource over the extracted install, which is all loadWeatherRegistry asks for.
+  const vfs = {
+    rawBytes: (p) => {
+      const path = join(WC3, 'ExtractedData', 'merged', ...p.split(SEP));
+      return existsSync(path) ? new Uint8Array(readFileSync(path)) : null;
+    },
+  };
+  const weather = loadWeatherRegistry(vfs);
+  if (weather.size === 21) {
+    ok(`TerrainArt\\Weather.slk parses to all 21 weather types`);
+  } else fail(`weather types: ${weather.size} (want 21)`);
+
+  // THE finding this milestone rests on. The table gives BOTH an emission rate and a
+  // particle count and never says how they relate — but they are not independent:
+  //     particles == emrate × lifespan × 20     for every row, exactly.
+  // So `particles` is the steady-state population and the two columns encode one number. We
+  // take `particles` as the live-particle budget; if this ever stops holding, the density
+  // model behind src/render/weather.ts is wrong and this gate says so.
+  const raw = readFileSync(join(WC3, 'ExtractedData', 'merged', 'TerrainArt', 'Weather.slk'), 'latin1');
+  const emrates = new Map(); // id → emrate, straight out of the SLK cells
+  {
+    const cells = new Map();
+    let x = 0, y = 0;
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.startsWith('C;')) continue;
+      for (const p of line.split(';')) {
+        if (p[0] === 'X') x = parseInt(p.slice(1), 10);
+        else if (p[0] === 'Y') y = parseInt(p.slice(1), 10);
+        else if (p[0] === 'K') { let v = p.slice(1); if (v.startsWith('"')) v = v.slice(1, -1); cells.set(`${y},${x}`, v); }
+      }
+    }
+    const cols = new Map();
+    for (const [k, v] of cells) { const [ry, rx] = k.split(',').map(Number); if (ry === 1) cols.set(v, rx); }
+    for (const [k, v] of cells) {
+      const [ry, rx] = k.split(',').map(Number);
+      if (rx !== cols.get('effectID') || ry === 1) continue;
+      emrates.set(v, Number(cells.get(`${ry},${cols.get('emrate')}`)));
+    }
+  }
+  let derived = 0;
+  for (const id of weather.ids()) {
+    const d = weather.get(id);
+    const em = emrates.get(id);
+    if (em !== undefined && Math.abs(d.particles - em * d.lifespan * 20) < 1e-6) derived++;
+  }
+  if (derived === 21) {
+    ok(`'particles' is a DERIVED column: particles == emrate × lifespan × 20 for ALL 21 rows, exactly — so it IS the steady-state population, and that is the density we emit`);
+  } else fail(`the emrate×lifespan×20 identity holds for only ${derived}/21 rows — the density model is built on it`);
+
+  // The five shapes, each read straight off the table.
+  const rain = weather.get('RAhr');
+  if (rain && rain.tail && !rain.head && rain.texture === 'ReplaceableTextures\\Weather\\rainTail.blp') {
+    ok(`rain ('RAhr') is a TAIL particle on rainTail.blp — a streak stretched along its velocity, not a billboard`);
+  } else fail(`RAhr: ${JSON.stringify(rain && { head: rain.head, tail: rain.tail, tex: rain.texture })}`);
+  // Tail length = |veloc| × taillen. This is what makes rain a short dash (1200 × 0.14 = 168)
+  // and a moonbeam a 3000-unit shaft (300 × 10) from the same two columns.
+  if (Math.abs(Math.abs(rain.veloc) * rain.taillen - 168) < 1e-6) {
+    ok(`...and its streak is |veloc| × taillen = 1200 × 0.14 = 168 world units long`);
+  } else fail(`rain streak: ${Math.abs(rain.veloc) * rain.taillen}`);
+  const ray = weather.get('LRma');
+  if (Math.abs(Math.abs(ray.veloc) * ray.taillen - 3000) < 1e-6) {
+    ok(`...while moonlight ('LRma') is the SAME two columns — 300 × 10 = a 3000-unit shaft of light`);
+  } else fail(`ray shaft: ${Math.abs(ray.veloc) * ray.taillen}`);
+
+  const snow = weather.get('SNls');
+  if (snow && snow.head && !snow.tail && !snow.additive) {
+    ok(`light snow ('SNls') is a HEAD billboard and the ONLY alphaMode 0 in the corpus's set — solid flakes, alpha-blended, not additive`);
+  } else fail(`SNls: ${JSON.stringify(snow && { head: snow.head, additive: snow.additive })}`);
+  const wind = weather.get('WOlw');
+  if (wind && wind.texRows === 8 && wind.texCols === 8 && wind.uvEnd === 63) {
+    ok(`Outland wind ('WOlw') is an 8×8 sprite ATLAS (clouds8x8) whose frame walks 0 → 32 → 63 across the sheet over the particle's life`);
+  } else fail(`WOlw atlas: ${JSON.stringify(wind && { r: wind.texRows, c: wind.texCols, uvEnd: wind.uvEnd })}`);
+  const fog = weather.get('FDwl');
+  if (fog && fog.alphaStart === 0 && fog.alphaMid === 16 && fog.alphaEnd === 0 && fog.scaleStart === 20 && fog.scaleEnd === 100) {
+    ok(`dungeon fog ('FDwl') fades IN and OUT (alpha 0 → 16 → 0) while swelling 20 → 100 units — the three-key ramps are per-particle, over its life`);
+  } else fail(`FDwl ramps: ${JSON.stringify(fog && { a: [fog.alphaStart, fog.alphaMid, fog.alphaEnd], s: [fog.scaleStart, fog.scaleEnd] })}`);
+  if (rain.ambientSound === 'AmbientSoundRain' && fog.ambientSound === null) {
+    ok(`the ambient bed comes off the table too — rain carries "AmbientSoundRain", fog's "-" is correctly read as NO sound (the SLK's dash-for-empty)`);
+  } else fail(`ambient: ${rain.ambientSound} / ${fog.ambientSound}`);
+
+  // --- the natives ------------------------------------------------------------------
+  let added = null, enabled = null, removed = null;
+  let nextId = 1;
+  const live = new Map();
+  const hooks = {
+    addWeatherEffect: (effectId, area) => {
+      if (!weather.get(effectId)) return -1;
+      const id = nextId++;
+      live.set(id, { effectId, area, enabled: false });
+      added = { id, effectId, area };
+      return id;
+    },
+    enableWeatherEffect: (id, on) => { live.get(id).enabled = on; enabled = { id, on }; },
+    removeWeatherEffect: (id) => { live.delete(id); removed = id; },
+  };
+  const SRC = `
+globals
+    weathereffect udg_we    = null
+    weathereffect udg_bogus = null
+endglobals
+// Verbatim in shape from (6)UpperKingdom's own CreateRegions() — this is what the World
+// Editor compiles a placed weather region into, and it is why 40 maps want this.
+function MakeSnow takes nothing returns nothing
+    set udg_we = AddWeatherEffect( Rect(-512.0, -512.0, 512.0, 512.0), 'SNls' )
+    call EnableWeatherEffect( udg_we, true )
+endfunction
+function StopSnow takes nothing returns nothing
+    call EnableWeatherEffect( udg_we, false )
+endfunction
+function Clean takes nothing returns nothing
+    call RemoveWeatherEffect( udg_we )
+endfunction
+// A weather id we don't know must not crash the map — it just gets no weather.
+function Bogus takes nothing returns nothing
+    set udg_bogus = AddWeatherEffect( Rect(0.0, 0.0, 1.0, 1.0), 'ZZZZ' )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  const rt = interp.rt;
+  interp.run('InitBlizzard', []);
+
+  interp.run('MakeSnow', []);
+  if (added && added.effectId === 'SNls' && added.area.minX === -512 && added.area.maxY === 512) {
+    ok(`AddWeatherEffect(rect, 'SNls') reaches the engine with the rawcode and the rect's real bounds`);
+  } else fail(`added: ${JSON.stringify(added)}`);
+  // The same "created, not started" shape the fog modifiers have (7.22): the editor always
+  // emits EnableWeatherEffect on the very next line, which would be pointless otherwise.
+  if (enabled && enabled.on === true && live.get(added.id).enabled === true) {
+    ok(`...and EnableWeatherEffect(we, true) is what actually STARTS it — AddWeatherEffect alone creates it disabled`);
+  } else fail(`enabled: ${JSON.stringify(enabled)}`);
+  interp.run('StopSnow', []);
+  if (live.get(added.id).enabled === false) {
+    ok(`EnableWeatherEffect(we, false) switches the storm off without destroying it (a map toggles one on and off)`);
+  } else fail(`still enabled`);
+  interp.run('Clean', []);
+  if (removed === added.id && !live.has(added.id)) {
+    ok(`RemoveWeatherEffect destroys it`);
+  } else fail(`removed: ${removed}`);
+  interp.run('Bogus', []);
+  if (rt.globals.get('udg_bogus').k === 'null' || rt.globals.get('udg_bogus').h === 0) {
+    ok(`an UNKNOWN weather id hands back a null handle rather than crashing the map (CLAUDE.md: never hard-crash)`);
+  } else fail(`bogus handle: ${JSON.stringify(rt.globals.get('udg_bogus'))}`);
+}
+
 // Mirrors src/ui/timerDialog.ts formatTimerValue — Game.dll carries exactly two countdown
 // formats (`%d:%02d` and `%02d:%02d:%02d`), so under an hour is M:SS and over is HH:MM:SS.
 function formatTimerValueCheck(seconds) {

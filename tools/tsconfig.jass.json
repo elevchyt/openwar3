@@ -29,6 +29,7 @@
     "../src/jass/headless.ts",
     "../src/data/objectData.ts",
     "../src/sim/alliances.ts",
-    "../src/sim/vision.ts"
+    "../src/sim/vision.ts",
+    "../src/data/weather.ts"
   ]
 }

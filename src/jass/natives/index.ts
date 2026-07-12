@@ -23,6 +23,7 @@ import { registerSoundNatives } from "./sound";
 import { registerTextNatives } from "./text";
 import { registerTimerDialogNatives } from "./timerdialog";
 import { registerVisionNatives } from "./vision";
+import { registerWeatherNatives } from "./weather";
 import { registerWorldNatives } from "./world";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -96,11 +97,13 @@ function registerUtilNatives(rt: Runtime): void {
   // Camera / environment natives every main() calls — we set these up ourselves in
   // the renderer, so here they are safe no-ops (GetCameraMargin returns 0.0).
   // (Sound + music used to sit in this list; they are real now — see natives/sound.ts.
+  // AddWeatherEffect/EnableWeatherEffect sat here too, and that is why 40 maps ran with
+  // their rain and snow silently switched off — they are real now, see natives/weather.ts.
   // SetAmbientDay/NightSound stay: they name a MIDI ambience bed we don't synthesize.)
   def(rt, "GetCameraMargin", () => jReal(0));
   for (const name of [
     "SetCameraBounds", "SetDayNightModels", "SetAmbientDaySound", "SetAmbientNightSound",
-    "SetMapFlag", "SetMapName", "EnableWeatherEffect", "AddWeatherEffect",
+    "SetMapFlag", "SetMapName",
   ]) {
     if (!rt.natives.has(name)) def(rt, name, () => JNULL);
   }
@@ -128,5 +131,6 @@ export function registerNatives(rt: Runtime): void {
   registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
   registerTimerDialogNatives(rt); // the countdown windows (7.21)
   registerVisionNatives(rt); // alliances/shared vision + BOTH fogs (7.22)
+  registerWeatherNatives(rt); // the map's atmosphere — rain/snow/fog particles (7.23)
   registerUtilNatives(rt);
 }

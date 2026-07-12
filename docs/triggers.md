@@ -39,12 +39,13 @@
 | 7.20 | **The trigger's AUDIO output** — the `sound` handle family (`CreateSound`(`FromLabel`/`FilenameWithLabel`), `SetSoundParamsFromLabel`, `SetSound{Duration,Channel,Pitch,Volume,Distances,ConeAngles,ConeOrientation,Position,DistanceCutoff}`, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`/`GetSoundIsPlaying`) + every BJ riding on it (`PlaySoundBJ`/`AtPointBJ`/`OnUnitBJ`/`StartSoundForPlayerBJ`/`VolumeGroupSetVolumeBJ`…), the 8 **volume groups**, and **music** (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic` — all three were explicit no-ops). Custom maps were silent apart from unit/combat sounds; melee had **no music at all** | ✅ done (live) | §7.20 headless (16 checks through the real blizzard.j BJs, resolving labels out of the **real** SoundInfo SLKs: params-not-file, the cross-table label namespace, `PercentToInt(pct,127)` volumes, the cone, the editor's `-1`/`4294967296.0` sentinels, the cine-mode group ducking); Echo Isles **live**: its own `SetMapMusic("Music", true, 0)` → the Human `Music_V1` playlist → `Human1.mp3` decoded (273 s) and playing; a trigger's `PlaySoundAtPointBJ` → a real PannerNode at the named world point (refDist 600 / maxDist 10000 from the SLK row), dropped when past its 3000 `DistanceCutoff`; an `AttachSoundToUnit`'d sound rides a marching peasant; blizzard.j's `PlaySound()` reaps its handle when the clip ends |
 | 7.21 | **Timer dialogs — the countdown windows** (`CreateTimerDialog`/`SetTitle`/`SetTitleColor`/`SetTimeColor`/`SetSpeed`/`Display`/`IsDisplayed`/`SetRealTimeRemaining`/`Destroy`, + the `…BJ` family). Closes the last **melee leftover** on the list: `MeleeInitVictoryDefeat` builds the *crippled* window and the *finish-soon* window and both were silently discarded — so a player who lost their last main hall got no clock. Uncovered (and fixed) a **general timer-pump bug**: a handler that destroys a timer spliced `rt.timers` mid-`for…of`, making the pump **skip the next timer forever** — and blizzard.j's own `MarkGameStarted` does exactly that, 0.01 s into every map | ✅ done (live) | §7.21 headless (through the real BJs: `CreateTimerDialogBJ` shows it, a dialog reads its timer LIVE (45 → 32.5 s), `MeleeInitVictoryDefeat` builds 3 windows — the null-timer one + a cripple window per PLAYING slot, titled "Build Town Hall"/"Build Great Hall" off the game's own strings — and `MeleeCheckForCrippledPlayers` shows only the crippled player's, opening at 2:00 = `bj_MELEE_CRIPPLE_TIMEOUT`); §7.4c pins the timer-pump regression; Echo Isles **live**: razing player 0's hall (farm still standing → crippled, not defeated) pops blizzard.j's real *"Build Town Hall 1:48"* window + its own *"You will be revealed to your opponents…"* warning, and three windows stack under the leaderboard in the game's own chrome (screenshots) |
 | 7.22 | **Vision, fog and the last panels** — **shared vision + alliances** (`SetPlayerAlliance`/`GetPlayerAlliance` over a real per-pair, per-setting matrix seeded from the lobby's teams; `CripplePlayer`), which finally lets blizzard.j's **`MeleeExposePlayer`** do what the 7.21 cripple timer promised; **BOTH fogs, which are different systems** — the atmospheric haze (`SetTerrainFogEx`/`ResetTerrainFog` → the `scene.distFog` shader) and the fog of war (`CreateFogModifier{Rect,Radius,RadiusLoc}`/`FogModifierStart`/`Stop`/`Destroy`, `SetFogState*`, `FogEnable`/`FogMaskEnable` → the `VisionMap`); **way gates** (`WaygateActivate`/`SetDestination`/`Get*`, a 400×400 box read out of the MPQ); **multiboards** (the grid scoreboard → the game's own `MultiBoard.fdf`). Plus the **record-only handle binding** that all of it turned out to need | ✅ done (live) | §7.22 headless (30 checks through the real blizzard.j BJs + the real `AllianceTable`/`VisionMap`: the matrix seeds from teams and is **directed**, `SetPlayerAllianceStateBJ` allies a pair, `MeleeExposePlayer` → `CripplePlayer` reveals the crippled player to exactly the players not co-allied with them; a fog modifier is created **stopped**, VISIBLE lights ground nobody can see and MASKED blacks out ground a unit stands in; `SetTerrainFogExBJ`'s 0–100 scale vs the native's 0–1; a gate fires on **entering** its box, not standing in it — the ping-pong regression; the multiboard BJ/native **axis swap** and the borrowed item handle). Echo Isles **live**: razing a crippled player's hall drains blizzard.j's clock → *"Revealing Player 2."* and their units show through black fog, while `ALLIANCE_SHARED_VISION` instead **lights the terrain**; Jack-o-Lantern's own green haze; a VISIBLE rect lit out in the unexplored middle of the map. CentaurGrove: a footman walks into the SW gate and comes out the NE one, 10 000 units away. Skibi's Castle TD: its **own** multiboard in the game's own chrome (screenshots) |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (270/335 used natives implemented) |
+| 7.23 | **Weather — the map's atmosphere** (`AddWeatherEffect` / `EnableWeatherEffect` / `RemoveWeatherEffect`). The **biggest unimplemented family in the corpus — 40 of the 165 maps**, most of them plain MELEE maps, because the World Editor compiles a placed weather region straight into `CreateRegions()`. All three natives were explicit **no-ops**, so 40 maps ran with their rain and snow silently switched off. Not a model and not a shader: one **data-driven particle emitter** whose every parameter is a column of `TerrainArt\Weather.slk` (`src/data/weather.ts` + the `src/render/weather.ts` GL pass) | ✅ done (live) | §7.23 headless (14 checks against the **real** SLK through our **real** parser: all 21 types; the `particles == emrate × lifespan × 20` identity that pins the density; rain is a *tail* streak and snow a *head* billboard; `\|veloc\| × taillen` gives rain a 168-unit dash and moonlight a 3000-unit shaft from the same two columns; the 8×8 cloud atlas; the three-key ramps; created-disabled, and an unknown id doesn't crash the map). Live: Harrow's own heavy snow (4000 flakes, 126 fps), Forestwalk's slanted rain, WarChasers' moonlight shafts and red dungeon fog — all from those maps' own scripts (screenshots) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (270/335 used natives implemented — and see the caveat: weather sat at a ✓ the whole time) |
 
 Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + **7.4c the
 timer-pump regression** + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13
 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items
-+ 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs + 7.22 vision/fog/waygates/multiboards) and
++ 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs + 7.22 vision/fog/waygates/multiboards + 7.23 weather) and
 **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It only counts natives called **directly** from a `war3map.j`, so everything
@@ -128,6 +129,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/leaderboard.ts` | **leaderboards** (7.19): the whole `Leaderboard*` family (create/display/assign-to-player, rows keyed by player, sort by value/player/label, style + colours) — the ~25 natives the entire GUI leaderboard surface rides on |
 | `natives/timerdialog.ts` | **timer dialogs** (7.21): the countdown windows (`CreateTimerDialog` + its setters). A `timerdialog` holds **no clock** — it is a *view onto a `timer`*, read live each frame, which is why the melee library can build the window at init and start the timer two minutes later |
 | `natives/vision.ts` | **alliances + BOTH fogs** (7.22). Three families that all answer *"what can a player see"*, kept in one file precisely because the thing most likely to go wrong is confusing the two fogs: **alliances** (`SetPlayerAlliance`/`GetPlayerAlliance`/`CripplePlayer` — a directed per-pair matrix, `src/sim/alliances.ts`), the **fog of war** (`CreateFogModifier*`/`FogModifierStart`/`Stop`/`Destroy`, `SetFogState*`, `FogEnable`/`FogMaskEnable` → the `VisionMap`), and the **terrain haze** (`SetTerrainFogEx`/`ResetTerrainFog` → `scene.distFog`), which is not fog of war at all |
+| `natives/weather.ts` | **weather** (7.23): `AddWeatherEffect` / `EnableWeatherEffect` / `RemoveWeatherEffect` — the map's rain, snow, fog, light-rays and wind. Three natives in front of a particle emitter (`src/data/weather.ts` reads `TerrainArt\Weather.slk`; `src/render/weather.ts` draws it). Same "created, not started" shape as the fog modifiers: `AddWeatherEffect` leaves the effect **disabled**, and the editor emits `EnableWeatherEffect(we, true)` on the very next line |
 | `natives/multiboard.ts` | **multiboards** (7.22): the grid scoreboard (`CreateMultiboard`, row/column counts, the `…Items…` plural setters and the `…Item…` singular ones). A cell is addressed **(row, column)** by the native and **(col, row)**, 1-based, by every BJ — Blizzard does the swap. A `multiboarditem` handle is **borrowed**, not owned (`MultiboardGetItem` … `MultiboardReleaseItem`), so it is a cursor into the board, never a copy of the cell |
 | `natives/sound.ts` | **sounds + music** (7.20): the `sound` handle family (`CreateSound`/`FromLabel`, `SetSoundParamsFromLabel`, the `SetSound*` setters, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`), the 8 `volumegroup`s, and the music interface (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic`). A `sound` is a **configured playback object**, not a clip — the natives mostly mutate a `SoundObj`, and only Start/Stop reach the engine (`SoundBoard`) |
 | `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
@@ -1301,6 +1303,102 @@ its **own** `Trig_Multiboard_Create_Actions` built its real board — *"- Wave 0
 and its own column widths (11.50/4.50/4.50 → 0.115/0.045/0.045 through the BJ's ÷100) — in the game's own chrome
 (screenshots).
 
+## Weather — the map's atmosphere (7.23 — done, live)
+
+The **biggest unimplemented family in the corpus**, and it had been hiding in plain sight: **40 of the 165 bundled
+maps** call `AddWeatherEffect`, most of them plain **melee** maps, because the World Editor compiles a placed
+"weather effect" region straight into the map's own script —
+
+```jass
+set we = AddWeatherEffect( gg_rct_Region_000, 'SNls' )   // (6)UpperKingdom, verbatim
+call EnableWeatherEffect( we, true )
+```
+
+— inside `CreateRegions()`. All three natives were **explicit no-ops**, so forty maps have been running with their
+rain and snow silently switched off.
+
+> **It never showed in the ranking, and that is the coverage caveat biting a third time.** `AddWeatherEffect` was
+> registered as a no-op, so `jass:coverage` — which detects an implementation by *name* — printed it with a `✓`. The
+> honest #1 was invisible behind a tick. (Same shape as `SetPlayerAlliance` in 7.22.)
+
+### It's a particle emitter, and the table IS the emitter
+
+Weather is not a model and not a shader. Every parameter lives in `TerrainArt\Weather.slk`: emission height, tilt,
+speed, lifespan, the streak length, the sprite atlas, and three-key colour/alpha/scale ramps. Twenty-one rows cover
+five shapes, all from the one emitter:
+
+| | id | texture | drawn as |
+|---|---|---|---|
+| rain | `RAhr` `RAlr` `RLhr` `RLlr` | `rainTail` | **tail** — a quad stretched along its velocity |
+| snow | `SNbs` `SNhs` `SNls` | `snow` | **head** — a camera-facing billboard |
+| fog | `FDbh` `FDbl` `FDgh` … | `CloudSingleFlat` | **head** — big, slow, near-transparent clouds |
+| rays | `LRaa` `LRma` | `RaysOfLight` | **tail** — long shafts of light |
+| wind | `WNcw` `WOcw` `WOlw` | `clouds8x8` | **head**, over an 8×8 sprite **atlas** |
+
+Two readings fall out of the table and do a lot of work:
+
+- **A tail's length is `|veloc| × taillen`.** The same two columns give rain a 168-unit dash (1200 × 0.14) and
+  moonlight a **3000-unit shaft** (300 × 10). Rain and a moonbeam are the same primitive.
+- **`particles` is a DERIVED column** — and this is what settles the density, which the table otherwise never states.
+  It gives both an emission rate and a particle count, and they are not independent:
+
+  ```
+  particles == emrate × lifespan × 20      — EXACTLY, for all 21 rows, without exception
+  ```
+
+  (heavy rain 100 × 0.9 × 20 = 1800; light snow 8 × 5 × 20 = 800; moonlight 0.9 × 3 × 20 = 54.) So `particles` is
+  simply the **steady-state population** of an emitter running at `emrate` over a fixed 20-cell grid — the two columns
+  encode one number. We take `particles` as the live-particle budget and derive the rate from it, which reproduces
+  exactly the density the table intends without having to guess what an "emitter cell" is. **§7.23 pins the identity**:
+  if it ever stops holding, the density model is wrong and the test says so.
+
+### The emitter follows the camera, inside the rect
+
+`AddWeatherEffect` bounds an effect to a rect and most maps hand it the whole playable map — but the budget (1800 for
+heavy rain) is a **screen**-full, not a **map**-full. Spread 1800 raindrops over a 100 000-unit map and you would see
+one every few minutes. So particles are emitted over the rect ∩ the ground the camera can actually see, which keeps
+on-screen density right whatever the rect's size; once born they live in world space and fall where they fall, so
+panning doesn't drag them along. (A map's weather is genuinely *regional* — Harrow places snow in four rects and the
+starting base is in none of them, so you walk into the snow.)
+
+### Two bugs only the live run could find
+
+Both were invisible to the headless test **and to a still screenshot**, which is the whole argument for driving the
+real game:
+
+- **The particles were never mipmapped-out — they were mipmapped INTO invisibility.** A snowflake is a 4-world-unit
+  quad, which at gameplay zoom is about **two pixels**. Ask for a mipmap and the GPU picks a deep level where the
+  flake — which fills 94 % of its 32² sprite — has been averaged down to a smear of low alpha, and the whole snowfall
+  renders as a haze you cannot see. It was drawing the entire time: 24 000 verts a frame, texture bound, blend on, and
+  nothing on screen. A particle is a **screen-space sprite**, not a surface seen at distance, so there is no
+  minification to prefilter: `LINEAR`, no mipmap.
+- **`dt` in the render loop is MILLISECONDS.** The emitter's lifespans and velocities come out of the SLK in
+  **seconds**. Fed 16.6 "seconds" a frame, every particle outlived its lifespan on its very first frame and respawned
+  on the spot — so the pass rendered a field of **age-0 particles, re-randomised every frame**. In a still screenshot
+  that is *indistinguishable from falling snow*. It only surfaced because the dungeon fog (whose alpha ramp starts at
+  **0** and peaks mid-life) drew nothing at all: every one of its 1600 particles was permanently at age 0, so every one
+  was permanently at alpha 0. The effects whose ramps start opaque (snow, rain) had been "working" in every screenshot
+  I had already taken. `update()` now clamps the step and **warns once** if it is handed something that can only be
+  milliseconds.
+
+Verified (`pnpm jass:test` §7.23) — 14 checks against the **real** `Weather.slk` through our **real** parser, not a
+fixture (a test against a hand-copied table would prove nothing): all 21 types parse; the `emrate × lifespan × 20`
+identity holds for every row; rain is a tail on `rainTail.blp` and its streak is 168 units while moonlight's is 3000
+from the same columns; light snow is the set's only alpha-blended (rather than additive) effect; Outland wind is an 8×8
+atlas whose frame walks 0 → 32 → 63 across the sheet; dungeon fog fades 0 → 16 → 0 while swelling 20 → 100; the SLK's
+`-` for "no ambient sound" is read as none, not as a label; `AddWeatherEffect` creates the effect **disabled** and
+`EnableWeatherEffect` is what starts it; and an **unknown** weather id hands back a null handle rather than crashing the
+map.
+
+Verified **live**, every one from the map's own script: `(2)Harrow`'s heavy snow (4 regions, 4000 flakes, 126 fps),
+`(3)Forestwalk`'s slanted light rain, and `(4)WarChasers` — which builds **13** effects (moonlight, sun rays, red
+dungeon fog, snow) — showing its moonlight shafts and its red fog bounded exactly by their rects (screenshots).
+
+**Not modelled:** the **ambient sound bed** (`AmbientSound` — "AmbientSoundRain" — is parsed off the table and carried
+on the def, but nothing plays it yet; it is a label the 7.20 `SoundBoard` already knows how to resolve, so it is a
+small follow-up), the `useFog` flag (whether an effect is dimmed by the atmospheric haze), and `TerrainDeform*` (the
+other "environment effect" family — it sculpts the terrain **mesh**, which we don't do; explicit no-ops).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -1313,12 +1411,16 @@ and its own column widths (11.50/4.50/4.50 → 0.115/0.045/0.045 through the BJ'
 - **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
   filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items; 7.19 floating text, dialogs and
   leaderboards; 7.20 sounds and music; 7.21 timer dialogs; 7.22 alliances/shared vision, both fogs, waygates and
-  multiboards. Still no-ops, now the top of the ranking: **cameras / cinematics** (`CreateCameraSetup` /
-  `CameraSetupSetField` / `CameraSetupSetDestPosition` — **10 maps each**, the biggest block left), **destructables**
-  (`CreateDestructable` / `GetEnumDestructable` — 5), **`SetGameSpeed`** (5), **`SetSkyModel`** (5), **`ReviveHeroLoc`**
-  (4), **`SetWaterBaseColor`** (4), **weather** (`AddWeatherEffect` returns a null handle; nothing renders rain/snow) and
-  **upgrades** (`SetPlayerTechResearched`). Each is a small bridge method away — wire on demand (`pnpm jass:coverage`
-  ranks them by how many maps call them).
+  multiboards; 7.23 weather. Still no-ops, now the top of the ranking: **cameras / cinematics** (`CreateCameraSetup` /
+  `CameraSetupSetField` / `CameraSetupSetDestPosition` — **10 maps each**, and the whole cinematic surface on top of
+  them: `CinematicModeBJ` (11 maps), `TransmissionFromUnitWithNameBJ` (8), `PingMinimap` (5) — **the biggest block
+  left**), **special effects** (`AddSpecialEffect*` / `DestroyEffect` — 10 maps directly and far more through the BJs),
+  **quests** (`CreateQuest*` — 8), **`SelectUnit`/`ClearSelection`** (8), **destructables** (`CreateDestructable` /
+  `KillDestructable` / `GetEnumDestructable` — 7), **`SetSkyModel`/`SetWaterBaseColor`** (9), **`SetGameSpeed`** (5),
+  **`ReviveHeroLoc`** (4), **upgrades** (`SetPlayerTechResearched` — 4), **chat events**
+  (`TriggerRegisterPlayerChatEvent` — 3) and **lightning** (2). Each is a small bridge method away — but note the
+  ranking under-counts anything reached through a BJ, so `jass:coverage` is a floor (weather sat at a `✓` for
+  23 milestones).
 - **Shops** — no unit sells anything, so `EVENT_PLAYER_UNIT_SELL_ITEM` / `_SELL` never fire (the item-sale plumbing is
   wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
   path: shop stock (`AddItemToStock`), the buy command card, gold, range.
