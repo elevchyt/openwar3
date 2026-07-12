@@ -45,8 +45,23 @@ import type { MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
 import { GameMenu } from "../ui/gameMenu";
+import { GameDialogOverlay } from "../ui/gameDialog";
+import { LeaderboardOverlay } from "../ui/leaderboard";
+import { TextTagOverlay, type TextTagContext } from "./textTags";
+import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { buildsFor, trainsFor } from "../data/techtree";
+
+// Our race ids → the section names in the game's own skin table (UI\war3skins.txt), which
+// is what decorates a `DecorateFileNames` frame's textures. WC3 skins the in-game panels
+// (leaderboard, dialogs, quest log) with the LOCAL player's race, so an Orc player's
+// victory dialog wears the orc border. See src/ui/fdf/library.ts `decorate`.
+const SKIN_SECTION: Record<PlayableRace, string> = {
+  human: "Human",
+  orc: "Orc",
+  undead: "Undead",
+  nightelf: "NightElf",
+};
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -398,6 +413,15 @@ export class MapViewerScene {
   private paused = false; // F10 game menu freezes the sim (rendering continues)
   /** Called when the player picks "End Game" — host tears the match down. */
   onExit: (() => void) | null = null;
+  // --- the trigger's on-screen output (7.19) ---
+  private textTags: TextTagOverlay | null = null; // CreateTextTag, drawn in the world
+  private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
+  private dialog: GameDialogOverlay | null = null; // DialogCreate — and the melee end screen
+  /** The game's own string table (UI\FrameDef\GlobalStrings.fdf) behind GetLocalizedString:
+   *  blizzard.j writes the whole victory/defeat screen in its keys. Loaded once, lazily. */
+  private globalStrings: FdfLibrary | null = null;
+  private screen3 = new Float32Array(3); // scratch for the world→screen projection
+  private world3 = new Float32Array(3);
   private minimap: HTMLCanvasElement | null = null;
   private iconCache = new Map<string, string | null>();
   private localPlayer = 0;
@@ -1079,6 +1103,24 @@ export class MapViewerScene {
       // or an item, so try each registry: "Paladin cast Holy Light on Peasant" needs all
       // three (the custom overlays are checked first inside each `get`).
       objectName: (typeId) => this.registry.get(typeId)?.name ?? this.abilities.get(typeId)?.name ?? this.items.get(typeId)?.name,
+      // --- the trigger's on-screen output (7.19) ---
+      // GetLocalizedString → the game's own GlobalStrings.fdf table. Not cosmetic: the
+      // melee victory/defeat dialog is written entirely in its keys, so without this the
+      // player would be shown "GAMEOVER_VICTORY_MSG" instead of "Victory!".
+      localizedString: (key) => this.globalStrings?.strings.get(key),
+      // The quit button of the victory/defeat dialog. `doScoreScreen` asks for WC3's
+      // post-game score screen (Glue\ScoreScreen.fdf) — we don't build one yet, so both
+      // paths simply leave the match.
+      endGame: () => {
+        this.dialog?.update(null);
+        this.paused = false;
+        this.onExit?.();
+      },
+      pauseGame: (flag) => (this.paused = flag),
+      enableUserUi: (flag) => (flag ? this.hud?.show() : this.hud?.hide()),
+      // bj_victoryDialogSound / bj_defeatDialogSound are CreateSoundFromLabel("QuestCompleted"
+      // / "QuestFailed") — UISounds.slk labels, so the game's own win/lose sting plays.
+      playUiSound: (label) => this.sounds?.playUi(label),
       createUnit: (player, typeId, x, y, facing) => this.spawnScriptUnit(player, typeId, x, y, facing),
       // A gold mine isn't a sim unit for us, so RemoveUnit can't take it off the map —
       // and the only caller that tries is the Undead start's mine swap, which puts one
@@ -1537,6 +1579,98 @@ export class MapViewerScene {
     } catch (err) {
       console.warn("[jass] trigger pump failed (non-fatal):", err);
     }
+  }
+
+  // --- the trigger's on-screen output (7.19) ---------------------------------------
+
+  /** Mount the three surfaces a trigger can talk to the player through, beyond the HUD
+   *  message log: floating text in the world, the leaderboard, and dialogs (which is what
+   *  the melee victory/defeat screen IS — see ui/gameDialog.ts). Also kicks off the load
+   *  of the game's string table, which GetLocalizedString reads. */
+  private mountScriptUi(ui: HTMLElement): void {
+    this.textTags?.dispose();
+    this.leaderboard?.dispose();
+    this.dialog?.dispose();
+    // WC3 skins the in-game panels with the LOCAL player's race (an Orc player's dialog is
+    // Orc-bordered) — that's what the war3skins.txt section names are (see fdf/library.ts).
+    const skin = SKIN_SECTION[this.localRace];
+    this.textTags = new TextTagOverlay(ui);
+    this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin);
+    this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
+      // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
+      // game — both are the engine's doing, which is why blizzard.j's MeleeVictoryDialogBJ
+      // registers a trigger on its quit button and gives it no action. Order matters: the
+      // script's own dialog-button triggers run first (they can still read GetClickedButton),
+      // and the quit is what tears the match down.
+      onClick: (button) => {
+        const engine = this.mapScript;
+        const dialog = engine?.interp.rt.dialogs.find((d) => d.handleId === button.dialogId);
+        if (dialog) {
+          dialog.visibleFor.delete(this.localPlayer);
+          dialog.revision++;
+        }
+        this.dialog?.update(null);
+        engine?.interp.fireDialogClick(button.handleId, button.dialogId, this.localPlayer);
+        if (button.quit) {
+          this.paused = false;
+          this.onExit?.();
+        }
+      },
+    });
+    if (!this.globalStrings) {
+      const lib = new FdfLibrary(this.vfs);
+      // GlobalStrings.fdf is what FdfLibrary.load() pulls in first for any screen, so
+      // loading the leaderboard's file gives us the string table as a side effect.
+      void lib.load("UI\\FrameDef\\UI\\LeaderBoard.fdf").then(() => (this.globalStrings = lib));
+    }
+  }
+
+  /** Drive the script's on-screen output for this frame. Runs on the RENDER clock (a text
+   *  tag must keep tracking its unit and the camera while the game is paused), while its
+   *  ageing/drift/expiry run on the SIM tick inside the interpreter — so a paused game
+   *  leaves the text hanging exactly where it was rather than freezing it off-screen. */
+  private updateScriptUi(): void {
+    const engine = this.mapScript;
+    if (!engine || !this.rts) return;
+    const rt = engine.interp.rt;
+
+    if (this.textTags) {
+      if (rt.textTags.length) this.textTags.update(rt.textTags, this.textTagContext());
+      else this.textTags.clear();
+    }
+    this.leaderboard?.update(rt.leaderboardFor(this.localPlayer));
+    this.dialog?.update(rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
+  }
+
+  /** The world→screen bridge the floating-text pass runs on. */
+  private textTagContext(): TextTagContext {
+    const rts = this.rts!;
+    const scene = this.viewer.map?.worldScene;
+    const dpr = this.canvas.width / this.canvas.clientWidth || 1;
+    const vision = rts.getVision();
+    return {
+      uiScale: window.innerHeight / 0.6, // the FDF UI space is 0.6 tall — see ui/fdf/layout.ts
+      groundHeight: (x, y) => rts.groundHeightAt(x, y),
+      unitAt: (simId) => {
+        const u = rts.simWorld.units.get(simId);
+        return u ? { x: u.x, y: u.y, flyHeight: rts.simWorld.getUnitFlyHeight(simId) } : null;
+      },
+      visible: (x, y) => vision.stateAt(x, y) === FogState.Visible,
+      project: (x, y, z) => {
+        if (!scene) return null;
+        this.world3[0] = x;
+        this.world3[1] = y;
+        this.world3[2] = z;
+        (scene.camera as unknown as RtsHost["camera"]).worldToScreen(this.screen3, this.world3, scene.viewport);
+        // worldToScreen gives GL pixels (y-UP from the canvas bottom). A point behind the
+        // eye still projects to a finite spot, so reject it rather than draw the text
+        // mirrored in front of the camera.
+        const sx = this.screen3[0] / dpr;
+        const sy = (this.canvas.height - this.screen3[1]) / dpr;
+        if (!Number.isFinite(sx) || !Number.isFinite(sy)) return null;
+        return { x: sx, y: sy };
+      },
+    };
   }
 
   /** Hide the map's start-location marker props (the `sloc` StartLocation.mdx
@@ -3041,6 +3175,7 @@ export class MapViewerScene {
       },
     };
     this.hud = new GameHud(ui, driver);
+    this.mountScriptUi(ui);
     this.gameMenu?.dispose();
     this.gameMenu = new GameMenu(ui, {
       onReturn: () => {
@@ -4296,6 +4431,9 @@ export class MapViewerScene {
       if (this.showColliders && fogScene) this.renderColliders(fogScene.camera.viewProjectionMatrix, dt);
       if (this.showPathing && fogScene) this.renderPathing(fogScene.camera.viewProjectionMatrix, dt);
       if (this.showRegions && fogScene) this.renderRegions(fogScene.camera.viewProjectionMatrix);
+      // The script's on-screen output (7.19) — floating text projected onto this frame's
+      // camera, plus the leaderboard/dialog panels. After the world is drawn: it's DOM.
+      this.updateScriptUi();
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -4350,6 +4488,13 @@ export class MapViewerScene {
     this.metrics.dispose();
     this.hud?.dispose();
     this.hud = null;
+    // The script's on-screen output (7.19) — its DOM outlives the canvas otherwise.
+    this.textTags?.dispose();
+    this.textTags = null;
+    this.leaderboard?.dispose();
+    this.leaderboard = null;
+    this.dialog?.dispose();
+    this.dialog = null;
     this.mapScript = null;
     this.registry.clearCustom(); // drop this map's custom object data
     this.abilities.clearCustom();

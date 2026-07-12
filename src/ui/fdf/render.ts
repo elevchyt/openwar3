@@ -2,7 +2,7 @@ import type { DataSource } from "../../vfs/types";
 import { blpToCanvas } from "../../render/blputil";
 import { wc3ToHtml } from "../wc3Text";
 import type { FdfFrame } from "./parser";
-import { FdfLibrary, firstProp, strProp } from "./library";
+import { FdfLibrary, firstProp, hasFlag, numProp, strProp } from "./library";
 import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
 
 // FDF → DOM renderer (issue #54). Builds the game's frames as absolutely-positioned
@@ -28,7 +28,24 @@ export interface FdfScreenOptions {
   container: HTMLElement;
   vfs: DataSource;
   fdfPath: string;
+  /** The FDF frame to mount. Ignored when `buildRoot` is given. */
   rootFrame: string;
+  /** Synthesize the root instead of looking one up (7.19). The engine's in-game panels
+   *  aren't whole screens in the FDF — the game *composes* them from templates at
+   *  runtime: a `ScriptDialog` gets N `ScriptDialogButton`s stacked inside it, a
+   *  `Leaderboard` gets a row per player. This is the hook for building that composite
+   *  out of the real templates, so the chrome still comes from the game's own files. */
+  buildRoot?(lib: FdfLibrary): FdfFrame;
+  /** Place the root at the centre of the screen at its own Width/Height, rather than
+   *  stretching it over the whole viewport — how WC3 puts a dialog on screen. */
+  centerRoot?: boolean;
+  /** Extra class on the overlay. `fdf-ingame` keeps it visible during a match (the glue
+   *  screens hide themselves then — see style.css). */
+  overlayClass?: string;
+  /** Which `UI\war3skins.txt` section decorates this screen's textures ("Human", "Orc",
+   *  "NightElf", "Undead"). WC3 skins the in-game panels by the local player's race.
+   *  Default: the table's own `[Default]` (Human art). */
+  skin?: string;
   handlers?: FdfScreenHandlers;
   /** frameName → literal text, overriding the FDF (e.g. "Battle.net" → "Online"). */
   textOverrides?: Record<string, string>;
@@ -47,11 +64,12 @@ export interface FdfScreen {
   dispose(): void;
 }
 
-/** Parse `fdfPath`, resolve `rootFrame`, and build it into `container`. */
+/** Parse `fdfPath`, resolve `rootFrame` (or synthesize one), and build it into `container`. */
 export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen> {
   const lib = new FdfLibrary(opts.vfs);
+  if (opts.skin) lib.skin = opts.skin;
   await lib.load(opts.fdfPath);
-  const root = lib.resolveRoot(opts.rootFrame);
+  const root = opts.buildRoot ? opts.buildRoot(lib) : lib.resolveRoot(opts.rootFrame);
   if (!root) throw new Error(`FDF: frame "${opts.rootFrame}" not found in ${opts.fdfPath}`);
 
   const blpCache = new Map<string, HTMLCanvasElement | null>();
@@ -65,7 +83,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   };
 
   const overlay = document.createElement("div");
-  overlay.className = "fdf-screen";
+  overlay.className = opts.overlayClass ? `fdf-screen ${opts.overlayClass}` : "fdf-screen";
 
   const shortcuts = new Map<string, () => void>(); // key (lowercase) → handler
 
@@ -74,8 +92,13 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     shortcuts.clear();
     const fit = fitBox(window.innerWidth, window.innerHeight);
     // Root fills the full screen width (worldW × 0.6) so TOPRIGHT-anchored frames land
-    // on the screen's right edge, not a centred 4:3 box's right edge.
-    const { tree } = layout(root, { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT }, opts.buttonWidthScale ?? 1);
+    // on the screen's right edge, not a centred 4:3 box's right edge. A CENTRED root
+    // instead keeps its own Width/Height and sits in the middle — how the game puts a
+    // dialog up: ScriptDialog declares Width 0.288f / Height 0.112f and nothing else.
+    const box = opts.centerRoot
+      ? centreBox(numProp(root, "Width") ?? fit.worldW, numProp(root, "Height") ?? UI_HEIGHT, fit.worldW)
+      : { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT };
+    const { tree } = layout(root, box, opts.buttonWidthScale ?? 1);
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas,
       handlers: opts.handlers ?? {},
@@ -250,11 +273,20 @@ function paintBackdrop(el: HTMLElement, f: FdfFrame, px: { width: number; height
   el.insertBefore(canvas, el.firstChild);
 }
 
+/** A frame's texture name → a real BLP path. A frame flagged `DecorateFileNames` names
+ *  its textures by SKIN KEY ("EscMenuEditBoxBackground") rather than by path, and the
+ *  engine resolves them through UI\war3skins.txt (FdfLibrary.decorate). Frames without
+ *  the flag name their files literally, so the lookup is a pass-through for them. */
+function texture(f: FdfFrame, key: string, ctx: RenderCtx): HTMLCanvasElement | null {
+  const name = strProp(f, key);
+  if (!name) return null;
+  return ctx.blpCanvas(hasFlag(f, "DecorateFileNames") ? ctx.lib.decorate(name) : name);
+}
+
 /** Compose a WC3 backdrop (BlendAll single-stretch, or 9-slice edge/corner) to a canvas. */
 function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): HTMLCanvasElement | null {
   if (w < 1 || h < 1) return null;
-  const bgPath = strProp(f, "BackdropBackground");
-  const bg = bgPath ? ctx.blpCanvas(bgPath) : null;
+  const bg = texture(f, "BackdropBackground", ctx);
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
   const g = canvas.getContext("2d");
@@ -272,7 +304,7 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   // 0.8×0.6 world units; scale them to pixels with the same factor as the layout.
   const cornerPx = Math.max(2, Math.round((prop(f, "BackdropCornerSize") ?? 0.012) * ctx.fit.scale));
   const inset = (prop(f, "BackdropBackgroundInsets") ?? 0) * ctx.fit.scale;
-  const edge = ctx.blpCanvas(strProp(f, "BackdropEdgeFile") ?? "");
+  const edge = texture(f, "BackdropEdgeFile", ctx);
 
   if (bg) {
     // Fill the (inset) interior. With BackdropTileBackground the background tiles
@@ -375,8 +407,7 @@ function wireButton(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
 function appendGlow(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   const highlightName = strProp(f, "ControlMouseOverHighlight");
   const highlight = highlightName ? findByName(f, highlightName) : undefined;
-  const highPath = highlight ? strProp(highlight, "HighlightAlphaFile") : undefined;
-  const highCanvas = highPath ? ctx.blpCanvas(highPath) : null;
+  const highCanvas = highlight ? texture(highlight, "HighlightAlphaFile", ctx) : null;
   if (!highCanvas) return;
   const glow = document.createElement("div");
   glow.className = "fdf-button-glow";
@@ -385,6 +416,11 @@ function appendGlow(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
 }
 
 // --- small helpers ---------------------------------------------------------------
+
+/** Centre a `w × h` frame in the `worldW × 0.6` screen (world units, y-up). */
+function centreBox(w: number, h: number, worldW: number): { x: number; y: number; w: number; h: number } {
+  return { x: (worldW - w) / 2, y: (UI_HEIGHT - h) / 2, w, h };
+}
 
 function rgba(args: { n: number | null }[]): string {
   const c = (i: number) => Math.round((args[i]?.n ?? 0) * 255);

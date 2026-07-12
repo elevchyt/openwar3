@@ -1767,5 +1767,266 @@ endfunction`;
   } else fail(`consumed item: type ${g('udg_pickType')?.n} (want 'tkno'), fires ${g('udg_picked')?.n}`);
 }
 
+// --- 7.19: the trigger's on-screen output ---------------------------------
+// Floating text, the victory/defeat dialogs, and leaderboards. Everything a trigger
+// SAYS to the player. All three go through the real blizzard.j BJs — for the dialogs
+// that matters more than usual, because WC3's "Victory!" screen is not a bespoke panel:
+// it is a plain JASS `dialog` that MeleeVictoryDialogBJ fills in from the game's own
+// string table. So we drive the real BJ and check what lands on screen.
+
+// The game's own string table (UI\FrameDef\GlobalStrings.fdf) — the engine's
+// GetLocalizedString reads it, and blizzard.j writes the whole end screen in its keys.
+// Parsed here with a regex rather than our FDF library, so the check is independent of it.
+const GLOBAL_STRINGS = (() => {
+  const path = join(WC3, 'ExtractedData', 'merged', 'UI', 'FrameDef', 'GlobalStrings.fdf');
+  const map = new Map();
+  if (!existsSync(path)) return map;
+  const src = readFileSync(path, 'latin1');
+  for (const m of src.matchAll(/^\s*([A-Z0-9_]+)\s+"((?:[^"\\]|\\.)*)"/gm)) map.set(m[1], m[2]);
+  return map;
+})();
+
+console.log('\n[7.19] Floating text (CreateTextTag: size/velocity/lifespan/fadepoint, permanence, expiry)');
+{
+  // The GUI's "Floating Text - Create floating text" + the setters every damage-number
+  // snippet in the wild reaches for. Sizes and speeds go through blizzard.j's own scaling
+  // (TextTagSize2Height: size 10 → 0.023; TextTagSpeed2Velocity: speed 128 → 0.071).
+  const SRC = `
+globals
+    texttag udg_tag = null
+    texttag udg_forever = null
+endglobals
+function Setup takes nothing returns nothing
+    // "+15 gold" over a creep at (512, 256): rise at speed 64, live 3s, fade from 2s.
+    set udg_tag = CreateTextTagLocBJ( "|cffffcc00+15 gold|r", Location(512, 256), 90, 10, 100, 80, 0, 0 )
+    call SetTextTagVelocityBJ( udg_tag, 64, 90 )
+    call SetTextTagPermanentBJ( udg_tag, false )
+    call SetTextTagLifespanBJ( udg_tag, 3.0 )
+    call SetTextTagFadepointBJ( udg_tag, 2.0 )
+    // A second tag with nothing but text: WC3 leaves this one on screen forever.
+    set udg_forever = CreateTextTag()
+    call SetTextTagTextBJ( udg_forever, "Creep Camp Cleared", 10 )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC]);
+  interp.run('Setup', []);
+  const rt = interp.rt;
+  const tag = rt.textTags[0];
+  const forever = rt.textTags[1];
+
+  const near = (a, b, eps = 1e-4) => Math.abs(a - b) < eps;
+  if (tag && near(tag.size, 0.023) && tag.x === 512 && tag.y === 256 && tag.z === 90) {
+    ok(`CreateTextTagLocBJ → world anchor (512, 256, z 90); font size 10 → height 0.023 (TextTagSize2Height)`);
+  } else fail(`text tag: size ${tag?.size} pos (${tag?.x}, ${tag?.y}, ${tag?.z})`);
+
+  // SetTextTagVelocityBJ(64, 90°) → straight up the SCREEN at 64 * 0.071/128 = 0.0355/s.
+  if (tag && near(tag.velX, 0) && near(tag.velY, 0.0355)) {
+    ok(`SetTextTagVelocityBJ(speed 64, angle 90°) → screen-relative velocity (0, 0.0355) — TextTagSpeed2Velocity`);
+  } else fail(`velocity: (${tag?.velX}, ${tag?.velY}) — want (0, 0.0355)`);
+
+  if (forever && forever.permanent === true && tag.permanent === false && tag.lifespan === 3 && tag.fadepoint === 2) {
+    ok(`a fresh tag is PERMANENT by default (the classic floating-text leak); lifespan 3.0 / fadepoint 2.0 only bite once permanence is cleared`);
+  } else fail(`permanence: fresh ${forever?.permanent} (want true), configured ${tag?.permanent} life ${tag?.lifespan} fade ${tag?.fadepoint}`);
+
+  // Age it on GAME time (advanceTime is the same sim-tick pump the timers ride).
+  interp.advanceTime(1.0);
+  if (near(tag.age, 1.0) && near(tag.offsetY, 0.0355) && rt.textTags.length === 2) {
+    ok(`after 1.0 s of game time the tag has drifted 0.0355 up the screen and is still alive`);
+  } else fail(`drift: age ${tag.age} offsetY ${tag.offsetY} live ${rt.textTags.length}`);
+
+  interp.advanceTime(2.5); // total 3.5 s > its 3.0 s lifespan
+  if (tag.dead === true && rt.textTags.length === 1 && rt.textTags[0] === forever) {
+    ok(`the timed tag expires at its lifespan and is dropped; the PERMANENT one is untouched`);
+  } else fail(`expiry: dead ${tag.dead}, ${rt.textTags.length} tag(s) left`);
+
+  interp.run('Setup', []); // a fresh pair, to destroy explicitly
+  const before = rt.textTags.length;
+  interp.rt.destroyTextTag(rt.textTags[before - 1]);
+  if (rt.textTags.length === before - 1) {
+    ok(`DestroyTextTag unlinks the tag (the renderer drops it on the next frame)`);
+  } else fail(`DestroyTextTag left ${rt.textTags.length} of ${before}`);
+}
+
+console.log('\n[7.19] Victory / defeat dialogs (the REAL MeleeVictoryDialogBJ / MeleeDefeatDialogBJ)');
+{
+  const sounds = [];
+  const messages = [];
+  const hooks = {
+    // The engine's string table. This is the whole reason the dialog reads "Victory!"
+    // rather than "GAMEOVER_VICTORY_MSG".
+    localizedString: (key) => GLOBAL_STRINGS.get(key),
+    playUiSound: (label) => sounds.push(label),
+    displayText: (p, msg) => messages.push(msg),
+    playerStructureCount: () => 1,
+    playerTypedUnitCount: () => 1,
+  };
+  const SRC = `
+globals
+    integer udg_clicks = 0
+    integer udg_wasQuit = 0
+    dialog  udg_own = null
+endglobals
+function OnButton takes nothing returns nothing
+    set udg_clicks = udg_clicks + 1
+    if (GetClickedDialog() == udg_own) then
+        set udg_wasQuit = 1
+    endif
+endfunction
+function Victory takes nothing returns nothing
+    call InitBlizzardGlobals()               // sets bj_victoryDialogSound = "QuestCompleted"
+    call SetPlayerName( Player(0), "Elev" )
+    call MeleeVictoryDialogBJ( Player(0), false )
+endfunction
+function DefeatOther takes nothing returns nothing
+    call MeleeDoDefeat( Player(1) )          // the real defeat path: → RemovePlayerPreserveUnitsBJ
+endfunction
+function DefeatLocal takes nothing returns nothing
+    call MeleeDoDefeat( Player(0) )
+endfunction
+// A script's OWN dialog, the way the GUI builds one (DialogAddButtonBJ →
+// bj_lastCreatedButton), with a trigger on its button.
+function OwnDialog takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    set udg_own = DialogCreate()
+    call DialogSetMessage( udg_own, "Choose a mode" )
+    call TriggerRegisterDialogButtonEvent( t, DialogAddButtonBJ( udg_own, "Normal" ) )
+    call TriggerAddAction( t, function OnButton )
+    call DialogDisplay( Player(0), udg_own, true )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('Victory', []);
+  const rt = interp.rt;
+  const d = rt.dialogs[0];
+  // GlobalStrings marks a button's accelerator by colouring that letter white, so the
+  // label arrives with WC3 markup: "|CFFFFFFFFQ|Ruit Game". Strip it to read the words.
+  const plain = (s) => (s ?? '').replace(/\|[cC][0-9a-fA-F]{8}|\|[rRnN]/g, '');
+
+  if (d && d.message === 'Victory!' && GLOBAL_STRINGS.get('GAMEOVER_VICTORY_MSG') === 'Victory!') {
+    ok(`MeleeVictoryDialogBJ → a dialog reading "Victory!" (GetLocalizedString("GAMEOVER_VICTORY_MSG") off the game's own GlobalStrings.fdf)`);
+  } else fail(`victory dialog message: ${JSON.stringify(d?.message)}`);
+
+  const labels = (d?.buttons ?? []).map((b) => plain(b.text));
+  const quitBtn = (d?.buttons ?? []).find((b) => b.quit);
+  if (labels.join('|') === 'Continue Game|Quit Game' && quitBtn && quitBtn.doScoreScreen === true) {
+    ok(`its buttons are "Continue Game" + a QUIT button ("Quit Game", doScoreScreen) — DialogAddQuitButton's quit flag is what ends the match`);
+  } else fail(`victory buttons: ${JSON.stringify(labels)} quit=${!!quitBtn}`);
+
+  // The hotkey comes out of the string itself: GlobalStrings marks the accelerator by
+  // colouring it white ("|CFFFFFFFFQ|Ruit Game" → Q).
+  if (quitBtn && quitBtn.hotkey === 'Q'.charCodeAt(0)) {
+    ok(`GetLocalizedHotkey("GAMEOVER_QUIT_GAME") → 'Q' (the letter GlobalStrings colours white)`);
+  } else fail(`quit hotkey: ${quitBtn?.hotkey} (want ${'Q'.charCodeAt(0)})`);
+
+  if (d && d.visibleFor.has(0) && sounds[0] === 'QuestCompleted') {
+    ok(`DialogDisplay puts it up for the winning player, and bj_victoryDialogSound plays the game's own "QuestCompleted" sting`);
+  } else fail(`display: visibleFor=${[...(d?.visibleFor ?? [])]} sounds=${JSON.stringify(sounds)}`);
+
+  if (messages.some((m) => m === 'Elev was victorious.')) {
+    ok(`DisplayTimedTextFromPlayer substitutes the player into PLAYER_VICTORIOUS ("%s was victorious.") — the subject, not the audience`);
+  } else fail(`victory message: ${JSON.stringify(messages)}`);
+
+  // A click runs the script's own dialog-button trigger, with GetClickedButton/Dialog in scope.
+  interp.run('OwnDialog', []);
+  const own = rt.dialogs.find((x) => x.message === 'Choose a mode');
+  interp.fireDialogClick(own.buttons[0].handleId, own.handleId, 0);
+  const g = (n) => interp.rt.globals.get(n);
+  if (g('udg_clicks')?.n === 1 && g('udg_wasQuit')?.n === 1) {
+    ok(`clicking a button fires the trigger registered on it (TriggerRegisterDialogButtonEvent), with GetClickedDialog resolving to the dialog`);
+  } else fail(`dialog-button trigger fired ${g('udg_clicks')?.n} time(s), GetClickedDialog matched ${g('udg_wasQuit')?.n}`);
+  // ...and only for THAT button — the victory dialog's quit button has its own trigger.
+  interp.fireDialogClick(quitBtn.handleId, d.handleId, 0);
+  if (g('udg_clicks')?.n === 1) {
+    ok(`a click on a DIFFERENT dialog's button doesn't fire it — registrations are per-button`);
+  } else fail(`cross-dialog click fired the wrong trigger (clicks now ${g('udg_clicks')?.n})`);
+
+  // The defeat path, through the real MeleeDoDefeat → RemovePlayerPreserveUnitsBJ.
+  interp.run('DefeatOther', []);
+  const lost = rt.dialogs.find((x) => x.visibleFor.has(1));
+  const defeated = interp.rt.globalArrays.get('bj_meleeDefeated')?.get(1);
+  if (lost && lost.message === 'You failed to achieve victory.' && defeated?.b === true) {
+    ok(`MeleeDoDefeat(Player(1)) → bj_meleeDefeated[1] and the "You failed to achieve victory." dialog`);
+  } else fail(`defeat: msg ${JSON.stringify(lost?.message)} flag ${defeated?.b}`);
+
+  // ...but the LOSING sting is the local player's, not everyone's: StartSoundForPlayerBJ
+  // gates on GetLocalPlayer, so player 1's defeat is silent here and player 0's is not.
+  if (!sounds.includes('QuestFailed')) {
+    ok(`another player's defeat plays no sound locally (StartSoundForPlayerBJ gates on GetLocalPlayer)`);
+  } else fail(`player 1's defeat sting leaked to the local player: ${JSON.stringify(sounds)}`);
+  interp.run('DefeatLocal', []);
+  if (sounds.includes('QuestFailed')) {
+    ok(`the LOCAL player's defeat plays the game's own "QuestFailed" sting`);
+  } else fail(`local defeat played no sound: ${JSON.stringify(sounds)}`);
+
+  // The defeat dialog offers "Continue Observing" only when the map allows observers on
+  // death (IsMapFlagSet(MAP_OBSERVERS_ON_DEATH)) — which we report false, so: quit only.
+  if (lost && lost.buttons.length === 1 && lost.buttons[0].quit === true) {
+    ok(`with no observers-on-death map flag, the defeat dialog offers only Quit — no "Continue Observing"`);
+  } else fail(`defeat buttons: ${JSON.stringify((lost?.buttons ?? []).map((b) => plain(b.text)))}`);
+}
+
+console.log('\n[7.19] Leaderboards (CreateLeaderboardBJ / AddItem / SetPlayerItemValue / Sort — through blizzard.j)');
+{
+  // Exactly what a TD's "Kills" board compiles to in the GUI.
+  const SRC = `
+globals
+    leaderboard udg_board = null
+endglobals
+function Setup takes nothing returns nothing
+    call InitBlizzardGlobals()               // populates bj_FORCE_ALL_PLAYERS (GetPlayersAll)
+    set udg_board = CreateLeaderboardBJ( GetPlayersAll(), "Creeps Killed" )
+    call LeaderboardAddItemBJ( Player(0), udg_board, "Red", 3 )
+    call LeaderboardAddItemBJ( Player(1), udg_board, "Blue", 11 )
+    call LeaderboardAddItemBJ( Player(2), udg_board, "Teal", 7 )
+endfunction
+function Unlabel takes nothing returns nothing
+    call LeaderboardSetLabelBJ( udg_board, "" )
+endfunction
+function Score takes nothing returns nothing
+    // "Set the value for Player 1 to 12" — the workhorse of every scoreboard trigger.
+    call LeaderboardSetPlayerItemValueBJ( Player(0), udg_board, 12 )
+    call LeaderboardSortItemsByPlayerBJ( udg_board, true )
+    call LeaderboardSortItemsBJ( udg_board, bj_SORTTYPE_SORTBYVALUE, false )
+endfunction
+function Kick takes nothing returns nothing
+    call LeaderboardRemovePlayerItemBJ( Player(2), udg_board )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC]);
+  interp.run('Setup', []);
+  const rt = interp.rt;
+  const lb = rt.leaderboards[0];
+
+  if (lb && lb.label === 'Creeps Killed' && lb.items.length === 3 && lb.displayed === true) {
+    ok(`CreateLeaderboardBJ → a displayed board titled "Creeps Killed" with 3 rows`);
+  } else fail(`board: label ${JSON.stringify(lb?.label)} rows ${lb?.items.length} shown ${lb?.displayed}`);
+
+  // CreateLeaderboardBJ assigns the board to a FORCE (ForceSetLeaderboardBJ over
+  // GetPlayersAll), so every player is looking at it — that is what puts it on screen.
+  if (rt.leaderboardFor(0) === lb && rt.leaderboardFor(5) === lb) {
+    ok(`ForceSetLeaderboardBJ assigned it to every player in the force — leaderboardFor(local) resolves it`);
+  } else fail(`assignment: p0 ${!!rt.leaderboardFor(0)} p5 ${!!rt.leaderboardFor(5)}`);
+
+  // LeaderboardResizeBJ's own (surprising) rule: size = item count, MINUS ONE when the
+  // board has no label. So a titled board reserves a row per item, and an untitled one
+  // reserves one fewer. Read straight off Blizzard.j — worth pinning, because guessing
+  // "+1 for the title" would leave a titled board a row short.
+  if (lb.rows === 3) {
+    ok(`LeaderboardResizeBJ sized the titled board to its 3 items`);
+  } else fail(`rows: ${lb.rows} (want 3)`);
+  interp.run('Unlabel', []);
+  if (lb.rows === 2 && lb.label === '') {
+    ok(`...and to items−1 once the label is cleared — LeaderboardResizeBJ's "if label == '' then size = size - 1"`);
+  } else fail(`unlabelled rows: ${lb.rows} (want 2)`);
+
+  interp.run('Score', []);
+  const order = lb.items.map((it) => `${it.label}:${it.value}`);
+  if (order.join(' ') === 'Red:12 Blue:11 Teal:7') {
+    ok(`SetPlayerItemValue(Red → 12) then sort by value DESCENDING → Red:12 Blue:11 Teal:7 (the row is keyed by PLAYER, not by index)`);
+  } else fail(`sorted order: ${order.join(' ')}`);
+
+  interp.run('Kick', []);
+  if (lb.items.length === 2 && !lb.items.some((it) => it.player === 2)) {
+    ok(`LeaderboardRemovePlayerItemBJ drops that player's row and re-sizes the board`);
+  } else fail(`after remove: ${lb.items.length} rows`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -35,9 +35,10 @@
 | 7.17 | **Abilities, heroes + the remaining sim events** — `UnitAddAbility`/`Remove`/`Get`/`SetUnitAbilityLevel`, `SetHeroLevel`/`AddHeroXP`/`SetHeroXP`/skill points/`SelectHeroSkill`, `SetUnitInvulnerable`/`Pathing`/`Animation`/`UserData`, the MathAPI (**`SquareRoot`** — every `DistanceBetweenPoints` rode on it); **ability ORDERS** (`IssueTargetOrder(u,"holybolt",t)` → the unit casts); events: **SPELL_**\* (5 phases), **CONSTRUCT_**\*, **TRAIN_**\*, **HERO_LEVEL/SKILL**, **UNIT_STATE_LIMIT** | ✅ done (live) | §7.17 headless (effects round-trip through the real BJs; every event family dispatches owner-matched; the state threshold fires on the *crossing* only); Echo Isles: one trigger spawns a Paladin → levels it to 5 → grants Holy Light → orders the cast, and HERO_LEVEL / UNIT_STATE_LIMIT / SPELL_EFFECT / CONSTRUCT_* / TRAIN_* all report back into the HUD (screenshots) |
 | 7.3 | **Melee runs from the map's own script** — `main()` fires the map's *Melee Initialization* trigger and blizzard.j's `Melee*` library does the rest: starting units + resources + hero limit, the start-location creep clear, the victory/defeat conditions. The hard-coded roster is retired (fallback only) | ✅ done (live) | §7.3 headless (EchoIsles' real `war3map.j` → the same roster/purse the old `startMelee` produced, all 4 races; creeps cleared; razing the hall defeats its owner); live: bases spawned by the script on Echo Isles (H/O/U/NE) + RagingStream's start-location camp cleared (screenshots) |
 | 7.18 | **Items** — the trigger surface (`CreateItem`/`UnitAddItem`(`ById`/`ToSlotById`)/`UnitRemoveItem`/`UnitDropItem{Point,Slot,Target}`/`UnitUseItem*`/`RemoveItem`/`SetItemPosition`/charges/`UnitItemInSlot`/`UnitHasItem`/`EnumItemsInRect`/**`ChooseRandomItemEx`** — 151 maps) + the **item events** (`PICKUP`/`DROP`/`USE`/`SELL_ITEM` with `GetManipulatedItem`/`GetManipulatingUnit`). Pre-placed items (`CreateAllItems`) become **real, pickable** items; the melee hero gets its **Town Portal scroll** | ✅ done (live) | §7.18 headless (the item natives + every BJ the GUI emits; the 4 events dispatch owner-matched; a consumed powerup still resolves in its handler); Echo Isles: a trigger creates a Paladin + 4 items, he walks onto the potion (PICKUP fires, HUD inventory shows it), a trigger `UnitUseItem`s **the same handle** → +250 life (USE fires), a tome grants XP, claws show a green +15, `UnitDropItemPointBJ` drops them (DROP fires), `ChooseRandomItemEx` rolls a level-5 artifact (screenshots) |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (230/335 used natives implemented) |
+| 7.19 | **The trigger's on-screen output** — **floating text** in 3D (`CreateTextTag` + setters finally *draw*: world anchor + screen-relative drift, size, colour, fade, unit-following, fog-gated); the **victory/defeat dialogs** (`dialog` — which is what WC3's "Victory!" screen *is*: MeleeVictoryDialogBJ builds a plain dialog from the game's own `GlobalStrings.fdf` + `ScriptDialog.fdf`, quit button ends the match); **leaderboards** (the whole `Leaderboard*` family → the game's own `LeaderBoard.fdf` panel). Plus `DecorateFileNames` → `UI\war3skins.txt`, without which no in-game FDF panel has any chrome | ✅ done (live) | §7.19 headless (all three through the real blizzard.j BJs: `TextTagSize2Height`/`Speed2Velocity` scaling, permanence + expiry, `MeleeVictoryDialogBJ`/`MeleeDoDefeat` → "Victory!"/"You failed to achieve victory." + the right buttons + the QuestCompleted/QuestFailed stings, `LeaderboardResizeBJ`'s own sizing rule, sort-by-value); Echo Isles: "+15 gold" rising over each unit + a permanent banner, a **real Victory dialog when the enemy's last building is razed** (Continue Game dismisses, Quit Game ends the match), a 4-player leaderboard in the game's own chrome (screenshots) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (232/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items + 7.19 on-screen output) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It detects an implementation by scanning `src/jass/natives/*.ts` for the
 > quoted native name, and it only counts natives called **directly** from a `war3map.j`. So (a) natives registered
@@ -105,6 +106,8 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/forces.ts` | **forces** (player groups): `CreateForce`/`ForceAddPlayer`/`IsPlayerInForce`/`ForForce`/`ForceEnum*` + `GetEnumPlayer`/`GetFilterPlayer` — the target of the "Text Message" actions (7.6) |
 | `natives/groups.ts` | **unit groups** (7.16): the `GroupEnum*` scans over the live sim (`EngineHooks.enumUnits`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`, membership, and the `Group*Order` mass orders — the GUI's "Pick every unit in \<region\> matching \<condition\>" |
 | `natives/items.ts` | **items** (7.18): `CreateItem`, the inventory family (`UnitAddItem`/`ById`/`ToSlotById`, `UnitRemoveItem`, `UnitItemInSlot`, `UnitHasItem`), drop/give/use, charges + item-type queries, `EnumItemsInRect`, and `ChooseRandomItem(Ex)` — an `item` handle is one entity whether it lies on the ground or sits in a pack |
+| `natives/dialogs.ts` | **dialogs + the game-over path** (7.19): `DialogCreate`/`SetMessage`/`AddButton`/`AddQuitButton`/`Display`, the dialog-button events (`TriggerRegisterDialogButtonEvent` → `GetClickedButton`/`GetClickedDialog`), `EndGame`/`PauseGame`/`IsNo{Victory,Defeat}Cheat`, and `CreateSoundFromLabel`+`StartSound` (which is where the victory/defeat sting comes from). This is the melee **victory/defeat screen** — see 7.19 |
+| `natives/leaderboard.ts` | **leaderboards** (7.19): the whole `Leaderboard*` family (create/display/assign-to-player, rows keyed by player, sort by value/player/label, style + colours) — the ~25 natives the entire GUI leaderboard surface rides on |
 | `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
 | `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
@@ -779,6 +782,127 @@ those `.doo` widgets sat there forever as undeletable scenery).
 > `SetItemInvulnerable` / `SetItemDropOnDeath` / `SetItemDropID` / `SetItemPlayer` are recorded on the
 > handle rather than acted on.
 
+## The trigger's on-screen output (7.19 — done, live)
+
+Everything a trigger *says* to the player used to go nowhere. Three surfaces, all now real.
+
+### Floating text — the world-space text pass
+
+`CreateTextTag` and its setters have filled `runtime.textTags` since 7.6; **nothing drew them**. Now
+`src/render/textTags.ts` does — the "+15 gold" over a slain creep, the damage number, the "Creep Camp
+Cleared" banner. Drawn as DOM over the canvas (crisp at any zoom, WC3 `|cAARRGGBB|` colour codes for free,
+and a text tag has no depth anyway), projected each frame through the camera.
+
+**A tag is a world ANCHOR plus a SCREEN-SPACE drift, and conflating the two is the whole trick.** `x/y/z`
+are world coordinates — the tag sticks to that spot (or to a unit, `SetTextTagPosUnit`) and pans with the
+camera. But `size` and the *velocity* are screen-relative, in the same 0.8×0.6 space the FDF UI uses.
+Blizzard.j says so in as many words:
+
+```jass
+function TextTagSize2Height    takes real size  returns real  { return size  * 0.023 / 10  }
+function TextTagSpeed2Velocity takes real speed returns real  { return speed * 0.071 / 128 }
+    // "Scale the speed linearly such that speed 128 equates to 0.071.
+    //  Screen-relative speeds are hard to grasp."
+```
+
+So a rising damage number climbs **the screen** at a steady rate; it does not travel north through the world
+and shrink into the distance. Also nailed down from the sources:
+
+- **A fresh tag is PERMANENT.** `CreateTextTag` alone hangs on screen forever — that's the well-known
+  floating-text leak, and it's why every damage-number snippet in the wild opens with
+  `SetTextTagPermanent(tt, false)` before setting a lifespan. We defaulted it to *false*, which would have
+  made every tag vanish on the first tick.
+- **Ageing/drift/expiry run on GAME time** (`Runtime.advanceTextTags`, pumped from `Interpreter.advanceTime`),
+  so tags freeze with a paused game — while the *projection* runs on the render clock, so a paused tag stays
+  pinned to its unit as the camera moves.
+- **Fadepoint** (previously a no-op): full strength until `fadepoint`, then linear to nothing at `lifespan`.
+- **Bottom-left anchored**, as the engine does — every "centre my damage number" snippet subtracts half its
+  own width precisely because WC3 doesn't. Fogged tags are hidden with the ground.
+
+### The victory / defeat dialogs
+
+7.3 already flipped the melee end-state correctly (`bj_meleeDefeated` / `bj_meleeVictoried`), but the dialog
+natives were no-ops, so **nothing said so on screen**. The fix is smaller than it looks, because
+**WC3 has no bespoke "Victory!" panel — it is a plain JASS `dialog`**:
+
+```jass
+function MeleeVictoryDialogBJ takes player whichPlayer, boolean leftGame returns nothing
+    local dialog d = DialogCreate()
+    call DisplayTimedTextFromPlayer(whichPlayer, 0, 0, 60, GetLocalizedString("PLAYER_VICTORIOUS"))
+    call DialogSetMessage( d, GetLocalizedString( "GAMEOVER_VICTORY_MSG" ) )          // "Victory!"
+    call DialogAddButton( d, GetLocalizedString( "GAMEOVER_CONTINUE_GAME" ), … )
+    call TriggerRegisterDialogButtonEvent( t, DialogAddQuitButton( d, true, GetLocalizedString( "GAMEOVER_QUIT_GAME" ), … ) )
+    call DialogDisplay( whichPlayer, d, true )
+    call StartSoundForPlayerBJ( whichPlayer, bj_victoryDialogSound )
+endfunction
+```
+
+So implementing `dialog` faithfully renders the real end screen. What that took:
+
+- **`GetLocalizedString` is a real lookup**, not identity. The screen is written entirely in the *game's* string
+  keys — `GAMEOVER_VICTORY_MSG` → *"Victory!"*, `GAMEOVER_QUIT_GAME` → *"|CFFFFFFFFQ|Ruit Game"* — which live in
+  `UI\FrameDef\GlobalStrings.fdf`, the file our FDF library already loads. `GetLocalizedHotkey` reads the
+  accelerator out of that same markup (GlobalStrings marks it by colouring the letter white → `Q`).
+- **`src/ui/gameDialog.ts`** builds it from the game's own `UI\FrameDef\UI\ScriptDialog.fdf`. Note the button is a
+  *separate* top-level template (`ScriptDialogButton`), not a child — the engine stamps out one per
+  `DialogAddButton` and stacks them inside, so we clone it per button (renaming the whole subtree: the layout
+  solver indexes frames by name across the screen, so two buttons sharing a child name would collide).
+- **Two behaviours belong to the ENGINE, not the script**, and blizzard.j quietly depends on it: any button click
+  closes the dialog, and a `DialogAddQuitButton` button ends the game. That's why `MeleeVictoryDialogBJ` registers
+  a trigger on its quit button and *never adds an action to it*. Both live in the UI layer (it owns the click),
+  which then calls `Interpreter.fireDialogClick` to run whatever triggers the script *did* register.
+- **The sting is real audio**: `bj_victoryDialogSound = CreateSoundFromLabel("QuestCompleted", …)` — a
+  `UISounds.slk` label, so `StartSound` plays it through our `SoundBoard.playUi`. `StartSoundForPlayerBJ` gates on
+  `GetLocalPlayer`, so another player's defeat is silent, as it should be.
+
+### Leaderboards
+
+The scoreboard every TD and AoS shows. Like the group family (7.16), the *whole* GUI surface is blizzard.j code we
+already interpret — `CreateLeaderboardBJ`, `LeaderboardAddItemBJ`, `LeaderboardSortItemsBJ`,
+`LeaderboardSetPlayerItemValueBJ`, `LeaderboardResizeBJ` — riding on ~25 natives that all did nothing. Two rules
+read straight off Blizzard.j rather than guessed:
+
+- a row is keyed by **player** (`LeaderboardAddItemBJ` removes that player's existing row first, and
+  `LeaderboardSetPlayerItemValueBJ` looks the row up with `LeaderboardGetPlayerIndex`);
+- `LeaderboardResizeBJ` sizes the board to its item count — **minus one when it has no label**. (Guessing "+1 for
+  the title" would have left every titled board a row short; the test pins it.)
+
+`src/ui/leaderboard.ts` mounts the game's own `UI\FrameDef\UI\LeaderBoard.fdf` frame and injects the rows into its
+(deliberately empty) `LeaderboardListContainer` — the rows aren't in the file because the engine generates them.
+Row colours are sampled from the game's own flat `ReplaceableTextures\TeamColor\TeamColorNN.blp` swatches, so it's
+the real WC3 palette and not a hard-coded one.
+
+### `DecorateFileNames` → `UI\war3skins.txt` (the gap this uncovered)
+
+The leaderboard mounted with **no chrome at all**, and the reason turned out to be general: a frame flagged
+`DecorateFileNames` names its textures by **skin KEY** (`BackdropBackground "EscMenuEditBoxBackground"`), not by
+path, and the engine resolves the key through `UI\war3skins.txt`. We never read that file, so *every* in-game FDF
+panel would have rendered as a transparent rectangle. `FdfLibrary.decorate` now parses it: `[Default]` carries the
+full table (Human's art) and each race section overrides a handful — which is exactly how WC3 gives an Orc player
+orc-bordered panels, so the overlays take the **local player's race** as their skin.
+
+Verified (`pnpm jass:test` §7.19), all three through the **real** blizzard.j BJs: `CreateTextTagLocBJ` anchors at
+(512, 256, z 90) with size 10 → height 0.023 and `SetTextTagVelocityBJ(64, 90°)` → screen velocity (0, 0.0355); a
+fresh tag is permanent while a configured one drifts 0.0355/s, expires at its lifespan and leaves the permanent one
+alone; `MeleeVictoryDialogBJ` → *"Victory!"* + "Continue Game"/"Quit Game" (quit flag + `doScoreScreen`), hotkey `Q`,
+the `QuestCompleted` sting, and *"Elev was victorious."* through `DisplayTimedTextFromPlayer`'s `%s`; a click fires
+only the trigger registered on **that** button; `MeleeDoDefeat` → `bj_meleeDefeated[1]` + *"You failed to achieve
+victory."* with quit-only buttons (no observers-on-death flag), and another player's defeat plays no sound locally;
+`CreateLeaderboardBJ` → a displayed board assigned to the whole force, `LeaderboardResizeBJ`'s items/items−1 rule,
+and sort-by-value descending after a `SetPlayerItemValue`.
+
+Verified **live** on Echo Isles: a trigger puts a rising `|cffffcc00+15 gold|r` over every unit (following them,
+drifting up the screen, the permanent banner staying put) — and razing Player 1's last building runs blizzard.j's
+own `MeleeCheckForLosersAndVictors`, which defeats them, declares Player 0 victorious and **renders the real
+Victory dialog**; "Continue Game" dismisses it and the game plays on, "Quit Game" calls `EndGame` and tears the
+match down. A 4-player `CreateLeaderboardBJ` board sits top-right in the game's own chrome, sorted by value, each
+row in its player's real colour (screenshots).
+
+> **What's still not on screen:** **multiboards** (`CreateMultiboard` — the other scoreboard; the FDF
+> `MultiBoard.fdf` is right there), **timer dialogs** (`CreateTimerDialog` — `MeleeInitVictoryDefeat` already builds
+> the crippled/finish-soon windows and they're silently ignored), and the **score screen** (`EndGame(true)` leaves
+> the match rather than showing `Glue\ScoreScreen.fdf`).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -789,21 +913,21 @@ those `.doo` widgets sat there forever as undeletable scenery).
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).
 - **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
-  filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items. Still no-ops: **weather**
-  (`AddWeatherEffect` returns a null handle; nothing renders rain/snow), **sounds**, **cameras/cinematics**, **upgrades**
-  (`SetPlayerTechResearched`), **waygates**, **multiboards/dialogs**. Each is a small bridge method away — wire on demand
-  (`pnpm jass:coverage` ranks them by how many maps call them).
+  filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items; 7.19 floating text, dialogs and
+  leaderboards. Still no-ops: **weather** (`AddWeatherEffect` returns a null handle; nothing renders rain/snow),
+  **sounds** beyond the UI-label one-shots 7.19 wired (no `Play*SoundAtPoint`, no music), **cameras/cinematics**,
+  **upgrades** (`SetPlayerTechResearched`), **waygates**, **multiboards** and **timer dialogs**. Each is a small bridge
+  method away — wire on demand (`pnpm jass:coverage` ranks them by how many maps call them).
 - **Shops** — no unit sells anything, so `EVENT_PLAYER_UNIT_SELL_ITEM` / `_SELL` never fire (the item-sale plumbing is
   wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
   path: shop stock (`AddItemToStock`), the buy command card, gold, range.
 - **Events still missing:** `EVENT_PLAYER_UNIT_SUMMON` (the sim has the summon channel — same "born in the renderer"
   shape as TRAIN_FINISH), `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `..._SELECTED`, `_SELL`/`_SELL_ITEM`
   (no shops — above), and the player-scoped `TriggerRegisterPlayerStateEvent` / chat events.
-- **Melee leftovers** (7.3): melee AI (`StartMeleeAI`), hero-limit *enforcement*, blight, and the victory/defeat
-  **dialogs** (the game state flips; nothing renders it). *(The first hero's Town Portal scroll is now granted — 7.18 —
-  though `AItp` has no cast behaviour in the sim, so the scroll doesn't teleport yet.)*
-- **Natives on demand** — weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
-  Use `pnpm jass:coverage` to prioritise (215/335 used natives implemented — and see the caveat on that number above).
-- **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them
-  in 3D yet (no world-space text pass). On-screen messages *are* rendered (HUD message log).
+- **Melee leftovers** (7.3): melee AI (`StartMeleeAI`), hero-limit *enforcement*, blight, and the **crippled/finish-soon
+  timer windows** (`CreateTimerDialog` — `MeleeInitVictoryDefeat` builds them and nothing renders them). *(The
+  victory/defeat **dialogs** now render — 7.19. The first hero's Town Portal scroll is granted — 7.18 — though `AItp` has
+  no cast behaviour in the sim, so the scroll doesn't teleport yet.)*
+- **Natives on demand** — weather, positional sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
+  Use `pnpm jass:coverage` to prioritise (232/335 used natives implemented — and see the caveat on that number above).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

@@ -10,7 +10,9 @@ import type { NativeCtx, Runtime } from "../runtime";
 import { asInt, asNum, asStr, jInt, jReal, jStr, JNULL, type JassValue } from "../values";
 import { registerAbilityNatives } from "./abilities";
 import { registerConfigNatives } from "./config";
+import { registerDialogNatives } from "./dialogs";
 import { registerEventNatives } from "./events";
+import { registerLeaderboardNatives } from "./leaderboard";
 import { registerForceNatives } from "./forces";
 import { registerGroupNatives } from "./groups";
 import { registerItemNatives } from "./items";
@@ -108,7 +110,9 @@ export function registerNatives(rt: Runtime): void {
   registerConfigNatives(rt);
   registerWorldNatives(rt);
   registerAbilityNatives(rt); // abilities + heroes (7.17)
+  registerDialogNatives(rt); // dialogs + the victory/defeat screen (7.19)
   registerEventNatives(rt);
+  registerLeaderboardNatives(rt); // the scoreboard every TD/AoS shows (7.19)
   registerForceNatives(rt);
   registerGroupNatives(rt);
   registerItemNatives(rt); // items + the item events (7.18)

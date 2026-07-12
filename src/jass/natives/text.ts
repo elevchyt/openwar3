@@ -34,10 +34,14 @@ function unitName(c: NativeCtx, u: JassUnit | undefined): string {
 
 export function registerTextNatives(rt: Runtime): void {
   // --- floating text tags (the GUI "Floating Text" actions) ---
+  // A fresh tag is PERMANENT (WC3's default — a CreateTextTag with no further setters
+  // hangs on screen forever; that's the well-known floating-text leak). `lifespan` only
+  // takes effect once a script clears permanence — see Runtime.advanceTextTags.
   def(rt, "CreateTextTag", (c) => {
     const tt: TextTagObj = {
       handleId: 0, text: "", x: 0, y: 0, z: 0, size: 0, color: 0xffffffff, visible: true,
-      permanent: false, lifespan: 0, age: 0, velX: 0, velY: 0, suspended: false, followUnit: -1, dead: false,
+      permanent: true, lifespan: 0, fadepoint: 0, age: 0, velX: 0, velY: 0,
+      offsetX: 0, offsetY: 0, suspended: false, followUnit: -1, dead: false,
     };
     tt.handleId = c.rt.handles.alloc(tt);
     c.rt.textTags.push(tt);
@@ -95,15 +99,10 @@ export function registerTextNatives(rt: Runtime): void {
   def(rt, "SetTextTagPermanent", (c, a) => (tag(c, a[0]) && (tag(c, a[0])!.permanent = truthy(a[1])), JNULL));
   def(rt, "SetTextTagAge", (c, a) => (tag(c, a[0]) && (tag(c, a[0])!.age = asNum(a[1])), JNULL));
   def(rt, "SetTextTagLifespan", (c, a) => (tag(c, a[0]) && (tag(c, a[0])!.lifespan = asNum(a[1])), JNULL));
-  def(rt, "SetTextTagFadepoint", () => JNULL); // fade timing — cosmetic; renderer can derive from lifespan
+  def(rt, "SetTextTagFadepoint", (c, a) => (tag(c, a[0]) && (tag(c, a[0])!.fadepoint = asNum(a[1])), JNULL));
   def(rt, "DestroyTextTag", (c, a) => {
     const tt = tag(c, a[0]);
-    if (tt) {
-      tt.dead = true;
-      const i = c.rt.textTags.indexOf(tt);
-      if (i >= 0) c.rt.textTags.splice(i, 1);
-      c.rt.handles.free(tt.handleId);
-    }
+    if (tt) c.rt.destroyTextTag(tt);
     return JNULL;
   });
 
@@ -116,6 +115,17 @@ export function registerTextNatives(rt: Runtime): void {
   // DisplayTimedTextToPlayer(player, x, y, duration, message).
   def(rt, "DisplayTimedTextToPlayer", (c, a) => {
     c.rt.hooks?.displayText?.(c.rt.data<JassPlayer>(a[0])?.index ?? 0, asStr(a[4]), asNum(a[3]));
+    return JNULL;
+  });
+  // DisplayTimedTextFromPlayer(player, x, y, duration, message) — despite common.j naming
+  // the parameter `toPlayer`, the player here is the SUBJECT, not the audience: the message
+  // goes to everyone with the player's name substituted into its `%s`. That is how
+  // "Player 1 was victorious." reaches the whole game from MeleeVictoryDialogBJ, which
+  // passes the raw format string GetLocalizedString("PLAYER_VICTORIOUS") = "%s was victorious."
+  def(rt, "DisplayTimedTextFromPlayer", (c, a) => {
+    const idx = c.rt.data<JassPlayer>(a[0])?.index ?? 0;
+    const msg = asStr(a[4]).replace(/%s/g, c.rt.playerName(idx));
+    c.rt.hooks?.displayText?.(c.rt.localPlayer, msg, asNum(a[3]));
     return JNULL;
   });
   def(rt, "ClearTextMessages", (c) => {
@@ -142,12 +152,25 @@ export function registerTextNatives(rt: Runtime): void {
   // Blizzard's (theirs is an internal detail), but stable within a run, which is all
   // maps rely on: it keys gamecache/hashtable slots via StringHashBJ.
   def(rt, "StringHash", (_c, a) => jInt(fnv1a(asStr(a[0]))));
-  // We ship one locale (the English strings the map already embeds), so localization
-  // is identity; the hotkey is the first meaningful character's code.
-  def(rt, "GetLocalizedString", (_c, a) => jStr(asStr(a[0])));
-  def(rt, "GetLocalizedHotkey", (_c, a) => {
-    const s = asStr(a[0]).trim();
-    return jInt(s.length ? s.charCodeAt(0) : 0);
+  // GetLocalizedString is a lookup in the GAME's own string table, not a no-op: the whole
+  // victory/defeat screen is written in its keys (GAMEOVER_VICTORY_MSG → "Victory!",
+  // GAMEOVER_QUIT_GAME → "|CFFFFFFFFQ|Ruit Game"), and blizzard.j never spells the text
+  // out. The engine reads UI\FrameDef\GlobalStrings.fdf — the same file the FDF UI system
+  // already loads (src/ui/fdf/library.ts). A key with no entry falls through as itself,
+  // which is also what a plain sentence passed to GetLocalizedString does.
+  def(rt, "GetLocalizedString", (c, a) => {
+    const key = asStr(a[0]);
+    return jStr(c.rt.hooks?.localizedString?.(key) ?? key);
+  });
+  // The hotkey is the accelerator letter of a localized string. GlobalStrings marks it by
+  // colouring it white ("|CFFFFFFFFQ|Ruit Game" → Q), so read the char inside the first
+  // colour run when there is one; otherwise fall back to the first meaningful character.
+  def(rt, "GetLocalizedHotkey", (c, a) => {
+    const key = asStr(a[0]);
+    const s = (c.rt.hooks?.localizedString?.(key) ?? key).trim();
+    const marked = /\|[cC][0-9a-fA-F]{8}(.)/.exec(s);
+    const ch = marked ? marked[1] : s.replace(/\|[cC][0-9a-fA-F]{8}|\|[rRnN]/g, "").trim()[0];
+    return jInt(ch ? ch.charCodeAt(0) : 0);
   });
 }
 

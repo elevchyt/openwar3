@@ -716,6 +716,9 @@ export class Interpreter {
       }
     }
     this.pumpThreads(); // waits come due AFTER the clock moved (so a 0s wait costs one tick)
+    // Floating text ages on GAME time too (7.19), so tags freeze with a paused game and
+    // drift in step with the timers that spawned them — never with the render clock.
+    this.rt.advanceTextTags(dt);
   }
 
   private expireTimer(t: TimerObj): void {
@@ -1023,6 +1026,24 @@ export class Interpreter {
       const handle = jHandle(u.handleId, "unit");
       this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig));
     }
+  }
+
+  /** The player clicked a dialog button (7.19). Fires the triggers the script registered
+   *  on that button (TriggerRegisterDialogButtonEvent) and on its dialog
+   *  (TriggerRegisterDialogEvent), with GetClickedButton / GetClickedDialog / GetTriggerPlayer
+   *  in scope. Raised by the UI, which owns the click — and which also closes the dialog and,
+   *  for a quit button, ends the game, because in WC3 those two are the ENGINE's doing, not
+   *  the script's: MeleeVictoryDialogBJ registers a trigger on its quit button and never adds
+   *  an action to it. */
+  fireDialogClick(buttonHandleId: number, dialogHandleId: number, player: number): void {
+    const responses = new Map<string, JassValue>([
+      ["ClickedButton", jHandle(buttonHandleId, "button")],
+      ["ClickedDialog", jHandle(dialogHandleId, "dialog")],
+      ["TriggerPlayer", this.rt.playerHandle(player)],
+    ]);
+    this.dispatchToRegs(responses, (reg) =>
+      (reg.kind === "dialogButton" && reg.params[0]?.k === "handle" && reg.params[0].h === buttonHandleId) ||
+      (reg.kind === "dialogEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === dialogHandleId));
   }
 
   /** Fire every registration matching `pred` with the given responses. Snapshots the

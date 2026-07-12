@@ -32,7 +32,16 @@ export interface BoolExpr {
  *  it, so an eager "emit on SetTextTagText" would snapshot it mid-configuration,
  *  e.g. before CreateTextTagLocBJ has set the position). `height`/`size` are the
  *  screen-relative font height the natives store; the BJ helpers scale from a font
- *  "size" via TextTagSize2Height (size 10 → 0.023). */
+ *  "size" via TextTagSize2Height (size 10 → 0.023).
+ *
+ *  Two units live here and they are NOT the same space:
+ *   • x/y/z are WORLD coordinates (the anchor the tag is projected from);
+ *   • size and velX/velY are SCREEN-relative, in the same 0.8×0.6 UI space the FDF
+ *     frames use — blizzard.j says so in as many words ("Scale the speed linearly
+ *     such that speed 128 equates to 0.071. Screen-relative speeds are hard to
+ *     grasp." — TextTagSpeed2Velocity). So a rising damage number drifts UP THE
+ *     SCREEN at a fixed rate; it doesn't travel north through the world. offsetX/
+ *     offsetY accumulate that drift (advanceTextTags), in the same screen space. */
 export interface TextTagObj {
   handleId: number;
   text: string;
@@ -43,13 +52,73 @@ export interface TextTagObj {
   color: number; // 0xAARRGGBB
   visible: boolean;
   permanent: boolean;
-  lifespan: number; // seconds (0 = use permanent/engine default)
+  lifespan: number; // seconds — only meaningful once permanent is false
+  fadepoint: number; // seconds — start fading out here (0 = no fade, pop out at lifespan)
   age: number;
   velX: number;
   velY: number;
+  offsetX: number; // accrued screen-space drift (velX × age), 0.8×0.6 UI units
+  offsetY: number;
   suspended: boolean;
   followUnit: number; // sim id of the unit it tracks (SetTextTagPosUnit), or -1
-  dead: boolean; // DestroyTextTag'd — the renderer should drop it
+  dead: boolean; // DestroyTextTag'd (or expired) — the renderer should drop it
+}
+
+/** One button of a JASS `dialog` (DialogAddButton / DialogAddQuitButton). The engine
+ *  renders these from the game's own `ScriptDialogButton` FDF template. A QUIT button
+ *  ends the game when clicked (that's the whole difference); `doScoreScreen` is what
+ *  it passes to EndGame. */
+export interface DialogButtonObj {
+  handleId: number;
+  dialogId: number; // handle id of the owning dialog
+  text: string;
+  hotkey: number; // GetLocalizedHotkey's char code (0 = none)
+  quit: boolean;
+  doScoreScreen: boolean;
+}
+
+/** A JASS `dialog` (DialogCreate) — a modal message + buttons. This is what the melee
+ *  victory/defeat screen IS: MeleeVictoryDialogBJ builds one with the GAMEOVER_VICTORY_MSG
+ *  string and a Quit button, so getting `dialog` right renders the real "Victory!" screen
+ *  for free. `visibleFor` is per-player (DialogDisplay takes a player). */
+export interface DialogObj {
+  handleId: number;
+  message: string;
+  buttons: DialogButtonObj[];
+  visibleFor: Set<number>;
+  revision: number; // bumped on every mutation, so the UI knows to rebuild
+}
+
+/** One row of a leaderboard (LeaderboardAddItem: a label, a value and the player it
+ *  belongs to — the player is what gives the row its colour and its icon). */
+export interface LeaderboardItem {
+  label: string;
+  value: number;
+  player: number;
+  showLabel: boolean;
+  showValue: boolean;
+  showIcon: boolean;
+  labelColor: number | null; // 0xAARRGGBB, or null → the board's label colour
+  valueColor: number | null;
+}
+
+/** A JASS `leaderboard` (CreateLeaderboard) — the scoreboard every TD/AoS puts on
+ *  screen. The whole GUI family (LeaderboardAddItemBJ, LeaderboardSortItemsBJ, …) is
+ *  blizzard.j code riding on the natives, so this record is all the engine must hold. */
+export interface LeaderboardObj {
+  handleId: number;
+  label: string;
+  items: LeaderboardItem[];
+  displayed: boolean;
+  /** LeaderboardSetSizeByItemCount — how many rows the board makes room for. */
+  rows: number;
+  showLabel: boolean;
+  showNames: boolean;
+  showValues: boolean;
+  showIcons: boolean;
+  labelColor: number; // 0xAARRGGBB
+  valueColor: number;
+  revision: number; // bumped on every mutation, so the UI only rebuilds when it changed
 }
 
 /** A rectangular region (Rect / the World-Editor `gg_rct_*` globals). Its bounds
@@ -393,6 +462,23 @@ export interface EngineHooks {
    *  `name` column of UnitUI.slk: "townhall", "greathall", …). Melee asks for the four
    *  main halls: owning none while still holding structures is what "crippled" means. */
   playerTypedUnitCount?(player: number, typeName: string, includeIncomplete: boolean, includeUpgrades: boolean): number;
+  // --- the trigger's on-screen output (7.19) ---
+  /** GetLocalizedString — the game's OWN string table (UI\FrameDef\GlobalStrings.fdf).
+   *  Not decoration: blizzard.j asks for the victory/defeat screen's text by key
+   *  (GetLocalizedString("GAMEOVER_VICTORY_MSG") → "Victory!"), so without this the
+   *  dialog would render the key. Undefined → the caller keeps the key (identity). */
+  localizedString?(key: string): string | undefined;
+  /** EndGame(doScoreScreen) — leave the match. The Quit button of the victory/defeat
+   *  dialog is a DialogAddQuitButton, and this is what it does. */
+  endGame?(doScoreScreen: boolean): void;
+  /** PauseGame — CustomVictoryDialogBJ freezes a single-player game under its dialog. */
+  pauseGame?(flag: boolean): void;
+  /** EnableUserUI(false) — hide the HUD (the victory dialog does this in campaigns). */
+  enableUserUi?(flag: boolean): void;
+  /** StartSound on a sound built by CreateSoundFromLabel — a UISounds.slk label. The
+   *  victory/defeat dialogs ride on this ("QuestCompleted" / "QuestFailed"), which is
+   *  where the game's win/lose sting comes from. */
+  playUiSound?(label: string): void;
 }
 
 /** Opaque handle store: integer ids → backing JS objects, with interning so
@@ -491,6 +577,14 @@ export class Runtime {
   /** Live floating text tags (CreateTextTag). The renderer polls this list; dead
    *  entries (DestroyTextTag) are flagged so it can drop them. */
   readonly textTags: TextTagObj[] = [];
+  /** Live dialogs (DialogCreate) and leaderboards (CreateLeaderboard) — polled by the
+   *  UI the same way, for the same reason: a script configures one over several calls
+   *  (message, then buttons, then DialogDisplay), so there is no single moment to push. */
+  readonly dialogs: DialogObj[] = [];
+  readonly leaderboards: LeaderboardObj[] = [];
+  /** PlayerSetLeaderboard — which board each player sees (player index → handle id).
+   *  A leaderboard is only on screen for the players it was assigned to. */
+  readonly playerBoards = new Map<number, number>();
   /** Seconds of game time elapsed (advanced from the sim tick). */
   gameTime = 0;
 
@@ -644,6 +738,49 @@ export class Runtime {
    *  pump hands back the same handle rather than minting a second one for one item. */
   bindSimItem(it: JassItem): void {
     if (it.simId >= 0) this.simItemHandles.set(it.simId, it.handleId);
+  }
+
+  /** Age every live floating text tag by `dt` seconds of GAME time (so tags freeze with
+   *  a paused game, exactly like the trigger threads and timers around them) and retire
+   *  the ones that have run out. Called from Interpreter.advanceTime, i.e. off the sim
+   *  tick — the renderer only ever draws what this leaves behind.
+   *
+   *  WC3's rule, and the reason the default matters: a text tag is **permanent by
+   *  default** — CreateTextTag alone leaves it on screen forever (the classic floating-
+   *  text leak). `lifespan` only bites once a script has turned permanence OFF, which is
+   *  why every damage-number snippet in the wild reads
+   *      SetTextTagPermanent(tt, false) / SetTextTagLifespan(tt, 1.0) / SetTextTagFadepoint(tt, 0.5)
+   *  A SUSPENDED tag is paused, not just hidden: it neither ages nor drifts. */
+  advanceTextTags(dt: number): void {
+    for (let i = this.textTags.length - 1; i >= 0; i--) {
+      const tt = this.textTags[i];
+      if (tt.suspended) continue;
+      tt.age += dt;
+      tt.offsetX += tt.velX * dt;
+      tt.offsetY += tt.velY * dt;
+      if (!tt.permanent && tt.age >= tt.lifespan) this.destroyTextTag(tt);
+    }
+  }
+
+  /** Retire a text tag (DestroyTextTag, or its lifespan running out). Flagged dead as
+   *  well as unlinked: the renderer holds its own view of the list and drops the tag on
+   *  the flag, and a stale JASS handle must not resurrect it. */
+  destroyTextTag(tt: TextTagObj): void {
+    if (tt.dead) return;
+    tt.dead = true;
+    const i = this.textTags.indexOf(tt);
+    if (i >= 0) this.textTags.splice(i, 1);
+    this.handles.free(tt.handleId);
+  }
+
+  /** The leaderboard `player` currently sees — assigned (PlayerSetLeaderboard, which the
+   *  BJ CreateLeaderboardBJ does for a whole force) AND displayed (LeaderboardDisplay).
+   *  Null when the player has none, or has one that is hidden. */
+  leaderboardFor(player: number): LeaderboardObj | null {
+    const hid = this.playerBoards.get(player);
+    if (hid === undefined) return null;
+    const lb = this.handles.get(hid) as LeaderboardObj | undefined;
+    return lb && lb.displayed ? lb : null;
   }
 
   /** Resolve a "TRIGSTR_nnn" placeholder to its war3map.wts text (the World Editor

@@ -7,6 +7,7 @@ import { parseFdf, type FdfFrame, type FdfProp } from "./parser";
 // files and construct the UIs" half of issue #54; layout/render is the other half.
 
 const GLOBAL_STRINGS = "UI\\FrameDef\\GlobalStrings.fdf";
+const SKINS = "UI\\war3skins.txt";
 
 function cloneFrame(f: FdfFrame): FdfFrame {
   return {
@@ -24,13 +25,50 @@ export class FdfLibrary {
   private lowered = new Map<string, FdfFrame>(); // lowercased name → frame (fallback)
   readonly strings = new Map<string, string>();
   private loaded = new Set<string>();
+  /** The DecorateFileNames skin table (UI\war3skins.txt): section → key → BLP path. */
+  private skins = new Map<string, Map<string, string>>();
+  /** Which race's chrome to decorate with — WC3 skins the in-game panels by the local
+   *  player's race (an Orc player's dialogs are Orc-bordered). "Default" is Human. */
+  skin = "Default";
 
   constructor(private vfs: DataSource) {}
 
-  /** Load GlobalStrings + the given screen file (and everything they include). */
+  /** Load GlobalStrings + the skin table + the given screen file (and their includes). */
   async load(path: string): Promise<void> {
     await this.loadFile(GLOBAL_STRINGS);
+    await this.loadSkins();
     await this.loadFile(path);
+  }
+
+  /** Parse UI\war3skins.txt — the table behind the FDF `DecorateFileNames` flag. A frame
+   *  marked with it names its textures by KEY ("EscMenuEditBoxBackground"), not by path,
+   *  and the engine looks the key up here. Without it the in-game panels (leaderboard,
+   *  dialogs, quest log) render with no chrome at all — their backdrops resolve to
+   *  nothing. `[Default]` carries the full table (Human's art); each race section
+   *  overrides a handful of entries, which is how an Orc player gets Orc borders. */
+  private async loadSkins(): Promise<void> {
+    if (this.skins.size || !this.vfs.exists(SKINS)) return;
+    const src = new TextDecoder("latin1").decode(await this.vfs.read(SKINS));
+    let section = new Map<string, string>();
+    for (const raw of src.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("//")) continue;
+      const head = /^\[(.+)\]$/.exec(line);
+      if (head) {
+        section = new Map();
+        this.skins.set(head[1], section);
+        continue;
+      }
+      const eq = line.indexOf("=");
+      if (eq > 0) section.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim());
+    }
+  }
+
+  /** Resolve a `DecorateFileNames` texture key to its real BLP path: the current skin's
+   *  entry, else `[Default]`'s. A name that is already a path (no entry) passes through —
+   *  the glue screens name their textures literally and must keep working. */
+  decorate(nameOrKey: string): string {
+    return this.skins.get(this.skin)?.get(nameOrKey) ?? this.skins.get("Default")?.get(nameOrKey) ?? nameOrKey;
   }
 
   private async loadFile(path: string): Promise<void> {
