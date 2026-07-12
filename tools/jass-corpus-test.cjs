@@ -2303,5 +2303,165 @@ endfunction
   } else fail(`cine groups: ${JSON.stringify([...groups])}`);
 }
 
+console.log('\n[7.21] Timer dialogs — the countdown windows (and the MELEE crippled-player window)');
+{
+  // The crippled check counts a player's structures and their MAIN HALLS. Player 0 holds
+  // buildings but no hall (→ crippled); player 1 holds a hall (→ not crippled).
+  const hooks = {
+    localizedString: (key) => GLOBAL_STRINGS.get(key),
+    playerStructureCount: (p) => (p === 0 || p === 1 ? 3 : 0),
+    playerTypedUnitCount: (p) => (p === 1 ? 1 : 0), // only player 1 still has a main hall
+    displayText: () => {},
+    soundLabelInfo: () => null,
+    playSound: () => true,
+  };
+  const SRC = `
+globals
+    timerdialog udg_wave = null
+    timer       udg_t    = null
+    boolean     udg_shown = false
+endglobals
+// The GUI's "Countdown Timer - Create a timer window" — the real BJ chain.
+function MakeWave takes nothing returns nothing
+    set udg_t = CreateTimer()
+    call TimerStart( udg_t, 45.0, false, null )
+    set udg_wave = CreateTimerDialogBJ( udg_t, "Next Level" )
+    set udg_shown = IsTimerDialogDisplayed( udg_wave )
+endfunction
+function HideWave takes nothing returns nothing
+    call TimerDialogDisplayBJ( false, udg_wave )
+endfunction
+// The MELEE path: MeleeInitVictoryDefeat builds a cripple timer + window per playing slot.
+function Melee takes nothing returns nothing
+    call MeleeInitVictoryDefeat(  )
+endfunction
+// Losing your last main hall while you still hold structures = crippled → the 120 s clock.
+function Cripple takes nothing returns nothing
+    call MeleeCheckForCrippledPlayers(  )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  const rt = interp.rt;
+  // Two PLAYING human slots, so MeleeInitVictoryDefeat builds a window for each.
+  rt.applyLobby([
+    { index: 0, raceIndex: 1, controller: 1, team: 0, startLocation: 0 },
+    { index: 1, raceIndex: 2, controller: 2, team: 1, startLocation: 1 },
+  ], 0);
+  interp.run('InitBlizzard', []);
+
+  interp.run('MakeWave', []);
+  const wave = rt.timerDialogs[rt.timerDialogs.length - 1];
+  if (rt.timerDialogs.length === 1 && wave.title === 'Next Level' && wave.displayed === true) {
+    ok(`CreateTimerDialogBJ → a window titled "Next Level", DISPLAYED (the BJ shows it; the native alone does not)`);
+  } else fail(`wave: ${JSON.stringify({ n: rt.timerDialogs.length, title: wave && wave.title, shown: wave && wave.displayed })}`);
+  if (rt.globals.get('udg_shown').b === true) {
+    ok(`...and IsTimerDialogDisplayed agrees`);
+  } else fail(`IsTimerDialogDisplayed: ${rt.globals.get('udg_shown').b}`);
+  // A timerdialog holds no clock — it READS the timer it was made over.
+  if (Math.abs(rt.timerDialogSeconds(wave) - 45) < 1e-6) {
+    ok(`the window shows 45 s — read live off its timer, not a copy (a timerdialog holds no clock)`);
+  } else fail(`seconds: ${rt.timerDialogSeconds(wave)}`);
+  interp.advanceTime(12.5);
+  if (Math.abs(rt.timerDialogSeconds(wave) - 32.5) < 1e-6) {
+    ok(`...and after 12.5 s of game time it reads 32.5 s (it ticks with the timer, and freezes when the game pauses)`);
+  } else fail(`after 12.5 s: ${rt.timerDialogSeconds(wave)}`);
+  interp.run('HideWave', []);
+  if (wave.displayed === false) {
+    ok(`TimerDialogDisplayBJ(false) takes it off screen (the "…ForPlayer" variant is blizzard.j gating on GetLocalPlayer)`);
+  } else fail(`still displayed`);
+
+  // --- the melee leftover this milestone closes ---------------------------------------
+  const before = rt.timerDialogs.length;
+  interp.run('Melee', []);
+  const made = rt.timerDialogs.slice(before);
+  // One "finish soon" dialog (over a NULL timer) + one cripple window per PLAYING slot.
+  const nullTimer = made.filter((d) => d.timerId === 0);
+  const crippleWins = made.filter((d) => d.timerId !== 0);
+  if (made.length === 3 && nullTimer.length === 1 && crippleWins.length === 2) {
+    ok(`MeleeInitVictoryDefeat builds 3 windows: the "finish soon" one + a cripple window for each of the 2 PLAYING slots`);
+  } else fail(`melee windows: ${made.length} (null-timer ${nullTimer.length}, cripple ${crippleWins.length})`);
+  // bj_finishSoonTimerDialog = CreateTimerDialog(null) — "it has no timer because it is
+  // driven by real time". It must not crash, and it shows SetRealTimeRemaining's value.
+  if (rt.timerDialogSeconds(nullTimer[0]) === 0) {
+    ok(`the "finish soon" window is CreateTimerDialog(null) — a legal, clock-less dialog (it reads TimerDialogSetRealTimeRemaining)`);
+  } else fail(`null-timer seconds: ${rt.timerDialogSeconds(nullTimer[0])}`);
+  // Its title is the race-specific "Build <main hall>" string, off the game's own table.
+  if (crippleWins[0].title === 'Build Town Hall' && crippleWins[1].title === 'Build Great Hall') {
+    ok(`the cripple windows are titled from the game's own strings, per RACE — "Build Town Hall" (human) / "Build Great Hall" (orc)`);
+  } else fail(`cripple titles: ${crippleWins.map((d) => d.title).join(' / ')}`);
+  // Not shown yet — a player is only crippled once they LOSE their last hall.
+  if (!crippleWins.some((d) => d.displayed)) {
+    ok(`...and neither is on screen yet: a cripple window only shows when its player actually becomes crippled`);
+  } else fail(`a cripple window was displayed at init`);
+
+  interp.run('Cripple', []);
+  // Player 0 has structures but no main hall → crippled. Player 1 still has its hall.
+  const p0 = crippleWins[0], p1 = crippleWins[1];
+  if (p0.displayed === true && p1.displayed === false) {
+    ok(`MeleeCheckForCrippledPlayers: player 0 lost their last hall → their "Build Town Hall" window APPEARS; player 1 (still has one) stays clear`);
+  } else fail(`displayed: p0 ${p0.displayed}, p1 ${p1.displayed}`);
+  if (rt.globals.get('bj_playerIsCrippled') && rt.globals.get('bj_playerIsCrippled')) {
+    // the flag lives in a JASS array; read it through the array table
+    const arr = rt.globalArrays.get('bj_playerIsCrippled');
+    if (arr && arr.get(0).b === true && arr.get(1).b === false) {
+      ok(`...and bj_playerIsCrippled[0] is set while [1] is not — the melee state and the window agree`);
+    } else fail(`bj_playerIsCrippled: ${arr ? [arr.get(0).b, arr.get(1).b] : 'missing'}`);
+  }
+  // 120 s is blizzard.j's own bj_MELEE_CRIPPLE_TIMEOUT, and the window counts it down.
+  const shown = formatTimerValueCheck(rt.timerDialogSeconds(p0));
+  if (shown === '2:00') {
+    ok(`the window opens at 2:00 — blizzard.j's bj_MELEE_CRIPPLE_TIMEOUT (120 s), formatted as the engine does`);
+  } else fail(`cripple countdown: ${shown} (want 2:00)`);
+  interp.advanceTime(61);
+  if (formatTimerValueCheck(rt.timerDialogSeconds(p0)) === '0:59') {
+    ok(`...ticking: 0:59 after 61 s`);
+  } else fail(`after 61 s: ${formatTimerValueCheck(rt.timerDialogSeconds(p0))}`);
+}
+
+// The timer-pump bug 7.21 uncovered — a general engine bug, so it gets its own gate.
+// A timer handler that DESTROYS a timer splices rt.timers, and advanceTime was iterating
+// that same array live: the splice made the iterator skip the very next timer, which then
+// never advanced. blizzard.j's own MarkGameStarted does exactly this (it destroys
+// bj_gameStartedTimer from inside its handler, 0.01 s into every map), so the next timer any
+// map created after InitBlizzard silently stopped ticking.
+console.log('\n[7.4c] Regression: a self-destroying timer must not stop the NEXT timer (advanceTime snapshot)');
+{
+  const SRC = `
+globals
+    timer udg_a = null
+    timer udg_b = null
+endglobals
+function Boom takes nothing returns nothing
+    call DestroyTimer( GetExpiredTimer() )   // the one-shot idiom — and what MarkGameStarted does
+endfunction
+function Setup takes nothing returns nothing
+    set udg_a = CreateTimer()
+    set udg_b = CreateTimer()
+    call TimerStart( udg_a, 0.01, false, function Boom )   // expires immediately, destroys itself
+    call TimerStart( udg_b, 60.0, false, null )            // ...and udg_b sits right after it
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC]);
+  const rt = interp.rt;
+  interp.run('Setup', []);
+  const b = rt.handles.get(rt.globals.get('udg_b').h);
+  interp.advanceTime(10);
+  if (Math.abs(b.remaining - 50) < 1e-6) {
+    ok(`the timer created after a self-destroying one still ticks (60 → 50 over 10 s); before the fix it stayed at 60 forever`);
+  } else fail(`udg_b.remaining = ${b.remaining} (want 50)`);
+  if (!rt.timers.includes(rt.handles.get(rt.globals.get('udg_a').h)) || rt.timers.length === 1) {
+    ok(`...and the destroyed timer really is gone from the pump`);
+  } else fail(`the destroyed timer is still in rt.timers`);
+}
+
+// Mirrors src/ui/timerDialog.ts formatTimerValue — Game.dll carries exactly two countdown
+// formats (`%d:%02d` and `%02d:%02d:%02d`), so under an hour is M:SS and over is HH:MM:SS.
+function formatTimerValueCheck(seconds) {
+  const total = Math.max(0, Math.ceil(seconds));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

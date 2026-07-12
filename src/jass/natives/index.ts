@@ -20,6 +20,7 @@ import { registerMeleeNatives } from "./melee";
 import { registerRegionNatives } from "./region";
 import { registerSoundNatives } from "./sound";
 import { registerTextNatives } from "./text";
+import { registerTimerDialogNatives } from "./timerdialog";
 import { registerWorldNatives } from "./world";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -122,5 +123,6 @@ export function registerNatives(rt: Runtime): void {
   registerRegionNatives(rt);
   registerSoundNatives(rt); // the sound handle family + music (7.20)
   registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
+  registerTimerDialogNatives(rt); // the countdown windows (7.21)
   registerUtilNatives(rt);
 }

@@ -62,6 +62,14 @@ export class LeaderboardOverlay {
     if (this.screen && this.current) this.paintRows(this.current);
   };
   private current: LeaderboardObj | null = null;
+  private lastHeight = 0;
+
+  /** How much of the top-right corner the board is using, in FDF 0.8×0.6 units (0 when it
+   *  isn't up). The timer-dialog stack hangs below it, so the two never overlap — as in WC3.
+   *  MARGIN_Y is the shared top inset, so this is the board's own height. */
+  occupiedHeight(): number {
+    return this.screen ? this.lastHeight : 0;
+  }
 
   /** `skin` is the war3skins.txt section the panel's chrome is decorated from — WC3 gives
    *  the in-game panels the local player's RACE ("Orc", "NightElf", …). */
@@ -127,6 +135,7 @@ export class LeaderboardOverlay {
     // that reserved space gets it.
     const rows = Math.max(lb.items.length, lb.rows, 1);
     const height = (lb.showLabel && lb.label ? TITLE_H : PAD) + rows * ROW_H + PAD;
+    this.lastHeight = height;
 
     const props = board.props.filter((p) => p.key !== "Height" && p.key !== "SetPoint");
     props.push({ key: "Height", args: [num(height)] });

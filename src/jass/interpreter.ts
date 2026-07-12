@@ -701,7 +701,15 @@ export class Interpreter {
    *  stops a zero/negative-timeout periodic timer from looping forever in one tick. */
   advanceTime(dt: number): void {
     this.rt.gameTime += dt;
-    for (const t of this.rt.timers) {
+    // Iterate a SNAPSHOT. An expiring timer's handler routinely mutates rt.timers — the
+    // one-shot idiom is `CreateTimer` … `DestroyTimer(GetExpiredTimer())`, and blizzard.j's
+    // own MarkGameStarted destroys `bj_gameStartedTimer` from inside its handler — and
+    // DestroyTimer SPLICES the list. Splicing during a live `for…of` makes the iterator skip
+    // the very next element, so the timer registered after the self-destroying one silently
+    // lost that tick, every time. (It cost the whole map: MarkGameStarted fires 0.01 s in,
+    // and the next timer created after it never advanced again.) DestroyTimer clears
+    // `running` before it splices, so the guard below still drops anything removed mid-pump.
+    for (const t of [...this.rt.timers]) {
       if (!t.running) continue;
       t.remaining -= dt;
       t.elapsedTotal += dt;

@@ -47,6 +47,7 @@ import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
 import { GameMenu } from "../ui/gameMenu";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
+import { TimerDialogOverlay } from "../ui/timerDialog";
 import { TextTagOverlay, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
@@ -62,6 +63,9 @@ const SKIN_SECTION: Record<PlayableRace, string> = {
   undead: "Undead",
   nightelf: "NightElf",
 };
+
+/** Gap (FDF 0.8×0.6 units) between the leaderboard and the countdown-window stack below it. */
+const TIMER_STACK_GAP = 0.006;
 
 // War3MapViewer.update() hardcodes super.update() to 1000/60 ms per frame, so
 // animations run at 2x on a 120Hz display, 2.4x at 144Hz, etc. We bypass it and
@@ -416,6 +420,7 @@ export class MapViewerScene {
   // --- the trigger's on-screen output (7.19) ---
   private textTags: TextTagOverlay | null = null; // CreateTextTag, drawn in the world
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
+  private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
   private dialog: GameDialogOverlay | null = null; // DialogCreate — and the melee end screen
   /** The game's own string table (UI\FrameDef\GlobalStrings.fdf) behind GetLocalizedString:
    *  blizzard.j writes the whole victory/defeat screen in its keys. Loaded once, lazily. */
@@ -1640,13 +1645,14 @@ export class MapViewerScene {
 
   // --- the trigger's on-screen output (7.19) ---------------------------------------
 
-  /** Mount the three surfaces a trigger can talk to the player through, beyond the HUD
-   *  message log: floating text in the world, the leaderboard, and dialogs (which is what
-   *  the melee victory/defeat screen IS — see ui/gameDialog.ts). Also kicks off the load
-   *  of the game's string table, which GetLocalizedString reads. */
+  /** Mount the surfaces a trigger can talk to the player through, beyond the HUD message
+   *  log: floating text in the world, the leaderboard, the countdown windows (7.21), and
+   *  dialogs (which is what the melee victory/defeat screen IS — see ui/gameDialog.ts).
+   *  Also kicks off the load of the game's string table, which GetLocalizedString reads. */
   private mountScriptUi(ui: HTMLElement): void {
     this.textTags?.dispose();
     this.leaderboard?.dispose();
+    this.timerDialogs?.dispose();
     this.dialog?.dispose();
     // WC3 skins the in-game panels with the LOCAL player's race (an Orc player's dialog is
     // Orc-bordered) — that's what the war3skins.txt section names are (see fdf/library.ts).
@@ -1656,6 +1662,7 @@ export class MapViewerScene {
     if (this.sounds) this.sounds.musicSkin = skin;
     this.textTags = new TextTagOverlay(ui);
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin);
+    this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
     this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
       // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
       // game — both are the engine's doing, which is why blizzard.j's MeleeVictoryDialogBJ
@@ -1699,6 +1706,13 @@ export class MapViewerScene {
       else this.textTags.clear();
     }
     this.leaderboard?.update(rt.leaderboardFor(this.localPlayer));
+    // Countdown windows stack below whatever the leaderboard is already using of the
+    // top-right corner (7.21). Their TIME isn't pushed — it's read live off each dialog's
+    // timer, so this runs every frame, not just when something changed.
+    if (this.timerDialogs) {
+      const below = this.leaderboard?.occupiedHeight() ?? 0;
+      this.timerDialogs.update(rt.timerDialogs, (td) => rt.timerDialogSeconds(td), below ? below + TIMER_STACK_GAP : 0);
+    }
     this.dialog?.update(rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
   }
 
@@ -4553,6 +4567,8 @@ export class MapViewerScene {
     this.textTags = null;
     this.leaderboard?.dispose();
     this.leaderboard = null;
+    this.timerDialogs?.dispose();
+    this.timerDialogs = null;
     this.dialog?.dispose();
     this.dialog = null;
     this.mapScript = null;

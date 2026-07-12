@@ -198,6 +198,34 @@ export interface RegionObj {
   rects: number[]; // rect handle ids
 }
 
+/** A JASS `timerdialog` (CreateTimerDialog) — 7.21.
+ *
+ *  The small countdown window WC3 hangs in the top-right ("Build Town Hall  1:59",
+ *  "Next Level  0:23"). It is a **view onto a timer**, holding no time of its own: the
+ *  engine reads the bound timer's remaining each frame. That is why `CreateTimerDialog`
+ *  takes the timer, and why blizzard.j can hand it one it started much later.
+ *
+ *  A dialog over a NULL timer is legal and blizzard.j relies on it —
+ *  `bj_finishSoonTimerDialog = CreateTimerDialog(null)`, "it has no timer because it is
+ *  driven by real time (outside of the game state to avoid desyncs)". Such a dialog shows
+ *  whatever `TimerDialogSetRealTimeRemaining` last put in it. */
+export interface TimerDialogObj {
+  handleId: number;
+  /** Handle id of the timer it displays; 0 = none (a real-time dialog, see above). */
+  timerId: number;
+  title: string;
+  /** TimerDialogSetTitleColor / SetTimeColor — 0xAARRGGBB, or null to keep the FDF's own
+   *  font colour (a script that never calls them must not be forced to a colour we chose). */
+  titleColor: number | null;
+  timeColor: number | null;
+  /** TimerDialogSetSpeed — how fast the DISPLAY counts relative to the timer. */
+  speed: number;
+  displayed: boolean;
+  /** TimerDialogSetRealTimeRemaining — the shown time for a dialog with no timer. */
+  realTimeRemaining: number;
+  revision: number; // bumped on every mutation, so the UI only rebuilds when it changed
+}
+
 /** A game timer (CreateTimer/TimerStart). Pumped by Interpreter.advanceTime from
  *  the sim tick; on expiry it runs its handler code and fires any trigger
  *  registered on it (TriggerRegisterTimerExpireEvent). */
@@ -672,6 +700,10 @@ export class Runtime {
    *  (message, then buttons, then DialogDisplay), so there is no single moment to push. */
   readonly dialogs: DialogObj[] = [];
   readonly leaderboards: LeaderboardObj[] = [];
+  /** Live `timerdialog`s (CreateTimerDialog) — the countdown windows (7.21). Polled by the
+   *  UI like the boards above, but for a second reason as well: a timer dialog's *time* is
+   *  never pushed, it is read live off the timer it is bound to, every frame. */
+  readonly timerDialogs: TimerDialogObj[] = [];
   /** Live `sound` handles (7.20). The engine walks these each frame for the two things it
    *  can only do over time: keep an `AttachSoundToUnit`'d sound on its (moving) unit, and
    *  reap a `KillSoundWhenDone` handle once its clip has finished. */
@@ -865,6 +897,17 @@ export class Runtime {
     const i = this.textTags.indexOf(tt);
     if (i >= 0) this.textTags.splice(i, 1);
     this.handles.free(tt.handleId);
+  }
+
+  /** The seconds a timer dialog should currently show. It owns no clock: it reads the timer
+   *  it was created over (live, so it ticks with the game and freezes when paused). A dialog
+   *  with no timer — blizzard.j's `bj_finishSoonTimerDialog` — shows whatever
+   *  TimerDialogSetRealTimeRemaining last set instead. `speed` scales the DISPLAY only. */
+  timerDialogSeconds(td: TimerDialogObj): number {
+    if (!td.timerId) return Math.max(0, td.realTimeRemaining);
+    const t = this.handles.get(td.timerId) as TimerObj | undefined;
+    if (!t) return 0;
+    return Math.max(0, t.remaining * (td.speed || 1));
   }
 
   /** Retire a `sound` handle — DestroySound, or a KillSoundWhenDone sound whose clip has

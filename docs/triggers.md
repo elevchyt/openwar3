@@ -37,9 +37,13 @@
 | 7.18 | **Items** — the trigger surface (`CreateItem`/`UnitAddItem`(`ById`/`ToSlotById`)/`UnitRemoveItem`/`UnitDropItem{Point,Slot,Target}`/`UnitUseItem*`/`RemoveItem`/`SetItemPosition`/charges/`UnitItemInSlot`/`UnitHasItem`/`EnumItemsInRect`/**`ChooseRandomItemEx`** — 151 maps) + the **item events** (`PICKUP`/`DROP`/`USE`/`SELL_ITEM` with `GetManipulatedItem`/`GetManipulatingUnit`). Pre-placed items (`CreateAllItems`) become **real, pickable** items; the melee hero gets its **Town Portal scroll** | ✅ done (live) | §7.18 headless (the item natives + every BJ the GUI emits; the 4 events dispatch owner-matched; a consumed powerup still resolves in its handler); Echo Isles: a trigger creates a Paladin + 4 items, he walks onto the potion (PICKUP fires, HUD inventory shows it), a trigger `UnitUseItem`s **the same handle** → +250 life (USE fires), a tome grants XP, claws show a green +15, `UnitDropItemPointBJ` drops them (DROP fires), `ChooseRandomItemEx` rolls a level-5 artifact (screenshots) |
 | 7.19 | **The trigger's on-screen output** — **floating text** in 3D (`CreateTextTag` + setters finally *draw*: world anchor + screen-relative drift, size, colour, fade, unit-following, fog-gated); the **victory/defeat dialogs** (`dialog` — which is what WC3's "Victory!" screen *is*: MeleeVictoryDialogBJ builds a plain dialog from the game's own `GlobalStrings.fdf` + `ScriptDialog.fdf`, quit button ends the match); **leaderboards** (the whole `Leaderboard*` family → the game's own `LeaderBoard.fdf` panel). Plus `DecorateFileNames` → `UI\war3skins.txt`, without which no in-game FDF panel has any chrome | ✅ done (live) | §7.19 headless (all three through the real blizzard.j BJs: `TextTagSize2Height`/`Speed2Velocity` scaling, permanence + expiry, `MeleeVictoryDialogBJ`/`MeleeDoDefeat` → "Victory!"/"You failed to achieve victory." + the right buttons + the QuestCompleted/QuestFailed stings, `LeaderboardResizeBJ`'s own sizing rule, sort-by-value); Echo Isles: "+15 gold" rising over each unit + a permanent banner, a **real Victory dialog when the enemy's last building is razed** (Continue Game dismisses, Quit Game ends the match), a 4-player leaderboard in the game's own chrome (screenshots) |
 | 7.20 | **The trigger's AUDIO output** — the `sound` handle family (`CreateSound`(`FromLabel`/`FilenameWithLabel`), `SetSoundParamsFromLabel`, `SetSound{Duration,Channel,Pitch,Volume,Distances,ConeAngles,ConeOrientation,Position,DistanceCutoff}`, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`/`GetSoundIsPlaying`) + every BJ riding on it (`PlaySoundBJ`/`AtPointBJ`/`OnUnitBJ`/`StartSoundForPlayerBJ`/`VolumeGroupSetVolumeBJ`…), the 8 **volume groups**, and **music** (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic` — all three were explicit no-ops). Custom maps were silent apart from unit/combat sounds; melee had **no music at all** | ✅ done (live) | §7.20 headless (16 checks through the real blizzard.j BJs, resolving labels out of the **real** SoundInfo SLKs: params-not-file, the cross-table label namespace, `PercentToInt(pct,127)` volumes, the cone, the editor's `-1`/`4294967296.0` sentinels, the cine-mode group ducking); Echo Isles **live**: its own `SetMapMusic("Music", true, 0)` → the Human `Music_V1` playlist → `Human1.mp3` decoded (273 s) and playing; a trigger's `PlaySoundAtPointBJ` → a real PannerNode at the named world point (refDist 600 / maxDist 10000 from the SLK row), dropped when past its 3000 `DistanceCutoff`; an `AttachSoundToUnit`'d sound rides a marching peasant; blizzard.j's `PlaySound()` reaps its handle when the clip ends |
+| 7.21 | **Timer dialogs — the countdown windows** (`CreateTimerDialog`/`SetTitle`/`SetTitleColor`/`SetTimeColor`/`SetSpeed`/`Display`/`IsDisplayed`/`SetRealTimeRemaining`/`Destroy`, + the `…BJ` family). Closes the last **melee leftover** on the list: `MeleeInitVictoryDefeat` builds the *crippled* window and the *finish-soon* window and both were silently discarded — so a player who lost their last main hall got no clock. Uncovered (and fixed) a **general timer-pump bug**: a handler that destroys a timer spliced `rt.timers` mid-`for…of`, making the pump **skip the next timer forever** — and blizzard.j's own `MarkGameStarted` does exactly that, 0.01 s into every map | ✅ done (live) | §7.21 headless (through the real BJs: `CreateTimerDialogBJ` shows it, a dialog reads its timer LIVE (45 → 32.5 s), `MeleeInitVictoryDefeat` builds 3 windows — the null-timer one + a cripple window per PLAYING slot, titled "Build Town Hall"/"Build Great Hall" off the game's own strings — and `MeleeCheckForCrippledPlayers` shows only the crippled player's, opening at 2:00 = `bj_MELEE_CRIPPLE_TIMEOUT`); §7.4c pins the timer-pump regression; Echo Isles **live**: razing player 0's hall (farm still standing → crippled, not defeated) pops blizzard.j's real *"Build Town Hall 1:48"* window + its own *"You will be revealed to your opponents…"* warning, and three windows stack under the leaderboard in the game's own chrome (screenshots) |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (250/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items + 7.19 on-screen output + 7.20 audio) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + **7.4c the
+timer-pump regression** + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13
+unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items
++ 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It only counts natives called **directly** from a `war3map.j`, so everything
 > a map reaches *through* a blizzard.j BJ — groups, `PolledWait`, the whole `PlaySound*BJ` family — is invisible in
@@ -116,6 +120,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/items.ts` | **items** (7.18): `CreateItem`, the inventory family (`UnitAddItem`/`ById`/`ToSlotById`, `UnitRemoveItem`, `UnitItemInSlot`, `UnitHasItem`), drop/give/use, charges + item-type queries, `EnumItemsInRect`, and `ChooseRandomItem(Ex)` — an `item` handle is one entity whether it lies on the ground or sits in a pack |
 | `natives/dialogs.ts` | **dialogs + the game-over path** (7.19): `DialogCreate`/`SetMessage`/`AddButton`/`AddQuitButton`/`Display`, the dialog-button events (`TriggerRegisterDialogButtonEvent` → `GetClickedButton`/`GetClickedDialog`), `EndGame`/`PauseGame`/`IsNo{Victory,Defeat}Cheat`, and `CreateSoundFromLabel`+`StartSound` (which is where the victory/defeat sting comes from). This is the melee **victory/defeat screen** — see 7.19 |
 | `natives/leaderboard.ts` | **leaderboards** (7.19): the whole `Leaderboard*` family (create/display/assign-to-player, rows keyed by player, sort by value/player/label, style + colours) — the ~25 natives the entire GUI leaderboard surface rides on |
+| `natives/timerdialog.ts` | **timer dialogs** (7.21): the countdown windows (`CreateTimerDialog` + its setters). A `timerdialog` holds **no clock** — it is a *view onto a `timer`*, read live each frame, which is why the melee library can build the window at init and start the timer two minutes later |
 | `natives/sound.ts` | **sounds + music** (7.20): the `sound` handle family (`CreateSound`/`FromLabel`, `SetSoundParamsFromLabel`, the `SetSound*` setters, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`), the 8 `volumegroup`s, and the music interface (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic`). A `sound` is a **configured playback object**, not a clip — the natives mostly mutate a `SoundObj`, and only Start/Stop reach the engine (`SoundBoard`) |
 | `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
@@ -908,9 +913,8 @@ match down. A 4-player `CreateLeaderboardBJ` board sits top-right in the game's 
 row in its player's real colour (screenshots).
 
 > **What's still not on screen:** **multiboards** (`CreateMultiboard` — the other scoreboard; the FDF
-> `MultiBoard.fdf` is right there), **timer dialogs** (`CreateTimerDialog` — `MeleeInitVictoryDefeat` already builds
-> the crippled/finish-soon windows and they're silently ignored), and the **score screen** (`EndGame(true)` leaves
-> the match rather than showing `Glue\ScoreScreen.fdf`).
+> `MultiBoard.fdf` is right there) and the **score screen** (`EndGame(true)` leaves the match rather than showing
+> `Glue\ScoreScreen.fdf`). *(Timer dialogs — the third gap on this list — now render: 7.21.)*
 
 ## The trigger's audio output — sounds + music (7.20 — done, live)
 
@@ -1022,6 +1026,88 @@ environment (`NewSoundEnvironment`, the `"DefaultEAXON"`/`"HeroAcksEAX"` presets
 (`RegisterStackedSound`), and **MIDI** ambience (`CreateMIDISound` / `SetAmbientDaySound` hand back a working handle
 that has no file, so a script that configures one still runs).
 
+## Timer dialogs — the countdown windows (7.21 — done, live)
+
+The little panel WC3 hangs top-right: *"Build Town Hall  1:59"*, *"Next Level  0:23"*. Every TD and AoS puts one
+up — and the reason this is a **melee leftover** rather than a custom-map nicety is that **blizzard.j's own melee
+library builds two of them and we were throwing both away**:
+
+```jass
+// MeleeInitVictoryDefeat (Scripts\Blizzard.j)
+set bj_finishSoonTimerDialog = CreateTimerDialog(null)          // the tournament "finish soon" window
+…per PLAYING slot…
+set bj_crippledTimer[index]        = CreateTimer()
+set bj_crippledTimerWindows[index] = CreateTimerDialog(bj_crippledTimer[index])
+call TimerDialogSetTitle(bj_crippledTimerWindows[index], MeleeGetCrippledTimerMessage(indexPlayer))
+```
+
+The **crippled** window is a real melee rule the engine already *computed* and never showed: lose your last main hall
+while you still hold other structures and blizzard.j starts a **120 s** clock (`bj_MELEE_CRIPPLE_TIMEOUT`) — build a
+new hall before it drains or you are **revealed to every opponent**. `MeleeCheckForCrippledPlayers` has been running
+here since 7.3 (it rides the death / construct-cancel / construct-finish events, and its structure counts came in with
+the melee milestone), so the *state* was right; the player just could not see the clock ticking.
+
+Two shapes, both read off the sources:
+
+- **A `timerdialog` holds no clock.** It is a **view onto a `timer`** — the engine reads that timer's remaining every
+  frame. That is why `CreateTimerDialog` *takes* the timer, and why the melee library can create the window at map
+  init and only `TimerStart` it two minutes into the game. So the panel polls; nothing is ever pushed.
+- **A dialog over a NULL timer is legal**, and blizzard.j depends on it — `CreateTimerDialog(null)`, commented in
+  Blizzard's own source as *"it has no timer because it is driven by real time (outside of the game state to avoid
+  desyncs)"*. It shows whatever `TimerDialogSetRealTimeRemaining` last put in it, and must not crash on the null.
+
+### The timer-pump bug this uncovered (general — not a timer-dialog bug)
+
+`Interpreter.advanceTime` iterated `rt.timers` with a live `for…of` **while an expiring timer's handler can mutate that
+array**. The one-shot idiom is `DestroyTimer(GetExpiredTimer())`, and `DestroyTimer` **splices** the list — which makes
+the iterator **skip the very next element**. So the timer registered right after a self-destroying one silently lost
+that tick.
+
+It is not hypothetical: **blizzard.j's own `MarkGameStarted` destroys `bj_gameStartedTimer` from inside its handler,
+0.01 s into every map** — so the next timer any map created after `InitBlizzard` never advanced again. `advanceTime`
+now iterates a snapshot (`DestroyTimer` clears `running` before it splices, so the existing guard still drops anything
+removed mid-pump). Pinned by its own regression gate, **§7.4c**.
+
+### The panel
+
+`src/ui/timerDialog.ts` mounts the game's own `UI\FrameDef\UI\TimerDialog.fdf` — unlike the leaderboard it needs
+nothing injected (the title and the time are already TEXT frames in the file), so we only override their strings. What
+the file can't say and the game decides at runtime: **where** it sits (the frame carries no `SetPoint`; WC3 puts it
+top-right, and we hang it below the leaderboard when there is one, so the two never overlap) and that there can be
+**several** — a map can show a wave timer and a revive timer at once, so the frame is cloned per displayed dialog and
+stacked.
+
+The same **unsized-TEXT-frame** trap the leaderboard hit bit again, and only the live run showed it: the FDF sizes the
+title purely by *two opposing anchors* (`SetPoint LEFT, "TimerDialogBackdrop"` + `SetPoint RIGHT, "TimerDialogValue"`),
+which our layout solver derives no width from — so the title collapsed to a 0×0 box and **never drew**, while the value
+(which declares `Width 0.06`) rendered fine. The first live screenshot was a window counting down `1:43` with nothing
+beside it.
+
+Verified (`pnpm jass:test` §7.21), through the **real** blizzard.j BJs: `CreateTimerDialogBJ` → a *displayed* window
+(the BJ shows it; the native alone does not) and `IsTimerDialogDisplayed` agrees; the window reads **45 s** off its
+timer and **32.5 s** after 12.5 s of game time (live, not a copy); `MeleeInitVictoryDefeat` builds exactly **3**
+windows — the null-timer "finish soon" one plus a cripple window for each of the 2 PLAYING slots, titled *"Build Town
+Hall"* (human) / *"Build Great Hall"* (orc) from the game's own strings — and **none** is on screen at init;
+`MeleeCheckForCrippledPlayers` then shows **only** the crippled player's, opening at **2:00** (`bj_MELEE_CRIPPLE_TIMEOUT`)
+and ticking to 0:59 after 61 s, with `bj_playerIsCrippled[0]` set and `[1]` clear.
+
+Verified **live** on Echo Isles: the map's own script builds all 3 windows at init; giving player 0 a farm and then
+razing their town hall (so they are *crippled*, not *defeated*) pops blizzard.j's real **"Build Town Hall  1:48"**
+window together with its own *"You will be revealed to your opponents unless you build a Town Hall."* warning in the
+HUD, while player 1's window stays hidden; and three windows stack neatly below the leaderboard in the game's own
+chrome (screenshots).
+
+> **The one thing NOT ground-truthed: the countdown's exact format.** `Game.dll` carries exactly two countdown
+> `printf` formats — `%d:%02d` and `%02d:%02d:%02d` — so we render `1:59` under an hour and `01:02:03` at or over one.
+> That is an *inference from the binary's strings*, not a measurement in the running client, and it's the kind of
+> detail CLAUDE.md says to measure. To settle it: load `(10)Skibi'sCastleTD.w3x` (or `(4)Monolith.w3x`) in the real
+> game — both display a timer window — and read it off the screen.
+
+**Not modelled:** `TimerDialogSetSpeed` scales the readout but the engine's own preemption/priority rules around it
+aren't simulated, and **`MeleeExposePlayer`** — what the cripple timer *does* when it drains — rides the `CripplePlayer`
+native (reveal a player to a force), which we don't implement yet, so the clock runs out and the message prints but the
+player isn't actually revealed. That needs the shared-vision surface (`SetPlayerAlliance`), not a timer.
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -1033,21 +1119,24 @@ that has no file, so a script that configures one still runs).
   stays passive/uncastable (graceful, but inert).
 - **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
   filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items; 7.19 floating text, dialogs and
-  leaderboards; 7.20 sounds and music. Still no-ops: **weather** (`AddWeatherEffect` returns a null handle; nothing
-  renders rain/snow), **cameras/cinematics**, **upgrades** (`SetPlayerTechResearched`), **waygates** (`WaygateActivate`
-  / `WaygateSetDestination` — 11 maps, now the top of the unimplemented ranking with `SetTerrainFogEx`), **fog
-  modifiers**, **multiboards** and **timer dialogs**. Each is a small bridge method away — wire on demand
-  (`pnpm jass:coverage` ranks them by how many maps call them).
+  leaderboards; 7.20 sounds and music; 7.21 timer dialogs. Still no-ops: **weather** (`AddWeatherEffect` returns a null
+  handle; nothing renders rain/snow), **cameras/cinematics**, **upgrades** (`SetPlayerTechResearched`), **waygates**
+  (`WaygateActivate` / `WaygateSetDestination` — 11 maps), **fog modifiers** / `SetTerrainFogEx` (14 maps — now the top
+  of the unimplemented ranking), **shared vision** (`SetPlayerAlliance` — which is why the melee cripple timer can run
+  out without actually revealing the player, §7.21) and **multiboards**. Each is a small bridge method away — wire on
+  demand (`pnpm jass:coverage` ranks them by how many maps call them).
 - **Shops** — no unit sells anything, so `EVENT_PLAYER_UNIT_SELL_ITEM` / `_SELL` never fire (the item-sale plumbing is
   wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
   path: shop stock (`AddItemToStock`), the buy command card, gold, range.
 - **Events still missing:** `EVENT_PLAYER_UNIT_SUMMON` (the sim has the summon channel — same "born in the renderer"
   shape as TRAIN_FINISH), `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `..._SELECTED`, `_SELL`/`_SELL_ITEM`
   (no shops — above), and the player-scoped `TriggerRegisterPlayerStateEvent` / chat events.
-- **Melee leftovers** (7.3): melee AI (`StartMeleeAI`), hero-limit *enforcement*, blight, and the **crippled/finish-soon
-  timer windows** (`CreateTimerDialog` — `MeleeInitVictoryDefeat` builds them and nothing renders them). *(The
-  victory/defeat **dialogs** now render — 7.19. The first hero's Town Portal scroll is granted — 7.18 — though `AItp` has
-  no cast behaviour in the sim, so the scroll doesn't teleport yet.)*
+- **Melee leftovers** (7.3): melee **AI** (`StartMeleeAI` is a no-op, so a computer slot just sits — the biggest one
+  left by far), hero-limit *enforcement* (the caps are recorded, not applied), **blight** under an undead base, and the
+  second half of the cripple rule — the timer **window** now renders (7.21) but `MeleeExposePlayer` can't actually
+  reveal the player, because `CripplePlayer`/`SetPlayerAlliance` (shared vision) isn't wired. *(The victory/defeat
+  **dialogs** render — 7.19; the first hero's Town Portal scroll is granted — 7.18 — though `AItp` has no cast
+  behaviour in the sim, so the scroll doesn't teleport yet.)*
 - **Natives on demand** — weather, cameras, cinematics (transmissions), multiboard, quests, gamecache. Use
   `pnpm jass:coverage` to prioritise (250/335 used natives implemented — and see the caveat on that number above).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.
