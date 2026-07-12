@@ -17,10 +17,12 @@ import { registerForceNatives } from "./forces";
 import { registerGroupNatives } from "./groups";
 import { registerItemNatives } from "./items";
 import { registerMeleeNatives } from "./melee";
+import { registerMultiboardNatives } from "./multiboard";
 import { registerRegionNatives } from "./region";
 import { registerSoundNatives } from "./sound";
 import { registerTextNatives } from "./text";
 import { registerTimerDialogNatives } from "./timerdialog";
+import { registerVisionNatives } from "./vision";
 import { registerWorldNatives } from "./world";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -120,9 +122,11 @@ export function registerNatives(rt: Runtime): void {
   registerGroupNatives(rt);
   registerItemNatives(rt); // items + the item events (7.18)
   registerMeleeNatives(rt); // what blizzard.j's Melee* library stands on (7.3)
+  registerMultiboardNatives(rt); // the grid scoreboard — what DotA puts on screen (7.22)
   registerRegionNatives(rt);
   registerSoundNatives(rt); // the sound handle family + music (7.20)
   registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
   registerTimerDialogNatives(rt); // the countdown windows (7.21)
+  registerVisionNatives(rt); // alliances/shared vision + BOTH fogs (7.22)
   registerUtilNatives(rt);
 }

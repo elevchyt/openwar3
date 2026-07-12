@@ -3,7 +3,8 @@ import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type Building
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
-import { VisionMap, FogState } from "../sim/vision";
+import { VisionMap, FogState, fogStateOf } from "../sim/vision";
+import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PrimaryAttribute, isRangedWeapon } from "../data/enums";
@@ -260,6 +261,22 @@ function findBirthFields(seqs: Array<{ name: string; interval?: ArrayLike<number
 // Brightness of a remembered-but-not-seen building in fog — matches the ground veil's
 // EXPLORED_DARK (0.5) so a greyed structure sits at the same dimness as its terrain.
 const FOG_EXPLORED_BRIGHT = 0.5;
+
+/** Where a fog modifier applies (7.22). common.j offers both shapes and they are not
+ *  interchangeable: `CreateFogModifierRect` takes a rect, `CreateFogModifierRadius[Loc]`
+ *  a centre + radius. */
+export type FogArea =
+  | { kind: "rect"; minX: number; minY: number; maxX: number; maxY: number }
+  | { kind: "circle"; x: number; y: number; radius: number };
+
+/** A script-placed fog-of-war modifier: hold `area` at `state` for `player`, while
+ *  `running`. `state` is the raw common.j fogstate (1 MASKED / 2 FOGGED / 4 VISIBLE). */
+export interface FogModifier {
+  player: number;
+  state: number;
+  area: FogArea;
+  running: boolean;
+}
 // A unit ordered to move but pinned in place by the crowd (actual displacement
 // far below what its speed would cover) shouldn't run the walk clip — it just
 // jogs on the spot, awkwardly. Below this share of expected displacement (EMA-
@@ -411,6 +428,21 @@ export class RtsController {
   private seededInstances = new Set<unknown>();
   private vision!: VisionMap; // per-team fog-of-war grid (built in the constructor)
   private visionAccum = 1; // seconds since the last vision rebuild (>interval → rebuild on first tick)
+  // Who is allied with whom (7.22). Seeded from the lobby's teams, then mutable by the
+  // script (SetPlayerAlliance) — so "Player - Make X treat Y as an Ally" and shared
+  // vision are real. The sim reads it through SimWorld.alliedPlayers (installed below).
+  private alliances = new AllianceTable();
+  // Players whose units are REVEALED to the local player — blizzard.j's `CripplePlayer`
+  // (what MeleeExposePlayer does to a player whose crippled timer ran out: their units
+  // show through the fog to every opponent). Keyed by player slot.
+  private exposed = new Set<number>();
+  // Script-placed fog modifiers (CreateFogModifierRect/Radius). A modifier holds an area
+  // at a fogstate FOR ONE PLAYER; only those belonging to a player whose sight we render
+  // (the local player, or a team-mate) touch our grid. Created STOPPED — FogModifierStart
+  // is what runs one (the same "the BJ shows it, the native doesn't" shape as timer
+  // dialogs), so `running` is not a formality.
+  private fogModifiers = new Map<number, FogModifier>();
+  private nextFogModifier = 1;
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
   private hoveredItem: number | null = null; // a ground item under the cursor (yellow hover ring)
@@ -484,6 +516,10 @@ export class RtsController {
     // whatever team it's on. This is what stops ranged creeps shooting a hero standing on
     // the far side of a forest they cannot see through.
     this.sim.lineOfSight = (x1, y1, x2, y2, flying) => this.vision.hasLineOfSight(x1, y1, x2, y2, flying);
+    // Allegiance between two PLAYER slots comes from the alliance matrix, not the team
+    // (7.22) — so a script that allies two players actually stops them fighting. Creeps
+    // (owner < 0) are excluded by SimWorld.playerAllegiance and keep the team rule.
+    this.sim.alliedPlayers = (a, b) => this.alliances.coAllied(a, b);
   }
 
   dispose(): void {
@@ -499,6 +535,98 @@ export class RtsController {
   /** Which team's combined sight lifts the fog of war (allies share vision). */
   setLocalTeam(team: number): void {
     this.localTeam = team;
+  }
+
+  /** Seed the alliance matrix from the lobby's teams (7.22). Called once start setup
+   *  knows who is on which team, BEFORE the map script runs — so the script's own
+   *  `SetPlayerAlliance` calls land on top of it rather than under it. */
+  seedAlliances(teamOf: (player: number) => number): void {
+    this.alliances.seedFromTeams(teamOf);
+  }
+
+  /** JASS SetPlayerAlliance / GetPlayerAlliance. */
+  setPlayerAlliance(source: number, other: number, type: number, value: boolean): void {
+    this.alliances.set(source, other, type, value);
+  }
+  getPlayerAlliance(source: number, other: number, type: number): boolean {
+    return this.alliances.get(source, other, type);
+  }
+  /** blizzard.j's PlayersAreCoAllied — what IsPlayerAlly and every ally count read. */
+  playersAreCoAllied(a: number, b: number): boolean {
+    return this.alliances.coAllied(a, b);
+  }
+
+  /** JASS `CripplePlayer(whichPlayer, toWhichPlayers, flag)` — reveal (or re-hide) a
+   *  player's units to a set of players. This is NOT shared vision: shared vision lends
+   *  you a player's SIGHT (you see through their units' eyes), whereas a cripple/expose
+   *  reveals that player's own units *to* you, wherever they stand. It is what melee
+   *  does to a player whose "Build Town Hall" timer runs out (blizzard.j
+   *  MeleeExposePlayer → CripplePlayer(p, everyoneNotCoAllied, true)).
+   *
+   *  We render one viewpoint, so only the local player's membership of the force matters. */
+  cripplePlayer(player: number, toPlayers: readonly number[], flag: boolean): void {
+    if (!toPlayers.includes(this.localPlayer)) return;
+    if (flag) this.exposed.add(player);
+    else this.exposed.delete(player);
+  }
+
+  /** CreateFogModifierRect / CreateFogModifierRadius[Loc] — created STOPPED (the native
+   *  does not start it; FogModifierStart does). Returns the modifier's id. */
+  createFogModifier(m: Omit<FogModifier, "running">): number {
+    const id = this.nextFogModifier++;
+    this.fogModifiers.set(id, { ...m, running: false });
+    return id;
+  }
+  fogModifierStart(id: number): void {
+    const m = this.fogModifiers.get(id);
+    if (m) m.running = true;
+  }
+  fogModifierStop(id: number): void {
+    const m = this.fogModifiers.get(id);
+    if (m) m.running = false;
+  }
+  destroyFogModifier(id: number): void {
+    this.fogModifiers.delete(id);
+  }
+
+  /** SetFogStateRect / SetFogStateRadius[Loc] — a ONE-SHOT stamp, not a standing
+   *  modifier: it changes the fog where it lands and then lets the grid carry on. On our
+   *  rebuilt-every-tick `visible` layer a one-shot VISIBLE therefore only *lights* the
+   *  area for an instant — but `explored` is sticky, so the lasting effect is that the
+   *  area is discovered (grey), and a one-shot MASKED un-discovers it. That is what the
+   *  native is used for in practice; a script that wants an area held open uses a
+   *  modifier, which is exactly the distinction the two APIs exist to draw. */
+  setFogState(player: number, state: number, area: FogArea): void {
+    if (!this.seesFor(player)) return;
+    this.stampFogArea(area, fogStateOf(state));
+  }
+
+  /** FogEnable / FogMaskEnable — the grey veil and the black mask, switched globally. */
+  setFogEnabled(on: boolean): void {
+    this.vision.setFogEnabled(on);
+  }
+  setFogMaskEnabled(on: boolean): void {
+    this.vision.setMaskEnabled(on);
+  }
+
+  /** Does the local viewpoint render `player`'s fog? True for the local player and any
+   *  team-mate — the grid is per-TEAM, so a modifier placed on an ally's fog shows up in
+   *  ours, and one placed on an opponent's is invisible here (correctly: it is their fog,
+   *  not ours). */
+  private seesFor(player: number): boolean {
+    return player === this.localPlayer || this.teamOfPlayer(player) === this.localTeam;
+  }
+
+  /** The team a player slot is on, as the sim knows it (any unit they own carries it).
+   *  Falls back to the slot number, matching mapViewer.teamOf's own default. */
+  private teamOfPlayer(player: number): number {
+    for (const u of this.sim.units.values()) if (u.owner === player) return u.team;
+    return player;
+  }
+
+  private stampFogArea(area: FogArea, state: FogState): void {
+    if (area.kind === "rect") this.vision.stampRect(area.minX, area.minY, area.maxX, area.maxY, state);
+    else this.vision.stampCircle(area.x, area.y, area.radius, state);
   }
 
   /** The fog-of-war grid — read by the minimap (HUD) and the 3D fog overlay. */
@@ -565,7 +693,7 @@ export class RtsController {
     this.vision.beginFrame();
     for (const u of this.sim.units.values()) {
       if (u.neutralPassive) continue; // shops/critters don't scout for you
-      if (u.team !== this.localTeam) continue; // only your team's units reveal
+      if (!this.revealsForLocal(u)) continue;
       const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
       this.vision.reveal(u.x, u.y, r, u.flying); // flyers see over terrain/trees
     }
@@ -576,6 +704,24 @@ export class RtsController {
       if (r.team !== this.localTeam) continue; // only OUR side learns where it came from
       this.vision.reveal(r.x, r.y, r.radius, r.flying);
     }
+    // Script-placed fog modifiers are stamped LAST, over everything the units revealed —
+    // that's what lets a running FOG_OF_WAR_VISIBLE modifier light ground nobody stands
+    // near (a TD showing you its whole maze) and a FOG_OF_WAR_MASKED one black out ground
+    // you are standing in (a cinematic area). Re-applied every rebuild, since the
+    // `visible` layer is cleared and recomputed each time.
+    for (const m of this.fogModifiers.values()) {
+      if (!m.running || !this.seesFor(m.player)) continue;
+      this.stampFogArea(m.area, fogStateOf(m.state));
+    }
+  }
+
+  /** Does this unit's sight lift OUR fog? Your own team always does. Beyond that, a
+   *  player who grants the local player ALLIANCE_SHARED_VISION lends us their units'
+   *  eyes — which is the whole point of the setting, and what the GUI's "Player - Make X
+   *  treat Y as an Ally (with shared vision)" turns on. */
+  private revealsForLocal(u: SimUnit): boolean {
+    if (u.team === this.localTeam) return true;
+    return u.owner >= 0 && this.alliances.sharesVisionWith(u.owner, this.localPlayer);
   }
 
   /** Install the fog's line-of-sight height field + tree blockers, so vision is
@@ -601,6 +747,10 @@ export class RtsController {
   private fogHides(u: SimUnit): boolean {
     if (this.vision.revealed) return false;
     if (u.team === this.localTeam && !u.neutralPassive) return false;
+    // An EXPOSED player (blizzard.j CripplePlayer — the melee cripple timer ran out) has
+    // every unit revealed to us wherever it stands, fog or no fog. That is the punishment
+    // itself, and it is the one thing that can show an enemy unit through black fog.
+    if (u.owner >= 0 && this.exposed.has(u.owner)) return false;
     if (u.building != null) {
       const [cx, cy] = this.vision.worldToCell(u.x, u.y);
       return !this.vision.isExplored(cx, cy);
@@ -640,7 +790,8 @@ export class RtsController {
     const inst = e.unit.instance;
     if (!inst.setVertexColor) return;
     let b = 1;
-    if (!this.vision.revealed && u.team !== this.localTeam && this.vision.stateAt(u.x, u.y) !== FogState.Visible) {
+    const exposed = u.owner >= 0 && this.exposed.has(u.owner); // CripplePlayer: shown, not remembered
+    if (!this.vision.revealed && !exposed && u.team !== this.localTeam && this.vision.stateAt(u.x, u.y) !== FogState.Visible) {
       b = FOG_EXPLORED_BRIGHT; // remembered-but-not-seen → half-bright grey
     }
     // Green whole-mesh tint while this unit is a valid target of an armed AoE spell.

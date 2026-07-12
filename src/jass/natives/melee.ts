@@ -95,9 +95,9 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "GetPlayerTypedUnitCount", (c, a) =>
     jInt(c.rt.hooks?.playerTypedUnitCount?.(playerIndex(c, a[0]), asStr(a[1]), truthy(a[2]), truthy(a[3])) ?? 0),
   );
-  // PlayersAreCoAllied (the BJ every ally count rides on) is GetPlayerAlliance both ways.
-  // Our alliances are the lobby's teams — no in-game diplomacy — so the setting is ignored.
-  def(rt, "GetPlayerAlliance", (c, a) => jBool(c.rt.hooks?.isPlayerAlly?.(playerIndex(c, a[0]), playerIndex(c, a[1])) ?? false));
+  // GetPlayerAlliance — the native PlayersAreCoAllied (the BJ every ally count rides on)
+  // reads both ways — moved to natives/vision.ts (7.22), where it reads the real per-pair
+  // alliance matrix instead of collapsing to a team comparison that ignored the setting.
   def(rt, "RemovePlayer", () => JNULL); // a defeated/victorious player is dropped — we keep them in the world
 
   // --- gold mines (MeleeFindNearestMine → MeleeStartingUnits*) ---

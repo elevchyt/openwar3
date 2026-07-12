@@ -393,6 +393,21 @@ export interface HeroEvent {
   abilityId: string;
 }
 
+/** A Way Gate's teleport config (7.22). A waygate is an ordinary unit ('nwgt') that
+ *  carries the `Awrp` ("Warp") ability; a script points it somewhere with
+ *  `WaygateSetDestination` and switches it on with `WaygateActivate`. Null/absent on
+ *  every other unit, so this costs nothing. */
+export interface WaygateState {
+  destX: number;
+  destY: number;
+  active: boolean;
+  /** Units currently standing in the gate's box. A gate fires on a unit ENTERING it —
+   *  the rising edge — not on one merely standing in it, so this is the "was already
+   *  inside" baseline the next tick is diffed against. See tickWaygates for why a gate
+   *  that fires on occupancy instead of entry makes a pair of gates ping-pong forever. */
+  inside: Set<number>;
+}
+
 export interface SimUnit {
   id: number;
   owner: number; // player slot; -1 = map-neutral
@@ -542,6 +557,7 @@ export interface SimUnit {
   buffs: SimBuff[]; // active timed effects
   stunned: boolean; // derived from buffs (cannot act)
   paused: boolean; // JASS PauseUnit: frozen — no orders, movement, or turning (cinematics)
+  waygate?: WaygateState | null; // JASS WaygateSetDestination/Activate — a Way Gate ('nwgt'), 7.22
   silenced: boolean; // derived from buffs (cannot cast spells)
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
   invulnerable: boolean; // derived from buffs + baseInvulnerable (immune to damage + enemy targeting)
@@ -843,6 +859,12 @@ export class SimWorld {
   /** Does anything (treeline, high ground) stand between these two points? Injected by
    *  rts from the VisionMap's height field; defaults to open ground for headless sims. */
   lineOfSight: (fromX: number, fromY: number, toX: number, toY: number, flying: boolean) => boolean = () => true;
+  /** Are two PLAYER slots allied? Injected by rts from the alliance matrix (7.22), so a
+   *  script's `SetPlayerAlliance` can ally two players the lobby put on different teams —
+   *  and un-ally two it put on the same one. `null` = "no opinion, use the teams", which
+   *  is what creeps (owner < 0) and a headless sim with no matrix both get, so allegiance
+   *  stays the plain team comparison it was before. */
+  alliedPlayers: (ownerA: number, ownerB: number) => boolean | null = () => null;
   /** Live fogged-attacker reveals, keyed `attackerId:victimTeam` so a unit shooting two
    *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
   private attackReveals = new Map<string, AttackReveal>();
@@ -2450,10 +2472,21 @@ export class SimWorld {
 
   // Different teams are enemies; creeps all share team -1 (hostile to every
   // player team but not to each other, like WC3's Neutral Hostile). Neutral
-  // Passive entities (shops, critters) are hostile to no one.
+  // Passive entities (shops, critters) are hostile to no one. Between two PLAYER
+  // slots the alliance matrix wins over the team (7.22): the GUI's "Player - Make
+  // X treat Y as an Ally" is exactly a pair of players who stop fighting.
   hostile(a: SimUnit, b: SimUnit): boolean {
     if (a.neutralPassive || b.neutralPassive) return false;
-    return a.team !== b.team;
+    const allied = this.playerAllegiance(a, b);
+    return allied !== null ? !allied : a.team !== b.team;
+  }
+
+  /** The alliance matrix's verdict on two units' owners, or null when it has none
+   *  (either side is a creep / neutral, or no matrix is installed) and the caller
+   *  should fall back to comparing teams. */
+  private playerAllegiance(a: SimUnit, b: SimUnit): boolean | null {
+    if (a.owner < 0 || b.owner < 0) return null;
+    return this.alliedPlayers(a.owner, b.owner);
   }
 
   /** True during daylight (06:00–18:00 game time). */
@@ -2461,10 +2494,12 @@ export class SimWorld {
     return this.timeOfDay >= DAY_START && this.timeOfDay < DAY_END;
   }
 
-  /** Same team = allied (friendly). Neutral-passive shops count as nobody's ally. */
+  /** Same team = allied (friendly), unless the alliance matrix says otherwise (7.22).
+   *  Neutral-passive shops count as nobody's ally. */
   allied(a: SimUnit, b: SimUnit): boolean {
     if (a.neutralPassive || b.neutralPassive) return false;
-    return a.team === b.team;
+    const allied = this.playerAllegiance(a, b);
+    return allied !== null ? allied : a.team === b.team;
   }
 
   // === abilities / buffs / casting ==========================================
@@ -3595,6 +3630,113 @@ export class SimWorld {
     if (!u.flying) this.settle(u);
   }
 
+  // === Way Gates (7.22 — issue #33) ========================================
+  //
+  // A Way Gate is a plain unit ('nwgt', Neutral Passive) whose behaviour is entirely
+  // script-driven: `WaygateSetDestination` points it somewhere, `WaygateActivate`
+  // switches it on, and anything that walks into it comes out the far end. Seven of the
+  // eleven maps that use one are ordinary MELEE maps (CentaurGrove, WindyWaste, Riverrun,
+  // Plaguelands, IceCrown, MysticIsles, Venetia) — the gate is a map feature, not a
+  // custom-map gadget, and its pair of gates is set up inside `CreateAllUnits()`.
+  //
+  // The trigger volume is NOT a guess: the Way Gate carries ability `Awrp` (UnitAbilities
+  // .slk `abilList=Awrp,Avul`), and Awrp's DataA1/DataB1 are 400/400 — which
+  // AbilityMetaData.slk + WorldEditStrings.txt name **"Teleport Area Width"** and
+  // **"Teleport Area Height"**. So the gate is a 400×400 world-unit BOX centred on the
+  // building, not a circle.
+
+  /** `Awrp` DataA1/DataB1 (Units\AbilityData.slk) — the Way Gate's teleport area, in
+   *  world units. Half-extents, since the box is centred on the gate. */
+  private static readonly WAYGATE_HALF_W = 400 / 2;
+  private static readonly WAYGATE_HALF_H = 400 / 2;
+
+  /** A gate teleports a unit that **ENTERS** its box — the rising edge — not one that
+   *  merely stands in it. That distinction is the whole behaviour, and getting it wrong is
+   *  not subtle: a gate's destination is its PARTNER gate, so a unit spat out at the far
+   *  end lands inside the partner's box. Fire on occupancy and the partner immediately
+   *  throws it back, the first gate throws it forward again, and the traveller ping-pongs
+   *  between the two forever (measured live on (4)CentaurGrove — the footman bounced
+   *  SW↔NE every tick and never arrived).
+   *
+   *  So each gate keeps the set of units already inside it, exactly as the enter-region
+   *  pump keeps its baseline (7.4b): a unit deposited inside a gate is seeded as
+   *  already-there and is only teleported once it leaves and walks back in. Runs after
+   *  movement, so a unit ordered onto a gate crosses the instant it arrives. */
+  private tickWaygates(): void {
+    let gates: SimUnit[] | null = null;
+    for (const g of this.units.values()) {
+      if (!g.waygate?.active) continue;
+      (gates ??= []).push(g);
+    }
+    if (!gates) return; // the overwhelmingly common case: no gates on this map
+
+    // 1. Who has just ENTERED each gate (in its box now, wasn't last tick)?
+    const moved = new Set<number>();
+    for (const g of gates) {
+      for (const u of this.units.values()) {
+        if (!this.inWaygate(u, g) || g.waygate!.inside.has(u.id)) continue;
+        if (moved.has(u.id)) continue; // one gate per unit per tick
+        this.teleportUnit(u, g.waygate!.destX, g.waygate!.destY);
+        moved.add(u.id);
+      }
+    }
+    // 2. Re-baseline every gate from the FINAL positions. This is what seeds an arriving
+    //    unit into the destination gate's `inside` set, so that gate does not fire on it.
+    for (const g of gates) {
+      const inside = g.waygate!.inside;
+      inside.clear();
+      for (const u of this.units.values()) if (this.inWaygate(u, g)) inside.add(u.id);
+    }
+  }
+
+  /** Is `u` standing in gate `g`'s teleport box? A gate never swallows itself, another
+   *  structure, or a neutral-passive prop. */
+  private inWaygate(u: SimUnit, g: SimUnit): boolean {
+    if (u === g || u.building || u.neutralPassive) return false;
+    return (
+      Math.abs(u.x - g.x) <= SimWorld.WAYGATE_HALF_W &&
+      Math.abs(u.y - g.y) <= SimWorld.WAYGATE_HALF_H
+    );
+  }
+
+  /** JASS WaygateSetDestination / WaygateActivate — configure a gate. Both natives
+   *  work on a unit that isn't a Way Gate (WC3 lets you make anything a gate), so we
+   *  don't gate on the type; a unit with no `waygate` record simply isn't one yet.
+   *  Reconfiguring keeps the occupancy baseline — retargeting a gate must not make it
+   *  re-fire on whoever happens to be standing in it. */
+  private waygateOf(id: number): WaygateState | null {
+    const u = this.units.get(id);
+    if (!u) return null;
+    return (u.waygate ??= { destX: 0, destY: 0, active: false, inside: new Set() });
+  }
+  setWaygateDestination(id: number, x: number, y: number): void {
+    const w = this.waygateOf(id);
+    if (!w) return;
+    w.destX = x;
+    w.destY = y;
+  }
+  waygateActivate(id: number, active: boolean): void {
+    const g = this.units.get(id);
+    const w = this.waygateOf(id);
+    if (!g || !w) return;
+    // Switching a gate ON seeds its occupancy baseline from whoever is already standing
+    // in it, so it does not fire on them — a unit inside at activation has not *entered*.
+    // Same silent-baseline rule the enter-region pump uses when a trigger is registered.
+    if (active && !w.active) {
+      w.inside.clear();
+      for (const u of this.units.values()) if (this.inWaygate(u, g)) w.inside.add(u.id);
+    }
+    w.active = active;
+  }
+  /** WaygateGetDestinationX/Y — 0 on a unit that is not a gate, as the engine reports. */
+  waygateDestination(id: number): { x: number; y: number } | null {
+    const w = this.units.get(id)?.waygate;
+    return w ? { x: w.destX, y: w.destY } : null;
+  }
+  waygateIsActive(id: number): boolean {
+    return this.units.get(id)?.waygate?.active === true;
+  }
+
   // === JASS trigger effects (Phase 7 — issue #33; see docs/triggers.md) ======
   // Small, public entry points the interpreter's EngineHooks bridge calls to mutate
   // a unit from a trigger action (SetUnitPosition/Facing/Owner/MoveSpeed/…). The
@@ -3794,6 +3936,7 @@ export class SimWorld {
     }
     this.tickMovement(dt);
     this.resolveCollisions();
+    this.tickWaygates(); // anything now standing in a gate's box comes out the far end
     this.resolveAirSeparation(dt);
     this.tickProjectiles(dt);
     this.tickSpellFields(dt); // Blizzard-style repeating area effects

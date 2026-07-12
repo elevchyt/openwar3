@@ -103,7 +103,13 @@ export function registerConfigNatives(rt: Runtime): void {
     const p = player(c, a[0]);
     return jInt(p ? c.rt.hooks?.getPlayerState?.(p.index, c.rt.enumIndex(a[1])) ?? 0 : 0);
   });
-  def(rt, "SetPlayerAlliance", () => JNULL);
-  def(rt, "SetPlayerAllianceStateBJ", () => JNULL);
+  // SetPlayerAlliance + GetPlayerAlliance + CripplePlayer live in natives/vision.ts (7.22).
+  // They used to be no-ops HERE — and `SetPlayerAllianceStateBJ` was registered as a no-op
+  // native too, which was worse than it looks: it is not a native at all but a blizzard.j
+  // FUNCTION, and the interpreter resolves natives BEFORE user functions. So the stub
+  // shadowed Blizzard's own code and silently swallowed the entire GUI alliance surface
+  // ("Player - Make X treat Y as an Ally"), which is nothing but that BJ fanning out into
+  // SetPlayerAlliance. Never register a …BJ name as a native unless you mean to replace
+  // blizzard.j's version of it.
   // SetPlayerName is implemented in natives/text.ts (it feeds GetPlayerName).
 }

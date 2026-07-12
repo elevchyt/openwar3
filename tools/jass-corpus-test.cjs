@@ -2454,6 +2454,509 @@ endfunction
   } else fail(`the destroyed timer is still in rt.timers`);
 }
 
+// ===========================================================================
+// 7.22 — vision, fog and way gates.
+//
+// Driven through the REAL blizzard.j BJs, and — where the semantics actually live —
+// against the REAL engine classes (src/sim/alliances.ts's AllianceTable and
+// src/sim/vision.ts's VisionMap), not a mock that would just agree with itself. The
+// bridge below is the same shape mapViewer's textHooks() installs.
+// ===========================================================================
+const { AllianceTable } = require(join(REPO, '.jass-build', 'src', 'sim', 'alliances.js'));
+const { VisionMap, FogState, fogStateOf } = require(join(REPO, '.jass-build', 'src', 'sim', 'vision.js'));
+
+console.log('\n[7.22] Shared vision + alliances (SetPlayerAlliance / CripplePlayer)');
+{
+  const alliances = new AllianceTable();
+  // The lobby: players 0+1 on team 0, player 2 on team 1. This is what seeds the matrix,
+  // exactly as RtsController.seedAlliances does before the map script runs.
+  alliances.seedFromTeams((p) => (p === 0 || p === 1 ? 0 : 1));
+  const exposedTo = new Map(); // player → the set of players they are revealed to
+  const hooks = {
+    setPlayerAlliance: (s, o, t, v) => alliances.set(s, o, t, v),
+    getPlayerAlliance: (s, o, t) => alliances.get(s, o, t),
+    cripplePlayer: (p, to, flag) => {
+      if (!exposedTo.has(p)) exposedTo.set(p, new Set());
+      for (const q of to) flag ? exposedTo.get(p).add(q) : exposedTo.get(p).delete(q);
+      if (!flag && to.length === 0) exposedTo.set(p, new Set()); // the "clear" call
+    },
+    isPlayerAlly: (p, q) => alliances.coAllied(p, q),
+    localizedString: (key) => GLOBAL_STRINGS.get(key),
+    playerStructureCount: () => 3,
+    playerTypedUnitCount: () => 0,
+    displayText: () => {},
+    soundLabelInfo: () => null,
+    playSound: () => true,
+  };
+  const SRC = `
+globals
+    boolean udg_coAlliedBefore = false
+    boolean udg_coAlliedAfter  = false
+    boolean udg_visionAfter    = false
+    boolean udg_stillAllied    = false
+endglobals
+// The GUI's "Player - Make Player 0 treat Player 2 as an Ally with shared vision" compiles
+// to SetPlayerAllianceStateBJ — pure blizzard.j, riding on the single SetPlayerAlliance
+// native. Nothing here calls the native directly.
+function AllyThem takes nothing returns nothing
+    set udg_coAlliedBefore = PlayersAreCoAllied( Player(0), Player(2) )
+    call SetPlayerAllianceStateBJ( Player(0), Player(2), bj_ALLIANCE_ALLIED_VISION )
+    call SetPlayerAllianceStateBJ( Player(2), Player(0), bj_ALLIANCE_ALLIED_VISION )
+    set udg_coAlliedAfter = PlayersAreCoAllied( Player(0), Player(2) )
+    set udg_visionAfter   = GetPlayerAlliance( Player(2), Player(0), ALLIANCE_SHARED_VISION )
+endfunction
+// One-directional: player 0 un-allies player 2, but player 2 has not un-allied player 0.
+function HalfUnally takes nothing returns nothing
+    call SetPlayerAllianceStateBJ( Player(0), Player(2), bj_ALLIANCE_UNALLIED )
+    set udg_stillAllied = PlayersAreCoAllied( Player(0), Player(2) )
+endfunction
+// The melee punishment: expose a player to everyone not co-allied with them.
+function Expose takes nothing returns nothing
+    call MeleeExposePlayer( Player(2), true )
+endfunction
+function Unexpose takes nothing returns nothing
+    call MeleeExposePlayer( Player(2), false )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  const rt = interp.rt;
+  rt.applyLobby([
+    { index: 0, raceIndex: 1, controller: 1, team: 0, startLocation: 0 },
+    { index: 1, raceIndex: 1, controller: 2, team: 0, startLocation: 1 },
+    { index: 2, raceIndex: 2, controller: 2, team: 1, startLocation: 2 },
+  ], 0);
+  interp.run('InitBlizzard', []);
+
+  // The seed: team-mates are co-allied and share vision; the other team is neither.
+  if (alliances.coAllied(0, 1) && alliances.sharesVisionWith(1, 0) && !alliances.coAllied(0, 2)) {
+    ok(`the matrix is SEEDED from the lobby's teams — 0 and 1 (same team) are co-allied and share vision; 2 is not`);
+  } else fail(`seed: coAllied(0,1)=${alliances.coAllied(0, 1)} vision(1→0)=${alliances.sharesVisionWith(1, 0)} coAllied(0,2)=${alliances.coAllied(0, 2)}`);
+
+  interp.run('AllyThem', []);
+  if (rt.globals.get('udg_coAlliedBefore').b === false && rt.globals.get('udg_coAlliedAfter').b === true) {
+    ok(`SetPlayerAllianceStateBJ(bj_ALLIANCE_ALLIED_VISION) — the whole GUI "make X treat Y as an Ally" family — allies 0 and 2 through the real BJ`);
+  } else fail(`coAllied before/after: ${rt.globals.get('udg_coAlliedBefore').b} / ${rt.globals.get('udg_coAlliedAfter').b}`);
+  if (rt.globals.get('udg_visionAfter').b === true && alliances.sharesVisionWith(2, 0)) {
+    ok(`...and it granted ALLIANCE_SHARED_VISION with it, so player 2's units now lift player 0's fog`);
+  } else fail(`shared vision: ${rt.globals.get('udg_visionAfter').b}`);
+  // The matrix is DIRECTED — that is the whole reason PlayersAreCoAllied reads both ways.
+  interp.run('HalfUnally', []);
+  if (rt.globals.get('udg_stillAllied').b === false && alliances.get(2, 0, 0) === true) {
+    ok(`the matrix is DIRECTED: 0 un-allies 2, so they are no longer co-allied — even though 2 still grants 0 ALLIANCE_PASSIVE`);
+  } else fail(`stillAllied=${rt.globals.get('udg_stillAllied').b}, 2→0 passive=${alliances.get(2, 0, 0)}`);
+
+  // --- the melee leftover this milestone closes ------------------------------------
+  // MeleeExposePlayer(p, true) → CripplePlayer(p, <every player NOT co-allied with p>, true).
+  interp.run('Expose', []);
+  const exposed2 = exposedTo.get(2) ?? new Set();
+  if (exposed2.has(0) && exposed2.has(1)) {
+    ok(`MeleeExposePlayer → CripplePlayer: player 2's units are REVEALED to players 0 and 1 (the cripple timer's real punishment)`);
+  } else fail(`exposed to: ${[...exposed2].join(',')}`);
+  if (!exposed2.has(2)) {
+    ok(`...but not to player 2 themselves — MeleeExposePlayer only adds players who are NOT co-allied with the exposed one`);
+  } else fail(`player 2 exposed to itself`);
+  const flag = rt.globalArrays.get('bj_playerIsExposed');
+  if (flag && flag.get(2).b === true) {
+    ok(`...and blizzard.j's own bj_playerIsExposed[2] is set`);
+  } else fail(`bj_playerIsExposed[2]: ${flag ? flag.get(2).b : 'missing'}`);
+  interp.run('Unexpose', []);
+  if ((exposedTo.get(2) ?? new Set()).size === 0) {
+    ok(`MeleeExposePlayer(p, false) hides them again — it re-issues CripplePlayer with the flag cleared (build a hall in time and nothing was ever shown)`);
+  } else fail(`still exposed to: ${[...exposedTo.get(2)].join(',')}`);
+}
+
+console.log('\n[7.22] Fog of war — script-placed fog modifiers (a DIFFERENT system from the terrain haze)');
+{
+  // A real 2048×2048 VisionMap, origin (-1024, -1024).
+  const vision = new VisionMap(-1024, -1024, 2048, 2048);
+  const modifiers = new Map();
+  let nextMod = 1;
+  const LOCAL = 0;
+  const hooks = {
+    createFogModifier: (player, state, area) => {
+      const id = nextMod++;
+      modifiers.set(id, { player, state, area, running: false });
+      return id;
+    },
+    fogModifierStart: (id) => { modifiers.get(id).running = true; },
+    fogModifierStop: (id) => { modifiers.get(id).running = false; },
+    destroyFogModifier: (id) => modifiers.delete(id),
+    setFogState: (player, state, area) => { if (player === LOCAL) stamp(area, fogStateOf(state)); },
+    fogEnable: (f) => vision.setFogEnabled(f),
+    fogMaskEnable: (f) => vision.setMaskEnabled(f),
+  };
+  const stamp = (area, state) => {
+    if (area.kind === 'rect') vision.stampRect(area.minX, area.minY, area.maxX, area.maxY, state);
+    else vision.stampCircle(area.x, area.y, area.radius, state);
+  };
+  // What RtsController.updateVision does every rebuild: clear, reveal from units, THEN
+  // stamp the running modifiers over the top.
+  const rebuild = () => {
+    vision.beginFrame();
+    vision.reveal(-800, -800, 300); // one friendly unit down in the corner
+    for (const m of modifiers.values()) if (m.running && m.player === LOCAL) stamp(m.area, fogStateOf(m.state));
+  };
+
+  const SRC = `
+globals
+    fogmodifier udg_reveal = null
+    fogmodifier udg_hide   = null
+endglobals
+// The compiled GUI shape: "Visibility - Create an initially Enabled visibility modifier".
+function MakeReveal takes nothing returns nothing
+    set udg_reveal = CreateFogModifierRectBJ( true, Player(0), FOG_OF_WAR_VISIBLE, Rect(0.0, 0.0, 512.0, 512.0) )
+endfunction
+// Created DISABLED — the native does not start a modifier, FogModifierStart does.
+function MakeHiddenStopped takes nothing returns nothing
+    set udg_hide = CreateFogModifierRadiusLocBJ( false, Player(0), FOG_OF_WAR_MASKED, Location(-800.0, -800.0), 200.0 )
+endfunction
+function StartHide takes nothing returns nothing
+    call FogModifierStart( udg_hide )
+endfunction
+function StopReveal takes nothing returns nothing
+    call FogModifierStop( udg_reveal )
+endfunction
+function NoFog takes nothing returns nothing
+    call FogEnableOff(  )
+    call FogMaskEnableOff(  )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('InitBlizzard', []);
+
+  rebuild();
+  // Nobody is anywhere near (256, 256), so it starts black.
+  if (vision.stateAt(256, 256) === FogState.Unexplored) {
+    ok(`before any modifier, ground no unit can see is Unexplored (black)`);
+  } else fail(`state at (256,256): ${vision.stateAt(256, 256)}`);
+
+  interp.run('MakeReveal', []);
+  rebuild();
+  if (vision.stateAt(256, 256) === FogState.Visible) {
+    ok(`CreateFogModifierRectBJ(enabled) → the rect is held at FOG_OF_WAR_VISIBLE — ground nobody stands near is LIT (the TD that shows you its whole maze)`);
+  } else fail(`state at (256,256): ${vision.stateAt(256, 256)}`);
+  if (vision.stateAt(700, 700) === FogState.Unexplored) {
+    ok(`...and only inside the rect: (700,700) is outside it and stays black`);
+  } else fail(`state at (700,700): ${vision.stateAt(700, 700)}`);
+
+  // The crux of the whole family: a fog modifier is created STOPPED.
+  interp.run('MakeHiddenStopped', []);
+  rebuild();
+  if (vision.stateAt(-800, -800) === FogState.Visible) {
+    ok(`CreateFogModifierRadiusLocBJ(enabled=false) does NOT start it — the unit standing at (-800,-800) still sees (the native creates, FogModifierStart runs)`);
+  } else fail(`state at (-800,-800): ${vision.stateAt(-800, -800)} (want Visible — the modifier should be inert)`);
+  interp.run('StartHide', []);
+  rebuild();
+  // MASKED must beat a unit's own sight AND clear `explored` — that is what makes a
+  // re-masked area go properly black rather than settling to remembered grey.
+  if (vision.stateAt(-800, -800) === FogState.Unexplored) {
+    ok(`FogModifierStart → FOG_OF_WAR_MASKED blacks out ground a unit is STANDING IN (a cinematic area), clearing the sticky 'explored' layer with it`);
+  } else fail(`after start, state at (-800,-800): ${vision.stateAt(-800, -800)}`);
+
+  interp.run('StopReveal', []);
+  rebuild();
+  // Stopping the reveal drops it to Explored, not black: the modifier lit it, so it was seen.
+  if (vision.stateAt(256, 256) === FogState.Explored) {
+    ok(`FogModifierStop → the revealed rect falls back to Explored grey (it WAS seen; terrain memory is sticky)`);
+  } else fail(`after stop, state at (256,256): ${vision.stateAt(256, 256)}`);
+
+  // The two global switches are NOT the same switch.
+  interp.run('NoFog', []);
+  if (vision.stateAt(700, 700) === FogState.Visible && vision.stateAt(256, 256) === FogState.Visible) {
+    ok(`FogEnableOff + FogMaskEnableOff → the whole map reads Visible (the grey veil and the black mask are two separate layers, and blizzard.j switches them separately)`);
+  } else fail(`no-fog: (700,700)=${vision.stateAt(700, 700)} (256,256)=${vision.stateAt(256, 256)}`);
+}
+
+console.log('\n[7.22] Terrain fog — the atmospheric haze (SetTerrainFogEx), which is NOT the fog of war');
+{
+  let fog = { start: 3000, end: 5000, r: 0.5, g: 0.5, b: 0.5 }; // the map's own w3i fog
+  const w3i = { ...fog };
+  let reset = 0;
+  const hooks = {
+    setTerrainFog: (style, zstart, zend, density, r, g, b) => { fog = { style, start: zstart, end: zend, density, r, g, b }; },
+    resetTerrainFog: () => { fog = { ...w3i }; reset++; },
+  };
+  const SRC = `
+// A hand-written script calls the native with rgb in 0–1 — verbatim from (6)Jack-o-Lantern's
+// own war3map.j (a green horizon).
+function Spooky takes nothing returns nothing
+    call SetTerrainFogEx( 0, 1000.0, 5000.0, 0.000, 0.000, 0.502, 0.000 )
+endfunction
+// The GUI's "Environment - Set fog to style ..." is SetTerrainFogExBJ, which takes 0–100
+// and multiplies by 0.01 on the way to the native. Same fog, different scale.
+function GuiBlue takes nothing returns nothing
+    call SetTerrainFogExBJ( 0, 1200.0, 4000.0, 0.0, 50.2, 50.2, 100.0 )
+endfunction
+function Restore takes nothing returns nothing
+    call ResetTerrainFogBJ(  )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('InitBlizzard', []);
+
+  interp.run('Spooky', []);
+  if (fog.style === 0 && fog.start === 1000 && fog.end === 5000 && Math.abs(fog.g - 0.502) < 1e-6 && fog.r === 0 && fog.b === 0) {
+    ok(`SetTerrainFogEx → a green horizon 1000–5000 units out, rgb in 0–1 (style 0 = LINEAR, which every one of the corpus's 12 calls passes — our shader is linear)`);
+  } else fail(`fog: ${JSON.stringify(fog)}`);
+  interp.run('GuiBlue', []);
+  // The BJ's ×0.01: 50.2 → 0.502, 100.0 → 1.0. Get this backwards and a GUI fog is white.
+  if (Math.abs(fog.r - 0.502) < 1e-6 && Math.abs(fog.b - 1.0) < 1e-6 && fog.start === 1200) {
+    ok(`...and SetTerrainFogExBJ's 0–100 scale is divided by 100 on the way in (50.2 → 0.502, 100 → 1.0) — the BJ and the native take DIFFERENT units`);
+  } else fail(`gui fog: ${JSON.stringify(fog)}`);
+  interp.run('Restore', []);
+  if (reset === 1 && fog.start === 3000 && Math.abs(fog.g - 0.5) < 1e-6) {
+    ok(`ResetTerrainFog restores the MAP's own w3i fog — not "no fog" (the w3i is the baseline, and that is what the engine resets to)`);
+  } else fail(`after reset: ${JSON.stringify(fog)} (resets: ${reset})`);
+}
+
+console.log('\n[7.22] Way gates — a unit walks in, and comes out the far end');
+{
+  // The gate box is 400×400 world units: the Way Gate's `Awrp` ("Warp") ability, whose
+  // DataA1/DataB1 (400/400) AbilityMetaData.slk names "Teleport Area Width"/"Height".
+  const HALF = 200;
+  const units = new Map(); // simId → {x, y, waygate}
+  let nextSim = 1;
+  const place = (typeId, x, y) => { const id = nextSim++; units.set(id, { id, typeId, x, y, waygate: null }); return id; };
+  // Two gates + a traveller, all pre-placed (as they are on every real map).
+  const gateA = place('nwgt', -3840, -3840);
+  const gateB = place('nwgt', 3456, 3200);
+  const walker = place('hfoo', 0, 0);
+  const hooks = {
+    // The record-only CreateUnit path: CreateAllUnits records the row, and the handle is
+    // bound to the unit ALREADY standing there. Without this, every WaygateSetDestination
+    // below would fall on a handle with simId -1 and do nothing at all.
+    findPlacedUnit: (typeId, x, y) => {
+      for (const u of units.values()) if (u.typeId === typeId && Math.hypot(u.x - x, u.y - y) <= 128) return u.id;
+      return -1;
+    },
+    waygateSetDestination: (id, x, y) => {
+      const u = units.get(id);
+      u.waygate = u.waygate || { destX: 0, destY: 0, active: false, inside: new Set() };
+      u.waygate.destX = x;
+      u.waygate.destY = y;
+    },
+    waygateActivate: (id, active) => {
+      const u = units.get(id);
+      u.waygate = u.waygate || { destX: 0, destY: 0, active: false, inside: new Set() };
+      u.waygate.active = active;
+    },
+    waygateDestination: (id) => { const w = units.get(id).waygate; return w ? { x: w.destX, y: w.destY } : null; },
+    waygateIsActive: (id) => !!(units.get(id).waygate && units.get(id).waygate.active),
+    getUnitX: (id) => units.get(id).x,
+    getUnitY: (id) => units.get(id).y,
+  };
+  // SimWorld.tickWaygates, in miniature. A gate fires on a unit ENTERING its box (the
+  // rising edge), never on one standing in it — and that is not a nicety. A gate's
+  // destination is its PARTNER gate, so the traveller lands inside the partner's box: fire
+  // on occupancy and the two gates throw the unit back and forth forever. Measured live on
+  // (4)CentaurGrove before the fix — the footman bounced SW↔NE every tick and never
+  // arrived. Hence `inside`, the same silent baseline the enter-region pump keeps.
+  const inBox = (u, g) => u !== g && u.typeId !== 'nwgt' && Math.abs(u.x - g.x) <= HALF && Math.abs(u.y - g.y) <= HALF;
+  const tickWaygates = () => {
+    const gates = [...units.values()].filter((g) => g.waygate && g.waygate.active);
+    const moved = new Set();
+    for (const g of gates) {
+      for (const u of units.values()) {
+        if (!inBox(u, g) || g.waygate.inside.has(u.id) || moved.has(u.id)) continue;
+        u.x = g.waygate.destX;
+        u.y = g.waygate.destY;
+        moved.add(u.id);
+      }
+    }
+    // Re-baseline from FINAL positions — this seeds the arriving unit into the destination
+    // gate's occupancy so that gate does not fire on it.
+    for (const g of gates) {
+      g.waygate.inside = new Set();
+      for (const u of units.values()) if (inBox(u, g)) g.waygate.inside.add(u.id);
+    }
+  };
+  // Verbatim in shape from (4)CentaurGrove's own CreateNeutralPassiveBuildings — the gates
+  // are set up INSIDE CreateAllUnits, which is exactly why the handle binding matters.
+  const SRC = `
+globals
+    unit    udg_gateA  = null
+    unit    udg_gateB  = null
+    real    udg_destX  = 0.0
+    boolean udg_active = false
+endglobals
+function CreateAllUnits takes nothing returns nothing
+    local player p = Player(PLAYER_NEUTRAL_PASSIVE)
+    set udg_gateA = CreateUnit( p, 'nwgt', -3840.0, -3840.0, 270.000 )
+    call WaygateSetDestination( udg_gateA, 3456.0, 3200.0 )
+    call WaygateActivate( udg_gateA, true )
+    set udg_gateB = CreateUnit( p, 'nwgt', 3456.0, 3200.0, 270.000 )
+    call WaygateSetDestination( udg_gateB, -3840.0, -3840.0 )
+    call WaygateActivate( udg_gateB, true )
+endfunction
+function Read takes nothing returns nothing
+    set udg_destX  = WaygateGetDestinationX( udg_gateA )
+    set udg_active = WaygateIsActive( udg_gateA )
+endfunction
+function Switchoff takes nothing returns nothing
+    call WaygateActivate( udg_gateA, false )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  const rt = interp.rt;
+  interp.run('InitBlizzard', []);
+  // Run it exactly as main() does: record-only, so nothing is spawned.
+  rt.spawnDepth = 1;
+  interp.run('CreateAllUnits', []);
+  rt.spawnDepth = 0;
+
+  const hA = rt.data(rt.globals.get('udg_gateA'));
+  if (hA && hA.simId === gateA) {
+    ok(`a record-only CreateUnit inside CreateAllUnits BINDS its handle to the pre-placed unit already standing there (simId ${hA.simId}, not -1)`);
+  } else fail(`gateA handle simId: ${hA && hA.simId} (want ${gateA})`);
+  if (units.get(gateA).waygate && units.get(gateA).waygate.active && units.get(gateA).waygate.destX === 3456) {
+    ok(`...so WaygateSetDestination + WaygateActivate on that handle actually reach the gate — which is the ONLY reason a melee map's waygates can work`);
+  } else fail(`gateA waygate: ${JSON.stringify(units.get(gateA).waygate)}`);
+
+  interp.run('Read', []);
+  if (rt.globals.get('udg_destX').n === 3456 && rt.globals.get('udg_active').b === true) {
+    ok(`WaygateGetDestinationX / WaygateIsActive read it back`);
+  } else fail(`read back: ${rt.globals.get('udg_destX').n} / ${rt.globals.get('udg_active').b}`);
+
+  // Walk in. 150 units off-centre is inside the 400×400 box (half-extent 200).
+  units.get(walker).x = -3840 + 150;
+  units.get(walker).y = -3840 - 150;
+  tickWaygates();
+  if (units.get(walker).x === 3456 && units.get(walker).y === 3200) {
+    ok(`a unit ENTERING gate A's 400×400 box comes out at gate B (Awrp DataA1/DataB1 = "Teleport Area Width"/"Height" = 400×400 — from the MPQ, not a guess)`);
+  } else fail(`walker at ${units.get(walker).x},${units.get(walker).y}`);
+  // THE regression gate for this milestone. The traveller now stands on gate B — inside
+  // gate B's own box. A gate that fired on OCCUPANCY would throw it straight back, and
+  // gate A would throw it forward again: the live run on (4)CentaurGrove bounced the
+  // footman SW↔NE every single tick and it never arrived. Firing on ENTRY fixes it, so
+  // run several ticks and insist it stays put.
+  let bounced = false;
+  for (let t = 0; t < 5; t++) {
+    tickWaygates();
+    if (units.get(walker).x !== 3456 || units.get(walker).y !== 3200) bounced = true;
+  }
+  if (!bounced) {
+    ok(`...and it STAYS there over 5 more ticks — a gate fires on ENTERING its box, not on standing in it, so the pair cannot ping-pong the traveller forever`);
+  } else fail(`the traveller ping-ponged between the gates (now at ${units.get(walker).x},${units.get(walker).y})`);
+  // …and it can still walk back through: leave the box, re-enter, and it crosses again.
+  units.get(walker).x = 3456 + 500; // step out of gate B
+  units.get(walker).y = 3200;
+  tickWaygates();
+  units.get(walker).x = 3456 + 100; // …and back in
+  tickWaygates();
+  if (units.get(walker).x === -3840 && units.get(walker).y === -3840) {
+    ok(`...while a unit that LEAVES and walks back in crosses again — the gate is re-armed by the exit, not permanently spent`);
+  } else fail(`return trip: ${units.get(walker).x},${units.get(walker).y}`);
+
+  // A unit just outside the box is untouched.
+  units.get(walker).x = -3840 + 250; // 250 > half-extent 200
+  units.get(walker).y = -3840;
+  tickWaygates();
+  if (units.get(walker).x === -3840 + 250) {
+    ok(`a unit 250 units off the gate is OUTSIDE the box (half-extent 200) and is not teleported — the gate is a box, not "anywhere near"`);
+  } else fail(`teleported from outside the box`);
+
+  interp.run('Switchoff', []);
+  units.get(walker).x = -3840;
+  units.get(walker).y = -3840;
+  tickWaygates();
+  if (units.get(walker).x === -3840) {
+    ok(`WaygateActivate(gate, false) → a deactivated gate teleports nothing, even standing dead centre`);
+  } else fail(`a deactivated gate still teleported`);
+}
+
+console.log('\n[7.22] Multiboards — the grid scoreboard (what DotA puts on screen)');
+{
+  const SRC = `
+globals
+    multiboard     udg_mb   = null
+    multiboarditem udg_cell = null
+    string         udg_read = ""
+    integer        udg_rows = 0
+    integer        udg_cols = 0
+endglobals
+// The compiled GUI shape, verbatim from (10)Skibi'sCastleTD: CreateMultiboardBJ(cols, rows, title).
+function Make takes nothing returns nothing
+    set udg_mb   = CreateMultiboardBJ( 3, 12, "Skibi's Castle" )
+    set udg_rows = MultiboardGetRowCount( udg_mb )
+    set udg_cols = MultiboardGetColumnCount( udg_mb )
+endfunction
+// The BJs are 1-based (col, row); the NATIVE underneath is 0-based (row, column). Blizzard
+// does the swap: "set mbitem = MultiboardGetItem(mb, curRow - 1, curCol - 1)".
+function Fill takes nothing returns nothing
+    call MultiboardSetItemValueBJ( udg_mb, 2, 5, "Kills" )
+    call MultiboardSetItemIconBJ ( udg_mb, 3, 1, "ReplaceableTextures\\\\CommandButtons\\\\BTNChestOfGold.blp" )
+endfunction
+// A borrowed handle: Get → write → Release. Reading through the RELEASED handle must not work.
+function Borrow takes nothing returns nothing
+    set udg_cell = MultiboardGetItem( udg_mb, 0, 0 )
+    call MultiboardSetItemValue( udg_cell, "top-left" )
+    call MultiboardReleaseItem( udg_cell )
+    call MultiboardSetItemValue( udg_cell, "STALE WRITE" )
+endfunction
+function Hide takes nothing returns nothing
+    call MultiboardDisplayBJ( false, udg_mb )
+endfunction
+function Suppress takes nothing returns nothing
+    call MultiboardAllowDisplayBJ( false )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks: {} });
+  const rt = interp.rt;
+  interp.run('InitBlizzard', []);
+
+  interp.run('Make', []);
+  const mb = rt.multiboards[0];
+  if (rt.multiboards.length === 1 && mb.rows === 12 && mb.columns === 3 && mb.title === "Skibi's Castle") {
+    ok(`CreateMultiboardBJ(3, 12, …) → a 12-row × 3-column board titled "Skibi's Castle"`);
+  } else fail(`board: ${JSON.stringify({ n: rt.multiboards.length, rows: mb && mb.rows, cols: mb && mb.columns, title: mb && mb.title })}`);
+  // CreateMultiboardBJ sets rows FIRST, then columns — so the grid is reshaped twice, and a
+  // reshape that dropped cells would lose everything written before the second call.
+  if (mb.items.length === 36) {
+    ok(`...and the grid really has 12 × 3 = 36 cells (the BJ sets rows THEN columns, so the reshape has to survive being run twice)`);
+  } else fail(`cells: ${mb.items.length}`);
+  // The BJ shows it: CreateMultiboardBJ ends with MultiboardDisplay(…, true).
+  if (mb.displayed === true) {
+    ok(`...and it is DISPLAYED — CreateMultiboardBJ shows it (the native alone does not)`);
+  } else fail(`not displayed`);
+  if (rt.globals.get('udg_rows').n === 12 && rt.globals.get('udg_cols').n === 3) {
+    ok(`MultiboardGetRowCount / GetColumnCount read them back`);
+  } else fail(`counts read back: ${rt.globals.get('udg_rows').n} / ${rt.globals.get('udg_cols').n}`);
+
+  // THE axis trap. MultiboardSetItemValueBJ(mb, col=2, row=5) is 1-based (col, row); it must
+  // land in cell (row 4, col 1) 0-based. Swap the axes and it lands in (row 1, col 4) — off
+  // this board entirely, and on a square board it would silently transpose instead.
+  interp.run('Fill', []);
+  const kills = mb.items[4 * mb.columns + 1];
+  if (kills && kills.value === 'Kills') {
+    ok(`MultiboardSetItemValueBJ(mb, col 2, row 5) — 1-based (COL, ROW) — lands in the 0-based (row 4, col 1) cell: the BJ and the native take the axes in OPPOSITE order`);
+  } else fail(`(4,1) = ${JSON.stringify(kills)}; row5/col2 as written = ${JSON.stringify(mb.items[1 * mb.columns + 4])}`);
+  const gold = mb.items[0 * mb.columns + 2];
+  if (gold && /BTNChestOfGold/.test(gold.icon)) {
+    ok(`...and MultiboardSetItemIconBJ(mb, col 3, row 1) puts the gold icon in (row 0, col 2)`);
+  } else fail(`icon cell: ${JSON.stringify(gold)}`);
+
+  // A multiboarditem handle is BORROWED — Get, write, Release. The released cursor is dead.
+  interp.run('Borrow', []);
+  if (mb.items[0].value === 'top-left') {
+    ok(`MultiboardGetItem → MultiboardSetItemValue → MultiboardReleaseItem writes the cell through the borrowed handle`);
+  } else fail(`(0,0) = ${mb.items[0].value}`);
+  if (mb.items[0].value !== 'STALE WRITE') {
+    ok(`...and a write through the RELEASED handle is a no-op — the handle is given back, not kept (every blizzard.j BJ pairs Get with Release)`);
+  } else fail(`a released item handle still wrote to the board`);
+
+  interp.run('Hide', []);
+  if (mb.displayed === false) {
+    ok(`MultiboardDisplayBJ(false) takes it off screen`);
+  } else fail(`still displayed`);
+  // Suppression is a separate, GLOBAL switch: it hides every board without clearing any
+  // `displayed` flag, so the boards come back exactly as they were (Skibi's wraps its
+  // minigame cinematics in it).
+  interp.run('Suppress', []);
+  if (rt.multiboardSuppressed === true && mb.displayed === false) {
+    ok(`MultiboardAllowDisplayBJ(false) → MultiboardSuppressDisplay(true): a GLOBAL hide that leaves each board's own displayed flag untouched`);
+  } else fail(`suppressed=${rt.multiboardSuppressed}`);
+}
+
 // Mirrors src/ui/timerDialog.ts formatTimerValue — Game.dll carries exactly two countdown
 // formats (`%d:%02d` and `%02d:%02d:%02d`), so under an hour is M:SS and over is HH:MM:SS.
 function formatTimerValueCheck(seconds) {

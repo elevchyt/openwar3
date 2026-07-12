@@ -1420,6 +1420,30 @@ body.in-game .load-gate { display: none; }
   text-align: right;
 }
 
+/* Multiboard cells (7.22) — the grid scoreboard. Injected into the FDF's own (empty)
+   MultiboardListContainer, one absolutely-positioned cell per (row, column). */
+.multiboard-cell {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--game-font);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+}
+.multiboard-icon {
+  flex: 0 0 auto;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.multiboard-value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* A dialog is modal: the scrim swallows clicks meant for the world behind it. */
 .fdf-dialog-scrim {
   position: fixed;

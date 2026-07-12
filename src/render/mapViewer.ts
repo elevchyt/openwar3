@@ -47,6 +47,7 @@ import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
 import { GameMenu } from "../ui/gameMenu";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
+import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
 import { TextTagOverlay, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
@@ -340,6 +341,7 @@ export class MapViewerScene {
   // stock fullbright shading rather than going black.
   private dayNight: DayNightCycle | null = null;
   private mapFog: DistFog | null = null; // the map's w3i environment fog (distance haze)
+  private w3iFog: DistFog | null = null; // …as the w3i declared it — what ResetTerrainFog restores
   // The top-bar day/night medallion — the real UI\Console\<Race>\<Race>UI-TimeIndicator
   // model on its own canvas, scrubbed to the sim clock each frame (issue #47).
   private clock: TimeIndicatorClock | null = null;
@@ -420,6 +422,7 @@ export class MapViewerScene {
   // --- the trigger's on-screen output (7.19) ---
   private textTags: TextTagOverlay | null = null; // CreateTextTag, drawn in the world
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
+  private multiboard: MultiboardOverlay | null = null; // CreateMultiboard — the grid scoreboard (7.22)
   private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
   private dialog: GameDialogOverlay | null = null; // DialogCreate — and the melee end screen
   /** The game's own string table (UI\FrameDef\GlobalStrings.fdf) behind GetLocalizedString:
@@ -813,6 +816,10 @@ export class MapViewerScene {
         const c = fi.fogColor;
         this.mapFog = makeFog(fi.fogHeight[0], fi.fogHeight[1], c[0] / 255, c[1] / 255, c[2] / 255);
       }
+      // Remember it: a script's SetTerrainFogEx replaces the haze, and ResetTerrainFog
+      // puts the map's OWN fog back (7.22) — so the w3i's settings are the baseline, not
+      // "no fog". A map with useTerrainFog 0 resets to none, which is equally correct.
+      this.w3iFog = this.mapFog;
     }
     const readBytes = (p: string): Uint8Array | null => this.vfs.rawBytes(p);
 
@@ -901,6 +908,9 @@ export class MapViewerScene {
     this.localRace = races.get(this.localPlayer) ?? "human";
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
     this.rts!.setLocalTeam(this.teamOf(this.localPlayer)); // whose combined sight lifts the fog
+    // Seed the alliance matrix from those teams (7.22) BEFORE the map script runs, so the
+    // script's own SetPlayerAlliance calls land on top of it rather than under it.
+    this.rts!.seedAlliances((p) => this.teamOf(p));
     // Fog-of-war start mode from the lobby: "explored" reveals the whole map as grey
     // terrain memory (live fog still hides current enemy movement); "revealall" drops
     // fog entirely; "unexplored" leaves the default pitch-black unseen ground.
@@ -1245,7 +1255,39 @@ export class MapViewerScene {
         const u = this.rts?.simWorld.units.get(id);
         return !!u && u.team >= 0 && u.team === this.teamOf(player);
       },
-      isPlayerAlly: (p, q) => this.teamOf(p) === this.teamOf(q),
+      // IsPlayerAlly/IsPlayerEnemy read the alliance matrix (7.22), not the raw lobby team
+      // — a script that allies two players from different teams changes both.
+      isPlayerAlly: (p, q) => this.rts?.playersAreCoAllied(p, q) ?? this.teamOf(p) === this.teamOf(q),
+      // --- alliances + shared vision (7.22) ---
+      setPlayerAlliance: (src, other, type, value) => this.rts?.setPlayerAlliance(src, other, type, value),
+      getPlayerAlliance: (src, other, type) => this.rts?.getPlayerAlliance(src, other, type) ?? false,
+      cripplePlayer: (player, toPlayers, flag) => this.rts?.cripplePlayer(player, toPlayers, flag),
+      // --- fog of war: script-placed modifiers (7.22) ---
+      createFogModifier: (player, state, area) => this.rts?.createFogModifier({ player, state, area }) ?? -1,
+      fogModifierStart: (id) => this.rts?.fogModifierStart(id),
+      fogModifierStop: (id) => this.rts?.fogModifierStop(id),
+      destroyFogModifier: (id) => this.rts?.destroyFogModifier(id),
+      setFogState: (player, state, area) => this.rts?.setFogState(player, state, area),
+      fogEnable: (flag) => this.rts?.setFogEnabled(flag),
+      fogMaskEnable: (flag) => this.rts?.setFogMaskEnabled(flag),
+      // --- the atmospheric distance haze — a DIFFERENT system (7.22) ---
+      // Replaces the map's w3i fog on `scene.distFog` (read fresh each frame, so this
+      // lands next frame with no extra plumbing). Our shader is linear, which is all the
+      // corpus asks for: every SetTerrainFogEx call in all 165 maps passes style 0.
+      setTerrainFog: (_style, zstart, zend, _density, r, g, b) => {
+        this.mapFog = makeFog(zstart, zend, r, g, b);
+      },
+      resetTerrainFog: () => {
+        this.mapFog = this.w3iFog;
+      },
+      // --- way gates (7.22) ---
+      waygateSetDestination: (id, x, y) => this.rts?.simWorld.setWaygateDestination(id, x, y),
+      waygateActivate: (id, active) => this.rts?.simWorld.waygateActivate(id, active),
+      waygateDestination: (id) => this.rts?.simWorld.waygateDestination(id) ?? null,
+      waygateIsActive: (id) => this.rts?.simWorld.waygateIsActive(id) ?? false,
+      // Bind a record-only CreateUnit row (inside CreateAllUnits) to the pre-placed unit
+      // already standing there, so the script can keep configuring it (7.22).
+      findPlacedUnit: (typeId, x, y) => this.findPlacedUnit(typeId, x, y),
       // --- melee from the script (7.3) ---
       // MeleeStartingVisibility opens a melee game at 08:00 (bj_MELEE_STARTING_TOD).
       setTimeOfDay: (hour) => {
@@ -1351,6 +1393,37 @@ export class MapViewerScene {
     if (unitId < MapViewerScene.MINE_ID_BASE) return undefined;
     return this.rts?.simWorld.mines.get(unitId - MapViewerScene.MINE_ID_BASE);
   }
+  /** Bind a PRE-PLACED `CreateUnit` row to the unit that is already standing there (7.22).
+   *
+   *  `CreateAllUnits()` is record-only for us — those units came in from war3mapUnits.doo
+   *  and are adopted, not spawned (7.3) — but the script goes on configuring the handle it
+   *  was just handed (`WaygateSetDestination`, `SetResourceAmount`, `SetUnitColor`), and
+   *  until now that handle had no unit behind it, so every such call was silently dropped.
+   *
+   *  The match is by TYPE + POSITION: the script and the .doo carry the same coordinates
+   *  for the same unit (they are two encodings of one placement), so the nearest unit of
+   *  the right type within a tile is that unit. Searching the SNAPSHOT view rather than
+   *  SimWorld.units means gold mines — which live in their own table and are only units to
+   *  the script — are matched too, under the same MINE_ID_BASE id the rest of the bridge
+   *  uses. -1 when nothing of that type stands there (a unit the .doo didn't carry). */
+  private findPlacedUnit(typeId: string, x: number, y: number): number {
+    let best = -1;
+    let bestD = MapViewerScene.PLACED_MATCH_RADIUS ** 2;
+    for (const u of this.unitSnapshots()) {
+      if (u.typeId !== typeId) continue;
+      const d = (u.x - x) ** 2 + (u.y - y) ** 2;
+      if (d <= bestD) {
+        bestD = d;
+        best = u.id;
+      }
+    }
+    return best;
+  }
+  /** How far a pre-placed unit may sit from the coordinates its own script row names.
+   *  They should agree exactly (same placement, two encodings) — a terrain tile of slack
+   *  absorbs the sim's spawn re-settle without ever reaching the next unit over. */
+  private static readonly PLACED_MATCH_RADIUS = 128;
+
   /** The SimMine nearest (x, y) within `radius` (the node, not our melee-roster helper). */
   private nearestMineNode(x: number, y: number, radius: number): SimMine | undefined {
     let best: SimMine | undefined;
@@ -1652,6 +1725,7 @@ export class MapViewerScene {
   private mountScriptUi(ui: HTMLElement): void {
     this.textTags?.dispose();
     this.leaderboard?.dispose();
+    this.multiboard?.dispose();
     this.timerDialogs?.dispose();
     this.dialog?.dispose();
     // WC3 skins the in-game panels with the LOCAL player's race (an Orc player's dialog is
@@ -1662,6 +1736,7 @@ export class MapViewerScene {
     if (this.sounds) this.sounds.musicSkin = skin;
     this.textTags = new TextTagOverlay(ui);
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin);
+    this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
     this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
       // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
@@ -1706,11 +1781,15 @@ export class MapViewerScene {
       else this.textTags.clear();
     }
     this.leaderboard?.update(rt.leaderboardFor(this.localPlayer));
-    // Countdown windows stack below whatever the leaderboard is already using of the
-    // top-right corner (7.21). Their TIME isn't pushed — it's read live off each dialog's
-    // timer, so this runs every frame, not just when something changed.
+    // The three top-right panels stack, in the order WC3 stacks them: leaderboard, then
+    // multiboard, then the countdown windows — each hangs below whatever the ones above it
+    // are already using, so they never overlap.
+    const underBoard = this.leaderboard?.occupiedHeight() ?? 0;
+    this.multiboard?.update(rt.multiboards, rt.multiboardSuppressed, underBoard ? underBoard + TIMER_STACK_GAP : 0);
+    // Countdown windows stack below both (7.21). Their TIME isn't pushed — it's read live
+    // off each dialog's timer, so this runs every frame, not just when something changed.
     if (this.timerDialogs) {
-      const below = this.leaderboard?.occupiedHeight() ?? 0;
+      const below = underBoard + (this.multiboard?.occupiedHeight() ?? 0);
       this.timerDialogs.update(rt.timerDialogs, (td) => rt.timerDialogSeconds(td), below ? below + TIMER_STACK_GAP : 0);
     }
     this.dialog?.update(rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
@@ -4566,6 +4645,7 @@ export class MapViewerScene {
     this.textTags?.dispose();
     this.textTags = null;
     this.leaderboard?.dispose();
+    this.multiboard?.dispose();
     this.leaderboard = null;
     this.timerDialogs?.dispose();
     this.timerDialogs = null;

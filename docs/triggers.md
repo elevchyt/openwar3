@@ -38,16 +38,22 @@
 | 7.19 | **The trigger's on-screen output** — **floating text** in 3D (`CreateTextTag` + setters finally *draw*: world anchor + screen-relative drift, size, colour, fade, unit-following, fog-gated); the **victory/defeat dialogs** (`dialog` — which is what WC3's "Victory!" screen *is*: MeleeVictoryDialogBJ builds a plain dialog from the game's own `GlobalStrings.fdf` + `ScriptDialog.fdf`, quit button ends the match); **leaderboards** (the whole `Leaderboard*` family → the game's own `LeaderBoard.fdf` panel). Plus `DecorateFileNames` → `UI\war3skins.txt`, without which no in-game FDF panel has any chrome | ✅ done (live) | §7.19 headless (all three through the real blizzard.j BJs: `TextTagSize2Height`/`Speed2Velocity` scaling, permanence + expiry, `MeleeVictoryDialogBJ`/`MeleeDoDefeat` → "Victory!"/"You failed to achieve victory." + the right buttons + the QuestCompleted/QuestFailed stings, `LeaderboardResizeBJ`'s own sizing rule, sort-by-value); Echo Isles: "+15 gold" rising over each unit + a permanent banner, a **real Victory dialog when the enemy's last building is razed** (Continue Game dismisses, Quit Game ends the match), a 4-player leaderboard in the game's own chrome (screenshots) |
 | 7.20 | **The trigger's AUDIO output** — the `sound` handle family (`CreateSound`(`FromLabel`/`FilenameWithLabel`), `SetSoundParamsFromLabel`, `SetSound{Duration,Channel,Pitch,Volume,Distances,ConeAngles,ConeOrientation,Position,DistanceCutoff}`, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`/`GetSoundIsPlaying`) + every BJ riding on it (`PlaySoundBJ`/`AtPointBJ`/`OnUnitBJ`/`StartSoundForPlayerBJ`/`VolumeGroupSetVolumeBJ`…), the 8 **volume groups**, and **music** (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic` — all three were explicit no-ops). Custom maps were silent apart from unit/combat sounds; melee had **no music at all** | ✅ done (live) | §7.20 headless (16 checks through the real blizzard.j BJs, resolving labels out of the **real** SoundInfo SLKs: params-not-file, the cross-table label namespace, `PercentToInt(pct,127)` volumes, the cone, the editor's `-1`/`4294967296.0` sentinels, the cine-mode group ducking); Echo Isles **live**: its own `SetMapMusic("Music", true, 0)` → the Human `Music_V1` playlist → `Human1.mp3` decoded (273 s) and playing; a trigger's `PlaySoundAtPointBJ` → a real PannerNode at the named world point (refDist 600 / maxDist 10000 from the SLK row), dropped when past its 3000 `DistanceCutoff`; an `AttachSoundToUnit`'d sound rides a marching peasant; blizzard.j's `PlaySound()` reaps its handle when the clip ends |
 | 7.21 | **Timer dialogs — the countdown windows** (`CreateTimerDialog`/`SetTitle`/`SetTitleColor`/`SetTimeColor`/`SetSpeed`/`Display`/`IsDisplayed`/`SetRealTimeRemaining`/`Destroy`, + the `…BJ` family). Closes the last **melee leftover** on the list: `MeleeInitVictoryDefeat` builds the *crippled* window and the *finish-soon* window and both were silently discarded — so a player who lost their last main hall got no clock. Uncovered (and fixed) a **general timer-pump bug**: a handler that destroys a timer spliced `rt.timers` mid-`for…of`, making the pump **skip the next timer forever** — and blizzard.j's own `MarkGameStarted` does exactly that, 0.01 s into every map | ✅ done (live) | §7.21 headless (through the real BJs: `CreateTimerDialogBJ` shows it, a dialog reads its timer LIVE (45 → 32.5 s), `MeleeInitVictoryDefeat` builds 3 windows — the null-timer one + a cripple window per PLAYING slot, titled "Build Town Hall"/"Build Great Hall" off the game's own strings — and `MeleeCheckForCrippledPlayers` shows only the crippled player's, opening at 2:00 = `bj_MELEE_CRIPPLE_TIMEOUT`); §7.4c pins the timer-pump regression; Echo Isles **live**: razing player 0's hall (farm still standing → crippled, not defeated) pops blizzard.j's real *"Build Town Hall 1:48"* window + its own *"You will be revealed to your opponents…"* warning, and three windows stack under the leaderboard in the game's own chrome (screenshots) |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (250/335 used natives implemented) |
+| 7.22 | **Vision, fog and the last panels** — **shared vision + alliances** (`SetPlayerAlliance`/`GetPlayerAlliance` over a real per-pair, per-setting matrix seeded from the lobby's teams; `CripplePlayer`), which finally lets blizzard.j's **`MeleeExposePlayer`** do what the 7.21 cripple timer promised; **BOTH fogs, which are different systems** — the atmospheric haze (`SetTerrainFogEx`/`ResetTerrainFog` → the `scene.distFog` shader) and the fog of war (`CreateFogModifier{Rect,Radius,RadiusLoc}`/`FogModifierStart`/`Stop`/`Destroy`, `SetFogState*`, `FogEnable`/`FogMaskEnable` → the `VisionMap`); **way gates** (`WaygateActivate`/`SetDestination`/`Get*`, a 400×400 box read out of the MPQ); **multiboards** (the grid scoreboard → the game's own `MultiBoard.fdf`). Plus the **record-only handle binding** that all of it turned out to need | ✅ done (live) | §7.22 headless (30 checks through the real blizzard.j BJs + the real `AllianceTable`/`VisionMap`: the matrix seeds from teams and is **directed**, `SetPlayerAllianceStateBJ` allies a pair, `MeleeExposePlayer` → `CripplePlayer` reveals the crippled player to exactly the players not co-allied with them; a fog modifier is created **stopped**, VISIBLE lights ground nobody can see and MASKED blacks out ground a unit stands in; `SetTerrainFogExBJ`'s 0–100 scale vs the native's 0–1; a gate fires on **entering** its box, not standing in it — the ping-pong regression; the multiboard BJ/native **axis swap** and the borrowed item handle). Echo Isles **live**: razing a crippled player's hall drains blizzard.j's clock → *"Revealing Player 2."* and their units show through black fog, while `ALLIANCE_SHARED_VISION` instead **lights the terrain**; Jack-o-Lantern's own green haze; a VISIBLE rect lit out in the unexplored middle of the map. CentaurGrove: a footman walks into the SW gate and comes out the NE one, 10 000 units away. Skibi's Castle TD: its **own** multiboard in the game's own chrome (screenshots) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (270/335 used natives implemented) |
 
 Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + **7.4c the
 timer-pump regression** + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13
 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items
-+ 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs) and **`pnpm jass:coverage`** (unimplemented natives by usage).
++ 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs + 7.22 vision/fog/waygates/multiboards) and
+**`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It only counts natives called **directly** from a `war3map.j`, so everything
-> a map reaches *through* a blizzard.j BJ — groups, `PolledWait`, the whole `PlaySound*BJ` family — is invisible in
-> the ranking. Treat it as a floor, not a census.
+> a map reaches *through* a blizzard.j BJ — groups, `PolledWait`, the whole `PlaySound*BJ` family, and most of the
+> multiboard and alliance surface — is invisible in the ranking. Treat it as a floor, not a census. 7.22 is the clearest
+> case yet: `SetPlayerAlliance` sat in the ranking at **1 map** and carried a `✓` (it was an explicit no-op, and the
+> tool detects an implementation by *name*, not by behaviour) — while the GUI's entire "Player - Make X treat Y as an
+> Ally" family, which every co-op and team map uses, reaches it through `SetPlayerAllianceStateBJ` and was counted
+> nowhere. A `✓` means "the name appears in `src/jass/natives/`", not "it works".
 >
 > It also detects an implementation by scanning `src/jass/natives/*.ts` for the native's name, and until 7.20 it
 > looked only for a **quoted** one. That made it report `TriggerRegisterUnitEvent` — the single most-used native in
@@ -121,6 +127,8 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/dialogs.ts` | **dialogs + the game-over path** (7.19): `DialogCreate`/`SetMessage`/`AddButton`/`AddQuitButton`/`Display`, the dialog-button events (`TriggerRegisterDialogButtonEvent` → `GetClickedButton`/`GetClickedDialog`), `EndGame`/`PauseGame`/`IsNo{Victory,Defeat}Cheat`, and `CreateSoundFromLabel`+`StartSound` (which is where the victory/defeat sting comes from). This is the melee **victory/defeat screen** — see 7.19 |
 | `natives/leaderboard.ts` | **leaderboards** (7.19): the whole `Leaderboard*` family (create/display/assign-to-player, rows keyed by player, sort by value/player/label, style + colours) — the ~25 natives the entire GUI leaderboard surface rides on |
 | `natives/timerdialog.ts` | **timer dialogs** (7.21): the countdown windows (`CreateTimerDialog` + its setters). A `timerdialog` holds **no clock** — it is a *view onto a `timer`*, read live each frame, which is why the melee library can build the window at init and start the timer two minutes later |
+| `natives/vision.ts` | **alliances + BOTH fogs** (7.22). Three families that all answer *"what can a player see"*, kept in one file precisely because the thing most likely to go wrong is confusing the two fogs: **alliances** (`SetPlayerAlliance`/`GetPlayerAlliance`/`CripplePlayer` — a directed per-pair matrix, `src/sim/alliances.ts`), the **fog of war** (`CreateFogModifier*`/`FogModifierStart`/`Stop`/`Destroy`, `SetFogState*`, `FogEnable`/`FogMaskEnable` → the `VisionMap`), and the **terrain haze** (`SetTerrainFogEx`/`ResetTerrainFog` → `scene.distFog`), which is not fog of war at all |
+| `natives/multiboard.ts` | **multiboards** (7.22): the grid scoreboard (`CreateMultiboard`, row/column counts, the `…Items…` plural setters and the `…Item…` singular ones). A cell is addressed **(row, column)** by the native and **(col, row)**, 1-based, by every BJ — Blizzard does the swap. A `multiboarditem` handle is **borrowed**, not owned (`MultiboardGetItem` … `MultiboardReleaseItem`), so it is a cursor into the board, never a copy of the cell |
 | `natives/sound.ts` | **sounds + music** (7.20): the `sound` handle family (`CreateSound`/`FromLabel`, `SetSoundParamsFromLabel`, the `SetSound*` setters, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`), the 8 `volumegroup`s, and the music interface (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic`). A `sound` is a **configured playback object**, not a clip — the natives mostly mutate a `SoundObj`, and only Start/Stop reach the engine (`SoundBoard`) |
 | `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
@@ -912,9 +920,8 @@ Victory dialog**; "Continue Game" dismisses it and the game plays on, "Quit Game
 match down. A 4-player `CreateLeaderboardBJ` board sits top-right in the game's own chrome, sorted by value, each
 row in its player's real colour (screenshots).
 
-> **What's still not on screen:** **multiboards** (`CreateMultiboard` — the other scoreboard; the FDF
-> `MultiBoard.fdf` is right there) and the **score screen** (`EndGame(true)` leaves the match rather than showing
-> `Glue\ScoreScreen.fdf`). *(Timer dialogs — the third gap on this list — now render: 7.21.)*
+> **What's still not on screen:** the **score screen** (`EndGame(true)` leaves the match rather than showing
+> `Glue\ScoreScreen.fdf`). *(Timer dialogs render — 7.21; **multiboards** render — 7.22.)*
 
 ## The trigger's audio output — sounds + music (7.20 — done, live)
 
@@ -1104,9 +1111,195 @@ chrome (screenshots).
 > game — both display a timer window — and read it off the screen.
 
 **Not modelled:** `TimerDialogSetSpeed` scales the readout but the engine's own preemption/priority rules around it
-aren't simulated, and **`MeleeExposePlayer`** — what the cripple timer *does* when it drains — rides the `CripplePlayer`
-native (reveal a player to a force), which we don't implement yet, so the clock runs out and the message prints but the
-player isn't actually revealed. That needs the shared-vision surface (`SetPlayerAlliance`), not a timer.
+aren't simulated. *(**`MeleeExposePlayer`** — what the cripple timer* does *when it drains — was the other gap here, and
+it is closed: 7.22.)*
+
+## Vision, fog and the last panels (7.22 — done, live)
+
+Four gaps that are each a small bridge onto an engine we already have — and one shared discovery that all of them
+needed.
+
+### Shared vision + alliances — `SetPlayerAlliance` / `CripplePlayer`
+
+WC3 does **not** keep a team number. It keeps a per-**pair**, per-**setting**, **directed** alliance matrix (common.j's
+ten `alliancetype`s: PASSIVE, SHARED_XP, SHARED_VISION, SHARED_CONTROL, …). `SetPlayerAlliance(A, B, …)` says what A
+grants B, and the two directions are independent — which is exactly why blizzard.j's own co-ally test reads **both**:
+
+```jass
+function PlayersAreCoAllied takes player playerA, player playerB returns boolean
+    if (playerA == playerB) then
+        return true
+    endif
+    if GetPlayerAlliance(playerA, playerB, ALLIANCE_PASSIVE) then
+        if GetPlayerAlliance(playerB, playerA, ALLIANCE_PASSIVE) then
+            return true          // both ways, or you aren't allies
+        endif
+    endif
+    return false
+endfunction
+```
+
+**`src/sim/alliances.ts`** is that matrix, **seeded from the lobby's teams** (team-mates are mutually passive and share
+vision) so a melee game behaves exactly as it did when allegiance was a plain `teamOf(a) === teamOf(b)` — and a script
+can then change any pair from under it. It is now the source of truth for three things that used to read the team
+directly: `GetPlayerAlliance` / `IsPlayerAlly`, the sim's own `hostile()`/`allied()` (via a `SimWorld.alliedPlayers`
+injection, in the same style as `visibleToTeam`/`lineOfSight` — so *"Player - Make X treat Y as an Ally"* actually stops
+them fighting), and the fog.
+
+Two things the fog now reads, and they are **different systems that look alike**:
+
+- **`ALLIANCE_SHARED_VISION`** lends you a player's **sight**: their units reveal *your* fog (`RtsController
+  .revealsForLocal`). The terrain lights up.
+- **`CripplePlayer(whichPlayer, toWhichPlayers, flag)`** reveals that player's **units** *to* you, wherever they stand
+  (`RtsController.exposed`, checked in `fogHides`). The units show; the **ground stays black**.
+
+**This is what the 7.21 cripple timer was missing.** `MeleeInitVictoryDefeat` built the *"Build Town Hall 1:59"* window
+and `MeleeCheckForCrippledPlayers` started its clock — and when it drained, blizzard.j's `MeleeExposePlayer` called a
+`CripplePlayer` that did nothing, so the message printed and the player was never revealed. It is real now:
+
+```jass
+function MeleeExposePlayer takes player whichPlayer, boolean expose returns nothing
+    local force toExposeTo = CreateForce()
+    call CripplePlayer( whichPlayer, toExposeTo, false )        // clear any previous exposure…
+    set bj_playerIsExposed[GetPlayerId(whichPlayer)] = expose
+    loop                                                        // …build the force of everyone NOT co-allied…
+        if (not PlayersAreCoAllied(whichPlayer, indexPlayer)) then
+            call ForceAddPlayer( toExposeTo, indexPlayer )
+        endif
+        …
+    endloop
+    call CripplePlayer( whichPlayer, toExposeTo, expose )       // …and reveal them to it
+endfunction
+```
+
+> **The stub that was worse than a missing native.** `SetPlayerAllianceStateBJ` was registered as a **native no-op** —
+> but it is not a native at all, it is a blizzard.j **function**, and the interpreter resolves natives *before* user
+> functions. So the stub **shadowed Blizzard's own code** and silently swallowed the entire GUI alliance surface (the
+> whole *"Player - Make X treat Y as an Ally"* family is nothing but that BJ fanning out into `SetPlayerAlliance`).
+> Never register a `…BJ` name as a native unless you mean to replace blizzard.j's version of it.
+
+### The two fogs — and they are not the same thing
+
+`SetTerrainFogEx` was the **#1 unimplemented native** in the corpus ranking (14 maps), and it is **not fog of war**. It
+is the **atmospheric distance haze** — `scene.distFog`, the shader we already had (`src/render/fog.ts`, driven from the
+map's w3i). So this was a bridge, not a new system. The corpus settled the one open question outright: **all 12
+`SetTerrainFogEx` calls across the 165 maps pass style `0` (linear)** — which is exactly what our shader does. (`density`
+only bites on the exponential styles, which is why those same maps happily pass anything from `0.0` to `16.9` for it and
+it never mattered.) `ResetTerrainFog` restores the map's **own w3i** fog, not "no fog".
+
+`SetTerrainFog` itself — five reals Blizzard did not even name in common.j, documented nowhere, and called by **no map in
+the corpus** — stays an explicit no-op rather than a guessed mapping onto our shader.
+
+The **fog of war** half is the `VisionMap`. A fog modifier holds an area at a `fogstate` for one player:
+
+- **`FOG_OF_WAR_VISIBLE`** lights ground nobody stands near — how a TD shows you its whole maze.
+- **`FOG_OF_WAR_FOGGED`** drops it to explored grey.
+- **`FOG_OF_WAR_MASKED`** blacks out ground you are **standing in** — a cinematic area. This one only works because
+  MASKED **clears `explored`**, the one layer that is otherwise write-once.
+
+Modifiers are stamped **last**, over everything the units revealed, on every vision rebuild. And the crux, which the
+BJ has to paper over and a naive reading of common.j misses: **`CreateFogModifier*` does not start the modifier.**
+
+```jass
+function CreateFogModifierRectBJ takes boolean enabled, player whichPlayer, fogstate whichFogState, rect r returns fogmodifier
+    set bj_lastCreatedFogModifier = CreateFogModifierRect(whichPlayer, whichFogState, r, true, false)
+    if enabled then
+        call FogModifierStart(bj_lastCreatedFogModifier)     // ← the BJ starts it; the native hands back a STOPPED one
+    endif
+    return bj_lastCreatedFogModifier
+endfunction
+```
+
+(The same *"the BJ shows it, the native doesn't"* shape as `CreateTimerDialogBJ` in 7.21.) `FogEnable` and
+`FogMaskEnable` are the two **separate** global switches — the grey "can't see it now" veil and the black "never been
+here" mask — and blizzard.j gives each its own On/Off pair precisely because they are not one switch.
+
+### Way gates
+
+A Way Gate (`'nwgt'`) teleports anything entering it to a destination point. Seven of the eleven maps that use one are
+plain **melee** maps (CentaurGrove, WindyWaste, Riverrun, Plaguelands, IceCrown, MysticIsles, Venetia) — the gate is a
+map feature, not a custom-map gadget.
+
+**The trigger volume is not a guess.** The Way Gate carries ability `Awrp` (`UnitAbilities.slk`: `abilList=Awrp,Avul`),
+and `Awrp`'s `DataA1`/`DataB1` are `400`/`400` — which `AbilityMetaData.slk` + `WorldEditStrings.txt` name **"Teleport
+Area Width"** and **"Teleport Area Height"**. So the gate is a **400×400 box**, not a circle.
+
+> **A gate fires on ENTERING its box, not on standing in it** — and this is the whole behaviour, not a nicety. A gate's
+> destination *is its partner gate*, so the traveller lands **inside the partner's box**. Fire on occupancy and the
+> partner throws it straight back, the first gate throws it forward again, and it ping-pongs forever. That is not
+> hypothetical: it is what the first implementation did, measured live on `(4)CentaurGrove` — the footman bounced SW↔NE
+> **every tick** and never arrived. So each gate keeps the set of units already inside it and diffs against it, exactly
+> as the enter-region pump keeps its baseline (7.4b); a unit deposited inside a gate is seeded as already-there, and only
+> crosses again once it leaves and walks back in. Pinned by a multi-tick check in §7.22.
+
+### The discovery all four needed: a record-only handle points at nothing
+
+`CreateAllUnits()` is **record-only** for us — those units came in from `war3mapUnits.doo` and are *adopted*, not spawned
+(7.3) — so `CreateUnit` inside it recorded a row and handed back a handle with `simId = -1`. But the script goes right on
+**configuring that handle**:
+
+```jass
+set u = CreateUnit( p, 'nwgt', -3840.0, -3840.0, 270.000 )                        // (4)CentaurGrove, verbatim
+call WaygateSetDestination( u, GetRectCenterX(gg_rct_NE_Waygate), GetRectCenterY(gg_rct_NE_Waygate) )
+call WaygateActivate( u, true )
+```
+
+Every one of those calls was landing on a handle with no unit behind it. The units all **exist** by the time the script
+runs (`startMelee` waits for every model first — 7.3), so `EngineHooks.findPlacedUnit(typeId, x, y)` now binds the
+record-only handle to the unit already standing there (matched by type + position; the script and the `.doo` are two
+encodings of one placement). Waygates are impossible without it — and it also quietly fixes `SetResourceAmount` on a
+pre-placed gold mine and `SetUnitColor` on a pre-placed tavern.
+
+### Multiboards
+
+**Be honest about the priority:** only 4 of the 165 bundled maps create one. It earns its place because it is what DotA
+and the whole modern custom-map ecosystem puts on screen, and because `UI\FrameDef\UI\MultiBoard.fdf` was sitting right
+next to the `LeaderBoard.fdf` we already mount. Where a leaderboard (7.19) is rows keyed by **player**, each holding one
+**number**, a multiboard is a free-form **grid of string cells**. Two shapes read off Blizzard.j rather than guessed:
+
+- **The BJ and the native take the axes in opposite orders.** The native is `MultiboardGetItem(mb, row, column)`,
+  **0-based**; every BJ that fronts it is `MultiboardSetItemValueBJ(mb, col, row, val)`, **1-based**, and loops
+  `MultiboardGetItem(mb, curRow - 1, curCol - 1)` (with 0 meaning "every row"/"every column"). Swap them and a script
+  writes down the wrong axis — and on a square board it would silently transpose rather than fail.
+- **A `multiboarditem` handle is BORROWED, not owned.** Every BJ pairs `MultiboardGetItem` with `MultiboardReleaseItem`,
+  so the handle is a **cursor into the board**, never a copy of the cell; a write through a released one is a no-op.
+
+`src/ui/multiboard.ts` mounts the game's own frame and injects the cells into its (deliberately empty)
+`MultiboardListContainer`. The same **unsized-frame trap** the leaderboard and the timer dialog both hit bit a third
+time, and worse: `MultiboardTitleBackdrop` carries a **`SetAllPoints`** — *after* its two `SetPoint`s — and the parent it
+would fill is the root frame, which in this file is the **0.024 minimize-button square**. Left in, the title band pins
+itself to that square and the title wraps inside a 24-thousandth-wide box. (The FDF's root is the *button*, not the
+board: the title hangs off its left edge and the body off its bottom, so the panel grows out of that one square and both
+of its dimensions are the engine's to decide.)
+
+### Verified
+
+Headless (`pnpm jass:test` §7.22), 30 checks through the **real** blizzard.j BJs — and, where the semantics actually
+live, against the **real** engine classes (`AllianceTable`, `VisionMap`) rather than a mock that would only agree with
+itself: the matrix seeds from the lobby's teams and is **directed** (0 un-allies 2 → not co-allied, though 2 still grants
+0 PASSIVE); `SetPlayerAllianceStateBJ(bj_ALLIANCE_ALLIED_VISION)` allies a pair *and* grants shared vision;
+`MeleeExposePlayer` → `CripplePlayer` reveals the crippled player to exactly the players **not co-allied** with them (and
+sets `bj_playerIsExposed`), and un-exposes them again. A fog modifier is created **stopped**; started, VISIBLE lights
+ground no unit can see and MASKED blacks out ground a unit is standing in; stopping the reveal falls back to Explored
+grey (it *was* seen); `FogEnableOff` + `FogMaskEnableOff` are two separate layers. `SetTerrainFogEx` takes rgb in 0–1
+while `SetTerrainFogExBJ`'s 0–100 is divided by 100 on the way in; `ResetTerrainFog` restores the w3i's own fog. A gate
+teleports on **entry**, **stays put over 5 more ticks** (the ping-pong gate), re-arms when the traveller leaves, ignores
+a unit 250 units out (the box's half-extent is 200), and does nothing when deactivated — and a record-only `CreateUnit`
+binds to the pre-placed unit (`simId 1`, not −1). The multiboard's BJ/native **axis swap** lands "Kills" in (row 4,
+col 1) from `(col 2, row 5)`, and a write through a **released** item handle is a no-op.
+
+Verified **live**: on Echo Isles, giving orc player 1 a burrow and razing their Great Hall crippled them (blizzard.j's
+own `bj_playerIsCrippled[1]`, its *"Build Great Hall"* clock ticking); draining that clock printed Blizzard's own
+**"Revealing Player 2."** and their five peons + burrow rendered **through pitch-black fog** — while granting
+`ALLIANCE_SHARED_VISION` instead **lit the terrain** at the identical spot (the two systems, side by side). Jack-o-
+Lantern's own `SetTerrainFogEx(0, 1000, 5000, 0, 0.000, 0.502, 0.000)` turned the horizon green and SavageStorm's turned
+it cold; `ResetTerrainFog` put it back. A `FOG_OF_WAR_VISIBLE` rect lit a sharp island of terrain (creeps and all, on the
+minimap too) out in the unexplored middle of the map, while created-but-not-started it did nothing at all. On
+`(4)CentaurGrove` the map's **own** script built both waygates, pointed them at each other and activated them, and a
+footman ordered into the SW gate came out at the NE one ~10 000 units away **and stayed there**. On `(10)Skibi'sCastleTD`
+its **own** `Trig_Multiboard_Create_Actions` built its real board — *"- Wave 0 of 45"*, *"West Lives - 30"*, its icons,
+and its own column widths (11.50/4.50/4.50 → 0.115/0.045/0.045 through the BJ's ÷100) — in the game's own chrome
+(screenshots).
 
 ## What's NOT done yet (next tasks — keep this list honest)
 
@@ -1119,24 +1312,25 @@ player isn't actually revealed. That needs the shared-vision surface (`SetPlayer
   stays passive/uncastable (graceful, but inert).
 - **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
   filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items; 7.19 floating text, dialogs and
-  leaderboards; 7.20 sounds and music; 7.21 timer dialogs. Still no-ops: **weather** (`AddWeatherEffect` returns a null
-  handle; nothing renders rain/snow), **cameras/cinematics**, **upgrades** (`SetPlayerTechResearched`), **waygates**
-  (`WaygateActivate` / `WaygateSetDestination` — 11 maps), **fog modifiers** / `SetTerrainFogEx` (14 maps — now the top
-  of the unimplemented ranking), **shared vision** (`SetPlayerAlliance` — which is why the melee cripple timer can run
-  out without actually revealing the player, §7.21) and **multiboards**. Each is a small bridge method away — wire on
-  demand (`pnpm jass:coverage` ranks them by how many maps call them).
+  leaderboards; 7.20 sounds and music; 7.21 timer dialogs; 7.22 alliances/shared vision, both fogs, waygates and
+  multiboards. Still no-ops, now the top of the ranking: **cameras / cinematics** (`CreateCameraSetup` /
+  `CameraSetupSetField` / `CameraSetupSetDestPosition` — **10 maps each**, the biggest block left), **destructables**
+  (`CreateDestructable` / `GetEnumDestructable` — 5), **`SetGameSpeed`** (5), **`SetSkyModel`** (5), **`ReviveHeroLoc`**
+  (4), **`SetWaterBaseColor`** (4), **weather** (`AddWeatherEffect` returns a null handle; nothing renders rain/snow) and
+  **upgrades** (`SetPlayerTechResearched`). Each is a small bridge method away — wire on demand (`pnpm jass:coverage`
+  ranks them by how many maps call them).
 - **Shops** — no unit sells anything, so `EVENT_PLAYER_UNIT_SELL_ITEM` / `_SELL` never fire (the item-sale plumbing is
   wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
   path: shop stock (`AddItemToStock`), the buy command card, gold, range.
 - **Events still missing:** `EVENT_PLAYER_UNIT_SUMMON` (the sim has the summon channel — same "born in the renderer"
   shape as TRAIN_FINISH), `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `..._SELECTED`, `_SELL`/`_SELL_ITEM`
   (no shops — above), and the player-scoped `TriggerRegisterPlayerStateEvent` / chat events.
-- **Melee leftovers** (7.3): melee **AI** (`StartMeleeAI` is a no-op, so a computer slot just sits — the biggest one
-  left by far), hero-limit *enforcement* (the caps are recorded, not applied), **blight** under an undead base, and the
-  second half of the cripple rule — the timer **window** now renders (7.21) but `MeleeExposePlayer` can't actually
-  reveal the player, because `CripplePlayer`/`SetPlayerAlliance` (shared vision) isn't wired. *(The victory/defeat
-  **dialogs** render — 7.19; the first hero's Town Portal scroll is granted — 7.18 — though `AItp` has no cast
-  behaviour in the sim, so the scroll doesn't teleport yet.)*
+- **Melee leftovers** (7.3): melee **AI** (`StartMeleeAI` is a no-op, so a computer slot just sits — **the biggest one
+  left by far, and now the only structural one**), hero-limit *enforcement* (the caps are recorded, not applied), and
+  **blight** under an undead base. *(The victory/defeat **dialogs** render — 7.19; the cripple **timer window** renders
+  — 7.21 — and the cripple rule's second half now lands too: `MeleeExposePlayer` really does reveal the player — 7.22.
+  The first hero's Town Portal scroll is granted — 7.18 — though `AItp` has no cast behaviour in the sim, so the scroll
+  doesn't teleport yet.)*
 - **Natives on demand** — weather, cameras, cinematics (transmissions), multiboard, quests, gamecache. Use
   `pnpm jass:coverage` to prioritise (250/335 used natives implemented — and see the caveat on that number above).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

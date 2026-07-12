@@ -10,7 +10,7 @@
 import { intToRawcode, rawcodeToInt } from "../lexer";
 import { orderIdToString, orderStringToId } from "../orders";
 import type { EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime } from "../runtime";
-import { asInt, asNum, jBool, jHandle, jInt, JNULL, jStr, type JassValue } from "../values";
+import { asInt, asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -24,7 +24,21 @@ function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: numb
   const typeId = intToRawcode(typeInt);
   // Inside CreateAllUnits the row is recorded but NOT spawned: those units are the map's
   // pre-placed ones, already on the map from war3mapUnits.doo (Runtime.recordOnlySpawnFns).
-  const simId = rt.spawnSuppressed ? -1 : rt.hooks?.createUnit?.(playerIdx, typeId, x, y, facing) ?? -1;
+  // But we still BIND the handle to the unit standing there (7.22) — the script keeps
+  // configuring it on the next line, and until now every one of those calls fell on a
+  // handle with no unit behind it:
+  //
+  //     set u = CreateUnit( p, 'nwgt', -3840.0, -3840.0, 270.000 )     // a Way Gate…
+  //     call WaygateSetDestination( u, GetRectCenterX(gg_rct_NE_Waygate), … )   // …pointed here
+  //     call WaygateActivate( u, true )                                          // …and switched on
+  //
+  // (verbatim from (4)CentaurGrove's own CreateNeutralPassiveBuildings). Same for
+  // SetResourceAmount on a pre-placed gold mine and SetUnitColor on a tavern. The units
+  // all exist by now — startMelee waits for every model before running the script (7.3) —
+  // so the bridge can simply find the one at (x, y).
+  const simId = rt.spawnSuppressed
+    ? rt.hooks?.findPlacedUnit?.(typeId, x, y) ?? -1
+    : rt.hooks?.createUnit?.(playerIdx, typeId, x, y, facing) ?? -1;
   const u: JassUnit = { handleId: 0, player: playerIdx, typeId, x, y, facing, simId };
   u.handleId = rt.handles.alloc(u);
   rt.units.push(u);
@@ -332,6 +346,38 @@ export function registerWorldNatives(rt: Runtime): void {
     const u = unit(c, a[0]);
     return jBool(u ? c.rt.hooks?.isUnitType?.(u.simId, c.rt.enumIndex(a[1]), u.typeId) ?? false : false);
   });
+
+  // --- way gates (7.22) ---
+  // A Way Gate ('nwgt') teleports anything entering its box to a destination point. The
+  // box is 400×400 world units — the `Awrp` ("Warp") ability's DataA1/DataB1, which
+  // AbilityMetaData names "Teleport Area Width"/"Height" (see SimWorld.tickWaygates); the
+  // sim owns that behaviour, these four natives just configure it. Seven of the eleven
+  // maps that use a gate are plain MELEE maps, and every one of them sets its gates up
+  // inside CreateAllUnits — which is why the record-only handle binding above is what
+  // makes this work at all.
+  def(rt, "WaygateSetDestination", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.waygateSetDestination?.(u.simId, asNum(a[1]), asNum(a[2]));
+    return JNULL;
+  });
+  def(rt, "WaygateActivate", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.waygateActivate?.(u.simId, a[1].k === "bool" && a[1].b);
+    return JNULL;
+  });
+  def(rt, "WaygateGetDestinationX", (c, a) => {
+    const u = unit(c, a[0]);
+    return jReal(u && u.simId >= 0 ? c.rt.hooks?.waygateDestination?.(u.simId)?.x ?? 0 : 0);
+  });
+  def(rt, "WaygateGetDestinationY", (c, a) => {
+    const u = unit(c, a[0]);
+    return jReal(u && u.simId >= 0 ? c.rt.hooks?.waygateDestination?.(u.simId)?.y ?? 0 : 0);
+  });
+  def(rt, "WaygateIsActive", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(u && u.simId >= 0 ? c.rt.hooks?.waygateIsActive?.(u.simId) ?? false : false);
+  });
+
   // Floating text tags + on-screen messages (the "text actions") live in
   // natives/text.ts alongside the string/name text-logic natives.
 }

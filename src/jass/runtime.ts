@@ -121,6 +121,34 @@ export interface LeaderboardObj {
   revision: number; // bumped on every mutation, so the UI only rebuilds when it changed
 }
 
+/** One cell of a multiboard (a `multiboarditem`) — 7.22.
+ *
+ *  Unlike a leaderboard row (which is keyed by PLAYER), a multiboard cell is keyed by
+ *  (row, column) and holds a string, not a number: it is a free-form GRID. That is why
+ *  DotA and most modern custom maps use it — a leaderboard can only say "player: number". */
+export interface MultiboardItem {
+  value: string;
+  icon: string;
+  width: number; // fraction of the board's width (MultiboardSetItemWidth)
+  showValue: boolean;
+  showIcon: boolean;
+  valueColor: number; // 0xAARRGGBB
+}
+
+/** A JASS `multiboard` (CreateMultiboard) — the OTHER scoreboard (7.22). */
+export interface MultiboardObj {
+  handleId: number;
+  title: string;
+  titleColor: number; // 0xAARRGGBB
+  rows: number;
+  columns: number;
+  /** Row-major cells, `rows * columns` of them; resized by Set{Row,Column}Count. */
+  items: MultiboardItem[];
+  displayed: boolean;
+  minimized: boolean;
+  revision: number; // bumped on every mutation, so the UI only rebuilds when it changed
+}
+
 /** A JASS `sound` (CreateSound / CreateSoundFromLabel) — 7.20.
  *
  *  Not a clip but a **configured playback object**: the map builds each one once, in
@@ -597,7 +625,56 @@ export interface EngineHooks {
    *  `scale` 0–1. VolumeGroupReset passes no group. */
   setVolumeGroup?(group: number, scale: number): void;
   resetVolumeGroups?(): void;
+  // --- alliances + shared vision (7.22) ---
+  /** SetPlayerAlliance(source, other, whichAllianceSetting, value) — `type` is the raw
+   *  common.j alliancetype index (0 PASSIVE, 5 SHARED_VISION, 6 SHARED_CONTROL, …). The
+   *  matrix is DIRECTED: this is what `source` grants `other`. */
+  setPlayerAlliance?(source: number, other: number, type: number, value: boolean): void;
+  getPlayerAlliance?(source: number, other: number, type: number): boolean;
+  /** CripplePlayer(whichPlayer, toWhichPlayers, flag) — reveal `player`'s units to a set
+   *  of players (or stop revealing them). Melee's punishment for losing your last main
+   *  hall: blizzard.j MeleeExposePlayer hands it every player not co-allied with you. */
+  cripplePlayer?(player: number, toPlayers: number[], flag: boolean): void;
+  // --- fog of war: script-placed modifiers (7.22) ---
+  /** CreateFogModifierRect / CreateFogModifierRadius[Loc] — returns the modifier's id.
+   *  Created STOPPED: the native does not start it, FogModifierStart does. */
+  createFogModifier?(player: number, state: number, area: JassFogArea): number;
+  fogModifierStart?(id: number): void;
+  fogModifierStop?(id: number): void;
+  destroyFogModifier?(id: number): void;
+  /** SetFogStateRect / SetFogStateRadius[Loc] — a one-shot stamp (not a modifier). */
+  setFogState?(player: number, state: number, area: JassFogArea): void;
+  /** FogEnable(flag) — the grey "not currently seen" veil. */
+  fogEnable?(flag: boolean): void;
+  /** FogMaskEnable(flag) — the black "never explored" mask. */
+  fogMaskEnable?(flag: boolean): void;
+  // --- the atmospheric distance haze — a DIFFERENT system from the fog above (7.22) ---
+  /** SetTerrainFogEx(style, zstart, zend, density, r, g, b) — the map's environment fog
+   *  (what the w3i's own fog fields configure), rgb in 0–1. Nothing to do with the fog of
+   *  war: this is the haze the terrain fades into with distance. */
+  setTerrainFog?(style: number, zstart: number, zend: number, density: number, r: number, g: number, b: number): void;
+  /** ResetTerrainFog — back to the map's own w3i fog. */
+  resetTerrainFog?(): void;
+  // --- way gates (7.22) ---
+  /** WaygateSetDestination / WaygateActivate / WaygateGetDestinationX|Y / WaygateIsActive. */
+  waygateSetDestination?(unitId: number, x: number, y: number): void;
+  waygateActivate?(unitId: number, active: boolean): void;
+  waygateDestination?(unitId: number): { x: number; y: number } | null;
+  waygateIsActive?(unitId: number): boolean;
+  /** Find the sim unit a PRE-PLACED `CreateUnit` row refers to (7.22). Inside
+   *  `CreateAllUnits()` we record the row and never spawn (the unit is already on the map,
+   *  adopted from war3mapUnits.doo — Runtime.recordOnlySpawnFns), which used to leave the
+   *  script's handle pointing at nothing. Every one of those units exists by the time the
+   *  script runs (startMelee waits for them), so the handle can be bound to the real unit
+   *  instead — which is the only reason `WaygateSetDestination(u, …)` on a gate built
+   *  inside CreateAllUnits can work at all. Returns -1 when no match stands there. */
+  findPlacedUnit?(typeId: string, x: number, y: number): number;
 }
+
+/** Where a fog modifier applies — a rect or a centre+radius (common.j offers both). */
+export type JassFogArea =
+  | { kind: "rect"; minX: number; minY: number; maxX: number; maxY: number }
+  | { kind: "circle"; x: number; y: number; radius: number };
 
 /** Opaque handle store: integer ids → backing JS objects, with interning so
  *  stable references (players, enum constants like PLAYER_COLOR_RED) return the
@@ -700,6 +777,12 @@ export class Runtime {
    *  (message, then buttons, then DialogDisplay), so there is no single moment to push. */
   readonly dialogs: DialogObj[] = [];
   readonly leaderboards: LeaderboardObj[] = [];
+  /** Live `multiboard`s (CreateMultiboard) — the grid scoreboard (7.22). */
+  readonly multiboards: MultiboardObj[] = [];
+  /** MultiboardSuppressDisplay(true) — hides EVERY multiboard, present and future,
+   *  without clearing any `displayed` flag. Skibi's Castle TD toggles it around its
+   *  cinematics (MultiboardAllowDisplayBJ). A global switch, so it lives here. */
+  multiboardSuppressed = false;
   /** Live `timerdialog`s (CreateTimerDialog) — the countdown windows (7.21). Polled by the
    *  UI like the boards above, but for a second reason as well: a timer dialog's *time* is
    *  never pushed, it is read live off the timer it is bound to, every frame. */

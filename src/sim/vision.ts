@@ -36,6 +36,29 @@ export enum FogState {
   Visible = 2,
 }
 
+/** common.j's `fogstate` — what a script-placed fog modifier holds an area at.
+ *  The values are the engine's own bit flags, not 0/1/2:
+ *
+ *    constant fogstate FOG_OF_WAR_MASKED  = ConvertFogState(1)   // black — un-explored
+ *    constant fogstate FOG_OF_WAR_FOGGED  = ConvertFogState(2)   // grey  — explored, not seen
+ *    constant fogstate FOG_OF_WAR_VISIBLE = ConvertFogState(4)   // lit   — currently seen
+ *
+ *  They map one-for-one onto our three FogStates, which is why a fog modifier is a
+ *  stamp onto the same grid the units reveal into rather than a system of its own. */
+export enum JassFogState {
+  Masked = 1,
+  Fogged = 2,
+  Visible = 4,
+}
+
+/** Translate a common.j fogstate to the grid's own FogState (defaults to Visible —
+ *  the state every real call passes most often, and the harmless one to get wrong). */
+export function fogStateOf(jassState: number): FogState {
+  if (jassState === JassFogState.Masked) return FogState.Unexplored;
+  if (jassState === JassFogState.Fogged) return FogState.Explored;
+  return FogState.Visible;
+}
+
 export class VisionMap {
   readonly width: number; // cells
   readonly height: number;
@@ -48,6 +71,16 @@ export class VisionMap {
   // `iseedeadpeople`: a pure override that reports the whole map Visible without
   // touching `explored`, so toggling it back off restores the real fog.
   private revealAll = false;
+  // The two halves of WC3's fog, each independently switchable from a script
+  // (common.j `FogEnable` / `FogMaskEnable`; blizzard.j wraps them as FogEnableOn/Off
+  // and FogMaskEnableOn/Off). They are NOT the same switch:
+  //   • the MASK is the black "you have never been here" layer  → FogMaskEnable
+  //   • the FOG  is the grey "you can't see it right now" layer → FogEnable
+  // Turning the mask off shows the whole map's terrain in grey; turning the fog off as
+  // well lights it completely. Like revealAll these are pure read-side overrides, so
+  // switching one back on restores the real fog underneath.
+  private fogEnabled = true;
+  private maskEnabled = true;
   // Line-of-sight height field (world units per cell), installed by setHeightField.
   // `ground` = terrain height for the eye/target; `block` = ground + tree height, the
   // thing that casts shadows. `treeCount` lets overlapping trees (and the several cells
@@ -330,17 +363,88 @@ export class VisionMap {
   }
 
   /** Fog state at a grid cell — used per-vertex by the 3D overlay mesh. Cells off
-   *  the map read Unexplored (black), matching the border fog. */
+   *  the map read Unexplored (black), matching the border fog. `FogEnable(false)` /
+   *  `FogMaskEnable(false)` lift the grey / black layers on the way out. */
   cellState(cx: number, cy: number): FogState {
     if (this.revealAll) return FogState.Visible;
-    if (!this.inBounds(cx, cy)) return FogState.Unexplored;
+    if (!this.inBounds(cx, cy)) return this.maskEnabled ? FogState.Unexplored : FogState.Explored;
     const i = cy * this.width + cx;
-    return this.visible[i] ? FogState.Visible : this.explored[i] ? FogState.Explored : FogState.Unexplored;
+    const raw = this.visible[i] ? FogState.Visible : this.explored[i] ? FogState.Explored : FogState.Unexplored;
+    return this.promote(raw);
+  }
+
+  /** Apply the FogEnable / FogMaskEnable overrides to a raw grid state: with the mask
+   *  off, nothing is ever black; with the fog off, anything explored is fully lit. */
+  private promote(raw: FogState): FogState {
+    if (raw === FogState.Unexplored && !this.maskEnabled) raw = FogState.Explored;
+    if (raw === FogState.Explored && !this.fogEnabled) raw = FogState.Visible;
+    return raw;
+  }
+
+  /** common.j `FogEnable(flag)` — the grey "explored but not currently seen" veil. */
+  setFogEnabled(on: boolean): void {
+    this.fogEnabled = on;
+  }
+
+  /** common.j `FogMaskEnable(flag)` — the black "never explored" mask. */
+  setMaskEnabled(on: boolean): void {
+    this.maskEnabled = on;
   }
 
   /** Has this cell ever been seen? (Progressive doodad reveal in the renderer.) */
   isExplored(cx: number, cy: number): boolean {
-    return this.revealAll || (this.inBounds(cx, cy) && this.explored[cy * this.width + cx] === 1);
+    if (this.revealAll || !this.maskEnabled) return true;
+    return this.inBounds(cx, cy) && this.explored[cy * this.width + cx] === 1;
+  }
+
+  /** Hold a rectangle at a fog state — a script-placed `CreateFogModifierRect` /
+   *  `SetFogStateRect`. Re-stamped over the freshly-rebuilt grid each vision update,
+   *  so a *running* modifier keeps winning over what the units can actually see. */
+  stampRect(minX: number, minY: number, maxX: number, maxY: number, state: FogState): void {
+    const x0 = Math.max(0, Math.floor((minX - this.originX) / VISION_CELL));
+    const x1 = Math.min(this.width - 1, Math.ceil((maxX - this.originX) / VISION_CELL));
+    const y0 = Math.max(0, Math.floor((minY - this.originY) / VISION_CELL));
+    const y1 = Math.min(this.height - 1, Math.ceil((maxY - this.originY) / VISION_CELL));
+    for (let cy = y0; cy <= y1; cy++) {
+      for (let cx = x0; cx <= x1; cx++) this.stampCell(cy * this.width + cx, state);
+    }
+  }
+
+  /** Hold a circle at a fog state — `CreateFogModifierRadius[Loc]` / `SetFogStateRadius`. */
+  stampCircle(wx: number, wy: number, radius: number, state: FogState): void {
+    if (radius <= 0) return;
+    const cx = (wx - this.originX) / VISION_CELL;
+    const cy = (wy - this.originY) / VISION_CELL;
+    const r = radius / VISION_CELL;
+    const r2 = r * r;
+    const x0 = Math.max(0, Math.floor(cx - r));
+    const x1 = Math.min(this.width - 1, Math.ceil(cx + r));
+    const y0 = Math.max(0, Math.floor(cy - r));
+    const y1 = Math.min(this.height - 1, Math.ceil(cy + r));
+    for (let y = y0; y <= y1; y++) {
+      const dy = y + 0.5 - cy;
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - cx;
+        if (dx * dx + dy * dy <= r2) this.stampCell(y * this.width + x, state);
+      }
+    }
+  }
+
+  /** A fog modifier OVERRIDES what the grid computed, in both directions: VISIBLE lights
+   *  a cell no unit can see (the TD that shows you its whole maze), and MASKED blacks out
+   *  a cell you are standing in — so MASKED must clear `explored`, the one layer that is
+   *  otherwise write-once. That's what makes a re-masked area go properly black again. */
+  private stampCell(i: number, state: FogState): void {
+    if (state === FogState.Visible) {
+      this.visible[i] = 1;
+      this.explored[i] = 1;
+    } else if (state === FogState.Explored) {
+      this.visible[i] = 0;
+      this.explored[i] = 1;
+    } else {
+      this.visible[i] = 0;
+      this.explored[i] = 0;
+    }
   }
 
   /** Does this cell block line of sight beyond its own terrain height? True for tree
