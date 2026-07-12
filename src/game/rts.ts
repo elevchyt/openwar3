@@ -1345,12 +1345,26 @@ export class RtsController {
   }
 
   addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0, reservedId?: number): number {
-    const seqs = instance.model.sequences;
-    const anims = buildAnimSet(seqs);
-    // Per-unit animation blending: cross-fade between sequences over this unit's
-    // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
-    // transitions ease instead of hard-cutting (issue #8).
-    instance.setBlendTime?.(def.animBlend);
+    // A reserved id means the script-spawn path already created the SIM unit (JASS
+    // CreateUnit is synchronous — the trigger may level/order/move the unit the very next
+    // statement); we're only here to give it its body, now that the model has loaded. If
+    // that unit is already GONE (a trigger that RemoveUnit'd it while the model was still
+    // streaming), there is nothing to attach to — report -1 so the caller drops the model.
+    if (reservedId !== undefined) {
+      if (!this.sim.units.has(reservedId)) return -1;
+      this.attachInstance(reservedId, instance, def);
+      return reservedId;
+    }
+    const simId = this.addSimUnit(def, x, y, facing, owner, team, constructionTime);
+    this.attachInstance(simId, instance, def);
+    return simId;
+  }
+
+  /** Create the SIM unit alone — no model. The JASS `CreateUnit` path: the script needs a
+   *  live unit *now* (it may immediately add abilities, set its level, or order it about),
+   *  but the model streams in async. `attachInstance` gives it a body when it arrives; the
+   *  render loop syncs its position from the sim, so it simply appears where it has got to. */
+  addSimUnit(def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0, reservedId?: number): number {
     const simId = reservedId ?? this.nextId++;
     const profile = WORKERS[def.id];
     const worker: WorkerState | null = profile ? { ...profile, carryGold: 0, carryLumber: 0 } : null;
@@ -1401,6 +1415,24 @@ export class RtsController {
       // harvests lumber but is NOT Peon-classified — it fights like any other unit.
       { hero, abilities: this.buildInitialAbilities(def), mechanical: def.classification.includes("mechanical"), isPeon: def.classification.includes("peon"), level: def.level, baseInvulnerable: def.abilities.includes("Avul") },
     );
+    // A structure spawned WITH a build time is a foundation just laid — that's the
+    // moment EVENT_(PLAYER_)UNIT_CONSTRUCT_START fires (7.17). A pre-placed/instant
+    // building (constructionTime 0) was never "constructed", so it raises nothing.
+    if (constructionTime > 0) this.sim.noteConstruct(simId, "start");
+    return simId;
+  }
+
+  /** Give a sim unit its rendered body: the model instance + everything derived from it
+   *  (animation set, birth clip, scale). Called the moment the model is ready — the same
+   *  frame for the melee/placement paths, a few frames later for a script-spawned unit
+   *  (whose sim unit already exists). A second call for the same unit is ignored. */
+  private attachInstance(simId: number, instance: Instance, def: UnitDef): void {
+    if (this.byId.has(simId)) return;
+    const anims = buildAnimSet(instance.model.sequences);
+    // Per-unit animation blending: cross-fade between sequences over this unit's
+    // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
+    // transitions ease instead of hard-cutting (issue #8).
+    instance.setBlendTime?.(def.animBlend);
     const entry: Entry = {
       simId,
       unit: { instance, state: WidgetState.IDLE },
@@ -1439,7 +1471,6 @@ export class RtsController {
       instance.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
       entry.curSeq = -1;
     }
-    return simId;
   }
 
   /** Remove a unit outright (JASS RemoveUnit): no death/corpse. The render side drops
@@ -1487,6 +1518,35 @@ export class RtsController {
    *  model parts to a player-colour index (our slot doubles as the colour). */
   setUnitTeamColor(simId: number, colorIndex: number): void {
     this.byId.get(simId)?.unit.instance.setTeamColor?.(colorIndex);
+  }
+  /** JASS SetUnitAnimation / ResetUnitAnimation (7.17) — play the clip whose sequence
+   *  name matches `animation` ("attack", "stand victory", "birth"; "" resets to the
+   *  unit's stand). WC3 matches on the model's own sequence names, so this is a name
+   *  test over `anims.seqNames`, not a fixed table. The clip is held like a cast
+   *  animation so the idle picker doesn't stomp it on the next frame. */
+  setUnitAnimation(simId: number, animation: string): void {
+    const e = this.byId.get(simId);
+    if (!e) return;
+    if (!animation) {
+      // Reset: back to the idle stand, released to the normal animation picker.
+      e.castAnimT = 0;
+      e.unit.state = WidgetState.IDLE;
+      if (e.anims.stand >= 0) {
+        e.unit.instance.setSequence(e.anims.stand);
+        e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
+        e.curSeq = e.anims.stand;
+      }
+      return;
+    }
+    // A named clip may exist several times (Stand, Stand - 2): take the first match.
+    const want = animation.toLowerCase();
+    const seq = e.anims.seqNames.findIndex((n) => n.toLowerCase().startsWith(want));
+    if (seq < 0) return; // this model has no such clip — leave it alone (WC3 no-ops too)
+    e.unit.instance.setSequence(seq);
+    e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
+    e.curSeq = seq;
+    e.unit.state = WidgetState.WALK; // hold it against the idle picker
+    e.castAnimT = this.seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
   }
 
   /** Record a building's footprint half-extents (WORLD units) so the render loop seats
@@ -3030,11 +3090,22 @@ export class RtsController {
   }
 
   /** JASS IssueXOrder → the sim (Phase 7 — issue #33). Maps a generic order id + target
-   *  kind to the matching sim command so a trigger-issued unit actually marches/attacks,
-   *  then records the ISSUED-order event. Unlike the player `order()` path this does NOT
-   *  gate on ownership — a trigger can command any unit. Returns whether the order took. */
-  issueUnitOrder(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
-    const s = orderIdToString(orderId);
+   *  kind to the matching sim command so a trigger-issued unit actually marches/attacks/
+   *  casts, then records the ISSUED-order event. Unlike the player `order()` path this
+   *  does NOT gate on ownership — a trigger can command any unit. Returns whether the
+   *  order took. `order` is the order string; an ABILITY order (the GUI's "Order <unit>
+   *  to <ability>" → `IssueTargetOrder(u, "holybolt", t)`) is matched by name against the
+   *  unit's own abilities — the engine's numeric ids for ability orders live in no data
+   *  file, so the STRING is the reliable key (7.17). */
+  issueUnitOrder(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
+    const s = order || orderIdToString(orderId);
+    // Ability order? Find the ability on this unit whose Order/Orderon/Orderoff string
+    // matches, and cast it (autocast toggles flip the autocast instead of casting).
+    const cast = this.castOrder(unitId, s, targetId, x, y);
+    if (cast !== null) {
+      if (cast) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
+      return cast;
+    }
     let ok = false;
     if (kind === "point") {
       if (s === "attack" || s === "attackground") ok = this.sim.issueAttackMove(unitId, x, y);
@@ -3052,6 +3123,29 @@ export class RtsController {
     }
     if (ok) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
     return ok;
+  }
+
+  /** Is `order` one of this unit's ABILITY order strings? Then cast it (or toggle its
+   *  autocast) and report whether it took. Returns **null** when it isn't an ability
+   *  order at all, so the caller falls through to the generic move/attack/stop orders.
+   *  Order strings come from the ability data (AbilityFunc `Order`/`Orderon`/`Orderoff`
+   *  — e.g. Holy Light's "holybolt"). */
+  private castOrder(unitId: number, order: string, targetId: number, x: number, y: number): boolean | null {
+    if (!order || ORDER_IDS[order] !== undefined) return null; // a generic order
+    const u = this.sim.units.get(unitId);
+    if (!u) return null;
+    for (const ab of u.abilities) {
+      const def = this.abilities.get(ab.id);
+      if (!def) continue;
+      if (def.order === order) return this.sim.issueCast(unitId, ab.code, targetId, x, y);
+      // "…on"/"…off" are the autocast toggles (Heal's "autocastoff"/"autocaston").
+      if (def.orderOn === order || def.orderOff === order) {
+        const want = def.orderOn === order;
+        if (ab.autocastOn !== want) this.sim.toggleAutocast(unitId, ab.code);
+        return true;
+      }
+    }
+    return null; // no such ability on this unit — not an ability order we can serve
   }
 
   /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */

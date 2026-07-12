@@ -16,7 +16,8 @@
 //     Expressions stay synchronous (see JassThread + runSync below).
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
-import { Runtime, JassArray, ThreadAbort, type BoolExpr, type JassPlayer, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { rawcodeToInt } from "./lexer";
+import { Runtime, JassArray, ThreadAbort, unitStateHolds, type BoolExpr, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -52,6 +53,36 @@ export interface OrderEvent {
   y: number;
   target: UnitSnapshot | null;
 }
+/** One spell event (7.17): the caster, the ability rawcode, which phase of the cast,
+ *  and what it was aimed at. Mirrors SimWorld's SpellEvent (the sim raises it). */
+export interface SpellEvent {
+  caster: UnitSnapshot;
+  abilityId: string; // 4-char rawcode
+  phase: "channel" | "cast" | "effect" | "finish" | "endcast";
+  target: UnitSnapshot | null;
+  x: number;
+  y: number;
+}
+/** A construction milestone (7.17): the structure + which phase. */
+export interface ConstructEvent {
+  structure: UnitSnapshot;
+  phase: "start" | "cancel" | "finish";
+}
+/** A training milestone (7.17): the training building, the unit type, and — on
+ *  "finish" — the unit that just walked out. */
+export interface TrainEvent {
+  building: UnitSnapshot;
+  unitTypeId: string;
+  trained: UnitSnapshot | null;
+  phase: "start" | "cancel" | "finish";
+}
+/** A hero levelling up or learning a skill (7.17). */
+export interface HeroEvent {
+  hero: UnitSnapshot;
+  phase: "level" | "skill";
+  level: number; // the new hero level, or the rank learned
+  abilityId: string; // "skill" only
+}
 
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
 const EVENT_UNIT_DEATH = 53;
@@ -66,6 +97,32 @@ const EVENT_PLAYER_UNIT_ISSUED_TARGET_ORDER = 40;
 const EVENT_UNIT_ISSUED_ORDER = 75;
 const EVENT_UNIT_ISSUED_POINT_ORDER = 76;
 const EVENT_UNIT_ISSUED_TARGET_ORDER = 77;
+// 7.17 — construction (26–28 player / 64–65 unit: common.j has NO unit CONSTRUCT_START),
+// training (32–34 / 69–71), hero level + skill (41/42 / 78/79), the unit-state threshold
+// (59), and the five spell phases (272–276 player / 289–293 unit).
+const EVENT_PLAYER_UNIT_CONSTRUCT_START = 26;
+const EVENT_PLAYER_UNIT_CONSTRUCT_CANCEL = 27;
+const EVENT_PLAYER_UNIT_CONSTRUCT_FINISH = 28;
+const EVENT_UNIT_CONSTRUCT_CANCEL = 64;
+const EVENT_UNIT_CONSTRUCT_FINISH = 65;
+const EVENT_PLAYER_UNIT_TRAIN_START = 32;
+const EVENT_PLAYER_UNIT_TRAIN_CANCEL = 33;
+const EVENT_PLAYER_UNIT_TRAIN_FINISH = 34;
+const EVENT_UNIT_TRAIN_START = 69;
+const EVENT_UNIT_TRAIN_CANCEL = 70;
+const EVENT_UNIT_TRAIN_FINISH = 71;
+const EVENT_PLAYER_HERO_LEVEL = 41;
+const EVENT_PLAYER_HERO_SKILL = 42;
+const EVENT_UNIT_HERO_LEVEL = 78;
+const EVENT_UNIT_HERO_SKILL = 79;
+// EVENT_UNIT_STATE_LIMIT (59) needs no constant here: it can only be registered through
+// TriggerRegisterUnitStateEvent (the limit + op live in the registration), so the
+// dispatcher matches on that registration kind — see pumpUnitStates.
+const EVENT_PLAYER_UNIT_SPELL_CHANNEL = 272; // …CAST 273, EFFECT 274, FINISH 275, ENDCAST 276
+const EVENT_UNIT_SPELL_CHANNEL = 289; // …CAST 290, EFFECT 291, FINISH 292, ENDCAST 293
+/** The five spell phases, in the order common.j numbers them (both event blocks are
+ *  contiguous, so phase index + the block's base = the event id). */
+const SPELL_PHASES = ["channel", "cast", "effect", "finish", "endcast"] as const;
 
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
@@ -804,6 +861,113 @@ export class Interpreter {
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.unit.owner, unit)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, unit)));
+    }
+  }
+
+  /** Pump spell events (7.17) — the five phases of a cast. WC3 raises CHANNEL and CAST
+   *  as the caster begins, EFFECT when the spell goes off (the phase nearly every GUI
+   *  trigger listens for), FINISH + ENDCAST when it's over, and ENDCAST alone when a
+   *  cast is interrupted. Responses: GetSpellAbilityId/GetSpellAbilityUnit/
+   *  GetSpellTargetUnit/GetSpellTargetX/Y (+ GetTriggerUnit = the caster). */
+  pumpSpellEvents(events: ReadonlyArray<SpellEvent>): void {
+    for (const e of events) {
+      const caster = this.rt.unitForSim(e.caster);
+      const target = e.target ? this.rt.unitForSim(e.target) : JNULL;
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", caster],
+        ["SpellAbilityUnit", caster],
+        ["SpellAbilityId", jInt(rawcodeToInt(e.abilityId))],
+        ["SpellTargetUnit", target],
+        ["SpellTargetX", jReal(e.x)],
+        ["SpellTargetY", jReal(e.y)],
+      ]);
+      const phase = SPELL_PHASES.indexOf(e.phase);
+      if (phase < 0) continue;
+      const playerEvt = EVENT_PLAYER_UNIT_SPELL_CHANNEL + phase;
+      const unitEvt = EVENT_UNIT_SPELL_CHANNEL + phase;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.caster.owner, caster)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, caster)));
+    }
+  }
+
+  /** Pump construction events (7.17) — the foundation laid / build cancelled / building
+   *  finished, matched by the structure's owner. Responses: GetConstructingStructure /
+   *  GetCancelledStructure / GetConstructedStructure (+ GetTriggerUnit = the structure). */
+  pumpConstructEvents(events: ReadonlyArray<ConstructEvent>): void {
+    for (const e of events) {
+      const s = this.rt.unitForSim(e.structure);
+      const key = e.phase === "start" ? "ConstructingStructure" : e.phase === "cancel" ? "CancelledStructure" : "ConstructedStructure";
+      const responses = new Map<string, JassValue>([["TriggerUnit", s], [key, s]]);
+      const playerEvt = e.phase === "start" ? EVENT_PLAYER_UNIT_CONSTRUCT_START : e.phase === "cancel" ? EVENT_PLAYER_UNIT_CONSTRUCT_CANCEL : EVENT_PLAYER_UNIT_CONSTRUCT_FINISH;
+      // common.j declares no unit-scoped CONSTRUCT_START (only 64/65) — so a "start"
+      // matches player registrations only.
+      const unitEvt = e.phase === "cancel" ? EVENT_UNIT_CONSTRUCT_CANCEL : e.phase === "finish" ? EVENT_UNIT_CONSTRUCT_FINISH : -1;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.structure.owner, s)) ||
+        (unitEvt >= 0 && reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, s)));
+    }
+  }
+
+  /** Pump training events (7.17). The subject unit is the TRAINING BUILDING (that's what
+   *  GetTriggerUnit is on a train event, and what a unit-scoped registration watches);
+   *  the finished unit is GetTrainedUnit, its type GetTrainedUnitType. */
+  pumpTrainEvents(events: ReadonlyArray<TrainEvent>): void {
+    for (const e of events) {
+      const b = this.rt.unitForSim(e.building);
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", b],
+        ["TrainedUnit", e.trained ? this.rt.unitForSim(e.trained) : JNULL],
+        ["TrainedUnitType", jInt(rawcodeToInt(e.unitTypeId))],
+      ]);
+      const playerEvt = e.phase === "start" ? EVENT_PLAYER_UNIT_TRAIN_START : e.phase === "cancel" ? EVENT_PLAYER_UNIT_TRAIN_CANCEL : EVENT_PLAYER_UNIT_TRAIN_FINISH;
+      const unitEvt = e.phase === "start" ? EVENT_UNIT_TRAIN_START : e.phase === "cancel" ? EVENT_UNIT_TRAIN_CANCEL : EVENT_UNIT_TRAIN_FINISH;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.building.owner, b)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, b)));
+    }
+  }
+
+  /** Pump hero events (7.17) — a hero gained a level (GetLevelingUnit) or learned a
+   *  skill (GetLearningUnit/GetLearnedSkill/GetLearnedSkillLevel). */
+  pumpHeroEvents(events: ReadonlyArray<HeroEvent>): void {
+    for (const e of events) {
+      const hero = this.rt.unitForSim(e.hero);
+      const levelling = e.phase === "level";
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", hero],
+        [levelling ? "LevelingUnit" : "LearningUnit", hero],
+        ["LearnedSkill", jInt(e.abilityId ? rawcodeToInt(e.abilityId) : 0)],
+        ["LearnedSkillLevel", jInt(e.level)],
+      ]);
+      const playerEvt = levelling ? EVENT_PLAYER_HERO_LEVEL : EVENT_PLAYER_HERO_SKILL;
+      const unitEvt = levelling ? EVENT_UNIT_HERO_LEVEL : EVENT_UNIT_HERO_SKILL;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.hero.owner, hero)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, hero)));
+    }
+  }
+
+  /** Pump unit-state threshold events (7.17) — `TriggerRegisterUnitStateEvent(trig, u,
+   *  UNIT_STATE_LIFE, LESS_THAN, 100)`, i.e. EVENT_UNIT_STATE_LIMIT. Unlike the other
+   *  events this one isn't raised by the sim: it's a POLL of the watched unit's state each
+   *  tick (nothing in the sim announces "life changed"), fired on the rising edge — so
+   *  "life drops below 100" fires once per crossing, not every tick it sits below. The
+   *  edge is seeded at REGISTRATION (unitStateNow in natives/events.ts), so a unit already
+   *  under the limit when the trigger is created doesn't fire, but one damaged a moment
+   *  later — even in that same tick — does. */
+  pumpUnitStates(): void {
+    for (const reg of this.rt.triggerRegs) {
+      if (reg.kind !== "unitState") continue;
+      const now = unitStateHolds(this.rt, reg);
+      const was = reg.edge ?? now;
+      reg.edge = now;
+      if (!now || was) continue; // not a fresh crossing
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      const u = this.rt.data<JassUnit>(reg.params[0] ?? JNULL);
+      if (!trig || !u) continue;
+      const handle = jHandle(u.handleId, "unit");
+      this.fireTrigger(trig, this.withTrigger(new Map([["TriggerUnit", handle]]), trig));
     }
   }
 

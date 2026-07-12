@@ -68,6 +68,13 @@ export interface AbilityDef {
   //                  model worn by a buffed unit — Banish's ethereal glow, the small
   //                  per-unit aura swirl (GeneralAuraTarget), Flame Strike's burn.
   animNames: string[]; // caster animation tags (AbilityFunc "animnames": spell,throw,slam…)
+  // The ability's ORDER STRING (AbilityFunc `Order=holybolt`, and `Orderon`/`Orderoff`
+  // for an autocast toggle). This is the name a script casts it by: the GUI's "Unit -
+  // Order <unit> to <ability>" compiles to IssueTargetOrder(u, "holybolt", target), so
+  // without it a trigger can't make a unit cast anything (7.17).
+  order: string;
+  orderOn: string; // autocast on (Orderon)
+  orderOff: string; // autocast off (Orderoff)
 }
 
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
@@ -334,6 +341,10 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       // against the 1.27 MPQ (docs/wc3-data-formats.md).
       buffArt: mdlPath(buffTargetArt(func, str(r, "buffid1"))),
       animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+      // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it.
+      order: (f ? str(f, "Order") : "").trim().toLowerCase(),
+      orderOn: (f ? str(f, "Orderon") : "").trim().toLowerCase(),
+      orderOff: (f ? str(f, "Orderoff") : "").trim().toLowerCase(),
     });
   }
   return new AbilityRegistry(defs);

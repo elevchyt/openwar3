@@ -32,11 +32,11 @@
 | 7.14 | **Trigger orders** — `Issue{Immediate,Point,Target}Order`(+`ById`/`Loc`) → the sim marches/attacks; `OrderId`/`OrderId2String`/`String2OrderId`/`GetUnitCurrentOrder`; **`EVENT_..._ISSUED_ORDER`/`POINT`/`TARGET`** (38/39/40 + unit 75/76/77) w/ `GetIssuedOrderId`/`GetOrderPointX/Y`/`GetOrderTargetUnit` | ✅ done (live) | §7.14 headless (issue natives → bridge w/ right id+kind+target; order events dispatch owner-matched; vocabulary round-trips); Echo Isles: a trigger marches a squad of peasants (screenshots) |
 | 7.15 | **Trigger threads — waits** (`TriggerSleepAction`/`PolledWait`): trigger actions run on a suspendable thread; `TriggerExecute`/`ConditionalTriggerExecute`/`ExecuteFunc` run on the caller's thread | ✅ done (live) | §7.15 headless (a wait suspends + resumes on game time, **event responses survive it**, `PolledWait` through the real blizzard.j, 0s-wait can't hang, wait-in-condition abandoned, a Wait in map init defers the rest of init); ExtremeCandyWar + WarChasers park + resume real threads (screenshots) |
 | 7.16 | **Unit groups** — `CreateGroup`/`GroupEnumUnitsIn{Rect,Range,RangeOfLoc}`/`OfPlayer`/`OfType`/`Selected` (+`Counted`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`/`GroupAddUnit`/`IsUnitInGroup`, `Group{Immediate,Point,Target}Order` — the GUI's **"Pick every unit in \<region\> matching \<condition\>"**. Plus the filter natives it's useless without: `IsUnitType`, `IsUnitAlly`/`IsUnitEnemy`, `GetUnitLoc`, `GetStartLocationLoc` | ✅ done (live) | §7.16 headless (the real `ForGroupBJ`+`GetUnitsInRectMatching` path picks 5-of-6, the filter rejects the rest; group order reaches all members; one sim unit == one handle); Echo Isles: a trigger picks every worker in a region, tints them, then marches the group (screenshots); ExtremeCandyWar's own script drives 169 `CreateGroup`/168 enums/217 `ForGroup` — **all empty before, now finding units** |
-| — | remaining effect natives (add/remove ability, `SetHeroLevel`/XP, weather, …) + remaining events (unit-state, construct/train, spell-cast) | ⬜ **next** | a hero levels / a spell-cast trigger fires |
-| 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
+| 7.17 | **Abilities, heroes + the remaining sim events** — `UnitAddAbility`/`Remove`/`Get`/`SetUnitAbilityLevel`, `SetHeroLevel`/`AddHeroXP`/`SetHeroXP`/skill points/`SelectHeroSkill`, `SetUnitInvulnerable`/`Pathing`/`Animation`/`UserData`, the MathAPI (**`SquareRoot`** — every `DistanceBetweenPoints` rode on it); **ability ORDERS** (`IssueTargetOrder(u,"holybolt",t)` → the unit casts); events: **SPELL_**\* (5 phases), **CONSTRUCT_**\*, **TRAIN_**\*, **HERO_LEVEL/SKILL**, **UNIT_STATE_LIMIT** | ✅ done (live) | §7.17 headless (effects round-trip through the real BJs; every event family dispatches owner-matched; the state threshold fires on the *crossing* only); Echo Isles: one trigger spawns a Paladin → levels it to 5 → grants Holy Light → orders the cast, and HERO_LEVEL / UNIT_STATE_LIMIT / SPELL_EFFECT / CONSTRUCT_* / TRAIN_* all report back into the HUD (screenshots) |
+| 7.3 | Melee from the script (retire hard-coded roster) | ⬜ **next** | melee-via-script == `startMelee` |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (171/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It detects an implementation by scanning `src/jass/natives/*.ts` for the
 > quoted native name, and it only counts natives called **directly** from a `war3map.j`. So (a) natives registered
@@ -72,7 +72,7 @@ main()                                                                          
   InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
                                // an init trigger's `Wait` suspends main() itself — the rest of init resumes after it (7.15)
 // then: rts.tick pumps the runtime → timers + sleeping trigger threads (waits, 7.15) + region + death/damage/attacked
-//       + issued-order triggers fire live (7.4b/c, 7.14)
+//       + issued-order + spell/construct/train/hero-level + unit-state triggers fire live (7.4b/c, 7.14, 7.17)
 ```
 
 ---
@@ -91,7 +91,8 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `runtime.ts` | handle table (interned player/enum handles), `MapSetup`, globals/arrays, function+native registries, seeded RNG, `EngineHooks` bridge |
 | `interpreter.ts` | tree-walker: call frames, `and`/`or` **do not short-circuit** (JASS gotcha), type-directed arithmetic, safe defaults, loop/recursion caps — plus the **trigger-thread scheduler** (7.15): statements are generators, so `TriggerSleepAction` can suspend a trigger mid-action and `pumpThreads` resumes it on game time |
 | `natives/config.ts` | `config()` + player-setup natives → `MapSetup` |
-| `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, unit queries |
+| `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, unit queries, unit-mutation effects (7.13), orders (7.14), per-unit flags/animation/user-data (7.17) |
+| `natives/abilities.ts` | **abilities + heroes** (7.17): `UnitAdd/RemoveAbility`, `Get`/`SetUnitAbilityLevel`, `SetHeroLevel`/`AddHeroXP`/`SetHeroXP`, skill points, `SelectHeroSkill` — all through the sim's trigger-effect API |
 | `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
 | `natives/forces.ts` | **forces** (player groups): `CreateForce`/`ForceAddPlayer`/`IsPlayerInForce`/`ForForce`/`ForceEnum*` + `GetEnumPlayer`/`GetFilterPlayer` — the target of the "Text Message" actions (7.6) |
 | `natives/groups.ts` | **unit groups** (7.16): the `GroupEnum*` scans over the live sim (`EngineHooks.enumUnits`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`, membership, and the `Group*Order` mass orders — the GUI's "Pick every unit in \<region\> matching \<condition\>" |
@@ -504,6 +505,90 @@ enlarged each through `GetEnumUnit`, printed `CountUnitsInGroup` to the HUD, the
 map with one `GroupPointOrder` (screenshots). On ExtremeCandyWar the map's **own** script now drives 169 `CreateGroup` /
 168 enums / 217 `ForGroup` calls that **find units** (they returned empty before), at 144 fps with 208 units.
 
+## Abilities, heroes, and the remaining sim events (7.17 — done, live)
+
+The last two gaps in the trigger surface: the **effect** natives that touch a unit's spells and
+a hero's progression, and the **events** the sim still swallowed (spell casts, construction,
+training, hero levels, HP/mana thresholds). With these, a map can do the whole loop — *grant a
+spell → order it cast → react when it goes off*. Built:
+
+- **`src/jass/natives/abilities.ts`** (new) — `UnitAddAbility` / `UnitRemoveAbility` /
+  `UnitMakeAbilityPermanent`, `GetUnitAbilityLevel` / `SetUnitAbilityLevel` / `Inc` / `Dec`,
+  `UnitResetCooldown`, and the hero family: `GetHeroLevel` / `GetUnitLevel` / `SetHeroLevel`,
+  `GetHeroXP` / `SetHeroXP` / `AddHeroXP`, `GetHeroSkillPoints` / `UnitModifySkillPoints`,
+  `SelectHeroSkill`. Each is a bridge call into a new **trigger-effect API on `SimWorld`**
+  (`addAbility`/`removeAbility`/`setAbilityLevel`/`setHeroLevel`/`addHeroXp`/…) that reuses the
+  sim's own rules — `UnitAddAbility` adds at rank 1 (WC3 *adds* the ability, it doesn't make it
+  learnable), and `SetHeroLevel` runs the real `levelUp` path per level crossed, so the nova, the
+  HP/mana refill, the skill point and the HERO_LEVEL event all happen exactly as on a kill.
+- **`src/jass/natives/world.ts`** — `SetUnitInvulnerable`, `SetUnitPathing` (the "ghost"),
+  `SetUnitAnimation` / `QueueUnitAnimation` / `ResetUnitAnimation` (matched against the model's own
+  sequence names — `RtsController.setUnitAnimation`), `SetUnitUserData`/`GetUnitUserData` (the
+  "custom value" every unit-indexing library rides on — pure script state, so it lives on the
+  handle), `IsPlayerAlly`/`IsPlayerEnemy`.
+- **The MathAPI** (`natives/index.ts`): `SquareRoot`, `Sin`/`Cos`/`Tan`/`Asin`/`Acos`/`Atan`/`Atan2`,
+  `Pow`, `Deg2Rad`/`Rad2Deg`. Not decoration — blizzard.j's `DistanceBetweenPoints` *is*
+  `SquareRoot(dx*dx + dy*dy)`, so until now **every distance in the BJ layer measured 0**.
+- **Ability orders** — the GUI's *"Unit - Order \<unit\> to \<ability\>"* compiles to
+  `IssueTargetOrder(u, "holybolt", target)`. The order string lives in the ability data
+  (`<Race>AbilityFunc.txt` `Order=` / `Orderon` / `Orderoff` — verified in the 1.27 MPQ; it is
+  **not** in AbilityData.slk), so `AbilityDef` now carries it and the bridge passes the order
+  **string** alongside the id: `RtsController.castOrder` matches it against the unit's own
+  abilities and calls `SimWorld.issueCast` (an autocast toggle flips autocast instead). The engine's
+  numeric ids for ability orders exist in no data file, so `OrderId` **mints** a stable id per
+  order string (0x000E0000 block) — self-consistent, which is all GUI code needs
+  (`GetIssuedOrderId() == OrderId("holybolt")`), and the cast itself never depends on the number.
+- **The events** — the sim records each one only when the script listens (`captureSpells` /
+  `captureConstruct` / `captureTrain` / `captureHeroEvents`, derived in `syncEventCaptures`), and
+  `pumpMapScript` drains them into the matching `Interpreter.pump*`:
+  - **Spells** (`EVENT_(PLAYER_)UNIT_SPELL_*`, 272–276 / 289–293) — our cast timeline maps straight
+    onto WC3's five phases: the wind-up beginning is **CHANNEL + CAST**, the cast point is
+    **EFFECT** (the phase nearly every GUI trigger uses), `endCast` is **FINISH + ENDCAST**, and an
+    interrupted cast (a stun, a Stop, a new order) raises **ENDCAST** alone. Responses:
+    `GetSpellAbilityId` (the ability's rawcode), `GetSpellAbilityUnit`, `GetSpellTargetUnit`,
+    `GetSpellTargetX/Y/Loc`.
+  - **Construction** (26–28 / 64–65) — the foundation laid (`RtsController.addSimUnit` with a build
+    time), `cancelBuilding`, and construction reaching 0 → `GetConstructingStructure` /
+    `GetCancelledStructure` / `GetConstructedStructure`. (common.j declares no *unit*-scoped
+    CONSTRUCT_START — only the player one.)
+  - **Training** (32–34 / 69–71) — start/cancel from the queue methods; **FINISH is raised by the
+    engine, not the sim**, because a trained unit is born in the renderer (the sim owns no models):
+    `SimWorld.noteTrainFinish` is called once the unit actually exists, so `GetTrainedUnit` hands
+    the script a real unit. The subject unit (`GetTriggerUnit`) is the **training building**.
+  - **Hero level / skill** (41–42 / 78–79) → `GetLevelingUnit`, `GetLearningUnit` /
+    `GetLearnedSkill` / `GetLearnedSkillLevel`.
+  - **`EVENT_UNIT_STATE_LIMIT`** (59, via `TriggerRegisterUnitStateEvent`) — the one event nothing
+    in the sim raises ("life changed" has no hook), so the interpreter **polls** it and fires on the
+    **rising edge**: "life drops below 100" fires once per crossing, not every tick it sits below.
+    The edge is seeded at **registration** (`unitStateHolds`), so a unit already under the limit when
+    the trigger is created stays quiet, while one wounded a moment later — even in the same tick —
+    fires.
+- **`CreateUnit` is now synchronous** (a real fidelity fix, not a new feature). Our spawn loads the
+  model asynchronously, so a trigger's `CreateUnit` used to hand back a unit whose **sim unit didn't
+  exist yet** — every effect applied on the next line (add ability, set level, issue an order) was
+  silently dropped. `RtsController.addSimUnit` now creates the sim unit immediately and
+  `attachInstance` gives it its body when the model lands (the render loop syncs position from the
+  sim, so it just appears where it has got to). A unit `RemoveUnit`'d while its model is still
+  streaming makes `addUnit` return -1 and the model is dropped rather than left a ghost.
+
+Verified (`pnpm jass:test` §7.17), through the real `common.j`/`blizzard.j`: `UnitAddAbility` → rank
+1, `SetUnitAbilityLevel(3)` + `DecUnitAbilityLevel` → 2, `UnitRemoveAbility` → 0; `SetHeroLevelBJ`
+→ level 3, `AddHeroXP(250)` → level 4 at 650 XP, `UnitModifySkillPoints` → 6 unspent; invulnerable /
+pathing / animation / user-data all round-trip; `DistanceBetweenPoints` → 500 (3-4-5). Every event
+family dispatches owner-matched (an enemy's cast doesn't fire a Player 0 trigger), `GetSpellAbilityId`
+→ `'AHhb'`, `GetTrainedUnit` is the new unit, and the state threshold fires 0 / 1 / 2 times across
+healthy → crossed → still-below → re-crossed. Verified **live** on Echo Isles: one trigger creates a
+Paladin, `SetHeroLevel`s it to 5 (four HERO_LEVEL fires, the level-up nova, the "5" badge), grants it
+Holy Light at rank 3, and `IssueTargetOrder(hero, "holybolt", peasant)` — the hero walks in, casts,
+and heals the worker 120 → 220 HP, with SPELL_EFFECT ("Paladin cast Holy Light on Peasant"),
+UNIT_STATE_LIMIT ("life fell below 200"), TRAIN_START/FINISH and CONSTRUCT_START/FINISH all printing
+back into the HUD from the map's own triggers (screenshots).
+
+> Known nuance: because events are drained a tick after the sim raises them, a `Get*` that reads the
+> **live** sim inside a handler sees the current value — so `GetHeroLevel(GetLevelingUnit())` in the
+> four HERO_LEVEL fires of a `SetHeroLevel(5)` jump reports 5 each time, not 2/3/4/5. The event's own
+> responses are per-level and correct; only the live re-read collapses.
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -513,18 +598,18 @@ map with one `GroupPointOrder` (screenshots). On ExtremeCandyWar the map's **own
 - **Custom-ability *behaviour*** — object data now gives a custom ability its real numbers, but only abilities whose base
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).
-- **More effect natives — the next task.** 7.7 + 7.13 cover resources, unit-state, and the unit-mutation set
-  (move/facing/owner/pause/scale/colour/fly-height/speed), and 7.16 adds the group + filter/query surface. Still no-ops:
-  `UnitAddAbility`/`UnitRemoveAbility`, `SetHeroLevel`/`AddHeroXP`, `SetUnitAnimation`, `CreateItem`/`UnitAddItem`,
-  weather, sounds, cameras. Each is a small bridge method away — wire on demand as maps hit them (`pnpm jass:coverage`
-  ranks them by how many maps call them).
-- **Remaining sim events** — timers, region, death, **damage**, **attacked**, and **orders** pump live (7.4b/c, 7.14);
-  still to wire from `rts.tick`: **unit-state** (`EVENT_UNIT_STATE_LIMIT` — HP/mana threshold crossings),
-  **construction/train finished** (`EVENT_PLAYER_UNIT_CONSTRUCT_FINISH`/`TRAIN_FINISH`), **spell cast**
-  (`EVENT_PLAYER_UNIT_SPELL_*`). Same shape as `pumpDamageEvents`/`pumpOrderEvents` — snapshot the event in the sim
-  (with its id/target), drain + dispatch in the interpreter.
-- **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster. Its hard
-  dependency — unit groups, which `MeleeClearExcessUnits` enumerates — is now done (7.16).
+- **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
+  filter/query surface; 7.17 abilities, heroes, flags and animation. Still no-ops: **items** (`CreateItem`/`UnitAddItem`/
+  `RemoveItem` + the DROP/PICKUP/USE_ITEM events, and `ChooseRandomItemEx` — 151 maps call it), **weather**
+  (`AddWeatherEffect` returns a null handle; nothing renders rain/snow), **sounds**, **cameras/cinematics**, **upgrades**
+  (`SetPlayerTechResearched`), **waygates**, **multiboards/dialogs**. Each is a small bridge method away — wire on demand
+  (`pnpm jass:coverage` ranks them by how many maps call them).
+- **Events still missing:** `EVENT_PLAYER_UNIT_SUMMON` (the sim has the summon channel — same "born in the renderer"
+  shape as TRAIN_FINISH), the **item** events, `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `..._SELECTED`,
+  and the player-scoped `TriggerRegisterPlayerStateEvent` / chat events.
+- **7.3 — the next milestone:** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee`
+  roster. Its hard dependencies — unit groups (`MeleeClearExcessUnits` enumerates), and now the hero/ability + order
+  surface — are done.
 - **Natives on demand** — weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
   Use `pnpm jass:coverage` to prioritise (171/335 used natives implemented — and see the caveat on that number above).
 - **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them

@@ -27,7 +27,7 @@
 // `IsUnitAliveBJ(GetFilterUnit())`. That filter still works here (a dead unit's
 // GetUnitState reads 0), it just has nothing to reject.
 
-import { orderStringToId } from "../orders";
+import { orderIdToString, orderStringToId } from "../orders";
 import type { BoolExpr, JassPlayer, JassUnit, NativeCtx, RectObj, Runtime, UnitSnapshot } from "../runtime";
 import { asInt, asNum, asStr, jBool, jHandle, JNULL, truthy, type JassValue } from "../values";
 
@@ -203,7 +203,7 @@ export function registerGroupNatives(rt: Runtime): void {
 
   // --- group orders: one order, every member (a spawn wave marching out) ---
   // Returns true if the order took for at least one unit, like the engine.
-  const orderGroup = (c: NativeCtx, gv: JassValue, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
+  const orderGroup = (c: NativeCtx, gv: JassValue, order: string, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
     const g = group(c, gv);
     if (!g) return jBool(false);
     const t = kind === "target" ? unit(c, targetV) : undefined;
@@ -211,23 +211,33 @@ export function registerGroupNatives(rt: Runtime): void {
     for (const hid of [...g.units]) {
       const u = c.rt.handles.get(hid) as JassUnit | undefined;
       if (!u || u.simId < 0) continue;
-      if (c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, kind, x, y, t?.simId ?? 0)) any = true;
+      if (c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, t?.simId ?? 0)) any = true;
     }
     return jBool(any);
   };
-  const orderStr = (v: JassValue): string => (v?.k === "string" ? v.s : "");
-  def(rt, "GroupImmediateOrder", (c, a) => orderGroup(c, a[0], orderStringToId(orderStr(a[1])), "immediate", 0, 0, JNULL));
-  def(rt, "GroupImmediateOrderById", (c, a) => orderGroup(c, a[0], asInt(a[1]), "immediate", 0, 0, JNULL));
-  def(rt, "GroupPointOrder", (c, a) => orderGroup(c, a[0], orderStringToId(orderStr(a[1])), "point", asNum(a[2]), asNum(a[3]), JNULL));
-  def(rt, "GroupPointOrderById", (c, a) => orderGroup(c, a[0], asInt(a[1]), "point", asNum(a[2]), asNum(a[3]), JNULL));
+  // As with the single-unit orders (natives/world.ts): the order STRING rides along so an
+  // ability order ("holybolt") can be cast by name; an *ById* call recovers it from the
+  // vocabulary.
+  const byName = (c: NativeCtx, gv: JassValue, ov: JassValue, kind: "immediate" | "point" | "target", x: number, y: number, tv: JassValue): JassValue => {
+    const order = ov?.k === "string" ? ov.s.trim().toLowerCase() : "";
+    return orderGroup(c, gv, order, orderStringToId(order), kind, x, y, tv);
+  };
+  const byId = (c: NativeCtx, gv: JassValue, iv: JassValue, kind: "immediate" | "point" | "target", x: number, y: number, tv: JassValue): JassValue => {
+    const id = asInt(iv);
+    return orderGroup(c, gv, orderIdToString(id), id, kind, x, y, tv);
+  };
+  def(rt, "GroupImmediateOrder", (c, a) => byName(c, a[0], a[1], "immediate", 0, 0, JNULL));
+  def(rt, "GroupImmediateOrderById", (c, a) => byId(c, a[0], a[1], "immediate", 0, 0, JNULL));
+  def(rt, "GroupPointOrder", (c, a) => byName(c, a[0], a[1], "point", asNum(a[2]), asNum(a[3]), JNULL));
+  def(rt, "GroupPointOrderById", (c, a) => byId(c, a[0], a[1], "point", asNum(a[2]), asNum(a[3]), JNULL));
   def(rt, "GroupPointOrderLoc", (c, a) => {
     const l = c.rt.data<{ x: number; y: number }>(a[2]);
-    return orderGroup(c, a[0], orderStringToId(orderStr(a[1])), "point", l?.x ?? 0, l?.y ?? 0, JNULL);
+    return byName(c, a[0], a[1], "point", l?.x ?? 0, l?.y ?? 0, JNULL);
   });
   def(rt, "GroupPointOrderByIdLoc", (c, a) => {
     const l = c.rt.data<{ x: number; y: number }>(a[2]);
-    return orderGroup(c, a[0], asInt(a[1]), "point", l?.x ?? 0, l?.y ?? 0, JNULL);
+    return byId(c, a[0], a[1], "point", l?.x ?? 0, l?.y ?? 0, JNULL);
   });
-  def(rt, "GroupTargetOrder", (c, a) => orderGroup(c, a[0], orderStringToId(orderStr(a[1])), "target", 0, 0, a[2]));
-  def(rt, "GroupTargetOrderById", (c, a) => orderGroup(c, a[0], asInt(a[1]), "target", 0, 0, a[2]));
+  def(rt, "GroupTargetOrder", (c, a) => byName(c, a[0], a[1], "target", 0, 0, a[2]));
+  def(rt, "GroupTargetOrderById", (c, a) => byId(c, a[0], a[1], "target", 0, 0, a[2]));
 }

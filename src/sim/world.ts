@@ -137,6 +137,10 @@ export interface PendingCast {
   fired: boolean; // the effect has fired (mana/cooldown committed) — now channel/backswing
   channelLeft: number; // remaining channel time — the caster stands + holds (Blizzard, Starfall)
   backLeft: number; // remaining cast backswing (recovery) after a non-channelled effect
+  // The cast has run its course (endCast fired its SPELL_FINISH/ENDCAST). Set so a
+  // stale pendingCast left behind by a resumed order can't raise a second ENDCAST
+  // when the unit is later stopped (see clearCast — 7.17).
+  ended: boolean;
   // The order to resume after the cast (so an autocast/manual cast mid attack-move
   // or follow continues afterward instead of falling idle).
   resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | null;
@@ -295,6 +299,52 @@ export interface EventUnitInfo {
   facing: number;
 }
 const eventInfo = (u: SimUnit): EventUnitInfo => ({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+
+/** Where a cast is in its lifecycle, for the trigger engine's spell events (7.17).
+ *  WC3 raises five, in this order: CHANNEL (the caster begins), CAST (the spell is
+ *  committed), EFFECT (it goes off — the one most GUI triggers use), FINISH (the
+ *  channel/recovery ran out) and ENDCAST (the caster stopped casting, interrupted
+ *  or not). Our cast timeline (see PendingCast) maps onto it directly: the wind-up
+ *  starting is CHANNEL+CAST, the cast point is EFFECT, endCast is FINISH+ENDCAST,
+ *  and an interrupted wind-up raises ENDCAST alone. */
+export type SpellPhase = "channel" | "cast" | "effect" | "finish" | "endcast";
+
+/** One spell event: who cast what, at whom/where. `abilityId` is the SimAbility's
+ *  own alias (the rawcode GetSpellAbilityId hands the script back). */
+export interface SpellEvent {
+  caster: EventUnitInfo;
+  abilityId: string;
+  phase: SpellPhase;
+  target: EventUnitInfo | null; // unit target (null for point/no-target casts)
+  x: number; // target point (the unit's position for a unit target)
+  y: number;
+}
+
+/** A structure's construction reaching a milestone (EVENT_(PLAYER_)UNIT_CONSTRUCT_*):
+ *  the foundation laid, the build cancelled, or the building finished. */
+export interface ConstructEvent {
+  structure: EventUnitInfo;
+  phase: "start" | "cancel" | "finish";
+}
+
+/** A training queue milestone (EVENT_(PLAYER_)UNIT_TRAIN_*). `trained` is the new
+ *  unit — only on "finish", and only once the engine has actually spawned it (the
+ *  sim owns no models, so the unit is born in the renderer; see noteTrainFinish). */
+export interface TrainEvent {
+  building: EventUnitInfo;
+  unitTypeId: string; // the trained unit's type rawcode (GetTrainedUnitType)
+  trained: EventUnitInfo | null;
+  phase: "start" | "cancel" | "finish";
+}
+
+/** A hero gaining a level (EVENT_PLAYER_HERO_LEVEL) or learning a skill
+ *  (EVENT_PLAYER_HERO_SKILL). `abilityId` is set only for "skill". */
+export interface HeroEvent {
+  hero: EventUnitInfo;
+  phase: "level" | "skill";
+  level: number; // the new hero level, or the rank just learned (skill)
+  abilityId: string;
+}
 
 export interface SimUnit {
   id: number;
@@ -696,10 +746,18 @@ export class SimWorld {
   captureDamage = false;
   captureAttacks = false;
   captureOrders = false;
+  captureSpells = false; // EVENT_(PLAYER_)UNIT_SPELL_* (7.17)
+  captureConstruct = false; // EVENT_(PLAYER_)UNIT_CONSTRUCT_* (7.17)
+  captureTrain = false; // EVENT_(PLAYER_)UNIT_TRAIN_* (7.17)
+  captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
   private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
   private orderEvents: Array<{ unit: EventUnitInfo; orderId: number; kind: "immediate" | "point" | "target"; x: number; y: number; target: EventUnitInfo | null }> = [];
+  private spellEvents: SpellEvent[] = [];
+  private constructEvents: ConstructEvent[] = [];
+  private trainEvents: TrainEvent[] = [];
+  private heroEvents: HeroEvent[] = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -948,6 +1006,7 @@ export class SimWorld {
     const b = this.units.get(buildingId)?.building;
     if (!b) return false;
     b.queue.push({ unitId, timeLeft: buildTime, buildTime });
+    this.noteTrain(buildingId, unitId, "start"); // EVENT_(PLAYER_)UNIT_TRAIN_START
     return true;
   }
 
@@ -955,7 +1014,9 @@ export class SimWorld {
   cancelLastTrain(buildingId: number): string | null {
     const b = this.units.get(buildingId)?.building;
     if (!b || !b.queue.length) return null;
-    return b.queue.pop()!.unitId;
+    const unitId = b.queue.pop()!.unitId;
+    this.noteTrain(buildingId, unitId, "cancel");
+    return unitId;
   }
 
   /** Cancel a specific queued item by index (0 = the one currently training).
@@ -965,7 +1026,9 @@ export class SimWorld {
   cancelTrainAt(buildingId: number, index: number): string | null {
     const b = this.units.get(buildingId)?.building;
     if (!b || index < 0 || index >= b.queue.length) return null;
-    return b.queue.splice(index, 1)[0].unitId;
+    const unitId = b.queue.splice(index, 1)[0].unitId;
+    this.noteTrain(buildingId, unitId, "cancel");
+    return unitId;
   }
 
   /** Set a building's rally point. A plain point (kind "point") is a move
@@ -1100,7 +1163,10 @@ export class SimWorld {
         if (this.fastBuild) {
           b.constructionLeft = Math.max(0, b.constructionLeft - Math.max(dt, b.buildTimeTotal * dt));
           u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
-          if (b.constructionLeft === 0) for (const bid of [...b.builderIds]) this.detachBuilder(bid);
+          if (b.constructionLeft === 0) {
+            for (const bid of [...b.builderIds]) this.detachBuilder(bid);
+            this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
+          }
           continue;
         }
         // Only advance while a builder is assigned AND standing next to the site
@@ -1143,7 +1209,10 @@ export class SimWorld {
           b.constructionLeft = Math.max(0, b.constructionLeft - rate * dt);
           const done = 1 - b.constructionLeft / b.buildTimeTotal;
           u.hp = u.maxHp * (0.1 + 0.9 * done);
-          if (b.constructionLeft === 0) for (const bid of [...b.builderIds]) this.detachBuilder(bid); // free the workers
+          if (b.constructionLeft === 0) {
+            for (const bid of [...b.builderIds]) this.detachBuilder(bid); // free the workers
+            this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
+          }
         }
         continue; // can't train while still being built
       }
@@ -1166,6 +1235,7 @@ export class SimWorld {
   cancelBuilding(id: number): boolean {
     const u = this.units.get(id);
     if (!u?.building) return false;
+    this.noteConstruct(u.id, "cancel"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_CANCEL (before it's gone)
     for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     this.unsettle(u); // free its reserved cells
     this.units.delete(u.id);
@@ -1781,6 +1851,70 @@ export class SimWorld {
     return out;
   }
 
+  /** Record a spell event (EVENT_(PLAYER_)UNIT_SPELL_*) — only when a script is
+   *  listening (`captureSpells`). Raised from the cast timeline in tickCast. */
+  private noteSpell(u: SimUnit, pc: PendingCast, phase: SpellPhase): void {
+    if (!this.captureSpells) return;
+    const t = pc.targetId ? this.units.get(pc.targetId) : undefined;
+    this.spellEvents.push({ caster: eventInfo(u), abilityId: pc.abilityId, phase, target: t ? eventInfo(t) : null, x: pc.x, y: pc.y });
+  }
+  /** Spell events since the last drain (`captureSpells`). */
+  drainSpellEvents(): SpellEvent[] {
+    if (!this.spellEvents.length) return this.spellEvents;
+    const out = this.spellEvents;
+    this.spellEvents = [];
+    return out;
+  }
+
+  /** Record a construction milestone (`captureConstruct`). Called where each one
+   *  actually happens: the foundation laid (RtsController.addUnit with a build time),
+   *  cancelBuilding, and construction reaching 0 in tickBuildings. */
+  noteConstruct(unitId: number, phase: ConstructEvent["phase"]): void {
+    if (!this.captureConstruct) return;
+    const u = this.units.get(unitId);
+    if (u) this.constructEvents.push({ structure: eventInfo(u), phase });
+  }
+  /** Construction events since the last drain (`captureConstruct`). */
+  drainConstructEvents(): ConstructEvent[] {
+    if (!this.constructEvents.length) return this.constructEvents;
+    const out = this.constructEvents;
+    this.constructEvents = [];
+    return out;
+  }
+
+  /** Record a training milestone (`captureTrain`) — start/cancel, from the queue
+   *  methods below. The FINISH is noteTrainFinish: only the engine knows the new
+   *  unit (the sim owns no models, so a trained unit is born in the renderer). */
+  private noteTrain(buildingId: number, unitTypeId: string, phase: TrainEvent["phase"]): void {
+    if (!this.captureTrain) return;
+    const b = this.units.get(buildingId);
+    if (b) this.trainEvents.push({ building: eventInfo(b), unitTypeId, trained: null, phase });
+  }
+  /** The engine spawned a trained unit: raise EVENT_(PLAYER_)UNIT_TRAIN_FINISH with it
+   *  (GetTrainedUnit). Called from the renderer's drainTrained handler, once the model
+   *  is up and the sim unit exists. */
+  noteTrainFinish(buildingId: number, trainedId: number): void {
+    if (!this.captureTrain) return;
+    const b = this.units.get(buildingId);
+    const t = this.units.get(trainedId);
+    if (b && t) this.trainEvents.push({ building: eventInfo(b), unitTypeId: t.typeId, trained: eventInfo(t), phase: "finish" });
+  }
+  /** Training events since the last drain (`captureTrain`). */
+  drainTrainEvents(): TrainEvent[] {
+    if (!this.trainEvents.length) return this.trainEvents;
+    const out = this.trainEvents;
+    this.trainEvents = [];
+    return out;
+  }
+
+  /** Hero level-up / skill-learn events since the last drain (`captureHeroEvents`). */
+  drainHeroEvents(): HeroEvent[] {
+    if (!this.heroEvents.length) return this.heroEvents;
+    const out = this.heroEvents;
+    this.heroEvents = [];
+    return out;
+  }
+
   /** Sim ids removed WITHOUT a death animation (cancelled buildings) — the
    *  renderer just hides them (an explosion effect covers the spot instead). */
   drainRemovals(): number[] {
@@ -2040,7 +2174,7 @@ export class SimWorld {
     const u = this.units.get(id);
     if (u) {
       u.order = "idle";
-      u.pendingCast = null; // the one command that aborts a locked-in wind-up
+      this.clearCast(u); // the one command that aborts a locked-in wind-up (raises SPELL_ENDCAST)
       u.targetId = null;
       u.followLeaderId = null; // an explicit stop ends any follow-and-guard episode
       u.inCombat = false;
@@ -2487,7 +2621,7 @@ export class SimWorld {
     u.inCombat = false;
     this.cancelSwing(u);
     if (u.order === "cast") {
-      u.pendingCast = null;
+      this.clearCast(u); // interrupted mid-cast → SPELL_ENDCAST
       u.order = "idle";
     }
   }
@@ -2582,6 +2716,7 @@ export class SimWorld {
       fired: false,
       channelLeft: 0,
       backLeft: 0,
+      ended: false,
       resume,
     };
     return true;
@@ -2677,6 +2812,11 @@ export class SimWorld {
       // tx/ty/targetId let the renderer aim cast-triggered visuals at the target —
       // e.g. the Blood Mage hurling one of his orbiting spheres (issue #37).
       this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0, tx, ty, targetId: pc.targetId, warnArt });
+      // The caster has begun: SPELL_CHANNEL then SPELL_CAST (7.17). WC3 raises both at
+      // the start of the cast — CHANNEL as the caster commits to it, CAST as the spell
+      // itself begins; the EFFECT below is the one most triggers actually listen for.
+      this.noteSpell(u, pc, "channel");
+      this.noteSpell(u, pc, "cast");
       // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's
       // Effectart at the target NOW, as the wind-up begins, so Flame Strike's smoke
       // vortex charges in place and lingers even if the cast is interrupted before
@@ -2714,6 +2854,7 @@ export class SimWorld {
     // The effect fires NOW (cast point) — cue its cast sound here so it lands with
     // the visible clap/bolt, not 0.4s early at the wind-up (issue #23).
     this.castFires.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId });
+    this.noteSpell(u, pc, "effect"); // EVENT_(PLAYER_)UNIT_SPELL_EFFECT — the spell goes off
     this.resolveCast(u, def, pc);
     pc.channelLeft = this.channelDuration(def, pc.rank);
     // No channel → play the cast backswing recovery (0 = none). A channel holds
@@ -2725,9 +2866,26 @@ export class SimWorld {
 
   /** End a cast: resume the pre-cast attack-move/follow, else fall idle. */
   private endCast(u: SimUnit, pc: PendingCast): void {
+    // The cast ran its course: SPELL_FINISH (the channel/recovery is over) then
+    // SPELL_ENDCAST (the caster has stopped casting). `ended` marks it done so the
+    // stop below — and any later stop of a stale pendingCast — can't raise a second
+    // ENDCAST for the same cast (see clearCast).
+    this.noteSpell(u, pc, "finish");
+    this.noteSpell(u, pc, "endcast");
+    pc.ended = true;
     if (pc.resume?.kind === "attackmove") this.issueAttackMove(u.id, pc.resume.x, pc.resume.y);
     else if (pc.resume?.kind === "follow") this.issueFollow(u.id, pc.resume.id);
     else this.stop(u.id);
+  }
+
+  /** Drop a unit's pending cast, raising SPELL_ENDCAST if it was interrupted mid-cast
+   *  (WC3 fires ENDCAST whether the spell completed or was cancelled — a stun, a Stop,
+   *  a new order). A cast that already ran to endCast is marked `ended` and stays quiet. */
+  private clearCast(u: SimUnit): void {
+    const pc = u.pendingCast;
+    if (!pc) return;
+    u.pendingCast = null;
+    if (pc.started && !pc.ended) this.noteSpell(u, pc, "endcast");
   }
 
   /** How long a channelled spell locks its caster (0 = not a channel). Matches the
@@ -2929,7 +3087,10 @@ export class SimWorld {
     this.recomputeStats(hero); // new maxHp/maxMana/attributes
     hero.hp = hero.maxHp; // WC3: leveling fully restores HP and mana
     hero.mana = hero.maxMana;
-    this.levelUps.push({ unitId: hero.id, level: hero.level });
+    this.levelUps.push({ unitId: hero.id, level: hero.level }); // renderer: level-up nova
+    // EVENT_(PLAYER_)HERO_LEVEL for the trigger engine (7.17) — a separate queue from
+    // the renderer's, since each side drains its own.
+    if (this.captureHeroEvents) this.heroEvents.push({ hero: eventInfo(hero), phase: "level", level: hero.level, abilityId: "" });
   }
 
   /** Learn (or rank up) a hero ability by spending a skill point. Returns true on
@@ -2944,7 +3105,115 @@ export class SimWorld {
     if (u.level < requiredHeroLevel(def, ab.level + 1)) return false;
     ab.level++;
     u.skillPoints--;
+    // EVENT_(PLAYER_)HERO_SKILL → GetLearningUnit/GetLearnedSkill/GetLearnedSkillLevel.
+    if (this.captureHeroEvents) this.heroEvents.push({ hero: eventInfo(u), phase: "skill", level: ab.level, abilityId });
     return true;
+  }
+
+  // === trigger effect API (7.17) ===========================================
+  // The natives a map's triggers call to grant abilities, level heroes, and flip
+  // per-unit flags. Each is a thin, guarded mutation the JASS bridge routes into
+  // (src/jass/natives/abilities.ts + world.ts → EngineHooks).
+
+  /** UnitAddAbility — grant an ability, already usable (WC3 adds it at rank 1, even
+   *  a hero ability: it is *added*, not made learnable). A duplicate is a no-op. */
+  addAbility(unitId: number, abilityId: string): boolean {
+    const u = this.units.get(unitId);
+    const def = this.abilities?.get(abilityId);
+    if (!u || !def) return false;
+    if (u.abilities.some((a) => a.id === abilityId)) return false;
+    u.abilities.push({ id: abilityId, code: def.code, level: 1, cooldownLeft: 0, autocastOn: false });
+    this.recomputeStats(u); // an ability can carry stat bonuses / an aura
+    return true;
+  }
+
+  /** UnitRemoveAbility — take an ability away (and any cast of it in flight). */
+  removeAbility(unitId: number, abilityId: string): boolean {
+    const u = this.units.get(unitId);
+    if (!u) return false;
+    const i = u.abilities.findIndex((a) => a.id === abilityId);
+    if (i < 0) return false;
+    u.abilities.splice(i, 1);
+    if (u.pendingCast?.abilityId === abilityId) this.stop(u.id);
+    this.recomputeStats(u);
+    return true;
+  }
+
+  /** GetUnitAbilityLevel — the unit's rank in an ability (0 = doesn't have it, or a
+   *  hero ability it hasn't learned). */
+  abilityLevelOf(unitId: number, abilityId: string): number {
+    return this.units.get(unitId)?.abilities.find((a) => a.id === abilityId)?.level ?? 0;
+  }
+
+  /** SetUnitAbilityLevel (and Inc/DecUnitAbilityLevel, which ride on it) — set the
+   *  rank directly, clamped to the ability's max. Returns the resulting rank. */
+  setAbilityLevel(unitId: number, abilityId: string, level: number): number {
+    const u = this.units.get(unitId);
+    const ab = u?.abilities.find((a) => a.id === abilityId);
+    const def = this.abilities?.get(abilityId);
+    if (!u || !ab || !def) return 0;
+    ab.level = Math.max(0, Math.min(def.levels || 1, Math.trunc(level)));
+    this.recomputeStats(u);
+    return ab.level;
+  }
+
+  /** UnitResetCooldown — clear every ability cooldown on the unit. */
+  resetCooldowns(unitId: number): void {
+    const u = this.units.get(unitId);
+    if (u) for (const a of u.abilities) a.cooldownLeft = 0;
+  }
+
+  /** SetHeroLevel — jump a hero to `level`. WC3 only ever levels a hero UP with this
+   *  (a lower level is ignored), granting the skill points and stat growth of each
+   *  level crossed — so it runs the real levelUp path (nova, HP/mana refill, and the
+   *  HERO_LEVEL event) once per level, and parks the XP bar at the new level's floor. */
+  setHeroLevel(unitId: number, level: number): void {
+    const h = this.units.get(unitId);
+    if (!h?.isHero) return;
+    const target = Math.min(MAX_HERO_LEVEL, Math.trunc(level));
+    while (h.level < target) this.levelUp(h);
+    h.xp = Math.max(h.xp, xpToReachLevel(h.level));
+  }
+
+  /** AddHeroXP — grant experience (levels follow through gainXp). Not a creep kill,
+   *  so no HeroFactorXP discount applies. */
+  addHeroXp(unitId: number, amount: number): void {
+    const h = this.units.get(unitId);
+    if (h) this.gainXp(h, amount);
+  }
+
+  /** SetHeroXP — set the XP bar directly, levelling the hero to match it. */
+  setHeroXp(unitId: number, xp: number): void {
+    const h = this.units.get(unitId);
+    if (!h?.isHero) return;
+    h.xp = Math.max(0, Math.trunc(xp));
+    while (h.level < MAX_HERO_LEVEL && h.xp >= xpToReachLevel(h.level + 1)) this.levelUp(h);
+  }
+
+  /** UnitModifySkillPoints — add/remove unspent skill points (never below zero). */
+  modifySkillPoints(unitId: number, delta: number): boolean {
+    const h = this.units.get(unitId);
+    if (!h?.isHero) return false;
+    h.skillPoints = Math.max(0, h.skillPoints + Math.trunc(delta));
+    return true;
+  }
+
+  /** SetUnitInvulnerable — the unit takes no damage and can't be targeted by enemies
+   *  (issue #26's baseInvulnerable, which recomputeStats folds into `invulnerable`
+   *  each tick alongside the buff-granted ones, so set both). */
+  setInvulnerable(unitId: number, flag: boolean): void {
+    const u = this.units.get(unitId);
+    if (!u) return;
+    u.baseInvulnerable = flag;
+    u.invulnerable = flag || u.invulnerable;
+    if (!flag) this.recomputeStats(u); // buffs may still hold it invulnerable
+  }
+
+  /** SetUnitPathing(false) — the unit ignores collision (walks through units and,
+   *  in WC3, terrain; ours is the sim's existing ghost flag). */
+  setPathing(unitId: number, flag: boolean): void {
+    const u = this.units.get(unitId);
+    if (u) u.noCollision = !flag;
   }
 
   /** Toggle an ability's autocast (Heal/Slow/…). Returns the new state. */

@@ -8,6 +8,7 @@
 
 import type { NativeCtx, Runtime } from "../runtime";
 import { asInt, asNum, asStr, jInt, jReal, jStr, JNULL, type JassValue } from "../values";
+import { registerAbilityNatives } from "./abilities";
 import { registerConfigNatives } from "./config";
 import { registerEventNatives } from "./events";
 import { registerForceNatives } from "./forces";
@@ -62,6 +63,28 @@ function registerUtilNatives(rt: Runtime): void {
   });
   def(rt, "SetRandomSeed", () => JNULL);
 
+  // Math (common.j's MathAPI). Not decoration: blizzard.j's DistanceBetweenPoints —
+  // which every "unit within X of point" GUI condition rides on — is
+  // `SquareRoot(dx*dx + dy*dy)`, so without SquareRoot every distance in the BJ layer
+  // measured 0. common.j's own rules: SquareRoot(x <= 0) = 0, Atan2(0,0) = 0,
+  // Pow(x=0, y<0) = 0, and Asin/Acos return 0 outside [-1, 1].
+  def(rt, "Deg2Rad", (_c, a) => jReal((asNum(a[0]) * Math.PI) / 180));
+  def(rt, "Rad2Deg", (_c, a) => jReal((asNum(a[0]) * 180) / Math.PI));
+  def(rt, "Sin", (_c, a) => jReal(Math.sin(asNum(a[0]))));
+  def(rt, "Cos", (_c, a) => jReal(Math.cos(asNum(a[0]))));
+  def(rt, "Tan", (_c, a) => jReal(Math.tan(asNum(a[0]))));
+  def(rt, "Asin", (_c, a) => jReal(Math.abs(asNum(a[0])) > 1 ? 0 : Math.asin(asNum(a[0]))));
+  def(rt, "Acos", (_c, a) => jReal(Math.abs(asNum(a[0])) > 1 ? 0 : Math.acos(asNum(a[0]))));
+  def(rt, "Atan", (_c, a) => jReal(Math.atan(asNum(a[0]))));
+  def(rt, "Atan2", (_c, a) => jReal(asNum(a[0]) === 0 && asNum(a[1]) === 0 ? 0 : Math.atan2(asNum(a[0]), asNum(a[1]))));
+  def(rt, "SquareRoot", (_c, a) => jReal(asNum(a[0]) <= 0 ? 0 : Math.sqrt(asNum(a[0]))));
+  def(rt, "Pow", (_c, a) => {
+    const x = asNum(a[0]), y = asNum(a[1]);
+    if (y === 0) return jReal(1);
+    if (x === 0 && y < 0) return jReal(0);
+    return jReal(Math.pow(x, y));
+  });
+
   // Camera / environment natives every main() calls — we set these up ourselves in
   // the renderer, so here they are safe no-ops (GetCameraMargin returns 0.0).
   def(rt, "GetCameraMargin", () => jReal(0));
@@ -82,6 +105,7 @@ export function registerNatives(rt: Runtime): void {
   }
   registerConfigNatives(rt);
   registerWorldNatives(rt);
+  registerAbilityNatives(rt); // abilities + heroes (7.17)
   registerEventNatives(rt);
   registerForceNatives(rt);
   registerGroupNatives(rt);

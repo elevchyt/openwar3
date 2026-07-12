@@ -631,7 +631,7 @@ console.log('\n[7.14] Trigger orders (IssueXOrder → sim; EVENT_..._ISSUED_ORDE
   const issued = [];
   const hooks = {
     createUnit: () => nextId++,
-    issueUnitOrder: (unitId, orderId, kind, x, y, targetId) => (issued.push({ unitId, orderId, kind, x, y, targetId }), true),
+    issueUnitOrder: (unitId, orderId, order, kind, x, y, targetId) => (issued.push({ unitId, orderId, order, kind, x, y, targetId }), true),
     getUnitCurrentOrder: () => 851986, // "move"
   };
   const SRC_A = `
@@ -648,8 +648,12 @@ function InitOrders takes nothing returns nothing
     call IssuePointOrder( udg_u, "attack", 512.0, 256.0 )
     call IssueTargetOrder( udg_u, "smart", udg_tgt )
     call IssueImmediateOrder( udg_u, "stop" )
+    // An ABILITY order (7.17): "Order <unit> to cast Holy Light" — the order STRING is
+    // what identifies the spell (the engine's numeric ids for ability orders are in no
+    // data file), so it must reach the bridge intact and round-trip through OrderId.
+    call IssueTargetOrder( udg_u, "holybolt", udg_tgt )
     set udg_oid  = OrderId( "move" )
-    set udg_ostr = OrderId2String( 851983 )
+    set udg_ostr = OrderId2String( OrderId( "holybolt" ) )
     set udg_cur  = GetUnitCurrentOrder( udg_u )
 endfunction`;
   const interpA = buildInterpreter([COMMON_J, BLIZZARD_J, SRC_A], { hooks });
@@ -665,8 +669,13 @@ endfunction`;
   else fail(`immediate order: ${JSON.stringify(im)}`);
   const oid = interpA.rt.globals.get('udg_oid'), ostr = interpA.rt.globals.get('udg_ostr'), cur = interpA.rt.globals.get('udg_cur');
   if (oid && oid.n === 851986) ok(`OrderId("move") == 851986`); else fail(`OrderId: ${oid && oid.n}`);
-  if (ostr && ostr.s === 'attack') ok(`OrderId2String(851983) == "attack"`); else fail(`OrderId2String: ${ostr && ostr.s}`);
   if (cur && cur.n === 851986) ok(`GetUnitCurrentOrder → 851986 (live via bridge)`); else fail(`GetUnitCurrentOrder: ${cur && cur.n}`);
+  // 7.17: an ability order reaches the sim BY NAME (that's the key the cast resolves on)
+  // and its minted id round-trips through the vocabulary.
+  const spell = issued.find((o) => o.order === 'holybolt');
+  if (spell && spell.kind === 'target' && spell.targetId === 201 && ostr && ostr.s === 'holybolt') {
+    ok(`IssueTargetOrder("holybolt", tgt) → the bridge gets the order STRING (an ability order); OrderId2String round-trips it`);
+  } else fail(`ability order: ${JSON.stringify(spell)} / OrderId2String → ${ostr && ostr.s}`);
 
   // Part B: the order EVENTS dispatch with the right responses (Interpreter.pumpOrderEvents).
   const SRC_B = `
@@ -889,7 +898,7 @@ console.log('\n[7.16] Unit groups (GroupEnum* / ForGroup / FirstOfGroup / group 
     selectedUnits: (p) => (p === 0 ? [2, 3] : []),
     objectName: (typeId) => ({ hfoo: 'Footman', hpea: 'Peasant', ogru: 'Grunt' })[typeId],
     isUnitType: (id, t) => (t === 2 ? false : t === 0 ? false : t === 4), // everything is GROUND
-    issueUnitOrder: (unitId, orderId, kind, x, y) => (issued.push({ unitId, orderId, kind, x, y }), true),
+    issueUnitOrder: (unitId, orderId, order, kind, x, y) => (issued.push({ unitId, orderId, order, kind, x, y }), true),
     getUnitState: (id, s) => (s === 0 ? 100 : 0), // UNIT_STATE_LIFE — all alive
   };
   const SRC = `
@@ -1000,6 +1009,247 @@ endfunction`;
   const same = interp2.rt.globals.get('udg_same');
   if (same && same.b === true) ok(`a CreateUnit'd unit enumerates as the SAME handle (IsUnitInGroup + \`==\` hold)`);
   else fail(`handle identity: ${same && same.b} (want true — one sim unit must mean one handle)`);
+}
+
+// --- 7.17a: ability + hero effect natives (a trigger grants a spell / levels a hero) ---
+console.log('\n[7.17] Ability + hero effects (UnitAddAbility / SetHeroLevel / AddHeroXP / invulnerable / animation)');
+{
+  // A mock sim unit with the state these natives mutate, mirroring SimWorld's own rules:
+  // an ability is added at rank 1, SetHeroLevel only ever levels UP (and each level grants
+  // a skill point), and XP crossing a threshold levels the hero.
+  const XP_FOR = (lvl) => (lvl - 1) * 200; // a stand-in curve (the real one is gameplayConstants')
+  const u = { level: 1, xp: 0, skillPoints: 1, abilities: [], invulnerable: false, pathing: true, anim: '' };
+  const level = (n) => {
+    while (u.level < n) {
+      u.level++;
+      u.skillPoints++;
+    }
+    u.xp = Math.max(u.xp, XP_FOR(u.level));
+  };
+  const hooks = {
+    createUnit: () => 1,
+    unitAddAbility: (id, a) => (u.abilities.some((x) => x.id === a) ? false : (u.abilities.push({ id: a, level: 1 }), true)),
+    unitRemoveAbility: (id, a) => {
+      const i = u.abilities.findIndex((x) => x.id === a);
+      return i < 0 ? false : (u.abilities.splice(i, 1), true);
+    },
+    getUnitAbilityLevel: (id, a) => u.abilities.find((x) => x.id === a)?.level ?? 0,
+    setUnitAbilityLevel: (id, a, lvl) => {
+      const ab = u.abilities.find((x) => x.id === a);
+      return ab ? ((ab.level = Math.max(0, Math.min(3, lvl))), ab.level) : 0;
+    },
+    getUnitLevel: () => u.level,
+    setHeroLevel: (id, n) => level(n),
+    getHeroXp: () => u.xp,
+    addHeroXp: (id, xp) => {
+      u.xp += xp;
+      while (u.xp >= XP_FOR(u.level + 1)) level(u.level + 1);
+    },
+    getHeroSkillPoints: () => u.skillPoints,
+    modifySkillPoints: (id, d) => ((u.skillPoints = Math.max(0, u.skillPoints + d)), true),
+    setUnitInvulnerable: (id, f) => (u.invulnerable = f),
+    setUnitPathing: (id, f) => (u.pathing = f),
+    setUnitAnimation: (id, a) => (u.anim = a),
+  };
+  const SRC = `
+globals
+    integer udg_abilLvl  = 0
+    integer udg_gone     = 0
+    integer udg_incLvl   = 0
+    integer udg_heroLvl  = 0
+    integer udg_xp       = 0
+    integer udg_points   = 0
+    integer udg_custom   = 0
+    real    udg_dist     = 0.0
+endglobals
+function RunEffects takes nothing returns nothing
+    local unit h = CreateUnit( Player(0), 'Hpal', 0.0, 0.0, 0.0 )
+
+    // Abilities: grant one, read its rank, rank it up, then strip a second one.
+    call UnitAddAbility( h, 'AHhb' )                       // Holy Light — added at rank 1
+    set udg_abilLvl = GetUnitAbilityLevel( h, 'AHhb' )
+    call SetUnitAbilityLevel( h, 'AHhb', 3 )
+    call DecUnitAbilityLevel( h, 'AHhb' )                  // 3 → 2 (rides on the setter)
+    set udg_incLvl = GetUnitAbilityLevel( h, 'AHhb' )
+    call UnitAddAbility( h, 'AHds' )
+    call UnitRemoveAbility( h, 'AHds' )
+    set udg_gone = GetUnitAbilityLevel( h, 'AHds' )        // 0 — it's gone
+
+    // Hero: jump to level 3 (the GUI's "Set hero level" is SetHeroLevelBJ), then XP.
+    call SetHeroLevelBJ( h, 3, false )
+    call AddHeroXP( h, 250, true )                         // 400 (lvl 3) + 250 = 650 → level 4
+    set udg_heroLvl = GetHeroLevel( h )
+    set udg_xp      = GetHeroXP( h )
+    call UnitModifySkillPoints( h, 2 )
+    set udg_points  = GetHeroSkillPoints( h )
+
+    // Flags / animation / custom value.
+    call SetUnitInvulnerable( h, true )
+    call SetUnitPathing( h, false )
+    call SetUnitAnimation( h, "attack" )
+    call SetUnitUserData( h, 42 )
+    set udg_custom = GetUnitUserData( h )
+
+    // DistanceBetweenPoints is a real blizzard.j BJ built on SquareRoot — without that
+    // native every distance in the BJ layer measured 0.
+    set udg_dist = DistanceBetweenPoints( Location(0.0, 0.0), Location(300.0, 400.0) )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('RunEffects', []);
+  const g = (n) => interp.rt.globals.get(n);
+  if (g('udg_abilLvl')?.n === 1 && g('udg_incLvl')?.n === 2 && g('udg_gone')?.n === 0) {
+    ok(`UnitAddAbility → rank 1; SetUnitAbilityLevel(3) + DecUnitAbilityLevel → 2; UnitRemoveAbility → 0`);
+  } else fail(`ability levels: add ${g('udg_abilLvl')?.n} dec ${g('udg_incLvl')?.n} removed ${g('udg_gone')?.n} (want 1/2/0)`);
+  // level 3 from SetHeroLevel, then 250 XP crosses into 4; skill points: 1 + 2 levels + 1 + 2.
+  if (g('udg_heroLvl')?.n === 4 && g('udg_xp')?.n === 650 && g('udg_points')?.n === 6) {
+    ok(`SetHeroLevelBJ → level 3; AddHeroXP(250) → level 4 @ 650 XP; UnitModifySkillPoints → 6 unspent`);
+  } else fail(`hero: level ${g('udg_heroLvl')?.n} xp ${g('udg_xp')?.n} points ${g('udg_points')?.n} (want 4/650/6)`);
+  if (u.invulnerable === true && u.pathing === false && u.anim === 'attack' && g('udg_custom')?.n === 42) {
+    ok(`SetUnitInvulnerable / SetUnitPathing(false) / SetUnitAnimation("attack") reached the bridge; user data round-trips (42)`);
+  } else fail(`flags: invuln ${u.invulnerable} pathing ${u.pathing} anim "${u.anim}" custom ${g('udg_custom')?.n}`);
+  if (Math.abs((g('udg_dist')?.n ?? 0) - 500) < 0.001) ok(`DistanceBetweenPoints (blizzard.j → SquareRoot) → 500 (3-4-5)`);
+  else fail(`DistanceBetweenPoints: ${g('udg_dist')?.n} (want 500 — SquareRoot must be implemented)`);
+}
+
+// --- 7.17b: the remaining sim events — spell, construct, train, hero level, unit-state ---
+console.log('\n[7.17] Sim events (SPELL_* / CONSTRUCT_* / TRAIN_* / HERO_LEVEL / UNIT_STATE_LIMIT)');
+{
+  const hp = { 10: 500 }; // the watched unit's life — the unit-state poll reads this
+  const hooks = { getUnitState: (id, s) => (s === 0 ? hp[id] ?? 0 : 0), createUnit: () => 10 };
+  const SRC = `
+globals
+    integer udg_effect     = 0
+    integer udg_channel    = 0
+    integer udg_endcast    = 0
+    integer udg_spellId    = 0
+    integer udg_targetId   = 0
+    integer udg_built      = 0
+    integer udg_builtType  = 0
+    integer udg_trained    = 0
+    integer udg_trainType  = 0
+    integer udg_levels     = 0
+    integer udg_newLevel   = 0
+    integer udg_skill      = 0
+    integer udg_hurt       = 0
+    unit    udg_watched    = null
+endglobals
+function OnEffect takes nothing returns nothing
+    set udg_effect   = udg_effect + 1
+    set udg_spellId  = GetSpellAbilityId()
+    set udg_targetId = GetUnitTypeId( GetSpellTargetUnit() )
+endfunction
+function OnChannel takes nothing returns nothing
+    set udg_channel = udg_channel + 1
+endfunction
+function OnEndcast takes nothing returns nothing
+    set udg_endcast = udg_endcast + 1
+endfunction
+function OnBuilt takes nothing returns nothing
+    set udg_built     = udg_built + 1
+    set udg_builtType = GetUnitTypeId( GetConstructedStructure() )
+endfunction
+function OnTrained takes nothing returns nothing
+    set udg_trained   = GetUnitTypeId( GetTrainedUnit() )
+    set udg_trainType = GetTrainedUnitType()
+endfunction
+function OnLevel takes nothing returns nothing
+    set udg_levels   = udg_levels + 1
+    set udg_newLevel = GetHeroLevel( GetLevelingUnit() )
+endfunction
+function OnSkill takes nothing returns nothing
+    set udg_skill = GetLearnedSkill()
+endfunction
+function OnHurt takes nothing returns nothing
+    set udg_hurt = udg_hurt + 1
+endfunction
+function Setup takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    // "A unit starts the effect of an ability" — the phase nearly every GUI trigger uses.
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_SPELL_EFFECT )
+    call TriggerAddAction( t, function OnEffect )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_SPELL_CHANNEL )
+    call TriggerAddAction( t, function OnChannel )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_SPELL_ENDCAST )
+    call TriggerAddAction( t, function OnEndcast )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_CONSTRUCT_FINISH )
+    call TriggerAddAction( t, function OnBuilt )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_TRAIN_FINISH )
+    call TriggerAddAction( t, function OnTrained )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_HERO_LEVEL )
+    call TriggerAddAction( t, function OnLevel )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_HERO_SKILL )
+    call TriggerAddAction( t, function OnSkill )
+    // "Life of <unit> drops below 100" — TriggerRegisterUnitStateEvent, the polled one.
+    set udg_watched = CreateUnit( Player(0), 'hfoo', 0.0, 0.0, 0.0 )
+    set t = CreateTrigger()
+    call TriggerRegisterUnitStateEvent( t, udg_watched, UNIT_STATE_LIFE, LESS_THAN, 100.0 )
+    call TriggerAddAction( t, function OnHurt )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('Setup', []);
+  const g = (n) => interp.rt.globals.get(n);
+  const caster = { id: 1, typeId: 'Hpal', owner: 0, x: 0, y: 0, facing: 0 };
+  const victim = { id: 2, typeId: 'ogru', owner: 1, x: 100, y: 0, facing: 0 };
+  const enemyCaster = { id: 3, typeId: 'Ofar', owner: 1, x: 0, y: 0, facing: 0 };
+
+  // The five phases of one cast (as SimWorld raises them), plus an enemy's cast that
+  // must NOT reach a Player(0)-registered trigger.
+  interp.pumpSpellEvents([
+    { caster, abilityId: 'AHhb', phase: 'channel', target: victim, x: 100, y: 0 },
+    { caster, abilityId: 'AHhb', phase: 'cast', target: victim, x: 100, y: 0 },
+    { caster, abilityId: 'AHhb', phase: 'effect', target: victim, x: 100, y: 0 },
+    { caster, abilityId: 'AHhb', phase: 'finish', target: victim, x: 100, y: 0 },
+    { caster, abilityId: 'AHhb', phase: 'endcast', target: victim, x: 100, y: 0 },
+    { caster: enemyCaster, abilityId: 'AHhb', phase: 'effect', target: null, x: 0, y: 0 },
+  ]);
+  if (g('udg_effect')?.n === 1 && g('udg_channel')?.n === 1 && g('udg_endcast')?.n === 1) {
+    ok(`SPELL_EFFECT/CHANNEL/ENDCAST each fired once for the owner's cast (the enemy's cast fired none)`);
+  } else fail(`spell phases: effect ${g('udg_effect')?.n} channel ${g('udg_channel')?.n} endcast ${g('udg_endcast')?.n} (want 1/1/1)`);
+  if (g('udg_spellId')?.n === 0x41486862 && g('udg_targetId')?.n === 0x6f677275) {
+    ok(`GetSpellAbilityId → 'AHhb'; GetSpellTargetUnit → the grunt it was cast at`);
+  } else fail(`spell responses: id ${g('udg_spellId')?.n?.toString(16)} target ${g('udg_targetId')?.n?.toString(16)}`);
+
+  interp.pumpConstructEvents([{ structure: { id: 4, typeId: 'hbar', owner: 0, x: 0, y: 0, facing: 0 }, phase: 'finish' }]);
+  if (g('udg_built')?.n === 1 && g('udg_builtType')?.n === 0x68626172) ok(`CONSTRUCT_FINISH fired once; GetConstructedStructure → the barracks ('hbar')`);
+  else fail(`construct: fires ${g('udg_built')?.n} type ${g('udg_builtType')?.n?.toString(16)}`);
+
+  interp.pumpTrainEvents([
+    { building: { id: 4, typeId: 'hbar', owner: 0, x: 0, y: 0, facing: 0 }, unitTypeId: 'hfoo', trained: { id: 5, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, phase: 'finish' },
+  ]);
+  if (g('udg_trained')?.n === 0x68666f6f && g('udg_trainType')?.n === 0x68666f6f) ok(`TRAIN_FINISH → GetTrainedUnit is the new footman; GetTrainedUnitType → 'hfoo'`);
+  else fail(`train: unit ${g('udg_trained')?.n?.toString(16)} type ${g('udg_trainType')?.n?.toString(16)}`);
+
+  interp.pumpHeroEvents([
+    { hero: caster, phase: 'level', level: 2, abilityId: '' },
+    { hero: caster, phase: 'skill', level: 1, abilityId: 'AHhb' },
+  ]);
+  // GetHeroLevel on the levelling unit reads the LIVE sim value through the bridge (no
+  // getUnitLevel hook here → 0), so assert on the fire count + the learned skill instead.
+  if (g('udg_levels')?.n === 1 && g('udg_skill')?.n === 0x41486862) ok(`HERO_LEVEL fired once (GetLevelingUnit set); HERO_SKILL → GetLearnedSkill 'AHhb'`);
+  else fail(`hero events: levels ${g('udg_levels')?.n} skill ${g('udg_skill')?.n?.toString(16)}`);
+
+  // The unit-state threshold is EDGE-triggered: full HP → nothing; drop below 100 → one
+  // fire; stay below → no repeat; heal above and drop again → a second fire.
+  interp.pumpUnitStates(); // baseline (500 hp — above the limit)
+  interp.pumpUnitStates();
+  const before = g('udg_hurt')?.n;
+  hp[10] = 60;
+  interp.pumpUnitStates();
+  interp.pumpUnitStates(); // still below — must NOT fire again
+  const after = g('udg_hurt')?.n;
+  hp[10] = 400;
+  interp.pumpUnitStates();
+  hp[10] = 20;
+  interp.pumpUnitStates();
+  const again = g('udg_hurt')?.n;
+  if (before === 0 && after === 1 && again === 2) ok(`UNIT_STATE_LIMIT ("life < 100") fires on each CROSSING — not while it sits below, not at full HP`);
+  else fail(`unit-state limit: healthy ${before} crossed ${after} re-crossed ${again} (want 0/1/2)`);
 }
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);

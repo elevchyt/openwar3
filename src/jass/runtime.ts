@@ -90,6 +90,28 @@ export interface TriggerReg {
   kind: string;
   trigId: number; // handle id of the registered trigger
   params: JassValue[];
+  /** Unit-state registrations only (EVENT_UNIT_STATE_LIMIT): did the comparison hold
+   *  last time we looked? That event is POLLED (nothing in the sim raises "life changed"),
+   *  and it must fire on the rising edge, so we remember the previous truth. Seeded at
+   *  REGISTRATION — a unit already past the limit then is not a crossing, but one pushed
+   *  past it later in the same tick is. */
+  edge?: boolean;
+}
+
+/** Apply a common.j `limitop` (a ConvertLimitOp index) to a value/limit pair — the
+ *  comparison behind the unit-state / player-state threshold events.
+ *  0 LESS_THAN, 1 LESS_THAN_OR_EQUAL, 2 EQUAL, 3 GREATER_THAN_OR_EQUAL, 4 GREATER_THAN,
+ *  5 NOT_EQUAL. An unknown op never fires (rather than fire always). */
+export function compareLimit(op: number, value: number, limit: number): boolean {
+  switch (op) {
+    case 0: return value < limit;
+    case 1: return value <= limit;
+    case 2: return value === limit;
+    case 3: return value >= limit;
+    case 4: return value > limit;
+    case 5: return value !== limit;
+    default: return false;
+  }
 }
 
 /** A player slot as config() fills it in (mirrors the SetPlayer* natives). */
@@ -117,6 +139,9 @@ export interface JassUnit {
   y: number;
   facing: number;
   simId: number; // our engine's sim id, or -1 when running headless
+  /** SetUnitUserData / GetUnitUserData — the "custom value" every unit carries. Pure
+   *  script state (the engine never reads it), so it lives on the handle. */
+  userData?: number;
 }
 
 /** A minimal live view of a sim unit the engine feeds the interpreter: the event
@@ -177,8 +202,11 @@ export interface EngineHooks {
   getUnitFacing?(unitId: number): number;
   // --- orders (7.14): IssueXOrder → sim; GetUnitCurrentOrder ← sim ---
   /** Issue{Immediate,Point,Target}Order — order id + target kind → the matching sim
-   *  command (a trigger-issued unit marches/attacks). Returns whether the order took. */
-  issueUnitOrder?(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
+   *  command (a trigger-issued unit marches/attacks/casts). Returns whether the order
+   *  took. `order` is the order STRING ("attack", "holybolt"): an ABILITY order is cast
+   *  by name (the engine's numeric ids for those aren't in any data file), so the bridge
+   *  matches it against the unit's abilities' own order strings. */
+  issueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
   /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */
   getUnitCurrentOrder?(unitId: number): number;
   // --- unit groups (7.16): enumeration + the classification a group filter asks about ---
@@ -191,6 +219,36 @@ export interface EngineHooks {
   isUnitType?(unitId: number, unitType: number): boolean;
   /** IsUnitAlly/IsUnitEnemy — is the unit allied to `player` (same team)? */
   isUnitAlly?(unitId: number, player: number): boolean;
+  /** IsPlayerAlly/IsPlayerEnemy — are two player slots on the same team? */
+  isPlayerAlly?(player: number, other: number): boolean;
+  // --- abilities + heroes (7.17): a trigger grants a spell, levels a hero ---
+  /** UnitAddAbility / UnitRemoveAbility — `abilityId` is the 4-char ability rawcode. */
+  unitAddAbility?(unitId: number, abilityId: string): boolean;
+  unitRemoveAbility?(unitId: number, abilityId: string): boolean;
+  /** GetUnitAbilityLevel — the unit's rank in an ability (0 = it doesn't have it). */
+  getUnitAbilityLevel?(unitId: number, abilityId: string): number;
+  /** SetUnitAbilityLevel / Inc / Dec — set the rank; returns the resulting rank. */
+  setUnitAbilityLevel?(unitId: number, abilityId: string, level: number): number;
+  /** SelectHeroSkill — learn a hero ability, spending a skill point. */
+  selectHeroSkill?(unitId: number, abilityId: string): boolean;
+  /** UnitResetCooldown — clear every ability cooldown on the unit. */
+  resetUnitCooldown?(unitId: number): void;
+  /** GetHeroLevel / GetUnitLevel — a hero's level (0 for a non-hero). */
+  getUnitLevel?(unitId: number): number;
+  /** SetHeroLevel — level the hero up to `level` (WC3 never levels one down). */
+  setHeroLevel?(unitId: number, level: number): void;
+  /** GetHeroXP / SetHeroXP / AddHeroXP — the hero's experience. */
+  getHeroXp?(unitId: number): number;
+  setHeroXp?(unitId: number, xp: number): void;
+  addHeroXp?(unitId: number, xp: number): void;
+  /** GetHeroSkillPoints / UnitModifySkillPoints — unspent skill points. */
+  getHeroSkillPoints?(unitId: number): number;
+  modifySkillPoints?(unitId: number, delta: number): boolean;
+  // --- per-unit flags / animation (7.17) ---
+  setUnitInvulnerable?(unitId: number, flag: boolean): void; // SetUnitInvulnerable
+  setUnitPathing?(unitId: number, flag: boolean): void; // SetUnitPathing (false = ghost)
+  /** SetUnitAnimation / ResetUnitAnimation — play the named clip ("" resets to stand). */
+  setUnitAnimation?(unitId: number, animation: string): void;
   /** Player resource / state: SetPlayerState & GetPlayerState. `state` is the raw
    *  playerstate index (1 = gold, 2 = lumber, 4 = food cap, 5 = food used). */
   setPlayerState?(player: number, state: number, value: number): void;
@@ -434,6 +492,18 @@ export class Runtime {
     }
     return JNULL;
   }
+}
+
+/** Does a unit-state registration's comparison hold RIGHT NOW? (`TriggerRegisterUnitStateEvent`
+ *  params: unit, unitstate, limitop, limitval.) Reads the live sim through the bridge; a unit
+ *  with no sim unit (headless, or already dead) reads false. Shared by the registration
+ *  (which seeds the edge) and the poll that fires on a crossing. */
+export function unitStateHolds(rt: Runtime, reg: TriggerReg): boolean {
+  const u = rt.data<JassUnit>(reg.params[0] ?? JNULL);
+  if (!u || u.simId < 0) return false;
+  const value = rt.hooks?.getUnitState?.(u.simId, rt.enumIndex(reg.params[1] ?? JNULL)) ?? 0;
+  const limit = reg.params[3] ?? JNULL;
+  return compareLimit(rt.enumIndex(reg.params[2] ?? JNULL), value, limit.k === "real" || limit.k === "int" ? limit.n : 0);
 }
 
 /** Context handed to every native: the runtime plus a way to call back into JASS

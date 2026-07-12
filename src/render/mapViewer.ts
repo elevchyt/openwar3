@@ -390,6 +390,9 @@ export class MapViewerScene {
   /** Registration count the sim's capture flags were derived from — re-derive when it
    *  changes (a trigger, or a thread resuming from a Wait, can register events late). */
   private scriptRegCount = 0;
+  /** Does the script watch a unit-state threshold (EVENT_UNIT_STATE_LIMIT)? That event is
+   *  polled per tick rather than raised by the sim, so it needs its own gate (7.17). */
+  private scriptWatchesUnitState = false;
   private gameMenu: GameMenu | null = null;
   private paused = false; // F10 game menu freezes the sim (rendering continues)
   /** Called when the player picks "End Game" — host tears the match down. */
@@ -1015,8 +1018,11 @@ export class MapViewerScene {
       clearText: (player) => {
         if (player === 0) this.hud?.clearMessages();
       },
-      // GetObjectName / GetUnitName resolve rawcodes to their real data-table names.
-      objectName: (typeId) => this.registry.get(typeId)?.name,
+      // GetObjectName / GetUnitName resolve rawcodes to their real data-table names. A
+      // rawcode can name a unit, an ability ('AHhb' — what GetSpellAbilityId hands back)
+      // or an item, so try each registry: "Paladin cast Holy Light on Peasant" needs all
+      // three (the custom overlays are checked first inside each `get`).
+      objectName: (typeId) => this.registry.get(typeId)?.name ?? this.abilities.get(typeId)?.name ?? this.items.get(typeId)?.name,
       // Trigger-created units (hero selection, spawns) — a real unit once past init.
       createUnit: (player, typeId, x, y, facing) => (this.scriptSpawnLive ? this.spawnScriptUnit(player, typeId, x, y, facing) : -1),
       removeUnit: (id) => this.rts?.removeUnit(id),
@@ -1081,7 +1087,7 @@ export class MapViewerScene {
       getUnitY: (id) => this.rts?.simWorld.getUnitY(id) ?? 0,
       getUnitFacing: (id) => this.rts?.simWorld.getUnitFacing(id) ?? 0,
       // Orders (7.14): trigger issue → the sim; current order ← the sim.
-      issueUnitOrder: (id, orderId, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, kind, x, y, targetId) ?? false,
+      issueUnitOrder: (id, orderId, order, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, order, kind, x, y, targetId) ?? false,
       getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
       // Unit groups (7.16): every GroupEnumUnits* scan reads the live sim through here.
       // A dead unit is already out of SimWorld.units (it became a corpse), so an enum
@@ -1095,6 +1101,25 @@ export class MapViewerScene {
         const u = this.rts?.simWorld.units.get(id);
         return !!u && u.team >= 0 && u.team === this.teamOf(player);
       },
+      isPlayerAlly: (p, q) => this.teamOf(p) === this.teamOf(q),
+      // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
+      unitAddAbility: (id, abilityId) => this.rts?.simWorld.addAbility(id, abilityId) ?? false,
+      unitRemoveAbility: (id, abilityId) => this.rts?.simWorld.removeAbility(id, abilityId) ?? false,
+      getUnitAbilityLevel: (id, abilityId) => this.rts?.simWorld.abilityLevelOf(id, abilityId) ?? 0,
+      setUnitAbilityLevel: (id, abilityId, level) => this.rts?.simWorld.setAbilityLevel(id, abilityId, level) ?? 0,
+      selectHeroSkill: (id, abilityId) => this.rts?.simWorld.learnAbility(id, abilityId) ?? false,
+      resetUnitCooldown: (id) => this.rts?.simWorld.resetCooldowns(id),
+      getUnitLevel: (id) => this.rts?.simWorld.units.get(id)?.level ?? 0,
+      setHeroLevel: (id, level) => this.rts?.simWorld.setHeroLevel(id, level),
+      getHeroXp: (id) => this.rts?.simWorld.units.get(id)?.xp ?? 0,
+      setHeroXp: (id, xp) => this.rts?.simWorld.setHeroXp(id, xp),
+      addHeroXp: (id, xp) => this.rts?.simWorld.addHeroXp(id, xp),
+      getHeroSkillPoints: (id) => this.rts?.simWorld.units.get(id)?.skillPoints ?? 0,
+      modifySkillPoints: (id, delta) => this.rts?.simWorld.modifySkillPoints(id, delta) ?? false,
+      // --- per-unit flags + animation (7.17) ---
+      setUnitInvulnerable: (id, flag) => this.rts?.simWorld.setInvulnerable(id, flag),
+      setUnitPathing: (id, flag) => this.rts?.simWorld.setPathing(id, flag),
+      setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
     };
   }
 
@@ -1136,15 +1161,23 @@ export class MapViewerScene {
     }
   }
 
-  /** Spawn a unit a trigger created via CreateUnit. The JASS side needs a sim id
-   *  synchronously (to hand back a unit handle), but the model loads async — so we
-   *  reserve the id now and attach the render instance when it's ready. JASS facing is
-   *  in degrees; the sim wants radians. Returns -1 if the type id isn't in our data. */
+  /** Spawn a unit a trigger created via CreateUnit. JASS `CreateUnit` is SYNCHRONOUS —
+   *  the very next statement may add an ability, set the hero's level, or order the unit
+   *  somewhere — so the SIM unit is created right here, while the model (which loads
+   *  async) attaches to it a few frames later (RtsController.addSimUnit/attachInstance).
+   *  A script-created building is snapped to the build grid first, so its sim position
+   *  matches the footprint the render path will stamp. JASS facing is in degrees; the sim
+   *  wants radians. Returns -1 if the type id isn't in our data. */
   private spawnScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number): number {
     const def = this.registry.get(typeId);
     if (!def || !this.rts) return -1;
+    const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
+    if (fp && this.grid) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
+    const facing = (facingDeg * Math.PI) / 180;
+    const team = this.teamOf(player);
     const simId = this.rts.reserveUnitId();
-    void this.spawnUnit(def, x, y, player, this.teamOf(player), 0, (facingDeg * Math.PI) / 180, simId);
+    this.rts.addSimUnit(def, x, y, facing, player, team, 0, simId); // exists NOW
+    void this.spawnUnit(def, x, y, player, team, 0, facing, simId); // …gets its body when the model lands
     return simId;
   }
 
@@ -1205,21 +1238,28 @@ export class MapViewerScene {
   /** Tell the sim which events to record — only the kinds the script actually listens for,
    *  so a map with no death/damage/attack/order triggers pays nothing. Event indices from
    *  common.j: DEATH 53/20, DAMAGED 52, ATTACKED 62/18, ISSUED-order 38–40 (player) / 75–77
-   *  (unit). Re-run whenever the registration list grows: a trigger thread that's sleeping
-   *  on a `Wait` (7.15) can register new events when it resumes, long after main() returned. */
+   *  (unit), CONSTRUCT 26–28 / 64–65, TRAIN 32–34 / 69–71, HERO level+skill 41–42 / 78–79,
+   *  SPELL 272–276 / 289–293. Re-run whenever the registration list grows: a trigger thread
+   *  that's sleeping on a `Wait` (7.15) can register new events when it resumes, long after
+   *  main() returned. */
   private syncEventCaptures(engine: MapScriptEngine): void {
     if (!this.rts) return;
     const rt = engine.interp.rt;
     const idx = (r: { params: unknown[] }): number => (r.params[1] ? rt.enumIndex(r.params[1] as never) : -1);
     const sw = this.rts.simWorld;
-    sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath" || (r.kind === "unitEvent" && idx(r) === 53) || (r.kind === "playerUnitEvent" && idx(r) === 20));
-    sw.captureDamage = rt.triggerRegs.some((r) => r.kind === "unitEvent" && idx(r) === 52);
-    sw.captureAttacks = rt.triggerRegs.some((r) => (r.kind === "unitEvent" && idx(r) === 62) || (r.kind === "playerUnitEvent" && idx(r) === 18));
-    sw.captureOrders = rt.triggerRegs.some(
-      (r) =>
-        (r.kind === "playerUnitEvent" && idx(r) >= 38 && idx(r) <= 40) ||
-        (r.kind === "unitEvent" && idx(r) >= 75 && idx(r) <= 77),
-    );
+    /** Does any registration watch an event in [lo, hi] of the given kind? */
+    const any = (kind: string, lo: number, hi = lo): boolean =>
+      rt.triggerRegs.some((r) => r.kind === kind && idx(r) >= lo && idx(r) <= hi);
+    sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath") || any("unitEvent", 53) || any("playerUnitEvent", 20);
+    sw.captureDamage = any("unitEvent", 52);
+    sw.captureAttacks = any("unitEvent", 62) || any("playerUnitEvent", 18);
+    sw.captureOrders = any("playerUnitEvent", 38, 40) || any("unitEvent", 75, 77);
+    sw.captureConstruct = any("playerUnitEvent", 26, 28) || any("unitEvent", 64, 65);
+    sw.captureTrain = any("playerUnitEvent", 32, 34) || any("unitEvent", 69, 71);
+    sw.captureHeroEvents = any("playerUnitEvent", 41, 42) || any("unitEvent", 78, 79);
+    sw.captureSpells = any("playerUnitEvent", 272, 276) || any("unitEvent", 289, 293);
+    // EVENT_UNIT_STATE_LIMIT is polled, not raised by the sim (see pumpUnitStates).
+    this.scriptWatchesUnitState = rt.triggerRegs.some((r) => r.kind === "unitState");
     this.scriptRegCount = rt.triggerRegs.length;
   }
 
@@ -1247,6 +1287,18 @@ export class MapViewerScene {
       if (attacks.length) engine.interp.pumpAttackEvents(attacks);
       const orders = sw.drainOrderEvents();
       if (orders.length) engine.interp.pumpOrderEvents(orders);
+      // 7.17: spells, construction, training, hero level/skill.
+      const spells = sw.drainSpellEvents();
+      if (spells.length) engine.interp.pumpSpellEvents(spells);
+      const construct = sw.drainConstructEvents();
+      if (construct.length) engine.interp.pumpConstructEvents(construct);
+      const trains = sw.drainTrainEvents();
+      if (trains.length) engine.interp.pumpTrainEvents(trains);
+      const heroes = sw.drainHeroEvents();
+      if (heroes.length) engine.interp.pumpHeroEvents(heroes);
+      // Unit-state thresholds (EVENT_UNIT_STATE_LIMIT) are POLLED — nothing in the sim
+      // raises "life dropped below 100", so the interpreter tests each watched unit itself.
+      if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
         engine.interp.pumpRegions(this.unitSnapshots());
@@ -1405,6 +1457,12 @@ export class MapViewerScene {
     instance.setScene(map.worldScene);
     instance.setTeamColor(owner); // player slot doubles as team color for now
     const simId = this.rts.addUnit(instance, def, x, y, facing, owner, team, constructionTime, reservedId); // default: face south
+    // -1: the sim unit this model was loading for is already gone (a trigger created and
+    // then removed it while the model streamed). Drop the model rather than leave a ghost.
+    if (simId < 0) {
+      instance.hide();
+      return null;
+    }
 
     // Buildings block pathing: stamp their footprint so units route around them.
     if (fp && this.grid) {
@@ -3827,8 +3885,14 @@ export class MapViewerScene {
           const [sx, sy] = this.trainSpawnSpot(t.buildingId, t.x, t.y, t.rallyX, t.rallyY, d.collision || 16, claimed);
           const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
           this.sounds?.play(d.soundSet, "Ready"); // "unit ready" voice on completion
+          const buildingId = t.buildingId;
           void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
-            if (simId !== null) this.applyRally(simId, rally);
+            if (simId === null) return;
+            this.applyRally(simId, rally);
+            // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the
+            // trained unit is born in the renderer (the sim owns no models), and
+            // GetTrainedUnit must hand the script the real unit.
+            world.noteTrainFinish(buildingId, simId);
           });
         }
         // --- spells / abilities ---

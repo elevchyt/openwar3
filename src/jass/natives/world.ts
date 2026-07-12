@@ -179,27 +179,39 @@ export function registerWorldNatives(rt: Runtime): void {
   // --- orders (7.14): a trigger tells a unit what to do; the sim carries it out ---
   // Route an order (generic id + target kind) through the bridge to the sim's issue*
   // commands. IssueXOrder returns true when the order took. A no-sim / unknown unit → false.
-  const orderStr = (v: JassValue): string => (v.k === "string" ? v.s : "");
-  const issue = (c: NativeCtx, unitV: JassValue, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
+  // The order STRING travels alongside the id: an ability order ("holybolt") has no id
+  // we can know, so the sim resolves the cast by matching the string against the unit's
+  // abilities (see rts.issueUnitOrder). An *ById* caller gives us only the number — we
+  // recover the string from the vocabulary (which minted it), so both spellings work.
+  const orderStr = (v: JassValue): string => (v.k === "string" ? v.s.trim().toLowerCase() : "");
+  const issue = (c: NativeCtx, unitV: JassValue, order: string, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
     const u = unit(c, unitV);
     if (!u || u.simId < 0) return jBool(false);
     const t = kind === "target" ? unit(c, targetV) : undefined;
-    return jBool(c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, kind, x, y, t?.simId ?? 0) ?? false);
+    return jBool(c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, t?.simId ?? 0) ?? false);
   };
-  def(rt, "IssueImmediateOrder", (c, a) => issue(c, a[0], orderStringToId(orderStr(a[1])), "immediate", 0, 0, JNULL));
-  def(rt, "IssueImmediateOrderById", (c, a) => issue(c, a[0], asInt(a[1]), "immediate", 0, 0, JNULL));
-  def(rt, "IssuePointOrder", (c, a) => issue(c, a[0], orderStringToId(orderStr(a[1])), "point", asNum(a[2]), asNum(a[3]), JNULL));
-  def(rt, "IssuePointOrderById", (c, a) => issue(c, a[0], asInt(a[1]), "point", asNum(a[2]), asNum(a[3]), JNULL));
+  const byName = (c: NativeCtx, unitV: JassValue, orderV: JassValue, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
+    const order = orderStr(orderV);
+    return issue(c, unitV, order, orderStringToId(order), kind, x, y, targetV);
+  };
+  const byId = (c: NativeCtx, unitV: JassValue, idV: JassValue, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
+    const id = asInt(idV);
+    return issue(c, unitV, orderIdToString(id), id, kind, x, y, targetV);
+  };
+  def(rt, "IssueImmediateOrder", (c, a) => byName(c, a[0], a[1], "immediate", 0, 0, JNULL));
+  def(rt, "IssueImmediateOrderById", (c, a) => byId(c, a[0], a[1], "immediate", 0, 0, JNULL));
+  def(rt, "IssuePointOrder", (c, a) => byName(c, a[0], a[1], "point", asNum(a[2]), asNum(a[3]), JNULL));
+  def(rt, "IssuePointOrderById", (c, a) => byId(c, a[0], a[1], "point", asNum(a[2]), asNum(a[3]), JNULL));
   def(rt, "IssuePointOrderLoc", (c, a) => {
     const loc = c.rt.data<{ x: number; y: number }>(a[2]);
-    return issue(c, a[0], orderStringToId(orderStr(a[1])), "point", loc?.x ?? 0, loc?.y ?? 0, JNULL);
+    return byName(c, a[0], a[1], "point", loc?.x ?? 0, loc?.y ?? 0, JNULL);
   });
   def(rt, "IssuePointOrderByIdLoc", (c, a) => {
     const loc = c.rt.data<{ x: number; y: number }>(a[2]);
-    return issue(c, a[0], asInt(a[1]), "point", loc?.x ?? 0, loc?.y ?? 0, JNULL);
+    return byId(c, a[0], a[1], "point", loc?.x ?? 0, loc?.y ?? 0, JNULL);
   });
-  def(rt, "IssueTargetOrder", (c, a) => issue(c, a[0], orderStringToId(orderStr(a[1])), "target", 0, 0, a[2]));
-  def(rt, "IssueTargetOrderById", (c, a) => issue(c, a[0], asInt(a[1]), "target", 0, 0, a[2]));
+  def(rt, "IssueTargetOrder", (c, a) => byName(c, a[0], a[1], "target", 0, 0, a[2]));
+  def(rt, "IssueTargetOrderById", (c, a) => byId(c, a[0], a[1], "target", 0, 0, a[2]));
 
   // Order id ↔ string vocabulary (OrderId/String2OrderId → int, OrderId2String → string).
   def(rt, "OrderId", (_c, a) => jInt(orderStringToId(orderStr(a[0]))));
@@ -259,6 +271,50 @@ export function registerWorldNatives(rt: Runtime): void {
   };
   def(rt, "IsUnitAlly", (c, a) => jBool(allied(c, a[0], a[1])));
   def(rt, "IsUnitEnemy", (c, a) => jBool(!allied(c, a[0], a[1])));
+  // Player-vs-player alliance (same team). A player is his own ally.
+  const playerIdx = (c: NativeCtx, v: JassValue): number => c.rt.data<JassPlayer>(v)?.index ?? asInt(v);
+  const playersAllied = (c: NativeCtx, a: JassValue[]): boolean => {
+    const p = playerIdx(c, a[0]);
+    const q = playerIdx(c, a[1]);
+    if (p === q) return true;
+    return c.rt.hooks?.isPlayerAlly?.(p, q) ?? c.rt.ensurePlayer(p).team === c.rt.ensurePlayer(q).team;
+  };
+  def(rt, "IsPlayerAlly", (c, a) => jBool(playersAllied(c, a)));
+  def(rt, "IsPlayerEnemy", (c, a) => jBool(!playersAllied(c, a)));
+
+  // --- per-unit flags + animation (7.17) ---
+  def(rt, "SetUnitInvulnerable", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitInvulnerable?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  // SetUnitPathing(u, false) makes a unit ignore collision (the classic "ghost" for
+  // cinematics and for parking a unit inside a base).
+  def(rt, "SetUnitPathing", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitPathing?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  // SetUnitAnimation plays a named clip ("attack", "stand victory", "birth"); the name
+  // is matched against the model's own sequence names. QueueUnitAnimation has no queue
+  // here — it plays the clip the same way; ResetUnitAnimation returns to the idle stand.
+  const anim = (c: NativeCtx, unitV: JassValue, name: string): JassValue => {
+    const u = unit(c, unitV);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitAnimation?.(u.simId, name);
+    return JNULL;
+  };
+  def(rt, "SetUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
+  def(rt, "QueueUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
+  def(rt, "ResetUnitAnimation", (c, a) => anim(c, a[0], ""));
+
+  // The unit's "custom value" — pure script state (the engine never reads it), the
+  // spine of every JASS unit-indexing library. It lives on the handle.
+  def(rt, "SetUnitUserData", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u) u.userData = asInt(a[1]);
+    return JNULL;
+  });
+  def(rt, "GetUnitUserData", (c, a) => jInt(unit(c, a[0])?.userData ?? 0));
 
   def(rt, "IsUnitHidden", () => jBool(false));
   // IsUnitType(u, UNIT_TYPE_*) — the classification half of every "matching unit"

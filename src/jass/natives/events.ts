@@ -14,7 +14,7 @@
 // the interpreter (it needs to call user functions) — see Interpreter.fireTrigger /
 // advanceTime. Registration here + firing there keeps natives free of the eval loop.
 
-import { ThreadAbort, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj } from "../runtime";
+import { ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -88,6 +88,19 @@ export function registerEventNatives(rt: Runtime): void {
     TriggerRegisterDialogEvent: "dialogEvent",
   };
   for (const [name, kind] of Object.entries(REG_KINDS)) def(rt, name, (c, a) => register(c, kind, a));
+  // TriggerRegisterUnitStateEvent needs one extra step: EVENT_UNIT_STATE_LIMIT is the one
+  // event we POLL (nothing in the sim announces "life changed"), and it fires on a
+  // CROSSING — so the comparison's truth has to be sampled the moment the trigger is
+  // registered. Without that seed, a unit wounded in the same tick as the registration
+  // would look like it had "always" been below the limit and never fire.
+  def(rt, "TriggerRegisterUnitStateEvent", (c, a) => {
+    const t = trig(c, a[0]);
+    if (!t) return jHandle(0, "event");
+    const reg: TriggerReg = { kind: "unitState", trigId: t.handleId, params: a.slice(1) };
+    reg.edge = unitStateHolds(c.rt, reg);
+    c.rt.triggerRegs.push(reg);
+    return jHandle(0, "event");
+  });
   // TriggerRegisterTimerEvent creates its OWN one-shot/periodic timer + a timerExpire
   // registration bound to it (common.j: takes trigger, real timeout, boolean periodic).
   def(rt, "TriggerRegisterTimerEvent", (c, a) => {
@@ -141,6 +154,55 @@ export function registerEventNatives(rt: Runtime): void {
   });
   def(rt, "GetOrderTarget", (c) => resp(c, "OrderTargetUnit")); // widget = the ordered unit target
   def(rt, "GetOrderTargetUnit", (c) => resp(c, "OrderTargetUnit"));
+  def(rt, "GetOrderedUnit", (c) => resp(c, "OrderedUnit"));
+
+  // Spell responses (EVENT_(PLAYER_)UNIT_SPELL_* — 7.17). GetSpellAbilityId is the
+  // ability's rawcode as an int; GetSpellAbility (the `ability` handle) has no object
+  // behind it in our engine, so it stays null rather than fake one.
+  def(rt, "GetSpellAbilityUnit", (c) => resp(c, "SpellAbilityUnit"));
+  def(rt, "GetSpellAbilityId", (c) => {
+    const v = resp(c, "SpellAbilityId");
+    return v.k === "int" ? v : jInt(0);
+  });
+  def(rt, "GetSpellAbility", () => JNULL);
+  def(rt, "GetSpellTargetUnit", (c) => resp(c, "SpellTargetUnit"));
+  def(rt, "GetSpellTargetX", (c) => {
+    const v = resp(c, "SpellTargetX");
+    return v.k === "real" ? v : jReal(0);
+  });
+  def(rt, "GetSpellTargetY", (c) => {
+    const v = resp(c, "SpellTargetY");
+    return v.k === "real" ? v : jReal(0);
+  });
+  def(rt, "GetSpellTargetLoc", (c) => {
+    const x = resp(c, "SpellTargetX");
+    const y = resp(c, "SpellTargetY");
+    const l = { handleId: 0, x: x.k === "real" ? x.n : 0, y: y.k === "real" ? y.n : 0 };
+    l.handleId = c.rt.handles.alloc(l);
+    return jHandle(l.handleId, "location");
+  });
+
+  // Construction / training responses (7.17).
+  def(rt, "GetConstructingStructure", (c) => resp(c, "ConstructingStructure")); // CONSTRUCT_START
+  def(rt, "GetCancelledStructure", (c) => resp(c, "CancelledStructure")); // CONSTRUCT_CANCEL
+  def(rt, "GetConstructedStructure", (c) => resp(c, "ConstructedStructure")); // CONSTRUCT_FINISH
+  def(rt, "GetTrainedUnit", (c) => resp(c, "TrainedUnit")); // TRAIN_FINISH (the new unit)
+  def(rt, "GetTrainedUnitType", (c) => {
+    const v = resp(c, "TrainedUnitType");
+    return v.k === "int" ? v : jInt(0);
+  });
+
+  // Hero responses (EVENT_PLAYER_HERO_LEVEL / _SKILL — 7.17).
+  def(rt, "GetLevelingUnit", (c) => resp(c, "LevelingUnit"));
+  def(rt, "GetLearningUnit", (c) => resp(c, "LearningUnit"));
+  def(rt, "GetLearnedSkill", (c) => {
+    const v = resp(c, "LearnedSkill");
+    return v.k === "int" ? v : jInt(0);
+  });
+  def(rt, "GetLearnedSkillLevel", (c) => {
+    const v = resp(c, "LearnedSkillLevel");
+    return v.k === "int" ? v : jInt(0);
+  });
 
   // --- run a trigger from script (used by RunInitializationTriggers etc.) ---
   const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean =>
