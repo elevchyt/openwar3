@@ -732,7 +732,7 @@ export class MapViewerScene {
     this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
     // Start near gameplay zoom rather than a whole-map overview — far better
     // draw performance and closer to WC3's default camera.
-    this.distance = 2600;
+    this.distance = MapViewerScene.MELEE_START;
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
@@ -3168,10 +3168,11 @@ export class MapViewerScene {
   // thin out to a faint hairline.
   private static readonly HOVER_RING_DIM = 0.78;
   // Camera zoom limits (world units of camera distance), WC3-like — not the huge
-  // free range we had. MELEE_START opens a touch more zoomed out than before.
-  private static readonly ZOOM_MIN = 1500;
-  private static readonly ZOOM_MAX = 3600;
-  private static readonly MELEE_START = 2400;
+  // free range we had. MELEE_START is WC3's own default camera target distance
+  // (the World Editor camera default: distance 1650, AoA 304, FarZ 5000).
+  private static readonly ZOOM_MIN = 1250;
+  private static readonly ZOOM_MAX = 2000;
+  private static readonly MELEE_START = 1650;
   private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
   private mouseOverCanvas = false; // cursor over the map (not the console) — gates edge-scroll
 
