@@ -215,6 +215,14 @@ class HandleTable {
   }
 }
 
+/** Thrown when `TriggerSleepAction` is reached somewhere it cannot park the caller —
+ *  a condition, a boolexpr filter, a `ForGroup`/`ForForce` callback, or a function called
+ *  from an expression. WC3 doesn't support a wait in those places either. We must not
+ *  simply ignore it: blizzard.j's `PolledWait` loops until its timer drains, so a no-op
+ *  wait would busy-loop to the iteration cap. Aborting that one callback is the safe
+ *  answer — the interpreter catches this at the synchronous-call boundary (runSync). */
+export class ThreadAbort {}
+
 /** A boxed JASS array (fixed 8192 slots in the real engine — JASS_MAX_ARRAY_SIZE).
  *  Sparse map + a per-type default so unset slots read as 0/0.0/false/null. */
 export class JassArray {
@@ -380,11 +388,13 @@ export class Runtime {
     return v.k === "handle" ? (this.handles.get(v.h) as T | undefined) : undefined;
   }
 
-  /** Log an unimplemented/failed native once (never spam; never crash the map). */
+  /** Log an unimplemented/failed native once (never spam; never crash the map). With no
+   *  `detail` this is the plain "native we haven't written yet" case; with one it's a real
+   *  diagnostic (a throwing action, an abandoned wait) and says so instead. */
   warnOnce(name: string, detail?: string): void {
     if (this.warned.has(name)) return;
     this.warned.add(name);
-    console.info(`[jass] native '${name}' not implemented — safe default${detail ? ` (${detail})` : ""}`);
+    console.info(detail ? `[jass] '${name}' — ${detail}` : `[jass] native '${name}' not implemented — safe default`);
   }
 
   /** The current event-response value (top frame), or null. */

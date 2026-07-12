@@ -709,5 +709,166 @@ endfunction`;
   if (tgtType && tgtType.n === rawcodeToInt('hpea')) ok(`GetOrderTargetUnit() is the peasant target`); else fail(`target type: ${tgtType && tgtType.n}`);
 }
 
+// --- 7.15: trigger threads — TriggerSleepAction / PolledWait (waits) ---
+console.log('\n[7.15] Trigger threads (TriggerSleepAction suspends; PolledWait; waits in map init)');
+{
+  const { rawcodeToInt } = require(join(BUILD, 'lexer.js'));
+
+  // Part A: a wait SUSPENDS the trigger's actions mid-way, and the thread keeps its event
+  // responses across the wait (GetDyingUnit() still resolves after "Wait 3 seconds").
+  const SRC_A = `
+globals
+    integer udg_phase  = 0
+    integer udg_before = 0
+    integer udg_after  = 0
+endglobals
+function OnDeath takes nothing returns nothing
+    set udg_phase  = 1
+    set udg_before = GetUnitTypeId( GetDyingUnit() )
+    call TriggerSleepAction( 3.0 )
+    set udg_phase  = 2
+    set udg_after  = GetUnitTypeId( GetDyingUnit() )
+endfunction
+function InitW takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    call TriggerAddAction( t, function OnDeath )
+    call TriggerRegisterPlayerUnitEvent( t, Player(0), ConvertPlayerUnitEvent(20), null ) // UNIT_DEATH
+endfunction`;
+  const iA = buildInterpreter([SRC_A]);
+  const gA = (n) => iA.rt.globals.get(n);
+  iA.run('InitW', []);
+  iA.pumpUnitDeaths([{ victim: { id: 1, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, killer: null }]);
+  const phase1 = gA('udg_phase'), before = gA('udg_before');
+  if (phase1 && phase1.n === 1 && before && before.n === rawcodeToInt('hfoo')) ok(`actions run immediately up to the wait (phase 1, GetDyingUnit resolved)`);
+  else fail(`pre-wait: phase ${phase1 && phase1.n} dying ${before && before.n} (want 1/'hfoo')`);
+  if (iA.sleepingThreads === 1) ok(`the wait parked the trigger thread (1 sleeping)`);
+  else fail(`sleeping threads: ${iA.sleepingThreads} (want 1)`);
+  iA.advanceTime(1.0);
+  iA.advanceTime(1.0);
+  const midPhase = gA('udg_phase');
+  if (midPhase && midPhase.n === 1) ok(`still parked after 2.0s of a 3.0s wait (phase 1)`);
+  else fail(`mid-wait phase: ${midPhase && midPhase.n} (want 1)`);
+  iA.advanceTime(1.5); // 3.5s total — the wait is up
+  const phase2 = gA('udg_phase'), after = gA('udg_after');
+  if (phase2 && phase2.n === 2) ok(`thread resumed after 3.0s of game time (phase 2)`);
+  else fail(`post-wait phase: ${phase2 && phase2.n} (want 2)`);
+  if (after && after.n === rawcodeToInt('hfoo')) ok(`event responses SURVIVE the wait — GetDyingUnit() still the victim`);
+  else fail(`post-wait GetDyingUnit: ${after && after.n} (want 'hfoo')`);
+  if (iA.sleepingThreads === 0) ok(`the finished thread left the scheduler (0 sleeping)`);
+  else fail(`sleeping threads after: ${iA.sleepingThreads} (want 0)`);
+
+  // Part B: PolledWait — the REAL blizzard.j BJ the GUI's "Wait" compiles to. It polls a
+  // timer in a loop calling TriggerSleepAction, so before threads existed it span to the
+  // 2,000,000-iteration cap and ABANDONED the rest of the trigger. It must now just wait.
+  const SRC_B = `
+globals
+    integer udg_step = 0
+    real    udg_at   = 0.0
+endglobals
+function DoWait takes nothing returns nothing
+    set udg_step = 1
+    call PolledWait( 2.0 )
+    set udg_step = 2
+endfunction`;
+  const iB = buildInterpreter([COMMON_J, BLIZZARD_J, SRC_B]);
+  const gB = (n) => iB.rt.globals.get(n);
+  iB.run('DoWait', []);
+  const bPre = gB('udg_step');
+  if (bPre && bPre.n === 1 && iB.sleepingThreads === 1) ok(`PolledWait(2.0) parked the thread instead of spinning`);
+  else fail(`PolledWait pre: step ${bPre && bPre.n} sleeping ${iB.sleepingThreads} (want 1/1)`);
+  let ticks = 0;
+  while (ticks < 400 && iB.sleepingThreads > 0) {
+    iB.advanceTime(0.05); // 20 Hz, like the sim tick
+    ticks++;
+  }
+  const bStep = gB('udg_step');
+  if (bStep && bStep.n === 2) ok(`PolledWait returned and the rest of the function ran (step 2)`);
+  else fail(`PolledWait post: step ${bStep && bStep.n} (want 2) after ${ticks} ticks`);
+  // bj_POLLED_WAIT_INTERVAL is 0.10s, so a 2.0s polled wait lands a little past 2.0s.
+  if (iB.rt.gameTime >= 2.0 && iB.rt.gameTime < 2.6) ok(`it waited ~2.0s of game time (${iB.rt.gameTime.toFixed(2)}s)`);
+  else fail(`PolledWait elapsed: ${iB.rt.gameTime.toFixed(2)}s (want ~2.0)`);
+
+  // Part C: a 0-second wait must still yield a tick — else `loop / TriggerSleepAction(0) /
+  // endloop` would hang the frame. A thread resumes at most once per pump.
+  const SRC_C = `
+globals
+    integer udg_n = 0
+endglobals
+function Spin takes nothing returns nothing
+    loop
+        set udg_n = udg_n + 1
+        exitwhen udg_n >= 3
+        call TriggerSleepAction( 0.0 )
+    endloop
+endfunction`;
+  const iC = buildInterpreter([SRC_C]);
+  iC.run('Spin', []);
+  const c0 = iC.rt.globals.get('udg_n');
+  iC.advanceTime(0.05);
+  const c1 = iC.rt.globals.get('udg_n');
+  iC.advanceTime(0.05);
+  const c2 = iC.rt.globals.get('udg_n');
+  if (c0 && c0.n === 1 && c1 && c1.n === 2 && c2 && c2.n === 3) ok(`TriggerSleepAction(0) costs one tick per wait (1 → 2 → 3), no hang`);
+  else fail(`zero-wait loop: ${c0 && c0.n} → ${c1 && c1.n} → ${c2 && c2.n} (want 1 → 2 → 3)`);
+
+  // Part D: a wait in a CONDITION has no thread to park (WC3 can't wait there either) —
+  // it must abandon that condition, NOT spin. The trigger then simply doesn't fire.
+  const SRC_D = `
+globals
+    integer udg_fired = 0
+endglobals
+function BadCond takes nothing returns boolean
+    call PolledWait( 1.0 )
+    return true
+endfunction
+function Act takes nothing returns nothing
+    set udg_fired = 1
+endfunction
+function InitD takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    call TriggerAddCondition( t, Condition( function BadCond ) )
+    call TriggerAddAction( t, function Act )
+    call TriggerRegisterPlayerUnitEvent( t, Player(0), ConvertPlayerUnitEvent(20), null )
+endfunction`;
+  const iD = buildInterpreter([COMMON_J, BLIZZARD_J, SRC_D]);
+  iD.run('InitD', []);
+  iD.pumpUnitDeaths([{ victim: { id: 1, typeId: 'hfoo', owner: 0, x: 0, y: 0, facing: 0 }, killer: null }]);
+  const fired = iD.rt.globals.get('udg_fired');
+  if (fired && fired.n === 0 && iD.sleepingThreads === 0) ok(`a wait in a condition is abandoned, not spun (trigger didn't fire, nothing parked)`);
+  else fail(`condition wait: fired ${fired && fired.n} sleeping ${iD.sleepingThreads} (want 0/0)`);
+
+  // Part E: the real-world shape — a MAP INIT trigger that waits, then spawns. WC3 runs
+  // main() on a thread, and ConditionalTriggerExecute runs the trigger's actions ON it, so
+  // the wait suspends main() itself and the rest of init is deferred (faithful to WC3).
+  const spawned = [];
+  const hooksE = { createUnit: (player, typeId, x, y) => (spawned.push({ player, typeId, x, y }), 300 + spawned.length) };
+  const SRC_E = `
+globals
+    trigger gg_trg_Wave = null
+    integer udg_afterInit = 0
+endglobals
+function WaveActions takes nothing returns nothing
+    call TriggerSleepAction( 5.0 )
+    call CreateUnit( Player(0), 'hfoo', 128.0, 256.0, 270.0 )
+endfunction
+function main takes nothing returns nothing
+    set gg_trg_Wave = CreateTrigger()
+    call TriggerAddAction( gg_trg_Wave, function WaveActions )
+    call ConditionalTriggerExecute( gg_trg_Wave )
+    set udg_afterInit = 1
+endfunction`;
+  const iE = buildInterpreter([COMMON_J, BLIZZARD_J, SRC_E], { hooks: hooksE });
+  iE.run('main', []);
+  const initFlagPre = iE.rt.globals.get('udg_afterInit');
+  if (spawned.length === 0 && initFlagPre && initFlagPre.n === 0 && iE.sleepingThreads === 1) ok(`a Wait in map init suspends main() itself — nothing spawned yet, init deferred`);
+  else fail(`init wait: spawned ${spawned.length} afterInit ${initFlagPre && initFlagPre.n} sleeping ${iE.sleepingThreads} (want 0/0/1)`);
+  for (let i = 0; i < 120 && iE.sleepingThreads > 0; i++) iE.advanceTime(0.05); // 6s
+  const initFlag = iE.rt.globals.get('udg_afterInit');
+  if (spawned.length === 1 && spawned[0].typeId === 'hfoo') ok(`after the 5s wait the trigger spawned its unit (CreateUnit reached the bridge)`);
+  else fail(`post-wait spawn: ${JSON.stringify(spawned)}`);
+  if (initFlag && initFlag.n === 1) ok(`main() resumed and finished after the trigger's wait`);
+  else fail(`afterInit: ${initFlag && initFlag.n} (want 1)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

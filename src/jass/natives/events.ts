@@ -14,7 +14,7 @@
 // the interpreter (it needs to call user functions) — see Interpreter.fireTrigger /
 // advanceTime. Registration here + firing there keeps natives free of the eval loop.
 
-import type { BoolExpr, NativeCtx, Runtime, TimerObj, TriggerObj } from "../runtime";
+import { ThreadAbort, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj } from "../runtime";
 import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -173,6 +173,16 @@ export function registerEventNatives(rt: Runtime): void {
   });
   def(rt, "ExecuteFunc", (c, a) => (a[0].k === "string" ? c.call(a[0].s, []) : JNULL));
   def(rt, "DoNothing", () => JNULL);
+
+  // TriggerSleepAction — the GUI's "Wait" action, and what blizzard.j's PolledWait loops
+  // on. It SUSPENDS the running trigger thread, which a native (a plain JS function) can't
+  // do, so the interpreter intercepts it at the call site (Interpreter.execThreadNative)
+  // and yields to the thread scheduler. This impl is only reached when there's no thread to
+  // park — a condition/filter/enum callback, where WC3 can't wait either: abandon that
+  // callback rather than let PolledWait's poll loop spin (see ThreadAbort).
+  def(rt, "TriggerSleepAction", () => {
+    throw new ThreadAbort();
+  });
 
   // --- timers ---
   def(rt, "CreateTimer", (c) => jHandle(makeTimer(c.rt, 0, false, null).handleId, "timer"));

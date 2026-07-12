@@ -10,9 +10,13 @@
 //   • never hard-crash the map: an unknown function/variable or a failed native
 //     logs once and yields a typed default (CLAUDE.md "safe default" rule). A
 //     runaway loop/recursion is capped rather than hanging the browser.
+//   • trigger actions run on a THREAD that `TriggerSleepAction` can suspend (7.15).
+//     That's why the statement/call layer is written as generators: a wait can occur
+//     anywhere inside a trigger's actions, so every enclosing call must be resumable.
+//     Expressions stay synchronous (see JassThread + runSync below).
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
-import { Runtime, JassArray, type BoolExpr, type JassPlayer, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg } from "./runtime";
+import { Runtime, JassArray, ThreadAbort, type BoolExpr, type JassPlayer, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -85,11 +89,54 @@ class Frame {
 
 const MAX_CALL_DEPTH = 3000; // deep enough for blizzard.j; a backstop against runaway recursion
 const MAX_LOOP_ITERS = 2_000_000; // init loops are tiny; this only guards a pathological script
+const MAX_THREADS = 4096; // live (sleeping) trigger threads — a backstop against runaway spawning
+
+/** What a running thread yields when it wants to sleep: seconds of game time. */
+type ThreadGen = Generator<number, JassValue, void>;
+
+/** Natives the thread layer must handle itself, because each one either suspends the
+ *  calling thread or runs more JASS on it — neither of which a plain (synchronous) native
+ *  impl can do. Intercepted at statement-call sites; see Interpreter.execThreadNative. */
+const THREAD_NATIVES = new Set(["TriggerSleepAction", "TriggerExecute", "ConditionalTriggerExecute", "ExecuteFunc"]);
+
+/** A **trigger thread** (7.15). WC3 runs a trigger's actions — and `main()`, and timer
+ *  handlers — on a thread that `TriggerSleepAction` can suspend mid-way; the engine
+ *  resumes it N seconds of game time later. Crucially the thread keeps its **event
+ *  responses** across the wait (`GetTriggerUnit()` still reads the same unit after a
+ *  `Wait 5 seconds`), so each thread carries its own slice of the (globally-stacked)
+ *  event-response frames, and its call depth, restored on resume.
+ *
+ *  We model a thread as a JS generator that yields the seconds it wants to sleep.
+ *  `pumpThreads` (driven from the sim tick, alongside the timers) resumes it when its
+ *  wake time arrives — at most **once per tick**, so a `TriggerSleepAction(0)` in a loop
+ *  costs a frame instead of hanging one. */
+interface JassThread {
+  id: number;
+  label: string; // for warnings, e.g. "trigger#12"
+  gen: ThreadGen;
+  stack: Array<Map<string, JassValue>>; // its event-response frames (thread-local in WC3)
+  depth: number; // its call depth, saved across the suspension
+  wakeAt: number; // rt.gameTime at which it may resume
+  lastTick: number; // the pump it last ran on (one resume per thread per tick)
+  done: boolean;
+  result: JassValue; // its return value, if it ran to completion
+}
 
 export class Interpreter {
   private depth = 0;
   private globalDecls: VarDecl[] = [];
   private readonly ctx: NativeCtx;
+
+  /** Suspended trigger threads, in creation order (deterministic resume order). */
+  private threads: JassThread[] = [];
+  private nextThreadId = 1;
+  private pumpTick = 0;
+  /** The thread currently executing, and how deep we are inside a SYNCHRONOUS drive
+   *  (runSync — a condition, a boolexpr filter, a ForGroup/ForForce callback, or a
+   *  function called from an expression). A wait can only suspend when we're on a
+   *  thread and NOT inside a sync drive — the same places WC3 supports one. */
+  private currentThread: JassThread | null = null;
+  private syncDepth = 0;
 
   constructor(public readonly rt: Runtime) {
     this.ctx = {
@@ -120,21 +167,48 @@ export class Interpreter {
     }
   }
 
-  /** Call a function by name: native impl → user function → declared-but-
-   *  unimplemented native (typed default) → unknown (null). Never throws for a
-   *  missing target. */
+  /** Call a function by name **synchronously** — the entry point for everything that
+   *  cannot suspend: conditions, boolexpr filters, enum callbacks (`ForGroup`/`ForForce`),
+   *  natives calling back through `NativeCtx.call`, and functions invoked from an
+   *  *expression*. A `TriggerSleepAction` reached from here can't yield (there's no
+   *  thread to park), so it aborts that callback — see runSync. WC3 doesn't support a
+   *  wait in any of these places either.
+   *
+   *  Resolution order: native impl → user function → declared-but-unimplemented native
+   *  (typed default) → unknown (null). Never throws for a missing target. */
   callFunction(name: string, args: JassValue[]): JassValue {
     const nat = this.rt.natives.get(name);
-    if (nat) {
-      try {
-        return nat(this.ctx, args);
-      } catch (err) {
-        this.rt.warnOnce(name, `threw: ${(err as Error).message}`);
-        return defaultForType(this.rt.nativeReturns.get(name) ?? "nothing");
-      }
-    }
+    if (nat) return this.callNative(name, nat, args); // natives are synchronous — no generator needed
     const fn = this.rt.functions.get(name);
-    if (fn) return this.callUser(fn, args);
+    if (fn) return this.runSync(this.callUserG(fn, args), name);
+    return this.missing(name);
+  }
+
+  /** The same resolution, as a generator — used from a thread, where a user function
+   *  (a trigger action, `PolledWait`, …) may suspend on a wait. */
+  private *callFunctionG(name: string, args: JassValue[]): ThreadGen {
+    const nat = this.rt.natives.get(name);
+    if (nat) return this.callNative(name, nat, args);
+    const fn = this.rt.functions.get(name);
+    if (fn) return yield* this.callUserG(fn, args);
+    return this.missing(name);
+  }
+
+  /** Invoke a native. A throwing native is logged once and yields its typed default —
+   *  except a ThreadAbort (a wait with nowhere to park), which must reach its runSync. */
+  private callNative(name: string, nat: (ctx: NativeCtx, args: JassValue[]) => JassValue, args: JassValue[]): JassValue {
+    try {
+      return nat(this.ctx, args);
+    } catch (err) {
+      if (err instanceof ThreadAbort) throw err;
+      this.rt.warnOnce(name, `threw: ${(err as Error).message}`);
+      return defaultForType(this.rt.nativeReturns.get(name) ?? "nothing");
+    }
+  }
+
+  /** A call with no target: a declared-but-unimplemented native returns its typed
+   *  default; a genuinely unknown name returns null. Both log once. */
+  private missing(name: string): JassValue {
     const ret = this.rt.nativeReturns.get(name);
     if (ret !== undefined) {
       this.rt.warnOnce(name);
@@ -144,7 +218,29 @@ export class Interpreter {
     return JNULL;
   }
 
-  private callUser(fn: FunctionDecl, args: JassValue[]): JassValue {
+  /** Drive a generator to completion on the caller's stack (no suspension possible).
+   *  A wait inside throws ThreadAbort, which we catch here: that callback is abandoned
+   *  (logged once) rather than left to spin — blizzard.j's `PolledWait` loops until its
+   *  timer drains, so a no-op wait would busy-loop to the iteration cap. */
+  private runSync(gen: ThreadGen, label: string): JassValue {
+    this.syncDepth++;
+    try {
+      const r = gen.next();
+      if (r.done) return r.value;
+      this.rt.warnOnce(label, "wait outside a trigger thread — ignored");
+      return JNULL;
+    } catch (err) {
+      if (err instanceof ThreadAbort) {
+        this.rt.warnOnce(label, "TriggerSleepAction outside a trigger thread — callback abandoned");
+        return JNULL;
+      }
+      throw err;
+    } finally {
+      this.syncDepth--;
+    }
+  }
+
+  private *callUserG(fn: FunctionDecl, args: JassValue[]): ThreadGen {
     if (++this.depth > MAX_CALL_DEPTH) {
       this.depth--;
       this.rt.warnOnce(fn.name, "call depth exceeded");
@@ -159,7 +255,7 @@ export class Interpreter {
       else frame.vars.set(loc.name, loc.init ? this.eval(loc.init, frame) : defaultForType(loc.type));
     }
     try {
-      this.execBlock(fn.body, frame);
+      yield* this.execBlockG(fn.body, frame);
     } catch (e) {
       if (e instanceof ReturnSignal) {
         this.depth--;
@@ -172,15 +268,36 @@ export class Interpreter {
     return defaultForType(fn.returns);
   }
 
-  private execBlock(stmts: Stmt[], frame: Frame): void {
-    for (const s of stmts) this.exec(s, frame);
+  private *execBlockG(stmts: Stmt[], frame: Frame): ThreadGen {
+    for (const s of stmts) yield* this.exec(s, frame);
+    return JNULL;
   }
 
-  private exec(s: Stmt, frame: Frame): void {
+  private *exec(s: Stmt, frame: Frame): ThreadGen {
     switch (s.kind) {
-      case "call":
-        this.callFunction(s.name, s.args.map((a) => this.eval(a, frame)));
-        return;
+      case "call": {
+        // The thread-aware natives, intercepted here so a wait inside them can suspend
+        // the *calling* thread (a native impl is a plain JS function — it cannot yield).
+        // Same precedence as callFunction: the engine's meaning wins over a same-named
+        // script function. Everything else can't suspend, so it goes through the sync path.
+        const args = s.args.map((a) => this.eval(a, frame));
+        if (THREAD_NATIVES.has(s.name)) {
+          yield* this.execThreadNative(s.name, args);
+          return JNULL;
+        }
+        const nat = this.rt.natives.get(s.name);
+        if (nat) {
+          this.callNative(s.name, nat, args);
+          return JNULL;
+        }
+        const fn = this.rt.functions.get(s.name);
+        if (fn) {
+          yield* this.callUserG(fn, args); // a user function may wait (PolledWait, a spawn loop, …)
+          return JNULL;
+        }
+        this.missing(s.name);
+        return JNULL;
+      }
       case "set": {
         const value = this.eval(s.value, frame);
         if (s.index !== undefined) {
@@ -191,39 +308,89 @@ export class Interpreter {
         } else {
           this.rt.globals.set(s.name, value);
         }
-        return;
+        return JNULL;
       }
       case "return":
         throw new ReturnSignal(s.value ? this.eval(s.value, frame) : JNULL);
       case "if": {
         for (const b of s.branches) {
           if (truthy(this.eval(b.cond, frame))) {
-            this.execBlock(b.body, frame);
-            return;
+            yield* this.execBlockG(b.body, frame);
+            return JNULL;
           }
         }
-        if (s.elseBody) this.execBlock(s.elseBody, frame);
-        return;
+        if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
+        return JNULL;
       }
       case "loop": {
         let iters = 0;
         while (true) {
           if (++iters > MAX_LOOP_ITERS) {
             this.rt.warnOnce("<loop>", "iteration cap hit");
-            return;
+            return JNULL;
           }
           try {
-            for (const st of s.body) this.exec(st, frame);
+            for (const st of s.body) yield* this.exec(st, frame);
           } catch (e) {
-            if (e instanceof ExitLoop) return;
+            if (e instanceof ExitLoop) return JNULL;
             throw e;
           }
         }
       }
       case "exitwhen":
         if (truthy(this.eval(s.cond, frame))) throw EXIT_LOOP;
-        return;
+        return JNULL;
     }
+  }
+
+  /** The four natives the thread layer owns (intercepted in `exec`): each either
+   *  suspends the calling thread or runs more JASS *on* it, which a plain native — a
+   *  synchronous JS function — cannot do. All four return `nothing`, so they can only
+   *  ever appear as a statement, which is why intercepting statement calls is enough.
+   *
+   *  They still have ordinary native impls in natives/events.ts for the synchronous
+   *  path (a `ForGroup` callback that calls `TriggerExecute`, say). */
+  private *execThreadNative(name: string, args: JassValue[]): ThreadGen {
+    if (name === "TriggerSleepAction") {
+      // THE suspension point. `TriggerSleepAction(n)` parks this thread for n seconds of
+      // GAME time (blizzard.j's PolledWait loops on it, so "Wait" in the GUI lands here).
+      const secs = Math.max(0, asNum(args[0] ?? jReal(0)));
+      if (this.currentThread && this.syncDepth === 0) {
+        yield secs;
+        return JNULL;
+      }
+      throw new ThreadAbort(); // no thread to park (a condition/filter/enum callback)
+    }
+    // ExecuteFunc takes a function NAME, not a trigger — run it on this thread.
+    if (name === "ExecuteFunc") return args[0]?.k === "string" ? yield* this.callFunctionG(args[0].s, []) : JNULL;
+
+    // TriggerExecute runs the trigger's actions on the CALLING thread (so a wait inside
+    // blocks the caller — this is how a map-init trigger's Wait delays the init after it);
+    // ConditionalTriggerExecute gates that on the trigger's conditions first.
+    const t = this.rt.data<TriggerObj>(args[0] ?? JNULL);
+    if (!t) return JNULL;
+    if (name === "ConditionalTriggerExecute" && !(t.enabled && this.conditionsPass(t))) return JNULL;
+    yield* this.runActionsG(t);
+    return JNULL;
+  }
+
+  /** Run a trigger's action functions in order, on the current thread. One throwing
+   *  action is logged and skipped — the rest still run (one bad trigger ≠ dead map). */
+  private *runActionsG(trig: TriggerObj): ThreadGen {
+    for (const fn of trig.actions) {
+      try {
+        yield* this.callFunctionG(fn, []);
+      } catch (err) {
+        if (err instanceof ThreadAbort) throw err;
+        if (!(err instanceof ReturnSignal)) this.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
+      }
+    }
+    return JNULL;
+  }
+
+  /** Evaluate a trigger's conditions (synchronously — WC3 can't wait in a condition). */
+  private conditionsPass(trig: TriggerObj): boolean {
+    return trig.conditions.every((fn) => truthy(this.callFunction(fn, [])));
   }
 
   private arrayFor(name: string, frame: Frame | null): JassArray {
@@ -326,34 +493,115 @@ export class Interpreter {
     return jReal(b === 0 ? 0 : asNum(l) / b);
   }
 
-  /** Run a top-level function by name (config, main, or any trigger callback). */
+  /** Run a top-level function by name (config, main, or any trigger callback) on its
+   *  own trigger thread. Returns its value if it ran to completion — the normal case —
+   *  or null if it suspended on a wait (a map-init trigger with a `Wait`), in which case
+   *  the pump resumes it. WC3 runs `main()` on a thread too, for exactly this reason. */
   run(fnName: string, args: JassValue[] = []): JassValue {
-    return this.callFunction(fnName, args);
+    return this.startThread(fnName, this.callFunctionG(fnName, args)).result;
+  }
+
+  // --- trigger threads (milestone 7.15) -------------------------------------
+
+  /** Start a thread and run it **immediately**, up to its first wait (WC3 runs trigger
+   *  actions the moment the event fires — the wait is what defers the rest). It only
+   *  joins the scheduler if it actually suspended. */
+  private startThread(label: string, gen: ThreadGen, responses?: Map<string, JassValue>): JassThread {
+    const t: JassThread = {
+      id: this.nextThreadId++,
+      label,
+      gen,
+      stack: responses ? [responses] : [],
+      depth: 0,
+      wakeAt: this.rt.gameTime,
+      lastTick: this.pumpTick,
+      done: false,
+      result: JNULL,
+    };
+    if (this.threads.length >= MAX_THREADS) {
+      this.rt.warnOnce("<threads>", `thread cap (${MAX_THREADS}) hit — trigger thread dropped`);
+      t.done = true;
+      return t;
+    }
+    this.resumeThread(t);
+    if (!t.done) this.threads.push(t);
+    return t;
+  }
+
+  /** Resume (or first-run) a thread: make its saved context current — event-response
+   *  frames, call depth, and a clean sync depth (a thread is a fresh execution context
+   *  even when spawned from inside a native) — step the generator, then save whatever
+   *  it left behind for next time. A thread that throws is logged and dies; it never
+   *  takes the frame down with it. */
+  private resumeThread(t: JassThread): void {
+    const savedDepth = this.depth;
+    const savedSync = this.syncDepth;
+    const savedThread = this.currentThread;
+    const base = this.rt.eventStack.length;
+    this.depth = t.depth;
+    this.syncDepth = 0;
+    this.currentThread = t;
+    for (const f of t.stack) this.rt.eventStack.push(f);
+    try {
+      const r = t.gen.next();
+      if (r.done) {
+        t.done = true;
+        t.result = typeof r.value === "object" ? r.value : JNULL;
+      } else {
+        t.wakeAt = this.rt.gameTime + Math.max(0, typeof r.value === "number" ? r.value : 0);
+      }
+    } catch (err) {
+      if (!(err instanceof ReturnSignal) && !(err instanceof ThreadAbort)) {
+        this.rt.warnOnce(t.label, `trigger thread threw: ${(err as Error).message}`);
+      }
+      t.done = true;
+    } finally {
+      // Whatever frames the thread pushed and hasn't popped are ITS event responses —
+      // lift them off the shared stack and carry them to the next resume.
+      t.stack = this.rt.eventStack.splice(base);
+      t.depth = this.depth;
+      t.lastTick = this.pumpTick;
+      this.depth = savedDepth;
+      this.syncDepth = savedSync;
+      this.currentThread = savedThread;
+    }
+  }
+
+  /** Resume every thread whose wake time has come (pumped from the sim tick, after the
+   *  timers). A thread resumes at most **once per pump**: that's what makes a wait cost
+   *  at least a frame, so `loop / TriggerSleepAction(0) / endloop` can't hang the tick. */
+  private pumpThreads(): void {
+    this.pumpTick++;
+    if (!this.threads.length) return;
+    for (const t of [...this.threads]) {
+      if (t.done || t.lastTick >= this.pumpTick || t.wakeAt > this.rt.gameTime) continue;
+      this.resumeThread(t);
+    }
+    if (this.threads.some((t) => t.done)) this.threads = this.threads.filter((t) => !t.done);
+  }
+
+  /** How many threads are parked on a wait (diagnostics / tests). */
+  get sleepingThreads(): number {
+    return this.threads.length;
   }
 
   // --- event runtime (milestone 7.4) ----------------------------------------
 
-  /** Fire a trigger: push its event responses (thread-local), evaluate conditions,
-   *  and run actions if they pass — then pop. This is the ECA execution the whole
-   *  event model routes through (timers here; sim events via fireEvent). A trigger
-   *  action that throws is logged, never propagated (one bad trigger ≠ dead map). */
+  /** Fire a trigger: evaluate its conditions with the event responses in scope, then —
+   *  if they pass — run its actions on a **thread** (7.15), which starts immediately but
+   *  can suspend on a `TriggerSleepAction` and resume later with those same responses
+   *  still readable (`GetTriggerUnit` after a wait). This is the ECA execution the whole
+   *  event model routes through (timers here; sim events via fireEvent). */
   fireTrigger(trig: TriggerObj, responses: Map<string, JassValue>): void {
     if (!trig.enabled) return;
     this.rt.eventStack.push(responses);
+    let pass: boolean;
     try {
-      const pass = trig.conditions.every((fn) => truthy(this.callFunction(fn, [])));
-      if (pass) {
-        for (const fn of trig.actions) {
-          try {
-            this.callFunction(fn, []);
-          } catch (err) {
-            if (!(err instanceof ReturnSignal)) this.rt.warnOnce(fn, `trigger action threw: ${(err as Error).message}`);
-          }
-        }
-      }
+      pass = this.conditionsPass(trig);
     } finally {
       this.rt.eventStack.pop();
     }
+    if (pass) this.startThread(`trigger#${trig.handleId}`, this.runActionsG(trig), responses);
   }
 
   /** Dispatch a sim-raised event to every trigger registered for `kind` whose
@@ -369,7 +617,8 @@ export class Interpreter {
     }
   }
 
-  /** Advance game timers by `dt` seconds (pumped from the sim tick). An expired
+  /** Advance game time by `dt` seconds (pumped from the sim tick): expire timers, then
+   *  resume any trigger thread whose `TriggerSleepAction` has run out (7.15). An expired
    *  timer runs its TimerStart handler code and fires any trigger registered on it
    *  (TriggerRegisterTimerExpireEvent); periodic timers re-arm. The inner guard
    *  stops a zero/negative-timeout periodic timer from looping forever in one tick. */
@@ -389,20 +638,14 @@ export class Interpreter {
         }
       }
     }
+    this.pumpThreads(); // waits come due AFTER the clock moved (so a 0s wait costs one tick)
   }
 
   private expireTimer(t: TimerObj): void {
     const responses = new Map<string, JassValue>([["ExpiredTimer", jHandle(t.handleId, "timer")]]);
-    if (t.handlerFn) {
-      this.rt.eventStack.push(responses);
-      try {
-        this.callFunction(t.handlerFn, []);
-      } catch (err) {
-        if (!(err instanceof ReturnSignal)) this.rt.warnOnce(t.handlerFn, `timer handler threw: ${(err as Error).message}`);
-      } finally {
-        this.rt.eventStack.pop();
-      }
-    }
+    // A timer handler runs on its own thread — WC3 lets one TriggerSleepAction (and the
+    // periodic re-arm keeps ticking while it sleeps).
+    if (t.handlerFn) this.startThread(`timer#${t.handleId}`, this.callFunctionG(t.handlerFn, []), responses);
     for (const reg of this.rt.triggerRegs) {
       if (reg.kind !== "timerExpire") continue;
       if (reg.params[0]?.k === "handle" && reg.params[0].h === t.handleId) {

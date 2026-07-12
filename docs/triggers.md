@@ -30,11 +30,18 @@
 | 7.7 | **Trigger effects land** (`SetPlayerState` resources, `SetUnitState` HP/mana) | ✅ done (live) | §7.12 headless (BJ resource family → gold 650, lumber 300); Candy grants 300 gold + income ticks in the HUD (screenshots) |
 | 7.13 | **Unit-mutation effects** (`SetUnitPosition`/`X`/`Y`/`Loc`, `SetUnitFacing[Timed]`, `SetUnitOwner` + **change-owner event**, `PauseUnit`/`IsUnitPaused`, `SetUnitScale`/`VertexColor`/`FlyHeight`/`MoveSpeed`/`TurnSpeed`/`TimeScale`, `SetUnitColor`, live `Get*`) | ✅ done (live) | §7.13 headless (every effect recorded in a mock sim; `EVENT_PLAYER_UNIT_CHANGE_OWNER` fires w/ `GetChangingUnitPrevOwner`; `Get*` read live); Echo Isles: a unit visibly scaled/tinted/reowned (screenshots) |
 | 7.14 | **Trigger orders** — `Issue{Immediate,Point,Target}Order`(+`ById`/`Loc`) → the sim marches/attacks; `OrderId`/`OrderId2String`/`String2OrderId`/`GetUnitCurrentOrder`; **`EVENT_..._ISSUED_ORDER`/`POINT`/`TARGET`** (38/39/40 + unit 75/76/77) w/ `GetIssuedOrderId`/`GetOrderPointX/Y`/`GetOrderTargetUnit` | ✅ done (live) | §7.14 headless (issue natives → bridge w/ right id+kind+target; order events dispatch owner-matched; vocabulary round-trips); Echo Isles: a trigger marches a squad of peasants (screenshots) |
+| 7.15 | **Trigger threads — waits** (`TriggerSleepAction`/`PolledWait`): trigger actions run on a suspendable thread; `TriggerExecute`/`ConditionalTriggerExecute`/`ExecuteFunc` run on the caller's thread | ✅ done (live) | §7.15 headless (a wait suspends + resumes on game time, **event responses survive it**, `PolledWait` through the real blizzard.j, 0s-wait can't hang, wait-in-condition abandoned, a Wait in map init defers the rest of init); ExtremeCandyWar + WarChasers park + resume real threads (screenshots) |
+| — | **Unit groups** (`CreateGroup`/`GroupEnumUnitsInRect`/`ForGroup`/…) — the GUI's "Pick every unit in <region>" | ⬜ **next** | a "pick every unit" trigger body does something |
 | — | remaining effect natives (add/remove ability, `SetHeroLevel`/XP, weather, …) + remaining events (unit-state, construct/train, spell-cast) | ⬜ next | a hero levels / a spell-cast trigger fires |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (125/335 used natives implemented) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (157/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+
+> **Note on `jass:coverage`'s numbers.** It detects an implementation by scanning `src/jass/natives/*.ts` for the
+> quoted native name, and it only counts natives called **directly** from a `war3map.j`. So (a) natives registered
+> from an unquoted table key can read as missing, and (b) everything a map reaches *through* a blizzard.j BJ —
+> groups, `PolledWait` — is invisible in the ranking. Treat it as a floor, not a census.
 
 ---
 
@@ -59,11 +66,13 @@ The engine calls two entry points, then pumps events:
 
 ```
 config()   // SetPlayers/SetTeams/DefineStartLocation/InitCustomPlayerSlots — player + map setup      [runs live]
-main()                                                                                                 [runs live, 7.6]
+main()                                                                                    [runs live, 7.6 — on a THREAD]
   SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
   CreateAllUnits()             // records rows only (scriptSpawnLive=false during init, so no dup of the .doo units)
   InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
-// then: rts.tick pumps the runtime → timer + region + death/damage/attacked triggers fire live (7.4b/c); orders/state pending
+                               // an init trigger's `Wait` suspends main() itself — the rest of init resumes after it (7.15)
+// then: rts.tick pumps the runtime → timers + sleeping trigger threads (waits, 7.15) + region + death/damage/attacked
+//       + issued-order triggers fire live (7.4b/c, 7.14)
 ```
 
 ---
@@ -80,7 +89,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `parser.ts` | recursive-descent → `JassProgram`. Precedence: `or` < `and` < comparisons < `+ -` < `* /` < unary |
 | `values.ts` | value model — **int and real are separate kinds** (JASS `int/int` truncates!); handles, code refs, null; `defaultForType` |
 | `runtime.ts` | handle table (interned player/enum handles), `MapSetup`, globals/arrays, function+native registries, seeded RNG, `EngineHooks` bridge |
-| `interpreter.ts` | tree-walker: call frames, `and`/`or` **do not short-circuit** (JASS gotcha), type-directed arithmetic, safe defaults, loop/recursion caps |
+| `interpreter.ts` | tree-walker: call frames, `and`/`or` **do not short-circuit** (JASS gotcha), type-directed arithmetic, safe defaults, loop/recursion caps — plus the **trigger-thread scheduler** (7.15): statements are generators, so `TriggerSleepAction` can suspend a trigger mid-action and `pumpThreads` resumes it on game time |
 | `natives/config.ts` | `config()` + player-setup natives → `MapSetup` |
 | `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, unit queries |
 | `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
@@ -391,6 +400,54 @@ dispatch owner-matched — `ISSUED_POINT_ORDER` fires only for the owning player
 Echo Isles: a trigger `IssuePointOrder` marched a 5-peasant squad across the map in formation (idle → move 851986 →
 attack-move 851983, positions advancing ~2100 units), then `PauseUnit` froze them mid-stride (screenshots).
 
+## Trigger threads — waits (7.15 — done, live)
+
+The GUI's **"Wait"** action, and the biggest *correctness* hole in the engine: not a missing feature but a
+**mis-executing** one. A WC3 trigger's actions run on a **thread** that `TriggerSleepAction` can suspend mid-way; the
+engine resumes it N seconds of game time later. We ran actions straight through, synchronously, so:
+
+- a bare `TriggerSleepAction` was an unimplemented native — a **silent no-op**, so everything after the wait ran
+  *instantly* (a wave spawner emptied itself in one frame);
+- worse, blizzard.j's **`PolledWait`** — what the GUI's "Wait" and every `…Wait` BJ actually call — *polls a timer in
+  a loop* until it drains. With the wait a no-op and no time passing inside a synchronous action, the timer never
+  drained: the loop span to the 2,000,000-iteration cap and then **abandoned the rest of the trigger**. Measured live
+  on ExtremeCandyWar: **886 ms of blocked frame per `PolledWait`, and the post-wait actions never ran** (its
+  `Warrior_Rage_Cap` trigger sets a cooldown flag, waits 0.9 s, clears it — so the flag stuck true forever).
+
+Verified against the real `Scripts\blizzard.j` (the poll loop is Blizzard's own code, `bj_POLLED_WAIT_INTERVAL` 0.10 /
+`bj_POLLED_WAIT_SKIP_THRESHOLD` 2.00). Built:
+
+- **`src/jass/interpreter.ts`** — the statement/call layer is now written as **generators**, so a wait can suspend
+  anywhere inside a trigger's actions and every enclosing call is resumable. A `JassThread` is a generator that yields
+  the seconds it wants to sleep; `startThread` runs it **immediately** (WC3 runs actions the moment the event fires —
+  the wait is what defers the rest) and only parks it in the scheduler if it actually suspended. `pumpThreads()` runs
+  from `advanceTime` — the same sim-tick pump as the timers — so waits are **game time** (they stop when the game is
+  paused) and stay deterministic.
+  - **Event responses survive a wait.** They're thread-local in WC3: `GetTriggerUnit()` still reads the same unit after
+    a `Wait 5 seconds`. Our response stack is global, so each thread carries **its own slice** of it (plus its call
+    depth), restored on resume.
+  - **A thread resumes at most once per pump** — that's what makes a wait cost at least a frame, so a
+    `loop / TriggerSleepAction(0) / endloop` can't hang the tick.
+  - **Expressions stay synchronous** (only statements can suspend). Every real wait is a statement — `TriggerSleepAction`
+    returns `nothing` — so this costs no fidelity and keeps the hot path (expression eval) allocation-free.
+- **Thread-transparent natives** — `TriggerExecute` / `ConditionalTriggerExecute` / `ExecuteFunc` run more JASS *on the
+  calling thread*, which a native (a plain JS function) can't do, so the interpreter intercepts them at the call site.
+  This is what makes **a Wait in a map-init trigger defer the rest of init** (`RunInitializationTriggers` executes the
+  init triggers in sequence on `main()`'s thread) — faithful to WC3, where init waits are a known gotcha. `main()` and
+  `config()` therefore run on threads too.
+- **A wait with nowhere to park** (a condition, a boolexpr filter, a `ForGroup`/`ForForce` callback — none of which WC3
+  can wait in either) throws `ThreadAbort` and abandons *that callback*, logged once. It must not simply no-op: that's
+  precisely what made `PolledWait` spin.
+
+Verified (`pnpm jass:test` §7.15): a wait suspends the trigger mid-action and resumes after exactly 3.0 s of game time
+with `GetDyingUnit()` still resolving; `PolledWait(2.0)` through the **real** blizzard.j parks instead of spinning and
+returns after ~2.0 s; `TriggerSleepAction(0)` advances one tick per wait (no hang); a wait in a condition is abandoned,
+not spun; and a `Wait` in map init suspends `main()` itself, deferring the rest of init until the trigger spawns its
+unit. Verified **live**: ExtremeCandyWar parks its intro-cinematic + income threads from t=0 and resumes them on
+schedule (gold ticking, 144 fps, no hitch — vs **886 ms blocked** with the old no-op wait, A/B'd in the running game);
+WarChasers holds 5 parked threads and sets `udg_TheLeaderBoard`, which is assigned *after* its `TriggerSleepAction(1.0)`
+(screenshots).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -409,8 +466,15 @@ attack-move 851983, positions advancing ~2100 units), then `PauseUnit` froze the
   (`EVENT_PLAYER_UNIT_SPELL_*`). Same shape as `pumpDamageEvents`/`pumpOrderEvents` — snapshot the event in the sim
   (with its id/target), drain + dispatch in the interpreter.
 - **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.
-- **Natives on demand** — groups, weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
-  Use `pnpm jass:coverage` to prioritise (125/335 used natives implemented).
+- **Unit groups — the next task.** `CreateGroup`/`GroupEnumUnitsInRect`/`InRange`/`OfPlayer`/`ForGroup`/`FirstOfGroup`/
+  `GroupAddUnit`/`IsUnitInGroup`/`GetEnumUnit` + the BJ family. This is the GUI's **"Pick every unit in \<region\>
+  matching \<condition\> and do \<actions\>"** — the workhorse action of custom maps (spawn waves, AoE damage, mass
+  orders) — and right now the whole action body silently does nothing. Should be a small diff: the boolexpr/filter
+  machinery already exists (`Condition`/`Filter`/`GetFilterUnit`) and enumeration is a scan over the sim's unit list.
+  It's also a hard dependency for **7.3** (`MeleeClearExcessUnits` enumerates groups). Note `jass:coverage` *undercounts*
+  it badly — maps reach groups through blizzard.j BJs, which the tool doesn't scan.
+- **Natives on demand** — weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
+  Use `pnpm jass:coverage` to prioritise (157/335 used natives implemented — and see the caveat on that number above).
 - **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them
   in 3D yet (no world-space text pass). On-screen messages *are* rendered (HUD message log).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

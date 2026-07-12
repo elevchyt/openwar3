@@ -387,6 +387,9 @@ export class MapViewerScene {
   // pre-placed units stay .doo-adopted, no duplicates); TRUE after init, so a trigger's
   // CreateUnit (hero selection, spawns) puts an actual unit on the map (7.2b).
   private scriptSpawnLive = false;
+  /** Registration count the sim's capture flags were derived from — re-derive when it
+   *  changes (a trigger, or a thread resuming from a Wait, can register events late). */
+  private scriptRegCount = 0;
   private gameMenu: GameMenu | null = null;
   private paused = false; // F10 game menu freezes the sim (rendering continues)
   /** Called when the player picks "End Game" — host tears the match down. */
@@ -1137,23 +1140,7 @@ export class MapViewerScene {
       if (!engine) return;
       this.scriptSpawnLive = true; // init done → trigger CreateUnit now spawns for real
       this.mapScript = engine; // pumped each tick (timers + region + death/damage/attack events — 7.4b/c)
-      // Tell the sim which combat events to record — only if the script listens (so a
-      // map with no death/damage/attack triggers pays nothing). Event indices from
-      // common.j: DEATH 53/20, DAMAGED 52, ATTACKED 62/18.
-      if (this.rts) {
-        const rt = engine.interp.rt;
-        const idx = (r: { params: unknown[] }): number => (r.params[1] ? rt.enumIndex(r.params[1] as never) : -1);
-        const sw = this.rts.simWorld;
-        sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath" || (r.kind === "unitEvent" && idx(r) === 53) || (r.kind === "playerUnitEvent" && idx(r) === 20));
-        sw.captureDamage = rt.triggerRegs.some((r) => r.kind === "unitEvent" && idx(r) === 52);
-        sw.captureAttacks = rt.triggerRegs.some((r) => (r.kind === "unitEvent" && idx(r) === 62) || (r.kind === "playerUnitEvent" && idx(r) === 18));
-        // ISSUED-order events: player 38/39/40, unit 75/76/77 (common.j ConvertPlayer/UnitEvent).
-        sw.captureOrders = rt.triggerRegs.some(
-          (r) =>
-            (r.kind === "playerUnitEvent" && idx(r) >= 38 && idx(r) <= 40) ||
-            (r.kind === "unitEvent" && idx(r) >= 75 && idx(r) <= 77),
-        );
-      }
+      this.syncEventCaptures(engine);
       const s = engine.setup;
       const trigs = engine.interp.rt.triggerRegs.length;
       console.info(
@@ -1165,15 +1152,40 @@ export class MapViewerScene {
     }
   }
 
+  /** Tell the sim which events to record — only the kinds the script actually listens for,
+   *  so a map with no death/damage/attack/order triggers pays nothing. Event indices from
+   *  common.j: DEATH 53/20, DAMAGED 52, ATTACKED 62/18, ISSUED-order 38–40 (player) / 75–77
+   *  (unit). Re-run whenever the registration list grows: a trigger thread that's sleeping
+   *  on a `Wait` (7.15) can register new events when it resumes, long after main() returned. */
+  private syncEventCaptures(engine: MapScriptEngine): void {
+    if (!this.rts) return;
+    const rt = engine.interp.rt;
+    const idx = (r: { params: unknown[] }): number => (r.params[1] ? rt.enumIndex(r.params[1] as never) : -1);
+    const sw = this.rts.simWorld;
+    sw.captureDeaths = rt.triggerRegs.some((r) => r.kind === "unitDeath" || (r.kind === "unitEvent" && idx(r) === 53) || (r.kind === "playerUnitEvent" && idx(r) === 20));
+    sw.captureDamage = rt.triggerRegs.some((r) => r.kind === "unitEvent" && idx(r) === 52);
+    sw.captureAttacks = rt.triggerRegs.some((r) => (r.kind === "unitEvent" && idx(r) === 62) || (r.kind === "playerUnitEvent" && idx(r) === 18));
+    sw.captureOrders = rt.triggerRegs.some(
+      (r) =>
+        (r.kind === "playerUnitEvent" && idx(r) >= 38 && idx(r) <= 40) ||
+        (r.kind === "unitEvent" && idx(r) >= 75 && idx(r) <= 77),
+    );
+    this.scriptRegCount = rt.triggerRegs.length;
+  }
+
   /** Drive the running map script from the sim tick (Phase 7 — 7.4b/c): advance its
-   *  timers and pump enter/leave-region + unit-death events. Best-effort — a throwing
-   *  trigger is swallowed inside the interpreter, but wrap the whole pump too so one
-   *  bad tick can't kill the frame loop. `dt` is seconds (the clamped sim step). */
+   *  timers, resume any trigger thread whose Wait has run out (7.15), and pump
+   *  enter/leave-region + unit-death events. Best-effort — a throwing trigger is swallowed
+   *  inside the interpreter, but wrap the whole pump too so one bad tick can't kill the
+   *  frame loop. `dt` is seconds (the clamped sim step). */
   private pumpMapScript(dt: number): void {
     const engine = this.mapScript;
     if (!engine || !this.rts) return;
     try {
-      engine.interp.advanceTime(dt); // timers (TriggerRegisterTimerExpireEvent + TimerStart handlers)
+      engine.interp.advanceTime(dt); // timers + trigger threads (waits) — 7.4a/7.15
+      // A resumed thread (or any live trigger) may have registered new events — re-derive
+      // what the sim needs to record if the registration list changed.
+      if (engine.interp.rt.triggerRegs.length !== this.scriptRegCount) this.syncEventCaptures(engine);
       // Combat events this tick (7.4c). Each drain is empty unless the sim was told to
       // record that kind (capture* flags), so a map that doesn't listen pays nothing.
       const sw = this.rts.simWorld;
