@@ -36,4 +36,4 @@ export function buildInterpreter(sources: string[], opts: HeadlessOptions = {}):
 
 export { parseJass } from "./parser";
 export { Runtime } from "./runtime";
-export type { MapSetup } from "./runtime";
+export type { LobbySlot, MapSetup } from "./runtime";

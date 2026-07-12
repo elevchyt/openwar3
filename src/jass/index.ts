@@ -12,7 +12,7 @@ import type { DataSource } from "../vfs/types";
 import type { MpqDataSource } from "../vfs/mpq";
 import { buildInterpreter } from "./headless";
 import type { Interpreter } from "./interpreter";
-import type { EngineHooks, MapSetup } from "./runtime";
+import type { EngineHooks, LobbySlot, MapSetup } from "./runtime";
 
 const decode = (b: Uint8Array): string => new TextDecoder("windows-1252").decode(b);
 // war3map.wts is UTF-8 (with a BOM); decode it as such so authored text isn't mojibake.
@@ -46,15 +46,29 @@ export interface MapScriptEngine {
  *
  *  `runMain` additionally runs the map's `main()` after `config()` — which walks
  *  blizzard.j's InitBlizzard (setting up the force presets), then
- *  InitCustomTriggers/RunInitializationTriggers, firing the map's "Map
- *  Initialization" triggers. That's what surfaces a custom map's welcome text/quest
- *  messages live. Pass display-only hooks (no `createUnit`) so unit placement still
- *  routes through the viewer's war3mapUnits.doo adoption (7.2b unchanged) — main()'s
- *  CreateAllUnits then only records JassUnit rows, never spawning a duplicate. */
+ *  InitCustomTriggers/RunInitializationTriggers, firing the map's "Map Initialization"
+ *  triggers. On a CUSTOM map that surfaces the welcome text / quests; on a MELEE map it
+ *  fires the "Melee Initialization" trigger — the eight `Melee*` calls that ARE the melee
+ *  game (7.3: starting units, resources, hero limits, creep clearing, victory/defeat).
+ *
+ *  `lobby` is the handoff the map script cannot make for itself: config() declares what
+ *  the MAP allows, the lobby decides who is actually PLAYING, as which race, on which
+ *  team. It's applied between config() and main(), because the melee library reads it
+ *  (GetPlayerSlotState / GetPlayerRace) the moment main() fires the init trigger.
+ *
+ *  main()'s CreateAllUnits only RECORDS its unit rows — the map's pre-placed units are
+ *  already on the map, adopted from war3mapUnits.doo (see Runtime.recordOnlySpawnFns), so
+ *  nothing is double-placed. Every other CreateUnit — the melee roster, a trigger's spawn
+ *  — goes through the `createUnit` hook for real. */
 export function loadMapScript(
   install: DataSource,
   map: MpqDataSource,
-  opts: { melee?: boolean; hooks?: EngineHooks; runMain?: boolean } = {},
+  opts: {
+    melee?: boolean;
+    hooks?: EngineHooks;
+    runMain?: boolean;
+    lobby?: { slots: ReadonlyArray<LobbySlot>; localPlayer: number };
+  } = {},
 ): MapScriptEngine | null {
   const mapJ = readScript(map, "war3map.j", "scripts\\war3map.j");
   if (!mapJ) return null;
@@ -67,6 +81,7 @@ export function loadMapScript(
   const sources = [common, blizzard, mapJ].filter((s): s is string => s !== null);
   const interp = buildInterpreter(sources, { gameType: opts.melee ? 1 : 4, hooks: opts.hooks, wts });
   interp.run("config", []);
+  if (opts.lobby) interp.rt.applyLobby(opts.lobby.slots, opts.lobby.localPlayer);
   if (opts.runMain) {
     // Best-effort: a script error in main() must never abort the match.
     try {

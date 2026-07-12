@@ -1252,5 +1252,207 @@ endfunction`;
   else fail(`unit-state limit: healthy ${before} crossed ${after} re-crossed ${again} (want 0/1/2)`);
 }
 
+// --- 7.3: melee run from the MAP'S OWN SCRIPT (blizzard.j's Melee* library) ------------
+//
+// The milestone: retire the hard-coded roster and let (2)EchoIsles.w3x's war3map.j drive a
+// melee game through main() → its "Melee Initialization" trigger → the eight Melee* calls.
+// We run the REAL map script over the REAL blizzard.j, against a mock sim (the same bridge
+// shape mapViewer hands the interpreter), and assert the outcome equals what the old
+// hard-coded startMelee produced: same starting units per race, same 500/150 purse, creeps
+// cleared off the used start locations.
+console.log('\n[7.3] Melee from the script (EchoIsles war3map.j → blizzard.j Melee*)');
+{
+  const echo = join(WC3, 'Maps', 'FrozenThrone', '(2)EchoIsles.w3x');
+  if (!existsSync(echo)) {
+    console.log('      (2)EchoIsles.w3x not found — skipped');
+  } else {
+    const MAP_J = readStr(openArchive(echo), 'war3map.j');
+    // Echo Isles' config(): DefineStartLocation(0, -5184, 2944) / (1, 4672, 2944).
+    const START = [{ x: -5184, y: 2944 }, { x: 4672, y: 2944 }];
+
+    /** One melee bring-up: races per slot → what the script did to the world. */
+    function runMelee(races) {
+      // The pre-placed world CreateAllUnits would have put down — a gold mine by each start
+      // location, creeps camped on start 0, and a creep camp + a shop far away. This is what
+      // mapViewer's bridge exposes from SimWorld (+ the mines, which are units to a script).
+      const sim = [
+        { id: 100, typeId: 'ngol', owner: 15, x: START[0].x + 500, y: START[0].y - 300, facing: 0, structure: true, gold: 12500 },
+        { id: 101, typeId: 'ngol', owner: 15, x: START[1].x - 500, y: START[1].y - 300, facing: 0, structure: true, gold: 12500 },
+        { id: 200, typeId: 'ngrb', owner: 12, x: START[0].x + 600, y: START[0].y + 200, facing: 0, structure: false }, // creep ON start 0 → cleared
+        { id: 201, typeId: 'nfor', owner: 12, x: START[1].x - 400, y: START[1].y + 100, facing: 0, structure: false }, // creep ON start 1 → cleared
+        { id: 202, typeId: 'ngrb', owner: 12, x: 0, y: -4000, facing: 0, structure: false }, // creep in the middle → kept
+        { id: 300, typeId: 'nrat', owner: 15, x: START[0].x + 300, y: START[0].y, facing: 0, structure: false }, // critter by start 0 → cleared
+        { id: 301, typeId: 'nmer', owner: 15, x: START[0].x - 400, y: START[0].y, facing: 0, structure: true }, // shop by start 0 → KEPT (a structure)
+      ];
+      const spawned = []; // every CreateUnit that reached the bridge (i.e. was NOT record-only)
+      const removed = [];
+      const stash = {}; // player → { gold, lumber }
+      const camera = { x: 0, y: 0 };
+      const world = { tod: 0 };
+      let nextId = 1;
+      const find = (id) => sim.find((u) => u.id === id) ?? spawned.find((u) => u.id === id);
+      const hooks = {
+        createUnit: (player, typeId, x, y, facing) => {
+          const u = { id: nextId++, player, typeId, x, y, facing, structure: /^(htow|ogre|unpl|etol)$/.test(typeId) };
+          spawned.push(u);
+          return u.id;
+        },
+        removeUnit: (id) => {
+          const i = sim.findIndex((u) => u.id === id);
+          if (i < 0) return;
+          // A gold mine isn't a sim unit for us, so the bridge ignores RemoveUnit on one —
+          // which is what makes the Undead haunted-mine swap a no-op instead of a mine loss.
+          if (sim[i].typeId === 'ngol') return;
+          removed.push(sim.splice(i, 1)[0].id);
+        },
+        enumUnits: () => sim,
+        getUnitX: (id) => find(id)?.x ?? 0,
+        getUnitY: (id) => find(id)?.y ?? 0,
+        // Same shape as mapViewer's bridge: from the sim unit while it lives, from its TYPE
+        // once it's a corpse (GetDyingUnit is already out of the sim — see deadUnitTypeIs).
+        isUnitType: (id, t, typeId) => {
+          const u = find(id);
+          if (u) return t === 2 ? !!u.structure : t === 4;
+          if (t === 1) return true; // UNIT_TYPE_DEAD
+          return t === 2 ? /^(htow|ogre|unpl|etol|ngol|nmer)$/.test(typeId ?? '') : t === 4;
+        },
+        getUnitState: (id, s) => (s === 0 ? 100 : 0), // everything alive (IsUnitAliveBJ)
+        setPlayerState: (p, state, v) => {
+          stash[p] ??= { gold: 0, lumber: 0 };
+          if (state === 1) stash[p].gold = v;
+          else if (state === 2) stash[p].lumber = v;
+        },
+        getPlayerState: (p, state) => (state === 1 ? stash[p]?.gold ?? 0 : state === 2 ? stash[p]?.lumber ?? 0 : 0),
+        setTimeOfDay: (h) => (world.tod = h),
+        getTimeOfDay: () => world.tod,
+        setCameraPosition: (x, y) => ((camera.x = x), (camera.y = y)),
+        getResourceAmount: (id) => find(id)?.gold ?? 0,
+        setResourceAmount: (id, amount) => { const m = find(id); if (m) m.gold = amount; },
+        // Our engine has no haunted mine: the Undead swap hands back the mine still standing
+        // there (RemoveUnit left it alone), so the acolytes clump around a real location.
+        createBlightedGoldMine: (_p, x, y) => sim.find((u) => u.typeId === 'ngol' && Math.hypot(u.x - x, u.y - y) < 64)?.id ?? -1,
+        playerStructureCount: (p) => spawned.filter((u) => u.player === p && u.structure).length,
+        playerTypedUnitCount: (p, name) => spawned.filter((u) => u.player === p && ({ htow: 'townhall', ogre: 'greathall', etol: 'treeoflife', unpl: 'necropolis' })[u.typeId] === name).length,
+        isPlayerAlly: (p, q) => p === q,
+      };
+      const interp = buildInterpreter([COMMON_J, BLIZZARD_J, MAP_J], { gameType: 1, hooks });
+      interp.run('config', []);
+      // The lobby handoff: which slots are PLAYING, as which race (a "random" already rolled).
+      interp.rt.applyLobby(races.map((raceIndex, i) => ({ index: i, raceIndex, controller: 1, team: i, startLocation: -1 })), 0);
+      interp.run('main', []); // → CreateAllUnits (records only) → InitBlizzard → the Melee Init trigger
+      return { interp, sim, spawned, removed, stash, camera, world };
+    }
+
+    // --- Human vs Orc, the canonical Echo Isles game ---
+    const r = runMelee([1, 2]); // RACE_HUMAN, RACE_ORC
+    const of = (p, typeId) => r.spawned.filter((u) => u.player === p && u.typeId === typeId);
+
+    // The map's pre-placed units were RECORDED, not spawned: CreateAllUnits put ~90 rows in
+    // the runtime, and NOT ONE of them reached the createUnit bridge (no doubled creeps).
+    const rows = r.interp.rt.units.length;
+    const meleeSpawns = r.spawned.length;
+    if (rows > 80 && meleeSpawns === 12) {
+      ok(`CreateAllUnits recorded ${rows} pre-placed unit rows and spawned NONE — only the melee roster (${meleeSpawns}) reached the bridge`);
+    } else fail(`record-only gate: ${rows} rows recorded, ${meleeSpawns} spawned (want >80 rows, exactly 12 spawns)`);
+
+    // MeleeStartingUnits: 1 Town Hall + 5 Peasants / 1 Great Hall + 5 Peons — the same
+    // roster src/data/races.ts hard-coded (STARTING_UNITS), now from Blizzard's own script.
+    if (of(0, 'htow').length === 1 && of(0, 'hpea').length === 5 && of(1, 'ogre').length === 1 && of(1, 'opeo').length === 5) {
+      ok(`starting units: P0 1×Town Hall + 5×Peasant, P1 1×Great Hall + 5×Peon (== the old hard-coded roster)`);
+    } else fail(`starting units: P0 ${of(0, 'htow').length}×htow ${of(0, 'hpea').length}×hpea, P1 ${of(1, 'ogre').length}×ogre ${of(1, 'opeo').length}×opeo`);
+
+    // The hall sits ON the start location; the workers clump 320 units off the MINE, back
+    // toward the hall (MeleeGetProjectedLoc + 64u spacing) — the exact geometry
+    // MELEE_WORKER_CLUSTERS encodes. Recompute it here and compare.
+    const hall = of(0, 'htow')[0];
+    const mine = r.sim.find((u) => u.id === 100);
+    const dir = Math.atan2(START[0].y - mine.y, START[0].x - mine.x);
+    const cx = mine.x + 320 * Math.cos(dir), cy = mine.y + 320 * Math.sin(dir);
+    const peons = of(0, 'hpea');
+    const spread = peons.every((p) => Math.hypot(p.x - cx, p.y - cy) <= 64 * 1.5 + 0.01);
+    if (Math.hypot(hall.x - START[0].x, hall.y - START[0].y) < 0.01 && spread) {
+      ok(`placement: Town Hall on the start location; all 5 Peasants clumped 320u off the mine (MeleeGetProjectedLoc)`);
+    } else fail(`placement: hall (${hall.x},${hall.y}) vs start (${START[0].x},${START[0].y}); peasant clump centre (${cx.toFixed(0)},${cy.toFixed(0)}) spread=${spread}`);
+
+    // MeleeStartingResources — the Frozen Throne purse (bj_MELEE_STARTING_GOLD_V1 = 500 /
+    // _LUMBER_V1 = 150). Reign of Chaos would have given 750/200, so this also proves
+    // VersionGet() reports TFT.
+    if (r.stash[0]?.gold === 500 && r.stash[0]?.lumber === 150 && r.stash[1]?.gold === 500 && r.stash[1]?.lumber === 150) {
+      ok(`starting resources: 500 gold / 150 lumber for both playing slots (TFT V1 constants)`);
+    } else fail(`starting resources: P0 ${JSON.stringify(r.stash[0])} P1 ${JSON.stringify(r.stash[1])} (want 500/150)`);
+
+    // An EMPTY slot gets nothing at all — no units, no purse. That's GetPlayerSlotState
+    // gating the whole library; if it read PLAYING for every slot, 10 ghost bases would spawn.
+    if (!r.spawned.some((u) => u.player > 1) && r.stash[2] === undefined) {
+      ok(`empty slots (2–11) got no units and no resources — GetPlayerSlotState gates the library`);
+    } else fail(`empty slots: ${r.spawned.filter((u) => u.player > 1).length} unit(s), stash ${JSON.stringify(r.stash[2])}`);
+
+    // MeleeClearExcessUnits: Neutral Hostile creeps AND non-structure Neutral Passive
+    // critters within 1500 of a USED start location are removed; the creep camp in the
+    // middle of the map survives, and so do the structures (the shop — and the GOLD MINE,
+    // which would otherwise be wiped and take the whole economy with it).
+    const gone = new Set(r.removed);
+    if (gone.has(200) && gone.has(201) && gone.has(300) && !gone.has(202) && !gone.has(301) && !gone.has(100) && !gone.has(101)) {
+      ok(`MeleeClearExcessUnits: creeps + critters on the used start locations removed (3); the far camp, the shop and BOTH gold mines kept`);
+    } else fail(`clear excess: removed [${[...gone]}] (want 200,201,300 — not 202/301/100/101)`);
+
+    // MeleeStartingVisibility: a melee game opens at 08:00 (bj_MELEE_STARTING_TOD).
+    if (Math.abs(r.world.tod - 8) < 0.001) ok(`MeleeStartingVisibility: game clock set to 08:00 (bj_MELEE_STARTING_TOD)`);
+    else fail(`time of day: ${r.world.tod} (want 8.0)`);
+
+    // MeleeStartingUnitsHuman ends by centring the camera on the initial PEASANTS (not the
+    // hall) — for the LOCAL player only, via SetCameraPositionForPlayer's GetLocalPlayer gate.
+    if (Math.hypot(r.camera.x - cx, r.camera.y - cy) < 0.01) ok(`camera framed on the local player's starting workers (SetCameraPositionForPlayer)`);
+    else fail(`camera: (${r.camera.x},${r.camera.y}) — want the P0 worker clump (${cx.toFixed(0)},${cy.toFixed(0)})`);
+
+    // The victory/defeat conditions are armed (MeleeInitVictoryDefeat): each playing slot
+    // watches its own deaths + construction, and the 2s "already won/lost?" timer is set.
+    const regs = r.interp.rt.triggerRegs.length;
+    if (regs >= 12 && r.interp.rt.timers.length >= 1) ok(`MeleeInitVictoryDefeat armed: ${regs} event registration(s), ${r.interp.rt.timers.length} timer(s)`);
+    else fail(`victory/defeat: ${regs} registration(s), ${r.interp.rt.timers.length} timer(s)`);
+
+    // …and nobody is defeated at the start: the 2-second "has anyone already won/lost?"
+    // check runs GetPlayerStructureCount over every slot. Stub that at 0 and BOTH players
+    // are defeated two seconds into every melee game. The empty slots ARE pre-defeated
+    // (MeleeInitVictoryDefeat does that up front), which is what makes victory detectable.
+    r.interp.advanceTime(2.5);
+    const flag = (name, i) => r.interp.rt.globalArrays.get(name)?.get(i)?.b;
+    if (!flag('bj_meleeDefeated', 0) && !flag('bj_meleeDefeated', 1) && flag('bj_meleeDefeated', 2) && !r.interp.rt.globals.get('bj_meleeGameOver')?.b) {
+      ok(`the 2s victory/defeat check leaves both playing slots alive (and pre-defeats the empty ones)`);
+    } else fail(`after 2s: defeated P0 ${flag('bj_meleeDefeated', 0)} P1 ${flag('bj_meleeDefeated', 1)} empty ${flag('bj_meleeDefeated', 2)}`);
+
+    // Now take the Town Hall away: EVENT_PLAYER_UNIT_DEATH → MeleeTriggerActionUnitDeath →
+    // "was it a STRUCTURE?" → the owner has none left → defeat, and the opponent wins.
+    // The dying unit is already OUT of the sim (it's a corpse), so IsUnitType has to answer
+    // STRUCTURE from its unit TYPE — get that wrong and a razed player plays on forever.
+    const hallId = hall.id;
+    r.spawned.splice(r.spawned.findIndex((u) => u.id === hallId), 1); // the hall is gone from the world
+    r.interp.pumpUnitDeaths([{ victim: { id: hallId, typeId: 'htow', owner: 0, x: hall.x, y: hall.y, facing: 0 }, killer: null }]);
+    if (flag('bj_meleeDefeated', 0) && flag('bj_meleeVictoried', 1) && r.interp.rt.globals.get('bj_meleeGameOver')?.b) {
+      ok(`killing the last structure defeats its owner and hands the opponent victory (blizzard.j's own conditions)`);
+    } else fail(`after razing P0: defeated ${flag('bj_meleeDefeated', 0)}, P1 victorious ${flag('bj_meleeVictoried', 1)}, gameOver ${r.interp.rt.globals.get('bj_meleeGameOver')?.b}`);
+
+    // --- Undead + Night Elf: the two starts that DON'T just drop a hall on the start loc ---
+    const r2 = runMelee([3, 4]); // RACE_UNDEAD, RACE_NIGHTELF
+    const of2 = (p, typeId) => r2.spawned.filter((u) => u.player === p && u.typeId === typeId);
+    // Undead: 1 Necropolis + 3 Acolytes + 1 Ghoul — and the gold mine SURVIVES the haunting
+    // (BlightGoldMineForPlayerBJ RemoveUnit's it, then CreateBlightedGoldmine puts it back;
+    // with that native missing, the acolytes would clump around a null location at (0,0)).
+    const acolytes = of2(0, 'uaco');
+    const mineU = r2.sim.find((u) => u.id === 100);
+    const nearMine = acolytes.length === 3 && acolytes.every((a) => Math.hypot(a.x - mineU.x, a.y - mineU.y) < 500);
+    if (of2(0, 'unpl').length === 1 && nearMine && of2(0, 'ugho').length === 1 && mineU) {
+      ok(`Undead: 1×Necropolis + 3×Acolyte (clumped at the mine) + 1×Ghoul — the haunted-mine swap kept the mine`);
+    } else fail(`undead: ${of2(0, 'unpl').length}×unpl, ${acolytes.length}×uaco (at the mine: ${nearMine}), ${of2(0, 'ugho').length}×ugho, mine ${mineU ? 'kept' : 'LOST'}`);
+    // Night Elf: the Tree of Life is planted BY THE MINE (to entangle it), not on the start
+    // location — 3.5 cells (448u) of it. Our old hard-coded roster got this wrong.
+    const tree = of2(1, 'etol')[0];
+    const mineNE = r2.sim.find((u) => u.id === 101);
+    if (tree && of2(1, 'ewsp').length === 5 && Math.abs(tree.x - mineNE.x) <= 448.01 && Math.abs(tree.y - mineNE.y) <= 448.01) {
+      ok(`Night Elf: 5×Wisp + the Tree of Life planted within 3.5 cells of the mine (not on the start location)`);
+    } else fail(`night elf: tree ${tree ? `(${tree.x.toFixed(0)},${tree.y.toFixed(0)})` : 'MISSING'} vs mine (${mineNE.x},${mineNE.y}); ${of2(1, 'ewsp').length}×ewsp`);
+  }
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

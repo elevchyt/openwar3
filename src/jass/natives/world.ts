@@ -22,7 +22,9 @@ function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: numb
   const rt = ctx.rt;
   const playerIdx = rt.data<JassPlayer>(playerV)?.index ?? asInt(playerV);
   const typeId = intToRawcode(typeInt);
-  const simId = rt.hooks?.createUnit?.(playerIdx, typeId, x, y, facing) ?? -1;
+  // Inside CreateAllUnits the row is recorded but NOT spawned: those units are the map's
+  // pre-placed ones, already on the map from war3mapUnits.doo (Runtime.recordOnlySpawnFns).
+  const simId = rt.spawnSuppressed ? -1 : rt.hooks?.createUnit?.(playerIdx, typeId, x, y, facing) ?? -1;
   const u: JassUnit = { handleId: 0, player: playerIdx, typeId, x, y, facing, simId };
   u.handleId = rt.handles.alloc(u);
   rt.units.push(u);
@@ -321,9 +323,14 @@ export function registerWorldNatives(rt: Runtime): void {
   // filter ("is A structure", "is alive", "is A Hero"). The unittype is a
   // ConvertUnitType index (0 HERO, 1 DEAD, 2 STRUCTURE, …); the bridge answers it from
   // the sim unit's own flags, and any classification we hold no data for reads false.
+  // The unit's TYPE is passed alongside its sim id: a unit that has just died is already
+  // out of the sim (it's a corpse now), but it is still a Hero, still a Structure — and
+  // blizzard.j asks exactly that ("MeleeTriggerActionUnitDeath: IsUnitType(GetDyingUnit(),
+  // UNIT_TYPE_STRUCTURE)" is what starts a melee defeat), so the bridge falls back to the
+  // unit data when the sim unit is gone.
   def(rt, "IsUnitType", (c, a) => {
     const u = unit(c, a[0]);
-    return jBool(u && u.simId >= 0 ? c.rt.hooks?.isUnitType?.(u.simId, c.rt.enumIndex(a[1])) ?? false : false);
+    return jBool(u ? c.rt.hooks?.isUnitType?.(u.simId, c.rt.enumIndex(a[1]), u.typeId) ?? false : false);
   });
   // Floating text tags + on-screen messages (the "text actions") live in
   // natives/text.ts alongside the string/name text-logic natives.

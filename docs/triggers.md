@@ -33,10 +33,10 @@
 | 7.15 | **Trigger threads — waits** (`TriggerSleepAction`/`PolledWait`): trigger actions run on a suspendable thread; `TriggerExecute`/`ConditionalTriggerExecute`/`ExecuteFunc` run on the caller's thread | ✅ done (live) | §7.15 headless (a wait suspends + resumes on game time, **event responses survive it**, `PolledWait` through the real blizzard.j, 0s-wait can't hang, wait-in-condition abandoned, a Wait in map init defers the rest of init); ExtremeCandyWar + WarChasers park + resume real threads (screenshots) |
 | 7.16 | **Unit groups** — `CreateGroup`/`GroupEnumUnitsIn{Rect,Range,RangeOfLoc}`/`OfPlayer`/`OfType`/`Selected` (+`Counted`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`/`GroupAddUnit`/`IsUnitInGroup`, `Group{Immediate,Point,Target}Order` — the GUI's **"Pick every unit in \<region\> matching \<condition\>"**. Plus the filter natives it's useless without: `IsUnitType`, `IsUnitAlly`/`IsUnitEnemy`, `GetUnitLoc`, `GetStartLocationLoc` | ✅ done (live) | §7.16 headless (the real `ForGroupBJ`+`GetUnitsInRectMatching` path picks 5-of-6, the filter rejects the rest; group order reaches all members; one sim unit == one handle); Echo Isles: a trigger picks every worker in a region, tints them, then marches the group (screenshots); ExtremeCandyWar's own script drives 169 `CreateGroup`/168 enums/217 `ForGroup` — **all empty before, now finding units** |
 | 7.17 | **Abilities, heroes + the remaining sim events** — `UnitAddAbility`/`Remove`/`Get`/`SetUnitAbilityLevel`, `SetHeroLevel`/`AddHeroXP`/`SetHeroXP`/skill points/`SelectHeroSkill`, `SetUnitInvulnerable`/`Pathing`/`Animation`/`UserData`, the MathAPI (**`SquareRoot`** — every `DistanceBetweenPoints` rode on it); **ability ORDERS** (`IssueTargetOrder(u,"holybolt",t)` → the unit casts); events: **SPELL_**\* (5 phases), **CONSTRUCT_**\*, **TRAIN_**\*, **HERO_LEVEL/SKILL**, **UNIT_STATE_LIMIT** | ✅ done (live) | §7.17 headless (effects round-trip through the real BJs; every event family dispatches owner-matched; the state threshold fires on the *crossing* only); Echo Isles: one trigger spawns a Paladin → levels it to 5 → grants Holy Light → orders the cast, and HERO_LEVEL / UNIT_STATE_LIMIT / SPELL_EFFECT / CONSTRUCT_* / TRAIN_* all report back into the HUD (screenshots) |
-| 7.3 | Melee from the script (retire hard-coded roster) | ⬜ **next** | melee-via-script == `startMelee` |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (171/335 used natives implemented) |
+| 7.3 | **Melee runs from the map's own script** — `main()` fires the map's *Melee Initialization* trigger and blizzard.j's `Melee*` library does the rest: starting units + resources + hero limit, the start-location creep clear, the victory/defeat conditions. The hard-coded roster is retired (fallback only) | ✅ done (live) | §7.3 headless (EchoIsles' real `war3map.j` → the same roster/purse the old `startMelee` produced, all 4 races; creeps cleared; razing the hall defeats its owner); live: bases spawned by the script on Echo Isles (H/O/U/NE) + RagingStream's start-location camp cleared (screenshots) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (215/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It detects an implementation by scanning `src/jass/natives/*.ts` for the
 > quoted native name, and it only counts natives called **directly** from a `war3map.j`. So (a) natives registered
@@ -66,10 +66,15 @@ The engine calls two entry points, then pumps events:
 
 ```
 config()   // SetPlayers/SetTeams/DefineStartLocation/InitCustomPlayerSlots — player + map setup      [runs live]
+           // → the host then hands over the LOBBY (Runtime.applyLobby, 7.3): which slots are actually
+           //   PLAYING, as which race — GetPlayerSlotState/GetPlayerRace, which config() cannot know
 main()                                                                                    [runs live, 7.6 — on a THREAD]
   SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
-  CreateAllUnits()             // records rows only (scriptSpawnLive=false during init, so no dup of the .doo units)
+  CreateAllUnits()             // RECORDS rows only — those units are already on the map, adopted from
+                               // war3mapUnits.doo (Runtime.recordOnlySpawnFns; scoped to the call, 7.3)
   InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
+                               // MELEE map: that init trigger is "Melee Initialization" — its eight Melee* calls
+                               //   ARE the game (bases, resources, creep clear, victory conditions — 7.3)
                                // an init trigger's `Wait` suspends main() itself — the rest of init resumes after it (7.15)
 // then: rts.tick pumps the runtime → timers + sleeping trigger threads (waits, 7.15) + region + death/damage/attacked
 //       + issued-order + spell/construct/train/hero-level + unit-state triggers fire live (7.4b/c, 7.14, 7.17)
@@ -96,6 +101,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
 | `natives/forces.ts` | **forces** (player groups): `CreateForce`/`ForceAddPlayer`/`IsPlayerInForce`/`ForForce`/`ForceEnum*` + `GetEnumPlayer`/`GetFilterPlayer` — the target of the "Text Message" actions (7.6) |
 | `natives/groups.ts` | **unit groups** (7.16): the `GroupEnum*` scans over the live sim (`EngineHooks.enumUnits`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`, membership, and the `Group*Order` mass orders — the GUI's "Pick every unit in \<region\> matching \<condition\>" |
+| `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
 | `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
 | `wts.ts` | `parseWts` — the map's `war3map.wts` trigger-string table (resolves `TRIGSTR_nnn` placeholders to authored text) |
@@ -589,6 +595,97 @@ back into the HUD from the map's own triggers (screenshots).
 > four HERO_LEVEL fires of a `SetHeroLevel(5)` jump reports 5 each time, not 2/3/4/5. The event's own
 > responses are per-level and correct; only the live re-read collapses.
 
+## Melee runs from the map's own script (7.3 — done, live)
+
+The milestone that closes the loop: **we no longer place a melee game ourselves.** A melee map's
+`war3map.j` carries a *"Melee Initialization"* trigger, and its eight calls into blizzard.j's `Melee*`
+library **are** the melee game:
+
+```jass
+function Trig_Melee_Initialization_Actions takes nothing returns nothing
+    call MeleeStartingVisibility(  )   // the clock opens at 08:00 (bj_MELEE_STARTING_TOD)
+    call MeleeStartingHeroLimit(  )    // 3 heroes per player, 1 per hero type
+    call MeleeGrantHeroItems(  )       // the first hero trained gets a Town Portal scroll
+    call MeleeStartingResources(  )    // 500 gold / 150 lumber (the TFT _V1 constants)
+    call MeleeClearExcessUnits(  )     // wipe the creeps camped on a USED start location
+    call MeleeStartingUnits(  )        // the town hall + the 5 workers clumped by the nearest mine
+    call MeleeStartingAI(  )           // (no AI scripts yet — a computer slot just sits)
+    call MeleeInitVictoryDefeat(  )    // no structures = defeated; no main hall = crippled
+endfunction
+```
+
+All eight are **Blizzard's own JASS** (`Scripts\Blizzard.j` in the MPQs) — we *interpret* them, so the
+rules and the numbers are the game's, not our guess at them. `mapViewer.startMelee` now just brings the
+match up and runs the script; the hard-coded roster (`STARTING_UNITS` / `MELEE_WORKER_CLUSTERS`) survives
+only as `startMeleeFallback`, for a melee-flagged map that ships no script at all.
+
+**Order is the crux.** In WC3, `main()` runs `CreateAllUnits()` — every pre-placed creep, shop and gold
+mine — *before* the init trigger fires. Ours arrive with their models, **asynchronously**. So:
+
+1. `enableSeeding()` → `waitForMapUnits()`: block until `unitsReady` **and** the viewer's `promiseMap` is
+   empty (every model resolved) **and** two more frames have run (`trySeed` adopts the stragglers). Waiting
+   on "the unit list stopped growing" is *not* enough — a big map's models arrive in bursts, and the first
+   lull fired the melee init early: on `(10)RagingStream` the start-location creeps didn't exist yet,
+   survived `MeleeClearExcessUnits`, and then ate the starting workers (5 of 12 units left).
+2. `runMapScript({ melee: true, … })` → `config()` → **the lobby handoff** → `main()`.
+
+**The lobby handoff** (`Runtime.applyLobby`, between `config()` and `main()`): `config()` declares what the
+*map* allows; the *lobby* decides who is actually PLAYING, as which race, on which team — and the melee
+library gates on exactly that (`GetPlayerSlotState`, `GetPlayerRace`, both of which the map script cannot
+know). An EMPTY slot gets no units, no purse, and keeps the creep camp on its start location.
+
+**The record-only gate moved into the runtime.** `Runtime.recordOnlySpawnFns = {"CreateAllUnits"}` +
+`spawnDepth` (bumped in `Interpreter.callUserG`): a `CreateUnit` *inside that call* records its row and
+never reaches the engine (those units are already on the map, `.doo`-adopted), while everything else —
+the melee roster, an init trigger's spawn — spawns for real. The old gate was "`main()` is running", which
+would have swallowed the entire melee roster, since the Melee Init trigger runs inside `main()`.
+
+Three things the bridge had to learn, each of which silently broke the melee library:
+
+- **A gold mine is a unit.** `MeleeFindNearestMine` *enumerates units* and keeps the nearest `'ngol'` —
+  that's how the workers end up clumped 320 units off the mine and (Night Elf) how the Tree of Life is
+  planted **at the mine** rather than on the start location. Our sim keeps mines in their own table
+  (`SimWorld.mines`, its own id space), so `enumUnits` presents them as unit snapshots under an offset id
+  (`MINE_ID_BASE`), and `IsUnitType` answers **STRUCTURE** for them. Get that last part wrong and
+  `MeleeClearExcessUnit` — which removes non-structure Neutral Passive units near a start location —
+  **deletes every player's gold mine** (on most 2-player maps the mine is the *only* neutral within 1500 of
+  the start). The Undead start goes further: `BlightGoldMineForPlayerBJ` **RemoveUnit's the mine** and asks
+  for a haunted one; we don't model haunted mines, so `RemoveUnit` on a mine is a no-op and
+  `CreateBlightedGoldmine` hands back the mine still standing there — otherwise the acolytes spawn around a
+  null location at (0,0).
+- **Neutral units have real player slots.** WC3's Neutral Hostile is **player 12** and Neutral Passive is
+  **player 15** (common.j); our sim files both under owner −1 and distinguishes them with `neutralPassive`.
+  `MeleeClearExcessUnit` removes a unit *only if its owner is one of those two*, so the translation now
+  happens at the one place a sim unit becomes a JASS unit (`SimWorld.jassOwnerOf`, used by `eventInfo` +
+  `enumUnits`). Custom maps get it for free: "spawn for Player 12" and creep-death triggers now match.
+- **A dead unit still has a type.** Our sim drops a unit from `SimWorld.units` the instant it dies (it
+  becomes a corpse), so `IsUnitType(GetDyingUnit(), UNIT_TYPE_STRUCTURE)` — the **first line** of
+  `MeleeTriggerActionUnitDeath`, i.e. the gate on the whole defeat check — answered *"no, it's dead"*, and a
+  player who lost their last building played on forever. `IsUnitType` now carries the unit's rawcode, and the
+  bridge classifies a corpse from its **unit data** (`deadUnitTypeIs`).
+
+Victory/defeat inputs are real, too: `GetPlayerStructureCount` / `GetPlayerTypedUnitCount` count the sim
+(the latter matches **UnitUI.slk's `name`** column — "townhall", "greathall", "treeoflife", "necropolis" —
+with `includeUpgrades` folding Keep/Castle back into "townhall": `MAIN_HALL_CHAINS`). Stub them at 0 and
+blizzard.j's 2-second "has anyone already won or lost?" timer defeats *every* player two seconds in.
+
+Verified (`pnpm jass:test` §7.3), running the **real** `(2)EchoIsles.w3x` `war3map.j` over the **real**
+blizzard.j: `CreateAllUnits` records 107 pre-placed rows and spawns **none** (only the 12 melee units reach
+the bridge — no doubled creeps); Human/Orc get 1 hall + 5 workers each, the hall on the start location and
+the workers clumped 320u off the mine (the same geometry the old roster hard-coded); 500/150 for both playing
+slots and **nothing** for the empty ones; the creeps + critters within 1500 of a used start location are
+removed while the far camp, the shop and both gold mines stay; the clock is set to 08:00; the camera frames
+the local player's workers; the 2s check defeats neither player; razing the town hall defeats its owner and
+hands the opponent victory; Undead keeps its mine through the haunting; Night Elf plants the tree within 3.5
+cells of the mine. Verified **live** on Echo Isles (all four races) and on `(10)RagingStream`, whose
+start-location camp is cleared while the other eight starts keep theirs (screenshots).
+
+Known gaps in the melee path (all inherited, none new): no **AI** (`StartMeleeAI` is a no-op, so a computer
+slot sits still), no **hero-limit enforcement** (the caps are recorded, not applied), no **Town Portal scroll**
+for the first hero (items aren't wired yet — `UnitAddItemById`), no **blight** under an undead base, and the
+defeat/victory **dialogs** don't render (the dialog natives are no-ops) — the game state flips correctly, it
+just doesn't say so on screen yet.
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -607,11 +704,10 @@ back into the HUD from the map's own triggers (screenshots).
 - **Events still missing:** `EVENT_PLAYER_UNIT_SUMMON` (the sim has the summon channel — same "born in the renderer"
   shape as TRAIN_FINISH), the **item** events, `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `..._SELECTED`,
   and the player-scoped `TriggerRegisterPlayerStateEvent` / chat events.
-- **7.3 — the next milestone:** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee`
-  roster. Its hard dependencies — unit groups (`MeleeClearExcessUnits` enumerates), and now the hero/ability + order
-  surface — are done.
+- **Melee leftovers** (7.3): melee AI (`StartMeleeAI`), hero-limit *enforcement*, the first hero's Town Portal scroll
+  (needs the item natives), blight, and the victory/defeat **dialogs** (the game state flips; nothing renders it).
 - **Natives on demand** — weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
-  Use `pnpm jass:coverage` to prioritise (171/335 used natives implemented — and see the caveat on that number above).
+  Use `pnpm jass:coverage` to prioritise (215/335 used natives implemented — and see the caveat on that number above).
 - **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them
   in 3D yet (no world-space text pass). On-screen messages *are* rendered (HUD message log).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

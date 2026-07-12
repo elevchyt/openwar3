@@ -7,7 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
-import type { QueuedOrder, RallyKind, SimUnit } from "../sim/world";
+import { jassOwnerOf, type QueuedOrder, type RallyKind, type SimMine, type SimUnit } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -38,9 +38,10 @@ interface CreepSeed {
   aggro: number;
   drops: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
-import { STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
+import { MAIN_HALL_CHAINS, RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
+import { MoveType } from "../data/enums";
 import { ModelViewerScene } from "./modelViewer";
-import type { MeleeConfig } from "../ui/lobby";
+import type { MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
 import { GameMenu } from "../ui/gameMenu";
@@ -219,6 +220,10 @@ interface W3xViewer {
   once(event: string, cb: () => void): void;
   loadMap(buffer: ArrayBuffer | Uint8Array): void;
   load(src: unknown, solver: Solver): Promise<SpawnModel | undefined>;
+  /** Everything the viewer is still fetching. It pushes each pre-placed unit into
+   *  `map.units` only when that unit's MODEL resolves, so "promiseMap is empty" is the
+   *  only sound "the map's units are all here" signal (see waitForMapUnits). */
+  promiseMap: Map<string, Promise<unknown>>;
   removeScene(scene: Scene): boolean;
   startFrame(): void;
   render(): void;
@@ -383,10 +388,6 @@ export class MapViewerScene {
   private metrics = new MetricsOverlay();
   private hud: GameHud | null = null;
   private mapScript: MapScriptEngine | null = null; // the running JASS interpreter (Phase 7), pumped from the frame loop
-  // Gate for script CreateUnit → real spawn. FALSE during main()'s CreateAllUnits (so
-  // pre-placed units stay .doo-adopted, no duplicates); TRUE after init, so a trigger's
-  // CreateUnit (hero selection, spawns) puts an actual unit on the map (7.2b).
-  private scriptSpawnLive = false;
   /** Registration count the sim's capture flags were derived from — re-derive when it
    *  changes (a trigger, or a thread resuming from a Wait, can register events late). */
   private scriptRegCount = 0;
@@ -887,34 +888,59 @@ export class MapViewerScene {
     return races;
   }
 
-  /** Standard-melee start (plan Phase 5.5): spawn each player's starting town
-   *  hall + workers at their start location. Runs only on maps the World Editor
-   *  flagged as melee (see MapInfo.isMelee / src/world/mapKind.ts). */
+  /** Standard-melee start — run from the MAP'S OWN SCRIPT (7.3; see docs/triggers.md).
+   *
+   *  A melee map's war3map.j carries a "Melee Initialization" trigger, and its eight calls
+   *  into blizzard.j's `Melee*` library ARE the melee game: MeleeStartingVisibility (the
+   *  08:00 clock), MeleeStartingHeroLimit, MeleeGrantHeroItems, MeleeStartingResources
+   *  (500/150), MeleeClearExcessUnits (the creeps camped on a used start location),
+   *  MeleeStartingUnits (the town hall + the five workers clumped by the nearest gold
+   *  mine), MeleeStartingAI, MeleeInitVictoryDefeat. We interpret Blizzard's own code
+   *  rather than reimplement it, so the rules are the game's, not our guess at them.
+   *
+   *  Order matters, and it's WC3's own: the map's pre-placed units exist BEFORE the init
+   *  trigger runs (in WC3 main() calls CreateAllUnits first). Ours arrive with their
+   *  models, asynchronously — so wait for the .doo adoption to settle, else
+   *  MeleeFindNearestMine would find no mine and MeleeClearExcessUnits no creeps.
+   *
+   *  The old hard-coded roster survives only as a fallback for a melee-flagged map that
+   *  ships no script at all (see startMeleeFallback). */
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
-    // The Frozen Throne (_V1) start purse — Reign of Chaos gave 750/200 (_V0).
-    const races = this.beginMatch(config, MELEE.MELEE_STARTING_GOLD_V1, MELEE.MELEE_STARTING_LUMBER_V1);
-    // Clear the creep camps the map placed on each USED start location so bases
-    // spawn on clean ground (blizzard.j MeleeClearExcessUnits). config.slots holds
-    // only the playing slots (open/closed are filtered out in the lobby), so unused
-    // start locations keep their camps — the seeding scans read these zones. Set
-    // now, synchronously, before the first frame runs trySeed on any creep.
+    // Resources come from the script (MeleeStartingResources), so open empty.
+    const races = this.beginMatch(config, 0, 0);
+    this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
+    await this.waitForMapUnits(); // …and the creeps/mines must all be in the sim before the script runs
+    const engine = this.runMapScript({ melee: true, races, slots: config.slots });
+    // No script (or it created nothing for the local player — a script that leans on
+    // natives we haven't written yet): fall back to our own roster so the match still
+    // starts, rather than dropping the player onto an empty map.
+    const spawned = [...this.rts.simWorld.units.values()].some((u) => u.owner === this.localPlayer);
+    if (!engine || !spawned) {
+      console.warn(`[jass] melee init did not spawn a base (script: ${engine ? "ran" : "absent"}) — using the built-in roster.`);
+      await this.startMeleeFallback(config, races);
+    }
+  }
+
+  /** Melee start with no map script: our own roster, the pre-7.3 path. Kept because a
+   *  melee-flagged map that ships no war3map.j (or whose script fails) must still be
+   *  playable — the numbers are the same ones blizzard.j uses (src/data/races.ts). */
+  private async startMeleeFallback(config: MeleeConfig, races: Map<number, PlayableRace>): Promise<void> {
+    if (!this.rts) return;
+    for (const slot of config.slots) this.rts.simWorld.initStash(slot.id, MELEE.MELEE_STARTING_GOLD_V1, MELEE.MELEE_STARTING_LUMBER_V1);
+    // Clear the creep camps on each USED start location so bases spawn on clean ground
+    // (what MeleeClearExcessUnits does from the script). Unused start locations keep theirs.
     this.rts.setStartLocationClearZones(config.slots.map((s) => ({ x: s.startX, y: s.startY })));
-    this.rts.enableSeeding(); // clear zones set → let trySeed adopt creeps (melee pre-places no player units)
     for (const slot of config.slots) {
       const race = races.get(slot.id) ?? "human";
       // Nearest gold mine to the start location (blizzard.j MeleeFindNearestMine).
-      // Workers cluster on the mine→hall line; the hall itself always sits on the
-      // start location.
+      // Workers cluster on the mine→hall line; the hall itself sits on the start location.
       const mine = this.nearestMine(slot.startX, slot.startY, MELEE.MELEE_MINE_SEARCH_RADIUS);
-      // Main hall(s) at the start location.
       for (const { id, count } of STARTING_UNITS[race]) {
         const def = this.registry.get(id);
         if (!def?.isBuilding) continue; // workers are placed from the authentic clusters below
         for (let i = 0; i < count; i++) await this.spawnUnit(def, slot.startX, slot.startY, slot.id, slot.team);
       }
-      // Workers in the authentic clump between the hall and the mine (blizzard.j
-      // MeleeStartingUnits*) instead of ringed around the hall.
       const clusters = MELEE_WORKER_CLUSTERS[race];
       for (const cluster of clusters) {
         const def = this.registry.get(cluster.id);
@@ -924,14 +950,44 @@ export class MapViewerScene {
           await this.spawnUnit(def, cx + ox * MELEE_UNIT_SPACING, cy + oy * MELEE_UNIT_SPACING, slot.id, slot.team);
         }
       }
-      // Frame the local player on their starting workers, as WC3 does (blizzard.j
-      // centres the camera on the initial peasants, not the town hall).
+      // Frame the local player on their starting workers, as WC3 does (blizzard.j centres
+      // the camera on the initial peasants, not the town hall).
       if (slot.id === this.localPlayer && clusters[0]) {
         const [cx, cy] = this.meleeClusterCenter(slot.startX, slot.startY, mine, clusters[0]);
         this.target[0] = cx;
         this.target[1] = cy;
       }
     }
+  }
+
+  /** Wait until every pre-placed war3mapUnits.doo unit is on the map AND adopted into the
+   *  sim. WC3's equivalent is CreateAllUnits(), which completes before any trigger fires;
+   *  our melee init has to see the same world — the gold mines it clumps the workers
+   *  around, the creeps it clears off the start locations.
+   *
+   *  The wait must be on the LOADER, not on the unit list: the viewer pushes each unit
+   *  into `map.units` as its model resolves, and a big map's models arrive in bursts, so
+   *  "the list stopped growing" fires in the first lull — which is how a 10-player map
+   *  once ran its melee init before its start-location creeps existed (they survived the
+   *  clear, then ate the workers). So: unitsReady (every load dispatched) → promiseMap
+   *  empty (every load resolved) → two more frames, for trySeed to adopt the stragglers.
+   *  Capped, so a model that never resolves can't hang the match. */
+  private waitForMapUnits(timeoutMs = 30000): Promise<void> {
+    return new Promise((resolve) => {
+      const t0 = performance.now();
+      let settledFrames = 0;
+      const poll = (): void => {
+        const loaded = this.viewer.map?.unitsReady && this.viewer.promiseMap.size === 0;
+        settledFrames = loaded ? settledFrames + 1 : 0;
+        if (settledFrames >= 2 || performance.now() - t0 > timeoutMs) {
+          if (settledFrames < 2) console.warn("[openwar3] map units still streaming after 30s — starting anyway.");
+          resolve();
+          return;
+        }
+        requestAnimationFrame(poll);
+      };
+      requestAnimationFrame(poll);
+    });
   }
 
   /** Nearest gold mine to (x, y) within `radius`, or null (blizzard.j
@@ -995,37 +1051,42 @@ export class MapViewerScene {
     this.rts.setPlayerUnitSeeds(seeds);
 
     // Run the map's own script (Phase 7). config() sets players/start-locations;
-    // main() (with display-only hooks) fires the map's initialization triggers, so
-    // its welcome text / quest messages appear in the HUD message log.
-    this.runMapScript();
+    // main() fires the map's initialization triggers, so its welcome text / quest
+    // messages appear in the HUD message log.
+    this.runMapScript({ melee: false, slots: config.slots });
 
     this.rts.enableSeeding(); // owners/teams configured → let trySeed adopt map units
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33).`);
   }
 
-  /** The engine bridge the JASS interpreter calls into. `createUnit` is gated by
-   *  `scriptSpawnLive`: during main()'s CreateAllUnits it records rows only (pre-placed
-   *  units stay war3mapUnits.doo-adopted — no duplicates), and only AFTER init does a
-   *  trigger's CreateUnit put a real unit on the map (7.2b). Only the LOCAL player's
-   *  messages (slot 0, our GetLocalPlayer) reach the HUD — the BJ force helpers already
-   *  gate on that, so a per-player loop won't spam duplicates. */
+  /** The engine bridge the JASS interpreter calls into. A script `CreateUnit` inside
+   *  CreateAllUnits only records its row (those units are already on the map, adopted from
+   *  war3mapUnits.doo — the gate lives in the runtime now: Runtime.recordOnlySpawnFns);
+   *  every other CreateUnit spawns for real. Only the LOCAL player's messages reach the
+   *  HUD — the BJ force helpers already gate on GetLocalPlayer, so a per-player loop won't
+   *  spam duplicates. */
   private textHooks(): EngineHooks {
     return {
       // `duration` is seconds (timed action) or < 0 (untimed) — showMessage handles both.
       displayText: (player, msg, duration) => {
-        if (player === 0) this.hud?.showMessage(msg, duration);
+        if (player === this.localPlayer) this.hud?.showMessage(msg, duration);
       },
       clearText: (player) => {
-        if (player === 0) this.hud?.clearMessages();
+        if (player === this.localPlayer) this.hud?.clearMessages();
       },
       // GetObjectName / GetUnitName resolve rawcodes to their real data-table names. A
       // rawcode can name a unit, an ability ('AHhb' — what GetSpellAbilityId hands back)
       // or an item, so try each registry: "Paladin cast Holy Light on Peasant" needs all
       // three (the custom overlays are checked first inside each `get`).
       objectName: (typeId) => this.registry.get(typeId)?.name ?? this.abilities.get(typeId)?.name ?? this.items.get(typeId)?.name,
-      // Trigger-created units (hero selection, spawns) — a real unit once past init.
-      createUnit: (player, typeId, x, y, facing) => (this.scriptSpawnLive ? this.spawnScriptUnit(player, typeId, x, y, facing) : -1),
-      removeUnit: (id) => this.rts?.removeUnit(id),
+      createUnit: (player, typeId, x, y, facing) => this.spawnScriptUnit(player, typeId, x, y, facing),
+      // A gold mine isn't a sim unit for us, so RemoveUnit can't take it off the map —
+      // and the only caller that tries is the Undead start's mine swap, which puts one
+      // straight back (see CreateBlightedGoldmine). Leaving it standing IS the swap.
+      removeUnit: (id) => {
+        if (this.mineForScript(id)) return;
+        this.rts?.removeUnit(id);
+      },
       killUnit: (id) => this.rts?.killUnit(id),
       // Player resources: SetPlayerState/GetPlayerState → the sim stash. This is what
       // grants a custom map its starting gold/lumber (its init triggers set it). Food
@@ -1083,8 +1144,10 @@ export class MapViewerScene {
       getUnitMoveSpeed: (id) => this.rts?.simWorld.getUnitMoveSpeed(id) ?? 0,
       setUnitTurnSpeed: (id, turn) => this.rts?.simWorld.setUnitTurnSpeed(id, turn),
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
-      getUnitX: (id) => this.rts?.simWorld.getUnitX(id) ?? 0,
-      getUnitY: (id) => this.rts?.simWorld.getUnitY(id) ?? 0,
+      // Position reads fall back to the mine table: to the script a gold mine IS a unit
+      // (MeleeGetProjectedLoc measures the hall/worker clump off GetUnitLoc(nearestMine)).
+      getUnitX: (id) => this.mineForScript(id)?.x ?? this.rts?.simWorld.getUnitX(id) ?? 0,
+      getUnitY: (id) => this.mineForScript(id)?.y ?? this.rts?.simWorld.getUnitY(id) ?? 0,
       getUnitFacing: (id) => this.rts?.simWorld.getUnitFacing(id) ?? 0,
       // Orders (7.14): trigger issue → the sim; current order ← the sim.
       issueUnitOrder: (id, orderId, order, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, order, kind, x, y, targetId) ?? false,
@@ -1093,15 +1156,43 @@ export class MapViewerScene {
       // A dead unit is already out of SimWorld.units (it became a corpse), so an enum
       // only ever sees living units.
       enumUnits: () => this.unitSnapshots(),
-      // Only the local player (slot 0) has a selection in our engine.
-      selectedUnits: (player) => (player === 0 ? this.rts?.selectedUnitIds() ?? [] : []),
-      isUnitType: (id, t) => this.unitTypeIs(id, t),
+      selectedUnits: (player) => (player === this.localPlayer ? this.rts?.selectedUnitIds() ?? [] : []),
+      isUnitType: (id, t, typeId) => this.unitTypeIs(id, t, typeId),
       // IsUnitAlly/IsUnitEnemy: team-based, so neutral hostile (team -1) is nobody's ally.
       isUnitAlly: (id, player) => {
         const u = this.rts?.simWorld.units.get(id);
         return !!u && u.team >= 0 && u.team === this.teamOf(player);
       },
       isPlayerAlly: (p, q) => this.teamOf(p) === this.teamOf(q),
+      // --- melee from the script (7.3) ---
+      // MeleeStartingVisibility opens a melee game at 08:00 (bj_MELEE_STARTING_TOD).
+      setTimeOfDay: (hour) => {
+        if (this.rts) this.rts.simWorld.timeOfDay = hour;
+      },
+      getTimeOfDay: () => this.rts?.simWorld.timeOfDay ?? MELEE.MELEE_STARTING_TOD,
+      // MeleeStartingUnits* frames the view on the starting WORKERS, not the hall.
+      setCameraPosition: (x, y) => {
+        this.target[0] = x;
+        this.target[1] = y;
+      },
+      getResourceAmount: (id) => this.mineForScript(id)?.gold ?? 0,
+      setResourceAmount: (id, amount) => {
+        const mine = this.mineForScript(id);
+        if (mine) mine.gold = amount;
+      },
+      // The Undead start's mine swap: our engine has no haunted mine, so hand back the
+      // one still standing at (x, y) (RemoveUnit left it alone). Acolytes then clump
+      // around a real mine instead of a null location.
+      createBlightedGoldMine: (_player, x, y) => {
+        const mine = this.nearestMineNode(x, y, MELEE.MELEE_MINE_SEARCH_RADIUS);
+        return mine ? MapViewerScene.MINE_ID_BASE + mine.id : -1;
+      },
+      // Victory/defeat (MeleeInitVictoryDefeat): a melee player is beaten when their team
+      // owns no structures, and "crippled" while they own no main hall.
+      playerStructureCount: (player, includeIncomplete) => this.countUnits(player, includeIncomplete, (u) => !!u.building),
+      playerUnitCount: (player, includeIncomplete) => this.countUnits(player, includeIncomplete, () => true),
+      playerTypedUnitCount: (player, typeName, includeIncomplete, includeUpgrades) =>
+        this.countUnits(player, includeIncomplete, (u) => this.unitIsTyped(u.typeId, typeName, includeUpgrades)),
       // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
       unitAddAbility: (id, abilityId) => this.rts?.simWorld.addAbility(id, abilityId) ?? false,
       unitRemoveAbility: (id, abilityId) => this.rts?.simWorld.removeAbility(id, abilityId) ?? false,
@@ -1124,14 +1215,67 @@ export class MapViewerScene {
   }
 
   /** The live sim units, as the interpreter's UnitSnapshot view (the region pump + group
-   *  enumeration both scan this). */
+   *  enumeration both scan this) — plus the gold mines, which are units to the script.
+   *  Owners are translated to WC3's player slots (creeps are 12, neutrals 15 — see
+   *  SimWorld.jassOwnerOf), because trigger code matches on exactly those. */
   private unitSnapshots(): UnitSnapshot[] {
     const snap: UnitSnapshot[] = [];
     if (!this.rts) return snap;
     for (const u of this.rts.simWorld.units.values()) {
-      snap.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+      snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
+    }
+    for (const m of this.rts.simWorld.mines.values()) {
+      snap.push({ id: MapViewerScene.MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
     }
     return snap;
+  }
+
+  /** A gold mine, addressed the way the SCRIPT addresses it — as a unit. Our sim keeps
+   *  mines in their own table (SimWorld.mines) with their own id counter, which would
+   *  collide with unit ids, so the bridge offsets them into a range of their own. That
+   *  fiction is what lets blizzard.j's MeleeFindNearestMine work: it enumerates units,
+   *  keeps the nearest 'ngol', and clumps the starting workers 320 units off it. */
+  private static readonly MINE_ID_BASE = 1_000_000;
+  private mineForScript(unitId: number): SimMine | undefined {
+    if (unitId < MapViewerScene.MINE_ID_BASE) return undefined;
+    return this.rts?.simWorld.mines.get(unitId - MapViewerScene.MINE_ID_BASE);
+  }
+  /** The SimMine nearest (x, y) within `radius` (the node, not our melee-roster helper). */
+  private nearestMineNode(x: number, y: number, radius: number): SimMine | undefined {
+    let best: SimMine | undefined;
+    let bestD = radius * radius;
+    for (const m of this.rts?.simWorld.mines.values() ?? []) {
+      const d = (m.x - x) ** 2 + (m.y - y) ** 2;
+      if (d <= bestD) {
+        bestD = d;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  /** GetPlayerStructureCount / GetPlayerUnitCount / GetPlayerTypedUnitCount (7.3) — how
+   *  blizzard.j decides who has been defeated. `includeIncomplete` counts a building still
+   *  under construction (WC3 does: a half-built town hall still keeps you in the game). */
+  private countUnits(player: number, includeIncomplete: boolean, match: (u: SimUnit) => boolean): number {
+    let n = 0;
+    for (const u of this.rts?.simWorld.units.values() ?? []) {
+      if (u.owner !== player || u.hp <= 0) continue;
+      if (!includeIncomplete && u.building && u.building.constructionLeft > 0) continue;
+      if (match(u)) n++;
+    }
+    return n;
+  }
+
+  /** Does this unit type answer to `typeName` (UnitUI.slk's `name`: "townhall", "footman")?
+   *  With `includeUpgrades`, an upgraded building answers to its BASE type's name too —
+   *  a Keep and a Castle are both "townhall", which is how MeleeGetAllyKeyStructureCount
+   *  finds a player's main hall whatever tier it's at. */
+  private unitIsTyped(typeId: string, typeName: string, includeUpgrades: boolean): boolean {
+    const def = this.registry.get(typeId);
+    if (!def) return false;
+    if (def.typeName === typeName) return true;
+    return includeUpgrades && (MAIN_HALL_CHAINS[typeName]?.includes(typeId) ?? false);
   }
 
   /** IsUnitType (7.16) — answer a unittype classification from the sim unit's flags.
@@ -1140,9 +1284,13 @@ export class MapViewerScene {
    *  classifications we hold no data for (ATTACKS_FLYING, GIANT, SAPPER, RESISTANT, …)
    *  read false rather than guess. Melee/ranged come from the weapon's `ranged` flag
    *  (UnitWeapons weapType: a missile weapon = a ranged attacker). */
-  private unitTypeIs(id: number, t: number): boolean {
+  private unitTypeIs(id: number, t: number, typeId?: string): boolean {
+    // A gold mine is a live Neutral Passive STRUCTURE, and it matters: MeleeClearExcessUnit
+    // wipes the non-structure neutrals around a start location — so a mine that answered
+    // "not a structure" (or "dead", the no-sim-unit default below) would be deleted.
+    if (this.mineForScript(id)) return t === 2 || t === 4; // STRUCTURE, GROUND
     const u = this.rts?.simWorld.units.get(id);
-    if (!u) return t === 1; // gone from the sim = dead (UNIT_TYPE_DEAD)
+    if (!u) return this.deadUnitTypeIs(t, typeId); // gone from the sim = a corpse — classify from its TYPE
     switch (t) {
       case 0: return u.isHero; // UNIT_TYPE_HERO
       case 1: return u.hp <= 0; // UNIT_TYPE_DEAD
@@ -1157,6 +1305,28 @@ export class MapViewerScene {
       case 15: return u.mechanical; // UNIT_TYPE_MECHANICAL
       case 16: return u.isPeon; // UNIT_TYPE_PEON
       case 23: return u.asleep; // UNIT_TYPE_SLEEPING
+      default: return false;
+    }
+  }
+
+  /** IsUnitType for a unit the sim no longer has — it died and became a corpse. It is
+   *  DEAD, and it is still whatever its TYPE says it is. This is not a nicety: the first
+   *  thing blizzard.j does on a melee death is ask whether the dying unit was a STRUCTURE
+   *  (MeleeTriggerActionUnitDeath), and answering "no, it's dead" meant a player who lost
+   *  their last building was never defeated. Only the type-derived classifications can be
+   *  answered here; the per-unit state ones (stunned, sleeping, summoned) are gone with it. */
+  private deadUnitTypeIs(t: number, typeId?: string): boolean {
+    if (t === 1) return true; // UNIT_TYPE_DEAD
+    const def = typeId ? this.registry.get(typeId) : undefined;
+    if (!def) return false;
+    switch (t) {
+      case 0: return def.isHero; // UNIT_TYPE_HERO
+      case 2: return def.isBuilding; // UNIT_TYPE_STRUCTURE
+      case 3: return def.moveType === MoveType.Fly; // UNIT_TYPE_FLYING
+      case 4: return def.moveType !== MoveType.Fly; // UNIT_TYPE_GROUND
+      case 14: return def.race === "undead"; // UNIT_TYPE_UNDEAD
+      case 15: return def.classification.includes("mechanical"); // UNIT_TYPE_MECHANICAL
+      case 16: return def.classification.includes("peon"); // UNIT_TYPE_PEON
       default: return false;
     }
   }
@@ -1211,17 +1381,31 @@ export class MapViewerScene {
     }
   }
 
-  /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue
-   *  #33). Best-effort and non-fatal: a script error is swallowed so the match
-   *  continues (units were already seeded from war3mapUnits.doo). */
-  private runMapScript(): void {
-    if (!this.mapArchive) return;
+  /** Run the map's config() + main() through the JASS interpreter (Phase 7 — issue #33).
+   *  On a MELEE map that's the whole start: main() fires the map's "Melee Initialization"
+   *  trigger, whose eight Melee* calls spawn the bases, set the purse, clear the start-
+   *  location creeps and arm the victory conditions (7.3). On a custom map it fires the
+   *  map's own init triggers (welcome text, quests, spawns).
+   *
+   *  The lobby is handed over between config() and main() (Runtime.applyLobby): which slots
+   *  are PLAYING, as which race — the melee library asks for exactly that, and config()
+   *  can't know it. Best-effort and non-fatal: a script error is swallowed so the match
+   *  continues. Returns the running engine, or null if the map ships no script. */
+  private runMapScript(opts: { melee: boolean; races?: Map<number, PlayableRace>; slots: SlotConfig[] }): MapScriptEngine | null {
+    if (!this.mapArchive) return null;
     try {
-      // Records-only through CreateAllUnits (no duplicate spawns); live spawns after.
-      this.scriptSpawnLive = false;
-      const engine = loadMapScript(this.vfs, this.mapArchive, { melee: false, runMain: true, hooks: this.textHooks() });
-      if (!engine) return;
-      this.scriptSpawnLive = true; // init done → trigger CreateUnit now spawns for real
+      const lobby = {
+        slots: opts.slots.map((s) => ({
+          index: s.id,
+          raceIndex: RACE_INDEX[opts.races?.get(s.id) ?? resolveRace(s.race)],
+          controller: s.controller === "computer" ? 2 : 1, // MAP_CONTROL_COMPUTER / _USER
+          team: s.team,
+          startLocation: -1, // config()'s SetPlayerStartLocation already placed each slot
+        })),
+        localPlayer: this.localPlayer,
+      };
+      const engine = loadMapScript(this.vfs, this.mapArchive, { melee: opts.melee, runMain: true, hooks: this.textHooks(), lobby });
+      if (!engine) return null;
       this.mapScript = engine; // pumped each tick (timers + region + death/damage/attack events — 7.4b/c)
       this.syncEventCaptures(engine);
       const s = engine.setup;
@@ -1230,8 +1414,10 @@ export class MapViewerScene {
         `[jass] config()+main() ran — ${s.players.size} players, ${s.startLocations.size} start locations, ` +
           `${trigs} event registration(s) (Phase 7 trigger engine).`,
       );
+      return engine;
     } catch (err) {
       console.warn("[jass] map script failed (non-fatal):", err);
+      return null;
     }
   }
 

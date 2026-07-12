@@ -298,6 +298,12 @@ export class Interpreter {
       this.rt.warnOnce(fn.name, "call depth exceeded");
       return defaultForType(fn.returns);
     }
+    // CreateAllUnits (and everything it calls) only RECORDS its CreateUnit rows — the
+    // map's pre-placed units are already on the map, adopted from war3mapUnits.doo (7.3).
+    // Scoped to this call, so the melee-init trigger — which runs inside main() too —
+    // still spawns MeleeStartingUnits' town hall and workers for real.
+    const recordOnly = this.rt.recordOnlySpawnFns.has(fn.name);
+    if (recordOnly) this.rt.spawnDepth++;
     const frame = new Frame();
     for (let i = 0; i < fn.params.length; i++) {
       frame.vars.set(fn.params[i].name, args[i] ?? defaultForType(fn.params[i].type));
@@ -311,12 +317,15 @@ export class Interpreter {
     } catch (e) {
       if (e instanceof ReturnSignal) {
         this.depth--;
+        if (recordOnly) this.rt.spawnDepth--;
         return e.value;
       }
       this.depth--;
+      if (recordOnly) this.rt.spawnDepth--;
       throw e;
     }
     this.depth--;
+    if (recordOnly) this.rt.spawnDepth--;
     return defaultForType(fn.returns);
   }
 

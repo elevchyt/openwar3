@@ -13,6 +13,7 @@ import { registerConfigNatives } from "./config";
 import { registerEventNatives } from "./events";
 import { registerForceNatives } from "./forces";
 import { registerGroupNatives } from "./groups";
+import { registerMeleeNatives } from "./melee";
 import { registerRegionNatives } from "./region";
 import { registerTextNatives } from "./text";
 import { registerWorldNatives } from "./world";
@@ -109,6 +110,7 @@ export function registerNatives(rt: Runtime): void {
   registerEventNatives(rt);
   registerForceNatives(rt);
   registerGroupNatives(rt);
+  registerMeleeNatives(rt); // what blizzard.j's Melee* library stands on (7.3)
   registerRegionNatives(rt);
   registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
   registerUtilNatives(rt);

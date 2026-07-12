@@ -298,7 +298,20 @@ export interface EventUnitInfo {
   y: number;
   facing: number;
 }
-const eventInfo = (u: SimUnit): EventUnitInfo => ({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+
+/** The unit's owner as the SCRIPT sees it (GetOwningPlayer). Our sim files every neutral
+ *  under owner -1 and tells creeps from shops with `neutralPassive`; WC3 gives them real
+ *  player slots — Neutral Hostile is **player 12** and Neutral Passive is **player 15**
+ *  (common.j PLAYER_NEUTRAL_AGGRESSIVE / PLAYER_NEUTRAL_PASSIVE). Trigger code leans on
+ *  that hard: blizzard.j's MeleeClearExcessUnit removes a start-location unit only if its
+ *  owner IS one of those two, and countless custom maps spawn "for Player 12". So the
+ *  translation happens here, at the one place a sim unit becomes a JASS unit. */
+export function jassOwnerOf(u: { owner: number; neutralPassive: boolean }): number {
+  if (u.owner >= 0) return u.owner;
+  return u.neutralPassive ? 15 : 12;
+}
+
+const eventInfo = (u: SimUnit): EventUnitInfo => ({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
 
 /** Where a cast is in its lifecycle, for the trigger engine's spell events (7.17).
  *  WC3 raises five, in this order: CHANNEL (the caster begins), CAST (the spell is

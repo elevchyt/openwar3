@@ -126,6 +126,28 @@ export interface JassPlayer {
   startLocation: number; // SetPlayerStartLocation index (-1 = unset)
   forcedStartLocation: boolean;
   name?: string; // SetPlayerName; GetPlayerName defaults to "Player N" (see playerName)
+  /** GetPlayerSlotState — a `playerslotstate` index: 0 EMPTY, 1 PLAYING, 2 LEFT. The
+   *  map script can't know this (it's the lobby's answer), so the host supplies it via
+   *  applyLobby. blizzard.j's whole melee library gates on it: MeleeStartingResources /
+   *  MeleeClearExcessUnits / MeleeStartingUnits each skip a slot that isn't PLAYING. */
+  slotState: number;
+  /** GetPlayerRace — a `race` index (common.j ConvertRace): 1 HUMAN, 2 ORC, 3 UNDEAD,
+   *  4 NIGHTELF. NOT the same enum as `race` above, which is the map's RACE_PREF_*
+   *  preference; this is the race the player actually plays (a lobby "random" already
+   *  resolved), and it's what MeleeStartingUnits branches on. */
+  raceIndex: number;
+}
+
+/** One playing slot as the host's lobby resolved it — the handoff into the script
+ *  (Runtime.applyLobby). Everything blizzard.j's melee library needs to know about a
+ *  slot that config() can't tell it: is it actually being played, by whom, as what. */
+export interface LobbySlot {
+  index: number; // player slot 0–11
+  /** Resolved race (a "random" pick is already made): common.j ConvertRace index. */
+  raceIndex: number;
+  controller: number; // MAP_CONTROL_*: 1 user, 2 computer
+  team: number;
+  startLocation: number;
 }
 
 /** A unit created by the script (CreateUnit). Kept so main()/CreateAllUnits can be
@@ -215,8 +237,10 @@ export interface EngineHooks {
   /** The units `player` currently has selected (GroupEnumUnitsSelected). */
   selectedUnits?(player: number): number[];
   /** IsUnitType — a unittype classification by its common.j ConvertUnitType index
-   *  (0 HERO, 1 DEAD, 2 STRUCTURE, 3 FLYING, …); the workhorse of "matching" filters. */
-  isUnitType?(unitId: number, unitType: number): boolean;
+   *  (0 HERO, 1 DEAD, 2 STRUCTURE, 3 FLYING, …); the workhorse of "matching" filters.
+   *  `typeId` is the unit's rawcode, so a unit that has already left the sim (a corpse —
+   *  what GetDyingUnit hands a death trigger) can still be classified from its type. */
+  isUnitType?(unitId: number, unitType: number, typeId?: string): boolean;
   /** IsUnitAlly/IsUnitEnemy — is the unit allied to `player` (same team)? */
   isUnitAlly?(unitId: number, player: number): boolean;
   /** IsPlayerAlly/IsPlayerEnemy — are two player slots on the same team? */
@@ -264,6 +288,29 @@ export interface EngineHooks {
   unitName?(unitId: number): string | undefined;
   /** Resolve an object (unit/ability/…) name from its rawcode (GetObjectName). */
   objectName?(typeId: string): string | undefined;
+  // --- melee from the script (7.3) — what blizzard.j's Melee* library reaches for ---
+  /** Set/get the game clock (SetFloatGameState(GAME_STATE_TIME_OF_DAY) — and the
+   *  Set/GetTimeOfDay BJs that ride on it). A melee game opens at 08:00
+   *  (bj_MELEE_STARTING_TOD), which is MeleeStartingVisibility's whole job. */
+  setTimeOfDay?(hour: number): void;
+  getTimeOfDay?(): number;
+  /** SetCameraPosition / SetCameraQuickPosition (via the …ForPlayer BJs, which gate on
+   *  GetLocalPlayer). MeleeStartingUnits* centres the view on the starting workers. */
+  setCameraPosition?(x: number, y: number): void;
+  /** GetResourceAmount — a gold mine's remaining gold. */
+  getResourceAmount?(unitId: number): number;
+  /** CreateBlightedGoldmine — the Undead start "replaces" the nearest gold mine with a
+   *  haunted one (BlightGoldMineForPlayerBJ removes the mine, then creates this at the
+   *  same spot). Returns the sim id of the mine that now stands there. */
+  createBlightedGoldMine?(player: number, x: number, y: number, facing: number): number;
+  /** GetPlayerStructureCount / GetPlayerUnitCount — melee defeat is "my team owns no
+   *  structures", so these decide who has lost (MeleeCheckForLosersAndVictors). */
+  playerStructureCount?(player: number, includeIncomplete: boolean): number;
+  playerUnitCount?(player: number, includeIncomplete: boolean): number;
+  /** GetPlayerTypedUnitCount — count a player's units of one internal TYPE name (the
+   *  `name` column of UnitUI.slk: "townhall", "greathall", …). Melee asks for the four
+   *  main halls: owning none while still holding structures is what "crippled" means. */
+  playerTypedUnitCount?(player: number, typeName: string, includeIncomplete: boolean, includeUpgrades: boolean): number;
 }
 
 /** Opaque handle store: integer ids → backing JS objects, with interning so
@@ -382,11 +429,55 @@ export class Runtime {
    *  GetGameTypeSelected — the host sets it from the map's melee flag. */
   gameType = 4;
 
+  /** Which slot the human at this machine is playing (GetLocalPlayer). Everything
+   *  "for me" is gated on it: the BJ text helpers (IsPlayerInForce(GetLocalPlayer())),
+   *  SetCameraPositionForPlayer, the local selection. The lobby's user slot isn't
+   *  always 0, so the host sets this with applyLobby. */
+  localPlayer = 0;
+
+  /** Functions whose `CreateUnit` calls must be RECORDED, not spawned (7.3). The map's
+   *  pre-placed units are already on the map — the viewer renders war3mapUnits.doo and
+   *  the engine adopts those widgets — so re-running the script's CreateAllUnits would
+   *  double every creep, shop and mine. The gate is scoped to the CALL (spawnDepth,
+   *  bumped in Interpreter.callUserG), not to main(): the melee-init trigger runs inside
+   *  main() too, and MeleeStartingUnits' town hall and workers must spawn for real. */
+  readonly recordOnlySpawnFns = new Set(["CreateAllUnits"]);
+  spawnDepth = 0;
+  get spawnSuppressed(): boolean {
+    return this.spawnDepth > 0;
+  }
+
+  /** Time-of-day scale (SetTimeOfDayScale) — kept here; the sim owns the clock itself. */
+  timeOfDayScale = 1;
+  /** SetPlayerTechMaxAllowed / GetPlayerTechMaxAllowed — "player:tech" → cap. We have no
+   *  tech-limit system yet (MeleeStartingHeroLimit sets the 3-hero + 1-per-type caps), so
+   *  this just records what the script asked for; -1 means "no limit", as in WC3. */
+  readonly techMaxAllowed = new Map<string, number>();
+
   readonly random: () => number;
   hooks: EngineHooks | null = null;
 
   constructor(seed = 0x9e3779b9) {
     this.random = mulberry32(seed);
+  }
+
+  /** Hand the lobby's resolved slots to the script (7.3), between config() and main().
+   *  config() declares what the MAP allows (slots, races, start locations); the lobby
+   *  decides who is actually PLAYING, as which race, on which team — and blizzard.j's
+   *  melee library reads exactly that through GetPlayerSlotState / GetPlayerRace /
+   *  GetPlayerStartLocation. Slots the lobby didn't fill are marked EMPTY, so they get
+   *  no starting units, no resources, and keep the creep camp on their start location. */
+  applyLobby(slots: ReadonlyArray<LobbySlot>, localPlayer: number): void {
+    this.localPlayer = localPlayer;
+    for (let i = 0; i < 12; i++) this.ensurePlayer(i).slotState = 0; // PLAYER_SLOT_STATE_EMPTY
+    for (const s of slots) {
+      const p = this.ensurePlayer(s.index);
+      p.slotState = 1; // PLAYER_SLOT_STATE_PLAYING
+      p.raceIndex = s.raceIndex;
+      p.controller = s.controller;
+      p.team = s.team;
+      if (s.startLocation >= 0) p.startLocation = s.startLocation;
+    }
   }
 
   /** A stable, interned player handle for slot `index` (Player(i) returns the same
@@ -408,6 +499,8 @@ export class Runtime {
         team: index,
         startLocation: -1,
         forcedStartLocation: false,
+        slotState: 0, // PLAYER_SLOT_STATE_EMPTY until the lobby says otherwise
+        raceIndex: 0,
       };
       this.setup.players.set(index, p);
     }

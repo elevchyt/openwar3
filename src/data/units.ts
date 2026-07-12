@@ -21,6 +21,10 @@ import {
 export interface UnitDef {
   id: string;
   name: string;
+  /** The unit's internal TYPE name (unitUI "name": "townhall", "greathall", "footman").
+   *  Not the display name — this is what JASS's GetPlayerTypedUnitCount matches on, which
+   *  is how blizzard.j's melee library counts a team's main halls (7.3). */
+  typeName: string;
   race: string; // human | orc | undead | nightelf | ...
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
@@ -267,6 +271,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     defs.set(id, {
       id,
       name: (strings && str(strings, "Name")) || (u && (str(u, "Name") || str(u, "name"))) || id,
+      typeName: u ? str(u, "name") : "",
       race: d ? str(d, "race") : "",
       model: `${file.replace(/\//g, "\\")}.mdx`,
       modelScale: u ? num(u, "modelScale", 1) : 1,

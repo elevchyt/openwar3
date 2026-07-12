@@ -7,7 +7,7 @@
 // is pure declaration, so it runs identically headless or live.
 
 import type { JassPlayer, NativeCtx, Runtime } from "../runtime";
-import { asInt, asNum, asStr, jInt, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asNum, asStr, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -72,8 +72,16 @@ export function registerConfigNatives(rt: Runtime): void {
   // --- player queries (used by blizzard.j slot logic + custom triggers) ---
   def(rt, "Player", (c, a) => c.rt.playerHandle(asInt(a[0])));
   def(rt, "GetPlayerId", (c, a) => jInt(player(c, a[0])?.index ?? 0));
-  def(rt, "GetLocalPlayer", (c) => c.rt.playerHandle(0)); // single-player: the one human is slot 0
+  def(rt, "GetLocalPlayer", (c) => c.rt.playerHandle(c.rt.localPlayer)); // the human at THIS machine
   def(rt, "GetPlayerController", (c, a) => c.rt.enumHandle("MapControl", player(c, a[0])?.controller ?? 4));
+  // Is the slot actually being played? The lobby's answer (Runtime.applyLobby), not the
+  // map's — and the gate on blizzard.j's entire melee library (7.3): a slot that isn't
+  // PLAYING gets no starting units, no resources, and keeps its start-location creeps.
+  def(rt, "GetPlayerSlotState", (c, a) => c.rt.enumHandle("PlayerSlotState", player(c, a[0])?.slotState ?? 0));
+  // The race the player actually plays (a lobby "random" already resolved) — what
+  // MeleeStartingUnits branches on. ConvertRace: 1 human, 2 orc, 3 undead, 4 night elf.
+  def(rt, "GetPlayerRace", (c, a) => c.rt.enumHandle("Race", player(c, a[0])?.raceIndex ?? 0));
+  def(rt, "IsPlayerObserver", () => jBool(false)); // no observer slots (GetPlayerName lives in natives/text.ts)
   def(rt, "GetPlayerTeam", (c, a) => jInt(player(c, a[0])?.team ?? 0));
   def(rt, "GetPlayerColor", (c, a) => c.rt.enumHandle("PlayerColor", player(c, a[0])?.color ?? 0));
   def(rt, "GetPlayerStartLocation", (c, a) => jInt(player(c, a[0])?.startLocation ?? -1));

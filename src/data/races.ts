@@ -85,6 +85,28 @@ export const WORKERS: Record<string, WorkerProfile> = {
   ewsp: { gold: true, lumber: true, lumberCapacity: 5, lumberPerChop: 5, chopPeriod: 5, damagesTree: false },
 };
 
+// The four main-hall chains, keyed by the BASE hall's internal type name (UnitUI.slk's
+// `name` column). blizzard.j's MeleeGetAllyKeyStructureCount asks for exactly these four
+// with GetPlayerTypedUnitCount(p, "townhall", true, true) — "…and its upgrades", which is
+// why a Keep or a Castle has to answer to "townhall" as well (7.3). Owning no key
+// structure while still holding buildings is what makes a melee player "crippled".
+export const MAIN_HALL_CHAINS: Record<string, string[]> = {
+  townhall: ["htow", "hkee", "hcas"], // Town Hall / Keep / Castle
+  greathall: ["ogre", "ostr", "ofrt"], // Great Hall / Stronghold / Fortress
+  treeoflife: ["etol", "etoa", "etoe"], // Tree of Life / Ages / Eternity
+  necropolis: ["unpl", "unp1", "unp2"], // Necropolis / Halls of the Dead / Black Citadel
+};
+
+// common.j `race`: ConvertRace(1) HUMAN, (2) ORC, (3) UNDEAD, (4) NIGHTELF. What
+// GetPlayerRace hands the script — MeleeStartingUnits branches the whole starting roster
+// on it, so a lobby "random" must already be resolved (see resolveRace).
+export const RACE_INDEX: Record<PlayableRace, number> = {
+  human: 1,
+  orc: 2,
+  undead: 3,
+  nightelf: 4,
+};
+
 // Buildings that accept resource deposits (town halls + upgrades).
 export const DEPOT_IDS = new Set([
   "htow", "hkee", "hcas", // Town Hall / Keep / Castle
