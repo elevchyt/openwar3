@@ -36,14 +36,20 @@
 | 7.3 | **Melee runs from the map's own script** — `main()` fires the map's *Melee Initialization* trigger and blizzard.j's `Melee*` library does the rest: starting units + resources + hero limit, the start-location creep clear, the victory/defeat conditions. The hard-coded roster is retired (fallback only) | ✅ done (live) | §7.3 headless (EchoIsles' real `war3map.j` → the same roster/purse the old `startMelee` produced, all 4 races; creeps cleared; razing the hall defeats its owner); live: bases spawned by the script on Echo Isles (H/O/U/NE) + RagingStream's start-location camp cleared (screenshots) |
 | 7.18 | **Items** — the trigger surface (`CreateItem`/`UnitAddItem`(`ById`/`ToSlotById`)/`UnitRemoveItem`/`UnitDropItem{Point,Slot,Target}`/`UnitUseItem*`/`RemoveItem`/`SetItemPosition`/charges/`UnitItemInSlot`/`UnitHasItem`/`EnumItemsInRect`/**`ChooseRandomItemEx`** — 151 maps) + the **item events** (`PICKUP`/`DROP`/`USE`/`SELL_ITEM` with `GetManipulatedItem`/`GetManipulatingUnit`). Pre-placed items (`CreateAllItems`) become **real, pickable** items; the melee hero gets its **Town Portal scroll** | ✅ done (live) | §7.18 headless (the item natives + every BJ the GUI emits; the 4 events dispatch owner-matched; a consumed powerup still resolves in its handler); Echo Isles: a trigger creates a Paladin + 4 items, he walks onto the potion (PICKUP fires, HUD inventory shows it), a trigger `UnitUseItem`s **the same handle** → +250 life (USE fires), a tome grants XP, claws show a green +15, `UnitDropItemPointBJ` drops them (DROP fires), `ChooseRandomItemEx` rolls a level-5 artifact (screenshots) |
 | 7.19 | **The trigger's on-screen output** — **floating text** in 3D (`CreateTextTag` + setters finally *draw*: world anchor + screen-relative drift, size, colour, fade, unit-following, fog-gated); the **victory/defeat dialogs** (`dialog` — which is what WC3's "Victory!" screen *is*: MeleeVictoryDialogBJ builds a plain dialog from the game's own `GlobalStrings.fdf` + `ScriptDialog.fdf`, quit button ends the match); **leaderboards** (the whole `Leaderboard*` family → the game's own `LeaderBoard.fdf` panel). Plus `DecorateFileNames` → `UI\war3skins.txt`, without which no in-game FDF panel has any chrome | ✅ done (live) | §7.19 headless (all three through the real blizzard.j BJs: `TextTagSize2Height`/`Speed2Velocity` scaling, permanence + expiry, `MeleeVictoryDialogBJ`/`MeleeDoDefeat` → "Victory!"/"You failed to achieve victory." + the right buttons + the QuestCompleted/QuestFailed stings, `LeaderboardResizeBJ`'s own sizing rule, sort-by-value); Echo Isles: "+15 gold" rising over each unit + a permanent banner, a **real Victory dialog when the enemy's last building is razed** (Continue Game dismisses, Quit Game ends the match), a 4-player leaderboard in the game's own chrome (screenshots) |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (232/335 used natives implemented) |
+| 7.20 | **The trigger's AUDIO output** — the `sound` handle family (`CreateSound`(`FromLabel`/`FilenameWithLabel`), `SetSoundParamsFromLabel`, `SetSound{Duration,Channel,Pitch,Volume,Distances,ConeAngles,ConeOrientation,Position,DistanceCutoff}`, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`/`GetSoundIsPlaying`) + every BJ riding on it (`PlaySoundBJ`/`AtPointBJ`/`OnUnitBJ`/`StartSoundForPlayerBJ`/`VolumeGroupSetVolumeBJ`…), the 8 **volume groups**, and **music** (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic` — all three were explicit no-ops). Custom maps were silent apart from unit/combat sounds; melee had **no music at all** | ✅ done (live) | §7.20 headless (16 checks through the real blizzard.j BJs, resolving labels out of the **real** SoundInfo SLKs: params-not-file, the cross-table label namespace, `PercentToInt(pct,127)` volumes, the cone, the editor's `-1`/`4294967296.0` sentinels, the cine-mode group ducking); Echo Isles **live**: its own `SetMapMusic("Music", true, 0)` → the Human `Music_V1` playlist → `Human1.mp3` decoded (273 s) and playing; a trigger's `PlaySoundAtPointBJ` → a real PannerNode at the named world point (refDist 600 / maxDist 10000 from the SLK row), dropped when past its 3000 `DistanceCutoff`; an `AttachSoundToUnit`'d sound rides a marching peasant; blizzard.j's `PlaySound()` reaps its handle when the clip ends |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (250/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items + 7.19 on-screen output) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items + 7.19 on-screen output + 7.20 audio) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
-> **Note on `jass:coverage`'s numbers.** It detects an implementation by scanning `src/jass/natives/*.ts` for the
-> quoted native name, and it only counts natives called **directly** from a `war3map.j`. So (a) natives registered
-> from an unquoted table key can read as missing, and (b) everything a map reaches *through* a blizzard.j BJ —
-> groups, `PolledWait` — is invisible in the ranking. Treat it as a floor, not a census.
+> **Note on `jass:coverage`'s numbers.** It only counts natives called **directly** from a `war3map.j`, so everything
+> a map reaches *through* a blizzard.j BJ — groups, `PolledWait`, the whole `PlaySound*BJ` family — is invisible in
+> the ranking. Treat it as a floor, not a census.
+>
+> It also detects an implementation by scanning `src/jass/natives/*.ts` for the native's name, and until 7.20 it
+> looked only for a **quoted** one. That made it report `TriggerRegisterUnitEvent` — the single most-used native in
+> the whole corpus, **157 maps** — as unimplemented, when in fact it is registered from an *unquoted table key*
+> (`natives/events.ts`'s `REG_KINDS`): the #1 line of its own ranking was a false positive. The tool now recognises
+> the bare-key form too, which is most of why "implemented" jumped 232 → 250.
 
 ---
 
@@ -71,7 +77,9 @@ config()   // SetPlayers/SetTeams/DefineStartLocation/InitCustomPlayerSlots — 
            // → the host then hands over the LOBBY (Runtime.applyLobby, 7.3): which slots are actually
            //   PLAYING, as which race — GetPlayerSlotState/GetPlayerRace, which config() cannot know
 main()                                                                                    [runs live, 7.6 — on a THREAD]
-  SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
+  SetCameraBounds / SetDayNightModels   (we no-op — the renderer owns these)
+  InitSounds() / SetMapMusic()  // REAL (7.20) — the map's sounds are built here, and SetMapMusic
+                               //   starts the race's music playlist (it doesn't just record it)
   CreateAllItems()             // SPAWNS for real (7.18) — pre-placed items are the SCRIPT's, and the
                                // duplicate war3mapUnits.doo item widgets are hidden (rts.trySeed)
   CreateAllUnits()             // RECORDS rows only — those units are already on the map, adopted from
@@ -108,6 +116,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/items.ts` | **items** (7.18): `CreateItem`, the inventory family (`UnitAddItem`/`ById`/`ToSlotById`, `UnitRemoveItem`, `UnitItemInSlot`, `UnitHasItem`), drop/give/use, charges + item-type queries, `EnumItemsInRect`, and `ChooseRandomItem(Ex)` — an `item` handle is one entity whether it lies on the ground or sits in a pack |
 | `natives/dialogs.ts` | **dialogs + the game-over path** (7.19): `DialogCreate`/`SetMessage`/`AddButton`/`AddQuitButton`/`Display`, the dialog-button events (`TriggerRegisterDialogButtonEvent` → `GetClickedButton`/`GetClickedDialog`), `EndGame`/`PauseGame`/`IsNo{Victory,Defeat}Cheat`, and `CreateSoundFromLabel`+`StartSound` (which is where the victory/defeat sting comes from). This is the melee **victory/defeat screen** — see 7.19 |
 | `natives/leaderboard.ts` | **leaderboards** (7.19): the whole `Leaderboard*` family (create/display/assign-to-player, rows keyed by player, sort by value/player/label, style + colours) — the ~25 natives the entire GUI leaderboard surface rides on |
+| `natives/sound.ts` | **sounds + music** (7.20): the `sound` handle family (`CreateSound`/`FromLabel`, `SetSoundParamsFromLabel`, the `SetSound*` setters, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`), the 8 `volumegroup`s, and the music interface (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic`). A `sound` is a **configured playback object**, not a clip — the natives mostly mutate a `SoundObj`, and only Start/Stop reach the engine (`SoundBoard`) |
 | `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
 | `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
@@ -903,6 +912,116 @@ row in its player's real colour (screenshots).
 > the crippled/finish-soon windows and they're silently ignored), and the **score screen** (`EndGame(true)` leaves
 > the match rather than showing `Glue\ScoreScreen.fdf`).
 
+## The trigger's audio output — sounds + music (7.20 — done, live)
+
+Everything a trigger *plays* used to go nowhere. Custom maps were silent apart from unit/combat sounds, and **melee
+had no music at all**. This is a **bridge** milestone: `src/audio/sounds.ts` already had the hard parts (MPQ
+Huffman+ADPCM decode, positional `PannerNode`s with WC3's MinDistance/MaxDistance/DistanceCutoff falloff, label
+lookup over the `UI\SoundInfo` SLKs). What was missing was the JASS `sound` handle in front of it.
+
+### A `sound` is a configured playback object, not a clip
+
+This is the shape to get right, and it's unusual. A map builds each sound **once**, in `InitSounds()`, then Starts /
+Stops / repositions *that same handle* all game:
+
+```jass
+set gg_snd_N03Tyrande01 = CreateSound("Sound\Dialogue\…\N03Tyrande01.mp3", false, false, false, 10, 10, "")
+call SetSoundParamsFromLabel( gg_snd_N03Tyrande01, "N03Tyrande01" )   // ← DialogSounds.slk
+call SetSoundDuration( gg_snd_N03Tyrande01, 14158 )
+…later…  call PlaySoundAtPointBJ( gg_snd_N03Tyrande01, 100, loc, 0 )
+```
+
+So the natives mostly mutate a `SoundObj` record (`runtime.ts`); only `StartSound`/`StopSound` reach the engine.
+
+**We need no `war3map.w3s` parser** — and that's a finding, not an assumption. Surveying all 165 bundled maps: **27
+ship a `war3map.w3s`, and those same 27 (exactly) emit `CreateSound` in their `war3map.j`.** The `.w3s` is the World
+Editor's *source*; the editor re-emits the sound definitions **as the script**. Same lesson as `.wtg`/`.wct` (7.0).
+
+Three semantics read off the sources rather than guessed:
+
+- **`SetSoundParamsFromLabel` sets PARAMS, never the FILE.** A label's row usually lists several variants
+  (`HeroDeathKnightPissed` → six WAVs), but the map already picked exactly one in `CreateSound`
+  (`…\DeathKnightPissed6.wav`) and must keep it. Only `CreateSoundFromLabel` — handed no file at all — takes the file
+  from the row. Get this backwards and every map's hand-picked dialogue line becomes a random one of its siblings.
+- **A label lives in ONE namespace spanning every SoundInfo table**, with nothing at the call site to say which:
+  `"N03Tyrande01"` is `DialogSounds.slk`, `"HeroDeathKnightPissed"` is `UnitAckSounds.slk`, `"QuestCompleted"`
+  (blizzard.j's victory sting) is `UISounds.slk`. `SoundBoard.labelParams` searches them all. (`EnvironmentSounds.slk`
+  is *not* in the list — despite the name it's the EAX reverb config, keyed by `EnvironmentType`.)
+- **`SetSoundDuration` is metadata, not a truncation.** The editor bakes the file's real length into the script
+  (`14158` ms) and `GetSoundDuration` reads it back — it's how a cinematic waits out a line before starting the next.
+
+Plus a real-data gotcha the test pins: the World Editor emits **`SetSoundVolume(snd, -1)` and
+`SetSoundPitch(snd, 4294967296.0)`** for a sound left on its defaults (verbatim in the shipped
+`(10)DustwallowKeys` `war3map.j`). Those are sentinels, not values — applying them would silence the sound and shift
+it 4 billion semitones. Out-of-range writes keep the current setting.
+
+### Music — `SetMapMusic("Music", true, 0)` names a PLAYLIST, not a file
+
+Every one of the 165 maps calls `SetMapMusic` and only one ever calls `PlayMusic`, yet every melee game has music —
+so **`SetMapMusic` starts the list**, it doesn't merely record it. And its `musicName` is a **skin key**, resolved
+through **`UI\war3skins.txt`** — the same file `DecorateFileNames` reads (7.19), which is why the parse now lives in
+one place (`src/data/war3skins.ts`, shared by `FdfLibrary` and `SoundBoard`):
+
+```
+[Human] Music_V1=Sound\Music\mp3Music\HumanX1.mp3;…\Human3.mp3;…\Human2.mp3;…\Human1.mp3
+[Orc]   Music_V1=Sound\Music\mp3Music\OrcX1.mp3;…\Orc3.mp3;…\Orc2.mp3;…\Orc1.mp3
+```
+
+Keyed by the **local player's race** and the game version (`_V0` = RoC, `_V1` = TFT — we're 1.27a, so V1). That is
+exactly how WC3 gives an Orc player orc music and a Human player human music, and it falls out of a table we already
+parse.
+
+### The volume groups, and what they prove
+
+`VolumeGroupSetVolume` scales the eight `SOUND_VOLUMEGROUP_*` buses, which our pools now route through (deaths →
+UNITSOUNDS, weapon clangs → COMBAT, casts → SPELLS, UI, ambience → AMBIENTSOUNDS, music → MUSIC). The mapping isn't
+guesswork — blizzard.j's own `SetCineModeVolumeGroupsImmediateBJ` ducks **UNITSOUNDS and UI to 0.00** while holding
+MUSIC at 0.55 and AMBIENTSOUNDS at 1.00 during a cinematic. It can only be doing that so the cinematic's own
+*dialogue* stays audible — which tells us a script-created `sound` belongs to **none** of those groups. Ours doesn't
+either.
+
+### The autoplay gate (a bug only the live run could find)
+
+`SetMapMusic` is cued from inside `main()` — long before the player has touched anything — so on a cold load the
+browser's autoplay policy still has the `AudioContext` **suspended** and the track cannot start. The cue had already
+happened and nothing ever retried it: **the music was simply lost.** `SoundBoard.unlock()` now re-cues a pending
+playlist once the context resumes, so the music survives the gate and starts on the first gesture. Caught only by
+driving the real app (`ctx: "suspended"`, `musicPlaying: false` with a perfectly-resolved playlist sitting there).
+
+Verified (`pnpm jass:test` §7.20), 16 checks through the **real** blizzard.j BJs, resolving labels out of the **real**
+extracted SoundInfo SLKs: `SetSoundParamsFromLabel` keeps the script's own file but takes volume 127 / WANT3D /
+MinDistance 3000 / MaxDistance 10000 from the actual `UnitAckSounds` row, while `CreateSoundFromLabel` pulls its file
++ volume 120 out of `DialogSounds` (the cross-table namespace); `GetSoundDurationBJ` → 3.385 s; `PlaySoundAtPointBJ`
+(100 %) → position (512, 256) + volume 127 and `bj_lastPlayedSound` set; `PlaySoundOnUnitBJ` (50 %) → attached, played
+at the unit's **live** position, volume 63 (`PercentToInt(50, 127)`); `GetSoundIsPlaying` true→false across
+Start/Stop; the editor's sentinels rejected; a 3D sound's distances/cutoff/cone (45°, outside volume 20 % → 25) reach
+the engine; blizzard.j's `PlaySound()` → Create + Start + KillSoundWhenDone and the handle is reaped; the music BJs
+arrive in order; `SetCineModeVolumeGroupsImmediateBJ` ducks all eight groups to Blizzard's values.
+
+Verified **live** on Echo Isles (driven through the actual `EngineHooks`): the map's own
+`SetMapMusic("Music", true, 0)` resolves to the **Human `Music_V1`** playlist and `Human1.mp3` decodes (a real 273-second
+AudioBuffer) and plays; `labelParams` resolves `QuestCompleted` / `HeroDeathKnightPissed` / `N03Tyrande01` /
+`RoosterSound` out of **four different** SoundInfo tables; a trigger's `PlaySoundAtPointBJ` builds a real `PannerNode`
+at exactly the world point it named, with `refDistance 600` / `maxDistance 10000` off the SLK row — and is **dropped**
+when the listener is 8376 units away, past its 3000 `DistanceCutoff`; an `AttachSoundToUnit`'d looping sound rides a
+marching peasant (panner tracking to `(-4814, 3314, 631)`, z = the terrain under it); and blizzard.j's `PlaySound()`
+frees its handle the moment the clip ends.
+
+> **Ear-proxy honesty.** Audio can't be screenshotted, so everything above is asserted *quantitatively* through
+> `agent-browser eval` — the resolved file path, a genuinely decoded `AudioBuffer` (duration / sample rate /
+> channels), the `PannerNode`'s world position and falloff, the gain, and the live `AudioContext` state. What I have
+> **not** confirmed is how it *sounds* — mix balance, whether the music sits at the right level under combat, and
+> whether our fixed fade ramp feels like WC3's. `CreateSound`'s `fadeInRate`/`fadeOutRate` (10 in every
+> editor-emitted sound, 12700 in blizzard.j's `PlaySound`) are in units **no file we have documents**, so rather than
+> invent a rate→seconds curve we ramp over a short fixed time and say so here.
+
+**Still not modelled** (recorded on the handle, read back faithfully, but nothing acts on them): the **EAX/reverb**
+environment (`NewSoundEnvironment`, the `"DefaultEAXON"`/`"HeroAcksEAX"` presets), the **mixing channel**
+(`SetSoundChannel` — WC3's preemption/priority rules; we cap concurrency per pool instead), **seeking**
+(`SetSoundPlayPosition` / `SetMusicPlayPosition`), **Doppler** (`SetSoundVelocity`), **stacked sounds**
+(`RegisterStackedSound`), and **MIDI** ambience (`CreateMIDISound` / `SetAmbientDaySound` hand back a working handle
+that has no file, so a script that configures one still runs).
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -914,10 +1033,11 @@ row in its player's real colour (screenshots).
   stays passive/uncastable (graceful, but inert).
 - **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
   filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items; 7.19 floating text, dialogs and
-  leaderboards. Still no-ops: **weather** (`AddWeatherEffect` returns a null handle; nothing renders rain/snow),
-  **sounds** beyond the UI-label one-shots 7.19 wired (no `Play*SoundAtPoint`, no music), **cameras/cinematics**,
-  **upgrades** (`SetPlayerTechResearched`), **waygates**, **multiboards** and **timer dialogs**. Each is a small bridge
-  method away — wire on demand (`pnpm jass:coverage` ranks them by how many maps call them).
+  leaderboards; 7.20 sounds and music. Still no-ops: **weather** (`AddWeatherEffect` returns a null handle; nothing
+  renders rain/snow), **cameras/cinematics**, **upgrades** (`SetPlayerTechResearched`), **waygates** (`WaygateActivate`
+  / `WaygateSetDestination` — 11 maps, now the top of the unimplemented ranking with `SetTerrainFogEx`), **fog
+  modifiers**, **multiboards** and **timer dialogs**. Each is a small bridge method away — wire on demand
+  (`pnpm jass:coverage` ranks them by how many maps call them).
 - **Shops** — no unit sells anything, so `EVENT_PLAYER_UNIT_SELL_ITEM` / `_SELL` never fire (the item-sale plumbing is
   wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
   path: shop stock (`AddItemToStock`), the buy command card, gold, range.
@@ -928,6 +1048,6 @@ row in its player's real colour (screenshots).
   timer windows** (`CreateTimerDialog` — `MeleeInitVictoryDefeat` builds them and nothing renders them). *(The
   victory/defeat **dialogs** now render — 7.19. The first hero's Town Portal scroll is granted — 7.18 — though `AItp` has
   no cast behaviour in the sim, so the scroll doesn't teleport yet.)*
-- **Natives on demand** — weather, positional sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
-  Use `pnpm jass:coverage` to prioritise (232/335 used natives implemented — and see the caveat on that number above).
+- **Natives on demand** — weather, cameras, cinematics (transmissions), multiboard, quests, gamecache. Use
+  `pnpm jass:coverage` to prioritise (250/335 used natives implemented — and see the caveat on that number above).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

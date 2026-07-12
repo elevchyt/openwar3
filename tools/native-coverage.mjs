@@ -52,9 +52,12 @@ const allNatives = new Set();
 for (const m of commonJ.matchAll(NATIVE_RE)) allNatives.add(m[1]);
 
 // --- what we've implemented so far (src/jass/natives/*.ts) ------------------
-// Each native impl is registered as `defineNative("Name", ...)` or listed in an
-// implemented-names array; we detect either by scanning the source for the string
-// literal "Name". Good enough for a coverage estimate.
+// Each native impl is registered as `def(rt, "Name", ...)`, listed in an implemented-names
+// array, or — for a whole family sharing one handler — used as an UNQUOTED object key in a
+// dispatch table (natives/events.ts's REG_KINDS: `TriggerRegisterUnitEvent: "unitEvent"`).
+// Detect both spellings. Missing the second form made this tool report the single most-used
+// native in the whole corpus, TriggerRegisterUnitEvent (157 maps), as unimplemented — the
+// #1 line of its own ranking was a false positive.
 const implemented = new Set();
 const nativesDir = join(REPO, 'src', 'jass', 'natives');
 if (existsSync(nativesDir)) {
@@ -62,7 +65,11 @@ if (existsSync(nativesDir)) {
     if (!f.endsWith('.ts')) continue;
     const src = readFileSync(join(nativesDir, f), 'utf8');
     for (const name of allNatives) {
-      if (src.includes(`"${name}"`) || src.includes(`'${name}'`)) implemented.add(name);
+      // `"Name"` / `'Name'`, or `Name:` as a bare key (the leading guard keeps it from
+      // matching prose in a comment, which a bare word-boundary search would).
+      if (src.includes(`"${name}"`) || src.includes(`'${name}'`) || new RegExp(`(^|[^\\w"'.])${name}\\s*:`, 'm').test(src)) {
+        implemented.add(name);
+      }
     }
   }
 }

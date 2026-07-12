@@ -1,3 +1,4 @@
+import { parseWar3Skins, skinValue, WAR3SKINS } from "../../data/war3skins";
 import type { DataSource } from "../../vfs/types";
 import { parseFdf, type FdfFrame, type FdfProp } from "./parser";
 
@@ -7,7 +8,6 @@ import { parseFdf, type FdfFrame, type FdfProp } from "./parser";
 // files and construct the UIs" half of issue #54; layout/render is the other half.
 
 const GLOBAL_STRINGS = "UI\\FrameDef\\GlobalStrings.fdf";
-const SKINS = "UI\\war3skins.txt";
 
 function cloneFrame(f: FdfFrame): FdfFrame {
   return {
@@ -40,35 +40,23 @@ export class FdfLibrary {
     await this.loadFile(path);
   }
 
-  /** Parse UI\war3skins.txt — the table behind the FDF `DecorateFileNames` flag. A frame
+  /** Load UI\war3skins.txt — the table behind the FDF `DecorateFileNames` flag. A frame
    *  marked with it names its textures by KEY ("EscMenuEditBoxBackground"), not by path,
    *  and the engine looks the key up here. Without it the in-game panels (leaderboard,
    *  dialogs, quest log) render with no chrome at all — their backdrops resolve to
    *  nothing. `[Default]` carries the full table (Human's art); each race section
-   *  overrides a handful of entries, which is how an Orc player gets Orc borders. */
+   *  overrides a handful of entries, which is how an Orc player gets Orc borders.
+   *  (The same file also holds the music playlists — see src/data/war3skins.ts.) */
   private async loadSkins(): Promise<void> {
-    if (this.skins.size || !this.vfs.exists(SKINS)) return;
-    const src = new TextDecoder("latin1").decode(await this.vfs.read(SKINS));
-    let section = new Map<string, string>();
-    for (const raw of src.split(/\r?\n/)) {
-      const line = raw.trim();
-      if (!line || line.startsWith("//")) continue;
-      const head = /^\[(.+)\]$/.exec(line);
-      if (head) {
-        section = new Map();
-        this.skins.set(head[1], section);
-        continue;
-      }
-      const eq = line.indexOf("=");
-      if (eq > 0) section.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim());
-    }
+    if (this.skins.size || !this.vfs.exists(WAR3SKINS)) return;
+    this.skins = parseWar3Skins(new TextDecoder("latin1").decode(await this.vfs.read(WAR3SKINS)));
   }
 
   /** Resolve a `DecorateFileNames` texture key to its real BLP path: the current skin's
    *  entry, else `[Default]`'s. A name that is already a path (no entry) passes through —
    *  the glue screens name their textures literally and must keep working. */
   decorate(nameOrKey: string): string {
-    return this.skins.get(this.skin)?.get(nameOrKey) ?? this.skins.get("Default")?.get(nameOrKey) ?? nameOrKey;
+    return skinValue(this.skins, this.skin, nameOrKey) ?? nameOrKey;
   }
 
   private async loadFile(path: string): Promise<void> {

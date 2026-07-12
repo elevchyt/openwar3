@@ -11,7 +11,7 @@ import { jassOwnerOf, type QueuedOrder, type RallyKind, type SimMine, type SimUn
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
-import type { EngineHooks, RectObj } from "../jass/runtime";
+import type { EngineHooks, RectObj, Runtime } from "../jass/runtime";
 import type { UnitSnapshot } from "../jass/interpreter";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
@@ -1118,9 +1118,44 @@ export class MapViewerScene {
       },
       pauseGame: (flag) => (this.paused = flag),
       enableUserUi: (flag) => (flag ? this.hud?.show() : this.hud?.hide()),
-      // bj_victoryDialogSound / bj_defeatDialogSound are CreateSoundFromLabel("QuestCompleted"
-      // / "QuestFailed") — UISounds.slk labels, so the game's own win/lose sting plays.
-      playUiSound: (label) => this.sounds?.playUi(label),
+      // --- the trigger's AUDIO output (7.20) ---
+      // A sound LABEL is how a map names volume/pitch/3D/distances without re-typing them;
+      // the SoundBoard searches every UI\SoundInfo table for it. This one hook is what
+      // SetSoundParamsFromLabel and CreateSoundFromLabel both stand on — including
+      // blizzard.j's victory/defeat stings (CreateSoundFromLabel("QuestCompleted", …)).
+      soundLabelInfo: (label) => this.sounds?.labelParams(label) ?? null,
+      playSound: (s) =>
+        this.sounds?.playScript(s.handleId, {
+          file: s.file,
+          volume: s.volume,
+          pitch: s.pitch,
+          looping: s.looping,
+          is3D: s.is3D,
+          // A 3D sound with no position never got one (no SetSoundPosition, no attached
+          // unit) — WC3 plays it flat rather than at the world origin, so pass null.
+          at: s.is3D && s.positioned ? { x: s.x, y: s.y, z: s.z } : null,
+          minDist: s.minDist,
+          maxDist: s.maxDist,
+          cutoff: s.cutoff,
+          coneInside: s.coneInside,
+          coneOutside: s.coneOutside,
+          coneOutsideVolume: s.coneOutsideVolume,
+          coneOrient: s.coneOrient,
+        }) ?? false,
+      stopSound: (id, fadeOut) => this.sounds?.stopScript(id, fadeOut),
+      soundIsPlaying: (id) => this.sounds?.isScriptPlaying(id) ?? false,
+      moveSound: (id, x, y, z) => this.sounds?.moveScript(id, { x, y, z }),
+      soundFileDuration: (file) => this.sounds?.fileDurationMs(file) ?? 0,
+      setMapMusic: (name, random, index) => this.sounds?.setMapMusic(name, random, index),
+      clearMapMusic: () => this.sounds?.clearMapMusic(),
+      playMusic: (name, fromMs, fadeInMs) => this.sounds?.playMusic(name, fromMs, fadeInMs),
+      stopMusic: (fadeOut) => this.sounds?.stopMusic(fadeOut),
+      resumeMusic: () => this.sounds?.resumeMusic(),
+      playThematicMusic: (name, fromMs) => this.sounds?.playThematicMusic(name, fromMs),
+      endThematicMusic: () => this.sounds?.endThematicMusic(),
+      setMusicVolume: (v) => this.sounds?.setMusicVolume(v),
+      setVolumeGroup: (group, scale) => this.sounds?.setVolumeGroup(group, scale),
+      resetVolumeGroups: () => this.sounds?.resetVolumeGroups(),
       createUnit: (player, typeId, x, y, facing) => this.spawnScriptUnit(player, typeId, x, y, facing),
       // A gold mine isn't a sim unit for us, so RemoveUnit can't take it off the map —
       // and the only caller that tries is the Undead start's mine swap, which puts one
@@ -1576,8 +1611,30 @@ export class MapViewerScene {
       if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
         engine.interp.pumpRegions(this.unitSnapshots());
       }
+      this.pumpScriptSounds(engine.interp.rt); // 7.20
     } catch (err) {
       console.warn("[jass] trigger pump failed (non-fatal):", err);
+    }
+  }
+
+  /** The two things a `sound` handle needs over TIME, which the natives can't do
+   *  themselves (7.20):
+   *   • an `AttachSoundToUnit`'d sound rides its unit — so a hero's line pans across the
+   *     field as he walks, instead of freezing where he stood when it started;
+   *   • a `KillSoundWhenDone` handle is destroyed once its clip actually ends, which only
+   *     this side knows. blizzard.j's `PlaySound()` is CreateSound + StartSound +
+   *     KillSoundWhenDone, so without the sweep every fire-and-forget sound leaks a handle. */
+  private pumpScriptSounds(rt: Runtime): void {
+    if (!rt.sounds.length || !this.sounds || !this.rts) return;
+    for (let i = rt.sounds.length - 1; i >= 0; i--) {
+      const s = rt.sounds[i];
+      const playing = this.sounds.isScriptPlaying(s.handleId);
+      if (playing && s.is3D && s.attachUnit >= 0) {
+        const x = this.rts.simWorld.getUnitX(s.attachUnit);
+        const y = this.rts.simWorld.getUnitY(s.attachUnit);
+        this.sounds.moveScript(s.handleId, { x, y, z: this.rts.groundHeightAt(x, y) });
+      }
+      if (s.killWhenDone && s.started && !playing) rt.destroySound(s);
     }
   }
 
@@ -1593,7 +1650,10 @@ export class MapViewerScene {
     this.dialog?.dispose();
     // WC3 skins the in-game panels with the LOCAL player's race (an Orc player's dialog is
     // Orc-bordered) — that's what the war3skins.txt section names are (see fdf/library.ts).
+    // The same sections hold the MUSIC playlists, which is how melee gives an Orc player
+    // orc music: SetMapMusic("Music", …) → [Orc] Music_V1 (7.20).
     const skin = SKIN_SECTION[this.localRace];
+    if (this.sounds) this.sounds.musicSkin = skin;
     this.textTags = new TextTagOverlay(ui);
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin);
     this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {

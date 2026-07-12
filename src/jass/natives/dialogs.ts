@@ -24,20 +24,12 @@
 // Interpreter.fireDialogClick to run whatever triggers the script did register.
 
 import type { DialogButtonObj, DialogObj, JassPlayer, NativeCtx, Runtime, TriggerObj } from "../runtime";
-import { asInt, asStr, jBool, jHandle, jInt, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asStr, jBool, jHandle, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
 const dialog = (c: NativeCtx, v: JassValue): DialogObj | undefined => c.rt.data<DialogObj>(v);
 const playerIndex = (c: NativeCtx, v: JassValue): number => c.rt.data<JassPlayer>(v)?.index ?? 0;
-
-/** A `sound` handle. We model a sound as nothing but its UISounds.slk label — which is
- *  all CreateSoundFromLabel is given, and all the engine needs to play it back through
- *  our SoundBoard (`playUi`). Positional/3D sounds are a separate (unbuilt) surface. */
-interface SoundObj {
-  handleId: number;
-  label: string;
-}
 
 export function registerDialogNatives(rt: Runtime): void {
   // --- the dialog object ---------------------------------------------------------
@@ -132,23 +124,10 @@ export function registerDialogNatives(rt: Runtime): void {
   def(rt, "RestartGame", () => JNULL);
   def(rt, "ChangeLevel", () => JNULL); // campaign-only (bj_changeLevelMapName is null in melee)
 
-  // --- sounds, only as far as the dialogs need them -------------------------------
-  // bj_victoryDialogSound = CreateSoundFromLabel("QuestCompleted", …) and its "QuestFailed"
-  // twin (blizzard.j InitBlizzardGlobals) — both are UISounds.slk labels, so StartSound on
-  // one plays through our SoundBoard.playUi. That is where the win/lose sting comes from.
-  def(rt, "CreateSoundFromLabel", (c, a) => {
-    const s: SoundObj = { handleId: 0, label: asStr(a[0]) };
-    s.handleId = c.rt.handles.alloc(s);
-    return jHandle(s.handleId, "sound");
-  });
-  def(rt, "StartSound", (c, a) => {
-    const s = c.rt.data<SoundObj>(a[0]);
-    if (s?.label) c.rt.hooks?.playUiSound?.(s.label);
-    return JNULL;
-  });
-  def(rt, "GetSoundIsPlaying", () => jBool(false));
-  def(rt, "GetSoundDuration", () => jInt(0));
-  def(rt, "GetSoundFileDuration", () => jInt(0));
+  // The victory/defeat STING (bj_victoryDialogSound = CreateSoundFromLabel("QuestCompleted",
+  // …) — blizzard.j InitBlizzardGlobals) is a plain `sound` handle like any other: 7.19 wired
+  // a UISounds-label-only version of it here, and 7.20 generalised that into the whole sound
+  // family (natives/sound.ts). Nothing sound-related lives in this file any more.
 }
 
 /** Attach a button to a dialog and hand back its `button` handle. Shared by

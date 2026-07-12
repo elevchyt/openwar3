@@ -18,6 +18,7 @@ import { registerGroupNatives } from "./groups";
 import { registerItemNatives } from "./items";
 import { registerMeleeNatives } from "./melee";
 import { registerRegionNatives } from "./region";
+import { registerSoundNatives } from "./sound";
 import { registerTextNatives } from "./text";
 import { registerWorldNatives } from "./world";
 
@@ -91,11 +92,12 @@ function registerUtilNatives(rt: Runtime): void {
 
   // Camera / environment natives every main() calls — we set these up ourselves in
   // the renderer, so here they are safe no-ops (GetCameraMargin returns 0.0).
+  // (Sound + music used to sit in this list; they are real now — see natives/sound.ts.
+  // SetAmbientDay/NightSound stay: they name a MIDI ambience bed we don't synthesize.)
   def(rt, "GetCameraMargin", () => jReal(0));
   for (const name of [
-    "SetCameraBounds", "SetDayNightModels", "NewSoundEnvironment", "SetAmbientDaySound",
-    "SetAmbientNightSound", "SetMapMusic", "PlayMusic", "SetMapFlag", "StartSound",
-    "StopSound", "SetMapName", "EnableWeatherEffect", "AddWeatherEffect",
+    "SetCameraBounds", "SetDayNightModels", "SetAmbientDaySound", "SetAmbientNightSound",
+    "SetMapFlag", "SetMapName", "EnableWeatherEffect", "AddWeatherEffect",
   ]) {
     if (!rt.natives.has(name)) def(rt, name, () => JNULL);
   }
@@ -118,6 +120,7 @@ export function registerNatives(rt: Runtime): void {
   registerItemNatives(rt); // items + the item events (7.18)
   registerMeleeNatives(rt); // what blizzard.j's Melee* library stands on (7.3)
   registerRegionNatives(rt);
+  registerSoundNatives(rt); // the sound handle family + music (7.20)
   registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
   registerUtilNatives(rt);
 }

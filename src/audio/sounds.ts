@@ -1,5 +1,6 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
+import { parseWar3Skins, skinValue, SKIN_VERSION_SUFFIX, WAR3SKINS } from "../data/war3skins";
 import type { DataSource } from "../vfs/types";
 
 // Unit voice lines & sound effects, sourced entirely from the real WC3 sound data
@@ -55,7 +56,80 @@ const COMBAT_TABLE = "UI\\SoundInfo\\UnitCombatSounds.slk";
 const UI_TABLE = "UI\\SoundInfo\\UISounds.slk";
 const AMBIENCE_TABLE = "UI\\SoundInfo\\AmbienceSounds.slk"; // dawn/dusk cries, weather beds
 const ANIMLOOKUPS_TABLE = "UI\\SoundInfo\\AnimLookups.slk"; // SND event code → SoundLabel
+const ABILITY_TABLE = "UI\\SoundInfo\\AbilitySounds.slk"; // spell sounds, by label
+const DIALOG_TABLE = "UI\\SoundInfo\\DialogSounds.slk"; // campaign dialogue lines
 // (SoundLabel → WAVs + 3D metadata is AnimSounds.slk — already loaded under the "anim" tag.)
+
+// A sound LABEL lives in ONE namespace spanning every SoundInfo table — a script's
+// SetSoundParamsFromLabel(snd, "N03Tyrande01") means DialogSounds, and
+// SetSoundParamsFromLabel(snd, "HeroDeathKnightPissed") means UnitAckSounds, with no
+// hint at the call site which table to look in. So labelParams() searches them all.
+// (EnvironmentSounds.slk is NOT in the list: despite the name it's the EAX reverb
+// config — keyed by EnvironmentType, not by a sound label. MIDISounds.slk is the MIDI
+// ambience beds, which we don't synthesize.)
+const LABEL_TABLES = ["ui", "ack", "anim", "combat", "ability", "ambience", "dialog"] as const;
+
+/** The playback parameters a SoundInfo row carries — what `SetSoundParamsFromLabel`
+ *  copies onto a `sound` handle, and what `CreateSoundFromLabel` builds one from.
+ *  `volume` is the raw SLK 0–127 scale, because that is JASS's scale too
+ *  (`SetSoundVolumeBJ` = `PercentToInt(percent, 127)`). */
+export interface SoundLabelParams {
+  files: string[]; // full MPQ paths of the row's variants (FileNames × DirectoryBase)
+  volume: number; // 0–127
+  pitch: number;
+  pitchVar: number;
+  channel: number;
+  threeD: boolean; // Flags contains WANT3D
+  minDist: number;
+  maxDist: number;
+  cutoff: number;
+}
+
+/** A `sound` handle's playback spec, as the JASS natives configure it (see
+ *  src/jass/natives/sound.ts). Purely a value object — the SoundBoard never sees a
+ *  JASS handle, only an opaque `id` to key the playing voice by. */
+export interface ScriptSoundSpec {
+  file: string; // MPQ path of the WAV/MP3
+  volume: number; // 0–127 (WC3 scale)
+  pitch: number;
+  looping: boolean;
+  is3D: boolean;
+  at: SoundPos | null; // SetSoundPosition / the attached unit's position
+  minDist: number;
+  maxDist: number;
+  cutoff: number;
+  coneInside: number; // degrees (0 = omnidirectional)
+  coneOutside: number;
+  coneOutsideVolume: number; // 0–127
+  coneOrient: SoundPos | null; // the cone's facing vector
+}
+
+/** The eight `volumegroup`s of common.j (SOUND_VOLUMEGROUP_*), which
+ *  `VolumeGroupSetVolume` scales. Our pools map onto them as follows; the mapping is
+ *  read off blizzard.j's own `SetCineModeVolumeGroupsImmediateBJ`, which ducks
+ *  UNITSOUNDS and UI to **0.00** while leaving MUSIC at 0.55 and AMBIENTSOUNDS at 1.00
+ *  during a cinematic — i.e. exactly so the cinematic's own *dialogue* stays audible.
+ *  That tells us a script-created `sound` belongs to NONE of these groups, so ours
+ *  doesn't route through one either. UNITMOVEMENT (footsteps) and FIRE (doodad fire
+ *  loops) have no pool here yet — their gains are recorded and simply have nothing to
+ *  scale. */
+const VG_UNITSOUNDS = 1;
+const VG_COMBAT = 2;
+const VG_SPELLS = 3;
+const VG_UI = 4;
+const VG_MUSIC = 5;
+const VG_AMBIENT = 6;
+const VOLUME_GROUPS = 8;
+
+/** Which volume group each one-shot pool answers to by default. A death cry is a unit
+ *  sound; a weapon clang is combat. (`playAmbience` shares the uncapped "ui" pool but
+ *  is an AMBIENTSOUNDS sound, so it overrides the group at the call site.) */
+const POOL_GROUP: Record<"death" | "impact" | "ui" | "spell", number> = {
+  death: VG_UNITSOUNDS,
+  impact: VG_COMBAT,
+  spell: VG_SPELLS,
+  ui: VG_UI,
+};
 
 const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["What", "Yes", "YesAttack", "Pissed", "Warcry", "Ready"]);
 
@@ -68,6 +142,11 @@ interface Clip {
   gain: number; // 0..1 (Volume / 127)
   pitch: number; // base playback rate
   pitchVar: number; // ± random jitter applied per play (0 = none)
+  // Row provenance — present only on clips resolved from a SoundInfo SLK row (resolve()),
+  // absent on the ones we synthesize for folder WAVs. `labelParams` hands both back to a
+  // script, which reads volume on WC3's own 0–127 scale rather than our 0–1 gain.
+  volume127?: number;
+  channel?: number;
   // Positional-audio fields, straight from the SoundInfo SLK row (see resolve()).
   threeD: boolean; // Flags contains WANT3D → play through a positional PannerNode
   refDist: number; // MinDistance — full volume within this radius (world units)
@@ -85,6 +164,48 @@ interface ModelSounds {
   launch: Clip[]; // M events whose label is a "…Launch"
   impact: Clip[]; // M events whose label is a "…Hit"/"…Impact" (or a single generic missile sound)
   ability: Clip[]; // A events — the sound the effect model itself plays when it appears
+}
+
+/** A live `sound` handle the script started (StartSound). The nodes arrive a tick late —
+ *  the WAV decodes async — so the entry is inserted the moment StartSound commits and
+ *  acts as the cancellation token: dropping it from the map is what a StopSound during
+ *  the decode does. */
+interface ScriptVoice {
+  src: AudioBufferSourceNode | null;
+  gain: GainNode | null;
+  panner: PannerNode | null;
+}
+
+/** One music track on the music bus (its own gain, so SetMusicVolume is live). */
+interface Track {
+  src: AudioBufferSourceNode;
+  gain: GainNode;
+}
+
+/** StopSound(…, fadeOut) / a pre-empted music track ramp out over this. WC3's own
+ *  fadeInRate/fadeOutRate (CreateSound's 5th/6th args) are in undocumented units — see
+ *  stopScript — so we ramp over a fixed, short time rather than invent a curve. */
+const FADE_SECONDS = 0.35;
+const MUSIC_FADE_SECONDS = 1.5;
+
+/** Point a positional sound's cone: SetSoundConeAngles(inside, outside, outsideVolume) +
+ *  SetSoundConeOrientation(x, y, z) map 1:1 onto the Web Audio PannerNode's cone, with
+ *  WC3's 0–127 outside volume scaled to the node's 0–1 outer gain. An inside angle of 0
+ *  (the default, and what all but 3 of the bundled maps leave it at) means no cone at
+ *  all — leave the node omnidirectional rather than collapse it to silence. */
+function applyCone(p: PannerNode, s: ScriptSoundSpec): void {
+  if (!s.coneInside || !s.coneOrient) return;
+  p.coneInnerAngle = s.coneInside;
+  p.coneOuterAngle = Math.max(s.coneInside, s.coneOutside);
+  p.coneOuterGain = Math.max(0, Math.min(1, s.coneOutsideVolume / 127));
+  const { x, y, z = 0 } = s.coneOrient;
+  if (p.orientationX) {
+    p.orientationX.value = x;
+    p.orientationY.value = y;
+    p.orientationZ.value = z;
+  } else {
+    p.setOrientation?.(x, y, z);
+  }
 }
 
 /** The 3D listener frame, in WC3 world space (Z up). Position sits at the camera's
@@ -109,6 +230,7 @@ export class SoundBoard {
   private master: GainNode | null = null;
   private tables = new Map<string, Table | null>();
   private buffers = new Map<string, Promise<AudioBuffer | null>>();
+  private decoded = new Map<string, number>(); // path → seconds, once decoded (GetSoundFileDuration)
   private clips = new Map<string, Clip | null>(); // memoized "table|key" → clip
   // Active voice lines keyed by SOURCE (unit/building instance id). One line per
   // source at a time — distinct sources overlap; a source re-requesting while its
@@ -121,13 +243,32 @@ export class SoundBoard {
   private muted = false;
   private volume = 0.85;
   private listener: Listener | null = null; // last camera frame (for WANT3D panning)
+  /** VolumeGroupSetVolume scales (0–1), one per SOUND_VOLUMEGROUP_* index. */
+  private groups = new Array<number>(VOLUME_GROUPS).fill(1);
+  /** Sounds a trigger script started (StartSound), keyed by its `sound` handle id, so
+   *  StopSound / GetSoundIsPlaying / a moving attached sound can all find them again. */
+  private scripts = new Map<number, ScriptVoice>();
+  /** The map's music (SetMapMusic / PlayMusic) — one track at a time, advancing through
+   *  the playlist as each finishes. `thematic` pre-empts it and restores it on End. */
+  private music: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  private musicList: string[] = [];
+  private musicIndex = 0;
+  private musicRandom = false;
+  private musicVolume = 1; // SetMusicVolume, 0–1 (the native's 0–127 scaled)
+  private musicPaused = false; // StopMusic — ResumeMusic restarts the list
+  private musicCueing = false; // a track is decoding (see startPendingMusic)
+  private thematic: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  private skins: Map<string, Map<string, string>> | null = null;
+  /** Which war3skins.txt section the music playlists come from — the LOCAL player's
+   *  race, which is how melee gives an Orc player orc music (set by the host). */
+  musicSkin = "Default";
 
   /** Fired when an acknowledgement VOICE actually starts (label + clip seconds) —
    *  the host drives the 3D portrait's talk animation off this. */
   onVoiceStart: ((label: string, durationSec: number) => void) | null = null;
 
   constructor(private vfs: DataSource) {
-    for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE], ["ambience", AMBIENCE_TABLE], ["animlookups", ANIMLOOKUPS_TABLE]] as const) {
+    for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE], ["ambience", AMBIENCE_TABLE], ["animlookups", ANIMLOOKUPS_TABLE], ["ability", ABILITY_TABLE], ["dialog", DIALOG_TABLE]] as const) {
       this.tables.set(tag, this.loadTable(path));
     }
   }
@@ -154,7 +295,18 @@ export class SoundBoard {
       this.master.connect(this.ctx.destination);
       this.applyListener(); // push the camera frame captured before the first gesture
     }
-    if (this.ctx.state === "suspended") void this.ctx.resume();
+    if (this.ctx.state === "suspended") void this.ctx.resume().then(() => this.startPendingMusic());
+    else this.startPendingMusic();
+  }
+
+  /** The map's music is cued from the script — `SetMapMusic` runs inside `main()`, long
+   *  before the player has touched anything — so on a cold load the AudioContext is still
+   *  suspended by the browser's autoplay gate and the track can't start. Without this the
+   *  music was simply lost: the cue had already happened and nothing ever retried it.
+   *  So the playlist survives the gate and starts on the first gesture instead. */
+  private startPendingMusic(): void {
+    if (this.ctx?.state !== "running") return;
+    if (this.musicList.length && !this.music && !this.musicCueing && !this.thematic && !this.musicPaused) this.startMusicTrack();
   }
 
   /** Position the 3D audio listener at the camera's ground focus (`target`), facing
@@ -428,7 +580,7 @@ export class SoundBoard {
    *  uses two of these: "RoosterSound" at dawn, "WolfSound" at dusk. Not positional
    *  (the rows carry no WANT3D flag) — the whole map hears them. */
   playAmbience(name: string): void {
-    this.playPool(this.resolve("ambience", name), "ui");
+    this.playPool(this.resolve("ambience", name), "ui", undefined, VG_AMBIENT);
   }
 
   /** Start/stop a named looping sound (e.g. building construction). Idempotent. */
@@ -492,6 +644,317 @@ export class SoundBoard {
     }
   }
 
+  // ===== The trigger script's sounds + music (7.20) ==================================
+  // Everything above is the ENGINE's own audio (a unit's voice, a weapon clang, a spell).
+  // What follows is the MAP SCRIPT's: the `sound` handle family and the music interface.
+  //
+  // The crucial difference is that a JASS `sound` is a **configured playback object**, not
+  // a fire-and-forget clip. A map builds each one once, in InitSounds():
+  //
+  //     set gg_snd_N03Tyrande01 = CreateSound("Sound\Dialogue\…\N03Tyrande01.mp3", …)
+  //     call SetSoundParamsFromLabel(gg_snd_N03Tyrande01, "N03Tyrande01")
+  //     call SetSoundDuration(gg_snd_N03Tyrande01, 14158)
+  //
+  // …and then Starts / Stops / repositions **that same handle** for the rest of the game.
+  // So these methods are keyed by the handle's id, where the pools above are anonymous.
+
+  /** Resolve a sound LABEL to its row's playback parameters, searching every SoundInfo
+   *  table (one label namespace spans them — see LABEL_TABLES). This is what
+   *  `SetSoundParamsFromLabel` copies onto a handle and what `CreateSoundFromLabel`
+   *  builds one from.
+   *
+   *  Note what it does NOT do: it never changes the handle's FILE. `CreateSound` was
+   *  given an exact path, and a label's row usually lists several variants — a map that
+   *  says CreateSound("…\DeathKnightPissed6.wav") + SetSoundParamsFromLabel("HeroDeathKnight
+   *  Pissed") wants *that* line with the sound-set's volume/3D metadata, not a random one
+   *  of the six. Only CreateSoundFromLabel (which is given no file) takes `files` from here. */
+  labelParams(label: string): SoundLabelParams | null {
+    if (!label) return null;
+    for (const tag of LABEL_TABLES) {
+      const clip = this.resolve(tag, label);
+      if (!clip) continue;
+      return {
+        files: clip.paths,
+        volume: clip.volume127 ?? 127,
+        pitch: clip.pitch,
+        pitchVar: clip.pitchVar,
+        channel: clip.channel ?? 0,
+        threeD: clip.threeD,
+        minDist: clip.refDist,
+        maxDist: clip.maxDist,
+        cutoff: clip.cutoff,
+      };
+    }
+    return null;
+  }
+
+  /** StartSound — play (or restart) the sound handle `id` with the spec the script has
+   *  configured on it. A 3D sound past its DistanceCutoff isn't played at all, exactly as
+   *  in the engine-side pools. Returns whether playback was actually committed (the file
+   *  resolved and the context is live) — the caller reports that as GetSoundIsPlaying. */
+  playScript(id: number, s: ScriptSoundSpec): boolean {
+    this.stopScript(id, false); // StartSound on a live handle restarts it
+    if (!s.file || !this.vfs.exists(s.file)) return false;
+    this.unlock();
+    if (!this.ctx || !this.master || this.ctx.state !== "running") return false;
+    const positional = s.is3D && !!s.at && !!this.listener;
+    if (positional && s.cutoff > 0 && this.distanceTo(s.at!) > s.cutoff) return false;
+    // Reserve the slot synchronously: the WAV decodes async, and a script that calls
+    // StartSound then StopSound in the same tick (or asks GetSoundIsPlaying) must see it.
+    const token: ScriptVoice = { src: null, gain: null, panner: null };
+    this.scripts.set(id, token);
+    void this.buffer(s.file).then((buf) => {
+      if (!buf || !this.ctx || !this.master || this.scripts.get(id) !== token) return;
+      const clip: Clip = {
+        paths: [s.file],
+        gain: Math.max(0, Math.min(1, s.volume / 127)),
+        pitch: s.pitch > 0 ? s.pitch : 1,
+        pitchVar: 0, // a script sets an exact pitch; the SLK's RANDOMPITCH jitter is the engine's
+        threeD: s.is3D,
+        refDist: s.minDist,
+        maxDist: s.maxDist,
+        cutoff: s.cutoff,
+      };
+      const src = this.source(buf, clip);
+      src.loop = s.looping;
+      const gain = this.gain(clip.gain);
+      const out: AudioNode = src.connect(gain);
+      if (positional) {
+        const panner = this.panner(clip, s.at!);
+        applyCone(panner, s);
+        out.connect(panner).connect(this.master);
+        token.panner = panner;
+      } else {
+        out.connect(this.master);
+      }
+      token.src = src;
+      token.gain = gain;
+      src.onended = () => {
+        if (this.scripts.get(id) === token) this.scripts.delete(id);
+      };
+      src.start();
+    });
+    return true;
+  }
+
+  /** StopSound(snd, killWhenDone, fadeOut). WC3's fade rates (CreateSound's fadeInRate /
+   *  fadeOutRate — 10 in every World-Editor-emitted sound, 12700 in blizzard.j's PlaySound)
+   *  are in units no file we have documents, so rather than invent a rate→seconds curve we
+   *  ramp over a short fixed FADE_SECONDS and say so. Everything else here is exact. */
+  stopScript(id: number, fadeOut: boolean): void {
+    const v = this.scripts.get(id);
+    if (!v) return;
+    this.scripts.delete(id);
+    const src = v.src;
+    if (!src) return; // still decoding — dropping the token above is what cancels it
+    if (fadeOut && v.gain && this.ctx) {
+      const now = this.ctx.currentTime;
+      v.gain.gain.setValueAtTime(v.gain.gain.value, now);
+      v.gain.gain.linearRampToValueAtTime(0, now + FADE_SECONDS);
+      try { src.stop(now + FADE_SECONDS); } catch { /* already stopped */ }
+    } else {
+      try { src.stop(); } catch { /* not started yet / already stopped */ }
+    }
+  }
+
+  /** GetSoundIsPlaying. True from the moment StartSound commits (through the decode) until
+   *  the clip ends or is stopped. */
+  isScriptPlaying(id: number): boolean {
+    return this.scripts.has(id);
+  }
+
+  /** Re-place a playing 3D sound — SetSoundPosition on a live handle, and the per-frame
+   *  update for one AttachSoundToUnit'd to a unit that is walking. */
+  moveScript(id: number, at: SoundPos): void {
+    const p = this.scripts.get(id)?.panner;
+    if (!p) return;
+    const z = at.z ?? 0;
+    if (p.positionX) {
+      p.positionX.value = at.x;
+      p.positionY.value = at.y;
+      p.positionZ.value = z;
+    } else {
+      p.setPosition?.(at.x, at.y, z);
+    }
+  }
+
+  // --- music (SetMapMusic / PlayMusic / PlayThematicMusic) ---------------------------
+
+  /** SetMapMusic(musicName, random, index) — and it starts playing: every one of the 165
+   *  bundled maps calls it in main() and only one ever calls PlayMusic, yet every melee
+   *  game has music. `musicName` is usually not a file but a PLAYLIST KEY resolved through
+   *  UI\war3skins.txt against the local player's race — `SetMapMusic("Music", true, 0)`
+   *  gives an Orc player the orc list and a Human player the human one. */
+  setMapMusic(musicName: string, random: boolean, index: number): void {
+    const list = this.musicPaths(musicName);
+    if (!list.length) return;
+    this.musicList = list;
+    this.musicRandom = random;
+    this.musicIndex = random ? Math.floor(Math.random() * list.length) : Math.max(0, Math.min(list.length - 1, index));
+    this.musicPaused = false;
+    this.startMusicTrack();
+  }
+
+  /** ClearMapMusic — the list is dropped; whatever is playing plays out. */
+  clearMapMusic(): void {
+    this.musicList = [];
+  }
+
+  /** PlayMusic / PlayMusicEx — play one track now (a file, or a playlist key: the engine
+   *  accepts either, and PlayMusic on a list plays the list). */
+  playMusic(musicName: string, fromMs = 0, _fadeInMs = 0): void {
+    const list = this.musicPaths(musicName);
+    if (!list.length) return;
+    this.musicList = list;
+    this.musicIndex = 0;
+    this.musicPaused = false;
+    this.startMusicTrack(fromMs / 1000);
+  }
+
+  stopMusic(fadeOut: boolean): void {
+    this.musicPaused = true;
+    this.fadeOutTrack(this.music, fadeOut);
+    this.music = null;
+  }
+
+  /** ResumeMusic — pick the list back up where StopMusic left it. */
+  resumeMusic(): void {
+    if (!this.musicPaused || !this.musicList.length) return;
+    this.musicPaused = false;
+    this.startMusicTrack();
+  }
+
+  /** SetMusicVolume(0–127). Applied live — the music bus holds its own gain node. */
+  setMusicVolume(volume127: number): void {
+    this.musicVolume = Math.max(0, Math.min(1, volume127 / 127));
+    this.applyMusicGain();
+  }
+
+  /** PlayThematicMusic — a one-off track that PRE-EMPTS the map music (a cinematic's
+   *  theme). EndThematicMusic brings the map music back. */
+  playThematicMusic(file: string, fromMs = 0): void {
+    const paths = this.musicPaths(file);
+    if (!paths.length) return;
+    this.endThematicMusic(); // only one thematic track at a time
+    this.fadeOutTrack(this.music, true); // duck the map music under it
+    this.music = null;
+    void this.startTrack(paths[0], fromMs / 1000).then((t) => {
+      this.thematic = t;
+      if (t) {
+        t.src.onended = () => {
+          if (this.thematic === t) {
+            this.thematic = null;
+            if (!this.musicPaused) this.startMusicTrack(); // the map music returns on its own
+          }
+        };
+      }
+    });
+  }
+
+  endThematicMusic(): void {
+    if (!this.thematic) return;
+    this.fadeOutTrack(this.thematic, true);
+    this.thematic = null;
+    if (!this.musicPaused) this.startMusicTrack();
+  }
+
+  /** Resolve a music name to real, existing files. A name with a path separator (or an
+   *  audio extension) is a literal file; anything else is a war3skins.txt playlist key,
+   *  looked up with the engine's version suffix (`Music` → `Music_V1` in TFT) in the
+   *  local player's race section, falling back to `[Default]`. */
+  private musicPaths(name: string): string[] {
+    if (!name) return [];
+    let candidates: string[];
+    if (/[\\/]/.test(name) || /\.(mp3|wav)$/i.test(name)) {
+      candidates = [name];
+    } else {
+      const skins = this.loadSkins();
+      const list = skinValue(skins, this.musicSkin, name + SKIN_VERSION_SUFFIX) ?? skinValue(skins, this.musicSkin, name) ?? "";
+      candidates = list.split(";");
+    }
+    return candidates.map((p) => p.trim().replace(/\//g, "\\")).filter((p) => p && this.vfs.exists(p));
+  }
+
+  private loadSkins(): Map<string, Map<string, string>> {
+    if (!this.skins) {
+      const bytes = this.vfs.rawBytes(WAR3SKINS);
+      this.skins = bytes ? parseWar3Skins(new TextDecoder("latin1").decode(bytes)) : new Map();
+    }
+    return this.skins;
+  }
+
+  /** Cue the current playlist entry; when it ends, advance to the next (WC3's map music
+   *  plays the list through, looping — `random` reshuffles instead of stepping). */
+  private startMusicTrack(offsetSec = 0): void {
+    const path = this.musicList[this.musicIndex];
+    if (!path || this.thematic) return;
+    this.fadeOutTrack(this.music, false);
+    this.music = null;
+    this.musicCueing = true; // the track decodes async — don't let the gate retry double-start it
+    void this.startTrack(path, offsetSec).then((t) => {
+      this.musicCueing = false;
+      if (!t || this.musicPaused || this.thematic) {
+        if (t) try { t.src.stop(); } catch { /* not started */ }
+        return;
+      }
+      this.music = t;
+      t.src.onended = () => {
+        if (this.music !== t) return; // superseded — the new track owns the bus
+        this.music = null;
+        this.musicIndex = this.musicRandom
+          ? Math.floor(Math.random() * this.musicList.length)
+          : (this.musicIndex + 1) % Math.max(1, this.musicList.length);
+        if (!this.musicPaused) this.startMusicTrack();
+      };
+    });
+  }
+
+  /** Decode + start one music track on the music bus. Resolves to null if the context
+   *  isn't running yet (autoplay gate) or the file won't decode. */
+  private async startTrack(path: string, offsetSec: number): Promise<Track | null> {
+    this.unlock();
+    if (!this.ctx || !this.master || this.ctx.state !== "running") return null;
+    const buf = await this.buffer(path);
+    if (!buf || !this.ctx || !this.master) return null;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = this.ctx.createGain();
+    gain.gain.value = this.musicVolume * (this.groups[VG_MUSIC] ?? 1);
+    src.connect(gain).connect(this.master);
+    src.start(0, Math.max(0, offsetSec));
+    return { src, gain };
+  }
+
+  private fadeOutTrack(t: Track | null, fade: boolean): void {
+    if (!t) return;
+    t.src.onended = null; // the list must not advance off a track WE stopped
+    if (fade && this.ctx) {
+      const now = this.ctx.currentTime;
+      t.gain.gain.setValueAtTime(t.gain.gain.value, now);
+      t.gain.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_SECONDS);
+      try { t.src.stop(now + MUSIC_FADE_SECONDS); } catch { /* already stopped */ }
+    } else {
+      try { t.src.stop(); } catch { /* already stopped */ }
+    }
+  }
+
+  private applyMusicGain(): void {
+    const v = this.musicVolume * (this.groups[VG_MUSIC] ?? 1);
+    if (this.music) this.music.gain.gain.value = v;
+    if (this.thematic) this.thematic.gain.gain.value = v;
+  }
+
+  /** GetSoundFileDuration(file) in ms. Decoding is async and the native is not, so this
+   *  answers from the decoded-buffer cache and kicks off a decode when it misses (0 until
+   *  then). In practice maps don't need it: the World Editor bakes the real length into
+   *  the script as `SetSoundDuration(snd, 14158)`, which is what GetSoundDuration reads. */
+  fileDurationMs(path: string): number {
+    const cached = this.decoded.get(path);
+    if (cached !== undefined) return Math.round(cached * 1000);
+    if (this.vfs.exists(path)) void this.buffer(path);
+    return 0;
+  }
+
   /** @returns true once a new line is committed to `source` (loads/plays async); false
    *  if the request was dropped (source still talking, unready context, cap, no clip). */
   private playVoice(label: string, category: SoundCategory, source?: string | number): boolean {
@@ -514,7 +977,7 @@ export class SoundBoard {
         return;
       }
       const src = this.source(buf, clip);
-      src.connect(this.gain(clip.gain)).connect(this.master);
+      src.connect(this.gain(clip.gain, VG_UNITSOUNDS)).connect(this.master);
       this.voices.set(key, src);
       src.onended = () => {
         if (this.voices.get(key) === src) this.voices.delete(key);
@@ -530,7 +993,7 @@ export class SoundBoard {
    *  spell aren't — a player-initiated cast sound must never lose its slot to the
    *  weapon-clang cap mid-fight (issue #23). A WANT3D clip with a world position
    *  pans + attenuates around the listener regardless of kind. */
-  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui" | "spell", at?: SoundPos): void {
+  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui" | "spell", at?: SoundPos, group = POOL_GROUP[kind]): void {
     if (!clip || !clip.paths.length) return;
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return;
@@ -556,7 +1019,7 @@ export class SoundBoard {
         return;
       }
       const src = this.source(buf, clip);
-      const g = src.connect(this.gain(clip.gain));
+      const g = src.connect(this.gain(clip.gain, group));
       if (positional) g.connect(this.panner(clip, at!)).connect(this.master);
       else g.connect(this.master);
       src.onended = release;
@@ -599,10 +1062,26 @@ export class SoundBoard {
     return src;
   }
 
-  private gain(value: number): GainNode {
+  /** A gain node at `value`, scaled by its `volumegroup` (VolumeGroupSetVolume). The
+   *  scale is applied at START, so a group change affects sounds cued after it — fine
+   *  for the one-shot pools (they're a second long); the music bus holds a live gain. */
+  private gain(value: number, group?: number): GainNode {
     const g = this.ctx!.createGain();
-    g.gain.value = value;
+    g.gain.value = value * (group === undefined ? 1 : this.groups[group] ?? 1);
     return g;
+  }
+
+  /** VolumeGroupSetVolume(vgroup, scale) — 0–1, per SOUND_VOLUMEGROUP_* index. */
+  setVolumeGroup(group: number, scale: number): void {
+    if (group < 0 || group >= VOLUME_GROUPS) return;
+    this.groups[group] = Math.max(0, Math.min(1, scale));
+    if (group === VG_MUSIC) this.applyMusicGain();
+  }
+
+  /** VolumeGroupReset — back to full on every group. */
+  resetVolumeGroups(): void {
+    this.groups.fill(1);
+    this.applyMusicGain();
   }
 
   /** Resolve a table row → clip metadata, memoized. Row lookup is case-insensitive. */
@@ -634,8 +1113,10 @@ export class SoundBoard {
         clip = {
           paths: files.map((f) => (dir + f).replace(/\//g, "\\")),
           gain: Number.isFinite(vol) ? Math.max(0, Math.min(1, vol / 127)) : 1,
+          volume127: Number.isFinite(vol) ? vol : 127,
           pitch: Number.isFinite(pitch) && pitch > 0 ? pitch : 1,
           pitchVar: Number.isFinite(pv) ? pv : 0,
+          channel: num("channel"),
           threeD: /WANT3D/i.test(flags),
           refDist: num("mindistance"),
           maxDist: num("maxdistance"),
@@ -664,7 +1145,9 @@ export class SoundBoard {
       // Copy into a standalone ArrayBuffer — decodeAudioData detaches it, and the
       // Uint8Array may be a view onto a larger pooled buffer.
       const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-      return await this.ctx.decodeAudioData(ab);
+      const buf = await this.ctx.decodeAudioData(ab);
+      this.decoded.set(path, buf.duration); // so GetSoundFileDuration can answer synchronously
+      return buf;
     } catch {
       return null;
     }

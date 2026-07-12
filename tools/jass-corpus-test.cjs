@@ -1786,6 +1786,63 @@ const GLOBAL_STRINGS = (() => {
   return map;
 })();
 
+// --- the REAL UI\SoundInfo tables, for the sound-label hook (7.20) --------------------
+// A sound LABEL lives in ONE namespace spanning every SoundInfo table, with nothing at the
+// call site to say which one: "N03Tyrande01" is DialogSounds, "HeroDeathKnightPissed" is
+// UnitAckSounds, "QuestCompleted" is UISounds. This mirrors SoundBoard.labelParams — same
+// tables, same order — but reads the game's own extracted data, so the test asserts against
+// the real rows rather than a fixture.
+const SOUND_LABELS = (() => {
+  const splitCsv = (line) => {
+    const out = [];
+    let cur = '', quoted = false;
+    for (const ch of line) {
+      if (ch === '"') quoted = !quoted;
+      else if (ch === ',' && !quoted) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out;
+  };
+  const tables = [];
+  for (const name of ['UISounds', 'UnitAckSounds', 'AnimSounds', 'UnitCombatSounds', 'AbilitySounds', 'AmbienceSounds', 'DialogSounds']) {
+    const path = join(WC3, 'ExtractedData', 'merged', 'UI', 'SoundInfo', `${name}.csv`);
+    if (!existsSync(path)) continue;
+    const lines = readFileSync(path, 'latin1').split(/\r?\n/).filter(Boolean);
+    const head = splitCsv(lines[0]).map((h) => h.trim().toLowerCase());
+    const rows = new Map();
+    for (let i = 1; i < lines.length; i++) {
+      const cells = splitCsv(lines[i]);
+      const rec = {};
+      head.forEach((h, j) => { rec[h] = (cells[j] ?? '').trim(); });
+      if (cells[0]?.trim()) rows.set(cells[0].trim().toLowerCase(), rec);
+    }
+    tables.push(rows);
+  }
+  const num = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) ? n : d; };
+  return (label) => {
+    if (!label) return null;
+    for (const rows of tables) {
+      const r = rows.get(label.toLowerCase());
+      if (!r) continue;
+      const dir = r.directorybase ?? '';
+      const files = (r.filenames ?? '').split(',').map((s) => s.trim()).filter(Boolean).map((f) => (dir + f).replace(/\//g, '\\'));
+      if (!files.length) continue;
+      return {
+        files,
+        volume: num(r.volume, 127),
+        pitch: num(r.pitch, 1),
+        channel: num(r.channel, 0),
+        threeD: /WANT3D/i.test(r.flags ?? ''),
+        minDist: num(r.mindistance, 0),
+        maxDist: num(r.maxdistance, 0),
+        cutoff: num(r.distancecutoff, 0),
+      };
+    }
+    return null;
+  };
+})();
+
 console.log('\n[7.19] Floating text (CreateTextTag: size/velocity/lifespan/fadepoint, permanence, expiry)');
 {
   // The GUI's "Floating Text - Create floating text" + the setters every damage-number
@@ -1854,7 +1911,11 @@ console.log('\n[7.19] Victory / defeat dialogs (the REAL MeleeVictoryDialogBJ / 
     // The engine's string table. This is the whole reason the dialog reads "Victory!"
     // rather than "GAMEOVER_VICTORY_MSG".
     localizedString: (key) => GLOBAL_STRINGS.get(key),
-    playUiSound: (label) => sounds.push(label),
+    // The win/lose sting is a plain `sound` handle: bj_victoryDialogSound =
+    // CreateSoundFromLabel("QuestCompleted", …) → StartSound. 7.20 generalised it, so it
+    // now resolves its file out of the real UISounds.slk like any other labelled sound.
+    soundLabelInfo: (label) => SOUND_LABELS(label),
+    playSound: (s) => (sounds.push(s.label), true),
     displayText: (p, msg) => messages.push(msg),
     playerStructureCount: () => 1,
     playerTypedUnitCount: () => 1,
@@ -2026,6 +2087,220 @@ endfunction`;
   if (lb.items.length === 2 && !lb.items.some((it) => it.player === 2)) {
     ok(`LeaderboardRemovePlayerItemBJ drops that player's row and re-sizes the board`);
   } else fail(`after remove: ${lb.items.length} rows`);
+}
+
+console.log('\n[7.20] The trigger\'s AUDIO output — sounds + music (through the REAL blizzard.j sound BJs)');
+{
+  // The engine side, recorded. `played` is what actually reached the SoundBoard.
+  const played = [];
+  const stopped = [];
+  const music = [];
+  const groups = new Map();
+  const playing = new Set();
+  const hooks = {
+    soundLabelInfo: (label) => SOUND_LABELS(label),
+    playSound: (s) => {
+      played.push({ file: s.file, label: s.label, volume: s.volume, pitch: s.pitch, is3D: s.is3D,
+        x: s.x, y: s.y, z: s.z, positioned: s.positioned, attach: s.attachUnit, looping: s.looping,
+        cutoff: s.cutoff, minDist: s.minDist, maxDist: s.maxDist,
+        coneInside: s.coneInside, coneOutsideVolume: s.coneOutsideVolume });
+      playing.add(s.handleId);
+      return true;
+    },
+    stopSound: (id, fadeOut) => { stopped.push({ id, fadeOut }); playing.delete(id); },
+    soundIsPlaying: (id) => playing.has(id),
+    setMapMusic: (name, random, index) => music.push({ call: 'setMap', name, random, index }),
+    playMusic: (name, fromMs) => music.push({ call: 'play', name, fromMs }),
+    stopMusic: (fadeOut) => music.push({ call: 'stop', fadeOut }),
+    resumeMusic: () => music.push({ call: 'resume' }),
+    playThematicMusic: (name, fromMs) => music.push({ call: 'thematic', name, fromMs }),
+    endThematicMusic: () => music.push({ call: 'endThematic' }),
+    setMusicVolume: (v) => music.push({ call: 'volume', v }),
+    setVolumeGroup: (g, scale) => groups.set(g, scale),
+    // The hero the sound attaches to (PlaySoundOnUnitBJ) — a live sim unit at (900, 300).
+    createUnit: () => 77,
+    getUnitX: (id) => (id === 77 ? 900 : 0),
+    getUnitY: (id) => (id === 77 ? 300 : 0),
+  };
+
+  const SRC = `
+globals
+    sound   udg_pissed = null
+    sound   udg_line   = null
+    sound   udg_boom   = null
+    unit    udg_hero   = null
+    real    udg_dur    = 0.0
+    boolean udg_before  = false
+    boolean udg_after   = false
+endglobals
+
+// The InitSounds() every map with sounds emits — CreateSound with an EXACT file, then the
+// label for its params, then the baked duration. All 27 bundled maps that ship a
+// war3map.w3s emit exactly this, which is why we need no .w3s parser.
+function InitSounds takes nothing returns nothing
+    set udg_pissed = CreateSound( "Units\\\\Undead\\\\HeroDeathKnight\\\\DeathKnightPissed6.wav", false, true, true, 12700, 12700, "HeroAcksEAX" )
+    call SetSoundParamsFromLabel( udg_pissed, "HeroDeathKnightPissed" )
+    call SetSoundDuration( udg_pissed, 3385 )
+    set udg_dur = GetSoundDurationBJ( udg_pissed )
+    // CreateSoundFromLabel is handed NO file — the row supplies it (this is the victory
+    // sting's own constructor).
+    set udg_line = CreateSoundFromLabel( "N03Tyrande01", false, false, false, 10, 10 )
+endfunction
+
+// "Play <sound> at <point>" — the GUI action, i.e. the real blizzard.j BJ chain:
+//   SetSoundPositionLocBJ → SetSoundVolumeBJ(PercentToInt(pct,127)) → PlaySoundBJ → StartSound
+function AtPoint takes nothing returns nothing
+    call PlaySoundAtPointBJ( udg_pissed, 100.0, Location(512.0, 256.0), 0.0 )
+endfunction
+
+// "Play <sound> on <unit>" — attaches, so the engine must take the UNIT's live position.
+function OnUnit takes nothing returns nothing
+    set udg_hero = CreateUnit( Player(0), 'Hpal', 0.0, 0.0, 0.0 )
+    call PlaySoundOnUnitBJ( udg_line, 50.0, udg_hero )
+endfunction
+
+function StartStop takes nothing returns nothing
+    call PlaySoundBJ( udg_pissed )
+    set udg_before = GetSoundIsPlaying( udg_pissed )
+    call StopSoundBJ( udg_pissed, true )
+    set udg_after = GetSoundIsPlaying( udg_pissed )
+endfunction
+
+// The World Editor emits these sentinels for a sound left on its defaults — seen verbatim
+// in the shipped (10)DustwallowKeys war3map.j. They are not values.
+function Sentinels takes nothing returns nothing
+    call SetSoundVolume( udg_pissed, -1 )
+    call SetSoundPitch( udg_pissed, 4294967296.0 )
+endfunction
+
+// A 3D sound with a cone + distances, through the BJs (the outside volume is a PERCENT).
+function Cone takes nothing returns nothing
+    set udg_boom = CreateSound( "Abilities\\\\Spells\\\\Other\\\\Doom\\\\DoomTarget.wav", false, true, true, 10, 10, "" )
+    call SetSoundDistances( udg_boom, 600.0, 8000.0 )
+    call SetSoundConeAnglesBJ( udg_boom, 45.0, 180.0, 20.0 )
+    call SetSoundConeOrientation( udg_boom, 1.0, 0.0, 0.0 )
+    call SetSoundDistanceCutoffBJ( udg_boom, 3000.0 )
+    call PlaySoundAtPointBJ( udg_boom, 100.0, Location(128.0, 64.0), 50.0 )
+endfunction
+
+// blizzard.j's own fire-and-forget helper: create + start + kill-when-done.
+function FireAndForget takes nothing returns nothing
+    call PlaySound( "Sound\\\\Interface\\\\Hint.wav" )
+endfunction
+
+function Music takes nothing returns nothing
+    call SetMapMusic( "Music", true, 0 )
+    call PlayThematicMusicBJ( "Sound\\\\Music\\\\mp3Music\\\\Doom.mp3" )
+    call EndThematicMusicBJ(  )
+    call StopMusicBJ( true )
+    call ResumeMusicBJ(  )
+    call SetMusicVolumeBJ( 50.0 )
+endfunction
+
+// Cinematic mode ducks the volume groups — blizzard.j's own values. Then one explicit
+// override on top, so we see both the library's ducking and a script's own call.
+function Cine takes nothing returns nothing
+    call SetCineModeVolumeGroupsImmediateBJ(  )
+    call VolumeGroupSetVolumeBJ( SOUND_VOLUMEGROUP_COMBAT, 25.0 )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  const rt = interp.rt;
+  const g = (n) => rt.globals.get(n);
+  const sndOf = (n) => rt.handles.get(g(n).h);
+
+  interp.run('InitSounds', []);
+  const pissed = sndOf('udg_pissed');
+  // THE semantic of SetSoundParamsFromLabel: params, never the file. The label's row lists
+  // all six DeathKnightPissed WAVs; the map asked for #6 and must keep it.
+  if (pissed.file === 'Units\\Undead\\HeroDeathKnight\\DeathKnightPissed6.wav') {
+    ok(`SetSoundParamsFromLabel keeps the script's OWN file (not one of the label row's 6 variants)`);
+  } else fail(`file: ${pissed.file}`);
+  if (pissed.volume === 127 && pissed.is3D === true && pissed.minDist === 3000 && pissed.maxDist === 10000) {
+    ok(`...but takes volume 127 / WANT3D / MinDistance 3000 / MaxDistance 10000 from the real UnitAckSounds.slk row`);
+  } else fail(`params: vol ${pissed.volume}, 3D ${pissed.is3D}, min ${pissed.minDist}, max ${pissed.maxDist}`);
+  const line = sndOf('udg_line');
+  // ...whereas CreateSoundFromLabel has no file to keep, so it takes the row's — and the
+  // row is in a DIFFERENT table (DialogSounds), which is the "one label namespace" rule.
+  if (line.file === 'Sound\\Dialogue\\NightElfCampaign\\NightElf03\\N03Tyrande01.mp3' && line.volume === 120) {
+    ok(`CreateSoundFromLabel resolves its file + volume 120 out of DialogSounds.slk — one label namespace spans every SoundInfo table`);
+  } else fail(`from-label: file ${line.file}, vol ${line.volume}`);
+  if (Math.abs(g('udg_dur').n - 3.385) < 1e-6) {
+    ok(`GetSoundDurationBJ → 3.385 s (the real BJ: I2R(GetSoundDuration) * 0.001 over the editor's baked 3385 ms)`);
+  } else fail(`GetSoundDurationBJ: ${g('udg_dur').n}`);
+
+  interp.run('AtPoint', []);
+  const at = played[played.length - 1];
+  if (at && at.positioned && at.x === 512 && at.y === 256 && at.volume === 127) {
+    ok(`PlaySoundAtPointBJ(100%) → the engine plays it AT (512, 256) with volume 127 (PercentToInt(100, 127))`);
+  } else fail(`at-point: ${JSON.stringify(at)}`);
+  const last = rt.globals.get('bj_lastPlayedSound');
+  if (last && last.h === pissed.handleId) {
+    ok(`...and PlaySoundBJ recorded it in bj_lastPlayedSound (GetLastPlayedSound)`);
+  } else fail(`bj_lastPlayedSound: ${JSON.stringify(last)}`);
+
+  interp.run('OnUnit', []);
+  const on = played[played.length - 1];
+  // The volume is the real PercentToInt(50, 127) = R2I(50 * 127 / 100) = 63.
+  if (on && on.attach === 77 && on.x === 900 && on.y === 300 && on.volume === 63) {
+    ok(`PlaySoundOnUnitBJ(50%) → AttachSoundToUnit: the sound plays at the UNIT's live position (900, 300), volume 63`);
+  } else fail(`on-unit: ${JSON.stringify(on)}`);
+
+  interp.run('StartStop', []);
+  if (g('udg_before').b === true && g('udg_after').b === false) {
+    ok(`GetSoundIsPlaying is true after PlaySoundBJ and false after StopSoundBJ`);
+  } else fail(`playing: before ${g('udg_before').b}, after ${g('udg_after').b}`);
+  if (stopped[stopped.length - 1]?.fadeOut === true) {
+    ok(`StopSoundBJ(snd, true) passes the fade-out through to the engine`);
+  } else fail(`stop: ${JSON.stringify(stopped[stopped.length - 1])}`);
+
+  interp.run('Sentinels', []);
+  if (pissed.volume === 127 && pissed.pitch === 1) {
+    ok(`SetSoundVolume(-1) / SetSoundPitch(4294967296.0) — the World Editor's "left on defaults" sentinels — are rejected, not applied`);
+  } else fail(`after sentinels: vol ${pissed.volume}, pitch ${pissed.pitch}`);
+
+  interp.run('Cone', []);
+  const boom = played[played.length - 1];
+  // SetSoundConeAnglesBJ's outside volume is a PERCENT: PercentToInt(20, 127) = 25.
+  if (boom && boom.minDist === 600 && boom.maxDist === 8000 && boom.cutoff === 3000 && boom.coneInside === 45 && boom.coneOutsideVolume === 25) {
+    ok(`a 3D sound carries its distances (600/8000), cutoff (3000) and cone (45°, outside volume 20% → 25) to the engine`);
+  } else fail(`cone: ${JSON.stringify(boom)}`);
+
+  const soundsBefore = rt.sounds.length;
+  interp.run('FireAndForget', []);
+  const ff = rt.sounds[rt.sounds.length - 1];
+  if (rt.sounds.length === soundsBefore + 1 && ff.killWhenDone === true && ff.started === true) {
+    ok(`blizzard.j's PlaySound() → CreateSound + StartSound + KillSoundWhenDone (the engine reaps the handle when the clip ends)`);
+  } else fail(`fire-and-forget: killWhenDone ${ff?.killWhenDone}, started ${ff?.started}`);
+  rt.destroySound(ff); // what the engine's per-frame sweep does once playback ends
+  if (rt.sounds.length === soundsBefore && rt.handles.get(ff.handleId) === undefined) {
+    ok(`...and destroySound unlinks it and frees the handle`);
+  } else fail(`after reap: ${rt.sounds.length} sound(s), handle ${rt.handles.get(ff.handleId) !== undefined ? 'live' : 'freed'}`);
+
+  interp.run('Music', []);
+  const calls = music.map((m) => m.call).join(' ');
+  if (calls === 'setMap thematic endThematic stop resume volume') {
+    ok(`the music BJs reach the engine in order: SetMapMusic → PlayThematicMusicBJ → End → StopMusicBJ → ResumeMusicBJ → SetMusicVolumeBJ`);
+  } else fail(`music calls: ${calls}`);
+  const setMap = music[0];
+  if (setMap.name === 'Music' && setMap.random === true && setMap.index === 0) {
+    ok(`SetMapMusic("Music", true, 0) — a PLAYLIST KEY, not a file (war3skins.txt resolves it per the local player's race)`);
+  } else fail(`SetMapMusic: ${JSON.stringify(setMap)}`);
+  if (music[music.length - 1].v === 63) {
+    ok(`SetMusicVolumeBJ(50%) → 63 (PercentToInt(50, 127), as with sound volume)`);
+  } else fail(`music volume: ${music[music.length - 1].v}`);
+
+  interp.run('Cine', []);
+  // VolumeGroupSetVolumeBJ is `VolumeGroupSetVolume(vgroup, percent * 0.01)`.
+  if (Math.abs((groups.get(2) ?? -1) - 0.25) < 1e-6) {
+    ok(`VolumeGroupSetVolumeBJ(COMBAT, 25%) → group 2 at scale 0.25`);
+  } else fail(`combat group: ${groups.get(2)}`);
+  // blizzard.j's own cinematic values: UNITSOUNDS + UI muted to 0.00, MUSIC held at 0.55.
+  // That is what proves a script-created `sound` (a cinematic's dialogue) belongs to NO
+  // volume group — the ducking would silence it otherwise.
+  if (groups.get(1) === 0 && groups.get(4) === 0 && Math.abs(groups.get(5) - 0.55) < 1e-6 && groups.get(6) === 1) {
+    ok(`SetCineModeVolumeGroupsImmediateBJ ducks all 8 groups to blizzard.j's values (UNITSOUNDS/UI → 0.00, MUSIC → 0.55, AMBIENT → 1.00)`);
+  } else fail(`cine groups: ${JSON.stringify([...groups])}`);
 }
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);

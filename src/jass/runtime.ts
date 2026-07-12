@@ -121,6 +121,65 @@ export interface LeaderboardObj {
   revision: number; // bumped on every mutation, so the UI only rebuilds when it changed
 }
 
+/** A JASS `sound` (CreateSound / CreateSoundFromLabel) — 7.20.
+ *
+ *  Not a clip but a **configured playback object**: the map builds each one once, in
+ *  `InitSounds()`, and then Starts / Stops / repositions *that same handle* all game.
+ *  Every field here is one of the `SetSound*` natives, so the record is simply what the
+ *  script has said about the sound so far; the engine reads it whole on StartSound.
+ *
+ *      set gg_snd_Boom = CreateSound("Abilities\…\Bolt.wav", false, true, true, 10, 10, "")
+ *      call SetSoundParamsFromLabel(gg_snd_Boom, "LightningBolt")   // volume/pitch/3D/dists
+ *      call SetSoundDuration(gg_snd_Boom, 1740)
+ *      …later…  call PlaySoundAtPointBJ(gg_snd_Boom, 100, loc, 0)   // position + volume + Start
+ */
+export interface SoundObj {
+  handleId: number;
+  file: string; // MPQ path of the WAV/MP3 (CreateSound's fileName; a label's own file otherwise)
+  label: string; // the SoundInfo label it was built from / SetSoundParamsFromLabel'd
+  looping: boolean;
+  is3D: boolean;
+  stopWhenOutOfRange: boolean;
+  fadeInRate: number;
+  fadeOutRate: number;
+  /** SetSoundVolume — WC3's own 0–127 scale (`SetSoundVolumeBJ` = PercentToInt(pct, 127)). */
+  volume: number;
+  pitch: number;
+  channel: number;
+  minDist: number;
+  maxDist: number;
+  cutoff: number;
+  coneInside: number; // degrees
+  coneOutside: number;
+  coneOutsideVolume: number; // 0–127
+  coneOrient: { x: number; y: number; z: number } | null;
+  /** SetSoundDuration, in MILLISECONDS — the World Editor bakes the file's real length
+   *  into the script (`SetSoundDuration(snd, 14158)`), and GetSoundDuration reads it back.
+   *  It's metadata a script waits on ("play the line, wait its duration, play the next"),
+   *  not something that truncates playback. */
+  duration: number;
+  x: number;
+  y: number;
+  z: number;
+  positioned: boolean; // SetSoundPosition has been called (else the sound is 2D/centered)
+  attachUnit: number; // AttachSoundToUnit — sim id it follows, or -1
+  killWhenDone: boolean; // KillSoundWhenDone — destroy the handle once playback ends
+  started: boolean; // StartSound has been called at least once (for the kill-when-done sweep)
+}
+
+/** What a sound LABEL resolves to in the UI\SoundInfo tables — the row's playback
+ *  parameters. Structural, so the interpreter needn't import the audio layer. */
+export interface SoundLabelInfo {
+  files: string[];
+  volume: number; // 0–127
+  pitch: number;
+  channel: number;
+  threeD: boolean;
+  minDist: number;
+  maxDist: number;
+  cutoff: number;
+}
+
 /** A rectangular region (Rect / the World-Editor `gg_rct_*` globals). Its bounds
  *  drive enter/leave-region events: the live pump tests each unit's (x,y) against
  *  every registered rect and fires the trigger on a crossing. */
@@ -475,10 +534,41 @@ export interface EngineHooks {
   pauseGame?(flag: boolean): void;
   /** EnableUserUI(false) — hide the HUD (the victory dialog does this in campaigns). */
   enableUserUi?(flag: boolean): void;
-  /** StartSound on a sound built by CreateSoundFromLabel — a UISounds.slk label. The
-   *  victory/defeat dialogs ride on this ("QuestCompleted" / "QuestFailed"), which is
-   *  where the game's win/lose sting comes from. */
-  playUiSound?(label: string): void;
+  // --- the trigger's AUDIO output (7.20) ---
+  /** SetSoundParamsFromLabel / CreateSoundFromLabel — resolve a sound LABEL to its row in
+   *  the UI\SoundInfo tables. This is the data hook the whole sound family stands on: a
+   *  label is how a map names volume/pitch/3D/distances without re-typing them, and it's
+   *  also where the victory/defeat sting's file comes from (`CreateSoundFromLabel
+   *  ("QuestCompleted", …)` — blizzard.j InitBlizzardGlobals). */
+  soundLabelInfo?(label: string): SoundLabelInfo | null;
+  /** StartSound — play the handle with whatever the script has configured on it. Returns
+   *  whether playback was committed (so GetSoundIsPlaying can answer straight away). */
+  playSound?(snd: SoundObj): boolean;
+  /** StopSound(snd, killWhenDone, fadeOut). */
+  stopSound?(handleId: number, fadeOut: boolean): void;
+  /** GetSoundIsPlaying. */
+  soundIsPlaying?(handleId: number): boolean;
+  /** SetSoundPosition / AttachSoundToUnit on an ALREADY-PLAYING sound — move its panner. */
+  moveSound?(handleId: number, x: number, y: number, z: number): void;
+  /** GetSoundFileDuration(file) → milliseconds (0 if not yet decoded). */
+  soundFileDuration?(file: string): number;
+  /** SetMapMusic(name, random, index) — the map's playlist, which is also what starts it.
+   *  `name` is usually a war3skins.txt PLAYLIST KEY ("Music"), not a file. */
+  setMapMusic?(name: string, random: boolean, index: number): void;
+  clearMapMusic?(): void;
+  /** PlayMusic / PlayMusicEx. */
+  playMusic?(name: string, fromMs: number, fadeInMs: number): void;
+  stopMusic?(fadeOut: boolean): void;
+  resumeMusic?(): void;
+  /** PlayThematicMusic[Ex] — pre-empts the map music; EndThematicMusic brings it back. */
+  playThematicMusic?(name: string, fromMs: number): void;
+  endThematicMusic?(): void;
+  /** SetMusicVolume — 0–127. */
+  setMusicVolume?(volume: number): void;
+  /** VolumeGroupSetVolume(vgroup, scale) — `group` is the SOUND_VOLUMEGROUP_* index,
+   *  `scale` 0–1. VolumeGroupReset passes no group. */
+  setVolumeGroup?(group: number, scale: number): void;
+  resetVolumeGroups?(): void;
 }
 
 /** Opaque handle store: integer ids → backing JS objects, with interning so
@@ -582,6 +672,10 @@ export class Runtime {
    *  (message, then buttons, then DialogDisplay), so there is no single moment to push. */
   readonly dialogs: DialogObj[] = [];
   readonly leaderboards: LeaderboardObj[] = [];
+  /** Live `sound` handles (7.20). The engine walks these each frame for the two things it
+   *  can only do over time: keep an `AttachSoundToUnit`'d sound on its (moving) unit, and
+   *  reap a `KillSoundWhenDone` handle once its clip has finished. */
+  readonly sounds: SoundObj[] = [];
   /** PlayerSetLeaderboard — which board each player sees (player index → handle id).
    *  A leaderboard is only on screen for the players it was assigned to. */
   readonly playerBoards = new Map<number, number>();
@@ -771,6 +865,15 @@ export class Runtime {
     const i = this.textTags.indexOf(tt);
     if (i >= 0) this.textTags.splice(i, 1);
     this.handles.free(tt.handleId);
+  }
+
+  /** Retire a `sound` handle — DestroySound, or a KillSoundWhenDone sound whose clip has
+   *  finished (the engine sweeps for those; see EngineHooks.soundIsPlaying). */
+  destroySound(snd: SoundObj): void {
+    const i = this.sounds.indexOf(snd);
+    if (i >= 0) this.sounds.splice(i, 1);
+    this.hooks?.stopSound?.(snd.handleId, false);
+    this.handles.free(snd.handleId);
   }
 
   /** The leaderboard `player` currently sees — assigned (PlayerSetLeaderboard, which the
