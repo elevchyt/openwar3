@@ -27,8 +27,10 @@ export interface CameraState {
   /** CAMERA_FIELD_ANGLE_OF_ATTACK — the VIEW direction's tilt, negative because it looks
    *  down. WC3's default is 304 (i.e. -56°). */
   aoaDeg: number;
-  /** CAMERA_FIELD_FIELD_OF_VIEW — vertical FOV. WC3's default is 70; ours is 45, and the
-   *  game camera keeps ours until a script says otherwise. */
+  /** CAMERA_FIELD_FIELD_OF_VIEW — vertical FOV, in WC3's LENS UNITS (default 70), which is what
+   *  every script speaks. Our renderer's lens is 45°, and mapViewer converts at the edge
+   *  (fovFromWc3/fovToWc3) so a setup stating WC3's ordinary 70 frames an ordinary view here
+   *  instead of a 1.7×-wide one. Blend in these units; never in ours. */
   fovDeg: number;
   /** CAMERA_FIELD_ROLL — rotation about the view axis. Zero in every bundled map. */
   rollDeg: number;

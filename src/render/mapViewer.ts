@@ -319,12 +319,15 @@ const ViewerClass = War3MapViewer as unknown as {
 
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
-  // (7.24). WC3's own defaults are 70° / 1650 (bj_CAMERA_DEFAULT_FOV / _DISTANCE); ours are
-  // 45° / 2400, and everything else in the renderer is tuned around them, so "the game
-  // camera" means OURS. A camera setup that asks for 70° still gets 70° — it just isn't
-  // where we come home to.
+  // (7.24). Our LENS is narrower than WC3's: 45° against its 70° (Scripts\Blizzard.j
+  // bj_CAMERA_DEFAULT_FOV), and everything else in the renderer is tuned around ours, so "the
+  // game camera" means OURS. A script's FOV is therefore translated onto our lens rather than
+  // taken literally — see fovFromWc3.
   private static readonly GAME_FOV = Math.PI / 4;
   private static readonly GAME_PITCH = 0.95; // ≈ 54.4° above the focus; WC3's AOA 304 is -56°
+  /** WC3's own default lens, Scripts\Blizzard.j bj_CAMERA_DEFAULT_FOV = 70 (its sibling
+   *  defaults: distance 1650, AOA 304, FARZ 5000, rotation 90). */
+  private static readonly WC3_FOV_DEG = 70;
 
   // Orbit camera state.
   private target = new Float32Array([0, 0, 0]);
@@ -349,7 +352,9 @@ export class MapViewerScene {
     distance: MapViewerScene.MELEE_START,
     farZ: 0,
     aoaDeg: (-MapViewerScene.GAME_PITCH * 180) / Math.PI,
-    fovDeg: (MapViewerScene.GAME_FOV * 180) / Math.PI,
+    // In WC3's lens units (see fovToWc3) — our 45° normal IS its 70° normal, and every field
+    // here is blended by ScriptCamera in the units the script speaks.
+    fovDeg: MapViewerScene.WC3_FOV_DEG,
     rollDeg: 0,
     rotationDeg: 90,
     zOffset: 0,
@@ -5482,6 +5487,30 @@ export class MapViewerScene {
     return this.upTmp;
   }
 
+  /** A script's FOV is authored against WC3's 70° lens; ours is 45°. Every camera object the
+   *  World Editor writes carries the full set of fields, so a setup that means "an ordinary
+   *  view" still SAYS 70 — WarChasers' CamStart1 is exactly bj_CAMERA_DEFAULT (70° / AOA 304 /
+   *  FARZ 5000) with the distance nudged to 1790.9, and it re-applies every 2 seconds. Taken
+   *  literally on our lens that is tan(35°)/tan(22.5°) = 1.7× wider than gameplay — the map
+   *  looked permanently zoomed out, and no wheel could bring it back (the wheel moves the
+   *  distance, not the lens).
+   *
+   *  So map an FOV by the FRAMING it produces — the half-height it subtends at the focus,
+   *  relative to each engine's own default lens. WC3's 70° lands exactly on our 45° (an
+   *  ordinary view stays ordinary), and a shot that deliberately narrows to a telephoto keeps
+   *  the same zoom-in factor it would have had in WC3. */
+  private static fovFromWc3(deg: number): number {
+    const k = Math.tan(clamp(deg, 1, 170) * (Math.PI / 360)) / Math.tan(MapViewerScene.WC3_FOV_DEG * (Math.PI / 360));
+    return 2 * Math.atan(k * Math.tan(MapViewerScene.GAME_FOV / 2));
+  }
+
+  /** The inverse: our lens reported back in the units a script speaks, so GetCameraField reads
+   *  70 on the default camera exactly as WC3 does, and a tween starts from the right place. */
+  private static fovToWc3(rad: number): number {
+    const k = Math.tan(rad / 2) / Math.tan(MapViewerScene.GAME_FOV / 2);
+    return (2 * Math.atan(k * Math.tan(MapViewerScene.WC3_FOV_DEG * (Math.PI / 360))) * 180) / Math.PI;
+  }
+
   /** The live camera in the units the JASS setters speak (degrees for the angles). This and
    *  writeCamera are the whole adapter between our orbit camera and WC3's field model. */
   private readCamera(): CameraState {
@@ -5495,7 +5524,7 @@ export class MapViewerScene {
       // WC3's ANGLE_OF_ATTACK is the VIEW direction's tilt (negative = looking down); our
       // pitch is the eye's elevation above the focus. Same angle, opposite sign.
       aoaDeg: -this.pitch * DEG,
-      fovDeg: this.fov * DEG,
+      fovDeg: MapViewerScene.fovToWc3(this.fov),
       rollDeg: this.roll * DEG,
       farZ: this.farZ,
     };
@@ -5510,7 +5539,7 @@ export class MapViewerScene {
     this.yaw = c.rotationDeg * RAD;
     this.pitch = -c.aoaDeg * RAD;
     // A camera setup with a 0 or absurd FOV would render nothing at all; keep it sane.
-    this.fov = clamp(c.fovDeg * RAD, 0.1, Math.PI * 0.9);
+    this.fov = clamp(MapViewerScene.fovFromWc3(c.fovDeg), 0.1, Math.PI * 0.9);
     this.roll = c.rollDeg * RAD;
     this.farZ = c.farZ;
   }
