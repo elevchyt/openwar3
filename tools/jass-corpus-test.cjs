@@ -3112,6 +3112,382 @@ endfunction
   } else fail(`bogus handle: ${JSON.stringify(rt.globals.get('udg_bogus'))}`);
 }
 
+// ===========================================================================
+// 7.24 — Cameras + cinematics: the map's intro actually plays.
+//
+// Driven through the REAL blizzard.j BJs — CinematicModeBJ, CinematicFadeBJ,
+// CameraSetupApplyForPlayer, TransmissionFromUnitWithNameBJ — because that is the only
+// surface a map ever touches, and against the REAL camera engine (src/render/scriptCamera.ts's
+// ScriptCamera), not a mock that would just agree with itself.
+//
+// The camera setup below is (4)Monolith's own `gg_cam_Monolith_Intro_Shot`, copied verbatim
+// out of its war3map.j.
+// ===========================================================================
+const { ScriptCamera } = require(join(REPO, '.jass-build', 'src', 'render', 'scriptCamera.js'));
+
+console.log('\n[7.24] Cameras + cinematics — the intro shot, the letterbox, the fade, the transmission');
+{
+  // The game camera's shape, as src/render/mapViewer.ts defines it.
+  const GAME_CAM = { distance: 2400, farZ: 0, aoaDeg: -54.4267, fovDeg: 45, rollDeg: 0, rotationDeg: 90, zOffset: 0 };
+  const cam = { targetX: 0, targetY: 0, ...GAME_CAM };
+  const scriptCam = new ScriptCamera(() => ({ ...GAME_CAM }));
+  const FIELD_KEYS = ['distance', 'farZ', 'aoaDeg', 'fovDeg', 'rollDeg', 'rotationDeg', 'zOffset'];
+
+  // The engine bridge — the same shape mapViewer's textHooks() installs.
+  const engine = {
+    interfaceShown: true, userUi: true, userControl: true, gameSpeed: 2,
+    fog: true, mask: true, dawnDusk: true,
+    filter: null, scene: null, pings: [], letterbox: null,
+    volumeGroups: new Map(),
+  };
+  const hooks = {
+    applyCamera: (move) => scriptCam.apply(move, cam),
+    cameraField: (f) => cam[FIELD_KEYS[f]] ?? 0,
+    cameraTarget: () => ({ x: cam.targetX, y: cam.targetY, z: cam.zOffset }),
+    cameraEye: () => ({ x: cam.targetX, y: cam.targetY - 1000, z: 1000 }),
+    cameraBounds: () => ({ minX: -8000, minY: -8000, maxX: 8000, maxY: 8000 }),
+    setCameraTargetUnit: (id, ox, oy) => scriptCam.setTargetUnit(id, ox, oy),
+    resetToGameCamera: (d) => scriptCam.resetToGameCamera(d, cam),
+    stopCamera: () => scriptCam.stop(),
+    setCameraNoise: (src, mag, vel, vert) => scriptCam.setNoise(src, mag, vel, vert),
+    showInterface: (show, fade) => { engine.interfaceShown = show; engine.letterbox = { on: !show, fade }; },
+    enableUserControl: (on) => { engine.userControl = on; },
+    enableUserUi: (on) => { engine.userUi = on; },
+    setDawnDusk: (on) => { engine.dawnDusk = on; },
+    isDawnDuskEnabled: () => engine.dawnDusk,
+    setGameSpeed: (s) => { engine.gameSpeed = s; },
+    getGameSpeed: () => engine.gameSpeed,
+    fogEnable: (on) => { engine.fog = on; },
+    fogMaskEnable: (on) => { engine.mask = on; },
+    isFogEnabled: () => engine.fog,
+    isFogMaskEnabled: () => engine.mask,
+    displayCineFilter: (f) => { engine.filter = f; },
+    setCinematicScene: (s) => { engine.scene = s; },
+    pingMinimap: (p) => engine.pings.push(p),
+    setVolumeGroup: (g, v) => engine.volumeGroups.set(g, v),
+    resetVolumeGroups: () => engine.volumeGroups.clear(),
+    // The transmission speaks FROM a unit, so the bridge has to answer for one.
+    createUnit: () => 7, // the speaker's sim id
+    getUnitX: () => 1500, getUnitY: () => -2500,
+    unitName: () => 'Blood Mage',
+    displayText: () => {}, clearText: () => {},
+    soundLabelInfo: () => null, playSound: () => true,
+    endThematicMusic: () => {},
+  };
+
+  const SRC = `
+globals
+    camerasetup gg_cam_Monolith_Intro_Shot = null
+    unit        udg_speaker                = null
+    real        udg_aoaRadians             = 0.0
+    real        udg_aoaDegreesBack         = 0.0
+    real        udg_distBack               = 0.0
+    boolean     udg_fogBefore              = true
+endglobals
+// VERBATIM from (4)Monolith's own war3map.j — this is what the World Editor's camera tool
+// compiles a placed camera object into.
+function MakeIntroShot takes nothing returns nothing
+    set gg_cam_Monolith_Intro_Shot = CreateCameraSetup(  )
+    call CameraSetupSetField( gg_cam_Monolith_Intro_Shot, CAMERA_FIELD_ZOFFSET, 0.0, 0.0 )
+    call CameraSetupSetField( gg_cam_Monolith_Intro_Shot, CAMERA_FIELD_ROTATION, 77.7, 0.0 )
+    call CameraSetupSetField( gg_cam_Monolith_Intro_Shot, CAMERA_FIELD_ANGLE_OF_ATTACK, 320.8, 0.0 )
+    call CameraSetupSetField( gg_cam_Monolith_Intro_Shot, CAMERA_FIELD_TARGET_DISTANCE, 1363.6, 0.0 )
+    call CameraSetupSetField( gg_cam_Monolith_Intro_Shot, CAMERA_FIELD_ROLL, 0.0, 0.0 )
+    call CameraSetupSetField( gg_cam_Monolith_Intro_Shot, CAMERA_FIELD_FIELD_OF_VIEW, 70.0, 0.0 )
+    call CameraSetupSetField( gg_cam_Monolith_Intro_Shot, CAMERA_FIELD_FARZ, 9743.6, 0.0 )
+    call CameraSetupSetDestPosition( gg_cam_Monolith_Intro_Shot, 1002.0, 3640.6, 0.0 )
+endfunction
+// …and this is Monolith's Intro Cinematic Start trigger, near enough verbatim: the GUI's
+// "Camera - Apply gg_cam_… for Player 1 over 2.00 seconds".
+function ApplyOverTwoSeconds takes nothing returns nothing
+    call CameraSetupApplyForPlayer( true, gg_cam_Monolith_Intro_Shot, Player(0), 2.00 )
+endfunction
+function SnapToShot takes nothing returns nothing
+    call CameraSetupApplyForPlayer( true, gg_cam_Monolith_Intro_Shot, Player(0), 0 )
+endfunction
+function DriftHome takes nothing returns nothing
+    call ResetToGameCameraForPlayer( Player(0), 6.00 )
+endfunction
+// The radian asymmetry: the SETTERS take degrees, GetCameraField hands back radians — and
+// blizzard.j's own GetCurrentCameraSetup is what proves it, because it has to multiply by
+// bj_RADTODEG to put the live camera back into a setup.
+function ReadItBack takes nothing returns nothing
+    local camerasetup c = GetCurrentCameraSetup()
+    set udg_aoaRadians     = GetCameraField( CAMERA_FIELD_ANGLE_OF_ATTACK )
+    set udg_aoaDegreesBack = CameraSetupGetField( c, CAMERA_FIELD_ANGLE_OF_ATTACK )
+    set udg_distBack       = CameraSetupGetField( c, CAMERA_FIELD_TARGET_DISTANCE )
+endfunction
+// Cinematic mode, through blizzard.j. NOTE what is NOT here: no ShowInterface, no
+// EnableUserControl, no FogEnable — CinematicModeBJ does all of it, and every one of those
+// lines is a native we have to own.
+function CineOn takes nothing returns nothing
+    set udg_fogBefore = IsFogEnabled()
+    call CinematicModeBJ( true, GetPlayersAll() )
+endfunction
+function CineOff takes nothing returns nothing
+    call CinematicModeBJ( false, GetPlayersAll() )
+endfunction
+function FadeOut takes nothing returns nothing
+    call CinematicFadeBJ( bj_CINEFADETYPE_FADEOUT, 6.00, "ReplaceableTextures\\\\CameraMasks\\\\White_mask.tga", 0, 0, 0, 0 )
+endfunction
+function FadeIn takes nothing returns nothing
+    call CinematicFadeBJ( bj_CINEFADETYPE_FADEIN, 2.00, "ReplaceableTextures\\\\CameraMasks\\\\White_mask.blp", 0, 0, 0, 0 )
+endfunction
+// A transmission, WarChasers-style: a unit speaks, with no sound handle and TIMETYPE_ADD.
+function Speak takes nothing returns nothing
+    set udg_speaker = CreateUnit( Player(1), 'Hblm', 1500.0, -2500.0, 270.0 )
+    call TransmissionFromUnitWithNameBJ( GetPlayersAll(), udg_speaker, "Kael", null, "The Monolith stirs.", bj_TIMETYPE_ADD, 10.00, false )
+endfunction
+// The GUI's "Cinematic - Ping minimap for Player 1 ... colour" — 0-100 percentages, and
+// a pure-red FLASHY ping is forbidden (that colour is the "under attack" ping).
+function PingIt takes nothing returns nothing
+    call PingMinimapLocForForceEx( GetPlayersAll(), Location(512.0, -768.0), 3.00, bj_MINIMAPPINGSTYLE_FLASHY, 100, 0, 0 )
+endfunction
+function ShakeIt takes nothing returns nothing
+    call CameraSetTargetNoiseForPlayer( Player(0), 100.00, 800.00 )
+endfunction
+function RideUnit takes nothing returns nothing
+    call SetCameraTargetControllerNoZForPlayer( Player(0), udg_speaker, 0, 0, false )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  const rt = interp.rt;
+  interp.run('InitBlizzard', []);
+  rt.localPlayer = 0; // every camera BJ gates on GetLocalPlayer
+  // The lobby hand-off, exactly as mapViewer.runMapScript does it: player 0 is the human.
+  rt.applyLobby([{ index: 0, raceIndex: 1, controller: 0 /* MAP_CONTROL_USER */, team: 0, startLocation: 0 },
+    { index: 1, raceIndex: 2, controller: 1 /* MAP_CONTROL_COMPUTER */, team: 1, startLocation: 1 }], 0);
+
+  // --- MAP_CONTROL_USER is 0, not 1 ------------------------------------------------
+  // Monolith wraps its ENTIRE intro cinematic in `ForForce(GetPlayersByMapControl(
+  // MAP_CONTROL_USER), …)`. We had the mapcontrol indices hand-typed off by one (user 1,
+  // computer 2) in the lobby hand-off, which made that force EMPTY — so the cinematic
+  // ran its CinematicModeBJ and then quietly did nothing else. common.j is unambiguous:
+  // MAP_CONTROL_USER = ConvertMapControl(0). Every GUI "for each user player" loop in the
+  // corpus depends on this, and all of them were silently no-ops.
+  {
+    const seen = [];
+    interp.rt.natives.get('ForForce'); // (the real BJ path — CountPlayersInForceBJ below walks it)
+    const probe = buildInterpreter([COMMON_J, BLIZZARD_J, `
+globals
+    integer udg_users = 0
+endglobals
+function CountUsers takes nothing returns nothing
+    set udg_users = CountPlayersInForceBJ( GetPlayersByMapControl(MAP_CONTROL_USER) )
+endfunction
+`], { hooks: {} });
+    probe.run('InitBlizzard', []);
+    probe.rt.applyLobby([{ index: 0, raceIndex: 1, controller: 0, team: 0, startLocation: 0 },
+      { index: 1, raceIndex: 2, controller: 1, team: 1, startLocation: 1 }], 0);
+    probe.run('CountUsers', []);
+    seen.push(probe.rt.globals.get('udg_users').n);
+    if (seen[0] === 1) {
+      ok(`GetPlayersByMapControl(MAP_CONTROL_USER) finds the human — MAP_CONTROL_USER is 0, not 1 (we had every mapcontrol index off by one, so this force came back EMPTY and every GUI "for each user player" loop, Monolith's whole intro among them, silently did nothing)`);
+    } else fail(`user players found: ${seen[0]} (want 1)`);
+  }
+
+  // --- gotcha #1, as a permanent gate: a …BJ is never a native ---------------------
+  // Registering "CinematicModeBJ" as a native would SHADOW blizzard.j's own function (the
+  // interpreter resolves natives first) and swallow the entire cinematic family in silence.
+  // This is the bug that hid the whole GUI alliance surface until 7.22.
+  const shadowed = ['CinematicModeBJ', 'CinematicModeExBJ', 'CinematicFadeBJ', 'TransmissionFromUnitWithNameBJ',
+    'CameraSetupApplyForPlayer', 'DoTransmissionBasicsXYBJ', 'PingMinimapLocForForceEx'].filter((n) => rt.natives.has(n));
+  if (shadowed.length === 0) {
+    ok(`no …BJ is registered as a native — every one of them runs blizzard.j's OWN code (the shadowing bug that hid the alliance surface for 22 milestones)`);
+  } else fail(`these BJs are shadowed by a native: ${shadowed.join(', ')}`);
+
+  // --- the camera setup is a bag of FIELDS ------------------------------------------
+  interp.run('MakeIntroShot', []);
+  const setup = rt.data(rt.globals.get('gg_cam_Monolith_Intro_Shot'));
+  if (setup && setup.fields.size === 7 && setup.fields.get(5).value === 77.7 && setup.fields.get(2).value === 320.8
+      && setup.fields.get(0).value === 1363.6 && setup.dest.x === 1002 && setup.dest.y === 3640.6) {
+    ok(`Monolith's own CreateCameraSetup + 7×CameraSetupSetField + SetDestPosition → a saved SHOT: rot 77.7°, AoA 320.8°, dist 1363.6, FoV 70°, focus (1002, 3640.6)`);
+  } else fail(`setup: ${setup && JSON.stringify([...setup.fields], null, 0)} dest ${setup && JSON.stringify(setup.dest)}`);
+
+  // --- CameraSetupApplyForPlayer → the live camera ----------------------------------
+  interp.run('SnapToShot', []);
+  scriptCam.update(0, cam, () => null); // duration 0: lands on the first frame
+  const snapped = Math.abs(cam.rotationDeg - 77.7) < 1e-3 && Math.abs(cam.aoaDeg - 320.8) < 1e-3
+    && Math.abs(cam.distance - 1363.6) < 1e-3 && Math.abs(cam.fovDeg - 70) < 1e-3
+    && Math.abs(cam.targetX - 1002) < 1e-3 && Math.abs(cam.targetY - 3640.6) < 1e-3;
+  if (snapped) {
+    ok(`...CameraSetupApplyForPlayer(doPan, setup, p, 0) SNAPS the live camera onto every one of those fields, focus included`);
+  } else fail(`camera: ${JSON.stringify(cam)}`);
+  // AoA 320.8 is -39.2°, i.e. the camera looks DOWN — WC3 stores the view direction's tilt,
+  // and 320.8 and -39.2 are the same angle. Our pitch (the eye's elevation) is its mirror.
+  if (Math.abs(Math.sin((-cam.aoaDeg * Math.PI) / 180) - Math.sin((39.2 * Math.PI) / 180)) < 1e-6) {
+    ok(`...and AoA 320.8 IS -39.2°: the field is the VIEW's tilt (negative = looking down), so pitch = -AoA with no normalisation — trig is periodic`);
+  } else fail(`aoa: ${cam.aoaDeg}`);
+
+  // A TIMED apply blends. Half-way through a 2 s pan the camera is exactly half-way — with
+  // an ease (smoothstep) rather than a straight lerp, so mid-blend is the midpoint either way.
+  cam.targetX = 0; cam.targetY = 0; cam.distance = 2400;
+  interp.run('ApplyOverTwoSeconds', []);
+  scriptCam.update(1.0, cam, () => null);
+  const half = Math.abs(cam.targetX - 501) < 1 && Math.abs(cam.distance - (2400 + (1363.6 - 2400) * 0.5)) < 1;
+  if (half) {
+    ok(`...while a 2 s apply BLENDS: one second in, the focus has travelled exactly half-way (x = 501 of 1002) and the zoom is half-way too`);
+  } else fail(`mid-blend: x=${cam.targetX} dist=${cam.distance}`);
+  scriptCam.update(1.0, cam, () => null); // land it
+  if (Math.abs(cam.targetX - 1002) < 1e-3 && !scriptCam.active) {
+    ok(`...and when the blend LANDS the camera lets go (active = false) — which is how the player gets their camera back, exactly where the shot left it`);
+  } else fail(`landed: x=${cam.targetX} active=${scriptCam.active}`);
+
+  // --- the radian asymmetry ----------------------------------------------------------
+  interp.run('ReadItBack', []);
+  const rad = rt.globals.get('udg_aoaRadians').n;
+  const deg = rt.globals.get('udg_aoaDegreesBack').n;
+  if (Math.abs(rad - (320.8 * Math.PI) / 180) < 1e-4 && Math.abs(deg - 320.8) < 1e-3
+      && Math.abs(rt.globals.get('udg_distBack').n - 1363.6) < 1e-3) {
+    ok(`GetCameraField(ANGLE_OF_ATTACK) returns RADIANS (5.599) though the setter took DEGREES (320.8) — and blizzard.j's GetCurrentCameraSetup round-trips it back with bj_RADTODEG`);
+  } else fail(`radians ${rad} / degrees back ${deg}`);
+
+  // --- ResetToGameCamera --------------------------------------------------------------
+  // Monolith's intro leans on this exactly: snap to the shot, then drift back to a normal
+  // camera OVER SIX SECONDS while the screen fades out. The focus must stay put.
+  interp.run('SnapToShot', []);
+  interp.run('DriftHome', []);
+  // An ANGLE must take the SHORTEST ARC. Monolith's shot stores AoA 320.8 and the game
+  // camera's is -54.4 — the same tilt written 375° apart. Blend the raw numbers and the
+  // camera sweeps through the horizon and goes fully UPSIDE-DOWN on its way "home"; the map
+  // asked for a 15° nudge. Only the live run caught this, because both endpoints were right.
+  // So: sample the whole drift and assert the camera never leaves the neighbourhood of the
+  // two angles it is travelling between.
+  let worstElevation = 90; // elevation above the focus = -AoA, normalised to (-180, 180]
+  for (let k = 0; k < 60; k++) {
+    scriptCam.update(0.1, cam, () => null);
+    const elev = -(((cam.aoaDeg % 360) + 540) % 360 - 180); // 320.8 → 39.2, -54.4 → 54.4
+    worstElevation = Math.min(worstElevation, Math.abs(elev - 46.8)); // 46.8 = midway between 39.2 and 54.4
+    if (elev < 35 || elev > 60) { worstElevation = -1; break; } // left the corridor → it tumbled
+  }
+  if (worstElevation >= 0) {
+    ok(`...and every step of that drift keeps the camera between the two tilts (39.2° → 54.4° above the focus): an ANGLE blends along the SHORTEST ARC. Blending the raw numbers instead sweeps AoA 320.8 → 238 → 159 → 75 → -44.9 — the camera pitches through the horizon and rolls fully upside-down, and every headless check still passes because both ENDPOINTS are right`);
+  } else fail(`the camera tumbled: it left the 35°–60° corridor mid-blend`);
+  if (Math.abs(cam.distance - 2400) < 1e-3 && Math.abs(cam.fovDeg - 45) < 1e-3 && Math.abs(cam.rotationDeg - 90) < 1e-3
+      && Math.abs(cam.targetX - 1002) < 1e-3) {
+    ok(`ResetToGameCamera(6.0) drifts every FIELD home to the game camera (dist 2400, FoV 45°, rot 90°) and leaves the FOCUS where the cinematic parked it`);
+  } else fail(`reset: ${JSON.stringify(cam)}`);
+
+  // --- cinematic mode: the checklist ---------------------------------------------------
+  // FIRST, at MAP INIT — which is when Monolith runs its intro, straight out of Map Init.
+  // CinematicModeExBJ opens with `if (not bj_gameStarted) then set interfaceFadeTime = 0`,
+  // so a cinematic that starts before the game does gets NO interface fade: the letterbox is
+  // simply THERE on the first frame, rather than sliding in over an empty screen.
+  engine.fog = false; // a map that had already turned its fog off…
+  engine.mask = false;
+  interp.run('CineOn', []);
+  if (engine.letterbox && engine.letterbox.on && engine.letterbox.fade === 0) {
+    ok(`CinematicModeBJ at MAP INIT: the letterbox does NOT fade in (bj_gameStarted is still false, so CinematicModeExBJ zeroes interfaceFadeTime) — the bars are simply there on the first frame`);
+  } else fail(`init letterbox: ${JSON.stringify(engine.letterbox)}`);
+  const on = engine.userControl === false && engine.fog === false && engine.mask === false
+    && engine.dawnDusk === false && engine.gameSpeed === 2;
+  if (on) {
+    ok(`...and it runs its whole checklist through the natives: EnableUserControl(false), FogEnable(false), FogMaskEnable(false), EnableDawnDusk(false), SetGameSpeed(MAP_SPEED_NORMAL)`);
+  } else fail(`cine-on: ${JSON.stringify({ ctl: engine.userControl, fog: engine.fog, dnd: engine.dawnDusk, spd: engine.gameSpeed })}`);
+  // The seed is FIXED for the duration — Monolith's own comment says so in as many words
+  // ("the random seed is fixed while cinematic mode is on, so it's important to [place the
+  // random shards] after we turn it off"). A no-op SetRandomSeed silently breaks that: the
+  // proof is that re-entering cinematic mode makes the stream REPEAT itself exactly.
+  const r1 = rt.random();
+  const r2 = rt.random();
+  interp.run('CineOn', []); // re-enter → SetRandomSeed(0) again
+  const r3 = rt.random();
+  if (r1 === r3 && r1 !== r2 && rt.globals.get('udg_fogBefore').b === false) {
+    ok(`...and SetRandomSeed(0) really RE-SEEDS the stream — re-entering cinematic mode replays it exactly (${r1.toFixed(6)} again) — while IsFogEnabled reported the map's LIVE fog, not a stub`);
+  } else fail(`seed: r1=${r1} r2=${r2} r3=${r3}; fogBefore=${JSON.stringify(rt.globals.get('udg_fogBefore'))}`);
+
+  // NOW past game start (blizzard.j's MarkGameStarted fires 0.01 s into every map — the very
+  // timer whose destruction uncovered the 7.21 pump bug). The fade is real from here on, and
+  // the deferred volume-group duck lands.
+  interp.advanceTime(0.02);
+  interp.run('CineOff', []);
+  interp.run('CineOn', []);
+  if (engine.letterbox && Math.abs(engine.letterbox.fade - 0.5) < 1e-6) {
+    ok(`...once the game HAS started (MarkGameStarted, 0.01 s in), the same call fades the interface out over 0.5 s — bj_CINEMODE_INTERFACEFADE`);
+  } else fail(`letterbox fade: ${JSON.stringify(engine.letterbox)}`);
+  // 7.20's volume groups duck under a cinematic — the same call, still working.
+  if (engine.volumeGroups.size >= 6 && engine.volumeGroups.get(1) === 0) {
+    ok(`...and SetCineModeVolumeGroupsBJ ducks the 8 volume groups (unit sounds to 0.00 — bj_CINEMODE_VOLUME_UNITSOUNDS), which is 7.20's wiring still holding`);
+  } else fail(`volume groups: ${JSON.stringify([...engine.volumeGroups])}`);
+
+  // …and leaving cinematic mode restores what it SAVED — not what it wishes were true.
+  interp.run('CineOff', []);
+  const off = engine.interfaceShown === true && engine.userControl === true && engine.dawnDusk === true
+    && engine.fog === false && engine.mask === false;
+  if (off) {
+    ok(`CinematicModeBJ(false) hands the game back: interface + user control + dawn/dusk ON — and the fog stays OFF, because it RESTORES the value it saved. A lying IsFogEnabled would have switched this map's fog back on`);
+  } else fail(`cine-off: ${JSON.stringify({ ui: engine.interfaceShown, ctl: engine.userControl, dnd: engine.dawnDusk, fog: engine.fog, mask: engine.mask })}`);
+
+  // --- the fade ------------------------------------------------------------------------
+  interp.run('FadeOut', []);
+  const fo = engine.filter;
+  if (fo && fo.start.a === 0 && fo.end.a === 255 && fo.duration === 6 && fo.blendMode === 2
+      && fo.start.r === 0 && fo.end.r === 0) {
+    ok(`CinematicFadeBJ(FADEOUT, 6 s, black) → a cine filter whose ALPHA runs 0 → 255 over 6 s: the GUI's "transparency" (100 → 0) is the INVERSE of the alpha we draw (PercentTo255(100 - trans))`);
+  } else fail(`fade-out: ${JSON.stringify(fo)}`);
+  interp.run('FadeIn', []);
+  const fi = engine.filter;
+  if (fi && fi.start.a === 255 && fi.end.a === 0 && fi.duration === 2) {
+    ok(`...and FADEIN is its mirror, 255 → 0`);
+  } else fail(`fade-in: ${JSON.stringify(fi)}`);
+  // A fade-IN also arms a timer to TAKE THE FILTER DOWN when it lands (FinishCinematicFadeBJ
+  // → DisplayCineFilter(false) + EnableUserUI(true)). Without it the map would play on under
+  // a fully-transparent-but-present filter, and with the UI still hidden.
+  engine.userUi = false;
+  interp.advanceTime(2.01);
+  if (engine.filter === null && engine.userUi === true) {
+    ok(`...and blizzard.j arms a timer for the end of the fade-in: 2 s later FinishCinematicFadeBJ pulls the filter down (DisplayCineFilter(false)) and gives the UI back (EnableUserUI(true))`);
+  } else fail(`after fade-in: filter=${JSON.stringify(engine.filter)} ui=${engine.userUi}`);
+
+  // --- the transmission ----------------------------------------------------------------
+  interp.run('Speak', []);
+  const scene = engine.scene;
+  // GetTransmissionDuration: TIMETYPE_ADD with a NULL sound → GetSoundDurationBJ(null) is
+  // bj_NOTHING_SOUND_DURATION (5.0), + the 10 s the map asked for = 15 s. The PORTRAIT then
+  // hangs on for bj_TRANSMISSION_PORT_HANGTIME (1.5) longer than the voice line.
+  if (scene && scene.portraitUnitId === 'Hblm' && scene.speaker === 'Kael' && scene.text === 'The Monolith stirs.'
+      && Math.abs(scene.voiceoverDuration - 15) < 1e-6 && Math.abs(scene.sceneDuration - 16.5) < 1e-6) {
+    ok(`TransmissionFromUnitWithNameBJ → SetCinematicScene(portrait 'Hblm', "Kael", "The Monolith stirs.") for 15 s — GetSoundDurationBJ(null) = bj_NOTHING_SOUND_DURATION 5 s, + the map's 10 s (TIMETYPE_ADD) — and the PORTRAIT hangs on 1.5 s longer (bj_TRANSMISSION_PORT_HANGTIME)`);
+  } else fail(`scene: ${JSON.stringify(scene)}`);
+  if (scene && scene.playerColor === 1) {
+    ok(`...and the speaker's name takes the colour of the player who OWNS the unit (Player(1) → playercolor 1, blue)`);
+  } else fail(`colour: ${scene && scene.playerColor}`);
+  // DoTransmissionBasicsXYBJ pings the minimap at the speaker, for exactly 1 second.
+  const tping = engine.pings[engine.pings.length - 1];
+  if (tping && tping.x === 1500 && tping.y === -2500 && Math.abs(tping.duration - 1) < 1e-6) {
+    ok(`...and it PINGS the minimap where the speaker stands, for bj_TRANSMISSION_PING_TIME = 1.0 s — which is why a transmission draws your eye to the map`);
+  } else fail(`transmission ping: ${JSON.stringify(tping)}`);
+
+  // --- minimap pings --------------------------------------------------------------------
+  engine.pings.length = 0;
+  interp.run('PingIt', []);
+  const ping = engine.pings[0];
+  if (ping && ping.x === 512 && ping.y === -768 && ping.duration === 3 && ping.extraEffects === true
+      && ping.r === 254 && ping.g === 0 && ping.b === 0) {
+    ok(`PingMinimapLocForForceEx(100%, 0, 0, FLASHY) → PercentTo255 gives 255 — but blizzard.j knocks a pure-red FLASHY ping down to 254, because 255/0/0 is reserved for the "under attack" ping`);
+  } else fail(`ping: ${JSON.stringify(ping)}`);
+
+  // --- the shake, and riding a unit -----------------------------------------------------
+  interp.run('ShakeIt', []);
+  cam.targetX = 0; cam.targetY = 0;
+  let maxOff = 0;
+  for (let i = 0; i < 200; i++) {
+    cam.targetX = 0; cam.targetY = 0;
+    scriptCam.update(1 / 60, cam, () => null);
+    maxOff = Math.max(maxOff, Math.abs(cam.targetX), Math.abs(cam.targetY));
+  }
+  if (maxOff > 20 && maxOff <= 100) {
+    ok(`CameraSetTargetNoise(100, 800) — WarChasers' boss rumble — shakes the focus, bounded by its MAGNITUDE (peak ${maxOff.toFixed(0)} ≤ 100 world units)`);
+  } else fail(`noise peak: ${maxOff}`);
+  scriptCam.setNoise(false, 0, 0, false); // CameraClearNoiseForPlayer
+  interp.run('RideUnit', []);
+  cam.targetX = 0; cam.targetY = 0;
+  scriptCam.update(1 / 60, cam, (id) => (id === 7 ? { x: 777, y: -333 } : null)); // 7 = the speaker's sim id
+  if (cam.targetX === 777 && cam.targetY === -333) {
+    ok(`SetCameraTargetController → the camera RIDES the unit: the focus is wherever the unit is, every frame`);
+  } else fail(`follow: ${cam.targetX}, ${cam.targetY}`);
+}
+
 // Mirrors src/ui/timerDialog.ts formatTimerValue — Game.dll carries exactly two countdown
 // formats (`%d:%02d` and `%02d:%02d:%02d`), so under an hour is M:SS and over is HH:MM:SS.
 function formatTimerValueCheck(seconds) {

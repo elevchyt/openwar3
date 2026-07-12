@@ -601,12 +601,19 @@ export class RtsController {
     this.stampFogArea(area, fogStateOf(state));
   }
 
-  /** FogEnable / FogMaskEnable — the grey veil and the black mask, switched globally. */
+  /** FogEnable / FogMaskEnable — the grey veil and the black mask, switched globally,
+   *  and the IsFog*Enabled getters a cinematic saves and restores them through (7.24). */
   setFogEnabled(on: boolean): void {
     this.vision.setFogEnabled(on);
   }
   setFogMaskEnabled(on: boolean): void {
     this.vision.setMaskEnabled(on);
+  }
+  isFogEnabled(): boolean {
+    return this.vision.isFogEnabled();
+  }
+  isFogMaskEnabled(): boolean {
+    return this.vision.isMaskEnabled();
   }
 
   /** Does the local viewpoint render `player`'s fog? True for the local player and any
@@ -939,6 +946,33 @@ export class RtsController {
   /** The local player's current selection, as sim ids (JASS GroupEnumUnitsSelected). */
   selectedUnitIds(): number[] {
     return [...this.selected];
+  }
+
+  /** Drop the whole selection. JASS `ClearSelection`, and what cinematic mode does on the
+   *  way in — a cinematic plays with nothing selected, so no selection ring or command card
+   *  survives into the shot (7.24). */
+  clearSelection(): void {
+    this.selected.clear();
+    this.selectedMine = null;
+    this.selectedItem = null;
+    this.primary = null;
+    this.focusedKey = "";
+  }
+
+  /** JASS `SelectUnit(u, flag)` — add the unit to (or drop it from) the selection. WC3 ADDS,
+   *  it does not replace: a script that wants a fresh selection calls ClearSelection first. */
+  scriptSelect(simId: number, select: boolean): void {
+    if (!select) {
+      this.deselect(simId);
+      return;
+    }
+    if (!this.sim.units.has(simId) || this.selected.has(simId)) return;
+    this.selected.add(simId);
+    if (this.primary === null) {
+      this.primary = simId;
+      this.focusedKey = this.groupKeyOf(simId);
+    }
+    this.announceSelection();
   }
 
   /** Remove a unit from the selection (keeping the primary consistent). */

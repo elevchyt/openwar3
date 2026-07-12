@@ -1453,6 +1453,54 @@ body.in-game .load-gate { display: none; }
 }
 .fdf-screen.fdf-dialog { z-index: 7; }
 
+/* --- cinematics (Phase 7.24 — issue #33) ----------------------------------------- */
+
+/* The cine filter (the fade to black) covers the WORLD and everything drawn over it —
+   unit bars, floating text — but NOT the interface. That is not a shortcut: it is why
+   blizzard.j calls EnableUserUI(false) before every fade. If the filter covered the UI
+   it would not have to. So: over the canvas (#ui as a whole sits above it), under the
+   HUD console (z-index 3 here) and under the cinematic panel. */
+.cine-filter {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* The letterbox + subtitle panel draws OVER the console: a transmission during ordinary
+   play (an ally warning you mid-melee) puts its portrait in the bottom-left corner, where
+   the minimap is, and it is not hidden behind it. */
+.fdf-screen.fdf-cinematic { z-index: 4; }
+
+/* The letterbox is OPAQUE — WC3's cinematic bars are the EscMenu stone over black, and the
+   map must not show through them. The FDF's own textures are composited on top of this. */
+.fdf-cinematic [data-frame="CinematicTopBorder"],
+.fdf-cinematic [data-frame="CinematicBottomBorder"] {
+  background: #000;
+}
+
+/* ShowInterface's fadeDuration (bj_CINEMODE_INTERFACEFADE = 0.5 s) — the bars SLIDE in
+   from off-screen; the duration is stamped on from the native's argument. Only applied on
+   the transition into cinematic mode: the panel is rebuilt on every new line of subtitle,
+   and the bars must not re-slide each time somebody speaks. */
+.fdf-cinematic .cine-bar-in[data-frame="CinematicTopBorder"] { animation: cine-bar-down 0.5s ease-out both; }
+.fdf-cinematic .cine-bar-in[data-frame="CinematicBottomBorder"] { animation: cine-bar-up 0.5s ease-out both; }
+@keyframes cine-bar-down {
+  from { transform: translateY(-100%); }
+  to { transform: none; }
+}
+@keyframes cine-bar-up {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+
+/* The speaker's animated bust, inside the FDF's "CinematicPortrait" SPRITE frame. */
+.cine-portrait-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 /* Opt-in menu tuning controls (?menudebug) — sliders for the 3D camera + sprite panel. */
 .menu-debug {
   position: fixed;

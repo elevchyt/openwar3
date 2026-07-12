@@ -6,6 +6,7 @@
 
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
 import { campMarker, NEUTRAL_DOT_COLOR } from "../data/gameplayConstants";
+import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3ToHtml } from "./wc3Text";
 
 export type OrderMode = "move" | "attack" | null;
@@ -211,8 +212,10 @@ function place(el: HTMLElement, zone: readonly [number, number, number, number])
   el.style.height = `${zone[3]}%`;
 }
 
-// WC3 player colors by slot.
-const PLAYER_COLORS = [
+// WC3 player colors by slot. Exported: a cinematic's speaker name is drawn in the colour of
+// the player who owns the speaking unit (SetCinematicScene takes a playercolor), and that has
+// to be the same palette the minimap dots use.
+export const PLAYER_COLORS = [
   "#ff0303", "#0042ff", "#1ce6b9", "#540081", "#fffc01", "#fe8a0e",
   "#20c000", "#e55bb0", "#959697", "#7ebff1", "#106246", "#4e2a04",
 ];
@@ -500,6 +503,9 @@ export class GameHud {
       this.textT = 0;
       this.updateTexts();
     }
+    // A live ping PULSES, so while one is up the minimap redraws every frame instead of at
+    // the 10 Hz the static dots are content with.
+    if (this.agePings(dtMs / 1000)) this.dotsT = DOTS_PERIOD;
     if (this.dotsT >= DOTS_PERIOD) {
       this.dotsT = 0;
       this.drawDots();
@@ -1565,6 +1571,25 @@ export class GameHud {
   private fogImage: ImageData | null = null; // reused fog-of-war mask (mmW × mmH)
   private mapGlyphs = new Map<string, HTMLImageElement>(); // BLP path → lazy-loaded glyph
 
+  // --- minimap pings (7.24) --------------------------------------------------------
+  // PingMinimap / PingMinimapEx: a marker that flashes at a world point for `duration`
+  // seconds. WC3 uses one to point at a transmission's speaker (DoTransmissionBasicsXYBJ
+  // pings for bj_TRANSMISSION_PING_TIME = 1 s) and every "look here!" a map wants.
+  private pings: Array<MinimapPing & { age: number }> = [];
+
+  /** Start a ping. `duration` ≤ 0 is WC3's "use the default", which is 5 seconds. */
+  ping(p: MinimapPing): void {
+    this.pings.push({ ...p, duration: p.duration > 0 ? p.duration : 5, age: 0 });
+  }
+
+  /** Age the live pings; true if any is still up (which forces a minimap redraw). */
+  private agePings(dt: number): boolean {
+    if (!this.pings.length) return false;
+    for (const p of this.pings) p.age += dt;
+    this.pings = this.pings.filter((p) => p.age < p.duration);
+    return true;
+  }
+
   private drawDots(): void {
     const ctx = this.dotsCanvas.getContext("2d")!;
     ctx.clearRect(0, 0, this.mmW, this.mmH);
@@ -1582,6 +1607,33 @@ export class GameHud {
       if (!p) continue;
       ctx.fillStyle = dot.owner >= 0 ? PLAYER_COLORS[dot.owner % PLAYER_COLORS.length] : NEUTRAL_DOT_COLOR;
       ctx.fillRect(p[0] - d, p[1] - d, UNIT_DOT, UNIT_DOT);
+    }
+    this.drawPings(ctx, ox, oy, w, h); // over everything: a ping is meant to be seen
+  }
+
+  /** A ping is a ring that expands and fades, once per PING_PULSE, for its duration. The
+   *  "flashy" flag (PingMinimapEx's extraEffects) is WC3's louder ping — here, a second ring
+   *  half a pulse out of phase, so it reads as a double blip against a busy minimap. */
+  private drawPings(ctx: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number): void {
+    const PING_PULSE = 0.5; // seconds per expand-and-fade cycle
+    const PING_R = 0.06 * MINIMAP_SIZE; // the ring's full radius, in dots-canvas pixels
+    for (const p of this.pings) {
+      const c = this.toMini(p.x, p.y, ox, oy, w, h);
+      if (!c) continue;
+      const ring = (phase: number): void => {
+        const t = ((p.age / PING_PULSE + phase) % 1 + 1) % 1;
+        ctx.beginPath();
+        ctx.arc(c[0], c[1], PING_R * t, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${p.r}, ${p.g}, ${p.b}, ${1 - t})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      };
+      ring(0);
+      if (p.extraEffects) ring(0.5);
+      ctx.beginPath();
+      ctx.arc(c[0], c[1], 2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
+      ctx.fill();
     }
   }
 

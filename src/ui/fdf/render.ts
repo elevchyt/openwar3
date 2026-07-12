@@ -326,6 +326,14 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   }
 
   if (edge) {
+    // BackdropCornerFlags names WHICH edges and corners of the border actually draw. Every
+    // panel we mounted before this declared all eight ("UL|UR|BL|BR|T|L|B|R"), so ignoring the
+    // property cost nothing — but the cinematic letterbox declares only its INNER edge
+    // ("UL|UR|T" on the bottom bar, "BL|BR|B" on the top one), because the other three sides
+    // run off the screen. Draw all eight there and the bars get a decorative frame around a
+    // void.
+    const flags = strProp(f, "BackdropCornerFlags");
+    const on = (name: string): boolean => !flags || flags.split("|").includes(name);
     const ts = edge.height; // tile size in source px (square tiles)
     const tile = (idx: number, dx: number, dy: number, dw: number, dh: number, rot = 0): void => {
       g.save();
@@ -337,15 +345,15 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
     };
     const c = cornerPx;
     // Edges (tiles 2/3 are vertical strips in the source → rotate for top/bottom).
-    tile(EDGE_TILE.L, 0, c, c, h - 2 * c);
-    tile(EDGE_TILE.R, w - c, c, c, h - 2 * c);
-    tile(EDGE_TILE.T, c, 0, w - 2 * c, c, 90);
-    tile(EDGE_TILE.B, c, h - c, w - 2 * c, c, 90);
+    if (on("L")) tile(EDGE_TILE.L, 0, c, c, h - 2 * c);
+    if (on("R")) tile(EDGE_TILE.R, w - c, c, c, h - 2 * c);
+    if (on("T")) tile(EDGE_TILE.T, c, 0, w - 2 * c, c, 90);
+    if (on("B")) tile(EDGE_TILE.B, c, h - c, w - 2 * c, c, 90);
     // Corners.
-    tile(EDGE_TILE.UL, 0, 0, c, c);
-    tile(EDGE_TILE.UR, w - c, 0, c, c);
-    tile(EDGE_TILE.LL, 0, h - c, c, c);
-    tile(EDGE_TILE.LR, w - c, h - c, c, c);
+    if (on("UL")) tile(EDGE_TILE.UL, 0, 0, c, c);
+    if (on("UR")) tile(EDGE_TILE.UR, w - c, 0, c, c);
+    if (on("BL") || on("LL")) tile(EDGE_TILE.LL, 0, h - c, c, c);
+    if (on("BR") || on("LR")) tile(EDGE_TILE.LR, w - c, h - c, c, c);
   }
   return canvas;
 }

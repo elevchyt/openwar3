@@ -323,6 +323,16 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "QueueUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
   def(rt, "ResetUnitAnimation", (c, a) => anim(c, a[0], ""));
 
+  // SelectUnit(u, flag) / ClearSelection — the script drives the player's SELECTION (7.24).
+  // A cinematic clears it on the way in (nothing should stay ringed and command-carded while
+  // the camera flies), and a hero-pick map selects the hero it just handed you.
+  def(rt, "SelectUnit", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.selectUnit?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  def(rt, "ClearSelection", (c) => (c.rt.hooks?.clearSelection?.(), JNULL));
+
   // The unit's "custom value" — pure script state (the engine never reads it), the
   // spine of every JASS unit-indexing library. It lives on the handle.
   def(rt, "SetUnitUserData", (c, a) => {

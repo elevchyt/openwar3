@@ -391,6 +391,17 @@ export class VisionMap {
     this.maskEnabled = on;
   }
 
+  /** …and what `IsFogEnabled` / `IsFogMaskEnabled` read back. Not decoration: blizzard.j's
+   *  CinematicModeExBJ saves both, turns them off for the cinematic, and restores what it
+   *  read — so these two answers decide whether a map that ran a cinematic still has fog
+   *  afterwards (7.24). */
+  isFogEnabled(): boolean {
+    return this.fogEnabled;
+  }
+  isMaskEnabled(): boolean {
+    return this.maskEnabled;
+  }
+
   /** Has this cell ever been seen? (Progressive doodad reveal in the renderer.) */
   isExplored(cx: number, cy: number): boolean {
     if (this.revealAll || !this.maskEnabled) return true;

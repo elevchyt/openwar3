@@ -298,12 +298,26 @@ export function compareLimit(op: number, value: number, limit: number): boolean 
   }
 }
 
+/** common.j's `mapcontrol` indices (ConvertMapControl) — who plays a slot. Named, because
+ *  they were hand-typed off by one for 23 milestones (user 1, computer 2), which made
+ *  blizzard.j's `GetPlayersByMapControl(MAP_CONTROL_USER)` build an EMPTY force and every GUI
+ *  "for each user player" loop quietly do nothing. Monolith's intro cinematic lives inside
+ *  one of those loops, which is how 7.24 found it. */
+export const MAP_CONTROL = {
+  USER: 0,
+  COMPUTER: 1,
+  RESCUABLE: 2,
+  NEUTRAL: 3,
+  CREEP: 4,
+  NONE: 5,
+} as const;
+
 /** A player slot as config() fills it in (mirrors the SetPlayer* natives). */
 export interface JassPlayer {
   index: number; // 0–15
   handleId: number; // its entry in the handle table
   color: number; // ConvertPlayerColor index (0–11)
-  controller: number; // MAP_CONTROL_*: 1 user, 2 computer, 3 rescuable, 4 neutral
+  controller: number; // a MAP_CONTROL index (0 user, 1 computer, 3 neutral, …)
   race: number; // RACE_PREF_* index
   raceSelectable: boolean;
   team: number; // SetPlayerTeam (defaults to own index)
@@ -329,7 +343,7 @@ export interface LobbySlot {
   index: number; // player slot 0–11
   /** Resolved race (a "random" pick is already made): common.j ConvertRace index. */
   raceIndex: number;
-  controller: number; // MAP_CONTROL_*: 1 user, 2 computer
+  controller: number; // a MAP_CONTROL index (USER / COMPUTER)
   team: number;
   startLocation: number;
 }
@@ -469,6 +483,9 @@ export interface EngineHooks {
   enumUnits?(): ReadonlyArray<UnitSnapshot>;
   /** The units `player` currently has selected (GroupEnumUnitsSelected). */
   selectedUnits?(player: number): number[];
+  /** SelectUnit(u, flag) / ClearSelection — the script drives the local player's selection. */
+  selectUnit?(unitId: number, select: boolean): void;
+  clearSelection?(): void;
   /** IsUnitType — a unittype classification by its common.j ConvertUnitType index
    *  (0 HERO, 1 DEAD, 2 STRUCTURE, 3 FLYING, …); the workhorse of "matching" filters.
    *  `typeId` is the unit's rawcode, so a unit that has already left the sim (a corpse —
@@ -676,6 +693,103 @@ export interface EngineHooks {
    *  instead — which is the only reason `WaygateSetDestination(u, …)` on a gate built
    *  inside CreateAllUnits can work at all. Returns -1 when no match stands there. */
   findPlacedUnit?(typeId: string, x: number, y: number): number;
+  // --- cameras + cinematics (7.24) ---
+  /** Every camera MOVE lands here — `CameraSetupApply*`, `SetCameraField`, `PanCameraTo*`.
+   *  One hook, because in WC3 they are all the same operation on the same single live
+   *  camera: start each named field (and, optionally, the target position) blending from
+   *  where it is now to a new value over a duration. Angles arrive in DEGREES, as the
+   *  setters take them (see the radian asymmetry in natives/camera.ts). */
+  applyCamera?(move: CameraMove): void;
+  /** GetCameraField / CameraSetupGetField's live counterpart. Returns the field in the
+   *  SETTER's units (degrees for the angle fields) — the native converts. */
+  cameraField?(field: number): number;
+  /** GetCameraTargetPosition{X,Y,Z} / GetCameraEyePosition{X,Y,Z}. */
+  cameraTarget?(): { x: number; y: number; z: number };
+  cameraEye?(): { x: number; y: number; z: number };
+  /** GetCameraBoundMin/MaxX/Y — the rect the camera focus is confined to. */
+  cameraBounds?(): JassRect;
+  /** SetCameraTargetController(u, xoff, yoff, inheritOrientation) — the camera rides a
+   *  unit. `unitId` < 0 releases it. */
+  setCameraTargetUnit?(unitId: number, xOffset: number, yOffset: number, inheritOrientation: boolean): void;
+  /** ResetToGameCamera(duration) — blend every field back to the default gameplay camera. */
+  resetToGameCamera?(duration: number): void;
+  /** StopCamera — freeze every in-flight camera blend where it stands. */
+  stopCamera?(): void;
+  /** SetCameraRotateMode(x, y, radiansToSweep, duration) — orbit a fixed point. */
+  cameraRotateMode?(x: number, y: number, radians: number, duration: number): void;
+  /** CameraSetTargetNoise / CameraSetSourceNoise (+ the …Ex variants) — the shake. */
+  setCameraNoise?(source: boolean, magnitude: number, velocity: number, vertOnly: boolean): void;
+  /** ShowInterface(flag, fadeDuration) — hide the HUD and slide the letterbox in. This is
+   *  what "cinematic mode" LOOKS like (blizzard.j's own comment: "Hide interface UI
+   *  (letterbox mode)"). */
+  showInterface?(show: boolean, fadeDuration: number): void;
+  /** EnableUserControl(false) — take the mouse and keyboard away from the player for the
+   *  duration of a cinematic. */
+  enableUserControl?(enable: boolean): void;
+  /** EnableDawnDusk(false) / IsDawnDuskEnabled — freeze the day/night cycle so a cinematic
+   *  plays under a constant light (CinematicModeExBJ saves the old value and restores it). */
+  setDawnDusk?(enable: boolean): void;
+  isDawnDuskEnabled?(): boolean;
+  /** SetGameSpeed / GetGameSpeed — the common.j gamespeed index (2 = MAP_SPEED_NORMAL). */
+  setGameSpeed?(speed: number): void;
+  getGameSpeed?(): number;
+  /** IsFogEnabled / IsFogMaskEnabled — the LIVE state of the two fog-of-war switches, which
+   *  CinematicModeExBJ saves before turning both off and restores when the cinematic ends. */
+  isFogEnabled?(): boolean;
+  isFogMaskEnabled?(): boolean;
+  /** DisplayCineFilter(flag) — the full-screen fade. A cinefilter is configured over many
+   *  calls (texture, blend mode, both colours, duration) and only COMMITTED here, so this
+   *  hook takes the finished thing; null is DisplayCineFilter(false). */
+  displayCineFilter?(filter: CineFilter | null): void;
+  /** SetCinematicScene(...) — a unit "speaks": portrait + speaker name + subtitle for a
+   *  duration. null is EndCinematicScene. */
+  setCinematicScene?(scene: CinematicScene | null): void;
+  /** PingMinimap / PingMinimapEx — flash a marker on the minimap for `duration` seconds. */
+  pingMinimap?(ping: MinimapPing): void;
+}
+
+/** One camera move: the fields to blend and (optionally) where to pan the focus.
+ *  `field` is the common.j camerafield index (0 TARGET_DISTANCE … 6 ZOFFSET); `value` is in
+ *  the setter's units — DEGREES for ANGLE_OF_ATTACK / FIELD_OF_VIEW / ROLL / ROTATION. */
+export interface CameraMove {
+  fields: Array<{ field: number; value: number; duration: number }>;
+  dest?: { x: number; y: number; duration: number };
+}
+
+/** A cinematic filter — the fade-to-black. WC3 draws a full-screen quad of `texture`,
+ *  tinted from `start` to `end` (r/g/b/a, 0–255) over `duration` seconds, in `blendMode`
+ *  (a common.j blendmode index; 2 = BLEND). blizzard.j's CinematicFadeBJ is nothing but
+ *  a pair of these — fade OUT is alpha 0 → 255, fade IN is 255 → 0. */
+export interface CineFilter {
+  texture: string;
+  blendMode: number;
+  start: { r: number; g: number; b: number; a: number };
+  end: { r: number; g: number; b: number; a: number };
+  duration: number;
+}
+
+/** A cinematic scene — the transmission panel: an animated portrait of unit TYPE
+ *  `portraitUnitId` (a rawcode; 0 = no portrait), the speaker's name in their player
+ *  colour, and a line of subtitle, for `sceneDuration` seconds. */
+export interface CinematicScene {
+  portraitUnitId: string;
+  playerColor: number;
+  speaker: string;
+  text: string;
+  sceneDuration: number;
+  voiceoverDuration: number;
+}
+
+/** A minimap ping. `extraEffects` is PingMinimapEx's flag — WC3's "flashy" ping (the
+ *  bouncing arrow) rather than the plain expanding cross. */
+export interface MinimapPing {
+  x: number;
+  y: number;
+  duration: number;
+  r: number;
+  g: number;
+  b: number;
+  extraEffects: boolean;
 }
 
 /** A plain world-space rect (a `rect` handle's bounds). */
@@ -806,6 +920,18 @@ export class Runtime {
    *  can only do over time: keep an `AttachSoundToUnit`'d sound on its (moving) unit, and
    *  reap a `KillSoundWhenDone` handle once its clip has finished. */
   readonly sounds: SoundObj[] = [];
+  /** The cine filter — the full-screen fade (7.24). There is exactly ONE in WC3, and it is
+   *  configured across seven natives (texture, blend mode, both colours, duration) before
+   *  `DisplayCineFilter(true)` commits it, so it lives here as one mutable object rather
+   *  than as a handle. See natives/cinematic.ts. */
+  readonly cineFilter: CineFilter & { displayed: boolean } = {
+    texture: "",
+    blendMode: 2, // BLEND_MODE_BLEND
+    start: { r: 255, g: 255, b: 255, a: 255 },
+    end: { r: 255, g: 255, b: 255, a: 255 },
+    duration: 0,
+    displayed: false,
+  };
   /** PlayerSetLeaderboard — which board each player sees (player index → handle id).
    *  A leaderboard is only on screen for the players it was assigned to. */
   readonly playerBoards = new Map<number, number>();
@@ -857,11 +983,23 @@ export class Runtime {
    *  this just records what the script asked for; -1 means "no limit", as in WC3. */
   readonly techMaxAllowed = new Map<string, number>();
 
-  readonly random: () => number;
+  /** The seeded RNG behind GetRandomInt/Real. Indirected through `rng` so SetRandomSeed can
+   *  really re-seed it: blizzard.j's CinematicModeExBJ fixes the seed to 0 for the duration
+   *  of a cinematic ("so that cinematics play consistently") and restores the old stream
+   *  afterwards — a no-op SetRandomSeed silently breaks that contract, and Monolith's own
+   *  comment calls it out ("the random seed is fixed while cinematic mode is on, so it's
+   *  important to [place the random shards] after we turn it off"). */
+  private rng: () => number;
+  readonly random = (): number => this.rng();
   hooks: EngineHooks | null = null;
 
   constructor(seed = 0x9e3779b9) {
-    this.random = mulberry32(seed);
+    this.rng = mulberry32(seed);
+  }
+
+  /** SetRandomSeed. */
+  setRandomSeed(seed: number): void {
+    this.rng = mulberry32(seed);
   }
 
   /** Hand the lobby's resolved slots to the script (7.3), between config() and main().
@@ -896,7 +1034,7 @@ export class Runtime {
         index,
         handleId: 0,
         color: index,
-        controller: 4, // default neutral until config sets it
+        controller: MAP_CONTROL.NEUTRAL, // until config() says otherwise
         race: 0,
         raceSelectable: false,
         team: index,

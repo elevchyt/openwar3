@@ -801,6 +801,11 @@ export class SimWorld {
   /** Time of day in game-hours [0, DayHours); advances every tick. A melee game
    *  opens at 08:00 (Scripts\Blizzard.j bj_MELEE_STARTING_TOD). */
   timeOfDay: number = MELEE.MELEE_STARTING_TOD;
+  /** `EnableDawnDusk(false)` — the clock STOPS (7.24). A cinematic freezes it so the shot
+   *  plays under a constant light and doesn't drift from day into night halfway through;
+   *  blizzard.j's CinematicModeExBJ turns it off on the way in and restores it on the way
+   *  out. Nothing else in the game switches it. */
+  dawnDusk = true;
   private deaths: number[] = [];
   /** Whether to record death/damage/attack events for the trigger engine (the host
    *  sets each only when the loaded script actually registers that event kind — off
@@ -3856,7 +3861,7 @@ export class SimWorld {
   }
 
   tick(dt: number): void {
-    this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % MISC_DATA.DayHours;
+    if (this.dawnDusk) this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % MISC_DATA.DayHours;
     this.tickAttackReveals(dt);
     this.tickBuildings(dt);
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)

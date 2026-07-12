@@ -6,7 +6,7 @@
 // correctness oracle for this milestone (7.1). No engine bridge is needed: config
 // is pure declaration, so it runs identically headless or live.
 
-import type { JassPlayer, NativeCtx, Runtime } from "../runtime";
+import { MAP_CONTROL, type JassPlayer, type NativeCtx, type Runtime } from "../runtime";
 import { asInt, asNum, asStr, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -73,7 +73,10 @@ export function registerConfigNatives(rt: Runtime): void {
   def(rt, "Player", (c, a) => c.rt.playerHandle(asInt(a[0])));
   def(rt, "GetPlayerId", (c, a) => jInt(player(c, a[0])?.index ?? 0));
   def(rt, "GetLocalPlayer", (c) => c.rt.playerHandle(c.rt.localPlayer)); // the human at THIS machine
-  def(rt, "GetPlayerController", (c, a) => c.rt.enumHandle("MapControl", player(c, a[0])?.controller ?? 4));
+  // GetPlayersByMapControl(MAP_CONTROL_USER) — "for each human player" — is one of the most
+  // common shapes in the whole corpus, and it is only as good as this answer.
+  def(rt, "GetPlayerController", (c, a) =>
+    c.rt.enumHandle("MapControl", player(c, a[0])?.controller ?? MAP_CONTROL.NEUTRAL));
   // Is the slot actually being played? The lobby's answer (Runtime.applyLobby), not the
   // map's — and the gate on blizzard.j's entire melee library (7.3): a slot that isn't
   // PLAYING gets no starting units, no resources, and keeps its start-location creeps.

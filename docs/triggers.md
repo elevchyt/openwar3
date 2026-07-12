@@ -40,13 +40,14 @@
 | 7.21 | **Timer dialogs — the countdown windows** (`CreateTimerDialog`/`SetTitle`/`SetTitleColor`/`SetTimeColor`/`SetSpeed`/`Display`/`IsDisplayed`/`SetRealTimeRemaining`/`Destroy`, + the `…BJ` family). Closes the last **melee leftover** on the list: `MeleeInitVictoryDefeat` builds the *crippled* window and the *finish-soon* window and both were silently discarded — so a player who lost their last main hall got no clock. Uncovered (and fixed) a **general timer-pump bug**: a handler that destroys a timer spliced `rt.timers` mid-`for…of`, making the pump **skip the next timer forever** — and blizzard.j's own `MarkGameStarted` does exactly that, 0.01 s into every map | ✅ done (live) | §7.21 headless (through the real BJs: `CreateTimerDialogBJ` shows it, a dialog reads its timer LIVE (45 → 32.5 s), `MeleeInitVictoryDefeat` builds 3 windows — the null-timer one + a cripple window per PLAYING slot, titled "Build Town Hall"/"Build Great Hall" off the game's own strings — and `MeleeCheckForCrippledPlayers` shows only the crippled player's, opening at 2:00 = `bj_MELEE_CRIPPLE_TIMEOUT`); §7.4c pins the timer-pump regression; Echo Isles **live**: razing player 0's hall (farm still standing → crippled, not defeated) pops blizzard.j's real *"Build Town Hall 1:48"* window + its own *"You will be revealed to your opponents…"* warning, and three windows stack under the leaderboard in the game's own chrome (screenshots) |
 | 7.22 | **Vision, fog and the last panels** — **shared vision + alliances** (`SetPlayerAlliance`/`GetPlayerAlliance` over a real per-pair, per-setting matrix seeded from the lobby's teams; `CripplePlayer`), which finally lets blizzard.j's **`MeleeExposePlayer`** do what the 7.21 cripple timer promised; **BOTH fogs, which are different systems** — the atmospheric haze (`SetTerrainFogEx`/`ResetTerrainFog` → the `scene.distFog` shader) and the fog of war (`CreateFogModifier{Rect,Radius,RadiusLoc}`/`FogModifierStart`/`Stop`/`Destroy`, `SetFogState*`, `FogEnable`/`FogMaskEnable` → the `VisionMap`); **way gates** (`WaygateActivate`/`SetDestination`/`Get*`, a 400×400 box read out of the MPQ); **multiboards** (the grid scoreboard → the game's own `MultiBoard.fdf`). Plus the **record-only handle binding** that all of it turned out to need | ✅ done (live) | §7.22 headless (30 checks through the real blizzard.j BJs + the real `AllianceTable`/`VisionMap`: the matrix seeds from teams and is **directed**, `SetPlayerAllianceStateBJ` allies a pair, `MeleeExposePlayer` → `CripplePlayer` reveals the crippled player to exactly the players not co-allied with them; a fog modifier is created **stopped**, VISIBLE lights ground nobody can see and MASKED blacks out ground a unit stands in; `SetTerrainFogExBJ`'s 0–100 scale vs the native's 0–1; a gate fires on **entering** its box, not standing in it — the ping-pong regression; the multiboard BJ/native **axis swap** and the borrowed item handle). Echo Isles **live**: razing a crippled player's hall drains blizzard.j's clock → *"Revealing Player 2."* and their units show through black fog, while `ALLIANCE_SHARED_VISION` instead **lights the terrain**; Jack-o-Lantern's own green haze; a VISIBLE rect lit out in the unexplored middle of the map. CentaurGrove: a footman walks into the SW gate and comes out the NE one, 10 000 units away. Skibi's Castle TD: its **own** multiboard in the game's own chrome (screenshots) |
 | 7.23 | **Weather — the map's atmosphere** (`AddWeatherEffect` / `EnableWeatherEffect` / `RemoveWeatherEffect`). The **biggest unimplemented family in the corpus — 40 of the 165 maps**, most of them plain MELEE maps, because the World Editor compiles a placed weather region straight into `CreateRegions()`. All three natives were explicit **no-ops**, so 40 maps ran with their rain and snow silently switched off. Not a model and not a shader: one **data-driven particle emitter** whose every parameter is a column of `TerrainArt\Weather.slk` (`src/data/weather.ts` + the `src/render/weather.ts` GL pass) | ✅ done (live) | §7.23 headless (14 checks against the **real** SLK through our **real** parser: all 21 types; the `particles == emrate × lifespan × 20` identity that pins the density; rain is a *tail* streak and snow a *head* billboard; `\|veloc\| × taillen` gives rain a 168-unit dash and moonlight a 3000-unit shaft from the same two columns; the 8×8 cloud atlas; the three-key ramps; created-disabled, and an unknown id doesn't crash the map). Live: Harrow's own heavy snow (4000 flakes, 126 fps), Forestwalk's slanted rain, WarChasers' moonlight shafts and red dungeon fog — all from those maps' own scripts (screenshots) |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (270/335 used natives implemented — and see the caveat: weather sat at a ✓ the whole time) |
+| 7.24 | **Cameras and cinematics — the map's intro actually plays.** The **camera setups** (`CreateCameraSetup` / `CameraSetupSetField` / `CameraSetupSetDestPosition` — 10 maps each, the top of the ranking) and the whole move family they feed (`CameraSetupApply*`, `SetCameraField`, `PanCameraTo[Timed][WithZ]`, `SetCameraTargetController`, `SetCameraRotateMode`, `CameraSetTargetNoise`, `ResetToGameCamera`); **cinematic mode** (`CinematicModeBJ`, 7 maps — the letterbox out of the game's own `CinematicPanel.fdf`, `EnableUserControl`, the frozen day/night clock, the fixed random seed); the **fade** (`CinematicFadeBJ` — 9 maps — over the 7 `SetCineFilter*` natives); **transmissions** (`TransmissionFromUnit[Type]WithNameBJ` → `SetCinematicScene`: the speaker's animated bust, his name in his player colour, his subtitle); and **minimap pings**. Plus `SelectUnit`/`ClearSelection` and a real `SetRandomSeed`. Uncovered a 23-milestone-old bug: **every `mapcontrol` index was off by one**, so `GetPlayersByMapControl(MAP_CONTROL_USER)` — which Monolith wraps its whole intro in — returned an **empty force** | ✅ done (live) | §7.24 headless (24 checks through the real BJs + the real `ScriptCamera`: Monolith's own 7-field intro shot; a 2 s apply is exactly half-way at 1 s and then **lets go**; the degrees-in/**radians**-out asymmetry `GetCurrentCameraSetup` proves; `CinematicModeBJ`'s full checklist, and that it **restores what it saved** — a lying `IsFogEnabled` would switch a map's fog back on; the letterbox does **not** fade at map init (`bj_gameStarted`); `SetRandomSeed(0)` really replays the stream; a fade is alpha 0→255 and its mirror, and blizzard.j arms a timer to take it down; a transmission's 15 s = `bj_NOTHING_SOUND_DURATION` + the map's 10 s, portrait +1.5 s; the pure-red flashy ping knocked to 254; **and the shortest-arc gate**). Live: **(4)Monolith's own intro cinematic plays** — letterbox in, camera on `gg_cam_Monolith_Intro_Shot`, a 6 s drift home under a 6 s fade to black, then the game handed back (HUD, camera, fog, clock). WarChasers' Soul Keeper **transmits** with his bust in the game's own frame; pings pulse on the minimap (screenshots) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (279/335 used natives implemented — and see the caveat: weather sat at a ✓ the whole time) |
 
 Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + **7.4c the
 timer-pump regression** + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13
 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items
-+ 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs + 7.22 vision/fog/waygates/multiboards + 7.23 weather) and
-**`pnpm jass:coverage`** (unimplemented natives by usage).
++ 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs + 7.22 vision/fog/waygates/multiboards + 7.23 weather +
+7.24 cameras/cinematics) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It only counts natives called **directly** from a `war3map.j`, so everything
 > a map reaches *through* a blizzard.j BJ — groups, `PolledWait`, the whole `PlaySound*BJ` family, and most of the
@@ -130,13 +131,15 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/timerdialog.ts` | **timer dialogs** (7.21): the countdown windows (`CreateTimerDialog` + its setters). A `timerdialog` holds **no clock** — it is a *view onto a `timer`*, read live each frame, which is why the melee library can build the window at init and start the timer two minutes later |
 | `natives/vision.ts` | **alliances + BOTH fogs** (7.22). Three families that all answer *"what can a player see"*, kept in one file precisely because the thing most likely to go wrong is confusing the two fogs: **alliances** (`SetPlayerAlliance`/`GetPlayerAlliance`/`CripplePlayer` — a directed per-pair matrix, `src/sim/alliances.ts`), the **fog of war** (`CreateFogModifier*`/`FogModifierStart`/`Stop`/`Destroy`, `SetFogState*`, `FogEnable`/`FogMaskEnable` → the `VisionMap`), and the **terrain haze** (`SetTerrainFogEx`/`ResetTerrainFog` → `scene.distFog`), which is not fog of war at all |
 | `natives/weather.ts` | **weather** (7.23): `AddWeatherEffect` / `EnableWeatherEffect` / `RemoveWeatherEffect` — the map's rain, snow, fog, light-rays and wind. Three natives in front of a particle emitter (`src/data/weather.ts` reads `TerrainArt\Weather.slk`; `src/render/weather.ts` draws it). Same "created, not started" shape as the fog modifiers: `AddWeatherEffect` leaves the effect **disabled**, and the editor emits `EnableWeatherEffect(we, true)` on the very next line |
+| `natives/camera.ts` | **cameras** (7.24): the `camerasetup` handle (a saved SHOT — a bag of camera FIELDS plus a destination, which is what the World Editor's camera tool compiles to) and the whole move family that applies one — `CameraSetupApply*`, `SetCameraField`, `PanCameraTo*`, `SetCameraTargetController`, `SetCameraRotateMode`, `CameraSet*Noise`, `ResetToGameCamera`. There is **one** camera in WC3 and one here: an apply is a set of blends over the game camera (`src/render/scriptCamera.ts`). The units are asymmetric and blizzard.j proves it — every SETTER takes degrees, `GetCameraField` returns **radians** |
+| `natives/cinematic.ts` | **cinematics** (7.24): everything the player sees around the shot — the letterbox (`ShowInterface`) + `EnableUserControl` + `EnableDawnDusk` + `SetGameSpeed` + a real `SetRandomSeed` (the checklist `CinematicModeBJ` fans out into), the **fade** (the 7 `SetCineFilter*` natives, committed by `DisplayCineFilter`), the **transmission** (`SetCinematicScene` — portrait + speaker + subtitle), and `PingMinimap[Ex]`. **No `…BJ` is registered here** — see the note under the coverage table |
 | `natives/multiboard.ts` | **multiboards** (7.22): the grid scoreboard (`CreateMultiboard`, row/column counts, the `…Items…` plural setters and the `…Item…` singular ones). A cell is addressed **(row, column)** by the native and **(col, row)**, 1-based, by every BJ — Blizzard does the swap. A `multiboarditem` handle is **borrowed**, not owned (`MultiboardGetItem` … `MultiboardReleaseItem`), so it is a cursor into the board, never a copy of the cell |
 | `natives/sound.ts` | **sounds + music** (7.20): the `sound` handle family (`CreateSound`/`FromLabel`, `SetSoundParamsFromLabel`, the `SetSound*` setters, `StartSound`/`StopSound`/`AttachSoundToUnit`/`KillSoundWhenDone`), the 8 `volumegroup`s, and the music interface (`SetMapMusic`/`PlayMusic`/`PlayThematicMusic`). A `sound` is a **configured playback object**, not a clip — the natives mostly mutate a `SoundObj`, and only Start/Stop reach the engine (`SoundBoard`) |
 | `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
 | `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
 | `wts.ts` | `parseWts` — the map's `war3map.wts` trigger-string table (resolves `TRIGSTR_nnn` placeholders to authored text) |
-| `natives/index.ts` | registry: enum constructors (`Convert*`) + utility natives (`I2S`, `GetRandomInt`, camera/env no-ops); calls the group registrars |
+| `natives/index.ts` | registry: enum constructors (`Convert*`) + utility natives (`I2S`, `GetRandomInt`, the MathAPI, env no-ops); calls the group registrars |
 | `headless.ts` | engine-free entry: `buildInterpreter(sources, { wts })` for tests/tooling |
 | `index.ts` | **app-facing** loader: reads `common.j`/`blizzard.j`/`war3map.j`/`war3map.wts` via the VFS, runs `config()` (+ `main()` with display hooks) |
 
@@ -1399,6 +1402,147 @@ on the def, but nothing plays it yet; it is a label the 7.20 `SoundBoard` alread
 small follow-up), the `useFog` flag (whether an effect is dimmed by the atmospheric haze), and `TerrainDeform*` (the
 other "environment effect" family — it sculpts the terrain **mesh**, which we don't do; explicit no-ops).
 
+## Cameras and cinematics — the map's intro actually plays (7.24 — done, live)
+
+The biggest block left on the list, and one coherent story. `(4)Monolith` runs its intro
+cinematic **straight out of Map Init**, and it is a complete specimen of the whole surface:
+
+```jass
+function Trig_Intro_Cinematic_Start_Func003A takes nothing returns nothing
+    call CameraSetupApplyForPlayer( true, gg_cam_Monolith_Intro_Shot, GetEnumPlayer(), 0 )
+    call ResetToGameCameraForPlayer( GetEnumPlayer(), udg_cinematicDuration )
+    call CinematicFadeBJ( bj_CINEFADETYPE_FADEOUT, udg_cinematicDuration, "…White_mask.tga", 0, 0, 0, 0 )
+endfunction
+function Trig_Intro_Cinematic_Start_Actions takes nothing returns nothing
+    set udg_cinematicDuration = 6.00
+    call CinematicModeBJ( true, GetPlayersAll() )
+    call ForForce( GetPlayersByMapControl(MAP_CONTROL_USER), function Trig_Intro_Cinematic_Start_Func003A )
+    call StartTimerBJ( udg_cinematicTimer, false, udg_cinematicDuration )
+endfunction
+```
+
+— letterbox in, snap to the shot, drift home over six seconds under a six-second fade to black,
+and six seconds later a second trigger fades back in and hands the game over. Every call in it
+was an unimplemented native.
+
+### A `camerasetup` is a saved SHOT, not a camera
+
+It is a bag of camera **fields** plus a destination point, which is exactly what the World
+Editor's camera tool writes out:
+
+```jass
+set gg_cam_Monolith_Intro_Shot = CreateCameraSetup(  )
+call CameraSetupSetField( …, CAMERA_FIELD_ROTATION,        77.7,   0.0 )
+call CameraSetupSetField( …, CAMERA_FIELD_ANGLE_OF_ATTACK, 320.8,  0.0 )
+call CameraSetupSetField( …, CAMERA_FIELD_TARGET_DISTANCE, 1363.6, 0.0 )
+call CameraSetupSetField( …, CAMERA_FIELD_FIELD_OF_VIEW,   70.0,   0.0 )
+call CameraSetupSetDestPosition( …, 1002.0, 3640.6, 0.0 )
+```
+
+**There is no second camera.** `CameraSetupApply*`, `SetCameraField` and `PanCameraTo*` all move
+the one camera the player is looking through — so `src/render/scriptCamera.ts` owns no camera
+either: it is a set of **tweens over mapViewer's own** `target` / `distance` / `yaw` / `pitch` /
+`fov`, and each tween **lets go** when it lands, handing the camera straight back to the player
+exactly where the shot finished. That is why a map that wants the normal camera back has to ask
+(`ResetToGameCamera`) rather than simply waiting. "The game camera" means **ours** (45° FOV at
+2400, not WC3's 70° at 1650) — a setup that asks for 70° still gets 70°, it just isn't home.
+
+Two things the file will not tell you, and blizzard.j will:
+
+- **Degrees in, radians out.** Every setter takes degrees; `GetCameraField` returns radians. The
+  proof is `GetCurrentCameraSetup`, which reads the live camera back into a setup and has to
+  convert on the way: `CameraSetupSetField(theCam, CAMERA_FIELD_ANGLE_OF_ATTACK, bj_RADTODEG *
+  GetCameraField(CAMERA_FIELD_ANGLE_OF_ATTACK), duration)`. So the engine boundary speaks
+  degrees and only that one native converts.
+- **A zero-duration apply lands NOW.** Monolith reads the camera back on the very next line
+  (`ResetToGameCamera`). Defer the snap by one frame and the reset blends the game camera *to
+  the game camera*: the intro shot never appears at all.
+
+### Cinematic mode is a checklist, and `CinematicModeExBJ` is the spec
+
+Each line of it is a native we had to own — `ShowInterface(false, fade)` (the letterbox, out of
+the game's own `UI\FrameDef\UI\CinematicPanel.fdf`), `EnableUserControl(false)`,
+`FogEnable`/`FogMaskEnable(false)`, `EnableDawnDusk(false)` (the clock **stops**, so the shot
+doesn't drift from day into night), `SetGameSpeed`, `SetCineModeVolumeGroupsBJ` (7.20, already
+real) and `SetRandomSeed(0)`.
+
+And the half that is easy to miss: on the way out it **restores what it SAVED on the way in**
+(`bj_cineModePriorFogSetting`, `…PriorDawnDusk`, `…PriorSpeed`). So `IsFogEnabled` /
+`IsFogMaskEnabled` / `IsDawnDuskEnabled` / `GetGameSpeed` have to answer honestly rather than
+return a stub — a lying getter doesn't break the cinematic, it breaks the **game the cinematic
+hands back** (it would switch the fog back on for a map that had deliberately turned it off).
+`SetRandomSeed` is real for the same reason, and Monolith says so in its own comment: *"the
+random seed is fixed while cinematic mode is on, so it's important to [place the random shards]
+after we turn it off"*.
+
+### The letterbox and the talking head are independent, and the FDF says so
+
+```
+// --- The "CinematicScenePanel" is shown and hidden as there
+//     is a cinematic scene to display.
+```
+
+`ShowInterface(false)` brings the bars in; `SetCinematicScene` shows the portrait. A transmission
+during ordinary play — an ally warning you mid-melee — shows the bust with **no** letterbox, and a
+silent flythrough shows the letterbox with no bust. So they toggle separately (`src/ui/cinematicPanel.ts`).
+Three adaptations the file can't state: the bars are authored **0.8 wide** (a 4:3 screen) and are
+stretched to the viewport; the portrait is a **SPRITE** (a live model — it gets its own
+`ModelViewerScene`, like the HUD's bust); and the **unsized-frame trap** bit for the fourth time
+(`CinematicSpeakerText` declares neither Width nor Height, so it collapsed to 0×0).
+
+Two FDF-renderer fixes fell out of it, both of which had been latent:
+- **`BackdropCornerFlags` was ignored.** Every panel we had mounted before declares all eight
+  (`"UL|UR|BL|BR|T|L|B|R"`), so it cost nothing — but the letterbox declares only its **inner**
+  edge (`"UL|UR|T"` on the bottom bar, `"BL|BR|B"` on the top), because the other three sides run
+  off the screen.
+- **`BackdropBlendAll`** makes our renderer stretch one texture over the frame and skip the edge
+  file — right for the ornate menu buttons it was tuned on, wrong for the bars and the portrait's
+  cover, which want the 9-slice (tiled `EscMenuBackground` stone + the real `CinematicBorder` trim).
+
+### Three bugs, and only the live run could find two of them
+
+- **Every `mapcontrol` index was off by one** — a 23-milestone-old bug in a *different* subsystem.
+  common.j says `MAP_CONTROL_USER = ConvertMapControl(0)`; we stored the human as **1** in the
+  lobby hand-off (`config()` had already set it right; `applyLobby` overwrote it). So
+  `GetPlayersByMapControl(MAP_CONTROL_USER)` built an **empty force**, and every GUI "for each
+  user player" loop in the corpus — one of the commonest shapes there is — quietly did nothing.
+  Monolith wraps its entire intro in one, which is how it finally surfaced. §7.24 pins it.
+- **A camera angle must blend along the SHORTEST ARC.** Monolith's shot stores
+  `ANGLE_OF_ATTACK = 320.8` and the game camera's is `-54.4` — the same tilt, written 375° apart.
+  Blending the raw numbers sweeps the camera `320.8 → 238 → 159 → 75 → -44.9` over six seconds:
+  it pitches through the horizon, goes fully **upside-down**, and comes back, while the map thinks
+  it asked for a 15° nudge. **Every headless check passed**, because both endpoints were right —
+  it took a live time-series of `s.pitch` to see it. (`FIELD_OF_VIEW` is deliberately not circular:
+  a lens angle is a magnitude, not a bearing.)
+- **The letterbox does not fade in at map init.** `CinematicModeExBJ` opens with
+  `if (not bj_gameStarted) then set interfaceFadeTime = 0` — so a cinematic that starts before the
+  game does (Monolith's) simply *has* its bars on the first frame. Not a bug in the end, but it
+  looked like one until the source explained it.
+
+Verified (`pnpm jass:test` §7.24) — 24 checks driven through the **real** blizzard.j BJs
+(`CinematicModeBJ`, `CinematicFadeBJ`, `CameraSetupApplyForPlayer`, `TransmissionFromUnitWithNameBJ`,
+`PingMinimapLocForForceEx`) against the **real** `ScriptCamera`, including a permanent gate that
+**no `…BJ` is registered as a native** (the shadowing bug that hid the alliance surface until 7.22)
+and the shortest-arc gate above. A transmission's duration is *derived*, not asserted:
+`bj_NOTHING_SOUND_DURATION` (5 s, for a null sound) + the map's 10 s = 15 s, and the portrait hangs
+on `bj_TRANSMISSION_PORT_HANGTIME` (1.5 s) longer.
+
+Verified **live**: `(4)Monolith`'s own intro cinematic plays end to end — letterbox in, the camera
+on its own `gg_cam_Monolith_Intro_Shot`, a six-second drift home under a six-second fade to black,
+then the game handed back intact (HUD, camera, fog, day/night clock). `(4)WarChasers`' Soul Keeper
+transmits with his animated bust in the game's own frame, his name in his player colour and his
+subtitle beneath — and its own "Snap Camera to Player" trigger re-locks the camera on the hero
+between shots, which is the map behaving exactly as written. Pings pulse on the minimap
+(screenshots).
+
+**Not modelled:** `UnitAddIndicator` (the white flash over a transmission's speaker),
+`SetCinematicCamera` (a camera path authored in an `.mdx` — no bundled map uses one), the cine
+filter's **texture** (every fade in the corpus is a `White_mask`/`Black_mask`, i.e. a flat colour;
+a shaped mask like `SpecialPowMask` degrades to that colour), `SetCineFilterStartUV`/`EndUV` (a
+scrolling filter), and the **game-speed multipliers** — `SetGameSpeed` is recorded and read back
+(which is all cinematic mode needs) but not applied, because WC3's five speeds are engine
+constants that live in no data file we have and guessing one is exactly what `CLAUDE.md` forbids.
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -1411,16 +1555,15 @@ other "environment effect" family — it sculpts the terrain **mesh**, which we 
 - **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
   filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items; 7.19 floating text, dialogs and
   leaderboards; 7.20 sounds and music; 7.21 timer dialogs; 7.22 alliances/shared vision, both fogs, waygates and
-  multiboards; 7.23 weather. Still no-ops, now the top of the ranking: **cameras / cinematics** (`CreateCameraSetup` /
-  `CameraSetupSetField` / `CameraSetupSetDestPosition` — **10 maps each**, and the whole cinematic surface on top of
-  them: `CinematicModeBJ` (11 maps), `TransmissionFromUnitWithNameBJ` (8), `PingMinimap` (5) — **the biggest block
-  left**), **special effects** (`AddSpecialEffect*` / `DestroyEffect` — 10 maps directly and far more through the BJs),
-  **quests** (`CreateQuest*` — 8), **`SelectUnit`/`ClearSelection`** (8), **destructables** (`CreateDestructable` /
-  `KillDestructable` / `GetEnumDestructable` — 7), **`SetSkyModel`/`SetWaterBaseColor`** (9), **`SetGameSpeed`** (5),
-  **`ReviveHeroLoc`** (4), **upgrades** (`SetPlayerTechResearched` — 4), **chat events**
-  (`TriggerRegisterPlayerChatEvent` — 3) and **lightning** (2). Each is a small bridge method away — but note the
-  ranking under-counts anything reached through a BJ, so `jass:coverage` is a floor (weather sat at a `✓` for
-  23 milestones).
+  multiboards; 7.23 weather; 7.24 cameras, cinematics, transmissions, minimap pings and `SelectUnit`/`ClearSelection`.
+  Still no-ops, now the top of the ranking: **special effects** (`AddSpecialEffect*` / `DestroyEffect` — 10 maps
+  directly and far more through the BJs — **the biggest block left**), **destructables** (`CreateDestructable` /
+  `KillDestructable` / `GetEnumDestructable` — 7), **`SetSkyModel`/`SetWaterBaseColor`** (9), **quests**
+  (`CreateQuest*` — 8), **`ReviveHeroLoc`** (4), **upgrades** (`SetPlayerTechResearched` — 4), **chat events**
+  (`TriggerRegisterPlayerChatEvent` — 3), **`TriggerRegisterPlayerStateEvent`** (3) and **lightning** (2). Each is a
+  small bridge method away — but note the ranking under-counts anything reached through a BJ, so `jass:coverage` is a
+  floor (weather sat at a `✓` for 23 milestones). `SetGameSpeed` is now a `✓` but is **recorded, not applied** — see
+  the 7.24 "not modelled" note, and treat the tick as exactly the caveat above.
 - **Shops** — no unit sells anything, so `EVENT_PLAYER_UNIT_SELL_ITEM` / `_SELL` never fire (the item-sale plumbing is
   wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
   path: shop stock (`AddItemToStock`), the buy command card, gold, range.
@@ -1433,6 +1576,10 @@ other "environment effect" family — it sculpts the terrain **mesh**, which we 
   — 7.21 — and the cripple rule's second half now lands too: `MeleeExposePlayer` really does reveal the player — 7.22.
   The first hero's Town Portal scroll is granted — 7.18 — though `AItp` has no cast behaviour in the sim, so the scroll
   doesn't teleport yet.)*
-- **Natives on demand** — weather, cameras, cinematics (transmissions), multiboard, quests, gamecache. Use
-  `pnpm jass:coverage` to prioritise (250/335 used natives implemented — and see the caveat on that number above).
+- **Natives on demand** — special effects, destructables, quests, sky/water, gamecache. Use `pnpm jass:coverage` to
+  prioritise (279/335 used natives implemented — and see the caveat on that number above).
+- **The 7.23 weather ambient sound bed** (`AmbientSound` — "AmbientSoundRain") is parsed off `Weather.slk` onto the def
+  and carried there, but nothing plays it. It is a label the 7.20 `SoundBoard` already knows how to resolve.
+- **The 7.21 countdown format is still not ground-truthed** — M:SS under an hour / HH:MM:SS over is *inferred* from the
+  `Game.dll` string dump, not measured. To settle it, read the clock off a real 1.27a client.
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

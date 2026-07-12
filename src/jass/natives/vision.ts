@@ -148,10 +148,13 @@ export function registerVisionNatives(rt: Runtime): void {
   });
   def(rt, "FogEnable", (c, a) => (c.rt.hooks?.fogEnable?.(truthy(a[0])), JNULL));
   def(rt, "FogMaskEnable", (c, a) => (c.rt.hooks?.fogMaskEnable?.(truthy(a[0])), JNULL));
-  // IsFogEnabled/IsFogMaskEnabled report the *map's* fog settings (the w3i flags), which
-  // we always honour — so both are true.
-  def(rt, "IsFogEnabled", () => jBool(true));
-  def(rt, "IsFogMaskEnabled", () => jBool(true));
+  // IsFogEnabled/IsFogMaskEnabled must report the LIVE state of those two switches, not a
+  // constant: blizzard.j's CinematicModeExBJ SAVES both before turning them off for the
+  // cinematic (bj_cineModePriorFogSetting / …MaskSetting) and restores what it read when the
+  // cinematic ends (7.24). A `true` stub is harmless on a map with fog and quietly switches
+  // it back ON at the end of a cinematic on a map that had disabled it.
+  def(rt, "IsFogEnabled", (c) => jBool(c.rt.hooks?.isFogEnabled?.() ?? true));
+  def(rt, "IsFogMaskEnabled", (c) => jBool(c.rt.hooks?.isFogMaskEnabled?.() ?? true));
 
   // --- terrain fog (the atmospheric haze — NOT the fog of war) ----------------
   // SetTerrainFogEx(style, zstart, zend, density, red, green, blue), rgb in 0–1. The

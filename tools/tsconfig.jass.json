@@ -30,6 +30,7 @@
     "../src/data/objectData.ts",
     "../src/sim/alliances.ts",
     "../src/sim/vision.ts",
-    "../src/data/weather.ts"
+    "../src/data/weather.ts",
+    "../src/render/scriptCamera.ts"
   ]
 }

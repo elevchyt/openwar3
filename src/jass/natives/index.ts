@@ -9,6 +9,8 @@
 import type { NativeCtx, Runtime } from "../runtime";
 import { asInt, asNum, asStr, jInt, jReal, jStr, JNULL, type JassValue } from "../values";
 import { registerAbilityNatives } from "./abilities";
+import { registerCameraNatives } from "./camera";
+import { registerCinematicNatives } from "./cinematic";
 import { registerConfigNatives } from "./config";
 import { registerDialogNatives } from "./dialogs";
 import { registerEventNatives } from "./events";
@@ -70,7 +72,9 @@ function registerUtilNatives(rt: Runtime): void {
     const lo = asNum(a[0]), hi = asNum(a[1]);
     return jReal(lo + c.rt.random() * (hi - lo));
   });
-  def(rt, "SetRandomSeed", () => JNULL);
+  // SetRandomSeed lives in natives/cinematic.ts and really re-seeds the stream — cinematic
+  // mode fixes the seed to 0 and restores it afterwards, so a no-op would break the map's
+  // randomness contract, not just the cinematic's.
 
   // Math (common.j's MathAPI). Not decoration: blizzard.j's DistanceBetweenPoints —
   // which every "unit within X of point" GUI condition rides on — is
@@ -94,15 +98,15 @@ function registerUtilNatives(rt: Runtime): void {
     return jReal(Math.pow(x, y));
   });
 
-  // Camera / environment natives every main() calls — we set these up ourselves in
-  // the renderer, so here they are safe no-ops (GetCameraMargin returns 0.0).
+  // Environment natives every main() calls that the renderer sets up for itself.
   // (Sound + music used to sit in this list; they are real now — see natives/sound.ts.
   // AddWeatherEffect/EnableWeatherEffect sat here too, and that is why 40 maps ran with
   // their rain and snow silently switched off — they are real now, see natives/weather.ts.
+  // SetCameraBounds/GetCameraMargin sat here too, and the whole camera + cinematic surface
+  // behind them: real now, see natives/camera.ts + natives/cinematic.ts.
   // SetAmbientDay/NightSound stay: they name a MIDI ambience bed we don't synthesize.)
-  def(rt, "GetCameraMargin", () => jReal(0));
   for (const name of [
-    "SetCameraBounds", "SetDayNightModels", "SetAmbientDaySound", "SetAmbientNightSound",
+    "SetDayNightModels", "SetAmbientDaySound", "SetAmbientNightSound",
     "SetMapFlag", "SetMapName",
   ]) {
     if (!rt.natives.has(name)) def(rt, name, () => JNULL);
@@ -118,6 +122,8 @@ export function registerNatives(rt: Runtime): void {
   registerConfigNatives(rt);
   registerWorldNatives(rt);
   registerAbilityNatives(rt); // abilities + heroes (7.17)
+  registerCameraNatives(rt); // camera setups + the camera-move family (7.24)
+  registerCinematicNatives(rt); // letterbox, fade, transmissions, minimap pings (7.24)
   registerDialogNatives(rt); // dialogs + the victory/defeat screen (7.19)
   registerEventNatives(rt);
   registerLeaderboardNatives(rt); // the scoreboard every TD/AoS shows (7.19)

@@ -11,7 +11,7 @@ import { jassOwnerOf, type QueuedOrder, type RallyKind, type SimMine, type SimUn
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
-import type { EngineHooks, RectObj, Runtime } from "../jass/runtime";
+import { MAP_CONTROL, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import type { UnitSnapshot } from "../jass/interpreter";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
@@ -51,6 +51,8 @@ import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
+import { CinematicPanelOverlay } from "../ui/cinematicPanel";
+import { ScriptCamera, type CameraState } from "./scriptCamera";
 import { TextTagOverlay, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
@@ -316,6 +318,14 @@ const ViewerClass = War3MapViewer as unknown as {
 };
 
 export class MapViewerScene {
+  // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
+  // (7.24). WC3's own defaults are 70° / 1650 (bj_CAMERA_DEFAULT_FOV / _DISTANCE); ours are
+  // 45° / 2400, and everything else in the renderer is tuned around them, so "the game
+  // camera" means OURS. A camera setup that asks for 70° still gets 70° — it just isn't
+  // where we come home to.
+  private static readonly GAME_FOV = Math.PI / 4;
+  private static readonly GAME_PITCH = 0.95; // ≈ 54.4° above the focus; WC3's AOA 304 is -56°
+
   // Orbit camera state.
   private target = new Float32Array([0, 0, 0]);
   // Terrain extent the camera focus is kept inside so it can't scroll off into the
@@ -325,7 +335,25 @@ export class MapViewerScene {
   // Look from the south toward +Y (north up), matching WC3's default camera so
   // units/buildings (which default to facing 270° = south) face the viewer.
   private yaw = Math.PI / 2;
-  private pitch = 0.95;
+  private pitch = MapViewerScene.GAME_PITCH;
+  // The rest of WC3's camera fields (7.24). They only move when a SCRIPT moves them —
+  // CAMERA_FIELD_FIELD_OF_VIEW / ROLL / FARZ have no player-facing control — so the game
+  // camera keeps our own defaults (45° FOV, no roll, far plane derived from the distance)
+  // until a camera setup says otherwise, and ResetToGameCamera brings them back here.
+  private fov = MapViewerScene.GAME_FOV;
+  private roll = 0;
+  private farZ = 0; // 0 = derive from the distance (the game camera's own rule)
+  // The camera the map's SCRIPT drives: CameraSetupApply / PanCameraTo / SetCameraField all
+  // blend the ONE camera above, over time (src/render/scriptCamera.ts).
+  private scriptCam = new ScriptCamera(() => ({
+    distance: MapViewerScene.MELEE_START,
+    farZ: 0,
+    aoaDeg: (-MapViewerScene.GAME_PITCH * 180) / Math.PI,
+    fovDeg: (MapViewerScene.GAME_FOV * 180) / Math.PI,
+    rollDeg: 0,
+    rotationDeg: 90,
+    zOffset: 0,
+  }));
   private keys = new Set<string>();
   private dragging = false;
   private midPanning = false; // middle-mouse (button 1) held → drag-pan the camera (WC3)
@@ -435,6 +463,21 @@ export class MapViewerScene {
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
   private multiboard: MultiboardOverlay | null = null; // CreateMultiboard — the grid scoreboard (7.22)
   private timerDialogs: TimerDialogOverlay | null = null; // CreateTimerDialog — the countdown windows (7.21)
+  private cinematic: CinematicPanelOverlay | null = null; // the letterbox + transmissions + the fade (7.24)
+  // The two switches CinematicModeBJ throws, tracked so they can be restored: the HUD is on
+  // screen only when BOTH the interface (ShowInterface) and the UI (EnableUserUI) are on —
+  // they are different natives, and a cinematic uses them for different things (the letterbox
+  // vs. hiding everything under a fade).
+  private interfaceShown = true;
+  private userUi = true;
+  /** EnableUserControl — false while a cinematic owns the mouse, keyboard and camera. */
+  private userControl = true;
+  /** SetGameSpeed / GetGameSpeed — the common.j gamespeed index. 2 = MAP_SPEED_NORMAL. */
+  private gameSpeed = 2;
+  // The speaker's animated bust during a transmission — its own bust viewer, on the FDF
+  // panel's canvas, exactly like the HUD's portrait (which it must not steal).
+  private cinePortraitViewer: ModelViewerScene | null = null;
+  private cinePortraitFor = "";
   private dialog: GameDialogOverlay | null = null; // DialogCreate — and the melee end screen
   /** The game's own string table (UI\FrameDef\GlobalStrings.fdf) behind GetLocalizedString:
    *  blizzard.j writes the whole victory/defeat screen in its keys. Loaded once, lazily. */
@@ -1148,7 +1191,13 @@ export class MapViewerScene {
         this.onExit?.();
       },
       pauseGame: (flag) => (this.paused = flag),
-      enableUserUi: (flag) => (flag ? this.hud?.show() : this.hud?.hide()),
+      // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
+      // cinematic fade (the filter covers the world, not the UI, so the UI has to go). It is
+      // a different switch from ShowInterface's letterbox, and the HUD needs both to be on.
+      enableUserUi: (flag) => {
+        this.userUi = flag;
+        this.syncHudVisible();
+      },
       // --- the trigger's AUDIO output (7.20) ---
       // A sound LABEL is how a map names volume/pitch/3D/distances without re-typing them;
       // the SoundBoard searches every UI\SoundInfo table for it. This one hook is what
@@ -1265,6 +1314,8 @@ export class MapViewerScene {
       // only ever sees living units.
       enumUnits: () => this.unitSnapshots(),
       selectedUnits: (player) => (player === this.localPlayer ? this.rts?.selectedUnitIds() ?? [] : []),
+      selectUnit: (id, select) => this.rts?.scriptSelect(id, select),
+      clearSelection: () => this.rts?.clearSelection(),
       isUnitType: (id, t, typeId) => this.unitTypeIs(id, t, typeId),
       // IsUnitAlly/IsUnitEnemy: team-based, so neutral hostile (team -1) is nobody's ally.
       isUnitAlly: (id, player) => {
@@ -1313,6 +1364,76 @@ export class MapViewerScene {
       },
       enableWeatherEffect: (id, on) => this.weather?.enable(id, on),
       removeWeatherEffect: (id) => this.weather?.remove(id),
+      // --- cameras + cinematics (7.24) ---
+      // Every camera MOVE is one call: the script names fields and (maybe) a destination,
+      // and ScriptCamera blends the live camera there. The …ForPlayer BJs already gated on
+      // GetLocalPlayer, so anything arriving here is for the human at this machine.
+      // read → mutate → WRITE BACK. A zero-duration move lands NOW (see ScriptCamera.apply),
+      // and the very next line of Monolith's trigger reads the camera straight back through
+      // ResetToGameCamera — it must see the shot the line before it just applied.
+      applyCamera: (move) => {
+        const cam = this.readCamera();
+        this.scriptCam.apply(move, cam);
+        this.writeCamera(cam);
+      },
+      cameraField: (field) => {
+        const cam = this.readCamera();
+        return [cam.distance, cam.farZ, cam.aoaDeg, cam.fovDeg, cam.rollDeg, cam.rotationDeg, cam.zOffset][field] ?? 0;
+      },
+      cameraTarget: () => ({ x: this.target[0], y: this.target[1], z: this.target[2] }),
+      cameraEye: () => {
+        const cp = Math.cos(this.pitch);
+        return {
+          x: this.target[0] - Math.cos(this.yaw) * cp * this.distance,
+          y: this.target[1] - Math.sin(this.yaw) * cp * this.distance,
+          z: this.target[2] + Math.sin(this.pitch) * this.distance,
+        };
+      },
+      cameraBounds: () => {
+        const b = this.mapBounds ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+        return { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY };
+      },
+      setCameraTargetUnit: (id, xOff, yOff) => {
+        this.cameraLock = false; // the script's controller replaces the portrait's follow-lock
+        this.scriptCam.setTargetUnit(id, xOff, yOff);
+      },
+      resetToGameCamera: (duration) => this.scriptCam.resetToGameCamera(duration, this.readCamera()),
+      stopCamera: () => this.scriptCam.stop(),
+      cameraRotateMode: (x, y, radians, duration) => this.scriptCam.setRotateMode(x, y, radians, duration, this.readCamera()),
+      setCameraNoise: (source, mag, vel, vertOnly) => this.scriptCam.setNoise(source, mag, vel, vertOnly),
+      // ShowInterface(false) is the letterbox: the console goes, the bars come in.
+      showInterface: (show, fade) => {
+        this.interfaceShown = show;
+        this.cinematic?.setLetterbox(!show, fade);
+        this.syncHudVisible();
+      },
+      enableUserControl: (enable) => {
+        this.userControl = enable;
+        if (!enable) {
+          this.rts?.clearSelection(); // a cinematic runs with nothing selected, as in WC3
+          this.hud?.clearOrderMode();
+        }
+      },
+      setDawnDusk: (enable) => {
+        if (this.rts) this.rts.simWorld.dawnDusk = enable;
+      },
+      isDawnDuskEnabled: () => this.rts?.simWorld.dawnDusk ?? true,
+      // SetGameSpeed is RECORDED, not applied: WC3's five speeds are engine constants that
+      // live in no data file we have, and guessing a multiplier would be exactly the kind of
+      // invented number CLAUDE.md forbids. Recording it is still load-bearing — cinematic
+      // mode saves GetGameSpeed on the way in and restores it on the way out, so a lying
+      // getter would leave the map running at cinematic speed forever.
+      setGameSpeed: (speed) => {
+        this.gameSpeed = speed;
+      },
+      getGameSpeed: () => this.gameSpeed,
+      isFogEnabled: () => this.rts?.isFogEnabled() ?? true,
+      isFogMaskEnabled: () => this.rts?.isFogMaskEnabled() ?? true,
+      displayCineFilter: (filter) => this.cinematic?.setFilter(filter),
+      setCinematicScene: (scene) => {
+        if (this.cinematic?.setScene(scene) && scene) void this.loadCinematicPortrait(scene.portraitUnitId);
+      },
+      pingMinimap: (ping) => this.hud?.ping(ping),
       // --- melee from the script (7.3) ---
       // MeleeStartingVisibility opens a melee game at 08:00 (bj_MELEE_STARTING_TOD).
       setTimeOfDay: (hour) => {
@@ -1607,7 +1728,12 @@ export class MapViewerScene {
         slots: opts.slots.map((s) => ({
           index: s.id,
           raceIndex: RACE_INDEX[opts.races?.get(s.id) ?? resolveRace(s.race)],
-          controller: s.controller === "computer" ? 2 : 1, // MAP_CONTROL_COMPUTER / _USER
+          // common.j: MAP_CONTROL_USER = ConvertMapControl(0), _COMPUTER = 1 (NOT 1 and 2 —
+          // we had it off by one, so `GetPlayersByMapControl(MAP_CONTROL_USER)` built an
+          // EMPTY force and every GUI "for each user player" loop silently did nothing.
+          // config() had already set the right value; applyLobby was overwriting it. Found
+          // by 7.24: Monolith runs its whole intro cinematic inside one of those loops.)
+          controller: s.controller === "computer" ? MAP_CONTROL.COMPUTER : MAP_CONTROL.USER,
           team: s.team,
           startLocation: -1, // config()'s SetPlayerStartLocation already placed each slot
         })),
@@ -1752,7 +1878,14 @@ export class MapViewerScene {
     this.leaderboard?.dispose();
     this.multiboard?.dispose();
     this.timerDialogs?.dispose();
+    this.cinematic?.dispose();
     this.dialog?.dispose();
+    // A fresh match starts out of any cinematic the last one may have ended in.
+    this.interfaceShown = true;
+    this.userUi = true;
+    this.userControl = true;
+    this.gameSpeed = 2; // MAP_SPEED_NORMAL
+    this.cinePortraitFor = "";
     // WC3 skins the in-game panels with the LOCAL player's race (an Orc player's dialog is
     // Orc-bordered) — that's what the war3skins.txt section names are (see fdf/library.ts).
     // The same sections hold the MUSIC playlists, which is how melee gives an Orc player
@@ -1763,6 +1896,7 @@ export class MapViewerScene {
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin);
     this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
+    this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
     this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
       // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
       // game — both are the engine's doing, which is why blizzard.j's MeleeVictoryDialogBJ
@@ -3534,6 +3668,46 @@ export class MapViewerScene {
       });
   }
 
+  // --- cinematics (7.24) -------------------------------------------------------------
+
+  /** The HUD is on screen only when the interface (ShowInterface) AND the UI (EnableUserUI)
+   *  are both on. Two natives, two different jobs — the letterbox hides the console for the
+   *  duration of a cinematic; EnableUserUI hides everything for the duration of a fade. */
+  private syncHudVisible(): void {
+    if (this.interfaceShown && this.userUi) this.hud?.show();
+    else this.hud?.hide();
+  }
+
+  /** The speaker's animated bust, on the cinematic panel's own canvas. Same machinery as the
+   *  HUD's portrait (a `_Portrait.mdx` looping its Portrait clip) but a SEPARATE viewer —
+   *  the two are on screen at once during a transmission in ordinary play, and one would
+   *  otherwise steal the other's canvas.
+   *
+   *  `typeId` is a unit TYPE, not a unit: a transmission shows the portrait of whatever the
+   *  speaker IS (SetCinematicScene takes a unit-type rawcode), so a Footman speaking always
+   *  shows the Footman bust. */
+  private async loadCinematicPortrait(typeId: string): Promise<void> {
+    const panel = this.cinematic;
+    if (!panel || !typeId) return;
+    const def = this.registry.get(typeId);
+    if (!def?.model) return;
+    const canvas = panel.portraitCanvas();
+    this.cinePortraitViewer ??= new ModelViewerScene(canvas, this.vfs);
+    if (this.cinePortraitFor === typeId) {
+      this.cinePortraitViewer.start(); // same speaker again — just wake the bust
+      return;
+    }
+    const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
+    const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+    try {
+      await this.cinePortraitViewer.load(path, 12, true, 0);
+      this.cinePortraitFor = typeId;
+      this.cinePortraitViewer.start();
+    } catch {
+      /* no bust for this type — the panel just shows an empty pane */
+    }
+  }
+
   /** Portrait busts are loaded lazily on the first selection of each unit type:
    *  the MDX parse + texture upload stalls a frame (measured 100–280ms), and the
    *  very first portrait additionally builds the bust viewer + compiles its
@@ -4360,11 +4534,15 @@ export class MapViewerScene {
     const frame = (t: number) => {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
-      this.updateCamera();
+      this.updateCamera(dt);
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
       this.updateClock(dt);
       this.updatePortrait();
+      // The cinematic panel runs on the RENDER clock, not the sim's: a fade must keep fading
+      // and a subtitle must keep counting down while the game is paused under a dialog — and
+      // `dt` here is MILLISECONDS, which is the mistake this subsystem is most prone to.
+      this.cinematic?.update(dt / 1000);
       // Re-scan for new on-map unit types (trained units, scouted enemies) a couple
       // times a second and warm their portraits before they're clicked.
       this.portraitWarmAccum += dt;
@@ -5179,7 +5357,7 @@ export class MapViewerScene {
     this.fogAccum = 0;
   }
 
-  private updateCamera(): void {
+  private updateCamera(dtMs = 1000 / 60): void {
     const scene = this.viewer.map?.worldScene;
     if (!scene) return;
 
@@ -5196,16 +5374,34 @@ export class MapViewerScene {
 
     // Pan the ground target relative to view yaw. WASD only outside a match —
     // in-game the letters belong to command hotkeys (M/A/S), WC3 pans with
-    // the arrow keys.
+    // the arrow keys. Under EnableUserControl(false) — cinematic mode — the player has no
+    // camera at all: the script owns it, and an arrow key must not fight the shot.
     const letters = !this.hud;
     const speed = this.distance * 0.9 * (1 / 60);
     const fwd: [number, number] = [Math.cos(this.yaw), Math.sin(this.yaw)];
     const right: [number, number] = [fwd[1], -fwd[0]];
-    if ((letters && this.keys.has("w")) || this.keys.has("arrowup")) this.pan(fwd, speed);
-    if ((letters && this.keys.has("s")) || this.keys.has("arrowdown")) this.pan(fwd, -speed);
-    if ((letters && this.keys.has("d")) || this.keys.has("arrowright")) this.pan(right, speed);
-    if ((letters && this.keys.has("a")) || this.keys.has("arrowleft")) this.pan(right, -speed);
-    this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
+    if (this.userControl) {
+      if ((letters && this.keys.has("w")) || this.keys.has("arrowup")) this.pan(fwd, speed);
+      if ((letters && this.keys.has("s")) || this.keys.has("arrowdown")) this.pan(fwd, -speed);
+      if ((letters && this.keys.has("d")) || this.keys.has("arrowright")) this.pan(right, speed);
+      if ((letters && this.keys.has("a")) || this.keys.has("arrowleft")) this.pan(right, -speed);
+      this.updateEdgeScroll(fwd, right, speed); // pan when the cursor rests at a screen edge
+    } else {
+      this.showScrollArrow(0, 0);
+    }
+
+    // The map's script drives the same camera (7.24) — a camera setup, a timed pan, a unit
+    // to ride, a shake. It runs AFTER the player's input so a cinematic wins, and it lets go
+    // of each field the moment that field's blend lands. `dtMs` is MILLISECONDS (the frame
+    // loop's clock); every duration in a JASS camera call is SECONDS.
+    if (this.scriptCam.active) {
+      const cam = this.readCamera();
+      this.scriptCam.update(Math.min(dtMs, 100) / 1000, cam, (id) => {
+        const u = this.rts?.simWorld.units.get(id);
+        return u ? { x: u.x, y: u.y } : null;
+      });
+      this.writeCamera(cam);
+    }
 
     // Keep the WebGL backing buffer matched to the on-screen size EVERY frame so
     // the scene keeps its true aspect ratio when the window changes — F11
@@ -5228,11 +5424,72 @@ export class MapViewerScene {
       this.target[1] - Math.sin(this.yaw) * cp * this.distance,
       this.target[2] + Math.sin(this.pitch) * this.distance,
     ]);
-    scene.camera.perspective(Math.PI / 4, this.aspect(), 16, this.distance * 8);
-    scene.camera.moveToAndFace(eye, this.target, UP);
+    // CameraSetSourceNoise shakes the EYE without moving what it looks at (target noise, by
+    // contrast, is already folded into this.target by scriptCam.update).
+    if (this.scriptCam.active) {
+      const [sx, sy, sz] = this.scriptCam.eyeShake();
+      eye[0] += sx;
+      eye[1] += sy;
+      eye[2] += sz;
+    }
+    // FARZ 0 = "the game camera's own rule", which is 8× the focus distance.
+    scene.camera.perspective(this.fov, this.aspect(), 16, this.farZ > 0 ? this.farZ : this.distance * 8);
+    scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
     // Drive positional (WANT3D) audio: listener at the ground focus, facing the
     // camera's look direction so on-screen battles pan + attenuate around center.
     this.sounds?.setListener(this.target, eye);
+  }
+
+  /** The camera's up axis. World-up, unless CAMERA_FIELD_ROLL has tilted the shot — then it
+   *  is world-up rotated about the view axis (Rodrigues, with forward as the axis). Roll is
+   *  0 in every bundled map, but it is a real field and a setup that names it must work. */
+  private readonly upTmp = new Float32Array([0, 0, 1]);
+  private upVector(eye: Float32Array): Float32Array {
+    if (!this.roll) return UP;
+    const f = [this.target[0] - eye[0], this.target[1] - eye[1], this.target[2] - eye[2]];
+    const len = Math.hypot(f[0], f[1], f[2]) || 1;
+    f[0] /= len; f[1] /= len; f[2] /= len;
+    const c = Math.cos(this.roll), s = Math.sin(this.roll);
+    // u' = u·cos + (f × u)·sin + f·(f·u)·(1 − cos), with u = world up (0,0,1).
+    const cross = [f[1] * 1 - f[2] * 0, f[2] * 0 - f[0] * 1, f[0] * 0 - f[1] * 0];
+    const dot = f[2];
+    this.upTmp[0] = 0 * c + cross[0] * s + f[0] * dot * (1 - c);
+    this.upTmp[1] = 0 * c + cross[1] * s + f[1] * dot * (1 - c);
+    this.upTmp[2] = 1 * c + cross[2] * s + f[2] * dot * (1 - c);
+    return this.upTmp;
+  }
+
+  /** The live camera in the units the JASS setters speak (degrees for the angles). This and
+   *  writeCamera are the whole adapter between our orbit camera and WC3's field model. */
+  private readCamera(): CameraState {
+    const DEG = 180 / Math.PI;
+    return {
+      targetX: this.target[0],
+      targetY: this.target[1],
+      zOffset: this.target[2],
+      distance: this.distance,
+      rotationDeg: this.yaw * DEG,
+      // WC3's ANGLE_OF_ATTACK is the VIEW direction's tilt (negative = looking down); our
+      // pitch is the eye's elevation above the focus. Same angle, opposite sign.
+      aoaDeg: -this.pitch * DEG,
+      fovDeg: this.fov * DEG,
+      rollDeg: this.roll * DEG,
+      farZ: this.farZ,
+    };
+  }
+
+  private writeCamera(c: CameraState): void {
+    const RAD = Math.PI / 180;
+    this.target[0] = c.targetX;
+    this.target[1] = c.targetY;
+    this.target[2] = c.zOffset;
+    this.distance = c.distance;
+    this.yaw = c.rotationDeg * RAD;
+    this.pitch = -c.aoaDeg * RAD;
+    // A camera setup with a 0 or absurd FOV would render nothing at all; keep it sane.
+    this.fov = clamp(c.fovDeg * RAD, 0.1, Math.PI * 0.9);
+    this.roll = c.rollDeg * RAD;
+    this.farZ = c.farZ;
   }
 
   // Edge-of-screen scrolling (WC3): pan when the cursor rests within EDGE_MARGIN of
@@ -5475,6 +5732,9 @@ export class MapViewerScene {
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
       this.sounds?.unlock(); // browsers gate audio until the first user gesture
+      // EnableUserControl(false) — a cinematic owns the mouse (7.24). No selecting, no
+      // orders, no drag-pan; the shot is the script's to compose.
+      if (!this.userControl) return;
       if (e.button === 1) {
         // Middle mouse (scroll-wheel click) held: drag-pan the camera, WC3-style.
         // preventDefault suppresses the browser's middle-click autoscroll cursor.
@@ -5618,6 +5878,7 @@ export class MapViewerScene {
       "wheel",
       (e) => {
         e.preventDefault();
+        if (!this.userControl) return; // a cinematic owns the zoom too (7.24)
         this.distance = clamp(this.distance * (1 + Math.sign(e.deltaY) * 0.1), MapViewerScene.ZOOM_MIN, MapViewerScene.ZOOM_MAX);
       },
       { passive: false },

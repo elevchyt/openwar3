@@ -115,7 +115,8 @@ export function registerDialogNatives(rt: Runtime): void {
     c.rt.hooks?.enableUserUi?.(truthy(a[0]));
     return JNULL;
   });
-  def(rt, "EnableUserControl", () => JNULL); // we never lock input away from the player
+  // EnableUserControl is REAL now (7.24, natives/cinematic.ts) — a cinematic takes the mouse
+  // and keyboard away from the player, and hands them back when it ends.
   // AllowVictoryDefeat gates the whole end-game path on these two. They report the "no
   // victory"/"no defeat" CHEATS being off — which they are; we implement no cheat codes.
   def(rt, "IsNoVictoryCheat", () => jBool(false));
