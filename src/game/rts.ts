@@ -1108,6 +1108,19 @@ export class RtsController {
       if (this.processedInstances.has(unit.instance)) continue; // already seeded/skipped
       this.processedInstances.add(unit.instance);
       const loc = unit.instance.localLocation;
+      // A pre-placed ITEM (war3mapUnits.doo carries items alongside units — an item row has
+      // `itemid` where a unit row has `unitid`, and the viewer renders both because its
+      // unit table is UnitData + UnitUI + **ItemData**). Hide it: the map's OWN script
+      // creates the real one (main() → CreateAllItems() → CreateItem), which spawns a live,
+      // pickable sim item with its own model (7.18) — so the viewer's widget is a duplicate,
+      // and a decorative one at that (it can't be picked up). Verified over the whole
+      // bundled corpus: every map with .doo item entries also ships CreateAllItems(), so
+      // deferring to the script never loses an item.
+      const itemId = unit.row?.string("itemid");
+      if (itemId && this.items.has(itemId)) {
+        this.clearExcessInstance(unit.instance);
+        continue;
+      }
       const def = this.registry.get(unit.row?.string("unitid") ?? "");
       // Pre-placed PLAYER unit (custom map, owner 0–11): adopt it as an OWNED,
       // simulated unit (issue #33) — this is what gives the local player vision of

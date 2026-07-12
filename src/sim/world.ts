@@ -167,6 +167,13 @@ export interface SimCorpse {
  *  effect is derived from the item def's granted abilities (world.ts item logic),
  *  keyed by the base ability `code` — the same dispatch model spells use. */
 export interface HeldItem {
+  /** Entity id — the SAME id space (and the same id) the item had on the ground.
+   *  An item in WC3 is one entity that moves between the ground and an inventory,
+   *  and a JASS `item` handle refers to it across that move: `CreateItem` →
+   *  `UnitAddItem` → a PICKUP trigger's `GetManipulatedItem()` must all be the one
+   *  item. So identity is carried through pickup/give/drop rather than re-minted
+   *  (7.18) — without it the handle would go stale the moment a hero picked it up. */
+  id: number;
   itemId: string; // item rawcode (ItemRegistry key)
   charges: number; // remaining uses (0 = a passive/permanent item, no active use)
   cooldownLeft: number; // seconds until this item can be used again
@@ -175,11 +182,38 @@ export interface HeldItem {
 /** An item lying on the ground: droppable, pickable, and (in WC3) destructible.
  *  Not a SimUnit — a lightweight entity the renderer draws as the item's model. */
 export interface SimItem {
-  id: number; // sim entity id (own id space)
+  id: number; // sim entity id (own id space; kept when it moves into an inventory)
   itemId: string; // item rawcode
   x: number;
   y: number;
   charges: number; // charges carried onto the ground (restored when picked back up)
+}
+
+/** Where an item is right now — the one lookup the trigger engine needs, since a
+ *  JASS `item` handle can refer to an item lying on the ground OR sitting in a
+ *  hero's inventory (`holder`/`slot` are 0/-1 for a ground item). */
+export interface ItemSnapshot {
+  id: number;
+  typeId: string; // item rawcode
+  charges: number;
+  x: number;
+  y: number;
+  holder: number; // sim id of the unit carrying it (0 = on the ground)
+  slot: number; // inventory slot when held, else -1
+  /** GetItemPlayer: the holder's owner, or Neutral Passive (15) for an item nobody
+   *  carries — WC3 files every unowned item under that slot. */
+  owner: number;
+}
+
+/** An item manipulated by a unit (EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM —
+ *  7.18). The item is a SNAPSHOT, not a live reference, because the event is drained
+ *  a tick after the sim raised it and the item may be gone by then (a tome is consumed
+ *  on pickup; a potion's last charge destroys it) — GetManipulatedItem must still hand
+ *  the script a usable handle, exactly as GetDyingUnit does for a corpse. */
+export interface ItemEvent {
+  unit: EventUnitInfo; // GetManipulatingUnit (the buyer, for a sale)
+  item: { id: number; typeId: string; charges: number };
+  phase: "pickup" | "drop" | "use" | "sell";
 }
 
 /** A creep's dropped-item table (from war3mapUnits.doo). Each SET drops (at most)
@@ -763,6 +797,7 @@ export class SimWorld {
   captureConstruct = false; // EVENT_(PLAYER_)UNIT_CONSTRUCT_* (7.17)
   captureTrain = false; // EVENT_(PLAYER_)UNIT_TRAIN_* (7.17)
   captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
+  captureItems = false; // EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM (7.18)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
   private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
@@ -771,6 +806,7 @@ export class SimWorld {
   private constructEvents: ConstructEvent[] = [];
   private trainEvents: TrainEvent[] = [];
   private heroEvents: HeroEvent[] = [];
+  private itemEvents: ItemEvent[] = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -1925,6 +1961,22 @@ export class SimWorld {
     if (!this.heroEvents.length) return this.heroEvents;
     const out = this.heroEvents;
     this.heroEvents = [];
+    return out;
+  }
+
+  /** Record an item manipulation (`captureItems`) — raised where the item actually moves
+   *  (pickUpItem / doDropItem / transferItem / useItem), so a trigger's UnitAddItem and a
+   *  hero walking over the item raise the same event, as in WC3. The item is snapshotted:
+   *  a consumed powerup no longer exists by the time the event is drained. */
+  private noteItem(u: SimUnit, item: { id: number; itemId: string; charges: number }, phase: ItemEvent["phase"]): void {
+    if (!this.captureItems) return;
+    this.itemEvents.push({ unit: eventInfo(u), item: { id: item.id, typeId: item.itemId, charges: item.charges }, phase });
+  }
+  /** Item events since the last drain (`captureItems`). */
+  drainItemEvents(): ItemEvent[] {
+    if (!this.itemEvents.length) return this.itemEvents;
+    const out = this.itemEvents;
+    this.itemEvents = [];
     return out;
   }
 
@@ -4998,7 +5050,9 @@ export class SimWorld {
     }
   }
 
-  /** A dying inventory-holder (a hero) scatters its held items on the ground. */
+  /** A dying inventory-holder (a hero) scatters its held items on the ground. Each one
+   *  keeps its entity id (it's the same item, now lying down) and raises DROP_ITEM —
+   *  WC3 fires the drop event for a dying hero's inventory too. */
   private dropInventory(u: SimUnit): void {
     let n = 0;
     for (let i = 0; i < u.inventory.length; i++) {
@@ -5006,17 +5060,21 @@ export class SimWorld {
       if (!held) continue;
       u.inventory[i] = null;
       const ang = (n * 2.399963) % (Math.PI * 2);
-      this.spawnGroundItem(held.itemId, u.x + Math.cos(ang) * 64, u.y + Math.sin(ang) * 64, held.charges);
+      this.spawnGroundItem(held.itemId, u.x + Math.cos(ang) * 64, u.y + Math.sin(ang) * 64, held.charges, held.id);
+      this.noteItem(u, held, "drop");
       n++;
     }
   }
 
   /** Create a ground item at a point (queued for the renderer to model). The
    *  position is snapped to a pathing-grid cell centre so items always rest on a
-   *  grid slot (WC3 behaviour) rather than at arbitrary sub-cell offsets. */
-  private spawnGroundItem(itemId: string, x: number, y: number, charges: number): SimItem {
+   *  grid slot (WC3 behaviour) rather than at arbitrary sub-cell offsets. `reuseId`
+   *  puts an item that already exists as an entity (one dropped from an inventory)
+   *  back on the ground AS ITSELF: identity survives the move, so a JASS `item` handle
+   *  taken before the drop still refers to it (7.18). */
+  private spawnGroundItem(itemId: string, x: number, y: number, charges: number, reuseId = 0): SimItem {
     const [sx, sy] = this.snapItemPos(x, y);
-    const it: SimItem = { id: this.nextItemId++, itemId, x: sx, y: sy, charges };
+    const it: SimItem = { id: reuseId || this.nextItemId++, itemId, x: sx, y: sy, charges };
     this.items.set(it.id, it);
     this.itemSpawns.push(it);
     return it;
@@ -5141,35 +5199,46 @@ export class SimWorld {
     }
   }
 
-  /** Put a ground item into a hero's inventory. Powerups (tomes, runes, gold) are
-   *  consumed instantly instead of stored. False if the inventory is full. */
-  private pickUpItem(u: SimUnit, it: SimItem): boolean {
+  /** Put a ground item into a hero's inventory. `wantSlot` >= 0 demands THAT slot and
+   *  fails if it's taken (UnitAddItemToSlotById is exact — it does not fall back to a free
+   *  slot); -1 takes the first free one, which is what walking over an item does. Powerups
+   *  (tomes, runes, gold) are consumed instantly instead of stored. False if there's no
+   *  room. Raises PICKUP_ITEM — a powerup fires it too (WC3 picks the tome up, then
+   *  consumes it). */
+  private pickUpItem(u: SimUnit, it: SimItem, wantSlot = -1): boolean {
     if (!this.itemReg) return false;
     const def = this.itemReg.get(it.itemId);
     if (!def) { this.removeGroundItem(it.id); return true; }
     if (def.powerup) {
+      this.noteItem(u, it, "pickup");
       this.applyPowerup(u, def);
       this.removeGroundItem(it.id);
       return true;
     }
-    const slot = u.inventory.indexOf(null);
-    if (slot < 0) return false; // inventory full — leave the item on the ground
-    u.inventory[slot] = { itemId: it.itemId, charges: it.charges, cooldownLeft: 0 };
+    const slot = wantSlot >= 0
+      ? (wantSlot < u.inventory.length && !u.inventory[wantSlot] ? wantSlot : -1)
+      : u.inventory.indexOf(null);
+    if (slot < 0) return false; // inventory full (or that slot taken) — leave it on the ground
+    u.inventory[slot] = { id: it.id, itemId: it.itemId, charges: it.charges, cooldownLeft: 0 };
     this.removeGroundItem(it.id);
+    this.noteItem(u, it, "pickup");
     this.recomputeStats(u); // reflect any stat bonus immediately
     return true;
   }
 
   /** Hand a held item from one hero to another (drops to the ground if the
-   *  recipient's inventory is full). */
+   *  recipient's inventory is full). WC3 raises BOTH events for a hand-over: the giver
+   *  DROPs the item and the receiver PICKs it UP. */
   private transferItem(from: SimUnit, slot: number, to: SimUnit): void {
     const held = from.inventory[slot];
     if (!held) return;
     const dest = to.inventory.indexOf(null);
-    if (dest < 0) { this.spawnGroundItem(held.itemId, to.x, to.y, held.charges); }
-    else { to.inventory[dest] = { itemId: held.itemId, charges: held.charges, cooldownLeft: 0 }; }
+    if (dest < 0) { this.spawnGroundItem(held.itemId, to.x, to.y, held.charges, held.id); }
+    else { to.inventory[dest] = { id: held.id, itemId: held.itemId, charges: held.charges, cooldownLeft: 0 }; }
     from.inventory[slot] = null;
     from.pendingGive = null;
+    this.noteItem(from, held, "drop");
+    this.noteItem(to, held, "pickup");
     this.recomputeStats(from);
     this.recomputeStats(to);
   }
@@ -5201,13 +5270,15 @@ export class SimWorld {
     return true;
   }
 
-  /** Actually place a slot's item on the ground at (x,y) and clear the slot. */
+  /** Actually place a slot's item on the ground at (x,y) and clear the slot. The item
+   *  keeps its entity id (same item, now on the ground) and raises DROP_ITEM. */
   private doDropItem(u: SimUnit, slot: number, x: number, y: number): void {
     const held = u.inventory[slot];
     if (!held) return;
     u.inventory[slot] = null;
     u.pendingDrop = null;
-    this.spawnGroundItem(held.itemId, x, y, held.charges);
+    this.spawnGroundItem(held.itemId, x, y, held.charges, held.id);
+    this.noteItem(u, held, "drop");
     this.recomputeStats(u);
   }
 
@@ -5267,6 +5338,10 @@ export class SimWorld {
       }
       if (!fired) return false; // handled code but nothing to do (already full) — no charge spent
       this.consumeItemUse(u, slot, def, lvl?.cooldown || 0);
+      // USE_ITEM is raised AFTER the charge is spent: GetItemCharges inside a use trigger
+      // reports what's left, which is what the classic "give the item its charge back to
+      // make it infinite" JASS idiom relies on (SetItemCharges(GetManipulatedItem(), n+1)).
+      this.noteItem(u, held, "use");
       return true;
     }
     return false;
@@ -5321,6 +5396,182 @@ export class SimWorld {
       }
     }
     this.recomputeStats(u);
+  }
+
+  // === item trigger-effect API (7.18) ======================================
+  // What a map's triggers reach for: create an item, give it to a hero, drop it, use
+  // it, read/set its charges. Each is a thin wrapper over the item mechanics above, so
+  // a trigger-driven pickup goes through exactly the same path (and raises exactly the
+  // same events) as a hero walking over the item. The JASS bridge is
+  // src/jass/natives/items.ts → EngineHooks; ids are ITEM entity ids (SimItem.id /
+  // HeldItem.id), which is what a JASS `item` handle stands for.
+
+  /** CreateItem — put a new item of type `typeId` on the ground. Charges default to the
+   *  item's own `uses` (a Potion of Healing is created with its 1 charge). -1 if the
+   *  rawcode isn't a known item type. */
+  createItem(typeId: string, x: number, y: number, charges = -1): number {
+    const def = this.itemReg?.get(typeId);
+    if (!def) return -1;
+    return this.spawnGroundItem(typeId, x, y, charges >= 0 ? charges : def.charges).id;
+  }
+
+  /** Where item `id` is right now — on the ground or in an inventory (7.18). One lookup
+   *  for both, because a JASS `item` handle doesn't care which. */
+  itemSnapshot(id: number): ItemSnapshot | null {
+    const ground = this.items.get(id);
+    // PLAYER_NEUTRAL_PASSIVE (common.j player 15) owns everything nobody carries.
+    if (ground) return { id, typeId: ground.itemId, charges: ground.charges, x: ground.x, y: ground.y, holder: 0, slot: -1, owner: 15 };
+    for (const u of this.units.values()) {
+      const slot = u.inventory.findIndex((h) => h?.id === id);
+      if (slot >= 0) {
+        const held = u.inventory[slot]!;
+        return { id, typeId: held.itemId, charges: held.charges, x: u.x, y: u.y, holder: u.id, slot, owner: jassOwnerOf(u) };
+      }
+    }
+    return null;
+  }
+
+  /** Every item lying on the ground (EnumItemsInRect scans this — a carried item is not
+   *  enumerable, matching WC3). */
+  groundItems(): SimItem[] {
+    return [...this.items.values()];
+  }
+
+  /** RemoveItem — destroy an item wherever it is (ground or inventory). */
+  removeItemById(id: number): boolean {
+    if (this.items.has(id)) { this.removeGroundItem(id); return true; }
+    for (const u of this.units.values()) {
+      const slot = u.inventory.findIndex((h) => h?.id === id);
+      if (slot >= 0) {
+        u.inventory[slot] = null;
+        this.recomputeStats(u);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** SetItemCharges. */
+  setItemCharges(id: number, charges: number): boolean {
+    const n = Math.max(0, Math.trunc(charges));
+    const ground = this.items.get(id);
+    if (ground) { ground.charges = n; return true; }
+    for (const u of this.units.values()) {
+      const held = u.inventory.find((h) => h?.id === id);
+      if (held) { held.charges = n; return true; }
+    }
+    return false;
+  }
+
+  /** SetItemPosition — move a ground item. WC3 semantics: positioning an item a unit is
+   *  CARRYING takes it out of the inventory and puts it on the ground there. */
+  setItemPosition(id: number, x: number, y: number): boolean {
+    const ground = this.items.get(id);
+    if (ground) {
+      const [sx, sy] = this.snapItemPos(x, y);
+      ground.x = sx;
+      ground.y = sy;
+      this.itemRemovals.push(id); // re-model at the new spot (the renderer has no "move item")
+      this.itemSpawns.push(ground);
+      return true;
+    }
+    for (const u of this.units.values()) {
+      const slot = u.inventory.findIndex((h) => h?.id === id);
+      if (slot >= 0) { this.doDropItem(u, slot, x, y); return true; }
+    }
+    return false;
+  }
+
+  /** UnitAddItem — give an existing item to a unit (from the ground, or straight out of
+   *  another unit's inventory). `wantSlot` >= 0 targets a specific slot
+   *  (UnitAddItemToSlotById). False if the item is gone or the inventory is full — the
+   *  item then stays exactly where it was, which is what makes blizzard.j's
+   *  UnitAddItemByIdSwapped leave it at the hero's feet. */
+  unitAddItem(unitId: number, itemId: number, wantSlot = -1): boolean {
+    const u = this.units.get(unitId);
+    if (!u || !u.inventory.length) return false;
+    const ground = this.items.get(itemId);
+    if (ground) return this.pickUpItem(u, ground, wantSlot);
+    // Held by someone else: hand it over (the giver DROPs, the receiver PICKs UP).
+    for (const from of this.units.values()) {
+      const slot = from.inventory.findIndex((h) => h?.id === itemId);
+      if (slot >= 0) {
+        if (from.id === unitId) return true; // already his
+        if (u.inventory.indexOf(null) < 0) return false;
+        this.transferItem(from, slot, u);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** UnitRemoveItem — take an item off a unit and leave it on the ground at its feet. */
+  unitRemoveItem(unitId: number, itemId: number): boolean {
+    const u = this.units.get(unitId);
+    const slot = u?.inventory.findIndex((h) => h?.id === itemId) ?? -1;
+    if (!u || slot < 0) return false;
+    this.doDropItem(u, slot, u.x, u.y);
+    return true;
+  }
+
+  /** UnitRemoveItemFromSlot — the same, by slot; returns the item id (0 = empty slot). */
+  unitRemoveItemFromSlot(unitId: number, slot: number): number {
+    const u = this.units.get(unitId);
+    const held = u?.inventory[slot];
+    if (!u || !held) return 0;
+    const id = held.id;
+    this.doDropItem(u, slot, u.x, u.y);
+    return id;
+  }
+
+  /** UnitDropItemPoint — a trigger drops the item AT the point immediately (unlike the
+   *  player's drop order, which walks the hero over first — see dropItem). */
+  unitDropItemPoint(unitId: number, itemId: number, x: number, y: number): boolean {
+    const u = this.units.get(unitId);
+    const slot = u?.inventory.findIndex((h) => h?.id === itemId) ?? -1;
+    if (!u || slot < 0) return false;
+    this.doDropItem(u, slot, x, y);
+    return true;
+  }
+
+  /** UnitDropItemSlot — despite the name, this MOVES the item within the unit's own
+   *  inventory (the GUI's "Hero - Give item to slot"): a swap, not a drop. */
+  unitDropItemSlot(unitId: number, itemId: number, slot: number): boolean {
+    const u = this.units.get(unitId);
+    const from = u?.inventory.findIndex((h) => h?.id === itemId) ?? -1;
+    if (!u || from < 0 || slot < 0 || slot >= u.inventory.length) return false;
+    return from === slot || this.swapItems(unitId, from, slot);
+  }
+
+  /** UnitDropItemTarget — hand the item to another unit (the GUI's "Hero - Give item to
+   *  hero"), immediately. */
+  unitDropItemTarget(unitId: number, itemId: number, targetId: number): boolean {
+    const u = this.units.get(unitId);
+    const to = this.units.get(targetId);
+    const slot = u?.inventory.findIndex((h) => h?.id === itemId) ?? -1;
+    if (!u || !to || slot < 0 || !to.inventory.length) return false;
+    this.transferItem(u, slot, to);
+    return true;
+  }
+
+  /** UnitUseItem / UnitUseItemPoint / UnitUseItemTarget — fire a carried item's active
+   *  effect (potion, scroll, dagger). Rides on the same useItem() the HUD's item button
+   *  calls, so it spends the charge, starts the cooldown, and raises USE_ITEM. */
+  unitUseItem(unitId: number, itemId: number, targetId: number, x: number, y: number): boolean {
+    const u = this.units.get(unitId);
+    const slot = u?.inventory.findIndex((h) => h?.id === itemId) ?? -1;
+    if (!u || slot < 0) return false;
+    return this.useItem(unitId, slot, targetId, x, y);
+  }
+
+  /** UnitInventorySize — how many slots the unit has (0 = no inventory ability). */
+  inventorySizeOf(unitId: number): number {
+    return this.units.get(unitId)?.inventory.length ?? 0;
+  }
+
+  /** UnitItemInSlot — the item entity id in a slot (0 = empty / no such slot). */
+  itemInSlot(unitId: number, slot: number): number {
+    return this.units.get(unitId)?.inventory[slot]?.id ?? 0;
   }
 
   // Idle (or patrolling) armed units scan for the nearest enemy in acquisition

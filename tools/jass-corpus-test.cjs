@@ -1454,5 +1454,318 @@ console.log('\n[7.3] Melee from the script (EchoIsles war3map.j → blizzard.j M
   }
 }
 
+// --- 7.18: items — the trigger surface + the item events ------------------
+// Everything runs through the REAL blizzard.j BJs the World Editor emits (the GUI's
+// "Hero - Create item and give", "Hero - Drop item", "Hero - Use item", "Item - Pick
+// random item"), so this exercises the native layer the way a map actually reaches it.
+//
+// The mock item world below mirrors SimWorld's item rules, and the one that matters most
+// is IDENTITY: an item keeps its entity id when it moves between the ground and an
+// inventory, so the handle CreateItem returned is the same handle GetManipulatedItem
+// hands a PICKUP trigger. Get that wrong and every "what did they just pick up?" trigger
+// in the wild silently compares two different handles for the same item.
+console.log('\n[7.18] Item natives (CreateItem / UnitAddItem / drop / use / charges / ChooseRandomItemEx)');
+{
+  // A tiny item world: ground items + per-unit inventories, sharing ONE id space.
+  const ITEM_TYPES = {
+    phea: { name: 'Potion of Healing', level: 1, classType: 'Charged', charges: 1, powerup: false, sellable: true, pawnable: true },
+    stwp: { name: 'Scroll of Town Portal', level: 2, classType: 'Purchasable', charges: 1, powerup: false, sellable: true, pawnable: true },
+    ratf: { name: 'Claws of Attack +15', level: 6, classType: 'Permanent', charges: 0, powerup: false, sellable: true, pawnable: true },
+    tkno: { name: 'Tome of Knowledge', level: 2, classType: 'PowerUp', charges: 1, powerup: true, sellable: true, pawnable: false },
+  };
+  const RANDOM_POOL = [ // what ChooseRandomItemEx draws from (droppable + pickRandom items)
+    { id: 'ratf', level: 6, classType: 'Permanent' },
+    { id: 'rde1', level: 6, classType: 'Permanent' },
+    { id: 'phea', level: 1, classType: 'Charged' },
+  ];
+  const HERO = 10, ALLY = 11;
+  const w = {
+    items: new Map(), // id → { id, typeId, charges, x, y } (on the ground)
+    inv: new Map([[HERO, new Array(6).fill(null)], [ALLY, new Array(6).fill(null)]]), // unit → slots of item ids
+    pos: new Map([[HERO, [500, 500]], [ALLY, [700, 500]]]),
+    next: 1,
+    used: [], // { unit, item } — every UnitUseItem that fired
+  };
+  const held = (id) => {
+    for (const [unit, slots] of w.inv) {
+      const slot = slots.findIndex((s) => s && s.id === id);
+      if (slot >= 0) return { unit, slot, rec: slots[slot] };
+    }
+    return null;
+  };
+  const hooks = {
+    createUnit: () => HERO,
+    getUnitX: (u) => w.pos.get(u)?.[0] ?? 0,
+    getUnitY: (u) => w.pos.get(u)?.[1] ?? 0,
+    createItem: (typeId, x, y) => {
+      const t = ITEM_TYPES[typeId];
+      if (!t) return -1;
+      const it = { id: w.next++, typeId, charges: t.charges, x, y };
+      w.items.set(it.id, it);
+      return it.id;
+    },
+    removeItem: (id) => {
+      if (!w.items.delete(id)) {
+        const h = held(id);
+        if (h) w.inv.get(h.unit)[h.slot] = null;
+      }
+    },
+    itemInfo: (id) => {
+      const g = w.items.get(id);
+      if (g) return { ...g, holder: 0, slot: -1, owner: 15 };
+      const h = held(id);
+      if (!h) return null;
+      const [x, y] = w.pos.get(h.unit);
+      return { id, typeId: h.rec.typeId, charges: h.rec.charges, x, y, holder: h.unit, slot: h.slot, owner: 0 };
+    },
+    itemTypeInfo: (typeId) => ITEM_TYPES[typeId] ?? null,
+    setItemCharges: (id, n) => {
+      const g = w.items.get(id);
+      if (g) g.charges = n;
+      else if (held(id)) held(id).rec.charges = n;
+    },
+    setItemPosition: (id, x, y) => {
+      const g = w.items.get(id);
+      if (g) { g.x = x; g.y = y; return; }
+      const h = held(id); // WC3: positioning a CARRIED item drops it there
+      if (h) { w.inv.get(h.unit)[h.slot] = null; w.items.set(id, { ...h.rec, x, y }); }
+    },
+    // Identity is preserved: the ground item BECOMES the held record, same id. A requested
+    // slot is exact (UnitAddItemToSlotById fails on a taken slot); -1 = first free.
+    unitAddItem: (unitId, itemId, want) => {
+      const slots = w.inv.get(unitId);
+      const g = w.items.get(itemId);
+      if (!slots || !g) return false;
+      const slot = want >= 0 ? (!slots[want] ? want : -1) : slots.indexOf(null);
+      if (slot < 0) return false; // full / slot taken — the item stays on the ground
+      slots[slot] = { id: g.id, typeId: g.typeId, charges: g.charges };
+      w.items.delete(g.id);
+      return true;
+    },
+    unitRemoveItem: (unitId, itemId) => {
+      const h = held(itemId);
+      if (!h || h.unit !== unitId) return false;
+      const [x, y] = w.pos.get(unitId);
+      w.inv.get(unitId)[h.slot] = null;
+      w.items.set(itemId, { ...h.rec, x, y });
+      return true;
+    },
+    unitRemoveItemFromSlot: (unitId, slot) => {
+      const rec = w.inv.get(unitId)?.[slot];
+      if (!rec) return 0;
+      const [x, y] = w.pos.get(unitId);
+      w.inv.get(unitId)[slot] = null;
+      w.items.set(rec.id, { ...rec, x, y });
+      return rec.id;
+    },
+    unitDropItemPoint: (unitId, itemId, x, y) => {
+      const h = held(itemId);
+      if (!h || h.unit !== unitId) return false;
+      w.inv.get(unitId)[h.slot] = null;
+      w.items.set(itemId, { ...h.rec, x, y });
+      return true;
+    },
+    unitDropItemSlot: (unitId, itemId, slot) => { // MOVES it within the inventory
+      const h = held(itemId);
+      const slots = w.inv.get(unitId);
+      if (!h || h.unit !== unitId || !slots || slot < 0 || slot >= slots.length) return false;
+      const tmp = slots[slot];
+      slots[slot] = h.rec;
+      slots[h.slot] = tmp;
+      return true;
+    },
+    unitDropItemTarget: (unitId, itemId, targetId) => {
+      const h = held(itemId);
+      const to = w.inv.get(targetId);
+      if (!h || h.unit !== unitId || !to) return false;
+      const free = to.indexOf(null);
+      if (free < 0) return false;
+      to[free] = h.rec;
+      w.inv.get(unitId)[h.slot] = null;
+      return true;
+    },
+    unitUseItem: (unitId, itemId, _t, _x, _y) => {
+      const h = held(itemId);
+      if (!h || h.unit !== unitId || h.rec.charges <= 0) return false;
+      h.rec.charges -= 1;
+      w.used.push({ unit: unitId, item: itemId });
+      if (h.rec.charges <= 0) w.inv.get(unitId)[h.slot] = null; // perishable: gone at 0
+      return true;
+    },
+    unitInventorySize: (unitId) => w.inv.get(unitId)?.length ?? 0,
+    unitItemInSlot: (unitId, slot) => w.inv.get(unitId)?.[slot]?.id ?? 0,
+    enumItems: () => [...w.items.values()].map((it) => ({ ...it, holder: 0, slot: -1, owner: 15 })),
+    chooseRandomItem: (cls, level) => {
+      const pool = RANDOM_POOL.filter((d) => (level < 0 || d.level === level) && (!cls || d.classType === cls));
+      return pool.length ? pool[0].id : '';
+    },
+  };
+  const SRC = `
+globals
+    item    udg_potion   = null
+    item    udg_claws    = null
+    integer udg_typeId   = 0
+    integer udg_charges  = 0
+    integer udg_invIndex = 0
+    boolean udg_hasIt    = false
+    boolean udg_sameOne  = false
+    integer udg_invSize  = 0
+    real    udg_dropX    = 0.0
+    integer udg_ground   = 0
+    integer udg_randPerm = 0
+    integer udg_randAny  = 0
+    integer udg_dist     = 0
+    boolean udg_slotFail = false
+endglobals
+function RunItems takes nothing returns nothing
+    local unit h = CreateUnit( Player(0), 'Hpal', 500.0, 500.0, 0.0 )
+    local item ground
+
+    // The GUI's "Hero - Create item and give": blizzard.j creates the item AT the hero,
+    // then UnitAddItem's it — so a full inventory leaves it lying at his feet.
+    set udg_potion  = UnitAddItemByIdSwapped( 'phea', h )
+    set udg_typeId  = GetItemTypeId( udg_potion )
+    set udg_hasIt   = UnitHasItem( h, udg_potion )
+    set udg_invSize = UnitInventorySize( h )
+    // "Inventory index of item-type" — the BJ walks UnitItemInSlot + GetItemTypeId (1-based).
+    set udg_invIndex = GetInventoryIndexOfItemTypeBJ( h, 'phea' )
+    set udg_sameOne  = ( UnitItemInSlotBJ( h, 1 ) == udg_potion )   // one item = one handle
+
+    // Charges: read, then hand one back (the classic "make it infinite" idiom).
+    call SetItemCharges( udg_potion, 3 )
+    set udg_charges = GetItemCharges( udg_potion )
+
+    // A second item, then move it to slot 3 (UnitDropItemSlot MOVES, it doesn't drop).
+    set udg_claws = UnitAddItemByIdSwapped( 'ratf', h )
+    call UnitDropItemSlotBJ( h, udg_claws, 3 )
+    set udg_slotFail = UnitAddItemToSlotById( h, 'stwp', 0 )        // slot 0 is taken → false
+
+    // Drop the potion at a point (instant, as a trigger's drop is), then check it's really
+    // on the ground there — and that a rect enumeration finds it.
+    call UnitDropItemPointBJ( h, udg_potion, 900.0, 500.0 )
+    set udg_dropX = GetItemX( udg_potion )
+    set ground = RandomItemInRectSimpleBJ( Rect(800.0, 400.0, 1000.0, 600.0) )
+    if ground == udg_potion then
+        set udg_ground = 1
+    endif
+
+    // Random item pools: ChooseRandomItemExBJ(level, type) → an item TYPE id.
+    set udg_randPerm = ChooseRandomItemExBJ( 6, ITEM_TYPE_PERMANENT )
+    set udg_randAny  = ChooseRandomItemBJ( 1 )
+
+    // The RandomDist* distribution (pure blizzard.j, riding on GetRandomInt).
+    call RandomDistReset(  )
+    call RandomDistAddItem( 'ratf', 100 )
+    set udg_dist = RandomDistChoose(  )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('RunItems', []);
+  const g = (n) => interp.rt.globals.get(n);
+  const rawcode = (s) => s.split('').reduce((a, c) => (a << 8) | c.charCodeAt(0), 0);
+
+  if (g('udg_typeId')?.n === rawcode('phea') && g('udg_hasIt')?.b === true && g('udg_invSize')?.n === 6) {
+    ok(`UnitAddItemByIdSwapped → the hero holds a 'phea' (UnitHasItem true, inventory 6 slots)`);
+  } else fail(`give item: typeId ${g('udg_typeId')?.n} has ${g('udg_hasIt')?.b} size ${g('udg_invSize')?.n}`);
+  if (g('udg_invIndex')?.n === 1 && g('udg_sameOne')?.b === true) {
+    ok(`GetInventoryIndexOfItemTypeBJ → slot 1, and UnitItemInSlot returns the SAME handle CreateItem did (one item = one handle)`);
+  } else fail(`inventory index ${g('udg_invIndex')?.n} (want 1), same handle ${g('udg_sameOne')?.b}`);
+  if (g('udg_charges')?.n === 3) ok(`SetItemCharges / GetItemCharges round-trip → 3`);
+  else fail(`charges ${g('udg_charges')?.n} (want 3)`);
+  // The claws moved to slot 3 (0-based 2); the potion is still in slot 0 — so adding to
+  // slot 0 must fail, and no stray item may be left on the ground by that attempt.
+  const clawSlot = w.inv.get(HERO).findIndex((s) => s && s.typeId === 'ratf');
+  if (clawSlot === 2 && g('udg_slotFail')?.b === false && ![...w.items.values()].some((i) => i.typeId === 'stwp')) {
+    ok(`UnitDropItemSlotBJ moved the claws to slot 3 (not dropped); UnitAddItemToSlotById into a TAKEN slot → false, no stray item created`);
+  } else fail(`slot move: claws at ${clawSlot} (want 2), toSlot ${g('udg_slotFail')?.b} (want false)`);
+  const potionOnGround = [...w.items.values()].find((i) => i.typeId === 'phea');
+  if (Math.abs((g('udg_dropX')?.n ?? 0) - 900) < 0.01 && potionOnGround && g('udg_ground')?.n === 1) {
+    ok(`UnitDropItemPointBJ put the potion on the ground at (900,500); EnumItemsInRect found it there (RandomItemInRectSimpleBJ)`);
+  } else fail(`drop: x ${g('udg_dropX')?.n} onGround ${!!potionOnGround} enum ${g('udg_ground')?.n}`);
+  if (g('udg_randPerm')?.n === rawcode('ratf') && g('udg_randAny')?.n === rawcode('phea') && g('udg_dist')?.n === rawcode('ratf')) {
+    ok(`ChooseRandomItemExBJ(6, PERMANENT) → 'ratf'; ChooseRandomItemBJ(1) → 'phea'; the RandomDist* distribution picks through it`);
+  } else fail(`random: perm ${g('udg_randPerm')?.n} any ${g('udg_randAny')?.n} dist ${g('udg_dist')?.n}`);
+}
+
+console.log('\n[7.18] Item events (PICKUP / DROP / USE, owner-matched, GetManipulatedItem)');
+{
+  const hooks = {
+    createUnit: () => 10,
+    getUnitX: () => 500,
+    getUnitY: () => 500,
+    createItem: () => 7, // the one item in this world (entity id 7)
+    itemInfo: (id) => (id === 7 ? { id: 7, typeId: 'phea', charges: 1, x: 500, y: 500, holder: 0, slot: -1, owner: 15 } : null),
+    itemTypeInfo: () => ({ name: 'Potion of Healing', level: 1, classType: 'Charged', powerup: false, sellable: true, pawnable: true }),
+    unitAddItem: () => true,
+  };
+  const SRC = `
+globals
+    item    udg_made     = null
+    integer udg_picked   = 0
+    integer udg_dropped  = 0
+    integer udg_usedCnt  = 0
+    integer udg_pickType = 0
+    boolean udg_sameItem = false
+    integer udg_enemyHit = 0
+endglobals
+function OnPickup takes nothing returns nothing
+    set udg_picked   = udg_picked + 1
+    set udg_pickType = GetItemTypeId( GetManipulatedItem() )
+    // The crux: the item the trigger CREATED is the item the event reports.
+    if GetManipulatedItem() == udg_made and GetManipulatingUnit() == GetTriggerUnit() then
+        set udg_sameItem = true
+    endif
+endfunction
+function OnDrop takes nothing returns nothing
+    set udg_dropped = udg_dropped + 1
+endfunction
+function OnUse takes nothing returns nothing
+    set udg_usedCnt = udg_usedCnt + 1
+endfunction
+function OnEnemyPickup takes nothing returns nothing
+    set udg_enemyHit = udg_enemyHit + 1
+endfunction
+function Setup takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    set udg_made = CreateItem( 'phea', 500.0, 500.0 )
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_PICKUP_ITEM )
+    call TriggerAddAction( t, function OnPickup )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_DROP_ITEM )
+    call TriggerAddAction( t, function OnDrop )
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(0), EVENT_PLAYER_UNIT_USE_ITEM )
+    call TriggerAddAction( t, function OnUse )
+    // A second player's pickup trigger must NOT fire for player 0's hero.
+    set t = CreateTrigger()
+    call TriggerRegisterPlayerUnitEventSimple( t, Player(1), EVENT_PLAYER_UNIT_PICKUP_ITEM )
+    call TriggerAddAction( t, function OnEnemyPickup )
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('Setup', []);
+  const g = (n) => interp.rt.globals.get(n);
+  const hero = { id: 10, typeId: 'Hpal', owner: 0, x: 500, y: 500, facing: 0 };
+  const potion = { id: 7, typeId: 'phea', charges: 1 };
+  interp.pumpItemEvents([
+    { unit: hero, item: potion, phase: 'pickup' },
+    { unit: hero, item: potion, phase: 'drop' },
+    { unit: hero, item: potion, phase: 'use' },
+  ]);
+  const rawcode = (s) => s.split('').reduce((a, c) => (a << 8) | c.charCodeAt(0), 0);
+  if (g('udg_picked')?.n === 1 && g('udg_dropped')?.n === 1 && g('udg_usedCnt')?.n === 1 && g('udg_enemyHit')?.n === 0) {
+    ok(`PICKUP / DROP / USE each fired once for the owning player — and NOT for the other player's trigger`);
+  } else fail(`item events: pickup ${g('udg_picked')?.n} drop ${g('udg_dropped')?.n} use ${g('udg_usedCnt')?.n} enemy ${g('udg_enemyHit')?.n} (want 1/1/1/0)`);
+  if (g('udg_pickType')?.n === rawcode('phea') && g('udg_sameItem')?.b === true) {
+    ok(`GetManipulatedItem() is the very item CreateItem returned ('phea'), and GetManipulatingUnit() == GetTriggerUnit()`);
+  } else fail(`GetManipulatedItem: type ${g('udg_pickType')?.n} sameHandle ${g('udg_sameItem')?.b}`);
+
+  // A consumed item (a tome vanishes the instant it's picked up) must STILL resolve in the
+  // handler — the event carries a snapshot, exactly as GetDyingUnit does for a corpse.
+  const tome = { id: 99, typeId: 'tkno', charges: 1 };
+  interp.pumpItemEvents([{ unit: hero, item: tome, phase: 'pickup' }]);
+  if (g('udg_pickType')?.n === rawcode('tkno') && g('udg_picked')?.n === 2) {
+    ok(`a POWERUP consumed on pickup (tome) still reports its type — the event snapshots the item, so it outlives it`);
+  } else fail(`consumed item: type ${g('udg_pickType')?.n} (want 'tkno'), fires ${g('udg_picked')?.n}`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -282,6 +282,7 @@ const ITEM_SETTERS: Record<string, (d: ItemDef, v: Val) => void> = {
   iper: (d, v) => { d.perishable = bool(v); },
   ipow: (d, v) => { d.powerup = bool(v); },
   idrp: (d, v) => { d.droppable = bool(v); },
+  isel: (d, v) => { d.sellable = bool(v); }, // "can be sold by a shop" (JASS IsItemSellable)
   ipaw: (d, v) => { d.pawnable = bool(v); },
   iprn: (d, v) => { d.pickRandom = bool(v); },
   ihtp: (d, v) => { d.maxHp = n(v); },

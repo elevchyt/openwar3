@@ -68,6 +68,11 @@ export function loadMapScript(
     hooks?: EngineHooks;
     runMain?: boolean;
     lobby?: { slots: ReadonlyArray<LobbySlot>; localPlayer: number };
+    /** Called with the booted engine BEFORE config()/main() run, so the host can publish
+     *  it (e.g. a hook that needs the interpreter's seeded RNG — ChooseRandomItem, 7.18)
+     *  while the script is still initialising. Waiting for the return value is too late:
+     *  main() has already run by then. */
+    onBoot?: (engine: MapScriptEngine) => void;
   } = {},
 ): MapScriptEngine | null {
   const mapJ = readScript(map, "war3map.j", "scripts\\war3map.j");
@@ -80,6 +85,8 @@ export function loadMapScript(
   const wts = readUtf8(map, "war3map.wts", "scripts\\war3map.wts") ?? undefined;
   const sources = [common, blizzard, mapJ].filter((s): s is string => s !== null);
   const interp = buildInterpreter(sources, { gameType: opts.melee ? 1 : 4, hooks: opts.hooks, wts });
+  const engine: MapScriptEngine = { interp, setup: interp.rt.setup };
+  opts.onBoot?.(engine);
   interp.run("config", []);
   if (opts.lobby) interp.rt.applyLobby(opts.lobby.slots, opts.lobby.localPlayer);
   if (opts.runMain) {
@@ -90,5 +97,5 @@ export function loadMapScript(
       console.warn("[jass] map main() failed (non-fatal):", err);
     }
   }
-  return { interp, setup: interp.rt.setup };
+  return engine;
 }

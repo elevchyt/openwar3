@@ -30,6 +30,7 @@ export interface ItemDef {
   perishable: boolean; // destroyed when its charges hit 0
   powerup: boolean; // consumed instantly on pickup (tomes, runes, gold) — never stored
   droppable: boolean; // can be dropped / dropped by a creep
+  sellable: boolean; // a shop may sell it (JASS IsItemSellable) — distinct from pawnable
   pawnable: boolean; // sellable back to a shop
   pickRandom: boolean; // eligible to fill a "random item of level N" drop slot
   maxHp: number; // item HP (destructible on the ground; 75 default in WC3)
@@ -75,6 +76,20 @@ export class ItemRegistry {
   clearCustom(): void {
     this.custom.clear();
     this.rebuildByLevel();
+  }
+
+  /** ChooseRandomItem / ChooseRandomItemEx (JASS, 7.18) — a random item of a class and
+   *  level, drawn from the same "eligible for a random drop" pool the creep drop tables
+   *  use (`droppable` + `pickRandom`). `classType` null = any class (ITEM_TYPE_ANY);
+   *  `level` < 0 = any level (common.j's documented "-1 for any level"). Null when the
+   *  pool is empty — the native then returns 0, as the engine does. */
+  chooseRandom(classType: string | null, level: number, rng: () => number): ItemDef | null {
+    const pool: ItemDef[] = [];
+    for (const [lvl, defs] of this.byLevel) {
+      if (level >= 0 && lvl !== level) continue;
+      for (const d of defs) if (!classType || d.classType === classType) pool.push(d);
+    }
+    return pool.length ? pool[Math.floor(rng() * pool.length)] ?? null : null;
   }
 
   /** Resolve a dropped-item id from a creep's drop set to a concrete item. The id
@@ -165,6 +180,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       perishable: num(r, "perishable", 0) === 1,
       powerup: num(r, "powerup", 0) === 1,
       droppable: num(r, "droppable", 0) === 1,
+      sellable: num(r, "sellable", 0) === 1,
       pawnable: num(r, "pawnable", 0) === 1,
       pickRandom: num(r, "pickRandom", 0) === 1,
       maxHp: num(r, "hp", 75),

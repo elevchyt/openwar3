@@ -34,9 +34,10 @@
 | 7.16 | **Unit groups** — `CreateGroup`/`GroupEnumUnitsIn{Rect,Range,RangeOfLoc}`/`OfPlayer`/`OfType`/`Selected` (+`Counted`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`/`GroupAddUnit`/`IsUnitInGroup`, `Group{Immediate,Point,Target}Order` — the GUI's **"Pick every unit in \<region\> matching \<condition\>"**. Plus the filter natives it's useless without: `IsUnitType`, `IsUnitAlly`/`IsUnitEnemy`, `GetUnitLoc`, `GetStartLocationLoc` | ✅ done (live) | §7.16 headless (the real `ForGroupBJ`+`GetUnitsInRectMatching` path picks 5-of-6, the filter rejects the rest; group order reaches all members; one sim unit == one handle); Echo Isles: a trigger picks every worker in a region, tints them, then marches the group (screenshots); ExtremeCandyWar's own script drives 169 `CreateGroup`/168 enums/217 `ForGroup` — **all empty before, now finding units** |
 | 7.17 | **Abilities, heroes + the remaining sim events** — `UnitAddAbility`/`Remove`/`Get`/`SetUnitAbilityLevel`, `SetHeroLevel`/`AddHeroXP`/`SetHeroXP`/skill points/`SelectHeroSkill`, `SetUnitInvulnerable`/`Pathing`/`Animation`/`UserData`, the MathAPI (**`SquareRoot`** — every `DistanceBetweenPoints` rode on it); **ability ORDERS** (`IssueTargetOrder(u,"holybolt",t)` → the unit casts); events: **SPELL_**\* (5 phases), **CONSTRUCT_**\*, **TRAIN_**\*, **HERO_LEVEL/SKILL**, **UNIT_STATE_LIMIT** | ✅ done (live) | §7.17 headless (effects round-trip through the real BJs; every event family dispatches owner-matched; the state threshold fires on the *crossing* only); Echo Isles: one trigger spawns a Paladin → levels it to 5 → grants Holy Light → orders the cast, and HERO_LEVEL / UNIT_STATE_LIMIT / SPELL_EFFECT / CONSTRUCT_* / TRAIN_* all report back into the HUD (screenshots) |
 | 7.3 | **Melee runs from the map's own script** — `main()` fires the map's *Melee Initialization* trigger and blizzard.j's `Melee*` library does the rest: starting units + resources + hero limit, the start-location creep clear, the victory/defeat conditions. The hard-coded roster is retired (fallback only) | ✅ done (live) | §7.3 headless (EchoIsles' real `war3map.j` → the same roster/purse the old `startMelee` produced, all 4 races; creeps cleared; razing the hall defeats its owner); live: bases spawned by the script on Echo Isles (H/O/U/NE) + RagingStream's start-location camp cleared (screenshots) |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (215/335 used natives implemented) |
+| 7.18 | **Items** — the trigger surface (`CreateItem`/`UnitAddItem`(`ById`/`ToSlotById`)/`UnitRemoveItem`/`UnitDropItem{Point,Slot,Target}`/`UnitUseItem*`/`RemoveItem`/`SetItemPosition`/charges/`UnitItemInSlot`/`UnitHasItem`/`EnumItemsInRect`/**`ChooseRandomItemEx`** — 151 maps) + the **item events** (`PICKUP`/`DROP`/`USE`/`SELL_ITEM` with `GetManipulatedItem`/`GetManipulatingUnit`). Pre-placed items (`CreateAllItems`) become **real, pickable** items; the melee hero gets its **Town Portal scroll** | ✅ done (live) | §7.18 headless (the item natives + every BJ the GUI emits; the 4 events dispatch owner-matched; a consumed powerup still resolves in its handler); Echo Isles: a trigger creates a Paladin + 4 items, he walks onto the potion (PICKUP fires, HUD inventory shows it), a trigger `UnitUseItem`s **the same handle** → +250 life (USE fires), a tome grants XP, claws show a green +15, `UnitDropItemPointBJ` drops them (DROP fires), `ChooseRandomItemEx` rolls a level-5 artifact (screenshots) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (230/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It detects an implementation by scanning `src/jass/natives/*.ts` for the
 > quoted native name, and it only counts natives called **directly** from a `war3map.j`. So (a) natives registered
@@ -70,6 +71,8 @@ config()   // SetPlayers/SetTeams/DefineStartLocation/InitCustomPlayerSlots — 
            //   PLAYING, as which race — GetPlayerSlotState/GetPlayerRace, which config() cannot know
 main()                                                                                    [runs live, 7.6 — on a THREAD]
   SetCameraBounds / SetDayNightModels / sound  (we no-op — the renderer owns these)
+  CreateAllItems()             // SPAWNS for real (7.18) — pre-placed items are the SCRIPT's, and the
+                               // duplicate war3mapUnits.doo item widgets are hidden (rts.trySeed)
   CreateAllUnits()             // RECORDS rows only — those units are already on the map, adopted from
                                // war3mapUnits.doo (Runtime.recordOnlySpawnFns; scoped to the call, 7.3)
   InitBlizzard() / InitGlobals() / InitCustomTriggers() / RunInitializationTriggers()  // init triggers fire → text!
@@ -101,6 +104,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
 | `natives/forces.ts` | **forces** (player groups): `CreateForce`/`ForceAddPlayer`/`IsPlayerInForce`/`ForForce`/`ForceEnum*` + `GetEnumPlayer`/`GetFilterPlayer` — the target of the "Text Message" actions (7.6) |
 | `natives/groups.ts` | **unit groups** (7.16): the `GroupEnum*` scans over the live sim (`EngineHooks.enumUnits`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`, membership, and the `Group*Order` mass orders — the GUI's "Pick every unit in \<region\> matching \<condition\>" |
+| `natives/items.ts` | **items** (7.18): `CreateItem`, the inventory family (`UnitAddItem`/`ById`/`ToSlotById`, `UnitRemoveItem`, `UnitItemInSlot`, `UnitHasItem`), drop/give/use, charges + item-type queries, `EnumItemsInRect`, and `ChooseRandomItem(Ex)` — an `item` handle is one entity whether it lies on the ground or sits in a pack |
 | `natives/melee.ts` | **what blizzard.j's `Melee*` library stands on** (7.3): `GetPlayerSlotState`/`GetPlayerRace` (in config.ts), `VersionGet`, `IsMapFlagSet`, `Set/GetFloatGameState` (the 08:00 clock), `SetCameraPosition`, the tech/hero caps, `GetPlayerStructureCount`/`GetPlayerTypedUnitCount` (who has lost), `GetResourceAmount`/`CreateBlightedGoldmine` (the gold-mine fiction) + explicit no-ops for what we don't model (AI scripts, blight, preloading) |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
 | `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
@@ -681,10 +685,99 @@ cells of the mine. Verified **live** on Echo Isles (all four races) and on `(10)
 start-location camp is cleared while the other eight starts keep theirs (screenshots).
 
 Known gaps in the melee path (all inherited, none new): no **AI** (`StartMeleeAI` is a no-op, so a computer
-slot sits still), no **hero-limit enforcement** (the caps are recorded, not applied), no **Town Portal scroll**
-for the first hero (items aren't wired yet — `UnitAddItemById`), no **blight** under an undead base, and the
-defeat/victory **dialogs** don't render (the dialog natives are no-ops) — the game state flips correctly, it
-just doesn't say so on screen yet.
+slot sits still), no **hero-limit enforcement** (the caps are recorded, not applied), no **blight** under an
+undead base, and the defeat/victory **dialogs** don't render (the dialog natives are no-ops) — the game state
+flips correctly, it just doesn't say so on screen yet. *(The first hero's **Town Portal scroll** — the fourth
+gap on this list until 7.18 — is now granted: `MeleeGrantItemsToHero`'s `UnitAddItemById` reaches a real item
+system.)*
+
+## Items (7.18 — done, live)
+
+The last big *effect* gap: a trigger can now **create, give, drop, use and destroy an item**, and react
+when one is picked up / dropped / used. Mostly a **bridge** milestone — the engine already had a real
+item system (ground items, hero inventories, charges + cooldown groups, powerups consumed on pickup,
+item behaviour dispatched off each granted ability's `code`, creep drop tables) — so this wires that
+system to the script rather than building a new one.
+
+**The one thing the sim was missing was identity.** In WC3 an item is **one entity that moves between
+the ground and an inventory**, and a JASS `item` handle follows it across that move: `CreateItem` →
+`UnitAddItem` → a PICKUP trigger's `GetManipulatedItem()` must all be the *same* item. Our `HeldItem`
+had no id at all (a pickup built a fresh inventory record and threw the ground item away), so every
+handle would have gone stale the moment a hero bent down. `HeldItem` now carries the ground item's
+entity id (`SimItem.id == HeldItem.id`, one id space), preserved through pickup / give / drop / hero
+death — and `Runtime.itemForSim` interns one handle per entity, exactly as `unitForSim` does for units.
+
+- **`src/sim/world.ts`** — item identity (above) + the **trigger-effect item API** (`createItem`,
+  `itemSnapshot` — the one lookup that answers "where is this item?" for ground *and* inventory —
+  `removeItemById`, `setItemCharges`, `setItemPosition`, `unitAddItem`, `unitRemoveItem[FromSlot]`,
+  `unitDropItemPoint/Slot/Target`, `unitUseItem`, `inventorySizeOf`, `itemInSlot`, `groundItems`) and
+  the **item events** (`captureItems` + `noteItem` + `drainItemEvents`, the same capture-only-if-the-
+  script-listens shape as 7.4c). Two semantics worth naming: a trigger's drop is **instant** (the
+  player's drop order walks the hero to the spot first — `UnitDropItemPoint` does not), and
+  `UnitDropItemSlot` **moves the item within the same inventory** (the GUI's "give item to slot") —
+  despite the name, nothing is dropped.
+- **`src/jass/natives/items.ts`** (new) — the natives, with the whole `…BJ` family riding on them for
+  free (`UnitAddItemByIdSwapped`, `UnitDropItemPointLoc`, `GetItemLoc`, `GetInventoryIndexOfItemTypeBJ`,
+  `UnitHasItemOfTypeBJ`, `CheckItemStatus`, `RandomItemInRectBJ`, `ChooseRandomItemExBJ`, and the
+  `RandomDistReset`/`AddItem`/`Choose` distribution — all of it blizzard.j code we already interpret).
+  `ChooseRandomItemEx` draws from the **same pool the creep drop tables use** (`droppable` +
+  `pickRandom`, indexed by level in `ItemRegistry`), filtered by the `itemtype`↔`class` mapping
+  (ITEM_TYPE_* order **is** ItemData.slk's `class` vocabulary; ANY = don't filter, level < 0 = any level).
+  Per-instance flags WC3 keeps on the item that our sim doesn't model (visible / invulnerable /
+  droppable / pawnable / user data) live on the handle — set and read back faithfully, but only the
+  script observes them.
+- **The events** (`Interpreter.pumpItemEvents`) — `EVENT_(PLAYER_)UNIT_PICKUP_ITEM` (49/86), `_DROP_ITEM`
+  (48/85), `_USE_ITEM` (50/87), `_SELL_ITEM` (271/288), owner-matched, with `GetManipulatedItem` /
+  `GetManipulatingUnit` (+ `GetSoldItem`/`GetBuyingUnit`). They're raised **where the item actually
+  moves** in the sim, so a trigger's `UnitAddItem` and a hero walking over the item fire the same event,
+  as in WC3. A hand-over raises **both** (the giver DROPs, the receiver PICKs UP), and USE is raised
+  *after* the charge is spent — which is what the classic "give the charge back to make the item
+  infinite" idiom (`SetItemCharges(GetManipulatedItem(), n+1)`) depends on. The item in the event is a
+  **snapshot**: a tome is consumed the instant it's picked up and a potion's last charge destroys it, so
+  the item may be gone by the time the event is drained — yet `GetItemTypeId(GetManipulatedItem())`, the
+  line every "what did they pick up?" trigger opens with, must still work. Same problem, same answer as
+  `GetDyingUnit`'s corpse.
+- **Pre-placed items are now REAL items.** A map's items live in its **script** (`main()` →
+  `CreateAllItems()` → `CreateItem`), and `war3mapUnits.doo` carries them too — the viewer rendered those
+  as static scenery (its unit table is UnitData + UnitUI + **ItemData**), which is why a pre-placed item
+  could never be picked up. The script now wins: its `CreateItem` spawns the one live, pickable item, and
+  `rts.trySeed` hides the duplicate `.doo` widget (an item row has `itemid` where a unit row has `unitid`).
+  Verified over the whole bundled corpus: **every** map with `.doo` item entries also ships
+  `CreateAllItems()`, so deferring to the script never loses an item. (This is the mirror image of units,
+  where the `.doo` widget wins and `CreateAllUnits` only records — 7.3.)
+- **The melee leftover is closed**: `MeleeGrantItemsToHero` (blizzard.j's own) calls
+  `UnitAddItemById(hero, 'stwp')`, which was a no-op — so the first hero trained never got its **Town
+  Portal scroll**. It does now. (Its *behaviour* is still inert: the sim dispatches item actives off the
+  ability `code`, and `AItp` isn't one it handles — the scroll sits in the pack, unused. Separate gap.)
+
+Verified (`pnpm jass:test` §7.18), through the **real** blizzard.j BJs: `UnitAddItemByIdSwapped` puts a
+`'phea'` in the hero's pack (`UnitHasItem`, 6 slots); `GetInventoryIndexOfItemTypeBJ` → slot 1 and
+`UnitItemInSlot` returns **the same handle `CreateItem` did**; charges round-trip; `UnitDropItemSlotBJ`
+*moves* the claws to slot 3 while `UnitAddItemToSlotById` into a **taken** slot fails and leaves no stray
+item behind (the exact bug the test caught: a requested slot must be exact, not fall back to the first
+free one); `UnitDropItemPointBJ` puts the item on the ground where asked and `EnumItemsInRect` finds it
+there; `ChooseRandomItemEx` + the `RandomDist*` distribution pick from the pool. The four events dispatch
+**owner-matched** (the other player's pickup trigger stays quiet), `GetManipulatedItem() == ` the item the
+trigger created, and a consumed powerup still reports its type in the handler.
+
+Verified **live** on Echo Isles: a trigger creates a Paladin and four items; `MeleeGrantItemsToHero` hands
+him the Town Portal scroll (PICKUP fires); he **walks onto** the potion → *"PICKUP: Paladin picked up
+Potion of Healing (charges 1, level 1)"* and the HUD inventory shows both; a trigger `UnitUseItem`s **the
+same handle it created** → *"USE: … life is now 550"* (+250, potion consumed); a Tome of Experience is
+consumed on pickup (XP 100/200) and Claws of Attack show a green **+15** on the damage line;
+`UnitDropItemPointBJ` → *"DROP: Paladin dropped Claws of Attack +15"* (the +15 disappears) and
+`ChooseRandomItemEx(level 5, PERMANENT)` rolls an Ancient Janggo onto the ground (screenshots). On
+**Skibi's Castle TD** the two pre-placed **custom** (`.w3t`) items exist as live, modelled sim items; on
+**ExtremeCandyWar** the map's own init trigger runs `EnumItemsInRectBJ(gg_rct_Cached_Units_and_Items,
+RemoveItem)` — the classic "park items in a corner to preload them, then delete" idiom — and its 8
+pre-placed items are created and then removed by the map itself, leaving the cache corner clean (before,
+those `.doo` widgets sat there forever as undeletable scenery).
+
+> **What items still can't do:** be **bought** — we have no shop purchasing, so nothing raises
+> `SELL_ITEM` yet (the registration, responses and dispatch are wired and waiting for a purchase path).
+> A ground item is also neither destructible nor hideable in the sim, so `SetItemVisible` /
+> `SetItemInvulnerable` / `SetItemDropOnDeath` / `SetItemDropID` / `SetItemPlayer` are recorded on the
+> handle rather than acted on.
 
 ## What's NOT done yet (next tasks — keep this list honest)
 
@@ -696,16 +789,19 @@ just doesn't say so on screen yet.
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).
 - **Effect natives still missing.** 7.7 + 7.13 cover resources, unit-state and the unit-mutation set; 7.16 the group +
-  filter/query surface; 7.17 abilities, heroes, flags and animation. Still no-ops: **items** (`CreateItem`/`UnitAddItem`/
-  `RemoveItem` + the DROP/PICKUP/USE_ITEM events, and `ChooseRandomItemEx` — 151 maps call it), **weather**
+  filter/query surface; 7.17 abilities, heroes, flags and animation; 7.18 items. Still no-ops: **weather**
   (`AddWeatherEffect` returns a null handle; nothing renders rain/snow), **sounds**, **cameras/cinematics**, **upgrades**
   (`SetPlayerTechResearched`), **waygates**, **multiboards/dialogs**. Each is a small bridge method away — wire on demand
   (`pnpm jass:coverage` ranks them by how many maps call them).
+- **Shops** — no unit sells anything, so `EVENT_PLAYER_UNIT_SELL_ITEM` / `_SELL` never fire (the item-sale plumbing is
+  wired and waiting: §7.18) and blizzard.j's `MeleeGrantItemsToHiredHero` (a tavern hero) can't run. Needs a purchase
+  path: shop stock (`AddItemToStock`), the buy command card, gold, range.
 - **Events still missing:** `EVENT_PLAYER_UNIT_SUMMON` (the sim has the summon channel — same "born in the renderer"
-  shape as TRAIN_FINISH), the **item** events, `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `..._SELECTED`,
-  and the player-scoped `TriggerRegisterPlayerStateEvent` / chat events.
-- **Melee leftovers** (7.3): melee AI (`StartMeleeAI`), hero-limit *enforcement*, the first hero's Town Portal scroll
-  (needs the item natives), blight, and the victory/defeat **dialogs** (the game state flips; nothing renders it).
+  shape as TRAIN_FINISH), `..._RESEARCH_*` / `..._UPGRADE_*` (no upgrade system yet), `..._SELECTED`, `_SELL`/`_SELL_ITEM`
+  (no shops — above), and the player-scoped `TriggerRegisterPlayerStateEvent` / chat events.
+- **Melee leftovers** (7.3): melee AI (`StartMeleeAI`), hero-limit *enforcement*, blight, and the victory/defeat
+  **dialogs** (the game state flips; nothing renders it). *(The first hero's Town Portal scroll is now granted — 7.18 —
+  though `AItp` has no cast behaviour in the sim, so the scroll doesn't teleport yet.)*
 - **Natives on demand** — weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
   Use `pnpm jass:coverage` to prioritise (215/335 used natives implemented — and see the caveat on that number above).
 - **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them

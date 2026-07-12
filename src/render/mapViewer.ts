@@ -1211,6 +1211,35 @@ export class MapViewerScene {
       setUnitInvulnerable: (id, flag) => this.rts?.simWorld.setInvulnerable(id, flag),
       setUnitPathing: (id, flag) => this.rts?.simWorld.setPathing(id, flag),
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
+      // --- items (7.18): a trigger creates/gives/drops/uses an item ---
+      // The sim already owns the item system (ground items, hero inventories, charges,
+      // powerups, item abilities), so each of these is a one-line bridge into it. A
+      // trigger-created item is spawned through the sim's normal ground-item queue, so the
+      // renderer models it (drainItemSpawns) and a hero can walk over and pick it up.
+      createItem: (typeId, x, y) => this.rts?.simWorld.createItem(typeId, x, y) ?? -1,
+      removeItem: (id) => void this.rts?.simWorld.removeItemById(id),
+      itemInfo: (id) => this.rts?.simWorld.itemSnapshot(id) ?? null,
+      setItemCharges: (id, charges) => void this.rts?.simWorld.setItemCharges(id, charges),
+      setItemPosition: (id, x, y) => void this.rts?.simWorld.setItemPosition(id, x, y),
+      itemTypeInfo: (typeId) => {
+        const d = this.items.get(typeId); // the ItemRegistry (custom .w3t overlay first)
+        return d ? { name: d.name, level: d.level, classType: d.classType, powerup: d.powerup, sellable: d.sellable, pawnable: d.pawnable } : null;
+      },
+      unitAddItem: (unitId, itemId, slot) => this.rts?.simWorld.unitAddItem(unitId, itemId, slot) ?? false,
+      unitRemoveItem: (unitId, itemId) => this.rts?.simWorld.unitRemoveItem(unitId, itemId) ?? false,
+      unitRemoveItemFromSlot: (unitId, slot) => this.rts?.simWorld.unitRemoveItemFromSlot(unitId, slot) ?? 0,
+      unitDropItemPoint: (unitId, itemId, x, y) => this.rts?.simWorld.unitDropItemPoint(unitId, itemId, x, y) ?? false,
+      unitDropItemSlot: (unitId, itemId, slot) => this.rts?.simWorld.unitDropItemSlot(unitId, itemId, slot) ?? false,
+      unitDropItemTarget: (unitId, itemId, targetId) => this.rts?.simWorld.unitDropItemTarget(unitId, itemId, targetId) ?? false,
+      unitUseItem: (unitId, itemId, targetId, x, y) => this.rts?.simWorld.unitUseItem(unitId, itemId, targetId, x, y) ?? false,
+      unitInventorySize: (unitId) => this.rts?.simWorld.inventorySizeOf(unitId) ?? 0,
+      unitItemInSlot: (unitId, slot) => this.rts?.simWorld.itemInSlot(unitId, slot) ?? 0,
+      enumItems: () => this.rts?.simWorld.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: 15 })) ?? [],
+      // ChooseRandomItem(Ex): draw from the registry's random-drop pool. The RNG is the
+      // interpreter's seeded one, so the pick stays deterministic (replays / future MP).
+      chooseRandomItem: (classType, level) => this.mapScript?.interp.rt.random
+        ? this.items.chooseRandom(classType, level, this.mapScript.interp.rt.random)?.id ?? ""
+        : "",
     };
   }
 
@@ -1404,7 +1433,15 @@ export class MapViewerScene {
         })),
         localPlayer: this.localPlayer,
       };
-      const engine = loadMapScript(this.vfs, this.mapArchive, { melee: opts.melee, runMain: true, hooks: this.textHooks(), lobby });
+      const engine = loadMapScript(this.vfs, this.mapArchive, {
+        melee: opts.melee,
+        runMain: true,
+        hooks: this.textHooks(),
+        lobby,
+        // Publish the engine BEFORE config()/main() run: a hook fired during init may need
+        // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).
+        onBoot: (e) => { this.mapScript = e; },
+      });
       if (!engine) return null;
       this.mapScript = engine; // pumped each tick (timers + region + death/damage/attack events — 7.4b/c)
       this.syncEventCaptures(engine);
@@ -1444,6 +1481,10 @@ export class MapViewerScene {
     sw.captureTrain = any("playerUnitEvent", 32, 34) || any("unitEvent", 69, 71);
     sw.captureHeroEvents = any("playerUnitEvent", 41, 42) || any("unitEvent", 78, 79);
     sw.captureSpells = any("playerUnitEvent", 272, 276) || any("unitEvent", 289, 293);
+    // 7.18 — items: DROP/PICKUP/USE are contiguous (48–50 player / 85–87 unit); SELL_ITEM
+    // is 271 / 288.
+    sw.captureItems = any("playerUnitEvent", 48, 50) || any("unitEvent", 85, 87)
+      || any("playerUnitEvent", 271) || any("unitEvent", 288);
     // EVENT_UNIT_STATE_LIMIT is polled, not raised by the sim (see pumpUnitStates).
     this.scriptWatchesUnitState = rt.triggerRegs.some((r) => r.kind === "unitState");
     this.scriptRegCount = rt.triggerRegs.length;
@@ -1482,6 +1523,10 @@ export class MapViewerScene {
       if (trains.length) engine.interp.pumpTrainEvents(trains);
       const heroes = sw.drainHeroEvents();
       if (heroes.length) engine.interp.pumpHeroEvents(heroes);
+      // 7.18: items picked up / dropped / used (a trigger's UnitAddItem and a hero walking
+      // over the item both come through here — they're the same sim path).
+      const items = sw.drainItemEvents();
+      if (items.length) engine.interp.pumpItemEvents(items);
       // Unit-state thresholds (EVENT_UNIT_STATE_LIMIT) are POLLED — nothing in the sim
       // raises "life dropped below 100", so the interpreter tests each watched unit itself.
       if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();

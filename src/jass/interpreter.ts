@@ -83,6 +83,14 @@ export interface HeroEvent {
   level: number; // the new hero level, or the rank learned
   abilityId: string; // "skill" only
 }
+/** A unit manipulating an item (7.18) — picked up, dropped, used, or bought. The item is
+ *  a SNAPSHOT: by the time the event is drained it may be gone (a tome is consumed on
+ *  pickup; a potion's last charge destroys it), and GetManipulatedItem must still resolve. */
+export interface ItemEvent {
+  unit: UnitSnapshot;
+  item: { id: number; typeId: string; charges: number };
+  phase: "pickup" | "drop" | "use" | "sell";
+}
 
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
 const EVENT_UNIT_DEATH = 53;
@@ -123,6 +131,14 @@ const EVENT_UNIT_SPELL_CHANNEL = 289; // …CAST 290, EFFECT 291, FINISH 292, EN
 /** The five spell phases, in the order common.j numbers them (both event blocks are
  *  contiguous, so phase index + the block's base = the event id). */
 const SPELL_PHASES = ["channel", "cast", "effect", "finish", "endcast"] as const;
+// 7.18 — items. DROP/PICKUP/USE are a contiguous block in both event families (48–50
+// player / 85–87 unit); SELL_ITEM sits on its own (271 / 288), added in a later patch.
+const EVENT_PLAYER_UNIT_DROP_ITEM = 48;
+const EVENT_UNIT_DROP_ITEM = 85;
+const EVENT_PLAYER_UNIT_SELL_ITEM = 271;
+const EVENT_UNIT_SELL_ITEM = 288;
+/** The three contiguous item phases, in common.j's order (phase index + base = event id). */
+const ITEM_PHASES = ["drop", "pickup", "use"] as const;
 
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
@@ -954,6 +970,35 @@ export class Interpreter {
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.hero.owner, hero)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, hero)));
+    }
+  }
+
+  /** Pump item events (7.18) — a unit picked up / dropped / used / bought an item:
+   *  EVENT_(PLAYER_)UNIT_PICKUP_ITEM (49/86), _DROP_ITEM (48/85), _USE_ITEM (50/87) and
+   *  _SELL_ITEM (271/288), matched by the manipulating unit's owner (player events) or the
+   *  unit itself (unit events). Responses: GetManipulatedItem (also GetSoldItem) +
+   *  GetManipulatingUnit (also GetBuyingUnit, and GetTriggerUnit).
+   *
+   *  The item handle is minted from the event's SNAPSHOT, not from a live lookup: a tome
+   *  is consumed the moment it's picked up and a potion's last charge destroys it, so by
+   *  the time we drain the event the item may no longer exist — yet WC3 hands the trigger
+   *  a usable item (GetItemTypeId(GetManipulatedItem()) is THE line every "what did they
+   *  pick up?" trigger opens with). Same problem, same answer as GetDyingUnit's corpse. */
+  pumpItemEvents(events: ReadonlyArray<ItemEvent>): void {
+    for (const e of events) {
+      const unit = this.rt.unitForSim(e.unit);
+      const item = this.rt.itemForSim({ ...e.item, x: e.unit.x, y: e.unit.y });
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", unit],
+        ["ManipulatingUnit", unit],
+        ["ManipulatedItem", item],
+      ]);
+      const phase = ITEM_PHASES.indexOf(e.phase as (typeof ITEM_PHASES)[number]);
+      const playerEvt = phase < 0 ? EVENT_PLAYER_UNIT_SELL_ITEM : EVENT_PLAYER_UNIT_DROP_ITEM + phase;
+      const unitEvt = phase < 0 ? EVENT_UNIT_SELL_ITEM : EVENT_UNIT_DROP_ITEM + phase;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.unit.owner, unit)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, unit)));
     }
   }
 

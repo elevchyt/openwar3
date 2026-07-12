@@ -192,6 +192,22 @@ export function registerEventNatives(rt: Runtime): void {
     return v.k === "int" ? v : jInt(0);
   });
 
+  // Item responses (EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM — 7.18). One pair
+  // covers all four: the item that moved (GetManipulatedItem) and the unit that moved it
+  // (GetManipulatingUnit — also GetTriggerUnit). A SALE additionally names the shop
+  // (GetSellingUnit) and the buyer (GetBuyingUnit = the manipulating unit); GetSoldItem is
+  // the sold item. GetSoldUnit is the *unit*-sale response (a tavern hero) — nothing raises
+  // it yet, so it reads null.
+  def(rt, "GetManipulatedItem", (c) => resp(c, "ManipulatedItem"));
+  def(rt, "GetManipulatingUnit", (c) => resp(c, "ManipulatingUnit"));
+  def(rt, "GetSoldItem", (c) => resp(c, "ManipulatedItem"));
+  def(rt, "GetSellingUnit", (c) => resp(c, "SellingUnit"));
+  def(rt, "GetBuyingUnit", (c) => resp(c, "ManipulatingUnit"));
+  def(rt, "GetSoldUnit", (c) => resp(c, "SoldUnit"));
+  // Set while an EnumItemsInRect filter / action callback runs (natives/items.ts).
+  def(rt, "GetEnumItem", (c) => resp(c, "EnumItem"));
+  def(rt, "GetFilterItem", (c) => resp(c, "FilterItem"));
+
   // Hero responses (EVENT_PLAYER_HERO_LEVEL / _SKILL — 7.17).
   def(rt, "GetLevelingUnit", (c) => resp(c, "LevelingUnit"));
   def(rt, "GetLearningUnit", (c) => resp(c, "LearningUnit"));

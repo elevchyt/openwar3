@@ -177,6 +177,55 @@ export interface UnitSnapshot {
   facing: number;
 }
 
+/** An item created by the script (CreateItem) or minted for one the sim already has
+ *  (a creep drop a trigger picks up). A JASS `item` is ONE entity whether it lies on
+ *  the ground or sits in a hero's inventory, so the handle keeps only its identity —
+ *  everything mutable (charges, where it is, who holds it) is read live through the
+ *  bridge (EngineHooks.itemInfo), exactly as a unit handle reads GetUnitX (7.18). */
+export interface JassItem {
+  handleId: number;
+  simId: number; // item entity id in the sim (-1 = headless, no engine attached)
+  typeId: string; // 4-char item rawcode
+  /** Last-known charges/position — the fallback when there's no bridge (headless). */
+  charges: number;
+  x: number;
+  y: number;
+  /** SetItemUserData — pure script state (the engine never reads it), like a unit's. */
+  userData?: number;
+  /** Per-instance flags WC3 keeps on the item itself. Our sim models none of them (an
+   *  item on the ground is neither hideable nor destructible here), so they live on the
+   *  handle: set and read back faithfully, but only the script observes them (the
+   *  `IsItem…` readers and CheckItemStatus, which the GUI conditions ride on). */
+  visible?: boolean;
+  invulnerable?: boolean;
+  droppable?: boolean;
+  pawnable?: boolean;
+}
+
+/** Where an item is right now — the bridge's answer for a JASS `item` handle. Mirrors
+ *  SimWorld.ItemSnapshot (structural, so the interpreter needn't import the sim). */
+export interface ItemSnapshot {
+  id: number;
+  typeId: string;
+  charges: number;
+  x: number;
+  y: number;
+  holder: number; // sim id of the unit carrying it (0 = lying on the ground)
+  slot: number; // inventory slot when carried, else -1
+  owner: number; // GetItemPlayer — the holder's slot, or 15 (Neutral Passive) on the ground
+}
+
+/** An item TYPE's data (our ItemRegistry) — what GetItemLevel / GetItemType /
+ *  IsItemPowerup / IsItemSellable ask about the item's *class*, not the instance. */
+export interface ItemTypeInfo {
+  name: string;
+  level: number;
+  classType: string; // ItemData.slk `class`: Permanent/Charged/PowerUp/Artifact/…
+  powerup: boolean;
+  sellable: boolean;
+  pawnable: boolean;
+}
+
 /** What config() (and the setup natives) accumulate — the map's declared player
  *  setup + start locations. Cross-checked against war3map.w3i (the free oracle). */
 export interface MapSetup {
@@ -268,6 +317,39 @@ export interface EngineHooks {
   /** GetHeroSkillPoints / UnitModifySkillPoints — unspent skill points. */
   getHeroSkillPoints?(unitId: number): number;
   modifySkillPoints?(unitId: number, delta: number): boolean;
+  // --- items (7.18): the trigger surface for items + the item events ---
+  /** CreateItem — a new item of type `typeId` on the ground; returns its entity id (-1
+   *  if the rawcode isn't a known item). Its model appears through the sim's normal
+   *  ground-item spawn queue, so a trigger-created item looks like any other. */
+  createItem?(typeId: string, x: number, y: number): number;
+  /** RemoveItem — destroy it, wherever it is (ground or inventory). */
+  removeItem?(itemId: number): void;
+  /** Where the item is + what's left of it (null once it's gone). The live read behind
+   *  GetItemX/Y/Charges/TypeId, IsItemOwned, GetItemPlayer. */
+  itemInfo?(itemId: number): ItemSnapshot | null;
+  setItemCharges?(itemId: number, charges: number): void;
+  /** SetItemPosition — move a ground item; on a CARRIED item WC3 drops it there. */
+  setItemPosition?(itemId: number, x: number, y: number): void;
+  /** The item TYPE's data (GetItemLevel / GetItemType / IsItemIdPowerup / …). */
+  itemTypeInfo?(typeId: string): ItemTypeInfo | null;
+  /** UnitAddItem (+ …ToSlotById): give an existing item to a unit — `slot` < 0 = first
+   *  free. False if the inventory is full, which is what leaves a UnitAddItemById item
+   *  lying at the hero's feet (blizzard.j creates it there first, then adds it). */
+  unitAddItem?(unitId: number, itemId: number, slot: number): boolean;
+  unitRemoveItem?(unitId: number, itemId: number): boolean; // → the ground at the unit
+  unitRemoveItemFromSlot?(unitId: number, slot: number): number; // → item id (0 = empty)
+  unitDropItemPoint?(unitId: number, itemId: number, x: number, y: number): boolean;
+  /** UnitDropItemSlot — MOVES the item to another slot of the same unit (not a drop). */
+  unitDropItemSlot?(unitId: number, itemId: number, slot: number): boolean;
+  unitDropItemTarget?(unitId: number, itemId: number, targetId: number): boolean; // hand over
+  /** UnitUseItem[Point|Target] — fire the item's active effect (potion/scroll/dagger). */
+  unitUseItem?(unitId: number, itemId: number, targetId: number, x: number, y: number): boolean;
+  unitInventorySize?(unitId: number): number;
+  unitItemInSlot?(unitId: number, slot: number): number; // → item id (0 = empty slot)
+  /** EnumItemsInRect — every item lying on the ground (a carried one isn't enumerable). */
+  enumItems?(): ReadonlyArray<ItemSnapshot>;
+  /** ChooseRandomItem(Ex) — a random item rawcode of a class + level ("" = none). */
+  chooseRandomItem?(classType: string | null, level: number): string;
   // --- per-unit flags / animation (7.17) ---
   setUnitInvulnerable?(unitId: number, flag: boolean): void; // SetUnitInvulnerable
   setUnitPathing?(unitId: number, flag: boolean): void; // SetUnitPathing (false = ghost)
@@ -424,6 +506,9 @@ export class Runtime {
    *  Interned so the same sim unit is always the same handle (JASS `==` works). */
   private readonly simUnitHandles = new Map<number, number>();
 
+  /** The same, for ITEM entities (sim item id → `item` handle id) — see itemForSim. */
+  private readonly simItemHandles = new Map<number, number>();
+
   /** The selected game type (common.j ConvertGameType index): 1 = MELEE,
    *  4 = USE_MAP_SETTINGS (custom). Drives blizzard.j InitGenericPlayerSlots and
    *  GetGameTypeSelected — the host sets it from the map's melee flag. */
@@ -533,6 +618,32 @@ export class Runtime {
       ju.player = u.owner;
     }
     return jHandle(hid, "unit");
+  }
+
+  /** Intern (or refresh) a JASS `item` handle for sim item `id` — the item counterpart of
+   *  unitForSim. One item entity = one handle, so an item a trigger created, then a hero
+   *  picked up, is the SAME handle in `GetManipulatedItem()` (JASS `==`, UnitHasItem and
+   *  GetItemTypeId all compare/read by handle). Items the script never created (a creep
+   *  drop) get their handle minted here on first sight. */
+  itemForSim(it: { id: number; typeId: string; charges: number; x: number; y: number }): JassValue {
+    let hid = this.simItemHandles.get(it.id);
+    if (hid === undefined) {
+      const ji: JassItem = { handleId: 0, simId: it.id, typeId: it.typeId, charges: it.charges, x: it.x, y: it.y };
+      ji.handleId = this.handles.alloc(ji);
+      this.simItemHandles.set(it.id, (hid = ji.handleId));
+    } else {
+      const ji = this.handles.get(hid) as JassItem;
+      ji.charges = it.charges;
+      ji.x = it.x;
+      ji.y = it.y;
+    }
+    return jHandle(hid, "item");
+  }
+
+  /** Bind a script-created item (CreateItem) to its sim id, so the pickup/drop/use event
+   *  pump hands back the same handle rather than minting a second one for one item. */
+  bindSimItem(it: JassItem): void {
+    if (it.simId >= 0) this.simItemHandles.set(it.simId, it.handleId);
   }
 
   /** Resolve a "TRIGSTR_nnn" placeholder to its war3map.wts text (the World Editor
