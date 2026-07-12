@@ -27,10 +27,10 @@ export interface CameraState {
   /** CAMERA_FIELD_ANGLE_OF_ATTACK — the VIEW direction's tilt, negative because it looks
    *  down. WC3's default is 304 (i.e. -56°). */
   aoaDeg: number;
-  /** CAMERA_FIELD_FIELD_OF_VIEW — vertical FOV, in WC3's LENS UNITS (default 70), which is what
-   *  every script speaks. Our renderer's lens is 45°, and mapViewer converts at the edge
-   *  (fovFromWc3/fovToWc3) so a setup stating WC3's ordinary 70 frames an ordinary view here
-   *  instead of a 1.7×-wide one. Blend in these units; never in ours. */
+  /** CAMERA_FIELD_FIELD_OF_VIEW — vertical FOV. WC3's default is 70 (bj_CAMERA_DEFAULT_FOV), and
+   *  so is ours — which is the whole reason a setup can be taken at its word. Every World-Editor
+   *  camera object states 70 whether or not it means anything by it (WarChasers' CamStart1 does),
+   *  and on a narrower lens that ordinary view would open 1.7× too wide. */
   fovDeg: number;
   /** CAMERA_FIELD_ROLL — rotation about the view axis. Zero in every bundled map. */
   rollDeg: number;
@@ -118,8 +118,9 @@ export class ScriptCamera {
   private noiseT = 0;
 
   /** The default gameplay camera — what ResetToGameCamera blends back to. Handed in by the
-   *  renderer, because it is the renderer's own camera that defines "normal", not WC3's
-   *  (our FOV is 45°, not 70°, and everything else is tuned around it). */
+   *  renderer, because it is the renderer's own camera that defines "normal" — its shape is
+   *  WC3's (70° / AOA 304 / rotation 90) but the distance it comes home to is the one the
+   *  player's zoom range opens at, not bj_CAMERA_DEFAULT_DISTANCE. */
   constructor(private readonly gameCamera: () => Omit<CameraState, "targetX" | "targetY">) {}
 
   /** True while anything here is still driving the camera — a tween in flight, a followed
