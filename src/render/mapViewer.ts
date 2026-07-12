@@ -1083,7 +1083,57 @@ export class MapViewerScene {
       // Orders (7.14): trigger issue → the sim; current order ← the sim.
       issueUnitOrder: (id, orderId, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, kind, x, y, targetId) ?? false,
       getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
+      // Unit groups (7.16): every GroupEnumUnits* scan reads the live sim through here.
+      // A dead unit is already out of SimWorld.units (it became a corpse), so an enum
+      // only ever sees living units.
+      enumUnits: () => this.unitSnapshots(),
+      // Only the local player (slot 0) has a selection in our engine.
+      selectedUnits: (player) => (player === 0 ? this.rts?.selectedUnitIds() ?? [] : []),
+      isUnitType: (id, t) => this.unitTypeIs(id, t),
+      // IsUnitAlly/IsUnitEnemy: team-based, so neutral hostile (team -1) is nobody's ally.
+      isUnitAlly: (id, player) => {
+        const u = this.rts?.simWorld.units.get(id);
+        return !!u && u.team >= 0 && u.team === this.teamOf(player);
+      },
     };
+  }
+
+  /** The live sim units, as the interpreter's UnitSnapshot view (the region pump + group
+   *  enumeration both scan this). */
+  private unitSnapshots(): UnitSnapshot[] {
+    const snap: UnitSnapshot[] = [];
+    if (!this.rts) return snap;
+    for (const u of this.rts.simWorld.units.values()) {
+      snap.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
+    }
+    return snap;
+  }
+
+  /** IsUnitType (7.16) — answer a unittype classification from the sim unit's flags.
+   *  `t` is the common.j ConvertUnitType index. These are what a "matching unit" filter
+   *  actually asks about ("is A structure", "is alive", "is A Hero", "is Summoned"); the
+   *  classifications we hold no data for (ATTACKS_FLYING, GIANT, SAPPER, RESISTANT, …)
+   *  read false rather than guess. Melee/ranged come from the weapon's `ranged` flag
+   *  (UnitWeapons weapType: a missile weapon = a ranged attacker). */
+  private unitTypeIs(id: number, t: number): boolean {
+    const u = this.rts?.simWorld.units.get(id);
+    if (!u) return t === 1; // gone from the sim = dead (UNIT_TYPE_DEAD)
+    switch (t) {
+      case 0: return u.isHero; // UNIT_TYPE_HERO
+      case 1: return u.hp <= 0; // UNIT_TYPE_DEAD
+      case 2: return !!u.building; // UNIT_TYPE_STRUCTURE
+      case 3: return u.flying; // UNIT_TYPE_FLYING
+      case 4: return !u.flying; // UNIT_TYPE_GROUND
+      case 7: return !!u.weapon && !u.weapon.ranged; // UNIT_TYPE_MELEE_ATTACKER
+      case 8: return !!u.weapon && u.weapon.ranged; // UNIT_TYPE_RANGED_ATTACKER
+      case 10: return u.isSummon; // UNIT_TYPE_SUMMONED
+      case 11: return u.stunned; // UNIT_TYPE_STUNNED
+      case 14: return u.race === "undead"; // UNIT_TYPE_UNDEAD
+      case 15: return u.mechanical; // UNIT_TYPE_MECHANICAL
+      case 16: return u.isPeon; // UNIT_TYPE_PEON
+      case 23: return u.asleep; // UNIT_TYPE_SLEEPING
+      default: return false;
+    }
   }
 
   /** Spawn a unit a trigger created via CreateUnit. The JASS side needs a sim id
@@ -1199,11 +1249,7 @@ export class MapViewerScene {
       if (orders.length) engine.interp.pumpOrderEvents(orders);
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
-        const snap: UnitSnapshot[] = [];
-        for (const u of this.rts.simWorld.units.values()) {
-          snap.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing });
-        }
-        engine.interp.pumpRegions(snap);
+        engine.interp.pumpRegions(this.unitSnapshots());
       }
     } catch (err) {
       console.warn("[jass] trigger pump failed (non-fatal):", err);

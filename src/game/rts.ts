@@ -785,6 +785,11 @@ export class RtsController {
     this.seedingEnabled = true;
   }
 
+  /** The local player's current selection, as sim ids (JASS GroupEnumUnitsSelected). */
+  selectedUnitIds(): number[] {
+    return [...this.selected];
+  }
+
   /** Remove a unit from the selection (keeping the primary consistent). */
   private deselect(id: number): void {
     this.selected.delete(id);

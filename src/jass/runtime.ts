@@ -119,6 +119,17 @@ export interface JassUnit {
   simId: number; // our engine's sim id, or -1 when running headless
 }
 
+/** A minimal live view of a sim unit the engine feeds the interpreter: the event
+ *  pumps (enter-region, death, …) and group enumeration (EngineHooks.enumUnits). */
+export interface UnitSnapshot {
+  id: number;
+  typeId: string;
+  owner: number;
+  x: number;
+  y: number;
+  facing: number;
+}
+
 /** What config() (and the setup natives) accumulate — the map's declared player
  *  setup + start locations. Cross-checked against war3map.w3i (the free oracle). */
 export interface MapSetup {
@@ -170,6 +181,16 @@ export interface EngineHooks {
   issueUnitOrder?(unitId: number, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
   /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */
   getUnitCurrentOrder?(unitId: number): number;
+  // --- unit groups (7.16): enumeration + the classification a group filter asks about ---
+  /** Every unit currently in the sim — what GroupEnumUnitsInRect/InRange/OfPlayer/… scan. */
+  enumUnits?(): ReadonlyArray<UnitSnapshot>;
+  /** The units `player` currently has selected (GroupEnumUnitsSelected). */
+  selectedUnits?(player: number): number[];
+  /** IsUnitType — a unittype classification by its common.j ConvertUnitType index
+   *  (0 HERO, 1 DEAD, 2 STRUCTURE, 3 FLYING, …); the workhorse of "matching" filters. */
+  isUnitType?(unitId: number, unitType: number): boolean;
+  /** IsUnitAlly/IsUnitEnemy — is the unit allied to `player` (same team)? */
+  isUnitAlly?(unitId: number, player: number): boolean;
   /** Player resource / state: SetPlayerState & GetPlayerState. `state` is the raw
    *  playerstate index (1 = gold, 2 = lumber, 4 = food cap, 5 = food used). */
   setPlayerState?(player: number, state: number, value: number): void;
@@ -333,6 +354,14 @@ export class Runtime {
       this.setup.players.set(index, p);
     }
     return p;
+  }
+
+  /** Bind a script-created unit (CreateUnit) to its sim id, so a later enumeration or
+   *  event pump (unitForSim) hands back the SAME handle instead of minting a second one
+   *  for the same unit — JASS `==`, IsUnitInGroup and GetTriggerUnit all compare by
+   *  handle id, so one sim unit must mean exactly one handle. */
+  bindSimUnit(u: JassUnit): void {
+    if (u.simId >= 0) this.simUnitHandles.set(u.simId, u.handleId);
   }
 
   /** Intern (or refresh) a JASS `unit` handle backing sim unit `u`. The handle's

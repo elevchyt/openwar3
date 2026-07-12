@@ -16,20 +16,15 @@
 //     Expressions stay synchronous (see JassThread + runSync below).
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
-import { Runtime, JassArray, ThreadAbort, type BoolExpr, type JassPlayer, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg } from "./runtime";
+import { Runtime, JassArray, ThreadAbort, type BoolExpr, type JassPlayer, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
 
-/** A minimal live view of a sim unit the engine feeds the region pump each tick. */
-export interface UnitSnapshot {
-  id: number;
-  typeId: string;
-  owner: number;
-  x: number;
-  y: number;
-  facing: number;
-}
+// The sim's live view of a unit (what the pumps and group enumeration are fed) lives in
+// runtime.ts, alongside the EngineHooks that carry it. Re-exported: the engine side has
+// always imported it from here.
+export type { UnitSnapshot };
 
 /** One unit death fed to the death pump: the victim + its killer (null if none). */
 export interface DeathEvent {

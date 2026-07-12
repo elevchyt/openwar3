@@ -870,5 +870,137 @@ endfunction`;
   else fail(`afterInit: ${initFlag && initFlag.n} (want 1)`);
 }
 
+// --- 7.16: unit groups — the GUI's "Pick every unit in <region> matching <cond>" ---
+console.log('\n[7.16] Unit groups (GroupEnum* / ForGroup / FirstOfGroup / group orders — through the real BJs)');
+{
+  // A mock sim: 5 units the enumeration hooks expose, exactly as mapViewer's bridge does
+  // over SimWorld.units. Two footmen + a peasant sit inside the rect (0,0)-(512,512); a
+  // player-1 grunt and a far-off footman sit outside it.
+  const sim = [
+    { id: 1, typeId: 'hfoo', owner: 0, x: 100, y: 100, facing: 0 },
+    { id: 2, typeId: 'hfoo', owner: 0, x: 300, y: 200, facing: 0 },
+    { id: 3, typeId: 'hpea', owner: 0, x: 400, y: 400, facing: 0 },
+    { id: 4, typeId: 'ogru', owner: 1, x: 200, y: 200, facing: 0 }, // inside, but player 1
+    { id: 5, typeId: 'hfoo', owner: 0, x: 2000, y: 2000, facing: 0 }, // outside the rect
+  ];
+  const issued = [];
+  const hooks = {
+    enumUnits: () => sim,
+    selectedUnits: (p) => (p === 0 ? [2, 3] : []),
+    objectName: (typeId) => ({ hfoo: 'Footman', hpea: 'Peasant', ogru: 'Grunt' })[typeId],
+    isUnitType: (id, t) => (t === 2 ? false : t === 0 ? false : t === 4), // everything is GROUND
+    issueUnitOrder: (unitId, orderId, kind, x, y) => (issued.push({ unitId, orderId, kind, x, y }), true),
+    getUnitState: (id, s) => (s === 0 ? 100 : 0), // UNIT_STATE_LIFE — all alive
+  };
+  const SRC = `
+globals
+    integer udg_picked   = 0
+    integer udg_footmen  = 0
+    integer udg_ofPlayer = 0
+    integer udg_inRange  = 0
+    integer udg_selected = 0
+    integer udg_firstId  = 0
+    boolean udg_inGroup  = false
+    boolean udg_notIn    = false
+    integer udg_counted  = 0
+endglobals
+// The exact shape the World Editor compiles "Pick every unit in <rect> matching
+// <(Unit-type of (Matching unit)) Equal to Footman> and do <actions>" into.
+function FiltFootman takes nothing returns boolean
+    return GetUnitTypeId( GetFilterUnit() ) == 'hfoo'
+endfunction
+function PickAction takes nothing returns nothing
+    set udg_picked = udg_picked + 1
+    if GetUnitTypeId( GetEnumUnit() ) == 'hfoo' then
+        set udg_footmen = udg_footmen + 1
+    endif
+endfunction
+function RunGroups takes nothing returns nothing
+    local group  g   = null
+    local rect   r   = Rect( 0.0, 0.0, 512.0, 512.0 )
+    local unit   u   = null
+
+    // "Pick every unit in region matching condition" — ForGroupBJ over GetUnitsInRectMatching.
+    call ForGroupBJ( GetUnitsInRectMatching( r, Condition( function FiltFootman ) ), function PickAction )
+
+    // The un-filtered rect enum: 4 units are inside (the 5th is far away).
+    set g = GetUnitsInRectAll( r )
+    set udg_counted = CountUnitsInGroup( g )
+    set udg_firstId = GetUnitTypeId( FirstOfGroup( g ) )
+    set udg_inGroup = IsUnitInGroup( FirstOfGroup( g ), g )
+    call GroupPointOrder( g, "attack", 1024.0, 64.0 )   // mass order: the whole group marches
+    call DestroyGroup( g )
+
+    // Ownership / radius / selection scans.
+    set g = GetUnitsOfPlayerAll( Player(0) )
+    set udg_ofPlayer = CountUnitsInGroup( g )
+    call DestroyGroup( g )
+
+    set g = CreateGroup()
+    call GroupEnumUnitsInRange( g, 0.0, 0.0, 250.0, null )   // only unit 1 (100,100) is within 250
+    set udg_inRange = CountUnitsInGroup( g )
+    call GroupClear( g )
+
+    call GroupEnumUnitsSelected( g, Player(0), null )
+    set udg_selected = CountUnitsInGroup( g )
+
+    // A group is a SET, and the enum REPLACED its contents (no leftovers from above).
+    call GroupClear( g )
+    set u = FirstOfGroup( GetUnitsOfPlayerAll( Player(1) ) )
+    call GroupAddUnit( g, u )
+    call GroupAddUnit( g, u )
+    set udg_notIn = IsUnitInGroup( u, g ) and CountUnitsInGroup( g ) == 1
+endfunction`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  interp.run('RunGroups', []);
+  const g = (n) => interp.rt.globals.get(n);
+  const picked = g('udg_picked'), counted = g('udg_counted'), ofPlayer = g('udg_ofPlayer');
+  const inRange = g('udg_inRange'), selected = g('udg_selected'), inGroup = g('udg_inGroup'), setOnce = g('udg_notIn');
+  const footmen = g('udg_footmen');
+  if (picked && picked.n === 2 && footmen && footmen.n === 2) ok(`"Pick every unit in region matching Footman" → ForGroupBJ ran the action for 2 units; GetEnumUnit resolves each`);
+  else fail(`picked: ${picked && picked.n} / GetEnumUnit footmen: ${footmen && footmen.n} (want 2/2 — the 2 footmen inside the rect)`);
+  if (counted && counted.n === 4) ok(`GetUnitsInRectAll + CountUnitsInGroup → 4 (the far-off unit excluded)`);
+  else fail(`rect count: ${counted && counted.n} (want 4)`);
+  if (ofPlayer && ofPlayer.n === 4) ok(`GroupEnumUnitsOfPlayer(Player(0)) → 4 (the player-1 grunt excluded)`);
+  else fail(`of-player count: ${ofPlayer && ofPlayer.n} (want 4)`);
+  if (inRange && inRange.n === 1) ok(`GroupEnumUnitsInRange(0,0,250) → 1 (a circle test from the unit's origin)`);
+  else fail(`in-range count: ${inRange && inRange.n} (want 1)`);
+  if (selected && selected.n === 2) ok(`GroupEnumUnitsSelected(Player(0)) → 2 (the bridge's selection)`);
+  else fail(`selected count: ${selected && selected.n} (want 2)`);
+  if (inGroup && inGroup.b === true && setOnce && setOnce.b === true) ok(`IsUnitInGroup true for a member; GroupAddUnit twice adds once (a group is a set)`);
+  else fail(`membership: inGroup ${inGroup && inGroup.b} setOnce ${setOnce && setOnce.b} (want true/true)`);
+  // The mass order reached the bridge for every member of the rect group, with the right id.
+  const marching = issued.filter((o) => o.kind === 'point' && o.orderId === 851983 && o.x === 1024);
+  if (marching.length === 4 && new Set(marching.map((o) => o.unitId)).size === 4) ok(`GroupPointOrder("attack") ordered all 4 members through the bridge (id 851983)`);
+  else fail(`group order: ${JSON.stringify(issued)}`);
+
+  // A trigger-CREATED unit must enumerate as the SAME handle CreateUnit returned —
+  // else `GetTriggerUnit() == GetEnumUnit()` and IsUnitInGroup silently fail.
+  const sim2 = [];
+  const hooks2 = {
+    createUnit: (player, typeId, x, y, facing) => {
+      const id = 900 + sim2.length;
+      sim2.push({ id, typeId, owner: player, x, y, facing });
+      return id;
+    },
+    enumUnits: () => sim2,
+  };
+  const SRC2 = `
+globals
+    boolean udg_same = false
+endglobals
+function RunIdentity takes nothing returns nothing
+    local unit  u = CreateUnit( Player(0), 'hfoo', 64.0, 64.0, 0.0 )
+    local group g = CreateGroup()
+    call GroupEnumUnitsInRange( g, 64.0, 64.0, 128.0, null )
+    set udg_same = IsUnitInGroup( u, g ) and ( FirstOfGroup( g ) == u )
+endfunction`;
+  const interp2 = buildInterpreter([COMMON_J, BLIZZARD_J, SRC2], { hooks: hooks2 });
+  interp2.run('RunIdentity', []);
+  const same = interp2.rt.globals.get('udg_same');
+  if (same && same.b === true) ok(`a CreateUnit'd unit enumerates as the SAME handle (IsUnitInGroup + \`==\` hold)`);
+  else fail(`handle identity: ${same && same.b} (want true — one sim unit must mean one handle)`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);

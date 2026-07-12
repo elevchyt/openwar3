@@ -116,6 +116,17 @@ export function registerRegionNatives(rt: Runtime): void {
     }
     return JNULL;
   });
+  // The map's start locations, as a location (config() recorded them via
+  // DefineStartLocation) — "spawn a wave at Player N's start" leans on this.
+  def(rt, "GetStartLocationLoc", (c, a) => {
+    const s = c.rt.setup.startLocations.get(asNum(a[0]));
+    const l: LocationObj = { handleId: 0, x: s?.x ?? 0, y: s?.y ?? 0 };
+    l.handleId = c.rt.handles.alloc(l);
+    return jHandle(l.handleId, "location");
+  });
+  def(rt, "GetStartLocationX", (c, a) => jReal(c.rt.setup.startLocations.get(asNum(a[0]))?.x ?? 0));
+  def(rt, "GetStartLocationY", (c, a) => jReal(c.rt.setup.startLocations.get(asNum(a[0]))?.y ?? 0));
+
   def(rt, "GetLocationX", (c, a) => jReal(loc(c, a[0])?.x ?? 0));
   def(rt, "GetLocationY", (c, a) => jReal(loc(c, a[0])?.y ?? 0));
   def(rt, "GetLocationZ", () => jReal(0)); // terrain height — needs the sim; 0 for now

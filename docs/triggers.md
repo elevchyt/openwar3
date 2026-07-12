@@ -31,12 +31,12 @@
 | 7.13 | **Unit-mutation effects** (`SetUnitPosition`/`X`/`Y`/`Loc`, `SetUnitFacing[Timed]`, `SetUnitOwner` + **change-owner event**, `PauseUnit`/`IsUnitPaused`, `SetUnitScale`/`VertexColor`/`FlyHeight`/`MoveSpeed`/`TurnSpeed`/`TimeScale`, `SetUnitColor`, live `Get*`) | ✅ done (live) | §7.13 headless (every effect recorded in a mock sim; `EVENT_PLAYER_UNIT_CHANGE_OWNER` fires w/ `GetChangingUnitPrevOwner`; `Get*` read live); Echo Isles: a unit visibly scaled/tinted/reowned (screenshots) |
 | 7.14 | **Trigger orders** — `Issue{Immediate,Point,Target}Order`(+`ById`/`Loc`) → the sim marches/attacks; `OrderId`/`OrderId2String`/`String2OrderId`/`GetUnitCurrentOrder`; **`EVENT_..._ISSUED_ORDER`/`POINT`/`TARGET`** (38/39/40 + unit 75/76/77) w/ `GetIssuedOrderId`/`GetOrderPointX/Y`/`GetOrderTargetUnit` | ✅ done (live) | §7.14 headless (issue natives → bridge w/ right id+kind+target; order events dispatch owner-matched; vocabulary round-trips); Echo Isles: a trigger marches a squad of peasants (screenshots) |
 | 7.15 | **Trigger threads — waits** (`TriggerSleepAction`/`PolledWait`): trigger actions run on a suspendable thread; `TriggerExecute`/`ConditionalTriggerExecute`/`ExecuteFunc` run on the caller's thread | ✅ done (live) | §7.15 headless (a wait suspends + resumes on game time, **event responses survive it**, `PolledWait` through the real blizzard.j, 0s-wait can't hang, wait-in-condition abandoned, a Wait in map init defers the rest of init); ExtremeCandyWar + WarChasers park + resume real threads (screenshots) |
-| — | **Unit groups** (`CreateGroup`/`GroupEnumUnitsInRect`/`ForGroup`/…) — the GUI's "Pick every unit in <region>" | ⬜ **next** | a "pick every unit" trigger body does something |
-| — | remaining effect natives (add/remove ability, `SetHeroLevel`/XP, weather, …) + remaining events (unit-state, construct/train, spell-cast) | ⬜ next | a hero levels / a spell-cast trigger fires |
+| 7.16 | **Unit groups** — `CreateGroup`/`GroupEnumUnitsIn{Rect,Range,RangeOfLoc}`/`OfPlayer`/`OfType`/`Selected` (+`Counted`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`/`GroupAddUnit`/`IsUnitInGroup`, `Group{Immediate,Point,Target}Order` — the GUI's **"Pick every unit in \<region\> matching \<condition\>"**. Plus the filter natives it's useless without: `IsUnitType`, `IsUnitAlly`/`IsUnitEnemy`, `GetUnitLoc`, `GetStartLocationLoc` | ✅ done (live) | §7.16 headless (the real `ForGroupBJ`+`GetUnitsInRectMatching` path picks 5-of-6, the filter rejects the rest; group order reaches all members; one sim unit == one handle); Echo Isles: a trigger picks every worker in a region, tints them, then marches the group (screenshots); ExtremeCandyWar's own script drives 169 `CreateGroup`/168 enums/217 `ForGroup` — **all empty before, now finding units** |
+| — | remaining effect natives (add/remove ability, `SetHeroLevel`/XP, weather, …) + remaining events (unit-state, construct/train, spell-cast) | ⬜ **next** | a hero levels / a spell-cast trigger fires |
 | 7.3 | Melee from the script (retire hard-coded roster) | ⬜ todo | melee-via-script == `startMelee` |
-| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (157/335 used natives implemented) |
+| 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (171/335 used natives implemented) |
 
-Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits) and **`pnpm jass:coverage`** (unimplemented natives by usage).
+Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.4 timers + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.10/7.11 events + 7.12 effects + 7.13 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups) and **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It detects an implementation by scanning `src/jass/natives/*.ts` for the
 > quoted native name, and it only counts natives called **directly** from a `war3map.j`. So (a) natives registered
@@ -94,6 +94,7 @@ or vfs** (bridge, not fork) — so it's testable headlessly and stays engine-agn
 | `natives/world.ts` | `CreateUnit` (+ bridge), resource/state setters, unit queries |
 | `natives/events.ts` | triggers (`CreateTrigger`/`TriggerAddAction`/`ConditionalTriggerExecute`), boolexprs, event **registration** + **response** readers, **timers** (7.4) |
 | `natives/forces.ts` | **forces** (player groups): `CreateForce`/`ForceAddPlayer`/`IsPlayerInForce`/`ForForce`/`ForceEnum*` + `GetEnumPlayer`/`GetFilterPlayer` — the target of the "Text Message" actions (7.6) |
+| `natives/groups.ts` | **unit groups** (7.16): the `GroupEnum*` scans over the live sim (`EngineHooks.enumUnits`), `ForGroup`/`GetEnumUnit`/`FirstOfGroup`, membership, and the `Group*Order` mass orders — the GUI's "Pick every unit in \<region\> matching \<condition\>" |
 | `natives/region.ts` | **rects / regions / locations**: `Rect`(+ `gg_rct_*`), `GetRect*`, `CreateRegion`/`RegionAddRect`, `Location`/`GetLocationX/Y` — the geometry the enter/leave-region pump tests against (7.4b) |
 | `natives/text.ts` | **text actions + logic** (7.6): on-screen messages (`DisplayText…`/`ClearTextMessages`), **floating text** (`CreateTextTag`…), names (`GetPlayerName`/`GetUnitName`/`GetObjectName`), `StringHash`, localization |
 | `wts.ts` | `parseWts` — the map's `war3map.wts` trigger-string table (resolves `TRIGSTR_nnn` placeholders to authored text) |
@@ -448,6 +449,61 @@ schedule (gold ticking, 144 fps, no hitch — vs **886 ms blocked** with the old
 WarChasers holds 5 parked threads and sets `udg_TheLeaderBoard`, which is assigned *after* its `TriggerSleepAction(1.0)`
 (screenshots).
 
+## Unit groups (7.16 — done, live)
+
+The **workhorse action of custom maps**: *"Pick every unit in \<region\> matching \<condition\> and do
+\<actions\>"* — spawn waves, AoE damage, mass orders, "are all the defenders dead?". The World Editor compiles it to
+
+```jass
+call ForGroupBJ( GetUnitsInRectMatching( gg_rct_Foo, Condition(function Filt) ), function Actions )
+```
+
+so the whole GUI family (`ForGroupBJ`, `GetUnitsInRect/RangeOf*`, `CountUnitsInGroup`, `GroupPickRandomUnit`,
+`GroupAddGroup`, `IsUnitGroupDeadBJ`, …) is *blizzard.j code we already interpret* riding on a handful of natives.
+Before this, every one of them silently did nothing. Built:
+
+- **`src/jass/natives/groups.ts`** — the container (`CreateGroup`/`GroupAddUnit`/`GroupRemoveUnit`/`GroupClear`/
+  `IsUnitInGroup`), the **enumeration** scans (`GroupEnumUnitsInRect`/`InRange`/`InRangeOfLoc`/`OfPlayer`/`OfType`/
+  `Selected`, each with its `*Counted` variant), **iteration** (`ForGroup` + `GetEnumUnit`, `FirstOfGroup`), and the
+  **mass orders** (`Group{Immediate,Point,Target}Order`(+`ById`/`Loc`) → the same sim bridge 7.14 issue-orders use).
+  - **Enumeration reads the live sim** through a new `EngineHooks.enumUnits` (mapViewer hands over `SimWorld.units`;
+    the region pump now shares that same snapshot helper).
+  - **The enum natives CLEAR the group first** — they replace its contents rather than accumulate, which is what makes
+    the recycled-"enum group" idiom work. Verified against the community JASS references (thehelper/Hive threads on
+    group enumeration) and consistent with blizzard.j, which only ever enums into a fresh or explicitly cleared group.
+  - **The `matching` filter** is a boolexpr run per unit with `GetFilterUnit` set — the same machinery the enter-region
+    filter uses.
+  - **One sim unit = one handle.** `CreateUnit` now binds its handle to the sim id (`Runtime.bindSimUnit`), so a unit
+    enumerated later is the *same* handle `CreateUnit` returned and the same one `GetTriggerUnit` hands out. Without
+    this, `IsUnitInGroup(GetTriggerUnit(), g)` and `GetEnumUnit() == u` would silently be false (two handles, one unit).
+- **The filter natives a group is useless without** — a "matching" condition asks `IsUnitType(…, UNIT_TYPE_STRUCTURE)`,
+  `IsUnitEnemy(…, Player(0))`, `IsUnitAliveBJ(…)`. All three were stubs or missing:
+  - **`IsUnitType`** (was a hard `false`) → a bridge lookup over the sim unit's flags: HERO / DEAD / STRUCTURE /
+    FLYING / GROUND / MELEE / RANGED / SUMMONED / STUNNED / UNDEAD / MECHANICAL / PEON / SLEEPING. Classifications we
+    hold no data for still read false, rather than guess.
+  - **`IsUnitAlly`/`IsUnitEnemy`** → team comparison via the bridge (neutral hostile, team −1, is nobody's ally).
+  - **`GetUnitLoc`** (+ `GetStartLocationLoc`/`X`/`Y`) — locations are the currency of the BJ layer: "pick every unit
+    within 600 of \<unit\>" is `GetUnitsInRangeOfLocMatching(600, GetUnitLoc(u), filter)`. **This was the bug that made
+    groups look broken in the wild:** live on ExtremeCandyWar the map called `GroupEnumUnitsInRangeOfLoc` 168× in a few
+    seconds and *every one enumerated around a null location and found nobody*. `IsUnitAliveBJ` already worked (it reads
+    `GetUnitState`, 7.7).
+
+Sim difference worth knowing: our sim drops a unit from `SimWorld.units` the moment it dies (it becomes a corpse), so an
+enum only ever sees **living** units. WC3 also enumerates dead-but-not-decayed bodies — which is why so much GUI code
+filters on `IsUnitAliveBJ(GetFilterUnit())`. That filter still works here; it just has nothing to reject.
+
+Verified (`pnpm jass:test` §7.16), all through the **real** blizzard.j: the compiled GUI shape
+(`ForGroupBJ(GetUnitsInRectMatching(…))`) picks exactly the 2 footmen inside the rect and `GetEnumUnit` resolves each;
+`GetUnitsInRectAll` + `CountUnitsInGroup` → 4 (the far-off unit excluded); `GroupEnumUnitsOfPlayer` excludes the other
+player's unit; `InRange` is a circle test from the unit's origin; `GroupEnumUnitsSelected` reads the bridge's selection;
+a group is a **set** (adding twice adds once); `GroupPointOrder("attack")` reaches all 4 members with id 851983; and a
+`CreateUnit`'d unit enumerates as the same handle (`IsUnitInGroup` + `==` hold).
+Verified **live**: on Echo Isles a trigger ran *"Pick every unit in \<region\> matching \<is a worker\>"* — it picked **5
+workers of the 6 units** in the rect (the town hall, in the rect but not a worker, was rejected by the filter), tinted and
+enlarged each through `GetEnumUnit`, printed `CountUnitsInGroup` to the HUD, then marched the whole picked group across the
+map with one `GroupPointOrder` (screenshots). On ExtremeCandyWar the map's **own** script now drives 169 `CreateGroup` /
+168 enums / 217 `ForGroup` calls that **find units** (they returned empty before), at 144 fps with 208 units.
+
 ## What's NOT done yet (next tasks — keep this list honest)
 
 - **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
@@ -457,24 +513,20 @@ WarChasers holds 5 parked threads and sets `udg_TheLeaderBoard`, which is assign
 - **Custom-ability *behaviour*** — object data now gives a custom ability its real numbers, but only abilities whose base
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).
-- **More effect natives** — 7.7 + 7.13 cover resources, unit-state, and the unit-mutation set (move/facing/owner/pause/
-  scale/colour/fly-height/speed). Still no-ops: `UnitAddAbility`/`UnitRemoveAbility`, `SetHeroLevel`/`AddHeroXP`,
-  `SetUnitAnimation`, weather, etc. Each is a small bridge method away — wire on demand as maps hit them.
+- **More effect natives — the next task.** 7.7 + 7.13 cover resources, unit-state, and the unit-mutation set
+  (move/facing/owner/pause/scale/colour/fly-height/speed), and 7.16 adds the group + filter/query surface. Still no-ops:
+  `UnitAddAbility`/`UnitRemoveAbility`, `SetHeroLevel`/`AddHeroXP`, `SetUnitAnimation`, `CreateItem`/`UnitAddItem`,
+  weather, sounds, cameras. Each is a small bridge method away — wire on demand as maps hit them (`pnpm jass:coverage`
+  ranks them by how many maps call them).
 - **Remaining sim events** — timers, region, death, **damage**, **attacked**, and **orders** pump live (7.4b/c, 7.14);
   still to wire from `rts.tick`: **unit-state** (`EVENT_UNIT_STATE_LIMIT` — HP/mana threshold crossings),
   **construction/train finished** (`EVENT_PLAYER_UNIT_CONSTRUCT_FINISH`/`TRAIN_FINISH`), **spell cast**
   (`EVENT_PLAYER_UNIT_SPELL_*`). Same shape as `pumpDamageEvents`/`pumpOrderEvents` — snapshot the event in the sim
   (with its id/target), drain + dispatch in the interpreter.
-- **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster.
-- **Unit groups — the next task.** `CreateGroup`/`GroupEnumUnitsInRect`/`InRange`/`OfPlayer`/`ForGroup`/`FirstOfGroup`/
-  `GroupAddUnit`/`IsUnitInGroup`/`GetEnumUnit` + the BJ family. This is the GUI's **"Pick every unit in \<region\>
-  matching \<condition\> and do \<actions\>"** — the workhorse action of custom maps (spawn waves, AoE damage, mass
-  orders) — and right now the whole action body silently does nothing. Should be a small diff: the boolexpr/filter
-  machinery already exists (`Condition`/`Filter`/`GetFilterUnit`) and enumeration is a scan over the sim's unit list.
-  It's also a hard dependency for **7.3** (`MeleeClearExcessUnits` enumerates groups). Note `jass:coverage` *undercounts*
-  it badly — maps reach groups through blizzard.j BJs, which the tool doesn't scan.
+- **7.3** run melee from `blizzard.j`'s `Melee*` library and retire the hard-coded `startMelee` roster. Its hard
+  dependency — unit groups, which `MeleeClearExcessUnits` enumerates — is now done (7.16).
 - **Natives on demand** — weather, sound, cameras, cinematics (transmissions), multiboard, quests, gamecache.
-  Use `pnpm jass:coverage` to prioritise (157/335 used natives implemented — and see the caveat on that number above).
+  Use `pnpm jass:coverage` to prioritise (171/335 used natives implemented — and see the caveat on that number above).
 - **Floating text rendering** — the `CreateTextTag` natives fully populate `runtime.textTags`, but nothing draws them
   in 3D yet (no world-space text pass). On-screen messages *are* rendered (HUD message log).
 - **Lua** (`war3map.lua`, Reforged 1.31+) — only when we target that version.

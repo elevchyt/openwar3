@@ -26,6 +26,7 @@ function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: numb
   const u: JassUnit = { handleId: 0, player: playerIdx, typeId, x, y, facing, simId };
   u.handleId = rt.handles.alloc(u);
   rt.units.push(u);
+  rt.bindSimUnit(u); // one sim unit = one handle: a later group enum/event pump reuses THIS one
   return jHandle(u.handleId, "unit");
 }
 
@@ -230,8 +231,44 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "GetUnitFacing", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => rad2deg(h.getUnitFacing?.(id)), (u) => u.facing) }));
   def(rt, "GetUnitMoveSpeed", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitMoveSpeed?.(id), () => 0) }));
   def(rt, "GetUnitFlyHeight", (c, a) => ({ k: "real", n: liveNum(c, unit(c, a[0]), (h, id) => h.getUnitFlyHeight?.(id), () => 0) }));
+  // A `location` handle for the unit's LIVE position. Locations are the currency of the
+  // BJ layer: "pick every unit within 600 of <unit>" compiles to
+  // GetUnitsInRangeOfLocMatching(600, GetUnitLoc(u), filter) — so without GetUnitLoc the
+  // whole enum scans a null point and finds nobody (measured on ExtremeCandyWar, whose
+  // script called GroupEnumUnitsInRangeOfLoc 168× in a few seconds, every one empty).
+  const location = (c: NativeCtx, x: number, y: number): JassValue => {
+    const l = { handleId: 0, x, y };
+    l.handleId = c.rt.handles.alloc(l);
+    return jHandle(l.handleId, "location");
+  };
+  def(rt, "GetUnitLoc", (c, a) => {
+    const u = unit(c, a[0]);
+    const [x, y] = u ? posOf(c, u) : [0, 0];
+    return location(c, x, y);
+  });
+
+  // Alliance — the other half of a group filter ("matching unit belongs to an enemy of
+  // Player 1"). Team-based: the sim's unit team vs the player's, so neutral hostile
+  // (team -1) is nobody's ally. Enemy is simply "not allied".
+  const allied = (c: NativeCtx, unitV: JassValue, playerV: JassValue): boolean => {
+    const u = unit(c, unitV);
+    if (!u) return false;
+    const p = c.rt.data<JassPlayer>(playerV)?.index ?? asInt(playerV);
+    if (u.simId < 0 || !c.rt.hooks?.isUnitAlly) return u.player === p; // headless: same owner
+    return c.rt.hooks.isUnitAlly(u.simId, p);
+  };
+  def(rt, "IsUnitAlly", (c, a) => jBool(allied(c, a[0], a[1])));
+  def(rt, "IsUnitEnemy", (c, a) => jBool(!allied(c, a[0], a[1])));
+
   def(rt, "IsUnitHidden", () => jBool(false));
-  def(rt, "IsUnitType", () => jBool(false));
+  // IsUnitType(u, UNIT_TYPE_*) — the classification half of every "matching unit"
+  // filter ("is A structure", "is alive", "is A Hero"). The unittype is a
+  // ConvertUnitType index (0 HERO, 1 DEAD, 2 STRUCTURE, …); the bridge answers it from
+  // the sim unit's own flags, and any classification we hold no data for reads false.
+  def(rt, "IsUnitType", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(u && u.simId >= 0 ? c.rt.hooks?.isUnitType?.(u.simId, c.rt.enumIndex(a[1])) ?? false : false);
+  });
   // Floating text tags + on-screen messages (the "text actions") live in
   // natives/text.ts alongside the string/name text-logic natives.
 }
