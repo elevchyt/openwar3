@@ -7,7 +7,7 @@ import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout
 import { fadePanels, type PanelDirection } from "./anim";
 import {
   buildEditBox, buildList, buildPopup, widgetKind,
-  type EditBoxControl, type ListControl, type PopupControl, type PopupMenuStyle,
+  type EditBoxControl, type ListControl, type PopupControl, type PopupMenuStyle, type ScrollBarStyle,
 } from "./widgets";
 
 // FDF → DOM renderer (issue #54). Builds the game's frames as absolutely-positioned
@@ -375,6 +375,9 @@ function renderWidget(
       labelBox.classList.add("fdf-popup-title");
       const inset = (numProp(f, "PopupButtonInset") ?? 0.01) + 0.011; // the inset + the arrow itself
       labelBox.style.paddingRight = `${inset * scale}px`;
+      // A notch below the FDF's own size: our font sets larger than WC3's, and these are its
+      // tightest boxes (a player row packs five of them across).
+      labelBox.style.fontSize = `${Math.max(8, parseFloat(getComputedStyle(labelBox).fontSize) * POPUP_LABEL_SCALE)}px`;
     }
     ctx.controls.set(f.name, buildPopup(el, f, scale, ctx.overlay, {
       titleEl: span ?? titleEl,
@@ -383,8 +386,46 @@ function renderWidget(
       menu: popupMenuStyle(f, node, ctx),
     }, ctx.disposers));
   } else {
-    ctx.controls.set(f.name, buildList(el, f, scale));
+    ctx.controls.set(f.name, buildList(el, f, scale, scrollBarStyle(node, ctx)));
   }
+}
+
+/**
+ * The list's scrollbar, from the SCROLLBAR frame the FDF hangs off it (MapListBox.fdf's
+ * MapListScrollBar, a StandardScrollBarTemplate). Its four pieces — the tiled track, the
+ * two arrow buttons and the knob — are the game's own art; the behaviour is ours, as the
+ * engine's is.
+ */
+function scrollBarStyle(node: LaidOutFrame, ctx: RenderCtx): ScrollBarStyle | null {
+  const bar = node.children.find((c) => c.frame.type === "SCROLLBAR")?.frame;
+  if (!bar) return null;
+  const scale = ctx.fit.scale;
+  /** A named sub-frame's ControlBackdrop, composited at a pixel size. */
+  const face = (name: string | undefined) => {
+    const owner = name ? findByName(bar, name) : bar;
+    const backdropName = owner ? strProp(owner, "ControlBackdrop") : undefined;
+    const backdrop = owner && backdropName ? findByName(owner, backdropName) : undefined;
+    return (w: number, h: number): HTMLCanvasElement | null =>
+      backdrop ? compositeBackdrop(backdrop, Math.round(w), Math.round(h), ctx) : null;
+  };
+  const inc = strProp(bar, "ScrollBarIncButtonFrame");
+  const thumb = strProp(bar, "SliderThumbButtonFrame");
+  /** A sub-frame's own declared height, in pixels. */
+  const heightOf = (name: string | undefined, fallback: number): number =>
+    (numProp((name && findByName(bar, name)) || bar, "Height") ?? fallback) * scale;
+  return {
+    width: (numProp(bar, "Width") ?? 0.0165) * scale,
+    arrow: heightOf(inc, 0.015),
+    // The knob is a fixed bead (StandardThumbButton: 0.01 × 0.01), not a bar that grows
+    // and shrinks with the list — it slides the same size however long the list is.
+    knob: heightOf(thumb, 0.01),
+    track: face(undefined),
+    // The FDF's INC button carries the UP arrow and the DEC button the DOWN one — the
+    // scrollbar's "increment" is towards the top of the list, not the bottom of the screen.
+    up: face(inc),
+    down: face(strProp(bar, "ScrollBarDecButtonFrame")),
+    thumb: face(thumb),
+  };
 }
 
 /**
@@ -394,6 +435,9 @@ function renderWidget(
  * (TeamButton / ColorButton) has none, so it falls back to that same shared template — which
  * is what the engine draws for it too.
  */
+/** How much smaller than the FDF says a dropdown's text is drawn (label and menu alike). */
+const POPUP_LABEL_SCALE = 0.88;
+
 function popupMenuStyle(f: FdfFrame, node: LaidOutFrame, ctx: RenderCtx): PopupMenuStyle | null {
   const named = strProp(f, "PopupMenuFrame");
   const own = node.children.find((c) => c.frame.type === "MENU" && (!named || c.frame.name === named))?.frame;
@@ -407,7 +451,7 @@ function popupMenuStyle(f: FdfFrame, node: LaidOutFrame, ctx: RenderCtx): PopupM
     backdrop: (w, h) => (backdrop ? compositeBackdrop(backdrop, w, h, ctx) : null),
     itemHeight: (numProp(menu, "MenuItemHeight") ?? 0.014) * scale,
     border: (numProp(menu, "MenuBorder") ?? 0.009) * scale,
-    fontSize: Math.max(8, (firstProp(menu, "FrameFont")?.args[1]?.n ?? 0.011) * scale),
+    fontSize: Math.max(8, (firstProp(menu, "FrameFont")?.args[1]?.n ?? 0.011) * scale * POPUP_LABEL_SCALE),
     highlight: highlight && highlight.length >= 3 ? rgba(highlight) : "rgb(252, 211, 18)",
   };
 }

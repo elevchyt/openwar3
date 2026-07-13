@@ -8,7 +8,7 @@ import { loadUnitRegistry, type UnitRegistry } from "../data/units";
 import { MAPS_PREFIX } from "../assets/opfs";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
-import type { FdfLibrary } from "./fdf/library";
+import { firstProp, type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, UI_FONT, type FdfScreen } from "./fdf/render";
 import type { ListItem, Option } from "./fdf/widgets";
 import type { Controller, MeleeConfig, SlotConfig } from "./lobby";
@@ -229,11 +229,13 @@ export async function mountSkirmish(
     const list = s.list("MapListBox");
     if (list) {
       fillList(s);
-      list.onChange = (value) => {
+      // A single click only ever SELECTS a row. Opening one takes a second click: a folder
+      // is walked into on a double-click, a map is played on one.
+      list.onChange = (value) => { if (!value.startsWith("folder:")) void chooseMap(value, s); };
+      list.onActivate = (value) => {
         if (value.startsWith("folder:")) openFolder(value.slice("folder:".length), s);
-        else void chooseMap(value, s);
+        else start();
       };
-      list.onActivate = () => start();
     }
     // Nothing picked yet: no map to start.
     s.setEnabled("PlayGameButton", !!selected);
@@ -562,6 +564,23 @@ function buildSkirmishRoot(lib: FdfLibrary, rows: number): FdfFrame {
     adopt(root, "TeamSetupContainer", built);
   }
 
+  // The right-hand chrome is a 3D model (render/menuScene.ts) stretched to frame a 16:9
+  // screen, so its two panels sit a little left of where Skirmish.fdf's 4:3 anchors put
+  // their contents. Two nudges put the DOM back inside the chrome that carries it:
+  //
+  //  · the map-info panel (the pane and the Advanced Options button) moves left, so the
+  //    minimap, the stat rows and the blurb centre on the panel rather than hugging its
+  //    right edge;
+  //  · Start Game / Cancel grow to fill their slot — the FDF's 0.24-wide button base is
+  //    narrower than the slot the chrome leaves for it. Both grow together, keeping the
+  //    file's own base:button ratio (0.24 : 0.168), so the ornate ends still frame the button.
+  nudgeX(findFrame(root, "MapInfoPaneContainer"), -MAP_INFO_NUDGE);
+  nudgeX(findFrame(root, "MapInfoBackdrop"), -MAP_INFO_NUDGE);
+  for (const [base, button] of [["PlayGameBackdrop", "PlayGameButton"], ["CancelBackdrop", "CancelButton"]]) {
+    setProp(findFrame(root, base), "Width", [num(BOTTOM_BUTTON_BASE_W)]);
+    setProp(findFrame(root, button), "Width", [num(BOTTOM_BUTTON_BASE_W * BUTTON_TO_BASE)]);
+  }
+
   // The "Game Settings" title anchors itself to the screen's top-left but declares no
   // Height, so it would inherit the root's — a screen-tall box with the title floating in
   // the middle of it. The engine sizes text frames to their text; give it its own line.
@@ -572,6 +591,23 @@ function buildSkirmishRoot(lib: FdfLibrary, rows: number): FdfFrame {
   renameFrame(root, "MapListContainer", "GameSettingsPanel");
   renameFrame(root, "TeamSetupContainer", "TeamSetupPanel");
   return root;
+}
+
+/** How far left the map-info panel's contents move to sit inside the 3D chrome (above). */
+const MAP_INFO_NUDGE = 0.052;
+/** Start Game / Cancel: the width of the ornate base, and the button's share of it. The base
+ *  fills the slot the chrome leaves it; the button fills the base but for the fleur on its
+ *  left and a hair of margin on its right — measured off the reference, where the blue face
+ *  runs nearly the whole width of the dark base it sits in. */
+const BOTTOM_BUTTON_BASE_W = 0.278;
+const BUTTON_TO_BASE = 0.79;
+
+/** Slide a frame along x, keeping the anchor the FDF gave it. */
+function nudgeX(f: FdfFrame | undefined, dx: number): void {
+  const point = f && firstProp(f, "SetPoint");
+  if (!point || point.args.length < 5) return;
+  const at = point.args[3].n ?? 0;
+  point.args[3] = num(at + dx);
 }
 
 /** Put `children` inside the named container frame. */
@@ -668,7 +704,7 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
   // Turtle Rock's, runs to eight lines). A word too many is clipped, exactly as the engine's
   // FIXEDSIZE text frames clip: the size of the type is not up for negotiation.
   const desc = findFrame(pane, "MapDescValue");
-  size(desc, PANE_W, PANE_H - bottom - DESC_GAP);
+  size(desc, PANE_W, DESC_BOTTOM - bottom - DESC_GAP);
   setProp(desc, "FrameFont", [str("MasterFont"), num(DESC_FONT), str("")]);
   return pane;
 }
@@ -680,6 +716,10 @@ const PANE_H = 0.2875;
 const ROWS_TOP = 0.176; // where "Suggested Players:" starts, below the minimap
 const ROW_H = 0.015;
 const DESC_GAP = 0.002; // MapDescValue's own SetPoint TOP, MapDescLabel BOTTOM, 0, -0.002
+/** How far below the pane's top the blurb may run: a shade past the pane's own box, into
+ *  the gap Skirmish.fdf leaves between it and the Advanced Options base. Echo Isles' five
+ *  lines want it; the button still sits clear underneath. */
+const DESC_BOTTOM = PANE_H + 0.012;
 /** The blurb's type size. The FDF's StandardSmallTextTemplate says 0.011, but that is sized
  *  for WC3's own font; ours sets wider, so a Blizzard-length description would not fit the
  *  box the game gives it. Smaller type, same box — the reference's proportions survive. */

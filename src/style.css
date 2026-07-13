@@ -1450,10 +1450,11 @@ body.in-game .fdf-screen.fdf-ingame {
   white-space: nowrap;
   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
 }
-/* MenuTextHighlightColor 0.99 0.827 0.0705 — the FDF's own hover colour. */
+/* MenuTextHighlightColor 0.99 0.827 0.0705 — the FDF's own hover colour, and the only thing
+   that changes under the mouse: the game tints the row's TEXT, it does not light its
+   background. */
 .fdf-popup-item:hover,
 .fdf-popup-item.selected { color: var(--fdf-menu-highlight, #fcd312); }
-.fdf-popup-item:hover { background: rgba(60, 80, 140, 0.45); }
 
 /* The dropdown's own label: one line, clipped where the pulldown arrow begins (the frame
    itself is a flex box laid out by the renderer, so the clipping belongs on the span). */
@@ -1482,18 +1483,29 @@ body.in-game .fdf-screen.fdf-ingame {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.fdf-list-row.selected { background: #2b3f8f; } /* the reference's blue selection bar */
+/* The selected row: the game's own bar — a flat, saturated blue (sampled off the reference
+   at rgb(7,7,162)) with the row's text turned gold, exactly as an open menu highlights. */
+.fdf-list-row.selected { background: #0707a2; color: var(--fdf-menu-highlight, #fcd312); }
 .fdf-list-row:not(.selected):hover { background: rgba(60, 80, 140, 0.35); }
 /* The row's badge (folder, or the melee icon with the map's player count in it) — the
    reference's is a good half again the height of the row's text. */
 .fdf-list-icon { width: 1.45em; height: 1.45em; flex: 0 0 auto; }
 
-/* A thin, dark scrollbar so the list's own chrome (the FDF border) stays the loud part. */
-.fdf-list-rows::-webkit-scrollbar,
+/* The list's scrollbar is the FDF's own (ui/fdf/widgets.ts draws its four pieces from the
+   SCROLLBAR frame's art), so the browser's must go. */
+.fdf-list-rows { scrollbar-width: none; }
+.fdf-list-rows::-webkit-scrollbar { display: none; }
+.fdf-scrollbar { position: absolute; pointer-events: auto; }
+.fdf-scrollbar-track,
+.fdf-scrollbar-arrow,
+.fdf-scrollbar-knob { position: absolute; left: 0; }
+.fdf-scrollbar-arrow,
+.fdf-scrollbar-knob { cursor: inherit; }
+.fdf-scrollbar-arrow:active { filter: brightness(0.8); }
+
+/* A thin, dark scrollbar so the popup's own chrome (the FDF border) stays the loud part. */
 .fdf-popup-menu::-webkit-scrollbar { width: 10px; }
-.fdf-list-rows::-webkit-scrollbar-track,
 .fdf-popup-menu::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.4); }
-.fdf-list-rows::-webkit-scrollbar-thumb,
 .fdf-popup-menu::-webkit-scrollbar-thumb { background: #6b5f45; border-radius: 2px; }
 
 /* The GLUE screens (main menu, Single Player, Custom Game) hide themselves during a match.

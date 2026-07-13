@@ -271,9 +271,25 @@ export function buildPopup(
 
 // --- LISTBOX -----------------------------------------------------------------------
 
+/**
+ * The list's scrollbar, from the FDF's own SCROLLBAR frame (StandardScrollBarTemplate: a
+ * tiled track, an up and a down arrow button, and a knob). The engine drives it; we draw
+ * its four pieces and do the same, rather than leaving the browser's own bar in the middle
+ * of the game's chrome.
+ */
+export interface ScrollBarStyle {
+  width: number; // px — the SCROLLBAR frame's Width
+  arrow: number; // px — the inc/dec buttons (square)
+  knob: number; // px — the thumb's height
+  track(w: number, h: number): HTMLCanvasElement | null;
+  up(w: number, h: number): HTMLCanvasElement | null;
+  down(w: number, h: number): HTMLCanvasElement | null;
+  thumb(w: number, h: number): HTMLCanvasElement | null;
+}
+
 /** A scrolling, selectable list inside a CONTROL/LISTBOX frame's chrome. `ListBoxBorder`
  *  (or the edit box's border) insets the rows from the backdrop, as in the FDF. */
-export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListControl {
+export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: ScrollBarStyle | null): ListControl {
   el.classList.add("fdf-list");
 
   const rows = document.createElement("div");
@@ -281,7 +297,10 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
   const border = (firstProp(f, "ListBoxBorder")?.args[0]?.n ?? 0.008) * scale;
   rows.style.inset = `${border}px`;
   rows.style.fontSize = fontSize(f, scale, 0.012);
+  // The rows stop where the scrollbar starts — it is beside them, not over them.
+  if (bar) rows.style.right = `${border + bar.width}px`;
   el.appendChild(rows);
+  const scrollbar = bar ? buildScrollBar(el, rows, bar, border) : null;
 
   let items: ListItem[] = [];
   let value: string | null = null;
@@ -311,6 +330,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
       row.addEventListener("dblclick", () => { if (enabled) control.onActivate?.(it.value); });
       rows.appendChild(row);
     }
+    scrollbar?.sync();
   };
 
   const control: ListControl = {
@@ -328,6 +348,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
       value = v;
       paint();
       rows.querySelector(".fdf-list-row.selected")?.scrollIntoView({ block: "nearest" });
+      scrollbar?.sync();
     },
     setEnabled(on: boolean): void {
       enabled = on;
@@ -335,6 +356,84 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
     },
   };
   return control;
+}
+
+/** Draw the FDF's scrollbar down the right of `rows` and drive it: the arrows step, the
+ *  knob drags, and scrolling the rows any other way (wheel, keyboard) moves the knob back. */
+function buildScrollBar(
+  el: HTMLElement,
+  rows: HTMLElement,
+  bar: ScrollBarStyle,
+  border: number,
+): { sync(): void } {
+  const track = document.createElement("div");
+  track.className = "fdf-scrollbar";
+  track.style.top = `${border}px`;
+  track.style.bottom = `${border}px`;
+  track.style.right = `${border}px`;
+  track.style.width = `${bar.width}px`;
+  el.appendChild(track);
+
+  /** One of the bar's pieces: a canvas of the FDF's art, sized and parked. */
+  const piece = (art: HTMLCanvasElement | null, cls: string, w: number, h: number): HTMLElement => {
+    const box = document.createElement("div");
+    box.className = cls;
+    box.style.width = `${w}px`;
+    box.style.height = `${h}px`;
+    if (art) {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(w);
+      canvas.height = Math.round(h);
+      canvas.getContext("2d")?.drawImage(art, 0, 0);
+      box.appendChild(canvas);
+    }
+    track.appendChild(box);
+    return box;
+  };
+
+  const height = el.clientHeight - 2 * border;
+  const back = piece(bar.track(bar.width, height), "fdf-scrollbar-track", bar.width, height);
+  back.style.top = "0";
+  const up = piece(bar.up(bar.arrow, bar.arrow), "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
+  up.style.top = "0";
+  const down = piece(bar.down(bar.arrow, bar.arrow), "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
+  down.style.bottom = "0";
+  const knob = piece(bar.thumb(bar.width, bar.knob), "fdf-scrollbar-knob", bar.width, bar.knob);
+
+  /** The stretch of track the knob may travel: between the two arrows. */
+  const span = (): number => track.clientHeight - 2 * bar.arrow - bar.knob;
+
+  const sync = (): void => {
+    const over = rows.scrollHeight - rows.clientHeight;
+    knob.hidden = over <= 1; // nothing to scroll: no knob, as in the game
+    if (over <= 1) return;
+    knob.style.top = `${bar.arrow + (rows.scrollTop / over) * Math.max(0, span())}px`;
+  };
+
+  const step = (): number => (rows.firstElementChild as HTMLElement | null)?.offsetHeight ?? 16;
+  up.addEventListener("click", () => { rows.scrollTop -= step(); });
+  down.addEventListener("click", () => { rows.scrollTop += step(); });
+  rows.addEventListener("scroll", sync);
+
+  knob.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const from = e.clientY;
+    const at = rows.scrollTop;
+    const over = rows.scrollHeight - rows.clientHeight;
+    const travel = span();
+    const move = (m: PointerEvent): void => {
+      if (travel > 0) rows.scrollTop = at + ((m.clientY - from) / travel) * over;
+    };
+    const drop = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", drop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", drop);
+  });
+
+  sync();
+  return { sync };
 }
 
 /** True when a frame type is one of the widgets above (drawn as chrome + a controller). */
