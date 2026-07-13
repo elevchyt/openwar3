@@ -1498,7 +1498,7 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-scrollbar { position: absolute; pointer-events: auto; }
 .fdf-scrollbar-track,
 .fdf-scrollbar-arrow,
-.fdf-scrollbar-knob { position: absolute; left: 0; }
+.fdf-scrollbar-knob { position: absolute; }
 .fdf-scrollbar-arrow,
 .fdf-scrollbar-knob { cursor: inherit; }
 .fdf-scrollbar-arrow:active { filter: brightness(0.8); }

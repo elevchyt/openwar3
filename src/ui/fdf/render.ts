@@ -364,7 +364,8 @@ function renderWidget(
     // with every name suffixed, so TeamButton3 owns TeamButtonTitle3, not TeamButton3Title.
     const base = f.name.replace(/\d+$/, "");
     const row = f.name.slice(base.length);
-    const titleEl = parts.get(strProp(f, "PopupTitleFrame") ?? `${base}Title${row}`) ?? null;
+    const titleName = strProp(f, "PopupTitleFrame") ?? `${base}Title${row}`;
+    const titleEl = parts.get(titleName) ?? null;
     const swatchEl = parts.get(`${base}Value${row}`) ?? null;
     // The selection's label must never run past the widget. Its TEXT frame is as wide as the
     // whole dropdown — but the pulldown arrow sits at the right end of that box (parked there
@@ -375,9 +376,16 @@ function renderWidget(
       labelBox.classList.add("fdf-popup-title");
       const inset = (numProp(f, "PopupButtonInset") ?? 0.01) + 0.011; // the inset + the arrow itself
       labelBox.style.paddingRight = `${inset * scale}px`;
-      // A notch below the FDF's own size: our font sets larger than WC3's, and these are its
-      // tightest boxes (a player row packs five of them across).
-      labelBox.style.fontSize = `${Math.max(8, parseFloat(getComputedStyle(labelBox).fontSize) * POPUP_LABEL_SCALE)}px`;
+      // The label's size is the one the WIDGET declares (0.011 across every PlayerSlot
+      // dropdown), not the one its own TEXT frame carries: StandardPopupMenuTitleTextTemplate
+      // declares no font at all, and left to inherit our renderer's default it came out a
+      // size larger than the Team button beside it, which does declare 0.011.
+      // A notch below that again — our font sets larger than WC3's, and a player row packs
+      // five of these boxes across.
+      const titleFrame = node.children.find((c) => c.frame.name === titleName)?.frame;
+      const declared = firstProp(titleFrame ?? f, "FrameFont")?.args[1]?.n
+        ?? firstProp(f, "FrameFont")?.args[1]?.n ?? 0.011;
+      labelBox.style.fontSize = `${Math.max(8, declared * scale * POPUP_LABEL_SCALE)}px`;
     }
     ctx.controls.set(f.name, buildPopup(el, f, scale, ctx.overlay, {
       titleEl: span ?? titleEl,
@@ -575,12 +583,11 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   if (!g) return null;
   g.imageSmoothingEnabled = true;
 
-  const blendAll = f.props.some((p) => p.key === "BackdropBlendAll");
-  if (blendAll) {
-    // One ornate texture stretched over the whole frame (the menu button borders).
-    if (bg) g.drawImage(bg, 0, 0, w, h);
-    return canvas;
-  }
+  // BackdropBlendAll is NOT "stretch one texture and stop" — the frames that carry it still
+  // name an edge file and still tile (the map list's own StandardEditBoxBackdropTemplate does
+  // both), and taking it as a short-circuit is what left the Game Settings list a bare dark
+  // rectangle with no frame around it. Every backdrop composes the same way; a frame with no
+  // edge file simply has no border to draw, which is the ornate menu buttons' case.
 
   // 9-slice: interior background + edge-file border. cornerSize/backgroundSize are in
   // 0.8×0.6 world units; scale them to pixels with the same factor as the layout.

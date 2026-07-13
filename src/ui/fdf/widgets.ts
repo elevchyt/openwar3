@@ -374,12 +374,16 @@ function buildScrollBar(
   track.style.width = `${bar.width}px`;
   el.appendChild(track);
 
-  /** One of the bar's pieces: a canvas of the FDF's art, sized and parked. */
-  const piece = (art: HTMLCanvasElement | null, cls: string, w: number, h: number): HTMLElement => {
+  /** One of the bar's pieces: a canvas of the FDF's art at the SIZE THE FDF GIVES IT — the
+   *  arrows and the knob are square there, and stretching them to the bar's width flattens
+   *  them — centred across the bar. */
+  const piece = (draw: (w: number, h: number) => HTMLCanvasElement | null, cls: string, w: number, h: number): HTMLElement => {
     const box = document.createElement("div");
     box.className = cls;
     box.style.width = `${w}px`;
     box.style.height = `${h}px`;
+    box.style.left = `${(bar.width - w) / 2}px`;
+    const art = draw(w, h);
     if (art) {
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(w);
@@ -392,13 +396,13 @@ function buildScrollBar(
   };
 
   const height = el.clientHeight - 2 * border;
-  const back = piece(bar.track(bar.width, height), "fdf-scrollbar-track", bar.width, height);
+  const back = piece(bar.track, "fdf-scrollbar-track", bar.width, height);
   back.style.top = "0";
-  const up = piece(bar.up(bar.arrow, bar.arrow), "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
+  const up = piece(bar.up, "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
   up.style.top = "0";
-  const down = piece(bar.down(bar.arrow, bar.arrow), "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
+  const down = piece(bar.down, "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
   down.style.bottom = "0";
-  const knob = piece(bar.thumb(bar.width, bar.knob), "fdf-scrollbar-knob", bar.width, bar.knob);
+  const knob = piece(bar.thumb, "fdf-scrollbar-knob", bar.knob, bar.knob);
 
   /** The stretch of track the knob may travel: between the two arrows. */
   const span = (): number => track.clientHeight - 2 * bar.arrow - bar.knob;

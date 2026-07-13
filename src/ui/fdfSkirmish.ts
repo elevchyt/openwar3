@@ -498,6 +498,10 @@ function loadIcons(vfs: DataSource): Icons {
   };
 }
 
+/** The count in a badge is the FDF's own label gold (FontColor 0.99 0.827 0.0705), the
+ *  colour every label on these screens is written in — not white. */
+const BADGE_GOLD = "#fcd312";
+
 /** The melee badge with `players` stamped in the middle of it. */
 function countBadge(art: HTMLCanvasElement, players: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
@@ -513,7 +517,7 @@ function countBadge(art: HTMLCanvasElement, players: number): HTMLCanvasElement 
     g.lineWidth = 4;
     g.strokeStyle = "rgba(0, 0, 0, 0.9)";
     g.strokeText(String(players), canvas.width / 2, canvas.height * 0.53);
-    g.fillStyle = "#fff";
+    g.fillStyle = BADGE_GOLD;
     g.fillText(String(players), canvas.width / 2, canvas.height * 0.53);
   }
   return canvas;
@@ -682,19 +686,19 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
 
   setProp(findFrame(pane, "MinimapImage"), "SetPoint", [arg("TOP"), str("MapInfoPane"), arg("TOP"), num(0), num(-0.032)]);
 
-  // The stat rows: label left, value right-justified over the same full-width box (the
-  // value's own `SetPoint TOPLEFT <label> TOPLEFT` + JUSTIFYRIGHT is the FDF's own idiom).
-  // Each spans the pane's full width, so the block reads centred under the minimap with the
-  // values flush against the pane's right edge, as in the reference.
+  // The stat rows: label left, value right-justified over the same box (the value's own
+  // `SetPoint TOPLEFT <label> TOPLEFT` + JUSTIFYRIGHT is the FDF's own idiom). The block is
+  // narrower than the pane and centred in it, so the label and its value read as a pair
+  // rather than being flung against the panel's two edges.
   let prev = "";
   let bottom = ROWS_TOP;
   for (const [name, gap] of INFO_ROWS) {
     const row = findFrame(pane, name);
     if (!row) continue;
-    size(row, PANE_W, ROW_H);
+    size(row, ROW_W, ROW_H);
     if (prev) setProp(row, "SetPoint", [arg("TOPLEFT"), str(prev), arg("BOTTOMLEFT"), num(0), num(-gap)]);
-    else setProp(row, "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(0), num(-ROWS_TOP)]);
-    size(findFrame(pane, name.replace(/Label$/, "Value")), PANE_W, ROW_H);
+    else setProp(row, "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(ROW_X), num(-ROWS_TOP)]);
+    size(findFrame(pane, name.replace(/Label$/, "Value")), ROW_W, ROW_H);
     bottom += gap + ROW_H;
     prev = name;
   }
@@ -704,7 +708,7 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
   // Turtle Rock's, runs to eight lines). A word too many is clipped, exactly as the engine's
   // FIXEDSIZE text frames clip: the size of the type is not up for negotiation.
   const desc = findFrame(pane, "MapDescValue");
-  size(desc, PANE_W, DESC_BOTTOM - bottom - DESC_GAP);
+  size(desc, ROW_W, DESC_BOTTOM - bottom - DESC_GAP);
   setProp(desc, "FrameFont", [str("MasterFont"), num(DESC_FONT), str("")]);
   return pane;
 }
@@ -713,24 +717,29 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
 // against it, and the description gets whatever it leaves.
 const PANE_W = 0.234375;
 const PANE_H = 0.2875;
-const ROWS_TOP = 0.176; // where "Suggested Players:" starts, below the minimap
-const ROW_H = 0.015;
+const ROWS_TOP = 0.17; // where "Suggested Players:" starts, below the minimap
+/** The stat block: narrower than the pane, and centred in it. */
+const ROW_W = 0.2;
+const ROW_X = (PANE_W - ROW_W) / 2;
+/** Tall enough for the type it holds — a row cropped to the FDF's 0.015 ate the descenders
+ *  of "Suggested Players:" (our text frames clip; they do not spill). */
+const ROW_H = 0.018;
 const DESC_GAP = 0.002; // MapDescValue's own SetPoint TOP, MapDescLabel BOTTOM, 0, -0.002
 /** How far below the pane's top the blurb may run: a shade past the pane's own box, into
  *  the gap Skirmish.fdf leaves between it and the Advanced Options base. Echo Isles' five
  *  lines want it; the button still sits clear underneath. */
-const DESC_BOTTOM = PANE_H + 0.012;
+const DESC_BOTTOM = PANE_H + 0.014;
 /** The blurb's type size. The FDF's StandardSmallTextTemplate says 0.011, but that is sized
  *  for WC3's own font; ours sets wider, so a Blizzard-length description would not fit the
  *  box the game gives it. Smaller type, same box — the reference's proportions survive. */
-const DESC_FONT = 0.0095;
+const DESC_FONT = 0.009;
 
 /** The map-info pane's stat rows, in order, with the gap above each. */
 const INFO_ROWS: Array<[string, number]> = [
   ["SuggestedPlayersLabel", 0],
-  ["MapSizeLabel", 0.002],
-  ["MapTilesetLabel", 0.002],
-  ["MapDescLabel", 0.007],
+  ["MapSizeLabel", 0.001],
+  ["MapTilesetLabel", 0.001],
+  ["MapDescLabel", 0.006],
 ];
 
 // --- small FdfFrame helpers ---------------------------------------------------------
