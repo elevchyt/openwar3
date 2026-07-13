@@ -116,7 +116,7 @@ export class MenuScene {
     // It carries the skirmish screen's Game Settings / Team Setup frames (and nothing at
     // all on the main menu — its "MainMenu Stand" clip hides them), so its window is
     // tuned so those frames land under the FDF containers Skirmish.fdf anchors there.
-    leftCx: -0.23,
+    leftCx: -0.205, // the screen-edge strip hugs x=0, as it does in the reference
     leftCy: -0.2,
     leftHalfX: 0.295,
     leftHalfY: 0.29,

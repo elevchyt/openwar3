@@ -4,7 +4,7 @@ import { wc3ToHtml } from "../wc3Text";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, strProp } from "./library";
 import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
-import { slidePanels, type PanelDirection } from "./anim";
+import { fadePanels, type PanelDirection } from "./anim";
 import {
   buildEditBox, buildList, buildPopup, widgetKind,
   type EditBoxControl, type ListControl, type PopupControl,
@@ -65,9 +65,9 @@ export interface FdfScreenOptions {
   hidden?: string[];
   /** Widen the button widgets by this factor (text size unchanged). Default 1. */
   buttonWidthScale?: number;
-  /** The frames that make up this screen's PANELS — the groups that slide off the top
-   *  and back down between menus (issue #61). Each named frame moves as one. Defaults
-   *  to the root's direct children. */
+  /** The frames that make up this screen's PANELS — the groups whose contents fade out and
+   *  back in between menus (issue #61). Each named frame fades as one. Defaults to the
+   *  root's direct children. */
   panels?: string[];
   /** BUTTON frames that behave as dropdowns (PlayerSlot's TeamButton / ColorButton are
    *  declared as plain BUTTONs in the FDF; the engine gives them a menu). */
@@ -97,7 +97,8 @@ export interface FdfScreen {
   editBox(name: string): EditBoxControl | null;
   popup(name: string): PopupControl | null;
   list(name: string): ListControl | null;
-  /** Slide this screen's panels off the top ("out") or back down into place ("in"). */
+  /** Fade this screen's panel contents out or in across the chrome clip's window (ui/fdf/anim.ts).
+   *  The panel itself is moved by the 3D chrome; only its contents live here. */
   animatePanels(dir: PanelDirection, durationMs: number): Promise<void>;
 }
 
@@ -199,7 +200,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     editBox: (name) => (controls.get(name) as EditBoxControl | undefined) ?? null,
     popup: (name) => (controls.get(name) as PopupControl | undefined) ?? null,
     list: (name) => (controls.get(name) as ListControl | undefined) ?? null,
-    animatePanels: (dir, durationMs) => slidePanels(panelEls(), dir, durationMs),
+    animatePanels: (dir, durationMs) => fadePanels(panelEls(), dir, durationMs),
     dispose(): void {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKey);

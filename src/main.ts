@@ -49,7 +49,7 @@ let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer
 let installMaps: Map<string, File> = new Map(); // the install's Maps\ folder (Custom Game)
 
 // The glue-screen stack (issue #61): main menu → Single Player → Custom Game, each
-// arriving and leaving with the panel animation the reference uses.
+// leaving and arriving the way the reference does.
 const glue = new GlueManager(null);
 
 type Which = "none" | "menubg" | "bg" | "model" | "map";
@@ -110,8 +110,9 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
 // --- the glue screens (issue #61) -------------------------------------------------
 //
 // Each is a GlueScreenDef: which chrome the panel model wears, and how to build the DOM.
-// GlueManager runs the transition between them (disable → panels out → beat → panels in),
-// timed off the chrome's own Birth/Death clips.
+// GlueManager runs the transition between them (screen goes dead → contents fade out and
+// the panel slides away → beat → the next panel drops in and its contents fade up), all of
+// it timed off the chrome's own Birth/Death clips.
 
 function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Promise<FdfScreen> } {
   return {

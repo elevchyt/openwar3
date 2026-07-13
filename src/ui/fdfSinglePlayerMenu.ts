@@ -37,9 +37,9 @@ export function mountSinglePlayerMenu(
     // The chain panel is a widescreen-wide slot; the 4:3-authored buttons are widened to
     // fill it, exactly as the main menu does.
     buttonWidthScale: 1.35,
-    // The two panels that slide: the button column, and the Cancel panel under it. They
-    // are separate frames in the FDF and separate panels in the chrome model, so they
-    // travel separately — each only as far as it needs to clear the top of the screen.
+    // The screen's two panels: the button column, and the Cancel panel under it. They are
+    // separate frames in the FDF and separate panels in the chrome model, and their
+    // contents fade out and in as one when the screen changes (ui/fdf/anim.ts).
     panels: ["MainPanel", "CancelPanel"],
     handlers: {
       CampaignButton: h.onCampaign ?? log("Campaign"),

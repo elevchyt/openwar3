@@ -5,16 +5,17 @@ import type { GlueChrome, MenuScene } from "../render/menuScene";
 // transition between them.
 //
 // The reference's transition, in order:
-//   1. a menu button is clicked → EVERY control on every panel goes dead, so a second
-//      click can't land while the screen is leaving;
-//   2. the panels slide up and off the top of the screen (and the panel CHROME plays its
-//      own "<Screen> Death" clip in the 3D layer — the two leave together);
+//   1. a menu button is clicked → the whole screen goes dead, so a second click can't land
+//      while it is leaving;
+//   2. the panel's CONTENTS (its buttons, labels, lists) fade out where they stand, and the
+//      empty panel slides up and off the screen — that slide is the 3D chrome playing its
+//      own "<Screen> Death" clip (render/menuScene.ts), not anything we author;
 //   3. a short beat with nothing on screen;
-//   4. the new screen's panels come back DOWN into place, over its "<Screen> Birth".
+//   4. the next screen's panel drops back in on its "<Screen> Birth", and its contents fade
+//      up on it once it has landed.
 //
-// Steps 2 and 4 are timed from the CHROME's own sequence lengths (menuScene.chromeTiming),
-// so the DOM panels and the model that frames them are never out of step — no hand-picked
-// durations to drift apart.
+// Steps 2 and 4 are timed from the CHROME's own sequence lengths, so the DOM and the model
+// that carries it are never out of step — no hand-picked durations to drift apart.
 
 /** The beat between one screen leaving and the next arriving. */
 const GAP_MS = 120;
@@ -23,7 +24,7 @@ const GAP_MS = 120;
 export interface GlueScreenDef {
   /** Which of the panel model's chrome sets this screen wears. */
   chrome: GlueChrome;
-  /** Build the FDF screen. Its panels must be parked off-screen by the caller, not here. */
+  /** Build the FDF screen. Fading it in is the manager's job, not the screen's. */
   mount(): Promise<FdfScreen>;
 }
 
@@ -73,8 +74,8 @@ export class GlueManager {
       this.current = next;
       next.element.style.visibility = "";
       const birth = this.scene?.playChromeBirth(def.chrome) ?? 0;
-      // animatePanels("in") parks the panels above the screen in this same task, so they
-      // never paint in place first — the entrance always starts from off-screen.
+      // animatePanels("in") drops the contents to transparent in this same task, so they
+      // never paint at full opacity for a frame before the panel that carries them arrives.
       await next.animatePanels("in", birth || 700);
       next.setInteractive(true);
       return next;
