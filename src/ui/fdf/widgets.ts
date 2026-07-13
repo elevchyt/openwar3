@@ -20,12 +20,8 @@ export interface Option {
 export interface ListItem {
   value: string;
   label: string;
-  /** Indent level — the map list nests maps under their folder. */
-  depth?: number;
   /** Optional leading icon (a decoded BLP canvas), e.g. the folder / player-count badge. */
   icon?: HTMLCanvasElement | null;
-  /** A heading row (the "FrozenThrone" / "Scenario" folders): shown, but not selectable. */
-  header?: boolean;
 }
 
 interface Control {
@@ -94,6 +90,21 @@ export function buildEditBox(el: HTMLElement, f: FdfFrame, scale: number): EditB
 
 // --- POPUPMENU (dropdown) ----------------------------------------------------------
 
+/**
+ * The open menu's own look, read off the FDF `MENU` frame the POPUPMENU names in
+ * `PopupMenuFrame` (StandardPopupMenuMenuTemplate: a bordered backdrop, `MenuItemHeight`,
+ * `MenuBorder`, a font and a highlight colour). WC3 draws the dropped-open list from that
+ * frame; without it we were drawing a menu of our own invention over the game's chrome.
+ */
+export interface PopupMenuStyle {
+  /** The MENU frame's ControlBackdrop, composited at a pixel size. */
+  backdrop(w: number, h: number): HTMLCanvasElement | null;
+  itemHeight: number; // px — MenuItemHeight
+  border: number; // px — MenuBorder (the backdrop's inset)
+  fontSize: number; // px — the MENU's FrameFont
+  highlight: string; // MenuTextHighlightColor — the row under the mouse
+}
+
 export interface PopupOptions {
   /** The frame whose text shows the current selection (PopupTitleFrame / *Title). */
   titleEl: HTMLElement | null;
@@ -101,7 +112,35 @@ export interface PopupOptions {
   swatchEl?: HTMLElement | null;
   /** Paint a value into the swatch (colour menu: fill it with the player colour). */
   paintSwatch?: (el: HTMLElement, value: string) => void;
+  /** The open list's chrome, from the FDF's own MENU frame. */
+  menu?: PopupMenuStyle | null;
 }
+
+/**
+ * Shrink a dropdown's label until it fits the box the FDF gave it. WC3's own font sets
+ * narrower than any we can ship, so a label the game fits at its declared size ("Night Elf"
+ * in a 0.08-wide race menu, "Computer (Normal)" in a name menu) would otherwise run out of
+ * the widget. The type gets smaller; nothing ever spills.
+ */
+function fitLabel(span: HTMLElement): void {
+  const box = span.parentElement;
+  if (!box) return;
+  // The frame's declared size, kept aside: every call starts from it, or a long label would
+  // ratchet the font down and the short one after it would stay tiny.
+  const declared = parseFloat(box.dataset.fdfFont ?? getComputedStyle(box).fontSize);
+  box.dataset.fdfFont = String(declared);
+  box.style.fontSize = `${declared}px`;
+  const style = getComputedStyle(box);
+  const room = box.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  if (room <= 0) return;
+  for (let size = declared; span.scrollWidth > room && size > MIN_LABEL_PX; size -= 0.5) {
+    box.style.fontSize = `${size - 0.5}px`;
+  }
+}
+
+/** The floor `fitLabel` will not shrink past — below this the label stops being readable,
+ *  and the ellipsis (style.css) takes over instead. */
+const MIN_LABEL_PX = 8;
 
 /** The dropdown that is currently open, if any. Only ever one, as in the game: opening a
  *  second closes the first. A per-popup `document` click listener can't do that on its own
@@ -123,13 +162,22 @@ export function buildPopup(
 ): PopupControl {
   el.classList.add("fdf-popup");
 
+  const style = opts.menu ?? null;
   const menu = document.createElement("div");
   menu.className = "fdf-popup-menu";
-  menu.style.fontSize = fontSize(f, scale);
+  menu.style.fontSize = `${style?.fontSize ?? parseFloat(fontSize(f, scale))}px`;
+  if (style) {
+    menu.classList.add("fdf-popup-menu-chromed"); // the FDF's own backdrop draws; CSS stands down
+    menu.style.padding = `${style.border}px`;
+    menu.style.setProperty("--fdf-menu-highlight", style.highlight);
+  }
   menu.hidden = true;
   // The menu lives on the overlay, not inside the (clipped, low) popup frame — an open
   // race menu overhangs the player rows below it.
   overlay.appendChild(menu);
+  /** The MENU frame's backdrop, drawn behind the items at whatever size the list came out. */
+  const chrome = document.createElement("canvas");
+  chrome.className = "fdf-popup-menu-chrome";
 
   let options: Option[] = [];
   let value = "";
@@ -138,7 +186,10 @@ export function buildPopup(
   const paint = (): void => {
     const label = options.find((o) => o.value === value)?.label ?? "";
     if (opts.swatchEl && opts.paintSwatch) opts.paintSwatch(opts.swatchEl, value);
-    else if (opts.titleEl) opts.titleEl.textContent = label;
+    else if (opts.titleEl) {
+      opts.titleEl.textContent = label;
+      fitLabel(opts.titleEl);
+    }
   };
 
   const close = (): void => {
@@ -152,10 +203,12 @@ export function buildPopup(
     openPopup?.(); // only one dropdown is ever open
     openPopup = close;
     menu.textContent = "";
+    if (style) menu.appendChild(chrome);
     for (const o of options) {
       const item = document.createElement("div");
       item.className = "fdf-popup-item";
       if (o.value === value) item.classList.add("selected");
+      if (style) item.style.height = `${style.itemHeight}px`;
       item.textContent = o.label;
       item.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -174,6 +227,15 @@ export function buildPopup(
     menu.style.left = `${box.left - host.left}px`;
     menu.style.top = `${box.bottom - host.top}px`;
     menu.style.minWidth = `${box.width}px`;
+    // The backdrop is composited to the list's own size, so its border sits on the edge —
+    // which means the list must have a size first, hence after it is in the document.
+    if (style) {
+      const w = Math.round(menu.clientWidth), h = Math.round(menu.clientHeight);
+      const painted = style.backdrop(w, h);
+      const g = chrome.getContext("2d");
+      chrome.width = w; chrome.height = h;
+      if (painted && g) g.drawImage(painted, 0, 0);
+    }
     el.classList.add("fdf-popup-open");
   };
 
@@ -230,9 +292,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
     for (const it of items) {
       const row = document.createElement("div");
       row.className = "fdf-list-row";
-      if (it.header) row.classList.add("header");
       if (it.value === value) row.classList.add("selected");
-      row.style.paddingLeft = `${(it.depth ?? 0) * 16 + 6}px`;
       if (it.icon) {
         const icon = document.createElement("img");
         icon.className = "fdf-list-icon";
@@ -242,15 +302,13 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
       const label = document.createElement("span");
       label.textContent = it.label;
       row.appendChild(label);
-      if (!it.header) {
-        row.addEventListener("click", () => {
-          if (!enabled || value === it.value) return;
-          value = it.value;
-          paint();
-          control.onChange?.(it.value);
-        });
-        row.addEventListener("dblclick", () => { if (enabled) control.onActivate?.(it.value); });
-      }
+      row.addEventListener("click", () => {
+        if (!enabled || value === it.value) return;
+        value = it.value;
+        paint();
+        control.onChange?.(it.value);
+      });
+      row.addEventListener("dblclick", () => { if (enabled) control.onActivate?.(it.value); });
       rows.appendChild(row);
     }
   };
@@ -258,7 +316,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
   const control: ListControl = {
     setItems(next: ListItem[]): void {
       items = next;
-      if (!items.some((i) => i.value === value && !i.header)) value = null;
+      if (!items.some((i) => i.value === value)) value = null;
       paint();
     },
     get value(): string | null { return value; },
@@ -266,7 +324,7 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListCont
      *  after a rebuild, not the user picking something. Firing here would re-enter the
      *  handler that caused the rebuild in the first place. */
     select(v: string): void {
-      if (!items.some((i) => i.value === v && !i.header)) return;
+      if (!items.some((i) => i.value === v)) return;
       value = v;
       paint();
       rows.querySelector(".fdf-list-row.selected")?.scrollIntoView({ block: "nearest" });

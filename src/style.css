@@ -1424,14 +1424,47 @@ body.in-game .fdf-screen.fdf-ingame {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.7);
   font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
 }
+/* …unless the FDF gave us the real thing. A POPUPMENU names a MENU frame (usually
+   StandardPopupMenuMenuTemplate) carrying the bordered-button backdrop, MenuBorder and
+   MenuItemHeight — with that composited behind the rows (ui/fdf/widgets.ts), the flat
+   stand-in above must get out of its way. */
+.fdf-popup-menu-chromed {
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+.fdf-popup-menu-chrome {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+}
 .fdf-popup-item {
+  display: flex;
+  align-items: center;
   padding: 3px 10px;
   color: #fff;
   white-space: nowrap;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
 }
 /* MenuTextHighlightColor 0.99 0.827 0.0705 — the FDF's own hover colour. */
 .fdf-popup-item:hover,
-.fdf-popup-item.selected { color: #fcd312; background: rgba(60, 80, 140, 0.45); }
+.fdf-popup-item.selected { color: var(--fdf-menu-highlight, #fcd312); }
+.fdf-popup-item:hover { background: rgba(60, 80, 140, 0.45); }
+
+/* The dropdown's own label: one line, clipped where the pulldown arrow begins (the frame
+   itself is a flex box laid out by the renderer, so the clipping belongs on the span). */
+.fdf-popup-title span {
+  display: block;
+  flex: 0 1 auto; /* shrinkable, but never stretched — the label measures its own text */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .fdf-list { pointer-events: auto; }
 .fdf-list-rows {
@@ -1450,9 +1483,10 @@ body.in-game .fdf-screen.fdf-ingame {
   text-overflow: ellipsis;
 }
 .fdf-list-row.selected { background: #2b3f8f; } /* the reference's blue selection bar */
-.fdf-list-row:not(.header):not(.selected):hover { background: rgba(60, 80, 140, 0.35); }
-.fdf-list-row.header { color: #fcd312; }
-.fdf-list-icon { width: 1.1em; height: 1.1em; flex: 0 0 auto; }
+.fdf-list-row:not(.selected):hover { background: rgba(60, 80, 140, 0.35); }
+/* The row's badge (folder, or the melee icon with the map's player count in it) — the
+   reference's is a good half again the height of the row's text. */
+.fdf-list-icon { width: 1.45em; height: 1.45em; flex: 0 0 auto; }
 
 /* A thin, dark scrollbar so the list's own chrome (the FDF border) stays the loud part. */
 .fdf-list-rows::-webkit-scrollbar,

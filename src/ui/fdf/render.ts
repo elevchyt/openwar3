@@ -7,7 +7,7 @@ import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout
 import { fadePanels, type PanelDirection } from "./anim";
 import {
   buildEditBox, buildList, buildPopup, widgetKind,
-  type EditBoxControl, type ListControl, type PopupControl,
+  type EditBoxControl, type ListControl, type PopupControl, type PopupMenuStyle,
 } from "./widgets";
 
 // FDF → DOM renderer (issue #54). Builds the game's frames as absolutely-positioned
@@ -366,14 +366,50 @@ function renderWidget(
     const row = f.name.slice(base.length);
     const titleEl = parts.get(strProp(f, "PopupTitleFrame") ?? `${base}Title${row}`) ?? null;
     const swatchEl = parts.get(`${base}Value${row}`) ?? null;
+    // The selection's label must never run past the widget. Its TEXT frame is as wide as the
+    // whole dropdown — but the pulldown arrow sits at the right end of that box (parked there
+    // by PopupButtonInset), so the label's room stops where the arrow begins.
+    const span = titleEl?.querySelector("span") ?? null;
+    const labelBox = span?.parentElement;
+    if (labelBox) {
+      labelBox.classList.add("fdf-popup-title");
+      const inset = (numProp(f, "PopupButtonInset") ?? 0.01) + 0.011; // the inset + the arrow itself
+      labelBox.style.paddingRight = `${inset * scale}px`;
+    }
     ctx.controls.set(f.name, buildPopup(el, f, scale, ctx.overlay, {
-      titleEl: titleEl?.querySelector("span") ?? titleEl,
+      titleEl: span ?? titleEl,
       swatchEl,
       paintSwatch: swatchEl ? (target, value) => { target.style.background = value; } : undefined,
+      menu: popupMenuStyle(f, node, ctx),
     }, ctx.disposers));
   } else {
     ctx.controls.set(f.name, buildList(el, f, scale));
   }
+}
+
+/**
+ * The open dropdown's look, from the game's own MENU frame. A POPUPMENU names it in
+ * `PopupMenuFrame` and carries it as a child (PlayerSlot's RaceMenu → RacePopupMenuMenu,
+ * itself a StandardPopupMenuMenuTemplate); a plain BUTTON pressed into service as a dropdown
+ * (TeamButton / ColorButton) has none, so it falls back to that same shared template — which
+ * is what the engine draws for it too.
+ */
+function popupMenuStyle(f: FdfFrame, node: LaidOutFrame, ctx: RenderCtx): PopupMenuStyle | null {
+  const named = strProp(f, "PopupMenuFrame");
+  const own = node.children.find((c) => c.frame.type === "MENU" && (!named || c.frame.name === named))?.frame;
+  const menu = own ?? ctx.lib.resolveRoot("StandardPopupMenuMenuTemplate");
+  if (!menu) return null;
+  const scale = ctx.fit.scale;
+  const backdropName = strProp(menu, "ControlBackdrop");
+  const backdrop = backdropName ? findByName(menu, backdropName) : undefined;
+  const highlight = firstProp(menu, "MenuTextHighlightColor")?.args;
+  return {
+    backdrop: (w, h) => (backdrop ? compositeBackdrop(backdrop, w, h, ctx) : null),
+    itemHeight: (numProp(menu, "MenuItemHeight") ?? 0.014) * scale,
+    border: (numProp(menu, "MenuBorder") ?? 0.009) * scale,
+    fontSize: Math.max(8, (firstProp(menu, "FrameFont")?.args[1]?.n ?? 0.011) * scale),
+    highlight: highlight && highlight.length >= 3 ? rgba(highlight) : "rgb(252, 211, 18)",
+  };
 }
 
 /** Composite the frame's ControlDisabledBackdrop over it, shown only when disabled. */
@@ -599,6 +635,12 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   el.style.justifyContent = jh === "JUSTIFYRIGHT" ? "flex-end" : jh === "JUSTIFYCENTER" ? "center" : "flex-start";
   el.style.alignItems = jv === "JUSTIFYTOP" ? "flex-start" : jv === "JUSTIFYBOTTOM" ? "flex-end" : "center";
   span.style.textAlign = jh === "JUSTIFYRIGHT" ? "right" : jh === "JUSTIFYCENTER" ? "center" : "left";
+
+  // FontJustificationOffset — the text's inset from the edge it justifies against. The
+  // dropdown label (StandardPopupMenuTitleTextTemplate) is the reason this matters: its box
+  // is the whole widget, so with no offset the label sits ON the widget's left border.
+  const ox = (firstProp(f, "FontJustificationOffset")?.args[0]?.n ?? 0) * ctx.fit.scale;
+  if (ox) el.style[jh === "JUSTIFYRIGHT" ? "paddingRight" : "paddingLeft"] = `${ox}px`;
 }
 
 /** Wire a button frame's click/shortcut handlers. The cursor stays the WC3 hand at

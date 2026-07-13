@@ -3,11 +3,13 @@ import { blpToCanvas } from "../render/blputil";
 import { RACES, RACE_LABEL, type Race } from "../data/races";
 import { mapSizeLabel, MELEE } from "../data/gameplayConstants";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
+import { readMapPreview, type MapPreview } from "../world/mapPreview";
+import { loadUnitRegistry, type UnitRegistry } from "../data/units";
 import { MAPS_PREFIX } from "../assets/opfs";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
-import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { mountFdfScreen, UI_FONT, type FdfScreen } from "./fdf/render";
 import type { ListItem, Option } from "./fdf/widgets";
 import type { Controller, MeleeConfig, SlotConfig } from "./lobby";
 
@@ -32,6 +34,7 @@ const PLAYER_SLOT_FDF = "UI\\FrameDef\\Glue\\PlayerSlot.fdf";
 // The list's row icons — the game's own (MapInfoPane.fdf names icon-file-melee for the
 // player-count badge; the folder/UMS icons sit beside it in UI\Widgets\Glues).
 const ICON_FOLDER = "UI\\Widgets\\Glues\\icon-folder.blp";
+const ICON_FOLDER_UP = "UI\\Widgets\\Glues\\icon-folder-up.blp";
 const ICON_MELEE = "UI\\Widgets\\Glues\\icon-file-melee.blp";
 const ICON_UMS = "UI\\Widgets\\Glues\\icon-file-ums.blp";
 
@@ -46,9 +49,9 @@ const TILESETS: Record<string, string> = {
 /** The controllers a slot can take. WC3 also offers three AI difficulties; we have one AI,
  *  so the menu says what it actually is rather than offering a choice that does nothing. */
 const CONTROLLERS: Array<[Controller, string]> = [
-  ["computer", "Computer (Normal)"],
   ["open", "Open"],
   ["closed", "Closed"],
+  ["computer", "Computer (Normal)"],
 ];
 
 const HANDICAPS = [100, 90, 80, 70, 60, 50];
@@ -56,6 +59,11 @@ const HANDICAPS = [100, 90, 80, 70, 60, 50];
 /** Every map we have read, path → info. Module-level, so coming back to the Custom Game
  *  screen doesn't re-read and re-parse the whole install's Maps folder a second time. */
 const mapCache = new Map<string, MapInfo>();
+/** …and the minimap markers of the maps that were actually picked. */
+const previewCache = new Map<string, MapPreview | null>();
+/** The install's unit table, loaded on the first map picked (it says which neutral buildings
+ *  earn a minimap glyph). Module-level for the same reason as the map cache. */
+let registry: UnitRegistry | null = null;
 
 export interface SkirmishHandlers {
   onStart: (map: File, info: MapInfo, config: MeleeConfig) => void;
@@ -79,10 +87,16 @@ export async function mountSkirmish(
 ): Promise<FdfScreen> {
   const entries = mapEntries(maps);
   const icons = loadIcons(vfs);
+  const minimapIcons = loadMinimapIcons(vfs);
+  // The folder the list is showing. WC3 opens on the expansion's own maps folder — that is
+  // where a Frozen Throne install's melee maps live.
+  let cwd = entries.some((e) => e.folder.toLowerCase() === "frozenthrone") ? "FrozenThrone" : "";
+  let strings: FdfLibrary | null = null; // for "(up one level)" — GlobalStrings' UP_ONE_LEVEL
 
   // Screen state. The FDF screen rebuilds its DOM on every resize, so this — not the DOM —
   // is the source of truth; `onBuild` re-fills the widgets from it each time.
   let selected: { path: string; file: File; info: MapInfo } | null = null;
+  let preview: MapPreview | null = null; // the selected map's minimap markers
   let slots: Slot[] = [];
   let maxSlots = 0;
   let alive = true; // cleared on dispose, so the background read below stops
@@ -97,11 +111,30 @@ export async function mountSkirmish(
     return info;
   };
 
+  /** The chosen map's preview markers (gold mines, shops, start locations). Reading them
+   *  means unpacking the map's terrain header and its placed units, so it happens for the
+   *  ONE map the player picked — never for the whole folder the list is showing. */
+  const readPreview = (path: string, file: File): void => {
+    const cached = previewCache.get(path);
+    if (cached !== undefined) { preview = cached; return; }
+    preview = null;
+    void (async () => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      registry ??= loadUnitRegistry(vfs);
+      const read = readMapPreview(bytes, (id) => registry?.get(id)?.minimapIcon ?? false);
+      previewCache.set(path, read);
+      if (!alive || selected?.path !== path) return;
+      preview = read;
+      if (selected) fillMapInfo(screen, selected.info, preview, minimapIcons);
+    })();
+  };
+
   const chooseMap = async (path: string, screen: FdfScreen): Promise<void> => {
     const file = maps.get(path);
     const info = await readMap(path);
     if (!file || !info) return;
     selected = { path, file, info };
+    readPreview(path, file);
     // A map's slots come from the map. Seat the local player in the first one and let the
     // AI have the rest — WC3's default when you pick a melee map.
     maxSlots = info.slots.length;
@@ -115,6 +148,13 @@ export async function mountSkirmish(
     screen.relayout(); // the row count changed, so the frame tree itself has to be rebuilt
   };
 
+  /** Walk into a folder (or back out of one): the list is a directory browser. */
+  const openFolder = (folder: string, screen: FdfScreen): void => {
+    cwd = folder;
+    fillList(screen);
+    void readFolder(screen);
+  };
+
   const screen = await mountFdfScreen({
     container,
     vfs,
@@ -122,7 +162,7 @@ export async function mountSkirmish(
     rootFrame: "Skirmish",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, PLAYER_SLOT_FDF],
     // The engine composes this screen from four files; so do we.
-    buildRoot: (lib) => buildSkirmishRoot(lib, maxSlots),
+    buildRoot: (lib) => { strings = lib; return buildSkirmishRoot(lib, maxSlots); },
     // "Advanced Options" is one of two mutually exclusive panels in the FDF (the other
     // shows the map info); the map info is the one on screen, so its twin stays hidden.
     hidden: ["AdvancedOptionsPanel"],
@@ -146,38 +186,54 @@ export async function mountSkirmish(
   const dispose = screen.dispose.bind(screen);
   screen.dispose = (): void => { alive = false; dispose(); };
 
-  // The list shows each map's OWN name ("Booty Bay", not "(2)BootyBay"), and its icon says
-  // whether it's a melee map or a custom one — both of which are inside the map. Reading a
-  // whole install's worth of maps up front would stall the screen's entrance, so the rows
-  // go up under their file names and are refreshed, one map at a time, in the background.
-  void (async () => {
+  void readFolder(screen);
+
+  return screen;
+
+  /**
+   * A row shows the map's OWN name ("Booty Bay", not "(2)BootyBay"), its player count and
+   * whether it is melee or custom — all of which live INSIDE the map file. Reading them up
+   * front would stall the screen's entrance, so the rows go up under their file names and
+   * the folder on screen is re-read in the background, one map at a time.
+   */
+  async function readFolder(s: FdfScreen): Promise<void> {
+    const folder = cwd;
     let changed = false;
-    for (const e of entries) {
+    for (const e of entries.filter((x) => x.folder === folder)) {
       if (!alive) return; // the player left; stop reading files for a screen that is gone
-      if (e.header) continue;
       try {
         const info = await readMap(e.path); // cached after the first visit
         if (!info) continue;
         e.label = info.name || e.label;
         e.melee = info.isMelee;
+        if (info.slots.length) e.players = info.slots.length;
         changed = true;
       } catch (err) {
         console.warn(`[OpenWar3] couldn't read ${e.path}:`, err);
       }
     }
-    if (alive && changed) screen.list("MapListBox")?.setItems(entries.map((e) => toListItem(e, icons)));
-  })();
+    if (alive && changed && cwd === folder) fillList(s);
+  }
 
-  return screen;
+  /** Put the current folder's rows in the list box. */
+  function fillList(s: FdfScreen): void {
+    const list = s.list("MapListBox");
+    if (!list) return;
+    const upOneLevel = strings?.string("UP_ONE_LEVEL") ?? "(up one level)";
+    list.setItems(folderRows(entries, cwd).map((r) => toListItem(r, icons, upOneLevel)));
+    if (selected) list.select(selected.path);
+  }
 
   /** (Re)fill every widget from the state above — called after each build/rebuild. */
   function fill(s: FdfScreen): void {
     const list = s.list("MapListBox");
     if (list) {
-      list.setItems(entries.map((e) => toListItem(e, icons)));
-      list.onChange = (path) => void chooseMap(path, s);
+      fillList(s);
+      list.onChange = (value) => {
+        if (value.startsWith("folder:")) openFolder(value.slice("folder:".length), s);
+        else void chooseMap(value, s);
+      };
       list.onActivate = () => start();
-      if (selected) list.select(selected.path);
     }
     // Nothing picked yet: no map to start.
     s.setEnabled("PlayGameButton", !!selected);
@@ -186,7 +242,7 @@ export async function mountSkirmish(
     s.setEnabled("MapInfoButton", false);
     if (!selected) return;
 
-    fillMapInfo(s, selected.info);
+    fillMapInfo(s, selected.info, preview, minimapIcons);
 
     const teams = teamOptions(maxSlots);
     slots.forEach((slot, i) => {
@@ -233,7 +289,7 @@ export async function mountSkirmish(
 }
 
 /** Fill the map-info pane: the badge, minimap, the three stat rows and the blurb. */
-function fillMapInfo(s: FdfScreen, info: MapInfo): void {
+function fillMapInfo(s: FdfScreen, info: MapInfo, preview: MapPreview | null, icons: MinimapIcons): void {
   s.setText("MaxPlayersValue", String(info.slots.length));
   s.setText("MapNameValue", info.name);
   s.setText("SuggestedPlayersValue", info.recommendedPlayers || `${info.slots.length} players`);
@@ -242,59 +298,184 @@ function fillMapInfo(s: FdfScreen, info: MapInfo): void {
   s.setText("MapSizeValue", mapSizeLabel(info.slots.length));
   s.setText("MapTilesetValue", TILESETS[info.tileset] ?? info.tileset ?? "—");
   s.setText("MapDescValue", info.description || "");
+  centreNameRow(s);
 
   // The minimap comes out of the MAP's own archive, not the install's, so it can't go
   // through the renderer's VFS-path sprite table — paint it straight onto the SPRITE frame.
   const el = s.frame("MinimapImage");
   if (!el) return;
   const canvas = info.minimap ? blpToCanvas(info.minimap) : null;
+  if (canvas && preview) drawPreviewMarkers(canvas, info, preview, icons);
   el.style.background = canvas ? `url(${canvas.toDataURL()}) center/contain no-repeat` : "#000";
 }
 
+/**
+ * Centre the name row — the player-count badge, the map's name, the author's badge — as one
+ * group over the pane. The engine sizes a TEXT frame to its TEXT and then anchors it, so the
+ * three sit shoulder to shoulder whatever the name's length; our layout solver gives a text
+ * frame a fixed box instead, so the row has to be re-centred once the name is in and its
+ * width is finally a real number.
+ */
+function centreNameRow(s: FdfScreen): void {
+  const badge = s.frame("MaxPlayersIcon");
+  const name = s.frame("MapNameValue");
+  const author = s.frame("AuthIcon");
+  const pane = s.frame("MapInfoPane");
+  const span = name?.querySelector("span");
+  if (!badge || !name || !author || !pane || !span) return;
+
+  const gap = badge.offsetWidth * 0.13; // the FDF's 0.0025 against the badge's own 0.01875
+  const text = Math.ceil(span.getBoundingClientRect().width);
+  const total = badge.offsetWidth + gap + text + gap + author.offsetWidth;
+  const left = Math.round((pane.clientWidth - total) / 2);
+  badge.style.left = `${left}px`;
+  name.style.left = `${left + badge.offsetWidth + gap}px`;
+  name.style.width = `${text}px`;
+  author.style.left = `${left + badge.offsetWidth + gap + text + gap}px`;
+}
+
+/** Stamp the lobby's markers onto a copy of the map's own minimap picture. */
+function drawPreviewMarkers(canvas: HTMLCanvasElement, info: MapInfo, preview: MapPreview, icons: MinimapIcons): void {
+  const g = canvas.getContext("2d");
+  if (!g) return;
+  // The picture covers the whole terrain rect, so world → picture is a straight remap
+  // (north is up: the minimap's +v runs the other way from the world's +y).
+  const stamp = (art: HTMLCanvasElement | null, x: number, y: number, size: number, tint?: string): void => {
+    if (!art) return;
+    const px = ((x - preview.minX) / preview.width) * canvas.width;
+    const py = (1 - (y - preview.minY) / preview.height) * canvas.height;
+    if (px < 0 || py < 0 || px > canvas.width || py > canvas.height) return;
+    g.drawImage(tint ? tinted(art, tint) : art, px - size / 2, py - size / 2, size, size);
+  };
+  const s = canvas.width * 0.05; // the reference's glyphs are ~1/20th of the picture across
+  for (const m of preview.markers) {
+    stamp(m.kind === "gold" ? icons.gold : icons.building, m.x, m.y, s);
+  }
+  // Start locations last and larger — the one thing on this map you are looking for.
+  for (const slot of info.slots) {
+    stamp(icons.start, slot.startX, slot.startY, s * 1.2, PLAYER_COLORS[slot.id % PLAYER_COLORS.length]);
+  }
+}
+
+/** A white glyph (MinimapIconStartLoc is a mask) painted in a player's colour. */
+function tinted(art: HTMLCanvasElement, colour: string): HTMLCanvasElement {
+  const out = document.createElement("canvas");
+  out.width = art.width;
+  out.height = art.height;
+  const g = out.getContext("2d");
+  if (!g) return out;
+  g.drawImage(art, 0, 0);
+  g.globalCompositeOperation = "source-in"; // keep the mask's alpha, replace its colour
+  g.fillStyle = colour;
+  g.fillRect(0, 0, out.width, out.height);
+  return out;
+}
+
+/** The lobby preview's glyphs — the RoC icon set the engine keeps for this screen. */
+interface MinimapIcons {
+  gold: HTMLCanvasElement | null;
+  building: HTMLCanvasElement | null;
+  start: HTMLCanvasElement | null;
+}
+
+function loadMinimapIcons(vfs: DataSource): MinimapIcons {
+  const icon = (path: string): HTMLCanvasElement | null => {
+    const bytes = vfs.rawBytes(path);
+    return bytes ? blpToCanvas(bytes) : null;
+  };
+  return {
+    gold: icon("UI\\MiniMap\\MiniMapIcon\\MinimapIconGold.blp"),
+    building: icon("UI\\MiniMap\\MiniMapIcon\\MinimapIconNeutralBuilding.blp"),
+    start: icon("UI\\MiniMap\\MiniMapIcon\\MinimapIconStartLoc.blp"),
+  };
+}
+
 // --- the map list ------------------------------------------------------------------
+//
+// The reference's list is a FOLDER BROWSER, not a flat index: it shows one directory at a
+// time — "(up one level)", then the sub-folders, then that folder's maps — and the maps are
+// ordered by how many players they take (the 2-player maps, then the 4s, then the 6s), with
+// the count printed inside the row's own melee badge.
 
 interface MapEntry {
   path: string; // key into the maps table ("Maps\\FrozenThrone\\(2)EchoIsles.w3x")
   folder: string; // "" for the top level
   label: string; // the file's stem to begin with, replaced by the map's own name
-  header: boolean; // a folder row
+  /** Max players. Blizzard's maps carry it in the file name — "(2)EchoIsles" — which is what
+   *  the list can sort on before a single map has been read; the map's own w3i replaces it. */
+  players: number;
   melee: boolean; // drives the row icon; only known once the map has been read
 }
 
-/** Group the install's maps the way the reference lists them: sub-folders first (as
- *  headers with their maps under them), then the loose maps at the top level. */
+/** Every playable map in the install, with the folder it lives in. */
 function mapEntries(maps: Map<string, File>): MapEntry[] {
   const all: MapEntry[] = [...maps.keys()].map((path) => {
     const parts = path.slice(MAPS_PREFIX.length).split("\\");
-    return { path, folder: parts.slice(0, -1).join("\\"), label: baseName(path), header: false, melee: true };
+    const label = baseName(path);
+    return {
+      path,
+      folder: parts.slice(0, -1).join("\\"),
+      label,
+      players: parseInt(/^\((\d+)\)/.exec(label)?.[1] ?? "0", 10),
+      melee: true,
+    };
   });
   // Campaign maps aren't skirmish maps — the Campaign screen is a different menu.
-  const playable = all.filter((e) => !/(^|\\)campaign(\\|$)/i.test(e.folder));
-  const byLabel = (a: MapEntry, b: MapEntry): number => a.label.localeCompare(b.label);
-  const folders = [...new Set(playable.map((e) => e.folder))].filter(Boolean).sort();
-  const out: MapEntry[] = [];
-  for (const folder of folders) {
-    out.push({ path: `folder:${folder}`, folder, label: folder.split("\\").pop() ?? folder, header: true, melee: false });
-    out.push(...playable.filter((e) => e.folder === folder).sort(byLabel));
-  }
-  out.push(...playable.filter((e) => !e.folder).sort(byLabel));
-  return out;
+  return all.filter((e) => !/(^|\\)campaign(\\|$)/i.test(e.folder));
 }
 
-function toListItem(e: MapEntry, icons: Icons): ListItem {
-  return {
-    value: e.path,
-    label: e.label,
-    header: e.header,
-    depth: e.header ? 0 : e.folder ? 1 : 0,
-    icon: e.header ? icons.folder : e.melee ? icons.melee : icons.ums,
-  };
+/** The rows for one folder: (up one level), the sub-folders, then the maps. */
+function folderRows(entries: MapEntry[], cwd: string): Array<MapEntry | FolderRow> {
+  const inCwd = entries.filter((e) => e.folder === cwd);
+  const prefix = cwd ? `${cwd}\\` : "";
+  const subFolders = [...new Set(
+    entries
+      .filter((e) => e.folder.startsWith(prefix) && e.folder !== cwd)
+      .map((e) => e.folder.slice(prefix.length).split("\\")[0]),
+  )].sort();
+
+  const rows: Array<MapEntry | FolderRow> = [];
+  if (cwd) rows.push({ folder: parentOf(cwd), up: true });
+  for (const name of subFolders) rows.push({ folder: prefix + name, up: false });
+  // Ascending by player count, then by name — the reference's order.
+  rows.push(...inCwd.sort((a, b) => a.players - b.players || a.label.localeCompare(b.label)));
+  return rows;
+}
+
+/** A folder row in the list: either a sub-folder, or the "(up one level)" row. */
+interface FolderRow {
+  folder: string;
+  up: boolean;
+}
+
+const isFolder = (r: MapEntry | FolderRow): r is FolderRow => (r as FolderRow).up !== undefined;
+
+/** A folder row's value — what the list hands back when it is clicked. */
+const folderValue = (r: FolderRow): string => `folder:${r.folder}`;
+
+function parentOf(folder: string): string {
+  const parts = folder.split("\\");
+  return parts.slice(0, -1).join("\\");
+}
+
+function toListItem(r: MapEntry | FolderRow, icons: Icons, upOneLevel: string): ListItem {
+  if (isFolder(r)) {
+    return {
+      value: folderValue(r),
+      label: r.up ? upOneLevel : (r.folder.split("\\").pop() ?? r.folder),
+      icon: r.up ? icons.up : icons.folder,
+    };
+  }
+  return { value: r.path, label: r.label, icon: r.melee ? icons.melee(r.players) : icons.ums };
 }
 
 interface Icons {
   folder: HTMLCanvasElement | null;
-  melee: HTMLCanvasElement | null;
+  up: HTMLCanvasElement | null;
   ums: HTMLCanvasElement | null;
+  /** The melee badge with the map's player count printed in it (as MapInfoPane's own
+   *  MaxPlayersIcon does — the same art, the same number over it). */
+  melee(players: number): HTMLCanvasElement | null;
 }
 
 function loadIcons(vfs: DataSource): Icons {
@@ -302,7 +483,38 @@ function loadIcons(vfs: DataSource): Icons {
     const bytes = vfs.rawBytes(path);
     return bytes ? blpToCanvas(bytes) : null;
   };
-  return { folder: icon(ICON_FOLDER), melee: icon(ICON_MELEE), ums: icon(ICON_UMS) };
+  const melee = icon(ICON_MELEE);
+  const badges = new Map<number, HTMLCanvasElement | null>();
+  return {
+    folder: icon(ICON_FOLDER),
+    up: icon(ICON_FOLDER_UP),
+    ums: icon(ICON_UMS),
+    melee(players: number): HTMLCanvasElement | null {
+      if (!badges.has(players)) badges.set(players, melee ? countBadge(melee, players) : null);
+      return badges.get(players) ?? null;
+    },
+  };
+}
+
+/** The melee badge with `players` stamped in the middle of it. */
+function countBadge(art: HTMLCanvasElement, players: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = art.width;
+  canvas.height = art.height;
+  const g = canvas.getContext("2d");
+  if (!g) return canvas;
+  g.drawImage(art, 0, 0);
+  if (players > 0) {
+    g.font = `bold ${Math.round(canvas.height * 0.5)}px ${UI_FONT}`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.lineWidth = 4;
+    g.strokeStyle = "rgba(0, 0, 0, 0.9)";
+    g.strokeText(String(players), canvas.width / 2, canvas.height * 0.53);
+    g.fillStyle = "#fff";
+    g.fillText(String(players), canvas.width / 2, canvas.height * 0.53);
+  }
+  return canvas;
 }
 
 function baseName(path: string): string {
@@ -419,37 +631,66 @@ function suffixed(frame: FdfFrame, suffix: string): FdfFrame {
 function layoutInfoPane(pane: FdfFrame): FdfFrame {
   setProp(pane, "SetAllPoints", []);
 
-  // The name row: the player-count badge, then the map's name, then the author badge —
-  // already chained to each other in the FDF, so only the badge needs placing.
+  // The name row: the player-count badge, then the map's name, then the author badge — the
+  // FDF chains all three to each other, so only the badge needs placing, and the row is
+  // re-centred on the name's real width once it is in (centreNameRow).
   setProp(findFrame(pane, "MaxPlayersIcon"), "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(0.03), num(-0.004)]);
   size(findFrame(pane, "MapNameValue"), 0.14, 0.019);
+  // The count sits INSIDE its badge: the engine sizes the TEXT frame to its digit and then
+  // centres it on the icon, which for a frame we size to the icon is the same as centring
+  // the text in it. (Left as it comes off StandardSmallTextTemplate, the digit lands on the
+  // badge's left rim.)
+  const count = findFrame(pane, "MaxPlayersValue");
+  size(count, 0.01875, 0.01875);
+  setProp(count, "FontJustificationH", [arg("JUSTIFYCENTER")]);
 
   setProp(findFrame(pane, "MinimapImage"), "SetPoint", [arg("TOP"), str("MapInfoPane"), arg("TOP"), num(0), num(-0.032)]);
 
   // The stat rows: label left, value right-justified over the same full-width box (the
   // value's own `SetPoint TOPLEFT <label> TOPLEFT` + JUSTIFYRIGHT is the FDF's own idiom).
+  // Each spans the pane's full width, so the block reads centred under the minimap with the
+  // values flush against the pane's right edge, as in the reference.
   let prev = "";
+  let bottom = ROWS_TOP;
   for (const [name, gap] of INFO_ROWS) {
     const row = findFrame(pane, name);
     if (!row) continue;
-    size(row, 0.2344, 0.016);
+    size(row, PANE_W, ROW_H);
     if (prev) setProp(row, "SetPoint", [arg("TOPLEFT"), str(prev), arg("BOTTOMLEFT"), num(0), num(-gap)]);
-    else setProp(row, "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(0), num(-0.178)]);
-    size(findFrame(pane, name.replace(/Label$/, "Value")), 0.2344, 0.016);
+    else setProp(row, "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(0), num(-ROWS_TOP)]);
+    size(findFrame(pane, name.replace(/Label$/, "Value")), PANE_W, ROW_H);
+    bottom += gap + ROW_H;
     prev = name;
   }
-  // The blurb wraps under its label (the FDF anchors it there itself); it just needs a box
-  // deep enough for the longest of Blizzard's own melee descriptions.
-  size(findFrame(pane, "MapDescValue"), 0.2344, 0.085);
+  // The blurb wraps under its label (the FDF anchors it there itself) and fills what is left
+  // of the pane — no more. The pane ENDS where the Advanced Options button begins, so a box
+  // any deeper would spill the map's description over the button (a long one, like
+  // Turtle Rock's, runs to eight lines). A word too many is clipped, exactly as the engine's
+  // FIXEDSIZE text frames clip: the size of the type is not up for negotiation.
+  const desc = findFrame(pane, "MapDescValue");
+  size(desc, PANE_W, PANE_H - bottom - DESC_GAP);
+  setProp(desc, "FrameFont", [str("MasterFont"), num(DESC_FONT), str("")]);
   return pane;
 }
+
+// The pane's own box (Skirmish.fdf's MapInfoPaneContainer) — every row below is laid out
+// against it, and the description gets whatever it leaves.
+const PANE_W = 0.234375;
+const PANE_H = 0.2875;
+const ROWS_TOP = 0.176; // where "Suggested Players:" starts, below the minimap
+const ROW_H = 0.015;
+const DESC_GAP = 0.002; // MapDescValue's own SetPoint TOP, MapDescLabel BOTTOM, 0, -0.002
+/** The blurb's type size. The FDF's StandardSmallTextTemplate says 0.011, but that is sized
+ *  for WC3's own font; ours sets wider, so a Blizzard-length description would not fit the
+ *  box the game gives it. Smaller type, same box — the reference's proportions survive. */
+const DESC_FONT = 0.0095;
 
 /** The map-info pane's stat rows, in order, with the gap above each. */
 const INFO_ROWS: Array<[string, number]> = [
   ["SuggestedPlayersLabel", 0],
   ["MapSizeLabel", 0.002],
   ["MapTilesetLabel", 0.002],
-  ["MapDescLabel", 0.008],
+  ["MapDescLabel", 0.007],
 ];
 
 // --- small FdfFrame helpers ---------------------------------------------------------
