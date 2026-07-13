@@ -68,8 +68,12 @@ const POLYGON_OFFSET_UNITS = -4;
 // A tall unit body occupies the screen-up direction, so a big +Y offset just hides the cast
 // behind the model; pushing east keeps it clear of the (thin) body and clearly to the right.
 // Tuned live (issue #58 f/u) — +36 both ways detached it, +20 both ways vanished behind units.
-const DIR_PUSH_X = 24;
-const DIR_PUSH_Y = 14;
+// HALVED from 24/14 (issue #59): at 24/14 a shadow read as a separate blob lying beside its
+// owner rather than cast by it — worst on the small models (a chest is only ~60u wide, so a
+// 24u shove is a third of it). 12/7 still clears the body to the up-right but the blob stays
+// in contact with the feet/foundation.
+const DIR_PUSH_X = 12;
+const DIR_PUSH_Y = 7;
 
 // Overall darkness. WC3 shadow blobs top out near 0.75 alpha in the texture, so this
 // scale gives ~0.6 peak — a soft, clearly-read contact shadow like the game's, not a

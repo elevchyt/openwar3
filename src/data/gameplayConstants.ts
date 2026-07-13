@@ -241,6 +241,17 @@ export const MISC_DATA = {
   /** Added to every selection circle's z coordinate. */
   SelectionCircleBaseZ: 16,
 
+  // --- item shadows (issue #60) -------------------------------------------------
+  // "// item shadow data" in the file. Unlike a unit — whose blob is sized per row in
+  // Units\UnitUI.slk (unitShadow/shadowW/H/X/Y) — EVERY item on the ground shares this
+  // one global shadow: the same ReplaceableTextures\Shadows\Shadow.blp, 120×120 world
+  // units, min corner at (item − 50, item − 50) so the blob centres +10,+10 (the game's
+  // fixed top-right cast). See src/render/mapViewer.ts updateShadowBatch.
+  /** Texture stem under ReplaceableTextures\Shadows\ (no extension). */
+  ItemShadowFile: "Shadow",
+  ItemShadowSize: [120, 120],
+  ItemShadowOffset: [50, 50],
+
   AttackNotifyDelay: 30.0,
   AttackNotifyRange: 1250,
   TradingIncSmall: 100,

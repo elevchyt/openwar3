@@ -7,7 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
-import { jassOwnerOf, type QueuedOrder, type RallyKind, type SimMine, type SimUnit } from "../sim/world";
+import { jassOwnerOf, type QueuedOrder, type RallyKind, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -28,7 +28,7 @@ import { applyMapUnitData, applyMapAbilityData, applyMapItemData } from "../data
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MISC_GAME } from "../data/gameplayConstants";
+import { CAMERA, MELEE, MISC_DATA, MISC_GAME } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -5022,7 +5022,8 @@ export class MapViewerScene {
    *  terrain by ShadowOverlay. Mobile units use a blob sized/offset straight from their
    *  UnitDef shadow data (unitUI.slk `unitShadow` + shadowW/H/X/Y); BUILDINGS use their
    *  baked `buildingShadow` texture stretched over their pathing footprint (no size field
-   *  exists, so the footprint is the size), centred and given the same top-right cast.
+   *  exists, so the footprint is the size), centred and given the same top-right cast;
+   *  ground ITEMS all share one global blob from MiscData (see below).
    *  Corpses and fogged/mined units are skipped — a fogged enemy's shadow must not reveal
    *  it. Cheap: a beginFrame + one small tessellation per unit, all drawn later in ~one
    *  call per shadow texture. */
@@ -5031,6 +5032,7 @@ export class MapViewerScene {
     if (!this.shadows || !this.buildingShadows || !world) return;
     this.shadows.beginFrame();
     this.buildingShadows.beginFrame();
+    this.addItemShadows(world);
     for (const u of world.units.values()) {
       if (u.hp <= 0) continue; // corpses cast no shadow
       const def = this.registry.get(u.typeId);
@@ -5051,6 +5053,25 @@ export class MapViewerScene {
       }
       if (!def.unitShadow || def.shadowW <= 0 || def.shadowH <= 0) continue;
       this.shadows.add(u.x, u.y, def.shadowW, def.shadowH, def.shadowX, def.shadowY, MapViewerScene.SHADOW_DIR + def.unitShadow + ".blp");
+    }
+  }
+
+  /** Ground items cast a shadow too (issue #60) — the chest/tome/rune sitting in the
+   *  grass was the one widget class floating without one. An item has no shadow columns
+   *  of its own (Units\ItemData.slk has none): the engine gives EVERY item the same blob
+   *  from `Units\MiscData.txt` — `ItemShadowFile=Shadow`, `ItemShadowSize=120,120`,
+   *  `ItemShadowOffset=50,50` — so they all batch into the unit overlay's one draw call.
+   *  Fog-gated on LIVE sight exactly like the item's model (see fogItems): an item in the
+   *  dark is hidden outright, and its shadow must not give it away. */
+  private addItemShadows(world: SimWorld): void {
+    if (!this.shadows || !world.items.size) return;
+    const vision = this.rts?.getVision();
+    const [w, h] = MISC_DATA.ItemShadowSize;
+    const [ox, oy] = MISC_DATA.ItemShadowOffset;
+    const texture = MapViewerScene.SHADOW_DIR + MISC_DATA.ItemShadowFile + ".blp";
+    for (const it of world.items.values()) {
+      if (vision && !vision.revealed && vision.stateAt(it.x, it.y) !== FogState.Visible) continue;
+      this.shadows.add(it.x, it.y, w, h, ox, oy, texture);
     }
   }
   // Building shadows have no size field in the data (unlike units' shadowW/H), so we size
