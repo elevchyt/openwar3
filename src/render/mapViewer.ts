@@ -7,7 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
-import { jassOwnerOf, type QueuedOrder, type RallyKind, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
+import { jassOwnerOf, type BuildJob, type QueuedOrder, type RallyKind, type ShopResult, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -21,7 +21,7 @@ import { WeatherOverlay } from "./weather";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
-import { RtsController, type RtsHost } from "../game/rts";
+import { RtsController, type RtsHost, type SelectionInfo } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData } from "../data/objectData";
@@ -58,7 +58,8 @@ import { ScriptCamera, type CameraState } from "./scriptCamera";
 import { TextTagOverlay, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
-import { buildsFor, trainsFor } from "../data/techtree";
+import { loadTechRegistry, type TechRegistry } from "../data/techtree";
+import { loadUpgradeRegistry, type UpgradeRegistry } from "../data/upgrades";
 
 // Our race ids → the section names in the game's own skin table (UI\war3skins.txt), which
 // is what decorates a `DecorateFileNames` frame's textures. WC3 skins the in-game panels
@@ -138,6 +139,28 @@ const DAWN_SOUND = "RoosterSound";
 const DUSK_SOUND = "WolfSound";
 const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
 const TAVERN_HIRE_TIME = 0; // tavern heroes are HIRED instantly — no build time, the hero just spawns (pops next tick)
+
+// Our race ids → the suffix WC3's UISounds.slk uses on its per-race cues
+// (ResearchCompleteHuman, UpgradeCompleteNightElf, …).
+const UI_SOUND_RACE: Record<PlayableRace, string> = {
+  human: "Human",
+  orc: "Orc",
+  undead: "Undead",
+  nightelf: "NightElf",
+};
+
+// Why a shop refused a purchase, in the game's own words. Verbatim from the real
+// Units\commandstrings.txt — "A valid patron must be nearby." is the one players know, and
+// it is why a hero has to walk up to the Arcane Vault before you can buy anything.
+const SHOP_ERROR: Record<ShopResult, string> = {
+  ok: "",
+  no: "",
+  nostock: "Out of stock", // Outofstock (no full stop in the data)
+  nopatron: "A valid patron must be nearby.", // Neednearbypatron
+  full: "Inventory is full.", // Inventoryfull
+  cost: "Not enough gold.", // Nogold
+  req: "", // the red "Requires:" line on the button already says which building is missing
+};
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
@@ -623,6 +646,8 @@ export class MapViewerScene {
     private registry: UnitRegistry,
     private abilities: AbilityRegistry,
     private items: ItemRegistry,
+    private tech: TechRegistry,
+    private upgrades: UpgradeRegistry,
     private solver: Solver,
   ) {
     this.sounds = new SoundBoard(vfs);
@@ -704,7 +729,7 @@ export class MapViewerScene {
       else viewer.once("loadedbasefiles", resolve);
     });
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), solver);
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver);
   }
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
@@ -798,7 +823,7 @@ export class MapViewerScene {
       };
       this.heightSampler = makeHeightSampler(terrain);
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
-      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.footMaxHeight);
+      this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight);
       this.rts.setSoundBoard(this.sounds);
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
@@ -1501,6 +1526,10 @@ export class MapViewerScene {
       playerUnitCount: (player, includeIncomplete) => this.countUnits(player, includeIncomplete, () => true),
       playerTypedUnitCount: (player, typeName, includeIncomplete, includeUpgrades) =>
         this.countUnits(player, includeIncomplete, (u) => this.unitIsTyped(u.typeId, typeName, includeUpgrades)),
+      // --- the tech tree (issue #57) ---
+      playerTechCount: (player, tech) => this.rts?.simWorld.tech?.count(player, tech) ?? 0,
+      setPlayerTechResearched: (player, tech, level) => this.rts?.simWorld.tech?.setResearchLevel(player, tech, level),
+      setPlayerTechMaxAllowed: (player, tech, max) => this.rts?.simWorld.tech?.setMaxAllowed(player, tech, max),
       // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
       unitAddAbility: (id, abilityId) => this.rts?.simWorld.addAbility(id, abilityId) ?? false,
       unitRemoveAbility: (id, abilityId) => this.rts?.simWorld.removeAbility(id, abilityId) ?? false,
@@ -2158,6 +2187,40 @@ export class MapViewerScene {
     if (!def.uberSplat || !this.splats) return;
     const s = this.uberSplatRegistry().get(def.uberSplat);
     if (s) this.splats.add(key, x, y, s.scale, s.texture);
+  }
+
+  /** Re-skin a live unit as another type — a Town Hall that just became a Keep (issue #57).
+   *  The sim already swapped the type and kept the entity, so this only replaces the model
+   *  instance and the render-side facts that hang off the type: the food it supplies, its
+   *  selection ring, and its ground splat (a Keep's is bigger than a Town Hall's).
+   *
+   *  It deliberately does NOT re-stamp the pathing footprint. Every tier of a WC3 hall shares
+   *  one footprint (`htow`/`hkee`/`hcas` all use the same pathing texture and a 176 collision),
+   *  and re-stamping would mean unsettling a building with units standing around it. If a
+   *  future upgrade DID change footprint, that would need handling here. */
+  private async remodelUnit(simId: number, toTypeId: string): Promise<void> {
+    const map = this.viewer.map;
+    const def = this.registry.get(toTypeId);
+    if (!map || !this.rts || !def) return;
+    const su = this.rts.simWorld.units.get(simId);
+    if (!su || su.hp <= 0) return; // died while the new model streamed in
+    const model = await this.viewer.load(def.model, this.solver);
+    if (!model) return;
+    const instance = model.addInstance();
+    instance.setScene(map.worldScene);
+    instance.setTeamColor(su.owner);
+    if (!this.rts.remodel(simId, instance, def)) {
+      instance.hide(); // the unit went away while we were loading
+      return;
+    }
+    // Re-lay the ground splat: a Keep's foundation is a different texture and scale from a
+    // Town Hall's, so drop the old decal before painting the new one.
+    this.splats?.remove(simId);
+    this.simBuildingSplats.delete(simId);
+    if (def.uberSplat) {
+      this.simBuildingSplats.add(simId);
+      this.addBuildingSplat(simId, def, su.x, su.y);
+    }
   }
 
   private async spawnUnit(
@@ -3781,9 +3844,13 @@ export class MapViewerScene {
       this.portraitWarmQueue.push(path);
     };
     for (const u of this.rts.simWorld.units.values()) consider(u.typeId);
-    for (const bid of buildsFor(this.localRace)) {
+    // Everything the local player is likely to make: what their worker builds, and what each
+    // of those buildings trains or becomes.
+    const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
+    for (const bid of workerId ? this.tech.builds(workerId) : []) {
       consider(bid);
-      for (const uid of trainsFor(bid)) consider(uid); // units this building trains
+      for (const uid of this.tech.trains(bid)) consider(uid); // units this building trains
+      for (const uid of this.tech.upgradesTo(bid)) consider(uid); // and what it upgrades into
     }
     this.schedulePortraitWarm();
   }
@@ -3832,21 +3899,171 @@ export class MapViewerScene {
       // Altars the player owns + neutral shops (taverns) they hire from.
       if (u.building && (u.owner === player || u.neutralPassive)) {
         for (const job of u.building.queue) {
-          if (this.registry.get(job.unitId)?.isHero) set.add(job.unitId);
+          if (job.kind === "unit" && this.registry.get(job.unitId)?.isHero) set.add(job.unitId);
         }
       }
     }
     return set;
   }
 
+  /** Units this building trains (`Trains`) or SELLS (`Sellunits` — a Tavern's heroes, a
+   *  Mercenary Camp's creeps). Both end up in the same production queue; the difference is
+   *  that a sold unit comes off the shop's stock and shouts to the creeps around it. */
+  private pushTrainButtons(sel: SelectionInfo, out: CommandButton[]): void {
+    const world = this.rts!.simWorld;
+    const t = this.tech.get(sel.typeId);
+    const sold = new Set(t.sellunits);
+    const list = [...t.trains, ...t.sellunits];
+    if (!list.length) return;
+    const food = this.rts!.foodFor(this.localPlayer);
+    const stash = this.rts!.stashFor(this.localPlayer);
+    // WC3 hero rules (shared by altars + taverns): a hero already owned or in production is
+    // removed from the card; once the player has MAX_HEROES the rest are disabled.
+    const heroesInProduction = this.heroTypesInProduction(this.localPlayer);
+    const atHeroCap = heroesInProduction.size >= MAX_HEROES;
+    for (const uid of list) {
+      const d = this.registry.get(uid);
+      if (!d) continue;
+      if (d.isHero && heroesInProduction.has(uid)) continue; // already have/queued this hero
+      // An `rtma` upgrade can make a unit unavailable outright — the plain Siege Engine
+      // vanishes from the Workshop card the moment Barrage is researched, replaced by the
+      // Barrage-equipped one. That's a hide, not a grey-out.
+      if (world.tech && world.tech.maxAllowed(this.localPlayer, uid) === 0) continue;
+
+      const owned = this.rts!.countOwned(this.localPlayer, uid);
+      const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer); // first hero is free
+      const gold = freeHero ? 0 : d.goldCost;
+      const lumber = freeHero ? 0 : d.lumberCost;
+      const stock = sold.has(uid) ? world.shopStock(sel.id, uid) : -1;
+      const metTech = world.canMake(this.localPlayer, uid, owned);
+      const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
+      const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
+      out.push(this.cmd({
+        id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
+        tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
+        desc: (d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned),
+        gold, lumber, food: d.foodUsed,
+        count: stock > 0 ? stock : undefined, // the shop's stock badge
+        col: d.buttonX, row: d.buttonY,
+        disabled: !afford || !metTech || !inStock || (d.isHero && atHeroCap),
+      }));
+    }
+  }
+
+  /** Upgrades this building can research (`Researches`). The button shows the NEXT level:
+   *  a Blacksmith that has Iron Forged Swords offers Steel, with its own name, icon, cost
+   *  and prerequisite (a Keep). Once every level is in, the button drops off the card. */
+  private pushResearchButtons(sel: SelectionInfo, out: CommandButton[]): void {
+    if (sel.owner !== this.localPlayer) return; // you don't research at someone else's shop
+    const world = this.rts!.simWorld;
+    const state = world.tech;
+    const stash = this.rts!.stashFor(this.localPlayer);
+    for (const upId of this.tech.researches(sel.typeId)) {
+      const d = this.upgrades.get(upId);
+      if (!d) continue;
+      const have = state?.researchLevel(this.localPlayer, upId) ?? 0;
+      // Something already in this building's queue counts as done for the card's purposes,
+      // so you can't queue Steel Forged Swords twice.
+      const queued = world.researchingLevel(sel.id, upId);
+      const next = Math.max(have, queued) + 1;
+      if (next > d.maxLevel) continue; // fully researched — the button is gone, as in WC3
+      const cost = this.upgrades.cost(upId, next);
+      const tier = next - 1; // requirement tier is 0-based on the LEVEL for an upgrade
+      const metTech = !state || state.meets(this.localPlayer, upId, tier);
+      const afford = stash.gold >= cost.gold && stash.lumber >= cost.lumber;
+      out.push(this.cmd({
+        id: `research:${upId}`,
+        icon: this.blpIcon(this.upgrades.icon(upId, next)),
+        name: this.upgrades.name(upId, next),
+        hotkey: this.upgrades.hotkey(upId, next),
+        tip: this.upgrades.tip(upId, next), // "Upgrade to Iron Forged |cffffcc00S|rwords"
+        desc: this.upgrades.uberTip(upId, next) + this.requirementLine(upId, tier),
+        gold: cost.gold, lumber: cost.lumber, food: 0,
+        col: d.buttonX, row: d.buttonY,
+        disabled: !afford || !metTech,
+      }));
+    }
+  }
+
+  /** What this building can BECOME (`Upgrade`) — Town Hall → Keep → Castle, and the Scout
+   *  Tower's three-way fan-out into Guard / Cannon / Arcane Tower. The cost and time are the
+   *  TARGET's own (a Keep is 705g/415l/140s), and each option carries its own requirements
+   *  (a Cannon Tower needs a Workshop). */
+  private pushBuildingUpgradeButtons(sel: SelectionInfo, out: CommandButton[]): void {
+    if (sel.owner !== this.localPlayer) return;
+    const world = this.rts!.simWorld;
+    if (world.isUpgrading(sel.id)) return; // already becoming something — one transformation at a time
+    const stash = this.rts!.stashFor(this.localPlayer);
+    for (const toId of this.tech.upgradesTo(sel.typeId)) {
+      const d = this.registry.get(toId);
+      if (!d) continue;
+      const metTech = world.canMake(this.localPlayer, toId, 0);
+      const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
+      out.push(this.cmd({
+        id: `upgrade:${toId}`, icon: this.blpIcon(d.icon), name: d.name,
+        hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
+        tip: d.tip, // "Upgrade to |cffffcc00K|reep"
+        desc: (d.description || `Upgrades to a ${d.name}.`) + this.requirementLine(toId),
+        gold: d.goldCost, lumber: d.lumberCost, food: 0,
+        col: d.buttonX, row: d.buttonY,
+        disabled: !afford || !metTech,
+      }));
+    }
+  }
+
+  /** Items a shop sells. The Arcane Vault uses `Makeitems`, the neutral shops `Sellitems` —
+   *  same card either way. Each item carries its own tech gate (a Potion of Healing needs a
+   *  Keep, via the TWN2 pseudo-tech) and its own stock, shown as the button's count badge.
+   *  Buying needs a "valid patron" — a hero standing within the shop's activation radius —
+   *  which is checked in the sim; here it only decides the greying. */
+  private pushShopButtons(sel: SelectionInfo, out: CommandButton[]): void {
+    const world = this.rts!.simWorld;
+    const wares = world.shopWares(sel.typeId);
+    if (!wares.items.length) return;
+    const stash = this.rts!.stashFor(this.localPlayer);
+    const hasPatron = world.shopPatrons(sel.id, this.localPlayer).length > 0;
+    for (const itemId of wares.items) {
+      const d = this.items.get(itemId);
+      if (!d) continue;
+      const stock = world.shopStock(sel.id, itemId);
+      const metTech = world.tech ? world.tech.meets(this.localPlayer, itemId) : true;
+      const afford = stash.gold >= d.gold && stash.lumber >= d.lumber;
+      out.push(this.cmd({
+        id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
+        hotkey: d.hotkey, tip: d.tip,
+        desc: d.description + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId),
+        gold: d.gold, lumber: d.lumber, food: 0,
+        count: stock > 0 ? stock : undefined,
+        col: d.buttonX, row: d.buttonY,
+        disabled: !afford || !metTech || stock <= 0 || !hasPatron,
+      }));
+    }
+  }
+
+  /** The tech ids the local player is missing for `id`, rendered as the game's own red
+   *  "Requires:" tooltip line. WC3 names the requirement by its display name — and the
+   *  pseudo-techs have names of their own ("Keep or Stronghold or Tree of Ages or Halls of
+   *  the Dead" for TWN2), which is why they live in the data rather than being spelled out. */
+  private requirementLine(id: string, tier = 0): string {
+    const state = this.rts?.simWorld.tech;
+    if (!state) return "";
+    const missing = state.missing(this.localPlayer, id, tier);
+    if (!missing.length) return "";
+    // The tech graph carries the display name, which is the only way a pseudo-tech reads
+    // properly: TWN2 renders as "Keep or Stronghold or Tree of Ages or Halls of the Dead".
+    const names = missing.map((t) => this.registry.get(t)?.name || this.tech.get(t).name || t);
+    return `|n|cffff0000Requires: ${names.join(", ")}|r`;
+  }
+
   /** Build the command card for the current selection. */
   private commandCard(): CommandButton[] {
     const sel = this.rts?.selectedInfo();
     if (!sel) return [];
-    // A neutral shop/tavern the local player can hire from shows its purchase card
-    // even though they don't own it; anything else must be the player's own unit.
-    const isShop = sel.isBuilding && sel.owner !== this.localPlayer && trainsFor(sel.typeId).length > 0;
-    if (sel.owner !== this.localPlayer && !isShop) return [];
+    const world = this.rts!.simWorld;
+    // A shop the local player may buy from shows its purchase card even though they don't own
+    // it (a Tavern, a Goblin Merchant — all Neutral Passive). Anything else must be theirs.
+    const foreignShop = sel.isBuilding && sel.owner !== this.localPlayer && world.isShop(sel.typeId);
+    if (sel.owner !== this.localPlayer && !foreignShop) return [];
     const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     const out: CommandButton[] = [];
 
@@ -3855,54 +4072,42 @@ export class MapViewerScene {
       return out;
     }
     if (sel.isBuilding) {
-      const food = this.rts!.foodFor(this.localPlayer);
-      // WC3 hero rules (shared by altars + taverns): a hero already owned or in
-      // production is removed from the card; once the player has MAX_HEROES the
-      // remaining hero buttons are disabled ("hero limit reached").
-      const heroesInProduction = this.heroTypesInProduction(this.localPlayer);
-      const atHeroCap = heroesInProduction.size >= MAX_HEROES;
-      for (const uid of trainsFor(sel.typeId)) {
-        const d = this.registry.get(uid);
-        if (!d) continue;
-        if (d.isHero && heroesInProduction.has(uid)) continue; // already have/queued this hero
-        const stash = this.rts!.stashFor(this.localPlayer);
-        const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer); // first hero is free
-        const gold = freeHero ? 0 : d.goldCost;
-        const lumber = freeHero ? 0 : d.lumberCost;
-        const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
-        out.push(this.cmd({
-          id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
-          tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
-          desc: d.description || `Trains a ${d.name}.`, gold, lumber, food: d.foodUsed,
-          col: d.buttonX, row: d.buttonY, disabled: !afford || (d.isHero && atHeroCap),
-        }));
-      }
-      // Cancel always owns the bottom-right slot (3,2) — the canonical WC3 spot.
-      // The Set Rally Point button sits one above it, at center-right (3,1), so it
-      // never shares the cancel slot. Neither collides with a train/hero button.
-      // A neutral tavern isn't yours to rally, so it gets no rally button.
-      if (!isShop && trainsFor(sel.typeId).length) {
+      this.pushShopButtons(sel, out); // items a shop sells (Arcane Vault, Goblin Merchant)
+      this.pushTrainButtons(sel, out); // units it trains / sells (Barracks, Tavern, Merc Camp)
+      this.pushResearchButtons(sel, out); // upgrades it researches (Blacksmith, Lumber Mill…)
+      this.pushBuildingUpgradeButtons(sel, out); // what it can become (Town Hall → Keep)
+
+      // Cancel always owns the bottom-right slot (3,2) — the canonical WC3 spot. Set Rally
+      // Point sits one above it at (3,1), so it never shares the cancel slot. A neutral shop
+      // isn't yours to rally.
+      if (!foreignShop && world.units.get(sel.id)?.building?.producesUnits) {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
         // No active state: placing a rally point is an aim, not an order in flight,
         // and a building has no "current command" to keep it lit afterwards.
         out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1 }));
       }
-      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last unit in the queue.", col: 3, row: 2 }));
+      if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last item in the queue.", col: 3, row: 2 }));
       return out;
     }
 
     // Movable units. Build sub-page for workers, else the order set.
     if (this.cardPage === "build" && sel.isWorker) {
       const stash = this.rts!.stashFor(this.localPlayer);
-      for (const bid of buildsFor(sel.race as "human")) {
+      // The worker's OWN `Builds` list from its profile — `[hpea] Builds=htow,hhou,hbar,…`.
+      // Structures whose prerequisites aren't met are greyed with a red "Requires:" line
+      // rather than hidden, which is what WC3 does (you can see the Guard Tower is there and
+      // that it wants a Lumber Mill).
+      for (const bid of this.tech.builds(sel.typeId)) {
         const d = this.registry.get(bid);
         if (!d) continue;
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
+        const metTech = world.canMake(this.localPlayer, bid, 0);
         out.push(this.cmd({
           id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
           tip: d.tip, // "Build |cffffcc00F|rarm" — the verb is already in the game's Tip
-          desc: d.description || `Builds ${d.name}.`, gold: d.goldCost, lumber: d.lumberCost, food: 0,
-          col: d.buttonX, row: d.buttonY, disabled: !afford,
+          desc: (d.description || `Builds ${d.name}.`) + this.requirementLine(bid),
+          gold: d.goldCost, lumber: d.lumberCost, food: 0,
+          col: d.buttonX, row: d.buttonY, disabled: !afford || !metTech,
         }));
       }
       out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Return to orders.", col: 3, row: 2 }));
@@ -4186,6 +4391,21 @@ export class MapViewerScene {
       if (sel) this.trainUnit(sel.id, id.slice(6));
       return;
     }
+    if (id.startsWith("research:")) {
+      const sel = this.rts.selectedInfo();
+      if (sel) this.startResearch(sel.id, id.slice(9));
+      return;
+    }
+    if (id.startsWith("upgrade:")) {
+      const sel = this.rts.selectedInfo();
+      if (sel) this.startBuildingUpgrade(sel.id, id.slice(8));
+      return;
+    }
+    if (id.startsWith("buy:")) {
+      const sel = this.rts.selectedInfo();
+      if (sel) this.buyItem(sel.id, id.slice(4));
+      return;
+    }
     if (id.startsWith("cancelqueue:")) {
       // Clicking any icon in the production queue (including the one currently
       // training, index 0) cancels that item and refunds it in full.
@@ -4214,13 +4434,84 @@ export class MapViewerScene {
     // Food (like gold/lumber) is committed when training begins; block if the
     // supply cap would be exceeded (WC3: "not enough food").
     if (stash.gold < gold || stash.lumber < lumber || food.used + d.foodUsed > food.made) return;
+    const world = this.rts.simWorld;
+    // Tech gate, enforced here and not merely greyed on the card, so a hotkey can't bypass it.
+    const owned = this.rts.countOwned(this.localPlayer, unitId);
+    if (!world.canMake(this.localPlayer, unitId, owned)) return;
+    // A unit the building SELLS (a Tavern hero, a Mercenary Camp creep) comes off its stock,
+    // and hiring is loud — purchaseUnit both depletes the shelf and shouts to the creeps.
+    const isSold = this.tech.get(this.rts.simWorld.units.get(buildingId)?.typeId ?? "").sellunits.includes(unitId);
+    if (isSold && world.purchaseUnit(buildingId, unitId, this.localPlayer) !== "ok") return;
+
     stash.gold -= gold;
     stash.lumber -= lumber;
     if (freeHero) this.freeHeroUsed.add(this.localPlayer);
     // A neutral shop (tavern) hires heroes near-instantly; own buildings use the
     // unit's real build time (altar heroes ~55s).
-    const shop = this.rts.simWorld.units.get(buildingId)?.neutralPassive;
-    this.rts.simWorld.enqueueTrain(buildingId, unitId, shop ? TAVERN_HIRE_TIME : d.buildTime || 15);
+    const shop = world.units.get(buildingId)?.neutralPassive;
+    world.enqueueTrain(buildingId, unitId, shop ? TAVERN_HIRE_TIME : d.buildTime || 15, freeHero);
+  }
+
+  /** Start researching an upgrade at a building. Charges the level's own cost (Steel Forged
+   *  Swords is dearer than Iron) and shares the building's ONE production queue with training,
+   *  exactly as WC3 does. */
+  private startResearch(buildingId: number, upgradeId: string): void {
+    if (!this.rts) return;
+    const world = this.rts.simWorld;
+    const state = world.tech;
+    const d = this.upgrades.get(upgradeId);
+    if (!d || !state) return;
+    const have = state.researchLevel(this.localPlayer, upgradeId);
+    const next = Math.max(have, world.researchingLevel(buildingId, upgradeId)) + 1;
+    if (next > d.maxLevel) return;
+    if (!state.meets(this.localPlayer, upgradeId, next - 1)) return;
+    const cost = this.upgrades.cost(upgradeId, next);
+    const stash = this.rts.stashFor(this.localPlayer);
+    if (stash.gold < cost.gold || stash.lumber < cost.lumber) return;
+    stash.gold -= cost.gold;
+    stash.lumber -= cost.lumber;
+    world.enqueueResearch(buildingId, upgradeId, next, cost.time || 1);
+  }
+
+  /** Start a building's transformation (Town Hall → Keep, Scout Tower → Guard Tower). The
+   *  cost and time are the TARGET's own; the structure keeps working while it upgrades. */
+  private startBuildingUpgrade(buildingId: number, toTypeId: string): void {
+    if (!this.rts) return;
+    const world = this.rts.simWorld;
+    const d = this.registry.get(toTypeId);
+    if (!d) return;
+    if (!this.tech.upgradesTo(world.units.get(buildingId)?.typeId ?? "").includes(toTypeId)) return;
+    // Enforced here, not merely hidden on the card, so a hotkey can't queue it twice and pay
+    // for the Keep twice over.
+    if (world.isUpgrading(buildingId)) return;
+    if (!world.canMake(this.localPlayer, toTypeId, 0)) return;
+    const stash = this.rts.stashFor(this.localPlayer);
+    if (stash.gold < d.goldCost || stash.lumber < d.lumberCost) return;
+    stash.gold -= d.goldCost;
+    stash.lumber -= d.lumberCost;
+    world.enqueueUpgrade(buildingId, toTypeId, d.buildTime || 1);
+  }
+
+  /** Buy an item from a shop. WC3 hands it to a "valid patron" — a nearby unit with an
+   *  inventory — so pick the player's SELECTED hero when it happens to be in range (that's
+   *  the one they mean), else the closest patron the shop can reach. */
+  private buyItem(shopId: number, itemId: string): void {
+    if (!this.rts) return;
+    const world = this.rts.simWorld;
+    const patrons = world.shopPatrons(shopId, this.localPlayer);
+    if (!patrons.length) {
+      this.hud?.showMessage(SHOP_ERROR.nopatron, 3);
+      return;
+    }
+    const shop = world.units.get(shopId);
+    const selected = this.rts.selectedSimUnit();
+    const buyer =
+      (selected && patrons.find((p) => p.id === selected.id)) ??
+      (shop
+        ? patrons.reduce((a, b) => (Math.hypot(a.x - shop.x, a.y - shop.y) <= Math.hypot(b.x - shop.x, b.y - shop.y) ? a : b))
+        : patrons[0]);
+    const result = world.purchaseItem(shopId, buyer.id, itemId, this.localPlayer);
+    if (result !== "ok" && SHOP_ERROR[result]) this.hud?.showMessage(SHOP_ERROR[result], 3);
   }
 
   /** Cancel an under-construction building: refund **75%** of its cost (WC3
@@ -4248,24 +4539,40 @@ export class MapViewerScene {
   }
 
   private cancelTrain(buildingId: number): void {
-    const uid = this.rts?.simWorld.cancelLastTrain(buildingId);
-    this.refundTrain(uid);
+    const job = this.rts?.simWorld.cancelLastTrain(buildingId);
+    this.refundJob(job);
   }
 
-  /** Cancel a specific queue slot (0 = currently training) and refund it. */
+  /** Cancel a specific queue slot (0 = currently in progress) and refund it. */
   private cancelTrainAt(buildingId: number, index: number): void {
-    const uid = this.rts?.simWorld.cancelTrainAt(buildingId, index);
-    this.refundTrain(uid);
+    const job = this.rts?.simWorld.cancelTrainAt(buildingId, index);
+    this.refundJob(job);
   }
 
-  /** Refund a cancelled training unit's full cost to the local player. */
-  private refundTrain(uid: string | null | undefined): void {
-    if (!uid || !this.rts) return;
-    const d = this.registry.get(uid);
+  /** Refund a cancelled queue job. Each kind has its own rate in MiscGame.txt: training and
+   *  research come back in FULL (TrainRefundRate / ResearchRefundRate = 1.0) but a cancelled
+   *  structure upgrade only pays back 75% (UpgradeRefundRate) — the same haircut as cancelling
+   *  a building under construction. */
+  private refundJob(job: BuildJob | null | undefined): void {
+    if (!job || !this.rts) return;
+    const stash = this.rts.stashFor(this.localPlayer);
+    if (job.kind === "research") {
+      const c = this.upgrades.cost(job.unitId, job.level);
+      stash.gold += Math.round(c.gold * MISC_GAME.ResearchRefundRate);
+      stash.lumber += Math.round(c.lumber * MISC_GAME.ResearchRefundRate);
+      return;
+    }
+    // The melee free first hero cost nothing, so it refunds nothing — otherwise queueing and
+    // cancelling one would simply mint 425 gold. Cancelling it also hands the freebie back.
+    if (job.kind === "unit" && job.free) {
+      this.freeHeroUsed.delete(this.localPlayer);
+      return;
+    }
+    const d = this.registry.get(job.unitId);
     if (d) {
-      const stash = this.rts.stashFor(this.localPlayer);
-      stash.gold += d.goldCost;
-      stash.lumber += d.lumberCost;
+      const rate = job.kind === "upgrade" ? MISC_GAME.UpgradeRefundRate : MISC_GAME.TrainRefundRate;
+      stash.gold += Math.round(d.goldCost * rate);
+      stash.lumber += Math.round(d.lumberCost * rate);
     }
   }
 
@@ -4670,6 +4977,24 @@ export class MapViewerScene {
             // GetTrainedUnit must hand the script the real unit.
             world.noteTrainFinish(buildingId, simId);
           });
+        }
+        // --- research + structure upgrades (issue #57) ---
+        // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an
+        // upgrade you research (Forged Swords) and UpgradeComplete<Race> for a structure that
+        // becomes another (Town Hall → Keep). Both are in UI\SoundInfo\UISounds.slk.
+        // Nothing else to do for research: recomputeStats() re-derives every unit's stats from
+        // the owner's researched levels each tick, so a Footman fighting on the far side of the
+        // map gets his new sword the moment the Blacksmith finishes.
+        for (const r of world.drainResearchCompletions()) {
+          if (r.owner === this.localPlayer) this.sounds?.playUi(`ResearchComplete${UI_SOUND_RACE[this.localRace]}`);
+        }
+        // A building became something else: swap its model in place. The sim kept the SAME
+        // entity — rally point, queue, selection and damage all carried over — so this only
+        // has to re-skin it and re-read the food it supplies.
+        for (const m of world.drainMorphs()) {
+          const owner = world.units.get(m.unitId)?.owner;
+          if (owner === this.localPlayer) this.sounds?.playUi(`UpgradeComplete${UI_SOUND_RACE[this.localRace]}`);
+          void this.remodelUnit(m.unitId, m.to);
         }
         // --- spells / abilities ---
         // Effect models (Holy Light burst, Heal glow, Thunder Clap ring, …): follow

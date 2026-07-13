@@ -12,7 +12,8 @@ import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef, tipFieldValue } from "../data/abilities";
 import { type ItemRegistry } from "../data/items";
 import { WORKERS, DEPOT_IDS } from "../data/races";
-import { trainsFor } from "../data/techtree";
+import { type TechRegistry } from "../data/techtree";
+import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
 import { worldLayer } from "../ui/stage";
 
@@ -147,7 +148,63 @@ interface AnimSet {
   seqNames: string[]; // raw sequence names (for cast-animation tag matching)
 }
 
-function buildAnimSet(seqs: Array<{ name: string }>): AnimSet {
+// The `Animprops` tokens that select a tiered building's LOOK. A tiered structure is a single
+// model carrying every tier as sequences — TownHall.mdx holds "Stand" (Town Hall), "Stand
+// Upgrade First" (Keep) and "Stand Upgrade Second" (Castle); HumanTower.mdx holds the Scout,
+// Guard, Cannon and Arcane towers the same way — and the unit's Animprops name its own set.
+// This is the whole closed vocabulary used for tiers across the 1.27a data.
+//
+// `alternate`/`alternateex` (alternate forms) and `swim` are also Animprops, but they are
+// STATE, not identity: a unit plays them only while transformed or in water, so they are not
+// handled here (the sequence pickers below already exclude swim clips outright — issue #38).
+const TIER_PROPS = new Set(["upgrade", "first", "second", "third", "fourth", "fifth"]);
+
+/** Rewrite the sequence names a unit is ALLOWED to see, so every lookup below can stay
+ *  tier-blind: a tiered unit's own clips are renamed to their base action ("Stand Upgrade
+ *  First" simply becomes the Keep's "Stand"), and clips belonging to other tiers are blanked
+ *  so nothing can match them. Indices are preserved throughout — they index the live model's
+ *  sequence array — and an untiered unit gets its list back untouched.
+ *
+ *  Three things about real WC3 sequence names make this fiddlier than it sounds, all of them
+ *  visible in HumanTower.mdx (the Scout/Guard/Cannon/Arcane towers are one model):
+ *
+ *    "Stand Ready Attack"                 the Scout Tower — no tier tokens at all
+ *    "Stand Upgrade First Ready Attack"   the Guard Tower
+ *    "Attack Stand  Ready Upgrade Second" the Cannon Tower — tokens REORDERED, double space
+ *    "Stand Upgrade Third Attack Ready"   the Arcane Tower — reordered again
+ *    "Birth Upgrade First Second third"   ONE birth clip SHARED by all three upgraded tiers
+ *
+ *  So: (1) a clip is mine when my tier tokens are all present in it — a superset test, which is
+ *  what lets the shared "First Second third" birth serve the Guard, Cannon and Arcane towers
+ *  alike; (2) a clip with no tier tokens stays available as a fallback (Death and Decay have no
+ *  per-tier variant, so every tier shares them); and (3) that fallback is blanked only when my
+ *  tier has its own version of the same action — compared as an unordered SET of base tokens,
+ *  because "Stand Ready Attack" and "Stand Upgrade Third Attack Ready" name the same action in
+ *  a different word order, and an order-sensitive test leaves the Arcane Tower wearing the
+ *  Scout Tower's model. */
+function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = []): Array<{ name: string }> {
+  const tier = animProps.filter((p) => TIER_PROPS.has(p));
+  if (!tier.length) return seqs;
+  const BLANK = "(none)"; // matches none of the sequence patterns below
+  const tokens = (n: string) => n.toLowerCase().split(/[\s\-_]+/).filter(Boolean);
+  const propsOf = (n: string) => tokens(n).filter((t) => TIER_PROPS.has(t));
+  const baseOf = (n: string) => tokens(n).filter((t) => !TIER_PROPS.has(t)); // original order kept
+  const baseKey = (n: string) => [...baseOf(n)].sort().join(" "); // ...but compared unordered
+  const isMine = (n: string) => {
+    const p = propsOf(n);
+    return p.length > 0 && tier.every((t) => p.includes(t));
+  };
+  return seqs.map((s) => {
+    if (isMine(s.name)) return { name: baseOf(s.name).join(" ") };
+    if (propsOf(s.name).length) return { name: BLANK }; // some other tier's clip
+    // A tier-less clip: shared (Death/Decay) unless my tier overrides this same action.
+    const overridden = seqs.some((o) => isMine(o.name) && baseKey(o.name) === baseKey(s.name));
+    return overridden ? { name: BLANK } : s;
+  });
+}
+
+function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] = []): AnimSet {
+  const seqs = applyAnimProps(raw, animProps);
   const find = (re: RegExp): number => seqs.findIndex((s) => re.test(s.name));
   const indices = (re: RegExp): number[] =>
     seqs.map((s, i) => ({ n: s.name, i })).filter(({ n }) => re.test(n)).map(({ i }) => i);
@@ -249,12 +306,18 @@ interface Entry {
 const AOE_TARGET_TINT = [0.25, 1.0, 0.25] as const;
 
 /** The "Birth" construction sequence + its frame interval, if the model has one. */
-function findBirthFields(seqs: Array<{ name: string; interval?: ArrayLike<number> }>): {
+function findBirthFields(
+  seqs: Array<{ name: string; interval?: ArrayLike<number> }>,
+  animProps: string[] = [],
+): {
   birthSeq: number;
   birthStart: number;
   birthEnd: number;
 } {
-  const birthSeq = seqs.findIndex((s) => /^birth$/i.test(s.name));
+  // A tiered building has its OWN birth clip ("Birth Upgrade First" is the Keep rising out of
+  // the Town Hall), so the construction animation has to be picked per tier too.
+  const named = applyAnimProps(seqs, animProps);
+  const birthSeq = named.findIndex((s) => /^birth$/i.test(s.name));
   const iv = birthSeq >= 0 ? seqs[birthSeq].interval : undefined;
   return { birthSeq, birthStart: iv ? iv[0] : 0, birthEnd: iv ? iv[1] : 0 };
 }
@@ -502,11 +565,15 @@ export class RtsController {
     private registry: UnitRegistry,
     private abilities: AbilityRegistry,
     private items: ItemRegistry,
+    private tech: TechRegistry,
+    private upgrades: UpgradeRegistry,
     // Highest terrain height across a building's footprint — used to seat structures
     // on the tallest level they touch instead of the (often lower) centre (issue #15).
     private footMaxHeight: FootprintMaxSampler,
   ) {
-    this.sim = new SimWorld(grid, 1, this.abilities, this.items); // registries power casting/learning/auras + items
+    // Registries power casting/learning/auras + items, and (issue #57) the tech tree:
+    // requirements, research effects and shop stock.
+    this.sim = new SimWorld(grid, 1, this.abilities, this.items, this.registry, this.tech, this.upgrades);
     // Fog-of-war grid, aligned to the same world origin as the pathing grid and
     // spanning the whole map (pathing is 32-unit cells; span = cells × 32).
     const [vox, voy] = grid.origin;
@@ -1345,7 +1412,7 @@ export class RtsController {
         this.clearExcessInstance(unit.instance);
         continue;
       }
-      const anims = buildAnimSet(seqs);
+      const anims = buildAnimSet(seqs, def?.animProps);
       unit.instance.setBlendTime?.(def?.animBlend ?? 0.15); // per-unit anim cross-fade (issue #8)
       const simId = this.nextId++;
       const su = this.sim.add(
@@ -1418,7 +1485,7 @@ export class RtsController {
         modelPath: def?.model ?? "",
         baseScale: def?.modelScale || 1,
         curScale: def?.modelScale || 1,
-        ...findBirthFields(unit.instance.model.sequences),
+        ...findBirthFields(unit.instance.model.sequences, def?.animProps),
         hidden: false,
         inMine: false,
         curSeq: -1,
@@ -1487,7 +1554,7 @@ export class RtsController {
     const entry: Entry = {
       simId,
       unit,
-      anims: buildAnimSet(unit.instance.model.sequences),
+      anims: buildAnimSet(unit.instance.model.sequences, def?.animProps),
       moveHeight: 0,
       footHalfW: 0, // neutral-passive buildings keep their map-placed Z (not driven here)
       footHalfH: 0,
@@ -1502,7 +1569,7 @@ export class RtsController {
       modelPath: def?.model ?? "",
       baseScale: def?.modelScale || 1,
       curScale: def?.modelScale || 1,
-      ...findBirthFields(unit.instance.model.sequences),
+      ...findBirthFields(unit.instance.model.sequences, def?.animProps),
       hidden: false,
       inMine: false,
       curSeq: -1,
@@ -1573,7 +1640,7 @@ export class RtsController {
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
-      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: trainsFor(def.id).length > 0 }
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: this.tech.trains(def.id).length > 0 || this.tech.get(def.id).sellunits.length > 0 }
       : null;
     const hero: HeroInit | undefined = def.isHero
       ? { level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: def.primaryAttr }
@@ -1630,7 +1697,7 @@ export class RtsController {
    *  (whose sim unit already exists). A second call for the same unit is ignored. */
   private attachInstance(simId: number, instance: Instance, def: UnitDef): void {
     if (this.byId.has(simId)) return;
-    const anims = buildAnimSet(instance.model.sequences);
+    const anims = buildAnimSet(instance.model.sequences, def.animProps);
     // Per-unit animation blending: cross-fade between sequences over this unit's
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
@@ -1653,7 +1720,7 @@ export class RtsController {
       modelPath: def.model,
       baseScale: def.modelScale || 1,
       curScale: def.modelScale || 1,
-      ...findBirthFields(instance.model.sequences),
+      ...findBirthFields(instance.model.sequences, def.animProps),
       hidden: false,
       inMine: false,
       curSeq: -1,
@@ -1673,6 +1740,41 @@ export class RtsController {
       instance.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
       entry.curSeq = -1;
     }
+  }
+
+  /** Swap a live unit's model + type-derived render facts, keeping the SAME entry — the
+   *  Town Hall that just finished becoming a Keep (issue #57). The old instance is dropped
+   *  and every field that came from the old UnitDef is re-read from the new one.
+   *
+   *  Selection survives: the entry (and its simId) is the thing the selection holds, and it
+   *  is not replaced. Returns false if the unit vanished while the new model was streaming. */
+  remodel(simId: number, instance: Instance, def: UnitDef): boolean {
+    const entry = this.byId.get(simId);
+    if (!entry) return false;
+    entry.unit.instance.hide(); // drop the old body
+    instance.setBlendTime?.(def.animBlend);
+    entry.unit = { instance, state: WidgetState.IDLE };
+    entry.anims = buildAnimSet(instance.model.sequences, def.animProps);
+    Object.assign(entry, findBirthFields(instance.model.sequences, def.animProps));
+    entry.typeId = def.id;
+    entry.race = def.race;
+    entry.name = def.name;
+    entry.foodUsed = def.foodUsed;
+    entry.foodMade = def.foodMade;
+    entry.level = def.level;
+    entry.modelPath = def.model;
+    entry.baseScale = def.modelScale || 1;
+    entry.curScale = def.modelScale || 1;
+    entry.selRadius = (def.selScale || 1) * SEL_RADIUS_PER_SCALE;
+    entry.moveHeight = lift(def.moveHeight);
+    entry.curSeq = -1;
+    entry.lastSwingSeq = -1;
+    entry.lastChopSeq = -1;
+    if (entry.anims.stand >= 0) {
+      instance.setSequence(entry.anims.stand);
+      instance.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
+    }
+    return true;
   }
 
   /** Remove a unit outright (JASS RemoveUnit): no death/corpse. The render side drops
@@ -2777,7 +2879,12 @@ export class RtsController {
       trainProgress: q.length && q[0].buildTime > 0 ? 1 - q[0].timeLeft / q[0].buildTime : 0,
       secondsLeft: b && b.constructionLeft > 0 ? b.constructionLeft : q.length ? q[0].timeLeft : 0,
       queueLength: q.length,
-      queue: q.map((j) => ({ icon: this.registry.get(j.unitId)?.icon ?? "" })),
+      // A queue slot may hold a unit, a research or a structure upgrade — pull each one's icon
+      // from the registry that owns it. Research uses the icon of the LEVEL being researched
+      // (Steel Forged Swords has its own art), which is why the level rides on the job.
+      queue: q.map((j) => ({
+        icon: (j.kind === "research" ? this.upgrades.icon(j.unitId, j.level) : this.registry.get(j.unitId)?.icon) ?? "",
+      })),
       icon: this.registry.get(e.typeId)?.icon ?? "",
       carryGold: u.worker?.carryGold ?? 0,
       carryLumber: u.worker?.carryLumber ?? 0,
@@ -3074,6 +3181,24 @@ export class RtsController {
 
   stashFor(owner: number): { gold: number; lumber: number } {
     return this.sim.stashOf(owner);
+  }
+
+  /** How many of `typeId` a player owns or has in production. This picks the REQUIREMENT
+   *  TIER for that unit: WC3 gates the Nth copy, not the type — hero #1 is free, #2 needs a
+   *  Keep and #3 a Castle (`[Hpal] Requirescount=3, Requires1=hkee, Requires2=hcas`). Queued
+   *  ones count, or you could queue three heroes at a Town Hall in one click. */
+  countOwned(owner: number, typeId: string): number {
+    let n = 0;
+    for (const u of this.sim.units.values()) {
+      if (u.hp <= 0) continue;
+      if (u.owner === owner && u.typeId === typeId) n++;
+      if (u.building && (u.owner === owner || u.neutralPassive)) {
+        for (const job of u.building.queue) {
+          if (job.kind === "unit" && job.unitId === typeId) n++;
+        }
+      }
+    }
+    return n;
   }
 
   /** Food used/made by a player's units — including food RESERVED for units still

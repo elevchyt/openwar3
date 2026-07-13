@@ -1,63 +1,291 @@
-import type { PlayableRace } from "./races";
+import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
+import type { DataSource } from "../vfs/types";
 
-// Curated melee tech tree (plan Phase 6). WC3 stores the command-card layout in
-// ability object-data that's costly to parse, so the melee build/train
-// relationships — which are stable and well-known — are declared here. Costs,
-// build times, food and icons come from the unit registry by id; this table
-// only says *who builds/trains what*. Tier requirements are deliberately
-// omitted for now (everything a worker/building could ever make is offered).
+// The tech tree — WC3's own, read from the game's own files (issue #57).
+//
+// None of this lives in the SLKs. UnitMetaData.slk's `slk` column names the file each
+// field is written to, and every tech field (`ureq` Requires, `utra` Trains, `ures`
+// Researches, `ubui` Builds, `uupt` Upgrade, `usei` Sellitems, `useu` Sellunits, `umki`
+// Makeitems, `udep` DependencyOr) says **Profile** — i.e. the per-race `*UnitFunc.txt`
+// INI. The same three fields sit on upgrades (`*UpgradeFunc.txt`) and items
+// (`ItemFunc.txt`), with identical semantics, so ONE graph covers all three id spaces
+// and `requirements()` answers for a unit, an upgrade or a shop item alike.
+//
+// This replaces the old hand-curated WORKER_BUILDS/BUILDING_TRAINS tables. They were
+// right — `[hpea] Builds=htow,hhou,hbar,hbla,hwtw,halt,harm,hars,hlum,hgra,hvlt` is
+// exactly the list that was typed out by hand — but they carried no requirements, and
+// the other three races had to be transcribed by hand. Reading the profiles gives every
+// race its real build/train/research lists AND its gating for free.
 
-// Structures each race's worker can construct (base-tier melee set: production,
-// tech, caster, air, supply, altar, first-tier tower, shop). Tier upgrades of a
-// town hall (Keep/Castle, etc.) are hall upgrades, not worker builds, so they're
-// omitted here but still listed as trainers below. Rawcodes verified against the
-// wc3edit rawcode dump + StrategyWiki (TFT 1.27); see docs/REFERENCES.md.
-export const WORKER_BUILDS: Record<PlayableRace, string[]> = {
-  human: ["htow", "hhou", "hbar", "halt", "hlum", "hbla", "hars", "harm", "hgra", "hwtw", "hvlt"],
-  orc: ["ogre", "otrb", "obar", "oalt", "ofor", "obea", "osld", "otto", "owtw", "ovln"],
-  undead: ["unpl", "usep", "uaod", "ugrv", "utod", "uslh", "ubon", "usap", "uzig", "utom"],
-  nightelf: ["etol", "eaom", "eaoe", "eaow", "odob", "eate", "emow", "edos", "etrp", "eden"],
+/** One node of the tech graph: what an id needs, and what it unlocks. */
+export interface TechDef {
+  id: string;
+  /** Display name, for the red "Requires: …" tooltip line. Usually redundant with the unit /
+   *  upgrade registry — but NOT for the pseudo-techs, which exist in neither: TWN2's name is
+   *  "Keep or Stronghold or Tree of Ages or Halls of the Dead", and it is spelled out in
+   *  ItemStrings.txt precisely so the tooltip can say that instead of "TWN2". */
+  name: string;
+  /** Requirement TIERS. `Requirescount` ("Requirements - Tiers Used") says how many are
+   *  live; tier 0 is the plain `Requires`, tier N is `Requires<N>`. The tier index means
+   *  different things per id kind, and a tier REPLACES rather than adds to tier 0:
+   *   - an UPGRADE indexes by the level being researched (Forged Swords lv1 is free,
+   *     lv2 needs `Requires1=hkee`, lv3 needs `Requires2=hcas`);
+   *   - a UNIT indexes by how many it already owns (hero #2 needs a Keep, #3 a Castle).
+   *  Ids with no `Requirescount` have a single tier that applies to every copy/level. */
+  requiresTiers: string[][];
+  /** `Requiresamount` ("Requirements - Levels"), parallel to the tier's requires list:
+   *  the LEVEL each listed tech must be at. Night elf's Enchanted Bears is the clear
+   *  case — `[Reeb] Requires=Redc, Requiresamount=2` needs Druid of the Claw training
+   *  at level 2, not merely researched. Missing entries mean 1. */
+  requiresAmount: number[];
+  /** `DependencyOr` ("Dependency Equivalents") — declared ON the required id, naming
+   *  OTHER ids that also satisfy a requirement for it. `[ohun] DependencyOr=otbk`: a
+   *  Troll Berserker satisfies a "needs a Headhunter" requirement. It is deliberately
+   *  one-way — UndeadUnitFunc.txt carries the comment "do NOT put a similar DependencyOr
+   *  under ucrm" next to `[ucry] DependencyOr=ucrm`. */
+  dependencyOr: string[];
+  trains: string[]; // `Trains` — units this building produces
+  researches: string[]; // `Researches` — upgrades this building can research
+  builds: string[]; // `Builds` — structures this worker can place
+  upgrade: string[]; // `Upgrade` — what this building can become. A LIST: [hwtw] Upgrade=hgtw,hctw,hatw
+  makeitems: string[]; // `Makeitems` — a RACE shop's stock (Arcane Vault, Voodoo Lounge, ...)
+  sellitems: string[]; // `Sellitems` — a NEUTRAL shop's item stock (Goblin Merchant)
+  sellunits: string[]; // `Sellunits` — a shop's unit stock (Tavern heroes, Mercenary Camp creeps)
+  revive: boolean; // `Revive` — an altar; revives dead heroes
+}
+
+const EMPTY: TechDef = {
+  id: "",
+  name: "",
+  requiresTiers: [[]],
+  requiresAmount: [],
+  dependencyOr: [],
+  trains: [],
+  researches: [],
+  builds: [],
+  upgrade: [],
+  makeitems: [],
+  sellitems: [],
+  sellunits: [],
+  revive: false,
 };
 
-// Units each building trains (workers + combat/caster/siege/air units). Altars
-// train the four heroes (uppercase-initial rawcodes). Tier-upgraded halls keep
-// training the worker.
-export const BUILDING_TRAINS: Record<string, string[]> = {
-  // --- Human ---
-  htow: ["hpea"], hkee: ["hpea"], hcas: ["hpea"], // Town Hall / Keep / Castle
-  hbar: ["hfoo", "hrif", "hkni"], // Barracks: Footman, Rifleman, Knight
-  harm: ["hmtm", "hgyr", "hmtt"], // Workshop: Mortar Team, Flying Machine, Siege Engine
-  hars: ["hmpr", "hsor", "hspt"], // Arcane Sanctum: Priest, Sorceress, Spell Breaker
-  hgra: ["hgry", "hdhw"], // Gryphon Aviary: Gryphon Rider, Dragonhawk Rider
-  halt: ["Hpal", "Hamg", "Hmkg", "Hblm"], // Altar of Kings (heroes)
-  // --- Orc ---
-  ogre: ["opeo"], ostr: ["opeo"], ofrt: ["opeo"], // Great Hall / Stronghold / Fortress
-  obar: ["ogru", "ohun", "ocat"], // Barracks: Grunt, Headhunter, Demolisher
-  obea: ["orai", "okod", "owyv", "otbr"], // Beastiary: Raider, Kodo, Wind Rider, Batrider
-  osld: ["oshm", "odoc", "ospw"], // Spirit Lodge: Shaman, Witch Doctor, Spirit Walker
-  otto: ["otau"], // Tauren Totem: Tauren
-  oalt: ["Obla", "Ofar", "Otch", "Oshd"], // Altar of Storms (heroes)
-  // --- Undead ---
-  unpl: ["uaco"], unp1: ["uaco"], unp2: ["uaco"], // Necropolis / Halls of the Dead / Black Citadel
-  usep: ["ugho", "ucry", "ugar"], // Crypt: Ghoul, Crypt Fiend, Gargoyle
-  utod: ["unec", "uban"], // Temple of the Damned: Necromancer, Banshee
-  uslh: ["umtw", "uabo", "uobs"], // Slaughterhouse: Meat Wagon, Abomination, Obsidian Statue
-  ubon: ["ufro"], // Boneyard: Frost Wyrm
-  uaod: ["Udea", "Udre", "Ulic", "Ucrl"], // Altar of Darkness (heroes)
-  // --- Night Elf ---
-  etol: ["ewsp"], etoa: ["ewsp"], etoe: ["ewsp"], // Tree of Life / Ages / Eternity
-  eaom: ["earc", "esen", "ebal"], // Ancient of War: Archer, Huntress, Glaive Thrower
-  eaoe: ["edry", "edoc", "emtg"], // Ancient of Lore: Dryad, Druid of the Claw, Mountain Giant
-  eaow: ["edot", "ehip", "efdr"], // Ancient of Wind: Druid of the Talon, Hippogryph, Faerie Dragon
-  edos: ["echm"], // Chimaera Roost: Chimaera
-  eate: ["Edem", "Ekee", "Emoo", "Ewar"], // Altar of Elders (heroes)
-  // --- Neutral ---
-  // Tavern: the 8 neutral heroes any race can hire (Liquipedia/Wowpedia "Tavern" +
-  // MPQ ntav — 425g/135L, first hero free). Grid slots come from each hero's own
-  // NeutralUnitFunc buttonpos (rows 1-2). The Tavern is Neutral Passive (player 15);
-  // the command card still offers these to the local player (see commandCard()).
-  ntav: ["Nngs", "Nbrn", "Npbm", "Nfir", "Nplh", "Nbst", "Ntin", "Nalc"],
-};
+export class TechRegistry {
+  /** unit type id → every tech id a live one of them satisfies (see `satisfies`). */
+  private satisfiesCache = new Map<string, string[]>();
+  /** id → the ids whose `Upgrade` list names it (its upgrade-chain PARENTS). */
+  private parents = new Map<string, string[]>();
+  /** id → the ids that name it in their `DependencyOr` (i.e. requirements it helps meet). */
+  private equivalents = new Map<string, string[]>();
+
+  constructor(private defs: Map<string, TechDef>) {
+    for (const def of defs.values()) {
+      for (const to of def.upgrade) push(this.parents, to, def.id);
+      // `[TWN2] DependencyOr=hkee,ostr,...` — owning a Keep satisfies the pseudo-tech TWN2.
+      for (const from of def.dependencyOr) push(this.equivalents, from, def.id);
+    }
+  }
+
+  get(id: string): TechDef {
+    return this.defs.get(id) ?? EMPTY;
+  }
+  has(id: string): boolean {
+    return this.defs.has(id);
+  }
+  trains(id: string): string[] {
+    return this.get(id).trains;
+  }
+  researches(id: string): string[] {
+    return this.get(id).researches;
+  }
+  builds(id: string): string[] {
+    return this.get(id).builds;
+  }
+  upgradesTo(id: string): string[] {
+    return this.get(id).upgrade;
+  }
+  revives(id: string): boolean {
+    return this.get(id).revive;
+  }
+
+  /** Every tech id that owning one live `unitId` satisfies.
+   *
+   *  Three ways a unit answers for a requirement, applied to fixpoint:
+   *   1. itself;
+   *   2. anything it UPGRADED FROM — `[hbla] Requires=htow` is met by a Keep, because
+   *      `htow Upgrade=hkee`. Human declares no DependencyOr at all, so the tier chain is
+   *      purely this: the engine walks the `Upgrade` chain back to its root;
+   *   3. anything that names it in `DependencyOr` — which is how the pseudo-techs work
+   *      (`TWN2 DependencyOr=hkee,...`, `HERO DependencyOr=Hamg,...`).
+   *
+   *  The closure matters: a Castle reaches `hkee` by (2), and `hkee` reaches `TWN2` by (3),
+   *  so a Castle satisfies TWN2 — which is what lets a Castle-tier player buy the Potion of
+   *  Healing (`[phea] Requires=TWN2`). Cached: the graph is immutable once loaded. */
+  satisfies(unitId: string): string[] {
+    const hit = this.satisfiesCache.get(unitId);
+    if (hit) return hit;
+    const seen = new Set<string>([unitId]);
+    const stack = [unitId];
+    while (stack.length) {
+      const id = stack.pop()!;
+      for (const next of [...(this.parents.get(id) ?? []), ...(this.equivalents.get(id) ?? [])]) {
+        if (!seen.has(next)) {
+          seen.add(next);
+          stack.push(next);
+        }
+      }
+    }
+    const out = [...seen];
+    this.satisfiesCache.set(unitId, out);
+    return out;
+  }
+
+  /** The requirements for the `tier`-th copy of a unit / the `tier`-th level of an upgrade
+   *  (both 0-based). Tiers past the last declared one clamp to it. Returns the tech ids and
+   *  the level each must be at (parallel arrays). */
+  requirements(id: string, tier = 0): Array<{ tech: string; level: number }> {
+    const def = this.get(id);
+    const tiers = def.requiresTiers;
+    const list = tiers[Math.min(Math.max(tier, 0), tiers.length - 1)] ?? [];
+    return list.map((tech, i) => ({ tech, level: def.requiresAmount[i] ?? 1 }));
+  }
+}
+
+// The tech fields live in the per-race Func profiles, and every id space declares them the
+// same way, so all four are loaded into one graph:
+//   - UNITS     — the bulk of it (Requires/Trains/Researches/Builds/Upgrade/Sell*/Makeitems).
+//   - UPGRADES  — an upgrade's own prerequisites, tiered by LEVEL (`[Rhme] Requires1=hkee`).
+//   - ABILITIES — an ability the engine hides until its upgrade is researched. This is how
+//     the "effectless" upgrades work: Control Magic, Flak Cannons and Cloud grant no stat at
+//     all, they simply satisfy `[…] Requires=Rhss/Rhfc/Rhcd` on the ability that was always
+//     on the unit. Same check, so the command card gates spells for free.
+//   - ITEMS     — a shop item's tech gate (`[phea] Requires=TWN2`). ItemFunc.txt is ALSO
+//     where the pseudo-tech OR-groups live (TWN1/TWN2/TWN3 = the four races' tier-1/2/3
+//     halls, TALT = any altar); HERO ("A Hero") is declared in NeutralUnitFunc.txt.
+const FUNC_FILES = [
+  "Units\\HumanUnitFunc.txt",
+  "Units\\OrcUnitFunc.txt",
+  "Units\\UndeadUnitFunc.txt",
+  "Units\\NightElfUnitFunc.txt",
+  "Units\\NeutralUnitFunc.txt",
+  "Units\\CampaignUnitFunc.txt",
+  "Units\\HumanUpgradeFunc.txt",
+  "Units\\OrcUpgradeFunc.txt",
+  "Units\\UndeadUpgradeFunc.txt",
+  "Units\\NightElfUpgradeFunc.txt",
+  "Units\\NeutralUpgradeFunc.txt",
+  "Units\\CampaignUpgradeFunc.txt",
+  "Units\\HumanAbilityFunc.txt",
+  "Units\\OrcAbilityFunc.txt",
+  "Units\\UndeadAbilityFunc.txt",
+  "Units\\NightElfAbilityFunc.txt",
+  "Units\\NeutralAbilityFunc.txt",
+  "Units\\CommonAbilityFunc.txt",
+  "Units\\ItemAbilityFunc.txt",
+  "Units\\CampaignAbilityFunc.txt",
+  "Units\\ItemFunc.txt",
+];
+
+// The matching Strings profiles — the only place a pseudo-tech's display name exists.
+const STRING_FILES = [
+  "Units\\HumanUnitStrings.txt",
+  "Units\\OrcUnitStrings.txt",
+  "Units\\UndeadUnitStrings.txt",
+  "Units\\NightElfUnitStrings.txt",
+  "Units\\NeutralUnitStrings.txt",
+  "Units\\HumanUpgradeStrings.txt",
+  "Units\\OrcUpgradeStrings.txt",
+  "Units\\UndeadUpgradeStrings.txt",
+  "Units\\NightElfUpgradeStrings.txt",
+  "Units\\NeutralUpgradeStrings.txt",
+  "Units\\ItemStrings.txt",
+];
+
+export function loadTechRegistry(vfs: DataSource): TechRegistry {
+  const funcs = new MappedData();
+  for (const path of FUNC_FILES) {
+    const bytes = vfs.rawBytes(path);
+    if (bytes) funcs.load(new TextDecoder("windows-1252").decode(bytes));
+  }
+  const strs = new MappedData();
+  for (const path of STRING_FILES) {
+    const bytes = vfs.rawBytes(path);
+    if (bytes) strs.load(new TextDecoder("windows-1252").decode(bytes));
+  }
+  const defs = new Map<string, TechDef>();
+  for (const id of Object.keys(funcs.map)) {
+    const row = funcs.getRow(id) as { string(key: string): string | undefined } | undefined;
+    if (!row) continue;
+    const s = strs.getRow(id) as { string(key: string): string | undefined } | undefined;
+    // An upgrade renames itself per level ("Iron Forged Swords,Steel…"); for a requirement
+    // line the first is the one to show.
+    const name = ((s && s.string("Name")) || "").split(",")[0]?.replace(/^"|"$/g, "").trim() || id;
+
+    // Tier 0 is `Requires`; `Requirescount` counts how many tiers are live. Only heroes use
+    // more than one in the melee data (Requirescount=3 — hero #2 needs a Keep, #3 a Castle)
+    // plus the 3-level Blacksmith/Lumber Mill upgrades.
+    const tierCount = Math.max(1, int(row, "requirescount", 1));
+    const requiresTiers: string[][] = [];
+    for (let t = 0; t < tierCount; t++) {
+      requiresTiers.push(list(row, t === 0 ? "requires" : `requires${t}`));
+    }
+    const def: TechDef = {
+      id,
+      name,
+      requiresTiers,
+      requiresAmount: list(row, "requiresamount").map((v) => parseInt(v, 10) || 1),
+      dependencyOr: list(row, "dependencyor"),
+      trains: list(row, "trains"),
+      researches: list(row, "researches"),
+      builds: list(row, "builds"),
+      upgrade: list(row, "upgrade"),
+      makeitems: list(row, "makeitems"),
+      sellitems: list(row, "sellitems"),
+      sellunits: list(row, "sellunits"),
+      revive: int(row, "revive", 0) === 1,
+    };
+    // Keep only rows that say something about the tech tree — the Func files are mostly
+    // art/tooltip rows, and an empty node would just bloat the graph.
+    if (
+      def.requiresTiers.some((t) => t.length) ||
+      def.dependencyOr.length ||
+      def.trains.length ||
+      def.researches.length ||
+      def.builds.length ||
+      def.upgrade.length ||
+      def.makeitems.length ||
+      def.sellitems.length ||
+      def.sellunits.length ||
+      def.revive
+    ) {
+      defs.set(id, def);
+    }
+  }
+  return new TechRegistry(defs);
+}
+
+function push(map: Map<string, string[]>, key: string, value: string): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+/** A comma-separated id list. "_" and "-" are the data's "empty" markers. */
+function list(row: { string(key: string): string | undefined }, key: string): string[] {
+  const v = row.string(key);
+  if (!v || v === "_" || v === "-") return [];
+  return v
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s && s !== "_" && s !== "-");
+}
+
+function int(row: { string(key: string): string | undefined }, key: string, fallback: number): number {
+  const v = row.string(key);
+  if (v === undefined || v === "" || v === "-" || v === "_") return fallback;
+  const n = parseInt(v, 10);
+  return Number.isNaN(n) ? fallback : n;
+}
 
 // Ground-order hotkeys (WC3 standard). Build/train use the unit's name hotkey.
 export const ORDER_HOTKEYS = {
@@ -72,13 +300,3 @@ export const ORDER_HOTKEYS = {
   gather: "G",
   cancel: "Escape",
 } as const;
-
-/** Whether a unit id is a worker that can construct buildings. */
-export function buildsFor(race: PlayableRace): string[] {
-  return WORKER_BUILDS[race] ?? [];
-}
-
-/** Units a given building trains (empty if none). */
-export function trainsFor(buildingId: string): string[] {
-  return BUILDING_TRAINS[buildingId] ?? [];
-}

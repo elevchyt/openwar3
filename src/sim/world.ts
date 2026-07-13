@@ -2,6 +2,10 @@ import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
+import { type UnitRegistry } from "../data/units";
+import { type TechRegistry } from "../data/techtree";
+import { type UpgradeRegistry } from "../data/upgrades";
+import { TechState } from "./tech";
 import { AttackType, ArmorType, PrimaryAttribute } from "../data/enums";
 import {
   MISC_DATA,
@@ -262,7 +266,19 @@ export interface WorkerState {
  *  mine/tree makes new workers harvest it; a unit makes them move to it (WC3). */
 export type RallyKind = "point" | "mine" | "tree" | "unit";
 
-/** Per-building state: construction progress + a unit training queue. */
+/** One job in a building's production queue. A building produces three different kinds of
+ *  thing on the SAME queue in WC3 — you cannot train a Footman while the Barracks researches
+ *  Defend — so they share one list and are told apart by `kind`:
+ *   - "unit"     — train a unit; spawns it at the rally point.
+ *   - "research" — an upgrade at `level`; raises the player's researched level on completion.
+ *   - "upgrade"  — the building becomes `unitId` (Town Hall → Keep). Morphs in place. */
+export type BuildJob =
+  // `free` marks the melee free first hero — charged nothing, so it must be refunded nothing.
+  | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean }
+  | { kind: "research"; unitId: string; level: number; timeLeft: number; buildTime: number }
+  | { kind: "upgrade"; unitId: string; timeLeft: number; buildTime: number };
+
+/** Per-building state: construction progress + a production queue. */
 export interface BuildingState {
   constructionLeft: number; // seconds until built (0 = complete)
   buildTimeTotal: number; // full construction time (for the progress fraction)
@@ -271,13 +287,36 @@ export interface BuildingState {
   // burn extra resources — see SPEED_BUILD_* constants + tickBuildings.
   goldCost: number; // base build cost, for the speed-build surcharge
   lumberCost: number;
-  queue: Array<{ unitId: string; timeLeft: number; buildTime: number }>;
+  queue: BuildJob[];
   rallyX: number; // trained units gather here (default: just south of the hall)
   rallyY: number;
   rallyKind: RallyKind; // how the rally target is interpreted (point/mine/tree/unit)
   rallyTargetId: number; // mine/tree/unit id for non-point rallies (0 for a point)
   producesUnits: boolean; // trains units → has a rally point (towers etc. don't)
+  // Shop stock, when this building sells things (Arcane Vault, Goblin Merchant, Tavern…).
+  // Keyed by item/unit id. Absent on everything else. See SHOP stock rules in tickShops().
+  stock?: Map<string, ShopStock>;
 }
+
+/** One shop slot's stock. WC3 restocks per ITEM, not per shop: each item has its own
+ *  `stockStart` (a delay before the shop first carries it), `stockRegen` (seconds to add one
+ *  back) and `stockMax` (the ceiling). ItemData.slk carries these for items, UnitBalance.slk
+ *  for the units a Tavern/Mercenary Camp sells. */
+export interface ShopStock {
+  count: number; // how many are on the shelf right now
+  max: number; // stockMax
+  regen: number; // stockRegen — seconds per restock tick (0 = never comes back once taken)
+  timer: number; // seconds until the next one is added (Infinity = never)
+}
+
+/** Why a shop purchase was refused. The HUD maps these onto the game's own messages in
+ *  Units\commandstrings.txt — "A valid patron must be nearby." (Neednearbypatron),
+ *  "Inventory is full." (Inventoryfull), and the standard cost/requirement lines. */
+export type ShopResult = "ok" | "no" | "nostock" | "nopatron" | "full" | "cost" | "req";
+
+/** Fallback patron reach for a shop whose ability data we can't read. The real numbers come
+ *  from the shop ability itself (Aall 600 / Aneu 450); this only covers a broken data load. */
+const DEFAULT_SHOP_RADIUS = 450;
 
 /** A shift-queued follow-up order, replayed when the unit's current order ends.
  *  WC3 allows chaining several (up to ~35) — move, attack, harvest, build… */
@@ -544,6 +583,16 @@ export interface SimUnit {
   baseSpeed: number; // move speed before slow/haste
   baseCooldown: number; // weapon cooldown before haste/slow
   baseDamagePoint: number; // weapon damage point before haste/slow (scales with cooldown)
+  // Weapon dice + range before upgrades. WC3's attack upgrades add a DIE (`ratd`), not flat
+  // damage — the engine has a flat-damage effect (`ratx`, used by Burning Oil and a couple
+  // of others) and Blizzard pointedly did not use it for Forged Swords: all 19 melee/ranged
+  // attack upgrades across the four races are `ratd` base=1 mod=1. So a Footman (1d2+11 =
+  // 12-13) upgrades to 2d2+11 = 13-15, then 3d2+11 = 14-17 — the RANGE widens, which is why
+  // upgraded WC3 units roll a bigger spread and not just a bigger number.
+  baseDice: number;
+  baseRange: number; // Long Rifles (`ratr`) adds +200 to the Rifleman's 400
+  baseSightDay: number; // Magic Sentry / `rsig` widen a tower's vision
+  baseSightNight: number;
   manaRegen: number; // mana per second (recomputed from INT + buffs)
   hpRegen: number; // hp per second
   lifesteal: number; // fraction of melee damage healed back (Vampiric Aura); derived
@@ -875,6 +924,10 @@ export class SimWorld {
   private attackReveals = new Map<string, AttackReveal>();
   // Trained units ready to spawn: the renderer creates the model + sim unit.
   private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
+  // Finished research (renderer plays the "upgrade complete" sound + refreshes the card).
+  private researchCompletions: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> = [];
+  // Buildings that changed type this tick (Town Hall → Keep): the renderer swaps the model.
+  private morphs: Array<{ unitId: number; from: string; to: string }> = [];
   private nextNodeId = 1;
   private rng: () => number;
   // --- corpses (persist + decay; targetable by corpse-consuming spells) ---
@@ -883,6 +936,9 @@ export class SimWorld {
   // --- items on the ground (dropped / creep-dropped; pickable) -------------
   readonly items = new Map<number, SimItem>();
   private nextItemId = 1;
+  /** Seconds since the match began. Shop restock schedules run on THIS clock, not on when a
+   *  shop was raised — see initShopStock. */
+  elapsed = 0;
   private itemSpawns: SimItem[] = []; // new ground items the renderer must model
   private itemRemovals: number[] = []; // ground items picked up/destroyed (drop their model)
   // Per-unit creep drop tables, seeded at spawn (map .doo), rolled on death.
@@ -908,13 +964,39 @@ export class SimWorld {
   // (same deferral as trainCompletions — the sim owns no model instances).
   private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number }> = [];
 
+  /** Per-player tech state: researched levels + what their live units unlock (issue #57).
+   *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
+   *  has no tech tree, and every requirement check then trivially passes. */
+  readonly tech: TechState | null;
+
   constructor(
     readonly grid: PathingGrid,
     seed = 1,
     private abilities?: AbilityRegistry,
     private itemReg?: ItemRegistry,
+    private unitReg?: UnitRegistry,
+    private techReg?: TechRegistry,
+    private upgradeReg?: UpgradeRegistry,
   ) {
     this.rng = lcg(seed);
+    this.tech =
+      techReg && upgradeReg
+        ? new TechState(techReg, upgradeReg, () =>
+            [...this.units.values()].map((u) => ({
+              owner: u.owner,
+              typeId: u.typeId,
+              alive: u.hp > 0,
+              underConstruction: !!u.building && u.building.constructionLeft > 0,
+            })),
+          )
+        : null;
+  }
+
+  /** Whether `player` may make `unitId` right now — tech prerequisites + availability cap.
+   *  `owned` selects the requirement tier (hero #2 needs a Keep). Always true with no tech
+   *  registry loaded. */
+  canMake(player: number, unitId: string, owned = 0): boolean {
+    return !this.tech || this.tech.canMake(player, unitId, owned);
   }
 
   addMine(x: number, y: number, gold: number, radius = 96): SimMine {
@@ -1000,6 +1082,262 @@ export class SimWorld {
     return out;
   }
 
+  // === shops (issue #57) =====================================================
+
+  /** Everything a shop sells: its `Makeitems` (a race shop like the Arcane Vault),
+   *  `Sellitems` (a neutral one like the Goblin Merchant) and `Sellunits` (a Tavern's heroes,
+   *  a Mercenary Camp's creeps). A building with none of these is not a shop. */
+  shopWares(typeId: string): { items: string[]; units: string[] } {
+    const t = this.techReg?.get(typeId);
+    if (!t) return { items: [], units: [] };
+    return { items: [...t.makeitems, ...t.sellitems], units: [...t.sellunits] };
+  }
+
+  isShop(typeId: string): boolean {
+    const w = this.shopWares(typeId);
+    return w.items.length > 0 || w.units.length > 0;
+  }
+
+  /** How far from a shop a patron may stand — the shop ability's "Activation Radius"
+   *  (AbilityData.slk DataA). WC3 puts it on the ability, not the building: `Aall`
+   *  ("Shop Sharing, Allied Bldg", on the Arcane Vault and the other race shops) is 600,
+   *  while the neutral `Aneu`/`Ane2` ("Select Hero"/"Select Unit", on the Goblin Merchant,
+   *  Tavern, Mercenary Camp) is 450. Note this is NOT MiscData's NeutralUseNotifyRadius=900,
+   *  which is the radius the shop SHOUTS to nearby creeps when used — a different thing that
+   *  we honour separately in notifyCreepsOfShopUse(). */
+  private shopRadius(typeId: string): number {
+    const def = this.unitReg?.get(typeId);
+    if (!def || !this.abilities) return DEFAULT_SHOP_RADIUS;
+    for (const abilId of def.abilities) {
+      const a = this.abilities.get(abilId);
+      if (!a) continue;
+      if (a.code === "Aall" || a.code === "Aneu") {
+        const r = a.levelData[0]?.data[0];
+        if (r && !Number.isNaN(r)) return r;
+      }
+    }
+    return DEFAULT_SHOP_RADIUS;
+  }
+
+  /** The units of `player` that could take delivery of an item bought from this shop — WC3's
+   *  "valid patron". A patron needs an inventory (in melee that means a hero) and must be
+   *  standing inside the shop's activation radius; otherwise the purchase is refused with
+   *  "A valid patron must be nearby." (commandstrings.txt `Neednearbypatron`).
+   *  Measured centre-to-centre against radius + the shop's collision, so a big shop doesn't
+   *  make its own doorstep out of range. */
+  shopPatrons(shopId: number, player: number): SimUnit[] {
+    const shop = this.units.get(shopId);
+    if (!shop) return [];
+    const out: SimUnit[] = [];
+    for (const u of this.units.values()) {
+      if (u.owner !== player || u.hp <= 0 || !u.inventory.length) continue;
+      if (this.inShopRange(shop, u)) out.push(u);
+    }
+    return out;
+  }
+
+  /** Is `u` standing close enough to use `shop`? The one range test both the patron list and
+   *  the purchase itself go through — stated as "within", never as "not beyond", so a NaN
+   *  coordinate fails it. (`NaN > reach` is false, so the negated form would have quietly let
+   *  a unit with a broken position shop from anywhere.) */
+  private inShopRange(shop: SimUnit, u: SimUnit): boolean {
+    return Math.hypot(u.x - shop.x, u.y - shop.y) <= this.shopRadius(shop.typeId) + shop.radius;
+  }
+
+  /** Stock remaining for one ware (item or unit) at a shop; -1 when it isn't stocked at all. */
+  shopStock(shopId: number, wareId: string): number {
+    const s = this.units.get(shopId)?.building?.stock?.get(wareId);
+    return s ? s.count : -1;
+  }
+
+  /** Seed a shop's shelves. The restock schedule runs on the GAME clock, not on when the shop
+   *  was raised, so a shop built (or captured) late already carries whatever has come due —
+   *  otherwise an Arcane Vault put up at minute 10 would make you wait until 17:20 for a
+   *  Potion of Healing (stockStart 440). */
+  private initShopStock(u: SimUnit): void {
+    if (!u.building || !this.techReg) return;
+    const wares = this.shopWares(u.typeId);
+    if (!wares.items.length && !wares.units.length) return;
+    const stock = new Map<string, ShopStock>();
+    const seed = (id: string, max: number, regen: number, start: number) => {
+      if (max <= 0) return;
+      const t = this.elapsed;
+      let count: number;
+      let timer: number;
+      if (t < start) {
+        count = 0; // not on the shelves yet
+        timer = start - t;
+      } else if (regen > 0) {
+        const since = t - start;
+        count = Math.min(max, 1 + Math.floor(since / regen));
+        timer = regen - (since % regen);
+      } else {
+        count = 1; // one, and never replenished (a Tavern's heroes)
+        timer = Infinity;
+      }
+      stock.set(id, { count, max, regen, timer });
+    };
+    for (const id of wares.items) {
+      const d = this.itemReg?.get(id);
+      if (d) seed(id, d.stockMax, d.stockRegen, d.stockStart);
+    }
+    for (const id of wares.units) {
+      const d = this.unitReg?.get(id);
+      if (d) seed(id, d.stockMax, d.stockRegen, d.stockStart);
+    }
+    if (stock.size) u.building.stock = stock;
+  }
+
+  /** Replenish every shop's shelves. A full shelf runs no timer; a ware with `stockRegen` 0
+   *  never comes back once taken. */
+  private tickShops(dt: number): void {
+    for (const u of this.units.values()) {
+      const stock = u.building?.stock;
+      if (!stock || u.hp <= 0) continue;
+      for (const s of stock.values()) {
+        if (s.count >= s.max || !Number.isFinite(s.timer)) continue;
+        s.timer -= dt;
+        if (s.timer <= 0) {
+          s.count++;
+          s.timer = s.regen > 0 ? s.regen : Infinity;
+        }
+      }
+    }
+  }
+
+  /** Take one off the shelf, starting the restock timer if the shelf had been full. */
+  private takeStock(shop: SimUnit, wareId: string): boolean {
+    const s = shop.building?.stock?.get(wareId);
+    if (!s || s.count <= 0) return false;
+    const wasFull = s.count >= s.max;
+    s.count--;
+    if (wasFull) s.timer = s.regen > 0 ? s.regen : Infinity;
+    return true;
+  }
+
+  /** Buy an item from a shop and hand it straight to `buyerId` (WC3 puts it in the patron's
+   *  inventory, it does not drop it on the floor). Returns why it failed, so the HUD can
+   *  print the game's own message. */
+  purchaseItem(shopId: number, buyerId: number, itemId: string, player: number): ShopResult {
+    const shop = this.units.get(shopId);
+    const buyer = this.units.get(buyerId);
+    const def = this.itemReg?.get(itemId);
+    if (!shop || !def || shop.hp <= 0) return "no";
+    if (this.shopStock(shopId, itemId) <= 0) return "nostock";
+    // The BUYER's tech gates the shelf: a Potion of Healing needs `TWN2` (a Keep or better).
+    if (this.tech && !this.tech.meets(player, itemId)) return "req";
+    if (!buyer || buyer.owner !== player || buyer.hp <= 0 || !buyer.inventory.length) return "nopatron";
+    if (!this.inShopRange(shop, buyer)) return "nopatron";
+    if (buyer.inventory.indexOf(null) < 0) return "full";
+    const stash = this.stashOf(player);
+    if (stash.gold < def.gold || stash.lumber < def.lumber) return "cost";
+
+    if (!this.takeStock(shop, itemId)) return "nostock";
+    stash.gold -= def.gold;
+    stash.lumber -= def.lumber;
+    const slot = buyer.inventory.indexOf(null);
+    buyer.inventory[slot] = { id: this.nextItemId++, itemId, charges: def.charges, cooldownLeft: 0 };
+    this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
+    return "ok";
+  }
+
+  /** Buy a UNIT from a shop (a Tavern's heroes, a Mercenary Camp's creeps). No patron is
+   *  needed — the unit is produced by the shop itself and walks out — but the stock still
+   *  depletes, and hiring is loud: creeps hear it (UnitSaleAggroRange 600). The caller has
+   *  already charged the cost and queues the training. */
+  purchaseUnit(shopId: number, unitId: string, player: number): ShopResult {
+    const shop = this.units.get(shopId);
+    if (!shop || shop.hp <= 0) return "no";
+    if (this.shopStock(shopId, unitId) <= 0) return "nostock";
+    if (this.tech && !this.tech.meets(player, unitId)) return "req";
+    if (!this.takeStock(shop, unitId)) return "nostock";
+    // Whoever of the buyer's units is nearest the shop takes the blame for the noise. NOT
+    // shopPatrons(), which only returns inventory-holders — you don't need a hero to hire a
+    // mercenary, so an army of Footmen parked outside the camp must still draw the aggro.
+    this.notifyCreepsOfShopUse(shop, this.nearestUnitOf(player, shop), MISC_GAME.UnitSaleAggroRange);
+    return "ok";
+  }
+
+  /** The player's live unit closest to `to`, or null — who the creeps come for. */
+  private nearestUnitOf(player: number, to: SimUnit): SimUnit | null {
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const u of this.units.values()) {
+      if (u.owner !== player || u.hp <= 0 || u.building) continue;
+      const d = Math.hypot(u.x - to.x, u.y - to.y);
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    return best;
+  }
+
+  /** Sell an item back to a shop. WC3 pays `PawnItemRate` of its gold value (0.50 in the
+   *  1.27a MiscGame.txt — NOT the 60% often quoted), and the hero must be within
+   *  `PawnItemRange` (300) of the shop. The item is destroyed, not restocked. */
+  pawnItem(unitId: number, slot: number, shopId: number): boolean {
+    const u = this.units.get(unitId);
+    const shop = this.units.get(shopId);
+    if (!u || !shop || !this.itemReg || slot < 0 || slot >= u.inventory.length) return false;
+    const held = u.inventory[slot];
+    if (!held) return false;
+    const def = this.itemReg.get(held.itemId);
+    if (!def || !def.pawnable) return false;
+    // The shop must actually DEAL IN ITEMS. A Tavern and a Mercenary Camp are shops, but they
+    // sell units and carry no "Shop Purchase Item" (Apit) ability — you cannot pawn a Claws of
+    // Attack at a Tavern, and `isShop` alone would have let you.
+    if (!this.shopWares(shop.typeId).items.length) return false;
+    // Stated as "within", not "not beyond" — see inShopRange. Note pawning uses its own,
+    // shorter reach (PawnItemRange 300) than buying does, so a hero can buy from further
+    // away than he can sell.
+    if (!(Math.hypot(u.x - shop.x, u.y - shop.y) <= MISC_GAME.PawnItemRange + shop.radius)) return false;
+    u.inventory[slot] = null;
+    const stash = this.stashOf(u.owner);
+    stash.gold += Math.floor(def.gold * MISC_GAME.PawnItemRate);
+    stash.lumber += Math.floor(def.lumber * MISC_GAME.PawnItemRate);
+    return true;
+  }
+
+  /** Using a NEUTRAL building shouts to the creeps around it (issue #57). Two ranges, and
+   *  they do two different things — the names say so:
+   *
+   *   - MiscData `NeutralUseNotifyRadius` (900) — creeps in earshot are NOTIFIED, i.e. they
+   *     wake. Sleeping creeps are otherwise deaf, so this is what stops a player quietly
+   *     shopping in the middle of a slumbering camp at night.
+   *   - MiscGame `ItemSaleAggroRange` (0) / `UnitSaleAggroRange` (600) — creeps this close
+   *     actually CHARGE. Buying a potion is silent (0); hiring a mercenary is not (600).
+   *
+   *  Only neutral buildings shout: the key is explicitly "when a neutral building is in use",
+   *  and buying from the Arcane Vault in your own base must not rouse the map. */
+  private notifyCreepsOfShopUse(shop: SimUnit, buyer: SimUnit | null, saleAggroRange: number): void {
+    if (!shop.neutralPassive) return;
+    for (const c of this.units.values()) {
+      if (!c.isCreep || c.hp <= 0 || c.building || !c.weapon || c.returning) continue;
+      const d = Math.hypot(c.x - shop.x, c.y - shop.y) - shop.radius;
+      if (d > MISC_DATA.NeutralUseNotifyRadius) continue;
+      c.asleep = false; // heard it — awake, but not necessarily coming
+      if (d > saleAggroRange || !buyer || buyer.hp <= 0 || !this.hostile(c, buyer)) continue;
+      c.campHelper = false; // roused in its own right, so it may call the rest of the camp
+      this.issueAttack(c.id, buyer.id);
+      this.alertCamp(c, buyer);
+    }
+  }
+
+  /** Research finished since the last drain (renderer plays the completion sound). */
+  drainResearchCompletions(): Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> {
+    const out = this.researchCompletions;
+    this.researchCompletions = [];
+    return out;
+  }
+
+  /** Buildings that morphed since the last drain (renderer swaps the model + food). */
+  drainMorphs(): Array<{ unitId: number; from: string; to: string }> {
+    const out = this.morphs;
+    this.morphs = [];
+    return out;
+  }
+
   /** Mines that ran dry since the last drain. */
   drainDepletedMines(): SimMine[] {
     if (!this.depleted.length) return this.depleted;
@@ -1078,33 +1416,85 @@ export class SimWorld {
 
   /** Queue a unit for training at a building. Timing only — the caller has
    *  already checked/charged resources and food. */
-  enqueueTrain(buildingId: number, unitId: string, buildTime: number): boolean {
+  enqueueTrain(buildingId: number, unitId: string, buildTime: number, free = false): boolean {
     const b = this.units.get(buildingId)?.building;
     if (!b) return false;
-    b.queue.push({ unitId, timeLeft: buildTime, buildTime });
+    b.queue.push({ kind: "unit", unitId, timeLeft: buildTime, buildTime, free });
     this.noteTrain(buildingId, unitId, "start"); // EVENT_(PLAYER_)UNIT_TRAIN_START
     return true;
   }
 
-  /** Cancel the last queued item (returns its unitId for a refund, or null). */
-  cancelLastTrain(buildingId: number): string | null {
+  /** Queue an upgrade for research at a building. Timing only — the caller has already
+   *  checked the tech requirements and charged the cost. WC3 shares ONE queue between
+   *  training and research, so a Barracks researching Defend cannot also train a Footman. */
+  enqueueResearch(buildingId: number, upgradeId: string, level: number, time: number): boolean {
     const b = this.units.get(buildingId)?.building;
-    if (!b || !b.queue.length) return null;
-    const unitId = b.queue.pop()!.unitId;
-    this.noteTrain(buildingId, unitId, "cancel");
-    return unitId;
+    if (!b) return false;
+    b.queue.push({ kind: "research", unitId: upgradeId, level, timeLeft: time, buildTime: time });
+    return true;
   }
 
-  /** Cancel a specific queued item by index (0 = the one currently training).
-   *  Returns its unitId for a full refund, or null. Removing index 0 just
-   *  promotes the next item, which keeps its own untouched build timer (WC3:
-   *  cancelling the in-progress unit refunds in full and starts the next fresh). */
-  cancelTrainAt(buildingId: number, index: number): string | null {
+  /** Queue this building's transformation into `toUnitId` (Town Hall → Keep, Scout Tower →
+   *  Guard Tower). It keeps working while it upgrades, and morphs in place on completion. */
+  enqueueUpgrade(buildingId: number, toUnitId: string, time: number): boolean {
+    const b = this.units.get(buildingId)?.building;
+    if (!b) return false;
+    b.queue.push({ kind: "upgrade", unitId: toUnitId, timeLeft: time, buildTime: time });
+    return true;
+  }
+
+  /** The level a building is currently researching an upgrade at, or 0 — so the command card
+   *  can show the in-progress rank and refuse to double-queue it. */
+  researchingLevel(buildingId: number, upgradeId: string): number {
+    const b = this.units.get(buildingId)?.building;
+    if (!b) return 0;
+    for (const j of b.queue) if (j.kind === "research" && j.unitId === upgradeId) return j.level;
+    return 0;
+  }
+
+  /** Whether this building is already turning into something. A structure can only become one
+   *  thing, so the upgrade buttons come off its card the moment one is queued — otherwise
+   *  clicking "Upgrade to Keep" twice charges 705 gold twice and morphs a Keep into a Keep. */
+  isUpgrading(buildingId: number): boolean {
+    const b = this.units.get(buildingId)?.building;
+    return !!b && b.queue.some((j) => j.kind === "upgrade");
+  }
+
+  /** Cancel the last queued item (returns the job, for the caller to refund). */
+  cancelLastTrain(buildingId: number): BuildJob | null {
+    const b = this.units.get(buildingId)?.building;
+    if (!b || !b.queue.length) return null;
+    return this.dropJob(buildingId, b.queue.pop()!);
+  }
+
+  /** Cancel a specific queued item by index (0 = the one currently in progress). Returns the
+   *  job so the caller can refund it at the right rate — WC3 refunds training in full but a
+   *  cancelled STRUCTURE UPGRADE only at 75% (MiscGame's UpgradeRefundRate). Removing index 0
+   *  just promotes the next item, which keeps its own untouched timer. */
+  cancelTrainAt(buildingId: number, index: number): BuildJob | null {
     const b = this.units.get(buildingId)?.building;
     if (!b || index < 0 || index >= b.queue.length) return null;
-    const unitId = b.queue.splice(index, 1)[0].unitId;
-    this.noteTrain(buildingId, unitId, "cancel");
-    return unitId;
+    return this.dropJob(buildingId, b.queue.splice(index, 1)[0]);
+  }
+
+  /** Common tail of a cancel: raise the event, and — the part that is easy to miss — put a
+   *  SHOP-bought unit back on the shelf. Without this, hiring a Tavern hero and cancelling
+   *  destroys her for the rest of the match: the stock was taken at purchase, and a Tavern's
+   *  `stockRegen` is 0, so nothing ever restores it and NO player can hire her again. */
+  private dropJob(buildingId: number, job: BuildJob): BuildJob {
+    if (job.kind === "unit") {
+      this.noteTrain(buildingId, job.unitId, "cancel");
+      this.returnStock(buildingId, job.unitId);
+    }
+    return job;
+  }
+
+  /** Put one back on the shelf (a cancelled purchase). Caps at stockMax and stops the restock
+   *  timer if that refills the shelf. */
+  private returnStock(shopId: number, wareId: string): void {
+    const s = this.units.get(shopId)?.building?.stock?.get(wareId);
+    if (!s || s.count >= s.max) return;
+    s.count++;
   }
 
   /** Set a building's rally point. A plain point (kind "point") is a move
@@ -1298,10 +1688,47 @@ export class SimWorld {
         job.timeLeft -= this.fastBuild ? Math.max(dt, job.buildTime * dt) : dt;
         if (job.timeLeft <= 0) {
           b.queue.shift();
-          this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
+          if (job.kind === "research") {
+            this.tech?.setResearchLevel(u.owner, job.unitId, job.level);
+            this.researchCompletions.push({ buildingId: u.id, upgradeId: job.unitId, level: job.level, owner: u.owner });
+          } else if (job.kind === "upgrade") {
+            this.morphBuilding(u, job.unitId);
+          } else {
+            this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
+          }
         }
       }
     }
+  }
+
+  /** Transform a finished building into its upgraded form in place (Town Hall → Keep, Scout
+   *  Tower → Guard Tower). WC3 keeps the SAME entity — its rally point, its queue and its
+   *  damage all carry over — so this rewrites the type and re-derives the stats rather than
+   *  destroying and respawning, which would flash the selection and drop the rally.
+   *
+   *  HP carries over as a FRACTION: a Town Hall at half health becomes a half-health Keep,
+   *  not a Keep with 750/2000. The renderer picks the swap up from `morphs` and re-attaches
+   *  the new model. */
+  private morphBuilding(u: SimUnit, toTypeId: string): void {
+    const def = this.unitReg?.get(toTypeId);
+    if (!def) return;
+    const frac = u.maxHp > 0 ? Math.min(1, u.hp / u.maxHp) : 1;
+    const from = u.typeId;
+    u.typeId = toTypeId;
+    u.baseMaxHp = def.hitPoints;
+    u.baseArmor = def.armor;
+    u.baseSightDay = def.sightDay;
+    u.baseSightNight = def.sightNight;
+    // What it produces is a property of the TYPE, so re-derive it: a structure that only gains
+    // a training list on upgrade would otherwise never get a rally point.
+    if (u.building && this.techReg) {
+      const t = this.techReg.get(toTypeId);
+      u.building.producesUnits = t.trains.length > 0 || t.sellunits.length > 0;
+    }
+    this.recomputeStats(u); // maxHp now reflects the new type (+ any Masonry already researched)
+    u.hp = Math.max(1, u.maxHp * frac);
+    this.tech?.invalidate(); // a Keep satisfies requirements a Town Hall does not
+    this.morphs.push({ unitId: u.id, from, to: toTypeId });
   }
 
   /** Cancel a building (manual cancel of an under-construction structure): free
@@ -1474,6 +1901,10 @@ export class SimWorld {
       | "getItemId"
       | "pendingGive"
       | "pendingDrop"
+      | "baseDice"
+      | "baseRange"
+      | "baseSightDay"
+      | "baseSightNight"
     >,
     building?: BuildingState | null,
     opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
@@ -1481,6 +1912,12 @@ export class SimWorld {
     const hero = opts?.hero;
     const u: SimUnit = {
       ...unit,
+      // Pre-upgrade weapon/vision baselines. recomputeStats() rebuilds the live values from
+      // these every tick, so researching Forged Swords mid-game lifts every existing Footman.
+      baseDice: unit.weapon?.dice ?? 0,
+      baseRange: unit.weapon?.range ?? 0,
+      baseSightDay: unit.sightDay,
+      baseSightNight: unit.sightNight,
       desiredFacing: unit.facing,
       order: "idle",
       targetId: null,
@@ -1614,6 +2051,8 @@ export class SimWorld {
     };
     this.units.set(u.id, u);
     this.settle(u);
+    this.tech?.invalidate(); // a new unit may unlock (or, for a shop, be) something
+    this.initShopStock(u); // Arcane Vault / Goblin Merchant / Tavern: fill the shelves
     // A structure that arrives already finished (a melee start Town Hall, a map-placed
     // neutral building) was not "placed" in the sense the notification means — only a
     // fresh foundation with construction left to run shouts at the creeps around it.
@@ -2518,8 +2957,9 @@ export class SimWorld {
    *  buffs, so Dispel Magic (which wipes `u.buffs`) can never remove them. */
   private itemBonuses(u: SimUnit): {
     str: number; agi: number; int: number; damage: number; armor: number; attackSpeed: number; manaRegen: number; lifesteal: number;
+    speed: number; maxHp: number;
   } {
-    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, lifesteal: 0 };
+    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, lifesteal: 0, speed: 0, maxHp: 0 };
     if (!u.inventory.length || !this.itemReg || !this.abilities) return b;
     for (const held of u.inventory) {
       if (!held) continue;
@@ -2537,6 +2977,63 @@ export class SimWorld {
           case "AIas": b.attackSpeed += val(0); break; // Gloves of Haste (+attack speed)
           case "AHab": b.manaRegen += val(0); break; // Pipe of Insight (mana regen)
           case "AIva": b.lifesteal = Math.max(b.lifesteal, val(0)); break; // Mask of Death (lifesteal)
+          // The two the shops made reachable (issue #57). Both are plain passive bonuses, and
+          // both were dead code paths until now because nothing sold them: Boots of Speed are
+          // the Goblin Merchant's signature item, and the Periapt is the +HP staple.
+          case "AIms": b.speed += val(0); break; // Boots of Speed (+60 movement)
+          case "AIml": b.maxHp += val(0); break; // Periapt of Vitality (+150 max HP)
+        }
+      }
+    }
+    return b;
+  }
+
+  /** Sum the bonuses the owner's RESEARCHED upgrades grant this unit (issue #57).
+   *
+   *  Two gates decide whether an upgrade touches a unit at all, and both come from the data:
+   *  the owner must have researched it, and the unit must LIST it in UnitBalance's `upgrades`
+   *  column. That second gate is what separates Forged Swords (on the Footman's list) from
+   *  Gunpowder (on the Rifleman's) — they are the same `ratd` effect and would otherwise both
+   *  fire on both units.
+   *
+   *  Effect values are the TOTAL at the researched level, not an increment:
+   *  `base + mod*(level-1)`. Priest Master Training therefore reads +200 max mana at level 2,
+   *  not another +100 on top of level 1.
+   *
+   *  Only the effects with unambiguous semantics are honoured; the rest are deliberately left
+   *  alone rather than guessed at (`renw` enable-weapons, `rart` armour-type swap, `rrai`,
+   *  `rent`, `rspi`, `rlev`, `raud`). `rtma` is not a stat at all — it flips a unit's
+   *  availability and is handled by TechState.maxAllowed. */
+  private upgradeBonuses(u: SimUnit): {
+    dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
+    range: number; sight: number; speed: number; attackSpeed: number; damage: number;
+  } {
+    const b = { dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0, attackSpeed: 0, damage: 0 };
+    if (!this.tech || !this.upgradeReg || !this.unitReg) return b;
+    const def = this.unitReg.get(u.typeId);
+    if (!def || !def.upgradesUsed.length) return b;
+    for (const upId of def.upgradesUsed) {
+      const level = this.tech.researchLevel(u.owner, upId);
+      if (level < 1) continue;
+      const up = this.upgradeReg.get(upId);
+      if (!up) continue;
+      for (const e of up.effects) {
+        const v = e.base + e.mod * (level - 1);
+        switch (e.effect) {
+          case "ratd": b.dice += v; break; // attack DICE (the melee/ranged attack upgrades)
+          case "ratx": b.damage += v; break; // flat attack damage (Burning Oil et al.)
+          // Armour upgrades ship no magnitude of their own — it is the target's `defUp`
+          // (2 per level for a unit, 1 for a building), so one Plating research is +2 on a
+          // Footman and one Masonry is +1 on a Farm. Scales with the level researched.
+          case "rarm": b.armor += def.defUp * level; break;
+          case "rhpx": b.hp += v; break;
+          case "rhpo": b.hpPct += v; break; // Masonry's +10%/level building HP
+          case "rmnx": b.mana += v; break;
+          case "rmnr": b.manaRegen += v; break;
+          case "ratr": b.range += v; break; // Long Rifles +200
+          case "rsig": b.sight += v; break;
+          case "rmvx": b.speed += v; break;
+          case "rats": b.attackSpeed += v; break;
         }
       }
     }
@@ -2544,9 +3041,11 @@ export class SimWorld {
   }
 
   /** Recompute a unit's effective stats from its base values, hero attribute
-   *  growth, and active buffs. Called every tick (cheap, idempotent). */
+   *  growth, active buffs, items and the owner's researched upgrades. Called every
+   *  tick (cheap, idempotent). */
   private recomputeStats(u: SimUnit): void {
     const item = this.itemBonuses(u);
+    const upg = this.upgradeBonuses(u);
     if (u.isHero) {
       u.str = Math.floor(u.baseStr + u.strPerLevel * (u.level - 1)) + item.str;
       u.agi = Math.floor(u.baseAgi + u.agiPerLevel * (u.level - 1)) + item.agi;
@@ -2593,29 +3092,36 @@ export class SimWorld {
       else if (b.kind === "silence") silence = true;
       else if (b.kind === "invuln") invuln = true;
     }
-    u.maxHp = u.baseMaxHp + HP_PER_STR * dStr;
-    u.maxMana = u.baseMaxMana + MANA_PER_INT * dInt;
+    // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
+    // adds (Animal War Training's +150). Current HP is not topped up — researching Masonry
+    // raises a damaged building's ceiling, it does not heal it.
+    u.maxHp = (u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp;
+    u.maxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana;
     if (u.hp > u.maxHp) u.hp = u.maxHp;
     if (u.mana > u.maxMana) u.mana = u.maxMana;
     // Spiked Carapace (Crypt Lord passive AUts): a flat bonus armour (dataB) while learned.
     const carapace = this.passiveLevelData(u, "AUts");
     const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
-    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor;
-    u.bonusArmor = armorBonus + carapaceArmor + item.armor; // the buff/aura/item portion (shown green in the HUD)
+    u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
+    u.bonusArmor = armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
     if (u.weapon) {
       const base = u.baseDamage + primaryDelta;
-      u.weapon.damage = Math.max(0, base + damageBonus + item.damage + base * damagePct); // Command/Trueshot add a % of base
+      u.weapon.damage = Math.max(0, base + damageBonus + item.damage + upg.damage + base * damagePct); // Command/Trueshot add a % of base
       u.bonusDamage = u.weapon.damage - base; // the buff/aura/item portion
+      u.weapon.dice = u.baseDice + upg.dice; // Forged Swords / Gunpowder add dice, widening the roll
+      u.weapon.range = u.baseRange + upg.range; // Long Rifles
       // Attack speed scales cooldown AND damage point together (verified: thehelper
       // "attack speed animations" thread — agility/haste divides both by the same
       // factor, so the strike lands proportionally sooner as the unit swings faster).
       // Item attack-speed (Gloves of Haste) adds to the haste side.
-      const speedFactor = (1 + slowAttack) / (1 + hasteAttack + item.attackSpeed);
+      const speedFactor = (1 + slowAttack) / (1 + hasteAttack + item.attackSpeed + upg.attackSpeed);
       u.weapon.cooldown = u.baseCooldown * speedFactor;
       u.weapon.damagePoint = u.baseDamagePoint * speedFactor;
     }
-    u.speed = Math.max(0, u.baseSpeed * (1 - slowMove) * (1 + hasteMove));
-    u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen;
+    u.sightDay = u.baseSightDay + upg.sight;
+    u.sightNight = u.baseSightNight + upg.sight;
+    u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
+    u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen + upg.manaRegen;
     u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus;
     u.lifesteal = Math.max(lifesteal, item.lifesteal);
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
@@ -3861,9 +4367,17 @@ export class SimWorld {
   }
 
   tick(dt: number): void {
+    this.elapsed += dt;
     if (this.dawnDusk) this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % MISC_DATA.DayHours;
+    // The tech census (who owns what, and so what each player may build) is invalidated
+    // wholesale each tick rather than at every birth/death/morph/construction-finish. The
+    // rebuild is a single O(units) pass and only happens if something actually asks — but
+    // a *missed* invalidation site would leave a player's requirements silently stale,
+    // which is a far nastier bug than one cheap pass.
+    this.tech?.invalidate();
     this.tickAttackReveals(dt);
     this.tickBuildings(dt);
+    this.tickShops(dt);
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)

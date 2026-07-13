@@ -24,6 +24,7 @@
 
 import type { NativeCtx, Runtime } from "../runtime";
 import { asInt, asNum, asStr, jBool, jInt, jReal, JNULL, truthy, type JassValue } from "../values";
+import { intToRawcode } from "../lexer";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -75,17 +76,33 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "SetCameraQuickPosition", (c, a) => (c.rt.hooks?.setCameraPosition?.(asNum(a[0]), asNum(a[1])), JNULL));
 
   // --- hero + tech limits (MeleeStartingHeroLimit) ---
-  // Recorded, not enforced: we have no tech-limit system yet, so the script's "3 heroes
-  // per player, 1 per hero type" caps are remembered but nothing consults them. -1 is
-  // WC3's "no limit", which is exactly what ReducePlayerTechMaxAllowed tests for.
+  // The availability cap is now REAL (issue #57): the sim's TechState reads it, so
+  // Blizzard.j's InitSummonableCaps genuinely hides the Barrage Siege Engine (`hrtt`) until
+  // Barrage is researched — `SetPlayerTechMaxAllowed(p,'hrtt',0)`. -1 is WC3's "no limit",
+  // which is what ReducePlayerTechMaxAllowed tests for.
   def(rt, "SetPlayerTechMaxAllowed", (c, a) => {
-    c.rt.techMaxAllowed.set(`${playerIndex(c, a[0])}:${asInt(a[1])}`, asInt(a[2]));
+    const player = playerIndex(c, a[0]);
+    const tech = intToRawcode(asInt(a[1]));
+    const max = asInt(a[2]);
+    c.rt.techMaxAllowed.set(`${player}:${asInt(a[1])}`, max);
+    c.rt.hooks?.setPlayerTechMaxAllowed?.(player, tech, max);
     return JNULL;
   });
   def(rt, "GetPlayerTechMaxAllowed", (c, a) => jInt(c.rt.techMaxAllowed.get(`${playerIndex(c, a[0])}:${asInt(a[1])}`) ?? -1));
-  def(rt, "GetPlayerTechCount", () => jInt(0));
-  def(rt, "SetPlayerTechResearched", () => JNULL);
-  def(rt, "GetPlayerTechResearched", () => jBool(false));
+  // For an upgrade the count is its researched LEVEL; for a unit type it's how many the
+  // player owns. One native, both meanings — that's WC3's own overload.
+  def(rt, "GetPlayerTechCount", (c, a) =>
+    jInt(c.rt.hooks?.playerTechCount?.(playerIndex(c, a[0]), intToRawcode(asInt(a[1])), truthy(a[2])) ?? 0),
+  );
+  def(rt, "SetPlayerTechResearched", (c, a) => {
+    c.rt.hooks?.setPlayerTechResearched?.(playerIndex(c, a[0]), intToRawcode(asInt(a[1])), asInt(a[2]));
+    return JNULL;
+  });
+  def(rt, "GetPlayerTechResearched", (c, a) => {
+    // "researched at level N or better" — the 3rd arg is the level being asked about.
+    const have = c.rt.hooks?.playerTechCount?.(playerIndex(c, a[0]), intToRawcode(asInt(a[1])), true) ?? 0;
+    return jBool(have >= Math.max(1, asInt(a[2])));
+  });
 
   // --- victory / defeat (MeleeInitVictoryDefeat → MeleeCheckForLosersAndVictors) ---
   // A melee player is defeated the moment their team owns no structures, and "crippled"

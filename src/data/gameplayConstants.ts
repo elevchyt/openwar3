@@ -146,7 +146,19 @@ export const MISC_GAME = {
   PickupItemRange: 150,
   /** WE: "Inventory - Sell Item Range" — reach to pawn an item at a shop. */
   PawnItemRange: 300,
+  /** What a shop pays for an item you sell back: HALF its gold value. Note this is 0.50 in
+   *  the real 1.27a data, not the 60% widely quoted online (that figure is from a later
+   *  patch / Reforged). The MPQ wins. */
   PawnItemRate: 0.5,
+
+  // --- shop sale aggro -------------------------------------------------------
+  // How far a purchase carries to nearby creeps. Buying an item is silent; hiring a unit
+  // from a Mercenary Camp is emphatically not. Distinct from MiscData's
+  // NeutralUseNotifyRadius (900), which merely WAKES creeps in earshot — these two make
+  // them charge. See notifyCreepsOfShopUse in src/sim/world.ts.
+  ItemSaleAggroRange: 0,
+  UnitSaleAggroRange: 600,
+  AbilSaleAggroRange: 0,
 
   // --- refunds --------------------------------------------------------------
   ConstructionRefundRate: 0.75, // cancelled construction

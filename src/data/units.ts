@@ -32,6 +32,13 @@ export interface UnitDef {
   animBlend: number; // Art - Animation Blend Time (unitUI "blend", seconds): cross-fade
   // duration between animation sequences. Real WC3 default is 0.15s (808 of ~836 units);
   // a handful differ (0.01/0.3/0.4/0.5/1.5). Verified against War3Patch.mpq UnitUI.slk.
+  // `Animprops` ("Art - Required Animation Names", in the per-race *UnitFunc.txt profile —
+  // NOT the SLK). A tiered building is ONE model whose tiers live in it as SEQUENCES:
+  // TownHall.mdx carries Stand / Stand Upgrade First / Stand Upgrade Second, and HumanTower.mdx
+  // carries the Scout, Guard, Cannon and Arcane towers the same way. The unit's Animprops say
+  // which set is its own — the Keep is `upgrade,first`, the Castle `upgrade,second`, the Arcane
+  // Tower `upgrade,third`. Without this, every tier renders as tier 1. See applyAnimProps().
+  animProps: string[];
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
   weaponSound: string; // unitUI "weap1" weapon-impact base ("MetalMediumSlice"); "_" = none
   lumberSound: string; // unitUI "weap2" 2nd-weapon base — workers' chop ("AxeMediumChop"); "" = none
@@ -88,6 +95,24 @@ export interface UnitDef {
   hitPoints: number;
   mana: number;
   armor: number;
+  // UnitBalance.slk `defUp` — how much ONE level of an armour upgrade is worth to this
+  // unit. WC3's armour upgrades (`rarm`: Plating, Leather Armor, Masonry) deliberately
+  // ship with an EMPTY base/mod in UpgradeData.slk, because the magnitude is a property of
+  // the target, not of the upgrade: 2 for a unit, 1 for a building. So Mithril Plating
+  // (level 3) is +6 armour on a Footman but Imbued Masonry (level 3) is only +3 on a Farm.
+  defUp: number;
+  // Shop stock for a unit a shop SELLS (Tavern heroes, Mercenary Camp creeps) — the same
+  // three fields as ItemDef, but from UnitBalance.slk. A Tavern hero is 1/0/135: one in
+  // stock, first available 2:15 into the game, and `stockRegen` 0 means once hired it never
+  // comes back — which is exactly why a neutral hero is unique across the whole match.
+  stockMax: number;
+  stockRegen: number;
+  stockStart: number;
+  // UnitBalance.slk `upgrades` ("Upgrades Used") — the upgrades that affect this unit, and
+  // the reason Forged Swords arms Footmen while Gunpowder arms Riflemen even though both
+  // are the same `ratd` effect: hfoo lists Rhme, hrif lists Rhra. An upgrade the unit does
+  // not list is simply not applied to it.
+  upgradesUsed: string[];
   foodUsed: number;
   foodMade: number;
   goldCost: number;
@@ -277,6 +302,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
+      animProps: fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [],
       soundSet: u ? str(u, "unitSound") : "",
       weaponSound: u ? str(u, "weap1") : "",
       lumberSound: u ? str(u, "weap2") : "",
@@ -317,6 +343,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
       mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
       armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
+      defUp: b ? num(b, "defUp", 0) : 0,
+      stockMax: b ? num(b, "stockMax", 0) : 0,
+      stockRegen: b ? num(b, "stockRegen", 0) : 0,
+      stockStart: b ? num(b, "stockStart", 0) : 0,
+      upgradesUsed: b ? (str(b, "upgrades") || "").split(",").map((s) => s.trim()).filter(Boolean) : [],
       foodUsed: b ? num(b, "fused", 0) : 0,
       foodMade: b ? num(b, "fmade", 0) : 0,
       goldCost: b ? num(b, "goldcost", 0) : 0,

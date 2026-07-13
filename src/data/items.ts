@@ -17,6 +17,10 @@ export interface ItemDef {
   name: string;
   description: string; // Ubertip, WC3 markup intact — shown on the HUD when the ground item is selected
   icon: string; // command-button BLP path (ItemFunc "Art")
+  tip: string; // shop-button tooltip TITLE, hotkey already gilded (ItemStrings "Tip")
+  hotkey: string; // ItemStrings "Hotkey"
+  buttonX: number; // shop command-card slot (ItemFunc "Buttonpos"), column 0-3
+  buttonY: number; // …row 0-2
   model: string; // ground model (.mdx) shown where the item lies (ItemData "file")
   scale: number; // ground-model scale
   gold: number; // gold cost (buy) / sell base
@@ -34,6 +38,15 @@ export interface ItemDef {
   pawnable: boolean; // sellable back to a shop
   pickRandom: boolean; // eligible to fill a "random item of level N" drop slot
   maxHp: number; // item HP (destructible on the ground; 75 default in WC3)
+  // Shop stock (issue #57). WC3 restocks per ITEM, not per shop, and the schedule runs on the
+  // GAME clock, not on when the shop was built — so an Arcane Vault raised at minute 10
+  // already carries the items whose delay has lapsed. `stockStart` is that delay: 0 for the
+  // basics (Scroll of Regeneration), 440 for the Potion of Healing / Town Portal, which is
+  // why you cannot rush-buy a TP. `stockRegen` is the seconds to put one more on the shelf,
+  // up to `stockMax`.
+  stockMax: number;
+  stockRegen: number;
+  stockStart: number;
 }
 
 export class ItemRegistry {
@@ -158,6 +171,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
     if (!classType) continue;
     const f = func.getRow(id) as Row | undefined;
     const s = strs.getRow(id) as Row | undefined;
+    const [bx, by] = buttonPos(f ? str(f, "Buttonpos") : "");
     const abilities = (str(r, "abilList") || "")
       .split(",")
       .map((a) => a.trim())
@@ -167,6 +181,10 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       name: (s && str(s, "Name")) || id,
       description: rawTip(s ? str(s, "Ubertip") : ""),
       icon: f ? str(f, "Art") : "",
+      tip: rawTip(s ? str(s, "Tip") : ""),
+      hotkey: s ? str(s, "Hotkey") : "",
+      buttonX: bx,
+      buttonY: by,
       model: itemModel(str(r, "file")),
       scale: num(r, "scale", 1),
       gold: num(r, "goldcost", 0),
@@ -184,6 +202,9 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       pawnable: num(r, "pawnable", 0) === 1,
       pickRandom: num(r, "pickRandom", 0) === 1,
       maxHp: num(r, "hp", 75),
+      stockMax: num(r, "stockMax", 0),
+      stockRegen: num(r, "stockRegen", 0),
+      stockStart: num(r, "stockStart", 0),
     });
   }
   return new ItemRegistry(defs);
@@ -203,6 +224,11 @@ function itemModel(v: string): string {
 // which the sim resolves against the ability data (e.g. a potion's heal amount).
 function rawTip(v: string): string {
   return v.replace(/^"|"$/g, "").trim();
+}
+
+function buttonPos(v: string): [number, number] {
+  const p = (v || "").split(",");
+  return [parseInt(p[0] ?? "0", 10) || 0, parseInt(p[1] ?? "0", 10) || 0];
 }
 
 function str(row: Row, key: string): string {

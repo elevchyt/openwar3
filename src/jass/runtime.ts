@@ -590,6 +590,16 @@ export interface EngineHooks {
    *  structures", so these decide who has lost (MeleeCheckForLosersAndVictors). */
   playerStructureCount?(player: number, includeIncomplete: boolean): number;
   playerUnitCount?(player: number, includeIncomplete: boolean): number;
+  /** GetPlayerTechCount / Set|GetPlayerTechResearched — the tech tree (issue #57). `tech` is
+   *  a rawcode that may name an UPGRADE (the count is its researched level) or a UNIT TYPE
+   *  (the count is how many the player owns, including anything that satisfies it through the
+   *  upgrade chain — a Keep answers for a Town Hall). Blizzard.j leans on these in
+   *  InitSummonableCaps, which is how the Barrage-equipped Siege Engine stays hidden until
+   *  Barrage is researched. */
+  playerTechCount?(player: number, tech: string, includeIncomplete: boolean): number;
+  setPlayerTechResearched?(player: number, tech: string, level: number): void;
+  /** SetPlayerTechMaxAllowed — 0 makes a unit type untrainable for that player. */
+  setPlayerTechMaxAllowed?(player: number, tech: string, max: number): void;
   /** GetPlayerTypedUnitCount — count a player's units of one internal TYPE name (the
    *  `name` column of UnitUI.slk: "townhall", "greathall", …). Melee asks for the four
    *  main halls: owning none while still holding structures is what "crippled" means. */
