@@ -799,7 +799,7 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
   size(count, 0.01875, 0.01875);
   setProp(count, "FontJustificationH", [arg("JUSTIFYCENTER")]);
 
-  setProp(findFrame(pane, "MinimapImage"), "SetPoint", [arg("TOP"), str("MapInfoPane"), arg("TOP"), num(0), num(-0.032)]);
+  setProp(findFrame(pane, "MinimapImage"), "SetPoint", [arg("TOP"), str("MapInfoPane"), arg("TOP"), num(0), num(-MINIMAP_TOP)]);
 
   // The stat rows: label left, value right-justified over the same box (the value's own
   // `SetPoint TOPLEFT <label> TOPLEFT` + JUSTIFYRIGHT is the FDF's own idiom). The block is
@@ -813,7 +813,12 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
     size(row, ROW_W, ROW_H);
     if (prev) setProp(row, "SetPoint", [arg("TOPLEFT"), str(prev), arg("BOTTOMLEFT"), num(0), num(-gap)]);
     else setProp(row, "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(ROW_X), num(-ROWS_TOP)]);
-    size(findFrame(pane, name.replace(/Label$/, "Value")), ROW_W, ROW_H);
+    const value = findFrame(pane, name.replace(/Label$/, "Value"));
+    size(value, ROW_W, ROW_H);
+    // The FDF sits these rows' text on the BOTTOM of their box (JUSTIFYBOTTOM), which is
+    // where the tails of "Suggested Players:" kept meeting the clip. Both halves of a row
+    // centre in it instead — they keep their common baseline, and the type keeps its tails.
+    for (const f of [row, value]) setProp(f, "FontJustificationV", [arg("JUSTIFYMIDDLE")]);
     bottom += gap + ROW_H;
     prev = name;
   }
@@ -832,13 +837,16 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
 // against it, and the description gets whatever it leaves.
 const PANE_W = 0.234375;
 const PANE_H = 0.2875;
-const ROWS_TOP = 0.17; // where "Suggested Players:" starts, below the minimap
+/** The minimap, and the stat rows under it — both a little higher than the FDF's own
+ *  geometry puts them, to leave the blurb the room a Blizzard-length one needs. */
+const MINIMAP_TOP = 0.026;
+const ROWS_TOP = 0.162; // where "Suggested Players:" starts, below the minimap
 /** The stat block: all but the last hair of the pane's width, and centred in it. */
-const ROW_W = 0.228;
+const ROW_W = 0.2325;
 const ROW_X = (PANE_W - ROW_W) / 2;
 /** Tall enough for the type it holds — a row cropped to the FDF's 0.015 ate the descenders
  *  of "Suggested Players:" (our text frames clip; they do not spill). */
-const ROW_H = 0.018;
+const ROW_H = 0.019;
 const DESC_GAP = 0.002; // MapDescValue's own SetPoint TOP, MapDescLabel BOTTOM, 0, -0.002
 /** How far below the pane's top the blurb may run: a shade past the pane's own box, into
  *  the gap Skirmish.fdf leaves between it and the Advanced Options base. Echo Isles' five
@@ -847,7 +855,7 @@ const DESC_BOTTOM = PANE_H + 0.014;
 /** The blurb's type size. The FDF's StandardSmallTextTemplate says 0.011, but that is sized
  *  for WC3's own font; ours sets wider, so a Blizzard-length description would not fit the
  *  box the game gives it. Smaller type, same box — the reference's proportions survive. */
-const DESC_FONT = 0.009;
+const DESC_FONT = 0.0085;
 
 /** The map-info pane's stat rows, in order, with the gap above each. */
 const INFO_ROWS: Array<[string, number]> = [
