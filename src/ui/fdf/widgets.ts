@@ -48,6 +48,11 @@ export interface ListControl extends Control {
   setItems(items: ListItem[]): void;
   get value(): string | null;
   select(value: string): void;
+  /** How far the list is scrolled. A screen that rebuilds itself (the Custom Game screen
+   *  does, on every map picked) reads this before and writes it after, so the list stays
+   *  exactly where the player left it. */
+  get scrollTop(): number;
+  set scrollTop(v: number);
   onChange?: (value: string) => void;
   /** Double-click / Enter on a row — the map list's "just start it" shortcut. */
   onActivate?: (value: string) => void;
@@ -346,12 +351,20 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
     get value(): string | null { return value; },
     /** Set the selection WITHOUT firing onChange — this is a screen restoring its own state
      *  after a rebuild, not the user picking something. Firing here would re-enter the
-     *  handler that caused the rebuild in the first place. */
+     *  handler that caused the rebuild in the first place. And it does NOT scroll: the row
+     *  the player just clicked is, by definition, already under their cursor — moving the
+     *  list out from under it is the last thing they asked for. */
     select(v: string): void {
       if (!items.some((i) => i.value === v)) return;
       value = v;
-      paint();
-      rows.querySelector(".fdf-list-row.selected")?.scrollIntoView({ block: "nearest" });
+      const at = rows.scrollTop;
+      paint(); // rebuilds the rows, which resets scrollTop — put it back
+      rows.scrollTop = at;
+      scrollbar?.sync();
+    },
+    get scrollTop(): number { return rows.scrollTop; },
+    set scrollTop(v: number) {
+      rows.scrollTop = v;
       scrollbar?.sync();
     },
     setEnabled(on: boolean): void {

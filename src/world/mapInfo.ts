@@ -37,6 +37,14 @@ export interface MapInfo {
   minimap: Uint8Array | null;
   /** Whether the map is a standard melee map (drives melee vs. custom start). */
   isMelee: boolean;
+  /**
+   * The map's own FORCES, when it declares custom ones (w3i flag 0x0040): a name and the
+   * players in it. WC3's lobby shows these as headings over the player rows — "Forest Task
+   * Force" above the four humans, "Monolithic Creeps" above the four computers — because on
+   * a custom map the teams are the map's to name, not the lobby's. Empty on a melee map,
+   * which declares one nameless force holding everybody.
+   */
+  forces: Array<{ name: string; players: number[] }>;
   /** w3i flag 0x0020 — the map fixes each slot's race/team and the lobby may not change
    *  them (WarChasers sets it). The lobby greys those controls out rather than letting the
    *  player author a setup the map's own config() immediately contradicts. */
@@ -55,7 +63,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const minimap = mpq.rawBytes("war3mapMap.blp") ?? null;
   const empty: MapInfo = {
     name: fallbackName, description: "", recommendedPlayers: "", tileset: "", width: 0, height: 0,
-    slots: [], minimap, isMelee: classification.isMelee, fixedPlayerSettings: false, classification,
+    slots: [], minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false, classification,
   };
   const w3iBytes = mpq.rawBytes("war3map.w3i");
   if (!w3iBytes) return empty;
@@ -90,6 +98,14 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     slots,
     minimap,
     isMelee: classification.isMelee,
+    // Only a map that claims its forces gets to name them; a melee map's single force is an
+    // implementation detail of the file, not a heading the lobby should print.
+    forces: customForces
+      ? info.forces.map((f) => ({
+          name: resolveName(f.name, "", strings),
+          players: slots.filter((s) => (f.playerMasks & (1 << s.id)) !== 0).map((s) => s.id),
+        }))
+      : [],
     fixedPlayerSettings: (info.flags & W3I_FIXED_PLAYER_SETTINGS) !== 0,
     classification,
   };

@@ -78,6 +78,29 @@ interface Slot {
   handicap: number;
 }
 
+/** A run of player rows under one heading. A melee map has a single, unnamed group (its rows
+ *  just stack from the top of the panel); a custom map has one per FORCE it declares, and the
+ *  lobby prints the map's own name for it over that force's rows. */
+interface Group {
+  name: string;
+  rows: number[]; // indices into `slots` — which is also each row's widget suffix
+}
+
+/** Split the player rows into the map's forces, in the order the map declares them. */
+function forceGroups(info: MapInfo, slots: Slot[]): Group[] {
+  const groups: Group[] = [];
+  for (const force of info.forces) {
+    const rows = slots.map((s, i) => (force.players.includes(s.id) ? i : -1)).filter((i) => i >= 0);
+    if (rows.length) groups.push({ name: force.name, rows });
+  }
+  // A map with no forces of its own (every melee map) — or one whose forces hold nobody we
+  // can seat — is one plain run of rows.
+  const seated = new Set(groups.flatMap((g) => g.rows));
+  const rest = slots.map((_, i) => i).filter((i) => !seated.has(i));
+  if (rest.length) groups.push({ name: "", rows: rest });
+  return groups;
+}
+
 /** Mount the Custom Game screen over `maps` — the install's own `Maps\` folder. */
 export async function mountSkirmish(
   container: HTMLElement,
@@ -98,7 +121,9 @@ export async function mountSkirmish(
   let selected: { path: string; file: File; info: MapInfo } | null = null;
   let preview: MapPreview | null = null; // the selected map's minimap markers
   let slots: Slot[] = [];
+  let groups: Group[] = []; // the player rows, under the map's own force headings
   let maxSlots = 0;
+  let listScroll = 0; // where the map list stands, kept across the screen's rebuilds
   let alive = true; // cleared on dispose, so the background read below stops
 
   const readMap = async (path: string): Promise<MapInfo | null> => {
@@ -145,12 +170,18 @@ export async function mountSkirmish(
       team: s.team,
       handicap: 100,
     }));
-    screen.relayout(); // the row count changed, so the frame tree itself has to be rebuilt
+    groups = forceGroups(info, slots);
+    // The whole screen is rebuilt below (the rows and their headings are frames, and there
+    // are now a different number of them), which throws the map list's DOM away with it.
+    // Remember where the list stood so it comes back exactly there.
+    listScroll = screen.list("MapListBox")?.scrollTop ?? 0;
+    screen.relayout();
   };
 
   /** Walk into a folder (or back out of one): the list is a directory browser. */
   const openFolder = (folder: string, screen: FdfScreen): void => {
     cwd = folder;
+    listScroll = 0; // a new folder starts at its top
     fillList(screen);
     void readFolder(screen);
   };
@@ -162,7 +193,7 @@ export async function mountSkirmish(
     rootFrame: "Skirmish",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF, PLAYER_SLOT_FDF],
     // The engine composes this screen from four files; so do we.
-    buildRoot: (lib) => { strings = lib; return buildSkirmishRoot(lib, maxSlots); },
+    buildRoot: (lib) => { strings = lib; return buildSkirmishRoot(lib, groups); },
     // "Advanced Options" is one of two mutually exclusive panels in the FDF (the other
     // shows the map info); the map info is the one on screen, so its twin stays hidden.
     hidden: ["AdvancedOptionsPanel"],
@@ -215,13 +246,14 @@ export async function mountSkirmish(
     if (alive && changed && cwd === folder) fillList(s);
   }
 
-  /** Put the current folder's rows in the list box. */
+  /** Put the current folder's rows in the list box, where the player left it. */
   function fillList(s: FdfScreen): void {
     const list = s.list("MapListBox");
     if (!list) return;
     const upOneLevel = strings?.string("UP_ONE_LEVEL") ?? "(up one level)";
     list.setItems(folderRows(entries, cwd).map((r) => toListItem(r, icons, upOneLevel)));
     if (selected) list.select(selected.path);
+    list.scrollTop = listScroll;
   }
 
   /** (Re)fill every widget from the state above — called after each build/rebuild. */
@@ -245,6 +277,9 @@ export async function mountSkirmish(
     if (!selected) return;
 
     fillMapInfo(s, selected.info, preview, minimapIcons);
+    // The map names its own forces ("Forest Task Force", "Monolithic Creeps"); the frames are
+    // there, this puts the names in them.
+    groups.forEach((g, i) => { if (g.name) s.setText(forceLabelName(i), g.name); });
 
     const teams = teamOptions(maxSlots);
     slots.forEach((slot, i) => {
@@ -542,7 +577,7 @@ function teamOptions(rows: number): Option[] {
 }
 
 /** Skirmish + the map list, the player rows and the info pane dropped into its containers. */
-function buildSkirmishRoot(lib: FdfLibrary, rows: number): FdfFrame {
+function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   const root = lib.resolveRoot("Skirmish");
   if (!root) throw new Error("Skirmish.fdf: no Skirmish frame");
 
@@ -557,14 +592,30 @@ function buildSkirmishRoot(lib: FdfLibrary, rows: number): FdfFrame {
 
   const slot = lib.resolveRoot("PlayerSlot");
   if (slot) {
+    // Stack the rows down the top of the team-setup frame, group by group: a force's heading
+    // (the map's own name for it), then its rows. PlayerSlot declares its own Height (0.025)
+    // and chains its widgets left-to-right off its own LEFT edge, so only the y is ours.
     const built: FdfFrame[] = [];
-    for (let i = 0; i < rows; i++) {
-      const row = suffixed(slot, String(i));
-      // Stack the rows down the top of the team-setup frame. PlayerSlot declares its own
-      // Height (0.025) and chains its widgets left-to-right off its own LEFT edge.
-      setProp(row, "SetPoint", [arg("TOPLEFT"), str("TeamSetupContainer"), arg("TOPLEFT"), num(0), num(-i * 0.0275)]);
-      built.push(row);
-    }
+    let y = 0;
+    groups.forEach((group, g) => {
+      if (group.name) {
+        const label = lib.resolveRoot("StandardLabelTextTemplate");
+        if (label) {
+          label.name = forceLabelName(g);
+          size(label, 0.3, ROW_PITCH);
+          setProp(label, "SetPoint", [arg("TOPLEFT"), str("TeamSetupContainer"), arg("TOPLEFT"), num(0), num(-y)]);
+          built.push(label);
+          y += ROW_PITCH;
+        }
+      }
+      const x = group.name ? ROW_INDENT : 0; // only a group under a heading is indented under it
+      for (const i of group.rows) {
+        const row = suffixed(slot, String(i));
+        setProp(row, "SetPoint", [arg("TOPLEFT"), str("TeamSetupContainer"), arg("TOPLEFT"), num(x), num(-y)]);
+        built.push(row);
+        y += ROW_PITCH;
+      }
+    });
     adopt(root, "TeamSetupContainer", built);
   }
 
@@ -611,6 +662,16 @@ const BUTTON_TO_BASE = 0.79;
 
 /** How far up the map list moves to centre between the panel's two rails. */
 const MAP_LIST_NUDGE = 0.006;
+
+/** One line of the team-setup panel: a player row (PlayerSlot is 0.025 tall) or a force's
+ *  heading. The rows sit shoulder to shoulder in the reference, so the pitch is barely more
+ *  than the row itself. */
+const ROW_PITCH = 0.026;
+/** The rows are indented under their heading, which starts at the panel's own left edge. */
+const ROW_INDENT = 0.012;
+
+/** The frame name of group `g`'s heading. */
+const forceLabelName = (g: number): string => `ForceLabel${g}`;
 
 /** Slide a frame along x (+y is up), keeping the anchor the FDF gave it. */
 function nudgeX(f: FdfFrame | undefined, dx: number): void { nudge(f, 3, dx); }
