@@ -792,6 +792,7 @@ export class RtsController {
       if (!m.running || !this.seesFor(m.player)) continue;
       this.stampFogArea(m.area, fogStateOf(m.state));
     }
+    this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
   }
 
   /** Does this unit's sight lift OUR fog? Your own team always does. Beyond that, a
@@ -835,6 +836,37 @@ export class RtsController {
       return !this.vision.isExplored(cx, cy);
     }
     return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
+  }
+
+  /** May the local player CLICK this unit right now — select it, hover it, aim an order at
+   *  it? A different question from whether its model is drawn (fogHides), and the difference
+   *  is the whole of issue #62: a structure you have explored KEEPS its image in the fog,
+   *  because WC3 leaves the last thing you saw standing there, but the image is a MEMORY, not
+   *  eyes on the building. You can see the Goblin Merchant across the map; you cannot shop at
+   *  it, select it, or send a unit to attack it, until something of yours is actually looking.
+   *  So: your own units always; an EXPOSED player's units (the melee cripple penalty reveals
+   *  them wherever they stand); and otherwise only what your team currently sees. */
+  private fogBlocksClick(u: SimUnit): boolean {
+    if (this.vision.revealed) return false;
+    if (u.team === this.localTeam && !u.neutralPassive) return false;
+    if (u.owner >= 0 && this.exposed.has(u.owner)) return false;
+    return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
+  }
+
+  /** Anything that has slipped into the fog leaves the selection and the hover (issue #62).
+   *  WC3 never lets you keep watching through the fog: the moment your last eye on a unit
+   *  closes it drops out of your selection — and a remembered building drops with it, even
+   *  though its image stays standing on the terrain. Run off the vision rebuild, so it costs
+   *  one pass over a ≤12-unit selection every 0.1s. */
+  private pruneFogged(): void {
+    for (const id of [...this.selected]) {
+      const u = this.sim.units.get(id);
+      if (u && this.fogBlocksClick(u)) this.deselect(id);
+    }
+    if (this.hovered !== null) {
+      const u = this.sim.units.get(this.hovered);
+      if (u && this.fogBlocksClick(u)) this.hovered = null;
+    }
   }
 
   /** Apply the combined visibility decision (gold-mine + fog) to one render entry,
@@ -4010,7 +4042,11 @@ export class RtsController {
     let bestBldgScore = Infinity;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
-      if (e.hidden) continue;
+      // `hidden` is "no model on screen"; fogBlocksClick is "no eyes on it" — and an explored
+      // enemy BUILDING is drawn but unseen, so the second test is the one that keeps the
+      // cursor from grabbing a shop across the map (issue #62). Every click, hover, order and
+      // spell target comes through here, so gating the pick gates all of them at once.
+      if (e.hidden || this.fogBlocksClick(u)) continue;
       if (ground && Math.hypot(u.x - ground[0], u.y - ground[1]) > PICK_WORLD_MAX) continue;
       const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
       // Project the unit's mid-body (base + ~half its height) to screen. Buildings
