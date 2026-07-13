@@ -67,6 +67,9 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Layout:** sim in `src/sim/` (world, pathing, `spells.ts`), game glue in `src/game/rts.ts`, rendering + command card
   in `src/render/mapViewer.ts`, HUD DOM in `src/ui/hud.ts`, data tables in `src/data/` (units, techtree, `abilities.ts`),
   audio in `src/audio/`, styles in `src/style.css`.
+- **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
+  camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
+  the real client) — conflate them and every distance changes meaning and every map camera breaks.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a
