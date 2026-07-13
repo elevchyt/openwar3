@@ -90,7 +90,12 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   const build = (): void => {
     overlay.textContent = "";
     shortcuts.clear();
-    const fit = fitBox(window.innerWidth, window.innerHeight);
+    // Fit to the overlay's OWN box, not the window. CSS decides what that box is — the whole
+    // window for the menus, the 16:9 game stage for the in-game screens (style.css) — so a
+    // frame anchored TOPRIGHT lands on the right edge of the frame it belongs to. Measuring
+    // the window here is what threw the multiboard and the leaderboard off once the game got
+    // letterboxed: they were laid out for a box wider than the one they were drawn in.
+    const fit = fitBox(overlay.clientWidth || window.innerWidth, overlay.clientHeight || window.innerHeight);
     // Root fills the full screen width (worldW × 0.6) so TOPRIGHT-anchored frames land
     // on the screen's right edge, not a centred 4:3 box's right edge. A CENTRED root
     // instead keeps its own Width/Height and sits in the middle — how the game puts a
@@ -109,6 +114,9 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     });
   };
 
+  // Mount BEFORE the first build: the layout measures the overlay's own box, and an element
+  // that isn't in the document yet measures 0.
+  opts.container.appendChild(overlay);
   build();
 
   const onResize = (): void => build();
@@ -127,8 +135,6 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     if (h) { e.preventDefault(); h(); }
   };
   window.addEventListener("keydown", onKey);
-
-  opts.container.appendChild(overlay);
 
   return {
     element: overlay,

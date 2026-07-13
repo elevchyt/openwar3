@@ -14,6 +14,7 @@ import { type ItemRegistry } from "../data/items";
 import { WORKERS, DEPOT_IDS } from "../data/races";
 import { trainsFor } from "../data/techtree";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
+import { worldLayer } from "../ui/stage";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -399,7 +400,10 @@ function makeHpBar(): HpBar {
   manaTrack.appendChild(mana);
   bars.append(hpTrack, manaTrack);
   root.append(level, bars);
-  document.body.appendChild(root);
+  // Into the world layer, whose box IS the canvas's — the bar's position is computed in
+  // canvas CSS pixels, so parenting it to the window instead offsets every bar by the
+  // letterbox (see ui/stage.ts).
+  worldLayer().appendChild(root);
   return { root, bars, level, hp, manaTrack, mana };
 }
 

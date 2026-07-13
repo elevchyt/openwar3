@@ -46,6 +46,8 @@ import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
+import { GAME_WIDTH, GAME_HEIGHT, worldLayer } from "../ui/stage";
+import { UI_HEIGHT } from "../ui/fdf/layout";
 import { GameMenu } from "../ui/gameMenu";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
@@ -1928,7 +1930,10 @@ export class MapViewerScene {
     // orc music: SetMapMusic("Music", …) → [Orc] Music_V1 (7.20).
     const skin = SKIN_SECTION[this.localRace];
     if (this.sounds) this.sounds.musicSkin = skin;
-    this.textTags = new TextTagOverlay(ui);
+    // Floating combat text is world-anchored (project() hands it canvas CSS pixels), so it
+    // belongs in the world layer — the leaderboard/multiboard/timers below are SCREEN-anchored
+    // UI and belong in #ui, which CSS has already fitted to the same stage.
+    this.textTags = new TextTagOverlay(worldLayer());
     this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin);
     this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
@@ -1997,7 +2002,9 @@ export class MapViewerScene {
     const dpr = this.canvas.width / this.canvas.clientWidth || 1;
     const vision = rts.getVision();
     return {
-      uiScale: window.innerHeight / 0.6, // the FDF UI space is 0.6 tall — see ui/fdf/layout.ts
+      // The FDF UI space is 0.6 tall (ui/fdf/layout.ts) and is fitted to the GAME frame, so a
+      // text tag's size/offset scales with the stage — not with the window around it.
+      uiScale: (this.canvas.clientHeight || GAME_HEIGHT) / UI_HEIGHT,
       groundHeight: (x, y) => rts.groundHeightAt(x, y),
       unitAt: (simId) => {
         const u = rts.simWorld.units.get(simId);
@@ -5562,14 +5569,15 @@ export class MapViewerScene {
     let dx = 0;
     let dy = 0;
     if (active) {
-      const m = this.lastMouse;
-      const w = window.innerWidth;
-      const h = window.innerHeight;
+      // The edges that scroll are the GAME frame's, not the window's — with the frame
+      // letterboxed, the window's edge is out in the black bar where there is no map.
+      const m = this.lastMouse; // viewport (clientX/clientY) coords
+      const r = this.canvas.getBoundingClientRect();
       const margin = MapViewerScene.EDGE_MARGIN;
-      if (m.x <= margin) dx = -1;
-      else if (m.x >= w - margin) dx = 1;
-      if (m.y <= margin) dy = -1;
-      else if (m.y >= h - margin) dy = 1;
+      if (m.x <= r.left + margin) dx = -1;
+      else if (m.x >= r.right - margin) dx = 1;
+      if (m.y <= r.top + margin) dy = -1;
+      else if (m.y >= r.bottom - margin) dy = 1;
     }
     if (dx || dy) {
       if (dx) this.pan(right, dx * speed);
@@ -5611,7 +5619,10 @@ export class MapViewerScene {
    *  more world per vertical screen pixel. */
   private midPan(mx: number, my: number): void {
     const h = this.canvas.clientHeight || 720;
-    const worldPerPx = (2 * this.distance * Math.tan(Math.PI / 8)) / h; // fov = π/4
+    // Off the LIVE lens, not a hard-coded one: the drag has to track the ground under the
+    // cursor, and the world a screen pixel covers is set by the lens (and by a script's, if
+    // one is driving the camera).
+    const worldPerPx = (2 * this.distance * Math.tan(this.fov / 2)) / h;
     const fwd: [number, number] = [Math.cos(this.yaw), Math.sin(this.yaw)];
     const right: [number, number] = [fwd[1], -fwd[0]];
     // Inverted: +mx (drag right) → pan left; -my (drag up) → pan down/backward.
@@ -5630,13 +5641,14 @@ export class MapViewerScene {
     this.target[1] = clamp(this.target[1], b.minY, b.maxY);
   }
 
-  /** Draw the drag-selection rectangle (canvas fills the page, so offset coords
-   *  are page coords). */
+  /** Draw the drag-selection rectangle. `x`/`y` are CANVAS coords (offsetX/offsetY), so the
+   *  box lives in the world layer, whose box is the canvas's — not on the body, which is the
+   *  window's and would offset it by the letterbox. */
   private updateSelectBox(x: number, y: number): void {
     if (!this.selectBoxEl) {
       this.selectBoxEl = document.createElement("div");
       this.selectBoxEl.className = "select-box";
-      document.body.appendChild(this.selectBoxEl);
+      worldLayer().appendChild(this.selectBoxEl);
     }
     const el = this.selectBoxEl;
     el.hidden = false;
@@ -5942,15 +5954,12 @@ export class MapViewerScene {
   }
 }
 
-// The game renders at a fixed 1080p, 16:9 — the frame Warcraft III itself draws, and the
-// frame the 70° lens is framed for. The CSS stage scales this buffer into the largest 16:9
-// box the window allows and letterboxes the rest (see style.css), so the aspect can never
-// drift with the window: 1:1 fullscreen on a 1080p display, cleanly scaled everywhere else.
-// Sizing the buffer off the window instead is what let a tall window widen the view — the
-// lens is vertical, so a wider box quietly hands the player more map than the real game gives.
-const GAME_WIDTH = 1920;
-const GAME_HEIGHT = 1080;
-
+// The game renders at a fixed 1080p, 16:9 (ui/stage.ts) — the frame Warcraft III itself
+// draws, and the frame the 70° lens is framed for. The CSS stage scales this buffer into the
+// largest 16:9 box the window allows and letterboxes the rest, so the aspect can never drift
+// with the window: 1:1 fullscreen on a 1080p display, cleanly scaled everywhere else. Sizing
+// the buffer off the window instead is what let a tall window widen the view — the lens is
+// vertical, so a wider box quietly hands the player more map than the real game gives.
 function syncCanvasSize(canvas: HTMLCanvasElement): void {
   // Only assign when it changed: reassigning canvas.width/height even to the same value
   // reallocates and clears the GL drawing buffer.

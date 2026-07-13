@@ -73,18 +73,35 @@ html, body {
   z-index: 0;
 }
 
-/* The map is the one scene that is a GAME view rather than a backdrop, so it — alone —
-   is letterboxed to the stage. The backing buffer is a fixed 1920x1080 (syncCanvasSize),
-   which this box scales to: pixel-for-pixel at 1080p fullscreen, and never a stretched
-   aspect anywhere else. */
+/* Everything that belongs to the GAME FRAME — the map canvas, the world-anchored overlay
+   layer, the HUD, the in-game FDF screens — is laid out in this same box, so a coordinate
+   means the same thing to all of them. Anything measured against the window instead lands
+   at the wrong place the moment the frame is letterboxed. */
+.stage-box,
 #map {
+  position: fixed;
   inset: auto;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   width: var(--stage-w);
   height: var(--stage-h);
+}
+
+/* The map is the one scene that is a GAME view rather than a backdrop, so it — alone — is
+   letterboxed. The backing buffer is a fixed 1920x1080 (GAME_WIDTH/GAME_HEIGHT), which this
+   box scales: pixel-for-pixel at 1080p fullscreen, never a stretched aspect anywhere else. */
+#map {
   background: #000;
+}
+
+/* World-anchored overlays (health bars, the drag box, floating combat text). Above the map,
+   below the HUD — and it CLIPS, so a bar on a unit at the frame's edge can't spill out over
+   the letterbox. */
+#world-layer {
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 /* Black bars around the stage during a match. */
@@ -190,7 +207,8 @@ body.in-game {
    Width is set inline, relative to the unit's on-screen size. The selection/
    hover RING is a separate flat 3D model on the terrain. */
 .unit-hpbar {
-  position: fixed;
+  /* Absolute inside #world-layer: the bar's left/top are canvas CSS pixels (ui/stage.ts). */
+  position: absolute;
   transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
@@ -880,7 +898,8 @@ body.in-game .menu-panel { display: none; }
 
 /* Drag-box selection rectangle (WC3 green marquee). */
 .select-box {
-  position: fixed;
+  /* Absolute inside #world-layer — the drag box is drawn in canvas (offsetX/offsetY) coords. */
+  position: absolute;
   border: 1px solid rgba(120, 235, 130, 0.9);
   background: rgba(90, 224, 110, 0.12);
   pointer-events: none;
@@ -1246,6 +1265,19 @@ body.in-game #ui {
   padding: 0;
 }
 
+/* Same for the in-game FDF screens (multiboard, leaderboard, dialogs): they anchor frames
+   to the corners of the GAME's frame, as the real game does — not to the browser window's.
+   They fit themselves to whatever box this lands them in (mountFdfScreen measures its own
+   overlay), so this rule is the only place the box is decided. */
+body.in-game .fdf-screen.fdf-ingame {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--stage-w);
+  height: var(--stage-h);
+}
+
 /* Menu panel anchored on the right, per the canonical TFT reference (§10.1). */
 .menu-panel {
   pointer-events: auto;
@@ -1420,7 +1452,9 @@ body.in-game .load-gate { display: none; }
    absolutely placed by transform each frame (src/render/textTags.ts) — it sits under the
    HUD but over the world, and never eats a click. */
 .texttag-layer {
-  position: fixed;
+  /* Absolute inside #world-layer (the canvas's box), not fixed to the window — its tags are
+     positioned in canvas CSS pixels. */
+  position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
