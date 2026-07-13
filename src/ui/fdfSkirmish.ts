@@ -833,8 +833,8 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
 const PANE_W = 0.234375;
 const PANE_H = 0.2875;
 const ROWS_TOP = 0.17; // where "Suggested Players:" starts, below the minimap
-/** The stat block: narrower than the pane, and centred in it. */
-const ROW_W = 0.2;
+/** The stat block: all but the last hair of the pane's width, and centred in it. */
+const ROW_W = 0.228;
 const ROW_X = (PANE_W - ROW_W) / 2;
 /** Tall enough for the type it holds — a row cropped to the FDF's 0.015 ate the descenders
  *  of "Suggested Players:" (our text frames clip; they do not spill). */
