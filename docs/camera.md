@@ -1,120 +1,117 @@
 # The camera — lens, zoom, and a map's own camera
 
-What Warcraft III's camera actually does, and the two traps that cost this project three wrong commits
-in a row. Everything here is **measured against the real 1.27a client**, not read out of a file — because
-on this particular question the files lie (see [`REFERENCES.md`](REFERENCES.md): the MPQ wins over any
-reference, but *observed behaviour* wins over the MPQ).
+What Warcraft III's camera actually does, and the trap that cost this project four wrong commits
+in a row. Everything here is **measured against the real 1.27a client** — the numbers in the files
+are right, but only if you resist the urge to reinterpret them.
 
 The code lives in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts) (`GAME_FOV`, `ZOOM_MIN/MAX`,
-`MELEE_START`, `fovFromWc3`/`fovToWc3`, `readCamera`/`writeCamera`) and
-[`src/render/scriptCamera.ts`](../src/render/scriptCamera.ts) (the tweens a map's script drives).
+`MELEE_START`, `readCamera`/`writeCamera`), [`src/render/scriptCamera.ts`](../src/render/scriptCamera.ts)
+(the tweens a map's script drives), and the constants themselves are in
+[`src/data/gameplayConstants.ts`](../src/data/gameplayConstants.ts) (`CAMERA.*`).
 
 ## TL;DR
 
 | Quantity | Value | Where it comes from |
 |---|---|---|
-| **Rendered lens** | **45°** vertical FOV | **Measured from the real client** (below). NOT the 70 in the data. |
-| Camera-setup FOV **field** | 70 | `Scripts\Blizzard.j` `bj_CAMERA_DEFAULT_FOV` — a *field* value, not the rendered angle |
-| Default distance | 1650 | `bj_CAMERA_DEFAULT_DISTANCE` |
+| **Rendered lens** | **70°** vertical FOV | `Scripts\Blizzard.j` `bj_CAMERA_DEFAULT_FOV` — and it is the angle the client really renders with (measured below) |
+| Default distance | 1650 | `bj_CAMERA_DEFAULT_DISTANCE` — what a match **opens on** |
 | Angle of attack | 304 (= −56°) | `bj_CAMERA_DEFAULT_AOA` |
 | Rotation / FarZ | 90 / 5000 | `bj_CAMERA_DEFAULT_ROTATION` / `_FARZ` |
-| Our zoom range | 1250 – 2000, opens at 2000 | Ours; brackets WC3's 1650 default |
+| Our zoom range | 1250 – 2400 | Ours; brackets WC3's 1650 default. WC3's own wheel stops are not documented anywhere we trust |
 | Melee camera centre | the starting **workers** | `Blizzard.j:8299` — *not* the town hall |
 
-## Trap 1 — the FOV field is not the lens
+## The trap: the lens and the distance are one knob
 
-`bj_CAMERA_DEFAULT_FOV = 70` is sitting right there in Blizzard's own code, so it is very tempting to
-render at 70°. **Don't.** The real client renders that same default camera at about **45°** vertically
-(on a ~2:1 window). Render at 70° and the entire game sits `tan(35°)/tan(22.5°)` = **1.7× too wide**, and
-every camera distance stops meaning what it means in the real game.
+What you see is set by **distance × tan(fov/2)**. Narrow the lens and everything looks farther away;
+you can hide that by pushing the distance out, and the frame will look almost the same. So a wrong
+lens does not announce itself as "wrong lens" — it announces itself as *every distance in the game
+meaning the wrong thing*, and it is very easy to keep "fixing" it by tuning the zoom constants.
 
-So the **FIELD** (what scripts speak, ordinary value 70) and the **LENS** (what we project with,
-ordinary value 45°) are *different quantities*, and a script's FOV must be translated between them.
-`fovFromWc3` maps a field onto the lens by the framing it produces — the half-height it subtends at the
-focus, relative to each scale's own ordinary value:
+That is exactly what happened here. A previous pass concluded that the FOV *field* (70) and the
+rendered *lens* were different quantities, put the lens at 45°, and translated every script's FOV
+onto that narrower scale. Then the zoom constants got tuned to compensate, and the game still felt
+welded to the ground, because a 45° lens shows **1.7× less world** than the real client does at the
+same distance — no zoom range can buy that back.
+
+**There is no translation.** `CAMERA_FIELD_FIELD_OF_VIEW` is a vertical FOV in degrees, WC3's
+default is 70, and 70° is what the client renders with. A map that asks for 70 gets 70; a map that
+narrows to a telephoto gets exactly the angle it asked for.
+
+## How the 70° was established (repeat this, don't re-argue it)
+
+Use a real-client screenshot of a **melee opening frame** — the camera is then WC3's own default
+(distance 1650, AOA 304, rotation 90, no script touching it) and nothing about it is in doubt. Ours
+is `~/Downloads/references/human hud and workers starting position.png`, 1920×1080.
+
+The measurement needs no knowledge of the map, only a landmark whose **world size** you can
+calibrate — the town hall's wall ring is ideal (crisp edges, sits on the ground):
+
+1. Screenshot the same landmark from **our** engine, twice, at two different known lenses/distances.
+   Every term is known there, so the hall's world width falls out of the projection.
+2. In the reference, measure the wall ring's pixel width and the screen y of its front base. For a
+   ground point at offset `dy` from the focus, with `k = (H/2)/tan(fov/2)`:
+
+   ```
+   z         = D + dy·cos(pitch)          // depth along the view axis
+   cy − sy   = k·dy·sin(pitch) / z        // where that ground point lands on screen
+   px width  = k · worldWidth / z
+   ```
+
+3. Solve for the one remaining unknown, the lens.
+
+The answer is not close to 45°:
 
 ```
-k        = tan(field/2) / tan(70°/2)          // how much wider/narrower than WC3's ordinary view
-lens     = 2·atan( k · tan(45°/2) )           // the same relative framing, on our lens
+  lens    town hall would be…      (it measures 320 px)
+   45°          480 px      ← what we were rendering: half again too big
+   60°          361 px
+   70°          308 px      ← the file's value, 4% off — inside the error of hand-picking edges
+   80°          267 px
 ```
 
-Field 70 lands exactly on our 45° (an ordinary view stays ordinary — which is what the real client
-does), and a shot that deliberately narrows to a telephoto keeps the zoom-in factor it would have had in
-WC3. `fovToWc3` is the inverse, so `GetCameraField(CAMERA_FIELD_FIELD_OF_VIEW)` reads 70 on the default
-camera exactly as it does in the real game.
+The fit's own minimum is ≈67°, and the residual against 70° is smaller than the uncertainty in
+reading a model's silhouette by eye. So the file is telling the truth; take it literally.
 
-## Trap 2 — honouring a map's camera setup literally
+> Note that lens and distance are **degenerate** for framing — a (fov, distance) pair fits the same
+> frame along a whole valley. That is why the solve above pins the distance at the melee default
+> (1650, which a fresh melee start guarantees) instead of fitting both at once.
 
-Every camera object the World Editor writes carries the **full field set**, whether or not the map author
-meant anything by any given field. So a camera that means "an ordinary view" still *says* 70.
+## A map's own camera
 
-`(4)WarChasers`' `gg_cam_CamStart1` is the worked example — it is precisely `bj_CAMERA_DEFAULT` with the
-distance nudged:
+Every camera object the World Editor writes carries the **full field set**, whether or not the map
+author meant anything by any given field. `(4)WarChasers`' `gg_cam_CamStart1` is precisely
+`bj_CAMERA_DEFAULT` with the distance nudged:
 
 ```jass
 call CameraSetupSetField( gg_cam_CamStart1, CAMERA_FIELD_ZOFFSET,         0.0,    0.0 )
 call CameraSetupSetField( gg_cam_CamStart1, CAMERA_FIELD_ROTATION,        90.0,   0.0 )
 call CameraSetupSetField( gg_cam_CamStart1, CAMERA_FIELD_ANGLE_OF_ATTACK, 304.0,  0.0 )
 call CameraSetupSetField( gg_cam_CamStart1, CAMERA_FIELD_TARGET_DISTANCE, 1790.9, 0.0 )
-call CameraSetupSetField( gg_cam_CamStart1, CAMERA_FIELD_FIELD_OF_VIEW,   70.0,   0.0 )   // <-- ordinary!
+call CameraSetupSetField( gg_cam_CamStart1, CAMERA_FIELD_FIELD_OF_VIEW,   70.0,   0.0 )
 call CameraSetupSetField( gg_cam_CamStart1, CAMERA_FIELD_FARZ,            5000.0, 0.0 )
 ```
 
-…and its `Snap Camera to Player` trigger re-applies it **every 2 seconds** (`TriggerRegisterTimerEventPeriodic`,
-2 s), on top of riding the player's wisp with `SetCameraTargetControllerNoZ`. Take the 70 at face value on a
-45° engine and the map is pinned 1.7× too wide **forever** — the mouse wheel moves the *distance*, not the
-lens, so the player can never undo it. That is exactly the "WarChasers is forcefully zoomed out" bug.
+…and its `Snap Camera to Player` trigger re-applies it **every 2 seconds**
+(`TriggerRegisterTimerEventPeriodic`, 2 s), on top of riding the player's wisp with
+`SetCameraTargetControllerNoZ`. Applied literally on the 70° lens, that is an ordinary view at
+1790.9 — which is what the map means and what the real client shows. (It also ships
+`Player1..7 Disallow MouseWheel` triggers: WarChasers *intends* to own your camera. That part is
+authentic; leave it alone.)
 
-With the translation in place, the map frames the ordinary view the real client shows, at its own 1790.9.
-
-> The map also ships `Player1..7 Disallow MouseWheel` triggers and re-imposes its distance on a timer —
-> WarChasers *intends* to own your camera. That part is authentic; leave it alone.
-
-## How the 45° was established (repeat this, don't re-argue it)
-
-Solving a camera from one screenshot needs only landmarks whose **world** positions you already know:
-
-1. Run the real client windowed: `Frozen Throne.exe -window` (automates fine; see the
-   `wc3-ground-truth-from-the-real-client` note). Start a **melee** game — the camera is then WC3's own
-   default: distance 1650, AOA 304, rotation 90, no script touching it.
-2. Screenshot the start view. Pick two landmarks with known world positions — the **gold mine** and the
-   **town hall** are ideal, and our own engine will print both (mine list, start location, ground heights).
-3. Grid-search the camera focus `(tx, ty)` × vertical FOV, projecting both landmarks with the known
-   distance/AOA/rotation, and minimise reprojection error against their measured pixel positions.
-4. Confirm by eye: render the same map at the same distance and stack the frames.
-
-The error curve is unambiguous — it bottoms out at 45° and 70° is nowhere near:
-
-```
-  fov    rms reprojection error (px), minimised over the focus
-   35        52.1
-   40        38.6
-   45        34.8   <-- minimum
-   50        37.8
-   60        50.2
-   70        62.5
-   80        73.0
-```
-
-(The ~35 px floor is the hand-measured landmark pixels, not model error; what matters is the shape.)
+The moment the lens was wrong, WarChasers looked like the *broken* one — it was the only map stating
+its FOV explicitly, so it was the only map still being rendered at 70 while everything else sat at
+45. It was right all along; the rest of the game was wrong.
 
 ## Zoom
 
-`ZOOM_MIN = 1250`, `ZOOM_MAX = 2000`, and a match **opens fully zoomed out** (`MELEE_START = ZOOM_MAX`).
-Because the lens is right, these are real-game distances: WC3's own default (1650) sits inside the range,
-so the opening view is about a fifth wider than the one the real client opens on.
+`ZOOM_MIN = 1250`, `ZOOM_MAX = 2400`, and a match opens on **1650** — `bj_CAMERA_DEFAULT_DISTANCE`,
+which through the 70° lens *is* the real client's opening view. Because the lens is right, these
+distances mean what they mean in the real game.
 
-Two things worth knowing before anyone "fixes" this again:
-
-- **Distances only mean something at the correct lens.** The pre-2026-07 code used 2400/3600 — those look
-  reasonable, but they were quietly compensating for a lens that was briefly set too narrow/too wide. If
-  you change `GAME_FOV`, every distance constant silently changes meaning.
-- **Authentic framing is tighter than people expect.** WC3's default view is noticeably closer in than the
-  roomy view OpenWar3 shipped with historically. That is not a bug. If a wider feel is ever wanted, the
-  lever is `ZOOM_MAX` (≈3400 reproduces the old roomy framing) — **never** the lens, which would break
-  every map camera again.
-
-WC3's own wheel stops have not been measured; 1250/2000 is our choice, not ground truth.
+- **Never re-tune the lens to change how roomy the game feels.** The lever is `ZOOM_MAX`. Changing
+  `GAME_FOV` silently redefines every distance constant and every map's camera.
+- WC3's own wheel stops have not been measured; 1250/2400 is our choice, not ground truth. The
+  *default* it opens on is ground truth.
 
 ## Melee camera centring
 

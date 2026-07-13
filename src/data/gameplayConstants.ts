@@ -299,6 +299,23 @@ export const MELEE = {
   UNIT_FACING: 270,
 } as const;
 
+/** `Scripts\Blizzard.j` `bj_CAMERA_DEFAULT_*` — the shape of the camera a game opens on,
+ *  and the one `ResetToGameCamera` comes home to. FIELD_OF_VIEW is the angle we actually
+ *  render with; see docs/camera.md before touching any of these. */
+export const CAMERA = {
+  /** bj_CAMERA_DEFAULT_DISTANCE — eye-to-focus distance. */
+  DEFAULT_DISTANCE: 1650,
+  /** bj_CAMERA_DEFAULT_FOV — vertical field of view, in degrees. */
+  DEFAULT_FOV: 70,
+  /** bj_CAMERA_DEFAULT_AOA — angle of attack, 304 = -56° (the view tilts down). */
+  DEFAULT_AOA: 304,
+  /** bj_CAMERA_DEFAULT_ROTATION — 90° = looking north (+Y), which is why units, facing
+   *  270° by default, face the viewer. */
+  DEFAULT_ROTATION: 90,
+  /** bj_CAMERA_DEFAULT_FARZ — far clip plane. */
+  DEFAULT_FARZ: 5000,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Derived tables. Computed from the raw values above so a fix to one is a fix to
 // all — never hand-transcribe a number that the game itself derives.
