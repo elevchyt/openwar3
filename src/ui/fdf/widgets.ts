@@ -185,6 +185,10 @@ export function buildPopup(
   const chrome = document.createElement("canvas");
   chrome.className = "fdf-popup-menu-chrome";
 
+  // The pulldown arrow the FDF hangs off the widget (PlayerSlotPopupMenuArrow1,
+  // TeamButtonArrow1…) — the one piece of its chrome that a disabled dropdown drops.
+  const arrow = el.querySelector<HTMLElement>(':scope > [data-frame*="Arrow"]');
+
   let options: Option[] = [];
   let value = "";
   let enabled = true;
@@ -270,6 +274,9 @@ export function buildPopup(
       enabled = on;
       if (!on) close();
       el.classList.toggle("fdf-disabled", !on);
+      // A dead dropdown offers nothing to pull down, so the game takes its arrow away too:
+      // WarChasers' greyed rows are bare boxes in the real client, arrowless.
+      if (arrow) arrow.hidden = !on;
     },
   };
   return control;

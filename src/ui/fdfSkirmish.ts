@@ -78,6 +78,9 @@ interface Slot {
   race: Race;
   team: number;
   handicap: number;
+  /** The MAP declared this slot a computer (w3i player type 2), so it is not the lobby's to
+   *  re-seat: the slot menu is greyed at "Computer (Normal)". See MapInfo's PlayerSlot. */
+  locked: boolean;
 }
 
 /** A run of player rows under one heading. A melee map has a single, unnamed group (its rows
@@ -125,6 +128,7 @@ export async function mountSkirmish(
   let slots: Slot[] = [];
   let groups: Group[] = []; // the player rows, under the map's own force headings
   let maxSlots = 0;
+  let localIndex = 0; // which row is YOU — the first slot the map lets a human take
   let listScroll = 0; // where the map list stands, kept across the screen's rebuilds
   let alive = true; // cleared on dispose, so the background read below stops
 
@@ -162,15 +166,22 @@ export async function mountSkirmish(
     if (!file || !info) return;
     selected = { path, file, info };
     readPreview(path, file);
-    // A map's slots come from the map. Seat the local player in the first one and let the
-    // AI have the rest — WC3's default when you pick a melee map.
+    // A map's slots come from the map. Seat the local player in the first one a human may
+    // take; a MELEE map then fills the rest with computers (pick Echo Isles, press Start, and
+    // you have an opponent), while a custom map leaves its free slots OPEN — WarChasers' three
+    // spare heroes stand empty in the real client, because a scenario's other seats are for
+    // people. A slot the map declared a computer is never ours to seat either way: it stays
+    // that map's own AI player.
     maxSlots = info.slots.length;
+    localIndex = Math.max(0, info.slots.findIndex((s) => s.controller === "user"));
+    const spare: Controller = info.isMelee ? "computer" : "open";
     slots = info.slots.map((s, i) => ({
       id: s.id,
-      controller: i === 0 ? "user" : "computer",
+      controller: s.controller === "computer" ? "computer" : i === localIndex ? "user" : spare,
       race: s.defaultRace,
       team: s.team,
       handicap: 100,
+      locked: s.controller === "computer",
     }));
     groups = forceGroups(info, slots);
     // The whole screen is rebuilt below (the rows and their headings are frames, and there
@@ -294,32 +305,53 @@ export async function mountSkirmish(
     groups.forEach((g, i) => { if (g.name) s.setText(forceLabelName(i), g.name); });
 
     const teams = teamOptions(maxSlots);
+    const fixed = selected.info.fixedPlayerSettings;
     slots.forEach((slot, i) => {
+      const mine = i === localIndex;
       const name = s.popup(`NameMenu${i}`);
       if (name) {
-        // Your own slot is you — WC3 shows your profile name there, not a menu of others.
-        name.setOptions(i === 0 ? [{ value: "user", label: "Player" }] : CONTROLLERS.map(([v, l]) => ({ value: v, label: l })));
+        // Your own slot is you — WC3 shows your profile name there, not a menu of others. A
+        // slot the MAP owns (a computer player it declared) shows what it is and takes no
+        // choice: the real client greys WarChasers' "Dungeon Denizens" row at Computer.
+        name.setOptions(
+          mine ? [{ value: "user", label: "Player" }]
+          : slot.locked ? [{ value: "computer", label: labelOf("computer") }]
+          : CONTROLLERS.map(([v, l]) => ({ value: v, label: l })),
+        );
         name.value = slot.controller;
-        name.onChange = (v) => { slot.controller = v as Controller; };
+        name.onChange = (v) => { slot.controller = v as Controller; fill(s); }; // the row's other menus follow who is in it
+        name.setEnabled(!mine && !slot.locked);
       }
+      // An EMPTY slot has nothing to configure: on an Open/Closed row the real client greys
+      // the race, team, colour and handicap and leaves only the slot menu live.
+      const seated = slot.controller === "user" || slot.controller === "computer";
       const race = s.popup(`RaceMenu${i}`);
       if (race) {
         race.setOptions(RACES.map((r) => ({ value: r, label: RACE_LABEL[r] })));
         race.value = slot.race;
         race.onChange = (v) => { slot.race = v as Race; };
+        // Note "fixed player settings" does NOT reach the race: on WarChasers (which sets the
+        // flag) the client still opens the race menu on both seated rows — yours and the AI's.
+        race.setEnabled(seated);
       }
       const team = s.popup(`TeamButton${i}`);
       if (team) {
         team.setOptions(teams);
         team.value = String(slot.team);
         team.onChange = (v) => { slot.team = parseInt(v, 10); };
+        // …but the team and the handicap it does: a fixed-settings map hands out everyone
+        // else's, and only your own row stays yours to set.
+        team.setEnabled(seated && (!fixed || mine));
       }
       const colour = s.popup(`ColorButton${i}`);
       if (colour) {
-        colour.setOptions(PLAYER_COLORS.slice(0, maxSlots).map((c, ci) => ({ value: c, label: `Player ${ci + 1}` })));
+        // The colour IS the player slot in WC3 — player 6 is green because it is player 6 —
+        // so the swatch is the slot's own colour and the menu is read-only. The options are
+        // the WHOLE palette, not the first `maxSlots` of it: a popup drops a value it has no
+        // option for, and a map that seats players 0/1/5/6/11 (WarChasers) would then paint
+        // three of its five rows with option 0's red.
+        colour.setOptions(PLAYER_COLORS.map((c, ci) => ({ value: c, label: `Player ${ci + 1}` })));
         colour.value = PLAYER_COLORS[slot.id % PLAYER_COLORS.length];
-        // The colour IS the player slot in WC3 — it isn't a free choice the sim can honour,
-        // so the swatch shows the slot's colour and the menu is read-only.
         colour.setEnabled(false);
       }
       const handicap = s.popup(`HandicapMenu${i}`);
@@ -327,14 +359,15 @@ export async function mountSkirmish(
         handicap.setOptions(HANDICAPS.map((p) => ({ value: String(p), label: `${p}%` })));
         handicap.value = String(slot.handicap);
         handicap.onChange = (v) => { slot.handicap = parseInt(v, 10); };
-      }
-      // A map that fixes its own races/teams doesn't take suggestions from the lobby.
-      if (selected?.info.fixedPlayerSettings) {
-        race?.setEnabled(false);
-        team?.setEnabled(false);
+        handicap.setEnabled(seated && (!fixed || mine));
       }
     });
   }
+}
+
+/** The menu label a controller shows ("Computer (Normal)"). */
+function labelOf(c: Controller): string {
+  return CONTROLLERS.find(([v]) => v === c)?.[1] ?? c;
 }
 
 /** Fill the map-info pane: the badge, minimap, the three stat rows and the blurb. */

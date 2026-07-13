@@ -1366,6 +1366,9 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-disabled > .fdf-disabled-face { opacity: 1; }
 .fdf-disabled { pointer-events: none; }
 .fdf-disabled .fdf-btn-text span { color: var(--fdf-disabled-color, #808080) !important; }
+/* A dropdown pressed out of a BUTTON (PlayerSlot's TeamButton) has no TEXT child to grey —
+   its label is the popup's own title frame, and it greys with the rest of the widget. */
+.fdf-disabled .fdf-popup-title span { color: var(--fdf-disabled-color, #808080) !important; }
 .fdf-disabled .fdf-button-glow { opacity: 0 !important; }
 
 /* Two screen-wide gates during a transition, both a single class on the overlay so neither

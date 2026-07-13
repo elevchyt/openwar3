@@ -13,6 +13,12 @@ export interface PlayerSlot {
   defaultRace: Race;
   startX: number;
   startY: number;
+  /** What the MAP says the slot is: w3i player type 1 = user (a human may take it), 2 =
+   *  computer. A computer slot is the map's own AI player and the lobby may not re-seat it —
+   *  WarChasers' "Dungeon Denizens" (player 11) is a computer, and the real client shows its
+   *  slot menu greyed at "Computer (Normal)" while the four user slots still offer Open/Closed.
+   *  A melee map declares every slot as a user slot, so nothing is locked there. */
+  controller: "user" | "computer";
   /** The slot's TEAM, and on a custom map it is the map's to decide, not the lobby's.
    *  A w3i carries FORCE definitions (a name + a bitmask of member players), and the
    *  "use custom forces" flag (0x0040) says they are authoritative — which is exactly what
@@ -52,9 +58,11 @@ export interface MapInfo {
    * which declares one nameless force holding everybody.
    */
   forces: Array<{ name: string; players: number[] }>;
-  /** w3i flag 0x0020 — the map fixes each slot's race/team and the lobby may not change
-   *  them (WarChasers sets it). The lobby greys those controls out rather than letting the
-   *  player author a setup the map's own config() immediately contradicts. */
+  /** w3i flag 0x0020 ("fixed player settings", set by WarChasers) — the map, not the lobby,
+   *  owns the setup. Measured against the real client on WarChasers, what it actually fixes is
+   *  every slot BUT your own: the AI player's team and handicap are greyed while yours are
+   *  still yours to pick, and the race stays open on any seated slot (the client happily lets
+   *  you re-race the Dungeon Denizens). See fdfSkirmish's row rules. */
   fixedPlayerSettings: boolean;
   /** Melee/custom classification + the map's flags and trigger script. */
   classification: MapClassification;
@@ -96,6 +104,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
       defaultRace: raceFromW3i(p.race),
       startX: p.startLocation[0],
       startY: p.startLocation[1],
+      controller: p.type === 2 ? "computer" : "user",
       team: customForces ? forceOf(info, p.id) : p.id, // see PlayerSlot.team
     }));
 
