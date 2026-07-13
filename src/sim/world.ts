@@ -416,6 +416,11 @@ export type ShopResult = "ok" | "no" | "nostock" | "nopatron" | "full" | "cost" 
  *  from the shop ability itself (Aall 600 / Aneu 450); this only covers a broken data load. */
 const DEFAULT_SHOP_RADIUS = 450;
 
+/** The four races a PLAYER can be. A requirement naming a building of one of these is a
+ *  race-specific gate; anything else (a pseudo-tech like TWN2, a neutral building) is not.
+ *  See missingForShop. */
+const PLAYABLE_RACES = new Set(["human", "orc", "undead", "nightelf"]);
+
 /** A shift-queued follow-up order, replayed when the unit's current order ends.
  *  WC3 allows chaining several (up to ~35) — move, attack, harvest, build… */
 export type QueuedOrder =
@@ -1288,6 +1293,34 @@ export class SimWorld {
     return Math.hypot(u.x - shop.x, u.y - shop.y) <= this.shopRadius(shop.typeId) + shop.radius;
   }
 
+  /** The requirements `player` (a buyer of `race`) has NOT met for `itemId` AT THIS SHOP — the
+   *  red "Requires:" line, and the gate on the purchase itself.
+   *
+   *  An item carries ONE requirement list, but it is sold in two very different places, and the
+   *  list belongs to the RACE shop. The Scroll of Healing is the case that proves it: its
+   *  `Requires=unp2` is a Black Citadel — the Undead Tomb of Relics' own tier-3 gate, and the
+   *  Tomb does sell it — yet the same scroll sits on every Goblin Merchant, where a Human could
+   *  never in the game's lifetime meet it. So a NEUTRAL shop drops a requirement that names
+   *  another race's building, and keeps every requirement that is race-agnostic: the
+   *  pseudo-techs (TWN2 = "a Keep or Stronghold or Tree of Ages or Halls of the Dead"), which
+   *  is exactly why a Scroll of Town Portal stays tier-2-gated wherever you buy it.
+   *
+   *  A RACE shop (the item is in its `Makeitems`) applies the lot, unchanged. */
+  missingForShop(shopId: number, itemId: string, race: string, player: number): string[] {
+    if (!this.tech) return [];
+    const missing = this.tech.missing(player, itemId);
+    if (!missing.length) return missing;
+    const shop = this.units.get(shopId);
+    const raceShop = !!shop && (this.techReg?.get(shop.typeId).makeitems.includes(itemId) ?? false);
+    if (raceShop) return missing;
+    return missing.filter((tech) => {
+      const d = this.unitReg?.get(tech);
+      // Not a unit at all → a pseudo-tech (TWN1/2/3, TALT, HERO). Race-agnostic: it applies.
+      if (!d || !PLAYABLE_RACES.has(d.race)) return true;
+      return d.race === race; // one of OUR buildings → ours to meet; another race's → not this shop's gate
+    });
+  }
+
   /** Stock remaining for one ware (item or unit) at a shop; -1 when it isn't stocked at all. */
   shopStock(shopId: number, wareId: string): number {
     const s = this.units.get(shopId)?.building?.stock?.get(wareId);
@@ -1429,7 +1462,8 @@ export class SimWorld {
     if (!shop || !def || shop.hp <= 0) return "no";
     if (this.shopStock(shopId, itemId) <= 0) return "nostock";
     // The BUYER's tech gates the shelf: a Potion of Healing needs `TWN2` (a Keep or better).
-    if (this.tech && !this.tech.meets(player, itemId)) return "req";
+    // Which requirements a NEUTRAL shop applies is a question of its own — see missingForShop.
+    if (this.missingForShop(shopId, itemId, buyer?.race ?? "", player).length) return "req";
     if (!buyer || buyer.owner !== player || buyer.hp <= 0 || !buyer.inventory.length) return "nopatron";
     if (!this.inShopRange(shop, buyer)) return "nopatron";
     if (buyer.inventory.indexOf(null) < 0) return "full";

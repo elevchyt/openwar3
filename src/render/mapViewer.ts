@@ -4084,17 +4084,19 @@ export class MapViewerScene {
       const slot = slots.get(itemId);
       if (!d || slot === undefined) continue;
       const stock = world.shopStock(sel.id, itemId);
-      const metTech = world.tech ? world.tech.meets(this.localPlayer, itemId) : true;
+      // What this SHOP asks of this buyer — not what the item asks in the abstract. A neutral
+      // shop drops another race's building requirement; see SimWorld.missingForShop.
+      const missing = world.missingForShop(sel.id, itemId, this.localRace, this.localPlayer);
       const afford = stash.gold >= d.gold && stash.lumber >= d.lumber;
       out.push(this.cmd({
         id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey, tip: d.tip,
-        desc: d.description + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId),
+        desc: d.description + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId, 0, missing),
         gold: d.gold, lumber: d.lumber, food: 0,
         count: stock > 0 ? stock : undefined,
         col: slot % 4,
         row: Math.floor(slot / 4),
-        disabled: !afford || !metTech || stock <= 0 || !hasPatron,
+        disabled: !afford || missing.length > 0 || stock <= 0 || !hasPatron,
       }));
     }
   }
@@ -4103,10 +4105,13 @@ export class MapViewerScene {
    *  "Requires:" tooltip line. WC3 names the requirement by its display name — and the
    *  pseudo-techs have names of their own ("Keep or Stronghold or Tree of Ages or Halls of
    *  the Dead" for TWN2), which is why they live in the data rather than being spelled out. */
-  private requirementLine(id: string, tier = 0): string {
+  private requirementLine(id: string, tier = 0, override?: string[]): string {
     const state = this.rts?.simWorld.tech;
     if (!state) return "";
-    const missing = state.missing(this.localPlayer, id, tier);
+    // `override` lets a caller narrow the list — a neutral shop asks less of a buyer than the
+    // item's raw data does (SimWorld.missingForShop), and the red line must say the same thing
+    // the greying does.
+    const missing = override ?? state.missing(this.localPlayer, id, tier);
     if (!missing.length) return "";
     // The tech graph carries the display name, which is the only way a pseudo-tech reads
     // properly: TWN2 renders as "Keep or Stronghold or Tree of Ages or Halls of the Dead".
