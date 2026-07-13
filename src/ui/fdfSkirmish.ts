@@ -603,6 +603,8 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
         if (label) {
           label.name = forceLabelName(g);
           size(label, 0.3, ROW_PITCH);
+          // A heading, not a title: it sits a size under the label type the template carries.
+          setProp(label, "FrameFont", [str("MasterFont"), num(FORCE_FONT), str("")]);
           setProp(label, "SetPoint", [arg("TOPLEFT"), str("TeamSetupContainer"), arg("TOPLEFT"), num(0), num(-y)]);
           built.push(label);
           y += ROW_PITCH;
@@ -669,6 +671,9 @@ const MAP_LIST_NUDGE = 0.006;
 const ROW_PITCH = 0.026;
 /** The rows are indented under their heading, which starts at the panel's own left edge. */
 const ROW_INDENT = 0.012;
+
+/** The force heading's type size (StandardLabelTextTemplate's own 0.013 sets too loud here). */
+const FORCE_FONT = 0.011;
 
 /** The frame name of group `g`'s heading. */
 const forceLabelName = (g: number): string => `ForceLabel${g}`;
