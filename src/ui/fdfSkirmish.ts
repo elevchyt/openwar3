@@ -61,6 +61,8 @@ const HANDICAPS = [100, 90, 80, 70, 60, 50];
 const mapCache = new Map<string, MapInfo>();
 /** …and the minimap markers of the maps that were actually picked. */
 const previewCache = new Map<string, MapPreview | null>();
+/** The folders whose maps have all been read — the only ones the list may show (openFolder). */
+const readFolders = new Set<string>();
 /** The install's unit table, loaded on the first map picked (it says which neutral buildings
  *  earn a minimap glyph). Module-level for the same reason as the map cache. */
 let registry: UnitRegistry | null = null;
@@ -178,12 +180,22 @@ export async function mountSkirmish(
     screen.relayout();
   };
 
-  /** Walk into a folder (or back out of one): the list is a directory browser. */
-  const openFolder = (folder: string, screen: FdfScreen): void => {
+  /**
+   * Walk into a folder (or back out of one): the list is a directory browser.
+   *
+   * A folder is READ BEFORE it is shown. Every row's name, icon and player count live inside
+   * the map file, and the maps are what the folder is sorted BY — so posting the rows first
+   * and refreshing them as the reads landed meant the player watched "(4)LostTemple" become
+   * "Lost Temple" and jump up the list under their cursor. The list goes quiet (empty, and
+   * answering nothing) until its folder is in, and then it is right the first time.
+   */
+  const openFolder = async (folder: string, screen: FdfScreen): Promise<void> => {
     cwd = folder;
     listScroll = 0; // a new folder starts at its top
+    fillList(screen); // empty + disabled: this folder has not been read yet
+    await readFolder(folder);
+    if (!alive || cwd !== folder) return; // the player left, or moved on to another folder
     fillList(screen);
-    void readFolder(screen);
   };
 
   const screen = await mountFdfScreen({
@@ -217,41 +229,41 @@ export async function mountSkirmish(
   const dispose = screen.dispose.bind(screen);
   screen.dispose = (): void => { alive = false; dispose(); };
 
-  void readFolder(screen);
+  void openFolder(cwd, screen);
 
   return screen;
 
   /**
-   * A row shows the map's OWN name ("Booty Bay", not "(2)BootyBay"), its player count and
-   * whether it is melee or custom — all of which live INSIDE the map file. Reading them up
-   * front would stall the screen's entrance, so the rows go up under their file names and
-   * the folder on screen is re-read in the background, one map at a time.
+   * Read every map in `folder`: a row shows the map's OWN name ("Booty Bay", not
+   * "(2)BootyBay"), its player count and whether it is melee or custom, and all four live
+   * INSIDE the map file. Each map is read once — `mapCache` is module-level, so a folder
+   * visited twice is instant the second time.
    */
-  async function readFolder(s: FdfScreen): Promise<void> {
-    const folder = cwd;
-    let changed = false;
+  async function readFolder(folder: string): Promise<void> {
     for (const e of entries.filter((x) => x.folder === folder)) {
       if (!alive) return; // the player left; stop reading files for a screen that is gone
       try {
-        const info = await readMap(e.path); // cached after the first visit
+        const info = await readMap(e.path);
         if (!info) continue;
         e.label = info.name || e.label;
         e.melee = info.isMelee;
-        if (info.slots.length) e.players = info.slots.length;
-        changed = true;
+        if (info.maxPlayers) e.players = info.maxPlayers;
       } catch (err) {
         console.warn(`[OpenWar3] couldn't read ${e.path}:`, err);
       }
     }
-    if (alive && changed && cwd === folder) fillList(s);
+    if (alive) readFolders.add(folder);
   }
 
-  /** Put the current folder's rows in the list box, where the player left it. */
+  /** Put the current folder's rows in the list box, where the player left it. A folder whose
+   *  maps are still being read shows nothing and takes no clicks — see openFolder. */
   function fillList(s: FdfScreen): void {
     const list = s.list("MapListBox");
     if (!list) return;
+    const ready = readFolders.has(cwd);
     const upOneLevel = strings?.string("UP_ONE_LEVEL") ?? "(up one level)";
-    list.setItems(folderRows(entries, cwd).map((r) => toListItem(r, icons, upOneLevel)));
+    list.setItems(ready ? folderRows(entries, cwd).map((r) => toListItem(r, icons, upOneLevel)) : []);
+    list.setEnabled(ready);
     if (selected) list.select(selected.path);
     list.scrollTop = listScroll;
   }
@@ -265,7 +277,7 @@ export async function mountSkirmish(
       // is walked into on a double-click, a map is played on one.
       list.onChange = (value) => { if (!value.startsWith("folder:")) void chooseMap(value, s); };
       list.onActivate = (value) => {
-        if (value.startsWith("folder:")) openFolder(value.slice("folder:".length), s);
+        if (value.startsWith("folder:")) void openFolder(value.slice("folder:".length), s);
         else start();
       };
     }
@@ -327,12 +339,12 @@ export async function mountSkirmish(
 
 /** Fill the map-info pane: the badge, minimap, the three stat rows and the blurb. */
 function fillMapInfo(s: FdfScreen, info: MapInfo, preview: MapPreview | null, icons: MinimapIcons): void {
-  s.setText("MaxPlayersValue", String(info.slots.length));
+  s.setText("MaxPlayersValue", String(info.maxPlayers));
   s.setText("MapNameValue", info.name);
-  s.setText("SuggestedPlayersValue", info.recommendedPlayers || `${info.slots.length} players`);
+  s.setText("SuggestedPlayersValue", info.recommendedPlayers || `${info.maxPlayers} players`);
   // "Map Size" is a WORD, not a measurement: the game buckets a map by its player count
   // (UI\MiscData.txt [BattleNetCustomFilter]), which is how a 1v1 reads "Small".
-  s.setText("MapSizeValue", mapSizeLabel(info.slots.length));
+  s.setText("MapSizeValue", mapSizeLabel(info.maxPlayers));
   s.setText("MapTilesetValue", TILESETS[info.tileset] ?? info.tileset ?? "—");
   s.setText("MapDescValue", info.description || "");
   centreNameRow(s);
@@ -350,8 +362,11 @@ function fillMapInfo(s: FdfScreen, info: MapInfo, preview: MapPreview | null, ic
  * Centre the name row — the player-count badge, the map's name, the author's badge — as one
  * group over the pane. The engine sizes a TEXT frame to its TEXT and then anchors it, so the
  * three sit shoulder to shoulder whatever the name's length; our layout solver gives a text
- * frame a fixed box instead, so the row has to be re-centred once the name is in and its
- * width is finally a real number.
+ * frame a fixed box instead, so the row has to be measured once the name is in.
+ *
+ * A name too long for the pane WRAPS ("Funny Bunny's Egg Hunt" wants two lines) and the row
+ * grows UPWARDS to hold it — its bottom stays where it was, so the minimap below never moves.
+ * (Clipping the overflow, which is what a fixed box does, hid half the name.)
  */
 function centreNameRow(s: FdfScreen): void {
   const badge = s.frame("MaxPlayersIcon");
@@ -361,14 +376,32 @@ function centreNameRow(s: FdfScreen): void {
   const span = name?.querySelector("span");
   if (!badge || !name || !author || !pane || !span) return;
 
+  // The box the FDF gave the name, kept aside: every fill starts from it, or a two-line name
+  // would leave the row taller for the one-line name after it.
+  const baseTop = parseFloat(name.dataset.baseTop ?? (name.dataset.baseTop = name.style.top));
+  const baseH = parseFloat(name.dataset.baseH ?? (name.dataset.baseH = name.style.height));
+
   const gap = badge.offsetWidth * 0.13; // the FDF's 0.0025 against the badge's own 0.01875
-  const text = Math.ceil(span.getBoundingClientRect().width);
-  const total = badge.offsetWidth + gap + text + gap + author.offsetWidth;
-  const left = Math.round((pane.clientWidth - total) / 2);
+  const room = pane.clientWidth - 2 * (badge.offsetWidth + gap);
+
+  span.style.whiteSpace = "nowrap"; // measure the name as ONE line…
+  const natural = Math.ceil(span.getBoundingClientRect().width);
+  span.style.whiteSpace = "";
+  const width = Math.min(natural, Math.floor(room)); // …and give it that, or the room it has
+
+  name.style.width = `${width}px`;
+  const height = Math.max(baseH, Math.ceil(span.getBoundingClientRect().height) + 2);
+  name.style.height = `${height}px`;
+  name.style.top = `${baseTop + baseH - height}px`; // grow up: the row's BOTTOM is the anchor
+
+  const left = Math.round((pane.clientWidth - (badge.offsetWidth + gap + width + gap + author.offsetWidth)) / 2);
   badge.style.left = `${left}px`;
   name.style.left = `${left + badge.offsetWidth + gap}px`;
-  name.style.width = `${text}px`;
-  author.style.left = `${left + badge.offsetWidth + gap + text + gap}px`;
+  author.style.left = `${left + badge.offsetWidth + gap + width + gap}px`;
+  // The badges sit on the middle of the name, however many lines it runs to.
+  const middle = baseTop + baseH - height / 2;
+  badge.style.top = `${middle - badge.offsetHeight / 2}px`;
+  author.style.top = `${middle - author.offsetHeight / 2}px`;
 }
 
 /** Stamp the lobby's markers onto a copy of the map's own minimap picture. */
@@ -503,16 +536,16 @@ function toListItem(r: MapEntry | FolderRow, icons: Icons, upOneLevel: string): 
       icon: r.up ? icons.up : icons.folder,
     };
   }
-  return { value: r.path, label: r.label, icon: r.melee ? icons.melee(r.players) : icons.ums };
+  return { value: r.path, label: r.label, icon: icons.map(r.melee, r.players) };
 }
 
 interface Icons {
   folder: HTMLCanvasElement | null;
   up: HTMLCanvasElement | null;
-  ums: HTMLCanvasElement | null;
-  /** The melee badge with the map's player count printed in it (as MapInfoPane's own
-   *  MaxPlayersIcon does — the same art, the same number over it). */
-  melee(players: number): HTMLCanvasElement | null;
+  /** A map's badge with its player count printed in it (as MapInfoPane's own MaxPlayersIcon
+   *  does — the same art, the same number over it). Melee maps wear the crossed-swords icon
+   *  and custom ones the cog, but BOTH carry the count: a custom map takes players too. */
+  map(melee: boolean, players: number): HTMLCanvasElement | null;
 }
 
 function loadIcons(vfs: DataSource): Icons {
@@ -520,15 +553,18 @@ function loadIcons(vfs: DataSource): Icons {
     const bytes = vfs.rawBytes(path);
     return bytes ? blpToCanvas(bytes) : null;
   };
-  const melee = icon(ICON_MELEE);
-  const badges = new Map<number, HTMLCanvasElement | null>();
+  const art = { melee: icon(ICON_MELEE), ums: icon(ICON_UMS) };
+  const badges = new Map<string, HTMLCanvasElement | null>();
   return {
     folder: icon(ICON_FOLDER),
     up: icon(ICON_FOLDER_UP),
-    ums: icon(ICON_UMS),
-    melee(players: number): HTMLCanvasElement | null {
-      if (!badges.has(players)) badges.set(players, melee ? countBadge(melee, players) : null);
-      return badges.get(players) ?? null;
+    map(melee: boolean, players: number): HTMLCanvasElement | null {
+      const key = `${melee ? "m" : "u"}${players}`;
+      if (!badges.has(key)) {
+        const base = melee ? art.melee : art.ums;
+        badges.set(key, base ? countBadge(base, players) : null);
+      }
+      return badges.get(key) ?? null;
     },
   };
 }

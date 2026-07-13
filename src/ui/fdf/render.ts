@@ -661,7 +661,11 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   const sizeWorld = font?.args[1]?.n ?? 0.013;
   el.style.fontFamily = UI_FONT;
   el.style.fontSize = `${Math.max(8, sizeWorld * ctx.fit.scale)}px`;
-  el.style.lineHeight = "1.05";
+  // The line box must hold the whole glyph, descenders and all. At 1.05 it did not: a text
+  // frame clips its overflow, and the FDF's own JUSTIFYBOTTOM labels ("Suggested Players:",
+  // "Large") sit their line flush against the bottom edge — so the tail of every g and y was
+  // cut off against it.
+  el.style.lineHeight = "1.2";
   el.style.whiteSpace = "pre-wrap";
 
   const color = firstProp(f, "FontColor")?.args;

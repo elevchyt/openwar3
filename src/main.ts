@@ -235,6 +235,11 @@ function onFilesLoaded(load: GateLoad): void {
   });
 }
 
+// The right mouse button belongs to the GAME (it is the move/attack order), and a game has no
+// browser context menu — anywhere, on any surface: the 3D canvas, the HUD, the menus. The
+// individual canvases already swallowed it; this closes the rest of the page.
+window.addEventListener("contextmenu", (e) => e.preventDefault());
+
 gate = mountLoadGate(ui, onFilesLoaded);
 
 // Console hooks for the phase exit criteria (see README "Testing manually").

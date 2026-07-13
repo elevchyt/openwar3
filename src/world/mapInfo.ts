@@ -33,6 +33,13 @@ export interface MapInfo {
   width: number;
   height: number;
   slots: PlayerSlot[];
+  /**
+   * How many players the map is FOR — the badge on its row and beside its name. Only the
+   * slots a human may take (w3i player type 1) count: Monolith seats eight, but four of them
+   * are its own "Monolithic Creeps" computers, and the game calls it a 4-player map. On a
+   * melee map every slot is a user slot, so this is simply `slots.length`.
+   */
+  maxPlayers: number;
   /** The map's own minimap image (war3mapMap.blp), for the Custom Game preview. */
   minimap: Uint8Array | null;
   /** Whether the map is a standard melee map (drives melee vs. custom start). */
@@ -63,7 +70,8 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const minimap = mpq.rawBytes("war3mapMap.blp") ?? null;
   const empty: MapInfo = {
     name: fallbackName, description: "", recommendedPlayers: "", tileset: "", width: 0, height: 0,
-    slots: [], minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false, classification,
+    slots: [], maxPlayers: 0, minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false,
+    classification,
   };
   const w3iBytes = mpq.rawBytes("war3map.w3i");
   if (!w3iBytes) return empty;
@@ -78,8 +86,11 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const wtsBytes = mpq.rawBytes("war3map.wts");
   const strings = wtsBytes ? parseWts(new TextDecoder("utf-8").decode(wtsBytes)) : new Map<number, string>();
   const customForces = (info.flags & W3I_USE_CUSTOM_FORCES) !== 0;
-  const slots: PlayerSlot[] = info.players
-    .filter((p) => p.type === 1 || p.type === 2) // user + computer playable slots
+  // Player TYPE: 1 = user (a human may take the slot), 2 = computer (the map's own AI). Both
+  // are seated in the lobby — Monolith's creeps get four rows of their own — but only the
+  // user slots are what the map is "for" (maxPlayers).
+  const playable = info.players.filter((p) => p.type === 1 || p.type === 2);
+  const slots: PlayerSlot[] = playable
     .map((p) => ({
       id: p.id,
       defaultRace: raceFromW3i(p.race),
@@ -96,6 +107,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     width: info.playableSize[0],
     height: info.playableSize[1],
     slots,
+    maxPlayers: playable.filter((p) => p.type === 1).length || slots.length,
     minimap,
     isMelee: classification.isMelee,
     // Only a map that claims its forces gets to name them; a melee map's single force is an
