@@ -3198,7 +3198,12 @@ export class MapViewerScene {
   private static readonly ZOOM_MAX = 2400;
   private static readonly MELEE_START = CAMERA.DEFAULT_DISTANCE;
   private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
-  private mouseOverCanvas = false; // cursor over the map (not the console) — gates edge-scroll
+  private pointerInWindow = false; // the cursor is on the page at all — gates edge-scroll
+  // The game frame's box in VIEWPORT coords, refreshed once a frame. Mouse input arrives in
+  // viewport coords while everything that touches the world (picking, the ghost, the AoE
+  // circle) wants CANVAS coords, and once the frame is letterboxed those differ by the bar.
+  // One cached rect converts between the two without a per-move layout read.
+  private frame = { left: 0, top: 0, right: 0, bottom: 0 };
 
   /** Create missile instances for freshly-launched projectiles, move live ones
    *  to their current sim position each frame, and detach ones that landed. */
@@ -4631,7 +4636,9 @@ export class MapViewerScene {
       this.updateBloodMageSpheres(dt / 1000); // Blood Mage orbiting spheres + thrown balls
       this.updatePendingBuildGhosts(); // dark-blue ghosts of queued-but-not-started builds
       if (this.placement) this.updateGhost(this.lastMouse.x, this.lastMouse.y); // show/position the ghost each frame (not only on mouse move)
-      this.updateReticle(this.lastMouse.x, this.lastMouse.y);
+      // lastMouse is CANVAS space (it unprojects into the world); the reticle is a body-fixed
+      // overlay, so it rides the VIEWPORT cursor. Letterboxed, the two are a black bar apart.
+      this.updateReticle(this.lastCursor.x, this.lastCursor.y);
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
@@ -5426,6 +5433,7 @@ export class MapViewerScene {
   }
 
   private updateCamera(dtMs = 1000 / 60): void {
+    this.syncFrame(); // one layout read a frame — the pointer handlers convert against it
     const scene = this.viewer.map?.worldScene;
     if (!scene) return;
 
@@ -5580,31 +5588,50 @@ export class MapViewerScene {
   // a screen edge, and show a directional arrow cursor pointing the scroll way.
   private scrollArrow: HTMLDivElement | null = null;
   private updateEdgeScroll(fwd: [number, number], right: [number, number], speed: number): void {
-    // Only in a live match, cursor over the map (not the console), nothing modal.
+    // Only in a live match, cursor on the page, nothing modal.
     const active =
       !!this.hud &&
       !this.paused &&
       !this.placement &&
-      this.mouseOverCanvas &&
+      this.pointerInWindow &&
       !document.body.classList.contains("game-menu-open");
     let dx = 0;
     let dy = 0;
     if (active) {
-      // The edges that scroll are the GAME frame's, not the window's — with the frame
-      // letterboxed, the window's edge is out in the black bar where there is no map.
-      const m = this.lastMouse; // viewport (clientX/clientY) coords
-      const r = this.canvas.getBoundingClientRect();
+      // The console does NOT shield the edge it sits on. In WC3 the HUD is painted over a
+      // full-screen 3D view, so pushing the cursor into the bottom of the console still pans
+      // down, and into the top bar still pans up. Ours is DOM, so gating this on "the pointer
+      // is over the canvas" handed the top and bottom strips to the HUD, which swallowed the
+      // move events — and vertical edge-scroll silently died while left/right (no HUD there)
+      // kept working.
+      //
+      // The edges are the GAME FRAME's, not the window's: letterboxed, the window's edge is
+      // out in the black bar where there is no map. The bar counts as PAST the edge, so the
+      // frame's border is where the playable screen ends, bar or no bar.
+      const m = this.lastCursor; // viewport coords, tracked wherever the pointer goes
+      const f = this.frame;
       const margin = MapViewerScene.EDGE_MARGIN;
-      if (m.x <= r.left + margin) dx = -1;
-      else if (m.x >= r.right - margin) dx = 1;
-      if (m.y <= r.top + margin) dy = -1;
-      else if (m.y >= r.bottom - margin) dy = 1;
+      if (m.x <= f.left + margin) dx = -1;
+      else if (m.x >= f.right - margin) dx = 1;
+      if (m.y <= f.top + margin) dy = -1;
+      else if (m.y >= f.bottom - margin) dy = 1;
     }
     if (dx || dy) {
       if (dx) this.pan(right, dx * speed);
       if (dy) this.pan(fwd, -dy * speed); // top of screen (dy<0) pans the view forward
     }
     this.showScrollArrow(dx, dy);
+  }
+
+  /** The game frame's box in viewport coords. Read once a frame: the pointer handlers and the
+   *  edge-scroll both need it, and `getBoundingClientRect` on every mouse move would force a
+   *  layout against a HUD that mutates the DOM each frame. */
+  private syncFrame(): void {
+    const r = this.canvas.getBoundingClientRect();
+    this.frame.left = r.left;
+    this.frame.top = r.top;
+    this.frame.right = r.right;
+    this.frame.bottom = r.bottom;
   }
 
   private showScrollArrow(dx: number, dy: number): void {
@@ -5617,11 +5644,12 @@ export class MapViewerScene {
       this.scrollArrow.className = "scroll-arrow";
       document.body.appendChild(this.scrollArrow);
     }
-    // Directional glyph (8-way) placed at the cursor, pointing the scroll way.
+    // Directional glyph (8-way) placed at the cursor, pointing the scroll way. It is fixed to
+    // the BODY, so it is placed in viewport coords — lastCursor, not the canvas-space lastMouse.
     const arrows: Record<string, string> = { "-1,-1": "↖", "0,-1": "↑", "1,-1": "↗", "-1,0": "←", "1,0": "→", "-1,1": "↙", "0,1": "↓", "1,1": "↘" };
     this.scrollArrow.textContent = arrows[`${dx},${dy}`] ?? "";
-    this.scrollArrow.style.left = `${this.lastMouse.x}px`;
-    this.scrollArrow.style.top = `${this.lastMouse.y}px`;
+    this.scrollArrow.style.left = `${this.lastCursor.x}px`;
+    this.scrollArrow.style.top = `${this.lastCursor.y}px`;
     this.scrollArrow.hidden = false;
   }
 
@@ -5698,8 +5726,14 @@ export class MapViewerScene {
    *  Patrol/Rally/Repair) it shows the WC3 **target reticle**; while merely
    *  hovering a unit/mine it keeps the race **hand cursor** but recoloured. Both
    *  pulse (colour only, constant size) — green friendly / yellow neutral / red
-   *  enemy — and hide the OS cursor over the map (via the `reticle-on` class). */
-  private updateReticle(cssX: number, cssY: number): void {
+   *  enemy — and hide the OS cursor over the map (via the `reticle-on` class).
+   *
+   *  `clientX`/`clientY` are VIEWPORT coords, because this overlay is fixed to the body — it
+   *  has to be free to follow the cursor out over the HUD and the letterbox. Feeding it the
+   *  canvas-space cursor instead is what made the game feel broken windowed: the reticle drew
+   *  itself a whole letterbox bar away from the real pointer, while `reticle-on` hid the OS
+   *  cursor — so you aimed with a cursor that was lying to you, and every click landed off. */
+  private updateReticle(clientX: number, clientY: number): void {
     if (!this.rts) return this.hideCursorOverlay();
     const mode = this.rts.orderMode;
     // Carrying an item (right-clicked in the inventory to move it): the cursor stays
@@ -5707,9 +5741,7 @@ export class MapViewerScene {
     // as if the gauntlet were holding it. Handled before everything else so no hover
     // tint or armed-order reticle can steal the cursor while you're carrying.
     const carrySlot = mode === "item" && this.rts.armedItem?.mode === "move" ? this.rts.armedItem.slot : -1;
-    // Positioned off lastCursor, not the passed-in map coords: the move is armed by a
-    // right-click on the HUD, where lastMouse hasn't been updated.
-    this.updateCarriedItem(carrySlot, this.lastCursor.x, this.lastCursor.y);
+    this.updateCarriedItem(carrySlot, clientX, clientY);
     if (carrySlot >= 0) {
       document.body.classList.remove("reticle-on"); // let the OS hand cursor show through
       return this.hideCursorOverlay();
@@ -5739,8 +5771,8 @@ export class MapViewerScene {
     }
     const el = this.reticleEl;
     el.hidden = false;
-    el.style.left = `${cssX}px`;
-    el.style.top = `${cssY}px`;
+    el.style.left = `${clientX}px`;
+    el.style.top = `${clientY}px`;
     el.style.backgroundImage = `url(${url})`;
     el.className = `order-reticle ${kind} pulse`;
   }
@@ -5748,8 +5780,9 @@ export class MapViewerScene {
   /** Show/hide the half-size item icon that follows the hand while an inventory item
    *  is armed for a move. `slot` < 0 hides it. It follows the cursor everywhere —
    *  over the map AND the console — because every one of those is a legal drop
-   *  target (another slot, the ground, an allied hero). */
-  private updateCarriedItem(slot: number, cssX: number, cssY: number): void {
+   *  target (another slot, the ground, an allied hero); body-fixed like the reticle,
+   *  so `clientX`/`clientY` are viewport coords. */
+  private updateCarriedItem(slot: number, clientX: number, clientY: number): void {
     const icon = slot >= 0 ? this.rts?.inventorySlots()[slot]?.icon : "";
     const url = icon ? this.blpIcon(icon) : null;
     document.body.classList.toggle("carrying-item", slot >= 0);
@@ -5774,8 +5807,8 @@ export class MapViewerScene {
       this.carryEl.style.height = `${px}px`;
     }
     this.carryEl.hidden = false;
-    this.carryEl.style.left = `${cssX}px`;
-    this.carryEl.style.top = `${cssY}px`;
+    this.carryEl.style.left = `${clientX}px`;
+    this.carryEl.style.top = `${clientY}px`;
     this.carryEl.style.backgroundImage = `url(${url})`;
   }
 
@@ -5910,7 +5943,6 @@ export class MapViewerScene {
     c.addEventListener("pointermove", (e) => {
       this.lastMouse.x = e.offsetX;
       this.lastMouse.y = e.offsetY;
-      this.mouseOverCanvas = true;
       if (this.midPanning) {
         // Self-heal: if the middle button isn't actually held any more, the ending
         // pointerup was lost — drop the pan so it can't stick to the cursor.
@@ -5934,32 +5966,39 @@ export class MapViewerScene {
       }
       if (!this.dragging) this.rts?.hoverAt(e.offsetX, e.offsetY);
     });
-    // Pointer over an interactive HUD element (which swallows the canvas move
-    // events): clear the hover so the reticle hides and the normal cursor shows.
-    // Where the pointer is, ALWAYS — unlike `lastMouse`, which only tracks the canvas
-    // (and the HUD once an order is armed). A right-click that arms an item move
-    // happens over the HUD with nothing armed yet, so lastMouse is stale there and the
-    // carried icon would sit at the last map position until you moved the mouse.
+    // Where the pointer is, in VIEWPORT coords, ALWAYS — over the map, over the HUD, out in
+    // the letterbox. Everything drawn AT the cursor (the reticle, the carried item, the
+    // scroll arrow) is fixed to the body and so is placed from this, and edge-scroll measures
+    // it against the frame. `lastMouse` is the other space: the canvas, for what unprojects
+    // into the world. Mixing them is invisible fullscreen (the frame IS the window there) and
+    // breaks by exactly one black bar as soon as it isn't.
     const trackCursor = (e: PointerEvent | MouseEvent) => {
       this.lastCursor.x = e.clientX;
       this.lastCursor.y = e.clientY;
+      this.pointerInWindow = true;
     };
     window.addEventListener("pointermove", trackCursor, { capture: true });
     window.addEventListener("pointerdown", trackCursor, { capture: true });
     window.addEventListener("contextmenu", trackCursor, { capture: true });
+    // Cursor left the page (or the window lost focus): stop edge-scrolling. Without this the
+    // camera would keep panning off the last edge the cursor crossed on its way out.
+    document.addEventListener("pointerleave", () => (this.pointerInWindow = false));
+    window.addEventListener("blur", () => (this.pointerInWindow = false));
     window.addEventListener("pointermove", (e) => {
       // Self-heal a stuck drag even while the pointer is off the canvas (over the
       // HUD): still "dragging" with the left button not held means the pointerup
       // was lost, so cancel it here too — the canvas handler can't see these moves.
       if (this.dragging && !(e.buttons & 1)) this.cancelDrag();
       if (e.target !== this.canvas && !this.dragging) {
-        this.mouseOverCanvas = false; // over the HUD/chrome — suspend edge-scroll
         this.rts?.clearHover();
-        // While a spell/order is armed, keep the reticle following the cursor over
-        // the HUD too, so you can aim skills at units in the console's group grid.
+        // While a spell/order is armed, keep aiming over the HUD too, so you can target
+        // units in the console's group grid — and so a point spell's AoE circle keeps
+        // tracking. The canvas isn't getting these moves, so convert into ITS space: the
+        // canvas-relative offset the map's picking speaks. (This used to store the raw
+        // viewport point, which the AoE unprojected as if it were a canvas one.)
         if (this.rts?.orderMode) {
-          this.lastMouse.x = e.clientX;
-          this.lastMouse.y = e.clientY;
+          this.lastMouse.x = e.clientX - this.frame.left;
+          this.lastMouse.y = e.clientY - this.frame.top;
         }
       }
     });
