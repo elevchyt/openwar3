@@ -542,6 +542,9 @@ export class RtsController {
   private lastSeenUnitCount = -1; // map.units length at the last scan (grows as models stream in)
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
+  // The health a unit had the last time this player could see it — what a REMEMBERED building's
+  // floating bar shows while it stands in the fog (updateHealthBars). Dropped with the unit.
+  private lastSeenHp = new Map<number, { hp: number; max: number; mana: number; maxMana: number }>();
   // Corpses adopt the dead unit's model instance and sequence it through Death →
   // Decay Flesh → Decay Bone in place, holding the bones until the sim corpse
   // decays (88s). `corpseId` links to the sim corpse so a spell that raises it
@@ -2090,6 +2093,7 @@ export class RtsController {
     if (def?.soundSet) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
     this.byId.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
+    this.lastSeenHp.delete(simId);
     this.deselect(simId);
     e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence
     if (e.anims.death >= 0) {
@@ -2113,6 +2117,7 @@ export class RtsController {
     if (!e) return;
     this.byId.delete(simId);
     this.entries.splice(this.entries.indexOf(e), 1);
+    this.lastSeenHp.delete(simId);
     this.deselect(simId);
     if (this.hovered === simId) this.hovered = null;
     e.unit.instance.hide();
@@ -4129,7 +4134,21 @@ export class RtsController {
     let n = 0;
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
-      if (!u || e.hidden || u.neutralPassive) continue; // mine-worker / neutral structures: no floating bar
+      // Anything with a model on screen carries a bar — INCLUDING a structure standing in the
+      // fog, whose image the fog keeps (see fogHides). A neutral shop is a building like any
+      // other and gets one; only neutral-passive MOBILE things (critters) and a worker gone
+      // down a mine go without.
+      if (!u || e.hidden || (u.neutralPassive && !u.building)) continue;
+      // …and a remembered building shows the health you LAST SAW on it, not its live health:
+      // the fog holds the last thing you saw of that building, so it holds its damage too. Look
+      // again and the bar catches up. (Recorded here, once a frame, while you can see it.)
+      const fogged = this.fogBlocksClick(u);
+      if (!fogged) this.lastSeenHp.set(e.simId, { hp: u.hp, max: u.maxHp, mana: u.mana, maxMana: u.maxMana });
+      const seen = fogged ? this.lastSeenHp.get(e.simId) : undefined;
+      const hp = seen ? seen.hp : u.hp;
+      const maxHp = seen ? seen.max : u.maxHp;
+      const mana = seen ? seen.mana : u.mana;
+      const maxMana = seen ? seen.maxMana : u.maxMana;
       this.world[0] = u.x;
       this.world[1] = u.y;
       // Bar floats at the unit's drawn base — for air units, their altitude.
@@ -4146,15 +4165,15 @@ export class RtsController {
       const ry = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - sx, this.screen2[1] - sy) / dpr);
       const bar = this.hpBars[n] ?? (this.hpBars[n] = makeHpBar());
       n++;
-      const frac = Math.max(0, Math.min(1, u.hp / u.maxHp));
+      const frac = maxHp > 0 ? Math.max(0, Math.min(1, hp / maxHp)) : 0;
       bar.hp.style.width = `${frac * 100}%`;
       // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy
       // alike — the floating bars aren't team-coloured). CSS adds the vertical sheen.
       bar.hp.style.backgroundColor = frac > 0.6 ? "#3fbf46" : frac > 0.3 ? "#d6b93b" : "#c8402f";
       // Mana bar (units/heroes with a mana pool).
-      if (u.maxMana > 0) {
+      if (maxMana > 0) {
         bar.manaTrack.hidden = false;
-        bar.mana.style.width = `${Math.max(0, Math.min(1, u.mana / u.maxMana)) * 100}%`;
+        bar.mana.style.width = `${Math.max(0, Math.min(1, mana / maxMana)) * 100}%`;
       } else {
         bar.manaTrack.hidden = true;
       }

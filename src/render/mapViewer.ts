@@ -3911,8 +3911,15 @@ export class MapViewerScene {
 
   // --- command card ---------------------------------------------------------
 
+  /** The one place a command button is made — so it is also the one place that can promise a
+   *  button never shows a raw `<AIlf,DataA1>` placeholder. Callers that know the ability and
+   *  rank resolve first (with that rank); this is the backstop for everything else, and for
+   *  whatever button gets added next. Resolving twice is free: the second pass sees no `<`. */
   private cmd(over: Partial<CommandButton>): CommandButton {
-    return { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, mana: 0, col: 0, row: 0, disabled: false, active: false, ...over };
+    const b: CommandButton = { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, mana: 0, col: 0, row: 0, disabled: false, active: false, ...over };
+    b.desc = this.tipText(b.desc);
+    if (b.tip) b.tip = this.tipText(b.tip);
+    return b;
   }
 
   /** Hero types the local player already has or is producing — owned hero units,
