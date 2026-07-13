@@ -113,11 +113,41 @@ function scaleButtonWidths(root: LaidOutFrame, scale: number): void {
   })(root);
 }
 
+/**
+ * The anchors the ENGINE supplies, not the file.
+ *
+ * A POPUPMENU's pulldown arrow (`PopupArrowFrame`) carries a size but no SetPoint: the
+ * engine parks it against the widget's right edge, inset by `PopupButtonInset`. Without
+ * that, an un-anchored frame falls back to its parent's top-left corner — which is where
+ * every race / team / handicap arrow on the Custom Game screen ended up (issue #61).
+ */
+function applyWidgetDefaults(root: FdfFrame): void {
+  (function walk(f: FdfFrame): void {
+    const arrowName = firstProp(f, "PopupArrowFrame")?.args[0]?.s;
+    const arrow = arrowName ? f.children.find((c) => c.name === arrowName) : undefined;
+    if (arrow && !hasFlag(arrow, "SetPoint") && !hasFlag(arrow, "Anchor") && !hasFlag(arrow, "SetAllPoints")) {
+      const inset = numProp(f, "PopupButtonInset") ?? 0.01;
+      arrow.props.push({
+        key: "SetPoint",
+        args: [
+          { s: "RIGHT", n: null, str: false },
+          { s: f.name, n: null, str: true },
+          { s: "RIGHT", n: null, str: false },
+          { s: String(-inset), n: -inset, str: false },
+          { s: "0", n: 0, str: false },
+        ],
+      });
+    }
+    f.children.forEach(walk);
+  })(root);
+}
+
 export function layout(
   root: FdfFrame,
   box: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: UI_WIDTH, h: UI_HEIGHT },
   buttonWidthScale = 1,
 ): { tree: LaidOutFrame; byName: Map<string, LaidOutFrame> } {
+  applyWidgetDefaults(root);
   const tree = buildTree(root, null);
   // Root fills its box.
   tree.x = box.x; tree.y = box.y;

@@ -75,6 +75,8 @@ const files = {
   MELEE: { label: "Scripts\\Blizzard.j", data: parseJassConstants(read(path.join(merged, "Scripts", "Blizzard.j"))) },
   // Note the different MiscData.txt: the minimap's palette lives in the *UI* one.
   MINIMAP: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
+  // …as do the glue screens' own constants (the Custom Game map-size buckets).
+  GLUE: { label: "UI\\MiscData.txt", data: parseMiscIni(read(path.join(merged, "UI", "MiscData.txt"))) },
 };
 
 // MELEE keys drop the `bj_` prefix; MELEE_UNIT_SPACING is a local, not a constant.

@@ -3,8 +3,31 @@
 // server (plan §0). Phase 1 delivers the picker + the MPQ files it yields; the
 // OPFS copy that avoids re-picking each session lands alongside it next.
 
-/** MPQ archive files from a picked install, keyed by lowercased base name. */
+/**
+ * Files from a picked install:
+ *   • the top-level MPQ archives, keyed by LOWERCASED base name — "war3.mpq", "war3x.mpq"
+ *   • every map under `Maps\`, keyed by its relative path AS WRITTEN —
+ *     "Maps\\FrozenThrone\\(2)EchoIsles.w3x"
+ *
+ * The maps are here because the Custom Game screen lists them (issue #61): WC3's melee maps
+ * live on DISK under `Maps\`, not inside the archives (the MPQs carry only the campaign
+ * ones), so a list built from the VFS alone would come up empty. Their keys keep their case
+ * because those keys are shown to the player — an archive's name never is.
+ */
 export type InstallFiles = Map<string, File>;
+
+/** Prefix of a map entry's key in InstallFiles (matched case-insensitively). */
+export const MAPS_PREFIX = "Maps\\";
+
+const isMap = (name: string): boolean => /\.(w3m|w3x)$/i.test(name);
+const isUnderMaps = (key: string): boolean => key.toLowerCase().startsWith(MAPS_PREFIX.toLowerCase());
+
+/** The maps in a picked install, as `path → File` (path with WC3's `\` separators). */
+export function installMaps(files: InstallFiles): Map<string, File> {
+  const maps = new Map<string, File>();
+  for (const [key, file] of files) if (isUnderMaps(key)) maps.set(key, file);
+  return maps;
+}
 
 /** Ask the browser to keep the OPFS cache from being evicted under storage pressure. */
 export async function requestPersistence(): Promise<boolean> {
@@ -24,6 +47,7 @@ interface DirEntry {
   kind: "file" | "directory";
   name: string;
   getFile(): Promise<File>;
+  values(): AsyncIterableIterator<DirEntry>;
 }
 interface DirHandle {
   name: string;
@@ -33,9 +57,9 @@ interface DirHandle {
 const isMpq = (name: string): boolean => name.toLowerCase().endsWith(".mpq");
 
 /**
- * Pick a WC3 folder and return its top-level MPQ files. Uses showDirectoryPicker
- * on Chromium, falling back to <input webkitdirectory> on Firefox/Safari.
- * Returns null if the user cancels or nothing is selected.
+ * Pick a WC3 folder and return its top-level MPQ archives plus every map under `Maps\`.
+ * Uses showDirectoryPicker on Chromium, falling back to <input webkitdirectory> on
+ * Firefox/Safari. Returns null if the user cancels or nothing is selected.
  */
 export async function pickInstall(): Promise<InstallFiles | null> {
   const picker = (
@@ -53,6 +77,8 @@ export async function pickInstall(): Promise<InstallFiles | null> {
     for await (const entry of handle.values()) {
       if (entry.kind === "file" && isMpq(entry.name)) {
         files.set(entry.name.toLowerCase(), await entry.getFile());
+      } else if (entry.kind === "directory" && entry.name.toLowerCase() === "maps") {
+        await collectMaps(entry, entry.name, files);
       }
     }
     return files;
@@ -61,7 +87,19 @@ export async function pickInstall(): Promise<InstallFiles | null> {
   return pickViaInput();
 }
 
-/** Firefox/Safari fallback: a directory <input>, filtered to MPQ files. */
+/** Walk `Maps\` and add every .w3m/.w3x under it, keyed by its relative path. */
+async function collectMaps(dir: DirEntry, prefix: string, into: InstallFiles): Promise<void> {
+  for await (const entry of dir.values()) {
+    const path = `${prefix}\\${entry.name}`;
+    if (entry.kind === "file") {
+      if (isMap(entry.name)) into.set(path, await entry.getFile());
+    } else {
+      await collectMaps(entry, path, into);
+    }
+  }
+}
+
+/** Firefox/Safari fallback: a directory <input>. webkitRelativePath gives the same keys. */
 function pickViaInput(): Promise<InstallFiles | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
@@ -72,7 +110,12 @@ function pickViaInput(): Promise<InstallFiles | null> {
       if (!list || list.length === 0) return resolve(null);
       const files: InstallFiles = new Map();
       for (const file of Array.from(list)) {
-        if (isMpq(file.name)) files.set(file.name.toLowerCase(), file);
+        if (isMpq(file.name)) { files.set(file.name.toLowerCase(), file); continue; }
+        if (!isMap(file.name)) continue;
+        // webkitRelativePath is "<pickedFolder>/Maps/FrozenThrone/(2)EchoIsles.w3x";
+        // drop the folder the user picked, and speak WC3's separator.
+        const rel = file.webkitRelativePath.split("/").slice(1).join("\\");
+        if (isUnderMaps(rel)) files.set(rel, file);
       }
       resolve(files.size ? files : null);
     };

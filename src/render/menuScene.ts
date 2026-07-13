@@ -16,11 +16,28 @@ import { makeFog, type DistFog } from "./fog";
 
 const TFT_MENU = "UI\\Glues\\MainMenu\\MainMenu3D_Exp\\MainMenu3D_Exp.mdx";
 const ROC_MENU = "UI\\Glues\\MainMenu\\MainMenu3d\\MainMenu3d.mdx";
-// Only the right panel — it carries the button frame + the hanging chains. The
-// left panel is a screen-edge border/gear strip meant to hug the left edge; under
-// our centred 4:3 mapping it floats mid-screen, so we leave it out.
-const PANELS_TFT = ["UI\\Glues\\SpriteLayers\\Expansion\\TopRightPanel-Expansion.mdx"];
-const PANELS_ROC = ["UI\\Glues\\SpriteLayers\\TopRightPanel.mdx"];
+// The two screen-edge sprite layers. The right one carries the button frames and the
+// hanging chains of every screen; the left one carries the left-hand chrome — the metal
+// border and gears on the main menu, and on the skirmish screen the big Game Settings /
+// Team Setup frames. Each is rendered into its own edge-anchored viewport.
+const RIGHT_TFT = "UI\\Glues\\SpriteLayers\\Expansion\\TopRightPanel-Expansion.mdx";
+const RIGHT_ROC = "UI\\Glues\\SpriteLayers\\TopRightPanel.mdx";
+const LEFT_TFT = "UI\\Glues\\SpriteLayers\\Expansion\\TopLeftPanel-Expansion.mdx";
+const LEFT_ROC = "UI\\Glues\\SpriteLayers\\TopLeftPanel.mdx";
+
+// The sprite-layer panel model is not one panel with one idle clip: it carries the
+// chrome of EVERY glue screen, and a screen's chrome is a sequence TRIPLE named after
+// it — "<Screen> Birth" / "<Screen> Stand" / "<Screen> Death" (dumped from the real
+// TopRightPanel.mdx: MainMenu, RealmSelection, SinglePlayer, SinglePlayerSkirmish,
+// MainCancelPanel, Options, Battlenet*...). That is how the original animates between
+// menus: the outgoing screen's chrome plays its Death, the incoming one its Birth, and
+// then idles on its Stand. We drive exactly those clips, so the panel motion IS the
+// game's own — no hand-authored slide (issue #61).
+export type GlueChrome = "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish";
+
+/** How long a screen's chrome takes to leave / arrive, in ms — read from the model's
+ *  own sequence intervals, so the DOM panels can be animated over the same window. */
+export interface ChromeTiming { death: number; birth: number }
 
 type Solver = (src: unknown) => unknown;
 interface Camera {
@@ -44,7 +61,7 @@ interface Viewer {
   whenAllLoaded(): Promise<unknown>;
   updateAndRender(dt: number): void;
 }
-interface MdxSequence { name: string }
+interface MdxSequence { name: string; interval: Int32Array | number[] }
 interface MdxInstance {
   setScene(scene: unknown): void;
   setSequence(index: number): void;
@@ -68,10 +85,15 @@ const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElemen
 export class MenuScene {
   private viewer: Viewer;
   private scene3d: Scene; // perspective background
-  private scenePanel: Scene; // orthographic UI panels, composited over the background
+  private scenePanel: Scene; // orthographic right-edge sprite layer, over the background
+  private sceneLeft: Scene; // …and the left-edge one, in its own left-anchored viewport
   private solver: Solver;
   private bgModel: MdxModel | null = null;
   private instances: MdxInstance[] = [];
+  /** The sprite-layer panels, kept with their model so we can look sequences up by name. */
+  private panels: Array<{ model: MdxModel; instance: MdxInstance }> = [];
+  private chrome: GlueChrome = "MainMenu";
+  private chromeTimer = 0;
   private raf = 0;
   private last = 0;
 
@@ -90,6 +112,15 @@ export class MenuScene {
     panelHalfX: 0.61, // panel ortho half-width
     panelHalfY: 0.3, // panel ortho half-height (smaller = taller/zoomed panel)
     panelStretchX: 1.32, // widen the container horizontally beyond its natural aspect
+    // The left-edge sprite layer, framed by the same rules in a LEFT-anchored viewport.
+    // It carries the skirmish screen's Game Settings / Team Setup frames (and nothing at
+    // all on the main menu — its "MainMenu Stand" clip hides them), so its window is
+    // tuned so those frames land under the FDF containers Skirmish.fdf anchors there.
+    leftCx: -0.23,
+    leftCy: -0.2,
+    leftHalfX: 0.295,
+    leftHalfY: 0.29,
+    leftStretchX: 1.07,
     // Distance-fog haze on the icy background (world units from the eye; rgb 0..1).
     fogStart: 2700,
     fogEnd: 4200,
@@ -124,16 +155,19 @@ export class MenuScene {
     const scenePanel = viewer.addScene();
     scenePanel.alpha = true; // composite the panels over the background, don't clear it
 
+    const sceneLeft = viewer.addScene();
+    sceneLeft.alpha = true;
+
     this.viewer = viewer;
     this.scene3d = scene3d;
     this.scenePanel = scenePanel;
+    this.sceneLeft = sceneLeft;
   }
 
   /** Load the background scene + the sprite-layer panels and loop their idle clips. */
   async load(): Promise<void> {
     const tft = this.vfs.exists(TFT_MENU);
     const bgPath = tft ? TFT_MENU : ROC_MENU;
-    const panelPaths = tft ? PANELS_TFT : PANELS_ROC;
 
     const bytes = await this.vfs.read(bgPath);
     const bg = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
@@ -141,25 +175,73 @@ export class MenuScene {
     this.bgModel = bg;
     this.addInstance(bg, this.scene3d, /^stand$/i);
 
-    // The right/left panels: metal border, gears, the button panel and its chains.
-    for (const path of panelPaths) {
-      if (!this.vfs.exists(path)) continue;
-      const model = (await this.viewer.load(await this.vfs.read(path), this.solver)) as MdxModel | undefined;
-      if (model) this.addInstance(model, this.scenePanel, /^mainmenu stand$/i);
-    }
+    // The screen-edge sprite layers: metal border, gears, the button frames and chains.
+    await this.loadPanel(tft ? RIGHT_TFT : RIGHT_ROC, this.scenePanel);
+    await this.loadPanel(tft ? LEFT_TFT : LEFT_ROC, this.sceneLeft);
 
     this.frameCameras();
     this.updateFog();
     await this.viewer.whenAllLoaded();
   }
 
-  private addInstance(model: MdxModel, scene: Scene, prefer: RegExp): void {
+  private async loadPanel(path: string, scene: Scene): Promise<void> {
+    if (!this.vfs.exists(path)) return;
+    const model = (await this.viewer.load(await this.vfs.read(path), this.solver)) as MdxModel | undefined;
+    if (!model) return;
+    const instance = this.addInstance(model, scene, /^mainmenu stand$/i);
+    this.panels.push({ model, instance });
+  }
+
+  private addInstance(model: MdxModel, scene: Scene, prefer: RegExp): MdxInstance {
     const instance = model.addInstance();
     instance.setScene(scene);
     instance.setSequenceLoopMode(2); // always loop
     const idx = model.sequences.findIndex((s) => prefer.test(s.name));
     instance.setSequence(idx >= 0 ? idx : 0);
     this.instances.push(instance);
+    return instance;
+  }
+
+  /** Duration (ms) of a named sequence on the panel model, or 0 if it has none. */
+  private seqLength(name: string): number {
+    const model = this.panels[0]?.model;
+    const seq = model?.sequences.find((s) => s.name.toLowerCase() === name.toLowerCase());
+    return seq ? seq.interval[1] - seq.interval[0] : 0;
+  }
+
+  /** How long `screen`'s chrome takes to leave and to arrive — the model's own timings. */
+  chromeTiming(screen: GlueChrome): ChromeTiming {
+    return { death: this.seqLength(`${screen} Death`), birth: this.seqLength(`${screen} Birth`) };
+  }
+
+  /** The chrome currently on screen. */
+  get chromeScreen(): GlueChrome { return this.chrome; }
+
+  /** Play one named clip on every panel instance; `loop` for the idle Stand clips. */
+  private playClip(name: string, loop: boolean): void {
+    for (const { model, instance } of this.panels) {
+      const idx = model.sequences.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
+      if (idx < 0) continue;
+      instance.setSequenceLoopMode(loop ? 2 : 0);
+      instance.setSequence(idx);
+    }
+  }
+
+  /** Send the current screen's chrome away: play "<screen> Death" once. */
+  playChromeDeath(): number {
+    clearTimeout(this.chromeTimer);
+    this.playClip(`${this.chrome} Death`, false);
+    return this.seqLength(`${this.chrome} Death`);
+  }
+
+  /** Bring `screen`'s chrome in: "<screen> Birth" once, then settle on its looping Stand. */
+  playChromeBirth(screen: GlueChrome): number {
+    clearTimeout(this.chromeTimer);
+    this.chrome = screen;
+    this.playClip(`${screen} Birth`, false);
+    const birth = this.seqLength(`${screen} Birth`);
+    this.chromeTimer = window.setTimeout(() => this.playClip(`${screen} Stand`, true), birth);
+    return birth;
   }
 
   start(): void {
@@ -182,15 +264,21 @@ export class MenuScene {
 
   dispose(): void {
     this.stop();
-    for (const inst of this.instances) { try { this.scene3d.removeInstance(inst); this.scenePanel.removeInstance(inst); } catch { /* ignore */ } }
+    clearTimeout(this.chromeTimer);
+    for (const inst of this.instances) {
+      for (const scene of [this.scene3d, this.scenePanel, this.sceneLeft]) {
+        try { scene.removeInstance(inst); } catch { /* not in this scene */ }
+      }
+    }
     this.instances = [];
+    this.panels = [];
     this.bgModel = null;
   }
 
   /** Frame the background with its own camera and the panels with an ortho projection
    *  mapping their [0,1]² screen space onto the centred 4:3 box (shared with the FDF). */
   private frameCameras(): void {
-    if (!this.scene3d || !this.scenePanel) return; // not constructed yet
+    if (!this.scene3d || !this.scenePanel || !this.sceneLeft) return; // not constructed yet
     const w = this.canvas.width || 1;
     const h = this.canvas.height || 1;
 
@@ -234,6 +322,16 @@ export class MenuScene {
       new Float32Array([0, 1, 0]),
     );
     this.scenePanel.viewport.set([w - pVw, 0, pVw, h]);
+
+    // The left-edge layer, by the same rules but anchored to the screen's LEFT edge.
+    const lVw = h * (t.leftHalfX / t.leftHalfY) * t.leftStretchX;
+    this.sceneLeft.camera.ortho(t.leftCx - t.leftHalfX, t.leftCx + t.leftHalfX, t.leftCy - t.leftHalfY, t.leftCy + t.leftHalfY, 1, 2000);
+    this.sceneLeft.camera.moveToAndFace(
+      new Float32Array([0.5, 0.5, 1000]),
+      new Float32Array([0.5, 0.5, 0]),
+      new Float32Array([0, 1, 0]),
+    );
+    this.sceneLeft.viewport.set([0, 0, lVw, h]);
   }
 
   private syncCanvasSize(): void {

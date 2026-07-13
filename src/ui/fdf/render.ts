@@ -4,6 +4,11 @@ import { wc3ToHtml } from "../wc3Text";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, strProp } from "./library";
 import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
+import { slidePanels, type PanelDirection } from "./anim";
+import {
+  buildEditBox, buildList, buildPopup, widgetKind,
+  type EditBoxControl, type ListControl, type PopupControl,
+} from "./widgets";
 
 // FDF → DOM renderer (issue #54). Builds the game's frames as absolutely-positioned
 // DOM over the 3D background: BACKDROP as composited chrome from the real BLPs,
@@ -20,14 +25,19 @@ const EDGE_TILE = { L: 0, R: 1, T: 2, B: 3, UL: 4, UR: 5, LL: 6, LR: 7 };
 export const UI_FONT = '"Trajan Pro", "Cinzel", "Palatino Linotype", "Book Antiqua", Palatino, "Times New Roman", serif';
 
 export interface FdfScreenHandlers {
-  /** frameName → click handler. Also fired by the frame's ControlShortcutKey. */
-  [frameName: string]: () => void;
+  /** frameName → click handler. Also fired by the frame's ControlShortcutKey. Most frames
+   *  have none, so a lookup is honestly `| undefined`. */
+  [frameName: string]: (() => void) | undefined;
 }
 
 export interface FdfScreenOptions {
   container: HTMLElement;
   vfs: DataSource;
   fdfPath: string;
+  /** Further .fdf files to load into the library before `buildRoot` runs. A screen the
+   *  engine composes from several files (the Custom Game screen pulls its list, its player
+   *  rows and its info pane from three more) needs their templates in scope. */
+  includeFdf?: string[];
   /** The FDF frame to mount. Ignored when `buildRoot` is given. */
   rootFrame: string;
   /** Synthesize the root instead of looking one up (7.19). The engine's in-game panels
@@ -55,6 +65,17 @@ export interface FdfScreenOptions {
   hidden?: string[];
   /** Widen the button widgets by this factor (text size unchanged). Default 1. */
   buttonWidthScale?: number;
+  /** The frames that make up this screen's PANELS — the groups that slide off the top
+   *  and back down between menus (issue #61). Each named frame moves as one. Defaults
+   *  to the root's direct children. */
+  panels?: string[];
+  /** BUTTON frames that behave as dropdowns (PlayerSlot's TeamButton / ColorButton are
+   *  declared as plain BUTTONs in the FDF; the engine gives them a menu). */
+  dropdownButtons?: string[];
+  /** Called after every build — including the rebuilds a resize triggers — so the screen
+   *  can (re)fill its widgets from its own model. Widgets are DOM, and a rebuild throws
+   *  the old DOM away; this is the hook that puts the contents back. */
+  onBuild?: (screen: FdfScreen) => void;
 }
 
 /** A mounted FDF screen: a full-viewport overlay that relayouts on resize. */
@@ -62,6 +83,22 @@ export interface FdfScreen {
   element: HTMLElement;
   relayout(): void;
   dispose(): void;
+  /** The DOM element built for a named frame, if it is on screen. */
+  frame(name: string): HTMLElement | null;
+  /** Replace a TEXT frame's contents (WC3 markup allowed). */
+  setText(name: string, text: string): void;
+  /** Grey a control out — buttons take their FDF ControlDisabledBackdrop. */
+  setEnabled(name: string, on: boolean): void;
+  /** Take the WHOLE screen live or dead. The reference kills the screen the moment a menu
+   *  button is clicked, so the panels can leave without a second click landing. This is a
+   *  screen-wide gate, NOT a bulk setEnabled: it must not clobber the per-control state a
+   *  screen has chosen (a greyed-out "Advanced Options" stays greyed out through it). */
+  setInteractive(on: boolean): void;
+  editBox(name: string): EditBoxControl | null;
+  popup(name: string): PopupControl | null;
+  list(name: string): ListControl | null;
+  /** Slide this screen's panels off the top ("out") or back down into place ("in"). */
+  animatePanels(dir: PanelDirection, durationMs: number): Promise<void>;
 }
 
 /** Parse `fdfPath`, resolve `rootFrame` (or synthesize one), and build it into `container`. */
@@ -69,8 +106,15 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   const lib = new FdfLibrary(opts.vfs);
   if (opts.skin) lib.skin = opts.skin;
   await lib.load(opts.fdfPath);
-  const root = opts.buildRoot ? opts.buildRoot(lib) : lib.resolveRoot(opts.rootFrame);
-  if (!root) throw new Error(`FDF: frame "${opts.rootFrame}" not found in ${opts.fdfPath}`);
+  for (const path of opts.includeFdf ?? []) await lib.load(path);
+  // buildRoot runs per BUILD, not once: a composed screen's frame tree depends on state
+  // that changes (the Custom Game screen grows a player row per slot in the chosen map).
+  const makeRoot = (): FdfFrame => {
+    const r = opts.buildRoot ? opts.buildRoot(lib) : lib.resolveRoot(opts.rootFrame);
+    if (!r) throw new Error(`FDF: frame "${opts.rootFrame}" not found in ${opts.fdfPath}`);
+    return r;
+  };
+  let root = makeRoot();
 
   const blpCache = new Map<string, HTMLCanvasElement | null>();
   const blpCanvas = (path: string): HTMLCanvasElement | null => {
@@ -86,10 +130,18 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   overlay.className = opts.overlayClass ? `fdf-screen ${opts.overlayClass}` : "fdf-screen";
 
   const shortcuts = new Map<string, () => void>(); // key (lowercase) → handler
+  const elements = new Map<string, HTMLElement>(); // frame name → its DOM node
+  const controls = new Map<string, EditBoxControl | PopupControl | ListControl>();
+  let disposers: Array<() => void> = [];
 
   const build = (): void => {
+    for (const off of disposers) off();
+    disposers = [];
+    root = makeRoot();
     overlay.textContent = "";
     shortcuts.clear();
+    elements.clear();
+    controls.clear();
     // Fit to the overlay's OWN box, not the window. CSS decides what that box is — the whole
     // window for the menus, the 16:9 game stage for the in-game screens (style.css) — so a
     // frame anchored TOPRIGHT lands on the right edge of the frame it belongs to. Measuring
@@ -105,13 +157,56 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
       : { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT };
     const { tree } = layout(root, box, opts.buttonWidthScale ?? 1);
     renderFrame(tree, overlay, {
-      lib, fit, blpCanvas,
+      lib, fit, blpCanvas, overlay,
       handlers: opts.handlers ?? {},
       textOverrides: opts.textOverrides ?? {},
       sprites: opts.sprites ?? {},
       hidden: new Set(opts.hidden ?? []),
-      shortcuts,
+      dropdownButtons: new Set(opts.dropdownButtons ?? []),
+      shortcuts, elements, controls, disposers,
     });
+    opts.onBuild?.(screen);
+  };
+
+  /** The panel elements this screen slides — the named panels, else the root's children. */
+  const panelEls = (): HTMLElement[] => {
+    const names = opts.panels ?? root.children.map((c) => c.name).filter(Boolean);
+    return names.map((n) => elements.get(n)).filter((el): el is HTMLElement => !!el);
+  };
+
+  const screen: FdfScreen = {
+    element: overlay,
+    relayout: build,
+    frame: (name) => elements.get(name) ?? null,
+    setText(name, text): void {
+      const el = elements.get(name);
+      if (!el) return;
+      const span = el.querySelector("span");
+      if (span) span.innerHTML = wc3ToHtml(text);
+    },
+    setEnabled(name, on): void {
+      const el = elements.get(name);
+      if (el) el.classList.toggle("fdf-disabled", !on);
+      const control = controls.get(name);
+      control?.setEnabled(on);
+    },
+    setInteractive(on): void {
+      // One class on the overlay: CSS greys the controls and takes their pointer events,
+      // and the keydown handler below drops the accelerators. Per-control enabled state is
+      // untouched, so it survives the transition.
+      overlay.classList.toggle("fdf-screen-disabled", !on);
+    },
+    editBox: (name) => (controls.get(name) as EditBoxControl | undefined) ?? null,
+    popup: (name) => (controls.get(name) as PopupControl | undefined) ?? null,
+    list: (name) => (controls.get(name) as ListControl | undefined) ?? null,
+    animatePanels: (dir, durationMs) => slidePanels(panelEls(), dir, durationMs),
+    dispose(): void {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("keydown", onKey);
+      for (const off of disposers) off();
+      disposers = [];
+      overlay.remove();
+    },
   };
 
   // Mount BEFORE the first build: the layout measures the overlay's own box, and an element
@@ -129,6 +224,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     // then (e.g. "S" is a HUD hotkey in-game, not "Single Player"). offsetParent is
     // always null for a position:fixed element, so check the effective display.
     if (getComputedStyle(overlay).display === "none") return;
+    if (overlay.classList.contains("fdf-screen-disabled")) return; // mid-transition
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
     const h = shortcuts.get(e.key.toLowerCase());
@@ -136,15 +232,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   };
   window.addEventListener("keydown", onKey);
 
-  return {
-    element: overlay,
-    relayout: build,
-    dispose(): void {
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("keydown", onKey);
-      overlay.remove();
-    },
-  };
+  return screen;
 }
 
 interface RenderCtx {
@@ -155,7 +243,13 @@ interface RenderCtx {
   textOverrides: Record<string, string>;
   sprites: Record<string, string>;
   hidden: Set<string>;
+  /** BUTTON frames the screen wants treated as dropdowns (PlayerSlot's Team/Colour). */
+  dropdownButtons: Set<string>;
+  overlay: HTMLElement;
   shortcuts: Map<string, () => void>;
+  elements: Map<string, HTMLElement>;
+  controls: Map<string, EditBoxControl | PopupControl | ListControl>;
+  disposers: Array<() => void>;
 }
 
 const BUTTON_TYPES = new Set(["GLUETEXTBUTTON", "GLUEBUTTON", "TEXTBUTTON", "BUTTON", "GLUECHECKBOX"]);
@@ -181,7 +275,10 @@ function renderFrame(
   el.style.height = `${px.height}px`;
   if (f.name) el.dataset.frame = f.name;
 
-  const isButton = BUTTON_TYPES.has(f.type);
+  // A dropdown may be declared as a plain BUTTON (PlayerSlot's TeamButton / ColorButton),
+  // so the screen's own list wins over the frame type.
+  const kind = ctx.dropdownButtons.has(f.name) ? "popup" : widgetKind(f);
+  const isButton = !kind && BUTTON_TYPES.has(f.type);
   if (f.type === "BACKDROP") {
     paintBackdrop(el, f, px, ctx);
   } else if (f.type === "TEXT") {
@@ -194,14 +291,97 @@ function renderFrame(
   }
 
   parentEl.appendChild(el);
+  if (f.name) ctx.elements.set(f.name, el);
   const abs = { left: px.left, top: px.top };
 
-  if (isButton) {
+  if (kind) {
+    renderWidget(kind, el, node, f, px, ctx, abs);
+  } else if (isButton) {
     renderButtonLayers(el, node, f, px, ctx, abs);
   } else {
     for (const child of node.children) renderFrame(child, el, ctx, abs);
   }
   return el;
+}
+
+/** Draw a widget's chrome from its FDF frames, then attach the controller that gives it
+ *  behaviour. Only the normal-state backdrop is drawn as a layer; the disabled backdrop
+ *  is composited on top and revealed by `.fdf-disabled`, mirroring the button states. */
+function renderWidget(
+  kind: "edit" | "popup" | "list",
+  el: HTMLElement,
+  node: LaidOutFrame,
+  f: FdfFrame,
+  px: { width: number; height: number },
+  ctx: RenderCtx,
+  abs: { left: number; top: number },
+): void {
+  const stateNames = stateLayerNames(f);
+  const baseName = strProp(f, "ControlBackdrop");
+  const baseChild = baseName ? node.children.find((c) => c.frame.name === baseName) : undefined;
+  if (baseChild) renderFrame(baseChild, el, ctx, abs);
+  appendDisabledFace(el, node, f, px, ctx);
+
+  // Everything else the FDF gives the widget (the pulldown arrow, the colour swatch, the
+  // title text) still draws — it is the widget's own chrome. The scrollbar frames do not:
+  // the list scrolls natively, so a fake bar would just sit there dead.
+  //
+  // Keep the elements we build HERE, and resolve the widget's parts out of this map rather
+  // than the screen-wide one: the three POPUPMENUs in a PlayerSlot row all inherit
+  // WITHCHILDREN from the same template, so each owns a child called
+  // "PlayerSlotPopupMenuTitle" — screen-wide, they overwrite one another, and which row's
+  // element a name resolves to would depend on the order the siblings happened to render in.
+  const parts = new Map<string, HTMLElement>();
+  for (const child of node.children) {
+    if (child === baseChild) continue;
+    if (child.frame.name && stateNames.has(child.frame.name)) continue;
+    if (child.frame.type === "SCROLLBAR" || child.frame.type === "MENU") continue;
+    const childEl = renderFrame(child, el, ctx, abs);
+    if (childEl && child.frame.name) parts.set(child.frame.name, childEl);
+  }
+
+  const scale = ctx.fit.scale;
+  if (kind === "edit") {
+    ctx.controls.set(f.name, buildEditBox(el, f, scale));
+  } else if (kind === "popup") {
+    // A POPUPMENU names its label frame outright (PopupTitleFrame). A BUTTON pressed into
+    // service as a dropdown (PlayerSlot's TeamButton / ColorButton) doesn't, and names its
+    // parts by convention: "<Button>Title" for the label, "<Button>Value" for the colour
+    // swatch. Mind the row suffix — the Custom Game screen's rows are copies of one template
+    // with every name suffixed, so TeamButton3 owns TeamButtonTitle3, not TeamButton3Title.
+    const base = f.name.replace(/\d+$/, "");
+    const row = f.name.slice(base.length);
+    const titleEl = parts.get(strProp(f, "PopupTitleFrame") ?? `${base}Title${row}`) ?? null;
+    const swatchEl = parts.get(`${base}Value${row}`) ?? null;
+    ctx.controls.set(f.name, buildPopup(el, f, scale, ctx.overlay, {
+      titleEl: titleEl?.querySelector("span") ?? titleEl,
+      swatchEl,
+      paintSwatch: swatchEl ? (target, value) => { target.style.background = value; } : undefined,
+    }, ctx.disposers));
+  } else {
+    ctx.controls.set(f.name, buildList(el, f, scale));
+  }
+}
+
+/** Composite the frame's ControlDisabledBackdrop over it, shown only when disabled. */
+function appendDisabledFace(
+  el: HTMLElement,
+  node: LaidOutFrame,
+  f: FdfFrame,
+  px: { width: number; height: number },
+  ctx: RenderCtx,
+): void {
+  const name = strProp(f, "ControlDisabledBackdrop");
+  const child = name ? node.children.find((c) => c.frame.name === name) : undefined;
+  if (!child) return;
+  const canvas = compositeBackdrop(child.frame, Math.round(px.width), Math.round(px.height), ctx);
+  if (!canvas) return;
+  canvas.className = "fdf-disabled-face";
+  canvas.style.position = "absolute";
+  canvas.style.inset = "0";
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  el.appendChild(canvas);
 }
 
 /** Render a button's layers in paint order: normal face → pushed face (shown on
@@ -238,10 +418,13 @@ function renderButtonLayers(
     }
   }
 
-  // 3) mouse-over glow
+  // 3) disabled face (the FDF's greyed backdrop, revealed by .fdf-disabled)
+  appendDisabledFace(el, node, f, px, ctx);
+
+  // 4) mouse-over glow
   appendGlow(el, f, ctx);
 
-  // 4) the label + any remaining children (drawn last → on top)
+  // 5) the label + any remaining children (drawn last → on top)
   const textName = strProp(f, "ButtonText");
   const push = firstProp(f, "ButtonPushedTextOffset")?.args;
   if (push && push.length >= 2) {
@@ -404,17 +587,26 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
 function wireButton(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   el.classList.add("fdf-button");
 
-  const handler = ctx.handlers[f.name];
+  const handler: (() => void) | undefined = ctx.handlers[f.name];
+  // A disabled button eats its click rather than firing — as does a button on a screen that
+  // is mid-transition, which is what stops a second menu button being pressed while the
+  // panels are already on their way out (issue #61). CSS kills the pointer events, but a
+  // focused button would still answer Enter/Space, so check here too.
+  const fire = (): void => {
+    if (el.classList.contains("fdf-disabled")) return;
+    if (el.closest(".fdf-screen-disabled")) return;
+    handler?.();
+  };
   if (handler) {
-    el.addEventListener("click", handler);
+    el.addEventListener("click", fire);
     el.setAttribute("role", "button");
     el.tabIndex = 0;
-    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); } });
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
   }
 
   // ControlShortcutKey "S" → global accelerator.
   const key = strProp(f, "ControlShortcutKey");
-  if (key && handler) ctx.shortcuts.set(key.toLowerCase(), handler);
+  if (key && handler) ctx.shortcuts.set(key.toLowerCase(), fire);
 }
 
 /** Append the mouse-over highlight (ControlMouseOverHighlight → HighlightAlphaFile). */

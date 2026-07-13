@@ -1,6 +1,7 @@
 import w3iParser from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3i";
 import { MpqDataSource } from "../vfs/mpq";
 import { raceFromW3i, type Race } from "../data/races";
+import { parseWts } from "../jass/wts";
 import { classifyMap, type MapClassification } from "./mapKind";
 
 // Map metadata for the lobby (plan Phase 5.5), read from war3map.w3i: name,
@@ -25,11 +26,15 @@ export interface PlayerSlot {
 
 export interface MapInfo {
   name: string;
+  /** The author's blurb (w3i description) — the Custom Game screen's "Map Description". */
+  description: string;
   recommendedPlayers: string;
   tileset: string;
   width: number;
   height: number;
   slots: PlayerSlot[];
+  /** The map's own minimap image (war3mapMap.blp), for the Custom Game preview. */
+  minimap: Uint8Array | null;
   /** Whether the map is a standard melee map (drives melee vs. custom start). */
   isMelee: boolean;
   /** w3i flag 0x0020 — the map fixes each slot's race/team and the lobby may not change
@@ -47,15 +52,23 @@ const W3I_USE_CUSTOM_FORCES = 0x0040;
 export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const mpq = new MpqDataSource("map", bytes);
   const classification = classifyMap(mpq); // melee vs. custom, from the w3i flags
+  const minimap = mpq.rawBytes("war3mapMap.blp") ?? null;
   const empty: MapInfo = {
-    name: fallbackName, recommendedPlayers: "", tileset: "", width: 0, height: 0,
-    slots: [], isMelee: classification.isMelee, fixedPlayerSettings: false, classification,
+    name: fallbackName, description: "", recommendedPlayers: "", tileset: "", width: 0, height: 0,
+    slots: [], minimap, isMelee: classification.isMelee, fixedPlayerSettings: false, classification,
   };
   const w3iBytes = mpq.rawBytes("war3map.w3i");
   if (!w3iBytes) return empty;
 
   const info = new w3iParser.File();
   info.load(w3iBytes);
+
+  // The name/description a map shows are usually TRIGSTR_### keys into its own war3map.wts
+  // (every Blizzard melee map is), so resolve them the way the engine does. war3map.wts is
+  // UTF-8 (with a BOM) — read as latin1, the BOM turns into three stray characters glued to
+  // the first "STRING 0" header, and the map's NAME is the one entry that fails to parse.
+  const wtsBytes = mpq.rawBytes("war3map.wts");
+  const strings = wtsBytes ? parseWts(new TextDecoder("utf-8").decode(wtsBytes)) : new Map<number, string>();
   const customForces = (info.flags & W3I_USE_CUSTOM_FORCES) !== 0;
   const slots: PlayerSlot[] = info.players
     .filter((p) => p.type === 1 || p.type === 2) // user + computer playable slots
@@ -68,12 +81,14 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     }));
 
   return {
-    name: resolveName(info.name, fallbackName),
-    recommendedPlayers: resolveName(info.recommendedPlayers, ""),
+    name: resolveName(info.name, fallbackName, strings),
+    description: resolveName(info.description, "", strings),
+    recommendedPlayers: resolveName(info.recommendedPlayers, "", strings),
     tileset: info.tileset,
     width: info.playableSize[0],
     height: info.playableSize[1],
     slots,
+    minimap,
     isMelee: classification.isMelee,
     fixedPlayerSettings: (info.flags & W3I_FIXED_PLAYER_SETTINGS) !== 0,
     classification,
@@ -87,8 +102,11 @@ function forceOf(info: { forces: Array<{ playerMasks: number }> }, id: number): 
   return i < 0 ? id : i;
 }
 
-// Names are often TRIGSTR_### references into war3map.wts; until we resolve those,
-// fall back to the file name.
-function resolveName(value: string, fallback: string): string {
-  return !value || value.startsWith("TRIGSTR_") ? fallback : value;
+// A w3i string is either literal or a "TRIGSTR_019" key into the map's own war3map.wts.
+// Resolve the key; only a key we can't find falls back.
+function resolveName(value: string, fallback: string, strings: Map<number, string>): string {
+  if (!value) return fallback;
+  const m = /^TRIGSTR_(\d+)$/.exec(value.trim());
+  if (!m) return value;
+  return strings.get(parseInt(m[1], 10))?.trim() || fallback;
 }

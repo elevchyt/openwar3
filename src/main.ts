@@ -3,11 +3,14 @@ import { AssetResolver } from "./assets/resolver";
 import { decodeBlp } from "./assets/blp";
 import { mountMainMenu } from "./ui/mainMenu";
 import { mountFdfMainMenu } from "./ui/fdfMainMenu";
+import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
+import { mountSkirmish } from "./ui/fdfSkirmish";
+import { GlueManager } from "./ui/glue";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
 import type { FdfScreen } from "./ui/fdf/render";
 import type { DataSource } from "./vfs/types";
-import { showLobby, type MeleeConfig } from "./ui/lobby";
-import { parseMapInfo } from "./world/mapInfo";
+import type { MeleeConfig } from "./ui/lobby";
+import type { MapInfo } from "./world/mapInfo";
 import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
@@ -43,6 +46,11 @@ let mapScene: MapViewerScene | null = null;
 let menuScene: MenuScene | null = null;
 let menuDebug: { dispose(): void } | null = null;
 let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer (next)
+let installMaps: Map<string, File> = new Map(); // the install's Maps\ folder (Custom Game)
+
+// The glue-screen stack (issue #61): main menu → Single Player → Custom Game, each
+// arriving and leaving with the panel animation the reference uses.
+const glue = new GlueManager(null);
 
 type Which = "none" | "menubg" | "bg" | "model" | "map";
 function show(which: Which): void {
@@ -99,52 +107,52 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
   return `${name}: placeholder terrain (import an install for authentic assets)`;
 }
 
-/** Single Player flow: pick a map → game setup lobby → Start loads the map. */
-async function singlePlayer(): Promise<void> {
-  const file = await pickMapFile();
-  if (!file) return;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const info = parseMapInfo(bytes, file.name.replace(/\.(w3x|w3m)$/i, ""));
-  // Fully release the GPU while the setup modal is open: pause every scene AND
-  // hide the canvases, so there's no live WebGL surface for the compositor to
-  // keep blending under a full-screen overlay (the cause of the freeze).
-  terrain.stop();
-  mapScene?.stop();
-  modelScene?.stop();
-  menuScene?.stop();
-  bgCanvas.hidden = true;
-  menuBgCanvas.hidden = true;
-  modelCanvas.hidden = true;
-  mapCanvas.hidden = true;
-  document.body.classList.add("menu-suspended"); // hide the main menu behind the lobby
-  const teardown = showLobby(ui, info, {
-    onCancel: () => {
-      teardown();
-      document.body.classList.remove("menu-suspended");
-      void showMenuBackground(resolver.installSource); // back to the animated menu scene
-    },
-    onStart: async (config) => {
-      meleeConfig = config;
-      teardown();
-      document.body.classList.remove("menu-suspended");
-      await enterMap(bytes, info.name);
-      // Melee maps get the standard setup (town hall + workers, melee rules);
-      // custom/scenario maps run their own triggers instead (see mapKind.ts).
-      if (info.isMelee) await mapScene?.startMelee(config);
-      else await mapScene?.startCustom(config);
-    },
-  });
+// --- the glue screens (issue #61) -------------------------------------------------
+//
+// Each is a GlueScreenDef: which chrome the panel model wears, and how to build the DOM.
+// GlueManager runs the transition between them (disable → panels out → beat → panels in),
+// timed off the chrome's own Birth/Death clips.
+
+function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Promise<FdfScreen> } {
+  return {
+    chrome: "MainMenu",
+    mount: () => mountFdfMainMenu(ui, vfs, {
+      onSinglePlayer: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onQuit: () => window.close(),
+    }),
+  };
 }
 
-function pickMapFile(): Promise<File | null> {
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".w3x,.w3m";
-    input.onchange = () => resolve(input.files?.[0] ?? null);
-    input.oncancel = () => resolve(null);
-    input.click();
-  });
+function singlePlayerScreen(vfs: DataSource): { chrome: "SinglePlayer"; mount: () => Promise<FdfScreen> } {
+  return {
+    chrome: "SinglePlayer",
+    mount: () => mountSinglePlayerMenu(ui, vfs, {
+      onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
+      onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
+    }),
+  };
+}
+
+function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; mount: () => Promise<FdfScreen> } {
+  return {
+    chrome: "SinglePlayerSkirmish",
+    mount: () => mountSkirmish(ui, vfs, installMaps, {
+      onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onStart: (file, info, config) => void startGame(file, info, config),
+    }),
+  };
+}
+
+/** Leave the menus and play: load the map, then melee or custom setup as the map asks. */
+async function startGame(file: File, info: MapInfo, config: MeleeConfig): Promise<void> {
+  meleeConfig = config;
+  glue.dispose(); // the menus are done; the match owns the screen now
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  await enterMap(bytes, info.name);
+  // Melee maps get the standard setup (town hall + workers, melee rules);
+  // custom/scenario maps run their own triggers instead (see mapKind.ts).
+  if (info.isMelee) await mapScene?.startMelee(config);
+  else await mapScene?.startCustom(config);
 }
 
 /** Enumerable unit models from the mounted install (portraits excluded). */
@@ -179,38 +187,51 @@ function exitToMenu(): void {
   mapScene = null;
   meleeConfig = null;
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
-  void showMenuBackground(resolver.installSource);
+  const vfs = resolver.installSource;
+  void showMenuBackground(vfs).then(() => {
+    // The menu's chrome is back on the main-menu clip, so the DOM must be too.
+    menuScene?.playChromeBirth("MainMenu");
+    if (vfs) void glue.show(mainMenuScreen(vfs));
+  });
 }
 
 // Boot flow (issue #54): the WC3 menus are constructed from the install's own
 // UI\FrameDef\*.fdf files, so we gate on loading the game files first — a single
 // button over the flying terrain — then build the FDF main menu and continue.
-let mainMenu: FdfScreen | null = null;
 let gate: { dispose(): void } | null = null;
 
-/** Build the authentic FDF-driven main menu; fall back to the flat skin if the
- *  install lacks the glue files or the FDF fails to construct. */
+/** Build the authentic FDF-driven main menu; fall back to the flat skin if the install
+ *  lacks the glue files or the FDF fails to construct. Every screen the game can reach is
+ *  now built from the FrameDef — the Custom Game screen included — so the flat menu is a
+ *  diagnostic, not a second way to play: it can only tell the player what's missing. */
 async function showMainMenu(vfs: DataSource): Promise<void> {
   try {
-    mainMenu = await mountFdfMainMenu(ui, vfs, {
-      onSinglePlayer: singlePlayer,
-      onQuit: () => window.close(),
-    });
+    await glue.show(mainMenuScreen(vfs));
   } catch (err) {
     console.warn("[OpenWar3] FDF main menu unavailable, using flat menu:", err);
-    mountMainMenu(ui, resolver, { onSinglePlayer: singlePlayer });
+    mountMainMenu(ui, resolver, {
+      onSinglePlayer: () => window.alert(
+        "This install is missing the UI\\FrameDef\\Glue files the menus are built from, " +
+        "so the game can't be set up. Re-import a complete Warcraft III (TFT 1.27a) folder.",
+      ),
+    });
   }
 }
 
 /** Hand off from the load gate to the main menu once the archives are mounted. */
 function onFilesLoaded(load: GateLoad): void {
   resolver.setInstall(load.vfs);
+  installMaps = load.maps; // the Custom Game screen's map list
   ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {}).vfs = load.vfs;
   gate?.dispose();
   gate = null;
   applyMenuCursor(load.vfs); // WC3 human hand cursor in the menus
-  void showMenuBackground(load.vfs); // animated MainMenu3D scene behind the menu
-  void showMainMenu(load.vfs); // build the FDF main menu over it
+  // The 3D scene has to exist before the menus do: it owns the panel chrome whose
+  // Birth/Death clips time their transitions (ui/glue.ts).
+  void showMenuBackground(load.vfs).then(() => {
+    glue.setScene(menuScene);
+    void showMainMenu(load.vfs);
+  });
 }
 
 gate = mountLoadGate(ui, onFilesLoaded);
@@ -225,6 +246,6 @@ gate = mountLoadGate(ui, onFilesLoaded);
   showTerrain,
   loadMap: async (file: File) => enterMap(new Uint8Array(await file.arrayBuffer()), file.name),
   meleeConfig: () => meleeConfig,
-  mainMenu: () => mainMenu,
+  mainMenu: () => glue.screen,
   menuScene: () => menuScene,
 };

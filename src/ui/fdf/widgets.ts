@@ -1,0 +1,291 @@
+import type { FdfFrame } from "./parser";
+import { firstProp, strProp } from "./library";
+
+// The interactive FDF widgets beyond the button family (issue #61): EDITBOX (text
+// input), POPUPMENU (the race / team / colour / handicap dropdowns) and the LISTBOX-
+// style CONTROL frames (the skirmish map list, the profile list).
+//
+// WC3's own FDF only declares each widget's CHROME — its backdrops, its title frame,
+// its arrow, its scrollbar. The engine supplies the behaviour and the contents at
+// runtime (that is why TeamSetup.fdf is an empty frame and PlayerSlot's RaceMenu holds
+// nothing but `MenuItem "HUMAN"` lines). So we do the same: the renderer draws the
+// frame's own chrome, and these controllers add the behaviour on top and hand the
+// screen a small typed handle to drive it with.
+
+export interface Option {
+  value: string;
+  label: string;
+}
+
+export interface ListItem {
+  value: string;
+  label: string;
+  /** Indent level — the map list nests maps under their folder. */
+  depth?: number;
+  /** Optional leading icon (a decoded BLP canvas), e.g. the folder / player-count badge. */
+  icon?: HTMLCanvasElement | null;
+  /** A heading row (the "FrozenThrone" / "Scenario" folders): shown, but not selectable. */
+  header?: boolean;
+}
+
+interface Control {
+  setEnabled(on: boolean): void;
+}
+
+export interface EditBoxControl extends Control {
+  get value(): string;
+  set value(v: string);
+  focus(): void;
+  onChange?: (value: string) => void;
+  onSubmit?: (value: string) => void;
+}
+
+export interface PopupControl extends Control {
+  setOptions(options: Option[]): void;
+  get value(): string;
+  set value(v: string);
+  onChange?: (value: string) => void;
+}
+
+export interface ListControl extends Control {
+  setItems(items: ListItem[]): void;
+  get value(): string | null;
+  select(value: string): void;
+  onChange?: (value: string) => void;
+  /** Double-click / Enter on a row — the map list's "just start it" shortcut. */
+  onActivate?: (value: string) => void;
+}
+
+/** Font size (world units) declared on a frame, defaulting to the FDF's own 0.011. */
+function fontSize(f: FdfFrame, scale: number, fallback = 0.011): string {
+  const size = firstProp(f, "FrameFont")?.args[1]?.n ?? fallback;
+  return `${Math.max(8, size * scale)}px`;
+}
+
+// --- EDITBOX ----------------------------------------------------------------------
+
+/** An <input> laid into the edit box's chrome. `EditBorderSize` is its text inset. */
+export function buildEditBox(el: HTMLElement, f: FdfFrame, scale: number): EditBoxControl {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "fdf-editbox-input";
+  const border = (firstProp(f, "EditBorderSize")?.args[0]?.n ?? 0.009) * scale;
+  input.style.padding = `0 ${border}px`;
+  // The text frame the FDF names via EditTextFrame carries the font; fall back to the
+  // box's own. Either way the input is transparent — the chrome behind it is the FDF's.
+  input.style.fontSize = fontSize(f, scale, 0.015);
+  el.appendChild(input);
+
+  const control: EditBoxControl = {
+    get value(): string { return input.value; },
+    set value(v: string) { input.value = v; },
+    focus: () => input.focus(),
+    setEnabled(on: boolean): void {
+      input.disabled = !on;
+      el.classList.toggle("fdf-disabled", !on);
+    },
+  };
+  input.addEventListener("input", () => control.onChange?.(input.value));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") control.onSubmit?.(input.value);
+  });
+  return control;
+}
+
+// --- POPUPMENU (dropdown) ----------------------------------------------------------
+
+export interface PopupOptions {
+  /** The frame whose text shows the current selection (PopupTitleFrame / *Title). */
+  titleEl: HTMLElement | null;
+  /** Optional swatch element painted with the value instead of text (the colour menu). */
+  swatchEl?: HTMLElement | null;
+  /** Paint a value into the swatch (colour menu: fill it with the player colour). */
+  paintSwatch?: (el: HTMLElement, value: string) => void;
+}
+
+/** The dropdown that is currently open, if any. Only ever one, as in the game: opening a
+ *  second closes the first. A per-popup `document` click listener can't do that on its own
+ *  — a popup stops its own click from propagating (or the same click that opened it would
+ *  immediately dismiss it), which also stops every OTHER popup's listener from ever seeing
+ *  it, so two menus could sit open at once. */
+let openPopup: (() => void) | null = null;
+
+/** A dropdown: the frame itself is the closed button; the open list is a popup layer.
+ *  The FDF declares the menu's own backdrop/font (StandardPopupMenuMenuTemplate) but
+ *  the engine positions and fills it — so the list is ours, styled to match. */
+export function buildPopup(
+  el: HTMLElement,
+  f: FdfFrame,
+  scale: number,
+  overlay: HTMLElement,
+  opts: PopupOptions,
+  disposers: Array<() => void>,
+): PopupControl {
+  el.classList.add("fdf-popup");
+
+  const menu = document.createElement("div");
+  menu.className = "fdf-popup-menu";
+  menu.style.fontSize = fontSize(f, scale);
+  menu.hidden = true;
+  // The menu lives on the overlay, not inside the (clipped, low) popup frame — an open
+  // race menu overhangs the player rows below it.
+  overlay.appendChild(menu);
+
+  let options: Option[] = [];
+  let value = "";
+  let enabled = true;
+
+  const paint = (): void => {
+    const label = options.find((o) => o.value === value)?.label ?? "";
+    if (opts.swatchEl && opts.paintSwatch) opts.paintSwatch(opts.swatchEl, value);
+    else if (opts.titleEl) opts.titleEl.textContent = label;
+  };
+
+  const close = (): void => {
+    menu.hidden = true;
+    el.classList.remove("fdf-popup-open");
+    if (openPopup === close) openPopup = null;
+  };
+
+  const open = (): void => {
+    if (!enabled || !options.length) return;
+    openPopup?.(); // only one dropdown is ever open
+    openPopup = close;
+    menu.textContent = "";
+    for (const o of options) {
+      const item = document.createElement("div");
+      item.className = "fdf-popup-item";
+      if (o.value === value) item.classList.add("selected");
+      item.textContent = o.label;
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        close();
+        if (o.value === value) return;
+        value = o.value;
+        paint();
+        control.onChange?.(value);
+      });
+      menu.appendChild(item);
+    }
+    // Drop the list directly under the closed button, matched to its width.
+    const box = el.getBoundingClientRect();
+    const host = overlay.getBoundingClientRect();
+    menu.hidden = false;
+    menu.style.left = `${box.left - host.left}px`;
+    menu.style.top = `${box.bottom - host.top}px`;
+    menu.style.minWidth = `${box.width}px`;
+    el.classList.add("fdf-popup-open");
+  };
+
+  el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (menu.hidden) open();
+    else close();
+  });
+  // Any click elsewhere dismisses it, as it does in the game.
+  document.addEventListener("click", close);
+  disposers.push(() => document.removeEventListener("click", close));
+
+  const control: PopupControl = {
+    setOptions(next: Option[]): void {
+      options = next;
+      if (!options.some((o) => o.value === value)) value = options[0]?.value ?? "";
+      paint();
+    },
+    get value(): string { return value; },
+    set value(v: string) {
+      if (!options.some((o) => o.value === v)) return;
+      value = v;
+      paint();
+    },
+    setEnabled(on: boolean): void {
+      enabled = on;
+      if (!on) close();
+      el.classList.toggle("fdf-disabled", !on);
+    },
+  };
+  return control;
+}
+
+// --- LISTBOX -----------------------------------------------------------------------
+
+/** A scrolling, selectable list inside a CONTROL/LISTBOX frame's chrome. `ListBoxBorder`
+ *  (or the edit box's border) insets the rows from the backdrop, as in the FDF. */
+export function buildList(el: HTMLElement, f: FdfFrame, scale: number): ListControl {
+  el.classList.add("fdf-list");
+
+  const rows = document.createElement("div");
+  rows.className = "fdf-list-rows";
+  const border = (firstProp(f, "ListBoxBorder")?.args[0]?.n ?? 0.008) * scale;
+  rows.style.inset = `${border}px`;
+  rows.style.fontSize = fontSize(f, scale, 0.012);
+  el.appendChild(rows);
+
+  let items: ListItem[] = [];
+  let value: string | null = null;
+  let enabled = true;
+
+  const paint = (): void => {
+    rows.textContent = "";
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.className = "fdf-list-row";
+      if (it.header) row.classList.add("header");
+      if (it.value === value) row.classList.add("selected");
+      row.style.paddingLeft = `${(it.depth ?? 0) * 16 + 6}px`;
+      if (it.icon) {
+        const icon = document.createElement("img");
+        icon.className = "fdf-list-icon";
+        icon.src = it.icon.toDataURL();
+        row.appendChild(icon);
+      }
+      const label = document.createElement("span");
+      label.textContent = it.label;
+      row.appendChild(label);
+      if (!it.header) {
+        row.addEventListener("click", () => {
+          if (!enabled || value === it.value) return;
+          value = it.value;
+          paint();
+          control.onChange?.(it.value);
+        });
+        row.addEventListener("dblclick", () => { if (enabled) control.onActivate?.(it.value); });
+      }
+      rows.appendChild(row);
+    }
+  };
+
+  const control: ListControl = {
+    setItems(next: ListItem[]): void {
+      items = next;
+      if (!items.some((i) => i.value === value && !i.header)) value = null;
+      paint();
+    },
+    get value(): string | null { return value; },
+    /** Set the selection WITHOUT firing onChange — this is a screen restoring its own state
+     *  after a rebuild, not the user picking something. Firing here would re-enter the
+     *  handler that caused the rebuild in the first place. */
+    select(v: string): void {
+      if (!items.some((i) => i.value === v && !i.header)) return;
+      value = v;
+      paint();
+      rows.querySelector(".fdf-list-row.selected")?.scrollIntoView({ block: "nearest" });
+    },
+    setEnabled(on: boolean): void {
+      enabled = on;
+      el.classList.toggle("fdf-disabled", !on);
+    },
+  };
+  return control;
+}
+
+/** True when a frame type is one of the widgets above (drawn as chrome + a controller). */
+export function widgetKind(f: FdfFrame): "edit" | "popup" | "list" | null {
+  if (f.type === "EDITBOX") return "edit";
+  if (f.type === "POPUPMENU" || f.type === "GLUEPOPUPMENU") return "popup";
+  // The map/profile lists are CONTROL frames carrying a backdrop and a scrollbar
+  // (MapListBox.fdf, ListBoxWar3.fdf); LISTBOX is the older, self-contained form.
+  if (f.type === "LISTBOX") return "list";
+  if (f.type === "CONTROL" && strProp(f, "ControlBackdrop")) return "list";
+  return null;
+}

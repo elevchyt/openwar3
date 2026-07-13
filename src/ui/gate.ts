@@ -14,6 +14,8 @@ export interface GateLoad {
   mounted: string[];
   missing: string[];
   fileCount: number;
+  /** The install's `Maps\` folder — what the Custom Game screen lists (issue #61). */
+  maps: Map<string, File>;
 }
 
 export interface LoadGate {
@@ -59,9 +61,9 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
     status.textContent = "Mounting archives…";
     try {
       await requestPersistence();
-      const { vfs, mounted, missing, fileCount } = await loadProfile(files, DEFAULT_PROFILE);
-      status.textContent = `Mounted ${mounted.join(", ")} — ${fileCount.toLocaleString()} files. Building menu…`;
-      onLoaded({ vfs, mounted, missing, fileCount });
+      const load = await loadProfile(files, DEFAULT_PROFILE);
+      status.textContent = `Mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files, ${load.maps.size} maps. Building menu…`;
+      onLoaded(load);
     } catch (err) {
       fail(`Couldn't load that folder: ${(err as Error).message}`);
     }

@@ -292,6 +292,27 @@ export const MINIMAP = {
   FogColorCreepNormal: [255, 0, 0, 50],
 } as const;
 
+/** `UI\MiscData.txt` — the glue (menu) screens' own constants. Not gameplay: this is the
+ *  file the MENU reads, which is why the keys live under their real section names.
+ *
+ *  `[BattleNetCustomFilter]` is where the game keeps the Small/Medium/Large map buckets,
+ *  and it buckets a map by its PLAYER COUNT, not by its dimensions — which is why the
+ *  1v1 Booty Bay reads "Small" on the Custom Game screen even though it is not a small
+ *  piece of terrain. Each range is an inclusive `min,max` player count. */
+export const GLUE = {
+  /** `[BattleNetCustomFilter]` — the map-size buckets, by suggested player count. */
+  SmallMapRange: [2, 4],
+  MediumMapRange: [5, 8],
+  LargeMapRange: [9, 12],
+} as const;
+
+/** The word the Custom Game screen puts against "Map Size", from `GLUE.*MapRange`. */
+export function mapSizeLabel(players: number): string {
+  if (players <= GLUE.SmallMapRange[1]) return "Small";
+  if (players <= GLUE.MediumMapRange[1]) return "Medium";
+  return "Large";
+}
+
 /** `Scripts\Blizzard.j` `bj_*` constants (the `bj_` prefix dropped). Blizzard's own
  *  JASS melee template — the ground truth for how a melee game is set up. `_V1` is
  *  the Frozen Throne value; `_V0` is the Reign of Chaos one it replaced. */

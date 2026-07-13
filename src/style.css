@@ -14,6 +14,9 @@
   --panel: rgba(10, 14, 22, 0.72);
   --border: rgba(216, 180, 90, 0.4);
   --game-font: "Friz Quadrata TT", "Nowar Sans", "Trebuchet MS", system-ui, sans-serif;
+  /* The glue-menu face. Kept in step with UI_FONT in ui/fdf/render.ts, which the
+     FDF-driven frames set inline; the widgets (ui/fdf/widgets.ts) read it from here. */
+  --ui-font: "Trajan Pro", "Cinzel", "Palatino Linotype", "Book Antiqua", Palatino, "Times New Roman", serif;
 }
 
 * { box-sizing: border-box; }
@@ -114,92 +117,6 @@ body.in-game {
 #model[hidden],
 #map[hidden] {
   display: none;
-}
-
-/* Game-setup lobby (Phase 5.5) — placeholder DOM UI over the menu. */
-.lobby {
-  position: fixed;
-  inset: 0;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* #ui is pointer-events:none (so the game canvas behind gets mouse input); the
-     lobby is a child of #ui, so it must re-enable events or its controls are
-     click-through. */
-  pointer-events: auto;
-  /* No backdrop-filter: a full-screen blur over the live WebGL canvas re-blurs
-     it every frame and freezes the compositor. A plain dim layer is cheap. */
-  background: rgba(3, 5, 9, 0.82);
-}
-
-.lobby-panel {
-  width: min(680px, 92vw);
-  max-height: 88vh;
-  overflow: auto;
-  padding: 24px 28px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.lobby-title {
-  margin: 0 0 4px;
-  color: var(--gold);
-}
-
-.lobby-meta {
-  margin: 0 0 18px;
-  font-size: 13px;
-  color: #9aa4b4;
-}
-
-.lobby-slots {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.lobby-row {
-  display: grid;
-  grid-template-columns: 90px 1fr 1fr 1fr;
-  gap: 8px;
-  align-items: center;
-}
-
-.lobby-label {
-  font-size: 14px;
-}
-
-.lobby-select {
-  padding: 8px;
-  font: inherit;
-  color: #f2ecdc;
-  background: #161c28;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-
-.lobby-options {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.lobby-options .lobby-select {
-  flex: 1;
-}
-
-.lobby-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 22px;
-  justify-content: flex-end;
-}
-
-.lobby-actions .menu-button {
-  min-width: 140px;
 }
 
 /* Floating status bars above EVERY visible unit (always-on, WC3-style): a hero
@@ -1439,11 +1356,105 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-button:active .fdf-pushed { opacity: 1; }
 .fdf-button:active .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
 
-/* The GLUE screens (main menu, lobby) hide themselves during a match. The in-game FDF
-   panels — the script's dialogs and leaderboards (7.19) — are built from the same FDF
-   machinery but must survive it, hence the opt-out class. */
+/* --- disabled state (issue #61) — the FDF's own ControlDisabledBackdrop, revealed over
+   the normal face. Disabled controls stop reacting entirely: no click, no press, no
+   glow, and the label greys to the FDF's FontDisabledColor. */
+.fdf-disabled-face {
+  opacity: 0;
+  pointer-events: none;
+}
+.fdf-disabled > .fdf-disabled-face { opacity: 1; }
+.fdf-disabled { pointer-events: none; }
+.fdf-disabled .fdf-btn-text span { color: #808080; }
+.fdf-disabled .fdf-button-glow { opacity: 0 !important; }
+
+/* A screen mid-transition answers nothing — no click, no hover glow, no accelerator — so a
+   second button can't be pressed while the panels are already on their way out. It does NOT
+   grey out: in the reference the buttons look perfectly normal as they slide, they just
+   aren't live. That keeps this gate separate from the per-control disabled state above,
+   which a screen sets deliberately (a dead "Advanced Options", a read-only colour swatch)
+   and which must survive the transition handing the screen back. */
+.fdf-screen-disabled .fdf-button,
+.fdf-screen-disabled .fdf-popup,
+.fdf-screen-disabled .fdf-list,
+.fdf-screen-disabled .fdf-editbox-input { pointer-events: none; }
+
+/* --- FDF widgets (issue #61): edit box, dropdown, list box. Each sits inside the frame
+   the FDF drew, so all the chrome around them is the game's own art — these rules only
+   style the text and the rows the engine itself supplies at runtime. */
+.fdf-editbox-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: 0;
+  outline: none;
+  pointer-events: auto;
+  font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+}
+
+.fdf-popup { pointer-events: auto; }
+
+.fdf-popup-menu {
+  position: absolute;
+  z-index: 3;
+  max-height: 42vh;
+  overflow-y: auto;
+  pointer-events: auto;
+  padding: 3px 0;
+  /* The menu's FDF backdrop is the bordered button art; matched here as a flat panel so
+     an open list is legible over the 3D scene behind it. */
+  background: #0b0d14;
+  border: 1px solid #6b5f45;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.7);
+  font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
+}
+.fdf-popup-item {
+  padding: 3px 10px;
+  color: #fff;
+  white-space: nowrap;
+}
+/* MenuTextHighlightColor 0.99 0.827 0.0705 — the FDF's own hover colour. */
+.fdf-popup-item:hover,
+.fdf-popup-item.selected { color: #fcd312; background: rgba(60, 80, 140, 0.45); }
+
+.fdf-list { pointer-events: auto; }
+.fdf-list-rows {
+  position: absolute;
+  overflow-y: auto;
+  color: #fff;
+  font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
+}
+.fdf-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fdf-list-row.selected { background: #2b3f8f; } /* the reference's blue selection bar */
+.fdf-list-row:not(.header):not(.selected):hover { background: rgba(60, 80, 140, 0.35); }
+.fdf-list-row.header { color: #fcd312; }
+.fdf-list-icon { width: 1.1em; height: 1.1em; flex: 0 0 auto; }
+
+/* A thin, dark scrollbar so the list's own chrome (the FDF border) stays the loud part. */
+.fdf-list-rows::-webkit-scrollbar,
+.fdf-popup-menu::-webkit-scrollbar { width: 10px; }
+.fdf-list-rows::-webkit-scrollbar-track,
+.fdf-popup-menu::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.4); }
+.fdf-list-rows::-webkit-scrollbar-thumb,
+.fdf-popup-menu::-webkit-scrollbar-thumb { background: #6b5f45; border-radius: 2px; }
+
+/* The GLUE screens (main menu, Single Player, Custom Game) hide themselves during a match.
+   The in-game FDF panels — the script's dialogs and leaderboards (7.19) — are built from
+   the same FDF machinery but must survive it, hence the opt-out class. */
 body.in-game .fdf-screen:not(.fdf-ingame),
-body.menu-suspended .fdf-screen:not(.fdf-ingame),
 body.in-game .load-gate { display: none; }
 
 /* --- the trigger's on-screen output (Phase 7.19 — issue #33) --------------------- */
