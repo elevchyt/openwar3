@@ -110,9 +110,9 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
 // --- the glue screens (issue #61) -------------------------------------------------
 //
 // Each is a GlueScreenDef: which chrome the panel model wears, and how to build the DOM.
-// GlueManager runs the transition between them (screen goes dead → contents fade out and
-// the panel slides away → beat → the next panel drops in and its contents fade up), all of
-// it timed off the chrome's own Birth/Death clips.
+// GlueManager runs the transition between them (every button goes disabled → contents fade
+// out and the panel slides away → beat → the next panel drops in and its contents fade up),
+// all of it timed off the chrome's own Birth/Death clips.
 
 function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Promise<FdfScreen> } {
   return {

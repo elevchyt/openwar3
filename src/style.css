@@ -1365,19 +1365,30 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 .fdf-disabled > .fdf-disabled-face { opacity: 1; }
 .fdf-disabled { pointer-events: none; }
-.fdf-disabled .fdf-btn-text span { color: #808080; }
+.fdf-disabled .fdf-btn-text span { color: var(--fdf-disabled-color, #808080) !important; }
 .fdf-disabled .fdf-button-glow { opacity: 0 !important; }
 
-/* A screen mid-transition answers nothing — no click, no hover glow, no accelerator — so a
-   second button can't be pressed while the panels are already on their way out. It does NOT
-   grey out: in the reference the buttons look perfectly normal as they slide, they just
-   aren't live. That keeps this gate separate from the per-control disabled state above,
-   which a screen sets deliberately (a dead "Advanced Options", a read-only colour swatch)
-   and which must survive the transition handing the screen back. */
+/* Two screen-wide gates during a transition, both a single class on the overlay so neither
+   touches the per-control state above (a deliberately greyed "Advanced Options" is still
+   greyed when the gate lifts).
+
+   `inert` — answers nothing, but looks normal. The screen that is ARRIVING: it must not be
+   clickable before it has landed, but it must not fade up looking dead and then pop.
+   `disabled` — answers nothing AND greys out, taking each control's FDF disabled backdrop.
+   The screen that is LEAVING: the moment a menu button is clicked, every button on it goes
+   dead, as in the reference. */
+.fdf-screen-inert .fdf-button,
+.fdf-screen-inert .fdf-popup,
+.fdf-screen-inert .fdf-list,
+.fdf-screen-inert .fdf-editbox-input,
 .fdf-screen-disabled .fdf-button,
 .fdf-screen-disabled .fdf-popup,
 .fdf-screen-disabled .fdf-list,
 .fdf-screen-disabled .fdf-editbox-input { pointer-events: none; }
+
+.fdf-screen-disabled .fdf-disabled-face { opacity: 1; }
+.fdf-screen-disabled .fdf-btn-text span { color: var(--fdf-disabled-color, #808080) !important; }
+.fdf-screen-disabled .fdf-button-glow { opacity: 0 !important; }
 
 /* --- FDF widgets (issue #61): edit box, dropdown, list box. Each sits inside the frame
    the FDF drew, so all the chrome around them is the game's own art — these rules only

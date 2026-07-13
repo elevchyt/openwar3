@@ -5,8 +5,8 @@ import type { GlueChrome, MenuScene } from "../render/menuScene";
 // transition between them.
 //
 // The reference's transition, in order:
-//   1. a menu button is clicked → the whole screen goes dead, so a second click can't land
-//      while it is leaving;
+//   1. a menu button is clicked → EVERY button on the screen goes disabled (greyed, and
+//      answering nothing), so a second click can't land while the screen is leaving;
 //   2. the panel's CONTENTS (its buttons, labels, lists) fade out where they stand, and the
 //      empty panel slides up and off the screen — that slide is the 3D chrome playing its
 //      own "<Screen> Death" clip (render/menuScene.ts), not anything we author;
@@ -54,16 +54,20 @@ export class GlueManager {
     if (this.busy) return null;
     this.busy = true;
     const leaving = this.current;
+    // Every button on the screen goes dead the moment one of them is clicked — BEFORE the
+    // next screen is built below, which is an await and can take a moment (the Custom Game
+    // screen loads four more .fdf files). Wait until after it and the buttons stay live for
+    // that whole window, which is exactly when a second click must not land.
+    leaving?.setAllDisabled(true);
     try {
       // Build the next screen BEFORE tearing the current one down. If its FDF is missing or
       // malformed this throws, and the player keeps the menu they were on instead of being
       // left staring at a blank 3D background with no way back.
       const next = await def.mount();
-      next.setInteractive(false); // dead until it has actually landed
+      next.setInteractive(false); // not clickable until it has landed — but not greyed either
       next.element.style.visibility = "hidden"; // …and unseen until the old screen has left
 
       if (leaving) {
-        leaving.setInteractive(false);
         // The chrome leaves at the same moment, and tells us how long it takes.
         const death = this.scene?.playChromeDeath() ?? 0;
         await leaving.animatePanels("out", death || 500);
@@ -81,7 +85,7 @@ export class GlueManager {
       return next;
     } catch (err) {
       console.error("[OpenWar3] couldn't open that menu:", err);
-      leaving?.setInteractive(true); // give the player their screen back
+      leaving?.setAllDisabled(false); // give the player their screen back
       return null;
     } finally {
       this.busy = false;

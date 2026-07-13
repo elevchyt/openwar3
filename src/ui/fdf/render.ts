@@ -89,11 +89,19 @@ export interface FdfScreen {
   setText(name: string, text: string): void;
   /** Grey a control out — buttons take their FDF ControlDisabledBackdrop. */
   setEnabled(name: string, on: boolean): void;
-  /** Take the WHOLE screen live or dead. The reference kills the screen the moment a menu
-   *  button is clicked, so the panels can leave without a second click landing. This is a
-   *  screen-wide gate, NOT a bulk setEnabled: it must not clobber the per-control state a
-   *  screen has chosen (a greyed-out "Advanced Options" stays greyed out through it). */
+  /**
+   * Stop the screen answering the mouse and the keyboard, WITHOUT greying it out. Used on
+   * the screen that is arriving: it must not be clickable before it has landed, but it also
+   * must not fade up looking disabled and then pop to normal once it does.
+   */
   setInteractive(on: boolean): void;
+  /**
+   * Disable EVERY button and control on the screen at once — the reference does this the
+   * moment a menu button is clicked, so the whole panel is visibly dead while it leaves.
+   * A screen-wide gate, not a bulk setEnabled: it doesn't clobber the per-control state the
+   * screen chose (a greyed-out "Advanced Options" is still greyed out when it's lifted).
+   */
+  setAllDisabled(on: boolean): void;
   editBox(name: string): EditBoxControl | null;
   popup(name: string): PopupControl | null;
   list(name: string): ListControl | null;
@@ -191,11 +199,13 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
       const control = controls.get(name);
       control?.setEnabled(on);
     },
+    // Both gates are ONE CLASS on the overlay, so neither touches per-control state and both
+    // lift cleanly. `inert` only takes the pointer events; `disabled` also greys everything.
     setInteractive(on): void {
-      // One class on the overlay: CSS greys the controls and takes their pointer events,
-      // and the keydown handler below drops the accelerators. Per-control enabled state is
-      // untouched, so it survives the transition.
-      overlay.classList.toggle("fdf-screen-disabled", !on);
+      overlay.classList.toggle("fdf-screen-inert", !on);
+    },
+    setAllDisabled(on): void {
+      overlay.classList.toggle("fdf-screen-disabled", on);
     },
     editBox: (name) => (controls.get(name) as EditBoxControl | undefined) ?? null,
     popup: (name) => (controls.get(name) as PopupControl | undefined) ?? null,
@@ -225,7 +235,9 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     // then (e.g. "S" is a HUD hotkey in-game, not "Single Player"). offsetParent is
     // always null for a position:fixed element, so check the effective display.
     if (getComputedStyle(overlay).display === "none") return;
-    if (overlay.classList.contains("fdf-screen-disabled")) return; // mid-transition
+    // Mid-transition: the screen is either leaving (disabled) or has not landed yet (inert).
+    if (overlay.classList.contains("fdf-screen-disabled")) return;
+    if (overlay.classList.contains("fdf-screen-inert")) return;
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
     const h = shortcuts.get(e.key.toLowerCase());
@@ -568,6 +580,12 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   const color = firstProp(f, "FontColor")?.args;
   if (color && color.length >= 3) span.style.color = rgba(color);
 
+  // FontDisabledColor is what the label goes when its control is disabled (0.5 0.5 0.5 for a
+  // button, 0.2 0.2 0.2 for a title). It has to be handed to CSS as a variable: FontColor is
+  // set INLINE above, and an inline colour beats any stylesheet rule trying to grey it out.
+  const disabled = firstProp(f, "FontDisabledColor")?.args;
+  if (disabled && disabled.length >= 3) el.style.setProperty("--fdf-disabled-color", rgba(disabled));
+
   const shadow = firstProp(f, "FontShadowColor")?.args;
   const soff = firstProp(f, "FontShadowOffset")?.args;
   if (shadow && shadow.length >= 3) {
@@ -595,7 +613,7 @@ function wireButton(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   // focused button would still answer Enter/Space, so check here too.
   const fire = (): void => {
     if (el.classList.contains("fdf-disabled")) return;
-    if (el.closest(".fdf-screen-disabled")) return;
+    if (el.closest(".fdf-screen-disabled, .fdf-screen-inert")) return;
     handler?.();
   };
   if (handler) {
