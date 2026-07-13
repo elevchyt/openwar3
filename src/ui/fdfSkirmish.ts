@@ -813,12 +813,18 @@ function layoutInfoPane(pane: FdfFrame): FdfFrame {
     size(row, ROW_W, ROW_H);
     if (prev) setProp(row, "SetPoint", [arg("TOPLEFT"), str(prev), arg("BOTTOMLEFT"), num(0), num(-gap)]);
     else setProp(row, "SetPoint", [arg("TOPLEFT"), str("MapInfoPane"), arg("TOPLEFT"), num(ROW_X), num(-ROWS_TOP)]);
-    const value = findFrame(pane, name.replace(/Label$/, "Value"));
-    size(value, ROW_W, ROW_H);
     // The FDF sits these rows' text on the BOTTOM of their box (JUSTIFYBOTTOM), which is
     // where the tails of "Suggested Players:" kept meeting the clip. Both halves of a row
     // centre in it instead — they keep their common baseline, and the type keeps its tails.
-    for (const f of [row, value]) setProp(f, "FontJustificationV", [arg("JUSTIFYMIDDLE")]);
+    setProp(row, "FontJustificationV", [arg("JUSTIFYMIDDLE")]);
+    // …the description's "value" is the blurb, though: it is a paragraph, not a value on the
+    // end of a line. It keeps its own box (below) and its own JUSTIFYTOP — a paragraph starts
+    // at the top of its box and grows down, it does not float in the middle of it.
+    if (name !== "MapDescLabel") {
+      const value = findFrame(pane, name.replace(/Label$/, "Value"));
+      size(value, ROW_W, ROW_H);
+      setProp(value, "FontJustificationV", [arg("JUSTIFYMIDDLE")]);
+    }
     bottom += gap + ROW_H;
     prev = name;
   }
