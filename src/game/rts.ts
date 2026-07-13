@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
+import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
@@ -853,6 +853,23 @@ export class RtsController {
     return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
   }
 
+  /** The same test for a GOLD MINE, which is not a sim unit and so has its own pick path (it is
+   *  found from the ground point, not from the unit entries — see mineAt). A mine is a building
+   *  like any other: the fog keeps its image once you have explored it, but the image is not the
+   *  mine. You cannot select it, hover it, send a worker into it or rally to it until something
+   *  of yours is looking at it. */
+  private fogBlocksMine(m: { x: number; y: number }): boolean {
+    if (this.vision.revealed) return false;
+    return this.vision.stateAt(m.x, m.y) !== FogState.Visible;
+  }
+
+  /** The gold mine at a ground point — the ONLY way a mine is picked, so that the fog gate holds
+   *  for every click that can land on one (select, hover, right-click harvest, rally). */
+  private mineAt(x: number, y: number, radius: number): SimMine | null {
+    const m = this.sim.nearestMine(x, y, radius);
+    return m && !this.fogBlocksMine(m) ? m : null;
+  }
+
   /** Anything that has slipped into the fog leaves the selection and the hover (issue #62).
    *  WC3 never lets you keep watching through the fog: the moment your last eye on a unit
    *  closes it drops out of your selection — and a remembered building drops with it, even
@@ -867,6 +884,11 @@ export class RtsController {
       const u = this.sim.units.get(this.hovered);
       if (u && this.fogBlocksClick(u)) this.hovered = null;
     }
+    // A selected gold mine drops out the same way the moment its last watcher leaves.
+    const sm = this.selectedMine !== null ? this.sim.mines.get(this.selectedMine) : null;
+    if (sm && this.fogBlocksMine(sm)) this.selectedMine = null;
+    const hm = this.hoveredMine !== null ? this.sim.mines.get(this.hoveredMine) : null;
+    if (hm && this.fogBlocksMine(hm)) this.hoveredMine = null;
   }
 
   /** Apply the combined visibility decision (gold-mine + fog) to one render entry,
@@ -2341,7 +2363,7 @@ export class RtsController {
         this.lastVoiceId = null;
         return;
       }
-      const m = this.sim.nearestMine(g[0], g[1], 300);
+      const m = this.mineAt(g[0], g[1], 300); // fogged mines are images, not click targets
       if (m) {
         this.selected.clear();
         this.primary = null;
@@ -2478,7 +2500,7 @@ export class RtsController {
         // (broad radius) so an item near a mine gets its own hover ring, not the mine's.
         const it = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
         if (it) this.hoveredItem = it.id;
-        else this.hoveredMine = this.sim.nearestMine(g[0], g[1], 300)?.id ?? null;
+        else this.hoveredMine = this.mineAt(g[0], g[1], 300)?.id ?? null;
       }
     }
   }
@@ -3638,7 +3660,7 @@ export class RtsController {
     // Workers in the selection right-clicking a resource start harvesting.
     // Generous pick radii: mines are 4×4 tiles, and clicking a tree canopy
     // lands the ground ray well behind the trunk.
-    const mine = this.sim.nearestMine(hit[0], hit[1], 320);
+    const mine = this.mineAt(hit[0], hit[1], 320); // …and you cannot mine what you cannot see
     if (mine) {
       // Fan the group around the mine's rim (distinct approach points) so they
       // don't all path to the one entry point and pile up while they wait their
@@ -3714,7 +3736,7 @@ export class RtsController {
     }
     const hit = this.groundPoint(cssX, cssY);
     if (!hit) return null;
-    const mine = this.sim.nearestMine(hit[0], hit[1], 320);
+    const mine = this.mineAt(hit[0], hit[1], 320);
     if (mine) return { x: mine.x, y: mine.y, kind: "mine", targetId: mine.id };
     const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
     const tree = this.sim.nearestTree(treeHit[0], treeHit[1], 140);
