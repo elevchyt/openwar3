@@ -156,9 +156,10 @@ export class TechRegistry {
 //   - UNITS     — the bulk of it (Requires/Trains/Researches/Builds/Upgrade/Sell*/Makeitems).
 //   - UPGRADES  — an upgrade's own prerequisites, tiered by LEVEL (`[Rhme] Requires1=hkee`).
 //   - ABILITIES — an ability the engine hides until its upgrade is researched. This is how
-//     the "effectless" upgrades work: Control Magic, Flak Cannons and Cloud grant no stat at
-//     all, they simply satisfy `[…] Requires=Rhss/Rhfc/Rhcd` on the ability that was always
-//     on the unit. Same check, so the command card gates spells for free.
+//     the "effectless" upgrades work: Defend, Control Magic, Flak Cannons and Cloud grant no
+//     stat at all, they simply satisfy `[…] Requires=Rhde/Rhss/Rhfc/Rhcd` on the ability that
+//     was always on the unit. The command card asks the same question every other id space
+//     asks — SimWorld.techMeets() in pushAbilityButtons — so one graph gates spells too.
 //   - ITEMS     — a shop item's tech gate (`[phea] Requires=TWN2`). ItemFunc.txt is ALSO
 //     where the pseudo-tech OR-groups live (TWN1/TWN2/TWN3 = the four races' tier-1/2/3
 //     halls, TALT = any altar); HERO ("A Hero") is declared in NeutralUnitFunc.txt.

@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, type SimWeapon, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
+import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
@@ -7,7 +7,7 @@ import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
-import { ArmorType, AttackType, MoveType, PrimaryAttribute, isRangedWeapon } from "../data/enums";
+import { ArmorType, AttackType, MoveType, PrimaryAttribute } from "../data/enums";
 import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef, tipFieldValue } from "../data/abilities";
 import { type ItemRegistry } from "../data/items";
@@ -1438,7 +1438,7 @@ export class RtsController {
           maxMana: def?.mana ?? 0,
           armor: def?.armor ?? 0,
           armorType: def?.armorType ?? ArmorType.Unknown,
-          weapon: def ? weaponFor(def) : null,
+          weapons: def ? weaponsFromDef(def) : [],
           castPoint: def?.castPoint ?? 0,
           castBackswing: def?.castBackswing ?? 0,
           worker: null,
@@ -1538,7 +1538,7 @@ export class RtsController {
         maxMana: 0,
         armor: def?.armor ?? 0,
         armorType: def?.armorType ?? ArmorType.Unknown,
-        weapon: null,
+        weapons: [],
         castPoint: 0, // neutral-passive structures never cast
         castBackswing: 0,
         worker: null,
@@ -1636,7 +1636,9 @@ export class RtsController {
   addSimUnit(def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0, reservedId?: number): number {
     const simId = reservedId ?? this.nextId++;
     const profile = WORKERS[def.id];
-    const worker: WorkerState | null = profile ? { ...profile, carryGold: 0, carryLumber: 0 } : null;
+    // baseLumberCapacity is the pre-upgrade load; Improved Lumber Harvesting raises the live
+    // `lumberCapacity` off it each tick (recomputeStats), so the profile stays the baseline.
+    const worker: WorkerState | null = profile ? { ...profile, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 } : null;
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
@@ -1668,7 +1670,7 @@ export class RtsController {
         maxMana: def.mana,
         armor: def.armor,
         armorType: def.armorType,
-        weapon: weaponFor(def),
+        weapons: weaponsFromDef(def),
         castPoint: def.castPoint,
         castBackswing: def.castBackswing,
         worker,
@@ -3194,7 +3196,12 @@ export class RtsController {
       if (u.owner === owner && u.typeId === typeId) n++;
       if (u.building && (u.owner === owner || u.neutralPassive)) {
         for (const job of u.building.queue) {
-          if (job.kind === "unit" && job.unitId === typeId) n++;
+          if (job.kind !== "unit" || job.unitId !== typeId) continue;
+          // A NEUTRAL shop's queue belongs to nobody by ownership — a Tavern is Neutral
+          // Passive — so the job itself says who is buying. Without that, a hero one player is
+          // hiring would count toward every other player's copy count, and so pick their
+          // requirement tier for them (harmless in 1v1, wrong in an FFA).
+          if (job.buyer !== undefined ? job.buyer === owner : u.owner === owner) n++;
         }
       }
     }
@@ -4155,30 +4162,6 @@ function lift(moveHeight: number): number {
 }
 
 // A unit's weapon from its registry stats; null when it can't attack.
-function weaponFor(def: UnitDef): SimWeapon | null {
-  if (def.attackCooldown <= 0 || def.attackDamage + def.attackDice * def.attackSides <= 0) return null;
-  // The Rifleman's weapTp1 is "instant" yet he clearly shoots: a missile model on a
-  // nominally instant weapon still flies. Either signal makes the attack ranged.
-  const ranged = isRangedWeapon(def.weaponType) || def.missileArt !== "";
-  return {
-    damage: def.attackDamage,
-    dice: def.attackDice,
-    sides: def.attackSides,
-    cooldown: def.attackCooldown,
-    damagePoint: def.attackDamagePoint,
-    range: def.attackRange,
-    acquire: def.acquireRange,
-    ranged,
-    missileArt: def.missileArt,
-    missileSpeed: def.missileSpeed,
-    attackType: def.attackType,
-    launchX: def.launchX,
-    launchY: def.launchY,
-    launchZ: def.launchZ,
-    impactZ: def.impactZ,
-  };
-}
-
 // Quaternion for a rotation `angle` about +Z, written into `out`.
 function setZQuat(out: Float32Array, angle: number): void {
   const half = angle / 2;

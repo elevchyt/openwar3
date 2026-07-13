@@ -302,9 +302,11 @@ if (existsSync(warchasers)) {
   const w3u = readBytes(wc, 'war3map.w3u');
   const wts = readBytes(wc, 'war3map.wts');
   // A minimal base type for EC12's base (Emoo); applyMapUnitData clones + overrides it.
+  // `weapons` is the unit's weapon SLOTS (issue #57) — an unarmed stub still declares the list.
   const base = {
     id: 'Emoo', name: 'Base', model: 'units\\base.mdx', isHero: true, primaryAttr: 0,
     strength: 20, agility: 20, intelligence: 20, abilities: [], heroAbilities: [], classification: [],
+    weapons: [],
   };
   const reg = new UnitRegistry(new Map([['Emoo', base]]));
   const count = applyMapUnitData(reg, w3u, wts);

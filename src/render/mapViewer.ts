@@ -24,7 +24,7 @@ import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, type RtsHost, type SelectionInfo } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { applyMapUnitData, applyMapAbilityData, applyMapItemData } from "../data/objectData";
+import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -1562,6 +1562,12 @@ export class MapViewerScene {
         const d = this.items.get(typeId); // the ItemRegistry (custom .w3t overlay first)
         return d ? { name: d.name, level: d.level, classType: d.classType, powerup: d.powerup, sellable: d.sellable, pawnable: d.pawnable } : null;
       },
+      // Neutral-building stock (issue #57): Blizzard.j stocks the Marketplace itself, off its
+      // own 30s timer — these just hand its natives the shelves. See src/jass/natives/stock.ts.
+      addToStock: (shopId, wareId, kind, count, max) => void this.rts?.simWorld.addToStock(shopId, wareId, kind, count, max),
+      removeFromStock: (shopId, wareId) => void this.rts?.simWorld.removeFromStock(shopId, wareId),
+      setTypeSlots: (shopId, kind, slots) => void this.rts?.simWorld.setTypeSlots(shopId, kind, slots),
+      setAllTypeSlots: (kind, slots) => void this.rts?.simWorld.setAllTypeSlots(kind, slots),
       unitAddItem: (unitId, itemId, slot) => this.rts?.simWorld.unitAddItem(unitId, itemId, slot) ?? false,
       unitRemoveItem: (unitId, itemId) => this.rts?.simWorld.unitRemoveItem(unitId, itemId) ?? false,
       unitRemoveItemFromSlot: (unitId, slot) => this.rts?.simWorld.unitRemoveItemFromSlot(unitId, slot) ?? 0,
@@ -1755,6 +1761,7 @@ export class MapViewerScene {
     this.registry.clearCustom();
     this.abilities.clearCustom();
     this.items.clearCustom();
+    this.upgrades.clearCustom();
     if (!this.mapArchive) return;
     const wts = this.mapArchive.rawBytes("war3map.wts") ?? this.mapArchive.rawBytes("war3map\\wts") ?? undefined;
     try {
@@ -1775,6 +1782,13 @@ export class MapViewerScene {
       if (w3t) console.info(`[jass] custom object data: ${applyMapItemData(this.items, w3t, wts)} custom item(s) (war3map.w3t).`);
     } catch (err) {
       console.warn("[jass] custom item data failed (non-fatal):", err);
+    }
+    try {
+      const w3q = this.mapArchive.rawBytes("war3map.w3q") ?? this.mapArchive.rawBytes("war3map\\w3q");
+      const meta = this.vfs.rawBytes("Units\\UpgradeMetaData.slk");
+      if (w3q && meta) console.info(`[jass] custom object data: ${applyMapUpgradeData(this.upgrades, w3q, meta, wts)} custom upgrade(s) (war3map.w3q).`);
+    } catch (err) {
+      console.warn("[jass] custom upgrade data failed (non-fatal):", err);
     }
   }
 
@@ -4018,23 +4032,34 @@ export class MapViewerScene {
    *  which is checked in the sim; here it only decides the greying. */
   private pushShopButtons(sel: SelectionInfo, out: CommandButton[]): void {
     const world = this.rts!.simWorld;
-    const wares = world.shopWares(sel.typeId);
+    // Built from the BUILDING, not the unit type: a Marketplace declares no wares at all and
+    // carries only what Blizzard.j's stock timer has put on its shelves (issue #57).
+    const wares = world.shopWaresOf(sel.id);
     if (!wares.items.length) return;
     const stash = this.rts!.stashFor(this.localPlayer);
     const hasPatron = world.shopPatrons(sel.id, this.localPlayer).length > 0;
+    // A shop that sells by DATA gives each ware a fixed slot (`buttonpos` in ItemFunc.txt) —
+    // the Goblin Merchant's card is the same every game. A Marketplace's stock is random, so
+    // its wares carry no slot of their own and would collide; they fill the card in stock
+    // order instead. That is exactly why the engine caps a shop at 11 item types
+    // (bj_MAX_STOCK_ITEM_SLOTS): the command card is 4×3, and Cancel owns the last slot.
+    const fixed = new Set(world.shopWares(sel.typeId).items);
+    let next = 0;
     for (const itemId of wares.items) {
       const d = this.items.get(itemId);
       if (!d) continue;
       const stock = world.shopStock(sel.id, itemId);
       const metTech = world.tech ? world.tech.meets(this.localPlayer, itemId) : true;
       const afford = stash.gold >= d.gold && stash.lumber >= d.lumber;
+      const slot = fixed.has(itemId) ? null : Math.min(next++, 10);
       out.push(this.cmd({
         id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey, tip: d.tip,
         desc: d.description + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId),
         gold: d.gold, lumber: d.lumber, food: 0,
         count: stock > 0 ? stock : undefined,
-        col: d.buttonX, row: d.buttonY,
+        col: slot === null ? d.buttonX : slot % 4,
+        row: slot === null ? d.buttonY : Math.floor(slot / 4),
         disabled: !afford || !metTech || stock <= 0 || !hasPatron,
       }));
     }
@@ -4062,7 +4087,7 @@ export class MapViewerScene {
     const world = this.rts!.simWorld;
     // A shop the local player may buy from shows its purchase card even though they don't own
     // it (a Tavern, a Goblin Merchant — all Neutral Passive). Anything else must be theirs.
-    const foreignShop = sel.isBuilding && sel.owner !== this.localPlayer && world.isShop(sel.typeId);
+    const foreignShop = sel.isBuilding && sel.owner !== this.localPlayer && world.isShopUnit(sel.id);
     if (sel.owner !== this.localPlayer && !foreignShop) return [];
     const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     const out: CommandButton[] = [];
@@ -4262,6 +4287,11 @@ export class MapViewerScene {
     const active = this.activeCommandId();
     for (const ab of su.abilities) {
       if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
+      // An ability can be gated by an upgrade — `[Adef] Requires=Rhde` (Defend), `[Acmg]
+      // Requires=Rhss` (Control Magic). It sits on the unit from birth and the RESEARCH is what
+      // reveals it, which is the whole job of the six Human upgrades that grant no stat at all.
+      // Abilities with no requirement (every hero spell) pass this untouched.
+      if (!this.rts.simWorld.techMeets(su.owner, ab.id)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -4419,6 +4449,7 @@ export class MapViewerScene {
   private trainUnit(buildingId: number, unitId: string): void {
     const d = this.registry.get(unitId);
     if (!d || !this.rts) return;
+    if (this.rts.simWorld.queueFull(buildingId)) return; // 7-deep queue — checked BEFORE charging
     // WC3 hero rules, enforced here too (not just hidden on the card) so a hotkey
     // can't queue a duplicate hero or exceed the 3-hero cap.
     if (d.isHero) {
@@ -4449,7 +4480,10 @@ export class MapViewerScene {
     // A neutral shop (tavern) hires heroes near-instantly; own buildings use the
     // unit's real build time (altar heroes ~55s).
     const shop = world.units.get(buildingId)?.neutralPassive;
-    world.enqueueTrain(buildingId, unitId, shop ? TAVERN_HIRE_TIME : d.buildTime || 15, freeHero);
+    // Tag the job with its BUYER: a Tavern is Neutral Passive, so a hero queued in it belongs
+    // to nobody by ownership, and countOwned (which picks the requirement tier) has no other
+    // way to tell whose it is. See BuildJob.buyer.
+    world.enqueueTrain(buildingId, unitId, shop ? TAVERN_HIRE_TIME : d.buildTime || 15, freeHero, this.localPlayer);
   }
 
   /** Start researching an upgrade at a building. Charges the level's own cost (Steel Forged
@@ -4461,6 +4495,7 @@ export class MapViewerScene {
     const state = world.tech;
     const d = this.upgrades.get(upgradeId);
     if (!d || !state) return;
+    if (world.queueFull(buildingId)) return; // before charging — see SimWorld.queueFull
     const have = state.researchLevel(this.localPlayer, upgradeId);
     const next = Math.max(have, world.researchingLevel(buildingId, upgradeId)) + 1;
     if (next > d.maxLevel) return;
@@ -4480,6 +4515,7 @@ export class MapViewerScene {
     const world = this.rts.simWorld;
     const d = this.registry.get(toTypeId);
     if (!d) return;
+    if (world.queueFull(buildingId)) return; // before charging — see SimWorld.queueFull
     if (!this.tech.upgradesTo(world.units.get(buildingId)?.typeId ?? "").includes(toTypeId)) return;
     // Enforced here, not merely hidden on the card, so a hotkey can't queue it twice and pay
     // for the Keep twice over.

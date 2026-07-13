@@ -18,6 +18,44 @@ import {
 // Movement speed etc. live across several files: UnitData (race/movement),
 // UnitBalance (spd/collision/hp/costs), UnitUI (model), UnitWeapons (attack).
 
+/** One weapon SLOT of a unit (UnitWeapons.slk's parallel `*1` / `*2` column families).
+ *
+ *  A WC3 unit may carry two attacks and choose between them BY TARGET — this is not a
+ *  curiosity, it is how half the anti-air roster works. The Flying Machine's slot 1 is
+ *  `air`-only and its slot 2 bombs the ground; the Gryphon Rider hammers ground with
+ *  slot 1 and air with slot 2; the Mortar Team keeps a separate `structure`-only slot for
+ *  buildings. Modelling one weapon per unit made a Footman able to swing at a Gryphon and
+ *  a Siege Engine able to mow down Footmen — neither of which WC3 permits. */
+export interface WeaponSlotDef {
+  /** This slot's bit in `weapsOn` ("Attacks Enabled"). The Flying Machine ships weapsOn=1
+   *  (air only) and the Chimaera weapsOn=2 (ground only — its acid breath is slot 1, OFF).
+   *  The `renw` upgrade effect REPLACES the whole mask: Flying Machine Bombs (`Rhgb`) and
+   *  Corrosive Breath (`Recb`) carry renw=3 → both slots; Impaling Bolt (`Repb`) carries
+   *  renw=2 → the Glaive Thrower SWAPS to slot 2 (which is why it starts hitting trees). */
+  enabled: boolean;
+  /** `targs1`/`targs2` — "Targets Allowed". The Footman's list has no `air`, which is
+   *  precisely why he cannot answer a Gryphon Rider; the Siege Engine's is `structure,debris`,
+   *  which is why it can only knock down buildings. Empty = the row declares no slot. */
+  targets: string[];
+  damage: number; // dmgplus1/2 (+ the hero's primary attribute, folded in as it is for slot 1)
+  dice: number;
+  sides: number;
+  cooldown: number;
+  damagePoint: number;
+  range: number;
+  weaponType: WeaponType; // weapTp1/2 — Normal/Instant strike at once, the Missile kinds fly
+  attackType: AttackType; // atkType1/2 → the damage table's row
+  missileArt: string; // this slot's projectile model — `Missileart` is a per-slot comma list
+  missileSpeed: number; // ...and so is `Missilespeed` (Flying Machine: 2000 air, 900 bombs)
+  /** Line-splash ("spill") — `spillDist1/2` + `spillRadius1/2` + `damageLoss1/2`. The
+   *  Gryphon Rider's hammer already carries a 50-unit spill RADIUS and a 0.2 falloff, but a
+   *  spill DISTANCE of 0, so it hits one unit; Storm Hammers (`Rhhb`, `rasd` = 200) opens the
+   *  distance and the same hammer starts carrying through the rank behind its target. */
+  spillDist: number;
+  spillRadius: number;
+  damageLoss: number; // fraction of damage shed per further unit down the line
+}
+
 export interface UnitDef {
   id: string;
   name: string;
@@ -118,6 +156,12 @@ export interface UnitDef {
   goldCost: number;
   lumberCost: number;
   buildTime: number;
+  /** Every weapon slot the UnitWeapons row declares, in slot order. This is the real attack
+   *  data; the flat `attack*` fields below are a summary of the PRIMARY slot for the HUD. */
+  weapons: WeaponSlotDef[];
+  // The primary weapon (the first slot `weapsOn` has switched on), flattened for the HUD
+  // info card, the impact-sound lookup, and war3map.w3u's `ua1*` overrides. For the ~4 units
+  // whose primary is not slot 1 (the Chimaera), this is still the attack the player sees.
   attackDamage: number; // weapon 1 base (dmgplus1); total = base + dice rolls
   attackDice: number; // number of damage dice (dice1)
   attackSides: number; // sides per damage die (sides1)
@@ -293,6 +337,12 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       : primary === PrimaryAttribute.Intelligence ? intAttr
       : 0;
 
+    // Both weapon slots, then the primary (= the first one `weapsOn` enables) flattened into
+    // the legacy attack* fields. A unit with no weapons row, or with weapsOn=0 (every
+    // building, the Scout Tower), ends up with no slots at all and simply cannot attack.
+    const slots = weaponSlots(w, fn, primaryVal);
+    const prime = slots.find((s) => s.enabled) ?? slots[0];
+
     defs.set(id, {
       id,
       name: (strings && str(strings, "Name")) || (u && (str(u, "Name") || str(u, "name"))) || id,
@@ -353,26 +403,27 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       goldCost: b ? num(b, "goldcost", 0) : 0,
       lumberCost: b ? num(b, "lumbercost", 0) : 0,
       buildTime: b ? num(b, "bldtm", 0) : 0,
-      attackDamage: (w ? num(w, "dmgplus1", 0) : 0) + primaryVal,
-      attackDice: w ? num(w, "dice1", 0) : 0,
-      attackSides: w ? num(w, "sides1", 0) : 0,
-      attackCooldown: w ? num(w, "cool1", 0) : 0,
-      attackDamagePoint: w ? num(w, "dmgpt1", 0) : 0,
+      weapons: slots,
+      attackDamage: prime?.damage ?? 0,
+      attackDice: prime?.dice ?? 0,
+      attackSides: prime?.sides ?? 0,
+      attackCooldown: prime?.cooldown ?? 0,
+      attackDamagePoint: prime?.damagePoint ?? 0,
       // castpt/castbsw live in UnitWeapons.slk alongside the attack timing (they
       // apply to the unit's casting, not to any one weapon). Default 0 → an instant
       // cast / no backswing for units with no weapons row (wards, most summons).
       castPoint: w ? num(w, "castpt", 0) : 0,
       castBackswing: w ? num(w, "castbsw", 0) : 0,
-      attackRange: w ? num(w, "rangeN1", 0) : 0,
+      attackRange: prime?.range ?? 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       canSleep: (d ? num(d, "cansleep", 0) : 0) === 1,
-      weaponType: toWeaponType(w ? str(w, "weapTp1") : ""),
-      attackType: toAttackType(w ? str(w, "atkType1") : ""),
+      weaponType: prime?.weaponType ?? WeaponType.None,
+      attackType: prime?.attackType ?? AttackType.None,
       armorType: toArmorType(b ? str(b, "defType") : ""),
       // Missile art + speed live in the per-race UnitFunc.txt (NOT UnitWeapons.slk),
       // as .mdl paths (e.g. Archmage FireBallMissile, Archer ArrowMissile).
-      missileArt: fn ? missilePath(str(fn, "missileart")) : "",
-      missileSpeed: fn ? num(fn, "missilespeed", 900) : 900,
+      missileArt: prime?.missileArt ?? "",
+      missileSpeed: prime?.missileSpeed ?? 900,
       // Launch/impact offsets live in UnitWeapons.slk (launchx/y/z, impactz). Verified
       // against the real 1.27 MPQ: Archmage launchx=15/launchz=66, Archer launchy=62.
       launchX: w ? num(w, "launchx", 0) : 0,
@@ -406,15 +457,53 @@ function rawTip(v: string): string {
   return v.replace(/^"|"$/g, "").trim();
 }
 
-// "missileart" from UnitFunc.txt is a .mdl model path. It may be comma-separated
-// (weapon1,weapon2) — prefer the *Missile* model (vs an *Impact* effect). Strip
-// the .mdl extension and use .mdx (the compiled file the MPQ actually ships).
-function missilePath(v: string): string {
+/** Both weapon slots of a UnitWeapons row. A slot exists only if it declares Targets
+ *  Allowed (`targs`) — the SLK writes "_" in every column of an undeclared slot. `enabled`
+ *  is that slot's bit in `weapsOn`; a slot can exist and be OFF, which is the whole point
+ *  of the `renw` upgrades (see WeaponSlotDef). */
+function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number): WeaponSlotDef[] {
+  if (!w) return [];
+  const mask = num(w, "weapsOn", 0);
+  // `Missileart` / `Missilespeed` (UnitFunc.txt) are themselves per-slot comma lists when the
+  // unit has two attacks: the Flying Machine's is "GyroCopterImpact.mdl,GyroCopterMissile.mdl"
+  // at speeds 2000,900 — the air shot and the bombs. One entry serves both slots (the Gryphon
+  // fires the same hammer at ground and air).
+  const arts = (fn ? str(fn, "missileart") : "").split(",").map((s) => s.trim()).filter(Boolean);
+  const speeds = (fn ? str(fn, "missilespeed") : "").split(",").map((s) => parseFloat(s.trim())).filter((n) => !Number.isNaN(n));
+  const out: WeaponSlotDef[] = [];
+  for (const n of [1, 2]) {
+    const targets = list(str(w, `targs${n}`));
+    if (!targets.length) continue; // the row declares no such slot
+    out.push({
+      enabled: (mask & (1 << (n - 1))) !== 0,
+      targets,
+      damage: num(w, `dmgplus${n}`, 0) + primaryVal,
+      dice: num(w, `dice${n}`, 0),
+      sides: num(w, `sides${n}`, 0),
+      cooldown: num(w, `cool${n}`, 0),
+      damagePoint: num(w, `dmgpt${n}`, 0),
+      range: num(w, `rangeN${n}`, 0),
+      weaponType: toWeaponType(str(w, `weapTp${n}`)),
+      attackType: toAttackType(str(w, `atkType${n}`)),
+      missileArt: mdxPath(arts[n - 1] ?? arts[0] ?? ""),
+      missileSpeed: speeds[n - 1] ?? speeds[0] ?? 900,
+      spillDist: num(w, `spillDist${n}`, 0),
+      spillRadius: num(w, `spillRadius${n}`, 0),
+      damageLoss: num(w, `damageLoss${n}`, 0),
+    });
+  }
+  return out;
+}
+
+/** A comma-separated token list, minus the SLK's "-"/"_" empties, lowercased. */
+function list(v: string): string[] {
+  return v.split(",").map((s) => s.trim().toLowerCase()).filter((s) => s && s !== "_" && s !== "-");
+}
+
+// A .mdl model path from the Func profile → the .mdx the MPQ actually ships.
+function mdxPath(v: string): string {
   if (!v) return "";
-  const parts = v.split(",").map((s) => s.trim()).filter(Boolean);
-  const pick = parts.find((p) => /missile/i.test(p)) ?? parts[0];
-  if (!pick) return "";
-  const p = pick.replace(/\//g, "\\").replace(/\.mdl$/i, "");
+  const p = v.replace(/\//g, "\\").replace(/\.mdl$/i, "");
   return /\.mdx$/i.test(p) ? p : `${p}.mdx`;
 }
 

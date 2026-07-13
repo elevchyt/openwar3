@@ -22,6 +22,7 @@ import { registerMeleeNatives } from "./melee";
 import { registerMultiboardNatives } from "./multiboard";
 import { registerRegionNatives } from "./region";
 import { registerSoundNatives } from "./sound";
+import { registerStockNatives } from "./stock";
 import { registerTextNatives } from "./text";
 import { registerTimerDialogNatives } from "./timerdialog";
 import { registerVisionNatives } from "./vision";
@@ -134,6 +135,7 @@ export function registerNatives(rt: Runtime): void {
   registerMultiboardNatives(rt); // the grid scoreboard — what DotA puts on screen (7.22)
   registerRegionNatives(rt);
   registerSoundNatives(rt); // the sound handle family + music (7.20)
+  registerStockNatives(rt); // neutral-building stock — the Marketplace (issue #57)
   registerTextNatives(rt); // after config: its real SetPlayerName overrides config's setup stub
   registerTimerDialogNatives(rt); // the countdown windows (7.21)
   registerVisionNatives(rt); // alliances/shared vision + BOTH fogs (7.22)

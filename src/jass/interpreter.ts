@@ -90,6 +90,8 @@ export interface ItemEvent {
   unit: UnitSnapshot;
   item: { id: number; typeId: string; charges: number };
   phase: "pickup" | "drop" | "use" | "sell";
+  /** GetSellingUnit — the shop, on a "sell" (see the sim's ItemEvent). */
+  seller?: UnitSnapshot;
 }
 
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
@@ -1004,6 +1006,9 @@ export class Interpreter {
         ["ManipulatingUnit", unit],
         ["ManipulatedItem", item],
       ]);
+      // On a sale the SHOP answers GetSellingUnit — which is the only handle Blizzard.j's
+      // RemovePurchasedItem has to take the sold item back off the shelf with.
+      if (e.seller) responses.set("SellingUnit", this.rt.unitForSim(e.seller));
       const phase = ITEM_PHASES.indexOf(e.phase as (typeof ITEM_PHASES)[number]);
       const playerEvt = phase < 0 ? EVENT_PLAYER_UNIT_SELL_ITEM : EVENT_PLAYER_UNIT_DROP_ITEM + phase;
       const unitEvt = phase < 0 ? EVENT_UNIT_SELL_ITEM : EVENT_UNIT_DROP_ITEM + phase;

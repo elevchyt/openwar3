@@ -19,9 +19,10 @@ import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType } from "./enums";
-import type { UnitDef, UnitRegistry } from "./units";
+import type { UnitDef, UnitRegistry, WeaponSlotDef } from "./units";
 import { mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
+import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 import { parseWts } from "../jass/wts";
 
 type Val = number | string;
@@ -39,6 +40,18 @@ function primaryVal(d: UnitDef): number {
     : d.primaryAttr === PrimaryAttribute.Agility ? d.agility
     : d.primaryAttr === PrimaryAttribute.Intelligence ? d.intelligence
     : 0;
+}
+
+/** The unit's primary weapon slot — what the `ua1*` overrides address. A map that retunes
+ *  "Attack 1" must reach the slot the sim actually swings with, not just the flat summary
+ *  the HUD prints, or a custom Footman would show 40 damage and deal 12. */
+function slot1(d: UnitDef): WeaponSlotDef | undefined {
+  return d.weapons[0];
+}
+
+/** "Targets Allowed" as the sim wants it: lowercase tokens, minus the SLK's empties. */
+function targetList(v: string): string[] {
+  return v.split(",").map((x) => x.trim().toLowerCase()).filter((x) => x && x !== "_" && x !== "-");
 }
 
 // Field-code → UnitDef setter. `ua1b` (base attack damage) is handled specially
@@ -63,14 +76,30 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   udef: (d, v) => { d.armor = Math.round(n(v)); },
   udty: (d, v) => { d.armorType = toArmorType(s(v)); },
   uacq: (d, v) => { d.acquireRange = n(v); },
-  ua1r: (d, v) => { d.attackRange = n(v); },
-  ua1t: (d, v) => { d.attackType = toAttackType(s(v)); },
-  ua1c: (d, v) => { d.attackCooldown = n(v); },
-  ua1d: (d, v) => { d.attackDice = n(v); },
-  ua1s: (d, v) => { d.attackSides = n(v); },
-  udp1: (d, v) => { d.attackDamagePoint = n(v); },
+  ua1r: (d, v) => { d.attackRange = n(v); const w = slot1(d); if (w) w.range = n(v); },
+  ua1t: (d, v) => { d.attackType = toAttackType(s(v)); const w = slot1(d); if (w) w.attackType = toAttackType(s(v)); },
+  ua1c: (d, v) => { d.attackCooldown = n(v); const w = slot1(d); if (w) w.cooldown = n(v); },
+  ua1d: (d, v) => { d.attackDice = n(v); const w = slot1(d); if (w) w.dice = n(v); },
+  ua1s: (d, v) => { d.attackSides = n(v); const w = slot1(d); if (w) w.sides = n(v); },
+  udp1: (d, v) => { d.attackDamagePoint = n(v); const w = slot1(d); if (w) w.damagePoint = n(v); },
   ucbs: (d, v) => { d.castBackswing = n(v); },
-  ua1z: (d, v) => { d.missileSpeed = n(v); },
+  ua1z: (d, v) => { d.missileSpeed = n(v); const w = slot1(d); if (w) w.missileSpeed = n(v); },
+  // "Attacks Enabled" (weapsOn). A custom unit may switch a slot on or off outright — the
+  // same mask the `renw` upgrades write. 1 = slot 1, 2 = slot 2, 3 = both.
+  uaen: (d, v) => { d.weapons.forEach((w, i) => { w.enabled = (n(v) & (1 << i)) !== 0; }); },
+  ua1g: (d, v) => { const w = slot1(d); if (w) w.targets = targetList(s(v)); },
+  usd1: (d, v) => { const w = slot1(d); if (w) w.spillDist = n(v); },
+  usr1: (d, v) => { const w = slot1(d); if (w) w.spillRadius = n(v); },
+  udl1: (d, v) => { const w = slot1(d); if (w) w.damageLoss = n(v); },
+  // Attack 2. Reaches the second slot only — a unit that declares none simply ignores these.
+  ua2r: (d, v) => { const w = d.weapons[1]; if (w) w.range = n(v); },
+  ua2t: (d, v) => { const w = d.weapons[1]; if (w) w.attackType = toAttackType(s(v)); },
+  ua2c: (d, v) => { const w = d.weapons[1]; if (w) w.cooldown = n(v); },
+  ua2d: (d, v) => { const w = d.weapons[1]; if (w) w.dice = n(v); },
+  ua2s: (d, v) => { const w = d.weapons[1]; if (w) w.sides = n(v); },
+  ua2b: (d, v) => { const w = d.weapons[1]; if (w) w.damage = n(v) + primaryVal(d); },
+  ua2g: (d, v) => { const w = d.weapons[1]; if (w) w.targets = targetList(s(v)); },
+  udp2: (d, v) => { const w = d.weapons[1]; if (w) w.damagePoint = n(v); },
   // Abilities.
   uabi: (d, v) => { d.abilities = s(v).split(",").map((x) => x.trim()).filter(Boolean); },
   uhab: (d, v) => { d.heroAbilities = s(v).split(",").map((x) => x.trim()).filter(Boolean); },
@@ -98,12 +127,25 @@ function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigSt
     SETTERS[m.id]?.(def, m.value);
   }
   // Base attack damage folds in the hero's primary attribute (as loadUnitRegistry does).
-  if (dmgOverride !== undefined) def.attackDamage = dmgOverride + primaryVal(def);
+  if (dmgOverride !== undefined) {
+    def.attackDamage = dmgOverride + primaryVal(def);
+    const w = slot1(def);
+    if (w) w.damage = def.attackDamage;
+  }
 }
 
-/** A fresh clone of a UnitDef under a new id (arrays copied so overrides don't alias). */
+/** A fresh clone of a UnitDef under a new id (arrays copied so overrides don't alias). The
+ *  weapon slots are OBJECTS, so they need copying one level deeper — a shallow spread would
+ *  leave a custom unit retuning the stock type's attack for every other player on the map. */
 function cloneDef(base: UnitDef, id: string): UnitDef {
-  return { ...base, id, abilities: [...base.abilities], heroAbilities: [...base.heroAbilities], classification: [...base.classification] };
+  return {
+    ...base,
+    id,
+    abilities: [...base.abilities],
+    heroAbilities: [...base.heroAbilities],
+    classification: [...base.classification],
+    weapons: base.weapons.map((w) => ({ ...w, targets: [...w.targets] })),
+  };
 }
 
 /**
@@ -251,6 +293,115 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
     if (!base) continue;
     const def = cloneAbility(base, obj.oldId);
     applyAbilityMods(def, obj.modifications as AbilMod[], meta, trigStr);
+    registry.setCustom(obj.oldId, def);
+    count++;
+  }
+  return count;
+}
+
+// --- custom upgrades (war3map.w3q) ----------------------------------------------
+//
+// Same shape as abilities: level-indexed (an upgrade renames and re-prices itself per rank),
+// so it uses the same War3MapW3d parser and the same "route the 4-char code through the game's
+// own MetaData SLK" trick — here Units\UpgradeMetaData.slk, whose `field` column names the
+// UpgradeData column each code writes (`gglb` → goldbase, `gef1` → effect1). Its `repeat`
+// column says which fields are per-LEVEL (Name/Tip/Ubertip/Hotkey/Art/Requires) and which are
+// flat; `levelOrVariation` on the modification carries the rank (0 = level-independent).
+//
+// NOT applied: `Requires`/`Requiresamount`. Prerequisites live in the tech GRAPH (techtree.ts),
+// which has no per-map overlay yet — a custom map that re-gates an upgrade still gets the stock
+// gating. Costs, levels, names and EFFECTS all land, which is the hole that mattered: a map
+// that retunes Forged Swords to +3 dice now gets +3 dice.
+
+const UPGRADE_SETTERS: Record<string, (d: UpgradeDef, v: Val) => void> = {
+  grac: (d, v) => { d.race = s(v); },
+  gcls: (d, v) => { d.className = s(v); },
+  glvl: (d, v) => { d.maxLevel = Math.max(1, n(v)); },
+  gglb: (d, v) => { d.goldBase = n(v); },
+  gglm: (d, v) => { d.goldMod = n(v); },
+  glmb: (d, v) => { d.lumberBase = n(v); },
+  glmm: (d, v) => { d.lumberMod = n(v); },
+  gtib: (d, v) => { d.timeBase = n(v); },
+  gtim: (d, v) => { d.timeMod = n(v); },
+  // Buttonpos is TWO codes writing one field name, so these can only be told apart by code.
+  gbpx: (d, v) => { d.buttonX = n(v); },
+  gbpy: (d, v) => { d.buttonY = n(v); },
+};
+
+/** An upgrade's up-to-4 effect slots (`effect1..4` + `base`/`mod`/`code`), by field code. */
+function applyEffectMod(def: UpgradeDef, field: string, value: Val): boolean {
+  const m = /^(effect|base|mod|code)([1-4])$/.exec(field);
+  if (!m) return false;
+  const i = parseInt(m[2], 10) - 1;
+  while (def.effects.length <= i) def.effects.push({ effect: "", base: 0, mod: 0, code: "" });
+  const e = def.effects[i];
+  if (m[1] === "effect") e.effect = s(value);
+  else if (m[1] === "base") e.base = n(value);
+  else if (m[1] === "mod") e.mod = n(value);
+  else e.code = s(value);
+  return true;
+}
+
+/** A per-level string list (names/tips/icons/hotkeys), grown to fit the rank being set. */
+function setLevel(list: string[], level: number, value: string): void {
+  const i = Math.max(0, level - 1);
+  while (list.length <= i) list.push(list[list.length - 1] ?? "");
+  list[i] = value;
+}
+
+function cloneUpgrade(base: UpgradeDef, id: string): UpgradeDef {
+  return {
+    ...base, id,
+    effects: base.effects.map((e) => ({ ...e })),
+    names: [...base.names], tips: [...base.tips], uberTips: [...base.uberTips],
+    hotkeys: [...base.hotkeys], icons: [...base.icons],
+  };
+}
+
+function applyUpgradeMods(def: UpgradeDef, mods: AbilMod[], meta: MappedData, trigStr: (v: string) => string): void {
+  for (const m of mods) {
+    const row = meta.getRow(m.id) as { string(k: string): string | undefined } | undefined;
+    if (!row) continue;
+    const field = row.string("field") ?? "";
+    const lvl = Math.max(1, m.levelOrVariation);
+    if (UPGRADE_SETTERS[m.id]) { UPGRADE_SETTERS[m.id](def, m.value); continue; }
+    if (applyEffectMod(def, field, m.value)) continue;
+    switch (field) {
+      case "Name": setLevel(def.names, lvl, trigStr(s(m.value))); break;
+      case "Tip": setLevel(def.tips, lvl, trigStr(s(m.value))); break;
+      case "Ubertip": setLevel(def.uberTips, lvl, trigStr(s(m.value))); break;
+      case "Hotkey": setLevel(def.hotkeys, lvl, s(m.value)); break;
+      case "Art": setLevel(def.icons, lvl, s(m.value).replace(/\//g, "\\")); break;
+      default: break; // Requires/Requiresamount (see above), EditorSuffix, inherit, global
+    }
+  }
+}
+
+/**
+ * Load a map's war3map.w3q custom upgrades into the registry overlay. Returns how many were
+ * installed. `metaBytes` = the install's Units\UpgradeMetaData.slk, which routes each 4-char
+ * field code to its UpgradeData column; without it nothing can be applied.
+ */
+export function applyMapUpgradeData(registry: UpgradeRegistry, w3qBytes: Uint8Array, metaBytes: Uint8Array, wtsBytes?: Uint8Array): number {
+  const meta = new MappedData(new TextDecoder("windows-1252").decode(metaBytes));
+  const trigStr = makeTrigStr(wtsBytes);
+  const w3q = new War3MapW3d(); // level-indexed, like abilities
+  w3q.load(w3qBytes);
+  let count = 0;
+
+  for (const obj of w3q.customTable.objects) {
+    const base = registry.base(obj.oldId) ?? registry.get(obj.oldId);
+    if (!base) continue;
+    const def = cloneUpgrade(base, obj.newId);
+    applyUpgradeMods(def, obj.modifications as AbilMod[], meta, trigStr);
+    registry.setCustom(obj.newId, def);
+    count++;
+  }
+  for (const obj of w3q.originalTable.objects) {
+    const base = registry.base(obj.oldId);
+    if (!base) continue;
+    const def = cloneUpgrade(base, obj.oldId);
+    applyUpgradeMods(def, obj.modifications as AbilMod[], meta, trigStr);
     registry.setCustom(obj.oldId, def);
     count++;
   }

@@ -551,6 +551,15 @@ export interface EngineHooks {
   enumItems?(): ReadonlyArray<ItemSnapshot>;
   /** ChooseRandomItem(Ex) — a random item rawcode of a class + level ("" = none). */
   chooseRandomItem?(classType: string | null, level: number): string;
+  // --- neutral-building stock: the Marketplace (issue #57, see natives/stock.ts) ---
+  /** AddItemToStock / AddUnitToStock — put a ware on a shop's shelf. */
+  addToStock?(shopId: number, wareId: string, kind: "item" | "unit", count: number, max: number): void;
+  /** RemoveItemFromStock / RemoveUnitFromStock — take it off entirely, freeing its type slot. */
+  removeFromStock?(shopId: number, wareId: string): void;
+  /** SetItemTypeSlots / SetUnitTypeSlots — how many distinct types THIS shop may hold. */
+  setTypeSlots?(shopId: number, kind: "item" | "unit", slots: number): void;
+  /** SetAllItemTypeSlots / SetAllUnitTypeSlots — the same, as a default for every shop. */
+  setAllTypeSlots?(kind: "item" | "unit", slots: number): void;
   // --- per-unit flags / animation (7.17) ---
   setUnitInvulnerable?(unitId: number, flag: boolean): void; // SetUnitInvulnerable
   setUnitPathing?(unitId: number, flag: boolean): void; // SetUnitPathing (false = ghost)

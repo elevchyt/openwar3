@@ -320,6 +320,20 @@ export const MELEE = {
   MELEE_UNIT_SPACING: 64,
   /** bj_UNIT_FACING — the facing every melee starting unit is created with (degrees). */
   UNIT_FACING: 270,
+
+  // Neutral-building stock — the Marketplace's rotating shelves. Blizzard.j runs the whole
+  // thing itself (InitNeutralBuildings → StartStockUpdates → PerformStockUpdates), so these
+  // are here for the natives it stands on rather than for a reimplementation of the loop.
+  /** bj_MAX_STOCK_ITEM_SLOTS — distinct ITEM types one shop may hold at once. */
+  MAX_STOCK_ITEM_SLOTS: 11,
+  /** bj_MAX_STOCK_UNIT_SLOTS — distinct UNIT types one shop may hold at once. */
+  MAX_STOCK_UNIT_SLOTS: 11,
+  /** bj_STOCK_RESTOCK_INITIAL_DELAY — seconds before the first stock update runs. */
+  STOCK_RESTOCK_INITIAL_DELAY: 120,
+  /** bj_STOCK_RESTOCK_INTERVAL — seconds between stock updates thereafter. */
+  STOCK_RESTOCK_INTERVAL: 30,
+  /** bj_STOCK_MAX_ITERATIONS — tries to roll a sellable item before giving up on a slot. */
+  STOCK_MAX_ITERATIONS: 20,
 } as const;
 
 /** `Scripts\Blizzard.j` `bj_CAMERA_DEFAULT_*` — the shape of the camera a game opens on,

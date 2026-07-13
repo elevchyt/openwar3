@@ -212,6 +212,22 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Adis: { target: "point" }, // Dispel Magic — clear buffs, damage summons
   Ainf: { target: "unit", autocast: true }, // Inner Fire — +armour +damage
   Aslo: { target: "unit", autocast: true }, // Slow (Sorceress)
+  // === Upgrade-granted (issue #57) ===
+  // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
+  // already gates it and the command card hides the button until the research lands — the
+  // ability itself sits on the unit from birth, exactly as it does in WC3.
+  //
+  // Defend (Footman, `Rhde`) is a STANCE. The data says so: HumanAbilityFunc gives it an order
+  // PAIR (`Order=defend` / `Unorder=undefend`) rather than a single cast order, which is the
+  // same on/off shape as an autocast toggle — so it rides that flag. See defendStance().
+  Adef: { target: "none", autocast: true },
+  // Passive indicators whose EFFECT is the upgrade itself, not an ability: the button is a
+  // "you have this now" badge (their art is PASBTN*, the passive button family). Bombs is the
+  // `renw` weapon slot, Storm Hammers the `rasd` line spill, Barrage the `rtma` unit swap —
+  // all three already land in the sim, so the badge and the behaviour agree.
+  Agyb: { target: "passive" }, // Flying Machine Bombs (`Rhgb`)
+  Asth: { target: "passive" }, // Storm Hammers (`Rhhb`)
+  Aroc: { target: "passive" }, // Barrage (`Rhrt`)
 };
 
 interface Row {

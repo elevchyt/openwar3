@@ -2,11 +2,11 @@ import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
-import { type UnitRegistry } from "../data/units";
+import { type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
-import { AttackType, ArmorType, PrimaryAttribute } from "../data/enums";
+import { AttackType, ArmorType, PrimaryAttribute, isRangedWeapon } from "../data/enums";
 import {
   MISC_DATA,
   MISC_GAME,
@@ -29,12 +29,36 @@ import { SPELL_HANDLERS, AURA_BUFFS, waveSchedule, WAVE_FIELDS, type SpellApi, t
 /** Weapon stats (from UnitWeapons.slk). Damage per swing = damage + dice d sides,
  *  reduced by the target's armor (WC3 formula). */
 export interface SimWeapon {
+  // Live values — recomputeStats() rebuilds these every tick from the base* baselines below,
+  // so a mid-game Forged Swords lifts every Footman already on the field.
   damage: number;
   dice: number;
   sides: number;
   cooldown: number; // seconds between swings
   damagePoint: number; // seconds from swing start to the strike/projectile launch
   range: number; // measured between collision hulls, WC3-style
+  // Pre-upgrade baselines, straight off this slot's UnitWeapons columns.
+  baseDamage: number;
+  baseDice: number;
+  baseRange: number;
+  baseCooldown: number;
+  baseDamagePoint: number;
+  /** Whether this slot may be used at all: its bit in `weapsOn`, which the `renw` upgrade
+   *  effect can rewrite (Flying Machine Bombs switches the bomb slot on). See WeaponSlotDef. */
+  enabled: boolean;
+  /** "Targets Allowed" (`targs1`/`targs2`). A weapon strikes a target only if its list admits
+   *  it — `air` for a flyer, `structure` for a building, `ground` for everything else — which
+   *  is why a Footman cannot answer a Gryphon Rider and a Siege Engine only knocks down walls.
+   *  Empty = unrestricted (a summon or custom unit with no data). See weaponVs(). */
+  targets: string[];
+  // Line-splash ("spill"): the hit carries down the missile's line, `spillDist` past the
+  // target, catching anything within `spillRadius` of it and shedding `damageLoss` of the
+  // damage per further body. Storm Hammers (`rasd`) is nothing but a spillDist of 200.
+  spillDist: number;
+  spillRadius: number;
+  baseSpillDist: number; // pre-upgrade (`rasd`/`rasr` add to these, as Long Rifles adds to range)
+  baseSpillRadius: number;
+  damageLoss: number;
   acquire: number; // auto-acquisition range (0 = never auto-attacks)
   ranged: boolean; // fires a travelling projectile instead of hitting instantly
   missileArt: string; // projectile model path (renderer), "" = invisible
@@ -68,9 +92,58 @@ export interface SimProjectile {
   startDist: number;
   attackType?: AttackType; // attacker's weapon attack type, carried so the damage-table
   // multiplier is correct even if the attacker dies before the arrow lands
+  /** Line-splash, carried from the weapon so the hit spills even if the shooter dies in
+   *  flight. `ox`/`oy` is the launch point — the line's direction is impact-minus-launch,
+   *  and the spill runs on PAST the target from there. See applySpill. */
+  spill?: { dist: number; radius: number; loss: number; ox: number; oy: number };
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
   // instead of dealing plain `damage` — the base code + rank to dispatch.
   spell?: { code: string; rank: number; abilityId: string };
+}
+
+/** A unit type's weapon slots as the sim wants them (see WeaponSlotDef for the data behind
+ *  each one). A slot carrying no damage at all is dropped — that is how a Town Hall, which has
+ *  a UnitWeapons row like everything else, ends up unarmed. A DISABLED slot is KEPT: the Flying
+ *  Machine's bombs must be sitting there, switched off, for Flying Machine Bombs to switch on. */
+export function weaponsFromDef(def: UnitDef): SimWeapon[] {
+  const out: SimWeapon[] = [];
+  for (const s of def.weapons) {
+    if (s.cooldown <= 0 || s.damage + s.dice * s.sides <= 0) continue;
+    // The Rifleman's weapTp1 is "instant" yet he clearly shoots: a missile model on a
+    // nominally instant weapon still flies. Either signal makes the attack ranged.
+    const ranged = isRangedWeapon(s.weaponType) || s.missileArt !== "";
+    out.push({
+      damage: s.damage,
+      dice: s.dice,
+      sides: s.sides,
+      cooldown: s.cooldown,
+      damagePoint: s.damagePoint,
+      range: s.range,
+      baseDamage: s.damage,
+      baseDice: s.dice,
+      baseRange: s.range,
+      baseCooldown: s.cooldown,
+      baseDamagePoint: s.damagePoint,
+      enabled: s.enabled,
+      targets: s.targets,
+      spillDist: s.spillDist,
+      spillRadius: s.spillRadius,
+      baseSpillDist: s.spillDist,
+      baseSpillRadius: s.spillRadius,
+      damageLoss: s.damageLoss,
+      // `acquire`, and the launch/impact offsets, are UNIT columns — not per-weapon ones.
+      acquire: def.acquireRange,
+      ranged,
+      missileArt: s.missileArt,
+      missileSpeed: s.missileSpeed,
+      attackType: s.attackType,
+      launchX: def.launchX,
+      launchY: def.launchY,
+      launchZ: def.launchZ,
+      impactZ: def.impactZ,
+    });
+  }
+  return out;
 }
 
 export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem";
@@ -218,6 +291,10 @@ export interface ItemEvent {
   unit: EventUnitInfo; // GetManipulatingUnit (the buyer, for a sale)
   item: { id: number; typeId: string; charges: number };
   phase: "pickup" | "drop" | "use" | "sell";
+  /** GetSellingUnit — the SHOP, on a "sell". Blizzard.j's whole Marketplace restock cycle
+   *  hangs off it: RemovePurchasedItem answers the sale with
+   *  `RemoveItemFromStock(GetSellingUnit(), GetItemTypeId(GetSoldItem()))`. */
+  seller?: EventUnitInfo;
 }
 
 /** A creep's dropped-item table (from war3mapUnits.doo). Each SET drops (at most)
@@ -254,7 +331,11 @@ export interface RepairState {
 export interface WorkerState {
   gold: boolean;
   lumber: boolean;
+  /** Lumber carried per trip. LIVE value: Improved/Advanced Lumber Harvesting (`rlum`) raises
+   *  it above `baseLumberCapacity`, which is why recomputeStats owns it (a Peasant already in
+   *  the forest when the research lands starts filling to the new load on its next trip). */
   lumberCapacity: number;
+  baseLumberCapacity: number;
   lumberPerChop: number;
   chopPeriod: number; // seconds between chops
   damagesTree: boolean; // wisps harvest without hurting the tree
@@ -274,7 +355,11 @@ export type RallyKind = "point" | "mine" | "tree" | "unit";
  *   - "upgrade"  — the building becomes `unitId` (Town Hall → Keep). Morphs in place. */
 export type BuildJob =
   // `free` marks the melee free first hero — charged nothing, so it must be refunded nothing.
-  | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean }
+  // `buyer` is who the job belongs to when the BUILDING's owner isn't the answer: a Tavern is
+  // Neutral Passive, so a hero queued there is nobody's by ownership. Without it, a hero player
+  // A is hiring counts toward player B's copy count — which is what selects B's requirement
+  // tier ("your 2nd hero needs a Keep"). Harmless in 1v1, wrong the moment there are three.
+  | { kind: "unit"; unitId: string; timeLeft: number; buildTime: number; free?: boolean; buyer?: number }
   | { kind: "research"; unitId: string; level: number; timeLeft: number; buildTime: number }
   | { kind: "upgrade"; unitId: string; timeLeft: number; buildTime: number };
 
@@ -295,7 +380,17 @@ export interface BuildingState {
   producesUnits: boolean; // trains units → has a rally point (towers etc. don't)
   // Shop stock, when this building sells things (Arcane Vault, Goblin Merchant, Tavern…).
   // Keyed by item/unit id. Absent on everything else. See SHOP stock rules in tickShops().
+  //
+  // Most shops fill this ONCE, from their data (`Sellitems`/`Makeitems`/`Sellunits`). The
+  // Marketplace is the exception and the reason the map is mutable: it declares no wares at
+  // all, and Blizzard's own JASS stocks it at runtime — see the AddItemToStock natives.
   stock?: Map<string, ShopStock>;
+  /** How many distinct item / unit TYPES this shop may hold (JASS Set[All]ItemTypeSlots).
+   *  Blizzard.j's InitNeutralBuildings sets both to 11 (bj_MAX_STOCK_ITEM_SLOTS). Undefined =
+   *  use the world default. A full shelf silently refuses further stock, which is what makes
+   *  the Marketplace rotate: buying an item frees its slot for the next restock tick. */
+  stockItemSlots?: number;
+  stockUnitSlots?: number;
 }
 
 /** One shop slot's stock. WC3 restocks per ITEM, not per shop: each item has its own
@@ -307,6 +402,9 @@ export interface ShopStock {
   max: number; // stockMax
   regen: number; // stockRegen — seconds per restock tick (0 = never comes back once taken)
   timer: number; // seconds until the next one is added (Infinity = never)
+  /** Which id space the key belongs to — one flat map holds both, and the slot caps are
+   *  counted per kind (11 item types AND 11 unit types). */
+  kind: "item" | "unit";
 }
 
 /** Why a shop purchase was refused. The HUD maps these onto the game's own messages in
@@ -337,7 +435,10 @@ export type QueuedOrder =
   | { kind: "buildresume"; buildingId: number; ax?: number; ay?: number }
   | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number };
 
-const MAX_QUEUED_ORDERS = 35; // WC3 action-queue cap
+const MAX_QUEUED_ORDERS = 35; // WC3 action-queue cap (shift-queued ORDERS on a unit)
+/** WC3 caps a building's PRODUCTION queue at 7 jobs — training, research and tier upgrades
+ *  all share it. A different thing entirely from MAX_QUEUED_ORDERS above. */
+const MAX_BUILD_QUEUE = 7;
 
 export interface SimMine {
   id: number;
@@ -472,7 +573,17 @@ export interface SimUnit {
   maxMana: number;
   armor: number;
   armorType: ArmorType; // UnitBalance defType → picks the damage-table column
+  /** Every weapon slot the unit's type declares, in slot order (see WeaponSlotDef). Which one
+   *  swings is decided per TARGET — weaponVs(). */
+  weapons: SimWeapon[];
+  /** The primary weapon: the first ENABLED slot, or null when the unit is unarmed. This is the
+   *  attack the HUD shows and what "is this unit armed / melee / ranged" means everywhere.
+   *  recomputeStats() re-picks it, so a Flying Machine that researches Bombs keeps its air
+   *  attack as primary and simply gains a second one. */
   weapon: SimWeapon | null;
+  /** The slot the in-flight swing was launched with (weaponVs at swing start) — a Gargoyle
+   *  that starts a ground swing must land THAT hit, not re-pick a weapon at the damage point. */
+  swingWeapon: SimWeapon | null;
   // Ability cast animation timing (UnitWeapons.slk castpt/castbsw), per-unit — not
   // per-weapon, so a weaponless pure caster still has them. castPoint = wind-up
   // before a spell's effect fires (added to the ability's Casting Time); castBackswing
@@ -579,18 +690,16 @@ export interface SimUnit {
   baseMaxHp: number; // level-1 maxHp — attribute growth is layered on top
   baseMaxMana: number;
   baseArmor: number; // armour before agility growth + buffs
-  baseDamage: number; // weapon base damage before primary-attr growth + buffs
+  // The PRIMARY weapon's base damage before primary-attr growth + buffs. Mirrors
+  // weapon.baseDamage; kept on the unit because it is the "how hard does this unit hit"
+  // figure other systems reason about (Inner Fire's +10% of base, the HUD's green bonus).
+  // WC3's attack upgrades add a DIE (`ratd`), not flat damage — the engine HAS a flat-damage
+  // effect (`ratx`, used by Burning Oil) and Blizzard pointedly did not use it for Forged
+  // Swords: all 19 melee/ranged attack upgrades across the four races are `ratd` base=1 mod=1.
+  // So a Footman (1d2+11 = 12-13) upgrades to 2d2+11 = 13-15, then 3d2+11 = 14-17 — the RANGE
+  // widens, which is why upgraded WC3 units roll a bigger spread and not just a bigger number.
+  baseDamage: number;
   baseSpeed: number; // move speed before slow/haste
-  baseCooldown: number; // weapon cooldown before haste/slow
-  baseDamagePoint: number; // weapon damage point before haste/slow (scales with cooldown)
-  // Weapon dice + range before upgrades. WC3's attack upgrades add a DIE (`ratd`), not flat
-  // damage — the engine has a flat-damage effect (`ratx`, used by Burning Oil and a couple
-  // of others) and Blizzard pointedly did not use it for Forged Swords: all 19 melee/ranged
-  // attack upgrades across the four races are `ratd` base=1 mod=1. So a Footman (1d2+11 =
-  // 12-13) upgrades to 2d2+11 = 13-15, then 3d2+11 = 14-17 — the RANGE widens, which is why
-  // upgraded WC3 units roll a bigger spread and not just a bigger number.
-  baseDice: number;
-  baseRange: number; // Long Rifles (`ratr`) adds +200 to the Rifleman's 400
   baseSightDay: number; // Magic Sentry / `rsig` widen a tower's vision
   baseSightNight: number;
   manaRegen: number; // mana per second (recomputed from INT + buffs)
@@ -999,6 +1108,15 @@ export class SimWorld {
     return !this.tech || this.tech.canMake(player, unitId, owned);
   }
 
+  /** Whether `player` meets the prerequisites for ANY tech id — a unit, an upgrade, a shop
+   *  item or an ABILITY. Abilities declare theirs the same way everything else does
+   *  (`[Adef] Requires=Rhde` in HumanAbilityFunc.txt), which is how the six "effectless" Human
+   *  upgrades work: they grant no stat, they simply satisfy an ability's requirement. Ids with
+   *  no requirements pass, so this is safe to ask of anything. */
+  techMeets(player: number, id: string): boolean {
+    return !this.tech || this.tech.meets(player, id);
+  }
+
   addMine(x: number, y: number, gold: number, radius = 96): SimMine {
     const mine: SimMine = { id: this.nextNodeId++, x, y, radius, gold, busy: false };
     this.mines.set(mine.id, mine);
@@ -1093,9 +1211,32 @@ export class SimWorld {
     return { items: [...t.makeitems, ...t.sellitems], units: [...t.sellunits] };
   }
 
+  /** What THIS shop is actually selling: its data's wares plus whatever a script has put on its
+   *  shelves. Only the second half exists for a Marketplace, whose entire stock is script-made
+   *  and changes every 30 seconds — so the command card must be built from the building, not
+   *  from the unit type. */
+  shopWaresOf(shopId: number): { items: string[]; units: string[] } {
+    const u = this.units.get(shopId);
+    if (!u) return { items: [], units: [] };
+    const w = this.shopWares(u.typeId);
+    for (const [id, s] of u.building?.stock ?? []) {
+      const list = s.kind === "item" ? w.items : w.units;
+      if (!list.includes(id)) list.push(id);
+    }
+    return w;
+  }
+
   isShop(typeId: string): boolean {
     const w = this.shopWares(typeId);
     return w.items.length > 0 || w.units.length > 0;
+  }
+
+  /** Whether this particular building can be bought from — by data OR by script-placed stock.
+   *  A Marketplace passes only on the strength of the latter. */
+  isShopUnit(shopId: number): boolean {
+    const u = this.units.get(shopId);
+    if (!u) return false;
+    return this.isShop(u.typeId) || (u.building?.stock?.size ?? 0) > 0;
   }
 
   /** How far from a shop a patron may stand — the shop ability's "Activation Radius"
@@ -1159,7 +1300,7 @@ export class SimWorld {
     const wares = this.shopWares(u.typeId);
     if (!wares.items.length && !wares.units.length) return;
     const stock = new Map<string, ShopStock>();
-    const seed = (id: string, max: number, regen: number, start: number) => {
+    const seed = (id: string, kind: "item" | "unit", max: number, regen: number, start: number) => {
       if (max <= 0) return;
       const t = this.elapsed;
       let count: number;
@@ -1175,17 +1316,77 @@ export class SimWorld {
         count = 1; // one, and never replenished (a Tavern's heroes)
         timer = Infinity;
       }
-      stock.set(id, { count, max, regen, timer });
+      stock.set(id, { count, max, regen, timer, kind });
     };
     for (const id of wares.items) {
       const d = this.itemReg?.get(id);
-      if (d) seed(id, d.stockMax, d.stockRegen, d.stockStart);
+      if (d) seed(id, "item", d.stockMax, d.stockRegen, d.stockStart);
     }
     for (const id of wares.units) {
       const d = this.unitReg?.get(id);
-      if (d) seed(id, d.stockMax, d.stockRegen, d.stockStart);
+      if (d) seed(id, "unit", d.stockMax, d.stockRegen, d.stockStart);
     }
     if (stock.size) u.building.stock = stock;
+  }
+
+  // --- runtime stock, for Blizzard.j's Marketplace (issue #57) ------------------
+  //
+  // The Marketplace (`nmrk`) is the one shop with no wares in its data at all: NeutralUnitFunc
+  // gives it no `Sellitems`. Its shelves are stocked at RUNTIME by Blizzard's own JASS —
+  // InitNeutralBuildings starts a timer, and every 30s (after a 120s delay) PerformStockUpdates
+  // picks a random (item class, level) that some creep on the map is known to drop, then
+  // UpdateEachStockBuilding enumerates every "marketplace" and calls AddItemToStock on it.
+  // We run that script rather than reimplementing it (the house rule), so all the sim owes it
+  // is these mutators. See src/jass/natives/stock.ts.
+
+  /** Default type-slot caps for shops the script hasn't set explicitly — JASS
+   *  SetAllItemTypeSlots / SetAllUnitTypeSlots. Blizzard.j's InitNeutralBuildings sets both to
+   *  11 on its own; these defaults only matter on a map whose script never runs. */
+  private allItemSlots: number = MELEE.MAX_STOCK_ITEM_SLOTS;
+  private allUnitSlots: number = MELEE.MAX_STOCK_UNIT_SLOTS;
+
+  setAllTypeSlots(kind: "item" | "unit", slots: number): void {
+    if (kind === "item") this.allItemSlots = Math.max(0, slots);
+    else this.allUnitSlots = Math.max(0, slots);
+  }
+
+  setTypeSlots(shopId: number, kind: "item" | "unit", slots: number): void {
+    const b = this.units.get(shopId)?.building;
+    if (!b) return;
+    if (kind === "item") b.stockItemSlots = Math.max(0, slots);
+    else b.stockUnitSlots = Math.max(0, slots);
+  }
+
+  private typeSlots(b: BuildingState, kind: "item" | "unit"): number {
+    return (kind === "item" ? b.stockItemSlots : b.stockUnitSlots) ?? (kind === "item" ? this.allItemSlots : this.allUnitSlots);
+  }
+
+  /** JASS AddItemToStock / AddUnitToStock: put a ware on `shopId`'s shelf. Re-adding one the
+   *  shop already carries just refreshes it. Refused when every type slot is taken — which is
+   *  precisely what makes a Marketplace's window rotate rather than grow without bound: a sale
+   *  removes the entry (RemoveItemFromStock, off the SELL_ITEM event) and frees the slot.
+   *  Returns whether it went on the shelf. */
+  addToStock(shopId: number, wareId: string, kind: "item" | "unit", count: number, max: number): boolean {
+    const shop = this.units.get(shopId);
+    const b = shop?.building;
+    if (!shop || !b || shop.hp <= 0 || !wareId) return false;
+    const stock = (b.stock ??= new Map());
+    const held = stock.get(wareId);
+    if (!held) {
+      let used = 0;
+      for (const s of stock.values()) if (s.kind === kind) used++;
+      if (used >= this.typeSlots(b, kind)) return false; // shelf full
+    }
+    // A script-stocked ware carries no restock schedule of its own — the script IS its
+    // schedule (the 30s stock-update timer), so regen stays 0 and the timer never runs.
+    stock.set(wareId, { count: Math.max(0, count), max: Math.max(1, max), regen: 0, timer: Infinity, kind });
+    return true;
+  }
+
+  /** JASS RemoveItemFromStock / RemoveUnitFromStock: take the ware off the shelf entirely
+   *  (not just decrement it) — the slot is freed for the next stock update. */
+  removeFromStock(shopId: number, wareId: string): void {
+    this.units.get(shopId)?.building?.stock?.delete(wareId);
   }
 
   /** Replenish every shop's shelves. A full shelf runs no timer; a ware with `stockRegen` 0
@@ -1236,8 +1437,14 @@ export class SimWorld {
     stash.gold -= def.gold;
     stash.lumber -= def.lumber;
     const slot = buyer.inventory.indexOf(null);
-    buyer.inventory[slot] = { id: this.nextItemId++, itemId, charges: def.charges, cooldownLeft: 0 };
+    const bought = { id: this.nextItemId++, itemId, charges: def.charges, cooldownLeft: 0 };
+    buyer.inventory[slot] = bought;
     this.notifyCreepsOfShopUse(shop, buyer, MISC_GAME.ItemSaleAggroRange);
+    // EVENT_(PLAYER_)UNIT_SELL_ITEM. Blizzard.j listens for this on every neutral-passive
+    // building and answers it with RemoveItemFromStock(GetSellingUnit(), …) — so a Marketplace
+    // only ever clears a sold item off its shelf (and frees the slot for the next 30s update)
+    // BECAUSE this event fires. The seller is the shop; the manipulating unit is the patron.
+    this.noteItem(buyer, bought, "sell", shop);
     return "ok";
   }
 
@@ -1414,12 +1621,21 @@ export class SimWorld {
     return out;
   }
 
+  /** A building's production queue is FULL — WC3 caps it at 7 jobs, training, research and
+   *  tier upgrades all sharing the one queue. Callers must ask BEFORE charging: an enqueue
+   *  refused after the gold has come out of the stash is gold the player never gets back.
+   *  (Not to be confused with MAX_QUEUED_ORDERS, the shift-queued ORDER cap on a unit.) */
+  queueFull(buildingId: number): boolean {
+    const b = this.units.get(buildingId)?.building;
+    return !!b && b.queue.length >= MAX_BUILD_QUEUE;
+  }
+
   /** Queue a unit for training at a building. Timing only — the caller has
    *  already checked/charged resources and food. */
-  enqueueTrain(buildingId: number, unitId: string, buildTime: number, free = false): boolean {
+  enqueueTrain(buildingId: number, unitId: string, buildTime: number, free = false, buyer?: number): boolean {
     const b = this.units.get(buildingId)?.building;
-    if (!b) return false;
-    b.queue.push({ kind: "unit", unitId, timeLeft: buildTime, buildTime, free });
+    if (!b || b.queue.length >= MAX_BUILD_QUEUE) return false;
+    b.queue.push({ kind: "unit", unitId, timeLeft: buildTime, buildTime, free, buyer });
     this.noteTrain(buildingId, unitId, "start"); // EVENT_(PLAYER_)UNIT_TRAIN_START
     return true;
   }
@@ -1429,7 +1645,7 @@ export class SimWorld {
    *  training and research, so a Barracks researching Defend cannot also train a Footman. */
   enqueueResearch(buildingId: number, upgradeId: string, level: number, time: number): boolean {
     const b = this.units.get(buildingId)?.building;
-    if (!b) return false;
+    if (!b || b.queue.length >= MAX_BUILD_QUEUE) return false;
     b.queue.push({ kind: "research", unitId: upgradeId, level, timeLeft: time, buildTime: time });
     return true;
   }
@@ -1438,7 +1654,7 @@ export class SimWorld {
    *  Guard Tower). It keeps working while it upgrades, and morphs in place on completion. */
   enqueueUpgrade(buildingId: number, toUnitId: string, time: number): boolean {
     const b = this.units.get(buildingId)?.building;
-    if (!b) return false;
+    if (!b || b.queue.length >= MAX_BUILD_QUEUE) return false;
     b.queue.push({ kind: "upgrade", unitId: toUnitId, timeLeft: time, buildTime: time });
     return true;
   }
@@ -1858,8 +2074,8 @@ export class SimWorld {
       | "baseArmor"
       | "baseDamage"
       | "baseSpeed"
-      | "baseCooldown"
-      | "baseDamagePoint"
+      | "weapon"
+      | "swingWeapon"
       | "manaRegen"
       | "hpRegen"
       | "lifesteal"
@@ -1901,8 +2117,6 @@ export class SimWorld {
       | "getItemId"
       | "pendingGive"
       | "pendingDrop"
-      | "baseDice"
-      | "baseRange"
       | "baseSightDay"
       | "baseSightNight"
     >,
@@ -1910,12 +2124,17 @@ export class SimWorld {
     opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
   ): SimUnit {
     const hero = opts?.hero;
+    // The primary weapon is DERIVED, never passed in: it is the first slot `weapsOn` has
+    // switched on (the Chimaera's is slot 2 — its acid breath sits in slot 1, off, until
+    // Corrosive Breath). recomputeStats() re-picks it whenever an upgrade rewrites the mask.
+    const weapon = unit.weapons.find((w) => w.enabled) ?? null;
     const u: SimUnit = {
       ...unit,
-      // Pre-upgrade weapon/vision baselines. recomputeStats() rebuilds the live values from
-      // these every tick, so researching Forged Swords mid-game lifts every existing Footman.
-      baseDice: unit.weapon?.dice ?? 0,
-      baseRange: unit.weapon?.range ?? 0,
+      weapon,
+      swingWeapon: null,
+      // Pre-upgrade vision baselines. recomputeStats() rebuilds the live values from these
+      // every tick, so researching Forged Swords mid-game lifts every existing Footman (the
+      // weapon baselines live on each SimWeapon — see SimWeapon.base*).
       baseSightDay: unit.sightDay,
       baseSightNight: unit.sightNight,
       desiredFacing: unit.facing,
@@ -1999,10 +2218,8 @@ export class SimWorld {
       baseMaxHp: unit.maxHp,
       baseMaxMana: unit.maxMana,
       baseArmor: unit.armor,
-      baseDamage: unit.weapon?.damage ?? 0,
+      baseDamage: weapon?.baseDamage ?? 0,
       baseSpeed: unit.speed,
-      baseCooldown: unit.weapon?.cooldown ?? 0,
-      baseDamagePoint: unit.weapon?.damagePoint ?? 0,
       manaRegen: opts?.manaRegen ?? 0, // recomputeStats derives the real value below
       hpRegen: 0,
       lifesteal: 0,
@@ -2226,7 +2443,7 @@ export class SimWorld {
       // Our tile is taken — relocate to the nearest free tile still comfortably inside
       // the strike band (hits connect out to range + ATTACK_LEASH; cap a margin below so
       // we stay inCombat and don't re-chase). This branch DOES move us (onto that tile).
-      const maxGap = u.weapon.range + ATTACK_LEASH * 0.6;
+      const maxGap = (this.weaponVs(u, t) ?? u.weapon).range + ATTACK_LEASH * 0.6;
       let free = this.nearestFreeBlockInRange(u, t, n, maxGap);
       if (!free) {
         // The whole in-range ring is full. Rather than STACK in range (the "still
@@ -2434,9 +2651,14 @@ export class SimWorld {
    *  (pickUpItem / doDropItem / transferItem / useItem), so a trigger's UnitAddItem and a
    *  hero walking over the item raise the same event, as in WC3. The item is snapshotted:
    *  a consumed powerup no longer exists by the time the event is drained. */
-  private noteItem(u: SimUnit, item: { id: number; itemId: string; charges: number }, phase: ItemEvent["phase"]): void {
+  private noteItem(u: SimUnit, item: { id: number; itemId: string; charges: number }, phase: ItemEvent["phase"], seller?: SimUnit): void {
     if (!this.captureItems) return;
-    this.itemEvents.push({ unit: eventInfo(u), item: { id: item.id, typeId: item.itemId, charges: item.charges }, phase });
+    this.itemEvents.push({
+      unit: eventInfo(u),
+      item: { id: item.id, typeId: item.itemId, charges: item.charges },
+      phase,
+      seller: seller ? eventInfo(seller) : undefined,
+    });
   }
   /** Item events since the last drain (`captureItems`). */
   drainItemEvents(): ItemEvent[] {
@@ -2551,6 +2773,10 @@ export class SimWorld {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || !u.weapon || u.ethereal || (!force && !this.hostile(u, t))) return false; // ethereal (Banished) → weapon disabled (issue #49)
+    // No weapon that may strike this target — a Footman ordered onto a Gryphon Rider. WC3
+    // refuses the order outright (the cursor never turns red); the caller falls back to a
+    // move, exactly as it does for any other refused attack.
+    if (!this.canAttack(u, t)) return false;
     if (this.castLocked(u)) return false; // mid-wind-up: only Stop breaks a cast
     if (t.invulnerable) return false; // invulnerable units can't be attacked at all — not even with a forced Attack order (issue #26)
     // A FRESH attack (from any non-attack state — a player command, idle auto-acquire,
@@ -2620,7 +2846,7 @@ export class SimWorld {
     // range), so a melee unit that reaches its slot is exactly in range — the slots
     // ARE the surround positions, giving a full ring of them rather than a tight
     // clump the units overshoot.
-    const stand = tr + wr + Math.min(u.weapon ? u.weapon.range : 0, 160);
+    const stand = tr + wr + Math.min(this.weaponVs(u, t)?.range ?? 0, 160);
     // Own footprint origin — exempt from the reachability line check so the unit can
     // step off the tile it's standing on.
     const half = u.footprint >> 1;
@@ -3000,15 +3226,21 @@ export class SimWorld {
    *  `base + mod*(level-1)`. Priest Master Training therefore reads +200 max mana at level 2,
    *  not another +100 on top of level 1.
    *
-   *  Only the effects with unambiguous semantics are honoured; the rest are deliberately left
-   *  alone rather than guessed at (`renw` enable-weapons, `rart` armour-type swap, `rrai`,
-   *  `rent`, `rspi`, `rlev`, `raud`). `rtma` is not a stat at all — it flips a unit's
-   *  availability and is handled by TechState.maxAllowed. */
+   *  Still deliberately unhandled rather than guessed at: `rart` (armour-type swap, Orc
+   *  Reinforced Defenses), `ratc` (attack target count — Moon Glaive's bounce), `rrai`,
+   *  `rent`, `rspi`, `rlev`, `raud`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
+   *  unit's availability and is handled by TechState.maxAllowed. */
   private upgradeBonuses(u: SimUnit): {
     dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
     range: number; sight: number; speed: number; attackSpeed: number; damage: number;
+    lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
   } {
-    const b = { dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0, attackSpeed: 0, damage: 0 };
+    const b = {
+      dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0,
+      attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0,
+      // -1 = "no `renw` researched" — the unit keeps whatever mask its data shipped with.
+      weaponMask: -1,
+    };
     if (!this.tech || !this.upgradeReg || !this.unitReg) return b;
     const def = this.unitReg.get(u.typeId);
     if (!def || !def.upgradesUsed.length) return b;
@@ -3034,10 +3266,52 @@ export class SimWorld {
           case "rsig": b.sight += v; break;
           case "rmvx": b.speed += v; break;
           case "rats": b.attackSpeed += v; break;
+          // Improved/Advanced Lumber Harvesting (`Rhlh`): the lumber a worker carries per
+          // trip. base 10 / mod 10, so 10 at level 1 and 20 at level 2 — ON TOP of the
+          // Peasant's own 10, matching the game's own tooltip ("Increases the amount of
+          // lumber that Peasants can carry by <Rhlh,mod1>").
+          case "rlum": b.lumber += v; break;
+          // Attack spill (Storm Hammers `Rhhb` = rasd 200, Impaling Bolt `Repb` = rasd 200):
+          // opens up the line-splash the weapon already carries a radius for.
+          case "rasd": b.spillDist += v; break;
+          case "rasr": b.spillRadius += v; break;
+          // Enable Weapons (`renw`) — an attackBits MASK that REPLACES `weapsOn`, it does not
+          // add to it. Flying Machine Bombs (`Rhgb`) and Corrosive Breath (`Recb`) are 3 (both
+          // slots); Impaling Bolt (`Repb`) is 2, which SWITCHES the Glaive Thrower off slot 1
+          // and onto slot 2 — the tree-piercing bolt — rather than giving it a second attack.
+          case "renw": b.weaponMask = v; break;
         }
       }
     }
     return b;
+  }
+
+  /** The weapon `u` would strike `t` with: the first ENABLED slot whose Targets Allowed admits
+   *  the target. null = it cannot attack `t` at all, which is a real and common answer in WC3 —
+   *  a Footman has no answer to a Gryphon Rider, a Siege Engine cannot touch a Footman, and a
+   *  Flying Machine cannot hit the ground until Bombs is researched.
+   *
+   *  WC3 classifies the target by what it IS (allegiance is the caller's business, via
+   *  hostile()): a flyer answers to `air`, a structure to `structure`, everything else to
+   *  `ground`. Note that a building is NOT "ground" — the Chimaera's corrosive breath lists
+   *  `structure,debris` alone and hits nothing but buildings, and the Mortar Team keeps a
+   *  separate structure-only slot precisely because its ground shot lists no `structure`. */
+  weaponVs(u: SimUnit, t: SimUnit): SimWeapon | null {
+    for (const w of u.weapons) {
+      if (!w.enabled) continue;
+      // No Targets Allowed data at all (a summon or custom unit with no weapons row) → treat
+      // the weapon as unrestricted rather than silently disarming the unit.
+      if (!w.targets.length) return w;
+      const key = t.building ? "structure" : t.flying ? "air" : "ground";
+      if (w.targets.includes(key)) return w;
+    }
+    return null;
+  }
+
+  /** Whether `u` has any weapon that may strike `t`. Every automatic target scan asks this, so
+   *  a Footman never walks across the map at a passing Gargoyle it can never hit. */
+  private canAttack(u: SimUnit, t: SimUnit): boolean {
+    return this.weaponVs(u, t) !== null;
   }
 
   /** Recompute a unit's effective stats from its base values, hero attribute
@@ -3099,25 +3373,41 @@ export class SimWorld {
     u.maxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana;
     if (u.hp > u.maxHp) u.hp = u.maxHp;
     if (u.mana > u.maxMana) u.mana = u.maxMana;
+    // Defend: "While Defend is active, movement is reduced to <DataC1,%>% of normal speed"
+    // (30%) — a stance, not a debuff, so it is derived here rather than carried as a buff.
+    const defend = this.defendStance(u);
+    if (defend) slowMove = Math.max(slowMove, 1 - this.dataOf(defend, 2, 0.3));
     // Spiked Carapace (Crypt Lord passive AUts): a flat bonus armour (dataB) while learned.
     const carapace = this.passiveLevelData(u, "AUts");
     const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
     u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
     u.bonusArmor = armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
-    if (u.weapon) {
-      const base = u.baseDamage + primaryDelta;
-      u.weapon.damage = Math.max(0, base + damageBonus + item.damage + upg.damage + base * damagePct); // Command/Trueshot add a % of base
-      u.bonusDamage = u.weapon.damage - base; // the buff/aura/item portion
-      u.weapon.dice = u.baseDice + upg.dice; // Forged Swords / Gunpowder add dice, widening the roll
-      u.weapon.range = u.baseRange + upg.range; // Long Rifles
-      // Attack speed scales cooldown AND damage point together (verified: thehelper
-      // "attack speed animations" thread — agility/haste divides both by the same
-      // factor, so the strike lands proportionally sooner as the unit swings faster).
-      // Item attack-speed (Gloves of Haste) adds to the haste side.
-      const speedFactor = (1 + slowAttack) / (1 + hasteAttack + item.attackSpeed + upg.attackSpeed);
-      u.weapon.cooldown = u.baseCooldown * speedFactor;
-      u.weapon.damagePoint = u.baseDamagePoint * speedFactor;
+    // Attack speed scales cooldown AND damage point together (verified: thehelper
+    // "attack speed animations" thread — agility/haste divides both by the same
+    // factor, so the strike lands proportionally sooner as the unit swings faster).
+    // Item attack-speed (Gloves of Haste) adds to the haste side.
+    const speedFactor = (1 + slowAttack) / (1 + hasteAttack + item.attackSpeed + upg.attackSpeed);
+    // EVERY slot is rebuilt, not just the one in hand: a Gargoyle's ground and air attacks
+    // both carry Forged Talons, and a Flying Machine that researches Bombs must find its bomb
+    // slot already carrying its armour/damage upgrades the moment the slot switches on.
+    for (const w of u.weapons) {
+      // `renw` REPLACES weapsOn (see upgradeBonuses) — hence a bit test against the new mask
+      // rather than an OR with the old one, which is what lets Impaling Bolt take the Glaive
+      // Thrower OFF its original weapon.
+      if (upg.weaponMask >= 0) w.enabled = (upg.weaponMask & (1 << u.weapons.indexOf(w))) !== 0;
+      const base = w.baseDamage + primaryDelta;
+      w.damage = Math.max(0, base + damageBonus + item.damage + upg.damage + base * damagePct); // Command/Trueshot add a % of base
+      w.dice = w.baseDice + upg.dice; // Forged Swords / Gunpowder add dice, widening the roll
+      w.range = w.baseRange + upg.range; // Long Rifles
+      w.cooldown = w.baseCooldown * speedFactor;
+      w.damagePoint = w.baseDamagePoint * speedFactor;
+      w.spillDist = w.baseSpillDist + upg.spillDist; // Storm Hammers — see the spill fields on SimWeapon
+      w.spillRadius = w.baseSpillRadius + upg.spillRadius;
     }
+    // Re-pick the primary: an upgrade may have just switched the unit's first live slot.
+    u.weapon = u.weapons.find((w) => w.enabled) ?? null;
+    if (u.weapon) u.bonusDamage = u.weapon.damage - (u.weapon.baseDamage + primaryDelta); // the buff/aura/item portion
+    if (u.worker) u.worker.lumberCapacity = u.worker.baseLumberCapacity + upg.lumber; // Improved/Advanced Lumber Harvesting
     u.sightDay = u.baseSightDay + upg.sight;
     u.sightNight = u.baseSightNight + upg.sight;
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
@@ -3134,6 +3424,23 @@ export class SimWorld {
     u.bonusStr = item.str;
     u.bonusAgi = item.agi;
     u.bonusInt = item.int;
+  }
+
+  /** Defend (Adef), when the unit is actually braced: the ability's level data, else null.
+   *
+   *  WC3 models Defend as an ORDER PAIR — `Order=defend` / `Unorder=undefend` in
+   *  HumanAbilityFunc.txt — which is the same on/off shape as an autocast toggle, so it rides
+   *  the autocast flag rather than inventing a second toggle mechanism. (tickAutocast only ever
+   *  fires `target: "unit"` abilities, so nothing tries to auto-cast it at anybody.)
+   *
+   *  The research gate is checked HERE and not merely on the button: an ability the player has
+   *  not researched must not do anything even if a trigger or a stale toggle switched it on. */
+  private defendStance(u: SimUnit): AbilityLevel | null {
+    const ab = u.abilities.find((a) => a.code === "Adef" && a.level >= 1 && a.autocastOn);
+    if (!ab || !this.abilities) return null;
+    if (this.tech && !this.tech.meets(u.owner, ab.id)) return null; // Rhde not researched
+    const def = this.abilities.get(ab.id);
+    return def?.levelData[0] ?? null;
   }
 
   /** The level-data for a passive ability the unit has learned (by base code), or
@@ -4589,11 +4896,13 @@ export class SimWorld {
       return;
     }
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
-    if (!t || !u.weapon) {
-      // Target died or vanished. Don't just stand down: a group that kills its
-      // target immediately rolls onto the next hostile still in range, instead of
-      // waiting out an idle-scan tick (issue #24 — "especially ranged units" that
-      // out-range a fleeing/dying target and were left standing around).
+    // No target, no weapon, or nothing in hand that can strike THIS target (a Flying Machine
+    // whose Bombs were never researched, ordered onto a Footman): don't just stand down — a
+    // group that kills its target immediately rolls onto the next hostile still in range,
+    // instead of waiting out an idle-scan tick (issue #24 — "especially ranged units" that
+    // out-range a fleeing/dying target and were left standing around).
+    let w = t ? this.weaponVs(u, t) : null;
+    if (!t || !w) {
       this.reacquireOrStop(u);
       return;
     }
@@ -4605,7 +4914,7 @@ export class SimWorld {
     // a different target reachable → switch; still walled in → re-arm the hold.
     if (u.gaveUp) {
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      const band = u.weapon.ranged ? u.weapon.range : u.weapon.range + ATTACK_LEASH;
+      const band = w.ranged ? w.range : w.range + ATTACK_LEASH;
       if (gap <= band) {
         u.gaveUp = false; // it wandered into reach — fight
       } else if (Math.abs(gap - u.gaveUpGap) > ATTACK_LEASH) {
@@ -4646,13 +4955,14 @@ export class SimWorld {
       u.acquireT -= dt; // throttle the scan to ~5x/sec (not every tick — it's an O(units) scan)
       if (u.acquireT <= 0) {
         u.acquireT = 0.2;
-        const strike = u.weapon.ranged ? u.weapon.range : u.weapon.range + ATTACK_LEASH;
+        const strike = w.ranged ? w.range : w.range + ATTACK_LEASH;
         const curGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
         if (curGap > strike) {
           const near = this.acquireTarget(u, strike);
           if (near && near.id !== t.id) {
             this.issueAttack(u.id, near.id);
             t = near;
+            w = this.weaponVs(u, t) ?? w; // the new target may want the other slot
           }
         }
       }
@@ -4668,7 +4978,7 @@ export class SimWorld {
     // Reset iff engage() counted us "in range" this tick (didn't chase) — same band it
     // uses: melee attack from within the strike leash, ranged only once actually in
     // range (leash is just their re-chase hysteresis).
-    const band = u.weapon.ranged ? (u.inCombat ? u.weapon.range + ATTACK_LEASH : u.weapon.range) : u.weapon.range + ATTACK_LEASH;
+    const band = w.ranged ? (u.inCombat ? w.range + ATTACK_LEASH : w.range) : w.range + ATTACK_LEASH;
     if (gap <= band) {
       u.stallT = 0;
       u.attackStalls = 0; // in the fight — clear the stall streak
@@ -4803,6 +5113,7 @@ export class SimWorld {
     const cands: Array<{ t: SimUnit; gap: number }> = [];
     for (const t of this.units.values()) {
       if (t === u || t.id === excludeId || !this.hostile(u, t)) continue;
+      if (!this.canAttack(u, t)) continue; // no weapon for it — not a candidate at any distance
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't pull an idle camp
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap > range) continue;
@@ -4822,7 +5133,7 @@ export class SimWorld {
    *  probe (as pathTo does) so its footprint doesn't block its own start. */
   private canReachToAttack(u: SimUnit, t: SimUnit): boolean {
     if (u.flying) return true;
-    const reach = u.weapon ? u.weapon.range : 0;
+    const reach = this.weaponVs(u, t)?.range ?? 0; // the range of the slot THIS target calls for
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
     if (gap <= reach) return true;
     const wasReserved = u.hasReservation;
@@ -4851,7 +5162,16 @@ export class SimWorld {
       this.settle(u);
       return;
     }
-    const w = u.weapon!;
+    // The slot for THIS target — a Gargoyle's ground claws or its air spit, and each with its
+    // own range and cooldown (the Flying Machine's bombs reach 100, its flak 500). Nothing we
+    // can hit it with: stand down rather than chase a target we could never strike.
+    const w = this.weaponVs(u, t);
+    if (!w) {
+      this.cancelSwing(u);
+      u.inCombat = false;
+      this.settle(u);
+      return;
+    }
     // Committed to a swing: the attack animation is playing toward its damage point,
     // where the strike/projectile fires (a delayed frame WITHIN the animation). A
     // WC3 unit stands still for that whole wind-up — it NEVER walks mid-strike, so
@@ -4899,6 +5219,7 @@ export class SimWorld {
     u.swingLeft = Math.max(0, w.damagePoint);
     u.swingBroken = false; // a genuine new swing always animates (clears any prior break)
     u.swingTargetId = t.id;
+    u.swingWeapon = w; // the strike lands with the slot it was launched from
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
     // EVENT_(PLAYER_)UNIT_ATTACKED fires as the attacker commits a swing at the target.
     if (this.captureAttacks) this.attackEvents.push({ attacked: eventInfo(t), attacker: eventInfo(u) });
@@ -4968,6 +5289,7 @@ export class SimWorld {
       if (t === u || !this.hostile(u, t)) continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap >= bestGap) continue;
+      if (!this.canAttack(u, t)) continue; // nothing in hand that can hit it (air/ground/structure)
       if (needSight && !this.canSee(u, t)) continue;
       bestGap = gap;
       best = t;
@@ -5023,6 +5345,7 @@ export class SimWorld {
       if (t === u || !this.hostile(u, t)) continue;
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap > range) continue;
+      if (!this.canAttack(u, t)) continue; // a ground-only creep ignores the flyer overhead
       if (!this.canSee(u, t)) continue; // a creep aggroes only what it can see (issue #45)
       const tier = this.threatTier(t);
       if (tier > bestTier || (tier === bestTier && gap < bestGap)) {
@@ -5037,7 +5360,8 @@ export class SimWorld {
   /** Advance an in-progress attack swing; when it reaches the weapon's damage
    *  point, launch the projectile (ranged) or deal the hit (melee). */
   private tickSwing(u: SimUnit, dt: number): void {
-    if (u.swingLeft < 0 || !u.weapon) return;
+    const w = u.swingWeapon;
+    if (u.swingLeft < 0 || !w) return;
     u.swingLeft -= dt;
     if (u.swingLeft > 0) return;
     u.swingLeft = -1;
@@ -5046,15 +5370,15 @@ export class SimWorld {
     // The swing reached its fire frame: play the attacker's own weapon sound (its
     // model's SND "K" event) regardless of whether a melee strike will connect.
     this.attackSwings.push(u.id);
-    if (u.weapon.ranged) {
-      this.spawnProjectile(u, t);
+    if (w.ranged) {
+      this.spawnProjectile(u, t, w);
     } else {
       // Melee connects if the target is still within the same reach the unit is
       // allowed to swing from (range + the combat-hold leash) — NOT the tighter
       // ARRIVE_EPS, which left a dead band where the attack animation played but
       // the strike whiffed and no damage landed against a target drifting away.
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap <= u.weapon.range + ATTACK_LEASH) this.dealDamage(u, t);
+      if (gap <= w.range + ATTACK_LEASH) this.dealDamage(u, t, w);
     }
   }
 
@@ -5065,8 +5389,7 @@ export class SimWorld {
 
   /** Launch a homing projectile from attacker to target. Damage is rolled now
    *  and applied when it lands (armor is applied at impact). */
-  private spawnProjectile(u: SimUnit, t: SimUnit): void {
-    const w = u.weapon!;
+  private spawnProjectile(u: SimUnit, t: SimUnit, w: SimWeapon): void {
     const id = this.nextProjectileId++;
     // Launch from the weapon's model point (local offset rotated by facing), not the
     // unit's feet — e.g. the Archmage's fireball leaves from launchz=66 (his rod).
@@ -5091,9 +5414,58 @@ export class SimWorld {
       startZ: lz,
       impactZ: impactBase + t.flyHeight,
       startDist: Math.hypot(t.x - lx, t.y - ly),
+      spill: w.spillDist > 0 && w.spillRadius > 0
+        ? { dist: w.spillDist, radius: w.spillRadius, loss: w.damageLoss, ox: lx, oy: ly }
+        : undefined,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
+  }
+
+  /** Carry a line weapon's hit PAST its target (issue #57). The "spill" fields on a Missile
+   *  (Line) / Artillery (Line) weapon describe a corridor that starts at the unit struck and
+   *  runs on along the missile's heading for `spillDist`, catching anything within
+   *  `spillRadius` of it — thehelper's "the damage will continue beyond the unit you hit".
+   *  Both stock users of it are pure upgrades: the Gryphon Rider's hammer and the Glaive
+   *  Thrower's bolt already ship the 50-unit radius and the 0.2 falloff and a spill DISTANCE
+   *  of 0, so they hit exactly one unit until Storm Hammers / Impaling Bolt (`rasd` = 200)
+   *  opens the corridor.
+   *
+   *  The magnitudes are all data (spillDist1/spillRadius1/damageLoss1). The FALLOFF CURVE is
+   *  the one thing no game file states: the Object Editor names "Damage Loss Factor" and stops
+   *  there. Hive/thehelper describe it as damage shed per further body down the line, so each
+   *  successive unit takes (1 - loss)× the one before — 44 → 35 → 28 for a Gryphon. */
+  private applySpill(p: SimProjectile, primary: SimUnit): void {
+    const s = p.spill!;
+    const dx = primary.x - s.ox;
+    const dy = primary.y - s.oy;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return; // point-blank — no line to spill along
+    const ux = dx / len;
+    const uy = dy / len;
+    const source = this.units.get(p.sourceId);
+    // Everything in the corridor behind the target, nearest first — the hammer loses its bite
+    // as it goes, so the order it meets them decides how hard each is hit.
+    const hits: Array<{ t: SimUnit; along: number }> = [];
+    for (const t of this.units.values()) {
+      if (t === primary || t.hp <= 0 || t.invulnerable) continue;
+      // Enemies only: the Gryphon's own splashTargs list is "ground,structure,enemy,debris",
+      // so a hammer that carries through never mows down the rank of Footmen behind it.
+      if (!source || !this.hostile(source, t)) continue;
+      if (!this.canAttack(source, t)) continue;
+      const along = (t.x - primary.x) * ux + (t.y - primary.y) * uy; // projection onto the line
+      if (along <= 0 || along > s.dist) continue; // behind the target, within the spill distance
+      const off = Math.abs((t.x - primary.x) * -uy + (t.y - primary.y) * ux); // perpendicular offset
+      if (off > s.radius + t.radius) continue;
+      hits.push({ t, along });
+    }
+    hits.sort((a, b) => a.along - b.along);
+    let damage = p.damage;
+    for (const h of hits) {
+      damage *= 1 - s.loss;
+      if (damage <= 0) break;
+      this.applyDamage(h.t, damage, p.sourceId, p.attackType ?? AttackType.None);
+    }
   }
 
   /** Advance in-flight projectiles toward their (moving) targets; deal damage on
@@ -5120,6 +5492,7 @@ export class SimWorld {
         } else {
           const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None);
           if (dealt > 0) this.applyArrowAutocast(this.units.get(p.sourceId), t); // Searing/Frost/Black/Incinerate arrows
+          if (p.spill) this.applySpill(p, t); // Storm Hammers / Impaling Bolt carry on down the line
         }
         this.removeProjectile(p.id);
       } else {
@@ -5422,10 +5795,12 @@ export class SimWorld {
     return dmg;
   }
 
-  private dealDamage(attacker: SimUnit, target: SimUnit): void {
+  /** Land a melee strike. `w` is the slot it was swung with — a Gargoyle's ground claws and
+   *  its air spit have different attack types, so the damage table must see the right one. */
+  private dealDamage(attacker: SimUnit, target: SimUnit, w: SimWeapon): void {
     // Critical Strike (Blademaster passive AOcr): a chance to multiply the swing.
-    const raw = this.applyCriticalStrike(attacker, this.rollDamage(attacker.weapon!));
-    const dealt = this.applyDamage(target, raw, attacker.id, attacker.weapon?.attackType ?? AttackType.None);
+    const raw = this.applyCriticalStrike(attacker, this.rollDamage(w));
+    const dealt = this.applyDamage(target, raw, attacker.id, w.attackType);
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
     // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
@@ -5466,6 +5841,20 @@ export class SimWorld {
   private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None): number {
     // Evasion (Demon Hunter passive AEev): a chance to dodge a physical attack.
     if (this.tryEvade(target)) return 0;
+    // Defend (Adef, granted by the Rhde research): a Footman braced behind his shield turns
+    // arrows aside. Straight off the ability's own Ubertip, which spells the whole thing out:
+    // "Activate to have a <DataF1>% chance to reflect Piercing attacks upon the source, and to
+    // take only <DataA1,%>% of the damage from attacks that are not reflected."
+    const defend = attackType === AttackType.Pierce ? this.defendStance(target) : null;
+    if (defend) {
+      if (this.rng() * 100 < this.dataOf(defend, 5, 30)) {
+        // Reflected: the shot goes back down its own flight path. The defender takes nothing.
+        const attacker = this.units.get(attackerId);
+        if (attacker) this.landDamage(attacker, rawDamage, target.id, false);
+        return 0;
+      }
+      rawDamage *= this.dataOf(defend, 0, 0.5); // dataA — the fraction that gets through
+    }
     // WC3 damage table: the weapon's attack type vs the target's armor type scales
     // the hit (Normal +50% vs Medium, Pierce ×2 vs Light/Unarmored, Siege ×1.5 vs
     // Fortified, Magic ×2 vs Heavy, …). Applied before the armor-value reduction;
@@ -6300,6 +6689,7 @@ export class SimWorld {
     // reach; otherwise re-scan (throttled) for the nearest in-range enemy.
     const reach = w.range + (u.inCombat ? ATTACK_LEASH : 0);
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
+    if (t && !this.canAttack(u, t)) t = undefined; // nothing in hand for it (air/ground/structure)
     if (t && (!this.hostile(u, t) || t.invulnerable || Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > reach)) t = undefined;
     if (!t) {
       u.acquireT -= dt;
@@ -6332,6 +6722,7 @@ export class SimWorld {
       if (t.isCreep && !this.creepAggroed(t)) continue; // don't wake an idle creep camp
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
       if (gap >= bestGap) continue;
+      if (!this.canAttack(u, t)) continue; // a Footman never turns on the Gryphon overhead
       if (!this.canSee(u, t)) continue; // out of sight (fog, night, or a treeline) → don't aggro
       bestGap = gap;
       best = t;
@@ -6354,6 +6745,7 @@ export class SimWorld {
       if (ally.order !== "attack" || ally.targetId === null) continue; // that is fighting
       const enemy = this.units.get(ally.targetId);
       if (!enemy || !this.hostile(u, enemy)) continue; // attacking an actual enemy of ours
+      if (!this.canAttack(u, enemy)) continue; // …that we could actually contribute against
       // Distance to the FRIEND that's fighting, not to its enemy — a unit left behind is
       // near its comrades even when their enemy is farther off, and it should march up to
       // help. It then attacks the enemy that friend is engaging (and re-targets to whatever
@@ -6596,7 +6988,7 @@ export class SimWorld {
       if (c.order !== "attack" || c.targetId === null) continue;
       if (!this.sameCamp(c, u)) continue;
       const t = this.units.get(c.targetId);
-      if (t && this.hostile(u, t)) return t;
+      if (t && this.hostile(u, t) && this.canAttack(u, t)) return t;
     }
     return null;
   }
