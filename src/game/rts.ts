@@ -2524,10 +2524,14 @@ export class RtsController {
         if (hit) this.sim.useItem(id, armed.slot, 0, hit[0], hit[1]);
         return true;
       }
-      // "move": hand the item to an allied hero clicked, else drop it on the ground.
+      // "move": the carried item goes to whatever was clicked — a SHOP buys it back (WC3 sells
+      // by exactly this gesture: right-click the item, then click the Goblin Merchant / Arcane
+      // Vault / Marketplace), an allied hero is handed it, and bare ground gets it dropped.
       const picked = this.pickAt(cssX, cssY);
       const to = picked !== null ? this.sim.units.get(picked) : undefined;
-      if (to && picked !== null && picked !== id && this.controls(picked) && to.inventory.length) {
+      if (to && picked !== null && picked !== id && this.sim.canPawnAt(to)) {
+        this.sim.issueSellItem(id, armed.slot, picked);
+      } else if (to && picked !== null && picked !== id && this.controls(picked) && to.inventory.length) {
         this.sim.issueGiveItem(id, armed.slot, picked);
       } else {
         const hit = this.groundHitAt(cssX, cssY);

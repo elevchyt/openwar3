@@ -1875,6 +1875,20 @@ export class MapViewerScene {
     // EVENT_UNIT_STATE_LIMIT is polled, not raised by the sim (see pumpUnitStates).
     this.scriptWatchesUnitState = rt.triggerRegs.some((r) => r.kind === "unitState");
     this.scriptRegCount = rt.triggerRegs.length;
+
+    // A creep whose DEATH the script watches drops its loot through the SCRIPT, not through
+    // us. The World Editor compiles each creep's dropped-item table out of war3mapUnits.doo
+    // and into war3map.j as a `Unit000NN_DropItems` death trigger (Echo Isles ships 24 of
+    // them) — so we were rolling the .doo table AND the script was rolling the same table,
+    // and every creep camp dropped twice the loot it should. The script's copy is the one
+    // that counts: it goes through Blizzard.j's UnitDropItem, which also tells
+    // UpdateStockAvailability what this map's creeps can drop — and that, and only that, is
+    // what a Marketplace ever stocks from.
+    for (const r of rt.triggerRegs) {
+      if (r.kind !== "unitEvent" || idx(r) !== 53) continue; // EVENT_UNIT_DEATH
+      const u = rt.data<{ simId: number }>(r.params[0] as never);
+      if (u && u.simId >= 0) sw.clearUnitDrops(u.simId);
+    }
   }
 
   /** Drive the running map script from the sim tick (Phase 7 — 7.4b/c): advance its
@@ -4038,28 +4052,48 @@ export class MapViewerScene {
     if (!wares.items.length) return;
     const stash = this.rts!.stashFor(this.localPlayer);
     const hasPatron = world.shopPatrons(sel.id, this.localPlayer).length > 0;
-    // A shop that sells by DATA gives each ware a fixed slot (`buttonpos` in ItemFunc.txt) —
-    // the Goblin Merchant's card is the same every game. A Marketplace's stock is random, so
-    // its wares carry no slot of their own and would collide; they fill the card in stock
-    // order instead. That is exactly why the engine caps a shop at 11 item types
-    // (bj_MAX_STOCK_ITEM_SLOTS): the command card is 4×3, and Cancel owns the last slot.
-    const fixed = new Set(world.shopWares(sel.typeId).items);
-    let next = 0;
+    // Slot assignment, and it is NOT simply "read Buttonpos". Three of the Goblin Merchant's
+    // eleven wares — Boots of Speed, Scroll of Protection, Potion of Invisibility — declare NO
+    // Buttonpos at all in ItemFunc.txt, and its other eight leave exactly three gaps on the
+    // 4×3 card (Cancel owns the last slot). So WC3 pins the wares that name a slot and lets
+    // the rest fill the holes; treating "no Buttonpos" as 0,0 stacked all three under the
+    // Circlet, which really is at 0,0, and they simply vanished from the shop.
+    //
+    // The same pass carries the Marketplace, whose stock is RANDOM: two rolled items can want
+    // the same slot, and the loser takes the next free one rather than disappearing.
+    const taken = new Set<number>([3 + 2 * 4]); // (3,2) — Cancel
+    const slots = new Map<string, number>();
+    const claim = (id: string, want: number): void => {
+      let s = want;
+      if (s < 0 || s > 11 || taken.has(s)) {
+        s = 0;
+        while (s < 12 && taken.has(s)) s++;
+      }
+      if (s > 11) return; // card full — nothing left to put it in
+      taken.add(s);
+      slots.set(id, s);
+    };
+    const wants = (id: string): number => {
+      const d = this.items.get(id);
+      return d && d.buttonX >= 0 && d.buttonY >= 0 ? d.buttonX + d.buttonY * 4 : -1;
+    };
+    for (const id of wares.items) if (wants(id) >= 0) claim(id, wants(id)); // pinned first…
+    for (const id of wares.items) if (!slots.has(id)) claim(id, -1); // …then the rest fill the gaps
     for (const itemId of wares.items) {
       const d = this.items.get(itemId);
-      if (!d) continue;
+      const slot = slots.get(itemId);
+      if (!d || slot === undefined) continue;
       const stock = world.shopStock(sel.id, itemId);
       const metTech = world.tech ? world.tech.meets(this.localPlayer, itemId) : true;
       const afford = stash.gold >= d.gold && stash.lumber >= d.lumber;
-      const slot = fixed.has(itemId) ? null : Math.min(next++, 10);
       out.push(this.cmd({
         id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey, tip: d.tip,
         desc: d.description + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId),
         gold: d.gold, lumber: d.lumber, food: 0,
         count: stock > 0 ? stock : undefined,
-        col: slot === null ? d.buttonX : slot % 4,
-        row: slot === null ? d.buttonY : Math.floor(slot / 4),
+        col: slot % 4,
+        row: Math.floor(slot / 4),
         disabled: !afford || !metTech || stock <= 0 || !hasPatron,
       }));
     }

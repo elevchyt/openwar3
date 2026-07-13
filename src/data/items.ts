@@ -19,8 +19,10 @@ export interface ItemDef {
   icon: string; // command-button BLP path (ItemFunc "Art")
   tip: string; // shop-button tooltip TITLE, hotkey already gilded (ItemStrings "Tip")
   hotkey: string; // ItemStrings "Hotkey"
-  buttonX: number; // shop command-card slot (ItemFunc "Buttonpos"), column 0-3
-  buttonY: number; // …row 0-2
+  /** Shop command-card slot (ItemFunc "Buttonpos"), column 0-3 / row 0-2 — or **-1** when the
+   *  item names no slot, in which case it takes the first FREE one on the card (see buttonPos). */
+  buttonX: number;
+  buttonY: number;
   model: string; // ground model (.mdx) shown where the item lies (ItemData "file")
   scale: number; // ground-model scale
   gold: number; // gold cost (buy) / sell base
@@ -226,9 +228,16 @@ function rawTip(v: string): string {
   return v.replace(/^"|"$/g, "").trim();
 }
 
+/** An item's shop slot, or -1/-1 when it DECLARES NONE. The distinction is load-bearing: three
+ *  of the Goblin Merchant's eleven wares (Boots of Speed, Scroll of Protection, Potion of
+ *  Invisibility) carry no `Buttonpos` at all, and defaulting them to 0,0 stacked them on top
+ *  of the Circlet — which really is at 0,0 — so they vanished from the card. WC3 pins the
+ *  items that name a slot and lets the rest fill the gaps (see pushShopButtons). */
 function buttonPos(v: string): [number, number] {
-  const p = (v || "").split(",");
-  return [parseInt(p[0] ?? "0", 10) || 0, parseInt(p[1] ?? "0", 10) || 0];
+  const p = (v ?? "").split(",");
+  const x = parseInt(p[0] ?? "", 10);
+  const y = parseInt(p[1] ?? "", 10);
+  return Number.isNaN(x) || Number.isNaN(y) ? [-1, -1] : [x, y];
 }
 
 function str(row: Row, key: string): string {

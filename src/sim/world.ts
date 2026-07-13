@@ -753,6 +753,9 @@ export interface SimUnit {
   inventory: (HeldItem | null)[]; // 6 slots for heroes ([] for units without an inventory)
   getItemId: number; // ground item this unit is walking to pick up (order === "getitem"; 0 = none)
   pendingGive: { toId: number; slot: number } | null; // walking to hand a slot's item to another hero
+  /** Walking to a SHOP to sell a slot's item (WC3: right-click the item, click the shop —
+   *  the same gesture as dropping it, but the shop takes it and pays). See issueSellItem. */
+  pendingSell: { shopId: number; slot: number } | null;
   pendingDrop: { slot: number; x: number; y: number } | null; // walking to a spot to drop a slot's item
 }
 
@@ -1491,14 +1494,13 @@ export class SimWorld {
     if (!held) return false;
     const def = this.itemReg.get(held.itemId);
     if (!def || !def.pawnable) return false;
-    // The shop must actually DEAL IN ITEMS. A Tavern and a Mercenary Camp are shops, but they
-    // sell units and carry no "Shop Purchase Item" (Apit) ability — you cannot pawn a Claws of
-    // Attack at a Tavern, and `isShop` alone would have let you.
-    if (!this.shopWares(shop.typeId).items.length) return false;
+    // The shop must actually DEAL IN ITEMS — the `Apit` ability, see canPawnAt. (Asking its
+    // ware LIST instead, as this did, silently refused a Marketplace: it lists nothing.)
+    if (!this.canPawnAt(shop)) return false;
     // Stated as "within", not "not beyond" — see inShopRange. Note pawning uses its own,
     // shorter reach (PawnItemRange 300) than buying does, so a hero can buy from further
     // away than he can sell.
-    if (!(Math.hypot(u.x - shop.x, u.y - shop.y) <= MISC_GAME.PawnItemRange + shop.radius)) return false;
+    if (!this.inPawnRange(u, shop)) return false;
     u.inventory[slot] = null;
     const stash = this.stashOf(u.owner);
     stash.gold += Math.floor(def.gold * MISC_GAME.PawnItemRate);
@@ -2116,6 +2118,7 @@ export class SimWorld {
       | "inventory"
       | "getItemId"
       | "pendingGive"
+      | "pendingSell"
       | "pendingDrop"
       | "baseSightDay"
       | "baseSightNight"
@@ -2264,6 +2267,7 @@ export class SimWorld {
       inventory: hero ? [null, null, null, null, null, null] : [],
       getItemId: 0,
       pendingGive: null,
+      pendingSell: null,
       pendingDrop: null,
     };
     this.units.set(u.id, u);
@@ -2944,6 +2948,9 @@ export class SimWorld {
       this.cancelSwing(u);
       this.detachBuilder(id);
       this.settle(u);
+      // Any errand the unit was walking to finish is off: a Stop cancels a pending drop, hand-
+      // over or sale as it cancels everything else.
+      u.pendingSell = null;
     }
   }
 
@@ -6076,6 +6083,13 @@ export class SimWorld {
     if (sets.length) this.unitDrops.set(id, sets);
   }
 
+  /** Hand this unit's loot back to the map script. The script owns the drop when it watches
+   *  the unit's death: the World Editor compiles the .doo drop table into war3map.j, so both
+   *  copies describe the SAME loot and rolling both drops it twice. See syncEventCaptures. */
+  clearUnitDrops(id: number): void {
+    this.unitDrops.delete(id);
+  }
+
   /** Roll a dead unit's drop table and scatter the results on the ground. Each SET
    *  drops at most one item, chosen among its entries by their `chance` percentages
    *  (WC3 dropped-item-set semantics); leftover probability = no drop. */
@@ -6179,6 +6193,7 @@ export class SimWorld {
     if (!u || !it || !u.inventory.length || this.castLocked(u)) return false;
     u.getItemId = itemId;
     u.pendingGive = null;
+    u.pendingSell = null;
     u.order = "getitem";
     u.targetId = null;
     u.inCombat = false;
@@ -6195,6 +6210,65 @@ export class SimWorld {
   }
 
   /** Order a hero to walk to another hero and hand over the item in `slot`. */
+  /** Order a hero to SELL a held item to `shopId` — WC3's gesture is the same one that drops
+   *  an item (right-click it in the inventory, then click the target); clicking a shop instead
+   *  of the ground sells it. The hero walks over first: pawning has its own, shorter reach
+   *  (PawnItemRange 300) than buying does. False if the shop doesn't deal in items at all. */
+  issueSellItem(unitId: number, slot: number, shopId: number): boolean {
+    const u = this.units.get(unitId);
+    const shop = this.units.get(shopId);
+    if (!u || !shop || !u.inventory[slot] || !this.canPawnAt(shop) || this.castLocked(u)) return false;
+    const def = this.itemReg?.get(u.inventory[slot]!.itemId);
+    if (!def?.pawnable) return false;
+    u.pendingSell = { shopId, slot };
+    u.pendingGive = null;
+    u.pendingDrop = null;
+    u.getItemId = 0;
+    u.order = "getitem";
+    u.targetId = null;
+    u.inCombat = false;
+    u.noCollision = false;
+    this.cancelSwing(u);
+    // Walk to the shop's NEAR EDGE, never its centre — that cell is inside the footprint and
+    // unwalkable, so a path to it fails and the hero just stands there holding the item.
+    if (!this.inPawnRange(u, shop)) {
+      const [ax, ay] = this.shopApproach(u, shop);
+      this.pathTo(u, ax, ay);
+    }
+    return true;
+  }
+
+  /** Does this building DEAL IN ITEMS — i.e. may a hero pawn one to it? The data says so
+   *  outright: every item shop carries the `Apit` ability ("Shop Purchase Item") — the
+   *  Marketplace, the Goblin Merchant, the Arcane Vault, the Tomb of Relics — and the two
+   *  shops that trade in UNITS, the Tavern (`ntav`) and the Mercenary Camp (`nmer`), do not.
+   *  So you cannot sell a Claws of Attack at a Tavern, and asking the ability rather than the
+   *  ware list is what lets you sell to a Marketplace whose shelves are still empty. */
+  canPawnAt(shop: SimUnit): boolean {
+    if (shop.hp <= 0 || !this.abilities) return false;
+    const def = this.unitReg?.get(shop.typeId);
+    return !!def?.abilities.some((id) => this.abilities?.get(id)?.code === "Apit");
+  }
+
+  private inPawnRange(u: SimUnit, shop: SimUnit): boolean {
+    return Math.hypot(u.x - shop.x, u.y - shop.y) <= MISC_GAME.PawnItemRange + shop.radius;
+  }
+
+  /** A standing spot on the shop's near side, OUTSIDE its pathing footprint. A building's
+   *  collision `radius` is far smaller than the block it actually stamps (the Goblin Merchant's
+   *  radius is 50, its footprint several times that), so aiming at centre-plus-radius — as the
+   *  depot approach does for a town hall — lands the goal inside solid ground, the path fails,
+   *  and the hero stands there holding the item he was told to sell. Pawning reaches 300, so
+   *  stopping at the footprint's edge is comfortably close enough to trade. */
+  private shopApproach(u: SimUnit, shop: SimUnit): [number, number] {
+    const dx = u.x - shop.x;
+    const dy = u.y - shop.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const half = Math.max(shop.radius, ((shop.footprint || 2) * PATHING_CELL) / 2);
+    const reach = half + u.radius + PATHING_CELL;
+    return [shop.x + (dx / d) * reach, shop.y + (dy / d) * reach];
+  }
+
   issueGiveItem(fromId: number, slot: number, toId: number): boolean {
     const u = this.units.get(fromId);
     const to = this.units.get(toId);
@@ -6237,6 +6311,21 @@ export class SimWorld {
         this.stop(u.id);
       } else if (!u.moving) {
         this.pathTo(u, to.x, to.y);
+      }
+      return;
+    }
+    // Walking to a shop to sell (issueSellItem). Pawning reaches only PawnItemRange (300), so
+    // the hero closes the distance first — exactly as he walks over to drop an item.
+    if (u.pendingSell) {
+      const shop = this.units.get(u.pendingSell.shopId);
+      if (!shop || shop.hp <= 0 || !u.inventory[u.pendingSell.slot]) { this.stop(u.id); return; }
+      if (this.inPawnRange(u, shop)) {
+        this.pawnItem(u.id, u.pendingSell.slot, shop.id);
+        this.notifyCreepsOfShopUse(shop, u, MISC_GAME.ItemSaleAggroRange); // using a neutral shop is loud
+        this.stop(u.id);
+      } else if (!u.moving) {
+        const [ax, ay] = this.shopApproach(u, shop);
+        this.pathTo(u, ax, ay);
       }
       return;
     }
@@ -6288,6 +6377,7 @@ export class SimWorld {
     else { to.inventory[dest] = { id: held.id, itemId: held.itemId, charges: held.charges, cooldownLeft: 0 }; }
     from.inventory[slot] = null;
     from.pendingGive = null;
+    from.pendingSell = null;
     this.noteItem(from, held, "drop");
     this.noteItem(to, held, "pickup");
     this.recomputeStats(from);
@@ -6311,6 +6401,7 @@ export class SimWorld {
     u.pendingDrop = { slot, x, y };
     u.getItemId = 0;
     u.pendingGive = null;
+    u.pendingSell = null;
     u.order = "getitem";
     u.targetId = null;
     u.inCombat = false;
