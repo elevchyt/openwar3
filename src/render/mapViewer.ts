@@ -4083,17 +4083,24 @@ export class MapViewerScene {
       const d = this.items.get(itemId);
       const slot = slots.get(itemId);
       if (!d || slot === undefined) continue;
-      const stock = world.shopStock(sel.id, itemId);
-      // What this SHOP asks of this buyer — not what the item asks in the abstract. A neutral
-      // shop drops another race's building requirement; see SimWorld.missingForShop.
-      const missing = world.missingForShop(sel.id, itemId, this.localRace, this.localPlayer);
+      // What this SHOP asks of this buyer — not what the item asks in the abstract. A NEUTRAL
+      // shop asks nothing at all; see SimWorld.missingForShop.
+      const missing = world.missingForShop(sel.id, itemId, this.localPlayer);
       const afford = stash.gold >= d.gold && stash.lumber >= d.lumber;
+      // Out of stock is a COOLDOWN, not a "no": the ware is coming back, and the button says
+      // when with the same clockwise sweep an ability wears (`stockRegen` seconds, or the
+      // longer `stockStart` wait before its first ever arrival).
+      const st = world.shopStockInfo(sel.id, itemId);
+      const stock = st?.count ?? -1;
+      const restocking = !!st && st.count <= 0 && Number.isFinite(st.timer) && st.period > 0;
       out.push(this.cmd({
         id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey, tip: d.tip,
         desc: d.description + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId, 0, missing),
         gold: d.gold, lumber: d.lumber, food: 0,
         count: stock > 0 ? stock : undefined,
+        cooldownLeft: restocking ? st.timer : 0,
+        cooldownFrac: restocking ? Math.max(0, Math.min(1, st.timer / st.period)) : 0,
         col: slot % 4,
         row: Math.floor(slot / 4),
         disabled: !afford || missing.length > 0 || stock <= 0 || !hasPatron,

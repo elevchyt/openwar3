@@ -402,6 +402,11 @@ export interface ShopStock {
   max: number; // stockMax
   regen: number; // stockRegen — seconds per restock tick (0 = never comes back once taken)
   timer: number; // seconds until the next one is added (Infinity = never)
+  /** The full span `timer` was last wound to. Purely for the UI: an out-of-stock ware wears the
+   *  same clockwise cooldown sweep an ability does, and the sweep needs the fraction
+   *  `timer / period` — which the timer alone cannot give (a ware's FIRST arrival is a
+   *  `stockStart` wait, not a `stockRegen` one, and the two are different lengths). */
+  period: number;
   /** Which id space the key belongs to — one flat map holds both, and the slot caps are
    *  counted per kind (11 item types AND 11 unit types). */
   kind: "item" | "unit";
@@ -415,11 +420,6 @@ export type ShopResult = "ok" | "no" | "nostock" | "nopatron" | "full" | "cost" 
 /** Fallback patron reach for a shop whose ability data we can't read. The real numbers come
  *  from the shop ability itself (Aall 600 / Aneu 450); this only covers a broken data load. */
 const DEFAULT_SHOP_RADIUS = 450;
-
-/** The four races a PLAYER can be. A requirement naming a building of one of these is a
- *  race-specific gate; anything else (a pseudo-tech like TWN2, a neutral building) is not.
- *  See missingForShop. */
-const PLAYABLE_RACES = new Set(["human", "orc", "undead", "nightelf"]);
 
 /** A shift-queued follow-up order, replayed when the unit's current order ends.
  *  WC3 allows chaining several (up to ~35) — move, attack, harvest, build… */
@@ -1293,38 +1293,40 @@ export class SimWorld {
     return Math.hypot(u.x - shop.x, u.y - shop.y) <= this.shopRadius(shop.typeId) + shop.radius;
   }
 
-  /** The requirements `player` (a buyer of `race`) has NOT met for `itemId` AT THIS SHOP — the
-   *  red "Requires:" line, and the gate on the purchase itself.
+  /** The requirements `player` has NOT met for `itemId` AT THIS SHOP — the red "Requires:" line,
+   *  and the gate on the purchase itself.
    *
-   *  An item carries ONE requirement list, but it is sold in two very different places, and the
-   *  list belongs to the RACE shop. The Scroll of Healing is the case that proves it: its
-   *  `Requires=unp2` is a Black Citadel — the Undead Tomb of Relics' own tier-3 gate, and the
-   *  Tomb does sell it — yet the same scroll sits on every Goblin Merchant, where a Human could
-   *  never in the game's lifetime meet it. So a NEUTRAL shop drops a requirement that names
-   *  another race's building, and keeps every requirement that is race-agnostic: the
-   *  pseudo-techs (TWN2 = "a Keep or Stronghold or Tree of Ages or Halls of the Dead"), which
-   *  is exactly why a Scroll of Town Portal stays tier-2-gated wherever you buy it.
+   *  A tech requirement belongs to the RACE shop, and to it alone. An item carries ONE
+   *  requirement list but is sold in two very different places: the Arcane Vault MAKES a Scroll
+   *  of Town Portal (`Makeitems`), and gates it on a Keep the way it gates anything it produces;
+   *  a Goblin Merchant merely has one on the shelf (`Sellitems`), and it does not care who you
+   *  are or what you have built. Anybody may buy anything a neutral shop has in stock — and
+   *  BEING IN STOCK is the whole gate, which is why every ware carries a restock clock of its
+   *  own (`stockStart` / `stockRegen`) and wears a cooldown sweep while it is out.
    *
-   *  A RACE shop (the item is in its `Makeitems`) applies the lot, unchanged. */
-  missingForShop(shopId: number, itemId: string, race: string, player: number): string[] {
+   *  The Scroll of Healing is what makes this unmistakable: `[shea] Requires=unp2` is a Black
+   *  Citadel — the Undead Tomb of Relics' own tier-3 gate, and the Tomb does sell the scroll —
+   *  yet the same scroll sits on every Goblin Merchant, where a Human could never in the game's
+   *  lifetime meet it. The requirement never belonged to the merchant. */
+  missingForShop(shopId: number, itemId: string, player: number): string[] {
     if (!this.tech) return [];
-    const missing = this.tech.missing(player, itemId);
-    if (!missing.length) return missing;
     const shop = this.units.get(shopId);
     const raceShop = !!shop && (this.techReg?.get(shop.typeId).makeitems.includes(itemId) ?? false);
-    if (raceShop) return missing;
-    return missing.filter((tech) => {
-      const d = this.unitReg?.get(tech);
-      // Not a unit at all → a pseudo-tech (TWN1/2/3, TALT, HERO). Race-agnostic: it applies.
-      if (!d || !PLAYABLE_RACES.has(d.race)) return true;
-      return d.race === race; // one of OUR buildings → ours to meet; another race's → not this shop's gate
-    });
+    return raceShop ? this.tech.missing(player, itemId) : [];
   }
 
   /** Stock remaining for one ware (item or unit) at a shop; -1 when it isn't stocked at all. */
   shopStock(shopId: number, wareId: string): number {
     const s = this.units.get(shopId)?.building?.stock?.get(wareId);
     return s ? s.count : -1;
+  }
+
+  /** A ware's whole shelf state, for the command card: how many are left, and — while none are
+   *  — how long until the next arrives and how far through that wait we are. An out-of-stock
+   *  ware wears the same clockwise sweep as an ability on cooldown, because that is exactly
+   *  what it is on. */
+  shopStockInfo(shopId: number, wareId: string): ShopStock | null {
+    return this.units.get(shopId)?.building?.stock?.get(wareId) ?? null;
   }
 
   /** Seed a shop's shelves. The restock schedule runs on the GAME clock, not on when the shop
@@ -1341,18 +1343,22 @@ export class SimWorld {
       const t = this.elapsed;
       let count: number;
       let timer: number;
+      let period: number;
       if (t < start) {
         count = 0; // not on the shelves yet
         timer = start - t;
+        period = timer; // the sweep runs the whole of the FIRST wait, which is not `regen` long
       } else if (regen > 0) {
         const since = t - start;
         count = Math.min(max, 1 + Math.floor(since / regen));
         timer = regen - (since % regen);
+        period = regen;
       } else {
         count = 1; // one, and never replenished (a Tavern's heroes)
         timer = Infinity;
+        period = Infinity;
       }
-      stock.set(id, { count, max, regen, timer, kind });
+      stock.set(id, { count, max, regen, timer, period, kind });
     };
     for (const id of wares.items) {
       const d = this.itemReg?.get(id);
@@ -1415,7 +1421,7 @@ export class SimWorld {
     }
     // A script-stocked ware carries no restock schedule of its own — the script IS its
     // schedule (the 30s stock-update timer), so regen stays 0 and the timer never runs.
-    stock.set(wareId, { count: Math.max(0, count), max: Math.max(1, max), regen: 0, timer: Infinity, kind });
+    stock.set(wareId, { count: Math.max(0, count), max: Math.max(1, max), regen: 0, timer: Infinity, period: Infinity, kind });
     return true;
   }
 
@@ -1437,6 +1443,7 @@ export class SimWorld {
         if (s.timer <= 0) {
           s.count++;
           s.timer = s.regen > 0 ? s.regen : Infinity;
+          s.period = s.timer;
         }
       }
     }
@@ -1448,7 +1455,10 @@ export class SimWorld {
     if (!s || s.count <= 0) return false;
     const wasFull = s.count >= s.max;
     s.count--;
-    if (wasFull) s.timer = s.regen > 0 ? s.regen : Infinity;
+    if (wasFull) {
+      s.timer = s.regen > 0 ? s.regen : Infinity;
+      s.period = s.timer;
+    }
     return true;
   }
 
@@ -1461,9 +1471,9 @@ export class SimWorld {
     const def = this.itemReg?.get(itemId);
     if (!shop || !def || shop.hp <= 0) return "no";
     if (this.shopStock(shopId, itemId) <= 0) return "nostock";
-    // The BUYER's tech gates the shelf: a Potion of Healing needs `TWN2` (a Keep or better).
-    // Which requirements a NEUTRAL shop applies is a question of its own — see missingForShop.
-    if (this.missingForShop(shopId, itemId, buyer?.race ?? "", player).length) return "req";
+    // A RACE shop's tech gates the shelf: an Arcane Vault's Scroll of Town Portal needs a Keep.
+    // A NEUTRAL shop's does not — see missingForShop.
+    if (this.missingForShop(shopId, itemId, player).length) return "req";
     if (!buyer || buyer.owner !== player || buyer.hp <= 0 || !buyer.inventory.length) return "nopatron";
     if (!this.inShopRange(shop, buyer)) return "nopatron";
     if (buyer.inventory.indexOf(null) < 0) return "full";
