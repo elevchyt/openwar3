@@ -366,8 +366,9 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
   return new AbilityRegistry(defs);
 }
 
-/** Value of a tooltip-referenced field on a level (`DataA1`, `Dur1`, `Cost1`, …).
- *  The trailing level digit is ignored — we read the field for the shown rank. */
+/** Value of a tooltip-referenced column on ONE rank (`DataA1`, `Dur1`, `Cost1`, …) — every
+ *  rank-indexed column an Ubertip may name. The caller has already picked the rank off the
+ *  column's trailing digit (see src/data/tipRefs.ts), so the digit is stripped here. */
 export function tipFieldValue(lvl: AbilityLevel, field: string): number | null {
   const f = field.toLowerCase().replace(/\d+$/, "");
   const dataIdx = "abcdefghi".indexOf(f.replace(/^data/, ""));
@@ -385,6 +386,8 @@ export function tipFieldValue(lvl: AbilityLevel, field: string): number | null {
       return lvl.area;
     case "rng":
       return lvl.castRange;
+    case "cast":
+      return lvl.castTime; // "<AEsh,Cast1>" — Shadowmeld's own channel time
     default:
       return null;
   }

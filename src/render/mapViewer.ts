@@ -26,7 +26,8 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
-import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel, tipFieldValue } from "../data/abilities";
+import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
+import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { CAMERA, MELEE, MISC_DATA, MISC_GAME } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
@@ -3969,7 +3970,7 @@ export class MapViewerScene {
       out.push(this.cmd({
         id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
-        desc: (d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned),
+        desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned),
         gold, lumber, food: d.foodUsed,
         count: stock > 0 ? stock : undefined, // the shop's stock badge
         col: d.buttonX, row: d.buttonY,
@@ -4005,7 +4006,7 @@ export class MapViewerScene {
         name: this.upgrades.name(upId, next),
         hotkey: this.upgrades.hotkey(upId, next),
         tip: this.upgrades.tip(upId, next), // "Upgrade to Iron Forged |cffffcc00S|rwords"
-        desc: this.upgrades.uberTip(upId, next) + this.requirementLine(upId, tier),
+        desc: this.tipText(this.upgrades.uberTip(upId, next)) + this.requirementLine(upId, tier),
         gold: cost.gold, lumber: cost.lumber, food: 0,
         col: d.buttonX, row: d.buttonY,
         disabled: !afford || !metTech,
@@ -4031,7 +4032,7 @@ export class MapViewerScene {
         id: `upgrade:${toId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         tip: d.tip, // "Upgrade to |cffffcc00K|reep"
-        desc: (d.description || `Upgrades to a ${d.name}.`) + this.requirementLine(toId),
+        desc: this.tipText(d.description || `Upgrades to a ${d.name}.`) + this.requirementLine(toId),
         gold: d.goldCost, lumber: d.lumberCost, food: 0,
         col: d.buttonX, row: d.buttonY,
         disabled: !afford || !metTech,
@@ -4096,7 +4097,7 @@ export class MapViewerScene {
       out.push(this.cmd({
         id: `buy:${itemId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey, tip: d.tip,
-        desc: d.description + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId, 0, missing),
+        desc: this.tipText(d.description) + (hasPatron ? "" : "|n|cffff0000A valid patron must be nearby.|r") + this.requirementLine(itemId, 0, missing),
         gold: d.gold, lumber: d.lumber, food: 0,
         count: stock > 0 ? stock : undefined,
         cooldownLeft: restocking ? st.timer : 0,
@@ -4176,7 +4177,7 @@ export class MapViewerScene {
         out.push(this.cmd({
           id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
           tip: d.tip, // "Build |cffffcc00F|rarm" — the verb is already in the game's Tip
-          desc: (d.description || `Builds ${d.name}.`) + this.requirementLine(bid),
+          desc: this.tipText(d.description || `Builds ${d.name}.`) + this.requirementLine(bid),
           gold: d.goldCost, lumber: d.lumberCost, food: 0,
           col: d.buttonX, row: d.buttonY, disabled: !afford || !metTech,
         }));
@@ -4210,7 +4211,7 @@ export class MapViewerScene {
             ? def.researchTip.replace(/%d/g, String(shown))
             : `Learn ${def.name} - [Level ${shown}]`;
           const body = def.researchUberTip
-            ? this.resolveTip(def.researchUberTip, def, shown)
+            ? this.tipText(def.researchUberTip, def, shown)
             : this.abilityDesc(def, shown);
           const desc = maxed || su.level >= need ? body : `${body}|n|n|cffffcc00Hero level: ${need}|r`;
           out.push(this.cmd({
@@ -4293,7 +4294,7 @@ export class MapViewerScene {
    *  tooltip (GlobalStrings.fdf has no cooldown label; the radial sweep is the tell). */
   private abilityDesc(def: AbilityDef, rank: number): string {
     const raw = def.uberTips[Math.min(rank, def.uberTips.length) - 1] || def.uberTips[0] || "";
-    return this.resolveTip(raw, def, rank);
+    return this.tipText(raw, def, rank);
   }
 
   /** Tooltip title for a spell button: the game's own per-rank `Tip` string, which
@@ -4302,25 +4303,12 @@ export class MapViewerScene {
     return def.tips[Math.min(rank, def.tips.length) - 1] || def.tips[0] || def.name;
   }
 
-  /** Replace WC3 tooltip references `<AbilCode,Field>` (and `,%` variants) with the
-   *  computed value — e.g. "heal for <AHhb,DataA1>" → "heal for 200". The field name
-   *  names its own rank in its trailing digit (`DataA1`/`DataA2`/`DataA3`), and that
-   *  digit wins: a Researchubertip lists every rank in one string ("Level 1 - <…A1>,
-   *  Level 2 - <…A2>"), so resolving them all against the shown rank would print the
-   *  same number three times. `rank` is only the fallback for an undigited field.
-   *  Unknown refs collapse to empty rather than leaking angle-bracket tokens. */
-  private resolveTip(text: string, def: AbilityDef, rank: number): string {
-    if (!text.includes("<")) return text;
-    return text.replace(/<([^,>]+),([^,>]+?)(,%)?>/g, (_m, code: string, field: string, pct?: string) => {
-      const d = this.abilities.get(code.trim()) ?? def;
-      const named = /(\d+)$/.exec(field.trim());
-      const lv = named ? Number(named[1]) : rank;
-      const lvl = d.levelData[Math.min(Math.max(lv, 1), d.levelData.length) - 1];
-      const v = tipFieldValue(lvl, field.trim());
-      if (v === null || Number.isNaN(v)) return "";
-      const n = pct ? v * 100 : v;
-      return String(Math.abs(n % 1) < 1e-6 ? Math.round(n) : Math.round(n * 100) / 100);
-    });
+  /** Fill a tooltip's `<ID,Field>` value references (src/data/tipRefs.ts). EVERY tooltip the
+   *  card shows carries them — an item's "by <AIlf,DataA1>", a summon's "<hwat,realHP> hit
+   *  points", an upgrade's "<Rhan,base1>" — so every `desc` on this card goes through here.
+   *  `self`/`rank` are the ability being described, when the tooltip belongs to one. */
+  private tipText(text: string, self?: AbilityDef, rank = 1): string {
+    return resolveTipRefs(text, { abilities: this.abilities, items: this.items, units: this.registry, upgrades: this.upgrades }, { self, level: rank });
   }
 
   /** Append a movable unit's learned/innate abilities (and a hero's Learn Skill

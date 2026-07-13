@@ -332,9 +332,15 @@ const UPGRADE_SETTERS: Record<string, (d: UpgradeDef, v: Val) => void> = {
 function applyEffectMod(def: UpgradeDef, field: string, value: Val): boolean {
   const m = /^(effect|base|mod|code)([1-4])$/.exec(field);
   if (!m) return false;
-  const i = parseInt(m[2], 10) - 1;
-  while (def.effects.length <= i) def.effects.push({ effect: "", base: 0, mod: 0, code: "" });
-  const e = def.effects[i];
+  // Address the effect by its SLOT, not by its position in the array: the loader skips empty
+  // slots, so effects[0] is not necessarily effect1 — and the slot is what a tooltip's
+  // "<Rhan,base1>" names (src/data/tipRefs.ts).
+  const slot = parseInt(m[2], 10);
+  let e = def.effects.find((x) => x.slot === slot);
+  if (!e) {
+    e = { slot, effect: "", base: 0, mod: 0, code: "" };
+    def.effects.push(e);
+  }
   if (m[1] === "effect") e.effect = s(value);
   else if (m[1] === "base") e.base = n(value);
   else if (m[1] === "mod") e.mod = n(value);

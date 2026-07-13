@@ -17,6 +17,10 @@ import type { DataSource } from "../vfs/types";
 
 /** One of an upgrade's up-to-4 effects (`effect1..4` + `base1..4`/`mod1..4`/`code1..4`). */
 export interface UpgradeEffect {
+  /** Which of the four columns this came from (1..4). An upgrade's own tooltip quotes the raw
+   *  column by slot — "<Rhan,base1>" — so the slot has to survive the load (src/data/tipRefs.ts);
+   *  the array index would not, since an empty `effect1` shifts everything up. */
+  slot: number;
   /** `effectN` — the engine's effect id from UpgradeEffectMetaData.slk. See applyUpgrades()
    *  in src/sim/world.ts for the ones the sim honours. */
   effect: string;
@@ -175,6 +179,7 @@ export function loadUpgradeRegistry(vfs: DataSource): UpgradeRegistry {
       const effect = str(r, `effect${n}`);
       if (!effect) continue;
       effects.push({
+        slot: n,
         effect,
         // `rarm` (armor) deliberately ships EMPTY base/mod — its magnitude is a property of
         // the unit being upgraded, not of the upgrade: UnitBalance.slk's `defUp` (2 for a

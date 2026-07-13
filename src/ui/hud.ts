@@ -318,6 +318,13 @@ function sliceTooltipBorder(strip: HTMLCanvasElement): string | null {
   return out.toDataURL();
 }
 
+/** The number on a cooldown sweep — an ability's, an item's, or a shop ware's restock. WC3
+ *  counts them all down in WHOLE seconds, and rounds UP, so a fresh 20s cooldown reads "20"
+ *  and the last tick reads "1" (never "0.4"). One rule for every sweep on the HUD. */
+function cdSeconds(secondsLeft: number): string {
+  return String(Math.ceil(secondsLeft));
+}
+
 /** The tooltip fill is a flat colour stored as a 64×64 texture — read its one pixel
  *  rather than hardcoding it. (1.27a: rgba(24, 34, 49, 195).) */
 function tooltipFill(bg: HTMLCanvasElement): string | null {
@@ -1194,7 +1201,7 @@ export class GameHud {
         cd.hidden = false;
         const elapsedDeg = (1 - s.cooldownFrac) * 360;
         cd.style.background = `conic-gradient(transparent 0deg ${elapsedDeg}deg, rgba(0,0,0,0.62) ${elapsedDeg}deg 360deg)`;
-        this.invCdText[i].textContent = s.cooldownLeft >= 10 ? String(Math.ceil(s.cooldownLeft)) : s.cooldownLeft.toFixed(1);
+        this.invCdText[i].textContent = cdSeconds(s.cooldownLeft);
       } else {
         cd.hidden = true;
       }
@@ -1318,7 +1325,7 @@ export class GameHud {
       // is what's still on cooldown.
       const elapsedDeg = (1 - (c.cooldownFrac ?? 0)) * 360;
       cd.style.background = `conic-gradient(transparent 0deg ${elapsedDeg}deg, rgba(0,0,0,0.62) ${elapsedDeg}deg 360deg)`;
-      this.cmdCdText[idx].textContent = c.cooldownLeft >= 10 ? String(Math.ceil(c.cooldownLeft)) : c.cooldownLeft.toFixed(1);
+      this.cmdCdText[idx].textContent = cdSeconds(c.cooldownLeft);
     }
   }
 

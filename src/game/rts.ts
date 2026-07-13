@@ -9,7 +9,8 @@ import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PrimaryAttribute } from "../data/enums";
 import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
-import { type AbilityRegistry, type AbilityDef, tipFieldValue } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
+import { resolveTipRefs } from "../data/tipRefs";
 import { type ItemRegistry } from "../data/items";
 import { WORKERS, DEPOT_IDS } from "../data/races";
 import { type TechRegistry } from "../data/techtree";
@@ -2638,9 +2639,9 @@ export class RtsController {
         itemId: held.itemId,
         icon: def?.icon ?? "",
         name: def?.name ?? held.itemId,
-        // The item's own Ubertip, with its <ABIL,Field> placeholders filled in — the
+        // The item's own Ubertip, with its <ID,Field> value references filled in — the
         // same text the HUD shows for the item lying on the ground.
-        desc: def ? this.resolveItemDesc(def.description) : "",
+        desc: def ? this.tipText(def.description) : "",
         charges: held.charges,
         cooldownLeft: held.cooldownLeft,
         cooldownFrac: total > 0 ? Math.max(0, Math.min(1, held.cooldownLeft / total)) : 0,
@@ -2797,19 +2798,16 @@ export class RtsController {
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
       queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
       isMine: false, goldRemaining: 0,
-      isItem: true, description: def ? this.resolveItemDesc(def.description) : "",
+      isItem: true, description: def ? this.tipText(def.description) : "",
       isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
     };
   }
 
-  /** Resolve `<ABIL,Field>` value placeholders in an item description against the
-   *  ability data (e.g. a Potion of Healing's "<AIh1,DataA1>" → its heal amount). */
-  private resolveItemDesc(desc: string): string {
-    return desc.replace(/<([^,>]+),([^>]+)>/g, (_m, abilId: string, field: string) => {
-      const ad = this.abilities.get(abilId.trim());
-      const v = ad ? tipFieldValue(ad.levelData[0], field.trim()) : null;
-      return v === null || v === undefined ? "" : String(Math.round(v));
-    });
+  /** Fill an item tooltip's `<ID,Field>` value references — a Potion of Healing's "<AIh1,DataA1>"
+   *  heal, Dust of Appearance's "<dust,uses>" charges. One resolver for every tooltip surface
+   *  (src/data/tipRefs.ts); the shop card runs the same text through the same code. */
+  private tipText(text: string): string {
+    return resolveTipRefs(text, { abilities: this.abilities, items: this.items, units: this.registry, upgrades: this.upgrades });
   }
 
   /** Selection info for a gold mine (name + remaining gold + its model). */

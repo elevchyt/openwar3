@@ -131,6 +131,10 @@ export interface UnitDef {
   sightDay: number;
   sightNight: number;
   hitPoints: number;
+  /** UnitBalance.slk `regenHP` — the unit type's own hit-point regeneration (hp/sec). The sim
+   *  builds a unit's live regen from its attributes and buffs (world.ts), so this is the DATA
+   *  value, quoted by the tooltips that promise it ("<ucrm,regenHP> hit points per second"). */
+  hpRegen: number;
   mana: number;
   armor: number;
   // UnitBalance.slk `defUp` — how much ONE level of an armour upgrade is worth to this
@@ -391,6 +395,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       sightDay: b ? num(b, "sight", 0) : 0,
       sightNight: b ? num(b, "nsight", 0) : 0,
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
+      hpRegen: b ? num(b, "regenHP", 0) : 0,
       mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
       armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
       defUp: b ? num(b, "defUp", 0) : 0,
