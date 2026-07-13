@@ -5942,18 +5942,21 @@ export class MapViewerScene {
   }
 }
 
+// The game renders at a fixed 1080p, 16:9 — the frame Warcraft III itself draws, and the
+// frame the 70° lens is framed for. The CSS stage scales this buffer into the largest 16:9
+// box the window allows and letterboxes the rest (see style.css), so the aspect can never
+// drift with the window: 1:1 fullscreen on a 1080p display, cleanly scaled everywhere else.
+// Sizing the buffer off the window instead is what let a tall window widen the view — the
+// lens is vertical, so a wider box quietly hands the player more map than the real game gives.
+const GAME_WIDTH = 1920;
+const GAME_HEIGHT = 1080;
+
 function syncCanvasSize(canvas: HTMLCanvasElement): void {
-  // Match the WebGL backing buffer to the element's on-screen (CSS) size × DPR.
-  // Derive the wanted size from clientWidth/Height (the actual on-screen size),
-  // NOT from the current buffer — that's what lets a window resize (F11,
-  // devtools, browser zoom / DPI change) re-sync instead of stretching a stale
-  // buffer. Only assign when it changed: reassigning canvas.width/height even to
-  // the same value reallocates and clears the GL drawing buffer.
-  const w = Math.floor(canvas.clientWidth * devicePixelRatio) || 1280;
-  const h = Math.floor(canvas.clientHeight * devicePixelRatio) || 720;
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
+  // Only assign when it changed: reassigning canvas.width/height even to the same value
+  // reallocates and clears the GL drawing buffer.
+  if (canvas.width !== GAME_WIDTH || canvas.height !== GAME_HEIGHT) {
+    canvas.width = GAME_WIDTH;
+    canvas.height = GAME_HEIGHT;
   }
 }
 

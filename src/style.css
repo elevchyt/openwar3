@@ -48,6 +48,18 @@ html, body {
   color: #e8e2d0;
 }
 
+/* The STAGE: the game frame is 16:9, always — the aspect Warcraft III renders at, and the
+   aspect our camera's 70° lens is framed for (docs/camera.md). Let the window dictate it and
+   a tall window quietly widens the lens horizontally, so a match frames differently on every
+   monitor. Instead we take the largest 16:9 box that fits and letterbox the rest in black.
+   Fullscreen on a 16:9 display simply makes the box the whole screen and the bars vanish.
+   The HUD rides the same box (it is the game's console, not the browser's), so it stays
+   welded to the bottom of the frame rather than to the bottom of the window. */
+:root {
+  --stage-w: min(100vw, calc(100vh * 16 / 9));
+  --stage-h: min(100vh, calc(100vw * 9 / 16));
+}
+
 /* WebGL scenes (terrain / model / map) sit behind the UI. One shows at a time. */
 #bg,
 #menubg,
@@ -59,6 +71,25 @@ html, body {
   height: 100%;
   display: block;
   z-index: 0;
+}
+
+/* The map is the one scene that is a GAME view rather than a backdrop, so it — alone —
+   is letterboxed to the stage. The backing buffer is a fixed 1920x1080 (syncCanvasSize),
+   which this box scales to: pixel-for-pixel at 1080p fullscreen, and never a stretched
+   aspect anywhere else. */
+#map {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--stage-w);
+  height: var(--stage-h);
+  background: #000;
+}
+
+/* Black bars around the stage during a match. */
+body.in-game {
+  background: #000;
 }
 
 #bg[hidden],
@@ -503,7 +534,8 @@ body.in-game .menu-panel { display: none; }
   right: auto;
   transform: translateX(-50%);
   aspect-ratio: var(--console-aspect);
-  height: min(26vh, calc(100vw / var(--console-aspect)));
+  /* Sized off the STAGE, not the window — the console belongs to the game frame. */
+  height: min(calc(var(--stage-h) * 0.26), calc(var(--stage-w) / var(--console-aspect)));
   width: auto;
   padding: 0;
   gap: 0;
@@ -1198,6 +1230,20 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   align-items: center;
   padding: 0 6vw;
   pointer-events: none;
+}
+
+/* In a match the UI layer IS the game's UI, so it rides the 16:9 stage with the map —
+   otherwise the console would sit at the bottom of the WINDOW, floating over the black
+   bar with a strip of map above it. (Out of a match #ui stays full-window: the menus,
+   the lobby and the load gate are the browser's frame, not the game's.) */
+body.in-game #ui {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--stage-w);
+  height: var(--stage-h);
+  padding: 0;
 }
 
 /* Menu panel anchored on the right, per the canonical TFT reference (§10.1). */
