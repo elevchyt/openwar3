@@ -1,5 +1,6 @@
 import type { FdfFrame } from "./parser";
 import { firstProp, strProp } from "./library";
+import { wc3ToHtml } from "../wc3Text";
 
 // The interactive FDF widgets beyond the button family (issue #61): EDITBOX (text
 // input), POPUPMENU (the race / team / colour / handicap dropdowns) and the LISTBOX-
@@ -319,7 +320,10 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
         row.appendChild(icon);
       }
       const label = document.createElement("span");
-      label.textContent = it.label;
+      // A map's name is WC3 markup, not plain text — a custom map's author colours it
+      // ("|cffffaa00Extreme Candy War 2004|r") and the game paints those colours rather than
+      // spelling the codes out.
+      label.innerHTML = wc3ToHtml(it.label);
       row.appendChild(label);
       row.addEventListener("click", () => {
         if (!enabled || value === it.value) return;

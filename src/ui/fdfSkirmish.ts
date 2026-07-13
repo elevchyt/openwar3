@@ -580,6 +580,9 @@ function buildSkirmishRoot(lib: FdfLibrary, rows: number): FdfFrame {
   //    file's own base:button ratio (0.24 : 0.168), so the ornate ends still frame the button.
   nudgeX(findFrame(root, "MapInfoPaneContainer"), -MAP_INFO_NUDGE);
   nudgeX(findFrame(root, "MapInfoBackdrop"), -MAP_INFO_NUDGE);
+  // …and the map list rides up off the panel's bottom rail, which its lower border was
+  // resting on, to sit centred between the two.
+  nudgeY(findFrame(root, "MapListContainer"), MAP_LIST_NUDGE);
   for (const [base, button] of [["PlayGameBackdrop", "PlayGameButton"], ["CancelBackdrop", "CancelButton"]]) {
     setProp(findFrame(root, base), "Width", [num(BOTTOM_BUTTON_BASE_W)]);
     setProp(findFrame(root, button), "Width", [num(BOTTOM_BUTTON_BASE_W * BUTTON_TO_BASE)]);
@@ -606,12 +609,17 @@ const MAP_INFO_NUDGE = 0.052;
 const BOTTOM_BUTTON_BASE_W = 0.278;
 const BUTTON_TO_BASE = 0.79;
 
-/** Slide a frame along x, keeping the anchor the FDF gave it. */
-function nudgeX(f: FdfFrame | undefined, dx: number): void {
+/** How far up the map list moves to centre between the panel's two rails. */
+const MAP_LIST_NUDGE = 0.006;
+
+/** Slide a frame along x (+y is up), keeping the anchor the FDF gave it. */
+function nudgeX(f: FdfFrame | undefined, dx: number): void { nudge(f, 3, dx); }
+function nudgeY(f: FdfFrame | undefined, dy: number): void { nudge(f, 4, dy); }
+
+function nudge(f: FdfFrame | undefined, arg: number, by: number): void {
   const point = f && firstProp(f, "SetPoint");
   if (!point || point.args.length < 5) return;
-  const at = point.args[3].n ?? 0;
-  point.args[3] = num(at + dx);
+  point.args[arg] = num((point.args[arg].n ?? 0) + by);
 }
 
 /** Put `children` inside the named container frame. */
