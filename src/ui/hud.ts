@@ -1276,7 +1276,11 @@ export class GameHud {
   private refreshCommandCard(): void {
     const cmds = this.driver.commandCard();
     this.updateCooldownOverlays(cmds); // every frame (cheap) — cmdKey ignores cooldown
-    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}:${c.autocast}:${c.count ?? 0}`).join("|");
+    // `desc` is part of the key: a button can keep every other property and still have new
+    // TEXT — a tavern hero stays greyed while its red "Requires:" line goes from "Altar of
+    // Storms, Stronghold" to "Stronghold" the moment the altar goes up. Leave it out and the
+    // tooltip keeps showing the requirement the player has just met.
+    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}:${c.autocast}:${c.count ?? 0}:${c.desc}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
     // The card changed (e.g. a building was cancelled and its buttons vanished):

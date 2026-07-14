@@ -3966,7 +3966,7 @@ export class MapViewerScene {
       // Barrage-equipped one. That's a hide, not a grey-out.
       if (world.tech && world.tech.maxAllowed(this.localPlayer, uid) === 0) continue;
 
-      const owned = this.rts!.countOwned(this.localPlayer, uid);
+      const owned = this.trainTier(uid, heroesInProduction.size);
       const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer); // first hero is free
       const gold = freeHero ? 0 : d.goldCost;
       const lumber = freeHero ? 0 : d.lumberCost;
@@ -4128,10 +4128,35 @@ export class MapViewerScene {
     // the greying does.
     const missing = override ?? state.missing(this.localPlayer, id, tier);
     if (!missing.length) return "";
-    // The tech graph carries the display name, which is the only way a pseudo-tech reads
-    // properly: TWN2 renders as "Keep or Stronghold or Tree of Ages or Halls of the Dead".
-    const names = missing.map((t) => this.registry.get(t)?.name || this.tech.get(t).name || t);
+    const names = missing.map((t) => this.techName(t));
     return `|n|cffff0000Requires: ${names.join(", ")}|r`;
+  }
+
+  /** A requirement's display name for the LOCAL player. Most ids just carry their own name,
+   *  but the pseudo-techs are OR-groups over the four races (`[TWN2] DependencyOr=hkee,ostr,
+   *  etoa,unp1` in ItemFunc.txt) and their name spells out every branch — "Keep or Stronghold
+   *  or Tree of Ages or Halls of the Dead". The game names only YOUR branch ("Requires:
+   *  Stronghold" for an Orc), so resolve the group to whichever member is the local race's,
+   *  and fall back to the group's own name if none is (a neutral player, a modded group). */
+  private techName(id: string): string {
+    const own = this.registry.get(id);
+    if (own?.name) return own.name;
+    const def = this.tech.get(id);
+    for (const alt of def.dependencyOr) {
+      const d = this.registry.get(alt);
+      if (d?.race === this.localRace) return d.name;
+    }
+    return def.name || id;
+  }
+
+  /** The requirement TIER a train button indexes with. A unit indexes by how many copies the
+   *  player owns — but a HERO indexes by how many HEROES they have, of any type. Heroes are
+   *  unique per player, so a hero's own copy count never leaves 0, and gating on it would mean
+   *  the Nth-hero requirement never fires: an altar's `[Hpal] Requires1=hkee` and a tavern's
+   *  `[Nbrn] Requires1=TWN2,TALT` are both "your SECOND hero needs a tier-2 hall", not "your
+   *  second Paladin". */
+  private trainTier(uid: string, heroCount: number): number {
+    return this.registry.get(uid)?.isHero ? heroCount : this.rts!.countOwned(this.localPlayer, uid);
   }
 
   /** Build the command card for the current selection. */
@@ -4493,9 +4518,11 @@ export class MapViewerScene {
     if (this.rts.simWorld.queueFull(buildingId)) return; // 7-deep queue — checked BEFORE charging
     // WC3 hero rules, enforced here too (not just hidden on the card) so a hotkey
     // can't queue a duplicate hero or exceed the 3-hero cap.
+    let heroCount = 0;
     if (d.isHero) {
       const inProduction = this.heroTypesInProduction(this.localPlayer);
       if (inProduction.has(unitId) || inProduction.size >= MAX_HEROES) return;
+      heroCount = inProduction.size;
     }
     const stash = this.rts.stashFor(this.localPlayer);
     const food = this.rts.foodFor(this.localPlayer);
@@ -4508,7 +4535,7 @@ export class MapViewerScene {
     if (stash.gold < gold || stash.lumber < lumber || food.used + d.foodUsed > food.made) return;
     const world = this.rts.simWorld;
     // Tech gate, enforced here and not merely greyed on the card, so a hotkey can't bypass it.
-    const owned = this.rts.countOwned(this.localPlayer, unitId);
+    const owned = this.trainTier(unitId, heroCount);
     if (!world.canMake(this.localPlayer, unitId, owned)) return;
     // A unit the building SELLS (a Tavern hero, a Mercenary Camp creep) comes off its stock,
     // and hiring is loud — purchaseUnit both depletes the shelf and shouts to the creeps.
