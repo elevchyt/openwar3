@@ -865,7 +865,7 @@ body.in-game .menu-panel { display: none; }
 .hud-xpbar {
   position: relative;
   height: 18px;
-  margin: 1px 6px 7px;
+  margin: 3px 6px 7px;
   background: #150a22;
   border: 1px solid #3a2650;
   border-radius: 3px;
