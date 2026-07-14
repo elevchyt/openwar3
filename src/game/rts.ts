@@ -2662,14 +2662,18 @@ export class RtsController {
   }
 
   /** A click on the MINIMAP, already resolved to a world point (issue #64). The minimap
-   *  can only name a POINT — it has no unit picking — so every order it can carry is the
-   *  ground-point form: right-click moves, and an armed A-move / patrol / point-target
-   *  spell or item / rally lands at the point, exactly as a click on the terrain would.
-   *  Right-click also cancels an armed order (WC3), like right-clicking the world.
+   *  can only name a POINT — it has no unit picking — so the orders it carries are the
+   *  ground-point ones: right-click moves, and an armed A-move / patrol / rally lands at
+   *  the point, exactly as a click on the terrain would. Right-click also cancels an armed
+   *  order (WC3), like right-clicking the world.
+   *
+   *  A SPELL (or an item) is never aimed at the minimap — the real game won't let you fire
+   *  one blind at a map pixel, and neither do we: the click is swallowed and the spell stays
+   *  armed, waiting for a real target in the world.
    *
    *  "ordered" → the click became a command (the HUD clears its armed highlight and must
-   *  NOT pan); "ignored" → consumed but the armed order stands (a unit-target spell can't
-   *  be aimed at the minimap, so the click does nothing rather than mis-firing or panning);
+   *  NOT pan); "ignored" → consumed, and whatever is armed stays armed (the click does
+   *  nothing rather than mis-firing or panning out from under the player mid-aim);
    *  "none" → not a command at all (a plain left-click, which pans the camera). */
   minimapClick(wx: number, wy: number, right: boolean, queued: boolean): "ordered" | "ignored" | "none" {
     const mode = this.orderMode;
@@ -2688,30 +2692,9 @@ export class RtsController {
       }
       return "none";
     }
-    if (mode === "cast") {
-      const cast = this.armedCast;
-      if (!cast) {
-        this.orderMode = null;
-        return "ordered";
-      }
-      if (cast.target === "unit") return "ignored"; // no unit under a minimap pixel — stay armed
-      this.orderMode = null;
-      this.armedCast = null;
-      this.castFromSelection(cast.code, 0, wx, wy);
-      return "ordered";
-    }
-    if (mode === "item") {
-      const armed = this.armedItem;
-      const id = this.primary;
-      // Only a point-use item (Scroll of Town Portal, blink) can be aimed at the minimap;
-      // a drop/give ("move") needs something under the cursor, so it stays armed.
-      if (!armed || armed.mode !== "usepoint") return "ignored";
-      this.orderMode = null;
-      this.armedItem = null;
-      if (id !== null && this.controls(id)) this.sim.useItem(id, armed.slot, 0, wx, wy);
-      return "ordered";
-    }
-    if (mode === "repair") return "ignored"; // repair needs a building under the cursor
+    // A spell, an item, or a repair is aimed in the WORLD, never at the minimap — swallow
+    // the click and leave it armed (right-click, above, is how you back out of one).
+    if (mode === "cast" || mode === "item" || mode === "repair") return "ignored";
     if (mode === "rally") {
       this.orderMode = null;
       for (const id of this.selected) {

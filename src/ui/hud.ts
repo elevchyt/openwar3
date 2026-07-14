@@ -116,7 +116,7 @@ export interface HudDriver {
   panTo(wx: number, wy: number): void;
   /** A click on the minimap, resolved to a world point (issue #64): a right-click moves
    *  the selection there (or cancels an armed order), and an armed attack-move / patrol /
-   *  point-target spell or item / rally fires at that point on a left-click.
+   *  rally lands at that point on a left-click. A spell is never aimed at the minimap.
    *  "ordered" → it became a command (clear the armed highlight, do NOT pan); "ignored" →
    *  consumed, armed order still stands; "none" → not a command (left-click pans). */
   minimapClick(wx: number, wy: number, right: boolean, queued: boolean): "ordered" | "ignored" | "none";
