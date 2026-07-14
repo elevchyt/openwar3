@@ -80,6 +80,7 @@ export interface SelectionInfo {
   attackType: AttackType; // → the damage-table row (info-card icon)
   armorType: ArmorType; // → the damage-table column (info-card icon)
   isHero: boolean;
+  properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
   xp: number; // hero current experience
   xpThis: number; // XP threshold for the current level
@@ -1699,8 +1700,11 @@ export class RtsController {
     const building: BuildingState | null = def.isBuilding
       ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: this.tech.trains(def.id).length > 0 || this.tech.get(def.id).sellunits.length > 0 }
       : null;
+    // A hero is born with a given name drawn from its `Propernames` list (the
+    // Demon Hunter's "Painkiller", the Paladin's "Uther"-alikes) — the info panel
+    // shows it above the XP bar, with "Level N Demon Hunter" inside the bar.
     const hero: HeroInit | undefined = def.isHero
-      ? { level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: def.primaryAttr }
+      ? { properName: def.properNames.length ? def.properNames[Math.floor(Math.random() * def.properNames.length)] : "", level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: def.primaryAttr }
       : undefined;
     this.sim.add(
       {
@@ -2846,7 +2850,7 @@ export class RtsController {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -2873,7 +2877,7 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -2913,6 +2917,7 @@ export class RtsController {
       attackType: def?.attackType ?? AttackType.None,
       armorType: def?.armorType ?? ArmorType.Unknown,
       isHero: u.isHero,
+      properName: u.properName,
       // Heroes carry their LIVE level/attributes on the sim unit (they grow with
       // XP); non-heroes fall back to the data-def values.
       level: u.isHero ? u.level : (def?.level ?? 0),

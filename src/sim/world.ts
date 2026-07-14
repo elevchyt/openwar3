@@ -307,6 +307,9 @@ export interface ItemDropSet {
 
 /** Attributes + growth for a hero, applied on spawn and each level-up. */
 export interface HeroInit {
+  /** The hero's randomly-drawn name ("Painkiller"), from the unit's `Propernames`
+   *  list in Units\*UnitStrings.txt. "" for heroes with no list (custom units). */
+  properName: string;
   level: number;
   str: number;
   agi: number;
@@ -679,6 +682,7 @@ export interface SimUnit {
   buildPending: { defId: string; x: number; y: number; gold: number; lumber: number } | null;
   // --- hero / abilities / buffs (spells slice) ---
   isHero: boolean;
+  properName: string; // hero's drawn name ("Painkiller"); "" for non-heroes
   level: number; // hero level (0 for non-heroes)
   xp: number; // hero experience
   skillPoints: number; // unspent skill points (1 gained per level)
@@ -2102,6 +2106,7 @@ export class SimWorld {
       | "orderQueue"
       | "buildPending"
       | "isHero"
+      | "properName"
       | "level"
       | "xp"
       | "skillPoints"
@@ -2248,6 +2253,7 @@ export class SimWorld {
       buildPending: null,
       // --- hero / abilities / buffs ---
       isHero: !!hero,
+      properName: hero?.properName ?? "",
       level: hero?.level ?? opts?.level ?? 0,
       xp: hero ? xpToReachLevel(hero.level) : 0,
       skillPoints: 0, // granted by leveling (initHero sets the starting points)

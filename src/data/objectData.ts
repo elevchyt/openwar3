@@ -144,6 +144,7 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
     abilities: [...base.abilities],
     heroAbilities: [...base.heroAbilities],
     classification: [...base.classification],
+    properNames: [...base.properNames],
     weapons: base.weapons.map((w) => ({ ...w, targets: [...w.targets] })),
   };
 }

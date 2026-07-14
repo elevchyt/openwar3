@@ -65,6 +65,7 @@ export interface HudSelection {
   attackType: AttackType;
   armorType: ArmorType;
   isHero: boolean;
+  properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
   xp: number; // hero current experience
   xpThis: number; // XP threshold for the current level
@@ -1365,7 +1366,9 @@ export class GameHud {
     this.portrait.classList.toggle("empty", !sel);
     if (!sel || this.driver.selectionIcons().length > 0) this.xpBar.hidden = true; // no single hero shown
     if (sel) {
-      this.selName.textContent = sel.name;
+      // A hero is titled by its GIVEN name ("Painkiller"); its class ("Demon Hunter")
+      // is what the XP bar spells out below, as "Level 1 Demon Hunter".
+      this.selName.textContent = sel.isHero && sel.properName ? sel.properName : sel.name;
       this.selHpText.textContent = sel.maxHp > 0 ? `${Math.ceil(sel.hp)} / ${sel.maxHp}` : "";
       this.selMpText.textContent = sel.maxMana > 0 ? `${Math.floor(sel.mana)} / ${sel.maxMana}` : "";
       const icons = this.driver.selectionIcons();
@@ -1449,12 +1452,16 @@ export class GameHud {
           this.selSub.textContent = ""; // level + XP live inside the bar; no extra label
           this.xpBar.hidden = false;
           this.xpBar.classList.remove("summon");
-          this.xpText.textContent = span > 0 ? `Level ${sel.level}   ${into} / ${span}` : `Level ${sel.level}  (max)`;
+          // The bar reads "Level 1 Demon Hunter", as the game writes it; the raw XP
+          // numbers are the bar's hover tooltip, not its label.
+          this.xpText.textContent = `Level ${sel.level} ${sel.name}`;
+          this.xpBar.title = span > 0 ? `Experience: ${into} / ${span}` : "Experience: (max level)";
           this.xpFill.style.width = `${span > 0 ? Math.max(0, Math.min(1, into / span)) * 100 : 100}%`;
         } else if (sel.isSummon) {
           this.selSub.textContent = "";
           this.xpBar.hidden = false;
           this.xpBar.classList.add("summon");
+          this.xpBar.title = "";
           this.xpText.textContent = `Summoned Unit (${sel.summonSecondsLeft}s)`;
           this.xpFill.style.width = `${sel.summonFrac * 100}%`;
         } else {

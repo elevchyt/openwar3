@@ -92,6 +92,11 @@ export interface UnitDef {
   buttonX: number; // command-card grid column (0-3), from "buttonpos"
   buttonY: number; // command-card grid row (0-2)
   isHero: boolean;
+  // A hero's pool of given names (UnitStrings "Propernames", a comma-separated
+  // list: "Shadowsong,Shadowfury,…,Painkiller,…"). Each hero draws one at birth
+  // and the info panel titles it above the XP bar, with "Level N <Name>" inside.
+  // Empty for everything that isn't a hero.
+  properNames: string[];
   priority: number; // UnitData `prio`: selection sub-group order (heroes 9, Footman 6, Peasant 1) — higher sorts first & leads the group
   moveType: MoveType; // UnitData `movetp` (None for buildings/immovable units)
   isBuilding: boolean;
@@ -371,6 +376,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       buttonX: bx,
       buttonY: by,
       isHero,
+      properNames: strings
+        ? str(strings, "Propernames").split(",").map((s) => s.trim()).filter(Boolean)
+        : [],
       priority: d ? num(d, "prio", 0) : 0, // UnitData `prio` — WC3 selection-order priority
       moveType: toMoveType(d ? str(d, "movetp") : ""),
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
