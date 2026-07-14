@@ -650,8 +650,11 @@ export class MapViewerScene {
     private tech: TechRegistry,
     private upgrades: UpgradeRegistry,
     private solver: Solver,
+    shared: SoundBoard | null,
   ) {
-    this.sounds = new SoundBoard(vfs);
+    // The menu already built a SoundBoard (and with it the page's one AudioContext) to play
+    // its theme and its wind — take that same one into the match rather than opening a second.
+    this.sounds = shared ?? new SoundBoard(vfs);
     this.setupKeyboardLock();
     // When the unit shown in the portrait speaks, mouth it on the 3D bust. Also
     // remember the line: a fresh selection plays its "What" voice while the bust
@@ -671,7 +674,7 @@ export class MapViewerScene {
   }
 
   /** Construct the viewer and wait for its base SLK tables (required before loadMap). */
-  static async create(canvas: HTMLCanvasElement, vfs: DataSource): Promise<MapViewerScene> {
+  static async create(canvas: HTMLCanvasElement, vfs: DataSource, sounds: SoundBoard | null = null): Promise<MapViewerScene> {
     syncCanvasSize(canvas);
 
     const baseUrls = new Map<string, string>();
@@ -730,7 +733,7 @@ export class MapViewerScene {
       else viewer.once("loadedbasefiles", resolve);
     });
 
-    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver);
+    return new MapViewerScene(canvas, viewer, created, vfs, loadUnitRegistry(vfs), loadAbilityRegistry(vfs), loadItemRegistry(vfs), loadTechRegistry(vfs), loadUpgradeRegistry(vfs), solver, sounds);
   }
 
   /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */

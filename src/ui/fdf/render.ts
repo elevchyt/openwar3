@@ -24,6 +24,18 @@ const EDGE_TILE = { L: 0, R: 1, T: 2, B: 3, UL: 4, UR: 5, LL: 6, LR: 7 };
 /** Font stack for menu text — our own choice (we don't ship or require WC3's font). */
 export const UI_FONT = '"Trajan Pro", "Cinzel", "Palatino Linotype", "Book Antiqua", Palatino, "Times New Roman", serif';
 
+// The click a button makes belongs to the UI, not to any one screen: every FDF button in
+// the game answers with the same sound (UISounds.slk's `GlueScreenClick` in the menus,
+// `MenuButtonClick` in-game — and both rows name the same Sound\Interface\BigButtonClick.wav).
+// So it is wired once, as a hook the host fills in with its SoundBoard, rather than passed
+// down through every screen's mount options to end up at the same place anyway.
+let clickSound: (() => void) | null = null;
+
+/** Give every FDF button its click sound (null to silence them). */
+export function setFdfClickSound(play: (() => void) | null): void {
+  clickSound = play;
+}
+
 export interface FdfScreenHandlers {
   /** frameName → click handler. Also fired by the frame's ControlShortcutKey. Most frames
    *  have none, so a lookup is honestly `| undefined`. */
@@ -711,6 +723,7 @@ function wireButton(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   const fire = (): void => {
     if (el.classList.contains("fdf-disabled")) return;
     if (el.closest(".fdf-screen-disabled, .fdf-screen-inert")) return;
+    clickSound?.(); // the button answers before its handler runs — the screen may leave
     handler?.();
   };
   if (handler) {

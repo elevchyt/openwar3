@@ -152,6 +152,11 @@ interface Clip {
   refDist: number; // MinDistance — full volume within this radius (world units)
   maxDist: number; // MaxDistance — attenuated to silence at this radius
   cutoff: number; // DistanceCutoff — WC3 doesn't play the sound at all beyond this
+  // Flags contains NODUPLICATES: the engine refuses to start the sound while a copy of it
+  // is already playing. UISounds.slk says why in its own comment column, on the very row
+  // this matters for: GlueScreenClick, "Use NODUPLICATES flag to prevent douple playing of
+  // this sound by cancel buttons." Absent on the clips we synthesize for folder WAVs.
+  noDup?: boolean;
 }
 
 /** Weapon/spell sounds embedded in a unit/missile/effect MODEL as SND event objects,
@@ -240,6 +245,10 @@ export class SoundBoard {
   private deaths = 0;
   private impacts = 0;
   private loops = new Map<string, AudioBufferSourceNode>(); // active looping sounds by name
+  /** Files a NODUPLICATES clip currently has in the air (see playPool). */
+  private playing = new Set<string>();
+  /** Named loops asked for while the AudioContext was still gated (see startPendingLoops). */
+  private pendingLoops = new Map<string, { tag: string; group?: number }>();
   private muted = false;
   private volume = 0.85;
   private listener: Listener | null = null; // last camera frame (for WANT3D panning)
@@ -307,8 +316,14 @@ export class SoundBoard {
       this.master.connect(this.ctx.destination);
       this.applyListener(); // push the camera frame captured before the first gesture
     }
-    if (this.ctx.state === "suspended") void this.ctx.resume().then(() => this.startPendingMusic());
-    else this.startPendingMusic();
+    if (this.ctx.state === "suspended") void this.ctx.resume().then(() => this.startPending());
+    else this.startPending();
+  }
+
+  /** Everything that was asked for while the autoplay gate was still shut. */
+  private startPending(): void {
+    this.startPendingMusic();
+    this.startPendingLoops();
   }
 
   /** The map's music is cued from the script — `SetMapMusic` runs inside `main()`, long
@@ -529,16 +544,13 @@ export class SoundBoard {
     } catch {
       return out; // unparseable model — stay silent rather than throw mid-combat
     }
-    const lookups = this.tables.get("animlookups") ?? null;
     for (const evt of model.eventObjects) {
       // Event-object names are "SND" + a 1-char separator + a 4-char code ("SNDXKRIF").
       if (evt.name.substring(0, 3) !== "SND") continue;
       const id = evt.name.substring(4);
       const cat = id[0]; // K = attack, M = missile, D = death, A = ability
       if (cat !== "K" && cat !== "M" && cat !== "A") continue;
-      const actual = lookups?.index.get(id.toLowerCase()) ?? id;
-      const lrow = lookups?.data.getRow(actual) as { string(k: string): string | undefined } | undefined;
-      const label = lrow?.string("SoundLabel");
+      const label = this.animLabel(id);
       if (!label) continue;
       const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
       if (!clip) continue;
@@ -588,6 +600,26 @@ export class SoundBoard {
     this.playPool(this.resolve("ui", name), "ui");
   }
 
+  /** Play the sound an MDX SND event object names, by its 4-char code — the same
+   *  AnimLookups → AnimSounds chain resolveModelSounds walks, but fired by a caller that
+   *  is driving the animation ITSELF rather than letting the model's category decide. The
+   *  glue menus are that caller: the panel chrome's whooshes are SND events sitting on the
+   *  first frame of each screen's Birth/Death clip (TopRightPanel-Expansion.mdx fires
+   *  SNDXARPD at frame 2500, where "MainMenu Birth" begins → "RightGlueScreenPopDown" →
+   *  Sound\Interface\RightGlueScreenPopDown.wav), and we play those clips ourselves. */
+  playAnimEvent(code: string): void {
+    const label = this.animLabel(code);
+    if (label) this.playPool(this.resolve("anim", label), "ui");
+  }
+
+  /** AnimLookups.slk: a 4-char SND event code ("KRIF", "ARPD") → its SoundLabel. */
+  private animLabel(code: string): string | null {
+    const lookups = this.tables.get("animlookups") ?? null;
+    const actual = lookups?.index.get(code.toLowerCase()) ?? code;
+    const row = lookups?.data.getRow(actual) as { string(k: string): string | undefined } | undefined;
+    return row?.string("SoundLabel") ?? null;
+  }
+
   /** Play a named ambience sound from AmbienceSounds.slk. Blizzard.j's InitDNCSounds
    *  uses two of these: "RoosterSound" at dawn, "WolfSound" at dusk. Not positional
    *  (the rows carry no WANT3D flag) — the whole map hears them. */
@@ -595,30 +627,69 @@ export class SoundBoard {
     this.playPool(this.resolve("ambience", name), "ui", undefined, VG_AMBIENT);
   }
 
-  /** Start/stop a named looping sound (e.g. building construction). Idempotent. */
+  /** Start/stop a named looping sound from UISounds.slk (e.g. building construction).
+   *  Idempotent. */
   setLoop(name: string, on: boolean): void {
-    if (on) {
-      if (this.loops.has(name)) return;
-      const clip = this.resolve("ui", name);
-      if (!clip || !clip.paths.length) return;
-      this.unlock();
-      if (!this.ctx || !this.master || this.ctx.state !== "running") return;
-      const placeholder = {} as AudioBufferSourceNode;
-      this.loops.set(name, placeholder); // reserve synchronously so we don't double-start
-      const path = clip.paths[(Math.random() * clip.paths.length) | 0];
-      void this.buffer(path).then((buf) => {
-        if (!buf || !this.ctx || !this.master || this.loops.get(name) !== placeholder) return;
-        const src = this.source(buf, clip);
-        src.loop = true;
-        src.connect(this.gain(clip.gain)).connect(this.master);
-        this.loops.set(name, src);
-        src.start();
-      });
-    } else {
+    this.namedLoop(name, on, "ui");
+  }
+
+  /** Start/stop a named looping sound from AmbienceSounds.slk. The rows that carry the
+   *  LOOPING flag are the sustained beds: a waterfall, a brazier — and the glue screen's
+   *  own wind ("ExpansionGlueScreenWind" → Sound\Ambient\War3XMainGlueScreen.wav), which
+   *  is the bed under the main menu. An AMBIENTSOUNDS volume-group sound, not a UI one. */
+  setAmbienceLoop(name: string, on: boolean): void {
+    this.namedLoop(name, on, "ambience", VG_AMBIENT);
+  }
+
+  private namedLoop(name: string, on: boolean, tag: string, group?: number): void {
+    if (!on) {
+      this.pendingLoops.delete(name);
       const src = this.loops.get(name);
       if (!src) return;
       this.loops.delete(name);
       try { src.stop(); } catch { /* not started yet / already stopped */ }
+      return;
+    }
+    if (this.loops.has(name)) return;
+    const clip = this.resolve(tag, name);
+    if (!clip || !clip.paths.length) return;
+    this.unlock();
+    if (!this.ctx || !this.master || this.ctx.state !== "running") {
+      // The browser's autoplay gate hasn't opened yet. A one-shot would simply be missed,
+      // but a LOOP is a standing request — the menu's wind is meant to be there from the
+      // moment the menu is. Remember it and start it when the context comes up, exactly as
+      // startPendingMusic does for a playlist cued before the first gesture.
+      this.pendingLoops.set(name, { tag, group });
+      return;
+    }
+    this.pendingLoops.delete(name);
+    this.startNamedLoop(name, clip, group);
+  }
+
+  /** Cue a resolved loop on a context that is known to be running. Deliberately does NOT
+   *  call unlock(): unlock() is what drains the pending list, so a loop that asked for the
+   *  unlock would be re-entered from inside its own call and recurse until the stack blew. */
+  private startNamedLoop(name: string, clip: Clip, group?: number): void {
+    const placeholder = {} as AudioBufferSourceNode;
+    this.loops.set(name, placeholder); // reserve synchronously so we don't double-start
+    const path = clip.paths[(Math.random() * clip.paths.length) | 0];
+    void this.buffer(path).then((buf) => {
+      if (!buf || !this.ctx || !this.master || this.loops.get(name) !== placeholder) return;
+      const src = this.source(buf, clip);
+      src.loop = true;
+      src.connect(this.gain(clip.gain, group)).connect(this.master);
+      this.loops.set(name, src);
+      src.start();
+    });
+  }
+
+  private startPendingLoops(): void {
+    if (this.ctx?.state !== "running") return;
+    for (const [name, { tag, group }] of [...this.pendingLoops]) {
+      this.pendingLoops.delete(name);
+      if (this.loops.has(name)) continue;
+      const clip = this.resolve(tag, name);
+      if (clip?.paths.length) this.startNamedLoop(name, clip, group);
     }
   }
 
@@ -1038,6 +1109,11 @@ export class SoundBoard {
     // WC3 DistanceCutoff: a positional sound past its cutoff isn't played at all —
     // drop it before reserving a pool slot so far-off battles don't starve the cap.
     if (positional && clip.cutoff > 0 && this.distanceTo(at!) > clip.cutoff) return;
+    const path = clip.paths[(Math.random() * clip.paths.length) | 0];
+    // NODUPLICATES: a second copy of a sound already playing is refused, not stacked —
+    // what keeps a double-clicked menu button from playing BigButtonClick twice over
+    // itself. Keyed by FILE, since that is what "the same sound" means to the engine.
+    if (clip.noDup && this.playing.has(path)) return;
     if (kind === "death") {
       if (this.deaths >= MAX_DEATHS) return;
       this.deaths++;
@@ -1045,11 +1121,12 @@ export class SoundBoard {
       if (this.impacts >= MAX_IMPACTS) return;
       this.impacts++;
     }
+    if (clip.noDup) this.playing.add(path);
     const release = () => {
       if (kind === "death") this.deaths--;
       else if (kind === "impact") this.impacts--;
+      if (clip.noDup) this.playing.delete(path);
     };
-    const path = clip.paths[(Math.random() * clip.paths.length) | 0];
     void this.buffer(path).then((buf) => {
       if (!buf || !this.ctx || !this.master) {
         release();
@@ -1158,6 +1235,7 @@ export class SoundBoard {
           refDist: num("mindistance"),
           maxDist: num("maxdistance"),
           cutoff: num("distancecutoff"),
+          noDup: /NODUPLICATES/i.test(flags),
         };
       }
     }

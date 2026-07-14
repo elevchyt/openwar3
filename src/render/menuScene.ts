@@ -62,6 +62,9 @@ interface Viewer {
   updateAndRender(dt: number): void;
 }
 interface MdxSequence { name: string; interval: Int32Array | number[] }
+/** An MDX event object as the viewer exposes it: `type` is the 3-char kind ("SND", "SPN"),
+ *  `id` the 4-char code after it ("SNDXARPD" → "ARPD"), `tracks` the frame times it fires at. */
+interface MdxEventObject { type: string; id: string; tracks: ArrayLike<number> }
 interface MdxInstance {
   setScene(scene: unknown): void;
   setSequence(index: number): void;
@@ -77,6 +80,7 @@ interface MdxCamera {
 interface MdxModel {
   sequences: MdxSequence[];
   cameras: MdxCamera[];
+  eventObjects: MdxEventObject[];
   addInstance(): MdxInstance;
 }
 
@@ -94,8 +98,16 @@ export class MenuScene {
   private panels: Array<{ model: MdxModel; instance: MdxInstance }> = [];
   private chrome: GlueChrome = "MainMenu";
   private chromeTimer = 0;
+  private soundTimers: number[] = [];
   private raf = 0;
   private last = 0;
+
+  /** Fired when one of the panel chrome's own SND event objects comes due in a clip we are
+   *  playing, with its 4-char AnimLookups code ("ARPD"). The host hands it to the SoundBoard,
+   *  which resolves it exactly as it resolves a unit's — AnimLookups → AnimSounds. This is
+   *  how the menu gets its whooshes: they are not sounds we chose, they are events Blizzard
+   *  keyed into the panel model's animation, and we simply honour them. */
+  onSound: ((code: string) => void) | null = null;
 
   // Live-tunable framing (exposed for the on-screen debug controls; values baked from
   // in-browser tuning against the reference). The panel is posed by bone animation, so
@@ -219,12 +231,48 @@ export class MenuScene {
 
   /** Play one named clip on every panel instance; `loop` for the idle Stand clips. */
   private playClip(name: string, loop: boolean): void {
+    this.clearSoundTimers();
     for (const { model, instance } of this.panels) {
       const idx = model.sequences.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
       if (idx < 0) continue;
       instance.setSequenceLoopMode(loop ? 2 : 0);
       instance.setSequence(idx);
+      this.scheduleClipSounds(model, model.sequences[idx]);
     }
+  }
+
+  /**
+   * Cue the SND event objects the panel model keys into `seq`. The menu's whooshes live in
+   * the model, not in any table we could have guessed at: TopRightPanel-Expansion.mdx fires
+   * SNDXARPD (→ "RightGlueScreenPopDown") at frame 2500 and SNDXARPU (→ "…PopUp") at 4833,
+   * which are the first frames of "MainMenu Birth" and "MainMenu Death" — one event per
+   * screen, on every Birth/Death/Morph clip in the file. The LEFT panel carries its own
+   * (ALPD/ALPU) and the skirmish/battle.net screens, where both panels move, carry ABPD/ABPU
+   * ("LeftAndRightGlueScreenPop*.wav") instead. So the right sound for a transition is
+   * whatever the models say, per panel — never a choice of ours.
+   *
+   * mdx-m3-viewer doesn't play these itself (its audio path is off and resolves paths its own
+   * way), so we run them on the animation's clock: a frame time is ms, and every event we've
+   * dumped sits on the clip's first frame, so in practice these fire immediately.
+   */
+  private scheduleClipSounds(model: MdxModel, seq: MdxSequence): void {
+    const [start, end] = [seq.interval[0], seq.interval[1]];
+    for (const evt of model.eventObjects ?? []) {
+      if (evt.type !== "SND") continue;
+      for (let i = 0; i < evt.tracks.length; i++) {
+        const at = evt.tracks[i];
+        if (at < start || at > end) continue; // belongs to a different screen's clip
+        const delay = at - start;
+        if (delay <= 0) this.onSound?.(evt.id);
+        else this.soundTimers.push(window.setTimeout(() => this.onSound?.(evt.id), delay));
+      }
+    }
+  }
+
+  /** Drop any event still pending — the clip that scheduled it is no longer playing. */
+  private clearSoundTimers(): void {
+    for (const t of this.soundTimers) clearTimeout(t);
+    this.soundTimers = [];
   }
 
   /** Send the current screen's chrome away: play "<screen> Death" once. */
@@ -265,6 +313,7 @@ export class MenuScene {
   dispose(): void {
     this.stop();
     clearTimeout(this.chromeTimer);
+    this.clearSoundTimers();
     for (const inst of this.instances) {
       for (const scene of [this.scene3d, this.scenePanel, this.sceneLeft]) {
         try { scene.removeInstance(inst); } catch { /* not in this scene */ }

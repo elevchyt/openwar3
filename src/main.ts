@@ -7,7 +7,9 @@ import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
 import { GlueManager } from "./ui/glue";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
-import type { FdfScreen } from "./ui/fdf/render";
+import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
+import { GlueAudio } from "./ui/glueAudio";
+import { SoundBoard } from "./audio/sounds";
 import type { DataSource } from "./vfs/types";
 import type { MeleeConfig } from "./ui/lobby";
 import type { MapInfo } from "./world/mapInfo";
@@ -45,6 +47,10 @@ let modelScene: ModelViewerScene | null = null;
 let mapScene: MapViewerScene | null = null;
 let menuScene: MenuScene | null = null;
 let menuDebug: { dispose(): void } | null = null;
+// The page's audio. Built once the archives are mounted (every sound is read out of them)
+// and handed on to the match, so the menu and the game share one AudioContext.
+let sounds: SoundBoard | null = null;
+let glueAudio: GlueAudio | null = null;
 let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer (next)
 let installMaps: Map<string, File> = new Map(); // the install's Maps\ folder (Custom Game)
 
@@ -71,10 +77,14 @@ async function showMenuBackground(vfs: DataSource | null): Promise<void> {
   try {
     if (!menuScene) {
       menuScene = new MenuScene(menuBgCanvas, vfs);
+      // The panel chrome's slide carries its own whooshes as SND events keyed into the clip
+      // (ui/glueAudio.ts) — play them as they come due.
+      menuScene.onSound = (code) => glueAudio?.event(code);
       await menuScene.load();
     }
     show("menubg");
     menuScene.start();
+    glueAudio?.start(); // the main-screen theme + the wind under it
     // Opt-in on-screen framing controls (?menudebug) — tune the camera/panel, then
     // "Log values" to print numbers to bake into MenuScene.tuning.
     if (menuScene && !menuDebug && new URLSearchParams(location.search).has("menudebug")) {
@@ -93,7 +103,7 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
   document.body.classList.add("in-game"); // hide the main-menu panel over the map
   if (vfs) {
     show("map");
-    if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs);
+    if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs, sounds);
     mapScene.onExit = () => exitToMenu(); // F10 → End Game leaves the match
     mapScene.loadMap(bytes);
     mapScene.start();
@@ -148,6 +158,7 @@ function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; moun
 async function startGame(file: File, info: MapInfo, config: MeleeConfig): Promise<void> {
   meleeConfig = config;
   glue.dispose(); // the menus are done; the match owns the screen now
+  glueAudio?.stop(); // …and the music channel: the map's own script cues its music from here
   const bytes = new Uint8Array(await file.arrayBuffer());
   await enterMap(bytes, info.name);
   // Melee maps get the standard setup (town hall + workers, melee rules);
@@ -227,6 +238,12 @@ function onFilesLoaded(load: GateLoad): void {
   gate?.dispose();
   gate = null;
   applyMenuCursor(load.vfs); // WC3 human hand cursor in the menus
+  // Audio: every sound comes out of the archives, so this is the first moment it can exist.
+  // The gate button the player just pressed is also the gesture that opens the browser's
+  // autoplay gate, so the theme can start with the menu.
+  sounds = new SoundBoard(load.vfs);
+  glueAudio = new GlueAudio(sounds, load.vfs);
+  setFdfClickSound(() => glueAudio?.click()); // every FDF button, menu and in-game alike
   // The 3D scene has to exist before the menus do: it owns the panel chrome whose
   // Birth/Death clips time their transitions (ui/glue.ts).
   void showMenuBackground(load.vfs).then(() => {
