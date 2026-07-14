@@ -114,6 +114,12 @@ export interface HudDriver {
   /** Fog-of-war state at a world point: 0 unexplored, 1 explored, 2 visible. */
   fogAt(wx: number, wy: number): number;
   panTo(wx: number, wy: number): void;
+  /** A click on the minimap, resolved to a world point (issue #64): a right-click moves
+   *  the selection there (or cancels an armed order), and an armed attack-move / patrol /
+   *  point-target spell or item / rally fires at that point on a left-click.
+   *  "ordered" → it became a command (clear the armed highlight, do NOT pan); "ignored" →
+   *  consumed, armed order still stands; "none" → not a command (left-click pans). */
+  minimapClick(wx: number, wy: number, right: boolean, queued: boolean): "ordered" | "ignored" | "none";
   /** Portrait clicked: snap the camera to the selected unit; `lock` follows it. */
   focusSelected(lock: boolean): void;
   setOrderMode(mode: OrderMode): void;
@@ -920,11 +926,18 @@ export class GameHud {
     this.minimapResize.observe(box);
 
     view.addEventListener("pointerdown", (e) => {
+      if (e.button === 1) return; // middle button: nothing on the minimap
       const rect = view.getBoundingClientRect();
       const u = (e.clientX - rect.left) / rect.width;
       const v = (e.clientY - rect.top) / rect.height;
       const [ox, oy, w, h] = this.driver.mapBounds();
-      this.driver.panTo(ox + u * w, oy + (1 - v) * h); // minimap is north-up
+      const wx = ox + u * w;
+      const wy = oy + (1 - v) * h; // minimap is north-up
+      // The minimap takes orders too (issue #64): right-click moves, an armed order aims.
+      const r = this.driver.minimapClick(wx, wy, e.button === 2, e.shiftKey);
+      if (r === "ordered") this.clearOrderMode();
+      if (r !== "none") return;
+      this.driver.panTo(wx, wy); // plain left-click: jump the camera there
     });
     // Idle-worker button — a framed race-worker icon above the minimap (like the
     // WC3 console), with an idle count at the bottom-right. Click (or F8 / ~)

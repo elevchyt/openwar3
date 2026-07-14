@@ -3561,6 +3561,17 @@ export class MapViewerScene {
         this.target[0] = wx;
         this.target[1] = wy;
       },
+      minimapClick: (wx, wy, right, queued) => {
+        if (!this.userControl) return "ignored"; // a cinematic owns the mouse — no orders
+        if (this.placement) {
+          // Building placement can't be aimed at the minimap; a right-click cancels it
+          // (as it does in the world), a left-click is simply not a command.
+          if (!right) return "none";
+          this.cancelPlacement();
+          return "ordered";
+        }
+        return this.rts?.minimapClick(wx, wy, right, queued) ?? "none";
+      },
       focusSelected: (lock) => {
         this.cameraLock = lock;
         const pos = this.rts?.selectedPosition();

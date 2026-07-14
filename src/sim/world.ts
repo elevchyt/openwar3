@@ -3121,8 +3121,21 @@ export class SimWorld {
    *  up mine-centre → hall-centre like the original game, rather than entering
    *  whichever edge they happened to wander to. */
   private pathToNode(u: SimUnit): void {
-    const node = u.resKind === "gold" ? this.mines.get(u.resId) : this.trees.get(u.resId);
-    if (node) this.pathTo(u, node.x, node.y); // approach (and enter) from any side
+    if (u.resKind === "gold") {
+      const mine = this.mines.get(u.resId);
+      if (!mine) return;
+      // Aim at the rim point FACING the worker, not the mine's centre: the centre sits
+      // inside the mine's own footprint, so the pathfinder snapped the goal to the first
+      // walkable cell of its scan (always the same corner) and the worker walked around
+      // the mine to enter from behind (issue #63). The near rim is the shortest path in.
+      const dx = u.x - mine.x;
+      const dy = u.y - mine.y;
+      const d = Math.hypot(dx, dy) || 1;
+      this.pathTo(u, mine.x + (dx / d) * (mine.radius + u.radius), mine.y + (dy / d) * (mine.radius + u.radius));
+      return;
+    }
+    const tree = this.trees.get(u.resId);
+    if (tree) this.pathTo(u, tree.x, tree.y); // a tree is one cell — walk at its trunk
   }
 
   /** A point on the mine's edge facing the drop-off (town hall). Workers enter the

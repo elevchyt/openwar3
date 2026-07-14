@@ -2641,17 +2641,99 @@ export class RtsController {
     this.host.camera.screenToWorldRay(this.ray, this.screen, this.host.viewport());
     const hit = this.groundHit();
     if (!hit) return true;
-    if (mode === "patrol") {
-      for (const id of this.selected) this.order(id, { kind: "patrol", x: hit[0], y: hit[1] }, queued);
-      this.queueArrow(hit[0], hit[1], MOVE_ARROW);
-    } else if (mode === "attack") {
-      this.groupAttackMove(hit[0], hit[1], queued); // distinct formation slot per unit (like move)
-      this.queueArrow(hit[0], hit[1], ATTACK_ARROW); // red a-move feedback
-    } else {
-      this.groupMove(hit[0], hit[1], queued); // spread the group into a formation
-      this.queueArrow(hit[0], hit[1], MOVE_ARROW);
-    }
+    this.groundOrder(mode, hit[0], hit[1], queued);
     return true;
+  }
+
+  /** The ground-point form of an armed order: patrol / attack-move / move to a world
+   *  point. Shared by a click in the world (orderClickAt, once the ray has hit the
+   *  terrain) and a click on the MINIMAP, which resolves straight to a world point. */
+  private groundOrder(mode: "move" | "attack" | "patrol", wx: number, wy: number, queued: boolean): void {
+    if (mode === "patrol") {
+      for (const id of this.selected) this.order(id, { kind: "patrol", x: wx, y: wy }, queued);
+      this.queueArrow(wx, wy, MOVE_ARROW);
+    } else if (mode === "attack") {
+      this.groupAttackMove(wx, wy, queued); // distinct formation slot per unit (like move)
+      this.queueArrow(wx, wy, ATTACK_ARROW); // red a-move feedback
+    } else {
+      this.groupMove(wx, wy, queued); // spread the group into a formation
+      this.queueArrow(wx, wy, MOVE_ARROW);
+    }
+  }
+
+  /** A click on the MINIMAP, already resolved to a world point (issue #64). The minimap
+   *  can only name a POINT — it has no unit picking — so every order it can carry is the
+   *  ground-point form: right-click moves, and an armed A-move / patrol / point-target
+   *  spell or item / rally lands at the point, exactly as a click on the terrain would.
+   *  Right-click also cancels an armed order (WC3), like right-clicking the world.
+   *
+   *  "ordered" → the click became a command (the HUD clears its armed highlight and must
+   *  NOT pan); "ignored" → consumed but the armed order stands (a unit-target spell can't
+   *  be aimed at the minimap, so the click does nothing rather than mis-firing or panning);
+   *  "none" → not a command at all (a plain left-click, which pans the camera). */
+  minimapClick(wx: number, wy: number, right: boolean, queued: boolean): "ordered" | "ignored" | "none" {
+    const mode = this.orderMode;
+    if (right && mode) {
+      this.orderMode = null; // right-click disarms a pending target (WC3), never orders
+      this.armedCast = null;
+      this.armedItem = null;
+      return "ordered";
+    }
+    if (!this.selected.size || !this.hasControllable()) {
+      if (mode) {
+        this.orderMode = null;
+        this.armedCast = null;
+        this.armedItem = null;
+        return "ordered";
+      }
+      return "none";
+    }
+    if (mode === "cast") {
+      const cast = this.armedCast;
+      if (!cast) {
+        this.orderMode = null;
+        return "ordered";
+      }
+      if (cast.target === "unit") return "ignored"; // no unit under a minimap pixel — stay armed
+      this.orderMode = null;
+      this.armedCast = null;
+      this.castFromSelection(cast.code, 0, wx, wy);
+      return "ordered";
+    }
+    if (mode === "item") {
+      const armed = this.armedItem;
+      const id = this.primary;
+      // Only a point-use item (Scroll of Town Portal, blink) can be aimed at the minimap;
+      // a drop/give ("move") needs something under the cursor, so it stays armed.
+      if (!armed || armed.mode !== "usepoint") return "ignored";
+      this.orderMode = null;
+      this.armedItem = null;
+      if (id !== null && this.controls(id)) this.sim.useItem(id, armed.slot, 0, wx, wy);
+      return "ordered";
+    }
+    if (mode === "repair") return "ignored"; // repair needs a building under the cursor
+    if (mode === "rally") {
+      this.orderMode = null;
+      for (const id of this.selected) {
+        if (this.controls(id) && this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, wx, wy, "point", 0);
+      }
+      this.rallyFeedback({ x: wx, y: wy, kind: "point", targetId: 0 });
+      this.sounds?.playUi("RallyPointPlace");
+      return "ordered";
+    }
+    if (mode) {
+      this.orderMode = null;
+      this.ack(mode === "attack");
+      this.groundOrder(mode, wx, wy, queued);
+      return "ordered";
+    }
+    if (!right) return "none"; // plain left-click: the HUD pans the camera
+    // Right-click with no armed order — the minimap's default (smart) command. With no unit
+    // to pick, the only sensible reading of a bare point is "go there" (WC3).
+    this.ack(false);
+    this.groupMove(wx, wy, queued);
+    this.queueArrow(wx, wy, MOVE_ARROW);
+    return "ordered";
   }
 
   // --- spellcasting ---------------------------------------------------------
@@ -3923,31 +4005,37 @@ export class RtsController {
 
     // Ring 0 hugs the footprint edge (radius + a body + slack, so a gold miner
     // lands within its entry reach); outer rings step out by `spacing`. Each ring
-    // holds as many evenly-spaced points as fit, staggered so rings interleave.
+    // is filled WHOLE — cutting it off after `list.length` points (as this used to)
+    // only ever emitted the arc starting at angle 0, so five peasants sent to a gold
+    // mine were all handed slots on its EAST rim and walked around it to enter from
+    // behind (issue #63). A full ring lets the assignment below pick the near side.
     const slots: Array<[number, number]> = [];
     for (let ring = 0; slots.length < list.length && ring < 24; ring++) {
       const rr = radius + wr + 8 + extraSpacing + ring * spacing;
       const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
-      for (let i = 0; i < n && slots.length < list.length; i++) {
+      for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + ring * 0.618; // golden-ish stagger between rings
         slots.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]);
       }
     }
-    // Nearest unit → nearest slot (so each takes the side it approaches from),
-    // each on its own claimed walkable cell.
-    const remaining = new Set(list.map((x) => x.id));
-    for (const slot of slots) {
-      if (!remaining.size) break;
-      let best: number | null = null;
-      let bestD = Infinity;
-      for (const id of remaining) {
-        const u = this.sim.units.get(id)!;
-        const d = Math.hypot(u.x - slot[0], u.y - slot[1]);
-        if (d < bestD) { bestD = d; best = id; }
+    // Shortest walk first: take every (unit, slot) pair in ascending distance and
+    // hand each unit the nearest slot still free. Greedily walking the SLOTS instead
+    // (each grabbing its nearest unit) let a far-side slot claim a unit that had a
+    // free slot right in front of it — the other half of the walk-around-the-mine bug.
+    const pairs: Array<{ id: number; slot: number; d: number }> = [];
+    for (const { id, u } of list) {
+      for (let s = 0; s < slots.length; s++) {
+        pairs.push({ id, slot: s, d: Math.hypot(u.x - slots[s][0], u.y - slots[s][1]) });
       }
-      if (best !== null) { out.set(best, claim(slot[0], slot[1])); remaining.delete(best); }
     }
-    for (const id of remaining) out.set(id, claim(cx, cy));
+    pairs.sort((a, b) => a.d - b.d);
+    const takenSlot = new Set<number>();
+    for (const p of pairs) {
+      if (out.has(p.id) || takenSlot.has(p.slot)) continue;
+      takenSlot.add(p.slot);
+      out.set(p.id, claim(slots[p.slot][0], slots[p.slot][1])); // its own walkable cell
+    }
+    for (const { id } of list) if (!out.has(id)) out.set(id, claim(cx, cy));
     return out;
   }
 
