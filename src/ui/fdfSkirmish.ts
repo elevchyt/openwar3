@@ -297,7 +297,7 @@ export async function mountSkirmish(
     // Advanced Options (handicaps, random races, tournament rules…) is a screen of its own
     // that we don't have. Grey it out rather than leave a button that answers to nothing.
     s.setEnabled("MapInfoButton", false);
-    if (!selected) return;
+    if (!selected) { clearMapInfo(s); return; }
 
     fillMapInfo(s, selected.info, preview, minimapIcons);
     // The map names its own forces ("Forest Task Force", "Monolithic Creeps"); the frames are
@@ -370,8 +370,31 @@ function labelOf(c: Controller): string {
   return CONTROLLERS.find(([v]) => v === c)?.[1] ?? c;
 }
 
+/** The frames of the pane that are a MAP's: the name row over the minimap (player-count
+ *  badge, name, author badge) and the value half of each stat row. Until one is picked the
+ *  pane is only its frame and its labels. */
+const NAME_ROW = ["MaxPlayersIcon", "MapNameValue", "AuthIcon"];
+const VALUES = ["SuggestedPlayersValue", "MapSizeValue", "MapTilesetValue", "MapDescValue"];
+
+/** No map picked: an empty minimap box under bare labels — nothing of a map is on show, so
+ *  the badges that describe one are not either (they are frames, not text, so they are
+ *  hidden rather than emptied). */
+function clearMapInfo(s: FdfScreen): void {
+  for (const name of NAME_ROW) {
+    const el = s.frame(name);
+    if (el) el.style.display = "none";
+  }
+  for (const name of VALUES) s.setText(name, "");
+  const minimap = s.frame("MinimapImage");
+  if (minimap) minimap.style.background = "none"; // the cover frame's empty box, not a black one
+}
+
 /** Fill the map-info pane: the badge, minimap, the three stat rows and the blurb. */
 function fillMapInfo(s: FdfScreen, info: MapInfo, preview: MapPreview | null, icons: MinimapIcons): void {
+  for (const name of NAME_ROW) {
+    const el = s.frame(name);
+    if (el) el.style.display = ""; // back from the empty state — and before centreNameRow measures them
+  }
   s.setText("MaxPlayersValue", String(info.maxPlayers));
   s.setText("MapNameValue", info.name);
   s.setText("SuggestedPlayersValue", info.recommendedPlayers || `${info.maxPlayers} players`);
