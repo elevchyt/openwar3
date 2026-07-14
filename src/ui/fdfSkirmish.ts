@@ -747,12 +747,16 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
 
 /** How far left the map-info panel's contents move to sit inside the 3D chrome (above). */
 const MAP_INFO_NUDGE = 0.052;
-/** Start Game / Cancel: the width of the ornate base, and the button's share of it. The base
- *  fills the slot the chrome leaves it; the button fills the base but for the fleur on its
- *  left and a hair of margin on its right — measured off the reference, where the blue face
- *  runs nearly the whole width of the dark base it sits in. */
-const BOTTOM_BUTTON_BASE_W = 0.278;
-const BUTTON_TO_BASE = 0.79;
+/** Start Game / Cancel: the width of the ornate base, and the button's share of it.
+ *
+ *  The base fills the slot the 3D chrome leaves it (wider than Skirmish.fdf's 0.24, which is
+ *  authored for a 4:3 screen). The SHARE, though, is the file's own — 0.168 / 0.24 = 0.7 —
+ *  and it has to be: the button is anchored TOPRIGHT to the base's TOPRIGHT, so all of the
+ *  base the button does not cover is the ornate fleur END on its left. Widen the button's
+ *  share and you don't get a bigger button in the same frame, you get a button that has eaten
+ *  its own frame — which is what a share of 0.79 did here. */
+const BOTTOM_BUTTON_BASE_W = 0.3;
+const BUTTON_TO_BASE = 0.168 / 0.24;
 
 /** How far up the map list moves to centre between the panel's two rails. */
 const MAP_LIST_NUDGE = 0.006;

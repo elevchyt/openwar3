@@ -201,8 +201,7 @@ function exitToMenu(): void {
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
   const vfs = resolver.installSource;
   void showMenuBackground(vfs).then(() => {
-    // The menu's chrome is back on the main-menu clip, so the DOM must be too.
-    menuScene?.playChromeBirth("MainMenu");
+    // glue.show() plays the chrome's Birth itself, so the DOM and the panel arrive together.
     if (vfs) void glue.show(mainMenuScreen(vfs));
   });
 }
@@ -244,6 +243,12 @@ function onFilesLoaded(load: GateLoad): void {
   sounds = new SoundBoard(load.vfs);
   glueAudio = new GlueAudio(sounds, load.vfs);
   setFdfClickSound(() => glueAudio?.click()); // every FDF button, menu and in-game alike
+  // Open the audio context NOW, on the gesture that got us here, and not at the first sound.
+  // Resuming it is asynchronous, and the first sound the menu makes is the whoosh on the very
+  // first frame of the main menu's Birth — ask for the context only then and that whoosh is
+  // played into a context that is still suspended, i.e. dropped. The model load below buys the
+  // resume all the time it needs.
+  sounds.unlock();
   // The 3D scene has to exist before the menus do: it owns the panel chrome whose
   // Birth/Death clips time their transitions (ui/glue.ts).
   void showMenuBackground(load.vfs).then(() => {

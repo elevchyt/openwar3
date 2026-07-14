@@ -37,11 +37,20 @@ export class GlueManager {
   /** The scene may be built after the manager (it needs the VFS); re-point it here. */
   setScene(scene: MenuScene | null): void { this.scene = scene; }
 
-  /** Put the first screen up with no transition (boot: the main menu is simply there). */
+  /**
+   * Put the first screen up. It ARRIVES like any other — the chrome plays its "<Screen> Birth"
+   * (and with it the whoosh keyed into that clip's first frame), and the screen's contents fade
+   * up on the panel as it lands. Only the LEAVING half is skipped, because there is nothing to
+   * leave. Booting straight onto the Stand clip instead meant the game's very first menu was
+   * the one menu that never animated in.
+   */
   async show(def: GlueScreenDef): Promise<FdfScreen> {
     this.current?.dispose();
-    this.current = await def.mount();
-    return this.current;
+    const next = await def.mount();
+    this.current = next;
+    const birth = this.scene?.playChromeBirth(def.chrome) ?? 0;
+    await next.animatePanels("in", birth || 700);
+    return next;
   }
 
   /**
