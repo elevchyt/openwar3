@@ -24,12 +24,15 @@
 //
 // A row's colour is the player's colour, sampled from the game's own team-colour texture
 // (ReplaceableTextures\TeamColor\TeamColorNN.blp is a flat swatch) — no hard-coded palette.
+// That colour is the row LABEL's, as in WC3: a board a script never colours still shows each
+// player's name in their own colour. An explicit LeaderboardSetItemLabelColor still wins.
 
 import { blpToCanvas } from "../render/blputil";
 import type { LeaderboardObj } from "../jass/runtime";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame } from "./fdf/parser";
 import { firstProp, numProp, type FdfLibrary } from "./fdf/library";
+import { UI_HEIGHT } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { wc3ToHtml } from "./wc3Text";
 
@@ -38,10 +41,17 @@ const TEAM_COLOR = (i: number) => `ReplaceableTextures\\TeamColor\\TeamColor${St
 
 // All in the FDF's 0.8×0.6 world units. The title/backdrop geometry is the file's; these
 // are the numbers the engine owns (row pitch, title band, and where the board hangs).
-const ROW_H = 0.0165; // one row's pitch — sized off LeaderboardTitle's 0.011f font
-const TITLE_LINE = 0.016; // ...and the title's own line height (see titleHeight below)
-const TITLE_H = 0.034; // the whole title band: the FDF's 0.015 top inset + one line
-const PAD = 0.012; // backdrop inset below the last row
+//
+// The FONT is the file's, though, and it is the one number that must not be derived: a row's
+// text is drawn at the same 0.011 `MasterFont` size the FDF gives LeaderboardTitle, whatever
+// the board's size. Sizing it as a fraction of the row pitch instead — which is what this did
+// — makes a one-row board's text twice the size of an eight-row board's, and neither is WC3's.
+const FONT = 0.011; // LeaderboardTitle's "MasterFont", 0.011 — rows are set at the same size
+const ROW_H = 0.0142; // one row's pitch: the 0.011 line, near enough its natural leading
+const TITLE_LINE = 0.015; // the title's own line box
+const TITLE_H = 0.032; // the title band: the FDF's 0.015 top inset + the line + its 0.002 gap
+const ROW_INSET = 0.012; // a row's own left/right inset inside the backdrop
+const PAD = 0.014; // backdrop inset below the last row (its border is 0.0125 of corner)
 const MARGIN_X = 0.006; // gap from the right edge of the screen
 const MARGIN_Y = 0.052; // gap from the top — clears the resource bar, as in WC3
 
@@ -54,14 +64,6 @@ export class LeaderboardOverlay {
   private mounting = false;
   /** The (handle, revision, row-count) we last built for — rebuild only when it changes. */
   private builtFor = "";
-
-  /** mountFdfScreen re-lays the panel out on resize, which wipes the rows we injected —
-   *  they aren't part of the FDF tree. Re-inject after it has rebuilt (our listener is
-   *  registered later, so it runs later). */
-  private readonly onResize = (): void => {
-    if (this.screen && this.current) this.paintRows(this.current);
-  };
-  private current: LeaderboardObj | null = null;
   private lastHeight = 0;
 
   /** How much of the top-right corner the board is using, in FDF 0.8×0.6 units (0 when it
@@ -73,9 +75,7 @@ export class LeaderboardOverlay {
 
   /** `skin` is the war3skins.txt section the panel's chrome is decorated from — WC3 gives
    *  the in-game panels the local player's RACE ("Orc", "NightElf", …). */
-  constructor(private container: HTMLElement, private vfs: DataSource, private skin: string) {
-    window.addEventListener("resize", this.onResize);
-  }
+  constructor(private container: HTMLElement, private vfs: DataSource, private skin: string) {}
 
   /** Poll: show/refresh the local player's board, or take it down. Called every frame —
    *  it does nothing at all unless the board actually changed (revision). */
@@ -93,7 +93,6 @@ export class LeaderboardOverlay {
   private teardown(): void {
     this.screen?.dispose();
     this.screen = null;
-    this.current = null;
     this.builtFor = "";
   }
 
@@ -112,10 +111,15 @@ export class LeaderboardOverlay {
         skin: this.skin,
         buildRoot: (lib) => this.rootFrame(lib, lb),
         textOverrides: { LeaderboardTitle: lb.showLabel ? lb.label : "" },
+        // The rows aren't part of the FDF tree, so every rebuild of the panel — and a RESIZE
+        // is a rebuild — throws them away. This is the hook that puts them back, and it is the
+        // only correct place for it: a `resize` listener of our own could only ever run before
+        // the screen's (ours is registered first), i.e. it would paint rows into the DOM that
+        // is about to be discarded, and the board would then sit there rowless until the next
+        // kill bumped its revision. That was the "the label vanishes when I hit F11" bug.
+        onBuild: (screen) => this.paintRows(screen, lb),
       });
       prev?.dispose(); // swap only once the new one is up, so the board never blinks
-      this.current = lb;
-      this.paintRows(lb);
     } catch (err) {
       console.warn("[leaderboard] could not mount the FDF panel:", err);
       this.screen = null;
@@ -174,40 +178,39 @@ export class LeaderboardOverlay {
   }
 
   /** Inject the rows into the FDF's own (empty) LeaderboardListContainer. */
-  private paintRows(lb: LeaderboardObj): void {
-    const host = this.screen?.element.querySelector<HTMLElement>('[data-frame="LeaderboardListContainer"]');
+  private paintRows(screen: FdfScreen, lb: LeaderboardObj): void {
+    const host = screen.element.querySelector<HTMLElement>('[data-frame="LeaderboardListContainer"]');
     if (!host) return;
+    host.textContent = ""; // idempotent: a repaint replaces the rows, it doesn't stack them
     const box = host.getBoundingClientRect();
     if (box.height <= 0) return;
-    const rowPx = box.height / Math.max(lb.items.length, lb.rows, 1);
-    const fontPx = Math.min(rowPx * 0.78, box.height);
+    // The same world→pixel factor the FDF renderer lays the panel out with, so the row text is
+    // the FDF's 0.011 and not a fraction of the box it happens to sit in.
+    const scale = (screen.element.clientHeight || box.height) / UI_HEIGHT;
+    // Rows sit at the FIXED ROW_H pitch, they don't divide the container between them: the
+    // container is as tall as the backdrop the board was sized to, so sharing it out would
+    // eat the bottom padding and push the last row onto the border.
+    const rowPx = ROW_H * scale;
+    const fontPx = Math.max(8, Math.min(FONT * scale, rowPx));
+    const inset = ROW_INSET * scale;
 
     lb.items.forEach((it, i) => {
       const row = document.createElement("div");
       row.className = "leaderboard-row";
       row.style.top = `${i * rowPx}px`;
-      row.style.left = "0";
-      row.style.right = "0";
+      row.style.left = `${inset}px`;
+      row.style.right = `${inset}px`;
       row.style.height = `${rowPx}px`;
       row.style.fontSize = `${fontPx}px`;
-
-      // The icon is the player's colour swatch — WC3 shows a small colour chip per row.
-      if (lb.showIcons && it.showIcon) {
-        const swatch = this.teamColor(it.player);
-        if (swatch) {
-          const chip = document.createElement("span");
-          chip.className = "leaderboard-icon";
-          chip.style.width = chip.style.height = `${Math.round(fontPx * 0.72)}px`;
-          chip.style.background = swatch;
-          row.appendChild(chip);
-        }
-      }
 
       if (lb.showNames && it.showLabel) {
         const label = document.createElement("span");
         label.className = "leaderboard-label";
         label.innerHTML = wc3ToHtml(it.label);
-        label.style.color = css(it.labelColor ?? lb.labelColor);
+        // No explicit colour → the player's own, as WC3 draws it. (LeaderboardSetItemLabelColor
+        // leaves `labelColor` non-null, and that wins; so does the board-wide one.)
+        label.style.color = it.labelColor !== null ? css(it.labelColor)
+          : this.teamColor(it.player) ?? css(lb.labelColor);
         row.appendChild(label);
       }
       if (lb.showValues && it.showValue) {
@@ -237,7 +240,6 @@ export class LeaderboardOverlay {
   }
 
   dispose(): void {
-    window.removeEventListener("resize", this.onResize);
     this.teardown();
   }
 }

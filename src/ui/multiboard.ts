@@ -26,6 +26,7 @@ import type { MultiboardObj } from "../jass/runtime";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
+import { UI_HEIGHT } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { wc3ToHtml } from "./wc3Text";
 import { blpToCanvas } from "../render/blputil";
@@ -34,10 +35,11 @@ const MULTIBOARD_FDF = "UI\\FrameDef\\UI\\MultiBoard.fdf";
 
 // FDF 0.8×0.6 world units. The title band and the button square are the file's; the row
 // pitch and the default column width are the engine's.
+const FONT = 0.010; // a cell's text — a notch under MultiboardTitle's 0.011f, as in WC3
 const ROW_H = 0.0135; // one row's pitch — sized off MultiboardTitle's 0.011f font
 const TITLE_H = 0.0235; // the title band (the FDF's 0.024 minimize button, near enough)
 const COL_W = 0.055; // a column's default width when the script sets none
-const PAD = 0.004;
+const PAD = 0.008; // the body backdrop's inset below the last row
 const MARGIN_X = 0.006;
 const MARGIN_Y = 0.052; // clears the resource bar — the same top inset the leaderboard uses
 
@@ -49,17 +51,10 @@ export class MultiboardOverlay {
   private screen: FdfScreen | null = null;
   private mounting = false;
   private builtFor = "";
-  private current: MultiboardObj | null = null;
   private lastHeight = 0;
   private lastTop = 0;
 
-  private readonly onResize = (): void => {
-    if (this.screen && this.current) this.paintCells(this.current);
-  };
-
-  constructor(private container: HTMLElement, private vfs: DataSource, private skin: string) {
-    window.addEventListener("resize", this.onResize);
-  }
+  constructor(private container: HTMLElement, private vfs: DataSource, private skin: string) {}
 
   /** How much of the top-right corner this board occupies (0 when it isn't up), so the
    *  timer-dialog stack can hang below it — the same contract the leaderboard has. */
@@ -87,7 +82,6 @@ export class MultiboardOverlay {
   private teardown(): void {
     this.screen?.dispose();
     this.screen = null;
-    this.current = null;
     this.builtFor = "";
     this.lastHeight = 0;
   }
@@ -105,10 +99,13 @@ export class MultiboardOverlay {
         skin: this.skin,
         buildRoot: (lib) => this.rootFrame(lib, mb, topOffset),
         textOverrides: { MultiboardTitle: mb.title },
+        // The cells aren't in the FDF tree, so every rebuild — a RESIZE is a rebuild — drops
+        // them. Repaint from the renderer's own post-build hook; a `resize` listener of ours
+        // would run BEFORE it and paint into DOM that is about to be thrown away (the same bug
+        // the leaderboard had: the board goes blank until the next revision bump).
+        onBuild: (screen) => this.paintCells(screen, mb),
       });
       prev?.dispose(); // swap only once the new one is up, so the board never blinks
-      this.current = mb;
-      this.paintCells(mb);
     } catch (err) {
       console.warn("[multiboard] could not mount the FDF panel:", err);
       this.screen = null;
@@ -207,13 +204,19 @@ export class MultiboardOverlay {
   }
 
   /** Inject the cells into the FDF's own (empty) MultiboardListContainer. */
-  private paintCells(mb: MultiboardObj): void {
-    const host = this.screen?.element.querySelector<HTMLElement>('[data-frame="MultiboardListContainer"]');
-    if (!host || mb.minimized) return;
+  private paintCells(screen: FdfScreen, mb: MultiboardObj): void {
+    const host = screen.element.querySelector<HTMLElement>('[data-frame="MultiboardListContainer"]');
+    if (!host) return;
+    host.textContent = ""; // idempotent: a repaint replaces the cells, it doesn't stack them
+    if (mb.minimized) return;
     const box = host.getBoundingClientRect();
     if (box.height <= 0 || box.width <= 0) return;
-    const rowPx = box.height / Math.max(mb.rows, 1);
-    const fontPx = Math.min(rowPx * 0.8, box.height);
+    // Rows sit at the FIXED ROW_H pitch and the cell font is the FDF's — neither is a fraction
+    // of the box. Dividing the container between the rows instead spread them over the padding
+    // the board was sized with, and dropped the last row onto the backdrop's border.
+    const scale = (screen.element.clientHeight || box.height) / UI_HEIGHT;
+    const rowPx = ROW_H * scale;
+    const fontPx = Math.max(8, Math.min(FONT * scale, rowPx));
 
     // Column x-offsets, from the same per-column widths the board was sized with.
     const widths: number[] = [];
@@ -283,7 +286,6 @@ export class MultiboardOverlay {
   }
 
   dispose(): void {
-    window.removeEventListener("resize", this.onResize);
     this.teardown();
   }
 }
