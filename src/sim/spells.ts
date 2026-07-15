@@ -37,6 +37,9 @@ export interface SpellApi {
   devour(kodo: SimUnit, prey: SimUnit): void;
   /** Spirit Walker: toggle between ethereal and corporeal form (morph + ethereal state). */
   toggleSpiritForm(unit: SimUnit): void;
+  /** Dismiss (silently remove) an owner's existing summons of the given types, each with an
+   *  unsummon effect — Feral Spirit replaces the caster's old wolves on re-cast. */
+  dismissSummons(owner: number, typeIds: string[], effectArt: string): void;
   /** Play an effect model at a unit (targetId>0) or a point (renderer). `life` = how
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
    *  value for a sustained effect like Flame Strike's 7s fire pillar. */
@@ -1033,8 +1036,14 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // --- summons ---
 
-  // Feral Spirit (Far Seer) — summon dataB wolves.
-  AOsf: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
+  // Feral Spirit (Far Seer) — dismiss the caster's existing wolves (with an unsummon poof),
+  // then raise a fresh pack of dataB (2) Spirit Wolves beside him. count:0 → summonSpell reads
+  // the count from the ability's dataB.
+  AOsf: (api, caster, def, rank) => {
+    const wolfTypes = def.levelData.map((l) => l.summon).filter(Boolean);
+    api.dismissSummons(caster.owner, wolfTypes, "Abilities\\Spells\\Undead\\Unsummon\\UnsummonTarget.mdx");
+    summonSpell(api, caster, def, rank, { count: 0, atPoint: false });
+  },
   // Force of Nature (Keeper) — summon dataA treants at the target point.
   AEfn: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 0, atPoint: true }, ctx),
   // Carrion Beetles (Crypt Lord) — raise a beetle from a corpse at the point.

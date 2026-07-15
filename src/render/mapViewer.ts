@@ -4011,6 +4011,17 @@ export class MapViewerScene {
     // removed from the card; once the player has MAX_HEROES the rest are disabled.
     const heroesInProduction = this.heroTypesInProduction(this.localPlayer);
     const atHeroCap = heroesInProduction.size >= MAX_HEROES;
+    // Some races share a buttonpos between two VISIBLE trainees (Orc's Grunt & Demolisher are
+    // both 0,0; Shaman & Spirit Walker collide too), so when a slot is already taken the button
+    // flows to the next free cell (WC3 packs them left-to-right). The bottom-right corner is
+    // kept clear for Rally (3,1) and Cancel (3,2). rtma-replaced units (Headhunter↔Berserker)
+    // never both show, so those don't count as collisions.
+    const used = new Set<string>(["3,1", "3,2"]);
+    const place = (bx: number, by: number): [number, number] => {
+      if (!used.has(`${bx},${by}`)) return [bx, by];
+      for (let ry = 0; ry < 3; ry++) for (let rx = 0; rx < 4; rx++) if (!used.has(`${rx},${ry}`)) return [rx, ry];
+      return [bx, by];
+    };
     for (const uid of list) {
       const d = this.registry.get(uid);
       if (!d) continue;
@@ -4028,13 +4039,15 @@ export class MapViewerScene {
       const metTech = world.canMake(this.localPlayer, uid, owned);
       const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
       const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
+      const [col, row] = place(d.buttonX, d.buttonY);
+      used.add(`${col},${row}`);
       out.push(this.cmd({
         id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
         desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned),
         gold, lumber, food: d.foodUsed,
         count: stock > 0 ? stock : undefined, // the shop's stock badge
-        col: d.buttonX, row: d.buttonY,
+        col, row,
         disabled: !afford || !metTech || !inStock || (d.isHero && atHeroCap),
       }));
     }
@@ -4088,17 +4101,25 @@ export class MapViewerScene {
       const d = this.registry.get(toId);
       if (!d) continue;
       const metTech = world.canMake(this.localPlayer, toId, 0);
-      const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
+      const [gold, lumber] = this.upgradeCost(sel.typeId, d); // the DIFFERENCE, not the full price
+      const afford = stash.gold >= gold && stash.lumber >= lumber;
       out.push(this.cmd({
         id: `upgrade:${toId}`, icon: this.blpIcon(d.icon), name: d.name,
         hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         tip: d.tip, // "Upgrade to |cffffcc00K|reep"
         desc: this.tipText(d.description || `Upgrades to a ${d.name}.`) + this.requirementLine(toId),
-        gold: d.goldCost, lumber: d.lumberCost, food: 0,
+        gold, lumber, food: 0,
         col: d.buttonX, row: d.buttonY,
         disabled: !afford || !metTech,
       }));
     }
+  }
+
+  /** A building tier upgrade costs the DIFFERENCE between the new building and the one it
+   *  replaces (WC3), never less than zero. */
+  private upgradeCost(fromTypeId: string | undefined, to: UnitDef): [number, number] {
+    const from = fromTypeId ? this.registry.get(fromTypeId) : undefined;
+    return [Math.max(0, to.goldCost - (from?.goldCost ?? 0)), Math.max(0, to.lumberCost - (from?.lumberCost ?? 0))];
   }
 
   /** Items a shop sells. The Arcane Vault uses `Makeitems`, the neutral shops `Sellitems` —
@@ -4663,10 +4684,13 @@ export class MapViewerScene {
     // for the Keep twice over.
     if (world.isUpgrading(buildingId)) return;
     if (!world.canMake(this.localPlayer, toTypeId, 0)) return;
+    // A tier upgrade costs the DIFFERENCE between the two buildings, not the full price of the
+    // new one (WC3): a Stronghold (700/375) over a Great Hall (385/185) is 315/190, not 700/375.
+    const [gold, lumber] = this.upgradeCost(world.units.get(buildingId)?.typeId, d);
     const stash = this.rts.stashFor(this.localPlayer);
-    if (stash.gold < d.goldCost || stash.lumber < d.lumberCost) return;
-    stash.gold -= d.goldCost;
-    stash.lumber -= d.lumberCost;
+    if (stash.gold < gold || stash.lumber < lumber) return;
+    stash.gold -= gold;
+    stash.lumber -= lumber;
     world.enqueueUpgrade(buildingId, toTypeId, d.buildTime || 1);
   }
 

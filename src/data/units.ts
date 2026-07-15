@@ -351,17 +351,18 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     // building, the Scout Tower), ends up with no slots at all and simply cannot attack.
     const slots = weaponSlots(w, fn, primaryVal);
     const prime = slots.find((s) => s.enabled) ?? slots[0];
+    const animProps = fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
 
     defs.set(id, {
       id,
       name: (strings && str(strings, "Name")) || (u && (str(u, "Name") || str(u, "name"))) || id,
       typeName: u ? str(u, "name") : "",
       race: d ? str(d, "race") : "",
-      model: `${file.replace(/\//g, "\\")}.mdx`,
+      model: unitModelPath(vfs, file, animProps),
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
-      animProps: fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [],
+      animProps,
       soundSet: u ? str(u, "unitSound") : "",
       weaponSound: u ? str(u, "weap1") : "",
       lumberSound: u ? str(u, "weap2") : "",
@@ -511,6 +512,19 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
 /** A comma-separated token list, minus the SLK's "-"/"_" empties, lowercased. */
 function list(v: string): string[] {
   return v.split(",").map((s) => s.trim().toLowerCase()).filter((s) => s && s !== "_" && s !== "-");
+}
+
+// A unit's model file (UnitUI `file`, no extension) → the .mdx to load. Some models ship an SD
+// variant suffixed `_V1` that carries EXTRA sequences the plain file omits — notably
+// HeadHunter_V1.mdx holds the Troll Berserker's "* Alternate" clips that HeadHunter.mdx lacks.
+// We only reach for `_V1` when the unit actually needs those alternate clips (its Animprops name
+// `alternate`), since forcing `_V1` on every unit swaps sequence sets in ways that break some
+// models' idle/stand pickers; everything else keeps the plain `.mdx`.
+function unitModelPath(vfs: DataSource, file: string, animProps: string[]): string {
+  const base = file.replace(/\//g, "\\");
+  const wantsAlternate = animProps.includes("alternate") || animProps.includes("alternateex");
+  const v1 = `${base}_V1.mdx`;
+  return wantsAlternate && vfs.exists(v1) ? v1 : `${base}.mdx`;
 }
 
 // A .mdl model path from the Func profile → the .mdx the MPQ actually ships.

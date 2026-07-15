@@ -4918,6 +4918,15 @@ export class SimWorld {
     },
     devour: (kodo, prey) => this.devourInternal(kodo, prey),
     toggleSpiritForm: (unit) => this.toggleSpiritForm(unit),
+    dismissSummons: (owner, typeIds, effectArt) => {
+      const set = new Set(typeIds);
+      for (const u of [...this.units.values()]) {
+        if (u.owner === owner && u.isSummon && u.hp > 0 && set.has(u.typeId)) {
+          if (effectArt) this.spellEffects.push({ art: effectArt, x: u.x, y: u.y, targetId: 0, z: 0 });
+          this.removeUnit(u.id); // silent poof — no corpse, no death XP
+        }
+      }
+    },
     emitEffect: (art, x, y, targetId, life) => {
       if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life });
     },
@@ -6344,7 +6353,9 @@ export class SimWorld {
    *  damage to enemies within dataC of the struck target. */
   private applyPulverize(attacker: SimUnit, target: SimUnit): void {
     const lvl = this.passiveLevelData(attacker, "Awar");
-    if (!lvl) return;
+    // Pulverize is granted by the Pulverize upgrade (Rows, Awar's Requires) — the ability
+    // sits on the Tauren from birth but only splashes once researched.
+    if (!lvl || !this.tech || this.tech.researchLevel(attacker.owner, "Rows") <= 0) return;
     const chance = this.dataOf(lvl, 0, 25) / 100; // dataA — % chance
     if (chance <= 0 || this.rng() >= chance) return;
     const dmg = this.dataOf(lvl, 1, 60); // dataB — splash damage

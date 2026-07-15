@@ -156,10 +156,13 @@ interface AnimSet {
 // Guard, Cannon and Arcane towers the same way — and the unit's Animprops name its own set.
 // This is the whole closed vocabulary used for tiers across the 1.27a data.
 //
-// `alternate`/`alternateex` (alternate forms) and `swim` are also Animprops, but they are
-// STATE, not identity: a unit plays them only while transformed or in water, so they are not
-// handled here (the sequence pickers below already exclude swim clips outright — issue #38).
-const TIER_PROPS = new Set(["upgrade", "first", "second", "third", "fourth", "fifth"]);
+// `swim` is also an Animprops but is STATE, not identity (a unit plays it only in water — never
+// here, water is unwalkable), so it's not handled — the pickers exclude swim clips outright
+// (issue #38). `alternate`/`alternateex`, HOWEVER, when they sit in a unit's OWN static Animprops,
+// name that unit's PERMANENT alternate look: the Troll Berserker (otbk, Animprops=alternate) is
+// the Headhunter model's alternate animation set. So they ARE identity here, handled just like a
+// tier — the picker sees the "* Alternate" clips renamed to their base action.
+const TIER_PROPS = new Set(["upgrade", "first", "second", "third", "fourth", "fifth", "alternate", "alternateex"]);
 
 /** Rewrite the sequence names a unit is ALLOWED to see, so every lookup below can stay
  *  tier-blind: a tiered unit's own clips are renamed to their base action ("Stand Upgrade
