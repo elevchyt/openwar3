@@ -1098,4 +1098,5 @@ export const AURA_BUFFS: Record<string, (lvl: AbilityLevel) => AuraEffect[]> = {
   AOac: (lvl) => [{ kind: "damagePct", value: d(lvl, 0, 0.1) }], // Command — +attack damage
   AUav: (lvl) => [{ kind: "lifesteal", value: d(lvl, 0, 0.15), meleeOnly: true }], // Vampiric — melee life steal
   AEah: (lvl) => [{ kind: "thorns", value: d(lvl, 0, 0.1) }], // Thorns — return melee damage
+  Aakb: (lvl) => [{ kind: "damagePct", value: d(lvl, 0, 0.1) }], // War Drums (Kodo) — +attack damage
 };

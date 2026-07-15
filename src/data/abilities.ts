@@ -223,6 +223,8 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Aspl: { target: "unit" }, // Spirit Link (Spirit Walker) — link a group, share damage
   Aast: { target: "point" }, // Ancestral Spirit (Spirit Walker) — revive a Tauren corpse
   // Disenchant (Adcn) dispatches to the existing Adis handler (its code IS Adis).
+  Aakb: { target: "passive" }, // War Drums (Kodo Beast) — damage aura (see AURA_BUFFS)
+  Awar: { target: "passive" }, // Pulverize (Tauren) — chance for a splash on attack (sim hook)
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the

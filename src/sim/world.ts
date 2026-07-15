@@ -6258,7 +6258,23 @@ export class SimWorld {
     }
     // Thorns Aura: the target returns a fraction of the damage to the attacker.
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
+    if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
     this.tryBash(attacker, target); // passive: a chance to stun on a landed attack
+  }
+
+  /** Pulverize (Tauren passive Awar): dataA% chance that a landed attack also deals dataB
+   *  damage to enemies within dataC of the struck target. */
+  private applyPulverize(attacker: SimUnit, target: SimUnit): void {
+    const lvl = this.passiveLevelData(attacker, "Awar");
+    if (!lvl) return;
+    const chance = this.dataOf(lvl, 0, 25) / 100; // dataA — % chance
+    if (chance <= 0 || this.rng() >= chance) return;
+    const dmg = this.dataOf(lvl, 1, 60); // dataB — splash damage
+    const radius = this.dataOf(lvl, 2, 250) || 250; // dataC — splash radius
+    for (const t of this.unitsInAreaInternal(target.x, target.y, radius)) {
+      if (t === attacker || t.building || !this.hostile(attacker, t)) continue;
+      this.landDamage(t, dmg, attacker.id, false); // spell-style splash, ignores further armor
+    }
   }
 
   /** Apply already-rolled PHYSICAL damage: reduced by the target's armor value,
