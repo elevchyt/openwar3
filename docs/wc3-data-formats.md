@@ -154,12 +154,53 @@ day or night.
 > day (`0` is read as "no argument" and toggles the cycle instead — use `1`). `PrintScreen` writes a `.tga` into
 > `Warcraft III/Screenshots/`. Two shots at a fixed camera give you the per-channel ratio with textures cancelled out.
 
+## The per-race profile files (`*Func.txt` / `*Strings.txt`) — read these, not just the SLKs
+
+The `.slk` tables above hold the **shared, cross-race engine numbers** (one file for every unit/ability, keyed
+by rawcode). But a large amount of a unit/ability/upgrade's definition — everything **presentational or
+relational** — lives instead in the per-race **profile** `.txt` files, split into a `Func` half and a
+`Strings` half:
+
+| Family | `<Race>…Func.txt` (art + relationships) | `<Race>…Strings.txt` (localized text) |
+|---|---|---|
+| Units | `Units\<Race>UnitFunc.txt` | `Units\<Race>UnitStrings.txt` |
+| Abilities | `Units\<Race>AbilityFunc.txt` | `Units\<Race>AbilityStrings.txt` |
+| Upgrades | `Units\<Race>UpgradeFunc.txt` | `Units\<Race>UpgradeStrings.txt` |
+
+`<Race>` is one of **`Human`, `Orc`, `Undead`, `NightElf`, `Neutral`, `Campaign`** — OpenWar3 loads **all six**
+of each into a single merged `MappedData` (`PROFILE_FILES` in `src/data/techtree.ts`; consumed by
+`src/data/units.ts`, `abilities.ts`, `techtree.ts`). Sections are `[rawcode]` INI blocks.
+
+**Why this matters — the recurring gotcha:** fields you would *expect* in the SLK are often **only** in the
+`Func.txt`, so code that reads only the SLK silently gets nothing. Confirmed cases:
+
+- **Missile art** — `Missileart`/`Missilespeed` for a unit's ranged attack are in `<Race>UnitFunc.txt`, **not**
+  `UnitWeapons.slk` (whose `Missileart` column is empty). A projectile won't render without reading the profile.
+  (The Orc Burrow's arrow is `otrb`'s `Missileart` in `OrcUnitFunc.txt`.)
+- **Command-card layout** — `art` (BLP icon) and `buttonpos`/`researchbuttonpos` (`col,row`) live only here,
+  for both units and abilities.
+- **Tech-tree relationships** — `Builds`, `Trains`, `Requires`, `Upgrade`, and tiered-building `Animprops` are
+  in `<Race>UnitFunc.txt`, **not** any SLK (see the Tech tree section below).
+- **Ability effect models & cast anims** — `Missileart`/`Targetart`/`Casterart`/`Specialart`/`Areaart` and
+  `animnames` are in `<Race>AbilityFunc.txt`; the persistent buff visual is the **buff object's** own
+  `Targetart` in a `[B…]` section of the same file.
+- **Names, tooltips, hotkeys** — all display text (`Name`, `Tip`/`Ubertip`, `Hotkey`) is in the `Strings`
+  half, never the SLK.
+
+Rule of thumb: **SLK = numbers the engine computes with; `Func.txt` = how it looks and what it connects to;
+`Strings.txt` = what the player reads.** When a value is missing from the SLK, check the race profile before
+assuming it isn't in the data. To dump one, `pnpm data:extract` writes the merged profiles to disk (see below).
+
 ## Tech tree (who builds/trains what)
 
-WC3 encodes build/train relationships in **ability object-data** (`Abui`/`Aneu`/sold-unit lists on shops),
-which is costly to parse. OpenWar3 curates the stable melee set by hand in `src/data/techtree.ts`
-(`WORKER_BUILDS`, `BUILDING_TRAINS`) — e.g. altars train the four race heroes, the Tavern (`ntav`) sells the
-eight neutral heroes.
+The build/train/research/upgrade graph is read straight from the per-race **`*UnitFunc.txt`** profiles (see the
+section above), **not** the SLKs — every relationship field is a `Profile` field on the INI section:
+`Builds` (`ubui`), `Trains` (`utra`), `Researches` (`ures`), `Upgrade` (`uupt`, what a building becomes),
+`Requires`/`Requires<N>` (`ureq`, tiered prerequisites), `DependencyOr` (`udep`), and the shop lists
+`Sellunits`/`Sellitems`/`Makeitems`. `src/data/techtree.ts` parses all of them into one graph spanning the
+unit, upgrade (`*UpgradeFunc.txt`) and item (`ItemFunc.txt`) id spaces — e.g.
+`[hpea] Builds=htow,hhou,hbar,…` gives the peasant its build menu, `[halt] Trains=Hpal,Hamg,Hmkg,Hblm` the
+altar its heroes. This replaced an older hand-curated table.
 
 ## Sounds
 
