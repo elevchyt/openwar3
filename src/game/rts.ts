@@ -294,6 +294,7 @@ interface Entry {
   inMine: boolean; // worker is inside a gold mine (the hide cause that also deselects)
   insideBuild: boolean; // Orc peon inside the structure it is building (also deselects)
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (also deselects)
+  devoured: boolean; // unit swallowed by a Kodo (also deselects)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
@@ -918,7 +919,15 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
-    const hide = u.inMine || u.insideBuild || u.inBurrow || this.fogHides(u);
+    const devoured = u.devouredBy > 0;
+    if (devoured !== e.devoured) {
+      e.devoured = devoured;
+      if (devoured) {
+        this.deselect(e.simId); // a unit swallowed by a Kodo drops out of the selection
+        if (this.hovered === e.simId) this.hovered = null;
+      }
+    }
+    const hide = u.inMine || u.insideBuild || u.inBurrow || devoured || this.fogHides(u);
     if (hide !== e.hidden) {
       e.hidden = hide;
       if (hide) {
@@ -1562,6 +1571,7 @@ export class RtsController {
         inMine: false,
         insideBuild: false,
         inBurrow: false,
+        devoured: false,
         curSeq: -1,
         lastSwingSeq: -1,
         lastChopSeq: -1,
@@ -1648,6 +1658,7 @@ export class RtsController {
       inMine: false,
       insideBuild: false,
       inBurrow: false,
+      devoured: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
@@ -1806,6 +1817,7 @@ export class RtsController {
       inMine: false,
       insideBuild: false,
       inBurrow: false,
+      devoured: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,

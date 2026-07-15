@@ -681,6 +681,8 @@ export interface SimUnit {
   linkGroup: number[]; // Spirit Link: the co-linked unit ids sharing this unit's damage (empty = unlinked)
   linkT: number; // Spirit Link time remaining (0 = not linked)
   linkShare: number; // Spirit Link: fraction of a hit distributed across the group (dataA)
+  devouring: number; // Kodo Devour: the prey unit id being digested (0 = none; holds one)
+  devouredBy: number; // this unit is swallowed inside that Kodo (0 = free; renderer hides it)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
@@ -2389,6 +2391,8 @@ export class SimWorld {
       | "linkGroup"
       | "linkT"
       | "linkShare"
+      | "devouring"
+      | "devouredBy"
       | "working"
       | "atNode"
       | "noCollision"
@@ -2543,6 +2547,8 @@ export class SimWorld {
       linkGroup: [],
       linkT: 0,
       linkShare: 0,
+      devouring: 0,
+      devouredBy: 0,
       working: false,
       atNode: false,
       noCollision: false,
@@ -3916,6 +3922,45 @@ export class SimWorld {
     }
   }
 
+  /** Kodo Devour: swallow an enemy land non-hero unit — it vanishes inside the Kodo (hidden,
+   *  reserving no cells) and is digested. A Kodo holds only one at a time. */
+  private devourInternal(kodo: SimUnit, prey: SimUnit): void {
+    if (kodo.devouring > 0 || prey.devouredBy > 0 || prey.hp <= 0) return;
+    this.unsettle(prey); // no cell block while inside
+    this.cancelSwing(prey);
+    prey.devouredBy = kodo.id;
+    prey.order = "idle";
+    prey.moving = false;
+    prey.path = [];
+    prey.targetId = null;
+    prey.noCollision = false;
+    kodo.devouring = prey.id;
+  }
+
+  /** Digest each swallowed unit at the Kodo's Devour dps; a fully-digested unit dies. */
+  private tickDevour(dt: number): void {
+    for (const u of this.units.values()) {
+      if (u.devouring <= 0) continue;
+      const prey = this.units.get(u.devouring);
+      if (!prey || prey.hp <= 0) { u.devouring = 0; continue; }
+      const lvl = this.passiveLevelData(u, "Adev");
+      prey.hp -= (lvl ? this.dataOf(lvl, 0, 5) : 5) * dt; // dataA — digest damage/sec
+      if (prey.hp <= 0) { u.devouring = 0; this.kill(prey, u.id); }
+    }
+  }
+
+  /** Spit a swallowed unit back out beside the Kodo (the Kodo died mid-digest). */
+  private freePrey(prey: SimUnit, kodo: SimUnit): void {
+    prey.devouredBy = 0;
+    const [cx, cy] = this.grid.worldToCell(kodo.x, kodo.y);
+    const fit = this.grid.nearestWalkable(cx, cy, 6);
+    if (fit) [prey.x, prey.y] = this.grid.cellToWorld(fit[0], fit[1]);
+    prey.order = "idle";
+    prey.moving = false;
+    prey.path = [];
+    this.settle(prey);
+  }
+
   private tickRegen(u: SimUnit, dt: number): void {
     if (u.maxMana > 0 && u.mana < u.maxMana) u.mana = Math.min(u.maxMana, u.mana + u.manaRegen * dt);
     if (u.hpRegen > 0 && u.hp > 0 && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.hpRegen * dt);
@@ -4856,6 +4901,7 @@ export class SimWorld {
       unit.linkT = durationSec;
       unit.linkShare = share;
     },
+    devour: (kodo, prey) => this.devourInternal(kodo, prey),
     emitEffect: (art, x, y, targetId, life) => {
       if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life });
     },
@@ -5216,6 +5262,7 @@ export class SimWorld {
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
     this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
     this.tickWards(dt); // Witch Doctor Healing Ward heal + Stasis Trap proximity stun
+    this.tickDevour(dt); // Kodo digests any swallowed unit
     this.tickCorpses(dt); // decay flesh→bone→gone
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
@@ -6568,6 +6615,16 @@ export class SimWorld {
         }
       }
       u.garrison = [];
+    }
+    // Kodo Devour: a Kodo slain mid-digest spits its prey back out alive; a prey unit that
+    // dies inside (fully digested, or the whole Map cleared) frees the Kodo's slot.
+    if (u.devouring > 0) {
+      const prey = this.units.get(u.devouring);
+      if (prey && prey.hp > 0) this.freePrey(prey, u);
+    }
+    if (u.devouredBy > 0) {
+      const kodo = this.units.get(u.devouredBy);
+      if (kodo) kodo.devouring = 0;
     }
     // A garrisoned peon dying by any other path leaves its host's roster + rescales it.
     if (u.garrisonHost) {

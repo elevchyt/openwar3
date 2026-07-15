@@ -33,6 +33,8 @@ export interface SpellApi {
   /** Spirit Link: mark `unit` as sharing `share` of its damage across the `group` unit ids
    *  for `durationSec`. Applied to every member so the split is symmetric. */
   linkSpirits(unit: SimUnit, group: number[], durationSec: number, share: number): void;
+  /** Kodo Devour: `kodo` swallows `prey` (hidden inside, digested over time). */
+  devour(kodo: SimUnit, prey: SimUnit): void;
   /** Play an effect model at a unit (targetId>0) or a point (renderer). `life` = how
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
    *  value for a sustained effect like Flame Strike's 7s fire pillar. */
@@ -475,6 +477,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   Aast: (api, caster, def, _rank, ctx) => {
     api.raiseNearbyCorpses(ctx.x, ctx.y, 250, caster.owner, caster.team, 1);
     if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
+  },
+
+  // Devour (Kodo Beast) — swallow an enemy land non-hero unit whole; it's digested inside
+  // (tickDevour) and freed if the Kodo is slain first.
+  Adev: (api, caster, def, _rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.hostile(caster, t) || t.building || t.isHero) return;
+    api.devour(caster, t);
+    if (def.targetArt) api.emitEffect(def.targetArt, caster.x, caster.y, caster.id);
   },
 
   // Unstable Concoction (Batrider) — the rider blows himself up: dataB damage to the target
