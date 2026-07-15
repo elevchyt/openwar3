@@ -1750,6 +1750,19 @@ export class MapViewerScene {
     if (!def || !this.rts) return -1;
     const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
     if (fp && this.grid) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
+    // A ground unit created ON a blocked cell — the classic "spawn a creep out of a
+    // building" trigger passes the building's own centre — is displaced by WC3 to the
+    // nearest free spot, so it emerges beside the structure rather than stuck inside it.
+    // Snap it to the nearest cell its footprint fits, exactly as a freshly-trained unit
+    // leaves its factory. Flyers and buildings are exempt (buildings snap above).
+    if (!def.isBuilding && def.moveType !== MoveType.Fly && this.grid) {
+      const n = footprintCells(def.collision || 16);
+      const [cx, cy] = this.grid.worldToCell(x, y);
+      if (!this.grid.footprintFits(cx, cy, n)) {
+        const fit = this.grid.nearestFit(cx, cy, n) ?? this.grid.nearestWalkable(cx, cy);
+        if (fit) [x, y] = this.grid.cellToWorld(fit[0], fit[1]);
+      }
+    }
     const facing = (facingDeg * Math.PI) / 180;
     const team = this.teamOf(player);
     const simId = this.rts.reserveUnitId();
