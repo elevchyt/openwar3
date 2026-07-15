@@ -477,6 +477,24 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
   },
 
+  // Unstable Concoction (Batrider) — the rider blows himself up: dataB damage to the target
+  // air unit and dataD to other enemy air units within dataC, then the caster dies.
+  Auco: (api, caster, def, rank, ctx) => {
+    const lvl = def.levelData[rank - 1];
+    const t = api.getUnit(ctx.targetId);
+    const cx = t ? t.x : ctx.x;
+    const cy = t ? t.y : ctx.y;
+    if (t && api.hostile(caster, t)) api.spellDamage(t, d(lvl, 1, 600), caster.id); // dataB — direct hit
+    const splash = d(lvl, 3, 140); // dataD — nearby air
+    const radius = d(lvl, 2, 200) || 200; // dataC — blast radius
+    for (const e of api.unitsInArea(cx, cy, radius)) {
+      if (e === t || e === caster || !e.flying || !api.hostile(caster, e)) continue;
+      api.spellDamage(e, splash, caster.id);
+    }
+    if (def.specialArt) api.emitEffect(def.specialArt, cx, cy, 0);
+    api.killUnit(caster); // the Batrider explodes
+  },
+
   // Witch Doctor wards — each summons an immobile ward at the point (unitid1). Sentry
   // gives vision for free (an owned unit reveals fog); the Healing Ward's heal and the
   // Stasis Trap's proximity stun run in world.tickWards, keyed off the ward's own data.

@@ -2064,6 +2064,7 @@ export class SimWorld {
     const u = this.units.get(id);
     const b = this.units.get(buildingId);
     if (!u || !u.worker || !b?.building || b.building.constructionLeft > 0 || b.hp >= b.maxHp) return false;
+    if (this.hasLiquidFire(b)) return false; // Liquid Fire prevents repair while it burns
     if (this.castLocked(u)) return false;
     this.detachBuilder(id); // clears any prior repair/build first
     u.order = "repair";
@@ -5941,6 +5942,7 @@ export class SimWorld {
         } else {
           const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None);
           if (dealt > 0) this.applyArrowAutocast(this.units.get(p.sourceId), t); // Searing/Frost/Black/Incinerate arrows
+          this.applyLiquidFire(this.units.get(p.sourceId), t); // Batrider: burn a struck building
           if (p.spill) this.applySpill(p, t); // Storm Hammers / Impaling Bolt carry on down the line
         }
         this.removeProjectile(p.id);
@@ -6282,6 +6284,23 @@ export class SimWorld {
   /** Autocast attack modifiers that fire on a landed ranged hit: Searing Arrows
    *  (AHfa) / Black Arrow (ANba) / Incinerate (ANia) add bonus fire damage; Cold &
    *  Frost Arrows (AHca) slow the target. Each spends the ability's per-shot mana. */
+  /** Liquid Fire (Batrider passive Aliq): a struck BUILDING burns for dataA dps over the
+   *  duration, its attack rate cut by dataC, and it cannot be repaired while burning. The
+   *  burn refreshes on each hit (re-applied by group), so sustained fire keeps it down. */
+  private applyLiquidFire(attacker: SimUnit | undefined, target: SimUnit): void {
+    if (!attacker || !target.building || target.hp <= 0) return;
+    const lvl = this.passiveLevelData(attacker, "Aliq");
+    if (!lvl) return;
+    const dur = lvl.duration || 3;
+    this.applyBuffInternal(target, { kind: "dot", group: "liquidfire", timeLeft: dur, value: this.dataOf(lvl, 0, 8), sourceId: attacker.id });
+    this.applyBuffInternal(target, { kind: "slow", group: "liquidfire-atk", timeLeft: dur, value: 0, value2: this.dataOf(lvl, 2, 0.8), sourceId: attacker.id });
+  }
+
+  /** Whether a building is currently burning under Liquid Fire (blocks repair). */
+  private hasLiquidFire(u: SimUnit): boolean {
+    return u.buffs.some((b) => b.group === "liquidfire");
+  }
+
   private applyArrowAutocast(attacker: SimUnit | undefined, target: SimUnit): void {
     if (!attacker || !this.abilities || target.hp <= 0) return;
     for (const ab of attacker.abilities) {
