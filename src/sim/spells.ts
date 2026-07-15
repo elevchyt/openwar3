@@ -404,6 +404,39 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     }
   },
 
+  // Bloodlust (Shaman) — buff a friendly unit: +attack speed (dataA) and +move
+  // speed (dataB). haste buff: value = move fraction, value2 = attack fraction.
+  Ablo: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.ally(caster, t)) return;
+    const lvl = def.levelData[rank - 1];
+    api.applyBuff(t, { kind: "haste", group: "bloodlust", timeLeft: dur(lvl, t) || 60, sourceId: caster.id, value: d(lvl, 1, 0.25), value2: d(lvl, 0, 0.4), art: def.targetArt });
+  },
+
+  // Purge (Shaman) — strip ALL buffs from the target; an enemy is then slowed to a
+  // crawl for dataD seconds (movement only), and a summoned unit is destroyed outright.
+  Aprg: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    api.dispel(t); // remove every timed buff (good AND bad)
+    if (api.hostile(caster, t)) {
+      if (t.summonLeft > 0) { api.spellDamage(t, 100000, caster.id); return; } // Purge destroys summons
+      // dataD = slow duration; heavy MOVE slow that recovers when it expires (no attack slow).
+      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: d(lvl, 3, 3), sourceId: caster.id, value: 0.75, value2: 0, art: def.targetArt });
+    }
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Ensnare (Raider) — bind an enemy to the ground: it cannot move (root pins movement
+  // to 1.0) for the duration (hero units get the shorter herodur). It can still attack.
+  Aens: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.hostile(caster, t)) return;
+    const lvl = def.levelData[rank - 1];
+    api.applyBuff(t, { kind: "root", group: "ensnare", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, art: def.targetArt });
+  },
+
   // ======================================================================
   //  Melee hero abilities (dispatched on base code — see data/abilities.ts).
   //  Numbers read from the MPQ AbilityData.slk data columns (verified 2026-07).

@@ -212,6 +212,9 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Adis: { target: "point" }, // Dispel Magic — clear buffs, damage summons
   Ainf: { target: "unit", autocast: true }, // Inner Fire — +armour +damage
   Aslo: { target: "unit", autocast: true }, // Slow (Sorceress)
+  Ablo: { target: "unit", autocast: true }, // Bloodlust (Shaman) — +attack & move speed
+  Aprg: { target: "unit" }, // Purge (Shaman) — strip buffs, slow enemy, destroy summons
+  Aens: { target: "unit", autocast: true }, // Ensnare (Raider) — root a target (air pulled down)
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the
