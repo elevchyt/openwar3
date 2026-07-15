@@ -215,6 +215,8 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Ablo: { target: "unit", autocast: true }, // Bloodlust (Shaman) — +attack & move speed
   Aprg: { target: "unit" }, // Purge (Shaman) — strip buffs, slow enemy, destroy summons
   Aens: { target: "unit", autocast: true }, // Ensnare (Raider) — root a target (air pulled down)
+  Alsh: { target: "unit" }, // Lightning Shield (Shaman) — damaging shield around a unit
+  Absk: { target: "none" }, // Berserk (Troll Berserker) — self: faster attack, +damage taken
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the

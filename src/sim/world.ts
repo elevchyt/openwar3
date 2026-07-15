@@ -188,6 +188,8 @@ export type BuffKind =
   | "silence" // cannot cast spells (Silence, Soul Burn) — can still move & attack
   | "manaShield" // absorb incoming damage into mana instead of hp; value = mana spent per hp
   | "root" // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
+  | "vuln" // value = fraction of EXTRA damage the holder takes (Berserk +50%)
+  | "shield" // Lightning Shield: value = dps dealt to units around the holder, value2 = radius
   | "ethereal"; // Banish: value = move-slow fraction; can't attack, immune to physical
   //            damage but takes +66% from Magic/Spells (see u.ethereal, EtherealDamageBonus)
 
@@ -3804,6 +3806,27 @@ export class SimWorld {
     return false;
   }
 
+  /** Lightning Shield (Alsh): the shielded unit itself is unharmed, but every OTHER unit
+   *  within the buff's radius takes `value` dps (spell damage, bypasses armor) — friend or
+   *  foe, which is why it's cast on an enemy (or an expendable own unit). */
+  private tickLightningShields(dt: number): void {
+    // Snapshot holders first — a shield can kill units (including other holders) mid-pass.
+    const shields = [];
+    for (const u of this.units.values()) {
+      for (const b of u.buffs) {
+        if (b.kind === "shield" && b.value > 0) shields.push({ holder: u, dps: b.value, radius: b.value2 || 160, killerId: b.sourceId });
+      }
+    }
+    for (const s of shields) {
+      if (s.holder.hp <= 0) continue;
+      for (const t of this.unitsInAreaInternal(s.holder.x, s.holder.y, s.radius)) {
+        if (t === s.holder || t.hp <= 0 || t.building || t.invulnerable) continue;
+        t.hp -= s.dps * dt; // spell damage — no armor reduction
+        if (t.hp <= 0) this.kill(t, s.killerId);
+      }
+    }
+  }
+
   private tickRegen(u: SimUnit, dt: number): void {
     if (u.maxMana > 0 && u.mana < u.maxMana) u.mana = Math.min(u.maxMana, u.mana + u.manaRegen * dt);
     if (u.hpRegen > 0 && u.hp > 0 && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.hpRegen * dt);
@@ -5096,6 +5119,7 @@ export class SimWorld {
     this.resolveAirSeparation(dt);
     this.tickProjectiles(dt);
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
+    this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
     this.tickCorpses(dt); // decay flesh→bone→gone
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
@@ -6195,8 +6219,11 @@ export class SimWorld {
     // Magic/Spells (issue #49, EtherealDamageBonus). A physical auto-attack thus
     // lands 0 on a banished unit — the melee simply can't hurt it.
     if (target.ethereal) typeMult *= etherealDamageMultiplier(attackType);
+    // Berserk (Absk) and the like: the holder takes a fraction MORE damage from every source.
+    let vuln = 0;
+    for (const b of target.buffs) if (b.kind === "vuln") vuln = Math.max(vuln, b.value);
     const reduction = armorDamageReduction(target.armor);
-    return this.landDamage(target, rawDamage * typeMult * (1 - reduction), attackerId, true);
+    return this.landDamage(target, rawDamage * typeMult * (1 + vuln) * (1 - reduction), attackerId, true);
   }
 
   /** Critical Strike (AOcr): dataB chance to multiply the swing damage by dataC. */

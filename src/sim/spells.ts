@@ -437,6 +437,25 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "root", group: "ensnare", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, art: def.targetArt });
   },
 
+  // Lightning Shield (Shaman) — a shield of electricity around the TARGET: the target is
+  // unharmed, but every unit around it takes dataA dps (area = radius). Cast it on an enemy
+  // (hurts them + their neighbours) or an expendable own unit. See tickLightningShields.
+  Alsh: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    api.applyBuff(t, { kind: "shield", group: "lightningshield", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: d(lvl, 0, 20), value2: lvl.area || 160, art: def.buffArt || def.targetArt });
+  },
+
+  // Berserk (Troll Berserker) — self only: attack dataB% faster (haste) but take dataC%
+  // more damage (vuln) for the duration. dataA rides the haste's move-speed slot.
+  Absk: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    const t = dur(lvl, caster) || 12;
+    api.applyBuff(caster, { kind: "haste", group: "berserk", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 0), value2: d(lvl, 1, 0.5), art: def.targetArt });
+    api.applyBuff(caster, { kind: "vuln", group: "berserk", timeLeft: t, sourceId: caster.id, value: d(lvl, 2, 0.5) });
+  },
+
   // ======================================================================
   //  Melee hero abilities (dispatched on base code — see data/abilities.ts).
   //  Numbers read from the MPQ AbilityData.slk data columns (verified 2026-07).
