@@ -4082,10 +4082,23 @@ export class MapViewerScene {
         tip: this.upgrades.tip(upId, next), // "Upgrade to Iron Forged |cffffcc00S|rwords"
         desc: this.tipText(this.upgrades.uberTip(upId, next)) + this.requirementLine(upId, tier),
         gold: cost.gold, lumber: cost.lumber, food: 0,
-        col: d.buttonX, row: d.buttonY,
+        ...this.researchSlot(upId, d),
         disabled: !afford || !metTech,
       }));
     }
+  }
+
+  /** The command-card slot for a research button. Normally the upgrade's own buttonpos, but a
+   *  few carry a slot that doesn't match the reference client — the Orc Barracks shows the
+   *  Berserker Upgrade above Troll Regeneration, the reverse of their raw Animprops buttonpos —
+   *  so those are corrected here. */
+  private researchSlot(upId: string, d: { buttonX: number; buttonY: number }): { col: number; row: number } {
+    const swap: Record<string, [number, number]> = {
+      Robk: [1, 1], // Berserker Upgrade — above Troll Regeneration
+      Rotr: [1, 2], // Troll Regeneration — below the Berserker Upgrade
+    };
+    const [col, row] = swap[upId] ?? [d.buttonX, d.buttonY];
+    return { col, row };
   }
 
   /** What this building can BECOME (`Upgrade`) — Town Hall → Keep → Castle, and the Scout

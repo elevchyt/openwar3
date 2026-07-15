@@ -205,7 +205,7 @@ export function loadUpgradeRegistry(vfs: DataSource): UpgradeRegistry {
       effects,
       names: csv(s, "Name"),
       tips: csv(s, "Tip"),
-      uberTips: csv(s, "Ubertip"),
+      uberTips: quotedList(s, "Ubertip"),
       hotkeys: csv(s, "Hotkey"),
       icons: csv(f, "Art"),
       buttonX: bx,
@@ -226,6 +226,18 @@ function csv(row: Row | undefined, key: string): string[] {
   if (v === undefined || v === "" || v === "-" || v === "_") return [];
   const parts = v.includes('","') ? v.split('","') : v.split(",");
   return parts.map((p) => p.replace(/^"|"$/g, "").trim());
+}
+
+/** Ubertip values are QUOTED sentences that carry commas of their own — both prose commas and
+ *  the `,` inside `<ID,Field>` value refs (Berserker Strength: "…with a <Robs,base1> hit point
+ *  increase, and <Robs,base2>…"). Levels are separated ONLY by the `","` seam MappedData leaves
+ *  after stripping the outer quotes; a bare-comma split (csv) would shred the sentence AND the
+ *  refs. So a single-level tip stays one whole string. */
+function quotedList(row: Row | undefined, key: string): string[] {
+  if (!row) return [];
+  const v = row.string(key);
+  if (v === undefined || v === "" || v === "-" || v === "_") return [];
+  return v.split('","').map((p) => p.replace(/^"|"$/g, "").trim());
 }
 
 function buttonPos(v: string): [number, number] {

@@ -194,7 +194,11 @@ function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = [])
   const tokens = (n: string) => n.toLowerCase().split(/[\s\-_]+/).filter(Boolean);
   const propsOf = (n: string) => tokens(n).filter((t) => TIER_PROPS.has(t));
   const baseOf = (n: string) => tokens(n).filter((t) => !TIER_PROPS.has(t)); // original order kept
-  const baseKey = (n: string) => [...baseOf(n)].sort().join(" "); // ...but compared unordered
+  // The ACTION a clip names, for override matching: base tokens minus the identity props AND the
+  // numeric variant suffix, compared unordered. Dropping the number is what lets the alternate
+  // "Stand Alternate - 1/2/3" override the plain "Stand"/"Stand - 2" (same action, different
+  // numbering) — without it the Berserker kept falling back to the Headhunter's non-alt stand.
+  const baseKey = (n: string) => baseOf(n).filter((t) => !/^\d+$/.test(t)).sort().join(" ");
   const isMine = (n: string) => {
     const p = propsOf(n);
     return p.length > 0 && tier.every((t) => p.includes(t));
