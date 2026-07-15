@@ -292,6 +292,7 @@ interface Entry {
   birthEnd: number;
   hidden: boolean; // instance currently hidden (worker in a gold mine, OR fog of war)
   inMine: boolean; // worker is inside a gold mine (the hide cause that also deselects)
+  insideBuild: boolean; // Orc peon inside the structure it is building (also deselects)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
@@ -902,7 +903,14 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
-    const hide = u.inMine || this.fogHides(u);
+    if (u.insideBuild !== e.insideBuild) {
+      e.insideBuild = u.insideBuild;
+      if (u.insideBuild) {
+        this.deselect(e.simId); // an Orc peon vanishing into its build drops out of the selection
+        if (this.hovered === e.simId) this.hovered = null;
+      }
+    }
+    const hide = u.inMine || u.insideBuild || this.fogHides(u);
     if (hide !== e.hidden) {
       e.hidden = hide;
       if (hide) {
@@ -1544,6 +1552,7 @@ export class RtsController {
         ...findBirthFields(unit.instance.model.sequences, def?.animProps),
         hidden: false,
         inMine: false,
+        insideBuild: false,
         curSeq: -1,
         lastSwingSeq: -1,
         lastChopSeq: -1,
@@ -1628,6 +1637,7 @@ export class RtsController {
       ...findBirthFields(unit.instance.model.sequences, def?.animProps),
       hidden: false,
       inMine: false,
+      insideBuild: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
@@ -1784,6 +1794,7 @@ export class RtsController {
       ...findBirthFields(instance.model.sequences, def.animProps),
       hidden: false,
       inMine: false,
+      insideBuild: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,

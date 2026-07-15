@@ -671,6 +671,7 @@ export interface SimUnit {
   resId: number; // mine/tree id being harvested
   workT: number; // chop/mine timer
   inMine: boolean; // inside the gold mine (renderer hides the unit)
+  insideBuild: boolean; // Orc peon hidden INSIDE the structure it is building (renderer hides it)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
@@ -855,6 +856,18 @@ const AIR_FANOUT_SPEED = 0.6;
 // Town Hall reference: 5 peasants take ~53s (from 90s) and cost ~615g (from 385g).
 const SPEED_BUILD_BONUS = 0.17;
 const SPEED_BUILD_SURCHARGE = 0.15;
+// Per-race construction style (engine behaviour, not a data field — observed in-game +
+// Warsmash). ORC/NIGHT ELF workers build from INSIDE the structure (hidden, one worker,
+// no assist); HUMAN peasants build from outside and can "speed build" — extra peasants
+// pile on to finish faster (SPEED_BUILD_*). Undead acolytes summon-and-leave (handled
+// elsewhere). Night Elf's wisp is inside-build too; it joins buildsFromInside when we
+// do the NE pass.
+function buildsFromInside(u: SimUnit): boolean {
+  return u.race === "orc";
+}
+function speedBuilds(u: SimUnit): boolean {
+  return u.race === "human";
+}
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
 // units may stop and reserve cells across it while it travels. Rather than let a
 // unit grind into that crowd until checkStuck() fires (0.5 s of no progress),
@@ -1786,6 +1799,10 @@ export class SimWorld {
     // Release this worker from any previous job, then add it to the site's
     // builder list (multiple workers speed-build a single structure).
     this.detachBuilder(workerId);
+    // Only HUMAN peasants speed-build: extra builders pile on to finish faster. Every
+    // other race builds with a single worker (Orc/NE from inside, Undead summon-and-go),
+    // so refuse a would-be second builder on a non-speed-build construction.
+    if (!speedBuilds(w) && b.building.constructionLeft > 0 && b.building.builderIds.length >= 1) return;
     w.buildPending = null; // its walk-to-build intent is now realised
     w.constructing = buildingId;
     if (!b.building.builderIds.includes(workerId)) b.building.builderIds.push(workerId);
@@ -1804,7 +1821,13 @@ export class SimWorld {
       }
       return;
     }
-    // Adjacent: snap to the nearest free tile outside the building's (now
+    // Orc peon: vanish INTO the site and build from inside (hidden), rather than
+    // standing beside it. Emerges at the doorstep when the build ends (detachBuilder).
+    if (buildsFromInside(w)) {
+      this.enterBuildSite(w, b);
+      return;
+    }
+    // Human peasant: snap to the nearest free tile outside the building's (now
     // stamped) footprint, so it stands beside the site hammering rather than
     // being trapped inside the under-construction model.
     this.unsettle(w);
@@ -1820,6 +1843,37 @@ export class SimWorld {
     w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x); // face the build site
   }
 
+  /** Orc peon disappearing INTO the structure it's building: parked at the site centre,
+   *  hidden by the renderer, reserving no cells. It re-emerges via detachBuilder (called
+   *  on completion, cancel, or the building's death). */
+  private enterBuildSite(w: SimUnit, b: SimUnit): void {
+    this.unsettle(w); // stop blocking cells while invisible inside
+    w.x = b.x;
+    w.y = b.y;
+    w.insideBuild = true;
+    w.order = "idle";
+    w.moving = false;
+    w.path = [];
+    w.noCollision = false;
+    w.desiredFacing = b.facing;
+  }
+
+  /** Orc peon leaving a structure it built from inside: place it on a free tile beside
+   *  the building's footprint and clear the hidden flag. No-op for a normal builder. */
+  private emergeBuilder(w: SimUnit, b: SimUnit): void {
+    if (!w.insideBuild) return;
+    w.insideBuild = false;
+    const n = w.footprint || footprintCells(w.radius);
+    const [bcx, bcy] = this.grid.worldToCell(b.x, b.y);
+    const fit = this.grid.nearestFit(bcx, bcy, n) ?? this.grid.nearestWalkable(bcx, bcy);
+    if (fit) [w.x, w.y] = this.grid.cellToWorld(fit[0], fit[1]);
+    w.order = "idle";
+    w.moving = false;
+    w.path = [];
+    this.settle(w);
+    w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x);
+  }
+
   /** Stop a worker constructing/repairing (manual order, or death). Called by
    *  every re-task path, so it also cancels a repair job. */
   private detachBuilder(workerId: number): void {
@@ -1827,8 +1881,11 @@ export class SimWorld {
     if (!w) return;
     w.repair = null; // re-tasking cancels a repair
     if (!w.constructing) return;
-    const b = this.units.get(w.constructing)?.building;
-    if (b) b.builderIds = b.builderIds.filter((id) => id !== workerId);
+    const bu = this.units.get(w.constructing);
+    if (bu?.building) bu.building.builderIds = bu.building.builderIds.filter((id) => id !== workerId);
+    // Orc peon leaving the site it built from inside — pop it out to the doorstep.
+    if (w.insideBuild && bu) this.emergeBuilder(w, bu);
+    else w.insideBuild = false;
     w.constructing = 0;
   }
 
@@ -1909,19 +1966,26 @@ export class SimWorld {
         let present = 0;
         for (const id of b.builderIds) {
           const builder = this.units.get(id)!;
+          // Orc peon that has walked up to the site now vanishes inside to build
+          // (hidden). Once inside it sits at the centre, so it reads as "present".
+          if (buildsFromInside(builder) && !builder.insideBuild && !builder.moving &&
+              Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96) {
+            this.enterBuildSite(builder, u);
+          }
           const nearby =
             !builder.moving &&
             Math.max(Math.abs(builder.x - u.x), Math.abs(builder.y - u.y)) - u.radius - builder.radius < 96;
           if (nearby) {
-            builder.desiredFacing = Math.atan2(u.y - builder.y, u.x - builder.x); // face the site while hammering
+            if (!builder.insideBuild) builder.desiredFacing = Math.atan2(u.y - builder.y, u.x - builder.x); // face the site while hammering
             present++;
           }
         }
         if (present > 0) {
           // Extra builders past the first speed the build but burn extra
-          // resources. If the owner can't pay this tick's surcharge, drop back
-          // toward the base rate (only as many extras as they can afford).
-          let extra = present - 1;
+          // resources (HUMAN only — speedBuilds()). If the owner can't pay this
+          // tick's surcharge, drop back toward the base rate (only as many extras
+          // as they can afford).
+          let extra = speedBuilds(u) ? present - 1 : 0;
           if (extra > 0) {
             const stash = this.stashOf(u.owner);
             while (extra > 0) {
@@ -2097,6 +2161,7 @@ export class SimWorld {
       | "resId"
       | "workT"
       | "inMine"
+      | "insideBuild"
       | "working"
       | "atNode"
       | "noCollision"
@@ -2243,6 +2308,7 @@ export class SimWorld {
       resId: 0,
       workT: 0,
       inMine: false,
+      insideBuild: false,
       working: false,
       atNode: false,
       noCollision: false,
