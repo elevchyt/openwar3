@@ -683,6 +683,7 @@ export interface SimUnit {
   linkShare: number; // Spirit Link: fraction of a hit distributed across the group (dataA)
   devouring: number; // Kodo Devour: the prey unit id being digested (0 = none; holds one)
   devouredBy: number; // this unit is swallowed inside that Kodo (0 = free; renderer hides it)
+  etherealForm: boolean; // Spirit Walker in ethereal form: persistently ethereal (immune physical, no attack)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
@@ -2242,6 +2243,18 @@ export class SimWorld {
     this.morphs.push({ unitId: u.id, from, to: toTypeId });
   }
 
+  /** Spirit Walker form toggle: morph between its ethereal form (ospm — trained default;
+   *  can't attack, immune to physical, takes +magic) and its corporeal form (ospw — attacks,
+   *  takes physical). Both forms carry only the one toggle ability, so we swap to whichever
+   *  form the unit is NOT in. The ethereal form is data-identified as the one with no weapon
+   *  (weapsOn=0), so `etherealForm` follows directly from the morphed loadout. */
+  toggleSpiritForm(u: SimUnit): void {
+    this.morphUnit(u, u.typeId === "ospm" ? "ospw" : "ospm");
+    u.etherealForm = !u.weapon; // the weaponless form (weapsOn=0) is the ethereal one
+    if (u.etherealForm) this.stop(u.id); // ethereal can't attack — drop any swing/target
+    this.recomputeStats(u); // apply the ethereal state immediately
+  }
+
   /** The innate/learnable abilities a unit type carries (mirrors RtsController.
    *  buildInitialAbilities) — used when a unit morphs into another type. */
   private buildAbilitiesFor(def: UnitDef): SimAbility[] {
@@ -2393,6 +2406,7 @@ export class SimWorld {
       | "linkShare"
       | "devouring"
       | "devouredBy"
+      | "etherealForm"
       | "working"
       | "atNode"
       | "noCollision"
@@ -2549,6 +2563,7 @@ export class SimWorld {
       linkShare: 0,
       devouring: 0,
       devouredBy: 0,
+      etherealForm: unit.typeId === "ospm", // the Spirit Walker is TRAINED in its ethereal form (ospm)
       working: false,
       atNode: false,
       noCollision: false,
@@ -3805,7 +3820,7 @@ export class SimWorld {
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
     u.silenced = silence;
-    u.ethereal = ethereal; // Banish: weapon disabled + physical immunity (see applyDamage, issueAttack)
+    u.ethereal = ethereal || u.etherealForm; // Banish (timed) OR the Spirit Walker's ethereal FORM (persistent)
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;
@@ -4902,6 +4917,7 @@ export class SimWorld {
       unit.linkShare = share;
     },
     devour: (kodo, prey) => this.devourInternal(kodo, prey),
+    toggleSpiritForm: (unit) => this.toggleSpiritForm(unit),
     emitEffect: (art, x, y, targetId, life) => {
       if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life });
     },

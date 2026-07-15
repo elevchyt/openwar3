@@ -35,6 +35,8 @@ export interface SpellApi {
   linkSpirits(unit: SimUnit, group: number[], durationSec: number, share: number): void;
   /** Kodo Devour: `kodo` swallows `prey` (hidden inside, digested over time). */
   devour(kodo: SimUnit, prey: SimUnit): void;
+  /** Spirit Walker: toggle between ethereal and corporeal form (morph + ethereal state). */
+  toggleSpiritForm(unit: SimUnit): void;
   /** Play an effect model at a unit (targetId>0) or a point (renderer). `life` = how
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
    *  value for a sustained effect like Flame Strike's 7s fire pillar. */
@@ -478,6 +480,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.raiseNearbyCorpses(ctx.x, ctx.y, 250, caster.owner, caster.team, 1);
     if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
   },
+
+  // Corporeal/Ethereal Form (Spirit Walker) — a self toggle between its two forms (both carry
+  // this one ability). morphUnit swaps the type (weapons + abilities), and the ethereal form
+  // (no weapon) becomes immune to physical / unable to attack / +magic damage.
+  Acpf: (api, caster) => api.toggleSpiritForm(caster),
 
   // Devour (Kodo Beast) — swallow an enemy land non-hero unit whole; it's digested inside
   // (tickDevour) and freed if the Kodo is slain first.

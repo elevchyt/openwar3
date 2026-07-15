@@ -229,6 +229,7 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Auco: { target: "unit" }, // Unstable Concoction (Batrider) — suicide AoE vs air units
   Adev: { target: "unit" }, // Devour (Kodo Beast) — swallow & digest an enemy land unit
   Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
+  Acpf: { target: "none" }, // Corporeal/Ethereal Form (Spirit Walker) — self toggle between forms
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the
