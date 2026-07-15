@@ -447,6 +447,13 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "shield", group: "lightningshield", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: d(lvl, 0, 20), value2: lvl.area || 160, art: def.buffArt || def.targetArt });
   },
 
+  // Witch Doctor wards — each summons an immobile ward at the point (unitid1). Sentry
+  // gives vision for free (an owned unit reveals fog); the Healing Ward's heal and the
+  // Stasis Trap's proximity stun run in world.tickWards, keyed off the ward's own data.
+  Aeye: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
+  Ahwd: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
+  Asta: (api, caster, def, rank, ctx) => summonSpell(api, caster, def, rank, { count: 1, atPoint: true }, ctx),
+
   // Berserk (Troll Berserker) — self only: attack dataB% faster (haste) but take dataC%
   // more damage (vuln) for the duration. dataA rides the haste's move-speed slot.
   Absk: (api, caster, def, rank) => {

@@ -217,6 +217,9 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Aens: { target: "unit", autocast: true }, // Ensnare (Raider) — root a target (air pulled down)
   Alsh: { target: "unit" }, // Lightning Shield (Shaman) — damaging shield around a unit
   Absk: { target: "none" }, // Berserk (Troll Berserker) — self: faster attack, +damage taken
+  Aeye: { target: "point" }, // Sentry Ward (Witch Doctor) — summon a vision ward
+  Ahwd: { target: "point" }, // Healing Ward (Witch Doctor) — summon a healing ward
+  Asta: { target: "point" }, // Stasis Trap (Witch Doctor) — summon a proximity stun trap
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the

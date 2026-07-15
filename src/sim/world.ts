@@ -3869,6 +3869,43 @@ export class SimWorld {
     }
   }
 
+  /** Witch Doctor wards, ticked off their own data: the Healing Ward (`Aoar`) heals nearby
+   *  friendly non-mechanical units by a % of max HP/sec; the Stasis Trap (`otot`) detonates
+   *  when an enemy land unit enters its trigger radius, stunning enemies around it, then is
+   *  consumed. Sentry Ward needs nothing — an owned unit reveals fog on its own. */
+  private tickWards(dt: number): void {
+    for (const u of this.units.values()) {
+      if (!u.isSummon || u.hp <= 0) continue;
+      const def = this.unitReg?.get(u.typeId);
+      if (!def) continue;
+      // Healing Ward — ability Aoar on the ward: heal allied non-mechanical units in range.
+      if (def.abilities.includes("Aoar")) {
+        const aoar = this.abilities?.get("Aoar")?.levelData[0];
+        const pct = aoar ? this.dataOf(aoar, 0, 0.02) : 0.02;
+        const area = aoar?.area || 500;
+        for (const t of this.unitsInAreaInternal(u.x, u.y, area)) {
+          if (t === u || t.hp <= 0 || t.mechanical || t.building || t.team !== u.team) continue;
+          if (t.hp < t.maxHp) t.hp = Math.min(t.maxHp, t.hp + t.maxHp * pct * dt);
+        }
+      }
+      // Stasis Trap — otot: arm until an enemy land unit steps into the trigger radius, then
+      // stun every enemy land unit in the (larger) blast radius and consume the trap.
+      if (u.typeId === "otot") {
+        const asta = this.abilities?.get("Asta")?.levelData[0];
+        const trig = asta ? this.dataOf(asta, 1, 250) : 250; // dataB — trigger radius
+        const blast = asta ? this.dataOf(asta, 2, 400) : 400; // dataC — stun radius
+        const stunDur = asta ? this.dataOf(asta, 3, 6) : 6; // dataD — stun duration
+        const armed = this.unitsInAreaInternal(u.x, u.y, trig).some((e) => e.hp > 0 && !e.flying && !e.building && this.hostile(u, e));
+        if (armed) {
+          for (const e of this.unitsInAreaInternal(u.x, u.y, blast)) {
+            if (e.hp > 0 && !e.flying && !e.building && this.hostile(u, e)) this.applyBuffInternal(e, { kind: "stun", timeLeft: stunDur, sourceId: u.id });
+          }
+          this.removeUnit(u.id); // trap consumed
+        }
+      }
+    }
+  }
+
   private tickRegen(u: SimUnit, dt: number): void {
     if (u.maxMana > 0 && u.mana < u.maxMana) u.mana = Math.min(u.maxMana, u.mana + u.manaRegen * dt);
     if (u.hpRegen > 0 && u.hp > 0 && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.hpRegen * dt);
@@ -5162,6 +5199,7 @@ export class SimWorld {
     this.tickProjectiles(dt);
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
     this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
+    this.tickWards(dt); // Witch Doctor Healing Ward heal + Stasis Trap proximity stun
     this.tickCorpses(dt); // decay flesh→bone→gone
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
