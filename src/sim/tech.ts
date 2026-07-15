@@ -61,6 +61,22 @@ export class TechState {
     this.dirty = true;
   }
 
+  /** For an `rtma` unit-swap upgrade (Berserker `Robk`: ohun→otbk), the (withdrawn, enabled)
+   *  pair — the unit type it makes UNAVAILABLE and the one it makes AVAILABLE. null if the
+   *  upgrade swaps no units. Lets the sim morph existing units when the upgrade completes. */
+  unitSwapForUpgrade(upgradeId: string): { from: string; to: string } | null {
+    let from = "";
+    let to = "";
+    for (const [unitId, effects] of this.techAvail) {
+      for (const e of effects) {
+        if (e.upgrade !== upgradeId) continue;
+        if (e.value === AVAILABLE) to = unitId; // -1 → this unit turns ON
+        else from = unitId; // +1 → this unit is withdrawn
+      }
+    }
+    return from && to ? { from, to } : null;
+  }
+
   private recount(): void {
     this.counts.clear();
     for (const u of this.census()) {

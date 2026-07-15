@@ -1,6 +1,6 @@
 import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
@@ -2187,8 +2187,9 @@ export class SimWorld {
           if (job.kind === "research") {
             this.tech?.setResearchLevel(u.owner, job.unitId, job.level);
             this.researchCompletions.push({ buildingId: u.id, upgradeId: job.unitId, level: job.level, owner: u.owner });
+            this.applyUnitSwap(u.owner, job.unitId); // rtma: morph existing units (Headhunter→Berserker)
           } else if (job.kind === "upgrade") {
-            this.morphBuilding(u, job.unitId);
+            this.morphUnit(u, job.unitId);
           } else {
             this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
           }
@@ -2205,7 +2206,7 @@ export class SimWorld {
    *  HP carries over as a FRACTION: a Town Hall at half health becomes a half-health Keep,
    *  not a Keep with 750/2000. The renderer picks the swap up from `morphs` and re-attaches
    *  the new model. */
-  private morphBuilding(u: SimUnit, toTypeId: string): void {
+  private morphUnit(u: SimUnit, toTypeId: string): void {
     const def = this.unitReg?.get(toTypeId);
     if (!def) return;
     const frac = u.maxHp > 0 ? Math.min(1, u.hp / u.maxHp) : 1;
@@ -2213,18 +2214,59 @@ export class SimWorld {
     u.typeId = toTypeId;
     u.baseMaxHp = def.hitPoints;
     u.baseArmor = def.armor;
+    u.armorType = def.armorType;
     u.baseSightDay = def.sightDay;
     u.baseSightNight = def.sightNight;
+    u.baseSpeed = def.speed;
+    // Rebuild the type-derived combat kit: a Headhunter→Berserker gains the Berserk ability
+    // and the Berserker's stronger throw; a building keeps its (usually empty) kit. Preserve
+    // any current cast/order by leaving order state alone — only the type's innate loadout swaps.
+    u.weapons = weaponsFromDef(def);
+    u.weapon = u.weapons.find((w) => w.enabled) ?? null;
+    u.abilities = this.buildAbilitiesFor(def);
     // What it produces is a property of the TYPE, so re-derive it: a structure that only gains
     // a training list on upgrade would otherwise never get a rally point.
     if (u.building && this.techReg) {
       const t = this.techReg.get(toTypeId);
       u.building.producesUnits = t.trains.length > 0 || t.sellunits.length > 0;
     }
-    this.recomputeStats(u); // maxHp now reflects the new type (+ any Masonry already researched)
+    this.recomputeStats(u); // maxHp now reflects the new type (+ any research already in)
     u.hp = Math.max(1, u.maxHp * frac);
     this.tech?.invalidate(); // a Keep satisfies requirements a Town Hall does not
     this.morphs.push({ unitId: u.id, from, to: toTypeId });
+  }
+
+  /** The innate/learnable abilities a unit type carries (mirrors RtsController.
+   *  buildInitialAbilities) — used when a unit morphs into another type. */
+  private buildAbilitiesFor(def: UnitDef): SimAbility[] {
+    const out: SimAbility[] = [];
+    if (!this.abilities) return out;
+    for (const id of def.abilities) {
+      const a = this.abilities.get(id);
+      if (a && KNOWN_ABILITIES[a.code]) out.push({ id, code: a.code, level: 1, cooldownLeft: 0, autocastOn: def.autoAbility === id });
+    }
+    for (const id of def.heroAbilities) {
+      const a = this.abilities.get(id);
+      if (a && KNOWN_ABILITIES[a.code]) out.push({ id, code: a.code, level: 0, cooldownLeft: 0, autocastOn: false });
+    }
+    return out;
+  }
+
+  /** rtma unit-swap: when an upgrade completes, every existing unit of the withdrawn type
+   *  (owned by that player) morphs into the enabled type in place — the Berserker Upgrade
+   *  turning all of a player's Headhunters into Troll Berserkers. */
+  private applyUnitSwap(owner: number, upgradeId: string): void {
+    const swap = this.tech?.unitSwapForUpgrade(upgradeId);
+    if (!swap || !this.tech) return;
+    // Flip production: the enabled unit becomes trainable, the withdrawn one hidden. The map's
+    // melee init caps the upgraded unit (SetPlayerTechMaxAllowed(otbk,0)) at start, and that
+    // explicit cap outranks the rtma tech-availability — so the swap must override it here.
+    this.tech.setMaxAllowed(owner, swap.to, -1);
+    this.tech.setMaxAllowed(owner, swap.from, 0);
+    // Morph every existing unit of the withdrawn type in place.
+    for (const u of this.units.values()) {
+      if (u.owner === owner && u.typeId === swap.from && u.hp > 0) this.morphUnit(u, swap.to);
+    }
   }
 
   /** Cancel a building (manual cancel of an under-construction structure): free
