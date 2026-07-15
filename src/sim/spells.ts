@@ -30,6 +30,9 @@ export interface SpellApi {
   requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number): void;
   /** Raise up to `max` friendly corpses near a point back to life (Resurrection). */
   raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number): number;
+  /** Spirit Link: mark `unit` as sharing `share` of its damage across the `group` unit ids
+   *  for `durationSec`. Applied to every member so the split is symmetric. */
+  linkSpirits(unit: SimUnit, group: number[], durationSec: number, share: number): void;
   /** Play an effect model at a unit (targetId>0) or a point (renderer). `life` = how
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
    *  value for a sustained effect like Flame Strike's 7s fire pillar. */
@@ -445,6 +448,33 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     api.applyBuff(t, { kind: "shield", group: "lightningshield", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: d(lvl, 0, 20), value2: lvl.area || 160, art: def.buffArt || def.targetArt });
+  },
+
+  // Spirit Link (Spirit Walker) — link up to dataB friendly organic units within the area
+  // into a group; dataA of any hit taken by a member is spread across the whole group. Sets
+  // the shared link state on each member (world.spiritLinkSplit does the distribution).
+  Aspl: (api, caster, def, rank, ctx) => {
+    const lvl = def.levelData[rank - 1];
+    const cap = Math.max(2, Math.round(d(lvl, 1, 4)));
+    const share = d(lvl, 0, 0.5);
+    const anchor = api.getUnit(ctx.targetId) ?? caster;
+    const group = api
+      .unitsInArea(anchor.x, anchor.y, lvl.area || 500)
+      .filter((t) => api.ally(caster, t) && !t.building && !t.isSummon)
+      .slice(0, cap);
+    if (group.length < 2) return;
+    const ids = group.map((u) => u.id);
+    for (const u of group) {
+      api.linkSpirits(u, ids, dur(lvl, u) || 75, share);
+      if (def.targetArt) api.emitEffect(def.targetArt, u.x, u.y, u.id);
+    }
+  },
+
+  // Ancestral Spirit (Spirit Walker) — raise ONE fallen non-hero Tauren from its corpse at
+  // the point, back at full strength (dataA = HP fraction restored ≈ 1).
+  Aast: (api, caster, def, _rank, ctx) => {
+    api.raiseNearbyCorpses(ctx.x, ctx.y, 250, caster.owner, caster.team, 1);
+    if (def.targetArt) api.emitEffect(def.targetArt, ctx.x, ctx.y, 0);
   },
 
   // Witch Doctor wards — each summons an immobile ward at the point (unitid1). Sentry

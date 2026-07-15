@@ -678,6 +678,9 @@ export interface SimUnit {
   garrisonHost: number; // Orc Burrow id this peon is garrisoned in (0 = none)
   garrison: number[]; // for an Orc Burrow: the peon ids loaded inside (fires arrows; DPS scales)
   garrisonCap: number; // max passengers this unit can hold (0 = can't garrison; Abun Dataa1)
+  linkGroup: number[]; // Spirit Link: the co-linked unit ids sharing this unit's damage (empty = unlinked)
+  linkT: number; // Spirit Link time remaining (0 = not linked)
+  linkShare: number; // Spirit Link: fraction of a hit distributed across the group (dataA)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
@@ -2382,6 +2385,9 @@ export class SimWorld {
       | "garrisonHost"
       | "garrison"
       | "garrisonCap"
+      | "linkGroup"
+      | "linkT"
+      | "linkShare"
       | "working"
       | "atNode"
       | "noCollision"
@@ -2533,6 +2539,9 @@ export class SimWorld {
       garrisonHost: 0,
       garrison: [],
       garrisonCap: this.computeGarrisonCap(unit.typeId),
+      linkGroup: [],
+      linkT: 0,
+      linkShare: 0,
       working: false,
       atNode: false,
       noCollision: false,
@@ -4841,6 +4850,11 @@ export class SimWorld {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src });
     },
     raiseNearbyCorpses: (x, y, r, owner, team, max) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max),
+    linkSpirits: (unit, group, durationSec, share) => {
+      unit.linkGroup = [...group];
+      unit.linkT = durationSec;
+      unit.linkShare = share;
+    },
     emitEffect: (art, x, y, targetId, life) => {
       if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life });
     },
@@ -5120,6 +5134,7 @@ export class SimWorld {
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
+      if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
       if (u.repathT > 0) u.repathT -= dt;
       for (const a of u.abilities) if (a.cooldownLeft > 0) a.cooldownLeft -= dt;
       for (const it of u.inventory) if (it && it.cooldownLeft > 0) it.cooldownLeft -= dt;
@@ -6303,7 +6318,25 @@ export class SimWorld {
     let vuln = 0;
     for (const b of target.buffs) if (b.kind === "vuln") vuln = Math.max(vuln, b.value);
     const reduction = armorDamageReduction(target.armor);
-    return this.landDamage(target, rawDamage * typeMult * (1 + vuln) * (1 - reduction), attackerId, true);
+    const final = rawDamage * typeMult * (1 + vuln) * (1 - reduction);
+    return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true);
+  }
+
+  /** Spirit Link (Aspl): `linkShare` of a post-armor hit is spread equally across the linked
+   *  group (each living member, including the target, takes an equal share); the rest stays
+   *  on the target. Returns the reduced amount the target itself should take. */
+  private spiritLinkSplit(target: SimUnit, dmg: number): number {
+    if (target.linkT <= 0 || target.linkGroup.length < 2 || dmg <= 0) return dmg;
+    const members = target.linkGroup.map((id) => this.units.get(id)).filter((u): u is SimUnit => !!u && u.hp > 0);
+    if (members.length < 2) return dmg;
+    const share = target.linkShare;
+    const per = (dmg * share) / members.length; // equal slice for every linked unit
+    for (const m of members) {
+      if (m === target) continue;
+      m.hp -= per; // already post-armor; spirit-shared damage isn't reduced again
+      if (m.hp <= 0) this.kill(m);
+    }
+    return dmg * (1 - share) + per; // target keeps the unshared part + its own slice
   }
 
   /** Critical Strike (AOcr): dataB chance to multiply the swing damage by dataC. */
