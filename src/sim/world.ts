@@ -146,7 +146,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
   return out;
 }
 
-export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem";
+export type SimOrder = "idle" | "move" | "attackmove" | "patrol" | "hold" | "attack" | "follow" | "harvest" | "return" | "repair" | "cast" | "getitem" | "garrison";
 
 /** A learned/innate ability on a unit. `code` is the base ability code (dispatch
  *  key — see data/abilities). `level` 0 = a hero ability not yet learned. */
@@ -672,6 +672,10 @@ export interface SimUnit {
   workT: number; // chop/mine timer
   inMine: boolean; // inside the gold mine (renderer hides the unit)
   insideBuild: boolean; // Orc peon hidden INSIDE the structure it is building (renderer hides it)
+  inBurrow: boolean; // peon garrisoned inside an Orc Burrow (renderer hides it)
+  garrisonHost: number; // Orc Burrow id this peon is garrisoned in (0 = none)
+  garrison: number[]; // for an Orc Burrow: the peon ids loaded inside (fires arrows; DPS scales)
+  garrisonCap: number; // max passengers this unit can hold (0 = can't garrison; Abun Dataa1)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
   noCollision: boolean; // ghosts through other units (mining workers, WC3-style)
@@ -1874,6 +1878,166 @@ export class SimWorld {
     w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x);
   }
 
+  // === Orc Burrow garrison ============================================================
+  // Peons climb inside an Orc Burrow (up to Abun's Dataa1 = 4) and it fires arrows: one
+  // piercing projectile whose DPS scales with the peon count (cooldown = base/(n+1);
+  // recomputeStats). Ground truth: UnitAbilities.slk otrb has Abun (Load) + Abtl (Battle
+  // Stations); Abun Dataa1=4; weapon 23-27 pierce, range 700, base cd 4 (UnitWeapons.slk);
+  // scaling per Liquipedia Orc_Burrow.
+
+  /** Passenger capacity of a unit type: Abun's Dataa1 (4 for the Orc Burrow), 0 if the
+   *  type lacks the Load ability. Cached per unit in `garrisonCap` (computed once). */
+  private computeGarrisonCap(typeId: string): number {
+    const def = this.unitReg?.get(typeId);
+    if (!def?.abilities.includes("Abun")) return 0; // only the Orc Burrow carries Load
+    const cap = this.abilities?.get("Abun")?.levelData[0]?.data[0];
+    return cap && cap > 0 ? Math.round(cap) : 4;
+  }
+
+  /** Whether `burrow` can take another passenger right now. */
+  private burrowHasRoom(burrow: SimUnit): boolean {
+    return (
+      burrow.garrisonCap > 0 &&
+      burrow.hp > 0 &&
+      (!burrow.building || burrow.building.constructionLeft <= 0) &&
+      burrow.garrison.length < burrow.garrisonCap
+    );
+  }
+
+  /** Order a peon to garrison an Orc Burrow: walk there, then climb inside (tickGarrison). */
+  issueGarrison(peonId: number, burrowId: number): boolean {
+    const p = this.units.get(peonId);
+    const b = this.units.get(burrowId);
+    if (!p || !p.worker || this.castLocked(p) || !b || b.garrisonCap === 0) return false;
+    if (this.hostile(p, b)) return false; // only your own / allied burrows
+    p.order = "garrison";
+    p.targetId = burrowId;
+    p.inCombat = false;
+    p.noCollision = false;
+    this.cancelSwing(p);
+    this.detachBuilder(peonId); // drop any build/harvest job
+    p.stuckT = 0;
+    p.stuckRetries = 0;
+    if (this.inBurrowReach(p, b)) {
+      this.enterBurrow(p, b); // already at the door — hop in now
+      return true;
+    }
+    const [ax, ay] = this.burrowApproach(p, b);
+    if (!this.pathTo(p, ax, ay)) this.stop(peonId); // no path at all → give up
+    return true;
+  }
+
+  /** A walkable point just outside the burrow's footprint on the peon's side — the burrow
+   *  centre itself is blocked, so pathing straight at it fails. */
+  private burrowApproach(p: SimUnit, b: SimUnit): [number, number] {
+    const dx = p.x - b.x, dy = p.y - b.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const reach = b.radius + p.radius + 20;
+    const ax = b.x + (dx / d) * reach, ay = b.y + (dy / d) * reach;
+    const [cx, cy] = this.grid.worldToCell(ax, ay);
+    const free = this.grid.nearestWalkable(cx, cy, 6);
+    return free ? this.grid.cellToWorld(free[0], free[1]) : [ax, ay];
+  }
+
+  private inBurrowReach(p: SimUnit, b: SimUnit): boolean {
+    return Math.max(Math.abs(p.x - b.x), Math.abs(p.y - b.y)) - b.radius - p.radius < 48;
+  }
+
+  /** Drive a peon walking to garrison: enter once it reaches the burrow's edge. */
+  private tickGarrison(u: SimUnit): void {
+    const b = u.targetId ? this.units.get(u.targetId) : null;
+    if (!b || b.garrisonCap === 0 || b.hp <= 0) {
+      this.stop(u.id);
+      return;
+    }
+    if (u.moving) return; // still walking up
+    if (this.inBurrowReach(u, b)) {
+      if (this.burrowHasRoom(b)) this.enterBurrow(u, b);
+      else this.stop(u.id); // full while we walked — give up
+    } else {
+      // Stopped short of the burrow (blocked); one more try toward the door, else idle.
+      const [ax, ay] = this.burrowApproach(u, b);
+      if (!this.pathTo(u, ax, ay)) this.stop(u.id);
+    }
+  }
+
+  /** Peon climbs into a burrow: hidden, reserving no cells, added to its garrison. */
+  private enterBurrow(peon: SimUnit, burrow: SimUnit): void {
+    this.unsettle(peon); // no cell block while inside
+    peon.inBurrow = true;
+    peon.garrisonHost = burrow.id;
+    peon.order = "idle";
+    peon.targetId = null;
+    peon.moving = false;
+    peon.path = [];
+    peon.noCollision = false;
+    if (!burrow.garrison.includes(peon.id)) burrow.garrison.push(peon.id);
+    this.recomputeStats(burrow); // switch the arrow attack on / rescale its cooldown
+  }
+
+  /** Eject one garrisoned peon to a free doorstep tile beside its burrow. */
+  private ejectPeon(peon: SimUnit, burrow: SimUnit): void {
+    peon.inBurrow = false;
+    peon.garrisonHost = 0;
+    const n = peon.footprint || footprintCells(peon.radius);
+    const [bcx, bcy] = this.grid.worldToCell(burrow.x, burrow.y);
+    const fit = this.grid.nearestFit(bcx, bcy, n) ?? this.grid.nearestWalkable(bcx, bcy);
+    if (fit) [peon.x, peon.y] = this.grid.cellToWorld(fit[0], fit[1]);
+    peon.order = "idle";
+    peon.moving = false;
+    peon.path = [];
+    this.settle(peon); // blocks its cell so the next ejected peon fans out beside it
+    peon.desiredFacing = Math.atan2(peon.y - burrow.y, peon.x - burrow.x);
+  }
+
+  /** Unload every peon from a burrow (the Unload command). */
+  unloadBurrow(burrowId: number): boolean {
+    const b = this.units.get(burrowId);
+    if (!b || b.garrison.length === 0) return false;
+    for (const pid of [...b.garrison]) {
+      const p = this.units.get(pid);
+      if (p) this.ejectPeon(p, b);
+    }
+    b.garrison = [];
+    this.recomputeStats(b); // empty → arrow attack off
+    return true;
+  }
+
+  /** Battle Stations: order nearby idle friendly peons into burrows with room, this one
+   *  first, then the nearest others (Abtl). */
+  battleStations(burrowId: number): boolean {
+    const b = this.units.get(burrowId);
+    if (!b || b.garrisonCap === 0) return false;
+    const R2 = 800 * 800; // gather radius around the burrow (WC3 ~ screenful)
+    const peons = [...this.units.values()]
+      .filter((p) => p.worker && p.owner === b.owner && p.hp > 0 && !p.inBurrow && !p.inMine && !p.insideBuild && !p.constructing && (p.x - b.x) ** 2 + (p.y - b.y) ** 2 <= R2)
+      .sort((a, c) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 - ((c.x - b.x) ** 2 + (c.y - b.y) ** 2));
+    // Project the seats we've already handed out this call so peons distribute across
+    // burrows instead of all walking to the same one (only `cap` can actually enter).
+    const dispatched = new Map<number, number>();
+    const roomFor = (bur: SimUnit): boolean =>
+      bur.hp > 0 && (!bur.building || bur.building.constructionLeft <= 0) &&
+      bur.garrison.length + (dispatched.get(bur.id) ?? 0) < bur.garrisonCap;
+    let sent = 0;
+    for (const p of peons) {
+      let target: SimUnit | null = roomFor(b) ? b : null;
+      if (!target) {
+        let bestD = Infinity;
+        for (const u of this.units.values()) {
+          if (u.garrisonCap === 0 || u.owner !== b.owner || !roomFor(u)) continue;
+          const d = (u.x - p.x) ** 2 + (u.y - p.y) ** 2;
+          if (d < bestD) { bestD = d; target = u; }
+        }
+      }
+      if (!target) break; // every burrow full
+      if (this.issueGarrison(p.id, target.id)) {
+        dispatched.set(target.id, (dispatched.get(target.id) ?? 0) + 1);
+        sent++;
+      }
+    }
+    return sent > 0;
+  }
+
   /** Stop a worker constructing/repairing (manual order, or death). Called by
    *  every re-task path, so it also cancels a repair job. */
   private detachBuilder(workerId: number): void {
@@ -2085,6 +2249,14 @@ export class SimWorld {
     this.unsettle(u);
     if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     if (u.constructing) this.detachBuilder(u.id);
+    if (u.garrison.length) this.unloadBurrow(u.id); // eject passengers before it vanishes
+    if (u.garrisonHost) {
+      const host = this.units.get(u.garrisonHost);
+      if (host) {
+        host.garrison = host.garrison.filter((id) => id !== u.id);
+        this.recomputeStats(host);
+      }
+    }
     this.units.delete(u.id);
     this.removals.push(u.id);
     this.unitDrops.delete(u.id);
@@ -2162,6 +2334,10 @@ export class SimWorld {
       | "workT"
       | "inMine"
       | "insideBuild"
+      | "inBurrow"
+      | "garrisonHost"
+      | "garrison"
+      | "garrisonCap"
       | "working"
       | "atNode"
       | "noCollision"
@@ -2309,6 +2485,10 @@ export class SimWorld {
       workT: 0,
       inMine: false,
       insideBuild: false,
+      inBurrow: false,
+      garrisonHost: 0,
+      garrison: [],
+      garrisonCap: this.computeGarrisonCap(unit.typeId),
       working: false,
       atNode: false,
       noCollision: false,
@@ -3539,6 +3719,17 @@ export class SimWorld {
       w.damagePoint = w.baseDamagePoint * speedFactor;
       w.spillDist = w.baseSpillDist + upg.spillDist; // Storm Hammers — see the spill fields on SimWeapon
       w.spillRadius = w.baseSpillRadius + upg.spillRadius;
+    }
+    // Orc Burrow: its arrow weapon is `weapsOn=1` in data but only fires while GARRISONED,
+    // and its attack SPEED scales with the peon count — one projectile always, cooldown =
+    // base/(peons+1) → 100/150/200/250 % DPS for 1-4 (Liquipedia Orc_Burrow; base cd 4 from
+    // UnitWeapons.slk). Damage per hit is unchanged. Empty → weapon off (no auto-attack).
+    if (u.garrisonCap > 0) {
+      const n = u.garrison.length;
+      for (const w of u.weapons) {
+        w.enabled = n >= 1;
+        if (n >= 1) w.cooldown = (w.baseCooldown * speedFactor) / (n + 1);
+      }
     }
     // Re-pick the primary: an upgrade may have just switched the unit's first live slot.
     u.weapon = u.weapons.find((w) => w.enabled) ?? null;
@@ -4868,6 +5059,9 @@ export class SimWorld {
         case "getitem":
           this.tickGetItem(u); // walk to a ground item / another hero, then pick up / hand over
           break;
+        case "garrison":
+          this.tickGarrison(u); // walk to the Orc Burrow, then climb inside
+          break;
         case "follow":
           this.tickFollow(u, dt); // trail the leader; guard it against nearby enemies once caught up
           break;
@@ -6187,6 +6381,27 @@ export class SimWorld {
       if (mine) mine.busy = false; // don't wedge the mine shut forever
     }
     if (u.constructing) this.detachBuilder(u.id); // free the halted construction
+    // Orc Burrow destroyed with peons inside: they die with it (WC3). Kill them first so
+    // each death is recorded, then this burrow's own death proceeds.
+    if (u.garrison.length) {
+      for (const pid of [...u.garrison]) {
+        const p = this.units.get(pid);
+        if (p) {
+          p.inBurrow = false;
+          p.garrisonHost = 0;
+          this.kill(p, killerId);
+        }
+      }
+      u.garrison = [];
+    }
+    // A garrisoned peon dying by any other path leaves its host's roster + rescales it.
+    if (u.garrisonHost) {
+      const host = this.units.get(u.garrisonHost);
+      if (host) {
+        host.garrison = host.garrison.filter((id) => id !== u.id);
+        this.recomputeStats(host);
+      }
+    }
     this.awardKillXp(u, killerId); // enemy heroes near the kill gain experience
     this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
     this.dropInventory(u); // a dying hero/inventory-unit drops its held items

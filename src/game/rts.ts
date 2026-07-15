@@ -293,6 +293,7 @@ interface Entry {
   hidden: boolean; // instance currently hidden (worker in a gold mine, OR fog of war)
   inMine: boolean; // worker is inside a gold mine (the hide cause that also deselects)
   insideBuild: boolean; // Orc peon inside the structure it is building (also deselects)
+  inBurrow: boolean; // peon garrisoned inside an Orc Burrow (also deselects)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
@@ -910,7 +911,14 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
-    const hide = u.inMine || u.insideBuild || this.fogHides(u);
+    if (u.inBurrow !== e.inBurrow) {
+      e.inBurrow = u.inBurrow;
+      if (u.inBurrow) {
+        this.deselect(e.simId); // a peon climbing into a burrow drops out of the selection
+        if (this.hovered === e.simId) this.hovered = null;
+      }
+    }
+    const hide = u.inMine || u.insideBuild || u.inBurrow || this.fogHides(u);
     if (hide !== e.hidden) {
       e.hidden = hide;
       if (hide) {
@@ -1553,6 +1561,7 @@ export class RtsController {
         hidden: false,
         inMine: false,
         insideBuild: false,
+        inBurrow: false,
         curSeq: -1,
         lastSwingSeq: -1,
         lastChopSeq: -1,
@@ -1638,6 +1647,7 @@ export class RtsController {
       hidden: false,
       inMine: false,
       insideBuild: false,
+      inBurrow: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
@@ -1795,6 +1805,7 @@ export class RtsController {
       hidden: false,
       inMine: false,
       insideBuild: false,
+      inBurrow: false,
       curSeq: -1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
@@ -3850,6 +3861,18 @@ export class RtsController {
       return;
     }
     const own = this.primary !== null ? target.owner === this.sim.units.get(this.primary)?.owner : false;
+    // Own Orc Burrow (built, with room): peons in the selection climb inside to man it.
+    // Only send as many as can fit; the rest keep their orders.
+    if (own && target.garrisonCap > 0 && (!target.building || target.building.constructionLeft <= 0)) {
+      const room = target.garrisonCap - target.garrison.length;
+      const workers = room > 0 ? [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room) : [];
+      let any = false;
+      for (const id of workers) if (this.sim.issueGarrison(id, picked)) any = true;
+      if (any) {
+        this.flashRing(target.x, target.y, selR, FLASH_GREEN);
+        return;
+      }
+    }
     let handled = false;
     if (own && target.building && target.building.constructionLeft > 0) {
       // Own building still going up: workers resume/assist it. Fan the group

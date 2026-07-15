@@ -4235,6 +4235,16 @@ export class MapViewerScene {
       this.pushResearchButtons(sel, out); // upgrades it researches (Blacksmith, Lumber Mill…)
       this.pushBuildingUpgradeButtons(sel, out); // what it can become (Town Hall → Keep)
 
+      // Orc Burrow garrison (UnitAbilities.slk otrb: Abtl Battle Stations + Astd Stand Down).
+      // Battle Stations pulls nearby peons in; Stand Down (shown once occupied) sends them
+      // back to work. Icons/hotkeys/slots are the ability data's own (OrcAbilityFunc/Strings).
+      const su = world.units.get(sel.id);
+      if (su && su.garrisonCap > 0 && (!su.building || su.building.constructionLeft <= 0)) {
+        out.push(this.cmd({ id: "battlestations", icon: btnIcon("BTNBattleStations"), name: "Battle Stations", hotkey: "B", desc: "Causes nearby Peons to run into the Burrow so that they can defend their base.", col: 0, row: 2 }));
+        if (su.garrison.length > 0)
+          out.push(this.cmd({ id: "standdown", icon: btnIcon("BTNBacktoWork"), name: "Stand Down", hotkey: "D", desc: "Causes Peons within the Burrow to return to work.", col: 1, row: 2 }));
+      }
+
       // Cancel always owns the bottom-right slot (3,2) — the canonical WC3 spot. Set Rally
       // Point sits one above it at (3,1), so it never shares the cancel slot. A neutral shop
       // isn't yours to rally.
@@ -4534,6 +4544,16 @@ export class MapViewerScene {
         this.placement = { def, fp: def.pathTex ? this.footprintFor(def.pathTex) : null, workerId };
         void this.showBuildGhost(def);
       }
+      return;
+    }
+    if (id === "battlestations") {
+      const sel = this.rts.selectedInfo();
+      if (sel) this.rts.simWorld.battleStations(sel.id); // pull nearby peons into the burrow
+      return;
+    }
+    if (id === "standdown") {
+      const sel = this.rts.selectedInfo();
+      if (sel) this.rts.simWorld.unloadBurrow(sel.id); // eject peons back to work
       return;
     }
     if (id.startsWith("train:")) {
