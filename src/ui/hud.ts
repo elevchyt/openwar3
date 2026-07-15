@@ -195,6 +195,12 @@ export interface HudDriver {
   /** Toggle the "Show Regions" overlay (the map's named gg_rct_* trigger regions,
    *  outlined with a name label inside each). Returns the resulting on/off state. */
   toggleRegions(): boolean;
+  /** Every hero unit type in the registry, for the "Spawn Hero" test dropdown:
+   *  the raw type id (e.g. "Hpal"), its display name, and its race. */
+  heroList(): Array<{ id: string; name: string; race: string }>;
+  /** Debug: spawn `typeId` at the camera centre, maxed to level 6 with every skill at
+   *  full rank and full mana — for casting a hero's whole kit on camera. */
+  spawnTestHero(typeId: string): void;
 }
 
 // Zone rectangles measured from the rendered console atlas (fractions of the
@@ -849,6 +855,33 @@ export class GameHud {
     regionBtn.textContent = "Show Regions";
     regionBtn.onclick = () => regionBtn.classList.toggle("active", this.driver.toggleRegions());
     panel.append(regionBtn);
+
+    // "Spawn Hero": a maxed level-6 hero at the camera centre, for casting a whole kit
+    // on camera. A race-grouped dropdown of every hero unit type + a Spawn button.
+    const heroSel = document.createElement("select");
+    heroSel.className = "hud-cheat-select";
+    const heroes = this.driver.heroList();
+    let lastRace = "";
+    let group: HTMLOptGroupElement | null = null;
+    for (const h of heroes) {
+      if (h.race !== lastRace) {
+        group = document.createElement("optgroup");
+        group.label = h.race || "neutral";
+        heroSel.append(group);
+        lastRace = h.race;
+      }
+      const opt = document.createElement("option");
+      opt.value = h.id;
+      opt.textContent = h.name;
+      (group ?? heroSel).append(opt);
+    }
+    const spawnBtn = document.createElement("button");
+    spawnBtn.className = "hud-cheat-btn";
+    spawnBtn.textContent = "Spawn Hero";
+    spawnBtn.onclick = () => {
+      if (heroSel.value) this.driver.spawnTestHero(heroSel.value);
+    };
+    if (heroes.length) panel.append(heroSel, spawnBtn);
     return panel;
   }
 

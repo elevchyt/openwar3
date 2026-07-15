@@ -1133,6 +1133,26 @@ export class MapViewerScene {
     });
   }
 
+  /** Debug (cheat panel): spawn a hero at the camera centre for the local player, maxed
+   *  to level 6 with every skill at full rank and full mana — so a whole kit can be cast
+   *  on camera for verification. Not a gameplay path; only the debug UI reaches it. */
+  private async spawnTestHero(typeId: string): Promise<void> {
+    const def = this.registry.get(typeId);
+    if (!def || !this.rts) return;
+    const world = this.rts.simWorld;
+    const simId = await this.spawnUnit(def, this.target[0], this.target[1], this.localPlayer, this.teamOf(this.localPlayer));
+    if (simId === null) return;
+    world.setHeroLevel(simId, 6);
+    const u = world.units.get(simId);
+    if (!u) return;
+    for (const ab of u.abilities) {
+      const ad = this.abilities.get(ab.id);
+      if (ad) world.setAbilityLevel(simId, ab.id, ad.levels); // max every learnable/innate spell
+    }
+    u.mana = u.maxMana;
+    this.rts.selectSingle(simId);
+  }
+
   /** Nearest gold mine to (x, y) within `radius`, or null (blizzard.j
    *  MeleeFindNearestMine). The mine anchors the starting-worker clump. */
   private nearestMine(x: number, y: number, radius: number): { x: number; y: number } | null {
@@ -3656,6 +3676,13 @@ export class MapViewerScene {
         if (!this.showRegions) this.hideRegionLabels();
         return this.showRegions;
       },
+      heroList: () =>
+        this.registry
+          .all()
+          .filter((d) => d.isHero)
+          .map((d) => ({ id: d.id, name: d.name, race: d.race }))
+          .sort((a, b) => a.race.localeCompare(b.race) || a.name.localeCompare(b.name)),
+      spawnTestHero: (typeId) => void this.spawnTestHero(typeId),
     };
     this.hud = new GameHud(ui, driver);
     this.mountScriptUi(ui);
