@@ -228,6 +228,7 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Aliq: { target: "passive" }, // Liquid Fire (Batrider) — on-attack building burn (sim hook)
   Auco: { target: "unit" }, // Unstable Concoction (Batrider) — suicide AoE vs air units
   Adev: { target: "unit" }, // Devour (Kodo Beast) — swallow & digest an enemy land unit
+  Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the

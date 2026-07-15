@@ -5990,6 +5990,8 @@ export class SimWorld {
           const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None);
           if (dealt > 0) this.applyArrowAutocast(this.units.get(p.sourceId), t); // Searing/Frost/Black/Incinerate arrows
           this.applyLiquidFire(this.units.get(p.sourceId), t); // Batrider: burn a struck building
+          const shooter = this.units.get(p.sourceId);
+          if (shooter) this.applyPillage(shooter, t, dealt); // ranged Pillage (Raider) off a struck building
           if (p.spill) this.applySpill(p, t); // Storm Hammers / Impaling Bolt carry on down the line
         }
         this.removeProjectile(p.id);
@@ -6308,7 +6310,18 @@ export class SimWorld {
     // Thorns Aura: the target returns a fraction of the damage to the attacker.
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
     if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
+    this.applyPillage(attacker, target, dealt); // Pillage: gold off a struck enemy building
     this.tryBash(attacker, target); // passive: a chance to stun on a landed attack
+  }
+
+  /** Pillage (Asal): a landed attack on an enemy BUILDING gains its owner gold equal to dataA
+   *  (50%) of the damage dealt. Gated on the Pillage upgrade (Ropg) — the ability sits on the
+   *  unit from birth but only pays out once researched. */
+  private applyPillage(attacker: SimUnit, target: SimUnit, dealt: number): void {
+    if (dealt <= 0 || !target.building || !this.hostile(attacker, target)) return;
+    const lvl = this.passiveLevelData(attacker, "Asal");
+    if (!lvl || !this.tech || this.tech.researchLevel(attacker.owner, "Ropg") <= 0) return;
+    this.stashOf(attacker.owner).gold += dealt * this.dataOf(lvl, 0, 0.5);
   }
 
   /** Pulverize (Tauren passive Awar): dataA% chance that a landed attack also deals dataB
