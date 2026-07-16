@@ -149,6 +149,10 @@ interface AnimSet {
   attackVariants: number[]; // empty-handed combat-attack clips; a random one plays per swing
   attackGold: number[]; // "Attack Gold" — the swing while carrying gold (fallback: base attack)
   attackLumber: number[]; // "Attack Lumber" — the swing while carrying lumber (fallback: base attack)
+  /** "Attack Slam" — the big strike a proc'd swing shows (SimUnit.swingSlam: a Critical
+   *  Strike, or the blow that breaks Wind Walk). -1 when the model authors none, which is
+   *  most of them — only units with a proc-on-attack passive carry one. */
+  attackSlam: number;
   death: number;
   standGold: number;
   walkGold: number;
@@ -276,6 +280,10 @@ function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] = []): A
     attackVariants: attackVariants.length ? attackVariants : attack >= 0 ? [attack] : [],
     attackGold,
     attackLumber,
+    // Anchored, so this is the model's OWN slam and never some other tier's: the Mountain
+    // King authors "Attack Slam" and "Attack Slam Alternate" (Avatar), and applyAnimProps
+    // has already renamed the alternate to a bare "Attack Slam" — or blanked it — by here.
+    attackSlam: find(/^attack slam\s*$/i),
     death: find(/^death/i),
     standGold: or(find(/stand gold/i), stand),
     walkGold: or(find(/walk gold/i), walk),
@@ -2179,12 +2187,18 @@ export class RtsController {
         // plain attack — never a random mix (issue #35). Carry pools fall back to the
         // empty-handed variants when a model lacks a carry-attack clip.
         const w = u.worker;
+        // A proc'd swing (a Critical Strike, or the blow that breaks Wind Walk — see
+        // SimUnit.swingSlam) shows the model's "Attack Slam" instead of a random plain
+        // swing: that clip is authored for exactly this and is why the Blademaster and
+        // the Mountain King have one. Models without it just swing normally.
         const vs =
-          w && w.carryGold > 0 && e.anims.attackGold.length
-            ? e.anims.attackGold
-            : w && w.carryLumber > 0 && e.anims.attackLumber.length
-              ? e.anims.attackLumber
-              : e.anims.attackVariants;
+          u.swingSlam && e.anims.attackSlam >= 0
+            ? [e.anims.attackSlam]
+            : w && w.carryGold > 0 && e.anims.attackGold.length
+              ? e.anims.attackGold
+              : w && w.carryLumber > 0 && e.anims.attackLumber.length
+                ? e.anims.attackLumber
+                : e.anims.attackVariants;
         if (u.swingSeq !== e.lastSwingSeq || !vs.includes(e.curSeq)) {
           e.lastSwingSeq = u.swingSeq;
           const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : (vs[0] ?? e.anims.attack);

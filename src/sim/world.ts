@@ -650,6 +650,14 @@ export interface SimUnit {
   // move-canceled), so its attack clip must NOT resume — it stands out the recovery
   // until the next real swing fires (the swing clears this). Reset every swing start.
   swingBroken: boolean;
+  // Swing procs, rolled ONCE at the swing's start (see engage) and spent at its damage
+  // point. They are decided up front — not at the blow — because the strike they modify
+  // has its own animation: WC3 models that carry a proc-on-attack passive carry an
+  // "Attack Slam" clip for exactly this (HeroBlademaster.mdx has one alongside its plain
+  // "Attack"/"Attack 2"; HeroMountainKing.mdx has "Attack Slam" + "Attack Slam Alternate"
+  // for Bash/Avatar). The clip is chosen when the swing begins, so the roll must be too.
+  swingCrit: boolean; // Critical Strike (AOcr) hit this swing — dealDamage multiplies it
+  swingSlam: boolean; // this swing shows "Attack Slam": a crit, or the Wind Walk backstab
   chopSeq: number; // increments each lumber chop (renderer re-triggers the chop clip in sync)
   inCombat: boolean; // engaging in range this tick (drives the attack animation)
   path: Array<[number, number]>; // world waypoints
@@ -1015,14 +1023,21 @@ const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq
 const PRECAST_WARNING = new Set(["AHfs"]);
 // Immediate abilities (base code): pressing the button IS the cast. No wind-up, no
 // cast animation, and no re-tasking — the caster keeps attacking/walking straight
-// through it. Divine Shield (and Cenarius's ACds, the same spell) is the case: it
-// declares no `Animnames` in HumanAbilityFunc.txt (so the engine has no clip to play
-// for it) and `Cast1=0` in AbilityData.slk, and it's a toggle rather than an order
-// (`Order=divineshield` / `Unorder=undivineshield`) — in WC3 the Paladin bubbles
-// mid-swing without dropping his attack. Do NOT widen this to every no-Animnames
-// spell: Holy Light and Water Elemental have none either, yet the engine falls back
-// to the caster's "Spell" clip for them (see RtsController.playCastAnim).
-const IMMEDIATE = new Set(["AHds", "ACds"]);
+// through it. Two cases, both with `Cast1=0` in AbilityData.slk and no `Animnames`
+// in their AbilityFunc:
+//   - Divine Shield (and Cenarius's ACds, the same spell) — no Animnames in
+//     HumanAbilityFunc.txt, and a toggle rather than an order (`Order=divineshield`
+//     / `Unorder=undivineshield`): in WC3 the Paladin bubbles mid-swing without
+//     dropping his attack.
+//   - Wind Walk — no Animnames in OrcAbilityFunc.txt, and the Blademaster's model
+//     carries no "Spell" clip at all (HeroBlademaster.mdx sequences: Stand*/Attack/
+//     Attack Slam/Walk/Death/Dissipate/Attack Walk Stand Spin), so the engine has
+//     literally nothing to show for the cast — it fades him where he stands and he
+//     keeps walking. That is the escape micro the ability exists for.
+// Do NOT widen this to every no-Animnames spell: Holy Light and Water Elemental have
+// none either, yet the engine falls back to the caster's "Spell" clip for them (see
+// RtsController.playCastAnim).
+const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
 // Corpse decay (Units\MiscData.txt BoneDecayTime): a corpse persists 88s after
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
@@ -2441,6 +2456,8 @@ export class SimWorld {
       | "swingTargetId"
       | "swingSeq"
       | "swingBroken"
+      | "swingCrit"
+      | "swingSlam"
       | "chopSeq"
       | "inCombat"
       | "neutralPassive"
@@ -2602,6 +2619,8 @@ export class SimWorld {
       swingTargetId: 0,
       swingSeq: 0,
       swingBroken: false,
+      swingCrit: false,
+      swingSlam: false,
       chopSeq: 0,
       inCombat: false,
       neutralPassive: false,
@@ -6293,6 +6312,17 @@ export class SimWorld {
     u.swingBroken = false; // a genuine new swing always animates (clears any prior break)
     u.swingTargetId = t.id;
     u.swingWeapon = w; // the strike lands with the slot it was launched from
+    // Roll this swing's procs now, before the clip is picked (see swingCrit/swingSlam).
+    // Critical Strike is only ever applied by dealDamage, so only a melee swing rolls it —
+    // a ranged shooter must not slam for a crit it would never deal. And only against
+    // something it may proc on: AOcr's `targs1` is "air,ground,enemy,neutral" — no `friend`
+    // — so a force-attack on your own unit never crits (and so never slams).
+    u.swingCrit = !w.ranged && this.hostile(u, t) && this.rollCriticalStrike(u);
+    // A blow out of Wind Walk shows the same strike: the fade breaks at the damage point
+    // (tickSwing) and that blow carries the Backstab Damage, so a swing begun while cloaked
+    // is the backstab swing. `cloaked`, not `invisible` — the bonus is owed from the moment
+    // the buff lands, transition included, which is the same test breakInvisibility makes.
+    u.swingSlam = u.swingCrit || u.cloaked;
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
     // EVENT_(PLAYER_)UNIT_ATTACKED fires as the attacker commits a swing at the target.
     if (this.captureAttacks) this.attackEvents.push({ attacked: eventInfo(t), attacker: eventInfo(u) });
@@ -7070,13 +7100,30 @@ export class SimWorld {
     return dmg * (1 - share) + per; // target keeps the unshared part + its own slice
   }
 
-  /** Critical Strike (AOcr): dataB chance to multiply the swing damage by dataC. */
+  /**
+   * Critical Strike (AOcr): roll dataA "Chance to Critical Strike" for a swing about to
+   * begin. Rolled at the swing's START, not at the blow, so the strike can animate as one
+   * (see swingCrit/swingSlam); dealDamage spends the result via applyCriticalStrike.
+   *
+   * dataA is a PERCENT, not a fraction: AbilityMetaData.slk gives Ocr1 `data=1` (→ dataA)
+   * with `maxVal=100`, and AOcr carries DataA1..4 = 15 — the Blademaster's 15%. Note the
+   * sibling field Ocr4 "Chance to Evade" (data=4) has `maxVal=1` and AEev stores 0.1, so
+   * the two conventions genuinely differ within one table; read the meta, don't assume.
+   */
+  private rollCriticalStrike(u: SimUnit): boolean {
+    const lvl = this.passiveLevelData(u, "AOcr");
+    if (!lvl) return false;
+    const chance = this.dataOf(lvl, 0) / 100; // dataA — "Chance to Critical Strike" (%)
+    return chance > 0 && this.rng() < chance;
+  }
+
+  /** Critical Strike (AOcr): multiply a swing the roll already marked as a crit by dataB
+   *  "Damage Multiplier" (AOcr DataB1..4 = 2/3/4/4 — the Blademaster's x2/x3/x4). */
   private applyCriticalStrike(attacker: SimUnit, damage: number): number {
+    if (!attacker.swingCrit) return damage;
     const lvl = this.passiveLevelData(attacker, "AOcr");
     if (!lvl) return damage;
-    const chance = this.dataOf(lvl, 1); // dataB — crit chance
-    const mult = this.dataOf(lvl, 2, 2); // dataC — damage multiplier
-    return chance > 0 && this.rng() < chance ? damage * mult : damage;
+    return damage * this.dataOf(lvl, 1, 2); // dataB — damage multiplier
   }
 
   /** Evasion (AEev): dataA chance for the DEFENDER to dodge a physical attack. */
