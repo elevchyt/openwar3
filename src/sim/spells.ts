@@ -279,6 +279,20 @@ const SUMMON_FALLBACK: Record<string, string> = {
   ANef: "npn1", // Storm, Earth & Fire → one of the split pandaren (npn1/2/3)
 };
 
+/** The spells whose legal targets are a POLARITY, not a flag list. `targs1` can say
+ *  "organic, not self" but it has no way to say "a friendly living unit or an enemy
+ *  Undead one" — so the engine hardcodes that rule and gives each of these its own
+ *  error string in commandstrings.txt (Holybolttarget/Deathcoiltarget), which is how we
+ *  know the rule is the ability's and not the data's. `healsUndead` says which side the
+ *  Undead are on; the handlers below apply the same split to decide heal vs. damage.
+ *  Verified in the 1.27 MPQ: AHhb targs1 = "air,ground,organic,notself,invu,vuln,
+ *  nonancient" — no allegiance flag at all, so the flags alone would let a Paladin
+ *  Holy Light an enemy Footman, which the real game refuses. */
+export const POLARITY_SPELLS: Record<string, { healsUndead: boolean; error: string }> = {
+  AHhb: { healsUndead: false, error: "Holybolttarget" }, // "Must target friendly living units or enemy Undead units."
+  AUdc: { healsUndead: true, error: "Deathcoiltarget" }, // "Must target enemy living units or friendly Undead units."
+};
+
 export const SPELL_HANDLERS: Record<string, Handler> = {
   // Holy Light — heal a friendly living unit for dataA, or smite an enemy Undead
   // unit for dataA (the projectile/impact carries this on units with a missile;

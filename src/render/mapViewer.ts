@@ -27,6 +27,7 @@ import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
+import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { CAMERA, MELEE, MISC_DATA, MISC_GAME } from "../data/gameplayConstants";
@@ -150,33 +151,33 @@ const UI_SOUND_RACE: Record<PlayableRace, string> = {
   nightelf: "NightElf",
 };
 
-// Why a shop refused a purchase, in the game's own words. Verbatim from the real
-// Units\commandstrings.txt — "A valid patron must be nearby." is the one players know, and
-// it is why a hero has to walk up to the Arcane Vault before you can buy anything.
+// Why a shop refused a purchase → the [Errors] key that says so. "A valid patron must be
+// nearby." is the one players know, and it is why a hero has to walk up to the Arcane
+// Vault before you can buy anything.
 const SHOP_ERROR: Record<ShopResult, string> = {
   ok: "",
   no: "",
-  nostock: "Out of stock", // Outofstock (no full stop in the data)
-  nopatron: "A valid patron must be nearby.", // Neednearbypatron
-  full: "Inventory is full.", // Inventoryfull
-  cost: "Not enough gold.", // Nogold
+  nostock: "Outofstock",
+  nopatron: "Neednearbypatron",
+  full: "Inventoryfull",
+  cost: "Nogold",
   req: "", // the red "Requires:" line on the button already says which building is missing
 };
 
-// The rest of the [Errors] block of Units\commandstrings.txt, verbatim. These are the
-// lines the engine flashes in gold above the console when it refuses a command.
-const ERR = {
-  nogold: "Not enough gold.",
-  nolumber: "Not enough lumber.",
-} as const;
+// The [Errors] keys that aren't spoken by any one subsystem — the resource refusals the
+// command card hands out. The strings themselves come out of the archive (data/commandStrings.ts).
+// Nofood is race-indexed: each race names its own supply building.
+const ERR_NOGOLD = "Nogold";
+const ERR_NOLUMBER = "Nolumber";
+const ERR_NOFOOD = "Nofood";
 
-// Nofood is ONE comma-separated entry in commandstrings.txt indexed by the engine's race
-// order (human, orc, undead, nightelf) — each race names its own supply building.
-const ERR_NOFOOD: Record<PlayableRace, string> = {
-  human: "Build more Farms to continue unit production.",
-  orc: "Build more Burrows to continue unit production.",
-  undead: "Summon more Ziggurats to continue unit production.",
-  nightelf: "Create more Moon Wells to continue unit production.",
+// The [Errors] keys that get a spoken warning rather than the generic error beep, and the
+// UISounds.slk cue prefix each maps to (NoGold + Orc → NoGoldOrc).
+const ERROR_VOICE: Record<string, string> = {
+  Nogold: "NoGold",
+  Nolumber: "NoLumber",
+  Nofood: "NoFood",
+  Cantplace: "CantPlace",
 };
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
@@ -654,6 +655,7 @@ export class MapViewerScene {
     | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
     | null
     | undefined;
+  private strings!: CommandStrings; // Units\commandstrings.txt [Errors] — every refusal line
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -671,6 +673,7 @@ export class MapViewerScene {
     // The menu already built a SoundBoard (and with it the page's one AudioContext) to play
     // its theme and its wind — take that same one into the match rather than opening a second.
     this.sounds = shared ?? new SoundBoard(vfs);
+    this.strings = loadCommandStrings(vfs); // the console's refusal lines, out of the archive
     this.setupKeyboardLock();
     // When the unit shown in the portrait speaks, mouth it on the 3D bust. Also
     // remember the line: a fresh selection plays its "What" voice while the bust
@@ -845,6 +848,7 @@ export class MapViewerScene {
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
       this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight);
       this.rts.setSoundBoard(this.sounds);
+      this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
@@ -2357,9 +2361,15 @@ export class MapViewerScene {
     if (!hit) return;
     let [x, y] = hit;
     if (p.fp) [x, y] = this.grid.snapForBuildingRect(x, y, p.fp.w, p.fp.h);
-    if (!this.placementValid(x, y)) return; // invalid site — keep placing
+    // A refused placement keeps the building on the cursor, exactly like a refused cast
+    // keeps the reticle: the player gets told why and clicks again, without re-picking the
+    // building off the card.
+    if (!this.placementValid(x, y)) {
+      this.refuse("Cantplace"); // "Unable to build there." — the worker says so out loud
+      return;
+    }
+    if (!this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
     const stash = this.rts.stashFor(this.localPlayer);
-    if (stash.gold < p.def.goldCost || stash.lumber < p.def.lumberCost) return;
     stash.gold -= p.def.goldCost;
     stash.lumber -= p.def.lumberCost;
     // Carry the spent cost on the order so the sim can refund it if the build is
@@ -4635,13 +4645,17 @@ export class MapViewerScene {
     }
   }
 
-  /** Refuse a command the way the game does: the gold line above the console plus a
-   *  voice cue. The resource warnings have a race-specific line the worker speaks
-   *  (NoGoldOrc → Sound\Interface\Warning\Orc\GruntNoGold1.wav, UISounds.slk); anything
-   *  else just gets the generic interface error beep. */
-  private refuse(text: string, cue?: "NoGold" | "NoLumber" | "NoFood"): void {
-    this.hud?.showError(text);
-    this.sounds?.playUi(cue ? `${cue}${UI_SOUND_RACE[this.localRace]}` : "InterfaceError");
+  /** Refuse a command the way the game does: the gold line above the console plus a sound,
+   *  both named by a single commandstrings.txt [Errors] key. A handful of refusals have a
+   *  race-specific line the worker SPEAKS (Nogold + Orc → NoGoldOrc →
+   *  Sound\Interface\Warning\Orc\GruntNoGold1.wav, per UISounds.slk); everything else gets
+   *  the generic interface error beep. An unknown/blank key still beeps — the sound is the
+   *  feedback that the click was seen and rejected, and it must not depend on there being
+   *  a sentence to go with it. */
+  private refuse(errorKey: string): void {
+    const voice = ERROR_VOICE[errorKey];
+    this.hud?.showError(this.strings.forRace(errorKey, this.localRace));
+    this.sounds?.playUi(voice ? `${voice}${UI_SOUND_RACE[this.localRace]}` : "InterfaceError");
   }
 
   /** Can the local player afford this? Refuses (naming the resource they're short of)
@@ -4650,8 +4664,8 @@ export class MapViewerScene {
    *  gates (tech, stock, queue) have passed. */
   private canAfford(gold: number, lumber: number): boolean {
     const stash = this.rts!.stashFor(this.localPlayer);
-    if (stash.gold < gold) return this.refuse(ERR.nogold, "NoGold"), false;
-    if (stash.lumber < lumber) return this.refuse(ERR.nolumber, "NoLumber"), false;
+    if (stash.gold < gold) return this.refuse(ERR_NOGOLD), false;
+    if (stash.lumber < lumber) return this.refuse(ERR_NOLUMBER), false;
     return true;
   }
 
@@ -4678,7 +4692,7 @@ export class MapViewerScene {
     // supply cap would be exceeded (WC3: "not enough food").
     if (!this.canAfford(gold, lumber)) return;
     if (food.used + d.foodUsed > food.made) {
-      this.refuse(ERR_NOFOOD[this.localRace], "NoFood");
+      this.refuse(ERR_NOFOOD);
       return;
     }
     const world = this.rts.simWorld;
@@ -4772,8 +4786,7 @@ export class MapViewerScene {
         ? patrons.reduce((a, b) => (Math.hypot(a.x - shop.x, a.y - shop.y) <= Math.hypot(b.x - shop.x, b.y - shop.y) ? a : b))
         : patrons[0]);
     const result = world.purchaseItem(shopId, buyer.id, itemId, this.localPlayer);
-    // "cost" is the shop's own out-of-gold path, so it earns the worker's NoGold line.
-    if (result !== "ok" && SHOP_ERROR[result]) this.refuse(SHOP_ERROR[result], result === "cost" ? "NoGold" : undefined);
+    if (result !== "ok" && SHOP_ERROR[result]) this.refuse(SHOP_ERROR[result]);
   }
 
   /** Cancel an under-construction building: refund **75%** of its cost (WC3

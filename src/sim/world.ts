@@ -20,7 +20,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, waveSchedule, WAVE_FIELDS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, waveSchedule, WAVE_FIELDS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -780,6 +780,10 @@ export interface SimUnit {
   pendingSell: { shopId: number; slot: number } | null;
   pendingDrop: { slot: number; x: number; y: number } | null; // walking to a spot to drop a slot's item
 }
+
+/** The [Errors] key for "refused, but the game has no line for this" — an empty key finds no
+ *  string, so the UI beeps and stays silent. Named so the intent isn't mistaken for a bug. */
+const SILENT_REFUSAL = "";
 
 const ARRIVE_EPS = 8; // world units — "close enough" to a waypoint
 // Hero inventory reach, straight from the Gameplay Constants. Note that picking an
@@ -4064,10 +4068,39 @@ export class SimWorld {
   }
 
   /** Can a unit target another with a (harmful) spell right now? */
-  private castableTarget(caster: SimUnit, target: SimUnit, flags: string[] = []): boolean {
-    if (target.hp <= 0) return false;
-    if (target.invulnerable && this.hostile(caster, target)) return false;
+  private castableTarget(caster: SimUnit, target: SimUnit, flags: string[] = [], code = ""): boolean {
+    return this.targetError(caster, target, flags, code) === null;
+  }
+
+  /** WHY a unit may not target another with an ability — a commandstrings.txt [Errors]
+   *  key ("Targetenemy"), or null when the target is legal. This is the one place the
+   *  rule lives: the sim gates the cast on it and the UI turns the key into the gold
+   *  line above the console, so what the player is told can never drift from what the
+   *  engine actually enforces.
+   *
+   *  The keys are the game's own and map almost 1:1 onto the `targs1` flags they refuse
+   *  (`enemy` → Targetenemy = "Must target an enemy unit.", `nonhero` → Nohero =
+   *  "Unable to target Heroes."), which is a good sign the real engine is table-driven
+   *  off the same data. */
+  targetError(caster: SimUnit, target: SimUnit, flags: string[] = [], code = ""): string | null {
+    if (target.hp <= 0) return "Notcorpse"; // "Target must be living."
+    if (target.invulnerable && this.hostile(caster, target)) return "Notinvulnerable";
+    // Abilities whose legal targets are a rule, not a flag list — the data can't say
+    // "friendly living OR enemy Undead", so the engine hardcodes it and gives the
+    // ability its own error string. Holy Light and Death Coil are mirror images.
+    const polarity = POLARITY_SPELLS[code];
+    if (polarity && !this.polarityOk(caster, target, polarity.healsUndead)) return polarity.error;
     return this.targetAllowed(caster, target, flags);
+  }
+
+  /** The Holy Light / Death Coil rule: one of heal-a-friendly and harm-an-enemy is for
+   *  the Undead and the other is for the living. `healsUndead` picks which way round.
+   *  Kept beside the spell handlers' own polarity check (sim/spells.ts) — that's what
+   *  decides heal vs. damage once the cast lands; this decides whether it may start. */
+  private polarityOk(caster: SimUnit, target: SimUnit, healsUndead: boolean): boolean {
+    const undead = target.race === "undead";
+    if (!this.hostile(caster, target)) return undead === healsUndead; // friendly
+    return undead !== healsUndead; // enemy
   }
 
   /** Enforce the ability's "Targets Allowed" (AbilityData `targs1`) allegiance +
@@ -4075,24 +4108,62 @@ export class SimWorld {
    *  against the 1.27 MPQ: Storm Bolt/Chain Lightning/Slow are `enemy` (never a
    *  friendly), Heal/Inner Fire/Frost Armor are `friend,self` (never an enemy),
    *  Holy Light/Death Coil/Life Drain are `notself` (anything but the caster).
-   *  Codes with no allegiance flag (Banish) stay unrestricted. */
-  private targetAllowed(caster: SimUnit, target: SimUnit, flags: string[]): boolean {
+   *  Codes with no allegiance flag (Banish) stay unrestricted.
+   *  Returns an [Errors] key, or null when allowed. */
+  private targetAllowed(caster: SimUnit, target: SimUnit, flags: string[]): string | null {
     const F = new Set(flags.map((f) => f.toLowerCase()));
     // Clear-cut unit-type gates.
-    if (F.has("nonhero") && target.isHero) return false;
-    if (F.has("hero") && !target.isHero) return false;
+    if (F.has("nonhero") && target.isHero) return "Nohero";
+    if (F.has("hero") && !target.isHero) return "Targethero";
+    // "organic" is the absence of the two inorganic kinds — WC3 has no organic flag on the
+    // unit, it has `mechanical` in UnitData and buildings, and everything else is flesh.
+    if (F.has("organic") && (target.mechanical || target.building)) return "Notmechanical"; // "Must target organic units."
+    if (F.has("structure") && !target.building) return "Targetstructure";
     const enemy = F.has("enemy");
     const friend = F.has("friend") || F.has("player"); // `player` = own units (Death Pact/Dark Ritual)
     const self = F.has("self");
     const neutral = F.has("neutral");
     const notself = F.has("notself");
     // No allegiance restriction in the data (e.g. Banish) → any allegiance allowed.
-    if (!(enemy || friend || self || neutral || notself)) return true;
-    if (target.id === caster.id) return self;
-    if (notself) return true; // anything but the caster
-    if (this.hostile(caster, target)) return enemy;
-    if (target.neutralPassive) return neutral || friend;
-    return friend; // a friendly (same-team) unit
+    if (!(enemy || friend || self || neutral || notself)) return null;
+    if (target.id === caster.id) return self ? null : "Notself";
+    if (notself) return null; // anything but the caster
+    if (this.hostile(caster, target)) return enemy ? null : "Notenemy";
+    if (target.neutralPassive) return neutral || friend ? null : "Notneutral";
+    return friend ? null : "Notfriendly";
+  }
+
+  /** A refusal the game has no words for: the click is rejected and the error beeps, but no
+   *  gold line appears. Not every "no" in WC3 comes with a sentence. */
+  static readonly SILENT_REFUSAL = SILENT_REFUSAL;
+
+  /** WHY this unit can't cast this ability at this target right now — a commandstrings.txt
+   *  [Errors] key, or null if it can. This is the click-time gate: the UI asks before it
+   *  spends the order, so the player gets told and the cursor stays armed rather than the
+   *  click being silently eaten.
+   *
+   *  Mana and cooldown are checked HERE, at click time, and not only in tickCast — WC3
+   *  says "Not enough mana." the instant you click, it doesn't walk the caster into range
+   *  first and then quietly give up. tickCast still re-checks both, because the walk takes
+   *  time and a cheaper spell may drain the mana in the meantime. */
+  castError(unitId: number, code: string, targetId = 0): string | null {
+    const u = this.units.get(unitId);
+    if (!u || !this.abilities) return "Notthisunit";
+    const ab = this.findAbility(u, code);
+    if (!ab) return "Notthisunit";
+    const def = this.abilities.get(ab.id);
+    if (!def || def.target === "passive") return "Notthisunit";
+    // Silenced/stunned has no string in the data because WC3 never needs one — it greys the
+    // button out, so the click can't happen. We refuse with the error beep and no sentence
+    // rather than borrow a line that means something else (Notdisabled is about movement).
+    if (u.stunned || u.silenced) return SILENT_REFUSAL;
+    const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
+    if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
+    if (def.target !== "unit") return null;
+    const t = this.units.get(targetId);
+    if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
+    return this.targetError(u, t, def.targetFlags, code);
   }
 
   /** Order a unit to cast an ability. `code` is the ability's base code; targetId
@@ -4108,7 +4179,7 @@ export class SimWorld {
     if (!def || def.target === "passive") return false;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     const t = def.target === "unit" ? this.units.get(targetId) : undefined;
-    if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags))) return false;
+    if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags, code))) return false;
     // Remember an attack-move/follow to resume after the cast (WC3 casters keep
     // marching/following once they've cast).
     const resume: PendingCast["resume"] =
@@ -4160,7 +4231,7 @@ export class SimWorld {
     let ty = pc.y;
     if (pc.targetId && !pc.fired) {
       const t = this.units.get(pc.targetId);
-      if (!t || !this.castableTarget(u, t, def.targetFlags)) {
+      if (!t || !this.castableTarget(u, t, def.targetFlags, pc.code)) {
         this.stop(u.id);
         return;
       }

@@ -317,6 +317,18 @@ interface Entry {
 // (PENDING_GHOST_TINT), so a caught unit reads clearly as "this will be hit".
 const AOE_TARGET_TINT = [0.25, 1.0, 0.25] as const;
 
+// With a mixed group selected, several units can refuse the same click for different
+// reasons, and WC3 shows ONE line. Least to most specific: a unit that doesn't have the
+// spell at all tells the player nothing; "not enough mana" tells them plenty. The
+// target-rule keys (Targetenemy, Holybolttarget, …) aren't listed and outrank all of
+// these — the player aimed at something specific, so naming what's wrong with it is
+// always the most useful thing to say.
+const CAST_ERROR_RANK = [SimWorld.SILENT_REFUSAL, "Notthisunit", "Targetunit", "Canttargetloc", "Cooldown", "Nomana"];
+const castErrorRank = (key: string): number => {
+  const i = CAST_ERROR_RANK.indexOf(key);
+  return i < 0 ? CAST_ERROR_RANK.length : i;
+};
+
 /** The "Birth" construction sequence + its frame interval, if the model has one. */
 function findBirthFields(
   seqs: Array<{ name: string; interval?: ArrayLike<number> }>,
@@ -1258,10 +1270,18 @@ export class RtsController {
   tryTargetArmedAt(simId: number): boolean {
     if (this.orderMode === "cast" && this.armedCast) {
       const cast = this.armedCast;
+      // A point-target spell can't aim at a single icon — nothing to refuse, just disarm.
+      if (cast.target !== "unit") {
+        this.orderMode = null;
+        this.armedCast = null;
+        return true;
+      }
+      const err = this.castRefusal(cast.code, simId);
+      if (err !== null) return this.refuseOrder(err); // stays armed, exactly as on the map
       this.orderMode = null;
       this.armedCast = null;
-      if (cast.target === "unit") this.castFromSelection(cast.code, simId, 0, 0);
-      return true; // point-target spells can't aim at a single icon — just disarm
+      this.castFromSelection(cast.code, simId, 0, 0);
+      return true;
     }
     if (this.orderMode === "attack") {
       this.orderMode = null;
@@ -2592,28 +2612,50 @@ export class RtsController {
    *  target (ground → drop, allied hero → give). */
   armedItem: { slot: number; mode: "usepoint" | "move" } | null = null;
 
+  /** Called when an order is refused, with a commandstrings.txt [Errors] key — the host
+   *  (render/mapViewer.ts) turns it into the gold line above the console and the error
+   *  sound. Set by the host; the sim itself has no UI. */
+  onRefuse?: (errorKey: string) => void;
+
   /** Execute the armed order at a screen point. Returns true when consumed
-   *  (the caller should then clear the HUD's armed state). */
+   *  (the caller should then clear the HUD's armed state); false leaves it armed —
+   *  either nothing was armed, or the order was REFUSED and the player gets to
+   *  click again without re-arming the spell. */
   orderClickAt(cssX: number, cssY: number, queued = false): boolean {
     if (!this.orderMode || this.selected.size === 0 || !this.hasControllable()) {
       this.orderMode = null;
       return false;
     }
     const mode = this.orderMode;
-    this.orderMode = null;
+    // A cast is the one order that can be REFUSED, so it validates before anything is
+    // torn down: an invalid target must leave orderMode/armedCast exactly as they were
+    // (the reticle is derived from them each frame, so that alone keeps it on screen).
+    // Every other mode is unconditionally consumed, as before.
     if (mode === "cast") {
       const cast = this.armedCast;
-      this.armedCast = null;
-      if (!cast) return true;
+      if (!cast) {
+        this.orderMode = null;
+        return true;
+      }
       if (cast.target === "unit") {
         const picked = this.pickAt(cssX, cssY);
-        if (picked !== null) this.castFromSelection(cast.code, picked, 0, 0);
+        const err = this.castRefusal(cast.code, picked ?? 0);
+        if (err !== null) return this.refuseOrder(err);
+        this.orderMode = null;
+        this.armedCast = null;
+        this.castFromSelection(cast.code, picked!, 0, 0);
         return true;
       }
       const hit = this.groundHitAt(cssX, cssY); // point-target spell
-      if (hit) this.castFromSelection(cast.code, 0, hit[0], hit[1]);
+      if (!hit) return this.refuseOrder("Canttargetloc"); // "Unable to target there."
+      const err = this.castRefusal(cast.code, 0);
+      if (err !== null) return this.refuseOrder(err);
+      this.orderMode = null;
+      this.armedCast = null;
+      this.castFromSelection(cast.code, 0, hit[0], hit[1]);
       return true;
     }
+    this.orderMode = null;
     if (mode === "item") {
       const armed = this.armedItem;
       this.armedItem = null;
@@ -2780,6 +2822,35 @@ export class RtsController {
       if (this.sim.issueCast(id, code, targetId, x, y)) any = true;
     }
     if (any) this.ack(false);
+  }
+
+  /** Can ANY unit in the selection cast this at that target? Returns null when one can,
+   *  else why the best-placed one can't — with a whole group selected WC3 reports a single
+   *  reason, and the one that gets furthest through the checks is the informative one
+   *  ("Not enough mana." beats "Must target an enemy unit." from a unit that lacks the
+   *  spell entirely). CAST_ERROR_RANK orders them; the last is the most specific. */
+  private castRefusal(code: string, targetId: number): string | null {
+    let worst: string | null = null;
+    let worstRank = -1;
+    for (const id of this.selected) {
+      if (this.sim.units.get(id)?.owner !== this.localPlayer) continue;
+      const err = this.sim.castError(id, code, targetId);
+      if (err === null) return null; // someone can cast — the order stands
+      const rank = castErrorRank(err);
+      if (rank >= worstRank) {
+        worstRank = rank;
+        worst = err;
+      }
+    }
+    return worst;
+  }
+
+  /** Refuse the armed order: tell the player why and LEAVE IT ARMED. WC3 doesn't spend
+   *  your click on a target it won't accept — the reticle stays up so the next click can
+   *  aim properly, and only Escape/right-click disarms. */
+  private refuseOrder(errorKey: string): boolean {
+    this.onRefuse?.(errorKey);
+    return false;
   }
 
   /** Cast a no-target ability (Thunder Clap, Divine Shield, Avatar) immediately. */
