@@ -65,6 +65,7 @@ export interface SimBuffInit {
   value?: number;
   value2?: number;
   art?: string;
+  delay?: number; // seconds before the effect engages (Wind Walk's Transition Time)
 }
 
 export interface SpellFieldInit {
@@ -933,17 +934,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 20) / 4, waves: Math.max(6, Math.round(lvl.duration || 30)), interval: 1, casterId: caster.id, art: def.casterArt || def.specialArt });
   },
 
-  // Wind Walk (Blademaster) — a burst of speed + bonus attack damage + the half-faded
-  // invisible look for the duration. The fade is the LOOK only: concealment from the
-  // enemy (and detection, its counterpart) is still not modelled, so it grants no
-  // gameplay advantage. WC3 carries no transparency field for this — [AOwk]/[BOwk]
-  // declare no art at all — so the 0.5 lives in the renderer (see rts.ts INVIS_ALPHA).
+  // Wind Walk (Blademaster) — vanish after a beat, move faster, and hit the next thing you
+  // touch harder. AbilityData.slk AOwk, whose Data columns AbilityMetaData names Owk1/2/3:
+  //   DataA "Transition Time"            0.6      — the pause before he actually fades out
+  //   DataB "Movement Speed Increase (%)" 0.1/0.4/0.7
+  //   DataC "Backstab Damage"             40/70/100
+  // The backstab is NOT a standing damage bonus (it used to be modelled as one, which paid
+  // out on every swing for the whole 20-50s). Liquipedia: "when the Blademaster attacks a
+  // unit to break invisibility, he will deal bonus damage" — it is one blow's worth, so it
+  // rides on the invisible buff and world.ts breakInvisibility() hands it to that swing.
+  // Both buffs share the "windwalk" group, which is what makes the break end the speed too.
   AOwk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const d0 = lvl.duration || 20;
+    const transition = d(lvl, 0, 0.6);
     api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, art: def.targetArt });
-    api.applyBuff(caster, { kind: "damage", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40) });
-    api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: 0 });
+    api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
   },
 
   // Metamorphosis / Robo-Goblin / Chemical Rage — transforms modelled as a timed

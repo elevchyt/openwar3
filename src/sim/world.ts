@@ -168,6 +168,11 @@ export interface SimBuff {
   value: number; // primary magnitude (armour, slow %, hp/sec, damage, …)
   value2: number; // secondary magnitude (e.g. attack-speed slow)
   art: string; // attached effect model (renderer), "" = none
+  /** Seconds until the buff's effect actually engages — Wind Walk's "Transition Time"
+   *  (AbilityData.slk AOwk DataA = 0.6), the beat between the cast and the vanish. The
+   *  buff exists and its duration is already running; it just isn't in force yet. 0 for
+   *  everything else, which engages the instant it lands. */
+  delay: number;
 }
 
 export type BuffKind =
@@ -743,7 +748,14 @@ export interface SimUnit {
   waygate?: WaygateState | null; // JASS WaygateSetDestination/Activate — a Way Gate ('nwgt'), 7.22
   silenced: boolean; // derived from buffs (cannot cast spells)
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
-  invisible: boolean; // derived from buffs (Wind Walk): renders half-faded; no gameplay effect yet
+  /** The fade is IN FORCE: renders half-faded, and draws no aggro (see canSee). False during
+   *  the Transition Time, when the unit is under the effect but hasn't vanished yet. */
+  invisible: boolean;
+  /** Under an invisibility effect AT ALL, transition included — a superset of `invisible`.
+   *  This, not `invisible`, is what stops the unit picking its own fights and what a strike
+   *  breaks: attacking during the transition has to cancel the vanish too, or Wind Walk
+   *  would auto-attack its way out of its own 0.6s wind-up. */
+  cloaked: boolean;
   invulnerable: boolean; // derived from buffs + baseInvulnerable (immune to damage + enemy targeting)
   baseInvulnerable: boolean; // persistent invulnerability from the unit type's "Invulnerable (Neutral)" ability (Avul) — goblin merchant, gold mine, mercenary camp, tavern, … (issue #26)
   mechanical: boolean; // machines/summons — no raisable corpse, unhealable by Heal
@@ -2461,6 +2473,7 @@ export class SimWorld {
       | "silenced"
       | "ethereal"
       | "invisible"
+      | "cloaked"
       | "invulnerable"
       | "baseInvulnerable"
       | "mechanical"
@@ -2619,6 +2632,7 @@ export class SimWorld {
       silenced: false,
       ethereal: false,
       invisible: false,
+      cloaked: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
       baseInvulnerable: !!opts?.baseInvulnerable,
       mechanical: !!opts?.mechanical,
@@ -3745,6 +3759,7 @@ export class SimWorld {
     let silence = false;
     let ethereal = false;
     let invisible = false;
+    let cloaked = false;
     let invuln = false;
     for (const b of u.buffs) {
       if (b.kind === "armor") armorBonus += b.value;
@@ -3766,7 +3781,10 @@ export class SimWorld {
         slowMove = Math.max(slowMove, b.value); // Banish's Movement Speed Reduction (DataA)
       } else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
       else if (b.kind === "silence") silence = true;
-      else if (b.kind === "invisible") invisible = true;
+      else if (b.kind === "invisible") {
+        cloaked = true; // under the effect from the moment it lands
+        if (b.delay <= 0) invisible = true; // …but not actually faded until the transition elapses
+      }
       else if (b.kind === "invuln") invuln = true;
     }
     // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
@@ -3834,6 +3852,7 @@ export class SimWorld {
     u.silenced = silence;
     u.ethereal = ethereal || u.etherealForm; // Banish (timed) OR the Spirit Walker's ethereal FORM (persistent)
     u.invisible = invisible;
+    u.cloaked = cloaked;
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;
@@ -3882,6 +3901,7 @@ export class SimWorld {
     for (const b of u.buffs) {
       if (b.kind === "hot" && b.value) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
       else if (b.kind === "dot" && b.value) u.hp -= b.value * dt;
+      if (b.delay > 0) b.delay -= dt; // Wind Walk's Transition Time, counting down to the vanish
       b.timeLeft -= dt;
     }
     u.buffs = u.buffs.filter((b) => b.timeLeft > 0);
@@ -4036,11 +4056,12 @@ export class SimWorld {
         existing.value2 = Math.max(existing.value2, init.value2 ?? 0);
         existing.timeLeft = Math.max(existing.timeLeft, init.timeLeft);
         existing.sourceId = init.sourceId;
+        existing.delay = init.delay ?? 0; // a re-cast restarts the transition
         if (init.art) existing.art = init.art;
         return;
       }
     }
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art: init.art ?? "" });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art: init.art ?? "", delay: init.delay ?? 0 });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -4366,6 +4387,10 @@ export class SimWorld {
       ab.cooldownLeft = lvl.cooldown;
     }
     pc.fired = true;
+    // Casting reveals, the same as attacking ("anything but move or stop"). This runs BEFORE
+    // resolveCast so that Wind Walk itself doesn't break the very fade it is about to grant —
+    // the break settles the OLD invisibility, then the handler applies the new one.
+    this.breakInvisibility(u); // no backstab: only a blow earns that
     // The effect fires NOW (cast point) — cue its cast sound here so it lands with
     // the visible clap/bolt, not 0.4s early at the wind-up (issue #23).
     this.castFires.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId });
@@ -5502,6 +5527,17 @@ export class SimWorld {
    *  enemy. An explicit attack order goes through issueAttack and doesn't consult
    *  this, so you can always pull a worker off the line and into a fight. */
   private acquireRange(u: SimUnit): number {
+    // An invisible unit doesn't pick its own fights, for the same reason a worker doesn't:
+    // 0 here keeps it out of every automatic path. Nothing states this outright — it is
+    // read off what invisibility is FOR. classic.battle.net's rule is that invisible units
+    // "reveal themselves if they DO anything but move or stop", and an auto-attack is not
+    // the player doing anything; if it counted, a Blademaster could never wind walk out of
+    // a fight (he would turn round and re-reveal on the nearest enemy) and Invisibility
+    // could never walk a unit past anyone. An explicit attack order still goes through
+    // issueAttack, which never consults this — so you can always choose to strike, and
+    // that strike is what reveals you. Gated on `cloaked`, not `invisible`, so the 0.6s
+    // Transition Time isn't a window in which he auto-attacks his own wind-up away.
+    if (u.cloaked) return 0;
     if (u.isPeon || this.harvesting(u)) return 0;
     if (u.isCreep) return u.aggroRange;
     return u.weapon ? u.weapon.acquire : 0;
@@ -5523,6 +5559,16 @@ export class SimWorld {
     // out-range a fleeing/dying target and were left standing around).
     let w = t ? this.weaponVs(u, t) : null;
     if (!t || !w) {
+      this.reacquireOrStop(u);
+      return;
+    }
+    // It vanished mid-fight: lose it. This is the other half of canSee's no-aggro rule — that
+    // one stops an invisible unit being PICKED as a target, this one stops an attacker who
+    // already had it from following it into the fade. Without it, wind walking out of a fight
+    // wouldn't shake anyone: they'd keep swinging at a hero they can no longer see. The
+    // re-acquire it falls into can't pick the same unit back up (canSee refuses it), so the
+    // attacker rolls onto another enemy or stands down.
+    if (t.invisible) {
       this.reacquireOrStop(u);
       return;
     }
@@ -5939,6 +5985,13 @@ export class SimWorld {
    *  heroes straight through a forest they could not see over. Ordered last, and after
    *  each caller's range test, so the ray is only cast for a target already worth it. */
   private canSee(u: SimUnit, t: SimUnit): boolean {
+    // An invisible unit is INVISIBLE: it draws no aggro. classic.battle.net's invisibility
+    // page — "just because you can't see them, it doesn't mean you can't hit them!" — is the
+    // other half of this: being unseen stops the automatic paths, not a deliberate blow, and
+    // every caller here is an automatic one (idle scan, creep aggro, assist, re-acquire).
+    // An explicit attack order goes through issueAttack and never consults canSee, which is
+    // also where our missing detection would otherwise have to say no.
+    if (t.invisible) return false;
     if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > this.sightOf(u)) return false;
     if (!this.visibleToTeam(u.team, t.x, t.y)) return false;
     return this.lineOfSight(u.x, u.y, t.x, t.y, u.flying || t.flying);
@@ -5990,15 +6043,19 @@ export class SimWorld {
     // The swing reached its fire frame: play the attacker's own weapon sound (its
     // model's SND "K" event) regardless of whether a melee strike will connect.
     this.attackSwings.push(u.id);
+    // Attacking reveals — at the fire frame, so a ranged shot gives its shooter away when it
+    // is loosed and not when it lands. The blow that breaks the fade carries the Backstab
+    // Damage; a melee swing that then whiffs still spends it, having already given the unit up.
+    const backstab = this.breakInvisibility(u);
     if (w.ranged) {
-      this.spawnProjectile(u, t, w);
+      this.spawnProjectile(u, t, w, backstab);
     } else {
       // Melee connects if the target is still within the same reach the unit is
       // allowed to swing from (range + the combat-hold leash) — NOT the tighter
       // ARRIVE_EPS, which left a dead band where the attack animation played but
       // the strike whiffed and no damage landed against a target drifting away.
       const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-      if (gap <= w.range + ATTACK_LEASH) this.dealDamage(u, t, w);
+      if (gap <= w.range + ATTACK_LEASH) this.dealDamage(u, t, w, backstab);
     }
   }
 
@@ -6007,9 +6064,38 @@ export class SimWorld {
     u.swingLeft = -1;
   }
 
+  /**
+   * Reveal an invisible unit, and return the Backstab Damage the blow that broke it earns
+   * (0 if it wasn't invisible, or for a plain invisibility that carries no bonus).
+   *
+   * WC3's rule is the same for EVERY source of invisibility — Wind Walk, the Sorceress's
+   * Invisibility, a Potion — so this is the one place it lives. classic.battle.net:
+   * "Invisible units will reveal themselves if they do anything but move or stop."
+   *
+   * Breaking ends the whole ABILITY, not just the fade: it drops every buff sharing the
+   * invisible buff's group, so a broken Wind Walk takes its Movement Speed Increase with it
+   * (liquipedia has the cooldown starting "when Wind Walk breaks" — the ability is over).
+   * The group is what scopes that: Wind Walk's speed and invisibility are both "windwalk",
+   * while a bare Invisibility only ever drops itself. An ungrouped ("") buff is nobody's
+   * sibling, so it must never be swept up by group equality.
+   */
+  private breakInvisibility(u: SimUnit): number {
+    if (!u.cloaked) return 0;
+    let bonus = 0;
+    const groups = new Set<string>();
+    for (const b of u.buffs) {
+      if (b.kind !== "invisible") continue;
+      bonus = Math.max(bonus, b.value); // Backstab Damage (AOwk DataC: 40/70/100)
+      if (b.group) groups.add(b.group);
+    }
+    u.buffs = u.buffs.filter((b) => b.kind !== "invisible" && !(b.group && groups.has(b.group)));
+    this.recomputeStats(u);
+    return bonus;
+  }
+
   /** Launch a homing projectile from attacker to target. Damage is rolled now
    *  and applied when it lands (armor is applied at impact). */
-  private spawnProjectile(u: SimUnit, t: SimUnit, w: SimWeapon): void {
+  private spawnProjectile(u: SimUnit, t: SimUnit, w: SimWeapon, bonus = 0): void {
     const id = this.nextProjectileId++;
     // Launch from the weapon's model point (local offset rotated by facing), not the
     // unit's feet — e.g. the Archmage's fireball leaves from launchz=66 (his rod).
@@ -6028,7 +6114,7 @@ export class SimWorld {
       sourceId: u.id,
       targetId: t.id,
       speed: w.missileSpeed > 0 ? w.missileSpeed : 900,
-      damage: this.rollDamage(w),
+      damage: this.rollDamage(w) + bonus, // + Backstab Damage if this shot broke a fade
       art: w.missileArt,
       attackType: w.attackType,
       startZ: lz,
@@ -6420,9 +6506,12 @@ export class SimWorld {
 
   /** Land a melee strike. `w` is the slot it was swung with — a Gargoyle's ground claws and
    *  its air spit have different attack types, so the damage table must see the right one. */
-  private dealDamage(attacker: SimUnit, target: SimUnit, w: SimWeapon): void {
+  private dealDamage(attacker: SimUnit, target: SimUnit, w: SimWeapon, bonus = 0): void {
     // Critical Strike (Blademaster passive AOcr): a chance to multiply the swing.
-    const raw = this.applyCriticalStrike(attacker, this.rollDamage(w));
+    // `bonus` is Wind Walk's Backstab Damage on the blow that broke the fade. It is added
+    // AFTER the crit multiply — the two are independent bonuses on the same swing, and
+    // nothing we have says a crit doubles the backstab.
+    const raw = this.applyCriticalStrike(attacker, this.rollDamage(w)) + bonus;
     const dealt = this.applyDamage(target, raw, attacker.id, w.attackType);
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
@@ -6675,7 +6764,11 @@ export class SimWorld {
     // next to the one it mirrors in acquireRange.
     const attacker = this.units.get(attackerId);
     const notFighting = target.order === "idle" || (target.order === "attack" && !target.inCombat);
-    const passive = target.isPeon || this.harvesting(target);
+    // A unit under an invisibility effect never returns fire either — the same reason it
+    // never picks its own fights in acquireRange. Retaliation reaches issueAttack directly,
+    // so it would otherwise be the one automatic path that could give a wind-walking hero
+    // away without the player asking for it.
+    const passive = target.isPeon || this.harvesting(target) || target.cloaked;
     if (notFighting && target.weapon && !passive && !target.returning && attacker && this.hostile(target, attacker) && attacker.id !== target.targetId) {
       this.issueAttack(target.id, attackerId);
     }
