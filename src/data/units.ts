@@ -43,10 +43,10 @@ export interface WeaponSlotDef {
   cooldown: number;
   damagePoint: number;
   /** `backSw1/2` — "Animation Backswing Point": the follow-through AFTER the strike
-   *  lands. `damagePoint + backswing` is exactly the attack clip's authored length
-   *  (verified against the real 1.27a MDX intervals: Footman 0.5+0.5 = the 1000ms
-   *  "Attack - 1" clip; Archmage 0.55+0.85 = 1400ms), which is what lets the renderer
-   *  fit the swing to the pair. It never gates the cooldown — only the animation. */
+   *  lands, before the unit may act again. It never gates the cooldown. Attack speed
+   *  divides it along with the damage point, which is the one thing the renderer wants
+   *  it for: the live/base ratio of the pair IS the attack-speed factor the swing clip
+   *  plays at (see rts.ts attackAnimRate — the pair is NOT the clip's length). */
   backswing: number;
   range: number;
   weaponType: WeaponType; // weapTp1/2 — Normal/Instant strike at once, the Missile kinds fly

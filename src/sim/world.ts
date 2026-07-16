@@ -36,10 +36,9 @@ export interface SimWeapon {
   sides: number;
   cooldown: number; // seconds between swings
   damagePoint: number; // seconds from swing start to the strike/projectile launch
-  /** Seconds of follow-through AFTER the strike. Never gates the cooldown — it exists so the
-   *  renderer can fit the attack clip to `damagePoint + backswing` (the pair IS the clip's
-   *  authored length; see WeaponSlot.backswing). Hasted/slowed with the damage point, so the
-   *  swing animation speeds up by exactly the attack-speed factor. */
+  /** Seconds of follow-through AFTER the strike. Never gates the cooldown. Hasted/slowed with
+   *  the damage point, so the pair's live/base ratio recovers the attack-speed factor — which
+   *  is the rate the renderer plays the swing clip at (see rts.ts attackAnimRate). */
   backswing: number;
   range: number; // measured between collision hulls, WC3-style
   // Pre-upgrade baselines, straight off this slot's UnitWeapons columns.
@@ -3911,7 +3910,7 @@ export class SimWorld {
       w.dice = w.baseDice + upg.dice; // Forged Swords / Gunpowder add dice, widening the roll
       w.range = w.baseRange + upg.range; // Long Rifles
       w.damagePoint = w.baseDamagePoint * speedFactor;
-      w.backswing = w.baseBackswing * speedFactor; // hasted with the damage point — the pair IS the clip
+      w.backswing = w.baseBackswing * speedFactor; // the follow-through hastes with the damage point
       // The same IAS divides the cooldown. Floor: a unit can never swing faster than its own
       // strike lands — "the unit is restricted to about its attack animation damage point…
       // always attack slightly slower than the actual animation damage point by 0.02 seconds"

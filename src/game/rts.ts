@@ -2195,7 +2195,7 @@ export class RtsController {
         }
         // Re-rate every tick, not just on the swing: attack speed can change mid-swing
         // (a Bloodlust lands, a Slow wears off) and the clip must follow it at once.
-        this.setAnimRate(e, this.attackAnimRate(e, u, e.curSeq));
+        this.setAnimRate(e, this.attackAnimRate(u));
       } else {
         // Smooth the actual/expected displacement so the walk clip only plays
         // when the unit is really making progress — a unit wedged in a crowd
@@ -2309,21 +2309,29 @@ export class RtsController {
     e.unit.instance.timeScale = r;
   }
 
-  /** The attack clip's playback rate. WC3 fits the swing to `damage point + backswing` —
-   *  and that pair IS the clip's authored length (verified against the real 1.27a models:
-   *  the Footman's 1000ms "Attack - 1" against dmgpt1 0.5 + backSw1 0.5; the Archmage's
-   *  1400ms against 0.55 + 0.85). Since attack speed divides both points, the rate works
-   *  out to exactly the unit's attack-speed factor: a Bloodlusted Grunt swings 40% faster
-   *  and its strike lands 40% sooner, staying in phase with the damage-point-timed hit.
-   *  Computing it from the live pair rather than the factor also keeps custom object data
-   *  honest — retuning dmgpt1 without re-authoring the model rescales the clip, as in WC3. */
-  private attackAnimRate(e: Entry, u: SimUnit, seq: number): number {
+  /** The attack clip's playback rate: the unit's attack-speed factor, and nothing else. An
+   *  unhasted unit swings at the rate its clip was authored at; a Bloodlusted Grunt swings
+   *  40% faster and its strike lands 40% sooner, staying in phase with the damage-point-
+   *  timed hit. Since attack speed divides `damagePoint`/`backswing` from their baselines
+   *  by exactly that factor, the live/base ratio recovers it without the sim having to
+   *  publish it.
+   *
+   *  It is NOT `clip length / (damagePoint + backswing)`. That pair looks like the clip's
+   *  authored length on the units one checks first (Footman 0.5+0.5 = his 1000ms
+   *  "Attack - 1"; Archmage 0.55+0.85 = 1400ms), but across every 1.27a model only 377 of
+   *  706 plain-attack clips land within 10% of it — 265 are LONGER, so fitting them to the
+   *  pair played them up to 2.5x too fast while their cooldown stayed right (Frost/Fire
+   *  Treant 1.5s clips against a 0.6 pair). The giveaway is a unit whose own variants
+   *  disagree: the Peasant's "Attack" is 1000ms and his "Attack -2" 1270ms under ONE
+   *  dmgpt1/backSw1 pair, so no rate fitted to that pair can be right for both — the
+   *  engine simply plays each at its authored length. */
+  private attackAnimRate(u: SimUnit): number {
     const w = u.swingWeapon ?? u.weapon;
     if (!w) return 1;
     const swing = w.damagePoint + w.backswing;
-    if (swing <= 0) return 1; // no authored timing (a summon with no weapons row) — play as-is
-    const clip = this.seqDuration(e.unit.instance, seq, 0);
-    return clip > 0 ? clip / swing : 1;
+    const base = w.baseDamagePoint + w.baseBackswing;
+    if (swing <= 0 || base <= 0) return 1; // no authored timing (a summon with no weapons row)
+    return base / swing;
   }
 
   /** The walk clip and its playback rate for a unit's CURRENT move speed. `walk`/`run`
