@@ -1534,7 +1534,12 @@ export class GameHud {
         // Hero: level + experience shown INSIDE the purple XP bar; a summon shows
         // a green "Summoned Unit (Ns)" timer bar. The sub-line carries a skill-
         // point nudge for heroes.
-        if (sel.isHero && sel.level > 0) {
+        // A summon wins over the hero bar: a Mirror Image illusion IS a hero (it copies the
+        // Blademaster exactly), but to its owner it must read as what it is — a temporary
+        // copy on a 60s clock — not carry a hero's XP bar. To an ENEMY the same illusion
+        // reports isSummon=false (rts.selectedInfo), so it keeps the XP bar and stays
+        // indistinguishable from the real thing.
+        if (sel.isHero && sel.level > 0 && !sel.isSummon) {
           const span = sel.xpNext - sel.xpThis;
           const into = Math.max(0, Math.round(sel.xp - sel.xpThis));
           this.selSub.textContent = ""; // level + XP live inside the bar; no extra label

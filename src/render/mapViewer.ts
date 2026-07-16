@@ -113,6 +113,16 @@ const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // h
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
   AHds: "Abilities\\Spells\\Human\\DivineShield\\DivineShield.wav",
 };
+// Which of an ability's art fields carries its CAST sound, for the few whose data lists an
+// art the ability never actually shows. The default order (target → caster → special) reads
+// the first art that carries an SND event, which is normally the effect the player sees —
+// but Mirror Image's `TargetArt` is `LevelupCaster.mdl`, a model AOmi never plays, and it
+// carries SND…AHER → Levelupcaster.wav. So every Mirror Image announced itself with the
+// hero LEVEL-UP chime. What it plays is Specialart (MirrorImageCaster → SND…AOMC →
+// MirrorImage.wav), so name that here and let the sound follow the model on screen.
+const SPELL_SOUND_ART: Record<string, (d: AbilityDef) => string[]> = {
+  AOmi: (d) => [d.specialArt],
+};
 // The looping bed a channelled area field lays down for as long as it runs. WC3 ships
 // these WAVs beside the effect model but references them from no data field (MPQ
 // HumanAbilityFunc.txt [AHbz] has no sound entry at all), so they're named here.
@@ -5482,7 +5492,8 @@ export class MapViewerScene {
           if (!def) continue;
           const caster = world.units.get(c.casterId);
           const at = caster ? { x: caster.x, y: caster.y, z: this.rts!.groundHeightAt(caster.x, caster.y) } : undefined;
-          this.sounds?.playSpellSound([def.targetArt, def.casterArt, def.specialArt], SPELL_SOUND_FALLBACK[c.code], at);
+          const arts = SPELL_SOUND_ART[c.code]?.(def) ?? [def.targetArt, def.casterArt, def.specialArt];
+          this.sounds?.playSpellSound(arts, SPELL_SOUND_FALLBACK[c.code], at);
         }
         // Hero level-up nova.
         for (const lu of world.drainLevelUps()) {
@@ -5514,6 +5525,7 @@ export class MapViewerScene {
               su.isIllusion = true;
               su.illusionDamageDealt = s.illusion.dealt; // AOmi DataB — 0: it hurts nothing
               su.illusionDamageTaken = s.illusion.taken; // AOmi DataC — 200%
+              su.properName = s.illusion.properName; // wear the Blademaster's own name, not a fresh roll
             }
             this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
           });

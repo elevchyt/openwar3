@@ -2355,7 +2355,11 @@ export class RtsController {
         if (seq >= 0) break;
       }
     if (seq < 0) seq = pick(/spell/i);
-    if (seq < 0) seq = e.anims.attack;
+    // No Animnames and no Spell clip on the model → the caster simply stands. This used to
+    // fall back to the ATTACK animation, which is not something WC3 does: the engine plays
+    // the clip Animnames asks for, else "Spell", else nothing. The Blademaster has no Spell
+    // clip at all (Stand/Attack/Walk/Death/Dissipate), so Mirror Image — which declares no
+    // Animnames either — had him swing his sword to conjure his images.
     if (seq < 0) return;
     e.unit.instance.setSequence(seq);
     e.unit.instance.setSequenceLoopMode(loop ? SequenceLoopMode.Loop : SequenceLoopMode.ModelDefined);

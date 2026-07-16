@@ -1151,7 +1151,7 @@ export class SimWorld {
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
   // (same deferral as trainCompletions — the sim owns no model instances).
-  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number } }> = [];
+  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string } }> = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -4850,6 +4850,11 @@ export class SimWorld {
     const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
     if (!lvl) return;
     const images = Math.max(1, Math.round(this.dataOf(lvl, 0, 1))); // DataA "Number of Images"
+    // A re-cast replaces the pack: the previous images pop (each with its own
+    // MirrorImageDeathCaster) rather than piling up alongside the new ones.
+    for (const u of [...this.units.values()]) {
+      if (u.isIllusion && u.owner === caster.owner && u.typeId === caster.typeId && u.hp > 0) this.unsummon(u);
+    }
     // One tile per image PLUS one for the hero himself — he is shuffled in among them.
     const spots = this.mirrorSpots(caster, images + 1);
     if (!spots.length) return;
@@ -4965,7 +4970,11 @@ export class SimWorld {
       // An image popping is BOmi's Specialart (MirrorImageDeathCaster) — its folder-mate
       // MirrorImageDeath.wav rides it as a model SND event (AnimLookups AOMI).
       unsummonArt: def?.buffSpecialArt ?? "",
-      illusion: { dealt: m.dealt, taken: m.taken },
+      // An image is an exact copy, and that includes the name over its head: every
+      // Blademaster in the pack must read the same. Spawning rolls a fresh proper name per
+      // hero, which would have labelled the four of them with four different names — an
+      // instant tell.
+      illusion: { dealt: m.dealt, taken: m.taken, properName: caster.properName },
     });
   }
 
@@ -5520,7 +5529,7 @@ export class SimWorld {
     return out;
   }
   /** Units summoned/raised this frame — the renderer creates their models. */
-  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number } }> {
+  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string } }> {
     if (!this.summonRequests.length) return this.summonRequests;
     const out = this.summonRequests;
     this.summonRequests = [];
@@ -6824,9 +6833,17 @@ export class SimWorld {
     // the whole ability — so this is enforced here, at the blow, not by editing its stats.
     // (Only its ATTACKS need this: an illusion cannot cast, so no spell damage is ever
     // attributed to one. "Damage Taken" lives in landDamage, which spells reach too.)
+    //
+    // The blow must still LAND: same swing, same weapon-on-armour clang as the real
+    // Blademaster, because a silent attacker would give the copy away instantly. So record
+    // the hit the way landDamage would and return 0, rather than bailing out before it —
+    // bailing early is exactly what left the images swinging in silence.
     const attacker = attackerId ? this.units.get(attackerId) : undefined;
+    if (attacker?.isIllusion && attacker.illusionDamageDealt <= 0) {
+      if (!target.invulnerable) this.hits.push({ attackerId, targetId: target.id });
+      return 0;
+    }
     if (attacker?.isIllusion) rawDamage *= attacker.illusionDamageDealt;
-    if (rawDamage <= 0) return 0;
     // Evasion (Demon Hunter passive AEev): a chance to dodge a physical attack.
     if (this.tryEvade(target)) return 0;
     // Defend (Adef, granted by the Rhde research): a Footman braced behind his shield turns
