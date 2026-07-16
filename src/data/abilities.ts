@@ -14,6 +14,18 @@ import { MISC_GAME } from "./gameplayConstants";
 /** How an ability is aimed. Derived from its `code` (see KNOWN_ABILITIES). */
 export type TargetType = "none" | "unit" | "point" | "passive";
 
+/** One persistent model a buff hangs on the unit it is applied to, with the
+ *  attachment point it rides. A buff row can list SEVERAL — Bloodlust puts a
+ *  model on each hand, Spiked Carapace four on the chest (see parseBuffFx). */
+export interface BuffFx {
+  path: string; // .mdx model path
+  /** The `Targetattach` tokens for this model ("origin", "overhead",
+   *  ["chest","mount","left"], …). Matched — unordered — against the target
+   *  model's attachment node names ("Chest Mount Left Ref"). [] = no attachment
+   *  named, so the effect just sits at the unit's origin. */
+  attach: string[];
+}
+
 /** Per-level numbers pulled from AbilityData's level-indexed columns. */
 export interface AbilityLevel {
   cost: number; // mana cost (cost1..)
@@ -64,9 +76,13 @@ export interface AbilityDef {
   specialArt: string; // extra one-shot effect (Flame Strike's erupting fire pillar)
   effectArt: string; // ability "beware"/effect art — Flame Strike's ground warning ring
   areaArt: string; // AoE ground effect (Blizzard, Rain of Fire)
-  buffArt: string; // TargetArt of this ability's primary buff (buffid1): the PERSISTENT
-  //                  model worn by a buffed unit — Banish's ethereal glow, the small
-  //                  per-unit aura swirl (GeneralAuraTarget), Flame Strike's burn.
+  buffArt: string; // buffFx[0]'s path — the primary persistent model (convenience).
+  /** The PERSISTENT models worn by a unit carrying this ability's buff (buffid1),
+   *  each with its attachment point: Divine Shield's bubble, Banish's ethereal glow,
+   *  the small per-unit aura swirl (GeneralAuraTarget), Bloodlust's two hand flames.
+   *  This — NOT the ability's own TargetArt — is where a buff's art lives; most
+   *  buff-applying abilities have no TargetArt at all. */
+  buffFx: BuffFx[];
   animNames: string[]; // caster animation tags (AbilityFunc "animnames": spell,throw,slam…)
   // The ability's ORDER STRING (AbilityFunc `Order=holybolt`, and `Orderon`/`Orderoff`
   // for an autocast toggle). This is the name a script casts it by: the GUI's "Unit -
@@ -322,6 +338,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     const [bx, by] = f ? parseButtonPos(str(f, "buttonpos") || str(f, "researchbuttonpos")) : [0, 0];
     const [lx, ly] = f ? parseButtonPos(str(f, "researchbuttonpos") || str(f, "buttonpos")) : [0, 0];
     const known = KNOWN_ABILITIES[code];
+    const buffFx = buffFxOf(func, str(r, "buffid1"));
 
     const levelData: AbilityLevel[] = [];
     for (let L = 1; L <= levels; L++) {
@@ -373,7 +390,8 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       // buffid1's own [B….] func section TargetArt (Banish → BanishTarget, an aura →
       // GeneralAuraTarget, Flame Strike → FlameStrikeDamageTarget). Verified 2026-07
       // against the 1.27 MPQ (docs/wc3-data-formats.md).
-      buffArt: mdlPath(buffTargetArt(func, str(r, "buffid1"))),
+      buffFx: buffFx,
+      buffArt: buffFx[0]?.path ?? "",
       animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
       // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it.
       order: (f ? str(f, "Order") : "").trim().toLowerCase(),
@@ -447,14 +465,36 @@ function rawTip(v: string): string {
   return v.replace(/^"|"$/g, "").trim();
 }
 
-/** A buff's own persistent TargetArt, read from its `[B….]` section in the same
+/** A buff's own persistent models, read from its `[B….]` section in the same
  *  AbilityFunc files (buffs live alongside abilities there). `buffId` may be a
- *  comma-list (multi-buff abilities); we take the first. "" if absent. */
-function buffTargetArt(func: MappedData, buffId: string): string {
+ *  comma-list (multi-buff abilities); we take the first.
+ *
+ *  The buff row pairs a comma-list of models with one attach spec each:
+ *    [Bblo]  Targetart = …\BloodlustTarget.mdl,…\BloodlustSpecial.mdl
+ *            Targetattachcount = 2
+ *            Targetattach  = hand,left      ← model 0
+ *            Targetattach1 = hand,right     ← model 1
+ *  So `Targetattach` is model 0's spec and `Targetattach<i>` is model i's — and each
+ *  spec is ITSELF a comma-list of tokens ("hand" + "left"), not two attach points.
+ *  Verified 2026-07 against the 1.27 MPQ (Bblo/BUts/Bbsk/BHds; docs/wc3-data-formats.md).
+ */
+function buffFxOf(func: MappedData, buffId: string): BuffFx[] {
   const first = (buffId || "").split(",")[0]?.trim();
-  if (!first) return "";
+  if (!first) return [];
   const row = func.getRow(first) as Row | undefined;
-  return row ? str(row, "Targetart") : "";
+  if (!row) return [];
+  const paths = str(row, "Targetart")
+    .split(",")
+    .map((p) => mdlPath(p))
+    .filter(Boolean);
+  return paths.map((path, i) => ({
+    path,
+    // Model 0 reads `Targetattach`, model i>0 reads `Targetattach<i>`.
+    attach: str(row, i === 0 ? "Targetattach" : `Targetattach${i}`)
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean),
+  }));
 }
 
 // Effect-art fields are ".mdl" model paths (comma-lists sometimes). Take the

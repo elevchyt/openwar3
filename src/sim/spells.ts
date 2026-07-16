@@ -1,4 +1,4 @@
-import type { AbilityDef, AbilityLevel } from "../data/abilities";
+import type { AbilityDef, AbilityLevel, BuffFx } from "../data/abilities";
 import type { SimUnit, BuffKind } from "./world";
 
 // Spell effect handlers, dispatched on an ability's base `code` (data/abilities).
@@ -65,7 +65,23 @@ export interface SimBuffInit {
   value?: number;
   value2?: number;
   art?: string;
+  /** The buff's persistent models + attachment points (def.buffFx). Pass this via
+   *  `...fx(def)` — see below — rather than setting `art` by hand. */
+  fx?: BuffFx[];
   delay?: number; // seconds before the effect engages (Wind Walk's Transition Time)
+}
+
+/** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).
+ *
+ *  A buff's persistent model lives on its BUFF row, not on the ability — most
+ *  buff-applying abilities (Divine Shield, Slow, Bloodlust, Inner Fire…) have no
+ *  TargetArt of their own at all, so reaching for `def.targetArt` here silently
+ *  rendered nothing. `def.targetArt` is the one-shot CAST burst (Holy Light's
+ *  flash) and belongs in emitEffect, not on a buff. Falls back to targetArt for
+ *  the handful of custom abilities that do put their buff model there. */
+export function fx(def: AbilityDef): { art: string; fx: BuffFx[] } {
+  if (def.buffFx.length) return { art: def.buffArt, fx: def.buffFx };
+  return { art: def.targetArt, fx: def.targetArt ? [{ path: def.targetArt, attach: [] }] : [] };
 }
 
 export interface SpellFieldInit {
@@ -331,7 +347,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     api.spellDamage(t, d(lvl, 0), caster.id);
-    api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t), sourceId: caster.id, art: def.targetArt });
+    api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t), sourceId: caster.id, ...fx(def) });
   },
 
   // Thunder Clap — slam the ground: dataA damage + slow (move dataC, attack dataD)
@@ -349,7 +365,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Divine Shield — self-invulnerability for the duration.
   AHds: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(caster, { kind: "invuln", timeLeft: lvl.duration || lvl.heroDuration, sourceId: caster.id, art: def.targetArt });
+    api.applyBuff(caster, { kind: "invuln", timeLeft: lvl.duration || lvl.heroDuration, sourceId: caster.id, ...fx(def) });
   },
 
   // Avatar (MK ultimate) — become a giant: +armour, +damage, immune to stun/slow
@@ -357,7 +373,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AHav: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const t = lvl.duration || lvl.heroDuration || 30;
-    api.applyBuff(caster, { kind: "armor", group: "avatar", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 5) < 1 ? 15 : d(lvl, 0), art: def.targetArt });
+    api.applyBuff(caster, { kind: "armor", group: "avatar", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 5) < 1 ? 15 : d(lvl, 0), ...fx(def) });
     api.applyBuff(caster, { kind: "damage", group: "avatar", timeLeft: t, sourceId: caster.id, value: 40 });
   },
 
@@ -412,7 +428,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t)) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "armor", group: "innerfire", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: d(lvl, 1, 5), art: def.targetArt });
+    api.applyBuff(t, { kind: "armor", group: "innerfire", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: d(lvl, 1, 5), ...fx(def) });
     api.applyBuff(t, { kind: "damage", group: "innerfire", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: Math.max(1, Math.round((t.baseDamage || 10) * (d(lvl, 0, 0.1) || 0.1))) });
   },
 
@@ -421,7 +437,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.hostile(caster, t)) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "slow", group: "slow", timeLeft: dur(lvl, t) || 15, sourceId: caster.id, value: d(lvl, 0, 0.35), value2: d(lvl, 1, 0.35), art: def.targetArt });
+    api.applyBuff(t, { kind: "slow", group: "slow", timeLeft: dur(lvl, t) || 15, sourceId: caster.id, value: d(lvl, 0, 0.35), value2: d(lvl, 1, 0.35), ...fx(def) });
   },
 
   // Dispel Magic — clear timed buffs from every unit in the area; summoned units
@@ -441,7 +457,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t)) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "haste", group: "bloodlust", timeLeft: dur(lvl, t) || 60, sourceId: caster.id, value: d(lvl, 1, 0.25), value2: d(lvl, 0, 0.4), art: def.targetArt });
+    api.applyBuff(t, { kind: "haste", group: "bloodlust", timeLeft: dur(lvl, t) || 60, sourceId: caster.id, value: d(lvl, 1, 0.25), value2: d(lvl, 0, 0.4), ...fx(def) });
   },
 
   // Purge (Shaman) — strip ALL buffs from the target; an enemy is then slowed to a
@@ -454,7 +470,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (api.hostile(caster, t)) {
       if (t.summonLeft > 0) { api.spellDamage(t, 100000, caster.id); return; } // Purge destroys summons
       // dataD = slow duration; heavy MOVE slow that recovers when it expires (no attack slow).
-      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: d(lvl, 3, 3), sourceId: caster.id, value: 0.75, value2: 0, art: def.targetArt });
+      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: d(lvl, 3, 3), sourceId: caster.id, value: 0.75, value2: 0, ...fx(def) });
     }
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
@@ -465,7 +481,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.hostile(caster, t)) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "root", group: "ensnare", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, art: def.targetArt });
+    api.applyBuff(t, { kind: "root", group: "ensnare", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: 1, ...fx(def) });
   },
 
   // Lightning Shield (Shaman) — a shield of electricity around the TARGET: the target is
@@ -475,7 +491,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "shield", group: "lightningshield", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: d(lvl, 0, 20), value2: lvl.area || 160, art: def.buffArt || def.targetArt });
+    api.applyBuff(t, { kind: "shield", group: "lightningshield", timeLeft: dur(lvl, t) || 20, sourceId: caster.id, value: d(lvl, 0, 20), value2: lvl.area || 160, ...fx(def) });
   },
 
   // Spirit Link (Spirit Walker) — link up to dataB friendly organic units within the area
@@ -549,7 +565,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   Absk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const t = dur(lvl, caster) || 12;
-    api.applyBuff(caster, { kind: "haste", group: "berserk", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 0), value2: d(lvl, 1, 0.5), art: def.targetArt });
+    api.applyBuff(caster, { kind: "haste", group: "berserk", timeLeft: t, sourceId: caster.id, value: d(lvl, 0, 0), value2: d(lvl, 1, 0.5), ...fx(def) });
     api.applyBuff(caster, { kind: "vuln", group: "berserk", timeLeft: t, sourceId: caster.id, value: d(lvl, 2, 0.5) });
   },
 
@@ -589,7 +605,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     for (const t of lineTargets(api, caster, ctx.x, ctx.y, d(lvl, 0, 600), (lvl.area || 250) / 2)) {
       if (!api.hostile(caster, t) || t.flying) continue;
       api.spellDamage(t, d(lvl, 2, 50), caster.id);
-      api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 1, sourceId: caster.id, art: def.targetArt });
+      api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 1, sourceId: caster.id, ...fx(def) });
     }
   },
 
@@ -678,7 +694,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
     for (const t of alliesInArea(api, caster, ctx.x, ctx.y, lvl.area || 1000, { self: true })) {
-      if (!t.mechanical) api.applyBuff(t, { kind: "hot", group: "tranquility", timeLeft: lvl.duration || 30, sourceId: caster.id, value: d(lvl, 0, 20), art: def.targetArt });
+      if (!t.mechanical) api.applyBuff(t, { kind: "hot", group: "tranquility", timeLeft: lvl.duration || 30, sourceId: caster.id, value: d(lvl, 0, 20), ...fx(def) });
     }
   },
 
@@ -700,7 +716,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t || t.flying) return;
     const lvl = def.levelData[rank - 1];
     const d0 = dur(lvl, t) || 9;
-    api.applyBuff(t, { kind: "root", group: "roots", timeLeft: d0, sourceId: caster.id, value: 1, art: def.targetArt });
+    api.applyBuff(t, { kind: "root", group: "roots", timeLeft: d0, sourceId: caster.id, value: 1, ...fx(def) });
     api.applyBuff(t, { kind: "dot", group: "roots", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 15) });
   },
 
@@ -709,7 +725,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || t.building) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "sleep", group: "sleep", timeLeft: dur(lvl, t) || 5, sourceId: caster.id, art: def.targetArt });
+    api.applyBuff(t, { kind: "sleep", group: "sleep", timeLeft: dur(lvl, t) || 5, sourceId: caster.id, ...fx(def) });
   },
 
   // Hex (Shadow Hunter) — transform a target into a critter: disabled (can't
@@ -718,7 +734,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "stun", group: "hex", timeLeft: dur(lvl, t) || 4, sourceId: caster.id, art: def.targetArt });
+    api.applyBuff(t, { kind: "stun", group: "hex", timeLeft: dur(lvl, t) || 4, sourceId: caster.id, ...fx(def) });
   },
 
   // Banish (Blood Mage) — turn a target ETHEREAL for the duration (issue #49). While
@@ -733,7 +749,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "ethereal", group: "banish", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: d(lvl, 0, 0.5), art: def.buffArt });
+    api.applyBuff(t, { kind: "ethereal", group: "banish", timeLeft: dur(lvl, t) || 12, sourceId: caster.id, value: d(lvl, 0, 0.5), ...fx(def) });
   },
 
   // Doom (Pit Lord, ult) — a heavy damage-over-time curse (dataA/sec).
@@ -741,7 +757,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "dot", group: "doom", timeLeft: 40, sourceId: caster.id, value: d(lvl, 0, 40), art: def.targetArt });
+    api.applyBuff(t, { kind: "dot", group: "doom", timeLeft: 40, sourceId: caster.id, value: d(lvl, 0, 40), ...fx(def) });
   },
 
   // Soul Burn (Firelord) — a damage-over-time burn that also silences the target.
@@ -750,7 +766,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     const d0 = dur(lvl, t) || 6;
-    api.applyBuff(t, { kind: "dot", group: "soulburn", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 7), art: def.targetArt });
+    api.applyBuff(t, { kind: "dot", group: "soulburn", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 7), ...fx(def) });
     api.applyBuff(t, { kind: "silence", group: "soulburn", timeLeft: d0, sourceId: caster.id });
   },
 
@@ -761,7 +777,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (!t) return;
     const lvl = def.levelData[rank - 1];
     for (const o of enemiesInArea(api, caster, t.x, t.y, lvl.area || 200)) {
-      api.applyBuff(o, { kind: "armor", group: "acid", timeLeft: lvl.duration || 15, sourceId: caster.id, value: -d(lvl, 3, 5), art: def.targetArt });
+      api.applyBuff(o, { kind: "armor", group: "acid", timeLeft: lvl.duration || 15, sourceId: caster.id, value: -d(lvl, 3, 5), ...fx(def) });
       api.applyBuff(o, { kind: "dot", group: "acid", timeLeft: lvl.duration || 15, sourceId: caster.id, value: d(lvl, 4, 3) });
     }
   },
@@ -784,7 +800,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const d0 = dur(lvl, t) || 15;
     api.spellDamage(t, d(lvl, 4, 75), caster.id);
-    api.applyBuff(t, { kind: "dot", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 10), art: def.targetArt });
+    api.applyBuff(t, { kind: "dot", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 0, 10), ...fx(def) });
     api.applyBuff(t, { kind: "slow", group: "shadowstrike", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0 });
   },
 
@@ -802,7 +818,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANdh: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 200)) {
-      api.applyBuff(t, { kind: "slow", group: "haze", timeLeft: dur(lvl, t) || 10, sourceId: caster.id, value: 0.25, value2: 0.25, art: def.targetArt });
+      api.applyBuff(t, { kind: "slow", group: "haze", timeLeft: dur(lvl, t) || 10, sourceId: caster.id, value: 0.25, value2: 0.25, ...fx(def) });
     }
   },
 
@@ -811,7 +827,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
     for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 300, true)) {
-      api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: lvl.duration || 8, sourceId: caster.id, art: def.targetArt });
+      api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: lvl.duration || 8, sourceId: caster.id, ...fx(def) });
     }
   },
 
@@ -948,7 +964,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const d0 = lvl.duration || 20;
     const transition = d(lvl, 0, 0.6);
-    api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, art: def.targetArt });
+    api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
     api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
   },
 
@@ -965,7 +981,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t)) return;
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "armor", group: "frostarmor", timeLeft: lvl.duration || 60, sourceId: caster.id, value: d(lvl, 1, 3), art: def.targetArt });
+    api.applyBuff(t, { kind: "armor", group: "frostarmor", timeLeft: lvl.duration || 60, sourceId: caster.id, value: d(lvl, 1, 3), ...fx(def) });
   },
 
   // Far Sight (Far Seer) — reveal an area of the map. We have no fog of war yet, so
@@ -977,7 +993,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Mana Shield (Naga) — absorb incoming damage into mana (dataA mana per hp).
   ANms: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    api.applyBuff(caster, { kind: "manaShield", group: "manashield", timeLeft: 3600, sourceId: caster.id, value: d(lvl, 0, 1) || 1, art: def.targetArt });
+    api.applyBuff(caster, { kind: "manaShield", group: "manashield", timeLeft: 3600, sourceId: caster.id, value: d(lvl, 0, 1) || 1, ...fx(def) });
   },
 
   // Blink (Warden / Demon Hunter's Illidan) — teleport toward the target point,
@@ -1008,7 +1024,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AOvd: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     for (const t of alliesInArea(api, caster, caster.x, caster.y, lvl.area || 800, { self: false })) {
-      api.applyBuff(t, { kind: "invuln", group: "voodoo", timeLeft: lvl.duration || 30, sourceId: caster.id, art: def.targetArt });
+      api.applyBuff(t, { kind: "invuln", group: "voodoo", timeLeft: lvl.duration || 30, sourceId: caster.id, ...fx(def) });
     }
   },
 
@@ -1022,7 +1038,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const rate = d(lvl, 1, 15) || 15;
     const d0 = lvl.duration || 6;
-    api.applyBuff(t, { kind: "dot", group: "drain", timeLeft: d0, sourceId: caster.id, value: rate, art: def.targetArt });
+    api.applyBuff(t, { kind: "dot", group: "drain", timeLeft: d0, sourceId: caster.id, value: rate, ...fx(def) });
     api.applyBuff(caster, { kind: "hot", group: "drain", timeLeft: d0, sourceId: caster.id, value: rate });
   },
 
@@ -1130,7 +1146,7 @@ function lv(def: AbilityDef, rank: number): AbilityLevel {
 function transformBuff(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, armor: number, damage: number): void {
   const lvl = lv(def, rank);
   const t = lvl.heroDuration || lvl.duration || 30;
-  api.applyBuff(caster, { kind: "armor", group: "transform", timeLeft: t, sourceId: caster.id, value: armor, art: def.targetArt });
+  api.applyBuff(caster, { kind: "armor", group: "transform", timeLeft: t, sourceId: caster.id, value: armor, ...fx(def) });
   api.applyBuff(caster, { kind: "damage", group: "transform", timeLeft: t, sourceId: caster.id, value: damage });
   api.applyBuff(caster, { kind: "haste", group: "transform", timeLeft: t, sourceId: caster.id, value: 0.15, value2: 0.15 });
 }

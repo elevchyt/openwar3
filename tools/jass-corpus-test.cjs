@@ -345,7 +345,7 @@ console.log('\n[7.8] Custom ability data (war3map.w3a → custom abilities)');
       id: 'Aoar', code: 'Aoar', isHero: false, isItem: false, levels: 1, reqLevel: 0, levelSkip: 0, target: 'passive',
       targetFlags: [], autocast: false, name: 'Base', icon: '', hotkey: '', buttonX: 0, buttonY: 0, learnX: 0, learnY: 0,
       research: false, tips: [], uberTips: [], researchTip: '', researchUberTip: '', levelData: [lvl()],
-      missileArt: '', targetArt: '', casterArt: '', specialArt: '', effectArt: '', areaArt: '', buffArt: '', animNames: [],
+      missileArt: '', targetArt: '', casterArt: '', specialArt: '', effectArt: '', areaArt: '', buffArt: '', buffFx: [], animNames: [],
     };
     const reg = new AbilityRegistry(new Map([['Aoar', baseAb]]));
     const count = applyMapAbilityData(reg, w3a, abMeta, wts);

@@ -26,7 +26,7 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
-import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
+import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, type BuffFx, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
 import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -325,6 +325,7 @@ interface SpawnInstance {
   // it rides that node's animated transform — how the Blood Mage's spheres orbit.
   setParent?(node: unknown): unknown;
   getAttachment?(id: number): unknown; // an attachment node by its model.attachments index
+  sequence: number; // index of the clip currently playing
   model: {
     sequences: Array<{ name: string; interval?: ArrayLike<number> }>;
     attachments?: Array<{ name: string }>; // "Sprite First Ref", "Hand Right Ref", …
@@ -2720,6 +2721,13 @@ export class MapViewerScene {
   //   • single-target buffs that carry their own art (Banish's ethereal BanishTarget).
   private buffFx = new Map<string, SpawnInstance>();
   private buffFxLoading = new Set<string>();
+  /** buffFx keys whose instance is parented to an attachment node — it moves with the
+   *  unit on its own, so trackBuffFx must not fight it with a ground setLocation. */
+  private buffFxParented = new Set<string>();
+  /** buffFx keys still playing their Birth clip (settleBuffFx moves them to Stand). */
+  private buffFxBirthing = new Set<string>();
+  /** Detached buff models playing out their Death clip before leaving the scene. */
+  private buffFxDying: Array<{ inst: SpawnInstance; ttl: number }> = [];
   private abilityByCode: Map<string, AbilityDef> | null = null;
   /** First ability def with the given base code (aura visuals only need its art). */
   private abilityDefByCode(code: string): AbilityDef | undefined {
@@ -2729,7 +2737,7 @@ export class MapViewerScene {
     }
     return this.abilityByCode.get(code);
   }
-  private updateAuraEffects(): void {
+  private updateAuraEffects(dt: number): void {
     const world = this.rts?.simWorld;
     const map = this.viewer.map;
     if (!world || !map) return;
@@ -2747,30 +2755,73 @@ export class MapViewerScene {
           if (!def) continue;
           // Small swirl on every affected unit; big model on the owner only (its own
           // aura copy carries sourceId === its id — allies get the owner's id).
-          this.trackBuffFx(active, `${u.id}|${auraCode}|s`, def.buffArt, u.id);
-          if (b.sourceId === u.id) this.trackBuffFx(active, `${u.id}|${auraCode}|o`, def.targetArt, u.id);
-        } else if (b.art) {
+          def.buffFx.forEach((fx, i) => this.trackBuffFx(active, `${u.id}|${auraCode}|s${i}`, fx, u.id));
+          if (b.sourceId === u.id) this.trackBuffFx(active, `${u.id}|${auraCode}|o`, { path: def.targetArt, attach: [] }, u.id);
+        } else if (b.fx.length) {
           if (seen.has("b:" + b.art)) continue;
           seen.add("b:" + b.art);
-          this.trackBuffFx(active, `${u.id}|${b.art}`, b.art, u.id);
+          b.fx.forEach((fx, i) => this.trackBuffFx(active, `${u.id}|${b.art}|${i}`, fx, u.id));
         }
       }
     }
     for (const [key, inst] of this.buffFx) {
-      if (!active.has(key)) {
-        inst.detach();
-        this.buffFx.delete(key);
-      }
+      if (!active.has(key)) this.dropBuffFx(key, inst);
+    }
+    // Dying models are no longer tracked by any buff: hold each until its Death clip has
+    // played out (or its deadline passes), then take it off the scene.
+    for (let i = this.buffFxDying.length - 1; i >= 0; i--) {
+      const d = this.buffFxDying[i];
+      d.ttl -= dt;
+      if (!d.inst.sequenceEnded && d.ttl > 0) continue;
+      d.inst.setParent?.(null);
+      d.inst.detach();
+      this.buffFxDying.splice(i, 1);
     }
   }
 
+  /** The buff is gone: play the model's Death clip out rather than snapping the effect
+   *  out of existence (the shield pops, it doesn't blink off).
+   *
+   *  The instance stays PARENTED while it dies. Unparenting it first looks tempting —
+   *  play the clip where it died — but an orphaned instance belongs to no scene, so
+   *  nothing advances its animation and it freezes on Death's first frame forever
+   *  (measured: frame stuck at 2333, the start of DivineShieldTarget's [2333,3000]).
+   *  Staying parented also matches the game, where the pop happens on the unit. */
+  private dropBuffFx(key: string, inst: SpawnInstance): void {
+    this.buffFx.delete(key);
+    this.buffFxBirthing.delete(key);
+    this.buffFxParented.delete(key);
+    const death = this.seqIndex(inst, /death/i);
+    if (death < 0) {
+      inst.setParent?.(null);
+      inst.detach();
+      return;
+    }
+    inst.setSequence(death);
+    inst.setSequenceLoopMode(0);
+    // Back the sequenceEnded check with a deadline: the clip's own length plus a beat.
+    // If this instance's animation stops being driven at all — its host unit dies and
+    // takes the attachment node with it — `sequenceEnded` never flips, and without a
+    // deadline the instance would sit in this list for the rest of the match.
+    const iv = inst.model.sequences[death]?.interval;
+    const secs = iv && iv[1] > iv[0] ? (iv[1] - iv[0]) / 1000 : 1;
+    this.buffFxDying.push({ inst, ttl: secs + 0.5 });
+  }
+
   /** Mark a persistent buff model live this frame: (re)position an existing instance,
-   *  or spawn it on demand. `path` "" is a no-op (aura with no small/big model). */
-  private trackBuffFx(active: Set<string>, key: string, path: string, simId: number): void {
-    if (!path) return;
+   *  or spawn it on demand. An empty path is a no-op (aura with no small/big model).
+   *
+   *  A buff model that found its attachment node is PARENTED to it (setParent), so it
+   *  rides the unit's animation — Divine Shield's bubble stays around the Paladin,
+   *  Bloodlust's flames stay on the moving hands — and needs no per-frame positioning.
+   *  Only an unattached one is walked along the ground here. */
+  private trackBuffFx(active: Set<string>, key: string, fx: BuffFx, simId: number): void {
+    if (!fx.path) return;
     active.add(key);
     const inst = this.buffFx.get(key);
     if (inst) {
+      this.settleBuffFx(key, inst);
+      if (this.buffFxParented.has(key)) return; // rides its attachment node
       const u = this.rts?.simWorld.units.get(simId);
       if (u) {
         this.loc3[0] = u.x;
@@ -2780,11 +2831,12 @@ export class MapViewerScene {
       }
     } else if (!this.buffFxLoading.has(key)) {
       this.buffFxLoading.add(key);
-      void this.spawnBuffFx(key, path, simId);
+      void this.spawnBuffFx(key, fx, simId);
     }
   }
 
-  private async spawnBuffFx(key: string, path: string, simId: number): Promise<void> {
+  private async spawnBuffFx(key: string, fx: BuffFx, simId: number): Promise<void> {
+    const path = fx.path;
     let model = this.effectModels.get(path);
     if (model === undefined) {
       model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
@@ -2796,14 +2848,81 @@ export class MapViewerScene {
     if (!model || !map || !u || u.hp <= 0 || this.buffFx.has(key)) return;
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
-    this.loc3[0] = u.x;
-    this.loc3[1] = u.y;
-    this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y);
-    inst.setLocation(this.loc3);
-    inst.setSequence(this.effectSequence(inst));
-    inst.setSequenceLoopMode(2); // loop the buff/aura effect for its lifetime
+    const host = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
+    const node = host ? this.attachmentNode(host, fx.attach) : undefined;
+    if (node) {
+      inst.setParent?.(node); // ride the unit's own animated attachment point
+      this.buffFxParented.add(key);
+    } else {
+      this.loc3[0] = u.x;
+      this.loc3[1] = u.y;
+      this.loc3[2] = this.rts!.groundHeightAt(u.x, u.y);
+      inst.setLocation(this.loc3);
+    }
+    // A buff model is a three-act clip — Birth, Stand, Death (verified on
+    // DivineShieldTarget.mdx and friends). Open on Birth, unlooped; settleBuffFx moves it
+    // to a looping Stand the frame Birth ends, and dropBuffFx plays Death. Looping Birth
+    // instead (what we used to do) replays the flash forever and the effect never settles.
+    const birth = this.seqIndex(inst, /birth/i);
+    if (birth >= 0) {
+      inst.setSequence(birth);
+      inst.setSequenceLoopMode(0); // play once, then settleBuffFx takes over
+      this.buffFxBirthing.add(key);
+    } else {
+      inst.setSequence(this.effectSequence(inst));
+      inst.setSequenceLoopMode(2);
+    }
     inst.show();
     this.buffFx.set(key, inst);
+  }
+
+  /** Birth is done → settle into the looping Stand. A model with no Stand just holds its
+   *  last Birth frame, which is what the game does too. */
+  private settleBuffFx(key: string, inst: SpawnInstance): void {
+    if (!this.buffFxBirthing.has(key)) return;
+    if (!inst.sequenceEnded) return;
+    this.buffFxBirthing.delete(key);
+    const stand = this.seqIndex(inst, /^stand/i);
+    if (stand < 0) return;
+    inst.setSequence(stand);
+    inst.setSequenceLoopMode(2); // the steady state: loop for the buff's lifetime
+  }
+
+  /** The attachment node on `host` for a buff's `Targetattach` tokens. WC3 names these
+   *  nodes "<Tokens…> Ref" — verified against the real 1.27 MDXs (Paladin/Grunt/Footman/
+   *  Headhunter/Crypt Fiend): "Origin Ref", "OverHead Ref", "Hand Left Ref", "Head - Ref".
+   *
+   *  Matching is a BEST match, not an exact one, because the data routinely asks for a
+   *  point a given model doesn't have: Berserk wants `weapon,left` but a Headhunter
+   *  carries a single "Weapon Ref", and Spiked Carapace's `chest,mount,left` has no
+   *  mount on an unmounted unit. So: the first token (the body part) must match — it's
+   *  what the effect is FOR, and without this test `weapon,left` would happily land on
+   *  "Hand Left Ref" — then take the most qualifiers matched, tie-broken by the fewest
+   *  extra words so `chest` picks "Chest Ref" over "Chest Mount Left Ref". A model with
+   *  no such part at all falls back to its origin, as the engine does; only a model with
+   *  no attachments returns undefined, leaving the caller to walk it along the ground. */
+  private attachmentNode(host: SpawnInstance, attach: string[]): unknown {
+    const atts = host.model?.attachments ?? [];
+    if (!atts.length) return undefined;
+    // No tokens named ("Targetattach" absent) means the model's root — same as origin.
+    const want = attach.length ? attach : ["origin"];
+    const wordsOf = (name: string) => name.toLowerCase().replace(/\bref\b/g, "").split(/[\s-]+/).filter(Boolean);
+    let best = -1;
+    let bestScore = 0;
+    let bestExtra = Infinity;
+    atts.forEach((a, i) => {
+      const words = wordsOf(a.name);
+      if (!words.includes(want[0])) return;
+      const score = want.filter((t) => words.includes(t)).length;
+      const extra = words.length - score;
+      if (score > bestScore || (score === bestScore && extra < bestExtra)) {
+        bestScore = score;
+        bestExtra = extra;
+        best = i;
+      }
+    });
+    if (best < 0) best = atts.findIndex((a) => wordsOf(a.name).includes("origin"));
+    return best >= 0 ? host.getAttachment?.(best) : undefined;
   }
 
   // --- Blood Mage orbiting spheres (issue #37) ------------------------------
@@ -5217,7 +5336,7 @@ export class MapViewerScene {
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);
       this.updateEffects(dt / 1000);
-      this.updateAuraEffects();
+      this.updateAuraEffects(dt / 1000);
       this.updateTreePulses(dt / 1000);
       this.updateTreeActors(); // per-chop "stand hit" wobble on felled/chopped trees' stand-ins
       this.updateProjectiles();

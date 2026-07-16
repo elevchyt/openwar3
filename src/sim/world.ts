@@ -1,6 +1,6 @@
 import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
@@ -167,7 +167,10 @@ export interface SimBuff {
   sourceId: number;
   value: number; // primary magnitude (armour, slow %, hp/sec, damage, …)
   value2: number; // secondary magnitude (e.g. attack-speed slow)
-  art: string; // attached effect model (renderer), "" = none
+  art: string; // fx[0]'s path — the primary attached model (renderer), "" = none
+  /** Every persistent model this buff hangs on the unit, with its attachment point
+   *  (see AbilityDef.buffFx). Usually one; Bloodlust wears two, Spiked Carapace four. */
+  fx: BuffFx[];
   /** Seconds until the buff's effect actually engages — Wind Walk's "Transition Time"
    *  (AbilityData.slk AOwk DataA = 0.6), the beat between the cast and the vanish. The
    *  buff exists and its duration is already running; it just isn't in force yet. 0 for
@@ -4061,7 +4064,8 @@ export class SimWorld {
         return;
       }
     }
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art: init.art ?? "", delay: init.delay ?? 0 });
+    const art = init.art ?? "";
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), delay: init.delay ?? 0 });
   }
 
   private interruptForStun(u: SimUnit): void {
