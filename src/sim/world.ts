@@ -36,6 +36,11 @@ export interface SimWeapon {
   sides: number;
   cooldown: number; // seconds between swings
   damagePoint: number; // seconds from swing start to the strike/projectile launch
+  /** Seconds of follow-through AFTER the strike. Never gates the cooldown — it exists so the
+   *  renderer can fit the attack clip to `damagePoint + backswing` (the pair IS the clip's
+   *  authored length; see WeaponSlot.backswing). Hasted/slowed with the damage point, so the
+   *  swing animation speeds up by exactly the attack-speed factor. */
+  backswing: number;
   range: number; // measured between collision hulls, WC3-style
   // Pre-upgrade baselines, straight off this slot's UnitWeapons columns.
   baseDamage: number;
@@ -43,6 +48,7 @@ export interface SimWeapon {
   baseRange: number;
   baseCooldown: number;
   baseDamagePoint: number;
+  baseBackswing: number;
   /** Whether this slot may be used at all: its bit in `weapsOn`, which the `renw` upgrade
    *  effect can rewrite (Flying Machine Bombs switches the bomb slot on). See WeaponSlotDef. */
   enabled: boolean;
@@ -118,12 +124,14 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       sides: s.sides,
       cooldown: s.cooldown,
       damagePoint: s.damagePoint,
+      backswing: s.backswing,
       range: s.range,
       baseDamage: s.damage,
       baseDice: s.dice,
       baseRange: s.range,
       baseCooldown: s.cooldown,
       baseDamagePoint: s.damagePoint,
+      baseBackswing: s.backswing,
       enabled: s.enabled,
       targets: s.targets,
       spillDist: s.spillDist,
@@ -980,6 +988,14 @@ const MANA_PER_INT = MISC_GAME.IntManaBonus;
 const ARMOR_PER_AGI = MISC_GAME.AgiDefenseBonus;
 const REGEN_PER_STR = MISC_GAME.StrRegenBonus; // hp/sec per Strength point
 const REGEN_PER_INT = MISC_GAME.IntRegenBonus; // mana/sec per Intelligence point
+// Attack-speed (IAS) caps. NOT in MiscGame/MiscData — neither file carries any attack-speed
+// cap key; the engine hardcodes them, so they live here at the use site rather than in
+// gameplayConstants.ts (which mirrors the data files). "The most FAR a unit can have is +400%
+// or -80%, afterwhich any excess is wasted" — Hive "Attack Speed Formula?" #12 (Dr Super Good);
+// the pair mirrors each other (5x vs 1/5x). They clamp the SUMMED bonus, before the division.
+const IAS_MAX = 4.0; // +400% — cannot swing faster than 5x its base attack time
+const IAS_MIN = -0.8; // -80% — cannot be slowed below 1/5 of its base attack rate
+const DAMAGE_POINT_FLOOR = 0.02; // a swing always lands 0.02s before it may start the next
 const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
 const AURA_REFRESH = 0.5; // aura buffs re-applied each tick with this TTL (fade on leave)
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
@@ -3857,11 +3873,21 @@ export class SimWorld {
     const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
     u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
     u.bonusArmor = armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
-    // Attack speed scales cooldown AND damage point together (verified: thehelper
-    // "attack speed animations" thread — agility/haste divides both by the same
-    // factor, so the strike lands proportionally sooner as the unit swings faster).
-    // Item attack-speed (Gloves of Haste) adds to the haste side.
-    const speedFactor = (1 + slowAttack) / (1 + hasteAttack + item.attackSpeed + upg.attackSpeed);
+    // Attack speed ("IAS"): every source — agility, items, buffs, upgrades, slows — sums
+    // into ONE additive bonus term, which then divides the base attack time exactly once.
+    // Bonuses never chain multiplicatively (Hive "Attack Speed Formula?" #12, Dr Super Good:
+    // "ARf = ARi/(1+FAR)"; Liquipedia Attack_Speed: "IAS = (0.02 * Agility) + Item Bonuses +
+    // Ability Bonuses", "Attack Speed = BCD/1 + IAS"), and a hero's slow is SUBTRACTED from
+    // the IAS rather than scaling the result. Heroes gain AgiAttackSpeedBonus (2%) per point
+    // of TOTAL agility — `cool1` is the raw Base Attack Time with no agility baked in
+    // (Blademaster cool1=1.77, and Liquipedia's displayed 1.23 = 1.77/(1+0.02*22) at that
+    // patch's 22 agi). Verified against MiscGame.txt AgiAttackSpeedBonus=0.02.
+    const agiAttackSpeed = u.isHero ? MISC_GAME.AgiAttackSpeedBonus * u.agi : 0;
+    const ias = Math.min(
+      IAS_MAX,
+      Math.max(IAS_MIN, agiAttackSpeed + hasteAttack + item.attackSpeed + upg.attackSpeed - slowAttack),
+    );
+    const speedFactor = 1 / (1 + ias);
     // EVERY slot is rebuilt, not just the one in hand: a Gargoyle's ground and air attacks
     // both carry Forged Talons, and a Flying Machine that researches Bombs must find its bomb
     // slot already carrying its armour/damage upgrades the moment the slot switches on.
@@ -3874,8 +3900,14 @@ export class SimWorld {
       w.damage = Math.max(0, base + damageBonus + item.damage + upg.damage + base * damagePct); // Command/Trueshot add a % of base
       w.dice = w.baseDice + upg.dice; // Forged Swords / Gunpowder add dice, widening the roll
       w.range = w.baseRange + upg.range; // Long Rifles
-      w.cooldown = w.baseCooldown * speedFactor;
       w.damagePoint = w.baseDamagePoint * speedFactor;
+      w.backswing = w.baseBackswing * speedFactor; // hasted with the damage point — the pair IS the clip
+      // The same IAS divides the cooldown. Floor: a unit can never swing faster than its own
+      // strike lands — "the unit is restricted to about its attack animation damage point…
+      // always attack slightly slower than the actual animation damage point by 0.02 seconds"
+      // (Hive "Attack Speed Formula?", Dr Super Good). Both sides scale with IAS, so this only
+      // binds where dmgpt1 > cool1 — rare in stock data, common in custom object data.
+      w.cooldown = Math.max(w.baseCooldown * speedFactor, w.damagePoint + DAMAGE_POINT_FLOOR);
       w.spillDist = w.baseSpillDist + upg.spillDist; // Storm Hammers — see the spill fields on SimWeapon
       w.spillRadius = w.baseSpillRadius + upg.spillRadius;
     }

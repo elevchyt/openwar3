@@ -320,6 +320,7 @@ interface SpawnInstance {
   setUniformScale(s: number): void;
   setVertexColor(c: ArrayLike<number>): void;
   frame: number;
+  timeScale: number; // animation playback rate (attack/walk clips are re-rated — see rts.ts animRate)
   sequenceEnded: boolean; // mdx-m3-viewer: true once a non-looping clip finishes
   hide(): void;
   show(): void;

@@ -42,6 +42,12 @@ export interface WeaponSlotDef {
   sides: number;
   cooldown: number;
   damagePoint: number;
+  /** `backSw1/2` — "Animation Backswing Point": the follow-through AFTER the strike
+   *  lands. `damagePoint + backswing` is exactly the attack clip's authored length
+   *  (verified against the real 1.27a MDX intervals: Footman 0.5+0.5 = the 1000ms
+   *  "Attack - 1" clip; Archmage 0.55+0.85 = 1400ms), which is what lets the renderer
+   *  fit the swing to the pair. It never gates the cooldown — only the animation. */
+  backswing: number;
   range: number;
   weaponType: WeaponType; // weapTp1/2 — Normal/Instant strike at once, the Missile kinds fly
   attackType: AttackType; // atkType1/2 → the damage table's row
@@ -67,6 +73,16 @@ export interface UnitDef {
   model: string; // MDX path, backslashes, with extension
   modelScale: number;
   selScale: number; // Art - Selection Scale (unitUI "scale"); ring size basis
+  /** Art - Animation - Walk Speed / Run Speed (unitUI "walk"/"run"). NOT how fast the unit
+   *  moves — the movement speed at which the model's "Walk" / "Walk Fast" clips were AUTHORED
+   *  to look natural at 1.0x playback. They are literal copies of the MDX sequence's own
+   *  MoveSpeed field (verified against the real 1.27a models: Kodo Beast's Walk=100 /
+   *  Walk Fast=240 match its SLK 100/240 exactly). The renderer re-rates the walk cycle by
+   *  `current speed / gait` so a slowed or hasted unit's feet stay planted — nearly every
+   *  stock unit has spd > walk (Footman 270 vs 210), so they habitually walk slightly fast.
+   *  Only 33 units author a distinct `run` (a "Walk Fast" clip); for the rest walk == run. */
+  animWalkSpeed: number;
+  animRunSpeed: number;
   animBlend: number; // Art - Animation Blend Time (unitUI "blend", seconds): cross-fade
   // duration between animation sequences. Real WC3 default is 0.15s (808 of ~836 units);
   // a handful differ (0.01/0.3/0.4/0.5/1.5). Verified against War3Patch.mpq UnitUI.slk.
@@ -176,6 +192,7 @@ export interface UnitDef {
   attackSides: number; // sides per damage die (sides1)
   attackCooldown: number;
   attackDamagePoint: number; // dmgpt1: delay from swing start to strike/launch (s)
+  attackBackswing: number; // backSw1: the follow-through after the strike (s) — see WeaponSlot.backswing
   // Ability casting animation timing, per-unit (UnitWeapons.slk castpt/castbsw),
   // NOT per-ability. WC3's Object Editor exposes these as "Art - Animation - Cast
   // Point" / "Cast Backswing". Cast point = the wind-up the caster plays before a
@@ -361,6 +378,8 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       model: unitModelPath(vfs, file, animProps),
       modelScale: u ? num(u, "modelScale", 1) : 1,
       selScale: u ? num(u, "scale", 1) : 1,
+      animWalkSpeed: u ? num(u, "walk", 0) : 0,
+      animRunSpeed: u ? num(u, "run", 0) : 0,
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
       animProps,
       soundSet: u ? str(u, "unitSound") : "",
@@ -423,6 +442,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       attackSides: prime?.sides ?? 0,
       attackCooldown: prime?.cooldown ?? 0,
       attackDamagePoint: prime?.damagePoint ?? 0,
+      attackBackswing: prime?.backswing ?? 0,
       // castpt/castbsw live in UnitWeapons.slk alongside the attack timing (they
       // apply to the unit's casting, not to any one weapon). Default 0 → an instant
       // cast / no backswing for units with no weapons row (wards, most summons).
@@ -496,6 +516,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       sides: num(w, `sides${n}`, 0),
       cooldown: num(w, `cool${n}`, 0),
       damagePoint: num(w, `dmgpt${n}`, 0),
+      backswing: num(w, `backSw${n}`, 0),
       range: num(w, `rangeN${n}`, 0),
       weaponType: toWeaponType(str(w, `weapTp${n}`)),
       attackType: toAttackType(str(w, `atkType${n}`)),

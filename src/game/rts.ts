@@ -28,6 +28,9 @@ interface Instance {
   localLocation: Float32Array;
   localRotation: Float32Array;
   frame: number;
+  /** Animation playback rate (mdx-m3-viewer multiplies dt by this before advancing the
+   *  clip). WC3 re-rates the attack and walk clips through it — see animRate(). */
+  timeScale: number;
   sequenceEnded: boolean; // mdx-m3-viewer: true once a non-looping clip finishes (drives the idle fidget re-roll)
   setLocation(v: ArrayLike<number>): unknown;
   setRotation(q: ArrayLike<number>): unknown;
@@ -138,6 +141,10 @@ interface AnimSet {
   stand: number;
   standVariants: number[]; // all plain idle stands ("Stand"/"Stand - N"); the idle fidget cycles them
   walk: number;
+  /** "Walk Fast" — the second gait a handful of models author (Kodo Beast, Pit Lord, the
+   *  dragon spawns). -1 when absent, which is the overwhelmingly common case. Picked over
+   *  `walk` once the unit's speed passes the midpoint of the two gaits; see walkAnim(). */
+  walkFast: number;
   attack: number;
   attackVariants: number[]; // empty-handed combat-attack clips; a random one plays per swing
   attackGold: number[]; // "Attack Gold" — the swing while carrying gold (fallback: base attack)
@@ -243,7 +250,10 @@ function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] = []): A
     : find(/^stand(\s|$|-)/i) >= 0
       ? find(/^stand(\s|$|-)/i)
       : find(/^stand/i);
-  const walk = find(/^walk\s*$/i) >= 0 ? find(/^walk\s*$/i) : find(/walk/i);
+  // The plain "Walk" must not match "Walk Fast" (a distinct gait, chosen by speed) — hence
+  // the anchored test first, with the loose one only as a last-resort fallback.
+  const walk = find(/^walk(\s*-?\s*\d+)?\s*$/i) >= 0 ? find(/^walk(\s*-?\s*\d+)?\s*$/i) : find(/^walk(?! fast)/i);
+  const walkFast = find(/^walk fast/i);
   const attack = attackVariants.length
     ? attackVariants[0]
     : find(/^attack\s*$/i) >= 0
@@ -261,6 +271,7 @@ function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] = []): A
     stand,
     standVariants: standVariants.length ? standVariants : stand >= 0 ? [stand] : [],
     walk,
+    walkFast,
     attack,
     attackVariants: attackVariants.length ? attackVariants : attack >= 0 ? [attack] : [],
     attackGold,
@@ -307,6 +318,12 @@ interface Entry {
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (also deselects)
   devoured: boolean; // unit swallowed by a Kodo (also deselects)
   curSeq: number; // sequence index currently playing (avoid redundant sets)
+  // Art - Animation - Walk/Run Speed (unitUI): the movement speeds the model's "Walk"/"Walk
+  // Fast" clips were authored for. The walk cycle is re-rated by speed/gait — see walkAnim().
+  animWalkSpeed: number;
+  animRunSpeed: number;
+  timeScale: number; // JASS SetUnitTimeScale — an override MULTIPLIED onto the animation rate
+  curRate: number; // last playback rate applied (avoid redundant sets)
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
   castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
@@ -1633,6 +1650,10 @@ export class RtsController {
         inBurrow: false,
         devoured: false,
         curSeq: -1,
+        animWalkSpeed: def?.animWalkSpeed ?? 0,
+        animRunSpeed: def?.animRunSpeed ?? 0,
+        timeScale: 1,
+        curRate: 1,
         lastSwingSeq: -1,
         lastChopSeq: -1,
         castAnimT: 0,
@@ -1720,6 +1741,10 @@ export class RtsController {
       inBurrow: false,
       devoured: false,
       curSeq: -1,
+      animWalkSpeed: def?.animWalkSpeed ?? 0,
+      animRunSpeed: def?.animRunSpeed ?? 0,
+      timeScale: 1,
+      curRate: 1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
       castAnimT: 0,
@@ -1879,6 +1904,10 @@ export class RtsController {
       inBurrow: false,
       devoured: false,
       curSeq: -1,
+      animWalkSpeed: def?.animWalkSpeed ?? 0,
+      animRunSpeed: def?.animRunSpeed ?? 0,
+      timeScale: 1,
+      curRate: 1,
       lastSwingSeq: -1,
       lastChopSeq: -1,
       castAnimT: 0,
@@ -1968,10 +1997,15 @@ export class RtsController {
     const e = this.byId.get(simId);
     if (e) e.moveHeight = height > 0 ? height : 0;
   }
-  /** JASS SetUnitTimeScale — the model animation playback rate. */
+  /** JASS SetUnitTimeScale — a trigger override on the model's animation playback rate.
+   *  It does not replace the engine's own attack/walk re-rating but multiplies on top of
+   *  it (UI\TriggerStrings "Change Unit Animation Speed"), so a unit scaled to 2x still
+   *  speeds its walk cycle up with a Bloodlust. Applied by setAnimRate. */
   setUnitTimeScale(simId: number, scale: number): void {
-    const inst = this.byId.get(simId)?.unit.instance as { timeScale?: number } | undefined;
-    if (inst) inst.timeScale = scale;
+    const e = this.byId.get(simId);
+    if (!e) return;
+    e.timeScale = scale;
+    e.curRate = NaN; // force setAnimRate to re-apply against the new override next tick
   }
   /** JASS SetUnitColor / SetUnitOwner's changeColor — re-tint the team-coloured
    *  model parts to a player-colour index (our slot doubles as the colour). */
@@ -2077,6 +2111,7 @@ export class RtsController {
       // to the construction progress so it assembles in sync with the timer.
       // Models without a Birth clip fall back to scaling up from ~40% to full.
       if (u.building && u.building.constructionLeft > 0) {
+        this.setAnimRate(e, 1); // the Birth clip is scrubbed by progress, not played at a rate
         const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
         if (e.birthSeq >= 0) {
           if (e.curSeq !== e.birthSeq) {
@@ -2101,7 +2136,10 @@ export class RtsController {
       }
       // A materializing summon holds its birth clip (sim `spawning`) — don't let
       // the picker override it until it can act.
-      if (u.spawning > 0) continue;
+      if (u.spawning > 0) {
+        this.setAnimRate(e, 1);
+        continue;
+      }
       // Hold a cast animation so the throw/slam/spell gesture (or a looped channel)
       // plays out instead of being overwritten by the stand/attack picker. But drop
       // the hold the instant the unit is interrupted — a new order, or it starts
@@ -2109,7 +2147,10 @@ export class RtsController {
       // once and WC3 "animation canceling" looks instantaneous.
       if (e.castAnimT > 0) {
         e.castAnimT -= dt;
-        if (u.order === "cast" && !u.moving) continue;
+        if (u.order === "cast" && !u.moving) {
+          this.setAnimRate(e, 1); // a cast gesture plays at its authored rate, unhasted
+          continue;
+        }
         e.castAnimT = 0;
       }
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
@@ -2124,6 +2165,7 @@ export class RtsController {
       // (a free-running loop drifted out of sync with the sound).
       const chopping = u.working && u.order === "harvest" && !u.moving && e.anims.chopLumber >= 0;
       if (chopping) {
+        this.setAnimRate(e, 1);
         if (u.chopSeq !== e.lastChopSeq || e.curSeq !== e.anims.chopLumber) {
           e.lastChopSeq = u.chopSeq;
           e.curSeq = e.anims.chopLumber;
@@ -2151,6 +2193,9 @@ export class RtsController {
           e.unit.instance.setSequence(pick);
           e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
         }
+        // Re-rate every tick, not just on the swing: attack speed can change mid-swing
+        // (a Bloodlust lands, a Slow wears off) and the clip must follow it at once.
+        this.setAnimRate(e, this.attackAnimRate(e, u, e.curSeq));
       } else {
         // Smooth the actual/expected displacement so the walk clip only plays
         // when the unit is really making progress — a unit wedged in a crowd
@@ -2159,7 +2204,16 @@ export class RtsController {
         const ratio = expected > 1e-3 ? Math.hypot(u.x - u.prevX, u.y - u.prevY) / expected : 1;
         e.moveEma += (Math.min(ratio, 1) - e.moveEma) * MOVE_EMA_ALPHA;
         const effMoving = u.moving && e.moveEma >= MOVE_ANIM_MIN_RATIO;
-        const seq = this.pickSequence(e.anims, u, effMoving);
+        let seq = this.pickSequence(e.anims, u, effMoving);
+        // Walking re-rates the cycle to the unit's live move speed (and may swap in a
+        // "Walk Fast" gait); every other pose plays at its authored rate.
+        if (effMoving) {
+          const w = this.walkAnim(e, u, seq);
+          seq = w.seq;
+          this.setAnimRate(e, w.rate);
+        } else {
+          this.setAnimRate(e, 1);
+        }
         if (seq === e.anims.stand) {
           // Plain empty-handed idle: fidget through the model's stand variants (WC3's varied
           // idle). We drive it ourselves — our units are raw MdxComplexInstances, not the
@@ -2212,6 +2266,9 @@ export class RtsController {
     this.entries.splice(this.entries.indexOf(e), 1);
     this.deselect(simId);
     e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from overriding the death sequence
+    // Drop any attack/walk re-rating: the model outlives its Entry as a corpse, and a unit
+    // cut down mid-stride would otherwise play its Death and decay clips at its walk rate.
+    e.unit.instance.timeScale = 1;
     if (e.anims.death >= 0) {
       e.unit.instance.setSequence(e.anims.death);
       e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
@@ -2241,6 +2298,58 @@ export class RtsController {
   /** Choose the animation sequence for a unit's current state, using the
    *  worker's carried resource so peasants walk/stand/chop with the right
    *  gold- and lumber-carrying clips. */
+  /** Apply an animation playback rate to a unit's model. WC3 re-rates the attack and walk
+   *  clips from the unit's live attack/move speed; everything else (stand, cast, death,
+   *  birth) plays at its authored rate. JASS SetUnitTimeScale is an INDEPENDENT override
+   *  multiplied on top (TriggerStrings "Change Unit Animation Speed"), not a replacement. */
+  private setAnimRate(e: Entry, rate: number): void {
+    const r = rate * e.timeScale;
+    if (Math.abs(r - e.curRate) < 1e-3) return;
+    e.curRate = r;
+    e.unit.instance.timeScale = r;
+  }
+
+  /** The attack clip's playback rate. WC3 fits the swing to `damage point + backswing` —
+   *  and that pair IS the clip's authored length (verified against the real 1.27a models:
+   *  the Footman's 1000ms "Attack - 1" against dmgpt1 0.5 + backSw1 0.5; the Archmage's
+   *  1400ms against 0.55 + 0.85). Since attack speed divides both points, the rate works
+   *  out to exactly the unit's attack-speed factor: a Bloodlusted Grunt swings 40% faster
+   *  and its strike lands 40% sooner, staying in phase with the damage-point-timed hit.
+   *  Computing it from the live pair rather than the factor also keeps custom object data
+   *  honest — retuning dmgpt1 without re-authoring the model rescales the clip, as in WC3. */
+  private attackAnimRate(e: Entry, u: SimUnit, seq: number): number {
+    const w = u.swingWeapon ?? u.weapon;
+    if (!w) return 1;
+    const swing = w.damagePoint + w.backswing;
+    if (swing <= 0) return 1; // no authored timing (a summon with no weapons row) — play as-is
+    const clip = this.seqDuration(e.unit.instance, seq, 0);
+    return clip > 0 ? clip / swing : 1;
+  }
+
+  /** The walk clip and its playback rate for a unit's CURRENT move speed. `walk`/`run`
+   *  (unitUI) are the speeds the model's "Walk"/"Walk Fast" clips were authored for, so the
+   *  rate is simply speed/gait — which is what keeps a slowed unit's feet from skating and
+   *  makes an Endurance Aura visibly quicken the stride. A model with a distinct "Walk Fast"
+   *  switches to it once past the midpoint of the two gaits (Kodo Beast walk=100/run=240 →
+   *  midpoint 170; at spd 220 it runs, rated 220/240 = 0.92). Scaling by `modelScale` is
+   *  Warsmash's reading and physically sound — a model drawn 1.75x larger takes a 1.75x
+   *  longer stride per cycle, so it must play slower to cover the same ground (the four
+   *  Quillbeast tiers share one model and one 90/300 gait, differing only in modelScale) —
+   *  but it is the one part of this I could not verify against the real client. */
+  private walkAnim(e: Entry, u: SimUnit, seq: number): { seq: number; rate: number } {
+    const { animWalkSpeed: walk, animRunSpeed: run } = e;
+    if (walk <= 0) return { seq, rate: 1 }; // no gait data — leave the clip at its authored rate
+    let gait = walk;
+    let clip = seq;
+    // Only the plain walk has a Fast variant; a laden worker's "Walk Gold"/"Walk Lumber"
+    // keeps its own clip and is simply re-rated against the base gait.
+    if (seq === e.anims.walk && run > walk && e.anims.walkFast >= 0 && u.speed >= (walk + run) / 2) {
+      gait = run;
+      clip = e.anims.walkFast;
+    }
+    return { seq: clip, rate: u.speed / (gait * (e.baseScale || 1)) };
+  }
+
   private pickSequence(a: AnimSet, u: SimUnit, moving: boolean): number {
     const carry = u.worker
       ? u.worker.carryGold > 0
