@@ -459,16 +459,19 @@ export interface EngineHooks {
   setUnitScale?(unitId: number, scale: number): void; // SetUnitScale (render)
   setUnitVertexColor?(unitId: number, r: number, g: number, b: number, a: number): void; // SetUnitVertexColor (0–1)
   setUnitFlyHeight?(unitId: number, height: number): void; // SetUnitFlyHeight
-  getUnitFlyHeight?(unitId: number): number; // GetUnitFlyHeight
+  getUnitFlyHeight?(unitId: number): number | undefined; // GetUnitFlyHeight
   setUnitMoveSpeed?(unitId: number, speed: number): void; // SetUnitMoveSpeed
-  getUnitMoveSpeed?(unitId: number): number; // GetUnitMoveSpeed
+  getUnitMoveSpeed?(unitId: number): number | undefined; // GetUnitMoveSpeed
   setUnitTurnSpeed?(unitId: number, turn: number): void; // SetUnitTurnSpeed
   setUnitTimeScale?(unitId: number, scale: number): void; // SetUnitTimeScale (animation rate)
   // Live position/facing reads — a script-created unit's JASS handle otherwise keeps
   // its spawn-time values, so route Get* through the sim when a sim id is attached.
-  getUnitX?(unitId: number): number;
-  getUnitY?(unitId: number): number;
-  getUnitFacing?(unitId: number): number;
+  // **undefined means "no live value"** (the unit is gone — a death trigger reads its
+  // victim one tick after kill() deleted it), and the native falls back to the handle's
+  // last-known field. Answering 0 instead hands out the map origin: see SimWorld.getUnitX.
+  getUnitX?(unitId: number): number | undefined;
+  getUnitY?(unitId: number): number | undefined;
+  getUnitFacing?(unitId: number): number | undefined;
   // --- orders (7.14): IssueXOrder → sim; GetUnitCurrentOrder ← sim ---
   /** Issue{Immediate,Point,Target}Order — order id + target kind → the matching sim
    *  command (a trigger-issued unit marches/attacks/casts). Returns whether the order

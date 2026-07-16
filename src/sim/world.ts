@@ -5249,20 +5249,29 @@ export class SimWorld {
   }
   // Live reads for the Get* natives (a script-created unit's JASS handle otherwise
   // keeps its spawn-time position/facing — the sim value is the current one).
-  getUnitX(id: number): number {
-    return this.units.get(id)?.x ?? 0;
+  //
+  // **undefined, never 0, for a unit that is gone.** These answer the JASS natives through
+  // liveNum (natives/world.ts), whose contract is "the live sim value, or the handle's
+  // last-known field when there is none" — and it can only tell the two apart by
+  // `undefined`. A dead unit is deleted from `units` inside kill(), one tick BEFORE the
+  // death event it queued is pumped, so every GetUnitX a death trigger makes is a read of a
+  // unit that no longer exists. Answering 0 there put the map origin into the hands of
+  // Blizzard.j's UnitDropItem — every creep in the game dropped its loot in one pile in the
+  // corner of the map, which is what "creep drops stopped working" turned out to be.
+  getUnitX(id: number): number | undefined {
+    return this.units.get(id)?.x;
   }
-  getUnitY(id: number): number {
-    return this.units.get(id)?.y ?? 0;
+  getUnitY(id: number): number | undefined {
+    return this.units.get(id)?.y;
   }
-  getUnitFacing(id: number): number {
-    return this.units.get(id)?.facing ?? 0;
+  getUnitFacing(id: number): number | undefined {
+    return this.units.get(id)?.facing;
   }
-  getUnitMoveSpeed(id: number): number {
-    return this.units.get(id)?.speed ?? 0;
+  getUnitMoveSpeed(id: number): number | undefined {
+    return this.units.get(id)?.speed;
   }
-  getUnitFlyHeight(id: number): number {
-    return this.units.get(id)?.flyHeight ?? 0;
+  getUnitFlyHeight(id: number): number | undefined {
+    return this.units.get(id)?.flyHeight;
   }
 
   // === drains (renderer pulls these each frame) =============================

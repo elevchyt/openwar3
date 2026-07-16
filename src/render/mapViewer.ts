@@ -1403,16 +1403,18 @@ export class MapViewerScene {
         this.rts?.simWorld.setUnitFlyHeight(id, height);
         this.rts?.setUnitFlyHeight(id, height);
       },
-      getUnitFlyHeight: (id) => this.rts?.simWorld.getUnitFlyHeight(id) ?? 0,
+      getUnitFlyHeight: (id) => this.rts?.simWorld.getUnitFlyHeight(id),
       setUnitMoveSpeed: (id, speed) => this.rts?.simWorld.setUnitMoveSpeed(id, speed),
-      getUnitMoveSpeed: (id) => this.rts?.simWorld.getUnitMoveSpeed(id) ?? 0,
+      getUnitMoveSpeed: (id) => this.rts?.simWorld.getUnitMoveSpeed(id),
       setUnitTurnSpeed: (id, turn) => this.rts?.simWorld.setUnitTurnSpeed(id, turn),
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
       // Position reads fall back to the mine table: to the script a gold mine IS a unit
       // (MeleeGetProjectedLoc measures the hall/worker clump off GetUnitLoc(nearestMine)).
-      getUnitX: (id) => this.mineForScript(id)?.x ?? this.rts?.simWorld.getUnitX(id) ?? 0,
-      getUnitY: (id) => this.mineForScript(id)?.y ?? this.rts?.simWorld.getUnitY(id) ?? 0,
-      getUnitFacing: (id) => this.rts?.simWorld.getUnitFacing(id) ?? 0,
+      // `undefined` (not 0) when the unit is gone — the native then reads the handle's
+      // last-known value instead of the map origin. See SimWorld.getUnitX.
+      getUnitX: (id) => this.mineForScript(id)?.x ?? this.rts?.simWorld.getUnitX(id),
+      getUnitY: (id) => this.mineForScript(id)?.y ?? this.rts?.simWorld.getUnitY(id),
+      getUnitFacing: (id) => this.rts?.simWorld.getUnitFacing(id),
       // Orders (7.14): trigger issue → the sim; current order ← the sim.
       issueUnitOrder: (id, orderId, order, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, order, kind, x, y, targetId) ?? false,
       getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
@@ -2011,9 +2013,13 @@ export class MapViewerScene {
       const s = rt.sounds[i];
       const playing = this.sounds.isScriptPlaying(s.handleId);
       if (playing && s.is3D && s.attachUnit >= 0) {
+        // A unit that died out from under its sound has no position left to follow: leave
+        // the sound where it last was rather than yanking it to the map origin.
         const x = this.rts.simWorld.getUnitX(s.attachUnit);
         const y = this.rts.simWorld.getUnitY(s.attachUnit);
-        this.sounds.moveScript(s.handleId, { x, y, z: this.rts.groundHeightAt(x, y) });
+        if (x !== undefined && y !== undefined) {
+          this.sounds.moveScript(s.handleId, { x, y, z: this.rts.groundHeightAt(x, y) });
+        }
       }
       if (s.killWhenDone && s.started && !playing) rt.destroySound(s);
     }
@@ -2122,7 +2128,7 @@ export class MapViewerScene {
       groundHeight: (x, y) => rts.groundHeightAt(x, y),
       unitAt: (simId) => {
         const u = rts.simWorld.units.get(simId);
-        return u ? { x: u.x, y: u.y, flyHeight: rts.simWorld.getUnitFlyHeight(simId) } : null;
+        return u ? { x: u.x, y: u.y, flyHeight: rts.simWorld.getUnitFlyHeight(simId) ?? 0 } : null;
       },
       visible: (x, y) => vision.stateAt(x, y) === FogState.Visible,
       project: (x, y, z) => {
