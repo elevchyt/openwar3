@@ -110,6 +110,10 @@ export interface SelectionInfo {
   isItem: boolean; // a selected ground item (show name + description instead of stats)
   description: string; // item description (Ubertip), shown when isItem
   isSummon: boolean; // a temporary summoned unit (shows the "Summoned Unit" timer bar)
+  /** The local viewpoint sees this unit as an illusion (blue wash + summon timer). Gated by
+   *  viewpoint exactly like isSummon: an ENEMY's illusion reports false, so nothing in the
+   *  HUD gives it away. See docs/illusions.md. */
+  isIllusion: boolean;
   summonSecondsLeft: number; // seconds until the summon expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
   buffs: Array<{ icon: string; name: string; harmful: boolean }>; // active auras/buffs/debuffs
@@ -320,11 +324,13 @@ interface Entry {
 // declare no art whatsoever, so there is nothing in the MPQs to read this from.
 const INVIS_ALPHA = 0.5;
 
-// The blue wash a Mirror Image illusion wears for its owner and their allies — the same
-// "not the real thing" read a building has while it is being placed. Multiplies the mesh,
-// so the Blademaster's own colours still show through. Nothing in the MPQs carries this
-// (AOmi declares no tint field); like INVIS_ALPHA it is a hardcoded engine look.
-const ILLUSION_TINT = [0.45, 0.62, 1.5] as const;
+// The blue wash an illusion wears for its owner and their allies — the same "not the real
+// thing" read a building has while it is being placed. Multiplies the mesh, so the unit's
+// own colours still show through underneath. Nothing in the MPQs carries this (AOmi
+// declares no tint field); like INVIS_ALPHA it is a hardcoded engine look.
+// Exported so the HUD's 3D portrait bust wears the same wash as the unit on the terrain —
+// see docs/illusions.md.
+export const ILLUSION_TINT = [0.22, 0.42, 1.9] as const;
 
 // Green multiply-tint on a unit's whole mesh while it's a valid target of an armed
 // AoE spell (issue #20) — the same idea as the dark-blue "about to be built" ghost
@@ -3058,7 +3064,7 @@ export class RtsController {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -3085,7 +3091,7 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -3168,6 +3174,8 @@ export class RtsController {
       // must look like an ordinary Blademaster: a timer bar over one of four identical
       // heroes would hand the opponent the answer the ability exists to hide.
       isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.seesFor(u.owner)),
+      isIllusion: u.isIllusion && this.seesFor(u.owner), // same viewpoint rule as the tint
+
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
       buffs: this.statusBuffsFor(u),

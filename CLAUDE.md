@@ -70,6 +70,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
   the real client) — conflate them and every distance changes meaning and every map camera breaks.
+- **Illusions:** read [`docs/illusions.md`](docs/illusions.md) before touching Mirror Image (`AOmi`), the Wand of
+  Illusion (`AIil`), or anything that copies a unit. An illusion's whole point is that the ENEMY can't tell it from
+  the original, so every tell (blue wash, summon timer, portrait) is gated on the LOCAL viewpoint, and its
+  no-damage rule is enforced at the blow — not by editing what it shows.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

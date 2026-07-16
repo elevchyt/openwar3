@@ -37,6 +37,7 @@ interface MdxInstance {
   setSequence(index: number): void;
   setSequenceLoopMode(mode: number): void;
   setTeamColor(id: number): void;
+  setVertexColor?(c: ArrayLike<number>): void;
 }
 interface MdxCamera {
   position: Float32Array;
@@ -69,6 +70,11 @@ export class ModelViewerScene {
   private solver: Solver;
   private model: MdxModel | null = null;
   private instance: MdxInstance | null = null;
+  /** Whole-mesh multiply applied to the bust. The HUD portrait must wear whatever wash the
+   *  unit on the terrain does — an illusion's blue, say — or the two disagree about what
+   *  you have selected. Held here (not just written once) because `load` rebuilds the
+   *  instance on every re-select and has to re-apply it. See docs/illusions.md. */
+  private tint: ArrayLike<number> = [1, 1, 1, 1];
   private modelCache = new Map<string, MdxModel>(); // parsed portrait models by path
   private raf = 0;
   private last = 0;
@@ -99,6 +105,13 @@ export class ModelViewerScene {
 
     this.viewer = viewer;
     this.scene = scene;
+  }
+
+  /** Tint the bust (a whole-mesh multiply; [1,1,1,1] = the model's own colours). Applies to
+   *  the live instance and is remembered for the next `load`. */
+  setTint(c: ArrayLike<number>): void {
+    this.tint = c;
+    this.instance?.setVertexColor?.(c);
   }
 
   /** Load an MDX by VFS path, attach an instance, and play idle/walk (or the
@@ -133,6 +146,7 @@ export class ModelViewerScene {
     instance.setScene(this.scene);
     instance.setSequenceLoopMode(2); // always loop
     instance.setTeamColor(teamColor);
+    instance.setVertexColor?.(this.tint);
     this.instance = instance;
 
     const sequences = this.sequences();

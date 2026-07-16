@@ -21,7 +21,7 @@ import { WeatherOverlay } from "./weather";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
-import { RtsController, type RtsHost, type SelectionInfo } from "../game/rts";
+import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
@@ -4038,6 +4038,13 @@ export class MapViewerScene {
     this.portraitLabel = this.registry.get(sel.typeId)?.soundSet ?? "";
     const canvas = this.hud.portraitCanvas();
     if (!this.portraitViewer) this.portraitViewer = new ModelViewerScene(canvas, this.vfs);
+    // The bust wears the same wash the unit wears on the terrain, so the panel and the
+    // battlefield agree about what you have selected. Set on EVERY selection, not once at
+    // load: one viewer is reused for every unit, and an illusion shares the hero's model —
+    // so selecting the real Blademaster right after one of his images would otherwise
+    // inherit the blue and show the hero as a copy. (sel.isIllusion is viewpoint-gated:
+    // an enemy's image reports false and its bust stays untinted. See docs/illusions.md.)
+    this.portraitViewer.setTint(sel.isIllusion ? [ILLUSION_TINT[0], ILLUSION_TINT[1], ILLUSION_TINT[2], 1] : [1, 1, 1, 1]);
     // WC3 ships dedicated talking-head models alongside most units.
     const portraitPath = sel.model.replace(/\.mdx$/i, "_Portrait.mdx");
     const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
@@ -5526,6 +5533,7 @@ export class MapViewerScene {
               su.illusionDamageDealt = s.illusion.dealt; // AOmi DataB — 0: it hurts nothing
               su.illusionDamageTaken = s.illusion.taken; // AOmi DataC — 200%
               su.properName = s.illusion.properName; // wear the Blademaster's own name, not a fresh roll
+              su.mana = Math.min(su.maxMana, s.illusion.mana); // the hero's pool as it stands after the cast
             }
             this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
           });

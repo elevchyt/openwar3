@@ -1151,7 +1151,7 @@ export class SimWorld {
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
   // (same deferral as trainCompletions — the sim owns no model instances).
-  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string } }> = [];
+  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string; mana: number } }> = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -4834,6 +4834,12 @@ export class SimWorld {
     duration: number; // how long each illusion lasts (Dur1)
     dealt: number; // AOmi DataB "Damage Dealt (%)"
     taken: number; // AOmi DataC "Damage Taken (%)"
+    /** The caster's mana the instant the spell went off — i.e. AFTER its 125 was paid. An
+     *  image is a copy of the Blademaster as he is NOW, half-drained pool included; spawning
+     *  it on a full bar would mark it out at a glance. Captured once here rather than read at
+     *  landing, so all the images match each other and the hero exactly (mana regenerates
+     *  during the missiles' flight). */
+    mana: number;
     missileArt: string;
     /** One per destination tile. `hero` marks the single slot the real Blademaster takes. */
     spots: Array<{ x: number; y: number; hero: boolean; t: number; flight: number; sx: number; sy: number; landed: boolean }>;
@@ -4870,6 +4876,9 @@ export class SimWorld {
       duration: lvl.heroDuration || lvl.duration || 60,
       dealt: this.dataOf(lvl, 1, 0), // DataB "Damage Dealt (%)" — 0: an illusion hurts nothing
       taken: this.dataOf(lvl, 2, 2), // DataC "Damage Taken (%)"
+      // The cost is spent UP FRONT at the cast commit (see the `committed` phase), so the
+      // caster's pool is already post-cast by the time this handler runs.
+      mana: caster.mana,
       missileArt: def.missileArt,
       spots: spots.map((s, i) => ({
         ...s,
@@ -4955,7 +4964,7 @@ export class SimWorld {
 
   /** The illusion request itself — an exact copy of the caster's own type, flagged so the
    *  sim knows it must not hurt anything and the renderer knows to tint it. */
-  private spawnIllusion(caster: SimUnit, x: number, y: number, m: { duration: number; dealt: number; taken: number; abilityId: string }): void {
+  private spawnIllusion(caster: SimUnit, x: number, y: number, m: { duration: number; dealt: number; taken: number; abilityId: string; mana: number }): void {
     const def = this.abilities?.get(m.abilityId);
     this.summonRequests.push({
       unitId: caster.typeId,
@@ -4974,7 +4983,7 @@ export class SimWorld {
       // Blademaster in the pack must read the same. Spawning rolls a fresh proper name per
       // hero, which would have labelled the four of them with four different names — an
       // instant tell.
-      illusion: { dealt: m.dealt, taken: m.taken, properName: caster.properName },
+      illusion: { dealt: m.dealt, taken: m.taken, properName: caster.properName, mana: m.mana },
     });
   }
 
@@ -5529,7 +5538,7 @@ export class SimWorld {
     return out;
   }
   /** Units summoned/raised this frame — the renderer creates their models. */
-  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string } }> {
+  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string; mana: number } }> {
     if (!this.summonRequests.length) return this.summonRequests;
     const out = this.summonRequests;
     this.summonRequests = [];
