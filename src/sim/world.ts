@@ -20,7 +20,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, waveSchedule, WAVE_FIELDS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -4083,14 +4083,32 @@ export class SimWorld {
    *  "Unable to target Heroes."), which is a good sign the real engine is table-driven
    *  off the same data. */
   targetError(caster: SimUnit, target: SimUnit, flags: string[] = [], code = ""): string | null {
+    // Coarsest first: what the target IS, then what the ability may touch, then whether
+    // this particular cast would achieve anything. Order is what the player reads — a
+    // Paladin aimed at himself hears "Unable to target self." (the flag), not "Hero has
+    // full health." (a fact about a target he can't pick in the first place).
     if (target.hp <= 0) return "Notcorpse"; // "Target must be living."
     if (target.invulnerable && this.hostile(caster, target)) return "Notinvulnerable";
+    const flagError = this.targetAllowed(caster, target, flags);
+    if (flagError !== null) return flagError;
     // Abilities whose legal targets are a rule, not a flag list — the data can't say
     // "friendly living OR enemy Undead", so the engine hardcodes it and gives the
     // ability its own error string. Holy Light and Death Coil are mirror images.
     const polarity = POLARITY_SPELLS[code];
     if (polarity && !this.polarityOk(caster, target, polarity.healsUndead)) return polarity.error;
-    return this.targetAllowed(caster, target, flags);
+    // A heal with nothing to heal is refused, not wasted — WC3 won't let you spend a
+    // Paladin's mana on an undamaged Footman. The hero/unit split is the data's own:
+    // "Hero has full health." vs "Already at full health."
+    if (this.wouldHeal(caster, target, code) && target.hp >= target.maxHp) return target.isHero ? "HPmaxed" : "UnitHPmaxed";
+    return null;
+  }
+
+  /** Would casting `code` on this target HEAL it? For a polarity spell the friendly half
+   *  of its rule is the healing half (Holy Light heals the friendly living and smites the
+   *  enemy Undead), so allegiance decides; polarityOk has already vouched for the race. */
+  private wouldHeal(caster: SimUnit, target: SimUnit, code: string): boolean {
+    if (POLARITY_SPELLS[code]) return !this.hostile(caster, target);
+    return HEAL_SPELLS.has(code);
   }
 
   /** The Holy Light / Death Coil rule: one of heal-a-friendly and harm-an-enemy is for

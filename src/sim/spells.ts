@@ -293,6 +293,12 @@ export const POLARITY_SPELLS: Record<string, { healsUndead: boolean; error: stri
   AUdc: { healsUndead: true, error: "Deathcoiltarget" }, // "Must target enemy living units or friendly Undead units."
 };
 
+/** Single-target heals that ALWAYS heal whatever they may legally touch. The polarity
+ *  spells above heal too, but only their friendly half, so they're judged separately.
+ *  A heal that would restore nothing is refused by WC3 rather than wasted (HPmaxed /
+ *  UnitHPmaxed) — you cannot burn a Paladin's mana on an undamaged Footman. */
+export const HEAL_SPELLS = new Set(["Ahea"]); // Priest — Heal
+
 export const SPELL_HANDLERS: Record<string, Handler> = {
   // Holy Light — heal a friendly living unit for dataA, or smite an enemy Undead
   // unit for dataA (the projectile/impact carries this on units with a missile;

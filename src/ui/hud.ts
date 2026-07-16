@@ -767,7 +767,13 @@ export class GameHud {
       // Keep the console at its NATURAL aspect ratio, centred, and let the sides
       // letterbox on widescreen — never stretch it. Height is capped so a wide
       // monitor doesn't blow it up; width follows from the aspect.
-      console_.style.setProperty("--console-aspect", String(skin.consoleAspect));
+      //
+      // The aspect goes on the HUD ROOT, not on the console: --console-h is derived from
+      // it (see the stylesheet) and anything that has to sit clear of the console — the
+      // error line — needs to read that height too. Set it here and only the console
+      // could see it.
+      this.root.style.setProperty("--console-aspect", String(skin.consoleAspect));
+      this.root.classList.add("hud-skinned-console");
 
       place(minimap, ZONES.minimap);
       place(portraitWrap, ZONES.portrait);

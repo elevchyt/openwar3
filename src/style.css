@@ -187,6 +187,17 @@ body.in-game .menu-panel { display: none; }
   z-index: 3;
   font-family: var(--game-font);
   user-select: none;
+  /* How tall the console actually is right now — ONE value, so anything that must sit
+     clear of it (the error line) can never drift out of agreement with the console
+     itself. This is the placeholder chrome's fixed strip; the skinned rule below
+     overrides it with the real art's resolution-dependent height. */
+  --console-h: 172px;
+}
+/* The real console art is sized off the STAGE, so it grows with the window: at 1080p it
+   is ~281px tall, not 172. Anything anchored to a fixed pixel offset instead of this
+   ends up UNDER the console on a big monitor and floating on a small one. */
+.hud.hud-skinned-console {
+  --console-h: min(calc(var(--stage-h) * 0.26), calc(var(--stage-w) / var(--console-aspect)));
 }
 
 /* On-screen message log — the "Game - Display text" trigger action target.
@@ -224,7 +235,10 @@ body.in-game .menu-panel { display: none; }
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 186px; /* clears the 172px console */
+  /* Ride just above the console at ANY resolution — the console's height is a function
+     of the window, so this has to be derived from the same value rather than guessed in
+     pixels (at 1080p a 186px guess sits 95px INSIDE the console art). */
+  bottom: calc(var(--console-h) + 14px);
   text-align: center;
   font-family: var(--game-font);
   font-size: 15px;
@@ -504,7 +518,7 @@ body.in-game .menu-panel { display: none; }
   transform: translateX(-50%);
   aspect-ratio: var(--console-aspect);
   /* Sized off the STAGE, not the window — the console belongs to the game frame. */
-  height: min(calc(var(--stage-h) * 0.26), calc(var(--stage-w) / var(--console-aspect)));
+  height: var(--console-h);
   width: auto;
   padding: 0;
   gap: 0;
