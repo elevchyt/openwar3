@@ -1012,9 +1012,14 @@ export class Interpreter {
       const phase = ITEM_PHASES.indexOf(e.phase as (typeof ITEM_PHASES)[number]);
       const playerEvt = phase < 0 ? EVENT_PLAYER_UNIT_SELL_ITEM : EVENT_PLAYER_UNIT_DROP_ITEM + phase;
       const unitEvt = phase < 0 ? EVENT_UNIT_SELL_ITEM : EVENT_UNIT_DROP_ITEM + phase;
+      // A SELL_ITEM event belongs to the SHOP, not to the buyer: Blizzard.j registers
+      // RemovePurchasedItem on Player(PLAYER_NEUTRAL_PASSIVE) — the Marketplace's owner —
+      // and a Human buying there is nobody's neutral-passive unit. Match on the seller.
+      const owner = e.seller ? e.seller.owner : e.unit.owner;
+      const subject = e.seller ? (responses.get("SellingUnit") as JassValue) : unit;
       this.dispatchToRegs(responses, (reg) =>
-        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, e.unit.owner, unit)) ||
-        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, unit)));
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, owner, subject)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, subject)));
     }
   }
 
