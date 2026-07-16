@@ -310,6 +310,7 @@ interface Entry {
   baseColor?: Float32Array; // model's own tint, captured before any fog dimming
   fogTintB?: number; // last fog brightness applied (avoids redundant setVertexColor)
   aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
+  illus?: boolean; // last Mirror-Image blue-wash state applied (owner/allies only)
   fade?: number; // last ghost fade applied (invisible/ethereal) — see INVIS_ALPHA
 }
 
@@ -318,6 +319,12 @@ interface Entry {
 // there, not data: no ability carries a transparency field, and Wind Walk's [AOwk]/[BOwk]
 // declare no art whatsoever, so there is nothing in the MPQs to read this from.
 const INVIS_ALPHA = 0.5;
+
+// The blue wash a Mirror Image illusion wears for its owner and their allies — the same
+// "not the real thing" read a building has while it is being placed. Multiplies the mesh,
+// so the Blademaster's own colours still show through. Nothing in the MPQs carries this
+// (AOmi declares no tint field); like INVIS_ALPHA it is a hardcoded engine look.
+const ILLUSION_TINT = [0.45, 0.62, 1.5] as const;
 
 // Green multiply-tint on a unit's whole mesh while it's a valid target of an armed
 // AoE spell (issue #20) — the same idea as the dark-blue "about to be built" ghost
@@ -953,7 +960,7 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
-    const hide = u.inMine || u.insideBuild || u.inBurrow || devoured || this.fogHides(u);
+    const hide = u.inMine || u.insideBuild || u.inBurrow || devoured || u.vanished || this.fogHides(u);
     if (hide !== e.hidden) {
       e.hidden = hide;
       if (hide) {
@@ -981,14 +988,20 @@ export class RtsController {
     }
     // Green whole-mesh tint while this unit is a valid target of an armed AoE spell.
     const hi = this.aoeHighlight.has(e.simId);
+    // A Mirror Image illusion wears a blue wash — and ONLY its owner and their allies see
+    // it. That asymmetry is the ability: you must be able to pick your images apart from
+    // your hero, while the enemy sees N identical Blademasters and has to guess. So it
+    // keys off the LOCAL viewpoint (seesFor), not off the unit itself.
+    const illus = u.isIllusion && this.seesFor(u.owner);
     // Half-fade the ghosted states (issue #66). This has to compose with the tint here
     // rather than be written straight to the instance: baseColor caches the model's own
     // colour and this method re-emits from it every time the fog brightness changes, so
     // an alpha written anywhere else would be clobbered on the next re-emit.
     const fade = u.ethereal || u.invisible ? INVIS_ALPHA : 1;
-    if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade) return; // unchanged since last tick
+    if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade && e.illus === illus) return; // unchanged since last tick
     e.fogTintB = b;
     e.aoeHi = hi;
+    e.illus = illus;
     e.fade = fade;
     if (!e.baseColor) {
       const c = inst.vertexColor;
@@ -996,7 +1009,8 @@ export class RtsController {
     }
     const base = e.baseColor;
     const g = hi ? AOE_TARGET_TINT : ([1, 1, 1] as const);
-    inst.setVertexColor([base[0] * b * g[0], base[1] * b * g[1], base[2] * b * g[2], base[3] * fade]);
+    const m = illus ? ILLUSION_TINT : ([1, 1, 1] as const);
+    inst.setVertexColor([base[0] * b * g[0] * m[0], base[1] * b * g[1] * m[1], base[2] * b * g[2] * m[2], base[3] * fade]);
   }
 
   /** Wire the voice/sound board (owned by the host, which has the VFS). */
@@ -3145,7 +3159,11 @@ export class RtsController {
       goldRemaining: 0,
       isItem: false,
       description: "",
-      isSummon: u.isSummon && u.summonLeft > 0,
+      // The "Summoned Unit" timer bar. A Mirror Image illusion is a summon and shows one —
+      // but only to the side that owns it and their allies. Click an enemy's image and it
+      // must look like an ordinary Blademaster: a timer bar over one of four identical
+      // heroes would hand the opponent the answer the ability exists to hide.
+      isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.seesFor(u.owner)),
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
       buffs: this.statusBuffsFor(u),

@@ -694,6 +694,11 @@ export interface SimUnit {
   linkShare: number; // Spirit Link: fraction of a hit distributed across the group (dataA)
   devouring: number; // Kodo Devour: the prey unit id being digested (0 = none; holds one)
   devouredBy: number; // this unit is swallowed inside that Kodo (0 = free; renderer hides it)
+  /** Off the field for a moment while an effect resolves: the renderer hides it, nothing can
+   *  target or hurt it, and it takes no orders. Mirror Image's shuffle uses it — the
+   *  Blademaster is whisked away while MirrorImageCaster plays and the missiles fly out, then
+   *  set down on one of the destination tiles as if he had been a copy all along. */
+  vanished: boolean;
   etherealForm: boolean; // Spirit Walker in ethereal form: persistently ethereal (immune physical, no attack)
   working: boolean; // chopping (renderer plays the attack animation)
   atNode: boolean; // parked at the resource (approach finished — stop pathing)
@@ -774,6 +779,16 @@ export interface SimUnit {
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
   summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
+  /** A Mirror Image illusion: a copy of the caster that fights but cannot hurt anything.
+   *  Its factors come from AOmi's own data (AbilityMetaData names the columns):
+   *  DataB "Damage Dealt (%)" = 0 and DataC "Damage Taken (%)" = 2. The unit is otherwise
+   *  an exact copy — same type, same stats on the sheet — which is the point: only its
+   *  owner can tell it apart. It is also a summon (isSummon), so it expires, leaves no
+   *  corpse and dies to Dispel Magic. */
+  isIllusion: boolean;
+  illusionDamageDealt: number; // fraction of its damage that lands (AOmi DataB) — 0 = none
+  illusionDamageTaken: number; // multiplier on damage it receives (AOmi DataC) — 2 = double
+
   /** The effect that replaces this summon when it LEAVES — its timer running out or a
    *  re-cast dismissing it. Carried from the ability that summoned it (its buff's
    *  Effectart: Feral Spirit -> feralspiritdone). "" = leave without one. This is not a
@@ -1136,7 +1151,7 @@ export class SimWorld {
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
   // (same deferral as trainCompletions — the sim owns no model instances).
-  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string }> = [];
+  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number } }> = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -2491,6 +2506,10 @@ export class SimWorld {
       | "summonLeft"
       | "summonMax"
       | "unsummonArt"
+      | "vanished"
+      | "isIllusion"
+      | "illusionDamageDealt"
+      | "illusionDamageTaken"
       | "pendingCast"
       | "isCreep"
       | "guardX"
@@ -2651,6 +2670,10 @@ export class SimWorld {
       summonLeft: 0,
       summonMax: 0,
       unsummonArt: "",
+      vanished: false,
+      isIllusion: false,
+      illusionDamageDealt: 1,
+      illusionDamageTaken: 1,
       pendingCast: null,
       // Creep guard AI is off by default; the map seeder flips isCreep on and sets
       // the guard point / aggro range / sleep flag for Neutral Hostile units.
@@ -3864,6 +3887,7 @@ export class SimWorld {
     u.invisible = invisible;
     u.cloaked = cloaked;
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
+    if (u.vanished) u.invulnerable = true; // whisked off the field mid-effect — nothing can reach it
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;
     u.bonusAgi = item.agi;
@@ -4231,6 +4255,10 @@ export class SimWorld {
   issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0): boolean {
     const u = this.units.get(unitId);
     if (!u || u.stunned || u.silenced || !this.abilities) return false;
+    // An illusion is a picture of a caster, not a caster: it has the abilities on its sheet
+    // (it is an exact copy) but may not use them. The command card hides them too — this is
+    // the backstop for every other route in (a trigger, a hotkey, autocast).
+    if (u.isIllusion) return false;
     if (this.castLocked(u)) return false; // already committed to a spell — see castLocked
     const ab = this.findAbility(u, code);
     if (!ab) return false;
@@ -4786,6 +4814,171 @@ export class SimWorld {
    *  still deals that last wave. */
   private waveImpacts: Array<{ t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"] }> = [];
 
+  // --- Mirror Image (AOmi) ------------------------------------------------------------
+  //
+  // The shuffle, as the game stages it: the Blademaster vanishes and MirrorImageCaster
+  // stands in his place; after the ability's own "Animation Delay" (DataD = 0.5s) that
+  // effect throws one MirrorImageMissile per destination; each missile that lands puts an
+  // illusion on its tile — except the one tile, picked at random, where the real hero is
+  // set back down. Which of them is the true Blademaster is therefore anyone's guess,
+  // including the caster's, and that IS the ability.
+  //
+  // It runs here rather than on the projectile system because these missiles fly to a
+  // POINT and deal nothing; tickProjectiles is built around a target unit it damages.
+  private mirrorCasts: Array<{
+    casterId: number;
+    abilityId: string;
+    rank: number;
+    delayLeft: number; // AOmi DataD "Animation Delay" — the beat before the missiles fly
+    thrown: boolean;
+    duration: number; // how long each illusion lasts (Dur1)
+    dealt: number; // AOmi DataB "Damage Dealt (%)"
+    taken: number; // AOmi DataC "Damage Taken (%)"
+    missileArt: string;
+    /** One per destination tile. `hero` marks the single slot the real Blademaster takes. */
+    spots: Array<{ x: number; y: number; hero: boolean; t: number; flight: number; sx: number; sy: number; landed: boolean }>;
+  }> = [];
+
+  /** Strip every timed buff (Dispel Magic; Mirror Image dispels its own caster). Auras
+   *  re-apply on the next tick, so only the timed ones actually go. */
+  private dispelUnit(u: SimUnit): void {
+    u.buffs = [];
+  }
+
+  /** Begin Mirror Image: hide the caster, and work out where everyone lands. */
+  private startMirrorImage(caster: SimUnit, def: AbilityDef, rank: number): void {
+    const lvl = def.levelData[Math.min(rank, def.levelData.length) - 1];
+    if (!lvl) return;
+    const images = Math.max(1, Math.round(this.dataOf(lvl, 0, 1))); // DataA "Number of Images"
+    // One tile per image PLUS one for the hero himself — he is shuffled in among them.
+    const spots = this.mirrorSpots(caster, images + 1);
+    if (!spots.length) return;
+    const heroSlot = Math.floor(this.rng() * spots.length); // never a fixed slot: the whole
+    // point is that the enemy (and the caster's own hand) cannot know which one is real.
+    const speed = 1000; // AOmi Missilespeed
+    this.mirrorCasts.push({
+      casterId: caster.id,
+      abilityId: def.id,
+      rank,
+      delayLeft: this.dataOf(lvl, 3, 0.5), // DataD "Animation Delay"
+      thrown: false,
+      duration: lvl.heroDuration || lvl.duration || 60,
+      dealt: this.dataOf(lvl, 1, 0), // DataB "Damage Dealt (%)" — 0: an illusion hurts nothing
+      taken: this.dataOf(lvl, 2, 2), // DataC "Damage Taken (%)"
+      missileArt: def.missileArt,
+      spots: spots.map((s, i) => ({
+        ...s,
+        hero: i === heroSlot,
+        t: 0,
+        flight: Math.max(0.05, Math.hypot(s.x - caster.x, s.y - caster.y) / speed),
+        sx: caster.x,
+        sy: caster.y,
+        landed: false,
+      })),
+    });
+    // "Dispels all magic from the Blademaster" — straight off the Ubertip.
+    this.dispelUnit(caster);
+    caster.vanished = true; // off the field: hidden, untargetable, and it keeps him from
+    // being attacked while the illusions are still in the air.
+    this.stop(caster.id);
+    if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: caster.x, y: caster.y, targetId: 0, z: 0 });
+  }
+
+  /** `count` free tiles to scatter the images (and the hero) across, nearest-fit around the
+   *  caster so nobody lands in a cliff or a tree. Ordered randomly and spread over a ring,
+   *  so the pattern differs every cast. */
+  private mirrorSpots(caster: SimUnit, count: number): Array<{ x: number; y: number }> {
+    const out: Array<{ x: number; y: number }> = [];
+    const n = caster.footprint || footprintCells(caster.radius);
+    const start = this.rng() * Math.PI * 2; // random ring phase — never the same fan twice
+    for (let i = 0; i < count; i++) {
+      const ang = start + (i / count) * Math.PI * 2;
+      const dist = 96 + this.rng() * 96;
+      const wx = caster.x + Math.cos(ang) * dist;
+      const wy = caster.y + Math.sin(ang) * dist;
+      let spot = { x: wx, y: wy };
+      if (this.grid) {
+        const [cx, cy] = this.grid.worldToCell(wx, wy);
+        const cell = this.grid.nearestFit(cx, cy, n, 14) ?? this.grid.nearestWalkable(cx, cy, 14);
+        if (cell) {
+          const [fx, fy] = this.grid.cellToWorld(cell[0], cell[1]);
+          spot = { x: fx, y: fy };
+        }
+      }
+      out.push(spot);
+    }
+    return out;
+  }
+
+  private tickMirrorImage(dt: number): void {
+    for (let i = this.mirrorCasts.length - 1; i >= 0; i--) {
+      const m = this.mirrorCasts[i];
+      const caster = this.units.get(m.casterId);
+      // The Blademaster died (or was removed) mid-shuffle: drop the whole thing rather than
+      // leave illusions of a hero who isn't there.
+      if (!caster || caster.hp <= 0) {
+        if (caster) caster.vanished = false;
+        this.mirrorCasts.splice(i, 1);
+        continue;
+      }
+      if (!m.thrown) {
+        m.delayLeft -= dt;
+        if (m.delayLeft > 0) continue; // MirrorImageCaster is still playing
+        m.thrown = true;
+        for (const s of m.spots) {
+          this.mirrorMissiles.push({ art: m.missileArt, sx: s.sx, sy: s.sy, tx: s.x, ty: s.y, flight: s.flight });
+        }
+        continue;
+      }
+      let all = true;
+      for (const s of m.spots) {
+        if (s.landed) continue;
+        s.t += dt;
+        if (s.t < s.flight) { all = false; continue; }
+        s.landed = true;
+        if (s.hero) {
+          // The real one steps out of the missile that happened to draw the short straw.
+          caster.vanished = false;
+          this.teleportUnit(caster, s.x, s.y);
+        } else {
+          this.spawnIllusion(caster, s.x, s.y, m);
+        }
+      }
+      if (all) this.mirrorCasts.splice(i, 1);
+    }
+  }
+
+  /** The illusion request itself — an exact copy of the caster's own type, flagged so the
+   *  sim knows it must not hurt anything and the renderer knows to tint it. */
+  private spawnIllusion(caster: SimUnit, x: number, y: number, m: { duration: number; dealt: number; taken: number; abilityId: string }): void {
+    const def = this.abilities?.get(m.abilityId);
+    this.summonRequests.push({
+      unitId: caster.typeId,
+      x,
+      y,
+      facing: caster.facing,
+      owner: caster.owner,
+      team: caster.team,
+      summonLeft: m.duration,
+      sourceId: caster.id,
+      summonArt: "",
+      // An image popping is BOmi's Specialart (MirrorImageDeathCaster) — its folder-mate
+      // MirrorImageDeath.wav rides it as a model SND event (AnimLookups AOMI).
+      unsummonArt: def?.buffSpecialArt ?? "",
+      illusion: { dealt: m.dealt, taken: m.taken },
+    });
+  }
+
+  /** MirrorImageMissile models in flight, drained by the renderer (they are pure visuals —
+   *  the sim already knows where and when each one lands). */
+  private mirrorMissiles: Array<{ art: string; sx: number; sy: number; tx: number; ty: number; flight: number }> = [];
+
+  drainMirrorMissiles(): Array<{ art: string; sx: number; sy: number; tx: number; ty: number; flight: number }> {
+    const out = this.mirrorMissiles;
+    this.mirrorMissiles = [];
+    return out;
+  }
+
   private addSpellFieldInternal(f: SpellFieldInit): void {
     // Capture the caster's team + the ability's Targets Allowed (targs1) NOW, so the
     // field keeps affecting the right allegiances even after the caster dies mid-channel.
@@ -5038,9 +5231,7 @@ export class SimWorld {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
     applyBuff: (t, buff) => this.applyBuffInternal(t, buff),
-    dispel: (t) => {
-      t.buffs = []; // Dispel Magic clears all timed buffs (auras re-apply next tick)
-    },
+    dispel: (t) => this.dispelUnit(t),
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "" });
     },
@@ -5068,6 +5259,7 @@ export class SimWorld {
       return burned;
     },
     teleport: (u, x, y) => this.teleportUnit(u, x, y),
+    mirrorImage: (caster, def, rank) => this.startMirrorImage(caster, def, rank),
     changeOwner: (u, owner, team) => {
       u.owner = owner;
       u.team = team;
@@ -5295,8 +5487,8 @@ export class SimWorld {
   /** Play a one-shot effect model at a point. For the spawn paths the renderer owns:
    *  a summon's burst belongs on the tile the renderer finally placed it on, which the
    *  sim never sees (see drainSummonRequests). Spell handlers use SpellApi.emitEffect. */
-  emitEffectAt(art: string, x: number, y: number): void {
-    if (art) this.spellEffects.push({ art, x, y, targetId: 0, z: 0 });
+  emitEffectAt(art: string, x: number, y: number, sound = false): void {
+    if (art) this.spellEffects.push({ art, x, y, targetId: 0, z: 0, sound });
   }
 
   /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
@@ -5328,7 +5520,7 @@ export class SimWorld {
     return out;
   }
   /** Units summoned/raised this frame — the renderer creates their models. */
-  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string }> {
+  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number } }> {
     if (!this.summonRequests.length) return this.summonRequests;
     const out = this.summonRequests;
     this.summonRequests = [];
@@ -5437,6 +5629,7 @@ export class SimWorld {
     this.resolveAirSeparation(dt);
     this.tickProjectiles(dt);
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
+    this.tickMirrorImage(dt); // Mirror Image's caster effect -> missiles -> illusions
     this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
     this.tickWards(dt); // Witch Doctor Healing Ward heal + Stasis Trap proximity stun
     this.tickDevour(dt); // Kodo digests any swallowed unit
@@ -6626,6 +6819,14 @@ export class SimWorld {
   }
 
   private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None): number {
+    // A Mirror Image illusion swings, connects, and does nothing: AOmi's DataB ("Damage
+    // Dealt (%)") is 0. Its sheet still reads like the Blademaster's — the deception is
+    // the whole ability — so this is enforced here, at the blow, not by editing its stats.
+    // (Only its ATTACKS need this: an illusion cannot cast, so no spell damage is ever
+    // attributed to one. "Damage Taken" lives in landDamage, which spells reach too.)
+    const attacker = attackerId ? this.units.get(attackerId) : undefined;
+    if (attacker?.isIllusion) rawDamage *= attacker.illusionDamageDealt;
+    if (rawDamage <= 0) return 0;
     // Evasion (Demon Hunter passive AEev): a chance to dodge a physical attack.
     if (this.tryEvade(target)) return 0;
     // Defend (Adef, granted by the Rhde research): a Footman braced behind his shield turns
@@ -6636,7 +6837,6 @@ export class SimWorld {
     if (defend) {
       if (this.rng() * 100 < this.dataOf(defend, 5, 30)) {
         // Reflected: the shot goes back down its own flight path. The defender takes nothing.
-        const attacker = this.units.get(attackerId);
         if (attacker) this.landDamage(attacker, rawDamage, target.id, false);
         return 0;
       }
@@ -6752,6 +6952,11 @@ export class SimWorld {
    *  the HP removed (0 if the target was invulnerable). */
   private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean): number {
     if (target.invulnerable) return 0; // Divine Shield / Avatar: immune to damage
+    // A Mirror Image illusion takes AOmi's DataC ("Damage Taken (%)") = 200%, which is why
+    // one melts the moment somebody works out which is which. It belongs HERE and not in
+    // applyDamage because that is only the ATTACK path: spellDamage lands straight here, and
+    // Dispel Magic hitting a summon is exactly the case that has to double.
+    if (target.isIllusion) amount *= target.illusionDamageTaken;
     // Sleep (Dreadlord) breaks the instant the sleeper takes damage (WC3).
     if (target.buffs.some((b) => b.kind === "sleep")) target.buffs = target.buffs.filter((b) => b.kind !== "sleep");
     // Mana Shield (Naga): absorb incoming damage into mana at `value` mana per hp.
@@ -6861,11 +7066,19 @@ export class SimWorld {
    *  fires death triggers. A wolf cut down in a fight still goes through kill() and dies
    *  properly — deathType=0 leaves no corpse and it dissipates (MiscData DissipateTime). */
   private unsummon(u: SimUnit): void {
-    if (u.unsummonArt) this.spellEffects.push({ art: u.unsummonArt, x: u.x, y: u.y, targetId: 0, z: 0 });
+    if (u.unsummonArt) this.spellEffects.push({ art: u.unsummonArt, x: u.x, y: u.y, targetId: 0, z: 0, sound: true });
     this.removeUnit(u.id); // silent: no corpse, no death XP, no death trigger
   }
 
   private kill(u: SimUnit, killerId = 0): void {
+    // A Mirror Image illusion that is destroyed does not die — it pops, with BOmi's
+    // Specialart (MirrorImageDeathCaster, whose AOMI SND event is MirrorImageDeath.wav).
+    // It must not play the Blademaster's death, which would both look wrong and tell the
+    // enemy they had found a copy; and it grants no XP, being nothing but a picture.
+    if (u.isIllusion) {
+      this.unsummon(u);
+      return;
+    }
     // Reincarnation (Tauren Chieftain / Elder Sage, AOre): a fatal blow instead
     // revives the hero in place, on a long cooldown (stored on the ability).
     if (this.tryReincarnate(u)) return;
@@ -7195,6 +7408,11 @@ export class SimWorld {
    *  room. Raises PICKUP_ITEM — a powerup fires it too (WC3 picks the tome up, then
    *  consumes it). */
   private pickUpItem(u: SimUnit, it: SimItem, wantSlot = -1): boolean {
+    // A Mirror Image illusion carries no inventory of its own and cannot take anything off
+    // the ground — it would be handing the real hero's items to a copy that is about to
+    // expire. Blocked here rather than at the order, because every route in (walking over
+    // an item, a right-click, a trigger's UnitAddItem) funnels through this one door.
+    if (u.isIllusion) return false;
     if (!this.itemReg) return false;
     const def = this.itemReg.get(it.itemId);
     if (!def) { this.removeGroundItem(it.id); return true; }

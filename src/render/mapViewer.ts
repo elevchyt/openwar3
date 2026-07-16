@@ -2712,6 +2712,49 @@ export class MapViewerScene {
     }
   }
 
+  // --- Mirror Image missiles ------------------------------------------------------
+  //
+  // Pure decoration: the sim has already decided where each one lands and when, and puts
+  // the image (or the hero) there on its own clock. These just have to be seen arriving,
+  // so they lerp start→destination over the sim's own flight time and detach on landing.
+  private mirrorMissiles: Array<{ inst: SpawnInstance; sx: number; sy: number; tx: number; ty: number; t: number; flight: number }> = [];
+
+  private async spawnMirrorMissile(m: { art: string; sx: number; sy: number; tx: number; ty: number; flight: number }): Promise<void> {
+    const map = this.viewer.map;
+    if (!map || !m.art) return;
+    let model = this.effectModels.get(m.art);
+    if (model === undefined) {
+      model = ((await this.viewer.load(m.art, this.solver)) as SpawnModel | undefined) ?? null;
+      this.effectModels.set(m.art, model);
+    }
+    if (!model || !this.viewer.map) return;
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    inst.setSequence(this.effectSequence(inst));
+    inst.setSequenceLoopMode(2);
+    inst.show();
+    this.mirrorMissiles.push({ inst, sx: m.sx, sy: m.sy, tx: m.tx, ty: m.ty, t: 0, flight: m.flight });
+  }
+
+  private updateMirrorMissiles(dt: number): void {
+    for (let i = this.mirrorMissiles.length - 1; i >= 0; i--) {
+      const m = this.mirrorMissiles[i];
+      m.t += dt;
+      const k = Math.min(1, m.t / m.flight);
+      const x = m.sx + (m.tx - m.sx) * k;
+      const y = m.sy + (m.ty - m.sy) * k;
+      this.loc3[0] = x;
+      this.loc3[1] = y;
+      // A shallow arc so it reads as thrown rather than dragged along the floor.
+      this.loc3[2] = (this.rts?.groundHeightAt(x, y) ?? 0) + Math.sin(k * Math.PI) * 60;
+      m.inst.setLocation(this.loc3);
+      if (k >= 1) {
+        m.inst.detach();
+        this.mirrorMissiles.splice(i, 1);
+      }
+    }
+  }
+
   // Persistent per-unit buff models: a looping effect worn by a unit for as long as
   // it carries a given buff. Pooled by a stable key so it's created once and detached
   // when the buff falls off. Two families feed this, both data-driven:
@@ -4599,6 +4642,10 @@ export class MapViewerScene {
     if (!this.rts) return;
     const su = this.rts.simWorld.units.get(sel.id);
     if (!su || su.owner !== this.localPlayer) return;
+    // A Mirror Image illusion copies the hero's abilities onto its sheet but can't use any
+    // of them, so it doesn't get the buttons at all — a card full of spells that silently
+    // refuse would read as a bug. (issueCast refuses them regardless.)
+    if (su.isIllusion) return;
     const active = this.activeCommandId();
     for (const ab of su.abilities) {
       if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
@@ -5336,6 +5383,7 @@ export class MapViewerScene {
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);
       this.updateEffects(dt / 1000);
+      this.updateMirrorMissiles(dt / 1000);
       this.updateAuraEffects(dt / 1000);
       this.updateTreePulses(dt / 1000);
       this.updateTreeActors(); // per-chop "stand hit" wobble on felled/chopped trees' stand-ins
@@ -5444,6 +5492,7 @@ export class MapViewerScene {
         // Summoned / raised units — create their models IN FRONT of the caster
         // (nearest free tile), play their birth clip, then flag temporary summons
         // (Water Elemental) so the sim expires them on schedule.
+        for (const m of world.drainMirrorMissiles()) void this.spawnMirrorMissile(m);
         for (const s of world.drainSummonRequests()) {
           const d = this.registry.get(s.unitId);
           if (!d) continue;
@@ -5451,7 +5500,7 @@ export class MapViewerScene {
           const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16);
           // The summon burst belongs on the SPOT the unit lands on, not on the caster —
           // three wolves fan out around the Far Seer, and each arrives in its own.
-          if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy);
+          if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy, true); // the model carries its own SND event
           void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
             if (simId === null) return;
             const su = world.units.get(simId);
@@ -5460,6 +5509,11 @@ export class MapViewerScene {
               su.summonLeft = summonLeft;
               su.summonMax = summonLeft;
               su.isSummon = true; // temporary summon — expires, leaves no corpse, ×0.5 XP
+            }
+            if (su && s.illusion) {
+              su.isIllusion = true;
+              su.illusionDamageDealt = s.illusion.dealt; // AOmi DataB — 0: it hurts nothing
+              su.illusionDamageTaken = s.illusion.taken; // AOmi DataC — 200%
             }
             this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
           });

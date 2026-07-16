@@ -58,6 +58,10 @@ export interface SpellApi {
   changeOwner(unit: SimUnit, owner: number, team: number): void;
   /** Kill a unit outright (Death Pact / Dark Ritual sacrifice, Transmute). */
   killUnit(unit: SimUnit): void;
+
+  /** Mirror Image: run the caster-vanishes -> missiles -> illusions sequence (AOmi).
+   *  Staged over time in the world, so the handler only kicks it off. */
+  mirrorImage(caster: SimUnit, def: AbilityDef, rank: number): void;
 }
 
 export interface SimBuffInit {
@@ -1132,11 +1136,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Phoenix (Blood Mage, ult) — summon a phoenix beside the caster.
   AHpx: (api, caster, def, rank) => summonSpell(api, caster, def, rank, { count: 1, atPoint: false }),
   // Mirror Image (Blademaster) — conjure illusions (copies of the caster's type).
-  AOmi: (api, caster, def, rank) => {
-    const lvl = def.levelData[rank - 1];
-    summonMany(api, caster, def, caster.typeId, caster.x, caster.y, Math.max(1, d(lvl, 1, 1)), lvl.heroDuration || lvl.duration || 60);
-    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-  },
+  // Mirror Image (Blademaster) — the whole ability is a staged shuffle (the caster
+  // vanishes, MirrorImageCaster plays, missiles fly out, and images land alongside the
+  // real hero on random tiles), so it runs as its own sequence in the world rather than
+  // as a plain summon. See startMirrorImage.
+  //
+  // It was summonMany'd off `d(lvl, 1, …)` — DataB — which AbilityMetaData names "Damage
+  // Dealt (%)" and the data sets to 0. `Math.max(1, 0)` meant exactly one image at every
+  // rank, for an ability whose entire tooltip is about the count going 1 → 2 → 3. The
+  // count is DataA, "Number of Images".
+  AOmi: (api, caster, def, rank) => api.mirrorImage(caster, def, rank),
 
   // Inferno (Dreadlord, ult) — an infernal crashes down at the point, dealing
   // dataA impact damage to enemies in `area`, then fights for the duration.

@@ -83,6 +83,12 @@ export interface AbilityDef {
    *  replaces a Feral Spirit wolf when its timer runs out. Verified 2026-07 against the
    *  1.27 MPQ (BOsf/BNsg/BNsq/BNsw all carry it). */
   buffEffectArt: string;
+  /** The buff's own `Specialart` — a PROC, and what it means is per-ability, so read it
+   *  only where you know the ability: Frost Armor's is the chill on an attacker, Mirror
+   *  Image's (`[BOmi]` MirrorImageDeathCaster) is an illusion popping, and Blizzard's own
+   *  comment on `[BNlm]` says the Lava Spawn's "is used when the lava monster splits".
+   *  Never treat it as a generic death/unsummon slot. */
+  buffSpecialArt: string;
   /** The PERSISTENT models worn by a unit carrying this ability's buff (buffid1),
    *  each with its attachment point: Divine Shield's bubble, Banish's ethereal glow,
    *  the small per-unit aura swirl (GeneralAuraTarget), Bloodlust's two hand flames.
@@ -399,6 +405,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       buffFx: buffFx,
       buffArt: buffFx[0]?.path ?? "",
       buffEffectArt: mdlPath(buffField(func, str(r, "buffid1"), "Effectart")),
+      buffSpecialArt: mdlPath(buffField(func, str(r, "buffid1"), "Specialart")),
       animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
       // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it.
       order: (f ? str(f, "Order") : "").trim().toLowerCase(),
