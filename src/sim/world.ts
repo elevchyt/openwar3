@@ -1014,6 +1014,16 @@ const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq
 // Blood Mage — by moving or a stun — leaves only the gong + vortex, no flames). The
 // strike itself (pillar + burn) still needs the wind-up to finish (see spells AHfs).
 const PRECAST_WARNING = new Set(["AHfs"]);
+// Immediate abilities (base code): pressing the button IS the cast. No wind-up, no
+// cast animation, and no re-tasking — the caster keeps attacking/walking straight
+// through it. Divine Shield (and Cenarius's ACds, the same spell) is the case: it
+// declares no `Animnames` in HumanAbilityFunc.txt (so the engine has no clip to play
+// for it) and `Cast1=0` in AbilityData.slk, and it's a toggle rather than an order
+// (`Order=divineshield` / `Unorder=undivineshield`) — in WC3 the Paladin bubbles
+// mid-swing without dropping his attack. Do NOT widen this to every no-Animnames
+// spell: Holy Light and Water Elemental have none either, yet the engine falls back
+// to the caster's "Spell" clip for them (see RtsController.playCastAnim).
+const IMMEDIATE = new Set(["AHds", "ACds"]);
 // Corpse decay (Units\MiscData.txt BoneDecayTime): a corpse persists 88s after
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
@@ -4312,12 +4322,16 @@ export class SimWorld {
     // (it is an exact copy) but may not use them. The command card hides them too — this is
     // the backstop for every other route in (a trigger, a hotkey, autocast).
     if (u.isIllusion) return false;
-    if (this.castLocked(u)) return false; // already committed to a spell — see castLocked
     const ab = this.findAbility(u, code);
     if (!ab) return false;
     const def = this.abilities.get(ab.id);
     if (!def || def.target === "passive") return false;
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
+    // Immediate abilities (see IMMEDIATE) fire here and now: pay, run the effect, done.
+    // They take no order and touch none of the unit's state below, so they neither need
+    // the castLocked gate nor interrupt a swing, a walk, or another spell's wind-up.
+    if (IMMEDIATE.has(code)) return this.castImmediate(u, ab, def, lvl);
+    if (this.castLocked(u)) return false; // already committed to a spell — see castLocked
     const t = def.target === "unit" ? this.units.get(targetId) : undefined;
     if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags, code))) return false;
     // Remember an attack-move/follow to resume after the cast (WC3 casters keep
@@ -4347,6 +4361,44 @@ export class SimWorld {
       ended: false,
       resume,
     };
+    return true;
+  }
+
+  /** Cast an IMMEDIATE ability on the spot: no PendingCast, no wind-up, no cast
+   *  animation, and the caster's current order (an attack in mid-swing, a walk) is
+   *  left completely alone. The whole cast collapses into this one call, so every
+   *  spell event fires here in the order tickCast would have raised them. */
+  private castImmediate(u: SimUnit, ab: SimAbility, def: AbilityDef, lvl: AbilityLevel): boolean {
+    if (ab.cooldownLeft > 0 || u.mana < lvl.cost) return false;
+    u.mana -= lvl.cost;
+    ab.cooldownLeft = lvl.cooldown;
+    // A stand-in PendingCast purely to describe the cast to noteSpell/resolveCast —
+    // it is never stored on the unit, so nothing can interrupt or resume it.
+    const pc: PendingCast = {
+      code: def.code,
+      abilityId: ab.id,
+      rank: ab.level,
+      targetId: 0,
+      x: u.x,
+      y: u.y,
+      range: 0,
+      castLeft: 0,
+      started: true,
+      committed: true,
+      fired: true,
+      channelLeft: 0,
+      backLeft: 0,
+      ended: true,
+      resume: null,
+    };
+    this.noteSpell(u, pc, "channel");
+    this.noteSpell(u, pc, "cast");
+    this.breakInvisibility(u); // casting reveals, the same as for a wound-up spell
+    this.castFires.push({ casterId: u.id, code: def.code, abilityId: ab.id }); // sound only — no castStarts, so no clip to hold
+    this.noteSpell(u, pc, "effect");
+    this.resolveCast(u, def, pc);
+    this.noteSpell(u, pc, "finish");
+    this.noteSpell(u, pc, "endcast");
     return true;
   }
 
