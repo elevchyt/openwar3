@@ -77,6 +77,12 @@ export interface AbilityDef {
   effectArt: string; // ability "beware"/effect art — Flame Strike's ground warning ring
   areaArt: string; // AoE ground effect (Blizzard, Rain of Fire)
   buffArt: string; // buffFx[0]'s path — the primary persistent model (convenience).
+  /** The buff's own `Effectart` — the effect played when the buff ENDS, as distinct from
+   *  buffFx (worn while it lasts) and the ability's `Effectart` (a pre-cast warning).
+   *  This is where an unsummon lives: `[BOsf] Effectart = …\feralspiritdone.mdl` is what
+   *  replaces a Feral Spirit wolf when its timer runs out. Verified 2026-07 against the
+   *  1.27 MPQ (BOsf/BNsg/BNsq/BNsw all carry it). */
+  buffEffectArt: string;
   /** The PERSISTENT models worn by a unit carrying this ability's buff (buffid1),
    *  each with its attachment point: Divine Shield's bubble, Banish's ethereal glow,
    *  the small per-unit aura swirl (GeneralAuraTarget), Bloodlust's two hand flames.
@@ -392,6 +398,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       // against the 1.27 MPQ (docs/wc3-data-formats.md).
       buffFx: buffFx,
       buffArt: buffFx[0]?.path ?? "",
+      buffEffectArt: mdlPath(buffField(func, str(r, "buffid1"), "Effectart")),
       animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
       // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it.
       order: (f ? str(f, "Order") : "").trim().toLowerCase(),
@@ -465,9 +472,26 @@ function rawTip(v: string): string {
   return v.replace(/^"|"$/g, "").trim();
 }
 
-/** A buff's own persistent models, read from its `[B….]` section in the same
- *  AbilityFunc files (buffs live alongside abilities there). `buffId` may be a
- *  comma-list (multi-buff abilities); we take the first.
+/** A buff's `[B….]` section in the same AbilityFunc files (buffs live alongside
+ *  abilities there). `buffId` may be a comma-list (multi-buff abilities); we take
+ *  the first. */
+function buffRow(func: MappedData, buffId: string): Row | undefined {
+  const first = (buffId || "").split(",")[0]?.trim();
+  return first ? (func.getRow(first) as Row | undefined) : undefined;
+}
+
+/** One art field off a buff's own row ("" if the buff or the field is absent). */
+function buffField(func: MappedData, buffId: string, key: string): string {
+  const row = buffRow(func, buffId);
+  return row ? str(row, key) : "";
+}
+
+/** A buff's own persistent models, read from its `[B….]` section.
+ *
+ *  NOTE the buff row carries THREE distinct art fields, and they are not
+ *  interchangeable: `Targetart` (worn while the buff lasts — this function),
+ *  `Effectart` (played when the buff ENDS — see buffEffectArt), and `Specialart`
+ *  (a proc, e.g. Frost Armor's chill on an attacker).
  *
  *  The buff row pairs a comma-list of models with one attach spec each:
  *    [Bblo]  Targetart = …\BloodlustTarget.mdl,…\BloodlustSpecial.mdl
@@ -479,9 +503,7 @@ function rawTip(v: string): string {
  *  Verified 2026-07 against the 1.27 MPQ (Bblo/BUts/Bbsk/BHds; docs/wc3-data-formats.md).
  */
 function buffFxOf(func: MappedData, buffId: string): BuffFx[] {
-  const first = (buffId || "").split(",")[0]?.trim();
-  if (!first) return [];
-  const row = func.getRow(first) as Row | undefined;
+  const row = buffRow(func, buffId);
   if (!row) return [];
   const paths = str(row, "Targetart")
     .split(",")

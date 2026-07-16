@@ -774,6 +774,11 @@ export interface SimUnit {
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
   summonMax: number; // the summon's full duration (for the "Summoned Unit" bar fill)
+  /** The effect that replaces this summon when it LEAVES — its timer running out or a
+   *  re-cast dismissing it. Carried from the ability that summoned it (its buff's
+   *  Effectart: Feral Spirit -> feralspiritdone). "" = leave without one. This is not a
+   *  death: a summon killed in combat plays its Death clip and dissipates instead. */
+  unsummonArt: string;
   pendingCast: PendingCast | null; // in-progress cast (order === "cast")
   // --- neutral-hostile creep guard AI (see the CREEP_* constants) -----------
   isCreep: boolean; // a map-placed Neutral Hostile creep with guard/leash behaviour
@@ -1131,7 +1136,7 @@ export class SimWorld {
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
   // (same deferral as trainCompletions — the sim owns no model instances).
-  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number }> = [];
+  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string }> = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -2485,6 +2490,7 @@ export class SimWorld {
       | "spawning"
       | "summonLeft"
       | "summonMax"
+      | "unsummonArt"
       | "pendingCast"
       | "isCreep"
       | "guardX"
@@ -2644,6 +2650,7 @@ export class SimWorld {
       spawning: 0,
       summonLeft: 0,
       summonMax: 0,
+      unsummonArt: "",
       pendingCast: null,
       // Creep guard AI is off by default; the map seeder flips isCreep on and sets
       // the guard point / aggro range / sleep flag for Neutral Hostile units.
@@ -5000,7 +5007,7 @@ export class SimWorld {
       if (c.raised || c.isHero || c.mechanical || !c.unitId) continue;
       if (Math.hypot(c.x - x, c.y - y) > radius) continue;
       c.raised = true; // the renderer hides the corpse model once raised
-      this.summonRequests.push({ unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team, summonLeft: 0, sourceId: 0 });
+      this.summonRequests.push({ unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team, summonLeft: 0, sourceId: 0, summonArt: "", unsummonArt: "" });
       raised++;
     }
     return raised;
@@ -5034,8 +5041,8 @@ export class SimWorld {
     dispel: (t) => {
       t.buffs = []; // Dispel Magic clears all timed buffs (auras re-apply next tick)
     },
-    requestSummon: (unitId, x, y, facing, owner, team, dur, src) => {
-      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src });
+    requestSummon: (unitId, x, y, facing, owner, team, dur, src, art) => {
+      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "" });
     },
     raiseNearbyCorpses: (x, y, r, owner, team, max) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max),
     linkSpirits: (unit, group, durationSec, share) => {
@@ -5045,13 +5052,10 @@ export class SimWorld {
     },
     devour: (kodo, prey) => this.devourInternal(kodo, prey),
     toggleSpiritForm: (unit) => this.toggleSpiritForm(unit),
-    dismissSummons: (owner, typeIds, effectArt) => {
+    dismissSummons: (owner, typeIds) => {
       const set = new Set(typeIds);
       for (const u of [...this.units.values()]) {
-        if (u.owner === owner && u.isSummon && u.hp > 0 && set.has(u.typeId)) {
-          if (effectArt) this.spellEffects.push({ art: effectArt, x: u.x, y: u.y, targetId: 0, z: 0 });
-          this.removeUnit(u.id); // silent poof — no corpse, no death XP
-        }
+        if (u.owner === owner && u.isSummon && u.hp > 0 && set.has(u.typeId)) this.unsummon(u);
       }
     },
     emitEffect: (art, x, y, targetId, life) => {
@@ -5288,6 +5292,13 @@ export class SimWorld {
     return this.spellFields.map((f) => ({ code: f.code, x: f.x, y: f.y }));
   }
 
+  /** Play a one-shot effect model at a point. For the spawn paths the renderer owns:
+   *  a summon's burst belongs on the tile the renderer finally placed it on, which the
+   *  sim never sees (see drainSummonRequests). Spell handlers use SpellApi.emitEffect. */
+  emitEffectAt(art: string, x: number, y: number): void {
+    if (art) this.spellEffects.push({ art, x, y, targetId: 0, z: 0 });
+  }
+
   /** Spell/effect models to play this frame (targetId>0 = follow that unit). */
   drainSpellEffects(): Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> {
     if (!this.spellEffects.length) return this.spellEffects;
@@ -5317,7 +5328,7 @@ export class SimWorld {
     return out;
   }
   /** Units summoned/raised this frame — the renderer creates their models. */
-  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number }> {
+  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string }> {
     if (!this.summonRequests.length) return this.summonRequests;
     const out = this.summonRequests;
     this.summonRequests = [];
@@ -5349,7 +5360,12 @@ export class SimWorld {
       if (u.summonLeft > 0) {
         u.summonLeft -= dt;
         if (u.summonLeft <= 0) {
-          this.kill(u); // temporary summon (Water Elemental) expired
+          // Its time is up. A summon whose data declares an unsummon effect LEAVES via it
+          // (a Feral Spirit wolf is replaced by feralspiritdone, it is not slain); one that
+          // declares none has no other way to go than to die, which is what a Water
+          // Elemental does — BHwe carries no Effectart and the elemental splashes.
+          if (u.unsummonArt) this.unsummon(u);
+          else this.kill(u);
           continue;
         }
       }
@@ -6834,6 +6850,19 @@ export class SimWorld {
     u.buffs = u.buffs.filter((b) => b.kind === "manaShield"); // clear debuffs on revive
     if (def.targetArt || def.casterArt) this.spellEffects.push({ art: def.targetArt || def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
     return true;
+  }
+
+  /** A summon LEAVES: its duration ran out, or a re-cast dismissed it. Its unsummon
+   *  effect takes its place and the unit is simply removed — no death.
+   *
+   *  This is not the same event as a summon being killed, and must not be routed through
+   *  kill(): that plays the unit's Death clip (a Feral Spirit wolf has one, and it looked
+   *  like the wolf had been slain when its timer merely expired), grants kill XP, and
+   *  fires death triggers. A wolf cut down in a fight still goes through kill() and dies
+   *  properly — deathType=0 leaves no corpse and it dissipates (MiscData DissipateTime). */
+  private unsummon(u: SimUnit): void {
+    if (u.unsummonArt) this.spellEffects.push({ art: u.unsummonArt, x: u.x, y: u.y, targetId: 0, z: 0 });
+    this.removeUnit(u.id); // silent: no corpse, no death XP, no death trigger
   }
 
   private kill(u: SimUnit, killerId = 0): void {

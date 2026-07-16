@@ -26,8 +26,10 @@ export interface SpellApi {
   applyBuff(target: SimUnit, buff: SimBuffInit): void;
   /** Remove timed (dispellable) buffs from a unit (Dispel Magic, etc.). */
   dispel(target: SimUnit): void;
-  /** Ask the renderer to create a summoned/raised unit (deferred, like training). */
-  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number): void;
+  /** Ask the renderer to create a summoned/raised unit (deferred, like training).
+   *  `art.summon` plays where the unit materializes; `art.unsummon` replaces it when its
+   *  timer runs out or it is dismissed (see summonArt/unsummonArt). */
+  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }): void;
   /** Raise up to `max` friendly corpses near a point back to life (Resurrection). */
   raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number): number;
   /** Spirit Link: mark `unit` as sharing `share` of its damage across the `group` unit ids
@@ -37,9 +39,10 @@ export interface SpellApi {
   devour(kodo: SimUnit, prey: SimUnit): void;
   /** Spirit Walker: toggle between ethereal and corporeal form (morph + ethereal state). */
   toggleSpiritForm(unit: SimUnit): void;
-  /** Dismiss (silently remove) an owner's existing summons of the given types, each with an
-   *  unsummon effect — Feral Spirit replaces the caster's old wolves on re-cast. */
-  dismissSummons(owner: number, typeIds: string[], effectArt: string): void;
+  /** Dismiss an owner's existing summons of the given types — Feral Spirit replaces the
+   *  caster's old wolves on re-cast. Each leaves via its OWN unsummon effect (the art it
+   *  was summoned with), so this needs no art passed in. */
+  dismissSummons(owner: number, typeIds: string[]): void;
   /** Play an effect model at a unit (targetId>0) or a point (renderer). `life` = how
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
    *  value for a sustained effect like Flame Strike's 7s fire pillar. */
@@ -281,12 +284,28 @@ function chainFrom(api: SpellApi, caster: SimUnit, first: SimUnit, count: number
 
 /** Summon `count` copies of a unit for the caster, fanned around a point (each
  *  request is placed on the nearest free tile by the renderer). */
-function summonMany(api: SpellApi, caster: SimUnit, unitId: string, x: number, y: number, count: number, durationSec: number): void {
+function summonMany(api: SpellApi, caster: SimUnit, def: AbilityDef, unitId: string, x: number, y: number, count: number, durationSec: number): void {
   if (!unitId) return;
+  const art = summonArt(def);
   for (let i = 0; i < Math.max(1, count); i++) {
     const facing = caster.facing + (i - (count - 1) / 2) * 0.5;
-    api.requestSummon(unitId, x, y, facing, caster.owner, caster.team, durationSec, caster.id);
+    api.requestSummon(unitId, x, y, facing, caster.owner, caster.team, durationSec, caster.id, art);
   }
+}
+
+/** The pair of effects a summoning ability gives its summons: the burst each unit
+ *  materializes in, and the one that replaces it when it leaves.
+ *
+ *  Both come straight from the data, and neither is where you'd first look:
+ *    [AOsf] Specialart = …\FeralSpirit\feralspirittarget.mdl   ← summon
+ *    [BOsf] Effectart  = …\FeralSpirit\feralspiritdone.mdl     ← unsummon (on the BUFF)
+ *  The Beastmaster's summons (ANsg/ANsq/ANsw) put their summon burst in `TargetArt`
+ *  instead of `Specialart`, hence the fallback. Nothing here may default to Undead's
+ *  `Unsummon\UnsummonTarget.mdl` — that is the acolyte's *Unsummon Building* art and has
+ *  nothing to do with a summon expiring (it was hardcoded here, and looked very wrong on
+ *  a wolf). A summon with no art in the data simply leaves without one. */
+function summonArt(def: AbilityDef): { summon: string; unsummon: string } {
+  return { summon: def.specialArt || def.targetArt, unsummon: def.buffEffectArt };
 }
 
 /** Summoned-unit ids for abilities whose unit isn't in the SLK `unitid` column
@@ -390,7 +409,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AHwe: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     if (!lvl.summon) return;
-    api.requestSummon(lvl.summon, caster.x, caster.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 60, caster.id);
+    api.requestSummon(lvl.summon, caster.x, caster.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 60, caster.id, summonArt(def));
   },
 
   // Blizzard — channelled: DataA waves of DataB damage in `area`, a second apart
@@ -1087,7 +1106,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // the count from the ability's dataB.
   AOsf: (api, caster, def, rank) => {
     const wolfTypes = def.levelData.map((l) => l.summon).filter(Boolean);
-    api.dismissSummons(caster.owner, wolfTypes, "Abilities\\Spells\\Undead\\Unsummon\\UnsummonTarget.mdx");
+    api.dismissSummons(caster.owner, wolfTypes);
     summonSpell(api, caster, def, rank, { count: 0, atPoint: false });
   },
   // Force of Nature (Keeper) — summon dataA treants at the target point.
@@ -1115,7 +1134,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Mirror Image (Blademaster) — conjure illusions (copies of the caster's type).
   AOmi: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    summonMany(api, caster, caster.typeId, caster.x, caster.y, Math.max(1, d(lvl, 1, 1)), lvl.heroDuration || lvl.duration || 60);
+    summonMany(api, caster, def, caster.typeId, caster.x, caster.y, Math.max(1, d(lvl, 1, 1)), lvl.heroDuration || lvl.duration || 60);
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
   },
 
@@ -1124,7 +1143,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AUin: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 250, true)) api.spellDamage(t, d(lvl, 0, 50), caster.id);
-    if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 180, caster.id);
+    if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 180, caster.id, { summon: "", unsummon: def.buffEffectArt });
     if (def.specialArt) api.emitEffect(def.specialArt, ctx.x, ctx.y, 0);
   },
 
@@ -1161,8 +1180,10 @@ function summonSpell(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: numb
   const count = opts.count > 0 ? opts.count : Math.max(1, d(lvl, 1, d(lvl, 0, 1)));
   const x = opts.atPoint && ctx ? ctx.x : caster.x;
   const y = opts.atPoint && ctx ? ctx.y : caster.y;
-  summonMany(api, caster, unitId, x, y, count, lvl.heroDuration || lvl.duration || 60);
-  if (def.specialArt) api.emitEffect(def.specialArt, x, y, 0);
+  // The summon burst rides each unit (requestSummon's `art.summon`), fired where it
+  // actually materializes. It used to be emitted once, here, at the CASTER's feet — so
+  // three wolves fanned out around the Far Seer shared a single puff behind them.
+  summonMany(api, caster, def, unitId, x, y, count, lvl.heroDuration || lvl.duration || 60);
 }
 
 /** One stat effect an aura grants to a unit in range. */

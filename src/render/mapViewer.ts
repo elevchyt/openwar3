@@ -5449,9 +5449,13 @@ export class MapViewerScene {
           if (!d) continue;
           const summonLeft = s.summonLeft;
           const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16);
+          // The summon burst belongs on the SPOT the unit lands on, not on the caster —
+          // three wolves fan out around the Far Seer, and each arrives in its own.
+          if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy);
           void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
             if (simId === null) return;
             const su = world.units.get(simId);
+            if (su) su.unsummonArt = s.unsummonArt; // how it leaves when its time is up
             if (su && summonLeft > 0) {
               su.summonLeft = summonLeft;
               su.summonMax = summonLeft;
