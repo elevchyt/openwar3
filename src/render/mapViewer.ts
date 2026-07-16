@@ -163,6 +163,22 @@ const SHOP_ERROR: Record<ShopResult, string> = {
   req: "", // the red "Requires:" line on the button already says which building is missing
 };
 
+// The rest of the [Errors] block of Units\commandstrings.txt, verbatim. These are the
+// lines the engine flashes in gold above the console when it refuses a command.
+const ERR = {
+  nogold: "Not enough gold.",
+  nolumber: "Not enough lumber.",
+} as const;
+
+// Nofood is ONE comma-separated entry in commandstrings.txt indexed by the engine's race
+// order (human, orc, undead, nightelf) — each race names its own supply building.
+const ERR_NOFOOD: Record<PlayableRace, string> = {
+  human: "Build more Farms to continue unit production.",
+  orc: "Build more Burrows to continue unit production.",
+  undead: "Summon more Ziggurats to continue unit production.",
+  nightelf: "Create more Moon Wells to continue unit production.",
+};
+
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
 const CANCEL_FX: Record<PlayableRace, string> = {
@@ -4619,6 +4635,26 @@ export class MapViewerScene {
     }
   }
 
+  /** Refuse a command the way the game does: the gold line above the console plus a
+   *  voice cue. The resource warnings have a race-specific line the worker speaks
+   *  (NoGoldOrc → Sound\Interface\Warning\Orc\GruntNoGold1.wav, UISounds.slk); anything
+   *  else just gets the generic interface error beep. */
+  private refuse(text: string, cue?: "NoGold" | "NoLumber" | "NoFood"): void {
+    this.hud?.showError(text);
+    this.sounds?.playUi(cue ? `${cue}${UI_SOUND_RACE[this.localRace]}` : "InterfaceError");
+  }
+
+  /** Can the local player afford this? Refuses (naming the resource they're short of)
+   *  when not. WC3 reports gold first, so a player short of both hears "Not enough gold."
+   *  Callers still do the deduction themselves — it happens later, once the order's own
+   *  gates (tech, stock, queue) have passed. */
+  private canAfford(gold: number, lumber: number): boolean {
+    const stash = this.rts!.stashFor(this.localPlayer);
+    if (stash.gold < gold) return this.refuse(ERR.nogold, "NoGold"), false;
+    if (stash.lumber < lumber) return this.refuse(ERR.nolumber, "NoLumber"), false;
+    return true;
+  }
+
   private freeHeroUsed = new Set<number>(); // players who've had their free first hero
   private trainUnit(buildingId: number, unitId: string): void {
     const d = this.registry.get(unitId);
@@ -4640,7 +4676,11 @@ export class MapViewerScene {
     const lumber = freeHero ? 0 : d.lumberCost;
     // Food (like gold/lumber) is committed when training begins; block if the
     // supply cap would be exceeded (WC3: "not enough food").
-    if (stash.gold < gold || stash.lumber < lumber || food.used + d.foodUsed > food.made) return;
+    if (!this.canAfford(gold, lumber)) return;
+    if (food.used + d.foodUsed > food.made) {
+      this.refuse(ERR_NOFOOD[this.localRace], "NoFood");
+      return;
+    }
     const world = this.rts.simWorld;
     // Tech gate, enforced here and not merely greyed on the card, so a hotkey can't bypass it.
     const owned = this.trainTier(unitId, heroCount);
@@ -4648,7 +4688,13 @@ export class MapViewerScene {
     // A unit the building SELLS (a Tavern hero, a Mercenary Camp creep) comes off its stock,
     // and hiring is loud — purchaseUnit both depletes the shelf and shouts to the creeps.
     const isSold = this.tech.get(this.rts.simWorld.units.get(buildingId)?.typeId ?? "").sellunits.includes(unitId);
-    if (isSold && world.purchaseUnit(buildingId, unitId, this.localPlayer) !== "ok") return;
+    if (isSold) {
+      const result = world.purchaseUnit(buildingId, unitId, this.localPlayer);
+      if (result !== "ok") {
+        if (SHOP_ERROR[result]) this.refuse(SHOP_ERROR[result]);
+        return;
+      }
+    }
 
     stash.gold -= gold;
     stash.lumber -= lumber;
@@ -4677,8 +4723,8 @@ export class MapViewerScene {
     if (next > d.maxLevel) return;
     if (!state.meets(this.localPlayer, upgradeId, next - 1)) return;
     const cost = this.upgrades.cost(upgradeId, next);
+    if (!this.canAfford(cost.gold, cost.lumber)) return;
     const stash = this.rts.stashFor(this.localPlayer);
-    if (stash.gold < cost.gold || stash.lumber < cost.lumber) return;
     stash.gold -= cost.gold;
     stash.lumber -= cost.lumber;
     world.enqueueResearch(buildingId, upgradeId, next, cost.time || 1);
@@ -4700,8 +4746,8 @@ export class MapViewerScene {
     // A tier upgrade costs the DIFFERENCE between the two buildings, not the full price of the
     // new one (WC3): a Stronghold (700/375) over a Great Hall (385/185) is 315/190, not 700/375.
     const [gold, lumber] = this.upgradeCost(world.units.get(buildingId)?.typeId, d);
+    if (!this.canAfford(gold, lumber)) return;
     const stash = this.rts.stashFor(this.localPlayer);
-    if (stash.gold < gold || stash.lumber < lumber) return;
     stash.gold -= gold;
     stash.lumber -= lumber;
     world.enqueueUpgrade(buildingId, toTypeId, d.buildTime || 1);
@@ -4715,7 +4761,7 @@ export class MapViewerScene {
     const world = this.rts.simWorld;
     const patrons = world.shopPatrons(shopId, this.localPlayer);
     if (!patrons.length) {
-      this.hud?.showMessage(SHOP_ERROR.nopatron, 3);
+      this.refuse(SHOP_ERROR.nopatron);
       return;
     }
     const shop = world.units.get(shopId);
@@ -4726,7 +4772,8 @@ export class MapViewerScene {
         ? patrons.reduce((a, b) => (Math.hypot(a.x - shop.x, a.y - shop.y) <= Math.hypot(b.x - shop.x, b.y - shop.y) ? a : b))
         : patrons[0]);
     const result = world.purchaseItem(shopId, buyer.id, itemId, this.localPlayer);
-    if (result !== "ok" && SHOP_ERROR[result]) this.hud?.showMessage(SHOP_ERROR[result], 3);
+    // "cost" is the shop's own out-of-gold path, so it earns the worker's NoGold line.
+    if (result !== "ok" && SHOP_ERROR[result]) this.refuse(SHOP_ERROR[result], result === "cost" ? "NoGold" : undefined);
   }
 
   /** Cancel an under-construction building: refund **75%** of its cost (WC3

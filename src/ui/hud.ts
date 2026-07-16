@@ -273,6 +273,7 @@ const TOOLTIP_COST_ICON = {
 // On-screen message log tuning.
 const MSG_MAX = 16; // max lines kept on screen at once (WC3 scrolls the oldest off)
 const MSG_DEFAULT_SECS = 12; // how long an untimed DisplayTextToPlayer line lingers
+const ERROR_SECS = 2.5; // how long the gold command-error line above the console holds
 
 /** Escape HTML, then translate WC3 text colour codes to spans: `|cAARRGGBB…|r`
  *  wraps a coloured run (alpha ignored), `|n`/`|N` is a line break, `||` a literal
@@ -446,12 +447,21 @@ export class GameHud {
   // stack of chat/quest lines in the upper-left, oldest scrolling off the top.
   private msgLog!: HTMLDivElement;
   private msgTimers = new Set<number>(); // pending auto-remove timeouts, cleared on dispose
+  // The gold error line just above the console (WC3's SimpleMessage frame).
+  private errLine!: HTMLDivElement;
+  private errTimer = 0;
 
   constructor(parent: HTMLElement, private driver: HudDriver) {
     this.root = document.createElement("div");
     this.root.className = "hud";
     const skin = driver.consoleSkin();
-    this.root.append(this.buildTopBar(skin), this.buildConsole(skin), this.buildCheatPanel(), this.buildMessageLog());
+    this.root.append(
+      this.buildTopBar(skin),
+      this.buildConsole(skin),
+      this.buildCheatPanel(),
+      this.buildMessageLog(),
+      this.buildErrorLine(),
+    );
     parent.appendChild(this.root);
     this.applyWidgetSkin();
     window.addEventListener("keydown", this.onKey);
@@ -492,6 +502,7 @@ export class GameHud {
     this.minimapResize?.disconnect();
     for (const id of this.msgTimers) clearTimeout(id);
     this.msgTimers.clear();
+    clearTimeout(this.errTimer);
     this.root.remove();
   }
 
@@ -911,6 +922,27 @@ export class GameHud {
       this.msgTimers.delete(id);
     }, Math.max(0.5, secs) * 1000);
     this.msgTimers.add(id);
+  }
+
+  /** The single gold line the engine flashes above the console when a command is
+   *  refused ("Not enough gold.", "Build more Farms…"). It is NOT the message log:
+   *  WC3 keeps one centred line here, replaced — never stacked — by the next error. */
+  private buildErrorLine(): HTMLDivElement {
+    this.errLine = document.createElement("div");
+    this.errLine.className = "hud-error";
+    return this.errLine;
+  }
+
+  /** Show one command error. Re-showing restarts the timer and replaces the text,
+   *  so mashing an unaffordable button holds one steady line rather than a stack. */
+  showError(text: string): void {
+    if (!text) return;
+    clearTimeout(this.errTimer);
+    this.errLine.textContent = text;
+    this.errLine.classList.remove("hud-error-on");
+    void this.errLine.offsetWidth; // restart the fade-in animation on a repeat error
+    this.errLine.classList.add("hud-error-on");
+    this.errTimer = window.setTimeout(() => this.errLine.classList.remove("hud-error-on"), ERROR_SECS * 1000);
   }
 
   /** Clear every on-screen message (the ClearTextMessages action). */
