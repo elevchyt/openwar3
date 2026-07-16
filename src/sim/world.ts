@@ -256,6 +256,21 @@ export interface SimCorpse {
 /** An item held in a hero's inventory (one of 6 slots). Its stat bonus / active
  *  effect is derived from the item def's granted abilities (world.ts item logic),
  *  keyed by the base ability `code` — the same dispatch model spells use. */
+/** Everything a copy needs to be indistinguishable from its original. Captured at cast time
+ *  and carried through the summon request (spawning is async — see drainSummonRequests). */
+export interface IllusionInit {
+  dealt: number; // fraction of the copy's damage that lands (0)
+  taken: number; // multiplier on damage it receives (2)
+  properName: string; // the original's given name
+  mana: number; // the original's pool after the cast was paid
+  level: number; // the original's hero level
+  baseStr: number; // base attributes INCLUDING permanent tome gains
+  baseAgi: number;
+  baseInt: number;
+  baseMaxHp: number; // includes Manual of Health
+  inventory: ({ itemId: string; charges: number } | null)[]; // what it is seen carrying
+}
+
 export interface HeldItem {
   /** Entity id — the SAME id space (and the same id) the item had on the ground.
    *  An item in WC3 is one entity that moves between the ground and an inventory,
@@ -786,6 +801,10 @@ export interface SimUnit {
    *  owner can tell it apart. It is also a summon (isSummon), so it expires, leaves no
    *  corpse and dies to Dispel Magic. */
   isIllusion: boolean;
+  /** The sim id of the unit this illusion copies (0 = not an illusion). The images have to
+   *  be findable FROM their original — they level with it — and matching on owner+typeId
+   *  would be a guess that quietly breaks the moment a player fields two of the same type. */
+  illusionOf: number;
   illusionDamageDealt: number; // fraction of its damage that lands (AOmi DataB) — 0 = none
   illusionDamageTaken: number; // multiplier on damage it receives (AOmi DataC) — 2 = double
 
@@ -1151,7 +1170,7 @@ export class SimWorld {
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
   // (same deferral as trainCompletions — the sim owns no model instances).
-  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string; mana: number } }> = [];
+  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: IllusionInit }> = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -2508,6 +2527,7 @@ export class SimWorld {
       | "unsummonArt"
       | "vanished"
       | "isIllusion"
+      | "illusionOf"
       | "illusionDamageDealt"
       | "illusionDamageTaken"
       | "pendingCast"
@@ -2672,6 +2692,7 @@ export class SimWorld {
       unsummonArt: "",
       vanished: false,
       isIllusion: false,
+      illusionOf: 0,
       illusionDamageDealt: 1,
       illusionDamageTaken: 1,
       pendingCast: null,
@@ -4670,6 +4691,57 @@ export class SimWorld {
     // EVENT_(PLAYER_)HERO_LEVEL for the trigger engine (7.17) — a separate queue from
     // the renderer's, since each side drains its own.
     if (this.captureHeroEvents) this.heroEvents.push({ hero: eventInfo(hero), phase: "level", level: hero.level, abilityId: "" });
+    // A hero's images level with him, nova and all. They are copies of him as he is NOW, so
+    // a Blademaster who dinged while his images stood beside him would otherwise be the only
+    // one of the four to grow, flash and refill — pointing straight at the real one.
+    for (const im of this.units.values()) {
+      if (im.isIllusion && im.illusionOf === hero.id && im.hp > 0) this.levelUpIllusion(im, hero);
+    }
+  }
+
+  /** Make a freshly-spawned copy into an illusion of `ofId`. Called by the renderer once the
+   *  unit exists (spawning is async — see drainSummonRequests).
+   *
+   *  Order matters, which is why this is one method and not six writes at the call site: the
+   *  level must land BEFORE recomputeStats, and hp/mana can only be set once that has run.
+   *  Spawning starts every hero at the unit TYPE's level 1, so an image of a level-5
+   *  Blademaster arrives with a level-1 pool; leave it and the next tick's recomputeStats
+   *  raises its maxHp past its hp and the copy stands there looking wounded. */
+  initIllusion(u: SimUnit, ofId: number, init: IllusionInit): void {
+    u.isIllusion = true;
+    u.illusionOf = ofId;
+    u.illusionDamageDealt = init.dealt; // AOmi DataB "Damage Dealt (%)" — 0: it hurts nothing
+    u.illusionDamageTaken = init.taken; // AOmi DataC "Damage Taken (%)" — 200%
+    u.properName = init.properName; // the original's name, not the fresh roll spawning gave it
+    u.level = Math.max(1, init.level);
+    // Tomes are PERMANENT and live in the original's base attributes (applyPowerup bumps
+    // baseStr/baseAgi/baseInt/baseMaxHp), so a copy spawned off the unit type alone would be
+    // missing every tome he ever drank — visibly weaker on the sheet than the hero beside it.
+    u.baseStr = init.baseStr;
+    u.baseAgi = init.baseAgi;
+    u.baseInt = init.baseInt;
+    u.baseMaxHp = init.baseMaxHp;
+    // The original's items, as INERT copies: same itemId (so the panel draws the same six
+    // slots and itemBonuses grants the same +damage/+armour/+stats), but no entity id. An
+    // item is ONE entity that JASS handles track across ground↔inventory (see HeldItem.id);
+    // handing four copies the original's ids would have four units claiming to hold it. The
+    // image can't drop, give or use them anyway — see the isIllusion guards on those.
+    u.inventory = init.inventory.map((it) => (it ? { id: 0, itemId: it.itemId, charges: it.charges, cooldownLeft: 0 } : null));
+    this.recomputeStats(u); // maxHp/maxMana/attributes off THAT level, tomes and items
+    u.hp = u.maxHp;
+    u.mana = Math.min(u.maxMana, init.mana); // the original's pool as it stands after the cast
+  }
+
+  /** Bring an illusion up to its hero's new level. Not levelUp(): an image earns nothing of
+   *  its own — no skill point (it cannot learn or cast), and no HERO_LEVEL event, which is
+   *  the player's hero levelling and must fire once, not once per copy. */
+  private levelUpIllusion(im: SimUnit, hero: SimUnit): void {
+    im.level = hero.level;
+    this.recomputeStats(im); // new maxHp/maxMana/attributes off the level
+    // The hero refills on levelling, so the images must too — matching pools is the point.
+    im.hp = im.maxHp;
+    im.mana = im.maxMana;
+    this.levelUps.push({ unitId: im.id, level: im.level }); // the same nova, on every image
   }
 
   /** Learn (or rank up) a hero ability by spending a skill point. Returns true on
@@ -4979,11 +5051,23 @@ export class SimWorld {
       // An image popping is BOmi's Specialart (MirrorImageDeathCaster) — its folder-mate
       // MirrorImageDeath.wav rides it as a model SND event (AnimLookups AOMI).
       unsummonArt: def?.buffSpecialArt ?? "",
-      // An image is an exact copy, and that includes the name over its head: every
-      // Blademaster in the pack must read the same. Spawning rolls a fresh proper name per
-      // hero, which would have labelled the four of them with four different names — an
-      // instant tell.
-      illusion: { dealt: m.dealt, taken: m.taken, properName: caster.properName, mana: m.mana },
+      // An image is an exact copy, and that includes the name over its head and the level
+      // in its bar. Spawning rolls a fresh proper name per hero and starts it at the unit
+      // TYPE's level (1), so a level-5 Blademaster would have conjured three level-1 copies
+      // wearing three different names — the enemy could pick the real one out of the pack
+      // without swinging at it.
+      illusion: {
+        dealt: m.dealt,
+        taken: m.taken,
+        properName: caster.properName,
+        mana: m.mana,
+        level: caster.level,
+        baseStr: caster.baseStr,
+        baseAgi: caster.baseAgi,
+        baseInt: caster.baseInt,
+        baseMaxHp: caster.baseMaxHp,
+        inventory: caster.inventory.map((it) => (it ? { itemId: it.itemId, charges: it.charges } : null)),
+      },
     });
   }
 
@@ -5538,7 +5622,7 @@ export class SimWorld {
     return out;
   }
   /** Units summoned/raised this frame — the renderer creates their models. */
-  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: { dealt: number; taken: number; properName: string; mana: number } }> {
+  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: IllusionInit }> {
     if (!this.summonRequests.length) return this.summonRequests;
     const out = this.summonRequests;
     this.summonRequests = [];
@@ -7463,6 +7547,11 @@ export class SimWorld {
    *  recipient's inventory is full). WC3 raises BOTH events for a hand-over: the giver
    *  DROPs the item and the receiver PICKs it UP. */
   private transferItem(from: SimUnit, slot: number, to: SimUnit): void {
+    // An illusion's inventory is a picture of the original's: it is there to be SEEN and to
+    // grant the same stat bonuses, and nothing more. The items are inert copies with no
+    // entity behind them (see initIllusion), so letting a copy move one would either
+    // duplicate the original's gear or hand out an item that does not exist.
+    if (from.isIllusion) return;
     const held = from.inventory[slot];
     if (!held) return;
     const dest = to.inventory.indexOf(null);
@@ -7508,6 +7597,11 @@ export class SimWorld {
   /** Actually place a slot's item on the ground at (x,y) and clear the slot. The item
    *  keeps its entity id (same item, now on the ground) and raises DROP_ITEM. */
   private doDropItem(u: SimUnit, slot: number, x: number, y: number): void {
+    // An illusion's inventory is a picture of the original's: it is there to be SEEN and to
+    // grant the same stat bonuses, and nothing more. The items are inert copies with no
+    // entity behind them (see initIllusion), so letting a copy move one would either
+    // duplicate the original's gear or hand out an item that does not exist.
+    if (u.isIllusion) return;
     const held = u.inventory[slot];
     if (!held) return;
     u.inventory[slot] = null;
@@ -7520,6 +7614,7 @@ export class SimWorld {
   /** Swap (or move) two inventory slots on the same unit. */
   swapItems(unitId: number, a: number, b: number): boolean {
     const u = this.units.get(unitId);
+    if (u?.isIllusion) return false; // a copy's inventory is a picture — it cannot be rearranged
     if (!u || a === b || a < 0 || b < 0 || a >= u.inventory.length || b >= u.inventory.length) return false;
     const tmp = u.inventory[a];
     u.inventory[a] = u.inventory[b];
@@ -7531,8 +7626,11 @@ export class SimWorld {
    *  charge was consumed / a cooldown started). Dispatches on the granted ability's
    *  base `code`, like spells. */
   useItem(unitId: number, slot: number, _targetId: number, x: number, y: number): boolean {
+    // …and a copy cannot USE one either: no potion, no scroll, no charge spent. Its items
+    // are not the original's, so drinking one would heal off a bottle nobody owns — and the
+    // charge would not come off the real hero's.
     const u = this.units.get(unitId);
-    if (!u || !this.itemReg || !this.abilities) return false;
+    if (!u || u.isIllusion || !this.itemReg || !this.abilities) return false;
     const held = u.inventory[slot];
     if (!held || held.cooldownLeft > 0) return false;
     const def = this.itemReg.get(held.itemId);

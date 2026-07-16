@@ -91,14 +91,54 @@ invisible/ethereal units it is a hardcoded engine look.
 
 ## Copying the original exactly
 
-Anything spawned as an illusion must inherit, or it gives itself away:
+An illusion is a copy of the unit **as it stands right now** — not of its unit type. Spawning
+gives you the type's defaults, and every one of these would otherwise be a tell. `IllusionInit`
+(`src/sim/world.ts`) is the payload; `initIllusion` applies it.
 
 - **proper name** — heroes roll a random one at spawn, which would label four "identical"
   Blademasters with four different names.
-- **mana** — the caster's pool *after* the cast is paid. (`AOmi`'s cost is spent up front at
+- **level** — spawning starts every hero at the unit TYPE's level 1, so a level-5 Blademaster
+  would conjure three level-1 copies.
+- **mana** — the original's pool *after* the cast is paid. (`AOmi`'s cost is spent up front at
   cast commit, so the value read when the sequence starts is already post-cast. Capture it
   **once** rather than at landing, or the images drift apart from each other via regen.)
-- type, level and stats come free from spawning the same unit type.
+- **base attributes + baseMaxHp** — tomes are PERMANENT and live here (`applyPowerup` bumps
+  `baseStr`/`baseAgi`/`baseInt`/`baseMaxHp`), so a copy built from the unit type alone is
+  missing every tome the hero ever drank.
+- **inventory** — the copy is *seen* carrying the same six slots, and `itemBonuses` reads
+  `held.itemId`, so it picks up the same +damage/+armour/+stats for free.
+
+**Order matters** and is why `initIllusion` is one method rather than writes at the call site:
+the level must land *before* `recomputeStats`, and hp/mana can only be set after it has run.
+Set the level and stop, and the next tick's `recomputeStats` raises maxHp past hp — the copy
+stands there looking wounded.
+
+### The inventory is a picture
+
+The items are **inert copies**: same `itemId`, but `id: 0`. An item in WC3 is ONE entity that
+JASS handles track across ground↔inventory (see `HeldItem.id`), so handing four copies the
+original's ids would have four units claiming to hold it. The copy therefore cannot:
+
+- **use** one (`useItem`) — no potion drunk, no charge spent off a bottle nobody owns
+- **drop or give** one (`doDropItem`, `transferItem`) — that would duplicate the original's gear
+- **rearrange** them (`swapItems`), or pick anything up (`pickUpItem`)
+
+It also drops nothing when it dies: `kill` routes an illusion to `unsummon` → `removeUnit`,
+which never reaches `dropInventory` — otherwise three images popping would triple the hero's
+Claws of Attack.
+
+**Item auras do not work on a copy** — and get this for free today rather than by a guard:
+`applyAuras` iterates `src.abilities` (the unit's OWN ability list), and items never feed it.
+If item-granted auras are ever wired up, they must skip `isIllusion` units.
+
+### Levelling
+
+Images level with their original (`levelUp` → `levelUpIllusion`), nova and all — a Blademaster
+who dinged while his images stood beside him would otherwise be the only one of the four to
+grow, flash and refill. `illusionOf` carries the link (matching on owner+typeId is a guess that
+breaks the moment a player fields two of a type). An image earns nothing of its own: no skill
+point (it cannot learn or cast) and no `HERO_LEVEL` event, which is the *player's* hero
+levelling and must fire once, not once per copy.
 
 ## Mirror Image's staging
 
@@ -127,15 +167,17 @@ back to the *attack* clip is not something the engine does.)
 2. On cast: play `def.targetArt` (`AIilTarget.mdx` @ `origin`) on the target, then spawn one
    illusion of **the target's** type beside it — `AOmi` copies the *caster*, `AIil` copies the
    *target*.
-3. Reuse `spawnIllusion`'s payload: `dealt` = `DataA`, `taken` = `DataB` (**note the shifted
-   indices**), `properName`/`mana` from the target, `unsummonArt` = `def.buffSpecialArt`, and
-   `summonLeft` = `Dur1`.
+3. Build an `IllusionInit` off **the target**: `dealt` = `DataA`, `taken` = `DataB` (**note the
+   shifted indices**), plus its name / level / mana / base attributes / inventory. Set
+   `unsummonArt` = `def.buffSpecialArt` and `summonLeft` = `Dur1`, and let `initIllusion` apply
+   it — do not poke the fields yourself, the ordering matters (see above).
 4. Everything else — the blue wash, the timer, the no-damage rule, the pop and its sound —
    already follows from `isIllusion` + `isSummon` and needs no new code.
 
 ## See also
 
-- `src/sim/world.ts` — `startMirrorImage`, `tickMirrorImage`, `spawnIllusion`, `unsummon`
+- `src/sim/world.ts` — `IllusionInit`, `initIllusion`, `startMirrorImage`, `tickMirrorImage`,
+  `spawnIllusion`, `levelUpIllusion`, `unsummon`
 - `src/game/rts.ts` — `ILLUSION_TINT`, `applyFogTint`, `SelectionInfo`
 - [`wc3-data-formats.md`](./wc3-data-formats.md) — where each table lives
 - [`REFERENCES.md`](./REFERENCES.md) — the reference index and its per-source gotchas

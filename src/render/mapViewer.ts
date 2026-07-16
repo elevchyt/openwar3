@@ -5528,13 +5528,10 @@ export class MapViewerScene {
               su.summonMax = summonLeft;
               su.isSummon = true; // temporary summon — expires, leaves no corpse, ×0.5 XP
             }
-            if (su && s.illusion) {
-              su.isIllusion = true;
-              su.illusionDamageDealt = s.illusion.dealt; // AOmi DataB — 0: it hurts nothing
-              su.illusionDamageTaken = s.illusion.taken; // AOmi DataC — 200%
-              su.properName = s.illusion.properName; // wear the Blademaster's own name, not a fresh roll
-              su.mana = Math.min(su.maxMana, s.illusion.mana); // the hero's pool as it stands after the cast
-            }
+            // Turn the fresh copy into an illusion of its original. The sim owns this: the
+            // level has to be applied and the stats rebuilt off it before hp/mana can be set
+            // (see initIllusion), which is not something the renderer should be sequencing.
+            if (su && s.illusion) world.initIllusion(su, s.sourceId, s.illusion);
             this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
           });
         }
