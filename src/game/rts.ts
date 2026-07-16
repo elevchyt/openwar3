@@ -310,7 +310,14 @@ interface Entry {
   baseColor?: Float32Array; // model's own tint, captured before any fog dimming
   fogTintB?: number; // last fog brightness applied (avoids redundant setVertexColor)
   aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
+  fade?: number; // last ghost fade applied (invisible/ethereal) — see INVIS_ALPHA
 }
+
+// A unit that is invisible (Wind Walk) or ethereal (Banish, Spirit Walker form) renders
+// half-faded — the ghosting WC3 gives both (issue #66). It is a hardcoded engine look
+// there, not data: no ability carries a transparency field, and Wind Walk's [AOwk]/[BOwk]
+// declare no art whatsoever, so there is nothing in the MPQs to read this from.
+const INVIS_ALPHA = 0.5;
 
 // Green multiply-tint on a unit's whole mesh while it's a valid target of an armed
 // AoE spell (issue #20) — the same idea as the dark-blue "about to be built" ghost
@@ -974,16 +981,22 @@ export class RtsController {
     }
     // Green whole-mesh tint while this unit is a valid target of an armed AoE spell.
     const hi = this.aoeHighlight.has(e.simId);
-    if (e.fogTintB === b && e.aoeHi === hi) return; // unchanged since last tick
+    // Half-fade the ghosted states (issue #66). This has to compose with the tint here
+    // rather than be written straight to the instance: baseColor caches the model's own
+    // colour and this method re-emits from it every time the fog brightness changes, so
+    // an alpha written anywhere else would be clobbered on the next re-emit.
+    const fade = u.ethereal || u.invisible ? INVIS_ALPHA : 1;
+    if (e.fogTintB === b && e.aoeHi === hi && e.fade === fade) return; // unchanged since last tick
     e.fogTintB = b;
     e.aoeHi = hi;
+    e.fade = fade;
     if (!e.baseColor) {
       const c = inst.vertexColor;
       e.baseColor = c ? new Float32Array([c[0], c[1], c[2], c[3]]) : new Float32Array([1, 1, 1, 1]);
     }
     const base = e.baseColor;
     const g = hi ? AOE_TARGET_TINT : ([1, 1, 1] as const);
-    inst.setVertexColor([base[0] * b * g[0], base[1] * b * g[1], base[2] * b * g[2], base[3]]);
+    inst.setVertexColor([base[0] * b * g[0], base[1] * b * g[1], base[2] * b * g[2], base[3] * fade]);
   }
 
   /** Wire the voice/sound board (owned by the host, which has the VFS). */

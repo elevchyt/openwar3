@@ -190,8 +190,11 @@ export type BuffKind =
   | "root" // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
   | "vuln" // value = fraction of EXTRA damage the holder takes (Berserk +50%)
   | "shield" // Lightning Shield: value = dps dealt to units around the holder, value2 = radius
-  | "ethereal"; // Banish: value = move-slow fraction; can't attack, immune to physical
+  | "ethereal" // Banish: value = move-slow fraction; can't attack, immune to physical
   //            damage but takes +66% from Magic/Spells (see u.ethereal, EtherealDamageBonus)
+  | "invisible"; // Wind Walk/Invisibility: the holder renders half-faded (see u.invisible).
+  //             VISUAL ONLY for now — concealment from the enemy and its counterpart,
+  //             detection, are not modelled, so this grants no gameplay advantage.
 
 /** An in-progress spell cast (order === "cast"). The lifecycle, matching WC3
  *  (hiveworkshop "Cast Point and Backswing Point" thread 265781): walk into range
@@ -740,6 +743,7 @@ export interface SimUnit {
   waygate?: WaygateState | null; // JASS WaygateSetDestination/Activate — a Way Gate ('nwgt'), 7.22
   silenced: boolean; // derived from buffs (cannot cast spells)
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
+  invisible: boolean; // derived from buffs (Wind Walk): renders half-faded; no gameplay effect yet
   invulnerable: boolean; // derived from buffs + baseInvulnerable (immune to damage + enemy targeting)
   baseInvulnerable: boolean; // persistent invulnerability from the unit type's "Invulnerable (Neutral)" ability (Avul) — goblin merchant, gold mine, mercenary camp, tavern, … (issue #26)
   mechanical: boolean; // machines/summons — no raisable corpse, unhealable by Heal
@@ -2456,6 +2460,7 @@ export class SimWorld {
       | "paused"
       | "silenced"
       | "ethereal"
+      | "invisible"
       | "invulnerable"
       | "baseInvulnerable"
       | "mechanical"
@@ -2613,6 +2618,7 @@ export class SimWorld {
       paused: false,
       silenced: false,
       ethereal: false,
+      invisible: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
       baseInvulnerable: !!opts?.baseInvulnerable,
       mechanical: !!opts?.mechanical,
@@ -3738,6 +3744,7 @@ export class SimWorld {
     let stun = false;
     let silence = false;
     let ethereal = false;
+    let invisible = false;
     let invuln = false;
     for (const b of u.buffs) {
       if (b.kind === "armor") armorBonus += b.value;
@@ -3759,6 +3766,7 @@ export class SimWorld {
         slowMove = Math.max(slowMove, b.value); // Banish's Movement Speed Reduction (DataA)
       } else if (b.kind === "stun" || b.kind === "sleep") stun = true; // sleep disables like a stun (wakes on damage)
       else if (b.kind === "silence") silence = true;
+      else if (b.kind === "invisible") invisible = true;
       else if (b.kind === "invuln") invuln = true;
     }
     // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
@@ -3825,6 +3833,7 @@ export class SimWorld {
     u.stunned = stun;
     u.silenced = silence;
     u.ethereal = ethereal || u.etherealForm; // Banish (timed) OR the Spirit Walker's ethereal FORM (persistent)
+    u.invisible = invisible;
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;

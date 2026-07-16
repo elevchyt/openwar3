@@ -933,13 +933,17 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.addSpellField({ code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800, damagePerWave: d(lvl, 0, 20) / 4, waves: Math.max(6, Math.round(lvl.duration || 30)), interval: 1, casterId: caster.id, art: def.casterArt || def.specialArt });
   },
 
-  // Wind Walk (Blademaster) — a burst of speed + bonus attack damage (WC3 also
-  // grants invisibility, which we don't model) for the duration.
+  // Wind Walk (Blademaster) — a burst of speed + bonus attack damage + the half-faded
+  // invisible look for the duration. The fade is the LOOK only: concealment from the
+  // enemy (and detection, its counterpart) is still not modelled, so it grants no
+  // gameplay advantage. WC3 carries no transparency field for this — [AOwk]/[BOwk]
+  // declare no art at all — so the 0.5 lives in the renderer (see rts.ts INVIS_ALPHA).
   AOwk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const d0 = lvl.duration || 20;
     api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, art: def.targetArt });
     api.applyBuff(caster, { kind: "damage", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40) });
+    api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: 0 });
   },
 
   // Metamorphosis / Robo-Goblin / Chemical Rage — transforms modelled as a timed
