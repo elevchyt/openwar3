@@ -325,7 +325,7 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
      }
      return offset;
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..fa378ca9cd92a91dff902227f5de768c095e3ebc 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..2c0fe916a43253124b9feff9b5755c429060d390 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
 @@ -45,6 +45,32 @@ class BatchGroup {
@@ -361,15 +361,54 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..fa378ca9cd92a91dff902227f5de768c
          gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
          if (isHd) {
+@@ -115,6 +141,14 @@ class BatchGroup {
+             const uvAnims = instance.uvAnims;
+             gl.uniform4fv(uniforms['u_vertexColor'], instance.vertexColor);
+             gl.uniform1i(uniforms['u_texture'], 0);
++            // OpenWar3: whole-instance transparency (issue #66). The alpha of the
++            // instance tint is a fade over the entire model rather than a per-layer
++            // one, so it rides its own uniform — see sd.frag/sd.vert.
++            const instanceAlpha = instance.vertexColor[3];
++            gl.uniform1f(uniforms['u_instanceAlpha'], instanceAlpha);
++            if (instanceAlpha < 0.01) {
++                return; // fully transparent — nothing to draw
++            }
+             for (const object of this.objects) {
+                 const batch = batches[object];
+                 const geoset = batch.geoset;
+@@ -133,7 +167,7 @@ class BatchGroup {
+                     gl.uniform2f(uniforms['u_uvTrans'], uvAnim[0], uvAnim[1]);
+                     gl.uniform2f(uniforms['u_uvRot'], uvAnim[2], uvAnim[3]);
+                     gl.uniform1f(uniforms['u_uvScale'], uvAnim[4]);
+-                    layer.bind(shader);
++                    layer.bind(shader, instanceAlpha);
+                     let texture = textureOverrides.get(textureIndex);
+                     if (!texture) {
+                         const replaceable = layerTexture.replaceableId;
 diff --git a/dist/cjs/viewer/handlers/mdx/layer.js b/dist/cjs/viewer/handlers/mdx/layer.js
-index 0d26837b8214841c35ccc52702bb9593a1cc18fc..f7c9114fddda9acaf1584e66553ff54008f10942 100644
+index 0d26837b8214841c35ccc52702bb9593a1cc18fc..da36f77883806182bb3b4b37a0f89e3c17ca894f 100644
 --- a/dist/cjs/viewer/handlers/mdx/layer.js
 +++ b/dist/cjs/viewer/handlers/mdx/layer.js
-@@ -50,7 +50,13 @@ class Layer extends animatedobject_1.default {
+@@ -48,14 +48,36 @@ class Layer extends animatedobject_1.default {
+         this.addVariants('KMTA', 'alpha');
+         this.addVariants('KMTF', 'textureId');
      }
-     bind(shader) {
+-    bind(shader) {
++    /**
++     * OpenWar3: `instanceAlpha` is the whole-instance transparency (issue #66), 1 =
++     * opaque. A Layer is shared by every instance of the model, so a faded unit can't
++     * be expressed by mutating this.blended — the blend state has to be decided here,
++     * per instance, per draw.
++     */
++    bind(shader, instanceAlpha = 1) {
          const gl = this.model.viewer.gl;
 -        // gl.uniform1f(shader.uniforms.u_unshaded, this.unshaded);
++        // Layers WC3 authored as opaque (filterMode None) or 1-bit alpha-tested
++        // (Transparent) are drawn with blending off and depth writes on. When the
++        // instance is faded they must blend instead, and stop writing depth — a
++        // ghosted unit that still filled the depth buffer would occlude whatever is
++        // drawn behind it afterwards, including its own further-back geosets.
++        const faded = instanceAlpha < 1 && !this.blended;
 +        // OpenWar3: bind the layer's Unshaded flag, which the stock code left commented
 +        // out. It didn't matter while sd.frag's "lighting" was a near-flat 0.7..1.0
 +        // lambert, but the day/night cycle now really darkens models — and WC3 marks a
@@ -380,8 +419,26 @@ index 0d26837b8214841c35ccc52702bb9593a1cc18fc..f7c9114fddda9acaf1584e66553ff540
          gl.uniform1f(shader.uniforms['u_filterMode'], this.filterMode);
          if (this.blended) {
              gl.enable(gl.BLEND);
+             gl.blendFunc(this.blendSrc, this.blendDst);
+         }
++        else if (faded) {
++            gl.enable(gl.BLEND);
++            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
++        }
+         else {
+             gl.disable(gl.BLEND);
+         }
+@@ -71,7 +93,7 @@ class Layer extends animatedobject_1.default {
+         else {
+             gl.enable(gl.DEPTH_TEST);
+         }
+-        if (this.noDepthSet) {
++        if (this.noDepthSet || faded) {
+             gl.depthMask(false);
+         }
+         else {
 diff --git a/dist/cjs/viewer/handlers/mdx/modelinstance.js b/dist/cjs/viewer/handlers/mdx/modelinstance.js
-index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb9f8a68a3 100644
+index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499c2ed0173 100644
 --- a/dist/cjs/viewer/handlers/mdx/modelinstance.js
 +++ b/dist/cjs/viewer/handlers/mdx/modelinstance.js
 @@ -21,6 +21,13 @@ const scaleHeap = gl_matrix_1.vec3.create();
@@ -490,7 +547,37 @@ index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb
                  }
              }
              node.wasDirty = wasDirty;
-@@ -436,6 +492,7 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -367,14 +423,29 @@ class MdxModelInstance extends modelinstance_1.default {
+             this.boneTexture.bindAndUpdate(this.worldMatrices);
+         }
+     }
++    // OpenWar3 (issue #66): a faded instance (vertex-colour alpha < 1 — Wind Walk,
++    // Banish, SetUnitVertexColor) has no opaque geometry left. Its "opaque" groups
++    // move to the translucent pass so they blend over a finished depth buffer instead
++    // of over whatever the opaque pass happened to have drawn so far.
++    isFaded() {
++        return this.vertexColor[3] < 1;
++    }
+     renderOpaque() {
+         const model = this.model;
++        if (this.isFaded()) {
++            return;
++        }
+         for (const group of model.opaqueGroups) {
+             group.render(this);
+         }
+     }
+     renderTranslucent() {
+         const model = this.model;
++        if (this.isFaded()) {
++            for (const group of model.opaqueGroups) {
++                group.render(this);
++            }
++        }
+         for (const group of model.translucentGroups) {
+             group.render(this);
+         }
+@@ -436,6 +507,7 @@ class MdxModelInstance extends modelinstance_1.default {
      setSequence(id) {
          const model = this.model;
          const sequences = model.sequences;
@@ -498,7 +585,7 @@ index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb
          this.sequence = id;
          if (id < 0 || id > sequences.length - 1) {
              this.sequence = -1;
-@@ -445,11 +502,64 @@ class MdxModelInstance extends modelinstance_1.default {
+@@ -445,11 +517,64 @@ class MdxModelInstance extends modelinstance_1.default {
          else {
              this.frame = sequences[id].interval[0];
          }
@@ -564,13 +651,20 @@ index 020a99b949ec1634579d439261027e00b6da23ac..29e6b0eebc79b6da4e168bcf998f1bdb
          const model = this.model;
          if (this.sequence === -1) {
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..adb4711453762bea0500a46c23605ae0aa1426a5 100644
+index 235f29101256617d34587316e8f40984a8f95685..f093f8e5f3357540123748bd71d11e675646fba7 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-@@ -11,12 +11,44 @@ uniform sampler2D u_texture;
+@@ -11,12 +11,65 @@ uniform sampler2D u_texture;
  uniform float u_filterMode;
  uniform bool u_unshaded;
  
++// OpenWar3: whole-instance transparency — the alpha of the instance's vertex colour
++// (issue #66), 1 = opaque. Kept out of v_color so the 1-bit alpha test below still
++// sees the layer's own alpha; see sd.vert. Layers pick up matching blend state in
++// mdx/layer.js bind(), and a faded instance is drawn in the translucent pass
++// (mdx/modelinstance.js) so it blends over finished opaque geometry.
++uniform float u_instanceAlpha;
++
 +// OpenWar3: day/night cycle, from the tileset's Environment\DNC\*Unit.mdx light
 +// (src/render/dayNight.ts). Same colours the terrain gets, but a higher ambient
 +// intensity — Blizzard authored units to sit flatter than the ground. u_dncEnabled
@@ -609,10 +703,33 @@ index 235f29101256617d34587316e8f40984a8f95685..adb4711453762bea0500a46c23605ae0
 +  if (filterMode >= 3.0 && filterMode <= 4.0) return rgb * f;
 +  return mix(u_distFogColor, rgb, f);
 +}
++
++// Fade a fragment toward "not drawn" by the instance's transparency. Which channel
++// carries that depends on the layer's blend equation — the same reasoning applyDistFog
++// uses above. For the alpha-blended modes (0/1 forced to SRC_ALPHA blending by
++// layer.js, and 2) it's the alpha; for additive (3/4) black is the identity, so scale
++// rgb; for modulate (5/6) the identity is white / mid-grey, so mix toward that.
++vec4 applyInstanceAlpha(vec4 color, float filterMode) {
++  if (u_instanceAlpha >= 1.0) return color;
++  if (filterMode >= 3.0 && filterMode <= 4.0) color.rgb *= u_instanceAlpha;
++  else if (filterMode == 5.0) color.rgb = mix(vec3(1.0), color.rgb, u_instanceAlpha);
++  else if (filterMode == 6.0) color.rgb = mix(vec3(0.5), color.rgb, u_instanceAlpha);
++  else color.a *= u_instanceAlpha;
++  return color;
++}
  
  vec4 getDiffuseColor() {
    vec2 uv = v_uv;
-@@ -55,19 +87,30 @@ void onlyNormals() {
+@@ -43,7 +96,7 @@ vec4 getDiffuseColor() {
+     discard;
+   }
+ 
+-  return color;
++  return applyInstanceAlpha(color, u_filterMode);
+ }
+ 
+ void onlyTexCoords() {
+@@ -55,19 +108,30 @@ void onlyNormals() {
  }
  
  void onlyDiffuse() {
@@ -649,7 +766,7 @@ index 235f29101256617d34587316e8f40984a8f95685..adb4711453762bea0500a46c23605ae0
  }
  
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
-index 49733805785c0ef269901d8928e47a953ada93a9..833ea2e1b74effd8bf47ce48f9268cf38dafa55e 100644
+index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393a2478522 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.vert.js
 @@ -23,6 +23,7 @@ varying vec4 v_color;
@@ -660,7 +777,17 @@ index 49733805785c0ef269901d8928e47a953ada93a9..833ea2e1b74effd8bf47ce48f9268cf3
  
  ${bonetexture_glsl_1.default}
  ${transforms_glsl_1.default}
-@@ -41,6 +42,7 @@ void main() {
+@@ -37,10 +38,16 @@ void main() {
+ 
+   v_uv = a_uv;
+   v_normal = normal;
+-  v_color = u_vertexColor * u_geosetColor.bgra * vec4(1.0, 1.0, 1.0, u_layerAlpha);
++  // OpenWar3: only the RGB of the instance tint belongs here. The instance's ALPHA
++  // is the whole-unit transparency (Wind Walk, Banish, SetUnitVertexColor) and is
++  // applied in sd.frag as u_instanceAlpha, AFTER the 1-bit alpha test — folding it
++  // in here would drag a filterMode-1 texel under the 0.75 cutoff and discard the
++  // fragment, making a faded unit vanish instead of ghosting.
++  v_color = vec4(u_vertexColor.rgb, 1.0) * u_geosetColor.bgra * vec4(1.0, 1.0, 1.0, u_layerAlpha);
    v_uvTransRot = vec4(u_uvTrans, u_uvRot);
    v_uvScale = u_uvScale;
    v_lightDir = normalize(u_lightPos - position);

@@ -6664,9 +6664,9 @@ function zQuat(out: Float32Array, angle: number): void {
 // --- Debug collider overlay geometry helpers (interleaved [x,y,z, r,g,b,a]) ---
 // Hard dark-blue vertex tint for the "pending build" ghost (issue #18). setVertexColor
 // multiplies the model's texture, so low red/green + strong blue reads as a dark-blue
-// silhouette across any building. Alpha MUST stay 1.0 — a translucent (<1) vertex colour
-// makes many building models vanish entirely (the same mdx-m3-viewer quirk the cursor
-// ghost avoids by not tinting at all); "hard" dark blue is opaque anyway.
+// silhouette across any building. "Hard" dark blue is opaque, hence alpha 1.0 — a
+// translucent alpha now genuinely fades the model (issue #66) rather than making it
+// vanish, so this is a look, not a constraint.
 const PENDING_GHOST_TINT = [0.12, 0.22, 0.85, 1.0] as const;
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
 // "Show Regions" overlay palette: cyan outline + a faint cyan wash inside each rect.
