@@ -1,5 +1,6 @@
 import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
+import { unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { type UnitDef, type UnitRegistry } from "../data/units";
@@ -707,6 +708,12 @@ export interface SimUnit {
   velX: number; // scratch: intended pathed displacement this tick (collision steering)
   velY: number;
   footprint: number; // reserved cells per side when stationary (0 = never)
+  // A building's stamped pathTex footprint (see destructibles.ts) and the position it
+  // was stamped at. Buildings don't reserve cells like a stopped unit does — they block
+  // through this stamp — so the stamp is what has to come back when the building dies.
+  // Held with its own x/y because the stamp is applied at the building's FOUNDING spot
+  // and must be lifted from exactly there.
+  pathStamp: { fp: Footprint; x: number; y: number } | null;
   resX: number; // origin cell of the current reservation
   resY: number;
   hasReservation: boolean;
@@ -2400,6 +2407,7 @@ export class SimWorld {
     this.noteConstruct(u.id, "cancel"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_CANCEL (before it's gone)
     for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     this.unsettle(u); // free its reserved cells
+    this.releasePathStamp(u); // …and its footprint's collision
     this.units.delete(u.id);
     this.removals.push(u.id);
     return true;
@@ -2412,6 +2420,7 @@ export class SimWorld {
     if (!u) return false;
     this.refundPendingBuild(u);
     this.unsettle(u);
+    this.releasePathStamp(u);
     if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     if (u.constructing) this.detachBuilder(u.id);
     if (u.garrison.length) this.unloadBurrow(u.id); // eject passengers before it vanishes
@@ -2493,6 +2502,7 @@ export class SimWorld {
       | "velX"
       | "velY"
       | "footprint"
+      | "pathStamp"
       | "resX"
       | "resY"
       | "hasReservation"
@@ -2660,6 +2670,7 @@ export class SimWorld {
       velY: 0,
       // Buildings (speed 0) block via their stamped static footprint instead.
       footprint: unit.flying || unit.speed <= 0 ? 0 : footprintCells(unit.radius),
+      pathStamp: null, // set by setPathStamp once the building's footprint is on the grid
       resX: 0,
       resY: 0,
       hasReservation: false,
@@ -3007,6 +3018,25 @@ export class SimWorld {
       this.grid.release(u.resX, u.resY, u.footprint);
       u.hasReservation = false;
     }
+  }
+
+  /** Hand a building the pathTex footprint that was stamped for it, so leaving the
+   *  world takes its collision with it (see releasePathStamp). Called by the spawner
+   *  once the stamp is down, and by the map loader for the buildings the .doo placed. */
+  setPathStamp(id: number, fp: Footprint, x: number, y: number): void {
+    const u = this.units.get(id);
+    if (u) u.pathStamp = { fp, x, y };
+  }
+
+  /** A building has left the world: lift its footprint off the pathing grid. In WC3
+   *  the ground a structure stood on is walkable the moment it dies — the collapse you
+   *  watch afterwards is only the death animation playing over open ground, which is
+   *  why units walk straight through the rubble. So this runs on death, on RemoveUnit,
+   *  and on a cancelled construction alike — every way a building stops existing. */
+  private releasePathStamp(u: SimUnit): void {
+    if (!u.pathStamp) return;
+    unstampFootprint(this.grid, u.pathStamp.fp, u.pathStamp.x, u.pathStamp.y);
+    u.pathStamp = null;
   }
 
   /** True if any live ground unit's hull overlaps a circle of `radius` at (x,y).
@@ -7324,6 +7354,7 @@ export class SimWorld {
     if (this.tryReincarnate(u)) return;
     this.refundPendingBuild(u); // died before its building went up → refund the cost
     this.unsettle(u); // corpses don't block cells
+    this.releasePathStamp(u); // …and neither does a collapsed building's footprint
     if (u.inMine) {
       const mine = this.mines.get(u.resId);
       if (mine) mine.busy = false; // don't wedge the mine shut forever

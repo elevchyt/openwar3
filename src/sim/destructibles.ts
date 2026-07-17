@@ -29,6 +29,14 @@ export interface Footprint {
   buildBlocked: boolean[]; // blue channel → UNBUILDABLE (a superset of `blocked` for buildings)
 }
 
+/** A stamped footprint and the world position it was stamped at — what a pre-placed
+ *  building hands to its sim unit so the unit can lift its own collision when it dies. */
+export interface PlacedFootprint {
+  x: number;
+  y: number;
+  fp: Footprint;
+}
+
 export type PathTexLookup = (id: string) => string | undefined;
 export type ByteReader = (path: string) => Uint8Array | null;
 

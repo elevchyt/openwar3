@@ -8,7 +8,7 @@ import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { jassOwnerOf, type BuildJob, type QueuedOrder, type RallyKind, type ShopResult, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
-import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint } from "../sim/destructibles";
+import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { MAP_CONTROL, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
@@ -602,8 +602,6 @@ export class MapViewerScene {
   // doodad widgets stream in async, so we can't hold instance refs here. Lets fogWidgets
   // light a tree from ANY cell it covers rather than one self-shadowed origin cell (#43).
   private treeFogRadius = new Map<string, number>();
-  // Stamped footprints of spawned buildings, for unstamping when cancelled.
-  private buildingFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
   // Animated portrait of the selected unit (own small viewer + canvas).
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
@@ -828,7 +826,6 @@ export class MapViewerScene {
     this.rts = null;
     this.dayNight = null;
     this.lastMarkerScanCount = -1;
-    this.buildingFootprints.clear();
     this.rallyFlag = null;
     this.rallyFlagModel = null;
     this.queueFlags = [];
@@ -903,6 +900,7 @@ export class MapViewerScene {
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
+      this.rts.setPlacedFootprints(nodes.placedFootprints); // each map building's stamp → freed when it dies
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
       this.mapPlayerUnits = nodes.players; // pre-placed player units → seeded owned in startCustom (issue #33)
     }
@@ -971,7 +969,8 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }> } {
+  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[] } {
+    const placedFootprints: PlacedFootprint[] = []; // each map building's stamp, handed to its unit at seed time
     const trees: Array<{ x: number; y: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
     const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
@@ -1006,10 +1005,16 @@ export class MapViewerScene {
       const dood = new MappedData(this.slkText("Doodads\\Doodads.slk"));
       const pathTexOf = (id: string): string | undefined =>
         destr.getRow(id)?.string("pathTex") || dood.getRow(id)?.string("pathTex") || undefined;
-      stampFootprints(grid, doodads, pathTexOf, readBytes);
+      // Only SOLID doodads block: a mapmaker who unticks "Solid" (or places an open,
+      // non-solid gate) means for units to walk through it, so its pathTex is not stamped.
+      // WarChasers' gates and half its Force Walls are non-solid — stamping them anyway was
+      // the phantom collider that isn't there in the World Editor.
+      stampFootprints(grid, doodads.filter((d) => d.solid), pathTexOf, readBytes);
       for (const d of doodads) {
         const row = destr.getRow(d.id);
-        if (row?.string("targType") === "tree") {
+        // A harvestable tree still has to be solid to be a real tree — an invisible,
+        // non-solid tree prop is deleted scenery, not something a wisp can chop.
+        if (d.solid && row?.string("targType") === "tree") {
           trees.push({ x: d.x, y: d.y, pathTex: row.string("pathTex") || "" });
         }
       }
@@ -1022,7 +1027,18 @@ export class MapViewerScene {
     const buildings = placed
       .filter((u) => this.registry.get(u.typeId)?.isBuilding)
       .map((u) => ({ id: u.typeId, x: u.x, y: u.y }));
+    // Stamp them now — the sim needs the map's collision right, from the first tick, and
+    // these buildings' sim units only stream in over the following frames. Each stamp is
+    // handed to its unit as it seeds (see setPlacedFootprints), so a map building that is
+    // destroyed frees its ground exactly like one the player built. Without that hand-off
+    // the collision outlived the building: on WarChasers the gnoll huts you level at the
+    // start went on blocking the path they stood in for the rest of the game.
     stampFootprints(grid, buildings, (id) => this.registry.get(id)?.pathTex || undefined, readBytes);
+    for (const b of buildings) {
+      const pathTex = this.registry.get(b.id)?.pathTex;
+      const fp = pathTex ? this.footprintFor(pathTex) : null;
+      if (fp) placedFootprints.push({ x: b.x, y: b.y, fp });
+    }
     for (let i = 0; i < placed.length; i++) {
       const u = placed[i];
       // Pre-placed buildings (neutral shops, taverns, fountains, altars, etc.) get
@@ -1056,7 +1072,7 @@ export class MapViewerScene {
         players.push({ x: u.x, y: u.y, owner: u.player });
       }
     }
-    return { trees, mines, neutral, creeps, players };
+    return { trees, mines, neutral, creeps, players, placedFootprints };
   }
 
   private slkText(path: string): string {
@@ -2250,9 +2266,9 @@ export class MapViewerScene {
     const n = footprintCells(collision);
     // Building half-extents in world units (cell = 32 → half-cell = 16). Fall back
     // to a 3×3-ish structure if we somehow have no stamped footprint on record.
-    const meta = this.buildingFootprints.get(buildingId);
-    const halfW = meta ? meta.fp.w * 16 : 48;
-    const halfH = meta ? meta.fp.h * 16 : 48;
+    const fp = this.rts?.simWorld.units.get(buildingId)?.pathStamp?.fp;
+    const halfW = fp ? fp.w * 16 : 48;
+    const halfH = fp ? fp.h * 16 : 48;
     // Four corners in counterclockwise order (WC3 rotates CCW): SW → SE → NE → NW,
     // i.e. bottom-left, bottom-right, top-right, top-left. World +y is north.
     const corners: Array<[number, number]> = [
@@ -2396,7 +2412,9 @@ export class MapViewerScene {
     // Buildings block pathing: stamp their footprint so units route around them.
     if (fp && this.grid) {
       stampFootprint(this.grid, fp, x, y);
-      this.buildingFootprints.set(simId, { fp, x, y }); // for unstamping on cancel
+      // The sim owns the stamp from here: it frees those cells the moment the building
+      // leaves the world (death, RemoveUnit, cancelled construction).
+      this.rts.simWorld.setPathStamp(simId, fp, x, y);
       // Seat the structure on the tallest terrain its footprint spans so it never
       // clips into a small hill/slope (issue #15). Half-extents in world units:
       // footprint cells are PATHING_CELL (32u) wide, centred on (x, y).
@@ -5250,12 +5268,7 @@ export class MapViewerScene {
     // Grab the building's position before it's removed, for the explosion.
     const b = this.rts.simWorld.units.get(buildingId);
     const fx = b ? { x: b.x, y: b.y, z: this.rts.groundHeightAt(b.x, b.y) } : null;
-    const meta = this.buildingFootprints.get(buildingId);
-    if (meta && this.grid) {
-      unstampFootprint(this.grid, meta.fp, meta.x, meta.y);
-      this.buildingFootprints.delete(buildingId);
-    }
-    this.rts.simWorld.cancelBuilding(buildingId);
+    this.rts.simWorld.cancelBuilding(buildingId); // frees its footprint's cells too
     if (fx) void this.spawnEffect(CANCEL_FX[this.localRace], fx.x, fx.y, fx.z);
   }
 

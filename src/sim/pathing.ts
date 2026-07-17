@@ -52,12 +52,22 @@ export function footprintCells(collision: number): number {
 export class PathingGrid {
   readonly width: number;
   readonly height: number;
+  // The TERRAIN baseline, straight from war3map.wpm. Read-only from here on: cliffs and
+  // water are the map's own geometry and nothing a building/tree does may erase them.
   private flags: Uint8Array;
   private originX: number;
   private originY: number;
   // Dynamic reservation layer (stationary units). Counted, so overlapping
   // reservations (rare, e.g. spawn overflow) release cleanly.
   private reservations: Uint16Array | null = null;
+  // Stamped footprint layers (trees + buildings), kept OFF the terrain baseline and
+  // COUNTED for the same reason the reservations are: footprints overlap (a gnoll hut
+  // pressed into the treeline shares cells with the trees, and a pathTex's blue border
+  // laps over its neighbour's), so clearing one on a bare bitmask would punch a hole in
+  // the terrain or in whatever else still stands on those cells. Counting means a
+  // footprint releases exactly the cells it took, and only once nothing else claims them.
+  private blockStamps: Uint16Array | null = null; // red channel → unwalkable
+  private buildStamps: Uint16Array | null = null; // blue channel → unbuildable
 
   constructor(data: PathingData, centerOffset: readonly [number, number]) {
     this.width = data.width;
@@ -147,7 +157,9 @@ export class PathingGrid {
   }
 
   walkable(cx: number, cy: number): boolean {
-    return this.inBounds(cx, cy) && (this.flags[cy * this.width + cx] & PathingFlag.Unwalkable) === 0;
+    if (!this.inBounds(cx, cy)) return false;
+    const i = cy * this.width + cx;
+    return (this.flags[i] & PathingFlag.Unwalkable) === 0 && !(this.blockStamps && this.blockStamps[i] > 0);
   }
 
   /** True if a building may be founded on this cell: not unbuildable *and* not
@@ -155,27 +167,40 @@ export class PathingGrid {
    *  building's full pathTex footprint; movable-unit reservations are ignored
    *  (our own units scatter when the builder arrives), matching WC3. */
   buildable(cx: number, cy: number): boolean {
-    return this.inBounds(cx, cy) && (this.flags[cy * this.width + cx] & (PathingFlag.Unwalkable | PathingFlag.Unbuildable)) === 0;
+    if (!this.inBounds(cx, cy)) return false;
+    const i = cy * this.width + cx;
+    if ((this.flags[i] & (PathingFlag.Unwalkable | PathingFlag.Unbuildable)) !== 0) return false;
+    return !(this.blockStamps && this.blockStamps[i] > 0) && !(this.buildStamps && this.buildStamps[i] > 0);
   }
 
-  /** Mark a cell unwalkable — used to stamp destructible (tree) footprints. */
+  /** Mark a cell unwalkable — used to stamp destructible (tree) + building footprints. */
   block(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= PathingFlag.Unwalkable;
+    if (!this.inBounds(cx, cy)) return;
+    this.blockStamps ??= new Uint16Array(this.width * this.height);
+    this.blockStamps[cy * this.width + cx]++;
   }
 
-  /** Clear a stamped cell (felled tree / collapsed mine footprint). */
+  /** Release one stamp of a cell (felled tree / collapsed building footprint). The cell
+   *  only reopens once the LAST claim on it is gone — and never if the terrain itself
+   *  is unwalkable underneath. */
   unblock(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] &= ~PathingFlag.Unwalkable;
+    if (!this.inBounds(cx, cy) || !this.blockStamps) return;
+    const i = cy * this.width + cx;
+    if (this.blockStamps[i] > 0) this.blockStamps[i]--;
   }
 
   /** Mark/clear a cell unbuildable — building footprints' full (blue) extent, so
    *  the next building can't crowd in and close the walkable corridor between them. */
   blockBuild(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] |= PathingFlag.Unbuildable;
+    if (!this.inBounds(cx, cy)) return;
+    this.buildStamps ??= new Uint16Array(this.width * this.height);
+    this.buildStamps[cy * this.width + cx]++;
   }
 
   unblockBuild(cx: number, cy: number): void {
-    if (this.inBounds(cx, cy)) this.flags[cy * this.width + cx] &= ~PathingFlag.Unbuildable;
+    if (!this.inBounds(cx, cy) || !this.buildStamps) return;
+    const i = cy * this.width + cx;
+    if (this.buildStamps[i] > 0) this.buildStamps[i]--;
   }
 
   worldToCell(wx: number, wy: number): [number, number] {

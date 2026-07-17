@@ -3,6 +3,7 @@ import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine,
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
+import type { PlacedFootprint } from "../sim/destructibles";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -590,6 +591,9 @@ export class RtsController {
   // units lift the fog of war (issue #33) and are selectable/commandable. Empty on
   // melee maps (which pre-place no player units — WC3 spawns those at runtime).
   private playerSeeds: Array<{ x: number; y: number; owner: number; team: number }> = [];
+  // The pathing footprint stamped for each pre-placed building, by position. Handed to
+  // the building's sim unit as it seeds so its death frees the ground it stood on.
+  private placedFootprints: PlacedFootprint[] = [];
   private seedingEnabled = false; // gate: don't adopt map units until start setup (teams/local player) is ready
   private seeded = false; // true once trySeed has run at least one scan (creepCamps gate)
   // Melee start-location clear zones (blizzard.j MeleeClearExcessUnits): each USED
@@ -1159,6 +1163,34 @@ export class RtsController {
     this.playerSeeds = seeds;
   }
 
+  /** Register the pathing footprint the map loader stamped for each pre-placed BUILDING.
+   *  trySeed hands each one to the sim unit that adopts that spot, so the building owns
+   *  its own collision and takes it away when it dies — the same deal a building the
+   *  player raises gets from the spawner. */
+  setPlacedFootprints(stamps: PlacedFootprint[]): void {
+    this.placedFootprints = stamps;
+  }
+
+  /** Attach the map-stamped footprint at this position (if any) to a freshly-seeded
+   *  building. Matched by position on the same 48u tolerance as every other .doo lookup
+   *  here — the sim unit is seeded from the instance the .doo placed, so the two agree.
+   *  The nearest match wins and is then CLAIMED (dropped from the list): a stamp belongs
+   *  to one building, or two neighbours could each free the same cells while the other's
+   *  collision stayed behind forever. */
+  private adoptPlacedFootprint(simId: number, x: number, y: number): void {
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < this.placedFootprints.length; i++) {
+      const p = this.placedFootprints[i];
+      if (Math.abs(p.x - x) >= 48 || Math.abs(p.y - y) >= 48) continue;
+      const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best < 0) return;
+    const [p] = this.placedFootprints.splice(best, 1);
+    this.sim.setPathStamp(simId, p.fp, p.x, p.y);
+  }
+
   /** The owner/team of a pre-placed player unit at a position, or null. */
   private playerSeedAt(x: number, y: number): { owner: number; team: number } | null {
     for (const p of this.playerSeeds) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return { owner: p.owner, team: p.team };
@@ -1724,6 +1756,7 @@ export class RtsController {
       { baseInvulnerable: !!def?.abilities.includes("Avul") },
     );
     u.neutralPassive = true;
+    if (isBuilding) this.adoptPlacedFootprint(simId, loc[0], loc[1]); // its collision dies with it
     const entry: Entry = {
       simId,
       unit,
@@ -1771,6 +1804,9 @@ export class RtsController {
   private seedPlayerUnit(unit: MapUnit, def: UnitDef, loc: Float32Array, owner: number, team: number): void {
     const facing = quatToZ(unit.instance.localRotation);
     const simId = this.addUnit(unit.instance, def, loc[0], loc[1], facing, owner, team);
+    // A pre-placed BUILDING takes ownership of the footprint the map loader stamped for
+    // it, so levelling it reopens the ground — WarChasers' gnoll huts are exactly this.
+    if (def.isBuilding) this.adoptPlacedFootprint(simId, loc[0], loc[1]);
     // The .doo instance is a viewer WIDGET (still in map.units), so mdx-m3-viewer's
     // Widget.update() keeps auto-playing its Stand clip. We suppress that by writing
     // `state = WidgetState.WALK` on the SAME widget object the viewer iterates — but
