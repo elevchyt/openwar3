@@ -481,8 +481,13 @@ export class GameHud {
     const bg = this.driver.blpCanvas(TOOLTIP_BACKGROUND);
     const fill = bg ? tooltipFill(bg) : null;
     if (border && fill) {
-      this.root.style.setProperty("--hud-tooltip-border", `url(${border})`);
-      this.root.style.setProperty("--hud-tooltip-fill", fill);
+      // Lift these to :root (not just the HUD root) so the world-space hover slab —
+      // which lives in ui/stage.ts's world layer, a separate DOM subtree — is skinned
+      // by the same nine-patch as the command-card tooltip. The body class gates the
+      // hover slab's `.skinned` look purely in CSS, so rts.ts needn't know about art.
+      document.documentElement.style.setProperty("--hud-tooltip-border", `url(${border})`);
+      document.documentElement.style.setProperty("--hud-tooltip-fill", fill);
+      document.body.classList.add("hud-tooltip-skinned");
       this.cmdTooltip.classList.add("skinned");
     }
   }

@@ -1087,6 +1087,13 @@ export class MapViewerScene {
   private beginMatch(config: MeleeConfig, startGold: number, startLumber: number): Map<number, PlayableRace> {
     this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
     this.rts!.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
+    // Owner-line names for the hover tooltip: an AI slot reads "Computer (Normal)"
+    // (the one difficulty we model, matching the Custom Game screen's label); a human
+    // slot falls back to a generic "Player N" — the local player never shows an owner
+    // line, so its own label is never seen.
+    this.rts!.setPlayerNames(
+      new Map(config.slots.map((s) => [s.id, s.controller === "computer" ? "Computer (Normal)" : `Player ${s.id + 1}`])),
+    );
     // Open on the local player's base at gameplay zoom.
     const home = config.slots.find((s) => s.id === this.localPlayer);
     if (home) {

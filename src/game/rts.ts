@@ -500,6 +500,20 @@ export interface SelIcon {
   owner: number;
 }
 
+// The floating name slab WC3 draws above the unit under the cursor. Colours
+// measured off the real 1.27a client's mouseover shots: the owner (player) line
+// is red for an enemy, gold for an ally; the unit's own name and its level are
+// white. Everything below the owner line is white regardless of allegiance.
+const HOVER_OWNER_ENEMY = "#ff0303"; // WC3 red — a hostile player's name
+const HOVER_OWNER_ALLY = "#ffcc00"; // WC3 gold — an allied player's name
+const HOVER_TEXT = "#ffffff"; // unit name, "Level N", "Gold: N" — always white
+
+/** One line of a hover tooltip: its text and the colour WC3 draws it in. */
+interface HoverLine {
+  text: string;
+  color: string;
+}
+
 // A floating status bar drawn above a unit: a hero level badge (left), an HP bar,
 // and a mana bar below it (for units with mana). Pooled, one per visible unit, so
 // bars are always on screen (WC3's "always show health bars"). The bars are single
@@ -538,6 +552,18 @@ function makeHpBar(): HpBar {
   // letterbox (see ui/stage.ts).
   worldLayer().appendChild(root);
   return { root, bars, level, hp, manaTrack, mana };
+}
+
+/** The hover slab element, into the same world layer as the HP bars so its position
+ *  is written in canvas CSS pixels with no letterbox offset (see ui/stage.ts). Skinned
+ *  by the human-tooltip-border nine-patch when a real install is mounted (the vars are
+ *  lifted to `:root` by ui/hud.ts applyWidgetSkin); a plain placeholder otherwise. */
+function makeHoverTip(): HTMLDivElement {
+  const root = document.createElement("div");
+  root.className = "unit-hover-tooltip";
+  root.hidden = true;
+  worldLayer().appendChild(root);
+  return root;
 }
 
 export class RtsController {
@@ -614,6 +640,15 @@ export class RtsController {
   private lastSeenUnitCount = -1; // map.units length at the last scan (grows as models stream in)
   private nextId = 1;
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
+  // The single floating name/owner slab shown above the unit (or gold mine / ground
+  // item) under the cursor. Built lazily into the world layer so it tracks its target
+  // in canvas space exactly like the HP bars; `hoverTipSig` caches the last rendered
+  // content so the DOM is only rebuilt when the lines actually change, not every frame.
+  private hoverTip: HTMLDivElement | null = null;
+  private hoverTipSig = "";
+  // Display names for the owner line ("Computer (Normal)", a human's account name).
+  // Seeded from the lobby at match start; a player with no entry falls back to "Player N".
+  private playerNames = new Map<number, string>();
   // Corpses adopt the dead unit's model instance and sequence it through Death →
   // Decay Flesh → Decay Bone in place, holding the bones until the sim corpse
   // decays (88s). `corpseId` links to the sim corpse so a spell that raises it
@@ -669,11 +704,25 @@ export class RtsController {
   dispose(): void {
     for (const b of this.hpBars) b.root.remove();
     this.hpBars = [];
+    this.hoverTip?.remove();
+    this.hoverTip = null;
   }
 
   /** Which player's units a drag-box selects (set at melee start). */
   setLocalPlayer(id: number): void {
     this.localPlayer = id;
+  }
+
+  /** Player display names for the hover tooltip's owner line (set at match start
+   *  from the lobby seating: AI slots read "Computer (Normal)"). */
+  setPlayerNames(names: Map<number, string>): void {
+    this.playerNames = names;
+  }
+
+  /** The owner-line label for a player slot — the lobby name, or a generic
+   *  "Player N" fallback so an un-seeded slot still reads sensibly. */
+  private playerLabel(owner: number): string {
+    return this.playerNames.get(owner) ?? `Player ${owner + 1}`;
   }
 
   /** Which team's combined sight lifts the fog of war (allies share vision). */
@@ -2299,6 +2348,7 @@ export class RtsController {
       }
     }
     this.updateHealthBars();
+    this.updateHoverTooltip();
   }
 
   /** The sim removed this unit: play its death animation, then decay the corpse
@@ -4616,6 +4666,113 @@ export class RtsController {
       bar.root.style.top = `${(h - sy) / dpr - (ry + 24)}px`; // gl y-up → css y-down (floats above the unit)
     }
     for (let k = n; k < this.hpBars.length; k++) this.hpBars[k].root.hidden = true;
+  }
+
+  /** What the hover slab should say for whatever the cursor is over — the ordered,
+   *  coloured lines plus the world point to float them above — or null when nothing
+   *  hovered warrants a tooltip. The WC3 rules (verified against the real client's
+   *  mouseover shots):
+   *    • another player's unit → the owner's name (red enemy / gold ally); a hero
+   *      adds its given name + "Level N".
+   *    • your own unit → nothing, UNLESS it's a hero (its name + "Level N").
+   *    • a neutral-hostile creep → its name + "Level N".
+   *    • a neutral-passive prop (shop, critter, neutral building) → its name only.
+   *    • a gold mine → "Gold Mine" + "Gold: N"; a ground item → its name. */
+  private computeHoverTip(): { x: number; y: number; z: number; radius: number; lines: HoverLine[] } | null {
+    if (this.hovered !== null) {
+      const u = this.sim.units.get(this.hovered);
+      const e = this.byId.get(this.hovered);
+      if (!u || !e || e.hidden || this.fogBlocksClick(u)) return null;
+      const lines: HoverLine[] = [];
+      if (u.owner < 0) {
+        // Neutral. A passive prop is name only; a hostile creep also shows its level.
+        lines.push({ text: e.name, color: HOVER_TEXT });
+        if (!u.neutralPassive) {
+          const lvl = u.isHero ? u.level : (this.registry.get(e.typeId)?.level ?? 0);
+          if (lvl > 0) lines.push({ text: `Level ${lvl}`, color: HOVER_TEXT });
+        }
+      } else if (u.owner === this.localPlayer) {
+        // Your own units wear no owner line; only a hero is worth a slab (name + level).
+        if (!u.isHero) return null;
+        lines.push({ text: u.properName || e.name, color: HOVER_TEXT });
+        lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
+      } else {
+        // Another player's unit: the owner's name, coloured by diplomacy to us.
+        const ally = this.alliances.coAllied(u.owner, this.localPlayer);
+        lines.push({ text: this.playerLabel(u.owner), color: ally ? HOVER_OWNER_ALLY : HOVER_OWNER_ENEMY });
+        if (u.isHero) {
+          lines.push({ text: u.properName || e.name, color: HOVER_TEXT });
+          lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
+        }
+      }
+      return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, lines };
+    }
+    if (this.hoveredMine !== null) {
+      const m = this.sim.mines.get(this.hoveredMine);
+      if (!m || this.fogBlocksMine(m)) return null;
+      const name = this.registry.get("ngol")?.name || "Gold Mine";
+      return {
+        x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: 64,
+        lines: [{ text: name, color: HOVER_TEXT }, { text: `Gold: ${m.gold}`, color: HOVER_TEXT }],
+      };
+    }
+    if (this.hoveredItem !== null) {
+      const it = this.sim.items.get(this.hoveredItem);
+      if (!it) return null;
+      const name = this.items.get(it.itemId)?.name || it.itemId;
+      return { x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: 32, lines: [{ text: name, color: HOVER_TEXT }] };
+    }
+    return null;
+  }
+
+  /** Float the hover slab above whatever the cursor is over, tracking it in canvas
+   *  space like the HP bars. Rebuilds the DOM only when the lines change (cached by
+   *  `hoverTipSig`); repositions every frame. Anchored bottom-centre a small gap above
+   *  the unit's HP bar so it only ever grows upward as the text gets taller. */
+  private updateHoverTooltip(): void {
+    const tip = this.computeHoverTip();
+    if (!tip) {
+      if (this.hoverTip) this.hoverTip.hidden = true;
+      this.hoverTipSig = "";
+      return;
+    }
+    if (!this.hoverTip) this.hoverTip = makeHoverTip();
+    const root = this.hoverTip;
+    const sig = tip.lines.map((l) => `${l.color}${l.text}`).join("");
+    if (sig !== this.hoverTipSig) {
+      this.hoverTipSig = sig;
+      root.replaceChildren();
+      for (const l of tip.lines) {
+        const div = document.createElement("div");
+        div.className = "uht-line";
+        div.style.color = l.color;
+        div.textContent = l.text;
+        root.appendChild(div);
+      }
+    }
+    // Project the target's base, and a point one selection-radius above it, exactly
+    // as updateHealthBars does — so the slab floats at the same zoom-tracked height.
+    const viewport = this.host.viewport();
+    const dpr = this.dpr();
+    const w = this.host.canvas.width;
+    const h = this.host.canvas.height;
+    this.world[0] = tip.x;
+    this.world[1] = tip.y;
+    this.world[2] = tip.z;
+    this.host.camera.worldToScreen(this.screen, this.world, viewport);
+    const sx = this.screen[0];
+    const sy = this.screen[1];
+    if (sx < 0 || sx > w || sy < 0 || sy > h) {
+      root.hidden = true;
+      return;
+    }
+    this.world2.set(this.world);
+    this.world2[1] = tip.y + tip.radius;
+    this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
+    const ry = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - sx, this.screen2[1] - sy) / dpr);
+    root.style.left = `${sx / dpr}px`;
+    root.style.top = `${(h - sy) / dpr - (ry + 34)}px`; // just above the HP bar (ry + 24), which sits above the unit
+    root.hidden = false;
   }
 
   /** CSS px → GL px (device pixels, y-up) to match camera.worldToScreen. */
