@@ -26,6 +26,7 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
+import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
 import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
@@ -326,6 +327,10 @@ interface SpawnInstance {
   show(): void;
   setSequence(i: number): void;
   setSequenceLoopMode(m: number): void;
+  // mdx re-samples an instance's bones only when its animation advanced this frame; a
+  // caller that writes `frame` itself sets `forced` so the pose follows (the viewer's own
+  // rule — "if an instance is transformed, always do a forced update"). Self-clearing.
+  forced?: boolean;
   setLocation(v: ArrayLike<number>): unknown;
   setRotation(q: ArrayLike<number>): unknown;
   detach(): boolean; // remove from the scene (projectiles on impact)
@@ -351,8 +356,22 @@ interface SpawnModel {
 interface SpecialFx {
   /** null while the model is still loading — the handle exists before the art does. */
   inst: SpawnInstance | null;
-  /** Playing its Birth clip; updateSpecialFx hands it to a looping Stand when that ends. */
-  birthing: boolean;
+  /** Seconds since the script created it. THE effect's clock: an mdx instance only
+   *  advances its own `frame` on the frames the scene actually draws it, so anything the
+   *  player isn't looking at freezes. Age is what makes the effect's life independent of
+   *  that (issue #68 follow-up) — see updateSpecialFx. */
+  age: number;
+  /** Which clips the model has — the input to specialFxPhaseAt. Read once, on load. */
+  clips: SpecialFxClips;
+  /** The model's Stand clip, or -1. */
+  standIdx: number;
+  /** Already handed over to its looping Stand (so we only setSequence once). */
+  standing: boolean;
+  /** Its whole life has run out: a Birth-only model that has played its last frame. It is
+   *  over, and is never drawn again — however long it took the player to look. */
+  spent: boolean;
+  /** Currently taken off the screen (fogged, or spent). */
+  hidden: boolean;
   /** The unit it rides, or -1 for one standing on the ground. */
   hostId: number;
   /** The attachment point's tokens ("origin", ["hand","left"]) — see attachmentNode. */
@@ -3050,7 +3069,11 @@ export class MapViewerScene {
     const model = mdlPath(path);
     if (!model) return -1;
     const id = this.nextSpecialFxId++;
-    const fx: SpecialFx = { inst: null, birthing: false, hostId, attach, parented: false, x, y, doomed: false };
+    const fx: SpecialFx = {
+      inst: null, age: 0, spent: false, standing: false, standIdx: -1,
+      clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false },
+      hidden: true, hostId, attach, parented: false, x, y, doomed: false,
+    };
     this.specialFx.set(id, fx);
     void this.loadSpecialFx(id, model, fx);
     return id;
@@ -3070,18 +3093,31 @@ export class MapViewerScene {
     }
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
+    inst.hide(); // starts off-screen; updateSpecialFxOne below is the only thing that shows it
+    // Read the model's clips once — specialFxPhaseAt turns them plus `age` into a phase.
     const birth = this.seqIndex(inst, /birth/i);
+    fx.standIdx = this.seqIndex(inst, /^stand/i);
+    const iv = birth >= 0 ? inst.model.sequences[birth]?.interval : undefined;
+    fx.clips = {
+      hasBirth: birth >= 0,
+      birthStart: iv?.[0] ?? 0,
+      birthSecs: iv && iv[1] > iv[0] ? (iv[1] - iv[0]) / 1000 : 0,
+      hasStand: fx.standIdx >= 0,
+    };
     if (birth >= 0) {
       inst.setSequence(birth);
-      inst.setSequenceLoopMode(0); // play once; updateSpecialFx settles it into Stand
-      fx.birthing = true;
+      inst.setSequenceLoopMode(0); // play once; updateSpecialFxOne settles it into Stand
     } else {
+      // No Birth to play out: it just loops the one clip it has, for as long as it lives.
       inst.setSequence(this.effectSequence(inst));
       inst.setSequenceLoopMode(2);
+      fx.standing = true;
     }
-    inst.show();
     fx.inst = inst;
     this.placeSpecialFx(fx); // land it before its first frame is drawn
+    // The model may have taken long enough to arrive that the effect is already over, or
+    // it may be standing in fog: never show() blind — let the age/fog pass below decide.
+    this.updateSpecialFxOne(fx);
   }
 
   /** Put an effect where it belongs this frame: parented to its host's attachment node if
@@ -3120,7 +3156,16 @@ export class MapViewerScene {
     inst.setLocation(this.loc3);
   }
 
-  private updateSpecialFx(): void {
+  /** Age every live effect and reconcile what the player sees.
+   *
+   *  An effect runs on the GAME's clock, not the renderer's. An mdx instance only advances
+   *  its own `frame` on the frames the scene draws it — `ModelInstance.update` is gated on
+   *  `rendered && isVisible(camera)` — so anything off-camera or hidden freezes where it
+   *  stands. Left to that, an effect created in the fog sat at frame 0 for as long as the
+   *  player looked elsewhere and then played its Birth from the start, minutes late: the
+   *  art queued up rather than happening. `age` is the fix — it ticks here every frame, for
+   *  every effect, seen or not, and it alone decides where in its life the effect is. */
+  private updateSpecialFx(dt: number): void {
     for (const [id, fx] of this.specialFx) {
       // An effect attached to a unit dies with him: WC3 destroys it when the widget leaves
       // the game, and our attachment node goes with the host's model either way.
@@ -3128,19 +3173,53 @@ export class MapViewerScene {
         this.destroySpecialFx(id);
         continue;
       }
-      const inst = fx.inst;
-      if (!inst) continue; // still loading
-      if (fx.birthing && inst.sequenceEnded) {
-        fx.birthing = false;
-        const stand = this.seqIndex(inst, /^stand/i);
-        // A model with no Stand just holds its last Birth frame, as the game does.
-        if (stand >= 0) {
-          inst.setSequence(stand);
-          inst.setSequenceLoopMode(2); // the steady state: loop until the script says stop
-        }
-      }
-      this.placeSpecialFx(fx);
+      fx.age += dt;
+      this.updateSpecialFxOne(fx);
     }
+  }
+
+  private updateSpecialFxOne(fx: SpecialFx): void {
+    const inst = fx.inst;
+    if (!inst) return; // still loading — age is already running, and the load will catch up
+    if (!fx.spent) {
+      this.placeSpecialFx(fx);
+      const phase = specialFxPhaseAt(fx.age, fx.clips);
+      if (phase.kind === "birth") {
+        // Drive Birth off `age` rather than letting the instance count for itself. On screen
+        // this writes what mdx would have anyway (measured: 14 ms apart, one frame of skew);
+        // after a spell frozen it snaps to where the effect really is by now, so it resumes
+        // mid-flight instead of restarting.
+        inst.frame = phase.frame;
+        inst.forced = true; // we moved the clock by hand — re-pose the bones
+      } else if (phase.kind === "stand") {
+        if (!fx.standing) {
+          fx.standing = true;
+          inst.setSequence(fx.standIdx);
+          inst.setSequenceLoopMode(2); // the steady state: loop until the script destroys it
+        }
+      } else {
+        fx.spent = true; // over — see SpecialFxPhase
+      }
+    }
+    // You cannot see an effect through the fog of war, and one that burned out in the fog
+    // has nothing left to show. Same live-sight rule the dropped items use (fogItems).
+    const show = !fx.spent && this.specialFxVisible(fx);
+    if (show !== !fx.hidden) {
+      fx.hidden = !show;
+      if (show) inst.show();
+      else inst.hide();
+    }
+  }
+
+  /** Can the local player see this effect right now? An attached one follows its host's own
+   *  verdict (`unitHidden` — fog, but also a gold mine or a transport's hold); a ground one
+   *  needs live sight of its point, not merely an explored memory of it. */
+  private specialFxVisible(fx: SpecialFx): boolean {
+    const rts = this.rts;
+    if (!rts) return true;
+    if (fx.hostId >= 0) return !rts.unitHidden(fx.hostId);
+    const vision = rts.getVision();
+    return vision.revealed || vision.stateAt(fx.x, fx.y) === FogState.Visible;
   }
 
   /** DestroyEffect — the model dies where it stands (fadeOutFx plays its Death clip). */
@@ -3149,7 +3228,11 @@ export class MapViewerScene {
     if (!fx) return;
     this.specialFx.delete(id);
     fx.doomed = true; // if it's still loading, loadSpecialFx drops it on arrival
-    if (fx.inst) this.fadeOutFx(fx.inst);
+    if (!fx.inst) return;
+    // Nobody is watching one that is fogged or already spent, and a hidden instance is not
+    // animated by the scene — so its Death clip would only sit out its deadline unseen.
+    if (fx.hidden) fx.inst.detach();
+    else this.fadeOutFx(fx.inst);
   }
 
   // --- Blood Mage orbiting spheres (issue #37) ------------------------------
@@ -5576,7 +5659,7 @@ export class MapViewerScene {
       this.updateEffects(dt / 1000);
       this.updateMirrorMissiles(dt / 1000);
       this.updateAuraEffects();
-      this.updateSpecialFx(); // script effects: settle Birth→Stand, follow their host
+      this.updateSpecialFx(dt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
       this.updateDyingFx(dt / 1000); // buff art + script effects playing out their Death clip
       this.updateTreePulses(dt / 1000);
       this.updateTreeActors(); // per-chop "stand hit" wobble on felled/chopped trees' stand-ins

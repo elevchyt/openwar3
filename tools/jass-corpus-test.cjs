@@ -3766,5 +3766,62 @@ endfunction
   } else fail(`headless handle: ${JSON.stringify(bareHandle)}`);
 }
 
+// ===========================================================================
+// 7.26b — An effect runs on the GAME's clock, not the renderer's (issue #68 follow-up).
+//
+// The bug this pins: an mdx instance advances its `frame` ONLY on the frames the scene
+// draws it (`ModelInstance.update` is gated on `rendered && isVisible(camera)`), so an
+// effect created in the fog of war froze at frame 0 and then played its Birth from the
+// start whenever the player finally looked — the art queued up instead of happening.
+// `specialFxPhaseAt` is the rule that fixes it: AGE alone decides the phase.
+const { specialFxPhaseAt } = require(join(REPO, '.jass-build', 'src', 'render', 'specialFxClock.js'));
+
+console.log("\n[7.26b] Special effects run on the game's clock (fog must not queue art up)");
+{
+  // AnimateDeadTarget.mdx — the model (4)WarChasers' "Spawn One Monster" attaches. Read off
+  // the real MDX in the live run: ONE sequence, `Birth [0, 2333]`, no Stand.
+  const ANIMATE_DEAD = { hasBirth: true, birthStart: 0, birthSecs: 2.333, hasStand: false };
+  // FrostArmorTarget.mdx — the Sun Key's swirl. Three acts: Stand/Birth/Death.
+  const FROST_ARMOR = { hasBirth: true, birthStart: 0, birthSecs: 0.3, hasStand: true };
+
+  const p0 = specialFxPhaseAt(0, ANIMATE_DEAD);
+  if (p0.kind === 'birth' && p0.frame === 0) {
+    ok('a brand-new effect opens on its Birth, at the clip\'s first frame');
+  } else fail(`age 0: ${JSON.stringify(p0)}`);
+
+  // The heart of it: age drives the model frame, so an effect that spent its Birth frozen
+  // resumes MID-FLIGHT when it is finally drawn rather than restarting from 0.
+  const p1 = specialFxPhaseAt(1.0, ANIMATE_DEAD);
+  if (p1.kind === 'birth' && Math.abs(p1.frame - 1000) < 1) {
+    ok('...and 1 s in it is 1000 model-ms in — age drives the frame, so a frozen effect resumes where it really is, it does not replay its Birth');
+  } else fail(`age 1: ${JSON.stringify(p1)}`);
+
+  // The reported symptom, stated as a check.
+  const late = specialFxPhaseAt(60, ANIMATE_DEAD);
+  if (late.kind === 'spent') {
+    ok('a Birth-ONLY effect (AnimateDeadTarget) is SPENT once its clip has run — 60 s later there is nothing to show, however long the player took to look');
+  } else fail(`age 60: ${JSON.stringify(late)}`);
+  if (specialFxPhaseAt(2.332, ANIMATE_DEAD).kind === 'birth' && specialFxPhaseAt(2.334, ANIMATE_DEAD).kind === 'spent') {
+    ok('...and it is spent exactly at the end of its clip, not a frame before');
+  } else fail('the spent boundary is not at birthSecs');
+
+  // A PERSISTENT effect must not be treated the same way: it is still there, so the player
+  // who arrives late sees it standing — not its Birth, and not nothing.
+  const key = specialFxPhaseAt(60, FROST_ARMOR);
+  if (key.kind === 'stand') {
+    ok('a persistent effect (the Sun Key swirl, which HAS a Stand) is STANDING at 60 s — it is on the key when you arrive, it neither replays its Birth nor vanishes');
+  } else fail(`frost armor at 60: ${JSON.stringify(key)}`);
+  if (specialFxPhaseAt(0.1, FROST_ARMOR).kind === 'birth' && specialFxPhaseAt(0.4, FROST_ARMOR).kind === 'stand') {
+    ok('...and seen from the start it still plays its Birth first, then settles');
+  } else fail('frost armor birth→stand handoff is wrong');
+
+  // A model with no Birth at all just loops the one clip it has — it is never "spent", or
+  // every such effect would blink out the frame it was created.
+  const NO_BIRTH = { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false };
+  if (specialFxPhaseAt(0, NO_BIRTH).kind === 'stand' && specialFxPhaseAt(999, NO_BIRTH).kind === 'stand') {
+    ok('a model with NO Birth clip is steady from birth to death — never spent (it has no flourish to run out of)');
+  } else fail(`no-birth model: ${JSON.stringify(specialFxPhaseAt(0, NO_BIRTH))}`);
+}
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
 process.exit(failures === 0 ? 0 : 1);
