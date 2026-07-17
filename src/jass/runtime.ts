@@ -707,6 +707,18 @@ export interface EngineHooks {
   addWeatherEffect?(effectId: string, area: JassRect): number;
   enableWeatherEffect?(id: number, enabled: boolean): void;
   removeWeatherEffect?(id: number): void;
+  // --- special effects: the trigger puts a model in the world (7.26 — issue #68) ---
+  /** AddSpecialEffect[Loc](modelName, x, y) — a PERSISTENT model standing on the ground:
+   *  it plays Birth, settles into a looping Stand, and lives until `destroyEffect`. The
+   *  path is a ".mdl" as the script spells it; the engine side normalises it to the
+   *  compiled ".mdx" the MPQ ships. Returns the engine's id, or -1 if it took nothing. */
+  addSpecialEffect?(path: string, x: number, y: number): number;
+  /** AddSpecialEffectTarget(modelName, widget, attachPointName) — the same persistent
+   *  model, but riding a unit's own attachment point, so it moves and animates with him.
+   *  `attach` is the point's TOKENS ("origin", ["hand","left"]) — see attachmentNode. */
+  addSpecialEffectTarget?(path: string, unitId: number, attach: string[]): number;
+  /** DestroyEffect — play the model's Death clip out, then take it off the scene. */
+  destroyEffect?(id: number): void;
   /** Find the sim unit a PRE-PLACED `CreateUnit` row refers to (7.22). Inside
    *  `CreateAllUnits()` we record the row and never spawn (the unit is already on the map,
    *  adopted from war3mapUnits.doo — Runtime.recordOnlySpawnFns), which used to leave the

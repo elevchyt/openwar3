@@ -26,7 +26,7 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
-import { loadAbilityRegistry, type AbilityRegistry, type AbilityDef, type BuffFx, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
+import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
 import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -344,6 +344,26 @@ interface SpawnInstance {
 }
 interface SpawnModel {
   addInstance(): SpawnInstance;
+}
+
+/** One live script `effect` (7.26 — issue #68): the model AddSpecialEffect* put in the
+ *  world, held until the script's DestroyEffect. See MapViewerScene.specialFx. */
+interface SpecialFx {
+  /** null while the model is still loading — the handle exists before the art does. */
+  inst: SpawnInstance | null;
+  /** Playing its Birth clip; updateSpecialFx hands it to a looping Stand when that ends. */
+  birthing: boolean;
+  /** The unit it rides, or -1 for one standing on the ground. */
+  hostId: number;
+  /** The attachment point's tokens ("origin", ["hand","left"]) — see attachmentNode. */
+  attach: string[];
+  /** True once parented to the host's attachment node: it moves and animates on its own. */
+  parented: boolean;
+  /** Where a ground effect stands (a host's live position wins while unparented). */
+  x: number;
+  y: number;
+  /** DestroyEffect landed before the model did — drop it the moment it loads. */
+  doomed: boolean;
 }
 
 // A Blood Mage's orbiting spheres (issue #37). The Sphere ability (Asph) attaches
@@ -1485,6 +1505,10 @@ export class MapViewerScene {
       },
       enableWeatherEffect: (id, on) => this.weather?.enable(id, on),
       removeWeatherEffect: (id) => this.weather?.remove(id),
+      // --- special effects: the trigger puts a model in the world (7.26 — issue #68) ---
+      addSpecialEffect: (path, x, y) => this.addSpecialEffect(path, x, y),
+      addSpecialEffectTarget: (path, unitId, attach) => this.addSpecialEffectTarget(path, unitId, attach),
+      destroyEffect: (id) => this.destroySpecialFx(id),
       // --- cameras + cinematics (7.24) ---
       // Every camera MOVE is one call: the script names fields and (maybe) a destination,
       // and ScriptCamera blends the live camera there. The …ForPlayer BJs already gated on
@@ -2780,8 +2804,9 @@ export class MapViewerScene {
   private buffFxParented = new Set<string>();
   /** buffFx keys still playing their Birth clip (settleBuffFx moves them to Stand). */
   private buffFxBirthing = new Set<string>();
-  /** Detached buff models playing out their Death clip before leaving the scene. */
-  private buffFxDying: Array<{ inst: SpawnInstance; ttl: number }> = [];
+  /** Models playing out their Death clip before leaving the scene — buff art whose buff
+   *  ended (dropBuffFx) and script effects a trigger destroyed (destroySpecialFx). */
+  private dyingFx: Array<{ inst: SpawnInstance; ttl: number }> = [];
   private abilityByCode: Map<string, AbilityDef> | null = null;
   /** First ability def with the given base code (aura visuals only need its art). */
   private abilityDefByCode(code: string): AbilityDef | undefined {
@@ -2791,7 +2816,7 @@ export class MapViewerScene {
     }
     return this.abilityByCode.get(code);
   }
-  private updateAuraEffects(dt: number): void {
+  private updateAuraEffects(): void {
     const world = this.rts?.simWorld;
     const map = this.viewer.map;
     if (!world || !map) return;
@@ -2821,30 +2846,33 @@ export class MapViewerScene {
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
     }
-    // Dying models are no longer tracked by any buff: hold each until its Death clip has
-    // played out (or its deadline passes), then take it off the scene.
-    for (let i = this.buffFxDying.length - 1; i >= 0; i--) {
-      const d = this.buffFxDying[i];
+  }
+
+  /** Dying models are no longer tracked by anything: hold each until its Death clip has
+   *  played out (or its deadline passes), then take it off the scene. Ticked from the
+   *  frame loop, not from updateAuraEffects — buff art is no longer its only source, and
+   *  updateAuraEffects gives up early on a scene with no world. */
+  private updateDyingFx(dt: number): void {
+    for (let i = this.dyingFx.length - 1; i >= 0; i--) {
+      const d = this.dyingFx[i];
       d.ttl -= dt;
       if (!d.inst.sequenceEnded && d.ttl > 0) continue;
       d.inst.setParent?.(null);
       d.inst.detach();
-      this.buffFxDying.splice(i, 1);
+      this.dyingFx.splice(i, 1);
     }
   }
 
-  /** The buff is gone: play the model's Death clip out rather than snapping the effect
-   *  out of existence (the shield pops, it doesn't blink off).
+  /** Take a persistent effect model off the world the way the game does: play its Death
+   *  clip out rather than snapping it out of existence (the shield pops, it doesn't blink
+   *  off), then let updateDyingFx reap it. A model with no Death clip just leaves.
    *
    *  The instance stays PARENTED while it dies. Unparenting it first looks tempting —
    *  play the clip where it died — but an orphaned instance belongs to no scene, so
    *  nothing advances its animation and it freezes on Death's first frame forever
    *  (measured: frame stuck at 2333, the start of DivineShieldTarget's [2333,3000]).
    *  Staying parented also matches the game, where the pop happens on the unit. */
-  private dropBuffFx(key: string, inst: SpawnInstance): void {
-    this.buffFx.delete(key);
-    this.buffFxBirthing.delete(key);
-    this.buffFxParented.delete(key);
+  private fadeOutFx(inst: SpawnInstance): void {
     const death = this.seqIndex(inst, /death/i);
     if (death < 0) {
       inst.setParent?.(null);
@@ -2859,7 +2887,16 @@ export class MapViewerScene {
     // deadline the instance would sit in this list for the rest of the match.
     const iv = inst.model.sequences[death]?.interval;
     const secs = iv && iv[1] > iv[0] ? (iv[1] - iv[0]) / 1000 : 1;
-    this.buffFxDying.push({ inst, ttl: secs + 0.5 });
+    this.dyingFx.push({ inst, ttl: secs + 0.5 });
+  }
+
+  /** The buff is gone: let the model die on the unit (fadeOutFx) rather than snapping it
+   *  out of existence. */
+  private dropBuffFx(key: string, inst: SpawnInstance): void {
+    this.buffFx.delete(key);
+    this.buffFxBirthing.delete(key);
+    this.buffFxParented.delete(key);
+    this.fadeOutFx(inst);
   }
 
   /** Mark a persistent buff model live this frame: (re)position an existing instance,
@@ -2977,6 +3014,142 @@ export class MapViewerScene {
     });
     if (best < 0) best = atts.findIndex((a) => wordsOf(a.name).includes("origin"));
     return best >= 0 ? host.getAttachment?.(best) : undefined;
+  }
+
+  // --- Special effects: a trigger puts a model in the world (7.26 — issue #68) ------
+  //
+  // What AddSpecialEffect[Loc] / AddSpecialEffectTarget / DestroyEffect stand on. Same
+  // models and the same three-act clip as a buff's art above (Birth → looping Stand →
+  // Death), and deliberately the same attachmentNode — an `effect` on a unit is the same
+  // thing on screen as a buff's Targetart, so it must ride the unit's animated node the
+  // same way. What differs is WHO decides it should end: a buff's art is reconciled
+  // against the sim every frame, but only the script knows when its effect is done, so
+  // these are keyed by the engine id its `effect` handle carries and live until
+  // destroySpecialFx.
+  private specialFx = new Map<number, SpecialFx>();
+  private nextSpecialFxId = 1;
+
+  /** AddSpecialEffect[Loc] — a persistent model standing on the ground. */
+  private addSpecialEffect(path: string, x: number, y: number): number {
+    return this.createSpecialFx(path, -1, [], x, y);
+  }
+
+  /** AddSpecialEffectTarget — a persistent model riding a unit's attachment point. */
+  private addSpecialEffectTarget(path: string, unitId: number, attach: string[]): number {
+    const u = this.rts?.simWorld.units.get(unitId);
+    if (!u) return -1;
+    return this.createSpecialFx(path, unitId, attach, u.x, u.y);
+  }
+
+  /** Mint the id and start loading. The id is handed back SYNCHRONOUSLY — the script's very
+   *  next line is routinely `set udg_SFX = GetLastCreatedEffectBJ()` and then a
+   *  `DestroyEffect` on it, so the handle has to exist long before the model does. An
+   *  effect destroyed while its model is still loading is marked `doomed` and never shows. */
+  private createSpecialFx(path: string, hostId: number, attach: string[], x: number, y: number): number {
+    // Script paths are ".mdl" as the World Editor spells them; the MPQ ships compiled ".mdx".
+    const model = mdlPath(path);
+    if (!model) return -1;
+    const id = this.nextSpecialFxId++;
+    const fx: SpecialFx = { inst: null, birthing: false, hostId, attach, parented: false, x, y, doomed: false };
+    this.specialFx.set(id, fx);
+    void this.loadSpecialFx(id, model, fx);
+    return id;
+  }
+
+  private async loadSpecialFx(id: number, path: string, fx: SpecialFx): Promise<void> {
+    let model = this.effectModels.get(path);
+    if (model === undefined) {
+      model = ((await this.viewer.load(path, this.solver)) as SpawnModel | undefined) ?? null;
+      this.effectModels.set(path, model);
+    }
+    const map = this.viewer.map;
+    // Destroyed (or the map torn down) while we were loading — never put it on screen.
+    if (!model || !map || fx.doomed || this.specialFx.get(id) !== fx) {
+      this.specialFx.delete(id);
+      return;
+    }
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    const birth = this.seqIndex(inst, /birth/i);
+    if (birth >= 0) {
+      inst.setSequence(birth);
+      inst.setSequenceLoopMode(0); // play once; updateSpecialFx settles it into Stand
+      fx.birthing = true;
+    } else {
+      inst.setSequence(this.effectSequence(inst));
+      inst.setSequenceLoopMode(2);
+    }
+    inst.show();
+    fx.inst = inst;
+    this.placeSpecialFx(fx); // land it before its first frame is drawn
+  }
+
+  /** Put an effect where it belongs this frame: parented to its host's attachment node if
+   *  it has one, else standing on the ground at its point.
+   *
+   *  The parenting is RETRIED, not done once at spawn, because the two clocks don't line
+   *  up: a trigger that spawns a monster and attaches art to it on the next line runs
+   *  ahead of the renderer, whose model for that brand-new unit does not exist yet — and
+   *  that is exactly (4)WarChasers' "Spawn One Monster". Parenting once, at spawn, would
+   *  silently leave the art on the ground at the spawn point while the monster walked off. */
+  private placeSpecialFx(fx: SpecialFx): void {
+    const inst = fx.inst;
+    if (!inst) return;
+    if (fx.hostId >= 0 && !fx.parented) {
+      const host = this.rts?.unitInstance(fx.hostId) as unknown as SpawnInstance | undefined;
+      const node = host ? this.attachmentNode(host, fx.attach) : undefined;
+      if (node) {
+        inst.setParent?.(node);
+        fx.parented = true;
+        this.loc3[0] = this.loc3[1] = this.loc3[2] = 0; // the node IS the origin now
+        inst.setLocation(this.loc3);
+        return;
+      }
+    }
+    if (fx.parented) return; // rides its host's node — nothing to do
+    // On the ground: an attached effect whose host has no usable node still follows him
+    // (the engine falls back to the unit's origin), so re-read the host's live position.
+    const u = fx.hostId >= 0 ? this.rts?.simWorld.units.get(fx.hostId) : undefined;
+    if (u) {
+      fx.x = u.x;
+      fx.y = u.y;
+    }
+    this.loc3[0] = fx.x;
+    this.loc3[1] = fx.y;
+    this.loc3[2] = this.rts?.groundHeightAt(fx.x, fx.y) ?? 0;
+    inst.setLocation(this.loc3);
+  }
+
+  private updateSpecialFx(): void {
+    for (const [id, fx] of this.specialFx) {
+      // An effect attached to a unit dies with him: WC3 destroys it when the widget leaves
+      // the game, and our attachment node goes with the host's model either way.
+      if (fx.hostId >= 0 && !this.rts?.simWorld.units.has(fx.hostId)) {
+        this.destroySpecialFx(id);
+        continue;
+      }
+      const inst = fx.inst;
+      if (!inst) continue; // still loading
+      if (fx.birthing && inst.sequenceEnded) {
+        fx.birthing = false;
+        const stand = this.seqIndex(inst, /^stand/i);
+        // A model with no Stand just holds its last Birth frame, as the game does.
+        if (stand >= 0) {
+          inst.setSequence(stand);
+          inst.setSequenceLoopMode(2); // the steady state: loop until the script says stop
+        }
+      }
+      this.placeSpecialFx(fx);
+    }
+  }
+
+  /** DestroyEffect — the model dies where it stands (fadeOutFx plays its Death clip). */
+  private destroySpecialFx(id: number): void {
+    const fx = this.specialFx.get(id);
+    if (!fx) return;
+    this.specialFx.delete(id);
+    fx.doomed = true; // if it's still loading, loadSpecialFx drops it on arrival
+    if (fx.inst) this.fadeOutFx(fx.inst);
   }
 
   // --- Blood Mage orbiting spheres (issue #37) ------------------------------
@@ -5402,7 +5575,9 @@ export class MapViewerScene {
       this.updateOrderArrows(dt / 1000);
       this.updateEffects(dt / 1000);
       this.updateMirrorMissiles(dt / 1000);
-      this.updateAuraEffects(dt / 1000);
+      this.updateAuraEffects();
+      this.updateSpecialFx(); // script effects: settle Birth→Stand, follow their host
+      this.updateDyingFx(dt / 1000); // buff art + script effects playing out their Death clip
       this.updateTreePulses(dt / 1000);
       this.updateTreeActors(); // per-chop "stand hit" wobble on felled/chopped trees' stand-ins
       this.updateProjectiles();

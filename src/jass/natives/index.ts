@@ -13,6 +13,7 @@ import { registerCameraNatives } from "./camera";
 import { registerCinematicNatives } from "./cinematic";
 import { registerConfigNatives } from "./config";
 import { registerDialogNatives } from "./dialogs";
+import { registerEffectNatives } from "./effects";
 import { registerEventNatives } from "./events";
 import { registerLeaderboardNatives } from "./leaderboard";
 import { registerForceNatives } from "./forces";
@@ -126,6 +127,7 @@ export function registerNatives(rt: Runtime): void {
   registerCameraNatives(rt); // camera setups + the camera-move family (7.24)
   registerCinematicNatives(rt); // letterbox, fade, transmissions, minimap pings (7.24)
   registerDialogNatives(rt); // dialogs + the victory/defeat screen (7.19)
+  registerEffectNatives(rt); // the trigger puts a model in the world (7.26 — issue #68)
   registerEventNatives(rt);
   registerLeaderboardNatives(rt); // the scoreboard every TD/AoS shows (7.19)
   registerForceNatives(rt);

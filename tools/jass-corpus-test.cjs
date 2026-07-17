@@ -302,11 +302,14 @@ if (existsSync(warchasers)) {
   const w3u = readBytes(wc, 'war3map.w3u');
   const wts = readBytes(wc, 'war3map.wts');
   // A minimal base type for EC12's base (Emoo); applyMapUnitData clones + overrides it.
-  // `weapons` is the unit's weapon SLOTS (issue #57) — an unarmed stub still declares the list.
+  // Every LIST field cloneDef deep-copies must be declared here even when empty (`weapons`
+  // — the unit's weapon SLOTS, issue #57 — and `properNames`, a hero's random-name pool):
+  // cloneDef spreads them, so a stub that has drifted from UnitDef crashes the whole suite
+  // on `[...base.<field>]` rather than failing this one check.
   const base = {
     id: 'Emoo', name: 'Base', model: 'units\\base.mdx', isHero: true, primaryAttr: 0,
     strength: 20, agility: 20, intelligence: 20, abilities: [], heroAbilities: [], classification: [],
-    weapons: [],
+    weapons: [], properNames: [],
   };
   const reg = new UnitRegistry(new Map([['Emoo', base]]));
   const count = applyMapUnitData(reg, w3u, wts);
@@ -3646,6 +3649,121 @@ endfunction
   const owner = interp.rt.globals.get('lastOwner')?.n ?? -1;
   if (fired === 1 && owner === 0) ok('a unit that crosses IN fires it exactly once, with GetEnteringUnit\'s owner (player 0, not the statue\'s 15)');
   else fail(`crossing: fired ${fired}× (want 1), owner ${owner} (want 0)`);
+}
+
+// ===========================================================================
+// 7.26 — Special effects: the trigger puts a model in the world (issue #68).
+//
+// Driven through the REAL blizzard.j BJs, because that is how the maps reach it:
+// AddSpecialEffectTargetUnitBJ / AddSpecialEffectLocBJ / DestroyEffectBJ are plain JASS
+// over the four natives, and the `bj_lastCreatedEffect` they keep is the only way a GUI
+// trigger can hold on to an effect it made. The whole family was unimplemented, so every
+// call fell back to a null `effect` and the art simply never appeared.
+console.log('\n[7.26] Special effects — the trigger puts a model in the world');
+{
+  const MONSTER_SIM_ID = 777;
+  let nextId = 1;
+  const live = new Map();
+  const destroyed = [];
+  const hooks = {
+    createUnit: () => MONSTER_SIM_ID, // the sim id the monster's handle must carry to the effect
+    addSpecialEffect: (path, x, y) => {
+      const id = nextId++;
+      live.set(id, { path, x, y, hostId: -1, attach: [] });
+      return id;
+    },
+    addSpecialEffectTarget: (path, unitId, attach) => {
+      const id = nextId++;
+      live.set(id, { path, hostId: unitId, attach });
+      return id;
+    },
+    destroyEffect: (id) => { live.delete(id); destroyed.push(id); },
+  };
+  // Verbatim in shape from (4)WarChasers' own Trig_Spawn_One_Monster_Actions — the trigger
+  // issue #68 reports — plus the Loc/destroy shapes its other triggers use.
+  const SRC = `
+globals
+    effect udg_TempSFX = null
+    unit   udg_Monster = null
+endglobals
+function SpawnOneMonster takes nothing returns nothing
+    call CreateNUnitsAtLoc( 1, 'nfgu', Player(11), Location(512.0, -256.0), 270.0 )
+    set udg_Monster = GetLastCreatedUnit()
+    call AddSpecialEffectTargetUnitBJ( "origin", GetLastCreatedUnit(), "Abilities\\\\Spells\\\\Undead\\\\AnimateDead\\\\AnimateDeadTarget.mdl" )
+endfunction
+function KeyGlow takes nothing returns nothing
+    call AddSpecialEffectLocBJ( Location(-1024.0, 768.0), "Abilities\\\\Spells\\\\Undead\\\\FrostArmor\\\\FrostArmorTarget.mdl" )
+    set udg_TempSFX = GetLastCreatedEffectBJ()
+endfunction
+function KeyGone takes nothing returns nothing
+    call DestroyEffectBJ( udg_TempSFX )
+endfunction
+// The multi-token attach point ("hand,left" — Skibi's Castle TD hangs a flag off one).
+function Flag takes nothing returns nothing
+    call AddSpecialEffectTargetUnitBJ( "hand,left", udg_Monster, "Objects\\\\InventoryItems\\\\OrcCaptureFlag\\\\OrcCaptureFlag.mdl" )
+endfunction
+// Destroying a null effect is legal JASS, and the corpus does it constantly.
+function DestroyNothing takes nothing returns nothing
+    call DestroyEffect( null )
+endfunction
+`;
+  const interp = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], { hooks });
+  const rt = interp.rt;
+  interp.run('InitBlizzard', []);
+
+  // --- the reported bug ---------------------------------------------------------------
+  interp.run('SpawnOneMonster', []);
+  const spawned = [...live.values()].find((e) => /AnimateDeadTarget/i.test(e.path));
+  if (spawned) {
+    ok(`WarChasers' own "Spawn One Monster" reaches the engine: AnimateDeadTarget on the monster it just made (issue #68 — this used to create nothing at all)`);
+  } else fail(`nothing created: ${JSON.stringify([...live.values()])}`);
+  // The BJ takes (attachPoint, widget, model) and the native (model, widget, attachPoint) —
+  // Blizzard swaps them. Get that backwards and the model path becomes the attach point.
+  if (spawned && spawned.hostId === MONSTER_SIM_ID) {
+    ok(`...attached to the SIM unit CreateUnit just made (the BJ takes (attach, widget, model) and the native (model, widget, attach) — Blizzard swaps them, and getting that backwards makes the model path the attach point)`);
+  } else fail(`hostId: ${spawned && spawned.hostId} (want ${MONSTER_SIM_ID})`);
+  if (spawned && spawned.attach.length === 1 && spawned.attach[0] === 'origin') {
+    ok(`..."origin" arrives as the attachment TOKENS the renderer matches against the model's "<Tokens…> Ref" nodes`);
+  } else fail(`attach: ${JSON.stringify(spawned && spawned.attach)}`);
+
+  interp.run('Flag', []);
+  const flag = [...live.values()].find((e) => /OrcCaptureFlag/i.test(e.path));
+  if (flag && flag.attach.join(',') === 'hand,left') {
+    ok(`a multi-token point ("hand,left") splits into ["hand","left"] — the same spelling the ability data's Targetattach uses`);
+  } else fail(`attach: ${JSON.stringify(flag && flag.attach)}`);
+
+  // --- the persistent lifetime: created here, destroyed by a LATER trigger -------------
+  interp.run('KeyGlow', []);
+  const glow = [...live.values()].find((e) => /FrostArmorTarget/i.test(e.path));
+  if (glow && glow.x === -1024 && glow.y === 768) {
+    ok(`AddSpecialEffectLocBJ lands at the location's real point (an effect on the ground, not on a unit)`);
+  } else fail(`loc effect: ${JSON.stringify(glow)}`);
+  const handle = rt.globals.get('udg_TempSFX');
+  if (handle && handle.k === 'handle') {
+    ok(`...and GetLastCreatedEffectBJ hands the script a real effect handle to keep — the lifetime is the SCRIPT's, not a TTL`);
+  } else fail(`handle: ${JSON.stringify(handle)}`);
+  interp.run('KeyGone', []);
+  if (destroyed.length === 1 && live.size === 2) {
+    ok(`DestroyEffectBJ on that stored handle destroys THAT effect and leaves the other two standing`);
+  } else fail(`destroyed: ${JSON.stringify(destroyed)}, still live: ${live.size}`);
+  // A destroyed handle is freed, so a map that destroys the same effect twice — or reads a
+  // stale array slot — must no-op rather than reach the engine again.
+  interp.run('KeyGone', []);
+  if (destroyed.length === 1) {
+    ok(`...destroying it a second time is a no-op (the handle is freed, so it resolves to nothing)`);
+  } else fail(`double destroy reached the engine: ${JSON.stringify(destroyed)}`);
+  interp.run('DestroyNothing', []);
+  ok(`DestroyEffect(null) does not crash the map (CLAUDE.md: never hard-crash — and the corpus calls it constantly)`);
+
+  // --- headless: no engine at all -------------------------------------------------------
+  const bare = buildInterpreter([COMMON_J, BLIZZARD_J, SRC], {});
+  bare.run('InitBlizzard', []);
+  bare.run('KeyGlow', []);
+  bare.run('KeyGone', []);
+  const bareHandle = bare.rt.globals.get('udg_TempSFX');
+  if (bareHandle.k === 'null' || bareHandle.h === 0) {
+    ok(`with NO engine attached the whole family hands back null handles and the script runs on (every EngineHooks method is optional)`);
+  } else fail(`headless handle: ${JSON.stringify(bareHandle)}`);
 }
 
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
