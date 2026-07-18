@@ -4,7 +4,7 @@ import { wc3ToHtml } from "../wc3Text";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, strProp } from "./library";
 import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
-import { fadePanels, type PanelDirection } from "./anim";
+import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import {
   buildEditBox, buildList, buildPopup, widgetKind,
   type EditBoxControl, type ListControl, type PopupControl, type PopupMenuStyle, type ScrollBarStyle,
@@ -81,6 +81,10 @@ export interface FdfScreenOptions {
    *  back in between menus (issue #61). Each named frame fades as one. Defaults to the
    *  root's direct children. */
   panels?: string[];
+  /** Panels that come in LATE: they fade out with everything else, but on the way in they
+   *  wait for the chrome to finish landing and only then appear (ui/fdf/anim.ts). For the
+   *  contents a screen fills itself in with, rather than the furniture it arrives with. */
+  latePanels?: string[];
   /** BUTTON frames that behave as dropdowns (PlayerSlot's TeamButton / ColorButton are
    *  declared as plain BUTTONs in the FDF; the engine gives them a menu). */
   dropdownButtons?: string[];
@@ -189,10 +193,30 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     opts.onBuild?.(screen);
   };
 
+  const late = new Set(opts.latePanels ?? []);
+
   /** The panel elements this screen slides — the named panels, else the root's children. */
-  const panelEls = (): HTMLElement[] => {
+  const panelEls = (lateOnes: boolean): HTMLElement[] => {
     const names = opts.panels ?? root.children.map((c) => c.name).filter(Boolean);
-    return names.map((n) => elements.get(n)).filter((el): el is HTMLElement => !!el);
+    return names
+      .filter((n) => late.has(n) === lateOnes)
+      .map((n) => elements.get(n))
+      .filter((el): el is HTMLElement => !!el);
+  };
+
+  /**
+   * Fade the screen's contents. The late panels ride the SAME call — going out they leave
+   * with everyone else, and coming in they get a longer window, which is all "late" means:
+   * fadePanels puts an entrance at the END of the window it is given, so handing the late
+   * ones the chrome's window plus a beat plus the fade lands their fade just after the
+   * chrome has settled. Both are awaited, so the screen isn't live before it is all there.
+   */
+  const animate = (dir: PanelDirection, durationMs: number): Promise<void> => {
+    const lateWindow = dir === "in" ? durationMs + LATE_PANEL_DELAY_MS + FADE_MS : durationMs;
+    return Promise.all([
+      fadePanels(panelEls(false), dir, durationMs),
+      fadePanels(panelEls(true), dir, lateWindow),
+    ]).then(() => undefined);
   };
 
   const screen: FdfScreen = {
@@ -222,7 +246,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     editBox: (name) => (controls.get(name) as EditBoxControl | undefined) ?? null,
     popup: (name) => (controls.get(name) as PopupControl | undefined) ?? null,
     list: (name) => (controls.get(name) as ListControl | undefined) ?? null,
-    animatePanels: (dir, durationMs) => fadePanels(panelEls(), dir, durationMs),
+    animatePanels: (dir, durationMs) => animate(dir, durationMs),
     dispose(): void {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKey);

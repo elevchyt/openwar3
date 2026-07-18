@@ -13,7 +13,15 @@
 // exit starting, and only appear once the arriving panel has all but landed.
 
 /** How long the contents take to fade. Short — this is a flick, not a dissolve. */
-const FADE_MS = 180;
+export const FADE_MS = 180;
+
+/**
+ * The beat a LATE panel waits after the chrome has finished landing before it fades in.
+ * Some contents are not part of the panel's furniture but of what the panel is FOR — the map
+ * list, the details of the map you picked. Those read as the screen filling itself in, which
+ * only happens once the screen is there: the chrome settles, a breath, then the contents.
+ */
+export const LATE_PANEL_DELAY_MS = 140;
 
 /** Cubic ease, so the fade starts and ends soft instead of stepping. */
 function easeInOut(x: number): number {
