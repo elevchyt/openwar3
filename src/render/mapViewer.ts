@@ -2983,21 +2983,30 @@ export class MapViewerScene {
       if (u.hp <= 0 || !u.buffs.length) continue;
       const seen = new Set<string>();
       for (const b of u.buffs) {
-        // Aura buffs are grouped "code:kind"; a plain single-target buff isn't.
+        // Aura buffs are grouped "code:kind". A colon alone does NOT make one, though:
+        // the item buffs are grouped "item:invuln" / "item:regen" too, and treating those
+        // as auras dropped their art on the floor — a Potion of Invulnerability showed no
+        // bubble and a Healing Salve no swirl, because the group's first half named no
+        // ability and the loop skipped the unit entirely instead of falling through. So an
+        // aura is a group whose first half RESOLVES to an ability, and everything else is a
+        // plain single-target buff wearing its own models.
         const auraCode = b.group.includes(":") ? b.group.split(":")[0] : "";
-        if (auraCode) {
+        const def = auraCode ? this.abilityDefByCode(auraCode) : undefined;
+        if (def) {
           if (seen.has("a:" + auraCode)) continue;
           seen.add("a:" + auraCode);
-          const def = this.abilityDefByCode(auraCode);
-          if (!def) continue;
           // Small swirl on every affected unit; big model on the owner only (its own
           // aura copy carries sourceId === its id — allies get the owner's id).
           def.buffFx.forEach((fx, i) => this.trackBuffFx(active, `${u.id}|${auraCode}|s${i}`, fx, u.id));
           if (b.sourceId === u.id) this.trackBuffFx(active, `${u.id}|${auraCode}|o`, { path: def.targetArt, attach: [] }, u.id);
         } else if (b.fx.length) {
-          if (seen.has("b:" + b.art)) continue;
-          seen.add("b:" + b.art);
-          b.fx.forEach((fx, i) => this.trackBuffFx(active, `${u.id}|${b.art}|${i}`, fx, u.id));
+          // Key off the models themselves, not `art`: a buff whose fx came from its own
+          // [B….] row (the regeneration items) leaves `art` empty, so two such buffs on one
+          // unit would share the key "b:" and the second would be dropped as a duplicate.
+          const key = b.art || b.fx[0].path;
+          if (seen.has("b:" + key)) continue;
+          seen.add("b:" + key);
+          b.fx.forEach((fx, i) => this.trackBuffFx(active, `${u.id}|${key}|${i}`, fx, u.id));
         }
       }
     }
