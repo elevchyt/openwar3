@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 286, **done** 153, **passive** 14, **todo** 346.
+Totals: 799 rows — **alias** 290, **done** 154, **passive** 14, **todo** 341.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-234 distinct base `code`s cover the 346 todo rows. Implementing one
+233 distinct base `code`s cover the 341 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -37,7 +37,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Asph` | Sphere | 7 |  |  | `Asp1` `Asp2` `Asp3` `Asp4` `Asp5` `Asp6` `Asph` |
 | `Acyc` | Cyclone | 5 | ground,enemy,neutral,organic | cyclone | `ACcy` `Acny` `Acyc` `AIcy` `SCc1` |
 | `AImm` | Item Mana Bonus | 5 |  |  | `AIbm` `AImb` `AImz` `AI2m` `AImv` |
-| `Amim` | Spell Immunity | 5 |  |  | `ACm2` `ACm3` `ACmi` `AImx` `Amim` |
 | `Abli` | Blight Dispel Large | 4 |  |  | `Abdl` `Abds` `Abgl` `Abgs` |
 | `Abur` | Burrow | 4 |  | burrow | `Abu2` `Abu3` `Abu5` `Abur` |
 | `ANde` | Demolish | 4 | enemy,structure | demolish | `ANd1` `ANd2` `ANd3` `ANde` |
@@ -954,11 +953,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACtn` | `AOwd` | Spawn Tentacle | creeps |  |  |  |  | Serpentward | Serpent Ward (tentacle, Forgotten one) |
 |   | `Aspb` | `Aspb` | Spell Book | other |  | I |  |  |  | Spell Book |
 |   | `AIsr` | `AIsr` | Spell Damage Reduction | other |  | I |  |  |  | Runed Bracers |
-|   | `ACm2` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Archimonde) |
-|   | `ACm3` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Dragons) |
-|   | `ACmi` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Creep) |
-|   | `AImx` | `Amim` | Spell Immunity | other |  | I |  |  |  | Magic Immunity |
-|   | `Amim` | `Amim` | Spell Immunity | nightelf |  |  |  |  |  | Magic Immunity |
+| ~ | `ACm2` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Archimonde) |
+| ~ | `ACm3` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Dragons) |
+| ~ | `ACmi` | `Amim` | Spell Immunity | creeps |  |  |  |  |  | Magic Immunity (Creep) |
+| ~ | `AImx` | `Amim` | Spell Immunity | other |  | I |  |  |  | Magic Immunity |
+| x | `Amim` | `Amim` | Spell Immunity | nightelf |  |  |  |  |  | Magic Immunity |
 |   | `ANse` | `ANse` | Spell Shield | other |  | I | air,ground,friend,invu,vuln,self |  |  | Spell Shield AOE |
 |   | `ANss` | `ANss` | Spell Shield | other |  | I |  | 1 |  | Spell Shield |
 |   | `Asps` | `Asps` | Spell Steal | human |  |  | air,ground,friend,enemy,neutral,self,vuln,invu | 2 | spellsteal | Spell Steal |

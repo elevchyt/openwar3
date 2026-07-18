@@ -66,6 +66,19 @@ const CASES = [
   ["Arep", "structure,friend,self", enemyGround, "Targetstructure", "must target a building"],
 ];
 
+// Magic Immunity (`Amim`) — the Dryad, Spell Breaker, Destroyer, Faerie Dragon. It refuses
+// BOTH directions: no Polymorph on an enemy one, no Bloodlust or Heal on a friendly one.
+const immuneFoe = unit({ owner: 1, team: 1, magicImmune: true });
+const immuneAlly = unit({ owner: 0, team: 0, magicImmune: true });
+CASES.push(
+  ["Aslo", "air,ground,enemy", immuneFoe, "Immunetomagic", "no Slow on an enemy Dryad"],
+  ["Ablo", "air,ground,friend,organic,self,neutral", immuneAlly, "Immunetomagic", "no Bloodlust on a friendly Spell Breaker"],
+  ["Ahea", "air,ground,friend,vuln,invu,self,organic,nonancient,neutral", immuneAlly, "Immunetomagic", "…nor a Priest's Heal"],
+  // The dispels are exempt: a debuff placed before the immunity applied must be removable.
+  ["Adis", "air,ground,ward,invu,vuln,tree", immuneFoe, null, "Dispel Magic still reaches it"],
+  ["Aadm", "air,ground,ward,invu,vuln,tree", immuneAlly, null, "…and so does Abolish Magic"],
+);
+
 let failed = 0;
 for (const [code, targs, target, want, what] of CASES) {
   const flags = targs.split(",").map((s) => s.trim()).filter((s) => s && s !== "_");

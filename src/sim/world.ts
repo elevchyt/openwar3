@@ -815,6 +815,11 @@ export interface SimUnit {
   waygate?: WaygateState | null; // JASS WaygateSetDestination/Activate — a Way Gate ('nwgt'), 7.22
   silenced: boolean; // derived from buffs (cannot cast spells)
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
+  /** Magic Immunity (`Amim`, and the creep copies that share its code) — the unit cannot be
+   *  the target of a spell at all, and takes no spell damage. Carried by the Dryad, the
+   *  Spell Breaker, the Destroyer, the Faerie Dragon, the Phoenix and the Serpent Wards
+   *  (Units\UnitAbilities.slk). Derived from the ability, like `ethereal` from its buff. */
+  magicImmune: boolean;
   /** The fade is IN FORCE: renders half-faded, and draws no aggro (see canSee). False during
    *  the Transition Time, when the unit is under the effect but hasn't vanished yet. */
   invisible: boolean;
@@ -1073,6 +1078,14 @@ const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
 const ITEM_REGEN_GROUP = "item:regen";
 /** Damage that dispels a regeneration item's effect. Not in any data file — see landDamage. */
 const ITEM_REGEN_BREAK = 20;
+/** Abilities that may be aimed at a magic-immune unit anyway. There is no flag for this in
+ *  the ability data — no `targs1` value means "may target the immune" — so the engine
+ *  hardcodes it and so must we, which is why the list is short and explicit rather than
+ *  inferred. The dispels are the clear members: a Dryad's Abolish Magic and the Human
+ *  Dispel Magic have to be able to clean a Spell Breaker, or a debuff placed before the
+ *  immunity applied could never be removed. Kept deliberately narrow — add a code here only
+ *  with a source, never to make a cast "work". */
+const MAGIC_IMMUNE_EXEMPT = new Set(["Adis", "Aadm", "Adcn"]);
 // Corpse decay (Units\MiscData.txt BoneDecayTime): a corpse persists 88s after
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
@@ -2740,6 +2753,7 @@ export class SimWorld {
       | "paused"
       | "silenced"
       | "ethereal"
+      | "magicImmune"
       | "invisible"
       | "cloaked"
       | "invulnerable"
@@ -2909,6 +2923,7 @@ export class SimWorld {
       paused: false,
       silenced: false,
       ethereal: false,
+      magicImmune: false, // recomputeStats derives it from the unit's ability list
       invisible: false,
       cloaked: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
@@ -4206,6 +4221,9 @@ export class SimWorld {
     u.stunned = stun;
     u.silenced = silence;
     u.ethereal = ethereal || u.etherealForm; // Banish (timed) OR the Spirit Walker's ethereal FORM (persistent)
+    // Magic Immunity is a plain property of the unit's ability list, not a buff — nothing
+    // grants or removes it mid-life, so it is derived here alongside the rest.
+    u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1);
     u.invisible = invisible;
     u.cloaked = cloaked;
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
@@ -4503,6 +4521,11 @@ export class SimWorld {
     // full health." (a fact about a target he can't pick in the first place).
     if (target.hp <= 0) return "Notcorpse"; // "Target must be living."
     if (target.invulnerable && this.hostile(caster, target)) return "Notinvulnerable";
+    // Magic Immunity — "That unit is immune to magic." It refuses BOTH directions, which is
+    // the part people misremember: you cannot Polymorph an enemy Spell Breaker, and you
+    // cannot Bloodlust or Heal a friendly one either. See MAGIC_IMMUNE_EXEMPT for the
+    // handful of abilities the engine lets through anyway.
+    if (target.magicImmune && !MAGIC_IMMUNE_EXEMPT.has(code)) return "Immunetomagic";
     const flagError = this.targetAllowed(caster, target, flags);
     if (flagError !== null) return flagError;
     // Abilities whose legal targets are a rule, not a flag list — the data can't say
@@ -5726,7 +5749,11 @@ export class SimWorld {
     // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
     // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical
     // immunity (issue #49).
-    spellDamage: (t, amount, src) => this.landDamage(t, t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount, src, false),
+    // Magic Immunity stops spell damage as well as spell targeting — that is what makes a
+    // Dryad walk through a Blizzard. It belongs on this seam and not in landDamage, because
+    // landDamage is also the ATTACK path and a magic-immune unit is hit by weapons normally.
+    spellDamage: (t, amount, src) =>
+      t.magicImmune ? 0 : this.landDamage(t, t.ethereal ? amount * ETHEREAL_SPELL_BONUS : amount, src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
