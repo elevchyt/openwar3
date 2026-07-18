@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 284, **done** 152, **passive** 14, **todo** 349.
+Totals: 799 rows — **alias** 286, **done** 153, **passive** 14, **todo** 346.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-235 distinct base `code`s cover the 349 todo rows. Implementing one
+234 distinct base `code`s cover the 346 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -44,7 +44,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Aapl` | Disease Cloud | 4 | ground,enemy,organic,neutral |  | `Aap1` `Aap2` `Aap3` `Aap4` |
 | `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
-| `Adda` | AOE damage upon death | 3 | ground,structure,debris,enemy,ward |  | `Adda` `Amnx` `Amnz` |
 | `Acan` | Cannibalize | 3 | ground,dead,organic | cannibalize | `Acan` `ACcn` `Acn2` |
 | `Afbk` | Feedback | 3 | air,ground,enemy,neutral |  | `Afbb` `Afbk` `Afbt` |
 | `Aoar` | Healing Ward Aura | 3 | ground,air,organic,vuln,invu,friend,neutral |  | `Aoar` `ACnr` `AIgx` |
@@ -299,9 +298,9 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Aam2` | `Aams` | Anti-magic Shell | undead |  |  | air,ground,vuln,invu,friend,self |  | antimagicshell | Anti-magic Shield (Matrix) |
 |   | `Aams` | `Aams` | Anti-magic Shell | undead |  |  | air,ground,vuln,invu |  | antimagicshell | Anti-magic Shield |
 |   | `ACam` | `Aams` | Anti-magic Shell | creeps |  |  | air,ground,vuln,invu |  | antimagicshell | Anti-magic Shield (creep) |
-|   | `Adda` | `Adda` | AOE damage upon death | other |  |  | ground,structure,debris,enemy,ward |  |  | Death Damage (sapper) |
-|   | `Amnx` | `Adda` | AOE damage upon death | other |  |  | ground,structure,debris,enemy |  |  | Death Damage (mine) |
-|   | `Amnz` | `Adda` | AOE damage upon death | other |  |  | ground,structure,debris,enemy |  |  | Death Damage (mine BIG) |
+| x | `Adda` | `Adda` | AOE damage upon death | other |  |  | ground,structure,debris,enemy,ward |  |  | Death Damage (sapper) |
+| ~ | `Amnx` | `Adda` | AOE damage upon death | other |  |  | ground,structure,debris,enemy |  |  | Death Damage (mine) |
+| ~ | `Amnz` | `Adda` | AOE damage upon death | other |  |  | ground,structure,debris,enemy |  |  | Death Damage (mine BIG) |
 | x | `Aatk` | `Aatk` | Attack | other |  |  |  |  |  | Attack |
 |   | `Aamk` | `Aamk` | Attribute Bonus | creeps | H |  |  |  | attributemodskill | Attribute Modifier Skill |
 |   | `Aabr` | `Aabr` | Aura of Blight | undead |  |  | ground,air,organic,vuln,invu,friend,neutral | 1 |  | Aura - Regeneration (Statue) |

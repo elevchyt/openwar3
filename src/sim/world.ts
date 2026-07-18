@@ -7638,6 +7638,39 @@ export class SimWorld {
     this.removeUnit(u.id); // silent: no corpse, no death XP, no death trigger
   }
 
+  /** `Adda` — "AOE damage upon death": the unit detonates as it dies, damaging everything
+   *  around it. The Goblin Land Mine and the Goblin Sapper are the units that carry it
+   *  (`Adda` itself, plus `Amnx` and `Amnz` for the small and BIG mine), and the rings are
+   *  the same four columns every death blast uses (AbilityMetaData Dda1..Dda4): dataA "Full
+   *  Damage Radius", dataB "Full Damage Amount", dataC "Partial Damage Radius", dataD
+   *  "Partial Damage Amount".
+   *
+   *  Chain reactions are real — a mine's blast sets off the mine beside it — but they must
+   *  terminate. Two guards do that: a unit blasts at most once (`exploded`), and the blast
+   *  skips anything already at zero hp, so the corpse it just made cannot be re-killed into
+   *  a second explosion. */
+  private exploded = new Set<number>();
+  private deathBlast(u: SimUnit): void {
+    if (this.exploded.has(u.id) || !this.abilities) return;
+    const ab = u.abilities.find((a) => a.code === "Adda" && a.level >= 1);
+    if (!ab) return;
+    const lvl = this.abilities.get(ab.id)?.levelData[Math.max(0, ab.level - 1)];
+    if (!lvl) return;
+    this.exploded.add(u.id);
+    const num = (i: number) => (lvl.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
+    const fullR = num(0);
+    const full = num(1);
+    const partR = num(2);
+    const part = num(3);
+    for (const t of this.units.values()) {
+      if (t.id === u.id || t.hp <= 0) continue;
+      const dist = Math.hypot(t.x - u.x, t.y - u.y);
+      if (dist > Math.max(fullR, partR)) continue;
+      const amount = dist <= fullR ? full : part;
+      if (amount > 0) this.landDamage(t, amount, u.id, false);
+    }
+  }
+
   private kill(u: SimUnit, killerId = 0): void {
     // A Mirror Image illusion that is destroyed does not die — it pops, with BOmi's
     // Specialart (MirrorImageDeathCaster, whose AOMI SND event is MirrorImageDeath.wav).
@@ -7650,6 +7683,7 @@ export class SimWorld {
     // Reincarnation (Tauren Chieftain / Elder Sage, AOre): a fatal blow instead
     // revives the hero in place, on a long cooldown (stored on the ability).
     if (this.tryReincarnate(u)) return;
+    this.deathBlast(u); // `Adda` — goblin land mines and sappers take the neighbours with them
     this.refundPendingBuild(u); // died before its building went up → refund the cost
     this.unsettle(u); // corpses don't block cells
     this.releasePathStamp(u); // …and neither does a collapsed building's footprint
