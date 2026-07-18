@@ -4740,6 +4740,21 @@ export class MapViewerScene {
     return this.registry.get(uid)?.isHero ? heroCount : this.rts!.countOwned(this.localPlayer, uid);
   }
 
+  /** Are we AIMING — an armed order (or a building ghost) waiting on the click that
+   *  targets it? This is the state the reticle cursor is up for, and the state whose
+   *  command card is nothing but Cancel.
+   *
+   *  Carrying an inventory item between slots is deliberately NOT aiming: it arms
+   *  `orderMode` the same way, but it's a drag inside the console, not an order the
+   *  unit is about to take — so the card stays put under it (same carve-out the
+   *  reticle makes in updateReticle). */
+  private isTargeting(): boolean {
+    if (this.placement) return true; // a building ghost following the cursor
+    const mode = this.rts?.orderMode ?? null;
+    if (!mode) return false;
+    return !(mode === "item" && this.rts?.armedItem?.mode === "move");
+  }
+
   /** Build the command card for the current selection. */
   private commandCard(): CommandButton[] {
     const sel = this.rts?.selectedInfo();
@@ -4751,6 +4766,24 @@ export class MapViewerScene {
     if (sel.owner !== this.localPlayer && !foreignShop) return [];
     const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
     const out: CommandButton[] = [];
+
+    // TARGET MODE — an order is armed and waiting for the click that aims it (Attack,
+    // Move, Patrol, Set Rally Point, Repair, a spell picking its target) or a building
+    // is being placed. WC3 empties the card down to a single Cancel in the bottom-right
+    // corner: while you're aiming, the un-issued order is the only thing in flight, and
+    // dropping it is the only other thing you can do. Its own strings say exactly that —
+    // Units\commandstrings.txt [CmdCancel] "Drops the current un-issued order and allows
+    // you to select a different order." Escape runs it, as does a right-click on the map.
+    if (this.isTargeting()) {
+      const text = this.strings.command("CmdCancel");
+      out.push(this.cmd({
+        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape",
+        tip: text.tip || "Cancel (|cffffcc00ESC|r)",
+        desc: text.ubertip || "Drops the current un-issued order and allows you to select a different order.",
+        col: 3, row: 2,
+      }));
+      return out;
+    }
 
     if (sel.underConstruction) {
       out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel construction.", col: 3, row: 2 }));

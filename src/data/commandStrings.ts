@@ -11,6 +11,10 @@ import type { PlayableRace } from "./races";
 // this file is also what a localized install translates, so a Spanish install should
 // say "No hay suficiente oro." without us knowing a word of Spanish.
 //
+// The same file also names the engine's own non-ability command buttons, one section
+// each ([CmdCancel], [CmdCancelBuild], [CmdCancelTrain]…), carrying the Tip and Ubertip
+// the card shows. Those come out of here too, for exactly the same reason.
+//
 // Some entries are ONE comma-separated string indexed by race, because each race names
 // its own building: Nofood is "Build more Farms…,Build more Burrows…,Summon more
 // Ziggurats…,Create more Moon Wells…". The index is the engine's race order, which is
@@ -20,8 +24,24 @@ import type { PlayableRace } from "./races";
  *  Nofood itself: Farms(human), Burrows(orc), Ziggurats(undead), Moon Wells(nightelf). */
 const RACE_ORDER: PlayableRace[] = ["human", "orc", "undead", "nightelf"];
 
+/** A built-in command button's card text, as the engine's own section carries it:
+ *  `Tip=Cancel (|cffffcc00ESC|r)` and the Ubertip that explains what it drops. */
+export interface CommandText {
+  tip: string;
+  ubertip: string;
+}
+
 export class CommandStrings {
-  constructor(private errors: Map<string, string>) {}
+  constructor(
+    private errors: Map<string, string>,
+    private commands: Map<string, CommandText> = new Map(),
+  ) {}
+
+  /** One engine command button's Tip/Ubertip by its section key ("CmdCancel").
+   *  Empty strings if the install doesn't carry it, so a caller can fall back. */
+  command(key: string): CommandText {
+    return this.commands.get(key.toLowerCase()) ?? { tip: "", ubertip: "" };
+  }
 
   /** One error string by its commandstrings.txt key ("Nogold"). Keys are matched
    *  case-insensitively — the data's own casing is inconsistent ("Targgetmine"). */
@@ -38,16 +58,29 @@ export class CommandStrings {
   }
 }
 
+/** Strip the data's own quoting/padding — it quotes the odd entry and leaves trailing
+ *  spaces on others ("Mustbeclosertomine=Must root closer to the gold mine. "). */
+function clean(value: string): string {
+  return value.replace(/^"|"$/g, "").trim();
+}
+
 export function loadCommandStrings(vfs: DataSource): CommandStrings {
   const errors = new Map<string, string>();
+  const commands = new Map<string, CommandText>();
   const bytes = vfs.rawBytes("Units\\commandstrings.txt");
-  if (!bytes) return new CommandStrings(errors);
+  if (!bytes) return new CommandStrings(errors, commands);
   const data = new MappedData(new TextDecoder("windows-1252").decode(bytes));
   const row = data.getRow("Errors");
   for (const [key, value] of Object.entries(row?.map ?? {})) {
-    // The data quotes the odd entry and leaves trailing spaces on others
-    // ("Mustbeclosertomine=Must root closer to the gold mine. ").
-    errors.set(key.toLowerCase(), value.replace(/^"|"$/g, "").trim());
+    errors.set(key.toLowerCase(), clean(value));
   }
-  return new CommandStrings(errors);
+  // Every other section is one command button ([CmdCancel], [CmdCancelTrain], …).
+  for (const [key, section] of Object.entries(data.map)) {
+    if (key.toLowerCase() === "errors") continue;
+    const map = (section as { map?: Record<string, string> }).map ?? {};
+    const tip = clean(map["Tip"] ?? "");
+    const ubertip = clean(map["Ubertip"] ?? "");
+    if (tip || ubertip) commands.set(key.toLowerCase(), { tip, ubertip });
+  }
+  return new CommandStrings(errors, commands);
 }
