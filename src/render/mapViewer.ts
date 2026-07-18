@@ -2764,10 +2764,21 @@ export class MapViewerScene {
     this.itemInstances.set(itemId, inst);
   }
 
-  private removeItemModel(itemId: number): void {
+  /** Drop a ground item's model. `died` = it was consumed where it lay (a powerup taken
+   *  off the ground), so it plays its DEATH clip out instead of blinking away — the same
+   *  courtesy fadeOutFx does for buff art, and the mechanism behind the little burst left
+   *  behind: every powerup ground model fires a spawn event on its death track (the tomes,
+   *  glyph and runes an `SPN…TOBO` → Objects\Spawnmodels\Other\ToonBoom\ToonBoom.mdl, the
+   *  Chest of Gold an `SPN…GDCR` → UI\Feedback\GoldCredit\GoldCredit.mdl), which the mdx
+   *  handler spawns for us off Splats\SpawnData.slk. Death lengths run 233ms (runes, pot
+   *  of gold) to 3633ms (tomes) — verified against the 1.27a models. */
+  private removeItemModel(itemId: number, died = false): void {
     const inst = this.itemInstances.get(itemId);
     if (inst) {
-      inst.detach();
+      // Only a VISIBLE item earns a death: one that died under fog would otherwise sit
+      // out its clip hidden, and the fog pass no longer tracks it to reveal it anyway.
+      if (died && this.itemShown.get(itemId)) this.fadeOutFx(inst);
+      else inst.detach();
       this.itemInstances.delete(itemId);
     }
     this.itemShown.delete(itemId);
@@ -5917,7 +5928,32 @@ export class MapViewerScene {
         }
         // --- items on the ground (dropped / creep-dropped) ---
         for (const it of world.drainItemSpawns()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
-        for (const id of world.drainItemRemovals()) this.removeItemModel(id);
+        for (const r of world.drainItemRemovals()) this.removeItemModel(r.id, r.died);
+        // A PowerUp was consumed: play the ability's own effect model on the unit that took
+        // it, and sound it. The sound is the model's business first — a tome names no
+        // Effectsound at all and carries an SND…AITM event inside AI?mTarget.mdx that
+        // resolves (AnimLookups → AnimSounds "Tome") to Tomes.wav, which is exactly what
+        // playSpellSound reaches for. The runes and glyphs instead name an Effectsound
+        // LABEL (`PowerupSound`, the same Tomes.wav; `ReceiveGold`/`ReceiveLumber` for the
+        // resource items), so that is the fallback — and the only source for the runes that
+        // carry no art of their own. Verified 1.27a Units\ItemAbilityFunc.txt +
+        // UI\SoundInfo\AbilitySounds.slk (row Y49) — see docs/wc3-data-formats.md.
+        for (const p of world.drainPowerupPickups()) {
+          const u = world.units.get(p.unitId);
+          if (!u) continue;
+          const at = { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) };
+          // The tome effects are a single 900ms Birth clip with no Death, so they are
+          // reaped on a timer rather than by a clip ending.
+          if (p.art) void this.spawnEffect(p.art, at.x, at.y, at.z, 1.5);
+          // BOTH sources sound, because in the engine they are independent: the SND event
+          // is baked into the effect model's animation and fires by playing it at all,
+          // while `Effectsound` is the ability's own. The Chest of Gold is the case that
+          // proves it — its model carries a Rejuvenation sting AND the ability names
+          // `ReceiveGold`, and the game's signature coin "cha-ching" is the latter, so
+          // treating the model event as a short-circuit loses it.
+          if (p.art) this.sounds?.playModelSound(p.art, at);
+          if (p.soundLabel) this.sounds?.playAbilitySound(p.soundLabel, at);
+        }
         this.updateItemAnims();
         this.updateItemFog();
       }

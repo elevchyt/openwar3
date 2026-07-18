@@ -82,6 +82,14 @@ export interface AbilityDef {
   specialArt: string; // extra one-shot effect (Flame Strike's erupting fire pillar)
   effectArt: string; // ability "beware"/effect art — Flame Strike's ground warning ring
   areaArt: string; // AoE ground effect (Blizzard, Rain of Fire)
+  /** AbilityFunc `Effectsound` — a LABEL into `UI\SoundInfo\AbilitySounds.slk`, not a path
+   *  (`PowerupSound` → Tomes.wav, `ReceiveGold` → ReceiveGold.wav). Most abilities carry
+   *  none and sound themselves off their effect model's embedded SND event instead, which
+   *  is why this is a fallback rather than the primary source: of the powerups, the runes
+   *  and glyphs name `Effectsound=PowerupSound` while every TOME names nothing at all and
+   *  relies on the SND…AITM event inside its Target model (verified 1.27a
+   *  Units\ItemAbilityFunc.txt + AbilitySounds.slk row Y49). */
+  effectSound: string;
   buffArt: string; // buffFx[0]'s path — the primary persistent model (convenience).
   /** The buff's own `Effectart` — the effect played when the buff ENDS, as distinct from
    *  buffFx (worn while it lasts) and the ability's `Effectart` (a pre-cast warning).
@@ -405,6 +413,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
       effectArt: mdlPath(f ? str(f, "Effectart") : ""),
       areaArt: mdlPath(f ? str(f, "Areaeffectart") : ""),
+      effectSound: f ? str(f, "Effectsound") : "", // a SLK label, NOT a path — no mdlPath here
       // The persistent buff model lives on the BUFF, not the ability: resolve
       // buffid1's own [B….] func section TargetArt (Banish → BanishTarget, an aura →
       // GeneralAuraTarget, Flame Strike → FlameStrikeDamageTarget). Verified 2026-07

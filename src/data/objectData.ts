@@ -247,6 +247,7 @@ function applyAbilityMods(def: AbilityDef, mods: AbilMod[], meta: MappedData, tr
       case "SpecialArt": def.specialArt = mdlPath(s(m.value)); break;
       case "Effectart": def.effectArt = mdlPath(s(m.value)); break;
       case "Areaeffectart": def.areaArt = mdlPath(s(m.value)); break;
+      case "EffectSound": def.effectSound = s(m.value).trim(); break; // a SLK label, not a path
       // Per-level.
       case "Area": if (lvl) lvl.area = n(m.value); break;
       case "Cool": if (lvl) lvl.cooldown = n(m.value); break;

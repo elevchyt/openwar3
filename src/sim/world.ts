@@ -1196,7 +1196,10 @@ export class SimWorld {
    *  shop was raised — see initShopStock. */
   elapsed = 0;
   private itemSpawns: SimItem[] = []; // new ground items the renderer must model
-  private itemRemovals: number[] = []; // ground items picked up/destroyed (drop their model)
+  private itemRemovals: Array<{ id: number; died: boolean }> = []; // ground items picked up/destroyed (drop their model)
+  // PowerUp items consumed on pickup this frame: the renderer plays the granted ability's
+  // Target/Caster art on the picker and sounds it. See applyPowerup.
+  private powerupPickups: Array<{ unitId: number; art: string; soundLabel: string }> = [];
   // Per-unit creep drop tables, seeded at spawn (map .doo), rolled on death.
   private unitDrops = new Map<number, ItemDropSet[]>();
   // --- spell / ability event channels drained by the renderer each frame ---
@@ -7567,16 +7570,24 @@ export class SimWorld {
     return out;
   }
 
-  /** Ground items removed since the last drain (renderer drops their models). */
-  drainItemRemovals(): number[] {
+  /** Ground items removed since the last drain (renderer drops their models). `died`
+   *  asks the renderer to play the model's DEATH clip in place rather than snapping it
+   *  out — see removeGroundItem. */
+  drainItemRemovals(): Array<{ id: number; died: boolean }> {
     if (!this.itemRemovals.length) return this.itemRemovals;
     const out = this.itemRemovals;
     this.itemRemovals = [];
     return out;
   }
 
-  private removeGroundItem(id: number): void {
-    if (this.items.delete(id)) this.itemRemovals.push(id);
+  /** Take a ground item off the world. `died` = it was CONSUMED where it lay, so the
+   *  renderer plays the model's Death clip (which is also what spawns the little puff:
+   *  every powerup model carries an `SPN…TOBO` → ToonBoom event on its Death track, and
+   *  the Chest of Gold an `SPN…GDCR` → GoldCredit one — verified 1.27a). It is NOT set
+   *  for the plumbing removals: an item that merely MOVES is removed and re-modelled at
+   *  the new spot (see moveItem), and dying there would puff on every reposition. */
+  private removeGroundItem(id: number, died = false): void {
+    if (this.items.delete(id)) this.itemRemovals.push({ id, died });
   }
 
   /** The ground item nearest a world point within `radius`, or null (for click-to-
@@ -7762,7 +7773,10 @@ export class SimWorld {
     if (def.powerup) {
       this.noteItem(u, it, "pickup");
       this.applyPowerup(u, def);
-      this.removeGroundItem(it.id);
+      // A consumed powerup DIES where it lay — it doesn't just vanish. Playing the model's
+      // Death clip is what gives the tome its little burst on the ground (the clip carries
+      // the ToonBoom spawn event), and it is the reason `died` exists at all.
+      this.removeGroundItem(it.id, true);
       return true;
     }
     const slot = wantSlot >= 0
@@ -7960,8 +7974,24 @@ export class SimWorld {
         case "AIgo": this.stashOf(u.owner).gold += dv(0); break; // Gold Coins
         case "AIlu": this.stashOf(u.owner).lumber += dv(0); break; // Bundle of Lumber
       }
+      // …and the pickup's LOOK, which is data, not per-code: the ability names a model to
+      // play on the unit that took it. Which slot holds it is not consistent in the game's
+      // own data — the tomes use `Targetart` (AIsm/AIam/AIim → …\AIsmTarget.mdl et al) but
+      // the Tome of Experience, Manual of Health and Chest of Gold use `Casterart` for the
+      // very same job — so take whichever is set. Every powerup attaches at `origin`, which
+      // is where a unit-targeted effect already plays. (1.27a Units\ItemAbilityFunc.txt.)
+      const art = ad.targetArt || ad.casterArt;
+      if (art || ad.effectSound) this.powerupPickups.push({ unitId: u.id, art, soundLabel: ad.effectSound });
     }
     this.recomputeStats(u);
+  }
+
+  /** PowerUps consumed this frame (renderer plays the effect model + its sound). */
+  drainPowerupPickups(): Array<{ unitId: number; art: string; soundLabel: string }> {
+    if (!this.powerupPickups.length) return this.powerupPickups;
+    const out = this.powerupPickups;
+    this.powerupPickups = [];
+    return out;
   }
 
   // === item trigger-effect API (7.18) ======================================
@@ -8037,7 +8067,9 @@ export class SimWorld {
       const [sx, sy] = this.snapItemPos(x, y);
       ground.x = sx;
       ground.y = sy;
-      this.itemRemovals.push(id); // re-model at the new spot (the renderer has no "move item")
+      // Re-model at the new spot (the renderer has no "move item"). Never `died` — this
+      // is a reposition, and a death clip here would puff the item at its old spot.
+      this.itemRemovals.push({ id, died: false });
       this.itemSpawns.push(ground);
       return true;
     }

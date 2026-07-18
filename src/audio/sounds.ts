@@ -633,6 +633,17 @@ export class SoundBoard {
     this.playPool(this.resolve("ui", name), "ui");
   }
 
+  /** Play a sound an ability names in its `Effectsound` field, by its AbilitySounds.slk
+   *  label (`PowerupSound` → Abilities\Spells\Items\AIam\Tomes.wav, `ReceiveGold`,
+   *  `ReceiveLumber`). A LABEL, not a path: the row carries the WAV name, its folder and
+   *  the 3D metadata, so unlike a folder-scanned effect WAV this one needs no synthesized
+   *  distances. Positional — a rune popped across the map should sound like it. Routed to
+   *  the uncapped "spell" channel for the same reason cast sounds are (issue #23): the
+   *  shared impact pool sits at its cap through a fight and would silently drop it. */
+  playAbilitySound(label: string, at?: SoundPos): void {
+    if (label) this.playPool(this.resolve("ability", label), "spell", at);
+  }
+
   /** Play the sound an MDX SND event object names, by its 4-char code — the same
    *  AnimLookups → AnimSounds chain resolveModelSounds walks, but fired by a caller that
    *  is driving the animation ITSELF rather than letting the model's category decide. The
@@ -1278,7 +1289,14 @@ export class SoundBoard {
           return Number.isFinite(n) ? n : 0;
         };
         clip = {
-          paths: files.map((f) => (dir + f).replace(/\//g, "\\")),
+          // Join with exactly one separator. The tables are NOT consistent about it:
+          // AnimSounds carries a trailing backslash on DirectoryBase
+          // ("Abilities\Spells\Items\AIam\") while AbilitySounds does not
+          // ("Abilities\Spells\Items\AIam"), so plain concatenation silently yields
+          // "…\AIamTomes.wav" for every AbilitySounds row — a path that resolves to
+          // nothing. Only bit once something played those labels (a rune's Effectsound
+          // is its ONLY sound source, so the whole table was mute).
+          paths: files.map((f) => (dir ? dir.replace(/[\\/]+$/, "") + "\\" + f : f).replace(/\//g, "\\")),
           gain: Number.isFinite(vol) ? Math.max(0, Math.min(1, vol / 127)) : 1,
           volume127: Number.isFinite(vol) ? vol : 127,
           pitch: Number.isFinite(pitch) && pitch > 0 ? pitch : 1,
