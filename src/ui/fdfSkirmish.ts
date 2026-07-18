@@ -230,7 +230,9 @@ export async function mountSkirmish(
     // in after the chrome has landed, so the screen reads as filling itself in.
     // MapInfoPanel, not its MapInfoPaneContainer: the panel is the whole right-hand column,
     // the pane AND the Advanced Options button under it, and they arrive together.
-    latePanels: ["GameSettingsPanel", "MapInfoPanel"],
+    // The "Game Settings" title comes with them — it names the map list, so it belongs to
+    // what the screen fills in rather than to the chrome the screen arrives wearing.
+    latePanels: ["GameSettingsLabel", "GameSettingsPanel", "MapInfoPanel"],
     handlers: {
       PlayGameButton: () => start(),
       CancelButton: h.onCancel,
