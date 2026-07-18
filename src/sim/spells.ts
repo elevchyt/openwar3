@@ -28,8 +28,11 @@ export interface SpellApi {
   dispel(target: SimUnit): void;
   /** Ask the renderer to create a summoned/raised unit (deferred, like training).
    *  `art.summon` plays where the unit materializes; `art.unsummon` replaces it when its
-   *  timer runs out or it is dismissed (see summonArt/unsummonArt). */
-  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }): void;
+   *  timer runs out or it is dismissed (see summonArt/unsummonArt).
+   *  `atPoint` says (x, y) is a TARGETED point the unit must land ON — a ward goes where
+   *  you clicked. Without it (x, y) is the caster's own position and the unit is placed a
+   *  step in front of them, WC3-style (see MapViewerScene.summonSpot). */
+  requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean): void;
   /** Raise up to `max` friendly corpses near a point back to life (Resurrection). */
   raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number): number;
   /** Spirit Link: mark `unit` as sharing `share` of its damage across the `group` unit ids
@@ -294,12 +297,12 @@ function chainFrom(api: SpellApi, caster: SimUnit, first: SimUnit, count: number
 
 /** Summon `count` copies of a unit for the caster, fanned around a point (each
  *  request is placed on the nearest free tile by the renderer). */
-function summonMany(api: SpellApi, caster: SimUnit, def: AbilityDef, unitId: string, x: number, y: number, count: number, durationSec: number): void {
+function summonMany(api: SpellApi, caster: SimUnit, def: AbilityDef, unitId: string, x: number, y: number, count: number, durationSec: number, atPoint = false): void {
   if (!unitId) return;
   const art = summonArt(def);
   for (let i = 0; i < Math.max(1, count); i++) {
     const facing = caster.facing + (i - (count - 1) / 2) * 0.5;
-    api.requestSummon(unitId, x, y, facing, caster.owner, caster.team, durationSec, caster.id, art);
+    api.requestSummon(unitId, x, y, facing, caster.owner, caster.team, durationSec, caster.id, art, atPoint);
   }
 }
 
@@ -1165,7 +1168,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AUin: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 250, true)) api.spellDamage(t, d(lvl, 0, 50), caster.id);
-    if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 180, caster.id, { summon: "", unsummon: def.buffEffectArt });
+    if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 180, caster.id, { summon: "", unsummon: def.buffEffectArt }, true);
     if (def.specialArt) api.emitEffect(def.specialArt, ctx.x, ctx.y, 0);
   },
 
@@ -1205,7 +1208,7 @@ function summonSpell(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: numb
   // The summon burst rides each unit (requestSummon's `art.summon`), fired where it
   // actually materializes. It used to be emitted once, here, at the CASTER's feet — so
   // three wolves fanned out around the Far Seer shared a single puff behind them.
-  summonMany(api, caster, def, unitId, x, y, count, lvl.heroDuration || lvl.duration || 60);
+  summonMany(api, caster, def, unitId, x, y, count, lvl.heroDuration || lvl.duration || 60, opts.atPoint);
 }
 
 /** One stat effect an aura grants to a unit in range. */

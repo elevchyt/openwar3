@@ -146,6 +146,30 @@ export class PathingGrid {
     ];
   }
 
+  /** The ANCHOR cell footprintFits()/nearestFit() index an n×n footprint by, for a unit
+   *  standing at world (wx, wy). footprintFits scans `cx - (n>>1) … cx - (n>>1) + n - 1`,
+   *  so the anchor is the centre cell for an odd footprint and the high-corner cell for an
+   *  even one — which is why the two parities round differently. */
+  footprintAnchor(wx: number, wy: number, n: number): [number, number] {
+    if (n % 2 === 1) return this.worldToCell(wx, wy);
+    return [
+      Math.round((wx - this.originX) / PATHING_CELL),
+      Math.round((wy - this.originY) / PATHING_CELL),
+    ];
+  }
+
+  /** The exact inverse of footprintAnchor: where a unit whose n×n footprint is anchored on
+   *  cell (cx, cy) actually stands. Odd footprints sit on the cell CENTRE, even ones on the
+   *  cell CORNER — the same rule snapForFootprint applies.
+   *
+   *  Use this rather than cellToWorld() + snapForFootprint() for an even footprint: the cell
+   *  centre lands exactly on a .5 boundary, so the re-snap's Math.round pushes it a whole
+   *  cell off (and JS rounds .5 toward +∞, so the error is directional). */
+  footprintCenter(cx: number, cy: number, n: number): [number, number] {
+    const half = n % 2 === 1 ? 0.5 : 0;
+    return [this.originX + (cx + half) * PATHING_CELL, this.originY + (cy + half) * PATHING_CELL];
+  }
+
   /** World-space origin (low corner) = the map's centerOffset. Used to align an
    *  independent overlay grid (e.g. the fog-of-war vision map) to the same space. */
   get origin(): readonly [number, number] {
@@ -242,12 +266,15 @@ export class PathingGrid {
   }
 
   /** Nearest cell (spiralling out from cx,cy) where an n×n footprint fits — for
-   *  placing a freshly-trained unit on empty tiles it actually fits on. */
-  nearestFit(cx: number, cy: number, n: number, maxRadius = 24): [number, number] | null {
+   *  placing a freshly-trained unit on empty tiles it actually fits on.
+   *  `accept` optionally rejects otherwise-fitting cells: a batch placed in one frame uses
+   *  it to skip cells already handed out, since reservations only land on the next tick. */
+  nearestFit(cx: number, cy: number, n: number, maxRadius = 24, accept?: (x: number, y: number) => boolean): [number, number] | null {
     for (let r = 0; r <= maxRadius; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
+          if (accept && !accept(cx + dx, cy + dy)) continue;
           if (this.footprintFits(cx + dx, cy + dy, n)) return [cx + dx, cy + dy];
         }
       }

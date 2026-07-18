@@ -279,6 +279,27 @@ export interface IllusionInit {
   inventory: ({ itemId: string; charges: number } | null)[]; // what it is seen carrying
 }
 
+/** A unit a spell asked to be brought into the world this tick. The sim owns no model
+ *  instances, so spawning is deferred to the renderer exactly like training is. */
+export interface SummonRequest {
+  unitId: string;
+  x: number;
+  y: number;
+  facing: number;
+  owner: number;
+  team: number;
+  summonLeft: number; // >0 = a temporary summon, seconds until it expires
+  sourceId: number; // the caster
+  summonArt: string; // the burst it materializes in
+  unsummonArt: string; // the burst that replaces it when it leaves
+  /** (x, y) is a point the player TARGETED (a ward, an infernal, a raised corpse) and the
+   *  unit belongs exactly ON it. Without this the placement steps 96 units along `facing`
+   *  first, which is right for a caster-relative summon and wrong for every targeted one
+   *  (see MapViewerScene.summonSpot). */
+  atPoint: boolean;
+  illusion?: IllusionInit;
+}
+
 export interface HeldItem {
   /** Entity id — the SAME id space (and the same id) the item had on the ground.
    *  An item in WC3 is one entity that moves between the ground and an inventory,
@@ -1224,7 +1245,7 @@ export class SimWorld {
   private levelUps: Array<{ unitId: number; level: number }> = [];
   // Units summoned/raised by a spell this tick: the renderer creates their models
   // (same deferral as trainCompletions — the sim owns no model instances).
-  private summonRequests: Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: IllusionInit }> = [];
+  private summonRequests: SummonRequest[] = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -5229,6 +5250,9 @@ export class SimWorld {
       summonLeft: m.duration,
       sourceId: caster.id,
       summonArt: "",
+      // Each image lands on the exact spot its missile flew to (the real hero teleports to
+      // one of them), so the spot is final — never a step further along the caster's facing.
+      atPoint: true,
       // An image popping is BOmi's Specialart (MirrorImageDeathCaster) — its folder-mate
       // MirrorImageDeath.wav rides it as a model SND event (AnimLookups AOMI).
       unsummonArt: def?.buffSpecialArt ?? "",
@@ -5483,7 +5507,8 @@ export class SimWorld {
       if (c.raised || c.isHero || c.mechanical || !c.unitId) continue;
       if (Math.hypot(c.x - x, c.y - y) > radius) continue;
       c.raised = true; // the renderer hides the corpse model once raised
-      this.summonRequests.push({ unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team, summonLeft: 0, sourceId: 0, summonArt: "", unsummonArt: "" });
+      // A raised corpse stands back up where it fell, not a step in front of the caster.
+      this.summonRequests.push({ unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner, team, summonLeft: 0, sourceId: 0, summonArt: "", unsummonArt: "", atPoint: true });
       raised++;
     }
     return raised;
@@ -5515,8 +5540,8 @@ export class SimWorld {
     },
     applyBuff: (t, buff) => this.applyBuffInternal(t, buff),
     dispel: (t) => this.dispelUnit(t),
-    requestSummon: (unitId, x, y, facing, owner, team, dur, src, art) => {
-      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "" });
+    requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint) => {
+      this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint });
     },
     raiseNearbyCorpses: (x, y, r, owner, team, max) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max),
     linkSpirits: (unit, group, durationSec, share) => {
@@ -5813,7 +5838,7 @@ export class SimWorld {
     return out;
   }
   /** Units summoned/raised this frame — the renderer creates their models. */
-  drainSummonRequests(): Array<{ unitId: string; x: number; y: number; facing: number; owner: number; team: number; summonLeft: number; sourceId: number; summonArt: string; unsummonArt: string; illusion?: IllusionInit }> {
+  drainSummonRequests(): SummonRequest[] {
     if (!this.summonRequests.length) return this.summonRequests;
     const out = this.summonRequests;
     this.summonRequests = [];

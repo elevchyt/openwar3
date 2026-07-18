@@ -2240,17 +2240,44 @@ export class MapViewerScene {
     }
   }
 
-  /** Where to place a summoned unit: the tile in front of its summoner, else the
-   *  nearest free tile around it (WC3 summons appear ahead of the caster). */
-  private summonSpot(casterX: number, casterY: number, facing: number, collision: number): [number, number] {
-    const dist = 96;
-    const fx = casterX + Math.cos(facing) * dist;
-    const fy = casterY + Math.sin(facing) * dist;
+  /** Where to place a summoned unit, on the nearest free tile of the UNIT grid.
+   *
+   *  `atPoint` is the difference between the two kinds of summon WC3 has, and getting it
+   *  wrong is very visible:
+   *   • false — (x, y) is the CASTER. The unit materializes a step in front of them, the
+   *     way the Far Seer's wolves trot out ahead of him.
+   *   • true  — (x, y) is a point the player TARGETED (Serpent Ward, Healing Ward, Sentry
+   *     Ward, Stasis Trap, Inferno, Force of Nature). The unit belongs exactly there.
+   *     Applying the forward step here threw every ward ~96 units PAST the click, in
+   *     whatever direction the hero happened to be facing.
+   *
+   *  The snap honours footprint PARITY (snapForFootprint), it does not just take the cell
+   *  centre: a Serpent Ward's collision of 16 is a 2×2 (even) footprint, which WC3 centres
+   *  on a cell CORNER. Centre-snapping an even footprint puts the unit half a cell off the
+   *  grid its own footprint math (footprintFits/footprintOrigin) assumes — the ward reads
+   *  as sitting on the coarse building lattice instead of the unit one. */
+  private summonSpot(x: number, y: number, facing: number, collision: number, atPoint: boolean, claimed: Set<string>): [number, number] {
+    const dist = atPoint ? 0 : 96; // the step in front of the caster — never past a target point
+    const fx = x + Math.cos(facing) * dist;
+    const fy = y + Math.sin(facing) * dist;
     if (this.grid) {
       const n = footprintCells(collision);
-      const [cx, cy] = this.grid.worldToCell(fx, fy);
-      const spot = this.grid.nearestFit(cx, cy, n, 14) ?? this.grid.nearestWalkable(cx, cy, 14);
-      if (spot) return this.grid.cellToWorld(spot[0], spot[1]);
+      // Index by the footprint's own anchor cell, not worldToCell: an even footprint (a
+      // Serpent Ward's collision of 16 is 2×2) anchors on the cell CORNER, and seeding the
+      // search from the wrong parity is what put wards half a cell off the unit grid.
+      const [cx, cy] = this.grid.footprintAnchor(fx, fy, n);
+      // `claimed` are the cells already handed out this frame. The sim reserves a
+      // footprint only on settle (a tick later), so without this a multi-unit summon
+      // aimed at ONE point — Force of Nature's treants, Storm/Earth/Fire — would hand
+      // every copy the same cell and stack them. The caster-relative summons never hit
+      // this because summonMany fans their facings, and that fan is what the forward
+      // step turns into distinct spots.
+      const unclaimed = (sx: number, sy: number): boolean => !claimed.has(`${sx},${sy}`);
+      const spot = this.grid.nearestFit(cx, cy, n, 14, unclaimed) ?? this.grid.nearestFit(cx, cy, n, 14) ?? this.grid.nearestWalkable(cx, cy, 14);
+      if (spot) {
+        claimed.add(`${spot[0]},${spot[1]}`);
+        return this.grid.footprintCenter(spot[0], spot[1], n);
+      }
     }
     return [fx, fy];
   }
@@ -2665,6 +2692,25 @@ export class MapViewerScene {
       return iv && iv[0] >= 0 && iv[0] < 1e7 && iv[1] > iv[0];
     });
     return sane >= 0 ? sane : 0;
+  }
+
+  /** The sequence a missile should play while it FLIES: its "Stand" clip.
+   *
+   *  A WC3 missile model carries three clips — Birth (the launch flash), Stand (the
+   *  in-flight loop: the spinning bolt, the ribbon trail, the particle emitters) and
+   *  Death (the impact burst, played by impactProjectile). Their ORDER in the file is
+   *  not fixed, and that is the whole bug: FarseerMissile happens to list
+   *  `[0] Stand | [1] Birth | [2] Death`, so playing index 0 blindly looked right,
+   *  while ShadowHunterMissile lists `[0] Birth | [1] "Stand -1" | [2] Death` — so the
+   *  Shadow Hunter's bolt looped a 34ms Birth clip forever and never animated.
+   *  SerpentWardMissile (the wards he summons) has the same Birth-first layout.
+   *
+   *  Match `/^stand/i`, not `/^stand$/i`: WC3 suffixes a clip name with its rarity
+   *  ("Stand -1"), and that suffix is part of the sequence name in the MDX. */
+  private missileSequence(inst: SpawnInstance): number {
+    const seqs = inst.model?.sequences ?? [];
+    const stand = seqs.findIndex((s) => /^stand/i.test(s.name));
+    return stand >= 0 ? stand : this.effectSequence(inst);
   }
 
   /** Loop keys of the channelled fields that were running last frame, so a field that
@@ -3965,7 +4011,7 @@ export class MapViewerScene {
     this.projectileLoading.delete(id);
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
-    inst.setSequence(0);
+    inst.setSequence(this.missileSequence(inst)); // the flight loop, NOT index 0 (see missileSequence)
     inst.setSequenceLoopMode(2);
     this.projectileInsts.set(id, inst);
   }
@@ -5898,15 +5944,16 @@ export class MapViewerScene {
           const h = world.units.get(lu.unitId);
           if (h) void this.spawnEffect(LEVEL_UP_FX, h.x, h.y, this.rts!.groundHeightAt(h.x, h.y), 1.5);
         }
-        // Summoned / raised units — create their models IN FRONT of the caster
-        // (nearest free tile), play their birth clip, then flag temporary summons
-        // (Water Elemental) so the sim expires them on schedule.
+        // Summoned / raised units — create their models on the nearest free tile (in front
+        // of the caster, or ON the targeted point for a ward — see summonSpot), play their
+        // birth clip, then flag temporary summons (Water Elemental) so the sim expires them.
         for (const m of world.drainMirrorMissiles()) void this.spawnMirrorMissile(m);
+        const summonClaimed = new Set<string>(); // cells handed out this frame (see summonSpot)
         for (const s of world.drainSummonRequests()) {
           const d = this.registry.get(s.unitId);
           if (!d) continue;
           const summonLeft = s.summonLeft;
-          const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16);
+          const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16, s.atPoint, summonClaimed);
           // The summon burst belongs on the SPOT the unit lands on, not on the caster —
           // three wolves fan out around the Far Seer, and each arrives in its own.
           if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy, true); // the model carries its own SND event
