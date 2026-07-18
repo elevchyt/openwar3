@@ -237,6 +237,40 @@ if (!broken.length) {
   }
 }
 lines.push("");
+lines.push("## Where this stands, and how to carry it on");
+lines.push("");
+lines.push("The **scan** is complete: all 799 rows are classified below and every art path they name");
+lines.push("is checked against the archives. What remains is implementation.");
+lines.push("");
+lines.push("How to add one, end to end:");
+lines.push("");
+lines.push("1. Read the row's numbers in `Units\\AbilityData.slk`, and read what its `Data` columns");
+lines.push("   MEAN — `Units\\AbilityMetaData.slk` `useSpecific` names them through");
+lines.push("   `UI\\WorldEditStrings.txt`. Never infer a column from behaviour: Finger of Death's");
+lines.push("   damage is dataC, and reading dataA the way other nukes do would deal 0.25.");
+lines.push("2. Add a `KNOWN_ABILITIES` entry in `src/data/abilities.ts` (target type from `Rng1`/");
+lines.push("   `Area1`; autocast iff its AbilityFunc row has `Orderon`/`Orderoff`).");
+lines.push("3. Add the handler to `SPELL_HANDLERS` (or `AURA_BUFFS`, or the passive path in");
+lines.push("   `world.ts`) — dispatch is on the base `code`, never the alias.");
+lines.push("4. Add assertions to `tools/sim-*-test.cjs` and run `pnpm sim:test`; re-run");
+lines.push("   `pnpm data:audit` to refresh this file.");
+lines.push("");
+lines.push("Two standing rules that have already earned their keep:");
+lines.push("");
+lines.push("- **`abilList` membership is not availability.** Check the ability's `Requires` — that is");
+lines.push("  what makes Ultravision an upgrade rather than a night elf racial.");
+lines.push("- **Do not invent a number.** Where the MPQ and a reference disagree, implement what the");
+lines.push("  data says and record the conflict. Open ones: Kaboom!'s dataE \"Building Damage Factor\"");
+lines.push("  (reads 100, Liquipedia says 3x vs buildings) and Cannibalize's dataB \"Max Hit Points\"");
+lines.push("  (800, which cannot bind at the stock rate). Both want a measurement against the real");
+lines.push("  client to settle — see the wc3-ground-truth memory.");
+lines.push("");
+lines.push("Known gaps that are NOT ability rows, found while auditing:");
+lines.push("");
+lines.push("- Invisibility is concealed from the aggro paths (`canSee`) but not from the enemy's");
+lines.push("  SCREEN — `rts.ts` fades every invisible unit for every viewer alike.");
+lines.push("- Call to Arms (`Amil`/`Amic`, the Human militia) is unimplemented in any form.");
+lines.push("");
 
 // --- what to implement next --------------------------------------------------
 // Implementing a base `code` clears every alias riding it, so the todo list is worth
