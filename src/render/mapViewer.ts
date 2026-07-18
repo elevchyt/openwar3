@@ -685,6 +685,7 @@ export class MapViewerScene {
   private effects: Array<{ inst: SpawnInstance; t: number }> = [];
   // Ground items (dropped / creep-dropped): one model instance per sim item id.
   private itemInstances = new Map<number, SpawnInstance>();
+  private itemShown = new Map<number, boolean>(); // last fog visibility pushed to each item model
   private itemLoading = new Set<number>();
   // Items mid-"Birth": once the birth clip finishes, switch them to a looping Stand.
   private itemBirthing: Array<{ id: number; inst: SpawnInstance; standIdx: number; birthEnd: number }> = [];
@@ -2754,7 +2755,12 @@ export class MapViewerScene {
       const birthEnd = seqs[birth]?.interval?.[1] ?? 0;
       this.itemBirthing.push({ id: itemId, inst, standIdx, birthEnd });
     }
-    inst.show();
+    // An item dropped where we have no eyes (a creep camp cleared across the map by an
+    // ally) starts hidden rather than blinking into the black for a frame.
+    const visible = this.rts.itemVisible(itemId);
+    if (visible) inst.show();
+    else inst.hide();
+    this.itemShown.set(itemId, visible);
     this.itemInstances.set(itemId, inst);
   }
 
@@ -2764,8 +2770,23 @@ export class MapViewerScene {
       inst.detach();
       this.itemInstances.delete(itemId);
     }
+    this.itemShown.delete(itemId);
     const bi = this.itemBirthing.findIndex((b) => b.id === itemId);
     if (bi >= 0) this.itemBirthing.splice(bi, 1);
+  }
+
+  /** Hide a ground item that no longer has eyes on it. An item is a live widget, not a
+   *  remembered building: WC3 shows it only while the ground it lies on is actually
+   *  visible, so it winks out with the fog rather than sitting in the black. */
+  private updateItemFog(): void {
+    if (!this.rts) return;
+    for (const [id, inst] of this.itemInstances) {
+      const visible = this.rts.itemVisible(id);
+      if (visible === this.itemShown.get(id)) continue; // only touch it when it changes
+      this.itemShown.set(id, visible);
+      if (visible) inst.show();
+      else inst.hide();
+    }
   }
 
   /** Hand a birthing item off to its looping Stand idle once the Birth clip ends. */
@@ -4906,7 +4927,7 @@ export class MapViewerScene {
             id: canLearn ? `learn:${ab.id}` : "noop",
             icon: this.blpIcon(def.icon),
             name: maxed ? `${def.name} (Max)` : `+ ${def.name} [${ab.level}/${def.levels}]`,
-            hotkey: def.hotkey,
+            hotkey: def.researchHotkey, // Researchhotkey — a passive has no cast Hotkey to borrow
             tip: maxed ? `${def.name} - [|cffffcc00Level ${def.levels}|r]` : tip,
             desc,
             col, row, disabled: !canLearn,
@@ -5898,6 +5919,7 @@ export class MapViewerScene {
         for (const it of world.drainItemSpawns()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
         for (const id of world.drainItemRemovals()) this.removeItemModel(id);
         this.updateItemAnims();
+        this.updateItemFog();
       }
       // Reset the command page + placement when the selection changes.
       if (this.rts && this.rts.selectedId !== this.lastSelected) {

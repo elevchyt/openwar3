@@ -658,7 +658,8 @@ export interface SimUnit {
   // "Attack"/"Attack 2"; HeroMountainKing.mdx has "Attack Slam" + "Attack Slam Alternate"
   // for Bash/Avatar). The clip is chosen when the swing begins, so the roll must be too.
   swingCrit: boolean; // Critical Strike (AOcr) hit this swing — dealDamage multiplies it
-  swingSlam: boolean; // this swing shows "Attack Slam": a crit, or the Wind Walk backstab
+  swingBash: boolean; // Bash (AHbh) procced this swing — dealDamage adds its bonus + stuns
+  swingSlam: boolean; // this swing shows "Attack Slam": a crit, a bash, or the Wind Walk backstab
   chopSeq: number; // increments each lumber chop (renderer re-triggers the chop clip in sync)
   inCombat: boolean; // engaging in range this tick (drives the attack animation)
   path: Array<[number, number]>; // world waypoints
@@ -2469,6 +2470,7 @@ export class SimWorld {
       | "swingSeq"
       | "swingBroken"
       | "swingCrit"
+      | "swingBash"
       | "swingSlam"
       | "chopSeq"
       | "inCombat"
@@ -2633,6 +2635,7 @@ export class SimWorld {
       swingSeq: 0,
       swingBroken: false,
       swingCrit: false,
+      swingBash: false,
       swingSlam: false,
       chopSeq: 0,
       inCombat: false,
@@ -4242,20 +4245,43 @@ export class SimWorld {
     }
   }
 
-  /** Passive Bash (AHbh): a landed attack has dataB chance to stun for dataC. */
-  private tryBash(attacker: SimUnit, target: SimUnit): void {
-    if (!this.abilities || target.invulnerable) return;
-    const ab = attacker.abilities.find((a) => a.code === "AHbh" && a.level >= 1);
-    if (!ab) return;
-    const def = this.abilities.get(ab.id);
-    if (!def) return;
-    const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
-    const chance = lvl.data[1]; // dataB = bash chance
-    const stunDur = lvl.data[2] || 1; // dataC = stun duration
-    if (Number.isFinite(chance) && this.rng() < chance) {
-      // Bash's buff is BPSE too — the same overhead swirl every stun in the game wears.
-      this.applyBuffInternal(target, { kind: "stun", group: "", timeLeft: target.isHero ? Math.min(stunDur, lvl.heroDuration || stunDur) : stunDur, sourceId: attacker.id, ...fx(def) });
-    }
+  /** Bash (Mountain King passive AHbh): roll whether THIS swing bashes.
+   *
+   *  The Data columns are named by AbilityMetaData.slk's Hbh1..5 rows (resolved through
+   *  WorldEditStrings): dataA "Chance to Bash", dataB "Damage Multiplier", dataC "Damage
+   *  Bonus", dataD "Chance to Miss". dataA is a PERCENT — Hbh1 carries maxVal=100 and
+   *  AHbh stores 20/30/40, the 20/30/40% the Ubertip quotes — so it needs /100, exactly
+   *  like Critical Strike's dataA. (This used to read dataB, which is 0 at every rank:
+   *  Bash simply never fired.) */
+  private rollBash(u: SimUnit): boolean {
+    const lvl = this.passiveLevelData(u, "AHbh");
+    if (!lvl) return false;
+    return this.rng() < this.dataOf(lvl, 0, 20) / 100; // dataA — "Chance to Bash" (%)
+  }
+
+  /** Spend a rolled Bash at the blow: stun the target for Dur (HeroDur against a hero).
+   *  The bonus damage is added to the swing itself in dealDamage, not here — it is attack
+   *  damage and must go through the target's armour like the rest of the strike. */
+  private applyBash(attacker: SimUnit, target: SimUnit): void {
+    if (!this.abilities || target.invulnerable || target.hp <= 0) return;
+    const ab = this.findAbility(attacker, "AHbh");
+    const def = ab && this.abilities.get(ab.id);
+    const lvl = this.passiveLevelData(attacker, "AHbh");
+    if (!def || !lvl) return;
+    // Dur1=2 / HeroDur1=1 — the game gives heroes their own, shorter stun rather than
+    // clamping the normal one. `group` is the ability code so a second bash REFRESHES the
+    // stun instead of stacking a pile of independent 2s buffs on the same victim.
+    const stunDur = target.isHero ? lvl.heroDuration : lvl.duration;
+    if (stunDur <= 0) return;
+    // Bash's buff is BPSE — the same overhead swirl every stun in the game wears
+    // (CommonAbilityFunc [BPSE] Targetart=…\Thunderclap\ThunderclapTarget.mdl, overhead).
+    this.applyBuffInternal(target, { kind: "stun", group: "AHbh", timeLeft: stunDur, sourceId: attacker.id, ...fx(def) });
+  }
+
+  /** The flat damage a rolled Bash adds to its swing (dataC "Damage Bonus" — 25). */
+  private bashDamageBonus(u: SimUnit): number {
+    const lvl = this.passiveLevelData(u, "AHbh");
+    return lvl ? this.dataOf(lvl, 2, 25) : 0; // dataC
   }
 
   /** Look up a learned/innate ability on a unit by its base code. */
@@ -6378,11 +6404,18 @@ export class SimWorld {
     // something it may proc on: AOcr's `targs1` is "air,ground,enemy,neutral" — no `friend`
     // — so a force-attack on your own unit never crits (and so never slams).
     u.swingCrit = !w.ranged && this.hostile(u, t) && this.rollCriticalStrike(u);
+    // Bash (AHbh) rolls here for the same reason crit does — the Mountain King's
+    // "Attack Slam" clip is picked as the swing begins. Unlike crit it is NOT melee-only
+    // (the item Bash AIbx sits happily on a ranged hero), but like crit it only procs on
+    // something it may target: AHbh's targs1 is "ground,air" with no `friend`, so a
+    // force-attack on your own unit never bashes.
+    u.swingBash = this.hostile(u, t) && !t.invulnerable && this.rollBash(u);
+
     // A blow out of Wind Walk shows the same strike: the fade breaks at the damage point
     // (tickSwing) and that blow carries the Backstab Damage, so a swing begun while cloaked
     // is the backstab swing. `cloaked`, not `invisible` — the bonus is owed from the moment
     // the buff lands, transition included, which is the same test breakInvisibility makes.
-    u.swingSlam = u.swingCrit || u.cloaked;
+    u.swingSlam = u.swingCrit || (u.swingBash && !w.ranged) || u.cloaked;
     u.swingSeq++; // renderer restarts the attack animation so the strike lines up
     // EVENT_(PLAYER_)UNIT_ATTACKED fires as the attacker commits a swing at the target.
     if (this.captureAttacks) this.attackEvents.push({ attacked: eventInfo(t), attacker: eventInfo(u) });
@@ -7008,7 +7041,10 @@ export class SimWorld {
     // `bonus` is Wind Walk's Backstab Damage on the blow that broke the fade. It is added
     // AFTER the crit multiply — the two are independent bonuses on the same swing, and
     // nothing we have says a crit doubles the backstab.
-    const raw = this.applyCriticalStrike(attacker, this.rollDamage(w)) + bonus;
+    // Bash's Damage Bonus rides this swing. Added AFTER the crit multiply, alongside the
+    // backstab: it is a flat bonus on the strike, not something a crit doubles.
+    const bashBonus = attacker.swingBash ? this.bashDamageBonus(attacker) : 0;
+    const raw = this.applyCriticalStrike(attacker, this.rollDamage(w)) + bonus + bashBonus;
     const dealt = this.applyDamage(target, raw, attacker.id, w.attackType);
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
@@ -7020,7 +7056,8 @@ export class SimWorld {
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
     if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
     this.applyPillage(attacker, target, dealt); // Pillage: gold off a struck enemy building
-    this.tryBash(attacker, target); // passive: a chance to stun on a landed attack
+    // Bash: rolled when the swing began (see engage), spent here on the blow that landed.
+    if (attacker.swingBash) this.applyBash(attacker, target);
   }
 
   /** Pillage (Asal): a landed attack on an enemy BUILDING gains its owner gold equal to dataA

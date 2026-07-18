@@ -54,7 +54,13 @@ export interface AbilityDef {
   autocast: boolean; // can toggle autocast (Heal, Slow, …)
   name: string;
   icon: string; // command-button BLP path (art)
-  hotkey: string; // cast/learn hotkey letter
+  hotkey: string; // Hotkey — the letter that CASTS it from the command card
+  /** Researchhotkey — the letter that LEARNS it on the hero's skill page. A separate
+   *  string in AbilityStrings, and for a passive it is the ONLY one: Bash ([AHbh]),
+   *  Critical Strike, Devotion Aura, Evasion and every other passive/aura carry
+   *  `Researchhotkey` with no `Hotkey` at all (nothing casts them), so keying the learn
+   *  page off `hotkey` left exactly those buttons mouse-only. Falls back to `hotkey`. */
+  researchHotkey: string;
   buttonX: number; // command-card column when active (buttonpos)
   buttonY: number; // command-card row when active
   learnX: number; // learn-skill page column (researchbuttonpos — usually row 0)
@@ -382,6 +388,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       name: (s && str(s, "Name")) || id,
       icon: f ? str(f, "art") : "",
       hotkey: (s ? (str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
+      researchHotkey: (s ? (str(s, "Researchhotkey").trim()[0] ?? str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
       buttonX: bx,
       buttonY: by,
       learnX: lx,

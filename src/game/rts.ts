@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
+import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
@@ -989,6 +989,31 @@ export class RtsController {
   private mineAt(x: number, y: number, radius: number): SimMine | null {
     const m = this.sim.nearestMine(x, y, radius);
     return m && !this.fogBlocksMine(m) ? m : null;
+  }
+
+  /** The ground item at a point — the ONLY way an item is picked, so the fog gate holds for
+   *  hover, select and right-click-to-pick-up alike (the same deal mineAt gives a mine).
+   *
+   *  An item is NOT remembered under fog the way a building is: a building you have seen
+   *  keeps standing on the terrain as an image, but an item is a live widget and vanishes
+   *  with the eyes on it. Without this gate the cursor read straight through pitch-black
+   *  unexplored ground and named every tome on the map. */
+  private itemAt(x: number, y: number, radius: number): SimItem | null {
+    const it = this.sim.itemAt(x, y, radius);
+    return it && !this.fogBlocksItem(it) ? it : null;
+  }
+
+  /** Whether a ground item's model should be drawn — the renderer's half of the same fog
+   *  rule the pick above enforces, so what you can name is exactly what you can see. */
+  itemVisible(id: number): boolean {
+    const it = this.sim.items.get(id);
+    return !!it && !this.fogBlocksItem(it);
+  }
+
+  /** No eyes on this spot right now → the item under it is neither drawn nor pickable. */
+  private fogBlocksItem(it: { x: number; y: number }): boolean {
+    if (this.vision.revealed) return false;
+    return this.vision.stateAt(it.x, it.y) !== FogState.Visible;
   }
 
   /** Anything that has slipped into the fog leaves the selection and the hover (issue #62).
@@ -2672,7 +2697,7 @@ export class RtsController {
       // while a mine's is broad (300), so an item dropped near a mine would otherwise be
       // unclickable — the mine under the same click would always win. Directly clicking
       // the item selects it; clicking the mine elsewhere still selects the mine.
-      const it = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
+      const it = this.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
       if (it) {
         this.selected.clear();
         this.primary = null;
@@ -2817,7 +2842,7 @@ export class RtsController {
       if (g) {
         // Mirror selectAt's priority: a ground item (tight radius) wins over a mine
         // (broad radius) so an item near a mine gets its own hover ring, not the mine's.
-        const it = this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
+        const it = this.itemAt(g[0], g[1], ITEM_PICK_RADIUS);
         if (it) this.hoveredItem = it.id;
         else this.hoveredMine = this.mineAt(g[0], g[1], 300)?.id ?? null;
       }
@@ -4035,7 +4060,7 @@ export class RtsController {
       const pu = picked !== null ? this.sim.units.get(picked) : undefined;
       const hostilePick = !!(pu && prim && !pu.building && this.sim.hostile(prim, pu));
       const g = hostilePick ? null : this.groundPoint(cssX, cssY);
-      const gitem = g ? this.sim.itemAt(g[0], g[1], ITEM_PICK_RADIUS) : null;
+      const gitem = g ? this.itemAt(g[0], g[1], ITEM_PICK_RADIUS) : null;
       if (gitem) {
         let any = false;
         for (const id of this.selected) {
@@ -4718,7 +4743,7 @@ export class RtsController {
     }
     if (this.hoveredItem !== null) {
       const it = this.sim.items.get(this.hoveredItem);
-      if (!it) return null;
+      if (!it || this.fogBlocksItem(it)) return null;
       const name = this.items.get(it.itemId)?.name || it.itemId;
       return { x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: 32, lines: [{ text: name, color: HOVER_TEXT }] };
     }
