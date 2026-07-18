@@ -7406,7 +7406,7 @@ export class SimWorld {
     }
     this.awardKillXp(u, killerId); // enemy heroes near the kill gain experience
     this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
-    this.dropInventory(u); // a dying hero/inventory-unit drops its held items
+    this.dropInventory(u); // a dying non-hero inventory-unit drops its held items
     this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
@@ -7461,10 +7461,15 @@ export class SimWorld {
     }
   }
 
-  /** A dying inventory-holder (a hero) scatters its held items on the ground. Each one
-   *  keeps its entity id (it's the same item, now lying down) and raises DROP_ITEM —
-   *  WC3 fires the drop event for a dying hero's inventory too. */
+  /** A dying inventory-holder scatters its held items on the ground. Each one keeps its
+   *  entity id (it's the same item, now lying down) and raises DROP_ITEM.
+   *
+   *  A HERO is the exception, and it is the important one: a dead hero in WC3 keeps its
+   *  whole inventory and walks back out of the altar still carrying it. Dropping a hero's
+   *  items would hand the killer six free artifacts and is not how the game plays. Only
+   *  non-hero inventory units (the `AInv` ability on a normal unit) drop what they carry. */
   private dropInventory(u: SimUnit): void {
+    if (u.isHero) return; // items ride with the hero through death and revival
     let n = 0;
     for (let i = 0; i < u.inventory.length; i++) {
       const held = u.inventory[i];
