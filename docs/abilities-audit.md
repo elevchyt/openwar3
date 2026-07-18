@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 293, **done** 155, **passive** 14, **todo** 337.
+Totals: 799 rows — **alias** 297, **done** 155, **passive** 14, **todo** 333.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-231 distinct base `code`s cover the 337 todo rows. Implementing one
+230 distinct base `code`s cover the 333 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -40,7 +40,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Abli` | Blight Dispel Large | 4 |  |  | `Abdl` `Abds` `Abgl` `Abgs` |
 | `Abur` | Burrow | 4 |  | burrow | `Abu2` `Abu3` `Abu5` `Abur` |
 | `ANde` | Demolish | 4 | enemy,structure | demolish | `ANd1` `ANd2` `ANd3` `ANde` |
-| `Aapl` | Disease Cloud | 4 | ground,enemy,organic,neutral |  | `Aap1` `Aap2` `Aap3` `Aap4` |
 | `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
 | `Acan` | Cannibalize | 3 | ground,dead,organic | cannibalize | `Acan` `ACcn` `Acn2` |
@@ -448,10 +447,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Advc` | `Advc` | Devour Cargo | orc |  |  | ground,enemy,neutral,vuln,invu |  |  | Cargo Hold (Devour) |
 |   | `ACde` | `Advm` | Devour Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 |  | Devour Magic(creep) |
 |   | `Advm` | `Advm` | Devour Magic | undead |  |  | air,ground,ward,invu,vuln,tree | 2 |  | Devour Magic |
-|   | `Aap1` | `Aapl` | Disease Cloud | undead |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Abomination) |
-|   | `Aap2` | `Aapl` | Disease Cloud | undead |  |  | ground,enemy,organic,neutral |  |  | Aura - Plague (Plague Ward) |
-|   | `Aap3` | `Aapl` | Disease Cloud | creeps |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Creep) |
-|   | `Aap4` | `Aapl` | Disease Cloud | creeps |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Creep gfx) |
+| ~ | `Aap1` | `Aapl` | Disease Cloud | undead |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Abomination) |
+| ~ | `Aap2` | `Aapl` | Disease Cloud | undead |  |  | ground,enemy,organic,neutral |  |  | Aura - Plague (Plague Ward) |
+| ~ | `Aap3` | `Aapl` | Disease Cloud | creeps |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Creep) |
+| ~ | `Aap4` | `Aapl` | Disease Cloud | creeps |  |  | ground,enemy,organic,neutral | 1 |  | Aura - Plague (Creep gfx) |
 |   | `Apts` | `Apts` | Disease Cloud | undead |  |  | ground,enemy,structure,debris,tree,wall,organic,neutral |  |  | Plague Toss |
 |   | `Adch` | `Adch` | Disenchant | orc |  |  | air,ground,ward,invu,vuln,enemy | 1 |  | Disenchant(old) |
 | ~ | `Adcn` | `Adis` | Disenchant | orc |  |  | air,ground,ward,invu,vuln,tree | 1 |  | Disenchant(new) |

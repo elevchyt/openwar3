@@ -4425,14 +4425,26 @@ export class SimWorld {
         const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
         const radius = lvl.area || 900;
         const effects = make(lvl);
+        // Which side an aura lands on is the ability's own business, read off `targs1`:
+        // almost all of them are `friend,self` and help the owner's army, but Disease Cloud
+        // is `ground,enemy,organic,neutral` and afflicts the other side. A hostile aura also
+        // has to respect the rest of its flags — the plague takes neither a flyer nor a
+        // mechanical unit — so it runs the same targetError gate a cast would.
+        const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+        const hostileAura = F.has("enemy") && !F.has("friend");
         for (const t of this.units.values()) {
-          if (t.building || t.hp <= 0 || t.team !== src.team) continue;
+          if (t.building || t.hp <= 0) continue;
+          if (hostileAura) {
+            if (!this.hostile(src, t) || this.targetError(src, t, def.targetFlags, ab.code) !== null) continue;
+          } else if (t.team !== src.team) continue;
           if (Math.hypot(t.x - src.x, t.y - src.y) > radius) continue;
           const ranged = !!t.weapon?.ranged;
           for (const e of effects) {
             if (e.rangedOnly && !ranged) continue; // Trueshot only helps ranged units
             if (e.meleeOnly && (ranged || !t.weapon)) continue; // Vampiric only helps melee units
-            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: AURA_REFRESH, sourceId: src.id, value: e.value, value2: e.value2 });
+            // An ordinary aura re-applies on a short TTL so it fades as its holder walks
+            // away; one with its own `duration` (Disease Cloud) leaves something behind.
+            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value: e.value, value2: e.value2 });
           }
         }
       }

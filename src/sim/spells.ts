@@ -1374,6 +1374,12 @@ export interface AuraEffect {
   value2?: number;
   rangedOnly?: boolean; // only benefits units with a ranged weapon (Trueshot)
   meleeOnly?: boolean; // only benefits melee units (Vampiric)
+  /** Seconds the buff LINGERS once applied, for auras whose effect outlives the radius.
+   *  Omitted for an ordinary aura, which re-applies on a short TTL and therefore fades the
+   *  moment its holder walks out (see AURA_REFRESH). Disease Cloud is the exception the
+   *  field exists for: catching the plague is not "standing in the cloud", and its own
+   *  column says so — dataA is named "Aura Duration" and reads 120 seconds. */
+  duration?: number;
 }
 
 /** Passive auras, applied each tick by the world to the caster + nearby allies.
@@ -1392,4 +1398,10 @@ export const AURA_BUFFS: Record<string, (lvl: AbilityLevel) => AuraEffect[]> = {
   AUav: (lvl) => [{ kind: "lifesteal", value: d(lvl, 0, 0.15), meleeOnly: true }], // Vampiric — melee life steal
   AEah: (lvl) => [{ kind: "thorns", value: d(lvl, 0, 0.1) }], // Thorns — return melee damage
   Aakb: (lvl) => [{ kind: "damagePct", value: d(lvl, 0, 0.1) }], // War Drums (Kodo) — +attack damage
+  // Disease Cloud (Abomination) — the one HOSTILE aura here. Its targs1 is
+  // `ground,enemy,organic,neutral`, so unlike every entry above it lands on enemies, and
+  // the world picks the side off those flags rather than a rule in the code. dataB is
+  // "Damage per Second" (1) and dataA "Aura Duration" (120), the latter being why the
+  // plague follows a unit that walks out of the cloud instead of ending at its edge.
+  Aapl: (lvl) => [{ kind: "dot", value: d(lvl, 1, 1), duration: d(lvl, 0, 120) }],
 };
