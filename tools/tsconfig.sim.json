@@ -1,0 +1,19 @@
+{
+  "//": "Throwaway config: compile the sim to CommonJS in a temp dir so headless Node tests can drive SimWorld without a browser or the MPQs. Strict typechecking is done by the main `pnpm typecheck` (tsconfig.json includes src/). See tools/sim-targeting-test.cjs.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "types": [],
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "..",
+    "outDir": "../.sim-build",
+    "noEmit": false
+  },
+  "files": ["../src/sim/world.ts"]
+}

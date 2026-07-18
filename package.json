@@ -15,7 +15,9 @@
     "data:browse": "node tools/build-data-browser.mjs --open",
     "data:verify": "node tools/verify-gameplay-constants.mjs",
     "jass:coverage": "node tools/native-coverage.mjs",
-    "jass:test": "tsc -p tools/tsconfig.jass.json && node tools/jass-corpus-test.cjs"
+    "jass:test": "tsc -p tools/tsconfig.jass.json && node tools/jass-corpus-test.cjs",
+    "sim:test": "tsc -p tools/tsconfig.sim.json && node tools/sim-targeting-test.cjs",
+    "data:audit": "node tools/audit-abilities.mjs"
   },
   "dependencies": {
     "events": "^3.3.0",

@@ -4521,7 +4521,26 @@ export class SimWorld {
     // "organic" is the absence of the two inorganic kinds — WC3 has no organic flag on the
     // unit, it has `mechanical` in UnitData and buildings, and everything else is flesh.
     if (F.has("organic") && (target.mechanical || target.building)) return "Notmechanical"; // "Must target organic units."
-    if (F.has("structure") && !target.building) return "Targetstructure";
+    // What the target IS — the same air/structure/ground classification weaponVs() already
+    // applies to Targets Allowed, and for the same reason: a building is NOT "ground" (see
+    // the Chimaera/Mortar Team note there). Spells read the identical flags, so the rule is
+    // shared rather than re-derived.
+    //
+    // `ground` and `air` are the two commonest flags in the table (391 and 296 of the 799
+    // rows) and they are an ALLOW-list: Entangling Roots is `ground,enemy,neutral,organic`
+    // and may not root a Gryphon; the Batrider's Unstable Concoction is `air,neutral,enemy`
+    // and may not be spent on a Grunt. Refusals are the game's own words — commandstrings.txt
+    // [Errors] Noair/Noground/Nostructure.
+    //
+    // Gated only when the data names a target kind at all: plenty of rows restrict by
+    // allegiance alone (Absorb Mana is `player,vuln,invu`) and stay unrestricted.
+    // A structure-ONLY ability keeps the game's positive wording ("Must target a building.")
+    // rather than the generic refusal — that is what Repair says when aimed at a Footman.
+    if (F.has("structure") && !F.has("ground") && !F.has("air") && !target.building) return "Targetstructure";
+    if (F.has("air") || F.has("ground") || F.has("structure")) {
+      const kind = target.building ? "structure" : target.flying ? "air" : "ground";
+      if (!F.has(kind)) return kind === "air" ? "Noair" : kind === "structure" ? "Nostructure" : "Noground";
+    }
     const enemy = F.has("enemy");
     const friend = F.has("friend") || F.has("player"); // `player` = own units (Death Pact/Dark Ritual)
     const self = F.has("self");
@@ -4872,17 +4891,22 @@ export class SimWorld {
       // (Heal/Inner Fire/Frost Armor all carry it — verified in the 1.27 MPQ).
       const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
-      const target = this.autocastTarget(u, lvl.castRange, friendly, def.code, F.has("self"));
+      const target = this.autocastTarget(u, lvl.castRange, friendly, def.code, F.has("self"), def.targetFlags);
       if (target) return this.issueCast(u.id, def.code, target.id);
     }
     return false;
   }
 
-  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean): SimUnit | null {
+  private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = []): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = friendly ? 0.999 : Infinity;
     for (const t of this.units.values()) {
       if (t.building || t.hp <= 0) continue;
+      // The pick must satisfy the same Targets Allowed gate the cast itself will run.
+      // Without this the search happily returns a target issueCast then refuses — and a
+      // Shaman standing between a Gryphon and a Grunt would keep choosing the Gryphon for
+      // his ground-only Lightning Shield and never shield anything at all.
+      if (this.targetError(u, t, flags, code) !== null) continue;
       // Skip the caster unless the spell's flags permit self-targeting (a `self`
       // autocast like Priest Heal can pick itself when it's the most-hurt ally).
       if (t === u && !(friendly && selfOk)) continue;

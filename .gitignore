@@ -14,3 +14,6 @@ Warcraft III/
 
 # JASS interpreter throwaway build (tools/tsconfig.jass.json → CJS for headless tests)
 .jass-build/
+
+# Sim throwaway build (tools/tsconfig.sim.json → CJS for headless targeting tests)
+.sim-build/
