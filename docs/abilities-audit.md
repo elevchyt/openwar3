@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 250, **done** 138, **passive** 14, **todo** 397.
+Totals: 799 rows — **alias** 272, **done** 146, **passive** 14, **todo** 367.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-249 distinct base `code`s cover the 397 todo rows. Implementing one
+241 distinct base `code`s cover the 367 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -35,9 +35,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `AIbl` | Build Tiny Altar of Kings | 8 |  |  | `AIbh` `AIbs` `AIbb` `AIbl` `AIbf` `AIbg` `AIbr` `AIbt` |
 | `AIfs` | Item Doom Guard Summon | 8 |  |  | `AIfu` `AIfh` `AIff` `AIir` `AIfd` `AIfr` `AIfs` `AIuw` |
 | `Asph` | Sphere | 7 |  |  | `Asp1` `Asp2` `Asp3` `Asp4` `Asp5` `Asp6` `Asph` |
-| `Aroa` | Roar | 6 | air,ground,friend,self | roar | `ACr1` `ACro` `AIrr` `Ara2` `Aroa` `Ahnl` |
 | `Acyc` | Cyclone | 5 | ground,enemy,neutral,organic | cyclone | `ACcy` `Acny` `Acyc` `AIcy` `SCc1` |
-| `ANfd` | Finger of Death | 5 | air,ground,nonhero,structure,ancient,nonancient |  | `Afod` `AIfz` `ANfd` `ACf3` `ACfd` |
 | `AImm` | Item Mana Bonus | 5 |  |  | `AIbm` `AImb` `AImz` `AI2m` `AImv` |
 | `Amim` | Spell Immunity | 5 |  |  | `ACm2` `ACm3` `ACmi` `AImx` `Amim` |
 | `Aadm` | Abolish Magic | 4 | air,ground,ward,invu,vuln,tree | autodispel | `Aadm` `ACd2` `ACdm` `Andm` |
@@ -48,18 +46,12 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
 | `AIfb` | Item Attack Fire Bonus | 4 | ground,air,ward |  | `AIfb` `AIgd` `AIfw` `AIdn` |
 | `Asds` | Kaboom! | 4 | ground,structure,debris,enemy,neutral | selfdestruct | `Asd2` `Asd3` `Asdg` `Asds` |
-| `Auhf` | Unholy Frenzy | 4 | air,ground,organic | unholyfrenzy | `ACuf` `AIuf` `Auhf` `Suhf` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
 | `Adda` | AOE damage upon death | 3 | ground,structure,debris,enemy,ward |  | `Adda` `Amnx` `Amnz` |
 | `Acan` | Cannibalize | 3 | ground,dead,organic | cannibalize | `Acan` `ACcn` `Acn2` |
-| `Acri` | Cripple | 3 | air,ground,enemy,organic,neutral | cripple | `ACcr` `Acri` `Scri` |
-| `Afae` | Faerie Fire | 3 | air,ground,enemy,neutral | faeriefire | `ACff` `Afa2` `Afae` |
 | `Afbk` | Feedback | 3 | air,ground,enemy,neutral |  | `Afbb` `Afbk` `Afbt` |
-| `ANfb` | Firebolt | 3 | air,ground,organic,enemy,neutral |  | `ACfb` `ANfb` `Awfb` |
-| `Anhe` | Heal | 3 | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | heal | `Anh1` `Anh2` `Anhe` |
 | `Aoar` | Healing Ward Aura | 3 | ground,air,organic,vuln,invu,friend,neutral |  | `Aoar` `ACnr` `AIgx` |
 | `AIdi` | Item Dispel | 3 | air,ground,ward,invu,vuln,tree |  | `AIdi` `AIds` `APdi` |
-| `Arej` | Rejuvenation | 3 | air,ground,friend,vuln,invu,self,organic,neutral | rejuvination | `ACr2` `ACrj` `Arej` |
 | `Arsk` | Resistant Skin | 3 |  |  | `ACrk` `ACsk` `Arsk` |
 | `Aspd` | Spawn Hydra | 3 |  |  | `Aspy` `Aspt` `Aspd` |
 | `ANsu` | Submerge | 3 |  | submerge | `Asb1` `Asb2` `Asb3` |
@@ -423,9 +415,9 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `Acpf` | `Acpf` | Corporeal Form | orc |  |  |  | 1 | corporealform | Corporeal Form |
 |   | `Acor` | `Acor` | Corrosive Breath | nightelf |  |  | structure | 1 | corrosivebreath | Corrosive Breath |
 |   | `Agyd` | `Agyd` | Create Corpse | undead |  |  |  | 1 |  | Graveyard |
-|   | `ACcr` | `Acri` | Cripple | creeps |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple (creep) |
-|   | `Acri` | `Acri` | Cripple | undead |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple |
-|   | `Scri` | `Acri` | Cripple | undead |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple (Warlock) |
+| ~ | `ACcr` | `Acri` | Cripple | creeps |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple (creep) |
+| x | `Acri` | `Acri` | Cripple | undead |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple |
+| ~ | `Scri` | `Acri` | Cripple | undead |  |  | air,ground,enemy,organic,neutral |  | cripple | Cripple (Warlock) |
 | ~ | `ACct` | `AOcr` | Critical Strike | creeps |  |  | air,ground,enemy,neutral |  |  | Critical Strike (creep) |
 | ~ | `AIcs` | `AOcr` | Critical Strike | other |  | I | air,ground,enemy,neutral |  |  | Critical Strike (item) |
 | x | `AOcr` | `AOcr` | Critical Strike | orc | H |  | air,ground,enemy,neutral |  |  | Blade Master - Critical Strike |
@@ -513,9 +505,9 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIev` | `AEev` | Evasion | other |  | I |  |  |  | Evasion |
 |   | `Aexh` | `Aexh` | Exhume Corpses | undead |  |  |  |  |  | Exhume |
 |   | `ANfy` | `ANfy` | Factory | creeps |  |  |  |  |  | Factory |
-|   | `ACff` | `Afae` | Faerie Fire | creeps |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire (creep) |
-|   | `Afa2` | `Afae` | Faerie Fire | nightelf |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire |
-|   | `Afae` | `Afae` | Faerie Fire | nightelf |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire |
+| ~ | `ACff` | `Afae` | Faerie Fire | creeps |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire (creep) |
+| ~ | `Afa2` | `Afae` | Faerie Fire | nightelf |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire |
+| x | `Afae` | `Afae` | Faerie Fire | nightelf |  |  | air,ground,enemy,neutral |  | faeriefire | Faerie Fire |
 | x | `AEfk` | `AEfk` | Fan of Knives | nightelf | H |  | air,ground,enemy,organic | 2 | fanofknives | Warden - Fan of Knives |
 | x | `AOfs` | `AOfs` | Far Sight | orc | H |  |  |  | farsight | Farseer - Far Sight |
 |   | `Afbb` | `Afbk` | Feedback | creeps |  |  | air,ground,enemy,neutral | 1 |  | Feedback (Spirit Beast) |
@@ -525,14 +517,14 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACs9` | `AOsf` | Feral Spirit | creeps |  |  |  | 1 | spiritwolf | Feral Spirit (creep - pig) |
 | ~ | `ACsf` | `AOsf` | Feral Spirit | creeps |  |  |  | 1 | spiritwolf | Feral Spirit (creep) |
 | x | `AOsf` | `AOsf` | Feral Spirit | orc | H |  |  | 1 | spiritwolf | Farseer - Spirit Wolf |
-|   | `Afod` | `ANfd` | Finger of Death | creeps |  |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Death |
-|   | `AIfz` | `ANfd` | Finger of Death | other |  | I | air,ground,enemy,organic,neutral | 1 |  | Finger of Death (item) |
-|   | `ANfd` | `ANfd` | Finger of Death | creeps | H |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Death |
-|   | `ACf3` | `ANfd` | Finger of Pain | creeps |  |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Pain (2,1 Button) |
-|   | `ACfd` | `ANfd` | Finger of Pain | creeps |  |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Pain |
-|   | `ACfb` | `ANfb` | Firebolt | creeps |  |  | air,ground,organic,enemy,neutral | 1 |  | Fire Bolt (creep) |
-|   | `ANfb` | `ANfb` | Firebolt | creeps | H |  | air,ground,organic,enemy,neutral | 1 |  | Fire Bolt |
-|   | `Awfb` | `ANfb` | Firebolt | creeps |  |  | air,ground,organic,enemy,neutral | 1 |  | Fire Bolt (warlock) |
+| ~ | `Afod` | `ANfd` | Finger of Death | creeps |  |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Death |
+| ~ | `AIfz` | `ANfd` | Finger of Death | other |  | I | air,ground,enemy,organic,neutral | 1 |  | Finger of Death (item) |
+| x | `ANfd` | `ANfd` | Finger of Death | creeps | H |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Death |
+| ~ | `ACf3` | `ANfd` | Finger of Pain | creeps |  |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Pain (2,1 Button) |
+| ~ | `ACfd` | `ANfd` | Finger of Pain | creeps |  |  | air,ground,nonhero,structure,ancient,nonancient | 1 |  | Finger of Pain |
+| ~ | `ACfb` | `ANfb` | Firebolt | creeps |  |  | air,ground,organic,enemy,neutral | 1 |  | Fire Bolt (creep) |
+| x | `ANfb` | `ANfb` | Firebolt | creeps | H |  | air,ground,organic,enemy,neutral | 1 |  | Fire Bolt |
+| ~ | `Awfb` | `ANfb` | Firebolt | creeps |  |  | air,ground,organic,enemy,neutral | 1 |  | Fire Bolt (warlock) |
 |   | `Aflk` | `Aflk` | Flak Cannons | human |  |  | air,enemy,neutral | 2 |  | Flak Cannon |
 | ~ | `ACfs` | `AHfs` | Flame Strike | creeps |  |  | ground,enemy,neutral,friend,structure,self | 2 | flamestrike | Flame Strike (Creep) |
 | x | `AHfs` | `AHfs` | Flame Strike | human | H |  | ground,enemy,neutral,friend,structure,self,tree,debris | 2 | flamestrike | Blood Mage - Flame Strike |
@@ -583,9 +575,9 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `Ahrl` | `Ahrl` | Harvest | undead |  |  | tree,alive,dead |  | harvest | Harvest Lumber |
 | ~ | `ANha` | `Ahar` | Harvest | other |  |  | tree,alive,dead |  | harvest | Harvest (naga) |
 | x | `Ahea` | `Ahea` | Heal | human |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal |
-|   | `Anh1` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep Normal) |
-|   | `Anh2` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep High) |
-|   | `Anhe` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep Normal) |
+| ~ | `Anh1` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep Normal) |
+| ~ | `Anh2` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep High) |
+| x | `Anhe` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep Normal) |
 | ~ | `AIrl` | `AIrg` | Healing Salve | other |  | I | air,ground,friend,self,organic,vuln,invu | 2 |  | Potion of Life Regen |
 | x | `ANhs` | `ANhs` | Healing Spray | creeps | H |  | ground,air,organic | 1 | healingspray | Alchemist - Healing Spray |
 | ~ | `AChw` | `Ahwd` | Healing Ward | creeps |  |  |  |  | healingward | Healing Ward (creep) |
@@ -870,9 +862,9 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AOr3` | `AOre` | Reincarnation | orc | H |  |  | 1 |  | Cairne - Reincarnation |
 | x | `AOre` | `AOre` | Reincarnation | orc | H |  |  | 1 |  | Chieftain - Reincarnation |
 |   | `Arbr` | `Arbr` | Reinforced Burrows Upgrade | orc |  |  |  | 1 |  | Reinforced Burrows |
-|   | `ACr2` | `Arej` | Rejuvenation | creeps |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination (Furbolg) |
-|   | `ACrj` | `Arej` | Rejuvenation | creeps |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination (creep) |
-|   | `Arej` | `Arej` | Rejuvenation | nightelf |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination |
+| ~ | `ACr2` | `Arej` | Rejuvenation | creeps |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination (Furbolg) |
+| ~ | `ACrj` | `Arej` | Rejuvenation | creeps |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination (creep) |
+| x | `Arej` | `Arej` | Rejuvenation | nightelf |  |  | air,ground,friend,vuln,invu,self,organic,neutral |  | rejuvination | Rejuvination |
 |   | `Aren` | `Aren` | Renew | nightelf |  |  | friend,ground,air,structure,bridge,alive,dead,invu,vuln |  | renew | Renew |
 | ~ | `Ahrp` | `Arep` | Repair | human |  |  | mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln |  | repair | Repair (Human) |
 | x | `Arep` | `Arep` | Repair | orc |  |  | mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln |  | repair | Repair (Orc) |
@@ -892,11 +884,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Arng` | `Arng` | Revenge | other |  |  |  | 3 |  | Revenge |
 |   | `Arev` | `Arev` | Revive Hero | other |  |  |  | 1 | revive | Revive |
 |   | `Aawa` | `Aawa` | Revive Hero Instantly | other |  |  |  | 1 | awaken | Awaken |
-|   | `ACr1` | `Aroa` | Roar | creeps |  |  | air,ground,friend,self | 1 | roar | Roar (creep) -- Skeletal Orc |
-|   | `ACro` | `Aroa` | Roar | creeps |  |  | air,ground,friend,self | 1 | roar | Roar (creep) |
-|   | `AIrr` | `Aroa` | Roar | other |  | I | air,ground,friend,self | 1 | roar | Roar |
-|   | `Ara2` | `Aroa` | Roar | nightelf |  |  | air,ground,friend,self | 1 | roar | Roar |
-|   | `Aroa` | `Aroa` | Roar | nightelf |  |  | air,ground,friend,self | 1 | roar | Roar |
+| ~ | `ACr1` | `Aroa` | Roar | creeps |  |  | air,ground,friend,self | 1 | roar | Roar (creep) -- Skeletal Orc |
+| ~ | `ACro` | `Aroa` | Roar | creeps |  |  | air,ground,friend,self | 1 | roar | Roar (creep) |
+| ~ | `AIrr` | `Aroa` | Roar | other |  | I | air,ground,friend,self | 1 | roar | Roar |
+| ~ | `Ara2` | `Aroa` | Roar | nightelf |  |  | air,ground,friend,self | 1 | roar | Roar |
+| x | `Aroa` | `Aroa` | Roar | nightelf |  |  | air,ground,friend,self | 1 | roar | Roar |
 | ~ | `ANg1` | `ANrg` | Robo-Goblin | creeps | H |  |  |  | robogoblin | Tinkerer - Robo-Goblin (Level 1) |
 | ~ | `ANg2` | `ANrg` | Robo-Goblin | creeps | H |  |  |  | robogoblin | Tinkerer - Robo-Goblin (Level 2) |
 | ~ | `ANg3` | `ANrg` | Robo-Goblin | creeps | H |  |  |  | robogoblin | Tinkerer - Robo-Goblin (Level 3) |
@@ -1025,7 +1017,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `Arsq` | `ANsq` | Summon Quilbeast | creeps | H |  |  | 1 | summonquillbeast | Rexxar - Summon Quilbeast |
 | ~ | `ACwe` | `AHwe` | Summon Sea Elemental | creeps |  |  |  |  | waterelemental | Summon Sea Elemental |
 | x | `AHwe` | `AHwe` | Summon Water Elemental | human | H |  |  |  | waterelemental | Arch Mage - Water Elemental |
-|   | `Ahnl` | `Aroa` | Summoning Ritual | naga |  |  | notself | 1 | roar | null roar (summoner) |
+| ~ | `Ahnl` | `Aroa` | Summoning Ritual | naga |  |  | notself | 1 | roar | null roar (summoner) |
 |   | `ANta` | `Atau` | Taunt | creeps |  |  | air,ground,enemy,vuln,invu | 1 | taunt | Taunt(Creep) |
 |   | `Atau` | `Atau` | Taunt | nightelf |  |  | air,ground,enemy,vuln,invu | 1 | taunt | Taunt |
 | ~ | `ACah` | `AEah` | Thorns Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Thorns Aura (creep) |
@@ -1049,10 +1041,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Ault` | `Ault` | Ultravision | nightelf |  |  |  |  |  | Ultravision |
 | ~ | `ACua` | `AUau` | Unholy Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Unholy Aura (creep) |
 | x | `AUau` | `AUau` | Unholy Aura | undead | H |  | air,ground,friend,self,vuln,invu | 1 |  | Death Knight - Unholy Aura |
-|   | `ACuf` | `Auhf` | Unholy Frenzy | creeps |  |  | air,ground,organic |  | unholyfrenzy | Unholy Frenzy (creep) |
-|   | `AIuf` | `Auhf` | Unholy Frenzy | other |  | I | air,ground,organic |  | unholyfrenzy | Unholy Frenzy (item) |
-|   | `Auhf` | `Auhf` | Unholy Frenzy | undead |  |  | air,ground,organic |  | unholyfrenzy | Unholy Frenzy |
-|   | `Suhf` | `Auhf` | Unholy Frenzy | creeps |  |  | air,ground,organic |  | unholyfrenzy | Unholy Frenzy (Warlock) |
+| ~ | `ACuf` | `Auhf` | Unholy Frenzy | creeps |  |  | air,ground,organic |  | unholyfrenzy | Unholy Frenzy (creep) |
+| ~ | `AIuf` | `Auhf` | Unholy Frenzy | other |  | I | air,ground,organic |  | unholyfrenzy | Unholy Frenzy (item) |
+| x | `Auhf` | `Auhf` | Unholy Frenzy | undead |  |  | air,ground,organic |  | unholyfrenzy | Unholy Frenzy |
+| ~ | `Suhf` | `Auhf` | Unholy Frenzy | creeps |  |  | air,ground,organic |  | unholyfrenzy | Unholy Frenzy (Warlock) |
 | ~ | `Aien` | `AInv` | Unit Inventory | other |  |  |  |  |  | Inventory(2 slot unit) Night Elf |
 | ~ | `Aihn` | `AInv` | Unit Inventory | other |  |  |  |  |  | Inventory(2 slot unit) Human |
 | ~ | `Aion` | `AInv` | Unit Inventory | other |  |  |  |  |  | Inventory(2 slot unit) Orc |

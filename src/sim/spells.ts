@@ -563,6 +563,109 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // (no weapon) becomes immune to physical / unable to attack / +magic damage.
   Acpf: (api, caster) => api.toggleSpiritForm(caster),
 
+  // === Creep & neutral casters ===
+  //
+  // Every Data index below is named by the game itself: AbilityMetaData.slk's `useSpecific`
+  // rows point at WorldEditStrings.txt, which spells out what each column of each of these
+  // abilities means ("WESTRING_AEVAL_CRI1 = Movement Speed Reduction (%)"). Nothing here is
+  // inferred from watching the ability — see docs and the ability-data-column-names memory.
+
+  // Roar — the caster bellows and every FRIENDLY unit within `area` hits harder for the
+  // duration. dataA "Damage Increase (%)", dataB "Defense Increase", dataC "Life
+  // Regeneration Rate". The stock Roar carries only dataA (0.25), so the armour and regen
+  // halves are applied only when a row actually sets them — a custom map may.
+  Aroa: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
+    for (const t of alliesInArea(api, caster, caster.x, caster.y, lvl.area || 500, { self: true })) {
+      const time = dur(lvl, t) || 45;
+      api.applyBuff(t, { kind: "damagePct", group: "roar", timeLeft: time, sourceId: caster.id, value: d(lvl, 0, 0.25), ...fx(def) });
+      const armor = d(lvl, 1, 0);
+      if (armor) api.applyBuff(t, { kind: "armor", group: "roar", timeLeft: time, sourceId: caster.id, value: armor });
+      const regen = d(lvl, 2, 0);
+      if (regen) api.applyBuff(t, { kind: "hpRegen", group: "roar", timeLeft: time, sourceId: caster.id, value: regen });
+    }
+  },
+
+  // Fire Bolt — the creeps' Storm Bolt: a missile that deals dataA "Damage" and stuns for
+  // the row's duration. Same shape as AHtb, and like it the missile is the caller's
+  // business (world.ts spawns it off def.missileArt) — the handler is the impact.
+  ANfb: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    api.spellDamage(t, d(lvl, 0, 100), caster.id);
+    api.applyBuff(t, { kind: "stun", group: "firebolt", timeLeft: dur(lvl, t) || 2, sourceId: caster.id, ...fx(def) });
+  },
+
+  // Finger of Death — one enormous hit, no stun and no duration. dataC is the "Damage"
+  // (500); dataA and dataB are "Graphic Delay" and "Graphic Duration", i.e. presentation,
+  // which is why the damage is NOT read from dataA the way most nukes are.
+  ANfd: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    api.spellDamage(t, d(def.levelData[rank - 1], 2, 500), caster.id);
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Heal (creep) — the neutral casters' version of the Priest's Heal, dataA "Hit Points
+  // Gained". Shares Ahea's rules: allies only, and never a mechanical unit.
+  Anhe: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.ally(caster, t) || t.mechanical) return;
+    api.spellHeal(t, d(def.levelData[rank - 1], 0, 15));
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Rejuvenation — dataA "Hit Points Gained" and dataB "Mana Points Gained", both restored
+  // ACROSS the duration rather than at once (the Druid of the Claw's 400 over 12s). Same
+  // total-over-duration shape as the regeneration items, and the mana half is likewise a
+  // timed manaRegen bonus.
+  Arej: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.ally(caster, t)) return;
+    const lvl = def.levelData[rank - 1];
+    const time = dur(lvl, t) || 12;
+    const hp = d(lvl, 0, 400);
+    const mana = d(lvl, 1, 0);
+    if (hp > 0) api.applyBuff(t, { kind: "hot", group: "rejuv", timeLeft: time, sourceId: caster.id, value: hp / time, ...fx(def) });
+    if (mana > 0) api.applyBuff(t, { kind: "manaRegen", group: "rejuv", timeLeft: time, sourceId: caster.id, value: mana / time });
+  },
+
+  // Cripple — dataA "Movement Speed Reduction (%)", dataB "Attack Speed Reduction (%)",
+  // dataC "Damage Reduction". The third is what separates it from a plain Slow: the target
+  // also hits for less, so it rides a NEGATIVE damagePct buff.
+  Acri: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.hostile(caster, t)) return;
+    const lvl = def.levelData[rank - 1];
+    const time = dur(lvl, t) || 60;
+    api.applyBuff(t, { kind: "slow", group: "cripple", timeLeft: time, sourceId: caster.id, value: d(lvl, 0, 0.75), value2: d(lvl, 1, 0.5), ...fx(def) });
+    const cut = d(lvl, 2, 0.5);
+    if (cut) api.applyBuff(t, { kind: "damagePct", group: "cripple", timeLeft: time, sourceId: caster.id, value: -cut });
+  },
+
+  // Faerie Fire — dataA "Defense Reduction" (4), as a negative armour buff. (Its other
+  // column, dataB, is "Always Autocast" — a flag about the button, not an effect.)
+  Afae: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t || !api.hostile(caster, t)) return;
+    const lvl = def.levelData[rank - 1];
+    api.applyBuff(t, { kind: "armor", group: "faeriefire", timeLeft: dur(lvl, t) || 90, sourceId: caster.id, value: -d(lvl, 0, 4), ...fx(def) });
+  },
+
+  // Unholy Frenzy — dataA "Attack Speed Bonus (%)" and dataB "Damage per Second", the
+  // bargain the spell IS: the target swings faster and bleeds for it. Cast on allies in
+  // WC3 (a Necromancer frenzies his own front line), so allegiance is not restricted here.
+  Auhf: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    const time = dur(lvl, t) || 45;
+    api.applyBuff(t, { kind: "haste", group: "unholyfrenzy", timeLeft: time, sourceId: caster.id, value: 0, value2: d(lvl, 0, 0.75), ...fx(def) });
+    api.applyBuff(t, { kind: "dot", group: "unholyfrenzy", timeLeft: time, sourceId: caster.id, value: d(lvl, 1, 4) });
+  },
+
   // Devour (Kodo Beast) — swallow an enemy land non-hero unit whole; it's digested inside
   // (tickDevour) and freed if the Kodo is slain first.
   Adev: (api, caster, def, _rank, ctx) => {

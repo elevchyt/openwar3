@@ -272,6 +272,17 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Adev: { target: "unit" }, // Devour (Kodo Beast) — swallow & digest an enemy land unit
   Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
   Acpf: { target: "none" }, // Corporeal/Ethereal Form (Spirit Walker) — self toggle between forms
+  // === Creep & neutral casters (issue: ability audit) ===
+  // Each Data column's meaning below is the game's own, read from AbilityMetaData.slk's
+  // `useSpecific` rows through WorldEditStrings.txt — not inferred from behaviour.
+  Aroa: { target: "none" }, // Roar — PBAoE friendly damage buff (no Rng, Area 500)
+  ANfb: { target: "unit" }, // Fire Bolt — missile: damage + stun (the creep Storm Bolt)
+  ANfd: { target: "unit" }, // Finger of Death — single-target nuke
+  Anhe: { target: "unit", autocast: true }, // Heal (creep) — Orderon/Orderoff = autocast
+  Arej: { target: "unit" }, // Rejuvenation — hp (and mana) restored over time
+  Acri: { target: "unit" }, // Cripple — slow move & attack, and cut the target's damage
+  Afae: { target: "unit", autocast: true }, // Faerie Fire — armour reduction (Orderon/Orderoff)
+  Auhf: { target: "unit" }, // Unholy Frenzy — attack speed at the cost of the target's life
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the
