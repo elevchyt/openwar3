@@ -5510,13 +5510,17 @@ export class MapViewerScene {
       this.cursorStyleEl = document.createElement("style");
       document.head.appendChild(this.cursorStyleEl);
     }
-    // Normal = the WC3 arrow everywhere; whenever the DOM target reticle is shown
-    // over the MAP (an armed order OR hovering a unit), hide the OS cursor there
-    // and let the reticle follow the mouse. Scoped to the map canvas so the
-    // arrow still shows over HUD buttons (whose hover can't reach the reticle).
+    // Normal = the WC3 arrow everywhere; whenever the DOM cursor overlay is shown,
+    // hide the OS cursor underneath it so only ONE cursor is ever visible.
+    //  - `reticle-on` (the recoloured hover HAND) only ever happens over the map, so
+    //    it's scoped to the canvas and HUD buttons keep the plain arrow.
+    //  - `armed-on` (an armed order's target reticle) is body-wide: in WC3 the reticle
+    //    IS the cursor while an order is armed, over the console too. Scoping this one
+    //    to #map was the bug — hovering the HUD showed the reticle AND the hand.
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
-      `body.in-game.reticle-on #map { cursor: none !important; }`;
+      `body.in-game.reticle-on #map { cursor: none !important; }\n` +
+      `body.in-game.armed-on, body.in-game.armed-on * { cursor: none !important; }`;
   }
 
   /** The real WC3 target reticle (row 2 of the race cursor sheet: a circle with
@@ -5959,7 +5963,7 @@ export class MapViewerScene {
     this.metrics.hide();
     this.hud?.hide();
     this.portraitViewer?.stop();
-    document.body.classList.remove("reticle-on"); // restore the OS/WC3 cursor
+    document.body.classList.remove("reticle-on", "armed-on"); // restore the OS/WC3 cursor
     this.hideCursorOverlay();
     this.updateCarriedItem(-1, 0, 0); // never leave an item stuck to the cursor
   }
@@ -6051,7 +6055,7 @@ export class MapViewerScene {
     this.cursorSheet = null;
     this.reticleUrls.clear();
     this.handUrls.clear();
-    document.body.classList.remove("reticle-on", "carrying-item");
+    document.body.classList.remove("reticle-on", "armed-on", "carrying-item");
     document.body.style.cursor = ""; // restore the default cursor off the map
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
@@ -6830,7 +6834,7 @@ export class MapViewerScene {
     const carrySlot = mode === "item" && this.rts.armedItem?.mode === "move" ? this.rts.armedItem.slot : -1;
     this.updateCarriedItem(carrySlot, clientX, clientY);
     if (carrySlot >= 0) {
-      document.body.classList.remove("reticle-on"); // let the OS hand cursor show through
+      document.body.classList.remove("reticle-on", "armed-on"); // let the OS hand cursor show through
       return this.hideCursorOverlay();
     }
     const hover = this.rts.hoverInfo();
@@ -6848,10 +6852,12 @@ export class MapViewerScene {
     }
     const url = kind === "reticle" ? this.reticleUrl(colorKey) : kind === "hand" ? this.handCursorUrl(colorKey) : "";
     if (!kind || !url) {
-      document.body.classList.remove("reticle-on");
+      document.body.classList.remove("reticle-on", "armed-on");
       return this.hideCursorOverlay();
     }
-    document.body.classList.add("reticle-on");
+    // The armed reticle owns the cursor screen-wide; the hover hand only over the map.
+    document.body.classList.toggle("armed-on", kind === "reticle");
+    document.body.classList.toggle("reticle-on", kind === "hand");
     if (!this.reticleEl) {
       this.reticleEl = document.createElement("div");
       document.body.appendChild(this.reticleEl);

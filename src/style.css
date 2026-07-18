@@ -851,8 +851,11 @@ body.in-game .menu-panel { display: none; }
    Two forms, both recoloured per allegiance (green friendly / yellow neutral /
    red enemy) and pulsing COLOUR ONLY (constant size):
    - .reticle: the real WC3 target reticle (row 2 of the race cursor sheet),
-     shown only while an order is armed (Move/Attack/Patrol/…).
-   - .hand: the race hand cursor, tinted, shown while merely hovering a unit. */
+     shown only while an order is armed (Move/Attack/Patrol/…). It replaces the
+     cursor over the WHOLE screen, console included (body.armed-on) — it IS the
+     cursor while you're aiming, so nothing else may draw one underneath it.
+   - .hand: the race hand cursor, tinted, shown while merely hovering a unit —
+     map-only, so the HUD keeps the plain arrow (body.reticle-on, #map). */
 /* Directional edge-scroll cursor: an arrow at the pointer pointing the pan way. */
 .scroll-arrow {
   position: fixed;
