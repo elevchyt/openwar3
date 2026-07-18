@@ -35,6 +35,10 @@ export interface SpellApi {
   requestSummon(unitId: string, x: number, y: number, facing: number, owner: number, team: number, durationSec: number, sourceId: number, art?: { summon: string; unsummon: string }, atPoint?: boolean): void;
   /** Raise up to `max` friendly corpses near a point back to life (Resurrection). */
   raiseNearbyCorpses(x: number, y: number, radius: number, owner: number, team: number, max: number): number;
+  /** Consume ONE corpse within `radius` — the Ghoul's meal. Returns false when there is
+   *  nothing to eat, which is the difference between raising (take what you can, any number)
+   *  and cannibalising (one body, and no ability without it). */
+  consumeCorpse(x: number, y: number, radius: number): boolean;
   /** Spirit Link: mark `unit` as sharing `share` of its damage across the `group` unit ids
    *  for `durationSec`. Applied to every member so the split is symmetric. */
   linkSpirits(unit: SimUnit, group: number[], durationSec: number, share: number): void;
@@ -672,6 +676,27 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // it. Its allegiance is deliberately unrestricted — the same cast cleanses a poisoned
   // ally and strips an enemy's Bloodlust, which is exactly why `targs1` names neither
   // `friend` nor `enemy`.
+  // Cannibalize (Ghoul) — eat a nearby corpse and regenerate off it. dataA is "Hit Points
+  // per Second" (10) across the row's duration (33s), so a body is worth 330 hit points if
+  // the meal is not interrupted.
+  //
+  // dataB is "Max Hit Points" (800) and is deliberately unused: at the stock rate and
+  // duration the total is 330, so the cap cannot bind, and inventing a meaning for a number
+  // that never takes effect would be guessing. A custom map that raises the rate would need
+  // it, and that is the point at which to work out what it actually caps.
+  //
+  // No corpse, no ability — the cast simply does nothing rather than granting the buff,
+  // which is why this reads the corpse first.
+  Acan: (api, caster, def, rank, ctx) => {
+    const lvl = def.levelData[rank - 1];
+    const reach = lvl.castRange || 50;
+    if (!api.consumeCorpse(ctx.x || caster.x, ctx.y || caster.y, reach)) return;
+    api.applyBuff(caster, {
+      kind: "hot", group: "cannibalize", timeLeft: dur(lvl, caster) || 33,
+      sourceId: caster.id, value: d(lvl, 0, 10), ...fx(def),
+    });
+  },
+
   Aadm: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;

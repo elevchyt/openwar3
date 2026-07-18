@@ -285,6 +285,8 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Auhf: { target: "unit" }, // Unholy Frenzy — attack speed at the cost of the target's life
   Aadm: { target: "unit", autocast: true }, // Abolish Magic — single-target dispel (Orderon/Orderoff)
   Asds: { target: "unit" }, // Kaboom! — the Goblin Sapper walks in and detonates (Rng 0)
+  // Cannibalize — no target: the Ghoul eats whatever corpse is under its feet (Rng 50).
+  Acan: { target: "none" },
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the

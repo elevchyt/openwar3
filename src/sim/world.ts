@@ -5760,6 +5760,25 @@ export class SimWorld {
     return raised;
   }
 
+  /** Eat the nearest corpse within `radius` (Cannibalize). Reuses the same `raised` flag
+   *  raising does — from the corpse's point of view being eaten and being raised are the
+   *  same fate, and the renderer already hides a corpse the moment it is set. Nearest
+   *  first, so a Ghoul standing between two bodies takes the one it is on. */
+  consumeCorpseInternal(x: number, y: number, radius: number): boolean {
+    let best: SimCorpse | undefined;
+    let bestDist = Infinity;
+    for (const c of this.corpses.values()) {
+      if (c.raised || c.mechanical) continue; // a mechanical wreck is not a meal
+      const dist = Math.hypot(c.x - x, c.y - y);
+      if (dist > radius || dist >= bestDist) continue;
+      best = c;
+      bestDist = dist;
+    }
+    if (!best) return false;
+    best.raised = true;
+    return true;
+  }
+
   private unitsInAreaInternal(x: number, y: number, radius: number): SimUnit[] {
     const out: SimUnit[] = [];
     for (const t of this.units.values()) {
@@ -5794,6 +5813,7 @@ export class SimWorld {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint });
     },
     raiseNearbyCorpses: (x, y, r, owner, team, max) => this.raiseNearbyCorpsesInternal(x, y, r, owner, team, max),
+    consumeCorpse: (x, y, r) => this.consumeCorpseInternal(x, y, r),
     linkSpirits: (unit, group, durationSec, share) => {
       unit.linkGroup = [...group];
       unit.linkT = durationSec;

@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 297, **done** 155, **passive** 14, **todo** 333.
+Totals: 799 rows — **alias** 299, **done** 156, **passive** 14, **todo** 330.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-230 distinct base `code`s cover the 333 todo rows. Implementing one
+229 distinct base `code`s cover the 330 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -42,7 +42,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ANde` | Demolish | 4 | enemy,structure | demolish | `ANd1` `ANd2` `ANd3` `ANde` |
 | `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
-| `Acan` | Cannibalize | 3 | ground,dead,organic | cannibalize | `Acan` `ACcn` `Acn2` |
 | `Afbk` | Feedback | 3 | air,ground,enemy,neutral |  | `Afbb` `Afbk` `Afbt` |
 | `Aoar` | Healing Ward Aura | 3 | ground,air,organic,vuln,invu,friend,neutral |  | `Aoar` `ACnr` `AIgx` |
 | `AIdi` | Item Dispel | 3 | air,ground,ward,invu,vuln,tree |  | `AIdi` `AIds` `APdi` |
@@ -364,9 +363,9 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Abdt` | `Abdt` | Burrow Detection | other |  |  |  |  |  | Burrow Detection (Flyers) |
 |   | `Amil` | `Amil` | Call to Arms | human |  |  |  |  | militia | Militia |
 |   | `Amic` | `Amic` | Call To Arms | human |  |  |  |  | townbellon | Militia Conversion |
-|   | `Acan` | `Acan` | Cannibalize | undead |  |  | ground,dead,organic |  | cannibalize | Cannibalize |
-|   | `ACcn` | `Acan` | Cannibalize | creeps |  |  | ground,dead,organic |  | cannibalize | Cannibalize (creep) |
-|   | `Acn2` | `Acan` | Cannibalize | undead |  |  | ground,dead,organic |  | cannibalize | Cannibalize (Abomination) |
+| x | `Acan` | `Acan` | Cannibalize | undead |  |  | ground,dead,organic |  | cannibalize | Cannibalize |
+| ~ | `ACcn` | `Acan` | Cannibalize | creeps |  |  | ground,dead,organic |  | cannibalize | Cannibalize (creep) |
+| ~ | `Acn2` | `Acan` | Cannibalize | undead |  |  | ground,dead,organic |  | cannibalize | Cannibalize (Abomination) |
 | ~ | `Sch2` | `Amtc` | Cargo Hold | undead |  |  | dead |  |  | Cargo Hold (Meat Wagon) |
 | ~ | `Sch3` | `Acar` | Cargo Hold | other |  |  | ground,friend,vuln,invu,nonsapper |  |  | Cargo Hold (Transport) |
 | ~ | `Sch4` | `Acar` | Cargo Hold | human |  |  | ground,friend,vuln,invu |  |  | Cargo Hold (Tank) |

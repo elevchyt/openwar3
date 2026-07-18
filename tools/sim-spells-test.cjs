@@ -192,5 +192,25 @@ const round = (n) => Math.round(n * 1000) / 1000;
   check("…and the sapper dies", died, 1);
 }
 
+// Cannibalize — a corpse is worth dataA hp/sec for the duration, and NOTHING happens with
+// no corpse to eat (the whole ability is the meal).
+{
+  const ghoul = unit({ id: 1, team: 0 });
+  {
+    const { api, log } = harness([ghoul]);
+    api.consumeCorpse = () => true; // a body is under his feet
+    SPELL_HANDLERS.Acan(api, ghoul, def({ data: [10, 800], duration: 33 }), 1, { targetId: 0, x: 0, y: 0 });
+    check("Cannibalize regenerates at dataA per second", [log.buffs[0].kind, log.buffs[0].value, log.buffs[0].timeLeft], ["hot", 10, 33]);
+  }
+  {
+    const { api, log } = harness([ghoul]);
+    let asked = 0;
+    api.consumeCorpse = () => { asked++; return false; }; // nothing to eat
+    SPELL_HANDLERS.Acan(api, ghoul, def({ data: [10, 800], duration: 33 }), 1, { targetId: 0, x: 0, y: 0 });
+    check("…and grants nothing without a corpse", log.buffs, []);
+    check("…having looked for one first", asked, 1);
+  }
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);
