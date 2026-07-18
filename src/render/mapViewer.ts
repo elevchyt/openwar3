@@ -109,6 +109,13 @@ const BASE_FILES = [
 
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // hero level-up nova
+/** The shop indicator: the team-coloured arrow over whoever will receive the next purchase.
+ *  `Targetattach=overhead` in the ability data, hence the attach token. See collectShopArrows
+ *  for why this is AneuTarget and not the AneuCaster the data names first. */
+const SHOP_ARROW_FX: BuffFx = { path: "Abilities\\Spells\\Other\\Aneu\\AneuTarget.mdx", attach: ["overhead"] };
+/** The shop's Select User button icon — see pushSelectUserButton for why this is not the
+ *  `BTNSelectHeroOn` the ability data names. */
+const SELECT_USER_ICON = "ReplaceableTextures\\CommandButtons\\BTNSelectUnit.blp";
 // Cast sounds for spells whose effect model doesn't sit next to a folder WAV
 // (e.g. Divine Shield has no target/caster art), by base ability code.
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
@@ -2997,8 +3004,33 @@ export class MapViewerScene {
         }
       }
     }
+    this.collectShopArrows(active);
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
+    }
+  }
+
+  /** WC3's shop indicator: a team-coloured arrow that hangs over the unit which will take
+   *  delivery of the local player's next purchase, for as long as it is standing in a
+   *  shop's activation radius. Rides the same persistent-FX pool as buff art, so it gets
+   *  the Birth → Stand(loop) → Death lifecycle and the `overhead` attachment for free.
+   *
+   *  On the model, and this is the trap: the ability data names `AneuCaster.mdl`, but in
+   *  TFT that file is BROKEN for our purposes. War3.mpq's copy textures the arrow with
+   *  `replaceableId 1` (the team-colour slot, which setTeamColor drives), while War3x.mpq
+   *  OVERRIDES it with a copy that hardcodes `Textures\TeamColor01.blp` — player 0's red.
+   *  Since the patch layering makes War3x win, using AneuCaster would paint every player's
+   *  arrow red. `AneuTarget.mdl` is the same model — same single "Arrow" bone, same
+   *  Birth/Stand/Death intervals, same MercArrow texture — with the team-colour slot
+   *  intact, and it is what the ability names as its TARGET art (`Targetattach=overhead`),
+   *  i.e. the one that belongs over the purchasing unit. So: target art, team colour works.
+   *  (Verified by parsing both models out of both archives.) */
+  private collectShopArrows(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const unitId of world.shopArrowUnits(this.localPlayer)) {
+      const key = `shoparrow|${unitId}`;
+      this.trackBuffFx(active, key, SHOP_ARROW_FX, unitId, this.localPlayer);
     }
   }
 
@@ -3060,7 +3092,7 @@ export class MapViewerScene {
    *  rides the unit's animation — Divine Shield's bubble stays around the Paladin,
    *  Bloodlust's flames stay on the moving hands — and needs no per-frame positioning.
    *  Only an unattached one is walked along the ground here. */
-  private trackBuffFx(active: Set<string>, key: string, fx: BuffFx, simId: number): void {
+  private trackBuffFx(active: Set<string>, key: string, fx: BuffFx, simId: number, teamColor?: number): void {
     if (!fx.path) return;
     active.add(key);
     const inst = this.buffFx.get(key);
@@ -3076,11 +3108,11 @@ export class MapViewerScene {
       }
     } else if (!this.buffFxLoading.has(key)) {
       this.buffFxLoading.add(key);
-      void this.spawnBuffFx(key, fx, simId);
+      void this.spawnBuffFx(key, fx, simId, teamColor);
     }
   }
 
-  private async spawnBuffFx(key: string, fx: BuffFx, simId: number): Promise<void> {
+  private async spawnBuffFx(key: string, fx: BuffFx, simId: number, teamColor?: number): Promise<void> {
     const path = fx.path;
     let model = this.effectModels.get(path);
     if (model === undefined) {
@@ -3093,6 +3125,9 @@ export class MapViewerScene {
     if (!model || !map || !u || u.hp <= 0 || this.buffFx.has(key)) return;
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
+    // Team-coloured art (the shop arrow) resolves its `replaceableId 1` layer against the
+    // owning player's slot, the same way a unit model does.
+    if (teamColor !== undefined) inst.setTeamColor?.(teamColor);
     const host = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
     const node = host ? this.attachmentNode(host, fx.attach) : undefined;
     if (node) {
@@ -4743,11 +4778,54 @@ export class MapViewerScene {
    *  Keep, via the TWN2 pseudo-tech) and its own stock, shown as the button's count badge.
    *  Buying needs a "valid patron" — a hero standing within the shop's activation radius —
    *  which is checked in the sim; here it only decides the greying. */
+  /** WC3's "Select Hero" / "Select Unit" toggle on a shop that delivers to a unit. Clicking
+   *  it arms a target mode; the next click on one of your units makes that unit the shop's
+   *  purchaser (the sim's setShopBuyer) and moves the overhead arrow onto it.
+   *
+   *  What the shop CARRIES decides whether the button exists (Aneu/Aall yes, Ane2 no), but
+   *  what the button SAYS always comes from `Aneu` — it is the only one of the three Blizzard
+   *  wrote player-facing text for ("Select Hero", Tip "Select |cffffcc00H|rero", Hotkey H).
+   *  `Aall`, which the four race shops carry, has a Name and nothing else, and that Name is an
+   *  internal designer label — render it and the Arcane Vault's button reads "Shop Sharing,
+   *  Allied Bldg." with no hotkey.
+   *
+   *  It sits in the ability's `Unbuttonpos` slot (3,2): that corner is Cancel's on most cards,
+   *  but a shop only shows Cancel when it has a production queue, and the shops never do.
+   *  Buttonpos (0,0) is unusable here — the Goblin Merchant sells ELEVEN items, which with the
+   *  corner spoken for fills the 4x3 card exactly, and 0,0 is the Circlet of Nobility's. */
+  private pushSelectUserButton(sel: SelectionInfo, out: CommandButton[]): void {
+    const world = this.rts!.simWorld;
+    if (!world.shopSelectsUser(sel.id)) return;
+    const def = this.abilities.get("Aneu") ?? this.abilities.get(world.shopInteractAbility(sel.id));
+    if (!def) return;
+    // No `active` state: arming this collapses the card to a lone Cancel (isTargeting),
+    // exactly as arming a spell does, so the button is never on screen while it is armed.
+    const buyer = world.shopBuyer(sel.id, this.localPlayer);
+    out.push(this.cmd({
+      id: `selectuser:${sel.id}`,
+      // NOT `def.icon`. The ability's `Art` is `BTNSelectHeroOn.blp`, and that file — like
+      // its `BTNSelectHeroOff` twin — is a red "?" PLACEHOLDER in War3.mpq: RoC never
+      // shipped art for this button and nothing overrides it later. The real icon arrived
+      // with TFT as `BTNSelectUnit.blp` (War3x, blue cycle arrows), so prefer it and keep
+      // the ability's own path as the fallback for an install that lacks it.
+      icon: this.blpIcon(SELECT_USER_ICON) ?? this.blpIcon(def.icon),
+      name: def.name,
+      hotkey: def.hotkey,
+      tip: def.tips[0],
+      desc: this.tipText(def.uberTips[0] ?? ""),
+      col: 3,
+      row: 2,
+      // Nothing to nominate: no unit of yours with an inventory is standing close enough.
+      disabled: !buyer,
+    }));
+  }
+
   private pushShopButtons(sel: SelectionInfo, out: CommandButton[]): void {
     const world = this.rts!.simWorld;
     // Built from the BUILDING, not the unit type: a Marketplace declares no wares at all and
     // carries only what Blizzard.j's stock timer has put on its shelves (issue #57).
     const wares = world.shopWaresOf(sel.id);
+    this.pushSelectUserButton(sel, out);
     if (!wares.items.length) return;
     const stash = this.rts!.stashFor(this.localPlayer);
     const hasPatron = world.shopPatrons(sel.id, this.localPlayer).length > 0;
@@ -5258,6 +5336,19 @@ export class MapViewerScene {
       if (sel) this.buyItem(sel.id, id.slice(4));
       return;
     }
+    if (id.startsWith("selectuser:")) {
+      // Arm the pick. Clicking it again disarms, the way every other armed order toggles.
+      const shopId = Number(id.slice(11));
+      if (!Number.isInteger(shopId)) return;
+      if (this.rts.orderMode === "selectuser" && this.rts.armedShopUser?.shopId === shopId) {
+        this.rts.orderMode = null;
+        this.rts.armedShopUser = null;
+        return;
+      }
+      this.rts.orderMode = "selectuser";
+      this.rts.armedShopUser = { shopId };
+      return;
+    }
     if (id.startsWith("cancelqueue:")) {
       // Clicking any icon in the production queue (including the one currently
       // training, index 0) cancels that item and refunds it in full.
@@ -5395,18 +5486,15 @@ export class MapViewerScene {
   private buyItem(shopId: number, itemId: string): void {
     if (!this.rts) return;
     const world = this.rts.simWorld;
-    const patrons = world.shopPatrons(shopId, this.localPlayer);
-    if (!patrons.length) {
+    // The shop's nominated purchaser (Select User), falling back to the nearest patron —
+    // one rule, in the sim, so the arrow overhead always points at whoever will actually
+    // receive the item. This used to prefer the currently SELECTED unit, which meant the
+    // arrow and the delivery could disagree the moment you clicked the shop itself.
+    const buyer = world.shopBuyer(shopId, this.localPlayer);
+    if (!buyer) {
       this.refuse(SHOP_ERROR.nopatron);
       return;
     }
-    const shop = world.units.get(shopId);
-    const selected = this.rts.selectedSimUnit();
-    const buyer =
-      (selected && patrons.find((p) => p.id === selected.id)) ??
-      (shop
-        ? patrons.reduce((a, b) => (Math.hypot(a.x - shop.x, a.y - shop.y) <= Math.hypot(b.x - shop.x, b.y - shop.y) ? a : b))
-        : patrons[0]);
     const result = world.purchaseItem(shopId, buyer.id, itemId, this.localPlayer);
     if (result !== "ok" && SHOP_ERROR[result]) this.refuse(SHOP_ERROR[result]);
   }

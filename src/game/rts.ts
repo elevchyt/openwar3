@@ -2882,7 +2882,12 @@ export class RtsController {
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
    *  damaged friendly building; "cast" targets a spell (see armedCast). */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | "item" | null = null;
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | "item" | "selectuser" | null = null;
+  /** The shop awaiting a purchaser pick when orderMode === "selectuser" (WC3's "Select
+   *  Hero"/"Select Unit"). Unlike every other armed order this one belongs to a building
+   *  the player may not even own — a neutral Goblin Merchant — so it carries the shop's id
+   *  rather than acting on the selection. */
+  armedShopUser: { shopId: number } | null = null;
   /** The spell armed for targeting when orderMode === "cast". `area` (>0) shows an
    *  AoE cast circle at the cursor for point-target area spells. */
   armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
@@ -2901,6 +2906,28 @@ export class RtsController {
    *  either nothing was armed, or the order was REFUSED and the player gets to
    *  click again without re-arming the spell. */
   orderClickAt(cssX: number, cssY: number, queued = false): boolean {
+    // Nominating a shop's purchaser is checked BEFORE the "do I control the selection"
+    // gate: the selection here is the SHOP, and the whole point of a neutral Goblin
+    // Merchant is that nobody controls it. What must be controllable is the unit picked.
+    if (this.orderMode === "selectuser") {
+      const shopId = this.armedShopUser?.shopId;
+      const picked = this.pickAt(cssX, cssY);
+      if (shopId === undefined) {
+        this.orderMode = null;
+        this.armedShopUser = null;
+        return true;
+      }
+      // A refused pick keeps the order armed so the player can click again, exactly as a
+      // refused cast does — you aimed at the wrong thing, you did not cancel the command.
+      // The two refusals are the game's own, and it has a string for precisely this
+      // ability: "Select a unit with an inventory." (commandstrings.txt Inventoryinteract).
+      const target = picked === null ? undefined : this.sim.units.get(picked);
+      if (!target || !this.controls(picked!) || !target.inventory.length) return this.refuseOrder("Inventoryinteract");
+      if (!this.sim.setShopBuyer(shopId, this.localPlayer, picked!)) return this.refuseOrder("Neednearbypatron");
+      this.orderMode = null;
+      this.armedShopUser = null;
+      return true;
+    }
     if (!this.orderMode || this.selected.size === 0 || !this.hasControllable()) {
       this.orderMode = null;
       return false;
@@ -3054,9 +3081,10 @@ export class RtsController {
       }
       return "none";
     }
-    // A spell, an item, or a repair is aimed in the WORLD, never at the minimap — swallow
-    // the click and leave it armed (right-click, above, is how you back out of one).
-    if (mode === "cast" || mode === "item" || mode === "repair") return "ignored";
+    // A spell, an item, a repair or a shop's purchaser pick is aimed at a thing in the
+    // WORLD, never at the minimap — swallow the click and leave it armed (right-click,
+    // above, is how you back out of one).
+    if (mode === "cast" || mode === "item" || mode === "repair" || mode === "selectuser") return "ignored";
     if (mode === "rally") {
       this.orderMode = null;
       for (const id of this.selected) {

@@ -1413,25 +1413,73 @@ export class SimWorld {
     return this.isShop(u.typeId) || (u.building?.stock?.size ?? 0) > 0;
   }
 
-  /** How far from a shop a patron may stand — the shop ability's "Activation Radius"
-   *  (AbilityData.slk DataA). WC3 puts it on the ability, not the building: `Aall`
-   *  ("Shop Sharing, Allied Bldg", on the Arcane Vault and the other race shops) is 600,
-   *  while the neutral `Aneu`/`Ane2` ("Select Hero"/"Select Unit", on the Goblin Merchant,
-   *  Tavern, Mercenary Camp) is 450. Note this is NOT MiscData's NeutralUseNotifyRadius=900,
-   *  which is the radius the shop SHOUTS to nearby creeps when used — a different thing that
-   *  we honour separately in notifyCreepsOfShopUse(). */
-  private shopRadius(typeId: string): number {
+  /** What a shop's "interact" ability says about using it. WC3 puts all of this on the
+   *  ability, not the building, and there are three of them (AbilityData.slk, all with
+   *  base code `Aneu`; column names from AbilityMetaData `Neu1..Neu4`):
+   *
+   *    alias  name                          DataA radius  DataB interact  DataC btn  DataD arrow
+   *    Aneu   "Select Hero"                 450           1               1          1
+   *    Aall   "Shop Sharing, Allied Bldg."  600           1               1          1
+   *    Ane2   "Select Unit"                 450           16              0          0
+   *
+   *  The split is coherent and we honour it: buildings that sell ITEMS carry Aneu (Goblin
+   *  Merchant `ngme`, Marketplace `nmrk`) or Aall (the four race shops `hvlt`/`ovln`/`eden`/
+   *  `utom`) and get both the Select User button and the overhead arrow, because an item
+   *  needs a unit to receive it. Buildings that sell UNITS carry Ane2 (Tavern, Mercenary
+   *  Camps, Goblin Lab, the shipyards, Dragon Roosts) and explicitly set BOTH flags to 0 —
+   *  a purchased unit walks out on its own, so there is nobody to nominate and nothing to
+   *  point an arrow at.
+   *
+   *  `Rng1` is 350 on all three and is a different number: the range at which the
+   *  `neutralinteract` order may be issued, not the range at which buying works.
+   *  None of this is MiscData's NeutralUseNotifyRadius=900 either — that is how far the
+   *  shop SHOUTS to nearby creeps when used (notifyCreepsOfShopUse).
+   *
+   *  Match on the BASE CODE, and note it is not one code: Aneu and Ane2 share `Aneu`, but
+   *  Aall is its own code `Aall` (verified in the SLK — the two neutral ones being siblings
+   *  makes it tempting to assume all three are, and then every race shop silently falls
+   *  back to the default radius with no button and no arrow). */
+  private shopInteract(typeId: string): { abilityId: string; radius: number; showButton: boolean; showArrow: boolean } {
+    const fallback = { abilityId: "", radius: DEFAULT_SHOP_RADIUS, showButton: false, showArrow: false };
     const def = this.unitReg?.get(typeId);
-    if (!def || !this.abilities) return DEFAULT_SHOP_RADIUS;
+    if (!def || !this.abilities) return fallback;
     for (const abilId of def.abilities) {
       const a = this.abilities.get(abilId);
-      if (!a) continue;
-      if (a.code === "Aall" || a.code === "Aneu") {
-        const r = a.levelData[0]?.data[0];
-        if (r && !Number.isNaN(r)) return r;
-      }
+      if (!a || (a.code !== "Aneu" && a.code !== "Aall")) continue;
+      const lvl = a.levelData[0];
+      if (!lvl) continue;
+      const r = lvl.data[0];
+      return {
+        abilityId: abilId,
+        radius: r && !Number.isNaN(r) ? r : DEFAULT_SHOP_RADIUS,
+        showButton: lvl.data[2] === 1,
+        showArrow: lvl.data[3] === 1,
+      };
     }
-    return DEFAULT_SHOP_RADIUS;
+    return fallback;
+  }
+
+  /** The shop's interact ability (Aneu/Ane2/Aall), so the HUD can build its Select User
+   *  button — icon, name, hotkey and tooltip — out of the game's own ability data. */
+  shopInteractAbility(shopId: number): string {
+    const shop = this.units.get(shopId);
+    return shop ? this.shopInteract(shop.typeId).abilityId : "";
+  }
+
+  /** How far from a shop a patron may stand (see shopInteract). */
+  private shopRadius(typeId: string): number {
+    return this.shopInteract(typeId).radius;
+  }
+
+  /** Does this shop nominate a purchasing unit — the "Select User" button on its command
+   *  card and the team-coloured arrow over the chosen unit? False for the unit-sellers. */
+  shopSelectsUser(shopId: number): boolean {
+    const shop = this.units.get(shopId);
+    return !!shop && this.shopInteract(shop.typeId).showButton;
+  }
+  shopShowsArrow(shopId: number): boolean {
+    const shop = this.units.get(shopId);
+    return !!shop && this.shopInteract(shop.typeId).showArrow;
   }
 
   /** The units of `player` that could take delivery of an item bought from this shop — WC3's
@@ -1447,6 +1495,70 @@ export class SimWorld {
     for (const u of this.units.values()) {
       if (u.owner !== player || u.hp <= 0 || !u.inventory.length) continue;
       if (this.inShopRange(shop, u)) out.push(u);
+    }
+    return out;
+  }
+
+  /** Who a player has nominated to take delivery at a given shop: shopId → player → unitId.
+   *
+   *  Keyed by PLAYER as well as by shop because a neutral Goblin Merchant serves everyone at
+   *  once and each player's choice is their own — which is also why WC3 issues the pick as
+   *  `IssueNeutralTargetOrderById(owner, shop, 852566, buyer)`, with the player as the first
+   *  argument rather than the shop's owner doing the ordering.
+   *
+   *  Nothing prunes this map: a nomination is re-validated on every read (shopBuyer), so a
+   *  unit that dies, is removed, or simply walks out of range quietly stops being the buyer
+   *  without every removal path in the sim having to know shops exist. */
+  private shopBuyers = new Map<number, Map<number, number>>();
+
+  /** Nominate `unitId` as `player`'s purchaser at `shop` (WC3's "Select Hero"/"Select Unit",
+   *  the `neutralinteract` order). Refuses anything that isn't a valid patron right now.
+   *  Passing 0 clears the nomination and hands the shop back to the default rule. */
+  setShopBuyer(shopId: number, player: number, unitId: number): boolean {
+    const shop = this.units.get(shopId);
+    if (!shop || !this.isShopUnit(shopId) || !this.shopSelectsUser(shopId)) return false;
+    if (unitId === 0) {
+      this.shopBuyers.get(shopId)?.delete(player);
+      return true;
+    }
+    const u = this.units.get(unitId);
+    if (!u || u.owner !== player || u.hp <= 0 || !u.inventory.length) return false;
+    if (!this.inShopRange(shop, u)) return false;
+    let per = this.shopBuyers.get(shopId);
+    if (!per) this.shopBuyers.set(shopId, (per = new Map()));
+    per.set(player, unitId);
+    return true;
+  }
+
+  /** The unit that takes delivery of `player`'s next purchase at `shop`, or null if they
+   *  have no eligible unit nearby. A standing nomination wins for as long as it stays
+   *  valid; otherwise the shop falls back to the unit standing CLOSEST to it, which is what
+   *  the engine appears to do and what a player expects when they walk one hero up to a
+   *  shop and click an item without ever touching the Select User button. */
+  shopBuyer(shopId: number, player: number): SimUnit | null {
+    const shop = this.units.get(shopId);
+    if (!shop) return null;
+    const nominated = this.shopBuyers.get(shopId)?.get(player);
+    if (nominated !== undefined) {
+      const u = this.units.get(nominated);
+      if (u && u.owner === player && u.hp > 0 && u.inventory.length && this.inShopRange(shop, u)) return u;
+      this.shopBuyers.get(shopId)?.delete(player); // stale — dead, gone, or walked away
+    }
+    const patrons = this.shopPatrons(shopId, player);
+    if (!patrons.length) return null;
+    return patrons.reduce((a, b) =>
+      Math.hypot(a.x - shop.x, a.y - shop.y) <= Math.hypot(b.x - shop.x, b.y - shop.y) ? a : b);
+  }
+
+  /** Every (unit, shop) pairing that should wear the overhead arrow for `player` this
+   *  frame: the buyer each arrow-showing shop would deliver to. Returns unit ids — one
+   *  unit standing between two shops still wears ONE arrow, as in the game. */
+  shopArrowUnits(player: number): Set<number> {
+    const out = new Set<number>();
+    for (const shop of this.units.values()) {
+      if (shop.hp <= 0 || !this.isShopUnit(shop.id) || !this.shopShowsArrow(shop.id)) continue;
+      const buyer = this.shopBuyer(shop.id, player);
+      if (buyer) out.add(buyer.id);
     }
     return out;
   }
