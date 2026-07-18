@@ -1531,23 +1531,50 @@ export class SimWorld {
   }
 
   /** The unit that takes delivery of `player`'s next purchase at `shop`, or null if they
-   *  have no eligible unit nearby. A standing nomination wins for as long as it stays
-   *  valid; otherwise the shop falls back to the unit standing CLOSEST to it, which is what
-   *  the engine appears to do and what a player expects when they walk one hero up to a
-   *  shop and click an item without ever touching the Select User button. */
+   *  have no eligible unit nearby.
+   *
+   *  The choice is STICKY. Once a shop has a purchaser it keeps it until that unit stops
+   *  being eligible (dies, is removed, walks out of range) or the player nominates another
+   *  by hand — a second hero arriving, even a nearer one, must never quietly take delivery
+   *  of what you were about to buy. This used to recompute "nearest patron" on every read,
+   *  so the buyer changed under the player as units wandered past.
+   *
+   *  Adoption (picking one when there is none) is deliberately NOT done here: this is a
+   *  query, called from the renderer among other places, and committing state from it would
+   *  tie the sim's choice to how often something happened to ask. tickShopBuyers owns it. */
   shopBuyer(shopId: number, player: number): SimUnit | null {
     const shop = this.units.get(shopId);
     if (!shop) return null;
     const nominated = this.shopBuyers.get(shopId)?.get(player);
-    if (nominated !== undefined) {
-      const u = this.units.get(nominated);
-      if (u && u.owner === player && u.hp > 0 && u.inventory.length && this.inShopRange(shop, u)) return u;
-      this.shopBuyers.get(shopId)?.delete(player); // stale — dead, gone, or walked away
+    if (nominated === undefined) return null;
+    const u = this.units.get(nominated);
+    if (u && u.owner === player && u.hp > 0 && u.inventory.length && this.inShopRange(shop, u)) return u;
+    this.shopBuyers.get(shopId)?.delete(player); // stale — dead, gone, or walked away
+    return null;
+  }
+
+  /** Give every shop a purchaser for every player who has one standing there and hasn't
+   *  got one already — the first eligible unit to arrive becomes the buyer, and from then
+   *  on only the player's own Select User pick moves it (see shopBuyer).
+   *
+   *  Ticked rather than resolved lazily so the choice depends on the sim's clock, not on
+   *  who asked. Cheap: it only walks shops that actually nominate a buyer, and only reaches
+   *  for the patron list when that shop+player has no valid one. */
+  private tickShopBuyers(): void {
+    for (const shop of this.units.values()) {
+      if (shop.hp <= 0 || !this.isShopUnit(shop.id) || !this.shopSelectsUser(shop.id)) continue;
+      // Which players have a unit here at all — no patrons, nothing to adopt.
+      const seen = new Set<number>();
+      for (const u of this.units.values()) {
+        if (u.hp <= 0 || !u.inventory.length || seen.has(u.owner)) continue;
+        if (!this.inShopRange(shop, u)) continue;
+        seen.add(u.owner);
+        if (this.shopBuyer(shop.id, u.owner)) continue; // already has a valid one — leave it
+        let per = this.shopBuyers.get(shop.id);
+        if (!per) this.shopBuyers.set(shop.id, (per = new Map()));
+        per.set(u.owner, u.id);
+      }
     }
-    const patrons = this.shopPatrons(shopId, player);
-    if (!patrons.length) return null;
-    return patrons.reduce((a, b) =>
-      Math.hypot(a.x - shop.x, a.y - shop.y) <= Math.hypot(b.x - shop.x, b.y - shop.y) ? a : b);
   }
 
   /** Every (unit, shop) pairing that should wear the overhead arrow for `player` this
@@ -5969,6 +5996,7 @@ export class SimWorld {
     this.tickAttackReveals(dt);
     this.tickBuildings(dt);
     this.tickShops(dt);
+    this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)

@@ -113,9 +113,6 @@ const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // h
  *  `Targetattach=overhead` in the ability data, hence the attach token. See collectShopArrows
  *  for why this is AneuTarget and not the AneuCaster the data names first. */
 const SHOP_ARROW_FX: BuffFx = { path: "Abilities\\Spells\\Other\\Aneu\\AneuTarget.mdx", attach: ["overhead"] };
-/** The shop's Select User button icon — see pushSelectUserButton for why this is not the
- *  `BTNSelectHeroOn` the ability data names. */
-const SELECT_USER_ICON = "ReplaceableTextures\\CommandButtons\\BTNSelectUnit.blp";
 // Cast sounds for spells whose effect model doesn't sit next to a folder WAV
 // (e.g. Divine Shield has no target/caster art), by base ability code.
 const SPELL_SOUND_FALLBACK: Record<string, string> = {
@@ -4783,38 +4780,34 @@ export class MapViewerScene {
    *  purchaser (the sim's setShopBuyer) and moves the overhead arrow onto it.
    *
    *  What the shop CARRIES decides whether the button exists (Aneu/Aall yes, Ane2 no), but
-   *  what the button SAYS always comes from `Aneu` — it is the only one of the three Blizzard
-   *  wrote player-facing text for ("Select Hero", Tip "Select |cffffcc00H|rero", Hotkey H).
-   *  `Aall`, which the four race shops carry, has a Name and nothing else, and that Name is an
-   *  internal designer label — render it and the Arcane Vault's button reads "Shop Sharing,
-   *  Allied Bldg." with no hotkey.
+   *  everything the button SHOWS comes from `[Anei]` — "Select User", hotkey U, at Buttonpos
+   *  3,2, with `BTNSelectUnit.blp`. `Anei` is a UI-only button definition, not an ability
+   *  (see UI_BUTTON_IDS): it has no AbilityData.slk row because nothing casts it.
    *
-   *  It sits in the ability's `Unbuttonpos` slot (3,2): that corner is Cancel's on most cards,
-   *  but a shop only shows Cancel when it has a production queue, and the shops never do.
-   *  Buttonpos (0,0) is unusable here — the Goblin Merchant sells ELEVEN items, which with the
-   *  corner spoken for fills the 4x3 card exactly, and 0,0 is the Circlet of Nobility's. */
+   *  None of that can be taken from the shop's own ability. `Aneu`/`Ane2` are RoC-era and
+   *  say "Select Hero"/"Select Unit" with an `Art` — `BTNSelectHeroOn.blp` — that is a red
+   *  "?" PLACEHOLDER in War3.mpq with nothing overriding it. `Aall` is worse: its only
+   *  string is the internal designer label "Shop Sharing, Allied Bldg." and it has no hotkey
+   *  at all. `Anei` is what TFT added to label this button properly. */
   private pushSelectUserButton(sel: SelectionInfo, out: CommandButton[]): void {
     const world = this.rts!.simWorld;
     if (!world.shopSelectsUser(sel.id)) return;
-    const def = this.abilities.get("Aneu") ?? this.abilities.get(world.shopInteractAbility(sel.id));
+    const def = this.abilities.get("Anei");
     if (!def) return;
     // No `active` state: arming this collapses the card to a lone Cancel (isTargeting),
     // exactly as arming a spell does, so the button is never on screen while it is armed.
     const buyer = world.shopBuyer(sel.id, this.localPlayer);
     out.push(this.cmd({
       id: `selectuser:${sel.id}`,
-      // NOT `def.icon`. The ability's `Art` is `BTNSelectHeroOn.blp`, and that file — like
-      // its `BTNSelectHeroOff` twin — is a red "?" PLACEHOLDER in War3.mpq: RoC never
-      // shipped art for this button and nothing overrides it later. The real icon arrived
-      // with TFT as `BTNSelectUnit.blp` (War3x, blue cycle arrows), so prefer it and keep
-      // the ability's own path as the fallback for an install that lacks it.
-      icon: this.blpIcon(SELECT_USER_ICON) ?? this.blpIcon(def.icon),
+      icon: this.blpIcon(def.icon),
       name: def.name,
       hotkey: def.hotkey,
       tip: def.tips[0],
       desc: this.tipText(def.uberTips[0] ?? ""),
-      col: 3,
-      row: 2,
+      // 3,2 — the bottom-right corner, and it is Anei's own Buttonpos. That corner is
+      // Cancel's on most cards, but a shop only shows Cancel with a production queue.
+      col: def.buttonX,
+      row: def.buttonY,
       // Nothing to nominate: no unit of yours with an inventory is standing close enough.
       disabled: !buyer,
     }));

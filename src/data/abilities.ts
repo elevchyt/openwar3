@@ -429,7 +429,70 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       orderOff: (f ? str(f, "Orderoff") : "").trim().toLowerCase(),
     });
   }
+  for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
   return new AbilityRegistry(defs);
+}
+
+/** Command buttons the ENGINE draws that are not abilities: they have a `[…]` section in
+ *  AbilityFunc/AbilityStrings (name, tooltip, hotkey, icon, buttonpos) but no row in
+ *  AbilityData.slk, because nothing casts them and no unit lists them in `abilList`.
+ *
+ *  `Anei` — "Select User", hotkey U, `BTNSelectUnit.blp` at Buttonpos 3,2 — is the shop's
+ *  purchaser button. Do NOT reach for `Aneu`/`Ane2` for its text: those are the real
+ *  abilities that give a shop its radius and flags, and their names ("Select Hero" with
+ *  hotkey H, "Select Unit" with U) are RoC-era leftovers. `Anei` is what TFT actually
+ *  labels the button with. */
+const UI_BUTTON_IDS = ["Anei"];
+
+/** Synthesize a def for a UI-only button (see UI_BUTTON_IDS). Everything an ability would
+ *  carry — levels, targets, effect art — is absent by construction; this is presentation. */
+function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData, strs: MappedData): void {
+  if (defs.has(id)) return; // a real ability row wins
+  const f = func.getRow(id) as Row | undefined;
+  const s = strs.getRow(id) as Row | undefined;
+  if (!f && !s) return; // this install doesn't have it
+  const [bx, by] = f ? parseButtonPos(str(f, "buttonpos")) : [0, 0];
+  defs.set(id, {
+    id,
+    code: id,
+    isHero: false,
+    isItem: false,
+    levels: 0,
+    reqLevel: 0,
+    levelSkip: 0,
+    target: "passive", // nothing casts it; the host wires up what the click does
+    targetFlags: [],
+    autocast: false,
+    name: (s && str(s, "Name")) || id,
+    icon: f ? str(f, "art") : "",
+    hotkey: (s ? (str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
+    researchHotkey: "",
+    buttonX: bx,
+    buttonY: by,
+    learnX: bx,
+    learnY: by,
+    research: false,
+    tips: splitTips(s ? str(s, "Tip") : ""),
+    uberTips: splitList(s ? str(s, "Ubertip") : ""),
+    researchTip: "",
+    researchUberTip: "",
+    levelData: [],
+    missileArt: "",
+    targetArt: "",
+    casterArt: "",
+    specialArt: "",
+    effectArt: "",
+    areaArt: "",
+    effectSound: "",
+    buffFx: [],
+    buffArt: "",
+    buffEffectArt: "",
+    buffSpecialArt: "",
+    animNames: [],
+    order: "",
+    orderOn: "",
+    orderOff: "",
+  });
 }
 
 /** Value of a tooltip-referenced column on ONE rank (`DataA1`, `Dur1`, `Cost1`, …) — every
