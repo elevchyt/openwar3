@@ -3916,10 +3916,23 @@ export class SimWorld {
       else if (b.kind === "invuln") invuln = true;
     }
     // Masonry-style `rhpo` is a PERCENTAGE of the base pool, applied before the flat `rhpx`
-    // adds (Animal War Training's +150). Current HP is not topped up — researching Masonry
-    // raises a damaged building's ceiling, it does not heal it.
-    u.maxHp = (u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp;
-    u.maxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana;
+    // adds (Animal War Training's +150).
+    const newMaxHp = (u.baseMaxHp + HP_PER_STR * dStr) * (1 + upg.hpPct) + upg.hp + item.maxHp;
+    const newMaxMana = u.baseMaxMana + MANA_PER_INT * dInt + upg.mana;
+    // Moving the ceiling keeps the unit's RELATIVE pool, in both directions: "Increasing the
+    // maximum amount of Hit Points of a unit does not change its relative Hit Points"
+    // (Liquipedia, Hit_Points). The page's own item-drop trick proves the ratio (not a flat
+    // delta) is what is preserved — regenerate with the item off, re-equip, and the current
+    // HP scales up with the ceiling for a gain of `regenerated · Bonus/(MaxHP − Bonus)`, which
+    // an additive model could never produce. So this is the ONE rule behind every ceiling
+    // move: a hero levelling (issue #69), strength/intellect growth, a tome, an item, and
+    // Brute Strength finishing over a field of Grunts (issue #70). A full-health Grunt stays
+    // full; a half-health one stays half; a wounded building researching Masonry gains
+    // headroom but is no more healed than before.
+    if (u.maxHp > 0 && newMaxHp !== u.maxHp) u.hp *= newMaxHp / u.maxHp;
+    if (u.maxMana > 0 && newMaxMana !== u.maxMana) u.mana *= newMaxMana / u.maxMana;
+    u.maxHp = newMaxHp;
+    u.maxMana = newMaxMana;
     if (u.hp > u.maxHp) u.hp = u.maxHp;
     if (u.mana > u.maxMana) u.mana = u.maxMana;
     // Defend: "While Defend is active, movement is reduced to <DataC1,%>% of normal speed"
@@ -4816,16 +4829,17 @@ export class SimWorld {
   private levelUp(hero: SimUnit): void {
     hero.level++;
     hero.skillPoints++;
-    this.recomputeStats(hero); // new maxHp/maxMana/attributes
-    hero.hp = hero.maxHp; // WC3: leveling fully restores HP and mana
-    hero.mana = hero.maxMana;
+    // Levelling does NOT refill (issue #69). The new strength/intellect raise the ceiling and
+    // recomputeStats carries the current pool up with it in proportion — a hero who dings at
+    // 100/1000 comes out at 105/1050, not healed to full. A level-up is not an escape.
+    this.recomputeStats(hero); // new maxHp/maxMana/attributes, current pool scaled with them
     this.levelUps.push({ unitId: hero.id, level: hero.level }); // renderer: level-up nova
     // EVENT_(PLAYER_)HERO_LEVEL for the trigger engine (7.17) — a separate queue from
     // the renderer's, since each side drains its own.
     if (this.captureHeroEvents) this.heroEvents.push({ hero: eventInfo(hero), phase: "level", level: hero.level, abilityId: "" });
     // A hero's images level with him, nova and all. They are copies of him as he is NOW, so
     // a Blademaster who dinged while his images stood beside him would otherwise be the only
-    // one of the four to grow, flash and refill — pointing straight at the real one.
+    // one of the four to grow and flash — pointing straight at the real one.
     for (const im of this.units.values()) {
       if (im.isIllusion && im.illusionOf === hero.id && im.hp > 0) this.levelUpIllusion(im, hero);
     }
@@ -4869,10 +4883,9 @@ export class SimWorld {
    *  the player's hero levelling and must fire once, not once per copy. */
   private levelUpIllusion(im: SimUnit, hero: SimUnit): void {
     im.level = hero.level;
+    // The hero's pool rides his new ceiling in proportion, so the images' must too — matching
+    // pools is the whole point. recomputeStats does exactly that for both.
     this.recomputeStats(im); // new maxHp/maxMana/attributes off the level
-    // The hero refills on levelling, so the images must too — matching pools is the point.
-    im.hp = im.maxHp;
-    im.mana = im.maxMana;
     this.levelUps.push({ unitId: im.id, level: im.level }); // the same nova, on every image
   }
 
@@ -7872,15 +7885,15 @@ export class SimWorld {
       const lvl = ad.levelData[0];
       const dv = (i: number) => (lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
       switch (ad.code) {
-        // Attribute tomes (dataA=agi, dataB=int, dataC=str) — permanent, so bump the
-        // BASE attribute + gain the HP/mana the new points confer.
+        // Attribute tomes (dataA=agi, dataB=int, dataC=str) — permanent, so bump the BASE
+        // attribute. The HP/mana the new points confer needs no hand-adding here: the
+        // recomputeStats below raises the ceiling and carries the current pool up with it in
+        // proportion, the same rule every other ceiling move obeys (see recomputeStats).
         case "AIam": case "AIim": case "AIsm": case "AIxm": {
-          const dAgi = dv(0), dInt = dv(1), dStr = dv(2);
-          u.baseAgi += dAgi; u.baseInt += dInt; u.baseStr += dStr;
-          u.hp += HP_PER_STR * dStr; u.mana += MANA_PER_INT * dInt;
+          u.baseAgi += dv(0); u.baseInt += dv(1); u.baseStr += dv(2);
           break;
         }
-        case "AImi": u.baseMaxHp += dv(0); u.hp += dv(0); break; // Manual of Health (+max HP)
+        case "AImi": u.baseMaxHp += dv(0); break; // Manual of Health (+max HP)
         case "AIem": if (u.isHero) this.gainXp(u, dv(0)); break; // Tome of Experience (+XP)
         case "AIha": u.hp = Math.min(u.maxHp, u.hp + dv(0)); break; // Rune of Healing
         case "AImr": u.mana = Math.min(u.maxMana, u.mana + dv(0)); break; // Rune of Mana
