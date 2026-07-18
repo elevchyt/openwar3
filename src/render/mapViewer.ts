@@ -2791,6 +2791,38 @@ export class MapViewerScene {
     }
   }
 
+  // --- Temporary spell ground splats (Thunder Clap's scorch) -----------------------
+  //
+  // Same overlay as a building's foundation decal, but on a clock: an UberSplatData row
+  // gives the texture, the half-width and an alpha envelope — fade in over BirthTime,
+  // hold PauseTime at full, fade out over Decay (THND: 0.2 / 2 / 2, StartA=0 MiddleA=255
+  // EndA=0). Ids are unique per cast so two claps overlap instead of replacing each other.
+  private spellSplats: Array<{ key: string; t: number; birth: number; pause: number; decay: number }> = [];
+  private nextSpellSplatId = 1;
+
+  private addSpellSplat(splatId: string, x: number, y: number): void {
+    if (!this.splats) return;
+    const s = this.uberSplatRegistry().get(splatId);
+    if (!s) return;
+    const key = `fx:${splatId}:${this.nextSpellSplatId++}`;
+    this.splats.add(key, x, y, s.scale, s.texture, { alpha: 0 }); // opens at StartA = 0
+    this.spellSplats.push({ key, t: 0, birth: s.birthTime, pause: s.pauseTime, decay: s.decay });
+  }
+
+  private updateSpellSplats(dt: number): void {
+    for (let i = this.spellSplats.length - 1; i >= 0; i--) {
+      const s = this.spellSplats[i];
+      s.t += dt;
+      const a = s.t < s.birth ? s.t / s.birth : s.t < s.birth + s.pause ? 1 : 1 - (s.t - s.birth - s.pause) / (s.decay || 1);
+      if (a <= 0) {
+        this.splats?.remove(s.key);
+        this.spellSplats.splice(i, 1);
+      } else {
+        this.splats?.setAlpha(s.key, Math.min(1, a));
+      }
+    }
+  }
+
   // --- Mirror Image missiles ------------------------------------------------------
   //
   // Pure decoration: the sim has already decided where each one lands and when, and puts
@@ -5722,6 +5754,7 @@ export class MapViewerScene {
       this.updateSelectionCircles(dt / 1000);
       this.updateOrderArrows(dt / 1000);
       this.updateEffects(dt / 1000);
+      this.updateSpellSplats(dt / 1000); // Thunder Clap's scorch fading in/out on the ground
       this.updateMirrorMissiles(dt / 1000);
       this.updateAuraEffects();
       this.updateSpecialFx(dt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
@@ -5798,6 +5831,8 @@ export class MapViewerScene {
           // the effect model's own folder, so resolve it off the art like a cast sound.
           if (fx.sound) this.sounds?.playSpellSound([fx.art], undefined, { x, y, z });
         }
+        // Ground decals a spell painted this frame (Thunder Clap's scorch, THND).
+        for (const s of world.drainSpellSplats()) this.addSpellSplat(s.splatId, s.x, s.y);
         // Sustain the looping bed under each running channelled field, and drop it the
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).

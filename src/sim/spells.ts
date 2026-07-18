@@ -47,6 +47,12 @@ export interface SpellApi {
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
    *  value for a sustained effect like Flame Strike's 7s fire pillar. */
   emitEffect(art: string, x: number, y: number, targetId: number, life?: number): void;
+  /** Paint a temporary ground decal at a point — an `Splats\UberSplatData.slk` row id
+   *  (Thunder Clap's `THND`). The row carries the texture, its half-width `Scale`, and
+   *  the BirthTime/PauseTime/Decay fade the renderer plays it through. Which ability
+   *  paints which splat is the engine's own wiring: nothing in AbilityData points at an
+   *  ubersplat, but the table names the rows after the abilities that use them. */
+  emitSplat(splatId: string, x: number, y: number): void;
   /** Register a repeating area effect (Blizzard waves, Rain of Fire, …). */
   addSpellField(f: SpellFieldInit): void;
   /** Drain up to `amount` mana from a unit; returns the mana actually removed
@@ -378,10 +384,15 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AHtc: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
+    // The shockwave also scorches the ground under the caster: UberSplatData row THND
+    // ("ThunderClap", ReplaceableTextures\Splats\ThunderClapUbersplat.blp).
+    api.emitSplat("THND", caster.x, caster.y);
     for (const t of api.unitsInArea(ctx.x, ctx.y, lvl.area)) {
       if (t === caster || !api.hostile(caster, t) || t.flying) continue;
       api.spellDamage(t, d(lvl, 0), caster.id);
-      api.applyBuff(t, { kind: "slow", timeLeft: dur(lvl, t), sourceId: caster.id, value: d(lvl, 2, 0.25), value2: d(lvl, 3, 0.25) });
+      // fx(def) → the slow buff BHtc's own Targetart, StasisTotemTarget.mdx worn
+      // `overhead` (the amber swirl — the same rig as the blue stun one).
+      api.applyBuff(t, { kind: "slow", timeLeft: dur(lvl, t), sourceId: caster.id, value: d(lvl, 2, 0.25), value2: d(lvl, 3, 0.25), ...fx(def) });
     }
   },
 
@@ -663,7 +674,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     for (const t of enemiesInArea(api, caster, caster.x, caster.y, lvl.area || 250)) {
       if (t.flying) continue;
       api.spellDamage(t, d(lvl, 0, 25), caster.id);
-      api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 2, sourceId: caster.id });
+      // fx(def) → the shared stun buff BPSE's Targetart (ThunderclapTarget.mdx, `overhead`) —
+      // the swirl every stunned unit wears. Without it War Stomp stunned in silence.
+      api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 2, sourceId: caster.id, ...fx(def) });
     }
   },
 

@@ -32,6 +32,7 @@ const FRAG_SRC = `
 precision mediump float;
 uniform sampler2D uTex;
 uniform vec3 uTint;
+uniform float uAlpha; // whole-splat opacity — a temporary spell splat's Birth/Pause/Decay fade
 uniform float uMask;
 uniform float uHalf; // ring outer radius in WORLD units (the splat half-width) — for mask mode
 varying vec2 vUv;
@@ -54,13 +55,13 @@ void main() {
     float aa = 1.5;                             // soft edge, world units
     float a = smoothstep(uHalf - thick - aa, uHalf - thick + aa, r) * (1.0 - smoothstep(uHalf - aa, uHalf + aa, r));
     if (a < 0.02) discard;
-    gl_FragColor = vec4(uTint, a);
+    gl_FragColor = vec4(uTint, a * uAlpha);
     return;
   }
   // Foundation / AoE splats: the texture as-authored, recoloured by uTint (white = as-is).
   vec4 c = texture2D(uTex, vUv);
   if (c.a < 0.01) discard; // skip the fully-transparent margin of the splat texture
-  gl_FragColor = vec4(c.rgb * uTint, c.a);
+  gl_FragColor = vec4(c.rgb * uTint, c.a * uAlpha);
 }`;
 
 // A hair of world lift + a slope-scaled depth bias so the coplanar decal reliably wins
@@ -83,6 +84,7 @@ interface SplatEntry {
   additive: boolean; // ADDITIVE blend vs alpha blend (default)
   mask: boolean; // draw a PROCEDURAL `tint` ring from UV, ignoring the texture (selection rings)
   half: number; // the splat half-width in world units (ring outer radius, for `mask`)
+  alpha: number; // whole-splat opacity (1 = as-authored); driven by setAlpha for fading splats
 }
 
 /** Per-splat options. `tint` recolours the texture (default white), or is the ring
@@ -93,6 +95,7 @@ export interface SplatOptions {
   tint?: [number, number, number];
   additive?: boolean;
   mask?: boolean;
+  alpha?: number;
 }
 
 interface CachedTexture {
@@ -110,6 +113,7 @@ export class UberSplatOverlay {
   private uViewProj: WebGLUniformLocation;
   private uTex: WebGLUniformLocation;
   private uTint: WebGLUniformLocation;
+  private uAlpha: WebGLUniformLocation;
   private uMask: WebGLUniformLocation;
   private uHalf: WebGLUniformLocation;
   private maxAttribs: number;
@@ -127,6 +131,7 @@ export class UberSplatOverlay {
     this.uViewProj = gl.getUniformLocation(this.program, "uViewProj")!;
     this.uTex = gl.getUniformLocation(this.program, "uTex")!;
     this.uTint = gl.getUniformLocation(this.program, "uTint")!;
+    this.uAlpha = gl.getUniformLocation(this.program, "uAlpha")!;
     this.uMask = gl.getUniformLocation(this.program, "uMask")!;
     this.uHalf = gl.getUniformLocation(this.program, "uHalf")!;
   }
@@ -146,11 +151,18 @@ export class UberSplatOverlay {
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     const uvBuf = createBuffer(gl, gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
-    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false, half: scale });
+    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false, half: scale, alpha: opts?.alpha ?? 1 });
     // Decode the BLP once (synchronous); the GL texture is uploaded lazily in render().
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });
     }
+  }
+
+  /** Re-fade an existing splat without rebuilding its geometry (a spell splat's
+   *  Birth/Pause/Decay envelope, ticked per frame). */
+  setAlpha(id: string | number, alpha: number): void {
+    const e = this.entries.get(String(id));
+    if (e) e.alpha = alpha;
   }
 
   remove(id: string | number): void {
@@ -260,6 +272,7 @@ export class UberSplatOverlay {
     gl.enableVertexAttribArray(this.aUv);
 
     for (const e of this.entries.values()) {
+      if (e.alpha <= 0) continue; // fully faded out (a spell splat mid-envelope)
       const tex = this.resolveTexture(e.texture);
       if (!tex) continue; // texture missing/undecodable — skip
       // Per-entry blend: additive for glowing selection rings, alpha for foundation
@@ -267,6 +280,7 @@ export class UberSplatOverlay {
       if (e.additive) gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform3fv(this.uTint, e.tint);
+      gl.uniform1f(this.uAlpha, e.alpha);
       gl.uniform1f(this.uMask, e.mask ? 1 : 0);
       gl.uniform1f(this.uHalf, e.half);
       gl.bindTexture(gl.TEXTURE_2D, tex);

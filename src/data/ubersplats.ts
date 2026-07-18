@@ -21,6 +21,13 @@ export interface UberSplatDef {
   texture: string; // resolved BLP path, backslashes, with extension (`dir\file.blp`)
   scale: number; // half-width in world units (quad spans center ± scale)
   blend: number; // UberSplatData "blendmode" (0 = alpha blend; used verbatim)
+  // The fade a TEMPORARY splat plays through, in seconds. A building's splat just holds
+  // (its row's times are irrelevant while the building stands), but a spell's — THND,
+  // "ThunderClap": BirthTime=0.2 PauseTime=2 Decay=2, StartA=0 MiddleA=255 EndA=0 — is
+  // the whole effect: fade in over BirthTime, hold PauseTime, fade out over Decay.
+  birthTime: number;
+  pauseTime: number;
+  decay: number;
 }
 
 interface Row {
@@ -57,6 +64,9 @@ export function loadUberSplatRegistry(vfs: DataSource): UberSplatRegistry {
       texture: `${dir.replace(/\//g, "\\")}\\${file}.blp`,
       scale: num(r, "scale", 100),
       blend: num(r, "blendmode", 0),
+      birthTime: num(r, "birthtime", 0),
+      pauseTime: num(r, "pausetime", 0),
+      decay: num(r, "decay", 0),
     });
   }
   return new UberSplatRegistry(defs);

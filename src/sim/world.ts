@@ -21,7 +21,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, fx, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -1201,6 +1201,9 @@ export class SimWorld {
   // --- spell / ability event channels drained by the renderer each frame ---
   // Spell effect models to play at a unit/point (targetArt/casterArt/areaArt).
   private spellEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> = [];
+  // Temporary ground decals a spell paints (Thunder Clap's scorch): an UberSplatData
+  // row id + where. The row carries the texture, half-width and fade timings.
+  private spellSplats: Array<{ splatId: string; x: number; y: number }> = [];
   // A unit began casting: renderer plays the cast animation (spell/throw/slam) and
   // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
@@ -4113,14 +4116,17 @@ export class SimWorld {
       // Stasis Trap — otot: arm until an enemy land unit steps into the trigger radius, then
       // stun every enemy land unit in the (larger) blast radius and consume the trap.
       if (u.typeId === "otot") {
-        const asta = this.abilities?.get("Asta")?.levelData[0];
+        const astaDef = this.abilities?.get("Asta");
+        const asta = astaDef?.levelData[0];
         const trig = asta ? this.dataOf(asta, 1, 250) : 250; // dataB — trigger radius
         const blast = asta ? this.dataOf(asta, 2, 400) : 400; // dataC — stun radius
         const stunDur = asta ? this.dataOf(asta, 3, 6) : 6; // dataD — stun duration
         const armed = this.unitsInAreaInternal(u.x, u.y, trig).some((e) => e.hp > 0 && !e.flying && !e.building && this.hostile(u, e));
         if (armed) {
+          // Bsta, Stasis Trap's own buff, wears the same overhead stun swirl as BPSE.
+          const stunFx = astaDef ? fx(astaDef) : undefined;
           for (const e of this.unitsInAreaInternal(u.x, u.y, blast)) {
-            if (e.hp > 0 && !e.flying && !e.building && this.hostile(u, e)) this.applyBuffInternal(e, { kind: "stun", timeLeft: stunDur, sourceId: u.id });
+            if (e.hp > 0 && !e.flying && !e.building && this.hostile(u, e)) this.applyBuffInternal(e, { kind: "stun", timeLeft: stunDur, sourceId: u.id, ...stunFx });
           }
           this.removeUnit(u.id); // trap consumed
         }
@@ -4247,7 +4253,8 @@ export class SimWorld {
     const chance = lvl.data[1]; // dataB = bash chance
     const stunDur = lvl.data[2] || 1; // dataC = stun duration
     if (Number.isFinite(chance) && this.rng() < chance) {
-      this.applyBuffInternal(target, { kind: "stun", group: "", timeLeft: target.isHero ? Math.min(stunDur, lvl.heroDuration || stunDur) : stunDur, sourceId: attacker.id });
+      // Bash's buff is BPSE too — the same overhead swirl every stun in the game wears.
+      this.applyBuffInternal(target, { kind: "stun", group: "", timeLeft: target.isHero ? Math.min(stunDur, lvl.heroDuration || stunDur) : stunDur, sourceId: attacker.id, ...fx(def) });
     }
   }
 
@@ -5499,6 +5506,9 @@ export class SimWorld {
     emitEffect: (art, x, y, targetId, life) => {
       if (art) this.spellEffects.push({ art, x, y, targetId, z: 0, life });
     },
+    emitSplat: (splatId, x, y) => {
+      if (splatId) this.spellSplats.push({ splatId, x, y });
+    },
     addSpellField: (f) => this.addSpellFieldInternal(f),
     burnMana: (t, amount) => {
       const burned = Math.min(t.mana, Math.max(0, amount));
@@ -5743,6 +5753,13 @@ export class SimWorld {
     if (!this.spellEffects.length) return this.spellEffects;
     const out = this.spellEffects;
     this.spellEffects = [];
+    return out;
+  }
+  /** Ground decals a spell asked for this frame (UberSplatData row id + centre). */
+  drainSpellSplats(): Array<{ splatId: string; x: number; y: number }> {
+    if (!this.spellSplats.length) return this.spellSplats;
+    const out = this.spellSplats;
+    this.spellSplats = [];
     return out;
   }
   /** Casts that began this frame (renderer plays the cast animation). */
