@@ -133,9 +133,30 @@ const POOL_GROUP: Record<"death" | "impact" | "ui" | "spell", number> = {
 
 const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["What", "Yes", "YesAttack", "Pissed", "Warcry", "Ready"]);
 
-const MAX_DEATHS = 4; // concurrent death cries
-const MAX_IMPACTS = 5; // concurrent weapon-impact / chop clangs
 const MAX_VOICES = 8; // concurrent voice lines across all sources (safety cap on overlap)
+
+/** Concurrent voices allowed per SOUND CHANNEL — the grouping the game's own SoundInfo
+ *  SLKs carry in their `Channel` column, read straight off the 1.27a archives:
+ *    UnitCombatSounds → 5      every weapon-impact clang (all 60 rows)
+ *    AnimSounds       → 11     a model's SND attack/fire/death events (591 of 592 rows)
+ *    UnitAckSounds    → 1–4    voice lines        AbilitySounds → 13/14    UISounds → 8/12
+ *  These are DIFFERENT channels to the engine and each holds its own voices. We used to
+ *  run every weapon sound through ONE 5-slot "impact" pool, so a unit's own fire sound
+ *  (channel 11) and the clang it lands (channel 5) competed with each other and with
+ *  every other unit in the fight. Measured in a 4-Mountain-King creep fight: 112 sounds
+ *  requested, 35 dropped — the Mountain King's hammer swing and its MetalHeavyBashFlesh
+ *  clang among them, i.e. blows that dealt damage in silence. Budget per channel instead.
+ *  The engine's own per-channel voice count isn't in any data file, so this size is ours:
+ *  generous enough that a normal fight never drops, small enough to bound a mass battle. */
+const CHANNEL_VOICES = 16;
+
+/** A reserved slot on a channel. `src` is null until the clip's buffer finishes decoding
+ *  (the reservation is taken synchronously, playback starts later); `dead` marks a voice
+ *  preempted before it ever started, so the decode callback knows not to play it. */
+interface PoolVoice {
+  src: AudioBufferSourceNode | null;
+  dead: boolean;
+}
 
 interface Clip {
   paths: string[]; // full MPQ paths of the randomized variants
@@ -157,6 +178,14 @@ interface Clip {
   // this matters for: GlueScreenClick, "Use NODUPLICATES flag to prevent douple playing of
   // this sound by cancel buttons." Absent on the clips we synthesize for folder WAVs.
   noDup?: boolean;
+  // Flags contains CHANNELFULLPREEMPT (or CHANNELFULLPREEMPTOLDEST): when the sound's
+  // channel is full the engine TAKES a slot from a voice already playing rather than
+  // refusing the new one. 490 of AnimSounds' 592 rows carry it — a unit's attack sound is
+  // meant to be heard even mid-brawl. The OLDEST variant names the victim outright, and
+  // oldest-first is the only deterministic policy for the plain flag too, so both stop the
+  // channel's longest-running voice. UnitCombatSounds carries NEITHER flag on any of its 60
+  // rows, so a full combat channel really does refuse the clang — that part is authentic.
+  preempt?: boolean;
 }
 
 /** Weapon/spell sounds embedded in a unit/missile/effect MODEL as SND event objects,
@@ -242,8 +271,9 @@ export class SoundBoard {
   // own line still plays is dropped. Source-less voices use a fresh voiceSeq key.
   private voices = new Map<string, AudioBufferSourceNode>();
   private voiceSeq = 0;
-  private deaths = 0;
-  private impacts = 0;
+  /** Live voices per sound channel, oldest first — the budget CHANNEL_VOICES bounds and
+   *  the queue a CHANNELFULLPREEMPT clip steals its slot from (see playPool). */
+  private channelVoices = new Map<number, PoolVoice[]>();
   private loops = new Map<string, AudioBufferSourceNode>(); // active looping sounds by name
   /** Files a NODUPLICATES clip currently has in the air (see playPool). */
   private playing = new Set<string>();
@@ -435,7 +465,10 @@ export class SoundBoard {
     const paths = this.folderSounds(kind, missileArt, suffixes);
     // Folder WAVs carry no SLK metadata, so mark them WANT3D with WC3's typical
     // combat distances (min 600 / max 10000) — a missile whoosh is a world sound.
-    if (paths.length) this.playPool({ paths, gain: 0.7, pitch: 1, pitchVar: 0.06, threeD: true, refDist: 600, maxDist: 10000, cutoff: 3000 }, "impact", at);
+    // This clip stands in for the SND "M" event the model didn't carry, so budget it on
+    // the channel that event would have resolved to (AnimSounds = 11) and let it preempt
+    // the way all but a handful of that table's rows do.
+    if (paths.length) this.playPool({ paths, gain: 0.7, pitch: 1, pitchVar: 0.06, threeD: true, refDist: 600, maxDist: 10000, cutoff: 3000, channel: 11, preempt: true }, "impact", at);
   }
 
   /** Play a unit's own attack/fire sound — the SND "K" event embedded in its model
@@ -1096,10 +1129,12 @@ export class SoundBoard {
     return true; // key reserved for this source — the line is committed (loads async)
   }
 
-  /** Play a clip on an overlapping one-shot pool. deaths/impacts are concurrency-
-   *  capped (reserved synchronously so an AoE burst can't slip the cap); ui and
-   *  spell aren't — a player-initiated cast sound must never lose its slot to the
-   *  weapon-clang cap mid-fight (issue #23). A WANT3D clip with a world position
+  /** Play a clip on an overlapping one-shot pool. deaths/impacts are budgeted per SOUND
+   *  CHANNEL — the clip's own `Channel` column, so a unit's fire sound (AnimSounds, 11)
+   *  and the clang it lands (UnitCombatSounds, 5) never compete for one budget; a full
+   *  channel preempts or refuses as the row's flags say (CHANNEL_VOICES). ui and spell
+   *  aren't budgeted at all — a player-initiated cast sound must never lose its slot to
+   *  the weapon-clang cap mid-fight (issue #23). A WANT3D clip with a world position
    *  pans + attenuates around the listener regardless of kind. */
   private playPool(clip: Clip | null, kind: "death" | "impact" | "ui" | "spell", at?: SoundPos, group = POOL_GROUP[kind]): void {
     if (!clip || !clip.paths.length) return;
@@ -1114,25 +1149,43 @@ export class SoundBoard {
     // what keeps a double-clicked menu button from playing BigButtonClick twice over
     // itself. Keyed by FILE, since that is what "the same sound" means to the engine.
     if (clip.noDup && this.playing.has(path)) return;
-    if (kind === "death") {
-      if (this.deaths >= MAX_DEATHS) return;
-      this.deaths++;
-    } else if (kind === "impact") {
-      if (this.impacts >= MAX_IMPACTS) return;
-      this.impacts++;
+    // Concurrency is budgeted per SOUND CHANNEL (see CHANNEL_VOICES). Reserve the slot
+    // synchronously — the buffer loads async, so an AoE burst would otherwise slip the cap.
+    let voices: PoolVoice[] | null = null;
+    if (kind === "impact" || kind === "death") {
+      const channel = clip.channel ?? 0;
+      voices = this.channelVoices.get(channel) ?? this.channelVoices.set(channel, []).get(channel)!;
+      if (voices.length >= CHANNEL_VOICES) {
+        if (!clip.preempt) return; // no preempt flag (UnitCombatSounds) — the engine refuses it
+        const victim = voices.shift(); // …otherwise steal the channel's longest-running voice
+        if (victim) {
+          victim.dead = true;
+          try {
+            victim.src?.stop();
+          } catch {
+            /* already ended */
+          }
+        }
+      }
     }
     if (clip.noDup) this.playing.add(path);
+    const voice: PoolVoice = { src: null, dead: false };
+    voices?.push(voice);
     const release = () => {
-      if (kind === "death") this.deaths--;
-      else if (kind === "impact") this.impacts--;
+      if (voices) {
+        const i = voices.indexOf(voice); // -1 once preempted: already shifted off
+        if (i >= 0) voices.splice(i, 1);
+      }
       if (clip.noDup) this.playing.delete(path);
     };
     void this.buffer(path).then((buf) => {
-      if (!buf || !this.ctx || !this.master) {
+      // `voice.dead`: preempted while its buffer was still decoding — don't start it.
+      if (!buf || !this.ctx || !this.master || voice.dead) {
         release();
         return;
       }
       const src = this.source(buf, clip);
+      voice.src = src;
       const g = src.connect(this.gain(clip.gain, group));
       if (positional) g.connect(this.panner(clip, at!)).connect(this.master);
       else g.connect(this.master);
@@ -1236,6 +1289,7 @@ export class SoundBoard {
           maxDist: num("maxdistance"),
           cutoff: num("distancecutoff"),
           noDup: /NODUPLICATES/i.test(flags),
+          preempt: /CHANNELFULLPREEMPT/i.test(flags), // also matches …PREEMPTOLDEST
         };
       }
     }
