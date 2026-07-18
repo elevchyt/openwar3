@@ -283,6 +283,8 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Acri: { target: "unit" }, // Cripple — slow move & attack, and cut the target's damage
   Afae: { target: "unit", autocast: true }, // Faerie Fire — armour reduction (Orderon/Orderoff)
   Auhf: { target: "unit" }, // Unholy Frenzy — attack speed at the cost of the target's life
+  Aadm: { target: "unit", autocast: true }, // Abolish Magic — single-target dispel (Orderon/Orderoff)
+  Asds: { target: "unit" }, // Kaboom! — the Goblin Sapper walks in and detonates (Rng 0)
   // === Upgrade-granted (issue #57) ===
   // Each of these carries `Requires=<upgradeId>` in its AbilityFunc row, so the tech graph
   // already gates it and the command card hides the button until the research lands — the

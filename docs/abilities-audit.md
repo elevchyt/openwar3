@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 278, **done** 150, **passive** 14, **todo** 357.
+Totals: 799 rows — **alias** 284, **done** 152, **passive** 14, **todo** 349.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-237 distinct base `code`s cover the 357 todo rows. Implementing one
+235 distinct base `code`s cover the 349 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -38,13 +38,11 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Acyc` | Cyclone | 5 | ground,enemy,neutral,organic | cyclone | `ACcy` `Acny` `Acyc` `AIcy` `SCc1` |
 | `AImm` | Item Mana Bonus | 5 |  |  | `AIbm` `AImb` `AImz` `AI2m` `AImv` |
 | `Amim` | Spell Immunity | 5 |  |  | `ACm2` `ACm3` `ACmi` `AImx` `Amim` |
-| `Aadm` | Abolish Magic | 4 | air,ground,ward,invu,vuln,tree | autodispel | `Aadm` `ACd2` `ACdm` `Andm` |
 | `Abli` | Blight Dispel Large | 4 |  |  | `Abdl` `Abds` `Abgl` `Abgs` |
 | `Abur` | Burrow | 4 |  | burrow | `Abu2` `Abu3` `Abu5` `Abur` |
 | `ANde` | Demolish | 4 | enemy,structure | demolish | `ANd1` `ANd2` `ANd3` `ANde` |
 | `Aapl` | Disease Cloud | 4 | ground,enemy,organic,neutral |  | `Aap1` `Aap2` `Aap3` `Aap4` |
 | `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
-| `Asds` | Kaboom! | 4 | ground,structure,debris,enemy,neutral | selfdestruct | `Asd2` `Asd3` `Asdg` `Asds` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
 | `Adda` | AOE damage upon death | 3 | ground,structure,debris,enemy,ward |  | `Adda` `Amnx` `Amnz` |
 | `Acan` | Cannibalize | 3 | ground,dead,organic | cannibalize | `Acan` `ACcn` `Acn2` |
@@ -273,10 +271,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 
 | | ID | Code | Name | Race | H | I | targs1 | Art | Order | Comment |
 |---|---|---|---|---|---|---|---|---|---|---|
-|   | `Aadm` | `Aadm` | Abolish Magic | nightelf |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic |
-|   | `ACd2` | `Aadm` | Abolish Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic (Creep, 1,2 pos) |
-|   | `ACdm` | `Aadm` | Abolish Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic (Creep) |
-|   | `Andm` | `Aadm` | Abolish Magic | naga |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic(naga) |
+| x | `Aadm` | `Aadm` | Abolish Magic | nightelf |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic |
+| ~ | `ACd2` | `Aadm` | Abolish Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic (Creep, 1,2 pos) |
+| ~ | `ACdm` | `Aadm` | Abolish Magic | creeps |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic (Creep) |
+| ~ | `Andm` | `Aadm` | Abolish Magic | naga |  |  | air,ground,ward,invu,vuln,tree | 1 | autodispel | Abolish Magic(naga) |
 |   | `Aabs` | `Aabs` | Absorb Mana | undead |  |  | player,vuln,invu | 1 | absorbmana | Absorb Mana |
 | x | `ANab` | `ANab` | Acid Bomb | creeps | H |  | ground,enemy,neutral,organic,air | 1 | acidbomb | Alchemist - Acid Bomb |
 | ~ | `ACss` | `AEsh` |  | creeps |  |  | ground,air,enemy,neutral | 1 | shadowstrike | Shadow Strike(Creep) |
@@ -737,10 +735,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `AItp` | `AItp` | Item Town Portal | other |  | I | structure,vuln,invu | 4 |  | ItemTownPortal       |
 |   | `AIuw` | `AIfs` | Item Ursa Warrior Summon | other |  | I |  | 1 |  | FigurineUrsaWarrior |
 |   | `AIwb` | `AIwb` | Item Web | other |  | I | air,enemy,neutral | 1 |  | ItemWeb |
-|   | `Asd2` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,enemy,neutral |  | selfdestruct | Self Destruct 2 (Clockwerk Goblins) |
-|   | `Asd3` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,enemy,neutral |  | selfdestruct | Self Destruct 3 (Clockwerk Goblins) |
-|   | `Asdg` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,enemy,neutral |  | selfdestruct | Self Destruct (Clockwerk Goblins) |
-|   | `Asds` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,tree,ward |  | selfdestruct | Self Destruct |
+| ~ | `Asd2` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,enemy,neutral |  | selfdestruct | Self Destruct 2 (Clockwerk Goblins) |
+| ~ | `Asd3` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,enemy,neutral |  | selfdestruct | Self Destruct 3 (Clockwerk Goblins) |
+| ~ | `Asdg` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,enemy,neutral |  | selfdestruct | Self Destruct (Clockwerk Goblins) |
+| x | `Asds` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,tree,ward |  | selfdestruct | Self Destruct |
 | ~ | `AIh3` | `AIhe` | Least Healing | other |  | I |  | 1 |  | ItemHeal (Least) |
 | ~ | `AIpl` | `AIrg` | Lesser Clarity Potion | other |  | I |  | 1 |  | Potion of Mana Regen(lesser) |
 | ~ | `APrl` | `AHre` | Lesser Rune Resurrection | other |  | I | air,ground,dead,friend | 2 | resurrection | Rune of Lesser Resurrection |

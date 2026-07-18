@@ -154,5 +154,43 @@ const round = (n) => Math.round(n * 1000) / 1000;
   check("…and bleeds the target for dataB per second", [log.buffs[1].kind, log.buffs[1].value], ["dot", 4]);
 }
 
+// Abolish Magic — a single-target Dispel Magic. dataB "Summoned Unit Damage" (300) lands
+// only on a summon; dataA "Mana Loss" is 0 on every stock row.
+{
+  const caster = unit({ id: 1, team: 0 });
+  const foe = unit({ id: 2, team: 1, summonLeft: 0 });
+  const summon = unit({ id: 3, team: 1, summonLeft: 30 });
+  {
+    const { api, log } = harness([caster, foe]);
+    let dispelled = 0;
+    api.dispel = () => dispelled++;
+    SPELL_HANDLERS.Aadm(api, caster, def({ data: [0, 300, 1] }), 1, { targetId: 2, x: 0, y: 0 });
+    check("Abolish Magic dispels its target", dispelled, 1);
+    check("…and does not damage a non-summon", log.damage, []);
+  }
+  {
+    const { api, log } = harness([caster, summon]);
+    api.dispel = () => {};
+    SPELL_HANDLERS.Aadm(api, caster, def({ data: [0, 300, 1] }), 1, { targetId: 3, x: 0, y: 0 });
+    check("…but a summon takes dataB", log.damage, [{ id: 3, amount: 300 }]);
+  }
+}
+
+// Kaboom! — two concentric rings, and no allegiance filter: the sapper's own escort is hit.
+{
+  const sapper = unit({ id: 1, team: 0, x: 0, y: 0 });
+  const inner = unit({ id: 2, team: 1, x: 50, y: 0 }); // inside the 100 full radius
+  const outer = unit({ id: 3, team: 1, x: 200, y: 0 }); // inside the 250 partial radius
+  const escort = unit({ id: 4, team: 0, x: 60, y: 0 }); // FRIENDLY, and inside the blast
+  const { api, log } = harness([sapper, inner, outer, escort]);
+  let died = 0;
+  api.killUnit = () => died++;
+  SPELL_HANDLERS.Asds(api, sapper, def({ data: [100, 250, 250, 100, 100] }), 1, { targetId: 2, x: 0, y: 0 });
+  check("Kaboom! deals dataB inside dataA and dataD beyond it", log.damage, [
+    { id: 2, amount: 250 }, { id: 3, amount: 100 }, { id: 4, amount: 250 },
+  ]);
+  check("…and the sapper dies", died, 1);
+}
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

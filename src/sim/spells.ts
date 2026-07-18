@@ -666,6 +666,59 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(t, { kind: "dot", group: "unholyfrenzy", timeLeft: time, sourceId: caster.id, value: d(lvl, 1, 4) });
   },
 
+  // Abolish Magic (Dryad) — Dispel Magic aimed at ONE unit instead of an area: strip its
+  // timed buffs, and a summon takes dataB "Summoned Unit Damage" (300), which is enough to
+  // end most of them. dataA is "Mana Loss", 0 on every stock row but honoured if a map sets
+  // it. Its allegiance is deliberately unrestricted — the same cast cleanses a poisoned
+  // ally and strips an enemy's Bloodlust, which is exactly why `targs1` names neither
+  // `friend` nor `enemy`.
+  Aadm: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = def.levelData[rank - 1];
+    api.dispel(t);
+    if (t.summonLeft > 0) api.spellDamage(t, d(lvl, 1, 300), caster.id);
+    const manaLoss = d(lvl, 0, 0);
+    if (manaLoss > 0) t.mana = Math.max(0, t.mana - manaLoss);
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+  },
+
+  // Kaboom! (Goblin Sapper) — he walks up to the target and detonates himself. The blast is
+  // two concentric rings, and the columns say so: dataA "Full Damage Radius" (100) and dataB
+  // "Full Damage Amount" (250), then dataC "Partial Damage Radius" (250) and dataD "Partial
+  // Damage Amount" (100). Those four are shared with the other death-blast abilities
+  // (AbilityMetaData rows Dda1..Dda4, useSpecific = Adda,Amnx,Amnz,Asds,Auco).
+  //
+  // Everything in range is hit, friend and foe alike: `targs1` is `ground,structure,debris,
+  // tree,ward` with no allegiance flag at all, and a sapper pack really does kill its own
+  // escort if it detonates among them.
+  //
+  // NOT applied: the extra damage a sapper is famous for doing to BUILDINGS. dataE is
+  // "Building Damage Factor" (AbilityMetaData Sds1, data=5) and its value is 100, while
+  // Liquipedia states the ability does "3 times as much damage against buildings". 100 is
+  // neither 3 nor a percentage that yields 3, so the two sources do not reconcile and
+  // neither reading can be called verified. Rather than invent a multiplier, the blast lands
+  // as written and this is left for a measurement against the real client (see the
+  // wc3-ground-truth memory) — the one source that can settle it.
+  Asds: (api, caster, def, rank, ctx) => {
+    const lvl = def.levelData[rank - 1];
+    const t = api.getUnit(ctx.targetId);
+    const cx = t ? t.x : ctx.x;
+    const cy = t ? t.y : ctx.y;
+    const fullR = d(lvl, 0, 100);
+    const full = d(lvl, 1, 250);
+    const partR = d(lvl, 2, 250);
+    const part = d(lvl, 3, 100);
+    for (const e of api.unitsInArea(cx, cy, Math.max(fullR, partR))) {
+      if (e === caster) continue; // he dies below, not to his own blast
+      const amount = Math.hypot(e.x - cx, e.y - cy) <= fullR ? full : part;
+      if (amount > 0) api.spellDamage(e, amount, caster.id);
+    }
+    if (def.specialArt) api.emitEffect(def.specialArt, cx, cy, 0);
+    else if (def.targetArt) api.emitEffect(def.targetArt, cx, cy, 0);
+    api.killUnit(caster);
+  },
+
   // Devour (Kodo Beast) — swallow an enemy land non-hero unit whole; it's digested inside
   // (tickDevour) and freed if the Kodo is slain first.
   Adev: (api, caster, def, _rank, ctx) => {
