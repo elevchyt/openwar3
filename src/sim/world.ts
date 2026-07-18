@@ -209,8 +209,11 @@ export type BuffKind =
   | "ethereal" // Banish: value = move-slow fraction; can't attack, immune to physical
   //            damage but takes +66% from Magic/Spells (see u.ethereal, EtherealDamageBonus)
   | "invisible"; // Wind Walk/Invisibility: the holder renders half-faded (see u.invisible).
-  //             VISUAL ONLY for now — concealment from the enemy and its counterpart,
-  //             detection, are not modelled, so this grants no gameplay advantage.
+  //             CONCEALMENT is modelled — canSee() refuses an invisible unit, so it draws no
+  //             aggro down any automatic path — and so is its counterpart, True Sight
+  //             (`u.detectRadius`, teamDetects). What is NOT modelled is hiding it from the
+  //             enemy's SCREEN: rts.ts fades every invisible unit for every viewer alike
+  //             rather than removing it from the ones who should not see it at all.
 
 /** An in-progress spell cast (order === "cast"). The lifecycle, matching WC3
  *  (hiveworkshop "Cast Point and Backswing Point" thread 265781): walk into range
@@ -820,6 +823,10 @@ export interface SimUnit {
    *  Spell Breaker, the Destroyer, the Faerie Dragon, the Phoenix and the Serpent Wards
    *  (Units\UnitAbilities.slk). Derived from the ability, like `ethereal` from its buff. */
   magicImmune: boolean;
+  /** True Sight radius — how far this unit reveals invisible enemies, or 0 for the vast
+   *  majority that reveal nothing. dataA of `Atru` (the Shade, the general detector and the
+   *  War Eagle, 900) or of `Adet` (the Sentry Ward, 1100). Derived from the ability list. */
+  detectRadius: number;
   /** The fade is IN FORCE: renders half-faded, and draws no aggro (see canSee). False during
    *  the Transition Time, when the unit is under the effect but hasn't vanished yet. */
   invisible: boolean;
@@ -2754,6 +2761,7 @@ export class SimWorld {
       | "silenced"
       | "ethereal"
       | "magicImmune"
+      | "detectRadius"
       | "invisible"
       | "cloaked"
       | "invulnerable"
@@ -2924,6 +2932,7 @@ export class SimWorld {
       silenced: false,
       ethereal: false,
       magicImmune: false, // recomputeStats derives it from the unit's ability list
+      detectRadius: 0, // …and True Sight likewise
       invisible: false,
       cloaked: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
@@ -4224,6 +4233,16 @@ export class SimWorld {
     // Magic Immunity is a plain property of the unit's ability list, not a buff — nothing
     // grants or removes it mid-life, so it is derived here alongside the rest.
     u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1);
+    // True Sight, likewise a property of the ability list. `Atru` and `Adet` are separate
+    // base codes for the same job (the Shade's 900 and the Sentry Ward's 1100), so both are
+    // read and the widest wins if a unit somehow carries each.
+    u.detectRadius = 0;
+    for (const a of u.abilities) {
+      if ((a.code !== "Atru" && a.code !== "Adet") || a.level < 1) continue;
+      const lvl = this.abilities?.get(a.id)?.levelData[Math.max(0, a.level - 1)];
+      const r = lvl?.data[0];
+      if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
+    }
     u.invisible = invisible;
     u.cloaked = cloaked;
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
@@ -6762,14 +6781,28 @@ export class SimWorld {
    *  blinds the watcher exactly as it blanks the fog map. Ranged creeps were shooting
    *  heroes straight through a forest they could not see over. Ordered last, and after
    *  each caller's range test, so the ray is only cast for a target already worth it. */
+  /** Does any living unit on `team` have True Sight covering (x, y)? Detection is shared
+   *  across the team, so one Shade or one Sentry Ward uncovers a Wind Walking hero for
+   *  every unit that side owns. */
+  teamDetects(team: number, x: number, y: number): boolean {
+    for (const d of this.units.values()) {
+      if (d.team !== team || d.hp <= 0 || d.detectRadius <= 0) continue;
+      if (Math.hypot(d.x - x, d.y - y) <= d.detectRadius) return true;
+    }
+    return false;
+  }
+
   private canSee(u: SimUnit, t: SimUnit): boolean {
     // An invisible unit is INVISIBLE: it draws no aggro. classic.battle.net's invisibility
     // page — "just because you can't see them, it doesn't mean you can't hit them!" — is the
     // other half of this: being unseen stops the automatic paths, not a deliberate blow, and
     // every caller here is an automatic one (idle scan, creep aggro, assist, re-acquire).
-    // An explicit attack order goes through issueAttack and never consults canSee, which is
-    // also where our missing detection would otherwise have to say no.
-    if (t.invisible) return false;
+    // An explicit attack order goes through issueAttack and never consults canSee.
+    //
+    // …unless somebody on the watcher's side has TRUE SIGHT over it. Detection is a team
+    // property in WC3, not a personal one: the Shade stands at the back and the whole army
+    // sees what it uncovers, which is the entire reason the unit exists.
+    if (t.invisible && !this.teamDetects(u.team, t.x, t.y)) return false;
     if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > this.sightOf(u)) return false;
     if (!this.visibleToTeam(u.team, t.x, t.y)) return false;
     return this.lineOfSight(u.x, u.y, t.x, t.y, u.flying || t.flying);

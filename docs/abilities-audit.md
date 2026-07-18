@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 290, **done** 154, **passive** 14, **todo** 341.
+Totals: 799 rows — **alias** 293, **done** 155, **passive** 14, **todo** 337.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-233 distinct base `code`s cover the 341 todo rows. Implementing one
+231 distinct base `code`s cover the 337 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -51,7 +51,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Aspd` | Spawn Hydra | 3 |  |  | `Aspy` `Aspt` `Aspd` |
 | `ANsu` | Submerge | 3 |  | submerge | `Asb1` `Asb2` `Asb3` |
 | `ANwm` | Summon Prawns | 3 |  | wateryminion | `Aslp` `AIwm` `ANwm` |
-| `Atru` | True Sight | 3 | vuln,invu |  | `Adtg` `ANtr` `Atru` |
 | `ACad` | Animate Dead | 2 | air,ground,dead | animatedead | `ACad` `AInd` |
 | `Aclf` | Cloud | 2 | vuln,invu,structure | cloudoffog | `Aclf` `AIfg` |
 | `Acmg` | Control Magic | 2 | air,ground,enemy,neutral,ward,organic | controlmagic | `Acmg` `AIcm` |
@@ -117,7 +116,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ANdp` | Dark Portal | 1 |  |  | `ANdp` |
 | `AUds` | Dark Summoning | 1 | air,ground,vuln,invu,player | darksummoning | `AUds` |
 | `Aave` | Destroyer Form | 1 |  | sphinxform | `Aave` |
-| `Adet` | Detector | 1 | vuln,invu |  | `Adt1` |
 | `Adtn` | Detonate | 1 | air,ground,ward,invu,vuln,tree | detonate | `Adtn` |
 | `ACdv` | Devour | 1 | ground,nonhero,enemy,organic,neutral | creepdevour | `ACdv` |
 | `Advc` | Devour Cargo | 1 | ground,enemy,neutral,vuln,invu |  | `Advc` |
@@ -441,7 +439,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `ANd3` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 3) |
 |   | `ANde` | `ANde` | Demolish | creeps | H |  | enemy,structure |  | demolish | Tinkerer - Demolish (Level 0) |
 |   | `Aave` | `Aave` | Destroyer Form | undead |  |  |  |  | sphinxform | Avenger Form |
-|   | `Adt1` | `Adet` | Detector | orc |  |  | vuln,invu |  |  | Detect (Sentry Ward) |
+| ~ | `Adt1` | `Adet` | Detector | orc |  |  | vuln,invu |  |  | Detect (Sentry Ward) |
 |   | `Adtn` | `Adtn` | Detonate | nightelf |  |  | air,ground,ward,invu,vuln,tree | 2 | detonate | Detonate |
 | ~ | `ACav` | `AHad` | Devotion Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Aura - Devotion (Creep) |
 | x | `AHad` | `AHad` | Devotion Aura | human | H |  | air,ground,friend,self,vuln,invu | 1 |  | Paladin - Devotion Aura |
@@ -1022,10 +1020,10 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `AEtq` | `AEtq` | Tranquility | nightelf | H |  | air,ground,friend,self,vuln,invu,neutral |  | tranquility | Keeper - Tranquility |
 | x | `ANtm` | `ANtm` | Transmute | creeps | H |  | air,ground,enemy,neutral,nonhero | 1 | transmute | Alchemist - Transmute |
 |   | `Atol` | `Atol` | Tree of Life upgrade ability | nightelf |  |  |  | 1 |  | Tree of life (for attaching art) |
-|   | `Adtg` | `Atru` | True Sight | other |  |  | vuln,invu |  |  | Detect (general) |
+| ~ | `Adtg` | `Atru` | True Sight | other |  |  | vuln,invu |  |  | Detect (general) |
 |   | `Agyv` | `Agyv` | True Sight | human |  |  | vuln,invu |  |  | Detect (Gyrocopter) |
-|   | `ANtr` | `Atru` | True Sight | other |  |  | vuln,invu |  |  | Detect(War Eagle) |
-|   | `Atru` | `Atru` | True Sight | undead |  |  | vuln,invu |  |  | Detect (Shade) |
+| ~ | `ANtr` | `Atru` | True Sight | other |  |  | vuln,invu |  |  | Detect(War Eagle) |
+| x | `Atru` | `Atru` | True Sight | undead |  |  | vuln,invu |  |  | Detect (Shade) |
 | ~ | `ACat` | `AEar` | Trueshot Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Aura - Trueshot (Creep) |
 | x | `AEar` | `AEar` | Trueshot Aura | nightelf | H |  | air,ground,friend,self,vuln,invu | 1 |  | Priestess - Trueshot Aura |
 |   | `Attu` | `Attu` | Turret | human |  |  |  |  |  | Tank Turret |
