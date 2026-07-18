@@ -29,6 +29,11 @@ export interface CommandButton {
   col: number; // 0–3
   row: number; // 0–2
   disabled: boolean;
+  /** A passive ability (Critical Strike, an aura): an INDICATOR that the unit has
+   *  the thing, not an order. It shows in full colour — it is working right now —
+   *  but it takes no press at all: no sink, no click sound, no hotkey. Learning one
+   *  is a different button on the learn page, and that one is pressable. */
+  passive?: boolean;
   /** THE current command of the selected unit — the one button wearing the green
    *  active border. At most one button in a card ever has this set. */
   active: boolean;
@@ -658,9 +663,10 @@ export class GameHud {
       this.driver.useInventory(slot);
       return;
     }
-    // Trigger the command whose hotkey matches the pressed key.
+    // Trigger the command whose hotkey matches the pressed key. A passive isn't a
+    // command, so its letter isn't taken — it can't shadow a real order sharing it.
     const key = e.key.toUpperCase();
-    const cmd = this.driver.commandCard().find((c) => c.hotkey === key && !c.disabled);
+    const cmd = this.driver.commandCard().find((c) => c.hotkey === key && !c.disabled && !c.passive);
     if (cmd) this.driver.runCommand(cmd.id);
   };
 
@@ -1381,7 +1387,7 @@ export class GameHud {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed", "autocast", "cant-afford");
+      btn.classList.remove("armed", "autocast", "cant-afford", "passive");
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
       onPress(btn, null);
@@ -1396,10 +1402,14 @@ export class GameHud {
       btn.classList.toggle("armed", c.active);
       btn.classList.toggle("autocast", !!c.autocast);
       btn.classList.toggle("cant-afford", c.disabled);
+      btn.classList.toggle("passive", !!c.passive);
       if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
       else this.cmdLabels[idx].textContent = c.name.slice(0, 4);
       if (c.count && c.count > 0) this.cmdCount[idx].textContent = String(c.count);
-      onPress(btn, () => this.driver.runCommand(c.id));
+      // A passive takes no press — it's an indicator, so it never sinks and never
+      // fires. It keeps its tooltip: reading what Critical Strike does is the whole
+      // reason the button is on the card.
+      onPress(btn, c.passive ? null : () => this.driver.runCommand(c.id));
       btn.onpointerenter = () => this.showTooltip(c);
       btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
     }

@@ -4974,9 +4974,10 @@ export class MapViewerScene {
         // look (a click while on cooldown is harmlessly rejected by the sim).
         // A PASSIVE is not "unavailable" either — Critical Strike is working right
         // now, and WC3 draws it in full colour off its own PASBTN art ([AOcr]
-        // Art=…\PassiveButtons\PASBTNCriticalStrike.blp). It simply does nothing on
-        // click (id "noop"), so only the mana check may grey it.
+        // Art=…\PassiveButtons\PASBTNCriticalStrike.blp). It just isn't a button
+        // you press (see `passive` below), so only the mana check may grey it.
         disabled: noMana,
+        passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
         // gets its own indicator, so the two can never both claim the border.

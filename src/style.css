@@ -1168,6 +1168,9 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
    the only border it paints is the green one on the CURRENT command (.armed).
    The press feedback is the sink below, on release-to-confirm (see onPress). */
 .hud-cmd.pressed { transform: scale(0.98); }
+/* A passive ability is an indicator, not an order: full colour (it IS working)
+   but nothing to press, so it doesn't take the hand cursor either. */
+.hud-cmd.passive { cursor: default; }
 .hud-cmd.armed {
   border-color: #6fe06a;
   box-shadow: 0 0 6px rgba(70, 224, 90, 0.5) inset;
