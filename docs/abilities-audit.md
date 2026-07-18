@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 240, **done** 138, **passive** 14, **todo** 407.
+Totals: 799 rows — **alias** 250, **done** 138, **passive** 14, **todo** 397.
 
 ## Art paths this install does not ship
 
@@ -26,12 +26,11 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-250 distinct base `code`s cover the 407 todo rows. Implementing one
+249 distinct base `code`s cover the 397 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
 |---|---|---|---|---|---|
-| `AIrg` | Clarity Potion | 10 |  |  | `AIpr` `AIp1` `AIp2` `AIp3` `AIp4` `AIp5` `AIp6` `AIrl` `AIpl` `AIsl` |
 | `Acha` | Berserker Upgrade | 8 |  |  | `Sbsk` `Sca1` `Sca2` `Sca3` `Sca4` `Sca5` `Sca6` `Srtt` |
 | `AIbl` | Build Tiny Altar of Kings | 8 |  |  | `AIbh` `AIbs` `AIbb` `AIbl` `AIbf` `AIbg` `AIbr` `AIbt` |
 | `AIfs` | Item Doom Guard Summon | 8 |  |  | `AIfu` `AIfh` `AIff` `AIir` `AIfd` `AIfr` `AIfs` `AIuw` |
@@ -407,7 +406,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | x | `ANch` | `ANch` | Charm | creeps | H |  | air,ground,nonhero,enemy,neutral,organic | 1 | charm | Dark Ranger - Charm |
 | x | `ANcr` | `ANcr` | Chemical Rage | creeps | H |  | self |  | chemicalrage | Alchemist - Chemical Rage |
 | x | `AIgo` | `AIgo` | Chest of Gold | other |  | I |  | 1 |  | GiveGold        |
-|   | `AIpr` | `AIrg` | Clarity Potion | other |  | I |  | 1 |  | Potion of Mana Regen(greater) |
+| ~ | `AIpr` | `AIrg` | Clarity Potion | other |  | I |  | 1 |  | Potion of Mana Regen(greater) |
 | ~ | `ACce` | `ANca` | Cleaving Attack | creeps |  |  | ground,enemy,neutral | 1 |  | Cleaving Attack (Creep) |
 | x | `ANca` | `ANca` | Cleaving Attack | creeps | H |  | ground,enemy,neutral | 1 |  | Pit Lord - Cleaving Attack |
 |   | `Aclf` | `Aclf` | Cloud | human |  |  | vuln,invu,structure |  | cloudoffog | Cloud of Fog |
@@ -563,12 +562,12 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Aaha` | `Aaha` | Gather | undead |  |  |  |  | harvest | Acolyte Harvest |
 | ~ | `Awh2` | `Awha` | Gather | creeps |  |  | tree,vuln,invu,alive,dead | 1 | harvest | Wisp Harvest (Invulnerable) |
 | x | `Awha` | `Awha` | Gather | nightelf |  |  | tree,alive,dead | 1 | harvest | Wisp Harvest |
-|   | `AIp1` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv I |
-|   | `AIp2` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv II |
-|   | `AIp3` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv III |
-|   | `AIp4` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv IV |
-|   | `AIp5` | `AIrg` | Generic Item-Rejuv Effect | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Rejuv I |
-|   | `AIp6` | `AIrg` | Generic Item-Rejuv Effect | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Rejuv II |
+| ~ | `AIp1` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv I |
+| ~ | `AIp2` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv II |
+| ~ | `AIp3` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv III |
+| ~ | `AIp4` | `AIrg` | Generic Item-Rejuv Effect | other |  | I |  |  |  | Potion of Rejuv IV |
+| ~ | `AIp5` | `AIrg` | Generic Item-Rejuv Effect | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Rejuv I |
+| ~ | `AIp6` | `AIrg` | Generic Item-Rejuv Effect | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Rejuv II |
 |   | `Amel` | `Amel` | Get Corpse | undead |  |  | ground,dead,nonhero |  | loadcorpse | Meat Load |
 |   | `Aeth` | `Aeth` | Ghost | undead |  |  |  |  |  | Ghost (Visible) |
 |   | `Agho` | `Agho` | Ghost | undead |  |  |  |  |  | Ghost |
@@ -587,7 +586,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Anh1` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep Normal) |
 |   | `Anh2` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep High) |
 |   | `Anhe` | `Anhe` | Heal | creeps |  |  | air,ground,friend,vuln,invu,self,organic,nonancient,neutral | 1 | heal | Heal (Creep Normal) |
-|   | `AIrl` | `AIrg` | Healing Salve | other |  | I | air,ground,friend,self,organic,vuln,invu | 2 |  | Potion of Life Regen |
+| ~ | `AIrl` | `AIrg` | Healing Salve | other |  | I | air,ground,friend,self,organic,vuln,invu | 2 |  | Potion of Life Regen |
 | x | `ANhs` | `ANhs` | Healing Spray | creeps | H |  | ground,air,organic | 1 | healingspray | Alchemist - Healing Spray |
 | ~ | `AChw` | `Ahwd` | Healing Ward | creeps |  |  |  |  | healingward | Healing Ward (creep) |
 | x | `Ahwd` | `Ahwd` | Healing Ward | orc |  |  |  |  | healingward | Healing Ward |
@@ -755,7 +754,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Asdg` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,enemy,neutral |  | selfdestruct | Self Destruct (Clockwerk Goblins) |
 |   | `Asds` | `Asds` | Kaboom! | creeps |  |  | ground,structure,debris,tree,ward |  | selfdestruct | Self Destruct |
 | ~ | `AIh3` | `AIhe` | Least Healing | other |  | I |  | 1 |  | ItemHeal (Least) |
-|   | `AIpl` | `AIrg` | Lesser Clarity Potion | other |  | I |  | 1 |  | Potion of Mana Regen(lesser) |
+| ~ | `AIpl` | `AIrg` | Lesser Clarity Potion | other |  | I |  | 1 |  | Potion of Mana Regen(lesser) |
 | ~ | `APrl` | `AHre` | Lesser Rune Resurrection | other |  | I | air,ground,dead,friend | 2 | resurrection | Rune of Lesser Resurrection |
 | ~ | `ACdr` | `AHdr` | Life Drain | creeps |  |  | air,ground,organic |  |  | Drain Life(Creep) |
 | ~ | `ANdr` | `AHdr` | Life Drain | creeps | H |  | air,ground,organic |  |  | Dark Ranger - Drain |
@@ -919,7 +918,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Sca6` | `Acha` |  | orc |  |  |  |  |  | Chaos (Grom) |
 | x | `AEst` | `AEst` | Scout | nightelf | H |  |  | 1 | scout | Priestess - Scout |
 |   | `AIsa` | `AIsa` | Scroll of Haste | other |  | I | air,ground,friend,self,vuln,invu |  |  | ItemSpeedAoe |
-|   | `AIsl` | `AIrg` | Scroll of Regeneration | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Life Regen |
+| ~ | `AIsl` | `AIrg` | Scroll of Regeneration | other |  | I | air,ground,friend,self,organic,vuln,invu | 1 |  | Scroll of Life Regen |
 | ~ | `ACsa` | `AHfa` | Searing Arrows | creeps |  |  | air,ground,structure,enemy,neutral | 1 | flamingarrows | Searing Arrows (creep) |
 | x | `AHfa` | `AHfa` | Searing Arrows | nightelf | H |  | air,ground,structure,enemy,neutral | 1 | flamingarrows | Priestess - Searing Arrows |
 | x | `Aneu` | `Aneu` | Select Hero | other |  |  |  | 2 |  | Neutral Building |

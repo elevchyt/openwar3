@@ -297,7 +297,20 @@ interface Row {
 export class AbilityRegistry {
   // Per-map custom overlay from war3map.w3a (see src/data/objectData.ts), mirroring
   // UnitRegistry: get() checks it first; cleared on map change.
-  constructor(private defs: Map<string, AbilityDef>, private custom = new Map<string, AbilityDef>()) {}
+  constructor(
+    private defs: Map<string, AbilityDef>,
+    private custom = new Map<string, AbilityDef>(),
+    /** Every `[B….]` buff section's persistent models, by buff id. `AbilityDef.buffFx` is
+     *  only buffid1's, which is right for the many abilities that apply one buff — but an
+     *  ability may list SEVERAL and choose between them at cast time off its own numbers.
+     *  The regeneration items are the clear case: `BIrg,BIrl,BIrm` is life-and-mana, life,
+     *  mana, and which one a Healing Salve wears depends on whether DataB is 0. */
+    private buffs = new Map<string, BuffFx[]>(),
+  ) {}
+  /** The persistent models a given buff id hangs on its holder ([] if unknown). */
+  buffFx(buffId: string): BuffFx[] {
+    return this.buffs.get(buffId) ?? [];
+  }
   get(id: string): AbilityDef | undefined {
     return this.custom.get(id) ?? this.defs.get(id);
   }
@@ -430,7 +443,15 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     });
   }
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
-  return new AbilityRegistry(defs);
+  // Index every buff section's models, so an ability that lists several buffs can pick the
+  // one its numbers call for (see AbilityRegistry.buffFx).
+  const buffs = new Map<string, BuffFx[]>();
+  for (const id of Object.keys(func.map)) {
+    if (id[0] !== "B") continue;
+    const fx = buffFxOf(func, id);
+    if (fx.length) buffs.set(id, fx);
+  }
+  return new AbilityRegistry(defs, new Map(), buffs);
 }
 
 /** Command buttons the ENGINE draws that are not abilities: they have a `[…]` section in

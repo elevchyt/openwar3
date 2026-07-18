@@ -1067,6 +1067,12 @@ const PRECAST_WARNING = new Set(["AHfs"]);
 // none either, yet the engine falls back to the caster's "Spell" clip for them (see
 // RtsController.playCastAnim).
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
+/** Buff group prefix worn by the regeneration items (`AIrg` — Healing Salve, Clarity
+ *  Potion, Potion/Scroll of Rejuvenation). One prefix so a single filter drops both the
+ *  life and the mana half together when the effect breaks. */
+const ITEM_REGEN_GROUP = "item:regen";
+/** Damage that dispels a regeneration item's effect. Not in any data file — see landDamage. */
+const ITEM_REGEN_BREAK = 20;
 // Corpse decay (Units\MiscData.txt BoneDecayTime): a corpse persists 88s after
 // death — the renderer sequences it Death → Decay Flesh → Decay Bone within this
 // window — and is then removed. The flesh stage is an early sub-phase, not added
@@ -7488,6 +7494,16 @@ export class SimWorld {
     if (target.isIllusion) amount *= target.illusionDamageTaken;
     // Sleep (Dreadlord) breaks the instant the sleeper takes damage (WC3).
     if (target.buffs.some((b) => b.kind === "sleep")) target.buffs = target.buffs.filter((b) => b.kind !== "sleep");
+    // …and so does a regeneration item. Drinking a Healing Salve and walking into a fight
+    // wastes it: the effect is dispelled by a hit worth at least ITEM_REGEN_BREAK damage.
+    // That threshold is an engine constant in no data file — it is documented on
+    // Liquipedia's Healing Salve page ("dispelled if the target is attacked or damaged by
+    // an ability that does at least 20 damage, before the damage is modified") and cannot
+    // be confirmed from the MPQ, unlike the amounts and durations above.
+    if (amount >= ITEM_REGEN_BREAK && target.buffs.some((b) => b.group?.startsWith(ITEM_REGEN_GROUP))) {
+      target.buffs = target.buffs.filter((b) => !b.group?.startsWith(ITEM_REGEN_GROUP));
+      this.recomputeStats(target); // the mana half is a stat bonus — drop it now, not next tick
+    }
     // Mana Shield (Naga): absorb incoming damage into mana at `value` mana per hp.
     amount = this.absorbWithManaShield(target, amount);
     if (amount <= 0) return 0;
@@ -8085,6 +8101,41 @@ export class SimWorld {
         case "AIma": // Potion of Mana / Scroll of Mana → restore mana
           if (u.mana < u.maxMana) { u.mana = Math.min(u.maxMana, u.mana + d(0)); fired = true; }
           break;
+        // Healing Salve / Clarity Potion / Potion & Scroll of Rejuvenation — restore over
+        // TIME, not at once. DataA is the total hit points and DataB the total mana the
+        // effect is worth across `Dur1`, so the per-second rate is the total over the
+        // duration: the Healing Salve's 400 HP / 45s, the greater Clarity Potion's 200 mana
+        // / 45s, a Scroll of Rejuvenation's 250 + 100 (1.27a Units\AbilityData.slk).
+        //
+        // Which buff the unit visibly wears is the ability's own choice among the three it
+        // lists (`BuffID1 = BIrg,BIrl,BIrm`): life-and-mana, life alone, mana alone. So the
+        // numbers pick it — a salve with no DataB wears BIrl and shows only the green swirl.
+        case "AIrg": {
+          const seconds = lvl?.duration || 0;
+          const hp = d(0);
+          const mana = d(1);
+          if (seconds <= 0 || (hp <= 0 && mana <= 0)) break;
+          // Nothing to restore = nothing to spend. WC3 refuses a salve at full health.
+          if (hp > 0 && mana <= 0 && u.hp >= u.maxHp) break;
+          if (mana > 0 && hp <= 0 && u.mana >= u.maxMana) break;
+          if (hp > 0 && mana > 0 && u.hp >= u.maxHp && u.mana >= u.maxMana) break;
+          const buffId = hp > 0 && mana > 0 ? "BIrg" : hp > 0 ? "BIrl" : "BIrm";
+          const fx = this.abilities.buffFx(buffId);
+          if (hp > 0) {
+            this.applyBuffInternal(u, {
+              kind: "hot", group: ITEM_REGEN_GROUP, timeLeft: seconds, sourceId: u.id,
+              value: hp / seconds, value2: 0, fx,
+            });
+          }
+          if (mana > 0) {
+            this.applyBuffInternal(u, {
+              kind: "manaRegen", group: `${ITEM_REGEN_GROUP}:mana`, timeLeft: seconds, sourceId: u.id,
+              value: mana / seconds, value2: 0, fx: hp > 0 ? [] : fx, // one set of models, not two
+            });
+          }
+          fired = true;
+          break;
+        }
         case "AIvu": // Potion of Invulnerability → brief invulnerability
           this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0 });
           fired = true;
