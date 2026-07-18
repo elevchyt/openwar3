@@ -1164,7 +1164,10 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
   cursor: pointer;
 }
 .hud-cmd:disabled { opacity: 0.35; cursor: default; }
-.hud-cmd:not(:disabled):hover { border-color: var(--gold); }
+/* No hover state: WC3's command card doesn't light a button under the cursor —
+   the only border it paints is the green one on the CURRENT command (.armed).
+   The press feedback is the sink below, on release-to-confirm (see onPress). */
+.hud-cmd.pressed { transform: scale(0.98); }
 .hud-cmd.armed {
   border-color: #6fe06a;
   box-shadow: 0 0 6px rgba(70, 224, 90, 0.5) inset;

@@ -44,7 +44,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   comment right there (the codebase already does this — match that style).
 - **Prefer the real asset.** If WC3 has a model/texture/icon/sound for something, use its real path from the MPQs
   (asset-resolver philosophy: authentic when present, placeholder otherwise). Example: the learn-skill button uses
-  `ReplaceableTextures\CommandButtonsDisabled\DISBTNSkillz.blp`; spell AoE circles are
+  `ReplaceableTextures\CommandButtons\BTNSkillz.blp` (the `CommandButtonsDisabled\DIS*` twin of any icon is just
+  its desaturated "unavailable" art — never reach for it for a live button); spell AoE circles are
   `ReplaceableTextures\Selection\SpellAreaOfEffect*.blp`.
 - **Legal boundary:** OpenWar3 ships **zero Blizzard assets or code**. The RE material is *documentation of behaviour
   and naming only* — never lift Blizzard binaries, decompiled code, or GPL reference code (Warsmash: study, don't lift).

@@ -1885,20 +1885,55 @@ function attrIcon(kind: "str" | "agi" | "int"): string {
   return `UI\\Widgets\\Console\\Human\\infocard-heroattributes-${kind}.blp`;
 }
 
-/** Bind a console button to fire the moment it's PRESSED, the way WC3's command
- *  card does. A DOM `click` only lands if the press and the release both happen
- *  over the button, so a fast click that drifts a pixel onto the frame art beside
- *  it is swallowed — half of issue #44. preventDefault also keeps the press from
- *  focusing the button, so a later Space/Enter can't re-fire it. Pass null to
- *  unbind a slot. */
+/** The console button currently held down with the left button, if any. Kept here
+ *  rather than as per-element state so that a card rebuild mid-hold (onPress is
+ *  re-bound every time the command list changes) can't lose track of the press. */
+let pressedEl: HTMLElement | null = null;
+let pressWatched = false;
+
+function setPressed(el: HTMLElement | null): void {
+  if (pressedEl === el) return;
+  pressedEl?.classList.remove("pressed");
+  pressedEl = el;
+  pressedEl?.classList.add("pressed");
+}
+
+/** Bind a console button to fire on RELEASE over the button, with the press itself
+ *  only sinking the icon (see `.pressed` in style.css). We don't use a DOM `click`:
+ *  that needs the press AND the release on the same element, so a fast click that
+ *  drifts a pixel onto the frame art beside the button is swallowed — half of issue
+ *  #44 — whereas here the press is ours the moment it lands and only the release
+ *  point is checked. Let go anywhere else and the press is abandoned (the standard
+ *  way to back out of a misclick), which the window listeners below handle.
+ *  preventDefault keeps the press from focusing the button, so a later Space/Enter
+ *  can't re-fire it. Pass null to unbind a slot. */
 function onPress(el: HTMLElement, fn: ((e: PointerEvent) => void) | null): void {
-  el.onpointerdown = fn
-    ? (e) => {
-        if (e.button !== 0) return; // right-click has its own (contextmenu) meaning
-        e.preventDefault();
-        fn(e);
-      }
-    : null;
+  if (!pressWatched) {
+    pressWatched = true;
+    // A release (or a cancelled pointer — a touch turning into a scroll, the window
+    // losing focus) that didn't land on the held button drops the press. The
+    // button's own handler runs first, at the target, so by the time this fires a
+    // confirmed press has already cleared itself.
+    window.addEventListener("pointerup", () => setPressed(null));
+    window.addEventListener("pointercancel", () => setPressed(null));
+  }
+  if (!fn) {
+    el.onpointerdown = null;
+    el.onpointerup = null;
+    if (pressedEl === el) setPressed(null); // the slot's command went away mid-hold
+    return;
+  }
+  el.onpointerdown = (e) => {
+    if (e.button !== 0) return; // right-click has its own (contextmenu) meaning
+    e.preventDefault();
+    setPressed(el);
+  };
+  el.onpointerup = (e) => {
+    if (e.button !== 0 || pressedEl !== el) return; // released on a button we never pressed
+    e.preventDefault();
+    setPressed(null);
+    fn(e);
+  };
 }
 
 // Highlight the hotkey letter (first occurrence, case-insensitive) in gold inside

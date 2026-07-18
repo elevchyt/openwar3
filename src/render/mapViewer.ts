@@ -4972,7 +4972,11 @@ export class MapViewerScene {
         col, row,
         // Cooldown is shown by the radial overlay, not the greyed "can't afford"
         // look (a click while on cooldown is harmlessly rejected by the sim).
-        disabled: passive || noMana,
+        // A PASSIVE is not "unavailable" either — Critical Strike is working right
+        // now, and WC3 draws it in full colour off its own PASBTN art ([AOcr]
+        // Art=…\PassiveButtons\PASBTNCriticalStrike.blp). It simply does nothing on
+        // click (id "noop"), so only the mana check may grey it.
+        disabled: noMana,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
         // gets its own indicator, so the two can never both claim the border.
@@ -4984,11 +4988,14 @@ export class MapViewerScene {
     }
     if (su.isHero && su.skillPoints > 0) {
       // Hero Abilities (learn-skill): opens the skill list to spend unspent points.
-      // WC3's canonical learn-abilities "Skillz" book art (the disabled-folder BLP),
-      // default hotkey O, and a corner badge showing the points available.
+      // WC3's canonical learn-abilities "Skillz" book art, default hotkey O, and a
+      // corner badge showing the points available. Take the CommandButtons copy, not
+      // the CommandButtonsDisabled one — the button is live (there are points to
+      // spend), and DISBTN* is just the desaturated art the engine swaps in when a
+      // button is unavailable.
       out.push(this.cmd({
         id: "learnpage",
-        icon: this.blpIcon("ReplaceableTextures\\CommandButtonsDisabled\\DISBTNSkillz.blp"),
+        icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp"),
         name: "Hero Abilities",
         hotkey: "O",
         desc: "Opens the abilities menu and allows you to assign unused points to the Heroes' abilities.",
@@ -5593,9 +5600,9 @@ export class MapViewerScene {
   private warmIconCache(): void {
     const paths = new Set<string>();
     for (const n of FIXED_CARD_ICONS) paths.add(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
-    // The hero "Hero Abilities" learn-skill book uses the disabled-folder Skillz art
-    // (see pushAbilityButtons) — not a registry icon, so warm it explicitly.
-    paths.add("ReplaceableTextures\\CommandButtonsDisabled\\DISBTNSkillz.blp");
+    // The hero "Hero Abilities" learn-skill book uses the Skillz art (see
+    // pushAbilityButtons) — not a registry icon, so warm it explicitly.
+    paths.add("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp");
     for (const d of this.registry.all()) if (d.icon) paths.add(d.icon);
     for (const a of this.abilities.all()) if (a.icon) paths.add(a.icon);
     for (const it of this.items.all()) if (it.icon) paths.add(it.icon);
