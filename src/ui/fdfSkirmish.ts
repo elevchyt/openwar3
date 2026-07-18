@@ -224,11 +224,13 @@ export async function mountSkirmish(
     // every slot a map could have (bj_MAX_PLAYERS) — this list is read once at mount,
     // before a map (and so a slot count) is known.
     dropdownButtons: dropdownButtonNames(MELEE.MAX_PLAYERS),
-    panels: ["GameSettingsLabel", "GameSettingsPanel", "TeamSetupPanel", "MapInfoPaneContainer", "PlayGameBackdrop", "CancelBackdrop"],
+    panels: ["GameSettingsLabel", "GameSettingsPanel", "TeamSetupPanel", "MapInfoPanel", "PlayGameBackdrop", "CancelBackdrop"],
     // The two panels that hold what the screen is FOR — the map list, and the details of the
     // map picked out of it — are not part of the furniture the screen arrives with. They come
     // in after the chrome has landed, so the screen reads as filling itself in.
-    latePanels: ["GameSettingsPanel", "MapInfoPaneContainer"],
+    // MapInfoPanel, not its MapInfoPaneContainer: the panel is the whole right-hand column,
+    // the pane AND the Advanced Options button under it, and they arrive together.
+    latePanels: ["GameSettingsPanel", "MapInfoPanel"],
     handlers: {
       PlayGameButton: () => start(),
       CancelButton: h.onCancel,
