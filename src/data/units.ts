@@ -147,8 +147,11 @@ export interface UnitDef {
   collision: number;
   // Fog-of-war sight radii (UnitBalance.slk `sight`/`nsight`, world units). Night
   // is normally shorter — e.g. Footman 1400/800, Peasant 800/600, Town Hall 900/600.
-  // Ultravision (rare; the `Ault` ability) would set nsight == sight, but no stock
-  // melee unit carries it — night elves take the same night penalty as everyone.
+  // Ultravision (the `Ault` ability) makes a unit use `sight` at night instead of `nsight`.
+  // Stock melee units DO carry it — the four night elf heroes, the Archer and the Glaive
+  // Thrower list it in UnitAbilities.slk — but it is gated behind the Ultravision upgrade
+  // (`[Ault] Requires=Reuv`, researched at the Hunter's Hall), so a night elf takes the
+  // same night penalty as everyone until that research lands. See recomputeStats.
   sightDay: number;
   sightNight: number;
   hitPoints: number;

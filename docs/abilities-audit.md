@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 272, **done** 146, **passive** 14, **todo** 367.
+Totals: 799 rows — **alias** 278, **done** 150, **passive** 14, **todo** 357.
 
 ## Art paths this install does not ship
 
@@ -26,7 +26,7 @@ a `todo` one it is a trap to know about before wiring the effect up.
 
 ## Unimplemented base codes, by alias fanout
 
-241 distinct base `code`s cover the 367 todo rows. Implementing one
+237 distinct base `code`s cover the 357 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -44,7 +44,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ANde` | Demolish | 4 | enemy,structure | demolish | `ANd1` `ANd2` `ANd3` `ANde` |
 | `Aapl` | Disease Cloud | 4 | ground,enemy,organic,neutral |  | `Aap1` `Aap2` `Aap3` `Aap4` |
 | `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
-| `AIfb` | Item Attack Fire Bonus | 4 | ground,air,ward |  | `AIfb` `AIgd` `AIfw` `AIdn` |
 | `Asds` | Kaboom! | 4 | ground,structure,debris,enemy,neutral | selfdestruct | `Asd2` `Asd3` `Asdg` `Asds` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
 | `Adda` | AOE damage upon death | 3 | ground,structure,debris,enemy,ward |  | `Adda` `Amnx` `Amnz` |
@@ -74,8 +73,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `AIob` | Item Attack Frost Bonus | 2 | ground,air,ward |  | `AIob` `AIft` |
 | `AIfl` | Item Capture The Flag | 2 |  |  | `AIfl` `AIfx` |
 | `AIdc` | Item Chain Dispel | 2 | air,ground,friend,self,enemy,invu,vuln |  | `AIdc` `Ache` |
-| `Arel` | Item Life Regeneration | 2 |  |  | `Arel` `Arll` |
-| `AIrm` | Item Mana Regeneration | 2 |  |  | `AIrn` `AIrm` |
 | `AIda` | Item Temporary Area Armor Bonus | 2 | ground,air,friend,self,invu,vuln |  | `AIda` `AIdb` |
 | `AIvi` | Item Temporary Invisibility | 2 |  |  | `AIv1` `AIv2` |
 | `ANmo` | Monsoon | 2 | air,ground,structure,enemy,neutral | monsoon | `ACmo` `ANmo` |
@@ -96,7 +93,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ACtc` | Slam | 2 | ground,neutral | creepthunderclap | `ACt2` `ACtc` |
 | `Aspo` | Slow Poison | 2 | air,ground,organic |  | `AIsz` `Aspo` |
 | `Atau` | Taunt | 2 | air,ground,enemy,vuln,invu | taunt | `ANta` `Atau` |
-| `Ault` | Ultravision | 2 |  |  | `AIuv` `Ault` |
 | `Aweb` | Web | 2 | air,enemy,neutral | web | `ACwb` `Aweb` |
 | `Aimp` |  | 1 |  |  | `Aimp` |
 | `Ansp` |  | 1 |  |  | `Ansp` |
@@ -294,7 +290,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIcd` | `AOac` |  | other |  | I | air,ground,friend,self,vuln,invu | 1 |  | ItemAuraCommand |
 | ~ | `AIin` | `AUin` |  | other |  | I | ground,structure,debris,enemy,neutral | 1 | inferno | ItemInferno |
 |   | `Aimp` | `Aimp` |  | nightelf |  |  |  |  |  | Impaling Bolt |
-|   | `AIrn` | `AIrm` |  | other |  | I |  |  |  | ItemRegenMana lesser |
+| ~ | `AIrn` | `AIrm` |  | other |  | I |  |  |  | ItemRegenMana lesser |
 | ~ | `AIx3` | `AIab` |  | other |  | I |  |  |  | (All + 3) |
 | ~ | `AIx4` | `AIab` |  | other |  | I |  |  |  | (All + 4) |
 |   | `Aalr` | `Aalr` | Alarm | other |  |  | air,ground,enemy,vuln,invu |  |  | Alarm |
@@ -631,8 +627,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `AIdf` | `AIsb` | Item Attack Black Arrow Bonus | other |  | I | ground,air,ward | 2 |  | Orb of Darkness |
 |   | `AIcb` | `AIcb` | Item Attack Corruption Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Corruption |
 |   | `AIaa` | `AIaa` | Item Attack Damage Gain | other |  | I |  | 1 |  | AttackMod |
-|   | `AIfb` | `AIfb` | Item Attack Fire Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Fire |
-|   | `AIgd` | `AIfb` | Item Attack Fire Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Guldan |
+| x | `AIfb` | `AIfb` | Item Attack Fire Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Fire |
+| ~ | `AIgd` | `AIfb` | Item Attack Fire Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Guldan |
 |   | `AIob` | `AIob` | Item Attack Frost Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Frost |
 |   | `AIlb` | `AIlb` | Item Attack Lightning Bonus | other |  | I | ground,air,ward | 3 |  | Orb of Lightning(old) |
 |   | `AIpb` | `AIpb` | Item Attack Poison Bonus | other |  | I | ground,air,organic | 3 |  | Orb of Venom |
@@ -698,8 +694,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AIl2` | `AIml` | Item Life Bonus | other |  | I |  |  |  | MaxLifeBonus (Greater) |
 | ~ | `AIlf` | `AIml` | Item Life Bonus | other |  | I |  |  |  | MaxLifeBonus (Least) |
 | ~ | `AIlz` | `AIml` | Item Life Bonus | other |  | I |  |  |  | MaxLifeBonus (Leastest) |
-|   | `Arel` | `Arel` | Item Life Regeneration | other |  | I |  |  |  | Regen Life |
-|   | `Arll` | `Arel` | Item Life Regeneration | other |  | I |  |  |  | Regen Life |
+| x | `Arel` | `Arel` | Item Life Regeneration | other |  | I |  |  |  | Regen Life |
+| ~ | `Arll` | `Arel` | Item Life Regeneration | other |  | I |  |  |  | Regen Life |
 | x | `AIva` | `AIva` | Item Life Steal | other |  | I | air,ground,enemy | 2 |  | Vampiric attack |
 |   | `AIbm` | `AImm` | Item Mana Bonus | other |  | I |  |  |  | MaxManaBonus (Most) |
 |   | `AImb` | `AImm` | Item Mana Bonus | other |  | I |  |  |  | MaxManaBonus (Least) |
@@ -708,7 +704,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `AImv` | `AImm` | Item Mana Bonus (75) | other |  | I |  |  |  | MaxManaBonus (Leastest, Really) |
 | ~ | `AIm1` | `AIma` | Item Mana Regain | other |  | I |  | 1 |  | ItemManaRestore (Lesser) |
 | ~ | `AIm2` | `AIma` | Item Mana Regain | other |  | I |  | 1 |  | ItemManaRestore (Greater) |
-|   | `AIrm` | `AIrm` | Item Mana Regeneration | other |  | I |  |  |  | ItemRegenMana        |
+| x | `AIrm` | `AIrm` | Item Mana Regeneration | other |  | I |  |  |  | ItemRegenMana        |
 | x | `AIms` | `AIms` | Item Move Speed Bonus | other |  | I |  |  |  | MoveSpeedBonus       |
 |   | `AIfx` | `AIfl` | Item Orcish Battle Standard | other |  | I |  | 1 |  | Flag (Orc Battle Standard) |
 | ~ | `AImh` | `AImi` | Item Permanent Life Gain | other |  | I |  | 1 |  | Permanent Hit point Bonus |
@@ -779,7 +775,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ANb2` | `AHbh` | Maul | creeps |  |  | ground |  | bash | Bash (maul , SP Bear, level 3) |
 |   | `Amec` | `Amec` | Mechanical Critter | other |  | I |  | 1 |  | MechanicalCritter |
 |   | `AIft` | `AIob` | Melee Cold Damage Bonus | other |  | I | ground,ward | 3 |  | Frostguard - frost melee |
-|   | `AIfw` | `AIfb` | Melee Fire Damage Bonus | other |  | I | ground,ward | 3 |  | Searing Blade - fire melee |
+| ~ | `AIfw` | `AIfb` | Melee Fire Damage Bonus | other |  | I | ground,ward | 3 |  | Searing Blade - fire melee |
 |   | `AIlx` | `AIsb` | Melee Lightning Damage Bonus | other |  | I | ground,ward | 3 |  | Shaman Claws - lightning melee |
 | ~ | `AEIl` | `AEme` | Metamorphosis | creeps | H |  |  |  | metamorphosis | Illidan - Metamorphosis |
 | x | `AEme` | `AEme` | Metamorphosis | nightelf | H |  |  |  | metamorphosis | Demon Hunter - Metamorphosis |
@@ -926,7 +922,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Ahid` | `Ahid` | Shadow Meld | creeps |  |  |  |  | ambush | Shadow Meld (Akama) |
 |   | `Ashm` | `Ashm` | Shadow Meld | nightelf |  |  |  |  | ambush | Shadow Meld |
 |   | `Sshm` | `Ashm` | Shadow Meld | nightelf |  |  |  |  | ambush | Shadow Meld (Instant) |
-|   | `AIdn` | `AIfb` | Shadow Orb Ability | other |  | I | ground,air,ward | 2 |  | Shadow Orb Ability |
+| ~ | `AIdn` | `AIfb` | Shadow Orb Ability | other |  | I | ground,air,ward | 2 |  | Shadow Orb Ability |
 | x | `AEsh` | `AEsh` | Shadow Strike | nightelf | H |  | ground,air,enemy,neutral,organic | 1 | shadowstrike | Warden - Shadow Strike |
 | ~ | `ACsh` | `AOsh` | Shockwave | creeps |  |  | ground,structure,enemy | 1 | shockwave | Shockwave (Creep) |
 | ~ | `ACst` | `AOsh` | Shockwave | creeps |  |  | ground,structure | 1 | shockwave | Shockwave (Trap) |
@@ -1037,8 +1033,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ACat` | `AEar` | Trueshot Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Aura - Trueshot (Creep) |
 | x | `AEar` | `AEar` | Trueshot Aura | nightelf | H |  | air,ground,friend,self,vuln,invu | 1 |  | Priestess - Trueshot Aura |
 |   | `Attu` | `Attu` | Turret | human |  |  |  |  |  | Tank Turret |
-|   | `AIuv` | `Ault` | Ultravision | other |  | I |  |  |  | ItemUltravision |
-|   | `Ault` | `Ault` | Ultravision | nightelf |  |  |  |  |  | Ultravision |
+| ~ | `AIuv` | `Ault` | Ultravision | other |  | I |  |  |  | ItemUltravision |
+| x | `Ault` | `Ault` | Ultravision | nightelf |  |  |  |  |  | Ultravision |
 | ~ | `ACua` | `AUau` | Unholy Aura | creeps |  |  | air,ground,friend,self,vuln,invu | 1 |  | Unholy Aura (creep) |
 | x | `AUau` | `AUau` | Unholy Aura | undead | H |  | air,ground,friend,self,vuln,invu | 1 |  | Death Knight - Unholy Aura |
 | ~ | `ACuf` | `Auhf` | Unholy Frenzy | creeps |  |  | air,ground,organic |  | unholyfrenzy | Unholy Frenzy (creep) |

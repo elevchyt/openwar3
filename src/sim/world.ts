@@ -3901,9 +3901,9 @@ export class SimWorld {
    *  buffs, so Dispel Magic (which wipes `u.buffs`) can never remove them. */
   private itemBonuses(u: SimUnit): {
     str: number; agi: number; int: number; damage: number; armor: number; attackSpeed: number; manaRegen: number; lifesteal: number;
-    speed: number; maxHp: number;
+    speed: number; maxHp: number; hpRegen: number;
   } {
-    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, lifesteal: 0, speed: 0, maxHp: 0 };
+    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, lifesteal: 0, speed: 0, maxHp: 0, hpRegen: 0 };
     if (!u.inventory.length || !this.itemReg || !this.abilities) return b;
     for (const held of u.inventory) {
       if (!held) continue;
@@ -3920,6 +3920,17 @@ export class SimWorld {
           case "AIab": b.agi += val(0); b.int += val(1); b.str += val(2); break; // stat items
           case "AIas": b.attackSpeed += val(0); break; // Gloves of Haste (+attack speed)
           case "AHab": b.manaRegen += val(0); break; // Pipe of Insight (mana regen)
+          // The two REGENERATION items, as distinct from the potions that restore over a
+          // fixed duration (AIrg): these are permanent, passive rates while the item is
+          // carried. Ring of Regeneration / Health Stone give dataA hp per second; the
+          // Sobi Mask and the wands give dataA mana per second.
+          case "Arel": b.hpRegen += val(0); break; // Regen Life (+2 hp/sec)
+          case "AIrm": b.manaRegen += val(0); break; // ItemRegenMana (+0.5 mana/sec)
+          // Orb of Fire and its family — the part of an orb that is plainly data: dataA
+          // flat bonus damage. NOT modelled: the on-hit effect an orb also carries (the
+          // burn, the frost slow, the lightning), which lives in the attack path rather
+          // than in a stat, and the air-attack grant some orbs give a ground-only weapon.
+          case "AIfb": b.damage += val(0); break; // Item Attack Fire Bonus (+5)
           case "AIva": b.lifesteal = Math.max(b.lifesteal, val(0)); break; // Mask of Death (lifesteal)
           // The two the shops made reachable (issue #57). Both are plain passive bonuses, and
           // both were dead code paths until now because nothing sold them: Boots of Speed are
@@ -4173,10 +4184,22 @@ export class SimWorld {
     if (u.weapon) u.bonusDamage = u.weapon.damage - (u.weapon.baseDamage + primaryDelta); // the buff/aura/item portion
     if (u.worker) u.worker.lumberCapacity = u.worker.baseLumberCapacity + upg.lumber; // Improved/Advanced Lumber Harvesting
     u.sightDay = u.baseSightDay + upg.sight;
-    u.sightNight = u.baseSightNight + upg.sight;
+    // Ultravision (`Ault`) — the unit keeps its DAY sight radius at night, i.e. the night
+    // penalty simply does not apply to it.
+    //
+    // It is not innate, and that is the whole of the "do night elves see at night?"
+    // question. `Ault` does sit on the night elf heroes, the Archer and the Glaive Thrower
+    // from birth (Units\UnitAbilities.slk), which makes it look racial — but its own row
+    // is `[Ault] Requires=Reuv`, the Ultravision upgrade researched at the Hunter's Hall.
+    // So until that research lands a night elf takes exactly the same night penalty as
+    // everyone else (Archer 1400 day / 800 night), and afterwards it does not. Same
+    // upgrade-gated-ability shape as Pillage (Ropg) and Defend (Rhde).
+    const ultravision = this.tech && this.tech.researchLevel(u.owner, "Reuv") > 0
+      && u.abilities.some((a) => a.code === "Ault" && a.level >= 1);
+    u.sightNight = ultravision ? u.sightDay : u.baseSightNight + upg.sight;
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
     u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen + upg.manaRegen;
-    u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus;
+    u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
     u.lifesteal = Math.max(lifesteal, item.lifesteal);
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
