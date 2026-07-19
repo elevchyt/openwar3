@@ -11,7 +11,7 @@ Status:
 - `/` **partial** — listed in `KNOWN_ABILITIES` (the UI can aim it) but nothing casts it yet.
 - ` ` **todo** — not implemented.
 
-Totals: 799 rows — **alias** 299, **done** 156, **passive** 14, **todo** 330.
+Totals: 799 rows — **alias** 305, **done** 161, **passive** 14, **todo** 319.
 
 ## Art paths this install does not ship
 
@@ -50,17 +50,34 @@ Two standing rules that have already earned their keep:
   data says and record the conflict. Open ones: Kaboom!'s dataE "Building Damage Factor"
   (reads 100, Liquipedia says 3x vs buildings) and Cannibalize's dataB "Max Hit Points"
   (800, which cannot bind at the stock rate). Both want a measurement against the real
-  client to settle — see the wc3-ground-truth memory.
+  client to settle — see the wc3-ground-truth memory. Two more have joined them:
+  Shadow Meld's dataB "Day/Night Duration" (2.5) and dataC "Action Duration" (0.5),
+  which have NAMES but no source saying what either measures, and Root's dataD
+  "Uprooted Defense Type" (2) — an index into a defense-type ordering our string
+  ArmorType enum does not carry.
+
+The morph family is one mechanism, not seven. Every two-form ability names both units
+outright — DataA "Normal Form Unit" and an "Alternate Form Unit" column — so morphing
+IS the ability and the target unit's own row supplies the behaviour (a burrowed Crypt
+Fiend cannot move because ucrm has spd "-", not because anything says so in code).
+`morphToggle` is generic and already carries Burrow and Call to Arms. Bear Form,
+Crow Form, Stone Form, Destroyer Form and Submerge are the same shape and are NOT
+switched on yet: each has its own wrinkle (a morph time, a travel form, a timed ult
+rather than a toggle), and enabling them unexamined ships five half-right abilities.
+Watch the column: the alternate form is UnitID1 for Abur but DataB for Amil, because
+AbilityMetaData names the columns per ability (see altFormOf).
 
 Known gaps that are NOT ability rows, found while auditing:
 
-- Invisibility is concealed from the aggro paths (`canSee`) but not from the enemy's
-  SCREEN — `rts.ts` fades every invisible unit for every viewer alike.
-- Call to Arms (`Amil`/`Amic`, the Human militia) is unimplemented in any form.
+- Renderer: a unit with two forms in ONE model needs `alternate` animProps chosen at
+  runtime (SimUnit.altModel) — done for rooted Ancients and burrowed units. The
+  Ancient Protector is unverified: its alternate stand is named "Stand Walk Alternate",
+  which reads like the mobile form, so its two sets may be the other way round.
+- Which of a Morph/Morph Alternate pair is the outbound clip is assumed, not measured.
 
 ## Unimplemented base codes, by alias fanout
 
-229 distinct base `code`s cover the 330 todo rows. Implementing one
+223 distinct base `code`s cover the 319 todo rows. Implementing one
 clears every alias that derives from it, so this is the order the work pays off in.
 
 | Base | Name | Rows | targs1 | Order | IDs |
@@ -72,7 +89,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Acyc` | Cyclone | 5 | ground,enemy,neutral,organic | cyclone | `ACcy` `Acny` `Acyc` `AIcy` `SCc1` |
 | `AImm` | Item Mana Bonus | 5 |  |  | `AIbm` `AImb` `AImz` `AI2m` `AImv` |
 | `Abli` | Blight Dispel Large | 4 |  |  | `Abdl` `Abds` `Abgl` `Abgs` |
-| `Abur` | Burrow | 4 |  | burrow | `Abu2` `Abu3` `Abu5` `Abur` |
 | `ANde` | Demolish | 4 | enemy,structure | demolish | `ANd1` `ANd2` `ANd3` `ANde` |
 | `AIsb` | Item Attack Black Arrow Bonus | 4 | ground,air,ward |  | `AIdf` `AIlx` `AIll` `AIsb` |
 | `Aams` | Anti-magic Shell | 3 | air,ground,vuln,invu,friend,self | antimagicshell | `Aam2` `Aams` `ACam` |
@@ -113,10 +129,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `ANrc` | Rain of Chaos | 2 |  |  | `ANr3` `ANrc` |
 | `Arai` | Raise Dead | 2 | dead | raisedead | `ACrd` `Arai` |
 | `Ambt` | Replenish Mana | 2 | air,ground,invu,vuln,friend | recharge | `Amb2` `Ambt` |
-| `Aroo` | Root | 2 |  | root | `Aro1` `Aro2` |
 | `AIsa` | Rune of Speed | 2 | air,ground,friend,self,vuln,invu |  | `APsa` `AIsa` |
 | `Aesn` | Sentinel | 2 | tree,vuln,invu | sentinel | `Aesn` `Aesr` |
-| `Ashm` | Shadow Meld | 2 |  | ambush | `Ashm` `Sshm` |
 | `ACtc` | Slam | 2 | ground,neutral | creepthunderclap | `ACt2` `ACtc` |
 | `Aspo` | Slow Poison | 2 | air,ground,organic |  | `AIsz` `Aspo` |
 | `Atau` | Taunt | 2 | air,ground,enemy,vuln,invu | taunt | `ANta` `Atau` |
@@ -136,8 +150,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Atdg` | Building Damage Aura | 1 | structure,enemy |  | `Atdg` |
 | `Abof` | Burning Oil | 1 | ground,enemy,neutral,friend,structure,self |  | `Abof` |
 | `Abdt` | Burrow Detection | 1 |  |  | `Abdt` |
-| `Amil` | Call to Arms | 1 |  | militia | `Amil` |
-| `Amic` | Call To Arms | 1 |  | townbellon | `Amic` |
 | `Achd` | Cargo Hold Death | 1 | air,ground,ward,vuln,invu |  | `Achd` |
 | `AIct` | Change Time of Day | 1 |  |  | `AIct` |
 | `ANcl` | Channel | 1 |  | channel | `ANcl` |
@@ -218,7 +230,6 @@ clears every alias that derives from it, so this is the order the work pays off 
 | `Atlp` | Load Pilot | 1 | ground,player,invu,vuln |  | `Atlp` |
 | `Aloc` | Locust | 1 |  |  | `Aloc` |
 | `Amdf` | Magic Defense | 1 |  | magicdefense | `Amdf` |
-| `Adts` | Magic Sentry | 1 | vuln,invu |  | `Adts` |
 | `Amfl` | Mana Flare | 1 | air,ground,enemy | manaflareon | `Amfl` |
 | `Amec` | Mechanical Critter | 1 |  |  | `Amec` |
 | `ANmr` | Mind Rot | 1 |  | mindrot | `ANmr` |
@@ -390,13 +401,13 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Atdg` | `Atdg` | Building Damage Aura | naga |  |  | structure,enemy |  |  | TornadoDamage |
 | x | `AIlu` | `AIlu` | Bundle of Lumber | other |  | I |  | 1 |  | GiveLumber        |
 |   | `Abof` | `Abof` | Burning Oil | orc |  |  | ground,enemy,neutral,friend,structure,self | 1 |  | Balls of Fire |
-|   | `Abu2` | `Abur` | Burrow | undead |  |  |  |  | burrow | Burrow(scarab lvl 2) |
-|   | `Abu3` | `Abur` | Burrow | undead |  |  |  |  | burrow | Burrow(scarab lvl 3) |
-|   | `Abu5` | `Abur` | Burrow | creeps |  |  |  |  | burrow | Burrow(Barbed Arachnathid) |
-|   | `Abur` | `Abur` | Burrow | undead |  |  |  |  | burrow | Burrow |
+| ~ | `Abu2` | `Abur` | Burrow | undead |  |  |  |  | burrow | Burrow(scarab lvl 2) |
+| ~ | `Abu3` | `Abur` | Burrow | undead |  |  |  |  | burrow | Burrow(scarab lvl 3) |
+| ~ | `Abu5` | `Abur` | Burrow | creeps |  |  |  |  | burrow | Burrow(Barbed Arachnathid) |
+| x | `Abur` | `Abur` | Burrow | undead |  |  |  |  | burrow | Burrow |
 |   | `Abdt` | `Abdt` | Burrow Detection | other |  |  |  |  |  | Burrow Detection (Flyers) |
-|   | `Amil` | `Amil` | Call to Arms | human |  |  |  |  | militia | Militia |
-|   | `Amic` | `Amic` | Call To Arms | human |  |  |  |  | townbellon | Militia Conversion |
+| x | `Amil` | `Amil` | Call to Arms | human |  |  |  |  | militia | Militia |
+| x | `Amic` | `Amic` | Call To Arms | human |  |  |  |  | townbellon | Militia Conversion |
 | x | `Acan` | `Acan` | Cannibalize | undead |  |  | ground,dead,organic |  | cannibalize | Cannibalize |
 | ~ | `ACcn` | `Acan` | Cannibalize | creeps |  |  | ground,dead,organic |  | cannibalize | Cannibalize (creep) |
 | ~ | `Acn2` | `Acan` | Cannibalize | undead |  |  | ground,dead,organic |  | cannibalize | Cannibalize (Abomination) |
@@ -789,7 +800,7 @@ clears every alias that derives from it, so this is the order the work pays off 
 |   | `Aloc` | `Aloc` | Locust | undead |  |  |  |  |  | Locust |
 | x | `AUls` | `AUls` | Locust Swarm | undead | H |  | air,ground,enemy |  | Locustswarm | Crypt Lord - Locust Swarm |
 |   | `Amdf` | `Amdf` | Magic Defense | human |  |  |  | 1 | magicdefense | Magic Defense |
-|   | `Adts` | `Adts` | Magic Sentry | human |  |  | vuln,invu | 1 |  | Detect (Magic Sentinel) |
+| x | `Adts` | `Adts` | Magic Sentry | human |  |  | vuln,invu | 1 |  | Detect (Magic Sentinel) |
 | x | `AEmb` | `AEmb` | Mana Burn | nightelf | H |  | air,ground,enemy,neutral | 1 | manaburn | Demon Hunter - Mana Burn |
 | ~ | `Ambb` | `AEmb` | Mana Burn | creeps |  |  | air,ground,enemy,neutral | 1 | manaburn | Mana Burn (Hotkey B) |
 | ~ | `Ambd` | `AEmb` | Mana Burn | creeps |  |  | air,ground,enemy,neutral | 1 | manaburn | Mana Burn (demon) |
@@ -915,8 +926,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `ANg2` | `ANrg` | Robo-Goblin | creeps | H |  |  |  | robogoblin | Tinkerer - Robo-Goblin (Level 2) |
 | ~ | `ANg3` | `ANrg` | Robo-Goblin | creeps | H |  |  |  | robogoblin | Tinkerer - Robo-Goblin (Level 3) |
 | x | `ANrg` | `ANrg` | Robo-Goblin | creeps | H |  |  |  | robogoblin | Tinkerer - Robo-Goblin (Level 0) |
-|   | `Aro1` | `Aroo` | Root | nightelf |  |  |  |  | root | Root (Ancients) |
-|   | `Aro2` | `Aroo` | Root | nightelf |  |  |  |  | root | Root (Ancient Protector) |
+| ~ | `Aro1` | `Aroo` | Root | nightelf |  |  |  |  | root | Root (Ancients) |
+| ~ | `Aro2` | `Aroo` | Root | nightelf |  |  |  |  | root | Root (Ancient Protector) |
 | ~ | `APra` | `AIra` | Rune Area Heal/Mana Regain | other |  | I | ground,air,friend,self,organic,vuln,invu | 1 |  | RuneRestoreAoe |
 | ~ | `APmr` | `AImr` | Rune Area Mana Regain | other |  | I | ground,air,friend,self,organic,vuln,invu | 1 |  | RuneManaRestoreAoe |
 | ~ | `APmg` | `AImr` | Rune Area Mana Regain Greater | other |  | I | ground,air,friend,self,organic,vuln,invu | 1 |  | RuneManaRestoreGreaterAoe |
@@ -946,8 +957,8 @@ clears every alias that derives from it, so this is the order the work pays off 
 | ~ | `AOsw` | `AOwd` | Serpent Ward | orc | H |  |  |  | ward | Shadow Hunter - Serpent Ward |
 | ~ | `Arsw` | `AOwd` | Serpent Ward | orc | H |  |  |  | Serpentward | Rokhan - Serpent Ward |
 |   | `Ahid` | `Ahid` | Shadow Meld | creeps |  |  |  |  | ambush | Shadow Meld (Akama) |
-|   | `Ashm` | `Ashm` | Shadow Meld | nightelf |  |  |  |  | ambush | Shadow Meld |
-|   | `Sshm` | `Ashm` | Shadow Meld | nightelf |  |  |  |  | ambush | Shadow Meld (Instant) |
+| x | `Ashm` | `Ashm` | Shadow Meld | nightelf |  |  |  |  | ambush | Shadow Meld |
+| ~ | `Sshm` | `Ashm` | Shadow Meld | nightelf |  |  |  |  | ambush | Shadow Meld (Instant) |
 | ~ | `AIdn` | `AIfb` | Shadow Orb Ability | other |  | I | ground,air,ward | 2 |  | Shadow Orb Ability |
 | x | `AEsh` | `AEsh` | Shadow Strike | nightelf | H |  | ground,air,enemy,neutral,organic | 1 | shadowstrike | Warden - Shadow Strike |
 | ~ | `ACsh` | `AOsh` | Shockwave | creeps |  |  | ground,structure,enemy | 1 | shockwave | Shockwave (Creep) |

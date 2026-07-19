@@ -263,13 +263,30 @@ lines.push("- **Do not invent a number.** Where the MPQ and a reference disagree
 lines.push("  data says and record the conflict. Open ones: Kaboom!'s dataE \"Building Damage Factor\"");
 lines.push("  (reads 100, Liquipedia says 3x vs buildings) and Cannibalize's dataB \"Max Hit Points\"");
 lines.push("  (800, which cannot bind at the stock rate). Both want a measurement against the real");
-lines.push("  client to settle — see the wc3-ground-truth memory.");
+lines.push("  client to settle — see the wc3-ground-truth memory. Two more have joined them:");
+lines.push("  Shadow Meld's dataB \"Day/Night Duration\" (2.5) and dataC \"Action Duration\" (0.5),");
+lines.push("  which have NAMES but no source saying what either measures, and Root's dataD");
+lines.push("  \"Uprooted Defense Type\" (2) — an index into a defense-type ordering our string");
+lines.push("  ArmorType enum does not carry.");
+lines.push("");
+lines.push("The morph family is one mechanism, not seven. Every two-form ability names both units");
+lines.push("outright — DataA \"Normal Form Unit\" and an \"Alternate Form Unit\" column — so morphing");
+lines.push("IS the ability and the target unit's own row supplies the behaviour (a burrowed Crypt");
+lines.push("Fiend cannot move because ucrm has spd \"-\", not because anything says so in code).");
+lines.push("`morphToggle` is generic and already carries Burrow and Call to Arms. Bear Form,");
+lines.push("Crow Form, Stone Form, Destroyer Form and Submerge are the same shape and are NOT");
+lines.push("switched on yet: each has its own wrinkle (a morph time, a travel form, a timed ult");
+lines.push("rather than a toggle), and enabling them unexamined ships five half-right abilities.");
+lines.push("Watch the column: the alternate form is UnitID1 for Abur but DataB for Amil, because");
+lines.push("AbilityMetaData names the columns per ability (see altFormOf).");
 lines.push("");
 lines.push("Known gaps that are NOT ability rows, found while auditing:");
 lines.push("");
-lines.push("- Invisibility is concealed from the aggro paths (`canSee`) but not from the enemy's");
-lines.push("  SCREEN — `rts.ts` fades every invisible unit for every viewer alike.");
-lines.push("- Call to Arms (`Amil`/`Amic`, the Human militia) is unimplemented in any form.");
+lines.push("- Renderer: a unit with two forms in ONE model needs `alternate` animProps chosen at");
+lines.push("  runtime (SimUnit.altModel) — done for rooted Ancients and burrowed units. The");
+lines.push("  Ancient Protector is unverified: its alternate stand is named \"Stand Walk Alternate\",");
+lines.push("  which reads like the mobile form, so its two sets may be the other way round.");
+lines.push("- Which of a Morph/Morph Alternate pair is the outbound clip is assumed, not measured.");
 lines.push("");
 
 // --- what to implement next --------------------------------------------------
