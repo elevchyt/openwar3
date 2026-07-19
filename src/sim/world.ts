@@ -838,6 +838,14 @@ export interface SimUnit {
    *  the resting state for every carrier — an Ancient is BUILT rooted, and a Tree of Life
    *  spends the whole game that way unless something goes badly wrong. See toggleRoot. */
   uprooted: boolean;
+  /** Seconds until a TIMED alternate form runs out and reverts on its own, or 0 for a form
+   *  that holds until something toggles it back. Call to Arms is the timed one: `[Amil]`
+   *  Dur1 = 45, and a militia that survives its 45 seconds becomes a Peasant again wherever
+   *  it happens to be standing. Burrow and the rest carry no duration at all. */
+  altFormLeft: number;
+  /** The ability whose alternate form this unit is currently in, so a timed form knows what to
+   *  revert THROUGH — the ability owns both ids, and by then the unit is the wrong one to ask. */
+  altFormAbil: string;
   /** This unit is currently showing the ALTERNATE half of its model. WC3 packs both looks of
    *  a two-form unit into one MDX — "Stand" and "Stand Alternate", with Morph/Morph Alternate
    *  between them — and nothing in the unit data says which half is live, because the ABILITY
@@ -1104,6 +1112,20 @@ const PRECAST_WARNING = new Set(["AHfs"]);
 // Do NOT widen this to every no-Animnames spell: Holy Light and Water Elemental have
 // none either, yet the engine falls back to the caster's "Spell" clip for them (see
 // RtsController.playCastAnim).
+/** The ALTERNATE FORM UNIT a two-form ability morphs into — and the two abilities that need
+ *  it disagree about which column it lives in, because AbilityMetaData names the columns per
+ *  ability rather than globally:
+ *
+ *    [Abur]  UnitID1 = ucrm   "Alternate Form Unit"   (DataB there is "Morphing Flags" = 1)
+ *    [Amil]  DataB   = hmil   "Alternate Form Unit"   (UnitID1 is empty)
+ *
+ *  So this reads UnitID1 first and falls back to DataB, which is the metadata's own answer for
+ *  each rather than a guess. Reading DataB unconditionally would hand Burrow the number 1 as a
+ *  unit id; reading UnitID1 unconditionally leaves the militia with no form to become. */
+function altFormOf(lvl: AbilityLevel | undefined): string {
+  return lvl?.summon || lvl?.dataStr[1] || "";
+}
+
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
 /** Buff group prefix worn by the regeneration items (`AIrg` — Healing Salve, Clarity
  *  Potion, Potion/Scroll of Rejuvenation). One prefix so a single filter drops both the
@@ -2597,8 +2619,8 @@ export class SimWorld {
    */
   morphToggle(u: SimUnit, def: AbilityDef): boolean {
     const lvl = def.levelData[0];
-    const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit"
-    const alternate = lvl?.summon ?? ""; // UnitID1 "Alternate Form Unit"
+    const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit" — the same for all of them
+    const alternate = altFormOf(lvl);
     if (!normal || !alternate) return false;
     const to = u.typeId === alternate ? normal : alternate;
     if (!this.unitReg?.get(to)) return false; // this install doesn't ship the other form
@@ -2607,6 +2629,11 @@ export class SimWorld {
     // the alternate half of the model — the burrowed pose is "Stand Alternate", reached
     // through the same Morph clip an Ancient uses. See SimUnit.altModel.
     u.altModel = to === alternate;
+    // A TIMED form runs itself out and reverts (Call to Arms' 45 seconds of being a militia).
+    // Duration lives on the ability, not the unit, and only counts on the way IN — going back
+    // to normal clears it, whether the clock ran down or a player rang the bell again.
+    u.altFormLeft = to === alternate ? lvl?.duration ?? 0 : 0;
+    u.altFormAbil = to === alternate ? def.id : "";
     // A form with no weapon can neither attack nor keep a target it was swinging at, and the
     // weaponless one is also the ethereal one (weapsOn=0 is how the Spirit Walker's two forms
     // are told apart in the data — there is no "is ethereal" column).
@@ -2614,6 +2641,19 @@ export class SimWorld {
     if (!u.weapon) this.stop(u.id);
     this.recomputeStats(u);
     return true;
+  }
+
+  /** Run a timed alternate form down, and revert it when the clock does. Call to Arms is the
+   *  only user in 1.27a: a militia gets 45 seconds and then goes back to being a Peasant
+   *  wherever it stands, which is what makes calling the bell a decision rather than a free
+   *  upgrade. Reverting goes through morphToggle so the return trip is the same code as the
+   *  outbound one — nothing here knows a Peasant from a militia. */
+  private tickAltForm(u: SimUnit, dt: number): void {
+    if (u.altFormLeft <= 0) return;
+    if ((u.altFormLeft -= dt) > 0) return;
+    const def = this.abilities?.get(u.altFormAbil);
+    if (def) this.morphToggle(u, def);
+    else u.altFormLeft = 0; // ability gone (custom data reload) — just stop counting
   }
 
   /** Is this unit type an ETHEREAL form, as opposed to merely a weaponless one? A burrowed
@@ -2840,6 +2880,8 @@ export class SimWorld {
       | "uprooted"
       | "rootedFootprint"
       | "altModel"
+      | "altFormLeft"
+      | "altFormAbil"
       | "invisible"
       | "cloaked"
       | "invulnerable"
@@ -3014,6 +3056,8 @@ export class SimWorld {
       uprooted: false, // an Ancient is built rooted (Aroo)
       rootedFootprint: 0, // set when it uproots, spent when it plants
       altModel: false, // derived: rooted Ancients and burrowed units wear the alternate model
+      altFormLeft: 0, // no timed form running
+      altFormAbil: "",
       invisible: false,
       cloaked: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
@@ -6007,6 +6051,7 @@ export class SimWorld {
     holdPosition: (unit) => { this.issueHold(unit.id); },
     toggleRoot: (unit) => this.toggleRoot(unit),
     morphToggle: (unit, def) => this.morphToggle(unit, def),
+    abilityOf: (id) => this.abilities?.get(id),
     dismissSummons: (owner, typeIds) => {
       const set = new Set(typeIds);
       for (const u of [...this.units.values()]) {
@@ -6318,6 +6363,7 @@ export class SimWorld {
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
+      this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;

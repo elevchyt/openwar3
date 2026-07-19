@@ -55,6 +55,9 @@ export interface SpellApi {
   /** Swap a unit between the two forms its ability names (DataA "Normal Form Unit" and
    *  UnitID1 "Alternate Form Unit") — Burrow and every other two-form ability. */
   morphToggle(unit: SimUnit, def: AbilityDef): boolean;
+  /** Look up another ability's own row. The town bell reaches for `Amil` this way so the
+   *  militia's stats and timer stay stated once, on the ability that owns them. */
+  abilityOf(id: string): AbilityDef | undefined;
   /** Put a unit into the hold-position stance (order "hold"), clearing whatever it was
    *  doing. Shadow Meld melds a unit INTO this stance: WC3 has a melded unit "hold position
    *  and hold their fire", which is what stops it walking out of its own invisibility. */
@@ -1202,6 +1205,42 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const transition = d(lvl, 0, 0.6);
     api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
     api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
+  },
+
+  // Call to Arms, the Peasant's own half (`Amil`, order `militia` / `militiaoff`) — the same
+  // form toggle as Burrow, between the two units the ability names:
+  //   DataA "Normal Form Unit"    hpea   the Peasant
+  //   DataB "Alternate Form Unit" hmil   the Militia
+  // (DataB, not UnitID1 — see altFormOf for why the column moves between abilities.)
+  //
+  // The militia is faster, armoured and hits nearly three times as hard (hmil: spd 270, def 4
+  // large, dmg 11, against the Peasant's 190 / 0 medium / 4), and every one of those numbers
+  // is hmil's own row. What makes it a decision rather than a free upgrade is Dur1 = 45: the
+  // form is TIMED, and a militia that survives its 45 seconds turns back into a Peasant
+  // wherever it happens to be standing — see tickAltForm.
+  Amil: (api, caster, def) => { api.morphToggle(caster, def); },
+
+  // Call to Arms, the town bell (`Amic`, order `townbellon` / `townbelloff`) — the half a
+  // player actually clicks. It converts no one itself: it rings, and every Peasant the hall
+  // owns within Area1 = 2000 runs their OWN `Amil`, which is why the militia's numbers and its
+  // 45-second clock live in one place rather than being restated here.
+  //
+  // Toggle direction is read off the field rather than tracked on the hall: if anything nearby
+  // is already a militia the bell sends them all back to work, otherwise it calls them up.
+  // That matches the button ("Call to Arms" / "Back to Work") without the hall having to
+  // remember a state that the militia themselves already carry — and it stays correct when a
+  // militia's own timer runs out from under the hall.
+  Amic: (api, caster, def) => {
+    const lvl = def.levelData[0];
+    const militia = api.abilityOf("Amil");
+    if (!militia) return;
+    const alt = militia.levelData[0]?.dataStr[1] ?? "";
+    const near = api.unitsInArea(caster.x, caster.y, lvl.area || 2000)
+      .filter((u) => u.owner === caster.owner && u.hp > 0 && u.abilities.some((a) => a.code === "Amil"));
+    const anyUp = near.some((u) => u.typeId === alt);
+    for (const u of near) {
+      if ((u.typeId === alt) === anyUp) api.morphToggle(u, militia); // only those on the wrong side
+    }
   },
 
   // Burrow (`Abur`, aliases Abu2/Abu3/Abu5) — the Crypt Fiend digs in. It is a FORM TOGGLE,

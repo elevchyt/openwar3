@@ -325,6 +325,11 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // Root/Unroot — the Ancients' stance toggle (`Order=root` / `Unorder=unroot`). Self-cast:
   // it takes no target, it just changes what the Ancient is. Aro1/Aro2 alias it.
   Aroo: { target: "none" },
+  // Call to Arms — the Human militia. `Amil` is the Peasant's own form toggle
+  // (`Order=militia` / `Unorder=militiaoff`); `Amic` is the town bell on the hall
+  // (`townbellon` / `townbelloff`) that rings for every Peasant within 2000. Both self-cast.
+  Amil: { target: "none" },
+  Amic: { target: "none" },
   // Burrow — the Crypt Fiend digs in (`Order=burrow` / `Unorder=unburrow`). A form toggle
   // between the two units the ability names; Abu2/Abu3/Abu5 alias it for the scarabs and the
   // Barbed Arachnathid. See the handler for why its sibling morphs are not listed here yet.
