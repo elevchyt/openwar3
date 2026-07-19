@@ -163,6 +163,12 @@ interface AnimSet {
   build: number; // "Stand Work" — the hammering pose while constructing
   decayFlesh: number; // corpse decay — flesh rots (heroes lack this)
   decayBone: number; // corpse decay — bones linger, then vanish
+  /** "Morph" — the clip a unit plays while CHANGING form. -1 for almost everything; the
+   *  Ancients author it as a pair, and which of the pair this index lands on depends on the
+   *  animProps the set was built with: the plain set's "Morph" is the Ancient hauling its
+   *  roots up, and under `alternate` the renamed "Morph Alternate" is it planting again. So
+   *  building the set for the state being moved TO always yields the right transition. */
+  morph: number;
   seqNames: string[]; // raw sequence names (for cast-animation tag matching)
 }
 
@@ -226,6 +232,33 @@ function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = [])
     const overridden = seqs.some((o) => isMine(o.name) && baseKey(o.name) === baseKey(s.name));
     return overridden ? { name: BLANK } : s;
   });
+}
+
+/** The animProps a unit should be RENDERED with right now — its static ones from UnitFunc,
+ *  plus `alternate` while an Ancient is rooted.
+ *
+ *  Root is the one case where the alternate set is a STATE rather than an identity. For the
+ *  Troll Berserker the props sit in its own UnitFunc row and never change; the Ancients carry
+ *  no Animprops at all, and it is the ability that decides which half of the model they wear.
+ *
+ *  Which half is which is settled by AncientOfWar.mdx's own sequence list, and it is the
+ *  reverse of the obvious guess: the PLAIN clips are the walking form ("Walk" has no alternate
+ *  twin — only the uprooted Ancient walks) and the ALTERNATE ones are the planted tree, which
+ *  is why the training pose is "stand work alternate" — an Ancient trains only while planted.
+ *  A rooted Ancient therefore renders `alternate`, and uprooting takes the props away. Getting
+ *  this backwards renders a planted Ancient in its walker pose, which is what it did before
+ *  this existed (the Ancients carry NO static Animprops, so nothing chose for them).
+ *
+ *  Verified on the Ancient of War, and the other three growing Ancients plus the Trees follow
+ *  the same naming. AncientProtector.mdx is the one I am NOT sure of: it has no "work" clip to
+ *  settle it, and its alternate stand is "Stand Walk Alternate" — a name that reads like the
+ *  MOBILE form, which would make its two sets the other way round. In practice the mapping
+ *  barely reaches it: with no plain "* Alternate" stand to match, its rooted stand falls back
+ *  to the same "Stand" it used before this function existed, so only its attack clip can be
+ *  affected. Left as-is rather than special-cased on a guess; wants a look at the real client. */
+function animPropsFor(def: { animProps?: string[] } | undefined, rooted: boolean): string[] | undefined {
+  if (!rooted) return def?.animProps;
+  return [...(def?.animProps ?? []), "alternate"];
 }
 
 function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] = []): AnimSet {
@@ -294,6 +327,9 @@ function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] = []): A
     build: or(find(/stand work(?! gold| lumber)/i), or(find(/^stand work/i), attack)),
     decayFlesh: find(/decay flesh/i),
     decayBone: find(/decay bone/i),
+    // Anchored: "Morph" must not pick up "Morph Alternate", which is the OTHER direction's
+    // clip and is already renamed to a plain "Morph" whenever the alternate props are on.
+    morph: find(/^morph(\s*-?\s*\d+)?\s*$/i),
     seqNames: seqs.map((s) => s.name),
   };
 }
@@ -342,6 +378,9 @@ interface Entry {
   aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
   illus?: boolean; // last Mirror-Image blue-wash state applied (owner/allies only)
   fade?: number; // last ghost fade applied (invisible/ethereal) — see INVIS_ALPHA
+  /** Last root state this entry's animation set was built for (see animPropsFor). Undefined
+   *  for everything that is not an Ancient — the sync is skipped entirely for those. */
+  rooted?: boolean;
 }
 
 // A unit that is invisible (Wind Walk) or ethereal (Banish, Spirit Walker form) renders
@@ -1080,6 +1119,44 @@ export class RtsController {
       }
     }
     if (!hide) this.applyFogTint(e, u);
+  }
+
+  /** Does this unit type carry Root (`Aroo`)? Asked once, at attach: the answer decides both
+   *  which half of the model the unit is born wearing and whether it pays for the per-tick
+   *  root sync at all. Matched on the base CODE, so the Ancients' `Aro1` and the Ancient
+   *  Protector's `Aro2` are both caught without naming either. */
+  private isAncient(def: UnitDef): boolean {
+    return def.abilities.some((id) => this.abilities.get(id)?.code === "Aroo");
+  }
+
+  /** Re-skin an Ancient when it roots or uproots: rebuild its animation set for the new state
+   *  and play the transition clip on the way.
+   *
+   *  The model never changes — this is one MDX carrying both forms — so this is not a remodel,
+   *  just a different reading of the same sequence list (see animPropsFor). The set is built
+   *  for the state being moved TO, which is also what makes `morph` land on the correct half
+   *  of the Ancient's Morph/Morph Alternate pair without either direction being named here.
+   *
+   *  The first call for a unit sets the baseline without playing anything: a freshly built
+   *  Ancient is already rooted and should simply BE planted, not animate itself into it. */
+  private applyRootAnims(e: Entry, u: SimUnit, def: UnitDef | undefined): void {
+    const rooted = !u.uprooted;
+    if (e.rooted === rooted) return;
+    const first = e.rooted === undefined;
+    e.rooted = rooted;
+    const seqs = e.unit.instance.model?.sequences;
+    if (!seqs) return;
+    e.anims = buildAnimSet(seqs, animPropsFor(def, rooted));
+    if (first) return; // baseline only — no transition to play
+    // Hold the morph clip for its own length: castAnimT keeps the ordinary stand/walk picker
+    // off this unit until the Ancient has finished hauling itself up or settling down.
+    if (e.anims.morph < 0) return; // model authors no transition — snap to the new set
+    const inst = e.unit.instance;
+    inst.setSequence(e.anims.morph);
+    inst.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
+    e.curSeq = e.anims.morph;
+    e.unit.state = WidgetState.WALK; // hold it against the idle picker, as a cast clip does
+    e.castAnimT = this.seqDuration(inst, e.anims.morph, CAST_ANIM_HOLD);
   }
 
   /** Is this unit concealed from the LOCAL viewpoint by invisibility? The sim already
@@ -2008,7 +2085,11 @@ export class RtsController {
    *  (whose sim unit already exists). A second call for the same unit is ignored. */
   private attachInstance(simId: number, instance: Instance, def: UnitDef): void {
     if (this.byId.has(simId)) return;
-    const anims = buildAnimSet(instance.model.sequences, def.animProps);
+    // An Ancient is BUILT rooted, so it starts on the alternate (planted) half of its model.
+    // Seeding `rooted` here is also what opts the unit into the per-tick root sync — nothing
+    // that lacks the ability ever pays for it. See animPropsFor / applyRootAnims.
+    const ancient = this.isAncient(def);
+    const anims = buildAnimSet(instance.model.sequences, animPropsFor(def, ancient));
     // Per-unit animation blending: cross-fade between sequences over this unit's
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
@@ -2017,6 +2098,7 @@ export class RtsController {
       simId,
       unit: { instance, state: WidgetState.IDLE },
       anims,
+      rooted: ancient ? true : undefined,
       moveHeight: lift(def.moveHeight),
       footHalfW: 0, // set by setBuildingFootprint() once the footprint is stamped
       footHalfH: 0,
@@ -2241,6 +2323,9 @@ export class RtsController {
       e.unit.instance.setRotation(this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
       this.applyVisibility(e, u);
+      // An Ancient that has rooted or uprooted wears the other half of its model (Aroo).
+      // `rooted` is seeded at attach for carriers only, so this costs nothing for everyone else.
+      if (e.rooted !== undefined) this.applyRootAnims(e, u, this.registry.get(e.typeId));
       // A building under construction: play its own "Birth" animation, scrubbed
       // to the construction progress so it assembles in sync with the timer.
       // Models without a Birth clip fall back to scaling up from ~40% to full.
