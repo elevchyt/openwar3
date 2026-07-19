@@ -107,6 +107,25 @@ const BASE_FILES = [
   "Units\\UnitMetaData.slk",
 ];
 
+/**
+ * The simulation's fixed rate.
+ *
+ * 60 Hz, not a lower rate, because the visual sync loop (game/rts.ts `tick`) pushes sim
+ * positions straight onto the model instances — there is no render interpolation between
+ * sim steps, so the sim rate IS the animation rate, and anything below display refresh
+ * shows as judder. Decoupling those (interpolate the sync loop, then drop to 20–30 Hz as
+ * the original's net rate did) is a worthwhile follow-up and would cut sim CPU per match,
+ * which matters once one machine hosts several.
+ *
+ * 16.7 ms also sits well inside the ≤50 ms window the movement/collision code is tuned for.
+ */
+const SIM_HZ = 60;
+const SIM_DT = 1 / SIM_HZ;
+/** Catch-up steps allowed in one frame before the remainder is dropped. Without a cap, a
+ *  long stall (tab-switch, GC) queues more work than the next frame can retire, which
+ *  queues still more — the classic spiral of death. */
+const MAX_STEPS_PER_FRAME = 5;
+
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // hero level-up nova
 /** The shop indicator: the team-coloured arrow over whoever will receive the next purchase.
@@ -568,6 +587,10 @@ export class MapViewerScene {
   private scriptWatchesUnitState = false;
   private gameMenu: GameMenu | null = null;
   private paused = false; // F10 game menu freezes the sim (rendering continues)
+  private simAccum = 0; // unspent real time, in seconds, waiting to become whole sim steps
+  /** Ticks elapsed since the match began. THE match clock — the number a multiplayer
+   *  command is stamped with and a snapshot is taken at (docs/multiplayer.md). */
+  private simTick = 0;
   /** Called when the player picks "End Game" — host tears the match down. */
   onExit: (() => void) | null = null;
   // --- the trigger's on-screen output (7.19) ---
@@ -5897,16 +5920,30 @@ export class MapViewerScene {
       }
       // The F10 game menu freezes the simulation (units hold; rendering continues).
       if (!this.paused) {
-        // Clamp the sim step (not the render/HUD dt). dt is the real inter-frame time, so
-        // a GC hitch, tab-switch, or heavy frame would otherwise feed the sim one giant
-        // step — units teleport and collision resolution overshoots and jitters (issue
-        // #24: the worse the frame rate, the worse the melee "shuffle"). Capping at 50 ms
-        // (≈20 fps) keeps every sim step inside the stable regime the movement/collision
-        // code is tuned for; a slow frame just advances the world a little less.
-        const simDt = Math.min(dt, 50) / 1000;
-        this.tickPendingBuild(simDt); // seconds, matching the sim's clock
-        this.rts?.tick(simDt); // sim runs in seconds; advance + sync before render
-        this.pumpMapScript(simDt); // Phase 7: fire the map's timers + enter/leave-region triggers
+        // FIXED TIMESTEP. The sim advances in whole SIM_DT steps and never in a raw frame
+        // delta, so a match is a COUNT OF TICKS rather than a history of one machine's
+        // frame rate. Two things need that: replays, and multiplayer — the host's
+        // authoritative tick number is what a command attaches to and what a snapshot is
+        // stamped with (docs/multiplayer.md). src/sim/world.ts always claimed to be
+        // fixed-timestep; until now the claim was aspirational.
+        //
+        // It also subsumes the old Math.min(dt, 50) clamp (issue #24: at low frame rates a
+        // single huge step made melee units overshoot and "shuffle"). Every step is now
+        // SIM_DT no matter how bad the frame was; a slow frame just runs more of them, and
+        // MAX_STEPS_PER_FRAME caps that so a long stall can't spiral into an ever-growing
+        // catch-up. Dropping the remainder there loses game time, which is the right thing
+        // to lose: the alternative is a death spiral.
+        this.simAccum += dt / 1000;
+        let steps = 0;
+        while (this.simAccum >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
+          this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
+          this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
+          this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
+          this.simTick++;
+          this.simAccum -= SIM_DT;
+          steps++;
+        }
+        if (steps === MAX_STEPS_PER_FRAME) this.simAccum = 0;
       }
       // Map units load async — hide the start-location props as they stream in.
       // Re-scan whenever the unit count grows so `sloc` markers that finish
