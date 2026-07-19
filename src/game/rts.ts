@@ -722,6 +722,8 @@ export class RtsController {
   ) {
     // Registries power casting/learning/auras + items, and (issue #57) the tech tree:
     // requirements, research effects and shop stock.
+    // Seed 1 is a placeholder: the real match seed isn't known until the lobby settles,
+    // and arrives via setSeed() at beginMatch — before anything rolls. See setSeed.
     this.sim = new SimWorld(grid, 1, this.abilities, this.items, this.registry, this.tech, this.upgrades);
     // Fog-of-war grid, aligned to the same world origin as the pathing grid and
     // spanning the whole map (pathing is 32-unit cells; span = cells × 32).
@@ -752,6 +754,14 @@ export class RtsController {
   /** Which player's units a drag-box selects (set at melee start). */
   setLocalPlayer(id: number): void {
     this.localPlayer = id;
+  }
+
+  /** Start the match's RNG from the lobby's seed. Called at beginMatch, which is after the
+   *  world exists but before any unit is seeded — i.e. before a single roll. In a LAN game
+   *  every client is handed the HOST's seed, so a damage die that comes up 3 on the host
+   *  comes up 3 everywhere (docs/multiplayer.md). */
+  setSeed(seed: number): void {
+    this.sim.reseed(seed);
   }
 
   /** Player display names for the hover tooltip's owner line (set at match start
@@ -2031,7 +2041,10 @@ export class RtsController {
     // Demon Hunter's "Painkiller", the Paladin's "Uther"-alikes) — the info panel
     // shows it above the XP bar, with "Level N Demon Hunter" inside the bar.
     const hero: HeroInit | undefined = def.isHero
-      ? { properName: def.properNames.length ? def.properNames[Math.floor(Math.random() * def.properNames.length)] : "", level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: def.primaryAttr }
+      // The draw comes off the SIM's seeded stream, not Math.random: properName is written
+      // into sim state and shown to every player, so two machines watching the same match
+      // must name the hero the same thing.
+      ? { properName: def.properNames.length ? def.properNames[Math.floor(this.sim.random() * def.properNames.length)] : "", level: Math.max(1, def.level), str: def.strength, agi: def.agility, int: def.intelligence, strPerLevel: def.strPerLevel, agiPerLevel: def.agiPerLevel, intPerLevel: def.intPerLevel, primaryAttr: def.primaryAttr }
       : undefined;
     this.sim.add(
       {

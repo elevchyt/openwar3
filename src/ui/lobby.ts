@@ -28,4 +28,10 @@ export type FogMode = "explored" | "unexplored" | "revealall";
 export interface MeleeConfig {
   slots: SlotConfig[];
   fog: FogMode; // fog-of-war start mode; default "explored"
+  /** The match's RNG seed. Everything the sim rolls — damage dice, crits, evasion, item
+   *  drops, summon scatter — comes off this one number, so it is part of the match's
+   *  identity rather than of any one machine's: a replay needs it to replay, and in a LAN
+   *  game the host picks it and every client is told (docs/multiplayer.md). Omitted means
+   *  "roll one" — only single-player setup may leave it out. */
+  seed?: number;
 }

@@ -982,5 +982,7 @@ function toConfig(slots: Slot[], info: MapInfo): MeleeConfig {
         startY: mapSlot?.startY ?? 0,
       };
     });
-  return { slots: playing, fog: "explored" };
+  // A fresh seed per match, so two games on the same map don't roll the same crits and
+  // drops. Math.random picks it; the sim never touches Math.random itself (world.ts).
+  return { slots: playing, fog: "explored", seed: 1 + Math.floor(Math.random() * 2147483645) };
 }

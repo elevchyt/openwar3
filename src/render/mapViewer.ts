@@ -126,6 +126,13 @@ const SIM_DT = 1 / SIM_HZ;
  *  queues still more — the classic spiral of death. */
 const MAX_STEPS_PER_FRAME = 5;
 
+/** A match seed for a game nobody specified one for (single player). Math.random is fine
+ *  HERE and nowhere near the sim: this picks the seed, it doesn't roll off it. The Park-
+ *  Miller LCG the sim uses wants a positive int below 2^31-1. */
+function randomSeed(): number {
+  return 1 + Math.floor(Math.random() * 2147483645);
+}
+
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // hero level-up nova
 /** The shop indicator: the team-coloured arrow over whoever will receive the next purchase.
@@ -1113,6 +1120,11 @@ export class MapViewerScene {
    *  console skin agree), seed teams/stashes, and mount the HUD. Returns the
    *  resolved race per slot (melee needs it for the starting roster). */
   private beginMatch(config: MeleeConfig, startGold: number, startLumber: number): Map<number, PlayableRace> {
+    // Seed the match's RNG before anything can roll. The world is built at map load, when
+    // the lobby's choices aren't known yet, so the seed arrives here — still ahead of unit
+    // seeding, the map script and the first tick, which is the last moment it is safe.
+    // Until this existed every match ran off a hardcoded 1 and rolled identically.
+    this.rts!.setSeed(config.seed ?? randomSeed());
     this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
     this.rts!.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
     // Owner-line names for the hover tooltip: an AI slot reads "Computer (Normal)"

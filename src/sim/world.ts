@@ -1281,6 +1281,10 @@ export class SimWorld {
   private morphs: Array<{ unitId: number; from: string; to: string }> = [];
   private nextNodeId = 1;
   private rng: () => number;
+  /** The seed this world's RNG was started from. Part of a match's identity: a replay or
+   *  a joining client needs it to roll the same damage, crits, misses and item drops as
+   *  the machine that owns the game (docs/multiplayer.md). */
+  seed: number;
   // --- corpses (persist + decay; targetable by corpse-consuming spells) ---
   readonly corpses = new Map<number, SimCorpse>();
   private nextCorpseId = 1;
@@ -1335,6 +1339,7 @@ export class SimWorld {
     private techReg?: TechRegistry,
     private upgradeReg?: UpgradeRegistry,
   ) {
+    this.seed = seed;
     this.rng = lcg(seed);
     this.tech =
       techReg && upgradeReg
@@ -6344,6 +6349,25 @@ export class SimWorld {
     const out = this.summonRequests;
     this.summonRequests = [];
     return out;
+  }
+
+  /**
+   * Restart the RNG from a new seed. Legal only BEFORE the match rolls anything — the
+   * lobby knows the seed after the world is constructed (render/mapViewer.ts builds the
+   * world at map load and settles the match config later, at beginMatch, which still runs
+   * before a single unit is seeded). Calling it mid-match would rewind the stream and
+   * desync a client from its host, so don't.
+   */
+  reseed(seed: number): void {
+    this.seed = seed;
+    this.rng = lcg(seed);
+  }
+
+  /** Draw from the match's seeded stream. For the few rolls that live just OUTSIDE the sim
+   *  but still decide sim state — a hero's proper name, written onto the unit — so they
+   *  come off the same reproducible sequence as damage and drops instead of Math.random. */
+  random(): number {
+    return this.rng();
   }
 
   tick(dt: number): void {
