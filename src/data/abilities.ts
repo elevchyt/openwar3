@@ -303,6 +303,24 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Agyb: { target: "passive" }, // Flying Machine Bombs (`Rhgb`)
   Asth: { target: "passive" }, // Storm Hammers (`Rhhb`)
   Aroc: { target: "passive" }, // Barrage (`Rhrt`)
+  // === Passives the SIM reads off the ability list ===
+  // These cast nothing, but recomputeStats DERIVES a unit property from them, and a unit only
+  // carries an ability that survives buildInitialAbilities — which keeps exactly what is
+  // listed here. Leaving them out doesn't merely hide a button: it silently switches the
+  // property off for every unit in the game. True Sight sat at radius 0 and magic immunity at
+  // `false` for precisely that reason, each with a working derivation behind it and nothing
+  // to derive from.
+  //
+  // They are genuine passive BUTTONS in WC3 too, the Devotion Aura shape — each carries its
+  // own PASBTN art (PASBTNShadeTrueSight, PASBTNMagicalSentry, PASBTNMagicImmunity) and a
+  // Buttonpos — so showing them on the card is authentic, not a side-effect.
+  Atru: { target: "passive" }, // True Sight — the Shade (`ushd`), Rng1 900
+  Adts: { target: "passive" }, // Magic Sentry — the four Human towers, Rng1 900, gated on `Rhse`
+  Amim: { target: "passive" }, // Magic Immunity — Dryad, Faerie Dragon, Spirit Walker, nbel
+  // `Adet` "Detect (Sentry Ward)" (Rng1 1100) is in AbilityData.slk but NO unit lists it in
+  // 1.27a's UnitAbilities.slk — it is a dead row. It stays out of this table (nothing would
+  // ever carry it) while the sim's detect derivation still honours the code, so a custom map
+  // that hands it out gets the radius the data promises.
 };
 
 interface Row {

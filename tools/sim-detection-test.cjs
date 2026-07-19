@@ -93,5 +93,26 @@ check("an unlearned detect ability grants no sight", radiusOf([abil("Atru", 0)])
 // And a unit with no detect ability at all detects nothing.
 check("a unit with no detect ability has no radius", radiusOf([abil("Amim")]), 0);
 
+// --- availability, not membership ----------------------------------------------------
+//
+// All four Human towers carry `Adts` from birth, but `[Adts] Requires=Rhse` (Magic Sentry).
+// Carrying the ability is not having it: without the research the tower sees nothing, which
+// is the standing "abilList membership is not availability" rule.
+const gated = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1, stubReg);
+let researched = false;
+gated.techMeets = (_player, id) => (id === "Adts" ? researched : true);
+function gatedRadius() {
+  const u = {
+    id: 9001, owner: 0, team: 0, hp: 100, x: 0, y: 0, detectRadius: 0, invisible: false,
+    buffs: [], inventory: [], weapons: [], abilities: [abil("Adts")],
+    baseArmor: 0, baseMaxHp: 100, baseMaxMana: 0, baseMoveSpeed: 270, baseSight: 1800,
+  };
+  gated.recomputeStats(u);
+  return u.detectRadius;
+}
+check("a tower without Magic Sentry researched detects nothing", gatedRadius(), 0);
+researched = true;
+check("…and 900 once the research lands", gatedRadius(), 900);
+
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);
 process.exit(failed ? 1 : 0);

@@ -4232,8 +4232,10 @@ export class SimWorld {
     u.silenced = silence;
     u.ethereal = ethereal || u.etherealForm; // Banish (timed) OR the Spirit Walker's ethereal FORM (persistent)
     // Magic Immunity is a plain property of the unit's ability list, not a buff — nothing
-    // grants or removes it mid-life, so it is derived here alongside the rest.
-    u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1);
+    // grants or removes it mid-life, so it is derived here alongside the rest. (`Amim` carries
+    // no Requires, so the tech gate below is a formality for it — it is the tower detection
+    // that actually needs one.)
+    u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1 && this.techMeets(u.owner, a.id));
     // True Sight, likewise a property of the ability list. Three separate base codes do the
     // one job, so all three are read and the widest wins if a unit somehow carries more than
     // one. AbilityData.slk names them plainly:
@@ -4248,10 +4250,17 @@ export class SimWorld {
     // reach, i.e. True Sight silently never fired: nothing was ever revealed.
     //
     // `Adet` is the odd one out in the table: its row carries no `code` cell, so it reaches
-    // the registry under the id fallback (abilities.ts `str(r, "code") || id`).
+    // the registry under the id fallback (abilities.ts `str(r, "code") || id`). No 1.27a unit
+    // lists it — it is kept here for custom maps that hand it out.
+    //
+    // The tech gate is the standing "abilList membership is not availability" rule, and this
+    // is the case that rule was written for: all four Human towers carry `Adts` from birth,
+    // but `[Adts] Requires=Rhse` — Magic Sentry. Without the check, every Scout Tower on the
+    // map would see through Wind Walk with the research still unbought.
     u.detectRadius = 0;
     for (const a of u.abilities) {
       if ((a.code !== "Atru" && a.code !== "Adet" && a.code !== "Adts") || a.level < 1) continue;
+      if (!this.techMeets(u.owner, a.id)) continue;
       const lvl = this.abilities?.get(a.id)?.levelData[Math.max(0, a.level - 1)];
       const r = lvl?.castRange;
       if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
