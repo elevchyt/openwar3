@@ -138,15 +138,12 @@ function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Pro
 
 /** Local Area Network: the relay-backed game list (src/net/, docs/multiplayer.md).
  *
- *  Chrome: TopRightPanel.mdx carries a Birth/Stand/Death triple per glue screen and
- *  menuScene.ts notes it includes `Battlenet*` clips — which is what the original wears
- *  here, LocalMultiplayerJoin.fdf being a BattleNetCustom* sibling. The exact sequence name
- *  is NOT verified (the model isn't in ExtractedData), so this borrows the skirmish chrome,
- *  which is the same wide setup-panel shape. Confirm the real name against the model and
- *  switch — don't guess it. */
-function lanScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; mount: () => Promise<FdfScreen> } {
+ *  Chrome `BattlenetCustom` — read out of the panel model's own sequence table. The game
+ *  has no LAN-specific chrome: LocalMultiplayerJoin.fdf is the transport-swapped twin of
+ *  BattleNetCustomJoinPanel.fdf and they share this triple (see menuScene.ts). */
+function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
   return {
-    chrome: "SinglePlayerSkirmish",
+    chrome: "BattlenetCustom",
     mount: () => mountLanScreen(ui, vfs, {
       onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
     }),

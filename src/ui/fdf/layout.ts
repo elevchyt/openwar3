@@ -72,6 +72,13 @@ function readPoints(frame: FdfFrame): { setAllPoints: boolean; points: PointSpec
   return { setAllPoints, points };
 }
 
+/** One line of a TEXT frame's own font, in world units. 1.2 is the line box the renderer
+ *  uses (ui/fdf/render.ts — it must clear descenders), and 0.013 its FrameFont default, so
+ *  an unsized TEXT frame ends up exactly as tall as the line it draws. */
+function textLineHeight(frame: FdfFrame): number {
+  return (firstProp(frame, "FrameFont")?.args[1]?.n ?? 0.013) * 1.2;
+}
+
 /** Build the LaidOutFrame tree (unsolved), reading explicit Width/Height. */
 function buildTree(frame: FdfFrame, parent: LaidOutFrame | null): LaidOutFrame {
   const node: LaidOutFrame = {
@@ -187,6 +194,13 @@ export function layout(
           const ok = points.every((pt) => relOf(n, pt.relName)?.placed);
           if (ok) { placeByTwoPoints(n, points, relOf); progressed = true; continue; }
         }
+        // A TEXT frame with no Height is one LINE tall, not as tall as whatever contains
+        // it — the engine auto-sizes TEXT to its string, so the FDF simply omits the size.
+        // Inheriting the parent's height instead is invisible on a centred label (the box
+        // grows symmetrically about the anchor) but wrong the moment anything anchors BELOW
+        // one: LocalMultiplayerJoin chains title → label → editbox → list down a ladder of
+        // BOTTOMLEFTs, and a full-height title pushed the list 1300px off a 625px screen.
+        if (Number.isNaN(n.h) && n.frame.type === "TEXT") n.h = textLineHeight(n.frame);
         if (n.parent?.placed) {
           if (Number.isNaN(n.w)) n.w = n.parent.w;
           if (Number.isNaN(n.h)) n.h = n.parent.h;

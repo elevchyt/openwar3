@@ -33,7 +33,12 @@ const LEFT_ROC = "UI\\Glues\\SpriteLayers\\TopLeftPanel.mdx";
 // menus: the outgoing screen's chrome plays its Death, the incoming one its Birth, and
 // then idles on its Stand. We drive exactly those clips, so the panel motion IS the
 // game's own — no hand-authored slide (issue #61).
-export type GlueChrome = "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish";
+// Verified against the models themselves: all four panel models (left/right, RoC/TFT) carry
+// a byte-identical 62-sequence table. There is NO LAN-specific chrome — nothing in it matches
+// /lan|local|network/. The LAN screens wear the Battle.net custom-game chrome, and the FDF
+// TOC confirms the pairing: LocalMultiplayerJoin/Create/Load.fdf parallel
+// BattleNetCustomJoin/Create/LoadPanel.fdf — the same three panels, one set per transport.
+export type GlueChrome = "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish" | "BattlenetCustom";
 
 /** How long a screen's chrome takes to leave / arrive, in ms — read from the model's
  *  own sequence intervals, so the DOM panels can be animated over the same window. */

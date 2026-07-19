@@ -154,18 +154,10 @@ function buildLanRoot(lib: FdfLibrary): FdfFrame {
   const root = lib.resolveRoot("LocalMultiplayerJoin");
   if (!root) throw new Error("LocalMultiplayerJoin.fdf: no LocalMultiplayerJoin frame");
 
-  // GameListTitle / PlayerNameLabel / GameListLabel are TEXT frames that declare NO
-  // Width/Height — the engine auto-sizes a TEXT frame to its string, so the FDF doesn't
-  // bother. Our layout stretches an unsized frame to fill instead, which matters here
-  // because this screen chains its anchors down a ladder of them
-  // (title → label → editbox → list, each SetPoint TOPLEFT … BOTTOMLEFT): one full-height
-  // frame pushes everything below it off the bottom of the screen. Give them their real
-  // heights, as fdfSkirmish.ts does for the frames the engine positions in code.
-  // (A general fix — auto-height for unsized TEXT frames — belongs in ui/fdf/layout.ts.)
-  size(findFrame(root, "GameListTitle"), LIST_W, 0.022);
-  size(findFrame(root, "PlayerNameLabel"), LIST_W, 0.016);
-  size(findFrame(root, "GameListLabel"), LIST_W, 0.016);
-
+  // NOTE: this screen chains its anchors down a ladder of unsized TEXT frames
+  // (title → label → editbox → list, each SetPoint TOPLEFT … BOTTOMLEFT). Those get their
+  // one-line height from the layout solver itself (ui/fdf/layout.ts `textLineHeight`) — it
+  // used to inherit the parent's height and push the list clean off the screen.
   const listBox = lib.resolveRoot("MapListBox");
   if (listBox) {
     setProp(listBox, "SetAllPoints", []); // fill the container the FDF already sized
@@ -174,8 +166,6 @@ function buildLanRoot(lib: FdfLibrary): FdfFrame {
   return root;
 }
 
-/** The left column's width, as LocalMultiplayerJoin.fdf sizes its editbox and list. */
-const LIST_W = 0.37;
 
 // --- small FdfFrame helpers (mirrors of the ones in fdfSkirmish.ts) -------------------
 
@@ -203,9 +193,3 @@ function setProp(
   f.props.push({ key, args });
 }
 
-const num = (n: number) => ({ s: String(n), n, str: false });
-
-function size(f: FdfFrame | undefined, w: number, h: number): void {
-  setProp(f, "Width", [num(w)]);
-  setProp(f, "Height", [num(h)]);
-}
