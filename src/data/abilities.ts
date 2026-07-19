@@ -314,6 +314,9 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // They are genuine passive BUTTONS in WC3 too, the Devotion Aura shape — each carries its
   // own PASBTN art (PASBTNShadeTrueSight, PASBTNMagicalSentry, PASBTNMagicImmunity) and a
   // Buttonpos — so showing them on the card is authentic, not a side-effect.
+  // Shadow Meld — the night elf racial. Self-cast (order `ambush`), night only; see the
+  // handler in spells.ts. `Sshm` is the same code with a 0.1s fade instead of 1.5s.
+  Ashm: { target: "none" },
   Atru: { target: "passive" }, // True Sight — the Shade (`ushd`), Rng1 900
   Adts: { target: "passive" }, // Magic Sentry — the four Human towers, Rng1 900, gated on `Rhse`
   Amim: { target: "passive" }, // Magic Immunity — Dryad, Faerie Dragon, Spirit Walker, nbel

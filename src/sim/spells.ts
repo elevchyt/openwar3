@@ -46,6 +46,13 @@ export interface SpellApi {
   devour(kodo: SimUnit, prey: SimUnit): void;
   /** Spirit Walker: toggle between ethereal and corporeal form (morph + ethereal state). */
   toggleSpiritForm(unit: SimUnit): void;
+  /** True during daylight (Dawn–Dusk on the sim clock). Shadow Meld is a night ability, and
+   *  the day/night cycle is the only world state any spell currently reads. */
+  isDay(): boolean;
+  /** Put a unit into the hold-position stance (order "hold"), clearing whatever it was
+   *  doing. Shadow Meld melds a unit INTO this stance: WC3 has a melded unit "hold position
+   *  and hold their fire", which is what stops it walking out of its own invisibility. */
+  holdPosition(unit: SimUnit): void;
   /** Dismiss an owner's existing summons of the given types — Feral Spirit replaces the
    *  caster's old wolves on re-cast. Each leaves via its OWN unsummon effect (the art it
    *  was summoned with), so this needs no art passed in. */
@@ -89,6 +96,9 @@ export interface SimBuffInit {
    *  `...fx(def)` — see below — rather than setting `art` by hand. */
   fx?: BuffFx[];
   delay?: number; // seconds before the effect engages (Wind Walk's Transition Time)
+  /** Marks a Shadow Meld invisibility, which also breaks on MOVEMENT and at DAWN
+   *  (world.ts tickMeld). See SimBuff.meld. */
+  meld?: boolean;
 }
 
 /** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).
@@ -1186,6 +1196,47 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const transition = d(lvl, 0, 0.6);
     api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
     api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
+  },
+
+  // Shadow Meld (`Ashm`) — the night elf racial: an Archer standing still in the dark simply
+  // isn't there. Every night elf ground unit has it, which is what a night elf army does when
+  // it wants the map to stop knowing where it is.
+  //
+  // It is the one invisibility that is a STANCE, not a spell, and that shapes the whole
+  // implementation. There is no duration column at all: it holds for as long as its
+  // conditions hold. So the buff goes on with timeLeft Infinity and world.ts tickMeld takes
+  // it off again when the unit moves or the sun comes up (`meld: true` marks it) — the other
+  // breaks (attack, cast) come free through the shared breakInvisibility path.
+  //
+  // AbilityData.slk Ashm, Data columns named by AbilityMetaData Shm1/2/3 through
+  // WorldEditStrings:
+  //   DataA "Fade Duration"      1.5   (Sshm, the instant variant, 0.1)
+  //   DataB "Day/Night Duration" 2.5
+  //   DataC "Action Duration"    0.5
+  // Only DataA is spent, as the buff's `delay` — Liquipedia names the 1.5s fade outright and
+  // the number agrees. DataB and DataC have names but no source that says what they MEASURE,
+  // so they stay unspent rather than guessed at (see tickMeld, and CLAUDE.md's "do not invent
+  // a number"). Both want a measurement against the real client.
+  //
+  // Casting is refused by day. That is not decoration: without it the unit would meld, pay
+  // the fade, and be stripped by tickMeld on the very next tick.
+  Ashm: (api, caster, def, rank) => {
+    if (api.isDay()) return; // night ability — the button is dead in daylight
+    const lvl = def.levelData[rank - 1];
+    // Hold position and hold fire. WC3 melds the unit INTO this stance, and it is the reason
+    // a melded unit stays melded: left on its own orders it would walk or shoot itself out of
+    // hiding within seconds.
+    api.holdPosition(caster);
+    api.applyBuff(caster, {
+      kind: "invisible",
+      group: "shadowmeld",
+      timeLeft: Infinity, // no duration column — the conditions are the duration
+      sourceId: caster.id,
+      value: 0, // no Backstab Damage: that is Wind Walk's DataC, and Ashm has no equivalent
+      delay: d(lvl, 0, 1.5), // "Fade Duration"
+      meld: true,
+      ...fx(def),
+    });
   },
 
   // Metamorphosis / Robo-Goblin / Chemical Rage — transforms modelled as a timed

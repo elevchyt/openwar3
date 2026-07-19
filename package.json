@@ -16,7 +16,7 @@
     "data:verify": "node tools/verify-gameplay-constants.mjs",
     "jass:coverage": "node tools/native-coverage.mjs",
     "jass:test": "tsc -p tools/tsconfig.jass.json && node tools/jass-corpus-test.cjs",
-    "sim:test": "tsc -p tools/tsconfig.sim.json && node tools/sim-targeting-test.cjs && node tools/sim-item-regen-test.cjs && node tools/sim-spells-test.cjs && node tools/sim-death-blast-test.cjs && node tools/sim-detection-test.cjs && node tools/sim-aura-test.cjs",
+    "sim:test": "tsc -p tools/tsconfig.sim.json && node tools/sim-targeting-test.cjs && node tools/sim-item-regen-test.cjs && node tools/sim-spells-test.cjs && node tools/sim-death-blast-test.cjs && node tools/sim-detection-test.cjs && node tools/sim-shadowmeld-test.cjs && node tools/sim-aura-test.cjs",
     "data:audit": "node tools/audit-abilities.mjs"
   },
   "dependencies": {

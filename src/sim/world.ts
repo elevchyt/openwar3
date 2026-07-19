@@ -184,6 +184,12 @@ export interface SimBuff {
    *  buff exists and its duration is already running; it just isn't in force yet. 0 for
    *  everything else, which engages the instant it lands. */
   delay: number;
+  /** Shadow Meld (`Ashm`), the one invisibility that is a STANCE rather than a spell. It
+   *  never expires on a clock — it holds for as long as its conditions do — so it breaks on
+   *  two things no other invisibility cares about: the unit MOVING, and DAY breaking. Both
+   *  are checked in tickMeld; everything else (attack, cast) reveals it through the shared
+   *  breakInvisibility path, same as Wind Walk. */
+  meld?: boolean;
 }
 
 export type BuffKind =
@@ -4492,7 +4498,7 @@ export class SimWorld {
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), delay: init.delay ?? 0 });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), delay: init.delay ?? 0, meld: init.meld });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -5843,6 +5849,8 @@ export class SimWorld {
     },
     devour: (kodo, prey) => this.devourInternal(kodo, prey),
     toggleSpiritForm: (unit) => this.toggleSpiritForm(unit),
+    isDay: () => this.isDay,
+    holdPosition: (unit) => { this.issueHold(unit.id); },
     dismissSummons: (owner, typeIds) => {
       const set = new Set(typeIds);
       for (const u of [...this.units.values()]) {
@@ -6153,6 +6161,7 @@ export class SimWorld {
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
+      this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
@@ -6944,6 +6953,35 @@ export class SimWorld {
    * while a bare Invisibility only ever drops itself. An ungrouped ("") buff is nobody's
    * sibling, so it must never be swept up by group equality.
    */
+  /**
+   * Shadow Meld's two extra break conditions, checked every tick because neither one is an
+   * EVENT the unit does — they are conditions that stop holding.
+   *
+   * MOVING. Liquipedia: the meld is lost if the unit "moves, attacks, uses an ability, or
+   * casts a spell". The last three already reveal through breakInvisibility (the shared path
+   * every invisibility uses), but movement is Shadow Meld's alone — Wind Walk's entire point
+   * is that you keep it while you walk. Tested on actual displacement rather than on the
+   * order, because an order is an intent: a melded Archer shoved by a collision resolve, or
+   * carried along by a settle() snap, has moved whether she meant to or not. `moving` alone
+   * would also miss the frame a push happens outside any order.
+   *
+   * DAY. `[Ashm]` is night-only for units (Liquipedia: "usually disabled during the day"),
+   * so dawn ends a meld already in force — it is not merely a bar on casting it.
+   *
+   * The two columns this does NOT spend are DataB "Day/Night Duration" (2.5) and DataC
+   * "Action Duration" (0.5). Their names are from AbilityMetaData/WorldEditStrings, but no
+   * source says what either measures — a grace period at dawn, a re-meld lockout after
+   * acting, something else. Per CLAUDE.md the number gets implemented when its MEANING is
+   * known, not guessed at from its size, so dawn is sharp and re-melding is immediate until
+   * somebody measures the real client. DataA "Fade Duration" (1.5) is spent, as the buff's
+   * `delay` — Liquipedia names that one outright.
+   */
+  private tickMeld(u: SimUnit): void {
+    if (!u.buffs.some((b) => b.kind === "invisible" && b.meld)) return;
+    const moved = u.x !== u.prevX || u.y !== u.prevY;
+    if (moved || this.isDay) this.breakInvisibility(u);
+  }
+
   private breakInvisibility(u: SimUnit): number {
     if (!u.cloaked) return 0;
     let bonus = 0;
