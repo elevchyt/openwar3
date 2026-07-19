@@ -834,6 +834,15 @@ export interface SimUnit {
    *  War Eagle, 900), `Adet` (the Sentry Ward, 1100) or `Adts` (Magic Sentinel, 900).
    *  Derived from the ability list. */
   detectRadius: number;
+  /** Root (`Aroo`): this Ancient has pulled itself out of the ground and is walking. False is
+   *  the resting state for every carrier — an Ancient is BUILT rooted, and a Tree of Life
+   *  spends the whole game that way unless something goes badly wrong. See toggleRoot. */
+  uprooted: boolean;
+  /** The building footprint an uprooted Ancient will take back when it plants (0 for
+   *  everything else). While it walks its own `footprint` is 0 — it collides by RADIUS like
+   *  any other unit — because a 4×4 stamped block is a thing the pathfinder routes around,
+   *  and an Ancient carrying one cannot leave the hole it is standing in. See toggleRoot. */
+  rootedFootprint: number;
   /** The fade is IN FORCE: renders half-faded, and draws no aggro (see canSee). False during
    *  the Transition Time, when the unit is under the effect but hasn't vanished yet. */
   invisible: boolean;
@@ -2429,6 +2438,10 @@ export class SimWorld {
     for (const u of this.units.values()) {
       const b = u.building;
       if (!b) continue;
+      // An UPROOTED Ancient is not a building right now: it trains nothing and researches
+      // nothing while it walks. The queue is left exactly as it stands rather than refunded —
+      // this is a pause, and planting again resumes it where it stopped.
+      if (u.uprooted) continue;
       if (b.constructionLeft > 0) {
         // Debug cheat: finish in ~1s no matter what (no builder required).
         if (this.fastBuild) {
@@ -2769,6 +2782,8 @@ export class SimWorld {
       | "ethereal"
       | "magicImmune"
       | "detectRadius"
+      | "uprooted"
+      | "rootedFootprint"
       | "invisible"
       | "cloaked"
       | "invulnerable"
@@ -2940,6 +2955,8 @@ export class SimWorld {
       ethereal: false,
       magicImmune: false, // recomputeStats derives it from the unit's ability list
       detectRadius: 0, // …and True Sight likewise
+      uprooted: false, // an Ancient is built rooted (Aroo)
+      rootedFootprint: 0, // set when it uproots, spent when it plants
       invisible: false,
       cloaked: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
@@ -4176,6 +4193,7 @@ export class SimWorld {
       Math.max(IAS_MIN, agiAttackSpeed + hasteAttack + item.attackSpeed + upg.attackSpeed - slowAttack),
     );
     const speedFactor = 1 / (1 + ias);
+    const root = this.rootAbility(u); // Ancients: which weapon slot is live depends on it
     // EVERY slot is rebuilt, not just the one in hand: a Gargoyle's ground and air attacks
     // both carry Forged Talons, and a Flying Machine that researches Bombs must find its bomb
     // slot already carrying its armour/damage upgrades the moment the slot switches on.
@@ -4198,6 +4216,23 @@ export class SimWorld {
       w.cooldown = Math.max(w.baseCooldown * speedFactor, w.damagePoint + DAMAGE_POINT_FLOOR);
       w.spillDist = w.baseSpillDist + upg.spillDist; // Storm Hammers — see the spill fields on SimWeapon
       w.spillRadius = w.baseSpillRadius + upg.spillRadius;
+    }
+    // Root (`Aroo`) swaps which WEAPON SLOT is live, and the Data columns say so outright
+    // (AbilityMetaData Roo1..Roo4 → WorldEditStrings):
+    //   DataA "Rooted Weapons"    Aroo/Aro1 = 1, Aro2 = 2
+    //   DataB "Uprooted Weapons"  Aroo/Aro1 = 2, Aro2 = 1
+    // Same bitmask as `weapsOn` (1 = first slot, 2 = second, 3 = both), so this is a mask
+    // assignment and not a bit test. The Ancient Protector is what the column is FOR: `etrp`
+    // has weapsOn=3 and takes Aro2, so planted it fires slot 2 — the 700-range attack that
+    // also hits air — and uprooted it swings slot 1, a 128-range melee. A tower while it
+    // stands still, a slow angry tree while it walks. The three plain Ancients carry the same
+    // stats in both slots, so for them this is bookkeeping the data still insists on.
+    if (root) {
+      const lvl = this.abilities?.get(root.id)?.levelData[0];
+      const mask = u.uprooted ? lvl?.data[1] : lvl?.data[0];
+      if (mask !== undefined && !Number.isNaN(mask)) {
+        for (let i = 0; i < u.weapons.length; i++) u.weapons[i].enabled = (mask & (1 << i)) !== 0;
+      }
     }
     // Orc Burrow: its arrow weapon is `weapsOn=1` in data but only fires while GARRISONED,
     // and its attack SPEED scales with the peon count — one projectile always, cooldown =
@@ -4229,6 +4264,12 @@ export class SimWorld {
       && u.abilities.some((a) => a.code === "Ault" && a.level >= 1);
     u.sightNight = ultravision ? u.sightDay : u.baseSightNight + upg.sight;
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
+    // Root (`Aroo`) — an Ancient is a building that can decide to walk. UnitBalance already
+    // gives every carrier a real movement speed (eaom spd=40): that is its UPROOTED walk, and
+    // what makes it a building the rest of the time is simply that we refuse to spend it.
+    // Zeroing the speed is the whole of "rooted" as far as movement is concerned — u.speed<=0
+    // is already what issueFollow, the stuck check and the collision list all gate on.
+    if (root && !u.uprooted) u.speed = 0;
     u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen + upg.manaRegen;
     u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
     u.lifesteal = Math.max(lifesteal, item.lifesteal);
@@ -4279,6 +4320,61 @@ export class SimWorld {
     u.bonusStr = item.str;
     u.bonusAgi = item.agi;
     u.bonusInt = item.int;
+  }
+
+  /** This unit's Root ability (`Aroo`), or undefined for everything that is not an Ancient.
+   *  Aro1/Aro2 are aliases of the same base code, which is what lets one lookup serve the
+   *  Ancients, the three Tree of Life tiers and the Ancient Protector alike. */
+  private rootAbility(u: SimUnit): SimAbility | undefined {
+    return u.abilities.find((a) => a.code === "Aroo" && a.level >= 1);
+  }
+
+  /**
+   * Root / Unroot (`Aroo`) — an Ancient pulling itself out of the ground, or planting again.
+   * `Order=root` / `Unorder=unroot` in NightElfAbilityFunc: one ability, two directions, which
+   * is why this toggles rather than taking a direction.
+   *
+   * Almost everything about the two states is derived in recomputeStats (the walk speed and
+   * the live weapon slot both fall out of `uprooted`). What CANNOT be derived is the physical
+   * transition, which is the only reason this method exists: a rooted Ancient occupies its
+   * cells and an uprooted one must not, or it would collide with the hole it left behind.
+   *
+   * Rooting refuses if the Ancient no longer fits where it stands — it may have walked onto
+   * ground too tight for its footprint, and a building that plants itself inside a wall is
+   * worse than one that refuses to plant. Returns whether the toggle happened, so a caller
+   * can tell a refusal from a no-op.
+   */
+  toggleRoot(u: SimUnit): boolean {
+    if (!this.rootAbility(u)) return false;
+    if (u.uprooted) {
+      // Planting: test the ground FIRST, because it is the only step that can fail, and it
+      // must be tested against the footprint the Ancient is about to take back rather than
+      // the 0 it walks around with.
+      const n = u.rootedFootprint;
+      if (n > 0 && this.grid) {
+        const [cx, cy] = this.grid.worldToCell(u.x, u.y);
+        if (!this.grid.footprintFits(cx, cy, n)) return false;
+      }
+      u.uprooted = false;
+      u.footprint = n;
+      u.rootedFootprint = 0;
+      this.stop(u.id); // drop any walk/target — it is a building again
+      this.settle(u); // stamp its cells and snap onto the grid
+    } else {
+      u.uprooted = true;
+      this.unsettle(u); // free the cells before it can take a step out of them
+      // Put the building footprint away for the walk. A stamped n×n block is an obstacle the
+      // pathfinder routes AROUND, so an Ancient that kept its 4×4 while walking would be
+      // permanently boxed in by itself — pathTo fails on the first step and the thing just
+      // stands there having visibly pulled its roots up. Walking, it collides by radius like
+      // every other mobile unit; the footprint comes back when it plants.
+      u.rootedFootprint = u.footprint;
+      u.footprint = 0;
+      // Whatever it was building keeps its place in the queue: WC3 halts an uprooted
+      // Ancient's production rather than cancelling it (see tickBuildings).
+    }
+    this.recomputeStats(u);
+    return true;
   }
 
   /** Defend (Adef), when the unit is actually braced: the ability's level data, else null.
@@ -5851,6 +5947,7 @@ export class SimWorld {
     toggleSpiritForm: (unit) => this.toggleSpiritForm(unit),
     isDay: () => this.isDay,
     holdPosition: (unit) => { this.issueHold(unit.id); },
+    toggleRoot: (unit) => this.toggleRoot(unit),
     dismissSummons: (owner, typeIds) => {
       const set = new Set(typeIds);
       for (const u of [...this.units.values()]) {

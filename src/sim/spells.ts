@@ -49,6 +49,9 @@ export interface SpellApi {
   /** True during daylight (Dawn–Dusk on the sim clock). Shadow Meld is a night ability, and
    *  the day/night cycle is the only world state any spell currently reads. */
   isDay(): boolean;
+  /** Root/Unroot (`Aroo`): toggle an Ancient between planted and walking. False if it refused
+   *  — the only refusal is trying to plant where the footprint no longer fits. */
+  toggleRoot(unit: SimUnit): boolean;
   /** Put a unit into the hold-position stance (order "hold"), clearing whatever it was
    *  doing. Shadow Meld melds a unit INTO this stance: WC3 has a melded unit "hold position
    *  and hold their fire", which is what stops it walking out of its own invisibility. */
@@ -1197,6 +1200,21 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
     api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
   },
+
+  // Root / Unroot (`Aroo`, aliases Aro1/Aro2) — an Ancient pulling itself out of the ground,
+  // or planting again. One ability, two directions (`Order=root` / `Unorder=unroot`), so it
+  // toggles; the command card shows one button that swaps its label with the state.
+  //
+  // Everything the two states differ by is DERIVED in recomputeStats — the walk speed and the
+  // live weapon slot both fall out of `uprooted` — so the handler only has to ask the sim to
+  // make the physical transition (free or claim the Ancient's cells). See toggleRoot.
+  //
+  // Unspent: DataD "Uprooted Defense Type" = 2. It is an INDEX into the game's own defense
+  // type ordering, and our ArmorType is a string enum with no such index, so mapping it means
+  // establishing what 2 means rather than assuming it lands on Medium because that is the
+  // answer I expect. A rooted Ancient is `fort` in UnitBalance and stays `fort` uprooted until
+  // that is settled — see CLAUDE.md on not inventing a number.
+  Aroo: (api, caster) => { api.toggleRoot(caster); },
 
   // Shadow Meld (`Ashm`) — the night elf racial: an Archer standing still in the dark simply
   // isn't there. Every night elf ground unit has it, which is what a night elf army does when

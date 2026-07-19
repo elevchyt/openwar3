@@ -317,6 +317,9 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // Shadow Meld — the night elf racial. Self-cast (order `ambush`), night only; see the
   // handler in spells.ts. `Sshm` is the same code with a 0.1s fade instead of 1.5s.
   Ashm: { target: "none" },
+  // Root/Unroot — the Ancients' stance toggle (`Order=root` / `Unorder=unroot`). Self-cast:
+  // it takes no target, it just changes what the Ancient is. Aro1/Aro2 alias it.
+  Aroo: { target: "none" },
   Atru: { target: "passive" }, // True Sight — the Shade (`ushd`), Rng1 900
   Adts: { target: "passive" }, // Magic Sentry — the four Human towers, Rng1 900, gated on `Rhse`
   Amim: { target: "passive" }, // Magic Immunity — Dryad, Faerie Dragon, Spirit Walker, nbel
