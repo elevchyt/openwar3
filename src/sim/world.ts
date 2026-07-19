@@ -825,8 +825,8 @@ export interface SimUnit {
   magicImmune: boolean;
   /** True Sight radius — how far this unit reveals invisible enemies, or 0 for the vast
    *  majority that reveal nothing. Rng1 of `Atru` (the Shade, the general detector and the
-   *  War Eagle) or of `Adts` (Magic Sentry) — both 900 in 1.27a's AbilityData.slk. Derived
-   *  from the ability list. */
+   *  War Eagle, 900), `Adet` (the Sentry Ward, 1100) or `Adts` (Magic Sentinel, 900).
+   *  Derived from the ability list. */
   detectRadius: number;
   /** The fade is IN FORCE: renders half-faded, and draws no aggro (see canSee). False during
    *  the Transition Time, when the unit is under the effect but hasn't vanished yet. */
@@ -4234,18 +4234,24 @@ export class SimWorld {
     // Magic Immunity is a plain property of the unit's ability list, not a buff — nothing
     // grants or removes it mid-life, so it is derived here alongside the rest.
     u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1);
-    // True Sight, likewise a property of the ability list. `Atru` (the Shade, the general
-    // detector) and `Adts` (Magic Sentry, what a tower's detection upgrade grants) are
-    // separate base codes for the same job, so both are read and the widest wins if a unit
-    // somehow carries each.
+    // True Sight, likewise a property of the ability list. Three separate base codes do the
+    // one job, so all three are read and the widest wins if a unit somehow carries more than
+    // one. AbilityData.slk names them plainly:
     //
-    // The radius is `Rng1` (castRange), NOT dataA. AbilityData.slk gives both codes
-    // Rng1 = 900 — the Shade's documented True Sight radius — while dataA reads 3 for each,
-    // a detection-type enum that is not a distance at all. Reading dataA gave every detector
-    // a 3-unit reach, i.e. True Sight silently never fired: nothing was ever revealed.
+    //   Atru  "Detect (Shade)"           Rng1  900
+    //   Adet  "Detect (Sentry Ward)"     Rng1 1100
+    //   Adts  "Detect (Magic Sentinel)"  Rng1  900
+    //
+    // The radius is `Rng1` (castRange), NOT dataA — dataA reads 3 for all three, a
+    // detection-TYPE enum that is not a distance at all, while those Rng1 values are exactly
+    // the radii the game is documented to have. Reading dataA gave every detector a 3-unit
+    // reach, i.e. True Sight silently never fired: nothing was ever revealed.
+    //
+    // `Adet` is the odd one out in the table: its row carries no `code` cell, so it reaches
+    // the registry under the id fallback (abilities.ts `str(r, "code") || id`).
     u.detectRadius = 0;
     for (const a of u.abilities) {
-      if ((a.code !== "Atru" && a.code !== "Adts") || a.level < 1) continue;
+      if ((a.code !== "Atru" && a.code !== "Adet" && a.code !== "Adts") || a.level < 1) continue;
       const lvl = this.abilities?.get(a.id)?.levelData[Math.max(0, a.level - 1)];
       const r = lvl?.castRange;
       if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
