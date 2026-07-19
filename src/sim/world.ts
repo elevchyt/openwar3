@@ -211,9 +211,9 @@ export type BuffKind =
   | "invisible"; // Wind Walk/Invisibility: the holder renders half-faded (see u.invisible).
   //             CONCEALMENT is modelled — canSee() refuses an invisible unit, so it draws no
   //             aggro down any automatic path — and so is its counterpart, True Sight
-  //             (`u.detectRadius`, teamDetects). What is NOT modelled is hiding it from the
-  //             enemy's SCREEN: rts.ts fades every invisible unit for every viewer alike
-  //             rather than removing it from the ones who should not see it at all.
+  //             (`u.detectRadius`, teamDetects). The SCREEN follows the same rule: rts.ts
+  //             (invisHides) hides the unit outright from a viewer who neither owns it nor
+  //             detects it, and fades it for the ones who may see it.
 
 /** An in-progress spell cast (order === "cast"). The lifecycle, matching WC3
  *  (hiveworkshop "Cast Point and Backswing Point" thread 265781): walk into range
@@ -824,8 +824,9 @@ export interface SimUnit {
    *  (Units\UnitAbilities.slk). Derived from the ability, like `ethereal` from its buff. */
   magicImmune: boolean;
   /** True Sight radius — how far this unit reveals invisible enemies, or 0 for the vast
-   *  majority that reveal nothing. dataA of `Atru` (the Shade, the general detector and the
-   *  War Eagle, 900) or of `Adet` (the Sentry Ward, 1100). Derived from the ability list. */
+   *  majority that reveal nothing. Rng1 of `Atru` (the Shade, the general detector and the
+   *  War Eagle) or of `Adts` (Magic Sentry) — both 900 in 1.27a's AbilityData.slk. Derived
+   *  from the ability list. */
   detectRadius: number;
   /** The fade is IN FORCE: renders half-faded, and draws no aggro (see canSee). False during
    *  the Transition Time, when the unit is under the effect but hasn't vanished yet. */
@@ -4233,14 +4234,20 @@ export class SimWorld {
     // Magic Immunity is a plain property of the unit's ability list, not a buff — nothing
     // grants or removes it mid-life, so it is derived here alongside the rest.
     u.magicImmune = u.abilities.some((a) => a.code === "Amim" && a.level >= 1);
-    // True Sight, likewise a property of the ability list. `Atru` and `Adet` are separate
-    // base codes for the same job (the Shade's 900 and the Sentry Ward's 1100), so both are
-    // read and the widest wins if a unit somehow carries each.
+    // True Sight, likewise a property of the ability list. `Atru` (the Shade, the general
+    // detector) and `Adts` (Magic Sentry, what a tower's detection upgrade grants) are
+    // separate base codes for the same job, so both are read and the widest wins if a unit
+    // somehow carries each.
+    //
+    // The radius is `Rng1` (castRange), NOT dataA. AbilityData.slk gives both codes
+    // Rng1 = 900 — the Shade's documented True Sight radius — while dataA reads 3 for each,
+    // a detection-type enum that is not a distance at all. Reading dataA gave every detector
+    // a 3-unit reach, i.e. True Sight silently never fired: nothing was ever revealed.
     u.detectRadius = 0;
     for (const a of u.abilities) {
-      if ((a.code !== "Atru" && a.code !== "Adet") || a.level < 1) continue;
+      if ((a.code !== "Atru" && a.code !== "Adts") || a.level < 1) continue;
       const lvl = this.abilities?.get(a.id)?.levelData[Math.max(0, a.level - 1)];
-      const r = lvl?.data[0];
+      const r = lvl?.castRange;
       if (r !== undefined && !Number.isNaN(r)) u.detectRadius = Math.max(u.detectRadius, r);
     }
     u.invisible = invisible;

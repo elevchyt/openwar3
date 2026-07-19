@@ -1069,7 +1069,7 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
-    const hide = u.inMine || u.insideBuild || u.inBurrow || devoured || u.vanished || this.fogHides(u);
+    const hide = u.inMine || u.insideBuild || u.inBurrow || devoured || u.vanished || this.fogHides(u) || this.invisHides(u);
     if (hide !== e.hidden) {
       e.hidden = hide;
       if (hide) {
@@ -1080,6 +1080,22 @@ export class RtsController {
       }
     }
     if (!hide) this.applyFogTint(e, u);
+  }
+
+  /** Is this unit concealed from the LOCAL viewpoint by invisibility? The sim already
+   *  refuses an invisible unit down every automatic aggro path (canSee), but concealment
+   *  is a thing you SEE, not only a thing the AI respects: to an enemy without detection a
+   *  Wind Walking Blademaster is not a faded ghost, he is simply not on the screen. Same
+   *  viewpoint rule as the illusion wash (seesFor) — your own and your allies' invisible
+   *  units stay drawn (half-faded, INVIS_ALPHA) so you can still command them.
+   *
+   *  …and True Sight takes it back: detection is a TEAM property in WC3 (one Shade uncovers
+   *  a hero for the whole army), so we ask the sim's own teamDetects rather than re-deriving
+   *  it here — that keeps what you can shoot and what you can see the same answer. */
+  private invisHides(u: SimUnit): boolean {
+    if (!u.invisible) return false;
+    if (this.seesFor(u.owner)) return false; // ours/an ally's — drawn, faded
+    return !this.sim.teamDetects(this.localTeam, u.x, u.y);
   }
 
   /** Dim an enemy/neutral BUILDING that's shown from fog memory (last-seen, out of
