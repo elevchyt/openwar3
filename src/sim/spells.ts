@@ -52,6 +52,9 @@ export interface SpellApi {
   /** Root/Unroot (`Aroo`): toggle an Ancient between planted and walking. False if it refused
    *  — the only refusal is trying to plant where the footprint no longer fits. */
   toggleRoot(unit: SimUnit): boolean;
+  /** Swap a unit between the two forms its ability names (DataA "Normal Form Unit" and
+   *  UnitID1 "Alternate Form Unit") — Burrow and every other two-form ability. */
+  morphToggle(unit: SimUnit, def: AbilityDef): boolean;
   /** Put a unit into the hold-position stance (order "hold"), clearing whatever it was
    *  doing. Shadow Meld melds a unit INTO this stance: WC3 has a melded unit "hold position
    *  and hold their fire", which is what stops it walking out of its own invisibility. */
@@ -1200,6 +1203,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.applyBuff(caster, { kind: "haste", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 1, 0.5), value2: 0, ...fx(def) });
     api.applyBuff(caster, { kind: "invisible", group: "windwalk", timeLeft: d0, sourceId: caster.id, value: d(lvl, 2, 40), delay: transition });
   },
+
+  // Burrow (`Abur`, aliases Abu2/Abu3/Abu5) — the Crypt Fiend digs in. It is a FORM TOGGLE,
+  // not a state: the ability names both units outright (DataA "Normal Form Unit" = ucry,
+  // UnitID1 "Alternate Form Unit" = ucrm) and morphing between them is the entire ability.
+  //
+  // Everything burrowing DOES is already in `ucrm`: spd "-" so it cannot move, weapsOn 0 so it
+  // cannot attack, regenHP 5 against the walking Fiend's 2 — which is the whole reason to
+  // burrow — and an abilList that drops Web but keeps Burrow so it can dig out. So there is
+  // nothing to write here beyond asking for the swap.
+  //
+  // The same handler is the mechanism behind Bear Form, Crow Form, Stone Form, Destroyer
+  // Form, Ethereal Form and Submerge — identical columns, different art. They are NOT enabled
+  // yet: each has its own wrinkles (Bear Form's morph time, Crow Form being a travel form,
+  // Metamorphosis being timed rather than a toggle), and enabling a unit's form swap without
+  // checking that unit is how you ship six half-right abilities instead of one right one.
+  Abur: (api, caster, def) => { api.morphToggle(caster, def); },
 
   // Root / Unroot (`Aroo`, aliases Aro1/Aro2) — an Ancient pulling itself out of the ground,
   // or planting again. One ability, two directions (`Order=root` / `Unorder=unroot`), so it

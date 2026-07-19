@@ -37,6 +37,11 @@ export interface AbilityLevel {
   castTime: number; // cast1.. — cast point / channel flag
   /** dataa1..datai1 as [a,b,c,d,e,f,g,h,i] — meaning is per-ability (see spells). */
   data: number[];
+  /** The same nine columns UNPARSED. Most are numbers and `data` is what you want, but a
+   *  few carry a rawcode: every morph ability keeps its "Normal Form Unit" in DataA
+   *  (`[Abur] DataA1 = ucry`), which `data` can only render as NaN. Read this when the
+   *  column names a unit/ability rather than measuring something. */
+  dataStr: string[];
   buffs: string[]; // buffid1.. — buff/effect codes this rank applies
   summon: string; // unitid1.. — unit summoned (Water Elemental etc.)
 }
@@ -320,6 +325,10 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // Root/Unroot — the Ancients' stance toggle (`Order=root` / `Unorder=unroot`). Self-cast:
   // it takes no target, it just changes what the Ancient is. Aro1/Aro2 alias it.
   Aroo: { target: "none" },
+  // Burrow — the Crypt Fiend digs in (`Order=burrow` / `Unorder=unburrow`). A form toggle
+  // between the two units the ability names; Abu2/Abu3/Abu5 alias it for the scarabs and the
+  // Barbed Arachnathid. See the handler for why its sibling morphs are not listed here yet.
+  Abur: { target: "none" },
   Atru: { target: "passive" }, // True Sight — the Shade (`ushd`), Rng1 900
   Adts: { target: "passive" }, // Magic Sentry — the four Human towers, Rng1 900, gated on `Rhse`
   Amim: { target: "passive" }, // Magic Immunity — Dryad, Faerie Dragon, Spirit Walker, nbel
@@ -429,6 +438,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
         area: num(r, `area${L}`, levelData[L - 2]?.area ?? 0),
         castTime: num(r, `cast${L}`, levelData[L - 2]?.castTime ?? 0),
         data: "abcdefghi".split("").map((c) => num(r, `data${c}${L}`, NaN)),
+        dataStr: "abcdefghi".split("").map((c) => str(r, `data${c}${L}`) || ""),
         buffs: (str(r, `buffid${L}`) || "").split(",").map((x) => x.trim()).filter(Boolean),
         summon: str(r, `unitid${L}`),
       });

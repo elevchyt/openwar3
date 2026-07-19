@@ -205,9 +205,9 @@ interface AbilMod { id: string; levelOrVariation: number; value: Val }
 
 const emptyLevel = (): AbilityLevel => ({
   cost: 0, cooldown: 0, duration: 0, heroDuration: 0, castRange: 0, area: 0, castTime: 0,
-  data: new Array(9).fill(NaN), buffs: [], summon: "",
+  data: new Array(9).fill(NaN), dataStr: new Array(9).fill(""), buffs: [], summon: "",
 });
-const cloneLevel = (l: AbilityLevel): AbilityLevel => ({ ...l, data: [...l.data], buffs: [...l.buffs] });
+const cloneLevel = (l: AbilityLevel): AbilityLevel => ({ ...l, data: [...l.data], dataStr: [...l.dataStr], buffs: [...l.buffs] });
 
 function cloneAbility(base: AbilityDef, id: string): AbilityDef {
   return {

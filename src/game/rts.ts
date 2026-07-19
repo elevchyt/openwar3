@@ -235,11 +235,12 @@ function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = [])
 }
 
 /** The animProps a unit should be RENDERED with right now — its static ones from UnitFunc,
- *  plus `alternate` while an Ancient is rooted.
+ *  plus `alternate` while it is showing the other half of its model (SimUnit.altModel).
  *
- *  Root is the one case where the alternate set is a STATE rather than an identity. For the
- *  Troll Berserker the props sit in its own UnitFunc row and never change; the Ancients carry
- *  no Animprops at all, and it is the ability that decides which half of the model they wear.
+ *  These are the cases where the alternate set is a STATE rather than an identity. For the
+ *  Troll Berserker the props sit in its own UnitFunc row and never change; a rooted Ancient
+ *  and a burrowed Crypt Fiend carry no Animprops at all, and it is the ABILITY that decides
+ *  which half of the model they wear, moment to moment.
  *
  *  Which half is which is settled by AncientOfWar.mdx's own sequence list, and it is the
  *  reverse of the obvious guess: the PLAIN clips are the walking form ("Walk" has no alternate
@@ -378,9 +379,10 @@ interface Entry {
   aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
   illus?: boolean; // last Mirror-Image blue-wash state applied (owner/allies only)
   fade?: number; // last ghost fade applied (invisible/ethereal) — see INVIS_ALPHA
-  /** Last root state this entry's animation set was built for (see animPropsFor). Undefined
-   *  for everything that is not an Ancient — the sync is skipped entirely for those. */
-  rooted?: boolean;
+  /** Last alternate-model state this entry's animation set was built for (see animPropsFor).
+   *  Undefined until a unit first shows it can be in two forms, which is what keeps the sync
+   *  off the overwhelming majority of units that only ever have one. */
+  altModel?: boolean;
 }
 
 // A unit that is invisible (Wind Walk) or ethereal (Banish, Spirit Walker form) renders
@@ -1121,32 +1123,30 @@ export class RtsController {
     if (!hide) this.applyFogTint(e, u);
   }
 
-  /** Does this unit type carry Root (`Aroo`)? Asked once, at attach: the answer decides both
-   *  which half of the model the unit is born wearing and whether it pays for the per-tick
-   *  root sync at all. Matched on the base CODE, so the Ancients' `Aro1` and the Ancient
-   *  Protector's `Aro2` are both caught without naming either. */
-  private isAncient(def: UnitDef): boolean {
-    return def.abilities.some((id) => this.abilities.get(id)?.code === "Aroo");
-  }
-
-  /** Re-skin an Ancient when it roots or uproots: rebuild its animation set for the new state
-   *  and play the transition clip on the way.
+  /** Re-skin a unit that has changed FORM: rebuild its animation set for the new state and
+   *  play the transition clip on the way.
    *
-   *  The model never changes — this is one MDX carrying both forms — so this is not a remodel,
-   *  just a different reading of the same sequence list (see animPropsFor). The set is built
-   *  for the state being moved TO, which is also what makes `morph` land on the correct half
-   *  of the Ancient's Morph/Morph Alternate pair without either direction being named here.
+   *  The model never changes — one MDX carries both forms — so this is not a remodel, just a
+   *  different reading of the same sequence list (see animPropsFor). The set is built for the
+   *  state being moved TO, which is also what makes `morph` land on the correct half of the
+   *  Morph/Morph Alternate pair without either direction being named here.
+   *
+   *  Two abilities arrive here and neither is named: an Ancient rooting (`Aroo`, where the
+   *  planted pose is the alternate one) and a Crypt Fiend burrowing (`Abur`, where the
+   *  underground pose is). CryptFiend.mdx and AncientOfWar.mdx are built the same way —
+   *  "Stand"/"Stand Alternate" with a Morph pair between — so both need exactly this and the
+   *  sim tells them apart, not the renderer.
    *
    *  The first call for a unit sets the baseline without playing anything: a freshly built
    *  Ancient is already rooted and should simply BE planted, not animate itself into it. */
-  private applyRootAnims(e: Entry, u: SimUnit, def: UnitDef | undefined): void {
-    const rooted = !u.uprooted;
-    if (e.rooted === rooted) return;
-    const first = e.rooted === undefined;
-    e.rooted = rooted;
+  private applyFormAnims(e: Entry, u: SimUnit, def: UnitDef | undefined): void {
+    const alt = u.altModel;
+    if (e.altModel === alt) return;
+    const first = e.altModel === undefined;
+    e.altModel = alt;
     const seqs = e.unit.instance.model?.sequences;
     if (!seqs) return;
-    e.anims = buildAnimSet(seqs, animPropsFor(def, rooted));
+    e.anims = buildAnimSet(seqs, animPropsFor(def, alt));
     if (first) return; // baseline only — no transition to play
     // Hold the morph clip for its own length: castAnimT keeps the ordinary stand/walk picker
     // off this unit until the Ancient has finished hauling itself up or settling down.
@@ -2086,10 +2086,10 @@ export class RtsController {
   private attachInstance(simId: number, instance: Instance, def: UnitDef): void {
     if (this.byId.has(simId)) return;
     // An Ancient is BUILT rooted, so it starts on the alternate (planted) half of its model.
-    // Seeding `rooted` here is also what opts the unit into the per-tick root sync — nothing
-    // that lacks the ability ever pays for it. See animPropsFor / applyRootAnims.
-    const ancient = this.isAncient(def);
-    const anims = buildAnimSet(instance.model.sequences, animPropsFor(def, ancient));
+    // Everything else starts on the plain half and only the sim can move it off (a Crypt
+    // Fiend that burrows). See animPropsFor / applyFormAnims.
+    const alt = this.sim.units.get(simId)?.altModel ?? false;
+    const anims = buildAnimSet(instance.model.sequences, animPropsFor(def, alt));
     // Per-unit animation blending: cross-fade between sequences over this unit's
     // own UnitUI `blend` time (0.15s for most WC3 units) so walk↔stand↔attack
     // transitions ease instead of hard-cutting (issue #8).
@@ -2098,7 +2098,7 @@ export class RtsController {
       simId,
       unit: { instance, state: WidgetState.IDLE },
       anims,
-      rooted: ancient ? true : undefined,
+      altModel: alt ? true : undefined,
       moveHeight: lift(def.moveHeight),
       footHalfW: 0, // set by setBuildingFootprint() once the footprint is stamped
       footHalfH: 0,
@@ -2154,8 +2154,15 @@ export class RtsController {
     entry.unit.instance.hide(); // drop the old body
     instance.setBlendTime?.(def.animBlend);
     entry.unit = { instance, state: WidgetState.IDLE };
-    entry.anims = buildAnimSet(instance.model.sequences, def.animProps);
-    Object.assign(entry, findBirthFields(instance.model.sequences, def.animProps));
+    // A morph is how a unit ENTERS its alternate form (a Crypt Fiend burrowing), so the new
+    // body has to be read with that form's props or it arrives wearing the plain half — the
+    // burrowed Fiend standing above ground. Re-baselining `altModel` also lets applyFormAnims
+    // play the transition, which it otherwise skips: the flag already matches.
+    const alt = this.sim.units.get(simId)?.altModel ?? false;
+    const props = animPropsFor(def, alt);
+    entry.anims = buildAnimSet(instance.model.sequences, props);
+    entry.altModel = alt ? true : undefined;
+    Object.assign(entry, findBirthFields(instance.model.sequences, props));
     entry.typeId = def.id;
     entry.race = def.race;
     entry.name = def.name;
@@ -2323,9 +2330,9 @@ export class RtsController {
       e.unit.instance.setRotation(this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
       this.applyVisibility(e, u);
-      // An Ancient that has rooted or uprooted wears the other half of its model (Aroo).
-      // `rooted` is seeded at attach for carriers only, so this costs nothing for everyone else.
-      if (e.rooted !== undefined) this.applyRootAnims(e, u, this.registry.get(e.typeId));
+      // A unit that has changed FORM wears the other half of its model — a rooted Ancient, a
+      // burrowed Crypt Fiend. Skipped entirely for the vast majority, which have only one.
+      if (u.altModel || e.altModel !== undefined) this.applyFormAnims(e, u, this.registry.get(e.typeId));
       // A building under construction: play its own "Birth" animation, scrubbed
       // to the construction progress so it assembles in sync with the timer.
       // Models without a Birth clip fall back to scaling up from ~40% to full.

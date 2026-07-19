@@ -838,6 +838,16 @@ export interface SimUnit {
    *  the resting state for every carrier — an Ancient is BUILT rooted, and a Tree of Life
    *  spends the whole game that way unless something goes badly wrong. See toggleRoot. */
   uprooted: boolean;
+  /** This unit is currently showing the ALTERNATE half of its model. WC3 packs both looks of
+   *  a two-form unit into one MDX — "Stand" and "Stand Alternate", with Morph/Morph Alternate
+   *  between them — and nothing in the unit data says which half is live, because the ABILITY
+   *  decides moment to moment.
+   *
+   *  Two unrelated-looking abilities land here: a ROOTED Ancient is alternate (its planted
+   *  pose, see toggleRoot) and a BURROWED Crypt Fiend is alternate (its underground pose, see
+   *  morphToggle). It is the same fact about the model either way, so the renderer reads this
+   *  one flag rather than knowing about either ability. */
+  altModel: boolean;
   /** The building footprint an uprooted Ancient will take back when it plants (0 for
    *  everything else). While it walks its own `footprint` is 0 — it collides by RADIUS like
    *  any other unit — because a 4×4 stamped block is a thing the pathfinder routes around,
@@ -2565,16 +2575,61 @@ export class SimWorld {
     this.morphs.push({ unitId: u.id, from, to: toTypeId });
   }
 
-  /** Spirit Walker form toggle: morph between its ethereal form (ospm — trained default;
-   *  can't attack, immune to physical, takes +magic) and its corporeal form (ospw — attacks,
-   *  takes physical). Both forms carry only the one toggle ability, so we swap to whichever
-   *  form the unit is NOT in. The ethereal form is data-identified as the one with no weapon
-   *  (weapsOn=0), so `etherealForm` follows directly from the morphed loadout. */
+  /**
+   * The generic FORM TOGGLE behind every two-form ability in the game: Burrow, Bear Form,
+   * Crow Form, Stone Form, Destroyer Form, Ethereal Form, Submerge. They are one mechanism
+   * wearing different art, and the ability row says so — AbilityMetaData names the columns
+   * the same way for all of them:
+   *
+   *   DataA   "Normal Form Unit"     `[Abur] = ucry`  the Crypt Fiend
+   *   UnitID1 "Alternate Form Unit"  `[Abur] = ucrm`  the burrowed Crypt Fiend
+   *
+   * So a form is not a state to model — it is a UNIT, and morphing to it is the whole
+   * implementation. Everything the burrowed Crypt Fiend does differently is already written
+   * down in `ucrm`: spd "-" (it cannot move), weapsOn 0 (it cannot attack), regenHP 5 against
+   * the walking form's 2 (the reason to burrow at all), and an abilList that drops Web but
+   * keeps Burrow so it can dig out again. Not one of those needed a line of code here.
+   *
+   * Which direction to go is read off the unit rather than tracked: a unit standing in its
+   * alternate form goes back to normal, anything else goes alternate. That also means the
+   * pair can be entered from either side, which matters because several of these units are
+   * TRAINED in their alternate form (the Spirit Walker arrives ethereal).
+   */
+  morphToggle(u: SimUnit, def: AbilityDef): boolean {
+    const lvl = def.levelData[0];
+    const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit"
+    const alternate = lvl?.summon ?? ""; // UnitID1 "Alternate Form Unit"
+    if (!normal || !alternate) return false;
+    const to = u.typeId === alternate ? normal : alternate;
+    if (!this.unitReg?.get(to)) return false; // this install doesn't ship the other form
+    this.morphUnit(u, to);
+    // Both forms share one MDX (ucrm is CryptFiend.mdx too), so the alternate FORM also wears
+    // the alternate half of the model — the burrowed pose is "Stand Alternate", reached
+    // through the same Morph clip an Ancient uses. See SimUnit.altModel.
+    u.altModel = to === alternate;
+    // A form with no weapon can neither attack nor keep a target it was swinging at, and the
+    // weaponless one is also the ethereal one (weapsOn=0 is how the Spirit Walker's two forms
+    // are told apart in the data — there is no "is ethereal" column).
+    u.etherealForm = !u.weapon && this.isEtherealForm(u.typeId);
+    if (!u.weapon) this.stop(u.id);
+    this.recomputeStats(u);
+    return true;
+  }
+
+  /** Is this unit type an ETHEREAL form, as opposed to merely a weaponless one? A burrowed
+   *  Crypt Fiend has no weapon either and is emphatically not ethereal — it is underground,
+   *  not on another plane. Only the Spirit Walker's form pair carries the ethereal rules
+   *  (immune to physical, +magic taken), and its alternate form is the one unit that means
+   *  it, so this stays an explicit list rather than being inferred from the empty weapon. */
+  private isEtherealForm(typeId: string): boolean {
+    return typeId === "ospm";
+  }
+
+  /** Spirit Walker form toggle (JASS/legacy entry point) — now just the generic morph with
+   *  the Ethereal Form ability's own row supplying both ids. */
   toggleSpiritForm(u: SimUnit): void {
-    this.morphUnit(u, u.typeId === "ospm" ? "ospw" : "ospm");
-    u.etherealForm = !u.weapon; // the weaponless form (weapsOn=0) is the ethereal one
-    if (u.etherealForm) this.stop(u.id); // ethereal can't attack — drop any swing/target
-    this.recomputeStats(u); // apply the ethereal state immediately
+    const def = this.abilities?.get("Aetf");
+    if (def) this.morphToggle(u, def);
   }
 
   /** The innate/learnable abilities a unit type carries (mirrors RtsController.
@@ -2784,6 +2839,7 @@ export class SimWorld {
       | "detectRadius"
       | "uprooted"
       | "rootedFootprint"
+      | "altModel"
       | "invisible"
       | "cloaked"
       | "invulnerable"
@@ -2957,6 +3013,7 @@ export class SimWorld {
       detectRadius: 0, // …and True Sight likewise
       uprooted: false, // an Ancient is built rooted (Aroo)
       rootedFootprint: 0, // set when it uproots, spent when it plants
+      altModel: false, // derived: rooted Ancients and burrowed units wear the alternate model
       invisible: false,
       cloaked: false,
       invulnerable: !!opts?.baseInvulnerable, // recomputeStats keeps this in sync each tick
@@ -4270,6 +4327,7 @@ export class SimWorld {
     // Zeroing the speed is the whole of "rooted" as far as movement is concerned — u.speed<=0
     // is already what issueFollow, the stuck check and the collision list all gate on.
     if (root && !u.uprooted) u.speed = 0;
+    if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
     u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen + upg.manaRegen;
     u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
     u.lifesteal = Math.max(lifesteal, item.lifesteal);
@@ -5948,6 +6006,7 @@ export class SimWorld {
     isDay: () => this.isDay,
     holdPosition: (unit) => { this.issueHold(unit.id); },
     toggleRoot: (unit) => this.toggleRoot(unit),
+    morphToggle: (unit, def) => this.morphToggle(unit, def),
     dismissSummons: (owner, typeIds) => {
       const set = new Set(typeIds);
       for (const u of [...this.units.values()]) {
