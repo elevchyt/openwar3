@@ -5,6 +5,9 @@ than on a cloud box, and what has to change in the engine first. This supersedes
 [`OpenWar3_PLAN.md`](../OpenWar3_PLAN.md) §7–8 on two points (hosting and server-side data); the rest
 of §7 — delta snapshots, area-of-interest culling, no client prediction in v1 — stands.
 
+**This file is also the progress tracker** — see [Where we are](#where-we-are) for what has landed,
+what is next, and what was deferred on purpose. Update that table when a phase moves.
+
 ## TL;DR
 
 | Decision | Choice | Why |
@@ -77,33 +80,81 @@ transport-agnostic (see Phase E).
 One `Authority` implementation in all three columns. It must not import a transport, a DOM, or a
 renderer — only `SimWorld`, the registries, and a command stream in / snapshot stream out.
 
+## Where we are
+
+Progress tracker — update this when a phase moves. Everything below it is the plan; this is the
+state.
+
+| Phase | State | Notes |
+|---|---|---|
+| A — timestep & identity | **done** | fixed 60 Hz step, `.doo`-order ids, seed from the lobby |
+| Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster; no match launch yet |
+| B — bisect `rts.ts` | not started | the tentpole |
+| C — command funnel | not started | **close the 8 bypasses first** |
+| D — N vision maps | not started | |
+| E — snapshots & reconnect | not started | |
+| Map selection + Start | not started | the next visible milestone |
+
+**Shipped so far** (newest first — `git log` for detail):
+
+- `5a0ec84` sim ids come from war3mapUnits.doo order, not model-load order
+- `97d58be` match seed plumbed from the lobby; hero-name draw onto the seeded stream
+- `d4a658c` fixed 60 Hz timestep with a tick counter
+- `be9285c` relay, transport seam, LAN screen (create / discover / join / roster)
+- FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
+
+**Tests:** `pnpm relay:test` (relay flow, headless) and `pnpm sim:test` (includes
+`sim-determinism-test.cjs` — same seed reproduces, different seed diverges). Both green.
+
+**Pick up here.** In order:
+
+1. **Map selection + Start** (`LocalMultiplayerCreate.fdf`). Host picks a map, broadcasts
+   `{map, slots, seed}`, both clients load and enter. Needs no new sim work — seed and ids are
+   settled. It will look synced for a few seconds and then drift, which is the point: that drift is
+   what Phase C fixes. Do the LAN screen's empty summary panel (`MapInfoPane`) with this.
+2. **Phase C, bypasses before transport.** The funnel at [`src/game/rts.ts`](../src/game/rts.ts)
+   `order()` is not exhaustive — `issueCast`, `issueSellItem`, `issueGiveItem`, `issueHold`,
+   `issueGetItem`, `issueGarrison`, `setShopBuyer`, and the trigger path `issueUnitOrder` all go
+   round it, and casts are absent from `QueuedOrder` entirely. Close those FIRST; wiring the
+   transport first just makes those actions silently host-only and the bug hard to see.
+3. **Phase E** — snapshots and reconnect.
+
+**Deliberately deferred**, with reasons, so nobody re-derives them:
+
+- **Render interpolation.** `rts.ts` pushes sim positions straight onto model instances, so the sim
+  rate IS the animation rate — hence 60 Hz rather than a lower net rate. Interpolating the sync loop
+  would allow 20–30 Hz and cut CPU per hosted match, but it is a real refactor of a 4 900-line file
+  and nothing is blocked on it.
+- **Transcendental determinism.** The ~146 `Math.hypot`/`atan2`/`sin`/`cos` calls in
+  [`src/sim/`](../src/sim/) are not bit-exact across JS engines. Irrelevant here — only one machine
+  simulates. It would resurface only if cross-machine replay verification is ever wanted.
+- **Host input delay and NAT strategy.** See Open questions.
+
 ## What has to change in the engine
 
 Sequenced. Phase B is the tentpole; everything downstream depends on it.
 
-### Phase A — timestep and identity hygiene
+### Phase A — timestep and identity hygiene — **done**
 
-Needed regardless of topology, and it also buys replays.
+Needed regardless of topology, and it also buys replays. What landed, and the traps found:
 
-1. **Fixed timestep.** [`src/render/mapViewer.ts`](../src/render/mapViewer.ts):5906 feeds the sim raw
-   `requestAnimationFrame` delta, clamped at 50 ms. Replace with an accumulator driving
-   `sim.tick(FIXED_DT)` plus a render interpolation factor. Note
-   [`src/sim/world.ts`](../src/sim/world.ts):28 already *claims* "fixed-timestep" — today that half of
-   the comment is aspirational. The authority's tick rate is meaningless until this lands.
-2. **Move entity ID allocation into the sim.** [`src/game/rts.ts`](../src/game/rts.ts):1782 (and
-   :1881, :1996, :2020) allocate `simId` in the order `trySeed` walks streamed units — i.e. **asset
-   load order**. Entity identity currently depends on disk and network timing. Everything downstream
-   (Map iteration, tiebreaks, `unitDrops` keys) inherits that.
-3. **Seed plumbing.** [`src/game/rts.ts`](../src/game/rts.ts):725 hardcodes the RNG seed to `1` — every
-   match rolls identically, and there is no way to set it. It must come from the lobby.
-4. **The hero-name draw** at [`src/game/rts.ts`](../src/game/rts.ts):2034 uses `Math.random()` and
-   writes into sim state (`SimUnit.properName`). Route it through `sim.rng()`. The other two
-   `Math.random()` calls (:2422, :2460, animation variants) are pure render and can stay.
-
-Not needed under this topology: the ~146 `Math.hypot`/`atan2`/`sin`/`cos` calls in
-[`src/sim/`](../src/sim/) are not bit-exact across JS engines, which would matter for lockstep. Only
-one machine simulates, so it does not. **Filed, not fixed** — it would resurface if cross-machine
-replay verification is ever wanted.
+1. **Fixed timestep.** [`src/render/mapViewer.ts`](../src/render/mapViewer.ts) now accumulates and
+   retires whole `SIM_DT` (1/60) steps, counting them in `simTick` — the number a command attaches
+   to. This subsumed the old `Math.min(dt, 50)` clamp (issue #24). `MAX_STEPS_PER_FRAME` caps
+   catch-up so a stall cannot spiral. [`src/sim/world.ts`](../src/sim/world.ts):28 had *claimed*
+   fixed-timestep since it was written; it was aspirational until this.
+2. **Entity ids from the map, not the loader.** Ids were allocated as the viewer finished loading
+   each model — disk/network/cache order, i.e. one machine's I/O timing. They now come from the
+   unit's index in `war3mapUnits.doo` (`setPlacedOrder` / `reserveIdAt` in
+   [`src/game/rts.ts`](../src/game/rts.ts)), reserved before any model loads; dynamic units continue
+   above that block. **Trap:** `addUnit`'s `reservedId` means "the sim unit already exists, just give
+   it a body" and returns -1 otherwise — pre-placed units need their id at creation and go through
+   `addSimUnit`. Routing them through `addUnit` looks right and silently seeds nothing.
+3. **Seed plumbing.** `MeleeConfig.seed` → `RtsController.setSeed` → `SimWorld.reseed`, applied at
+   `beginMatch`: after the world exists, before any unit is seeded, which is the last safe moment.
+   Every match had previously run off a hardcoded `1`.
+4. **The hero-name draw** now uses `sim.random()`; it is written into sim state and shown to every
+   player. The other two `Math.random()` calls (animation variants) are pure render and stay.
 
 ### Phase B — bisect `rts.ts`
 
