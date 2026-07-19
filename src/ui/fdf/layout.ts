@@ -194,13 +194,20 @@ export function layout(
           const ok = points.every((pt) => relOf(n, pt.relName)?.placed);
           if (ok) { placeByTwoPoints(n, points, relOf); progressed = true; continue; }
         }
-        // A TEXT frame with no Height is one LINE tall, not as tall as whatever contains
-        // it — the engine auto-sizes TEXT to its string, so the FDF simply omits the size.
+        // An ANCHORED TEXT frame with no Height is one LINE tall, not as tall as whatever
+        // contains it — the engine auto-sizes TEXT to its string, so the FDF omits the size.
         // Inheriting the parent's height instead is invisible on a centred label (the box
         // grows symmetrically about the anchor) but wrong the moment anything anchors BELOW
         // one: LocalMultiplayerJoin chains title → label → editbox → list down a ladder of
         // BOTTOMLEFTs, and a full-height title pushed the list 1300px off a 625px screen.
-        if (Number.isNaN(n.h) && n.frame.type === "TEXT") n.h = textLineHeight(n.frame);
+        //
+        // An UNANCHORED one is a different animal and must keep filling its parent. That is
+        // the frame the ENGINE positions rather than the file: a button's label declares
+        // neither size nor SetPoint (StandardButtonTextTemplate carries only a font and
+        // JUSTIFYCENTER/JUSTIFYMIDDLE), and it is those justifications, applied across the
+        // whole button, that centre the caption. Give it one line instead and every button
+        // in the game wears its text jammed against the top edge.
+        if (Number.isNaN(n.h) && n.frame.type === "TEXT" && points.length) n.h = textLineHeight(n.frame);
         if (n.parent?.placed) {
           if (Number.isNaN(n.w)) n.w = n.parent.w;
           if (Number.isNaN(n.h)) n.h = n.parent.h;
