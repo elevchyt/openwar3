@@ -21,7 +21,7 @@ import { WeatherOverlay } from "./weather";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
-import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo } from "../game/rts";
+import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
@@ -937,6 +937,7 @@ export class MapViewerScene {
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
       this.rts.setPlacedFootprints(nodes.placedFootprints); // each map building's stamp → freed when it dies
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
+      this.rts.setPlacedOrder(nodes.placedOrder); // sim ids from .doo order, not model-load order
       this.mapPlayerUnits = nodes.players; // pre-placed player units → seeded owned in startCustom (issue #33)
     }
   }
@@ -1004,7 +1005,7 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[] } {
+  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[]; placedOrder: PlacedRef[] } {
     const placedFootprints: PlacedFootprint[] = []; // each map building's stamp, handed to its unit at seed time
     const trees: Array<{ x: number; y: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
@@ -1107,7 +1108,10 @@ export class MapViewerScene {
         players.push({ x: u.x, y: u.y, owner: u.player });
       }
     }
-    return { trees, mines, neutral, creeps, players, placedFootprints };
+    // Every placed unit in war3mapUnits.doo ORDER. This is the map's own ordering of its
+    // units and the only stable identity they have — see RtsController.setPlacedOrder.
+    const placedOrder: PlacedRef[] = placed.map((u) => ({ x: u.x, y: u.y, typeId: u.typeId }));
+    return { trees, mines, neutral, creeps, players, placedFootprints, placedOrder };
   }
 
   private slkText(path: string): string {

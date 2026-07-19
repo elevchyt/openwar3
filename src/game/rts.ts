@@ -57,6 +57,14 @@ interface Camera {
   worldToScreen(out: Float32Array, v: Float32Array, viewport: Float32Array): Float32Array;
   screenToWorldRay(out: Float32Array, v: Float32Array, viewport: Float32Array): Float32Array;
 }
+/** One pre-placed unit, as war3mapUnits.doo lists it. Position + type is enough to match a
+ *  rendered instance back to its row, and the row's INDEX is what fixes its sim id. */
+export interface PlacedRef {
+  x: number;
+  y: number;
+  typeId: string;
+}
+
 export interface RtsHost {
   readonly canvas: HTMLCanvasElement;
   readonly camera: Camera;
@@ -680,6 +688,8 @@ export class RtsController {
   private processedInstances = new Set<object>();
   private lastSeenUnitCount = -1; // map.units length at the last scan (grows as models stream in)
   private nextId = 1;
+  /** Placed units in .doo order, each with the sim id reserved for it. See setPlacedOrder. */
+  private placedIds: Array<{ x: number; y: number; typeId: string; id: number; taken: boolean }> = [];
   private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
   // The single floating name/owner slab shown above the unit (or gold mine / ground
   // item) under the cursor. Built lazily into the world layer so it tracks its target
@@ -1308,6 +1318,53 @@ export class RtsController {
     this.neutralPositions = positions;
   }
 
+  /**
+   * Every placed unit in war3mapUnits.doo ORDER, which fixes each one's sim id.
+   *
+   * Sim ids used to be handed out by trySeed in the order the viewer finished LOADING
+   * each unit's model — i.e. in disk/network/cache order. That made a unit's identity a
+   * property of one machine's I/O timing: the same map could number the same creep
+   * differently on two runs, let alone on two machines. Harmless while nothing outside
+   * the process ever named a unit; fatal the moment a command says "attack unit 57"
+   * (docs/multiplayer.md), because 57 is a different creep on the other end.
+   *
+   * The .doo's own order is the identity the MAP gives its units — every client reads
+   * the same file and agrees, with no coordination. So ids are reserved up front, before
+   * a single model has loaded, and adoption just looks its own up.
+   */
+  setPlacedOrder(order: PlacedRef[]): void {
+    this.placedIds = order.map((p, i) => ({ ...p, id: i + 1, taken: false }));
+    // Dynamically created units (trained, summoned, JASS CreateUnit) continue ABOVE the
+    // reserved block. Their ids stay ordinal because the creating events are themselves
+    // ordered by the sim clock — the host decides them, and tells everyone.
+    this.nextId = order.length + 1;
+  }
+
+  /**
+   * The id reserved for the placed unit at this position, consumed so two units stacked
+   * on one spot still get distinct ids. Falls back to the running counter for anything
+   * the .doo doesn't describe (a unit the map's script created before seeding finished).
+   *
+   * 48u tolerance, matching isNeutralPassiveAt/playerSeedAt: the renderer's location and
+   * the .doo's differ slightly for units the engine settles onto the ground.
+   */
+  private reserveIdAt(x: number, y: number, typeId: string): number {
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < this.placedIds.length; i++) {
+      const p = this.placedIds[i];
+      if (p.taken || p.typeId !== typeId) continue;
+      const dx = Math.abs(p.x - x);
+      const dy = Math.abs(p.y - y);
+      if (dx >= 48 || dy >= 48) continue;
+      const d = dx + dy;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best < 0) return this.nextId++;
+    this.placedIds[best].taken = true;
+    return this.placedIds[best].id;
+  }
+
   private isNeutralPassiveAt(x: number, y: number): boolean {
     for (const p of this.neutralPositions) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return true;
     return false;
@@ -1789,7 +1846,8 @@ export class RtsController {
       }
       const anims = buildAnimSet(seqs, def?.animProps);
       unit.instance.setBlendTime?.(def?.animBlend ?? 0.15); // per-unit anim cross-fade (issue #8)
-      const simId = this.nextId++;
+      // The id this creep's .doo row reserved — NOT the order its model happened to load in.
+      const simId = this.reserveIdAt(loc[0], loc[1], def?.id ?? "");
       const su = this.sim.add(
         {
           id: simId,
@@ -1888,7 +1946,7 @@ export class RtsController {
    *  instance in tick() (the map viewer already renders it) — this record just
    *  makes it hoverable/selectable and rings it. */
   private seedNeutral(unit: MapUnit, def: UnitDef | undefined, loc: Float32Array): void {
-    const simId = this.nextId++;
+    const simId = this.reserveIdAt(loc[0], loc[1], def?.id ?? "");
     this.seededInstances.add(unit.instance); // RTS drives this shop/critter's fog visibility
     const isBuilding = def?.isBuilding ?? false;
     // Buildings get a (complete) building state so pickAt/rings treat them as
@@ -1980,7 +2038,11 @@ export class RtsController {
    *  hand its fog visibility to the RTS so the static-widget pass doesn't fight it. */
   private seedPlayerUnit(unit: MapUnit, def: UnitDef, loc: Float32Array, owner: number, team: number): void {
     const facing = quatToZ(unit.instance.localRotation);
-    const simId = this.addUnit(unit.instance, def, loc[0], loc[1], facing, owner, team);
+    // addSimUnit + attachInstance rather than addUnit, because addUnit's `reservedId` means
+    // "the sim unit already exists, just give it a body" (the JASS CreateUnit path) and
+    // returns -1 when it doesn't. A pre-placed unit needs its reserved id at CREATION.
+    const simId = this.addSimUnit(def, loc[0], loc[1], facing, owner, team, 0, this.reserveIdAt(loc[0], loc[1], def.id));
+    this.attachInstance(simId, unit.instance, def);
     // A pre-placed BUILDING takes ownership of the footprint the map loader stamped for
     // it, so levelling it reopens the ground — WarChasers' gnoll huts are exactly this.
     if (def.isBuilding) this.adoptPlacedFootprint(simId, loc[0], loc[1]);
