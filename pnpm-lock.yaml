@@ -29,6 +29,9 @@ importers:
       vite:
         specifier: ^5.4.10
         version: 5.4.21
+      ws:
+        specifier: ^8.21.1
+        version: 8.21.1
 
 packages:
 
@@ -411,6 +414,18 @@ packages:
       terser:
         optional: true
 
+  ws@8.21.1:
+    resolution: {integrity: sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
 snapshots:
 
   '@esbuild/aix-ppc64@0.21.5':
@@ -669,3 +684,5 @@ snapshots:
       rollup: 4.62.2
     optionalDependencies:
       fsevents: 2.3.3
+
+  ws@8.21.1: {}
