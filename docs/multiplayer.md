@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7). Open: 3c, 6b, 7b, then 8–12 — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c). Open: 6b (now measured, not built), 7b, then 8–12 — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(373 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(374 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -1182,7 +1182,37 @@ enumerated by body rather than by name.
    rendered nothing.** In the test there is no renderer at all, so "units I drew" is empty by
    construction — under the old `this.entries` walk every one of those lists would have been.
 
-3c. **A garrisoned friendly still gets a minimap dot.** Found while writing 3b's test, pinned
+3c. ~~**A garrisoned friendly still gets a minimap dot.**~~ **Fixed, and the fix waited on a
+   measurement rather than on an argument.** The developer drove the real 1.27a client — a
+   peasant sent to a remote gold mine, with no other unit or building of theirs nearby so the
+   dot could not be confused with anything else — and reported: **no dot while it is inside.**
+   That is the whole of what was missing; the reasoning below had been right since 3b and was
+   not, on its own, grounds to change what the game draws.
+
+   `isOffField(u)` is now tested first in `minimapDots`, on its own, and the `u.team === vp.team`
+   clause is left doing only the fog job it reads like. Behaviour change, deliberate and
+   measured: a unit in a mine, in a burrow, inside the structure it is building, swallowed by a
+   Kodo, or `vanished` mid-Mirror-Image draws nothing — **not even for its owner**.
+
+   **The predicate moved to [`world.ts`](../src/sim/world.ts) because there were about to be
+   three copies of it.** `hiddenFor` had it, `visibilityFor` (item 6) had written it out again,
+   and `minimapDots` was about to need it. A five-term disjunction in three places is three
+   chances to add a sixth term to two of them. It sits next to `SimUnit` and is deliberately
+   neither a fog nor an ownership test — whether the OWNER should still be told is a question
+   each caller answers differently, and they disagree: the snapshot says yes (a Burrow must be
+   able to list its garrison), the minimap says no.
+
+   **Verified headlessly, and honestly not visually.** The check fails on the exact bug —
+   deleting the `isOffField` guard leaves `pnpm typecheck` green and turns two named checks red,
+   confirmed by doing it. In the browser the change is only observable during the few seconds a
+   worker is actually inside the mine, and an A/B across two builds caught the peasant OUTSIDE
+   in both frames (identical gold, identical idle-worker count, 2 pixels of difference from
+   1px of position drift). Rather than keep hunting that window, the developer's measurement of
+   the real client stands as the authority and the headless check as the regression guard.
+   `sim:test` 373 → **374**.
+
+3c-old. **The original entry, kept because its reasoning is what found the bug.** Found while
+   writing 3b's test, pinned
    rather than fixed. `minimapDots`'s `|| u.team === vp.team` looks like "your own army shows
    through the fog", but `Viewpoint.fogHides` **already** returns false for your own team — so the
    clause cannot be about fog. The only thing it overrides is the viewpoint-INDEPENDENT half of
@@ -1324,9 +1354,17 @@ enumerated by body rather than by name.
    units), so it is not a regression. It is now a hole in a payload rather than in a render loop,
    which is a better place to fix it from: the authority would have to keep a per-viewpoint
    last-seen set of destroyed structures and emit them as `remembered` until the cell is seen
-   again. That IS the per-viewpoint history item 6 got to avoid, so it is its own item and should
-   be measured against the running client first (how long does the ghost persist, does it survive
-   a re-scout that shows empty ground).
+   again. That IS the per-viewpoint history item 6 got to avoid, so it is its own item.
+
+   **MEASURED — the developer drove the real 1.27a client: it keeps the ghost image until you
+   re-scout the spot.** So there is no timeout to model and no decay: the memory persists
+   indefinitely and is cleared by SIGHT of the cell, which is the same trigger that would
+   refresh it. That is the cheapest possible rule and it settles the design — the authority
+   keeps, per viewpoint, the last-seen record of any structure that has since left
+   `world.units`, and drops it the moment `fogBlocksAt` goes false for its cell. Still its own
+   item because it is the first piece of genuinely per-recipient HISTORY the authority has to
+   carry, and it wants its own test (a building destroyed out of sight stays; the same building
+   re-scouted disappears).
 
 7. ~~**`forAudience` gets its caller.**~~ **Done for the broadcast half — and the caller is NOT
    snapshot construction, which is what this entry predicted.** A snapshot is per-recipient

@@ -76,30 +76,34 @@ console.log("\nyour own team survives the fog; the enemy does not");
   check("and player 1 sees only its own", p1.map((d) => d.owner), [1]);
 }
 
-// What `minimapDots`'s own-team clause actually does, which is NOT what it looks like.
-// `Viewpoint.fogHides` already returns false for your own team, so the `|| u.team === vp.team`
-// in minimapDots cannot be about fog. The only thing it overrides is the VIEWPOINT-INDEPENDENT
-// half of hiddenFor — inMine / insideBuild / inBurrow / devouredBy / vanished.
+// FIXED (docs/multiplayer.md Phase E item 3c), and the fix waited on a measurement rather than
+// on an argument. `Viewpoint.fogHides` already returns false for your own team, so the
+// `|| u.team === vp.team` clause in minimapDots was never about fog — the only thing it could
+// override was the VIEWPOINT-INDEPENDENT half of hiddenFor, which meant a friendly unit inside a
+// gold mine or a burrow painted a dot at the spot it walked in from.
 //
-// So a friendly unit inside a gold mine or a burrow gets a minimap dot, at the position it
-// entered from. In the real 1.27a client it does not: garrisoned and mining units have no dot of
-// their own. That is a PRE-EXISTING bug, not something items 3/3b introduced — the clause is
-// carried across byte-for-byte — so it is pinned here as current behaviour and filed as its own
-// item (docs/multiplayer.md Phase E item 3c) rather than fixed inside a behaviour-preserving move.
-// When it is fixed, this check is what says so out loud.
-console.log("\nSUSPECTED BUG, pinned as-is: a garrisoned friendly still gets a dot (item 3c)");
+// The developer drove the real 1.27a client and reported: no dot. So `isOffField` is now tested
+// first and on its own, and the own-team clause does only the fog job it reads like.
+console.log("\na unit that is off the field gets no dot, not even its owner's (item 3c)");
 {
   const world = worldOf([
     unit({ id: 1, owner: 0, team: 0, inBurrow: true }),
     unit({ id: 2, owner: 0, team: 0, inMine: true }),
     unit({ id: 3, owner: 1, team: 1, inBurrow: true }),
+    unit({ id: 4, owner: 0, team: 0, insideBuild: true }),
+    unit({ id: 5, owner: 0, team: 0, devouredBy: 9 }),
+    unit({ id: 6, owner: 0, team: 0, vanished: true }),
+    unit({ id: 7, owner: 0, team: 0, x: 400, y: 400 }), // plainly on the field — the control
   ]);
   const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
   set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
   const vp = set.viewpointFor(0);
-  check("hiddenFor says the burrowed friendly is hidden", hiddenFor(vp, world.units.get(1)), true);
-  check("…but the own-team clause puts a dot back anyway", minimapDots(world, vp).length, 2);
-  check("an ENEMY inside a burrow gets no dot", minimapDots(world, vp).every((d) => d.owner === 0), true);
+  check("hiddenFor still says the burrowed friendly is hidden", hiddenFor(vp, world.units.get(1)), true);
+  // Measured against the real client: a mining peasant's dot disappears while it is inside and
+  // comes back when it pops out. Same for every other way of being off the field.
+  check("all five off-field friendlies are gone from the minimap", minimapDots(world, vp).length, 1);
+  check("…and the one left is the unit actually standing on the map", minimapDots(world, vp)[0].x, 400);
+  check("an ENEMY inside a burrow gets no dot either", minimapDots(world, vp).every((d) => d.owner === 0), true);
 }
 
 console.log("\nunits nobody can see are hidden for everyone, whatever the fog says");

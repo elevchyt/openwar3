@@ -1,4 +1,4 @@
-import type { SimUnit, SimMine, SimItem, BuildJob, SimBuff, SimAbility, HeldItem } from "../sim/world";
+import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -123,8 +123,7 @@ export type Visibility = "live" | "remembered" | "omit";
  *  3. **Fog.** Then the memory split above.
  */
 export function visibilityFor(viewer: SnapshotViewer, u: SimUnit): Visibility {
-  const off = u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished;
-  if (off) return viewer.seesFor(u.owner) ? "live" : "omit";
+  if (isOffField(u)) return viewer.seesFor(u.owner) ? "live" : "omit";
   if (viewer.invisHides(u)) return "omit";
   if (viewer.fogHides(u)) return "omit";
   return viewer.fogBlocksClick(u) ? "remembered" : "live";

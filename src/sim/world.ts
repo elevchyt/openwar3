@@ -933,6 +933,29 @@ export interface SimUnit {
   pendingDrop: { slot: number; x: number; y: number } | null; // walking to a spot to drop a slot's item
 }
 
+/**
+ * Is this unit OFF THE FIELD — carried inside something, swallowed, or whisked away?
+ *
+ * Inside a gold mine, inside the structure it is building (the Orc peon), garrisoned in a
+ * Burrow, digesting inside a Kodo, or `vanished` for the beat of Mirror Image's shuffle. The
+ * common fact is that the unit has no position anybody can see: it is not merely fogged, it is
+ * not on the map. Nothing draws it, nothing can target it, and — measured against the real
+ * 1.27a client — **it gets no minimap dot, not even its owner's**.
+ *
+ * It lives here, next to `SimUnit`, because three separate places have to agree on it and the
+ * expression had already been written out twice: `hiddenFor` (the render/fog question),
+ * `minimapDots` (which used to override it and was wrong for it — Phase E item 3c) and
+ * `visibilityFor` (the snapshot send rule, which drops these for everyone but the owner). Three
+ * copies of a five-term disjunction is three chances to add a sixth term to two of them.
+ *
+ * Deliberately NOT a fog or ownership test. Whether the OWNER should still be told about the
+ * unit is a separate question each caller answers differently — a snapshot says yes (a Burrow
+ * must list its garrison), the minimap says no (WC3 draws no dot).
+ */
+export function isOffField(u: SimUnit): boolean {
+  return u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished;
+}
+
 /** The [Errors] key for "refused, but the game has no line for this" — an empty key finds no
  *  string, so the UI beeps and stays silent. Named so the intent isn't mistaken for a bug. */
 const SILENT_REFUSAL = "";

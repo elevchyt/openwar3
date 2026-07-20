@@ -1,4 +1,4 @@
-import type { SimUnit } from "../sim/world";
+import { isOffField, type SimUnit } from "../sim/world";
 import type { Viewpoint } from "./viewpoint";
 
 // What the minimap shows, asked for ONE viewpoint (docs/multiplayer.md Phase E item 3b).
@@ -29,15 +29,23 @@ export interface MinimapWorld {
  * and useless for asking about anybody else.
  */
 export function hiddenFor(vp: Viewpoint, u: SimUnit): boolean {
-  if (u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished) return true;
+  if (isOffField(u)) return true;
   return vp.fogHides(u) || vp.invisHides(u);
 }
 
 /**
  * The coloured unit dots, for one viewpoint.
  *
- * Your own team's dots survive the fog test (`u.team === vp.team`): WC3 always shows you your own
+ * Your own team's dots survive the FOG test (`u.team === vp.team`): WC3 always shows you your own
  * army on the minimap, including units standing in a corner nobody has looked at for a minute.
+ *
+ * What that clause must NOT survive is `isOffField` — and it used to (Phase E item 3c). The
+ * clause looks like it is about fog, but `Viewpoint.fogHides` already returns false for your own
+ * team before it consults the grid, so fog was never what it overrode. The only thing it could
+ * override was the viewpoint-independent half of `hiddenFor`, which meant a peasant inside a
+ * gold mine and a peon inside a burrow each painted a dot at the spot they walked in from.
+ * **Measured in the real 1.27a client: they get no dot.** So the off-field test is applied
+ * first, on its own, and the own-team clause is left doing only the fog job it reads like.
  *
  * Neutral-passive units — critters, shops, the neutral buildings — never get a dot. They are
  * furniture, and `minimapIcons` paints the ones that get an icon instead.
@@ -46,6 +54,7 @@ export function minimapDots(world: MinimapWorld, vp: Viewpoint): Array<{ x: numb
   const out: Array<{ x: number; y: number; owner: number }> = [];
   for (const u of world.units.values()) {
     if (u.neutralPassive) continue;
+    if (isOffField(u)) continue;
     if (!hiddenFor(vp, u) || u.team === vp.team) out.push({ x: u.x, y: u.y, owner: u.owner });
   }
   return out;
