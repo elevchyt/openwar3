@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | [remaining-work list](#remaining-work-in-order-1) written; no code moved yet. Blocked on two decisions: how the dev boot is gated, and the unit of vision |
+| D — N vision maps | in progress | [remaining-work list](#remaining-work-in-order-1) written; both blocking decisions settled (dev-only vite plugin; vision is per-PLAYER). Item 1 next |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -601,10 +601,12 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    verification so far has been a hand-patched temp `?dev=` boot, applied and reverted **ten times**
    during Phase B. Land a real one — a vite `configureServer` middleware serving `/wc3/*` from the
    local install plus a scripted `devBoot()` in `main.ts` — gated so the shipped build can never
-   serve a Blizzard byte. **Blocked on the developer: how it is gated** (dev-only vite plugin, env
-   var, or separate entry point). Shipping an asset route by accident is not recoverable by a
-   follow-up commit, so this is not a call to make unilaterally. Then: two browser contexts,
-   different player slots, same map and seed.
+   serve a Blizzard byte. **Decided: a dev-only vite plugin** carrying `apply: "serve"`, so the
+   `/wc3/*` middleware is structurally absent from `pnpm build` rather than present-but-disabled,
+   with `devBoot()` behind a dynamic import so it tree-shakes out of the bundle. The route must be
+   code that was never emitted, not code that got switched off — an env var can be mis-set in CI and
+   an accidentally-shipped asset route is not recoverable by a follow-up commit. Then: two browser
+   contexts, different player slots, same map and seed.
 2. **Extract a `Viewpoint`** (new file, `src/game/viewpoint.ts`). One object owning one `VisionMap`
    plus the `exposed` set and the fog modifiers that bear on it, exposing `seesFor(player)`,
    `revealsFor(u)`, `fogHides(u)`, `fogBlocksClick(u)`, `fogBlocksAt(x, y)`, `isExplored(x, y)`.
@@ -635,7 +637,7 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
 key off `seesFor(u.owner)` today, which is the correct rule (see [`illusions.md`](./illusions.md):
 the enemy must not be able to tell). Item 2 carries them along unchanged; do not re-derive them.
 
-#### Open decision — what is the unit of vision?
+#### Settled — the unit of vision is the PLAYER
 
 `VisionMap` is per-**TEAM** today, and teams are not players (`teamOfPlayer` falls back to the slot
 number). The candidates differ the moment a script calls `SetPlayerAlliance` with shared vision,
@@ -647,9 +649,10 @@ which is exactly the feature this is for:
 - **per sharing group** — fewest rebuilds, but the groups have to be recomputed whenever an alliance
   changes, and a half-shared alliance (A sees B but not vice versa) has no group.
 
-Recommendation on the table: **per player**, because `seesFor` and `revealsFor` already OR the three
-notions together and per-player is the only one of the three that is closed under a runtime
-`SetPlayerAlliance`. Not yet ratified.
+**Decided: per player.** `seesFor` and `revealsFor` already OR the three notions together — team
+membership *and* `alliances.sharesVisionWith` — so folding sharing in at reveal time costs nothing
+new, and per-player is the only one of the three that is closed under a runtime `SetPlayerAlliance`.
+The price is N rebuilds at 10 Hz each instead of one; measure it at item 7 and record the number.
 
 ### Phase E — transport, lobby, reconnect
 
