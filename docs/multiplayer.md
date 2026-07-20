@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b). Open: 6d, 7b, 9b, 10b-note, 10c, then 11–12 — **wired in tests, not yet in the app** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note). Open: 6d, 7b, 9b, 10b-harness, 10c, then 11–12 — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1646,11 +1646,38 @@ enumerated by body rather than by name.
     `pnpm relay:test` now carries **47** loopback checks. Three injections, each turning its own
     checks red: dropping the recipient guard, the staleness guard, and the pass-through.
 
-10b-note. **Nothing constructs a `MatchLink` yet, and that is the remaining wiring.**
-    `startGame` in [`src/main.ts`](../src/main.ts) builds the match from `onStart(path, info,
-    config)` and is never handed the `LanLobby` that produced it, so the controller still has no
-    channel to attach. That hand-off is UI plumbing rather than a rule — one more argument
-    through two call sites — and it is what turns this from a tested module into live traffic.
+10b-note. ~~**Nothing constructs a `MatchLink` yet.**~~ **Done.** `fdfLan.enter` assembles a
+    `MatchLinkSetup` — the lobby as the channel, the local SLOT resolved from `slots.find(s =>
+    s.peer === myPeer).id`, the seating, and `isHost` — and passes it through
+    `onStart(path, info, config, link)` → `startGame` → `MapViewerScene.attachMatchLink` →
+    `RtsController.attachMatchLink`. It is built THERE because the LAN screen is the last place
+    the lobby and the seating exist together; `startGame` disposes the glue and never sees the
+    lobby. `RtsController.driveMatchLink` runs once a tick: the host emits a snapshot per
+    recipient, a client diffs the newest arrival against its own sim and `console.warn`s a
+    single grouped `[sync]` line per tick when they disagree. **Six modules stopped being
+    unimported at once** — `snapshot`, `ghosts`, `divergence`, `matchLink`, and the AoI/command
+    rules they carry.
+
+    **Behaviour is unchanged for a single-player game, and that is checked rather than
+    asserted.** `devBoot` calls `startGame(file, info, config)` with no `link`, so the dev-boot
+    path builds no `MatchLink` and `driveMatchLink` returns on its first line. Echo Isles seed
+    4242 on the dev path: boots and plays at 144 fps, **minimap byte-identical to the parent
+    commit** (0 of 18 088 pixels) across a stash/restore A/B, and no `[sync]` line — there is no
+    link to produce one. `slot` vs `peer` is kept distinct at the seam (`localPlayer` is the
+    slot, `me` is the relay peer), because conflating them is how a client filters out the very
+    snapshots addressed to it.
+
+    **NOT verified: two clients actually exchanging snapshots in the browser.** That needs the
+    full create/join/start UI driven across two contexts with a relay up, and there is no
+    committed headless LAN boot — `?dev` bypasses the lobby entirely, which is exactly why it
+    builds no link. The end-to-end path (host emits → relay → client receives → diff) is covered
+    by the 47 loopback checks through the real `RelayCore`; what this commit adds on top is the
+    app wiring, and only the no-regression half of that is shown in a browser. A scripted
+    two-client LAN harness is its own item (**10b-harness**), and it is what turns the loopback
+    proof into a live one.
+
+    `pnpm build` is clean: zero `wc3/manifest` / `devBoot` / `OPENWAR3_INSTALL` in `dist/`,
+    `menuDebug` still its own chunk — checked because this touched `main.ts`, the boot entry.
 
 10b-old. **The original entry.** `RtsController` has no transport and cannot get one:
     `LanLobby` is constructed in [`src/ui/fdfLan.ts`](../src/ui/fdfLan.ts), a UI module, and the

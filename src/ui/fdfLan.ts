@@ -5,6 +5,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { ListItem } from "./fdf/widgets";
 import { LanLobby, type LobbyState } from "../net/lobby";
+import type { MatchLinkSetup } from "../game/matchLink";
 import type { StartMatch } from "../net/protocol";
 import type { MeleeConfig, SlotConfig } from "./lobby";
 import type { Race } from "../data/races";
@@ -45,8 +46,9 @@ export interface LanHandlers {
   /** Go pick a map to host. Comes back through `hostWith` on the screen this returns. */
   onCreateGame: () => void;
   /** The match is on — for the host the moment it presses Start, for a client the moment the
-   *  host's `start` lands. Both are handed the same map and the same config. */
-  onStart: (mapPath: string, info: MapInfo, config: MeleeConfig) => void;
+   *  host's `start` lands. Both are handed the same map and the same config, plus the match's
+   *  end of the wire (`link`), assembled here because the lobby does not outlive this screen. */
+  onStart: (mapPath: string, info: MapInfo, config: MeleeConfig, link: MatchLinkSetup) => void;
 }
 
 /** The LAN screen, plus the one thing the create screen needs to hand back to it. */
@@ -158,7 +160,18 @@ export async function mountLanScreen(
         screen.setText("CustomCreateInfo", `|cffff8080You do not have ${msg.mapName}.|r`);
         return;
       }
-      h.onStart(msg.mapPath, info, toConfig(msg, me));
+      // The match's end of the wire, assembled HERE because this is the last place the lobby
+      // and the seating exist together — `startGame` disposes the glue and never sees the
+      // lobby (docs/multiplayer.md Phase E item 10b-note). `me` is the relay peer; the SLOT is
+      // the one seated on it, and the two are different numbering.
+      const localPlayer = msg.slots.find((s) => s.peer === me)?.id ?? me ?? 0;
+      const link: MatchLinkSetup = {
+        channel: lobby,
+        localPlayer,
+        seats: msg.slots.map((s) => ({ id: s.id, peer: s.peer })),
+        isHost: lobby.isHost,
+      };
+      h.onStart(msg.mapPath, info, toConfig(msg, me), link);
     })();
   };
 

@@ -21,6 +21,7 @@ import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
+import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
@@ -1193,6 +1194,14 @@ export class MapViewerScene {
    *
    *  The old hard-coded roster survives only as a fallback for a melee-flagged map that
    *  ships no script at all (see startMeleeFallback). */
+
+  /** Hand the LAN match's end of the wire to the controller (docs/multiplayer.md 10b-note).
+   *  A plain pass-through — the scene owns the `RtsController`, and `startGame` in main.ts
+   *  owns the setup; neither should reach across the other. */
+  attachMatchLink(setup: MatchLinkSetup): void {
+    this.rts?.attachMatchLink(setup);
+  }
+
   async startMelee(config: MeleeConfig): Promise<void> {
     if (!this.rts || !this.viewer.map) return;
     // Resources come from the script (MeleeStartingResources), so open empty.

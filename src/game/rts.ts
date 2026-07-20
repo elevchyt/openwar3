@@ -25,6 +25,7 @@ import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
+import { MatchLink, type MatchLinkSetup } from "./matchLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons } from "./minimapView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
@@ -388,6 +389,13 @@ export class RtsController {
    *  player still loses a destroyed building off its own screen, which is item 6d — but the
    *  memory is now correct, which is what a snapshot needs. */
   private ghosts = new GhostMemory();
+  /** The match's end of the wire, once a LAN game hands one over (item 10b). null in
+   *  single-player, where the local sim is the only authority and there is nothing to send to
+   *  or diff against. */
+  private matchLink: MatchLink | null = null;
+  /** Seconds since the match began — the authority's clock the snapshot is stamped with, so a
+   *  client can drop one that arrived out of order. */
+  private matchTime = 0;
   // …and this machine's own, cached because the render path asks it many times a frame.
   // Re-pointed by setLocalPlayer, which is the only thing that can change it.
   private local!: Viewpoint;
@@ -2053,6 +2061,7 @@ export class RtsController {
     if (rebuilt.includes(this.local)) {
       this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
     }
+    this.driveMatchLink(dt);
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       if (u.neutralPassive) {
@@ -3473,6 +3482,46 @@ export class RtsController {
    */
   get simView(): SimView {
     return this.sim;
+  }
+
+  /**
+   * Attach a LAN match's end of the wire (docs/multiplayer.md Phase E item 10b/10b-note).
+   *
+   * Called once, after `startMelee`/`startCustom`, so the world it will snapshot already
+   * exists. In single-player this is never called and `driveMatchLink` is a no-op — the local
+   * player's behaviour is unchanged either way, which is the whole of sequencing B: the client
+   * keeps simulating, and the link only sends (host) or compares-and-logs (client) alongside.
+   */
+  attachMatchLink(setup: MatchLinkSetup): void {
+    this.matchLink = new MatchLink(setup.channel, setup.localPlayer, setup.seats);
+    this.matchLinkIsHost = setup.isHost;
+  }
+  private matchLinkIsHost = false;
+
+  /** Once a tick: the host emits a snapshot per recipient; a client diffs the newest arrival
+   *  against what it simulated and logs where they disagree. Nothing here changes what is
+   *  DRAWN — that is item 10c. */
+  private driveMatchLink(dt: number): void {
+    const link = this.matchLink;
+    if (!link) return;
+    this.matchTime += dt;
+    if (this.matchLinkIsHost) {
+      link.tickHost(dt, this.sim, {
+        // `Viewpoint` satisfies `SnapshotViewer` (pinned by snapshot-viewer-conformance.ts),
+        // and `viewerSeats` already pairs each with its player.
+        viewers: () => this.viewpoints.viewerSeats(),
+        ghostsFor: (p) => this.ghosts.ghostsFor(p),
+      }, this.matchTime);
+      return;
+    }
+    // Client: compare the authority's newest view against our own, for OUR seat.
+    if (!link.latest()) return;
+    const findings = link.compare(this.sim, this.local, this.ghosts.ghostsFor(this.localPlayer));
+    if (findings.length) {
+      // A drift log, not an error: sequencing B expects disagreement and wants it named. One
+      // grouped line per tick, so a desynced match does not scroll the console into uselessness.
+      console.warn(`[sync] ${findings.length} divergence(s):`, link.describe().join(" | "));
+    }
   }
 
   /**

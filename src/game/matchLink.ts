@@ -66,6 +66,23 @@ export interface HostSources {
  *  view of the world more often than the fog that shapes it is recomputed. */
 export const SNAPSHOT_INTERVAL = 0.1;
 
+/**
+ * Everything the match needs to join the wire, assembled where the lobby still exists.
+ *
+ * The LAN screen is the only place that knows all four of these at once, and it stops existing
+ * the moment the match starts (`glue.dispose()`), so they are handed over rather than looked up
+ * later. `localPlayer` is the SLOT, not the relay peer: the two are different numbering and
+ * conflating them is how a client ends up filtering snapshots addressed to it.
+ */
+export interface MatchLinkSetup {
+  channel: MatchChannel;
+  /** This machine's player slot — `slots.find(s => s.peer === myPeerId).id`. */
+  localPlayer: number;
+  seats: LinkSeat[];
+  /** Only the host pumps. Everybody, host included, may receive. */
+  isHost: boolean;
+}
+
 export class MatchLink {
   private accum = 0;
   /** The most recent snapshot this client was sent, or null on the host / before the first. */

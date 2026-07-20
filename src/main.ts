@@ -21,6 +21,7 @@ import { makePlaceholderTerrain } from "./world/placeholderTerrain";
 import { loadMapBytes } from "./world/map";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
 import { MapViewerScene } from "./render/mapViewer";
+import type { MatchLinkSetup } from "./game/matchLink";
 import { MenuScene } from "./render/menuScene";
 import { applyMenuCursor } from "./ui/cursor";
 
@@ -153,7 +154,7 @@ function lanScreen(
       const screen = await mountLanScreen(ui, vfs, installMaps, {
         onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
         onCreateGame: () => void glue.goTo(lanCreateScreen(vfs)),
-        onStart: (_path, info, config) => void startGame(mapFileFor(_path), info, config),
+        onStart: (_path, info, config, link) => void startGame(mapFileFor(_path), info, config, link),
       });
       // Coming back from the create screen: the room is announced here rather than there,
       // because the LAN screen is the one holding the lobby connection.
@@ -203,7 +204,7 @@ function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; moun
 }
 
 /** Leave the menus and play: load the map, then melee or custom setup as the map asks. */
-async function startGame(file: File, info: MapInfo, config: MeleeConfig): Promise<void> {
+async function startGame(file: File, info: MapInfo, config: MeleeConfig, link?: MatchLinkSetup): Promise<void> {
   meleeConfig = config;
   glue.dispose(); // the menus are done; the match owns the screen now
   glueAudio?.stop(); // …and the music channel: the map's own script cues its music from here
@@ -213,6 +214,10 @@ async function startGame(file: File, info: MapInfo, config: MeleeConfig): Promis
   // custom/scenario maps run their own triggers instead (see mapKind.ts).
   if (info.isMelee) await mapScene?.startMelee(config);
   else await mapScene?.startCustom(config);
+  // A LAN match hands over the match's end of the wire (docs/multiplayer.md item 10b-note); a
+  // skirmish passes none, and the controller runs exactly as it always has. Attach it AFTER
+  // setup so the world it snapshots exists.
+  if (link) mapScene?.attachMatchLink(link);
 }
 
 /** Enumerable unit models from the mounted install (portraits excluded). */
