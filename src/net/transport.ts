@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "./protocol";
+import type { Transport } from "./transportTypes";
 
 // The transport seam.
 //
@@ -7,14 +8,11 @@ import { PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "./prot
 // module must be transport-agnostic so the SAME code serves all three deployments in
 // docs/multiplayer.md (LAN direct, internet via relay, dedicated cloud later). The day we
 // move the authority off the host, only the adapter changes.
+//
+// The `Transport` TYPE lives in transportTypes.ts (no `import.meta`), re-exported here so
+// existing importers are unaffected; this file adds the socket-backed implementation.
 
-export interface Transport {
-  send(msg: ClientMessage): void;
-  close(): void;
-  readonly connected: boolean;
-  onMessage: (msg: ServerMessage) => void;
-  onClose: (reason: string) => void;
-}
+export type { Transport };
 
 /** Where the relay lives. Local by default (`node server/relay.mjs`); override with
  *  VITE_RELAY_URL to point a build at a deployed one. */

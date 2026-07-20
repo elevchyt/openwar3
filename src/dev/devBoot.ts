@@ -5,6 +5,7 @@ import type { GateLoad } from "../ui/gate";
 import type { FogMode, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
 import { LanLobby, type LobbyState } from "../net/lobby";
+import { WebSocketTransport } from "../net/transport";
 import type { StartMatch as StartMatchMsg } from "../net/protocol";
 import { buildStart, toConfig } from "../ui/fdfLan";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
@@ -167,7 +168,7 @@ async function devLanBoot(
   seed: number,
   fog: FogMode,
 ): Promise<void> {
-  const lobby = new LanLobby();
+  const lobby = new LanLobby(() => new WebSocketTransport());
   log(`LAN ${side}: connecting to the relay…`);
   await lobby.connect(); // ws://<page host>:8787 — node server/relay.mjs
 

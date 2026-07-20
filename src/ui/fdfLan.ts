@@ -5,6 +5,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { ListItem } from "./fdf/widgets";
 import { LanLobby, type LobbyState } from "../net/lobby";
+import { WebSocketTransport } from "../net/transport";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import type { StartMatch } from "../net/protocol";
 import type { MeleeConfig, SlotConfig } from "./lobby";
@@ -63,7 +64,7 @@ export async function mountLanScreen(
   maps: Map<string, File>,
   h: LanHandlers,
 ): Promise<LanScreen> {
-  const lobby = new LanLobby();
+  const lobby = new LanLobby(() => new WebSocketTransport());
   const minimapIcons = loadMinimapIcons(vfs);
   let screen: LanScreen;
 

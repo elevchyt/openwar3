@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a). Open: 7b, 10c-2b+ (feed the entry sync a snapshot, with 6d), 11a-client, 11b, 12; 10b-harness-shot + 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client). Open: 7b, 10c-2b+ (feed the entry sync a snapshot, with 6d), 11b, 12; 10b-harness-shot + 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1878,10 +1878,44 @@ enumerated by body rather than by name.
     sequence a single client cannot show. The relay logic is covered over both the in-process and
     real-socket paths.
 
-11a-client. **The client stashes its token and auto-rejoins on a drop.** `LanLobby` receives the
-    token in `created`/`joined` and ignores it today; it needs to keep it and, on
-    `WebSocketTransport.onClose` mid-match, reconnect and `join` with it. Small, but it is the
-    client half and belongs on its own.
+11a-client. ~~**The client stashes its token and auto-rejoins on a drop.**~~ **Done — and the
+    developer confirmed the design: the token IS a per-session hash, kept in localStorage so it
+    survives a tab reload or crash, not just a socket blip.** `LanLobby` now saves
+    `{roomId, token, playerName}` on `created`/`joined`, clears it on a chosen `leave`/`dispose`
+    or a `room-closed`, and on a dropped connection reconnects and reclaims the slot with it.
+    `reconnectPlan` ([`reconnect.ts`](../src/net/reconnect.ts)) is the one decision — rejoin only
+    while the room is still LISTED (the host is up); a vanished room means the match ended, so
+    the stale session is forgotten rather than retried forever.
+
+    **The move that made it testable was inverting the transport dependency.** `LanLobby`
+    imported `WebSocketTransport`, whose `import.meta`/`window` cannot compile to the CommonJS the
+    headless suite runs as — so the whole lobby was out of a test's reach. Now the lobby takes a
+    transport FACTORY and imports only `type Transport` (moved to
+    [`transportTypes.ts`](../src/net/transportTypes.ts) so even the type carries no `import.meta`
+    in its file). A fake transport drives the entire reconnect flow headlessly — the same
+    dependency-inversion that made `RelayCore` testable, applied to the client half.
+    `fdfLan`/`devBoot` pass `() => new WebSocketTransport()`; nothing else changed for them.
+
+    **A real UX bug fell out of the test.** On reconnect, `connect()` used to reset the state to
+    "browsing" and clear the error — which would blink the roster away for the beat between the
+    socket reopening and the rejoin landing. The check for "the UI shows Reconnecting…" went red
+    and forced the fix (a reconnect keeps its state until `joined`).
+
+    **`peer-drop`/`peer-rejoin` are now handled** (protocol 3, from item 11a): a dropped peer
+    stays in the roster ("reconnecting"), a rejoin heals it, and only a `peer-leave` removes it.
+
+    **Tested headlessly, 20 checks** ([`tools/lobby-test.cjs`](../tools/lobby-test.cjs), the FIRST
+    test the lobby has ever had): token stashed on join and cleared on leave; a drop reconnects
+    and rejoins with the token; a drop into an ended game gives up and forgets the token; a drop
+    while merely browsing is a plain disconnect; the roster handling. `sim:test` 412 → **432**.
+    Two injections — a drop that never reconnects, a `reconnectPlan` that ignores whether the room
+    still exists — each turn their own named checks red.
+
+    **Still NOT wired: nothing forces a real drop for the host's catch-up (11b) to answer.** This
+    is the client half; the reconnected player rejoins the ROOM, but sees correct GAME state only
+    once the host sends it a full snapshot (11b) and the client renders from it (10c). Verified in
+    the browser that the refactored lobby still boots a two-client LAN match; the drop/rejoin
+    round trip itself is the deferred two-client capture.
 
 11b. **Reconnect, the authority side: answer a rejoin with a FULL snapshot.** The relay puts the
     player back in the room; the host must then hand it the state it missed. `MatchLink` already
