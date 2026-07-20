@@ -205,6 +205,15 @@ interface Entry {
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
   castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
   moveEma: number; // smoothed actual/expected displacement — gates the walk clip
+  // The position this entry was DRAWN at last frame. The walk/stand picker needs "how far did
+  // the drawn unit move this frame", and that is a render fact — the previous DRAWN position —
+  // not a sim one. It used to read `SimUnit.prevX/prevY`, which coincides only because the sim
+  // and the render tick 1:1 (Phase A). A client drawing 10 Hz snapshots at 60 fps has no such
+  // coincidence, and this is the one field the entry sync read that a snapshot does not carry —
+  // so tracking it here is what lets the sync be fed a snapshot at all (docs/multiplayer.md
+  // item 10c-2). Seeded < 0 so the first frame reads "no previous" and the ratio defaults to 1.
+  prevDrawnX: number; // NaN until the first frame draws it, then last frame's drawn x
+  prevDrawnY: number;
   baseColor?: Float32Array; // model's own tint, captured before any fog dimming
   fogTintB?: number; // last fog brightness applied (avoids redundant setVertexColor)
   aoeHi?: boolean; // last AoE-target green-tint state applied (avoids redundant setVertexColor)
@@ -1608,6 +1617,8 @@ export class RtsController {
         lastChopSeq: -1,
         castAnimT: 0,
         moveEma: 1,
+        prevDrawnX: NaN,
+        prevDrawnY: NaN,
       };
       this.entries.push(entry);
       this.byId.set(simId, entry);
@@ -1700,6 +1711,8 @@ export class RtsController {
       lastChopSeq: -1,
       castAnimT: 0,
       moveEma: 1,
+      prevDrawnX: NaN,
+      prevDrawnY: NaN,
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
@@ -1878,6 +1891,8 @@ export class RtsController {
       lastChopSeq: -1,
       castAnimT: 0,
       moveEma: 1,
+      prevDrawnX: NaN,
+      prevDrawnY: NaN,
     };
     this.entries.push(entry);
     this.byId.set(simId, entry);
@@ -2065,6 +2080,15 @@ export class RtsController {
     this.driveMatchLink(dt);
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
+      // How far this unit moved SINCE IT WAS LAST DRAWN — a render fact the walk/stand picker
+      // needs (see `prevDrawnX`). Captured before anything can `continue`, then advanced to the
+      // position about to be drawn, so every entry's previous stays current whatever branch it
+      // takes. NaN on the first frame means "no previous": read the current position so the
+      // delta is zero and a freshly spawned unit stands rather than false-triggering a walk.
+      const prevX = Number.isNaN(e.prevDrawnX) ? u.x : e.prevDrawnX;
+      const prevY = Number.isNaN(e.prevDrawnY) ? u.y : e.prevDrawnY;
+      e.prevDrawnX = u.x;
+      e.prevDrawnY = u.y;
       if (u.neutralPassive) {
         this.applyVisibility(e, u); // static & viewer-rendered, but fog still hides/reveals it
         continue;
@@ -2183,7 +2207,7 @@ export class RtsController {
         // when the unit is really making progress — a unit wedged in a crowd
         // (moving ordered, but barely inching) stands instead of jogging in place.
         const expected = u.speed * dt;
-        const ratio = expected > 1e-3 ? Math.hypot(u.x - u.prevX, u.y - u.prevY) / expected : 1;
+        const ratio = expected > 1e-3 ? Math.hypot(u.x - prevX, u.y - prevY) / expected : 1;
         e.moveEma += (Math.min(ratio, 1) - e.moveEma) * MOVE_EMA_ALPHA;
         const effMoving = u.moving && e.moveEma >= MOVE_ANIM_MIN_RATIO;
         let seq = pickSequence(e.anims, u, effMoving);

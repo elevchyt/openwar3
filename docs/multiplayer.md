@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1). Open: 7b, 10c-2+ (the rest of the render, with 6d), 11–12; 10b-harness-shot + 9b-cmd-shot are browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a). Open: 7b, 10c-2b+ (feed the entry sync a snapshot, with 6d), 11–12; 10b-harness-shot + 9b-cmd-shot are browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1812,10 +1812,41 @@ enumerated by body rather than by name.
     branch). The client-draws-the-authority half needs two contexts and is the same
     daemon-fragile capture deferred as 10b-harness-shot.
 
-10c-2+. **The rest of the render from the snapshot** — the `Entry` sync (positions, animation,
-    facing), selection, health bars. These read `SimUnit` directly and in bulk; each is its own
-    slice, and each removes one more reason the client needs its local sim to draw. `6d` (a razed
-    building's ghost) rides in whichever slice reworks `onDeath`.
+10c-2a. ~~**The one field the entry sync read that a snapshot cannot carry.**~~ **Done, and it
+    was `prevX`/`prevY`.** The rule was "classify by what the consumer actually reads" — so before
+    routing the entry sync to a snapshot, audit what it reads. Of the ~19 `SimUnit` fields the
+    sync touches, **eighteen are in `UnitSnapshot` already** (item 5 chose them off exactly these
+    sites). The nineteenth is `prevX`/`prevY`, and it is not authoritative state at all: the
+    sync reads it once, to compute *how far the drawn unit moved this frame*, which gates the
+    walk-vs-stand clip. That is a RENDER fact — the previous DRAWN position — that coincides with
+    the sim's `prevX` only because the sim and the render tick 1:1 (Phase A). A client drawing 10
+    Hz snapshots at 60 fps has no such coincidence.
+
+    So the render now tracks its own `prevDrawnX`/`prevDrawnY` per `Entry`, captured before any
+    `continue` and advanced to the position about to be drawn. **Byte-identical by
+    construction:** the sim sets `prevX = x` at spawn and at the start of every tick's movement,
+    so last frame's drawn position IS this frame's `u.prevX` — the two are equal every frame a
+    unit walks. The one edge is a TELEPORT (`setPosition` sets `prevX = newX`): the render sees
+    the jump where the sim sees zero, but that frame is gated to invisibility by the same call's
+    `moving = false`, and the `moveEma` residue self-corrects in a few frames. Echo Isles melee
+    teleports nothing, so the boot is exact.
+
+    **After this, the entry sync reads ONLY snapshot-carried fields** — which is the whole point,
+    and the precondition for 10c-2b feeding it a snapshot. `grep u.prevX src/game/rts.ts` is now
+    0.
+
+    **Verified single-player, byte-identical minimap** (0 of 18 088 pixels) — this is
+    renderer-only (the entry sync has no headless reach), so a byte-identical frame is the whole
+    of what can be shown, and it is what "behaviour-preserving groundwork" means. No new headless
+    test: the change is a field-source swap inside a loop `sim:test` cannot enter. `sim:test`
+    stays 412.
+
+10c-2b+. **Feed the entry sync a snapshot on a client** — now unblocked. The sync's `u` becomes a
+    `RenderUnit` (the readonly shape both `SimUnit` and `UnitSnapshot` satisfy), sourced from the
+    local sim on host/single-player and the received snapshot on a client. Then selection, health
+    bars, the command card — each reads through the same source, and the switch is ATOMIC across
+    them (a model at the snapshot's position with a health bar at the sim's would be a
+    Frankenstein). `6d` (a razed building's ghost) rides in the slice that reworks `onDeath`.
 
 11. **Reconnect: rejoin token → full snapshot → deltas resume.** Relay side is a token in the room
     table (it must stay free-tier-shaped: no sim, no Blizzard data, no match state beyond that table).
