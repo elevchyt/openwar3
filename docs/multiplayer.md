@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | items 1–6 done; only item 7 open (sim.visibleToTeam + the N-rebuild budget) |
+| D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -116,7 +116,12 @@ state.
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
-**Pick up here.** Phase B is **done** — see [what it proves](#phase-b-is-done-what-it-proves).
+**Pick up here.** Phase D is **done**. Next is **Phase E** (snapshots, transport, reconnect),
+which inherits four things Phase D deliberately did not do — all recorded in the item they came
+from: `dots`/`creepCamps` still iterate the local client's render records rather than `sim.units`;
+`minimapIcons` has no fog gate and nobody has checked the real client; a one-shot `SetFogState` is
+not replayed onto viewpoints created after it fires; and `forAudience` has no caller until
+snapshots exist.
 Next is **Phase D** (one `VisionMap` per vision group), which also inherits the fog modifiers,
 `cripplePlayer` and `seesFor`/`exposed` that Phase B declined to split early. Its
 [remaining-work list](#remaining-work-in-order-1) is written and is the handoff; its **item 1** is the
@@ -757,34 +762,29 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    it will be delivered once per recipient rather than once to the host.
 
 
-7. **`sim.visibleToTeam` consults the real grid for every team.** See the note above — this is the
-   behaviour-changing one. Verify with creeps: a creep camp must stop aggroing a hero it has no
-   sight on. Also the moment N rebuilds become real, so measure and record the frame cost.
+7. ~~**`sim.visibleToTeam` consults the real grid for every team.**~~ **Done.**
+   `VisionSet.viewpointForTeam(team)` answers it. It prefers an existing PLAYER viewpoint on
+   that team, which is thrift but mostly safety: the local team keeps being answered by the
+   very grid it always was, so this cannot change what the local player's units acquire. A team
+   with no player slot — creeps — gets its own, constructed with `player: -1`.
 
-#### Found while verifying item 1 — not item 1's to fix
+   **The behaviour change is smaller than this list predicted, and that is worth recording.**
+   The note used to say enemy creeps aggro through fog and would stop. They already didn't:
+   issue #45 gated acquisition on the unit's own sight radius and line of sight, and for a
+   creep the team grid is essentially the union of exactly those eyes — so the new gate is very
+   nearly a no-op for creeps. What it actually buys is the case that does not exist yet: when a
+   host simulates PLAYER 2's army, that army is now gated on player 2's fog instead of on
+   nothing at all. That is an anti-maphack property, not a creep-AI fix.
 
-Two clients on Echo Isles, same seed, slots 0 and 1, `explored` vs `unexplored`:
+   **Cost, measured rather than guessed.** At Echo Isles scale (192×192 vision cells, ~104
+   units, cliffs installed so the line-of-sight raycasts do real work) one rebuild round costs
+   **0.79 ms for one viewpoint, 1.49 for two, 2.28 for three, 3.01 for four** — linear in N, as
+   expected, since each grid iterates every unit but only raycasts its own team's. At the 10 Hz
+   cadence three viewpoints cost ~2.3 ms once every sixth frame. In the running game Echo Isles
+   held 124–132 fps / 7.6–8.1 ms, against 116–144 / 7.7–8.6 before the change: no measurable
+   difference at this scale. A 12-player map with four teams would cost ~3 ms per round, still
+   comfortably inside a frame.
 
-- **The good news, and it is worth stating.** The existing per-team `VisionMap` is *correct* for the
-  one viewpoint it serves. Under `fog=unexplored` the enemy's minimap dot is genuinely absent and
-  the world outside sight is genuinely black. Phase D is adding viewpoints to something that works,
-  not repairing something that doesn't — which is why "behaviour must not change for the local
-  player" is a testable claim and not a hope.
-- ~~**BUG — `fog: "explored"` reveals enemy BUILDINGS, not just terrain.**~~ **Fixed.**
-  `VisionMap` now carries a third bitmap: `explored` is "do I know the terrain here", `seen` is
-  "did I ever have EYES here", and `VisionMap.hasSeen` is what a remembered building asks.
-  `exploreAll()` fills only the first, so start-explored hands out the map and not the enemy.
-  A FOGGED fog modifier follows the same rule (`FOG_OF_WAR_FOGGED` is documented as "explored,
-  not seen"); a VISIBLE one grants both; a MASKED one wipes both. Pinned by
-  [`tools/sim-vision-test.cjs`](../tools/sim-vision-test.cjs) — 17 checks, and it was confirmed to
-  FAIL against the old one-bitmap behaviour before being kept. Also changed, deliberately:
-  `hasSeen` no longer consults `maskEnabled`, because `FogMaskEnable(false)` makes terrain legible
-  rather than telling you what is built on it. That branch is **not** exercised by a test or by
-  the browser — no map in the boot path calls it.
-- **Unverified — gold-mine and creep-camp glyphs draw on unexplored black.** `minimapIcons()` and
-  `creepCamps()` both paint through pitch-black fog. This may well be correct: WC3's melee minimap
-  does show some neutral furniture from the start. **Check against the real client before touching
-  it** (CLAUDE.md: the MPQ and the running game win over any reference). Belongs to item 5.
 
 **Illusion tells are already viewpoint-gated** — the blue wash, the summon timer and the portrait all
 key off `seesFor(u.owner)` today, which is the correct rule (see [`illusions.md`](./illusions.md):

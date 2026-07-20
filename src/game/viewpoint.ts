@@ -287,6 +287,9 @@ export class VisionSet {
   /** recipient → the players revealed to them (CripplePlayer). Held here rather than only on
    *  the viewpoints so a viewpoint created later inherits it. */
   private readonly exposures = new Map<number, Set<number>>();
+  /** Teams with no player viewpoint of their own — creeps, and any side the local client
+   *  holds no seat for. Keyed separately so a team is never rebuilt twice. */
+  private readonly byTeam = new Map<number, Viewpoint>();
 
   constructor(
     private readonly world: VisionWorld,
@@ -324,8 +327,43 @@ export class VisionSet {
     return vp;
   }
 
-  all(): Iterable<Viewpoint> {
-    return this.byPlayer.values();
+  /** Every viewpoint that needs rebuilding. A team-only viewpoint is skipped once some
+   *  player's viewpoint has taken over answering for that team — otherwise the same team
+   *  would be rebuilt twice a tick, and the two grids could drift apart. */
+  *all(): Iterable<Viewpoint> {
+    yield* this.byPlayer.values();
+    for (const [team, vp] of this.byTeam) if (!this.claimed(team)) yield vp;
+  }
+
+  /** Is some PLAYER's viewpoint already answering for this team? */
+  private claimed(team: number): boolean {
+    for (const vp of this.byPlayer.values()) if (vp.team === team) return true;
+    return false;
+  }
+
+  /**
+   * The eyes of a whole TEAM — what the sim's auto-acquisition gate asks (`visibleToTeam`).
+   *
+   * Prefers an existing PLAYER viewpoint on that team over minting a team-only one. That is
+   * not just thrift: it means the local team keeps being answered by the very grid it was
+   * always answered by, so this cannot change what the local player's units acquire.
+   *
+   * A team-only viewpoint is created with `player: -1`, which is deliberate. Creeps are a team
+   * with no player slot, and `revealsFor` already keys team membership off `u.team` — the
+   * `sharesVisionWith` half needs `owner >= 0` and correctly finds nobody.
+   */
+  viewpointForTeam(team: number): Viewpoint {
+    for (const vp of this.byPlayer.values()) if (vp.team === team) return vp;
+    const existing = this.byTeam.get(team);
+    if (existing) return existing;
+    const vp = new Viewpoint(-1, team, this.world, this.alliances, this.originX, this.originY, this.worldWidth, this.worldHeight);
+    if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
+    if (this.startFog === "revealall") vp.setRevealAll(true);
+    // NOT exploreAll: the lobby's start-explored is a courtesy to HUMANS looking at a minimap.
+    // Handing it to the creep team would explore ground no creep has walked, and `explored` is
+    // not what the acquisition gate reads anyway — but it would be a lie in the grid.
+    this.byTeam.set(team, vp);
+    return vp;
   }
 
   /** Install the fog's line-of-sight height field on every viewpoint, present and future. */
@@ -390,7 +428,7 @@ export class VisionSet {
     const rebuilt: Viewpoint[] = [];
     // `modifiers` is iterated once per viewpoint, so it must be re-iterable — a Map's
     // .values() is, a bare generator is not. The controller passes the Map view.
-    for (const vp of this.byPlayer.values()) if (vp.tick(dt, modifiers)) rebuilt.push(vp);
+    for (const vp of this.all()) if (vp.tick(dt, modifiers)) rebuilt.push(vp);
     return rebuilt;
   }
 }

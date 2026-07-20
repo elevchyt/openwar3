@@ -187,5 +187,49 @@ console.log("\na one-shot SetFogState reaches whoever renders that player's fog"
   check("…and an unrelated player's did not", one.vision.hasSeen(cellOf(128), cellOf(128)), false);
 }
 
+console.log("\nevery team gets asked of its OWN grid  (item 7)");
+{
+  const units = new Map([
+    [1, { id: 1, owner: 0, team: 0, x: 100, y: 100 }],
+    [2, { id: 2, owner: -1, team: 9, x: 900, y: 900 }], // a creep, far away
+  ]);
+  const world = { units, isDay: true, activeAttackReveals: () => [], teamDetects: () => false };
+  const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
+  const mine = set.viewpointFor(0);
+  mine.setTeam(0);
+
+  check("a player's team is answered by that player's own viewpoint", set.viewpointForTeam(0), mine);
+  const creeps = set.viewpointForTeam(9);
+  check("…and a team with no player slot gets its own", creeps === mine, false);
+  check("a team-only viewpoint carries no player slot", creeps.player, -1);
+  check("asking twice does not mint a second", set.viewpointForTeam(9), creeps);
+
+  // Rebuild everything, then ask what each side can see.
+  set.tick(1, []);
+  check("player 0 sees where its own unit stands", mine.vision.stateAt(100, 100), FogState.Visible);
+  check("…and not where the creep stands", mine.vision.stateAt(900, 900) === FogState.Visible, false);
+  check("the creep sees its own ground", creeps.vision.stateAt(900, 900), FogState.Visible);
+  check("…and not the player's base", creeps.vision.stateAt(100, 100) === FogState.Visible, false);
+
+  // The whole point: the two grids disagree. Under the old code every non-local team
+  // short-circuited to "sees everything", so the creep's answer here was always true.
+  check("the creep grid does NOT report the player's base visible", creeps.vision.stateAt(100, 100) === FogState.Visible, false);
+}
+
+console.log("\na team is never rebuilt twice");
+{
+  const units = new Map([[1, { id: 1, owner: 0, team: 4, x: 100, y: 100 }]]);
+  const world = { units, isDay: true, activeAttackReveals: () => [], teamDetects: () => false };
+  const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
+  // A team-only viewpoint appears FIRST (the sim asked before the lobby seated anyone)…
+  set.viewpointForTeam(4);
+  check("one viewpoint so far", [...set.all()].length, 1);
+  // …and then a player viewpoint takes that team over.
+  set.viewpointFor(0).setTeam(4);
+  check("the team-only one steps aside rather than double-rebuilding", [...set.all()].length, 1);
+  check("and the survivor is the player's", [...set.all()][0].player, 0);
+  check("viewpointForTeam now returns the player's", set.viewpointForTeam(4).player, 0);
+}
+
 console.log(failed ? `\nvision: ${failed} FAILED` : "\nvision: all checks passed");
 process.exit(failed ? 1 : 0);

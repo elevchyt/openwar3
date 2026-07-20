@@ -470,8 +470,13 @@ export class RtsController {
     // Gate the sim's auto-acquisition on the fog of war (issue #17): idle units only
     // aggro enemies their team can actually SEE. Only the local team's sight is
     // modelled, so other teams pass through as visible (unchanged behaviour).
+    // Every team is asked of its OWN grid now. This used to short-circuit every non-local
+    // team to "sees everything", because no grid existed for them — harmless while one client
+    // rendered one viewpoint, and wrong the moment a host simulates somebody else's army.
+    // viewpointForTeam prefers an existing player viewpoint, so the local team keeps being
+    // answered by the very grid it always was.
     this.sim.visibleToTeam = (team, x, y) =>
-      team !== this.localTeam || this.local.vision.stateAt(x, y) === FogState.Visible;
+      this.viewpoints.viewpointForTeam(team).vision.stateAt(x, y) === FogState.Visible;
     // …and on terrain: a treeline or cliff between watcher and target blinds the watcher,
     // whatever team it's on. This is what stops ranged creeps shooting a hero standing on
     // the far side of a forest they cannot see through.
