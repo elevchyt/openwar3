@@ -36,6 +36,12 @@ endglobals
 function WhoAmI takes nothing returns nothing
     set seen = GetPlayerId(GetLocalPlayer())
 endfunction
+
+// The shape MeleeVictoryDialogBJ uses: the player is the SUBJECT of the message, and the
+// message itself goes to the whole game.
+function Broadcast takes nothing returns nothing
+    call DisplayTimedTextFromPlayer(Player(0), 0, 0, 5, "%s wins")
+endfunction
 `;
 
 const interp = buildInterpreter([SRC]);
@@ -86,6 +92,61 @@ console.log("\na throwing trigger does not leave the runtime wearing somebody el
   // Without the finally, every later GetLocalPlayer in the match answers 11.
   check("the audience was restored despite the throw", whoAmI(), 3);
   check("…and the field itself is clear", rt.audience, null);
+}
+
+// ---------------------------------------------------------------------------------------
+// Phase E item 7: `forAudience` gets its caller. A script BROADCAST reaches every screen,
+// and each delivery is evaluated as that recipient.
+// ---------------------------------------------------------------------------------------
+
+const MAP_CONTROL_USER = 0, MAP_CONTROL_COMPUTER = 1;
+const seat = (index, controller = MAP_CONTROL_USER) =>
+  ({ index, raceIndex: 1, controller, team: 0, startLocation: index });
+
+console.log("\nthe audience is who has a screen, which is not who has a viewpoint");
+{
+  rt.applyLobby([seat(0), seat(2, MAP_CONTROL_COMPUTER), seat(5)], 0);
+  // A computer slot is simulated exactly like a human and DOES get a Viewpoint (it needs fog
+  // for its acquisition gate). It does not get messages. The two lists disagree on purpose.
+  check("only the human seats", JSON.stringify(rt.viewers()), "[0,5]");
+}
+
+console.log("\na broadcast reaches every seat, not just the host's");
+{
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const got = [];
+  rt.hooks = { displayText: (to, msg) => got.push(`${to}:${msg}`) };
+  interp.callFunction("Broadcast", []);
+  // Before item 7 this resolved `localViewer` once and pushed exactly one entry — the host's.
+  // Players 5 and 9 were never told who won.
+  // `%s` is the SUBJECT player's name, substituted once before the fan-out — every recipient
+  // reads the same sentence, which is what makes it a broadcast rather than N messages.
+  check("all three were told", JSON.stringify(got), '["0:Player 1 wins","5:Player 1 wins","9:Player 1 wins"]');
+}
+
+console.log("\neach delivery is evaluated AS its recipient");
+{
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const seen = [];
+  // THE check. The hook asks the runtime who the local player is at the moment it is called —
+  // exactly what a host-side hook routing to a per-client transport would do. Dropping the
+  // `forAudience` wrapper leaves the loop delivering to 0/5/9 while the runtime privately
+  // answers "0" for all three, which is the desync class `audience` exists to prevent.
+  rt.hooks = { displayText: (to) => seen.push(`${to}/${rt.localViewer}`) };
+  interp.callFunction("Broadcast", []);
+  check("recipient and localViewer agree throughout", JSON.stringify(seen), '["0/0","5/5","9/9"]');
+  check("and the audience is clear afterwards", rt.audience, null);
+}
+
+console.log("\nwith nobody seated the message still lands on the host");
+{
+  rt.applyLobby([], 4); // a headless corpus run: no lobby, no seats
+  const got = [];
+  rt.hooks = { displayText: (to) => got.push(to) };
+  interp.callFunction("Broadcast", []);
+  // `viewers()` is legitimately empty here, and a broadcast that reached nobody would make
+  // every single-player boot silently lose its victory message.
+  check("falls back to this machine's own seat", JSON.stringify(got), "[4]");
 }
 
 console.log(failed ? `\naudience: ${failed} FAILED` : "\naudience: all checks passed");

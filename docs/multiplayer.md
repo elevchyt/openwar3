@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6). Open: 3c and 6b, then 7–12 — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7). Open: 3c, 6b, 7b, then 8–12 — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1328,11 +1328,59 @@ enumerated by body rather than by name.
    be measured against the running client first (how long does the ghost persist, does it survive
    a re-scout that shows empty ground).
 
-7. **`forAudience` gets its caller.** `Runtime.audience` and `forAudience(player, fn)` landed in
-   Phase D item 6 with no caller by design — snapshot construction is the caller. Per-recipient
-   evaluation of a `GetLocalPlayer`-gated block, and per-recipient delivery of the broadcast text
-   natives (`DisplayTimedTextFromPlayer`, `ClearTextMessages`) that today resolve once against the
-   host's own seat.
+7. ~~**`forAudience` gets its caller.**~~ **Done for the broadcast half — and the caller is NOT
+   snapshot construction, which is what this entry predicted.** A snapshot is per-recipient
+   STATE, rebuilt every tick from the world. A text message is an EVENT that happens once, at
+   the moment the script fires it, and is delivered N times. Waiting for snapshot construction
+   to carry it would have meant queueing messages into world state and diffing them back out —
+   the wrong shape for something with no duration. So `Runtime.broadcast(fn)` in
+   [`runtime.ts`](../src/jass/runtime.ts) is the caller: it fans out over the seats and wraps
+   each delivery in `forAudience`.
+
+   **The bug it fixes is real and was invisible in single-player.**
+   `DisplayTimedTextFromPlayer` — the native behind "Player 1 was victorious." — resolved
+   `localViewer` **once** and delivered to exactly one seat. Right while each client simulated
+   its own match; wrong the moment a host answers for N players, where every seat but the host's
+   would simply never be told who won. `ClearTextMessages` had the same shape (and had been
+   hardcoded to slot 0 before the lobby could say otherwise). Both are broadcasts by definition:
+   `ClearTextMessages` wipes every player's log, which is why cinematics open with it.
+
+   **`viewers()` is who has a SCREEN, and it deliberately disagrees with the viewpoint seating.**
+   Playing + `MAP_CONTROL.USER`. A computer slot gets a `Viewpoint` (item 2 — it needs fog for
+   its acquisition gate) and gets no messages, because a message shown to nobody is not a
+   message. Merging the two lists would either hand an AI a chat log or take a human's fog away.
+   Sorted, because a broadcast arriving in slot order on one host and hash order on another is a
+   replay that does not reproduce. Empty `viewers()` falls back to the host's own seat, which is
+   every headless corpus run and every single-player boot.
+
+   **The `forAudience` wrapper is separately load-bearing, and the test proves it separately.**
+   The invariant at a per-recipient boundary is that while delivering to `p`, the runtime's
+   answer to `GetLocalPlayer` must BE `p` — otherwise the hook is called with one recipient
+   while the runtime privately believes another, which is the desync class Phase D item 6 built
+   `audience` for. Confirmed by injecting: dropping the wrapper but keeping the fan-out leaves
+   *all three were told* green and turns only *recipient and localViewer agree throughout* red.
+
+   **Verified in the browser, and this one could actually move a pixel** — unlike items 5 and 6,
+   `runtime.ts` and `text.ts` are on the live path. Echo Isles, seed 4242: the client boots and
+   plays (144 fps, 103 units, resources and food normal), and the **minimap is byte-identical to
+   the parent commit** (0 of 18 088 pixels, max delta 0) across a stash/restore A/B. Local
+   behaviour is unchanged by construction too: a 1-human melee has `viewers() === [localPlayer]`,
+   so the fan-out makes exactly the one call it made before, to the same seat.
+
+   **NOT exercised at runtime:** Echo Isles melee never calls either native on a normal boot —
+   `MeleeVictoryDialogBJ` needs the game to actually end, and melee runs no cinematic. The
+   fan-out is covered by the headless checks only. `jass:test` audience 9 → **13**.
+
+7b. **Per-recipient evaluation of a `GetLocalPlayer`-gated block.** The other half of item 7,
+   split off because it is a different and much deeper change. A MAP script (not blizzard.j)
+   writing `if GetLocalPlayer() == Player(0) then … endif` evaluates ONCE on the host today, as
+   the host. Correct behaviour is to evaluate the block once per recipient — which means the
+   interpreter re-running it N times, and that is only safe because of Blizzard's own contract
+   that such a block carries no net traffic. Our interpreter does not enforce that contract: a
+   map author who put world mutation inside the gate would get it applied N times. So this needs
+   either a way to run a block for effect-on-presentation-only, or an accepted risk stated out
+   loud. **Do not fold it into a native's fan-out** — it is an interpreter change, not a
+   delivery one.
 
 8. **An in-process transport adapter, and the reconnect test that rides on it.** `Transport`
    ([`transport.ts`](../src/net/transport.ts)) is already the seam and `WebSocketTransport` is already

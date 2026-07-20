@@ -125,16 +125,18 @@ export function registerTextNatives(rt: Runtime): void {
   def(rt, "DisplayTimedTextFromPlayer", (c, a) => {
     const idx = c.rt.data<JassPlayer>(a[0])?.index ?? 0;
     const msg = asStr(a[4]).replace(/%s/g, c.rt.playerName(idx));
-    // Goes to whoever is being evaluated for. The message is a BROADCAST (see above), so
-    // under Phase E this is delivered once per recipient rather than once to the host.
-    c.rt.hooks?.displayText?.(c.rt.localViewer, msg, asNum(a[3]));
+    // A BROADCAST (see above): "Player 1 was victorious." is for the whole game, not for the
+    // machine that happened to run the script. It used to resolve `localViewer` ONCE — right
+    // while one client simulated its own match, and wrong the moment a host answers for N
+    // players, where every seat but the host's would silently never be told who won.
+    c.rt.broadcast((to) => c.rt.hooks?.displayText?.(to, msg, asNum(a[3])));
     return JNULL;
   });
   def(rt, "ClearTextMessages", (c) => {
-    // Was hardcoded to slot 0 with the note "single-player: slot 0", which is wrong the
-    // moment the human is not in slot 0 — it cleared a bystander's message log and left the
-    // real one standing. The lobby has said which slot we are since applyLobby.
-    c.rt.hooks?.clearText?.(c.rt.localViewer);
+    // Also a broadcast, and it was hardcoded to slot 0 before the lobby could say otherwise.
+    // Clearing one seat's log is not what this native does: it wipes EVERY player's messages,
+    // which is why cinematics open with it.
+    c.rt.broadcast((to) => c.rt.hooks?.clearText?.(to));
     return JNULL;
   });
 

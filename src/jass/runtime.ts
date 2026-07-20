@@ -1038,6 +1038,51 @@ export class Runtime {
     }
   }
 
+  /**
+   * Every slot that has a SCREEN — the recipients of anything the script broadcasts
+   * (docs/multiplayer.md Phase E item 7).
+   *
+   * Playing and USER-controlled. A computer slot is deliberately excluded even though a host
+   * simulates it exactly like a human: the audience is "who is watching", and a message shown
+   * to nobody is not a message. That is a different question from `Viewpoint`'s seating, which
+   * DOES include computers because a computer needs fog for its acquisition gate — the two
+   * lists disagree on purpose, and merging them would either give an AI a chat log or take a
+   * human's fog away.
+   *
+   * Sorted, because a broadcast that arrives in slot order on one host and hash order on
+   * another is a replay that does not reproduce.
+   */
+  viewers(): number[] {
+    const out: number[] = [];
+    for (const p of this.setup.players.values()) {
+      if (p.slotState === 1 && p.controller === MAP_CONTROL.USER) out.push(p.index);
+    }
+    return out.sort((a, b) => a - b);
+  }
+
+  /**
+   * Deliver one broadcast once per recipient, each evaluated AS that recipient.
+   *
+   * The `forAudience` wrapper is the point rather than the loop. A per-recipient delivery
+   * boundary has one invariant — while we are delivering to `p`, the runtime's answer to
+   * `GetLocalPlayer` must BE `p` — and the whole reason `audience` exists is that on a host
+   * "local" otherwise means the host for everybody. Leaving the hook to be called with a
+   * recipient the runtime privately disagrees with is exactly the desync class Phase D item 6
+   * built this for, and it costs one line to make impossible.
+   *
+   * Falls back to the host's own seat when the lobby has seated nobody — a headless corpus run
+   * and every single-player boot, where `viewers()` is legitimately empty and the message must
+   * still land somewhere.
+   */
+  broadcast(fn: (recipient: number) => void): void {
+    const seats = this.viewers();
+    if (seats.length === 0) {
+      this.forAudience(this.localPlayer, () => fn(this.localPlayer));
+      return;
+    }
+    for (const p of seats) this.forAudience(p, () => fn(p));
+  }
+
   /** Functions whose `CreateUnit` calls must be RECORDED, not spawned (7.3). The map's
    *  pre-placed units are already on the map — the viewer renders war3mapUnits.doo and
    *  the engine adopts those widgets — so re-running the script's CreateAllUnits would
