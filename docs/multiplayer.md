@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | item 1 done (committed `?dev` boot, two clients); items 2–7 open |
+| D — N vision maps | in progress | items 1–2 done (`?dev` boot; `Viewpoint` extracted); items 3–7 open |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -611,12 +611,29 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    `wc3/manifest`, `devBoot`, `OPENWAR3_INSTALL` — zero hits, while the *other* dynamic import in
    `main.ts` (`menuDebug`) still emits its own chunk, so dynamic imports plainly do survive the
    build and this one's absence is the fold working rather than luck.
-2. **Extract a `Viewpoint`** (new file, `src/game/viewpoint.ts`). One object owning one `VisionMap`
-   plus the `exposed` set and the fog modifiers that bear on it, exposing `seesFor(player)`,
-   `revealsFor(u)`, `fogHides(u)`, `fogBlocksClick(u)`, `fogBlocksAt(x, y)`, `isExplored(x, y)`.
-   `rts.ts` keeps a single `private local: Viewpoint` and every current call becomes
-   `this.local.…`. **Zero behaviour change, zero new maps.** This is the move that makes items 3–7
-   one-liners instead of seventeen scattered edits.
+2. ~~**Extract a `Viewpoint`.**~~ **Done.** [`src/game/viewpoint.ts`](../src/game/viewpoint.ts) owns
+   one `VisionMap`, the `exposed` set, and every question that can only be answered "…for whom?":
+   `seesFor`, `teamOfPlayer`, `revealsFor`, `fogHides`, `fogBlocksClick`, `fogBlocksAt`,
+   `showsFromMemory`, `invisHides`, and the 10 Hz `rebuild`. `rts.ts` holds a single
+   `private local: Viewpoint` and delegates; `localPlayer`/`localTeam` stay as the client's own
+   identity and are pushed into the viewpoint by `setLocalPlayer`/`setLocalTeam`. Zero behaviour
+   change, still exactly one grid. `viewpoint.ts` compiles standalone (no renderer, DOM or
+   transport) — worth keeping true, it is what lets the authority hold N of these.
+
+   Two things did **not** move, and the reasons are the interesting part:
+
+   - **The fog-modifier registry stays on the controller.** Modifier ids are one global handle
+     space shared with JASS, so N viewpoints minting ids from their own counters would collide.
+     `rebuild(modifiers)` is handed the running ones and picks out its own. Routing each modifier
+     to the viewpoint it was created *for* is still item 4.
+   - **`pruneFogged` stays on the controller.** It drops units from the SELECTION, which is client
+     state, not vision. The controller calls it after `rebuild`.
+
+   `FogArea`/`FogModifier` moved to [`src/game/fog.ts`](../src/game/fog.ts) — `rts.ts` imports
+   `viewpoint.ts`, so leaving them in `rts.ts` would have been a cycle. `rts.ts` re-exports both,
+   so no importer changed.
+
+
 3. **A `VisionSet` registry** — `viewpointFor(player)`, creating on demand, each rebuilding at its
    own 10 Hz. The local player's viewpoint becomes `viewpointFor(this.localPlayer)`. Still exactly
    one instance at runtime, because nothing else asks for one yet; the cost lands in item 7.

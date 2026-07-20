@@ -1,0 +1,240 @@
+import { VisionMap, FogState, fogStateOf } from "../sim/vision";
+import type { AllianceTable } from "../sim/alliances";
+import type { SimUnit } from "../sim/world";
+import type { HeightSampler } from "./heightmap";
+import type { FogArea, FogModifier } from "./fog";
+
+/**
+ * One player's eyes: a fog-of-war grid, and every question that can only be answered
+ * "…for whom?" (docs/multiplayer.md Phase D item 2).
+ *
+ * These questions lived on `RtsController` as a dozen methods reading `this.localTeam` and
+ * `this.vision`, which was correct while exactly one machine rendered exactly one viewpoint.
+ * Phase E sends each client an AoI-filtered snapshot, so the authority has to answer them N
+ * times over, once per recipient — and a method that closes over "local" cannot be asked
+ * about anybody else.
+ *
+ * **This class is the extraction, not the change.** `rts.ts` holds a single `Viewpoint` and
+ * the local player still sees exactly what it saw. What it buys is that every one of these
+ * rules is now a method on an object you can have more than one of.
+ *
+ * Deliberately NOT here:
+ *   • the fog-modifier REGISTRY — modifier ids are a single global handle space shared with
+ *     JASS, so one registry stays on the controller and hands the running ones to `rebuild`.
+ *     Routing each modifier to the viewpoint it was created for is item 4.
+ *   • `pruneFogged` — it drops units from the SELECTION, which is client state, not vision.
+ *     The controller calls it after `rebuild`.
+ *   • anything that touches a render `Entry`. `applyFogTint` stays on the renderer side and
+ *     asks `showsFromMemory` for the fog half of its answer.
+ */
+
+/** The slice of the world a viewpoint reads. Narrow on purpose: a viewpoint must be
+ *  constructible in a test, and must never become a second handle on the whole `SimWorld`. */
+export interface VisionWorld {
+  readonly units: ReadonlyMap<number, SimUnit>;
+  readonly isDay: boolean;
+  activeAttackReveals(): Iterable<{ team: number; x: number; y: number; radius: number; flying: boolean }>;
+  /** True Sight is a TEAM property in WC3 — one Shade uncovers a hero for the whole army —
+   *  so this is the sim's own answer rather than one re-derived here. That keeps what you
+   *  can shoot and what you can see the same answer. */
+  teamDetects(team: number, x: number, y: number): boolean;
+}
+
+export class Viewpoint {
+  readonly vision: VisionMap;
+  /** Players whose units are REVEALED to this viewpoint — blizzard.j `CripplePlayer`, what
+   *  MeleeExposePlayer does to a player whose crippled timer ran out. Their units show
+   *  through the fog wherever they stand, which is the punishment itself and the one thing
+   *  that can put an enemy unit on screen through black fog. */
+  private exposed = new Set<number>();
+
+  constructor(
+    /** The slot these eyes belong to. */
+    public player: number,
+    /** The team whose combined sight lifts this viewpoint's fog. Not derivable from
+     *  `player` — `teamOfPlayer` falls back to the slot number and the lobby may seat two
+     *  slots on one team — so the caller states it (`setTeam`). */
+    public team: number,
+    private readonly world: VisionWorld,
+    private readonly alliances: AllianceTable,
+    originX: number,
+    originY: number,
+    worldWidth: number,
+    worldHeight: number,
+  ) {
+    this.vision = new VisionMap(originX, originY, worldWidth, worldHeight);
+  }
+
+  setPlayer(player: number): void {
+    this.player = player;
+  }
+  setTeam(team: number): void {
+    this.team = team;
+  }
+
+  // --- who this viewpoint counts as "us" -------------------------------------------
+
+  /** Does this viewpoint render `player`'s fog? True for itself and any team-mate — the
+   *  grid is per-TEAM, so a modifier placed on an ally's fog shows up in ours, and one
+   *  placed on an opponent's is invisible here (correctly: it is their fog, not ours). */
+  seesFor(player: number): boolean {
+    return player === this.player || this.teamOfPlayer(player) === this.team;
+  }
+
+  /** The team a player slot is on, as the sim knows it (any unit they own carries it).
+   *  Falls back to the slot number, matching mapViewer.teamOf's own default. */
+  teamOfPlayer(player: number): number {
+    for (const u of this.world.units.values()) if (u.owner === player) return u.team;
+    return player;
+  }
+
+  /** Does this unit's sight lift OUR fog? Your own team always does. Beyond that, a player
+   *  who grants us ALLIANCE_SHARED_VISION lends us their units' eyes — which is the whole
+   *  point of the setting, and what the GUI's "Player - Make X treat Y as an Ally (with
+   *  shared vision)" turns on. */
+  revealsFor(u: SimUnit): boolean {
+    if (u.team === this.team) return true;
+    return u.owner >= 0 && this.alliances.sharesVisionWith(u.owner, this.player);
+  }
+
+  /** CripplePlayer: reveal (or stop revealing) every unit `player` owns to these eyes. */
+  setExposed(player: number, flag: boolean): void {
+    if (flag) this.exposed.add(player);
+    else this.exposed.delete(player);
+  }
+  isExposed(u: SimUnit): boolean {
+    return u.owner >= 0 && this.exposed.has(u.owner);
+  }
+
+  // --- what this viewpoint may see ---------------------------------------------------
+
+  /** Should this unit's model be hidden by the fog right now? Your own team is always
+   *  visible. Enemy/neutral STRUCTURES persist once SEEN (WC3 leaves the last-seen building
+   *  greyed in fog); mobile units and critters vanish unless currently in sight —
+   *  "concealing enemy movements". "Seen", not "explored": see VisionMap.hasSeen. */
+  fogHides(u: SimUnit): boolean {
+    if (this.vision.revealed) return false;
+    if (u.team === this.team && !u.neutralPassive) return false;
+    if (this.isExposed(u)) return false;
+    if (u.building != null) {
+      const [cx, cy] = this.vision.worldToCell(u.x, u.y);
+      return !this.vision.hasSeen(cx, cy);
+    }
+    return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
+  }
+
+  /** May this viewpoint CLICK this unit right now — select it, hover it, aim an order at
+   *  it? A different question from whether its model is drawn (fogHides), and the difference
+   *  is the whole of issue #62: a structure you have seen KEEPS its image in the fog, but
+   *  the image is a MEMORY, not eyes on the building. You can see the Goblin Merchant across
+   *  the map; you cannot shop at it, select it, or send a unit to attack it, until something
+   *  of yours is actually looking. */
+  fogBlocksClick(u: SimUnit): boolean {
+    if (this.vision.revealed) return false;
+    if (u.team === this.team && !u.neutralPassive) return false;
+    if (this.isExposed(u)) return false;
+    return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
+  }
+
+  /** No eyes on this spot right now. The test for things that are NOT sim units and so have
+   *  their own pick paths — a gold mine (found from the ground point) and a ground item.
+   *  Neither is remembered under fog the way a building is: a building you have seen keeps
+   *  standing on the terrain as an image, but a mine you cannot see is one you cannot send a
+   *  worker into, and an item is a live widget that vanishes with the eyes on it. */
+  fogBlocksAt(p: { x: number; y: number }): boolean {
+    if (this.vision.revealed) return false;
+    return this.vision.stateAt(p.x, p.y) !== FogState.Visible;
+  }
+
+  /** Is this unit being shown from MEMORY — last-seen, out of current sight? What the
+   *  renderer dims to the same grey as the terrain veil. An exposed player's units are shown
+   *  rather than remembered, so they keep full colour. */
+  showsFromMemory(u: SimUnit): boolean {
+    if (this.vision.revealed || this.isExposed(u)) return false;
+    return u.team !== this.team && this.vision.stateAt(u.x, u.y) !== FogState.Visible;
+  }
+
+  /** Does invisibility hide this unit from these eyes? Ours and our allies' invisible units
+   *  stay drawn (half-faded) so we can still command them — the same viewpoint rule as the
+   *  illusion wash. True Sight takes it back, and detection is a team property. */
+  invisHides(u: SimUnit): boolean {
+    if (!u.invisible) return false;
+    if (this.seesFor(u.owner)) return false; // ours/an ally's — drawn, faded
+    return !this.world.teamDetects(this.team, u.x, u.y);
+  }
+
+  // --- rebuilding the grid -------------------------------------------------------------
+
+  /** Rebuild the "currently visible" layer from this viewpoint's live sight. Each friendly
+   *  unit reveals a circle of its day- or night-sight radius; buildings and allies count
+   *  too. Neutral shops grant no vision. Throttled by the caller (10 Hz).
+   *
+   *  `modifiers` is every script-placed modifier the controller holds; the ones this
+   *  viewpoint renders are picked out here. */
+  rebuild(modifiers: Iterable<FogModifier>): void {
+    const day = this.world.isDay;
+    this.vision.beginFrame();
+    for (const u of this.world.units.values()) {
+      if (u.neutralPassive) continue; // shops/critters don't scout for you
+      if (!this.revealsFor(u)) continue;
+      const r = (day ? u.sightDay : u.sightNight) || u.sightDay || 800;
+      this.vision.reveal(u.x, u.y, r, u.flying); // flyers see over terrain/trees
+    }
+    // An enemy that shot at us out of the fog gives its position away for a second
+    // (MiscData FoggedAttackRevealRadius) — so you see what is hitting you, and it fades
+    // again if it stops. `flying` reveals over the treeline it fired through.
+    for (const r of this.world.activeAttackReveals()) {
+      if (r.team !== this.team) continue; // only OUR side learns where it came from
+      this.vision.reveal(r.x, r.y, r.radius, r.flying);
+    }
+    // Script-placed fog modifiers are stamped LAST, over everything the units revealed —
+    // that's what lets a running FOG_OF_WAR_VISIBLE modifier light ground nobody stands near
+    // (a TD showing you its whole maze) and a FOG_OF_WAR_MASKED one black out ground you are
+    // standing in (a cinematic area). Re-applied every rebuild, since the `visible` layer is
+    // cleared and recomputed each time.
+    for (const m of modifiers) {
+      if (!m.running || !this.seesFor(m.player)) continue;
+      this.stampArea(m.area, fogStateOf(m.state));
+    }
+  }
+
+  stampArea(area: FogArea, state: FogState): void {
+    if (area.kind === "rect") this.vision.stampRect(area.minX, area.minY, area.maxX, area.maxY, state);
+    else this.vision.stampCircle(area.x, area.y, area.radius, state);
+  }
+
+  // --- pass-throughs to the grid --------------------------------------------------------
+
+  /** Install the fog's line-of-sight height field + tree blockers, so vision is shadowed by
+   *  high ground and treelines. `cliffHeightAt` is the CLIFF-LEVEL sampler, not the full
+   *  terrain height — only real cliff levels block WC3 sight, not rolling groundHeight. */
+  initBlockers(cliffHeightAt: HeightSampler, trees: Iterable<{ x: number; y: number; blockRadius: number }>): void {
+    this.vision.setHeightField((x, y) => cliffHeightAt(x, y));
+    for (const tree of trees) this.vision.addTreeBlocker(tree.x, tree.y, tree.blockRadius);
+  }
+  onTreeFelled(x: number, y: number, radius: number): void {
+    this.vision.removeTreeBlocker(x, y, radius);
+  }
+
+  setFogEnabled(on: boolean): void {
+    this.vision.setFogEnabled(on);
+  }
+  setFogMaskEnabled(on: boolean): void {
+    this.vision.setMaskEnabled(on);
+  }
+  isFogEnabled(): boolean {
+    return this.vision.isFogEnabled();
+  }
+  isFogMaskEnabled(): boolean {
+    return this.vision.isMaskEnabled();
+  }
+  setRevealAll(on: boolean): void {
+    this.vision.setRevealAll(on);
+  }
+  get revealed(): boolean {
+    return this.vision.revealed;
+  }
+  exploreAll(): void {
+    this.vision.exploreAll();
+  }
+}
