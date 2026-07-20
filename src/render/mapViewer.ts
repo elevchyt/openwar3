@@ -7,12 +7,11 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
-import { jassOwnerOf, type RallyKind, type ShopResult, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
+import { type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { MAP_CONTROL, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
-import type { UnitSnapshot } from "../jass/interpreter";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
@@ -22,7 +21,7 @@ import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
-import { MINE_ID_BASE, mineForScript } from "../game/jassHooks";
+import { unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
@@ -44,7 +43,7 @@ interface CreepSeed {
   aggro: number;
   drops: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
-import { MAIN_HALL_CHAINS, RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
+import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { MoveType } from "../data/enums";
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig, SlotConfig } from "../ui/lobby";
@@ -1509,19 +1508,10 @@ export class MapViewerScene {
         this.rts?.setUnitFlyHeight(id, height);
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
-      // Unit groups (7.16): every GroupEnumUnits* scan reads the live sim through here.
-      // A dead unit is already out of SimWorld.units (it became a corpse), so an enum
-      // only ever sees living units.
-      enumUnits: () => this.unitSnapshots(),
       selectedUnits: (player) => (player === this.localPlayer ? this.rts?.selectedUnitIds() ?? [] : []),
       selectUnit: (id, select) => this.rts?.scriptSelect(id, select),
       clearSelection: () => this.rts?.clearSelection(),
-      isUnitType: (id, t, typeId) => this.unitTypeIs(id, t, typeId),
       // IsUnitAlly/IsUnitEnemy: team-based, so neutral hostile (team -1) is nobody's ally.
-      isUnitAlly: (id, player) => {
-        const u = this.rts?.simView.units.get(id);
-        return !!u && u.team >= 0 && u.team === this.teamOf(player);
-      },
       // --- the atmospheric distance haze — a DIFFERENT system (7.22) ---
       // Replaces the map's w3i fog on `scene.distFog` (read fresh each frame, so this
       // lands next frame with no extra plumbing). Our shader is linear, which is all the
@@ -1532,9 +1522,6 @@ export class MapViewerScene {
       resetTerrainFog: () => {
         this.mapFog = this.w3iFog;
       },
-      // Bind a record-only CreateUnit row (inside CreateAllUnits) to the pre-placed unit
-      // already standing there, so the script can keep configuring it (7.22).
-      findPlacedUnit: (typeId, x, y) => this.findPlacedUnit(typeId, x, y),
       // --- weather: the map's atmosphere (7.23) ---
       addWeatherEffect: (effectId, area) => {
         this.weatherDefs ??= loadWeatherRegistry(this.vfs);
@@ -1618,12 +1605,6 @@ export class MapViewerScene {
         this.target[0] = x;
         this.target[1] = y;
       },
-      // Victory/defeat (MeleeInitVictoryDefeat): a melee player is beaten when their team
-      // owns no structures, and "crippled" while they own no main hall.
-      playerStructureCount: (player, includeIncomplete) => this.countUnits(player, includeIncomplete, (u) => !!u.building),
-      playerUnitCount: (player, includeIncomplete) => this.countUnits(player, includeIncomplete, () => true),
-      playerTypedUnitCount: (player, typeName, includeIncomplete, includeUpgrades) =>
-        this.countUnits(player, includeIncomplete, (u) => this.unitIsTyped(u.typeId, typeName, includeUpgrades)),
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
       // --- items (7.18) ---
@@ -1642,141 +1623,11 @@ export class MapViewerScene {
     };
   }
 
-  /** The live sim units, as the interpreter's UnitSnapshot view (the region pump + group
-   *  enumeration both scan this) — plus the gold mines, which are units to the script.
-   *  Owners are translated to WC3's player slots (creeps are 12, neutrals 15 — see
-   *  SimWorld.jassOwnerOf), because trigger code matches on exactly those. */
-  private unitSnapshots(): UnitSnapshot[] {
-    const snap: UnitSnapshot[] = [];
-    if (!this.rts) return snap;
-    for (const u of this.rts.simView.units.values()) {
-      snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
-    }
-    for (const m of this.rts.simView.mines.values()) {
-      snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
-    }
-    return snap;
-  }
 
-  /** A gold mine, addressed the way the SCRIPT addresses it — as a unit. Our sim keeps
-   *  mines in their own table (SimWorld.mines) with their own id counter, which would
-   *  collide with unit ids, so the bridge offsets them into a range of their own. That
-   *  fiction is what lets blizzard.j's MeleeFindNearestMine work: it enumerates units,
-   *  keeps the nearest 'ngol', and clumps the starting workers 320 units off it. */
-  /** The id-space convention now lives with the bridge that invents it (game/jassHooks.ts) —
-   *  five natives moved there and the renderer's enumeration has to agree with them, so a
-   *  `private static` here would have been two definitions of one fiction. */
-  private mineForScript(unitId: number): SimMine | undefined {
-    const view = this.rts?.simView;
-    return view ? mineForScript(view, unitId) : undefined;
-  }
-  /** Bind a PRE-PLACED `CreateUnit` row to the unit that is already standing there (7.22).
-   *
-   *  `CreateAllUnits()` is record-only for us — those units came in from war3mapUnits.doo
-   *  and are adopted, not spawned (7.3) — but the script goes on configuring the handle it
-   *  was just handed (`WaygateSetDestination`, `SetResourceAmount`, `SetUnitColor`), and
-   *  until now that handle had no unit behind it, so every such call was silently dropped.
-   *
-   *  The match is by TYPE + POSITION: the script and the .doo carry the same coordinates
-   *  for the same unit (they are two encodings of one placement), so the nearest unit of
-   *  the right type within a tile is that unit. Searching the SNAPSHOT view rather than
-   *  SimWorld.units means gold mines — which live in their own table and are only units to
-   *  the script — are matched too, under the same MINE_ID_BASE id the rest of the bridge
-   *  uses. -1 when nothing of that type stands there (a unit the .doo didn't carry). */
-  private findPlacedUnit(typeId: string, x: number, y: number): number {
-    let best = -1;
-    let bestD = MapViewerScene.PLACED_MATCH_RADIUS ** 2;
-    for (const u of this.unitSnapshots()) {
-      if (u.typeId !== typeId) continue;
-      const d = (u.x - x) ** 2 + (u.y - y) ** 2;
-      if (d <= bestD) {
-        bestD = d;
-        best = u.id;
-      }
-    }
-    return best;
-  }
-  /** How far a pre-placed unit may sit from the coordinates its own script row names.
-   *  They should agree exactly (same placement, two encodings) — a terrain tile of slack
-   *  absorbs the sim's spawn re-settle without ever reaching the next unit over. */
-  private static readonly PLACED_MATCH_RADIUS = 128;
 
-  /** GetPlayerStructureCount / GetPlayerUnitCount / GetPlayerTypedUnitCount (7.3) — how
-   *  blizzard.j decides who has been defeated. `includeIncomplete` counts a building still
-   *  under construction (WC3 does: a half-built town hall still keeps you in the game). */
-  private countUnits(player: number, includeIncomplete: boolean, match: (u: SimUnit) => boolean): number {
-    let n = 0;
-    for (const u of this.rts?.simView.units.values() ?? []) {
-      if (u.owner !== player || u.hp <= 0) continue;
-      if (!includeIncomplete && u.building && u.building.constructionLeft > 0) continue;
-      if (match(u)) n++;
-    }
-    return n;
-  }
 
-  /** Does this unit type answer to `typeName` (UnitUI.slk's `name`: "townhall", "footman")?
-   *  With `includeUpgrades`, an upgraded building answers to its BASE type's name too —
-   *  a Keep and a Castle are both "townhall", which is how MeleeGetAllyKeyStructureCount
-   *  finds a player's main hall whatever tier it's at. */
-  private unitIsTyped(typeId: string, typeName: string, includeUpgrades: boolean): boolean {
-    const def = this.registry.get(typeId);
-    if (!def) return false;
-    if (def.typeName === typeName) return true;
-    return includeUpgrades && (MAIN_HALL_CHAINS[typeName]?.includes(typeId) ?? false);
-  }
 
-  /** IsUnitType (7.16) — answer a unittype classification from the sim unit's flags.
-   *  `t` is the common.j ConvertUnitType index. These are what a "matching unit" filter
-   *  actually asks about ("is A structure", "is alive", "is A Hero", "is Summoned"); the
-   *  classifications we hold no data for (ATTACKS_FLYING, GIANT, SAPPER, RESISTANT, …)
-   *  read false rather than guess. Melee/ranged come from the weapon's `ranged` flag
-   *  (UnitWeapons weapType: a missile weapon = a ranged attacker). */
-  private unitTypeIs(id: number, t: number, typeId?: string): boolean {
-    // A gold mine is a live Neutral Passive STRUCTURE, and it matters: MeleeClearExcessUnit
-    // wipes the non-structure neutrals around a start location — so a mine that answered
-    // "not a structure" (or "dead", the no-sim-unit default below) would be deleted.
-    if (this.mineForScript(id)) return t === 2 || t === 4; // STRUCTURE, GROUND
-    const u = this.rts?.simView.units.get(id);
-    if (!u) return this.deadUnitTypeIs(t, typeId); // gone from the sim = a corpse — classify from its TYPE
-    switch (t) {
-      case 0: return u.isHero; // UNIT_TYPE_HERO
-      case 1: return u.hp <= 0; // UNIT_TYPE_DEAD
-      case 2: return !!u.building; // UNIT_TYPE_STRUCTURE
-      case 3: return u.flying; // UNIT_TYPE_FLYING
-      case 4: return !u.flying; // UNIT_TYPE_GROUND
-      case 7: return !!u.weapon && !u.weapon.ranged; // UNIT_TYPE_MELEE_ATTACKER
-      case 8: return !!u.weapon && u.weapon.ranged; // UNIT_TYPE_RANGED_ATTACKER
-      case 10: return u.isSummon; // UNIT_TYPE_SUMMONED
-      case 11: return u.stunned; // UNIT_TYPE_STUNNED
-      case 14: return u.race === "undead"; // UNIT_TYPE_UNDEAD
-      case 15: return u.mechanical; // UNIT_TYPE_MECHANICAL
-      case 16: return u.isPeon; // UNIT_TYPE_PEON
-      case 23: return u.asleep; // UNIT_TYPE_SLEEPING
-      default: return false;
-    }
-  }
 
-  /** IsUnitType for a unit the sim no longer has — it died and became a corpse. It is
-   *  DEAD, and it is still whatever its TYPE says it is. This is not a nicety: the first
-   *  thing blizzard.j does on a melee death is ask whether the dying unit was a STRUCTURE
-   *  (MeleeTriggerActionUnitDeath), and answering "no, it's dead" meant a player who lost
-   *  their last building was never defeated. Only the type-derived classifications can be
-   *  answered here; the per-unit state ones (stunned, sleeping, summoned) are gone with it. */
-  private deadUnitTypeIs(t: number, typeId?: string): boolean {
-    if (t === 1) return true; // UNIT_TYPE_DEAD
-    const def = typeId ? this.registry.get(typeId) : undefined;
-    if (!def) return false;
-    switch (t) {
-      case 0: return def.isHero; // UNIT_TYPE_HERO
-      case 2: return def.isBuilding; // UNIT_TYPE_STRUCTURE
-      case 3: return def.moveType === MoveType.Fly; // UNIT_TYPE_FLYING
-      case 4: return def.moveType !== MoveType.Fly; // UNIT_TYPE_GROUND
-      case 14: return def.race === "undead"; // UNIT_TYPE_UNDEAD
-      case 15: return def.classification.includes("mechanical"); // UNIT_TYPE_MECHANICAL
-      case 16: return def.classification.includes("peon"); // UNIT_TYPE_PEON
-      default: return false;
-    }
-  }
 
   /** Spawn a unit a trigger created via CreateUnit. JASS `CreateUnit` is SYNCHRONOUS —
    *  the very next statement may add an ability, set the hero's level, or order the unit
@@ -1990,7 +1841,7 @@ export class MapViewerScene {
       if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();
       // Enter/leave-region — only snapshot the world if some trigger watches a region.
       if (engine.interp.rt.triggerRegs.some((r) => r.kind === "enterRegion" || r.kind === "leaveRegion")) {
-        engine.interp.pumpRegions(this.unitSnapshots());
+        engine.interp.pumpRegions(this.rts ? unitSnapshots(this.rts.simView) : []);
       }
       this.pumpScriptSounds(engine.interp.rt); // 7.20
     } catch (err) {

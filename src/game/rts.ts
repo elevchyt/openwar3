@@ -6,7 +6,7 @@ import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
-import { simHooks, authorityHooks, visionHooks } from "./jassHooks";
+import { simHooks, authorityHooks, visionHooks, rosterHooks } from "./jassHooks";
 import type { EngineHooks } from "../jass/runtime";
 import type { SimView } from "./simView";
 export type { PlacedRef };
@@ -3421,6 +3421,7 @@ export class RtsController {
       ...simHooks(this.sim, teamOf),
       ...authorityHooks(this.authority),
       ...visionHooks(this.viewpoints, this.alliances),
+      ...rosterHooks(this.sim, this.registry, teamOf),
     };
   }
 

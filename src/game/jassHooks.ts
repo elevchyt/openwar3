@@ -1,5 +1,7 @@
-import type { SimWorld, SimMine } from "../sim/world";
-import type { EngineHooks } from "../jass/runtime";
+import { jassOwnerOf, type SimWorld, type SimMine, type SimUnit } from "../sim/world";
+import type { EngineHooks, UnitSnapshot } from "../jass/runtime";
+import { MAIN_HALL_CHAINS } from "../data/races";
+import { MoveType } from "../data/enums";
 import { MELEE } from "../data/gameplayConstants";
 import { fogStateOf, type FogState } from "../sim/vision";
 import type { FogArea } from "./fog";
@@ -276,6 +278,171 @@ export function authorityHooks(authority: {
       if (state === 5) return authority.foodFor(p).used; // FOOD_USED
       return 0;
     },
+  };
+}
+
+/**
+ * Every unit the script can see, PLUS the gold mines — which are units only to it.
+ *
+ * The region pump and every `GroupEnumUnits*` scan read the live sim through here, so it is
+ * exported rather than private: the renderer still drives `pumpRegions` each tick and must
+ * enumerate the world exactly as the natives do. Two copies of this loop would be two answers
+ * to "what units exist", which is the sort of thing that diverges quietly.
+ *
+ * A dead unit is already out of `SimWorld.units` (it became a corpse), so an enum only ever
+ * sees living units.
+ */
+export function unitSnapshots(sim: {
+  readonly units: ReadonlyMap<number, SimUnit>;
+  readonly mines: ReadonlyMap<number, SimMine>;
+}): UnitSnapshot[] {
+  const snap: UnitSnapshot[] = [];
+  for (const u of sim.units.values()) {
+    snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
+  }
+  for (const m of sim.mines.values()) {
+    snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
+  }
+  return snap;
+}
+
+/** How far a pre-placed unit may sit from the coordinates its own script row names. They should
+ *  agree exactly (same placement, two encodings) — a terrain tile of slack absorbs the sim's
+ *  spawn re-settle without ever reaching the next unit over. */
+const PLACED_MATCH_RADIUS = 128;
+
+/** The unit-type fields these natives classify by. Structural, so `UnitRegistry` satisfies it and
+ *  this file keeps a narrow import closure. */
+interface TypeDef {
+  isHero: boolean;
+  isBuilding: boolean;
+  moveType: MoveType;
+  race: string;
+  classification: readonly string[];
+  typeName: string;
+}
+
+// The natives that ENUMERATE and CLASSIFY units (docs/multiplayer.md Phase E item 1g).
+//
+// These sat in the renderer and were filed under "presentation, by nature" along with camera and
+// sound. They are nothing of the kind: every one reads `sim.units`, `sim.mines` and the unit
+// REGISTRY, and not a single renderer field. The registries are data tables — the misfiling came
+// from the word "registry" sitting in a list next to "text" and "selection", which is the same
+// classify-by-name mistake Phase B paid for four times.
+//
+// They are their own factory rather than part of `simHooks` because they need the registry, and
+// `simHooks`'s whole selection rule is "SimWorld and nothing else". Keeping that rule literal is
+// worth more than one fewer function.
+export function rosterHooks(
+  sim: SimWorld,
+  registry: { get(typeId: string): TypeDef | undefined },
+  teamOf: (player: number) => number,
+): Partial<EngineHooks> {
+  /** A unit that is GONE from the sim is a corpse: classify it from its TYPE instead. */
+  const deadTypeIs = (t: number, typeId?: string): boolean => {
+    if (t === 1) return true; // UNIT_TYPE_DEAD
+    const def = typeId ? registry.get(typeId) : undefined;
+    if (!def) return false;
+    switch (t) {
+      case 0: return def.isHero; // UNIT_TYPE_HERO
+      case 2: return def.isBuilding; // UNIT_TYPE_STRUCTURE
+      case 3: return def.moveType === MoveType.Fly; // UNIT_TYPE_FLYING
+      case 4: return def.moveType !== MoveType.Fly; // UNIT_TYPE_GROUND
+      case 14: return def.race === "undead"; // UNIT_TYPE_UNDEAD
+      case 15: return def.classification.includes("mechanical"); // UNIT_TYPE_MECHANICAL
+      case 16: return def.classification.includes("peon"); // UNIT_TYPE_PEON
+      default: return false;
+    }
+  };
+
+  /** Does this unit type answer to `typeName` (UnitUI.slk's `name`: "townhall", "footman")?
+   *  With `includeUpgrades`, an upgraded building answers to its BASE type's name too — a Keep
+   *  and a Castle are both "townhall", which is how MeleeGetAllyKeyStructureCount finds a
+   *  player's main hall whatever tier it is at. */
+  const isTyped = (typeId: string, typeName: string, includeUpgrades: boolean): boolean => {
+    const def = registry.get(typeId);
+    if (!def) return false;
+    if (def.typeName === typeName) return true;
+    return includeUpgrades && (MAIN_HALL_CHAINS[typeName]?.includes(typeId) ?? false);
+  };
+
+  const countUnits = (player: number, includeIncomplete: boolean, match: (u: SimUnit) => boolean): number => {
+    let n = 0;
+    for (const u of sim.units.values()) {
+      if (u.owner !== player || u.hp <= 0) continue;
+      if (!includeIncomplete && u.building && u.building.constructionLeft > 0) continue;
+      if (match(u)) n++;
+    }
+    return n;
+  };
+
+  return {
+    // Unit groups (7.16): every GroupEnumUnits* scan reads the live sim through here.
+    enumUnits: () => unitSnapshots(sim),
+    /** IsUnitType (7.16) — answer a unittype classification from the sim unit's flags. `t` is the
+     *  common.j ConvertUnitType index. The classifications we hold no data for (ATTACKS_FLYING,
+     *  GIANT, SAPPER, RESISTANT, …) read false rather than guess. Melee/ranged come from the
+     *  weapon's `ranged` flag (UnitWeapons weapType: a missile weapon = a ranged attacker). */
+    isUnitType: (id, t, typeId) => {
+      // A gold mine is a live Neutral Passive STRUCTURE, and it matters: MeleeClearExcessUnit
+      // wipes the non-structure neutrals around a start location — so a mine that answered
+      // "not a structure" (or "dead", the no-sim-unit default below) would be deleted.
+      if (mineForScript(sim, id)) return t === 2 || t === 4; // STRUCTURE, GROUND
+      const u = sim.units.get(id);
+      if (!u) return deadTypeIs(t, typeId);
+      switch (t) {
+        case 0: return u.isHero;
+        case 1: return u.hp <= 0;
+        case 2: return !!u.building;
+        case 3: return u.flying;
+        case 4: return !u.flying;
+        case 7: return !!u.weapon && !u.weapon.ranged;
+        case 8: return !!u.weapon && u.weapon.ranged;
+        case 10: return u.isSummon;
+        case 11: return u.stunned;
+        case 14: return u.race === "undead";
+        case 15: return u.mechanical;
+        case 16: return u.isPeon;
+        case 23: return u.asleep;
+        default: return false;
+      }
+    },
+    // IsUnitAlly/IsUnitEnemy: TEAM-based, so neutral hostile (team -1) is nobody's ally. This is
+    // a team question rather than an alliance one, which is why it is here and not in
+    // `visionHooks` beside `isPlayerAlly` — see 1e-note.
+    isUnitAlly: (id, player) => {
+      const u = sim.units.get(id);
+      return !!u && u.team >= 0 && u.team === teamOf(player);
+    },
+    /** Bind a PRE-PLACED `CreateUnit` row to the unit already standing there (7.22).
+     *
+     *  `CreateAllUnits()` is record-only for us — those units came in from war3mapUnits.doo and
+     *  are adopted, not spawned — but the script goes on configuring the handle it was just
+     *  handed (`WaygateSetDestination`, `SetResourceAmount`, `SetUnitColor`), and without this
+     *  every such call was silently dropped. The match is by TYPE + POSITION, because the script
+     *  and the .doo carry the same coordinates for the same unit. Searching the SNAPSHOT rather
+     *  than `sim.units` means gold mines are matched too, under the same handle the rest of the
+     *  bridge uses. -1 when nothing of that type stands there. */
+    findPlacedUnit: (typeId, x, y) => {
+      let best = -1;
+      let bestD = PLACED_MATCH_RADIUS ** 2;
+      for (const u of unitSnapshots(sim)) {
+        if (u.typeId !== typeId) continue;
+        const d = (u.x - x) ** 2 + (u.y - y) ** 2;
+        if (d <= bestD) {
+          bestD = d;
+          best = u.id;
+        }
+      }
+      return best;
+    },
+    // Victory/defeat (MeleeInitVictoryDefeat): a melee player is beaten when their team owns no
+    // structures, and "crippled" while they own no main hall. `includeIncomplete` counts a
+    // building still under construction — WC3 does: a half-built town hall keeps you in the game.
+    playerStructureCount: (player, includeIncomplete) => countUnits(player, includeIncomplete, (u) => !!u.building),
+    playerUnitCount: (player, includeIncomplete) => countUnits(player, includeIncomplete, () => true),
+    playerTypedUnitCount: (player, typeName, includeIncomplete, includeUpgrades) =>
+      countUnits(player, includeIncomplete, (u) => isTyped(u.typeId, typeName, includeUpgrades)),
   };
 }
 

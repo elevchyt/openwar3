@@ -17,7 +17,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
-const { simHooks, authorityHooks, visionHooks, MINE_ID_BASE } = require(join(REPO, ".sim-build", "src", "game", "jassHooks.js"));
+const { simHooks, authorityHooks, visionHooks, rosterHooks, MINE_ID_BASE } = require(join(REPO, ".sim-build", "src", "game", "jassHooks.js"));
 const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
 
 let failed = 0;
@@ -52,6 +52,14 @@ const EXPECTED = [
   "unitRemoveAbility", "unitRemoveItem", "unitRemoveItemFromSlot", "unitUseItem",
   "waygateActivate", "waygateDestination", "waygateIsActive", "waygateSetDestination",
 ].sort();
+
+// Minimal unit-type rows for the roster checks. A Keep ('hkee') is deliberately NOT named
+// "townhall" — MAIN_HALL_CHAINS is what makes it answer to one, and that is the interesting case.
+const TYPEDEFS = {
+  hkee: { isHero: false, isBuilding: true, moveType: 0, race: "human", classification: [], typeName: "keep" },
+  hhou: { isHero: false, isBuilding: true, moveType: 0, race: "human", classification: [], typeName: "farm" },
+  hfoo: { isHero: false, isBuilding: false, moveType: 0, race: "human", classification: [], typeName: "footman" },
+};
 
 console.log("the pure-world half of the hook table is complete");
 // teamOf is injected — the slot->team seating is the lobby's, not the world's. A stub that is
@@ -232,6 +240,51 @@ const victim = { owner: 0, x: 0, y: 0 };
 check("recipient 1 sees the crippled player's units", vset.viewpointFor(1).isExposed(victim), true);
 check("recipient 2 as well", vset.viewpointFor(2).isExposed(victim), true);
 check("a player not in the force does not", vset.viewpointFor(0).isExposed(victim), false);
+
+// --- the roster half --------------------------------------------------------------------------
+//
+// These seven were filed under "presentation, by nature" alongside camera and sound, because the
+// list they sat in ended "...text, selection, and the registries". A registry is a DATA TABLE, not
+// presentation, and every one of these reads sim.units, sim.mines and the unit registry with no
+// renderer field anywhere. Same classify-by-name mistake Phase B paid for four times.
+console.log("\nthe roster natives enumerate and classify from the sim alone");
+const roster = rosterHooks(world, { get: (id) => TYPEDEFS[id] }, teamOf);
+check("rosterHooks is exactly the seven", Object.keys(roster).sort(), [
+  "enumUnits", "findPlacedUnit", "isUnitAlly", "isUnitType",
+  "playerStructureCount", "playerTypedUnitCount", "playerUnitCount",
+].sort());
+
+// enumUnits must include the MINES, or blizzard.j's MeleeFindNearestMine finds nothing: it
+// enumerates UNITS and keeps the nearest 'ngol'.
+const enumerated = roster.enumUnits();
+check("gold mines are enumerated as units", enumerated.some((u) => u.typeId === "ngol"), true);
+check("…under the script handle, not the raw mine id", enumerated.find((u) => u.typeId === "ngol").id, MINE_ID_BASE + 3);
+
+// A mine must classify as a live STRUCTURE. MeleeClearExcessUnit wipes the non-structure
+// neutrals around a start location, so a mine answering "not a structure" would be deleted.
+check("a mine is a STRUCTURE", roster.isUnitType(MINE_ID_BASE + 3, 2), true);
+check("…and GROUND", roster.isUnitType(MINE_ID_BASE + 3, 4), true);
+check("…and not DEAD", roster.isUnitType(MINE_ID_BASE + 3, 1), false);
+
+// isUnitAlly is a TEAM question and must use the injected seating, not the slot number.
+// Players 0 and 1 are both on team 7 in TEAMS above; player 2 is on 9.
+world.units.set(77, { id: 77, owner: 0, team: 7, hp: 100 });
+check("a unit on my team is an ally", roster.isUnitAlly(77, 1), true);
+check("…and one on another team is not", roster.isUnitAlly(77, 2), false);
+world.units.set(78, { id: 78, owner: 12, team: -1, hp: 100 }); // neutral hostile
+check("neutral hostile (team -1) is nobody's ally", roster.isUnitAlly(78, 0), false);
+
+console.log("\nthe count natives are what MeleeInitVictoryDefeat reads");
+world.units.set(80, { id: 80, owner: 5, team: 0, hp: 100, building: { constructionLeft: 0 }, typeId: "hkee" });
+world.units.set(81, { id: 81, owner: 5, team: 0, hp: 100, building: { constructionLeft: 30 }, typeId: "hhou" });
+world.units.set(82, { id: 82, owner: 5, team: 0, hp: 100, typeId: "hfoo" });
+check("structures, complete only", roster.playerStructureCount(5, false), 1);
+check("structures, including incomplete", roster.playerStructureCount(5, true), 2);
+check("all units, complete only", roster.playerUnitCount(5, false), 2);
+// A Keep answers to "townhall" only with includeUpgrades — that is how
+// MeleeGetAllyKeyStructureCount finds a main hall whatever tier it has reached.
+check("a Keep is not literally named townhall", roster.playerTypedUnitCount(5, "townhall", true, false), 0);
+check("…but counts as one up the upgrade chain", roster.playerTypedUnitCount(5, "townhall", true, true), 1);
 
 console.log(failed ? `\njass-hooks: ${failed} FAILED` : "\njass-hooks: all checks passed");
 process.exit(failed ? 1 : 0);

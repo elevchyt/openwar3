@@ -1032,10 +1032,9 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    **commented out**, so a melee map never calls them. The 13 natives are covered by the headless
    checks only. A map with script-placed fog modifiers would be the way to exercise them.
 
-1e-note. **`isUnitAlly` was left behind deliberately.** It is a TEAM question
-   (`u.team === teamOf(player)`), not an alliance one, so it belongs with `simHooks` — which now
-   has both `sim` and `teamOf` and could take it in one line. Left out to keep this item to the
-   13 it named.
+1e-note. ~~**`isUnitAlly` was left behind deliberately.**~~ **Done in item 1g**, where it joined
+   the other six roster natives rather than `simHooks` — it is a TEAM question, and it belongs
+   with the natives that classify units rather than with the ones that mutate the world.
 
 1f. ~~**The order-funnel natives.**~~ **Four of the five done; this entry was wrong about
    `removeUnit`.** It called `createUnit`/`removeUnit` both "entangled with model seeding".
@@ -1062,13 +1061,35 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    **Left: `createUnit`.** It routes to `spawnScriptUnit`, which loads a model. It is the last
    member of this group and belongs with 1g below.
 
-1g. **`createUnit`, and the rest of the presentation half.** `createUnit` is the only world-ish
-   native still stuck in the renderer, because spawning loads a model. The likely shape is the
-   dual-writer trick from 1c — the authority creates the sim unit, the renderer decorates by
-   attaching a body — but `addSimUnit`/`addUnit`/`attachInstance` already split that way, so check
-   what the seam actually is before assuming. Everything else remaining in the renderer's 82
-   (camera, sound, weather, effects, text, selection, registries) is presentation by nature and is
-   what gets *injected* into a headless table rather than moved out of it.
+1g. ~~**`createUnit`, and the rest of the presentation half.**~~ **Partly done — and the "rest is
+   presentation by nature" claim was wrong, which is the finding.** Seven more natives came out:
+   `enumUnits`, `isUnitType`, `isUnitAlly`, `findPlacedUnit`, `playerStructureCount`,
+   `playerUnitCount`, `playerTypedUnitCount`, now `rosterHooks(sim, registry, teamOf)`. Every one
+   reads `sim.units`, `sim.mines` and the unit registry, with no renderer field anywhere. They had
+   been filed under "camera, sound, weather, effects, text, selection, **registries**" — and a
+   registry is a DATA TABLE, not presentation. Classifying by the company a word keeps is the same
+   mistake Phase B paid for four times. Renderer 69 → **62**, `jassHooks` 82 → **89**.
+
+   `unitSnapshots(sim)` is exported rather than private, because the renderer still drives
+   `pumpRegions` each tick and must enumerate the world exactly as the natives do — two copies of
+   that loop would be two answers to "what units exist". It takes the narrow
+   `{ units, mines }` readonly type so the renderer passes `simView`; the first cut passed
+   `simWorld` and pushed the escape-hatch count 32 → 33, exactly as in item 1d. Back to 32. Six
+   dead private helpers deleted from the renderer with the move.
+
+   **Still open: `createUnit`.** It is genuinely entangled, and the dual-writer trick from 1c does
+   NOT fit: the renderer needs the RESOLVED position back (the authority snaps a building to the
+   build grid and displaces a ground unit off a blocked cell), and `createUnit?(): number` can
+   only carry an id. The right shape is the drain-queue this codebase already uses everywhere else
+   — `drainSummonRequests`, `drainDeaths`, `drainTreePulses` — where the authority creates the
+   unit and queues a spawn the renderer drains to attach a body. That is its own item, **1h**,
+   because it changes the spawn path rather than moving a hook.
+
+1h. **`createUnit` via a spawn drain-queue.** The authority resolves placement and creates the sim
+   unit; the renderer drains a queue and attaches the model. Mirrors `drainSummonRequests`, which
+   already does exactly this for summons. Everything left in the renderer's 62 after that
+   (camera, sound, weather, effects, cinematics, text, selection) is presentation and gets
+   *injected* into a headless table rather than moved out of it.
 
 2. ~~**Create player viewpoints at match start, not lazily.**~~ **Done — and it was not small,
    because seating exposed a real bug the moment it was tested.** `VisionSet.seat(seats)` +
