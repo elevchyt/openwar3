@@ -90,13 +90,17 @@ state.
 | A — timestep & identity | **done** | fixed 60 Hz step, `.doo`-order ids, seed from the lobby |
 | Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster |
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
-| B — bisect `rts.ts` | **in progress** | the tentpole; inventory done, [ordered move list](#remaining-work-in-order) is the handoff |
+| B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | not started | |
-| E — snapshots & reconnect | not started | |
+| E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
 
+- Phase B: `rts.ts` bisected — `authority.ts` (the gate + economy + ownership), `formations.ts`,
+  `placement.ts` and `simView.ts` on the authority side; `worldOverlays.ts` and `unitAnims.ts`
+  moved out to the renderer. All four authority modules compile standalone. `rts.ts` 5 382 →
+  4 227; `document`/`window`/`../ui/*` gone from it entirely
 - Phase C: `Command` (`src/game/commands.ts`) + `RtsController.execute` — all eleven player
   actions now go through one gate, and `stop`/`hold` joined `QueuedOrder`
 - map selection + Start: `LocalMultiplayerCreate.fdf` as its own screen, the map summary pane
@@ -112,10 +116,11 @@ state.
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
-**Pick up here.** Phase B is the live piece of work, and its
-[**remaining-work list**](#remaining-work-in-order) is the source of truth for what to do next —
-take the first unfinished item. Narrowing the `simWorld` getter is item 7 on that list, since it
-turned out to be the same question as "where do the JASS hooks live". Phase D / E follow.
+**Pick up here.** Phase B is **done** — see [what it proves](#phase-b-is-done-what-it-proves).
+Next is **Phase D** (one `VisionMap` per vision group), which also inherits the fog modifiers,
+`cripplePlayer` and `seesFor`/`exposed` that Phase B declined to split early. Then **Phase E**,
+whose first job is a committed headless boot path, because the [JASS hook table](#the-jass-hook-table)
+split depends on it.
 
 ### The `simWorld` escape hatch
 
@@ -422,17 +427,60 @@ commit.
    `timeOfDay`/`dawnDusk`, so they stayed on `simWorld`. That is the fourth misclassification
    this phase, and the first one a type caught rather than a person.
 
-   **7b — the hooks onto `Authority`. Remaining.** What is left of `simWorld` in the renderer
-   is now almost exactly the JASS `EngineHooks` that MUTATE the world (`setUnitOwner`,
-   `addHeroXp`, `createItem`, `unitAddItem`, the waygate and inventory natives) plus `initStash`
-   / `setPathStamp` / `setTypeSlots` setup. Those are authority operations wired up inside the
-   renderer; they belong on `Authority`. **Two things to know before starting:**
-   `SetPlayerState` writes the live stash (`sw.stashOf(p).gold = value`) — legitimate as a JASS
-   native, but it is the last live-stash write anywhere and wants to become an `Authority`
-   method; and the hooks table is genuinely mixed, with `SetUnitOwner` sitting beside
-   `PanCameraTo`, so it moves entry by entry rather than wholesale.
-8. **Flip the phase table** once 1–7 land and the authority half imports no renderer, no DOM and
-   no transport.
+   **7b — the hook table. MOVED TO PHASE E** (developer's call, after the inventory below).
+   See [The JASS hook table](#the-jass-hook-table).
+
+8. ~~**Flip the phase table.**~~ **Done.**
+
+#### Phase B is done. What it proves
+
+The four authority-side modules pass both seam tests, and — the check that actually matters —
+`tsc` compiles all four **standalone**, so no renderer, DOM or transport is anywhere in their
+import closure:
+
+| Module | What it owns |
+|---|---|
+| [`authority.ts`](../src/game/authority.ts) (519 L) | `execute()`, `applyOrder()` (private), ownership, economy, supply, hero rules, order plumbing |
+| [`formations.ts`](../src/game/formations.ts) (234 L) | group/ring/follow destination solvers |
+| [`placement.ts`](../src/game/placement.ts) (154 L) | the `.doo` registries and the sim ids they reserve |
+| [`simView.ts`](../src/game/simView.ts) (51 L) | the read-only window the renderer draws from |
+
+`rts.ts` went **5 382 → 4 227** lines; `WidgetState|worldLayer` **20 → 17**; `document`,
+`window` and `../ui/*` are **gone from it entirely**; `simWorld` in the renderer **127 → 70**.
+`applyOrder` being `private` to `Authority` turned Phase C's central invariant from a grep
+into a compiler rule.
+
+**A lesson worth keeping**, since it cost four corrections: methods were repeatedly misfiled
+by what their NAME suggests rather than by what their consumers actually read —
+`buildCreepCamps` (reads render records), all of item 5, `resolveRally`/`rallyFeedback` (take
+`cssX, cssY`), and `SetTimeOfDay`/`SuspendTimeOfDay` (write, not read). Only the last was
+caught by a type rather than by a person. Run the dependency scan *before* the move, and
+prefer `readonly` types over greps.
+
+### The JASS hook table
+
+`MapViewerScene.textHooks()` builds a **151-entry** `EngineHooks` table inside the renderer.
+It is thoroughly mixed: `setUnitOwner`, `getUnitX` and `createItem` sit among `pingMinimap`,
+`showInterface`, `selectUnit` and `clearSelection`. The interpreter is authority-side and runs
+on the host once, so a headless host needs a hook table — and today one can only be built by a
+renderer.
+
+**This is Phase E work, not Phase B.** Two reasons, both established by inventory rather than
+assumed:
+
+- Routing the ~54 world-mutating natives through `Authority` methods would add ~54
+  pass-throughs over an already-clean `SimWorld` — the same shape rejected in item 5 — and
+  would NOT help, because the table would still be constructed inside the renderer.
+- The move that helps is extracting the table into its own module, built from
+  `(SimWorld, Authority)` with the presentation entries injected by whoever is drawing. Its
+  interface is determined by what the headless boot path looks like, and **there is no
+  committed headless boot path** (see [Boot](#boot) — `?dev=` is a temp local patch and the
+  load gate needs a human gesture). Designing the interface before the boot exists is guessing.
+
+Also noted while inventorying: `SetPlayerState` writes the live stash
+(`sw.stashOf(p).gold = value`). Legitimate as a JASS native — it is the authority acting — but
+it is the last live-stash write anywhere in the renderer, and it wants to become an `Authority`
+method when the table splits.
 
 **Noted, not fixed** (found during the inventory; each is its own item, none is a Phase B blocker):
 
