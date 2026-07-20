@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b). Open: 6c, 7b, then 8–12 — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8). Open: 6c, 7b, then 9–12 — **nothing crosses the wire yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1463,11 +1463,53 @@ enumerated by body rather than by name.
    loud. **Do not fold it into a native's fan-out** — it is an interpreter change, not a
    delivery one.
 
-8. **An in-process transport adapter, and the reconnect test that rides on it.** `Transport`
-   ([`transport.ts`](../src/net/transport.ts)) is already the seam and `WebSocketTransport` is already
-   just an adapter. An in-process one makes two authorities/clients testable in one Node process,
-   which is what "keep reconnect exercised by a test from day one" requires. Write the test here, not
-   after item 11.
+8. ~~**An in-process transport adapter, and the reconnect test that rides on it.**~~ **Done, and
+   it turned into an extraction rather than a new implementation.** The entry assumed writing an
+   adapter alongside `WebSocketTransport`. The obstacle was one layer down: the thing worth
+   simulating in-process is not the transport, it is the RELAY, and the relay's routing lived
+   inside `server/relay.mjs`'s WebSocket callbacks. Writing a second copy of a room table is
+   writing two sets of rules that agree until the day they do not — and the copy that would
+   drift is the one no test covers.
+
+   **So the rule got one home and two adapters.** [`server/rooms.mjs`](../server/rooms.mjs)
+   `RelayCore` holds the rooms, peer ids, the host-leaves-closes-the-room rule and the
+   `relay`→`deliver` fan-out, with no socket in it; a "connection" is anything with `send(msg)`.
+   [`relay.mjs`](../server/relay.mjs) is now only the WebSocket adapter — the port, the JSON
+   framing and the parse error, which are the three things genuinely about a wire. It stayed
+   plain `.mjs` with no build step, so it still deploys on its own.
+   [`tools/loopback.mjs`](../tools/loopback.mjs) is the in-process adapter over the SAME core.
+   **The extraction is proved by the test that already existed**: `pnpm relay:test` drives the
+   real server over real sockets and passed unchanged.
+
+   **Two properties of the loopback are deliberate, and both are about not being easier than a
+   socket.** Delivery is asynchronous (`await tick()` is the "let the network settle" step), so
+   a test cannot come to depend on an ordering no real transport gives. And messages are
+   serialised **at `send()`**, not at delivery — because `ws.send(JSON.stringify(msg))` freezes
+   the payload at the moment of the call, and a caller that reuses its message object must not
+   be able to change what is already on the wire.
+
+   **The copy discipline is where this move actually paid, and it exposed a flaw in my own
+   adapter.** The first version copied on the way out AND on the way in, and the first test
+   asserted "the sender's payload survives" — which either copy alone guarantees, so deleting
+   either one left every check green. Classic "something else was doing the work". Chasing it
+   down showed the outbound copy was taken *inside* the delivery microtask, so it snapshotted
+   nothing a socket would: it was defence-in-depth that defended nothing. Moving it to `send()`
+   made it mean something, and the two copies now protect two different things with a check
+   each — freeze-at-send (a caller mutating its message before delivery) and copy-per-arrival
+   (two recipients of one broadcast sharing an object). Each fails only when its own copy is
+   removed; confirmed by removing each.
+
+   **The reconnect test is written now, and it pins the gap rather than a fix.** Item 11 does
+   not exist yet, so the checks say what happens TODAY — a dropped client comes back with a NEW
+   peer id, is told nothing about the match in progress, and has nothing replayed to it. Same
+   discipline as item 3c: labelled as current behaviour, so landing item 11 has to change them
+   on purpose instead of filling a gap nobody notices. `LoopbackTransport.drop()` is deliberately
+   a separate verb from `close()` even though the relay cannot yet tell them apart — a drop must
+   hold the slot and a leave must free it, and that is exactly what item 11 has to add.
+
+   `pnpm relay:test` now runs both; `pnpm loopback:test` runs the new one alone. **22 loopback
+   checks**, and no file under `src/` was touched — the client bundle is byte-for-byte the same,
+   which is why there is no screenshot here.
 
 9. **Commands cross the wire.** New `GameMessage` member carrying `Command`; the client's `execute`
    becomes *send*, the host's becomes *receive, judge ownership, apply*. The gate already refuses a
