@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness). Open: 6d, 7b, 9b, 10b-harness-shot, 10c, then 11–12 — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b). Open: 7b, then 10c (with 6d) and 11–12; 10b-harness-shot + 9b-cmd-shot are browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1413,7 +1413,16 @@ enumerated by body rather than by name.
    `sim:test` 386 → **392**; two injections (dropping the structures-only guard, and a drain that
    does not clear) each turn their own checks red.
 
-6d. **The local player still loses a destroyed building off its own screen.** The memory is now
+6d. **The local player still loses a destroyed building off its own screen.** *(Deferred to
+   land with [item 10c](#remaining-work-in-order-2), for a stated reason.)* This is a
+   RENDERER-only change — `onDeath` and the corpse path — so no headless test can reach it
+   (`sim:test` and `loopback` have no renderer), and staging it in a browser needs an enemy to
+   raze a building you scouted and left, a two-client scenario that is expensive even with the
+   LAN harness. Doing it now would produce a renderer change with no test and no cheap proof.
+   It belongs with 10c, where the client's render source becomes the snapshot: at that point
+   `onDeath` is already being reworked to read the authoritative world, and a `remembered`
+   building simply never receives a death to animate. Fixing it in isolation first would be
+   throwaway. The memory is now
    correct and nothing RENDERS it. `rts.ts` `onDeath` plays the collapse and adopts the model as
    a corpse the moment the sim reports the death, whether or not this client can see the spot —
    so a building you scouted and walked away from vanishes when its owner razes it, where the
@@ -1573,11 +1582,48 @@ enumerated by body rather than by name.
    relay:test` now carries **34** loopback checks; the two injections (trusting a `player` field
    in the payload, and the truthiness seating check) each turn exactly one named check red.
 
-9b. **The client's `execute` becomes *send*.** The other half, and it is deliberately NOT in
-   item 9's commit because it is the same decision as item 10: a client that sends commands
-   while still simulating locally drifts from the host within seconds, so "stop executing
-   locally and start sending" cannot land before there is a snapshot stream to render instead.
-   Whoever takes item 10 takes this with it.
+9b. ~~**The client's `execute` becomes *send*.**~~ **Done — as *also-send*, not *become-send*,
+   which sequencing B is the whole reason for.** The entry predicted "stop executing locally and
+   start sending". Under B the client keeps simulating as a prediction, so `RtsController.execute`
+   still applies to the local sim AND, on a client, forwards the local player's accepted command
+   to the host. The host applies it to the authoritative sim; every other client learns the
+   result from its snapshot. Item 9 built the receiving door (`CommandRouter`); this is the
+   sending side plus wiring that door to `Authority.execute` on the host.
+
+   **The command is aimed at the host, not broadcast, and that is the design in one line.**
+   Authoritative-host means only the host applies a command. Broadcasting instead — every client
+   applying every command — is lockstep, a different model with a different desync surface. A
+   `hostPeer` now rides in `MatchLinkSetup` (the room creator's relay peer, `peers.find(p =>
+   p.host)`), and `MatchLink.sendCommand` addresses it. A 2-peer room cannot tell the two apart
+   (the host is the only "everyone else"), so the check that pins it needs a THIRD seat: a second
+   client must not receive a peer's command. It went red on the broadcast injection.
+
+   **Identity stays the relay's stamp, never the payload** (item 9's whole point). The host's
+   `onCommand` runs the arriving envelope through `CommandRouter.receive(from, msg)` — `from` is
+   the relay's unforgeable stamp — and only an accepted `(player, cmd)` reaches the SAME
+   `Authority.execute` a local action goes through. So a peer's order is judged by exactly the
+   rule the host's own is, and a faked `unitId` (Phase C) or a faked player (item 9) is refused
+   identically whether it came off the wire or off the keyboard.
+
+   **`MatchLink` now demuxes three ways** — snapshots consumed internally, commands surfaced to
+   `onCommand`, anything else passed through — so a future message type touches no seam. Dropping
+   the command branch turns four checks red (commands fall through to the passthrough and never
+   reach the router). `matchLink` still compiles standalone; it imports only the command
+   *envelope* from `commandLink`, no `Authority`.
+
+   **Local behaviour is unchanged by construction.** In single-player `this.matchLink` is null,
+   so the forward branch is skipped and `execute` is byte-for-byte its old self. `invariant:
+   applyOrder still 0 in rts.ts` — the host's receive path goes through `execute`, the public
+   door, never `applyOrder`.
+
+   **Verified:** `loopback` 51 → **56** checks driving the full path — client `sendCommand` →
+   relay stamp → host demux → `CommandRouter` → the execute stand-in — plus the host-aimed and
+   demux injections. Single-player A/B in the browser: minimap byte-identical to the parent
+   (0 of 18 088 pixels), confirming the live `execute` path did not move. **NOT driven in the
+   browser: an actual order issued on one client reaching the other's host** — that needs unit
+   selection and order-issuing across two WebGL contexts, and the agent-browser daemon is
+   unreliable under two at once (same wall as 10b-harness-shot). The wire path is covered end to
+   end headlessly; only the click-driven capture is deferred.
 
 10. **Snapshots cross the wire.** ~~Sequencing unsettled.~~ **DECIDED by the developer: B — the
     client renders snapshots AND keeps simulating**, so the two can be compared and the

@@ -387,22 +387,87 @@ console.log("both ends of the pipe are counted, so a dead pipe is distinguishabl
   check("a stale snapshot bumps stale, not received", [peerLink.received, peerLink.stale], [3, 1]);
 }
 
-console.log("the link leaves traffic that is not a snapshot alone");
+console.log("the link demuxes the two kinds of game traffic and passes anything else through");
 {
   const { host, peer } = await room();
-  const seen = [];
+  const other = [];
   const ch = channelFor(peer);
-  ch.onPeerData = (from, data) => seen.push(data.k);
-  new MatchLink(ch, 1, SEATS); // wraps the handler above
+  ch.onPeerData = (from, data) => other.push(data.k);
+  const link = new MatchLink(ch, 1, SEATS); // wraps the handler above
+  const cmds = [];
+  link.onCommand = (from, msg) => cmds.push([from, msg.cmd.c]);
   const hostLink = new MatchLink(channelFor(host), 0, SEATS);
 
-  host.send({ t: "relay", to: 2, data: commandMessage({ c: "order", unitId: 4, order: { kind: "move", x: 0, y: 0 }, queued: false }) });
-  await tick();
+  // A snapshot: consumed internally, not surfaced to either callback.
   hostLink.tickHost(1, worldAt(420), sources, 5);
   await tick();
-  // Commands (item 9b) share this channel. The link must take the snapshots and pass the rest
-  // through, or wiring one would silently swallow the other.
-  check("the command still reached its handler", seen, ["cmd"]);
+  // A command: surfaced to onCommand, NOT passed through as "the rest".
+  host.send({ t: "relay", to: 2, data: commandMessage({ c: "order", unitId: 4, order: { kind: "move", x: 0, y: 0 }, queued: false }) });
+  await tick();
+  // Something else entirely: passed through untouched, so a future message type needs no change
+  // to this seam.
+  host.send({ t: "relay", to: 2, data: { k: "chat", text: "gg" } });
+  await tick();
+
+  check("the command reached onCommand, stamped with the relay's from", cmds, [[1, "order"]]);
+  check("and did not fall through to the passthrough", other, ["chat"]);
+  check("the snapshot went to neither callback", link.received, 1);
+}
+
+console.log("\na client's command crosses the wire to the host, and the host learns who really sent it");
+{
+  // Full item-9b path: client sends -> relay stamps -> host demuxes -> CommandRouter judges.
+  // The controller wires onCommand to CommandRouter + Authority.execute; here we stand in for
+  // that last hop so the wire half is tested without a sim.
+  const { host, peer } = await room();
+  const hostPeer = 1;
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS, hostPeer);
+  const clientLink = new MatchLink(channelFor(peer), 1, SEATS, hostPeer);
+  const router = new CommandRouter(SEATS);
+  const applied = [];
+  hostLink.onCommand = (from, msg) => {
+    const j = router.receive(from, msg);
+    if (accepted(j)) applied.push([j.player, j.cmd.unitId]);
+  };
+
+  clientLink.sendCommand({ c: "order", unitId: 77, order: { kind: "attack", targetId: 5, force: true }, queued: false });
+  await tick();
+  // The client is peer 2 = player 1. Identity comes from the relay stamp, never the payload
+  // (item 9) — so the host bills the order to player 1 and to unit 77.
+  check("the host applied it for the real sender", applied, [[1, 77]]);
+
+  // And a SECOND client must not receive it. A command is aimed at the host, not broadcast,
+  // because the model is authoritative-host: only the host applies it, and other clients see
+  // the effect through their snapshot. Broadcasting would make every client's onCommand fire
+  // — the lockstep leak this addressing prevents. A 2-peer room cannot catch it (the host is
+  // the only "everyone else"); this needs a third seat.
+  const relay3 = new LoopbackRelay();
+  const h3 = relay3.connect("h3");
+  const a3 = relay3.connect("a3");
+  const b3 = relay3.connect("b3");
+  await tick();
+  h3.send({ ...CREATE, maxPlayers: 3 });
+  await tick();
+  const rid = h3.last("created").room.id;
+  a3.send({ t: "join", roomId: rid, playerName: "A" });
+  b3.send({ t: "join", roomId: rid, playerName: "B" });
+  await tick();
+  const SEATS3 = [{ id: 0, peer: 1 }, { id: 1, peer: 2 }, { id: 2, peer: 3 }];
+  new MatchLink(channelFor(h3), 0, SEATS3, 1); // host
+  const aLink = new MatchLink(channelFor(a3), 1, SEATS3, 1);
+  const bLink = new MatchLink(channelFor(b3), 2, SEATS3, 1);
+  const bGot = [];
+  bLink.onCommand = (from, msg) => bGot.push(msg.cmd.unitId);
+  aLink.sendCommand({ c: "order", unitId: 55, order: { kind: "move", x: 0, y: 0 }, queued: false });
+  await tick();
+  check("the other client is not sent a peer's command", bGot, []);
+
+  // The host does not echo its own commands onto the wire — it IS the authority. A command it
+  // sent would come straight back to it here; nothing does.
+  applied.length = 0;
+  host.send({ t: "relay", to: hostPeer, data: commandMessage({ c: "order", unitId: 9, order: { kind: "move", x: 1, y: 2 }, queued: false }) });
+  await tick();
+  check("a command addressed to the host from the host is still just judged by stamp", applied, [[0, 9]]);
 }
 
 console.log(failed === 0 ? "\nloopback: all checks passed" : `\nloopback: ${failed} FAILED`);

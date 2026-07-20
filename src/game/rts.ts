@@ -26,6 +26,7 @@ import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
 import { MatchLink, type MatchLinkSetup } from "./matchLink";
+import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons } from "./minimapView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
@@ -3493,8 +3494,20 @@ export class RtsController {
    * keeps simulating, and the link only sends (host) or compares-and-logs (client) alongside.
    */
   attachMatchLink(setup: MatchLinkSetup): void {
-    this.matchLink = new MatchLink(setup.channel, setup.localPlayer, setup.seats);
+    const link = new MatchLink(setup.channel, setup.localPlayer, setup.seats, setup.hostPeer);
+    this.matchLink = link;
     this.matchLinkIsHost = setup.isHost;
+    if (setup.isHost) {
+      // The host is the only party that judges an arriving command. `CommandRouter` resolves
+      // the relay's `from` stamp — which no client can forge — to a slot, and a command whose
+      // sender holds no seat is dropped (item 9). Then the SAME `Authority.execute` a local
+      // action goes through, so a peer's order is judged by exactly the rule the host's own is.
+      const router = new CommandRouter(setup.seats);
+      link.onCommand = (from, msg) => {
+        const judged = router.receive(from, msg);
+        if (accepted(judged)) this.authority.execute(judged.player, judged.cmd);
+      };
+    }
   }
   private matchLinkIsHost = false;
 
@@ -3600,7 +3613,17 @@ export class RtsController {
    * which is the point of having moved it.
    */
   execute(player: number, cmd: Command): boolean {
-    return this.authority.execute(player, cmd);
+    const applied = this.authority.execute(player, cmd);
+    // On a CLIENT, forward the local player's accepted commands to the host's authoritative
+    // sim (item 9b). We still applied it locally just above — sequencing B keeps the client
+    // simulating as a prediction — but the host is where it counts, and its snapshot carries
+    // the result back. The host itself sends nothing: it IS the authority, and its own
+    // `execute` above already reached the real sim. Gated on the local player because triggers
+    // and the renderer emit commands too, and only a human's own input crosses the wire.
+    if (applied && this.matchLink && !this.matchLinkIsHost && player === this.localPlayer) {
+      this.matchLink.sendCommand(cmd);
+    }
+    return applied;
   }
 
   /** @see Authority.stashFor — a frozen copy; the renderer may read, never spend. */

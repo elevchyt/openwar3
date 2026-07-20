@@ -190,7 +190,8 @@ async function devLanBoot(
   }
 
   const me = lobby.snapshot.you?.id;
-  const link = matchLinkFrom(lobby, lobby.isHost, start.slots, me);
+  const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
+  const link = matchLinkFrom(lobby, lobby.isHost, start.slots, me, hostPeer);
   const config = { ...toConfig(start, me), fog };
   await hooks.startGame(file, info, config, link);
 }

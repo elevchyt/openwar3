@@ -164,7 +164,8 @@ export async function mountLanScreen(
       // and the seating exist together — `startGame` disposes the glue and never sees the
       // lobby (docs/multiplayer.md Phase E item 10b-note). `matchLinkFrom` is shared with the
       // dev-LAN boot so the harness proves this exact assembly, not a lookalike.
-      const link = matchLinkFrom(lobby, lobby.isHost, msg.slots, me);
+      const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
+      const link = matchLinkFrom(lobby, lobby.isHost, msg.slots, me, hostPeer);
       h.onStart(msg.mapPath, info, toConfig(msg, me), link);
     })();
   };

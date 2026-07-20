@@ -1,5 +1,7 @@
 import { snapshotFor, type SnapshotViewer, type SnapshotWorld, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
 import { divergence, describeDivergence, type Divergence } from "./divergence";
+import { commandMessage, isCommandMessage, type CommandMessage } from "../net/commandLink";
+import type { Command } from "./commands";
 
 /**
  * The match's end of the wire (docs/multiplayer.md Phase E item 10b).
@@ -81,6 +83,11 @@ export interface MatchLinkSetup {
   seats: LinkSeat[];
   /** Only the host pumps. Everybody, host included, may receive. */
   isHost: boolean;
+  /** The relay peer holding the authoritative sim — where a client SENDS its commands
+   *  (item 9b). A client aims at the host specifically rather than broadcasting, because the
+   *  model is authoritative-host, not lockstep: only the host applies a command, and every
+   *  other client learns the result from its snapshot, not from the command itself. */
+  hostPeer: number;
 }
 
 /**
@@ -96,18 +103,24 @@ export interface MatchLinkSetup {
  * `myPeer ?? 0` only fires for a seating that names no peer for us, which a real `StartMatch`
  * never produces — it is there so a malformed room degrades to a single-player-shaped answer
  * instead of `undefined`.
+ *
+ * `hostPeer` is the relay peer of whoever holds the authoritative sim — the room creator. The
+ * caller passes it because the seating (`StartMatch.slots`) records a peer per SLOT but does
+ * not mark which is the host; the lobby's peer list does (`peers.find(p => p.host)`).
  */
 export function matchLinkFrom(
   channel: MatchChannel,
   isHost: boolean,
   slots: ReadonlyArray<{ id: number; peer?: number }>,
   myPeer: number | undefined,
+  hostPeer: number,
 ): MatchLinkSetup {
   return {
     channel,
     localPlayer: slots.find((s) => s.peer === myPeer)?.id ?? myPeer ?? 0,
     seats: slots.map((s) => ({ id: s.id, peer: s.peer })),
     isHost,
+    hostPeer,
   };
 }
 
@@ -123,20 +136,44 @@ export class MatchLink {
    *  is alive; staying at 0 while in a match is proof it is not. */
   received = 0;
 
+  /**
+   * A command arrived from a client (host side only). The controller wires this to
+   * `CommandRouter` + `Authority.execute` — the identity check stays out here, in `MatchLink`,
+   * so this module keeps neither `Authority` nor the command vocabulary in its import closure
+   * beyond the wire envelope. Default no-op: a client sets nothing and receives nothing.
+   */
+  onCommand: (from: number, cmd: CommandMessage) => void = () => {};
+
   constructor(
     private readonly channel: MatchChannel,
     /** This machine's own slot. A snapshot addressed to anybody else is a routing bug. */
     private readonly localPlayer: number,
     /** Seating, for peer→player. Empty on a client that only receives. */
     private readonly seats: readonly LinkSeat[] = [],
+    /** The authoritative sim's relay peer — where `sendCommand` aims. */
+    private readonly hostPeer: number = 0,
   ) {
-    // The channel hands us everything that is not `start`; we take the snapshots and leave the
-    // rest alone, so commands (item 9b) can share the same channel without a second seam.
+    // The channel hands us everything that is not `start`; we demux the two kinds of game
+    // traffic — snapshots the host emits, commands a client sends — and pass anything else
+    // through, so a future message type does not have to touch this seam.
     const previous = channel.onPeerData;
     channel.onPeerData = (from, data) => {
       if (isSnapshotMessage(data)) this.receive(data.snap);
+      else if (isCommandMessage(data)) this.onCommand(from, data);
       else previous(from, data);
     };
+  }
+
+  /**
+   * Client side: send one of the local player's commands to the host's authoritative sim.
+   *
+   * Aimed at `hostPeer`, not broadcast: this is authoritative-host, so only the host applies
+   * it, and every other client sees the effect through its snapshot rather than by replaying
+   * the command. Broadcasting would instead make every client apply every command — lockstep,
+   * a different design with a different desync surface.
+   */
+  sendCommand(cmd: Command): void {
+    this.channel.send(commandMessage(cmd), this.hostPeer);
   }
 
   /** The peer sitting behind a player slot — the reverse of `CommandRouter`'s lookup, because
