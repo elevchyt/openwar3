@@ -364,6 +364,29 @@ console.log("an out-of-order or mis-addressed snapshot is refused, not rendered"
   check("somebody else's snapshot is ignored", peerLink.latest().time, 10);
 }
 
+console.log("both ends of the pipe are counted, so a dead pipe is distinguishable from a quiet one");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+
+  // The heartbeat these counters feed (rts.ts, dev-only) is what makes the two-client LAN
+  // harness watchable: a silent [sync] with received === 0 is a broken pipe, with received
+  // rising it is a working one that happens to agree. The distinction is the whole point.
+  check("nothing sent or received before the first tick", [hostLink.sent, peerLink.received], [0, 0]);
+  for (let t = 1; t <= 3; t++) {
+    hostLink.tickHost(1, worldAt(420), sources, t);
+    await tick();
+  }
+  check("the host counts what it emitted", hostLink.sent, 3);
+  check("the client counts what it accepted", peerLink.received, 3);
+  // A stale arrival is counted as stale, NOT as received — the two counters must not
+  // double-count, or a replayed snapshot would read as progress.
+  hostLink.tickHost(1, worldAt(420), sources, 2); // older than time=3
+  await tick();
+  check("a stale snapshot bumps stale, not received", [peerLink.received, peerLink.stale], [3, 1]);
+}
+
 console.log("the link leaves traffic that is not a snapshot alone");
 {
   const { host, peer } = await room();

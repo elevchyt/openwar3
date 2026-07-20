@@ -5,7 +5,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { ListItem } from "./fdf/widgets";
 import { LanLobby, type LobbyState } from "../net/lobby";
-import type { MatchLinkSetup } from "../game/matchLink";
+import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import type { StartMatch } from "../net/protocol";
 import type { MeleeConfig, SlotConfig } from "./lobby";
 import type { Race } from "../data/races";
@@ -162,15 +162,9 @@ export async function mountLanScreen(
       }
       // The match's end of the wire, assembled HERE because this is the last place the lobby
       // and the seating exist together — `startGame` disposes the glue and never sees the
-      // lobby (docs/multiplayer.md Phase E item 10b-note). `me` is the relay peer; the SLOT is
-      // the one seated on it, and the two are different numbering.
-      const localPlayer = msg.slots.find((s) => s.peer === me)?.id ?? me ?? 0;
-      const link: MatchLinkSetup = {
-        channel: lobby,
-        localPlayer,
-        seats: msg.slots.map((s) => ({ id: s.id, peer: s.peer })),
-        isHost: lobby.isHost,
-      };
+      // lobby (docs/multiplayer.md Phase E item 10b-note). `matchLinkFrom` is shared with the
+      // dev-LAN boot so the harness proves this exact assembly, not a lookalike.
+      const link = matchLinkFrom(lobby, lobby.isHost, msg.slots, me);
       h.onStart(msg.mapPath, info, toConfig(msg, me), link);
     })();
   };
@@ -314,7 +308,9 @@ export async function mountLanScreen(
  * left over is filled with computers — the same rule the Custom Game screen uses, so a 4-player
  * map hosted by two people is a 2v2 against two AIs rather than a half-empty map.
  */
-function buildStart(mapPath: string, mapName: string, info: MapInfo, st: LobbyState): StartMatch {
+/** Build the host's start message. `seed` is injectable so the dev-LAN boot can pin a
+ *  reproducible match; production omits it and one is rolled. Exported for that boot only. */
+export function buildStart(mapPath: string, mapName: string, info: MapInfo, st: LobbyState, seed?: number): StartMatch {
   const peers = [...st.peers].sort((a, b) => (a.host ? -1 : b.host ? 1 : a.id - b.id));
   const human = info.slots.filter((s) => s.controller !== "computer");
   const slots: StartMatch["slots"] = [];
@@ -340,14 +336,16 @@ function buildStart(mapPath: string, mapName: string, info: MapInfo, st: LobbySt
     k: "start",
     mapPath,
     mapName,
-    // One seed for the match, rolled once, by the host. See MeleeConfig.seed.
-    seed: 1 + Math.floor(Math.random() * 2147483645),
+    // One seed for the match, rolled once by the host — or pinned by the dev-LAN boot for a
+    // reproducible two-client run. See MeleeConfig.seed.
+    seed: seed ?? 1 + Math.floor(Math.random() * 2147483645),
     slots,
   };
 }
 
-/** A start message as THIS machine's `MeleeConfig` — the same match, seen from our seat. */
-function toConfig(msg: StartMatch, me: number | undefined): MeleeConfig {
+/** A start message as THIS machine's `MeleeConfig` — the same match, seen from our seat.
+ *  Exported for the dev-LAN boot, which overrides only `fog`. */
+export function toConfig(msg: StartMatch, me: number | undefined): MeleeConfig {
   const slots: SlotConfig[] = msg.slots.map((s) => ({
     id: s.id,
     controller: s.controller,

@@ -83,6 +83,34 @@ export interface MatchLinkSetup {
   isHost: boolean;
 }
 
+/**
+ * Assemble a `MatchLinkSetup` from a room's seating (docs/multiplayer.md item 10b-note).
+ *
+ * The ONE piece of link wiring that must be identical in production and in any test harness —
+ * so it lives here, once, and both `fdfLan` and the dev-LAN boot call it rather than each
+ * writing the peer→slot resolution out. Getting that resolution wrong is how a client filters
+ * out the very snapshots addressed to it, and a harness that assembled the link differently
+ * from production would prove the wrong thing.
+ *
+ * `myPeer` is the RELAY peer id; the local slot is the seat that peer sits in. The fallback to
+ * `myPeer ?? 0` only fires for a seating that names no peer for us, which a real `StartMatch`
+ * never produces — it is there so a malformed room degrades to a single-player-shaped answer
+ * instead of `undefined`.
+ */
+export function matchLinkFrom(
+  channel: MatchChannel,
+  isHost: boolean,
+  slots: ReadonlyArray<{ id: number; peer?: number }>,
+  myPeer: number | undefined,
+): MatchLinkSetup {
+  return {
+    channel,
+    localPlayer: slots.find((s) => s.peer === myPeer)?.id ?? myPeer ?? 0,
+    seats: slots.map((s) => ({ id: s.id, peer: s.peer })),
+    isHost,
+  };
+}
+
 export class MatchLink {
   private accum = 0;
   /** The most recent snapshot this client was sent, or null on the host / before the first. */
@@ -91,6 +119,9 @@ export class MatchLink {
   private lastFindings: Divergence[] = [];
   /** Snapshots dropped for arriving out of order. A rising count is itself a diagnostic. */
   stale = 0;
+  /** Snapshots accepted (newer than what we held). On a client this rising is proof the pipe
+   *  is alive; staying at 0 while in a match is proof it is not. */
+  received = 0;
 
   constructor(
     private readonly channel: MatchChannel,
@@ -133,6 +164,7 @@ export class MatchLink {
       const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player));
       this.channel.send({ k: "snap", snap } satisfies SnapshotMessage, peer);
       sent++;
+      this.emitted++;
     }
     return sent;
   }
@@ -153,12 +185,20 @@ export class MatchLink {
       return;
     }
     this.newest = snap;
+    this.received++;
   }
 
   /** The newest snapshot the authority sent this client, or null. */
   latest(): WorldSnapshot | null {
     return this.newest;
   }
+
+  /** How many snapshots this host has emitted this match — the send-side counterpart to
+   *  `received`, so a dev heartbeat can show both ends of the pipe. */
+  get sent(): number {
+    return this.emitted;
+  }
+  private emitted = 0;
 
   /**
    * Compare the newest snapshot against what this client simulated for itself, and report.

@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note). Open: 6d, 7b, 9b, 10b-harness, 10c, then 11–12 — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness). Open: 6d, 7b, 9b, 10b-harness-shot, 10c, then 11–12 — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1687,6 +1687,39 @@ enumerated by body rather than by name.
     on a cadence and sends; every client keeps the latest and runs `divergence` against its own.
     This is the wiring item, and it is where `CommandRouter` (item 9) and `GhostMemory.ghostsFor`
     (item 6c) finally get their callers.
+
+10b-harness. ~~**A scripted two-client LAN boot.**~~ **Done.** `?dev&lan=host` and
+    `?dev&lan=join` in [`src/dev/devBoot.ts`](../src/dev/devBoot.ts) drive one side each of a real
+    LAN match over a real relay: the host creates a room, waits for the joiner, pins the match on
+    the URL seed and starts; the joiner finds the room, joins, waits for the start. `?dev` alone
+    could never do this — it bypasses the lobby, which is exactly why it builds no link — so this
+    is a separate branch through the genuine `LanLobby` + `WebSocketTransport` + `MatchLink`
+    stack. Needs `node server/relay.mjs` up.
+
+    **The link assembly is now shared, so the harness proves the production wiring rather than a
+    lookalike.** `matchLinkFrom(channel, isHost, slots, myPeer)` in
+    [`matchLink.ts`](../src/game/matchLink.ts) is the single peer→slot resolution both `fdfLan`
+    and the dev-LAN boot call; `buildStart` (seed now injectable) and `toConfig` are exported
+    from `fdfLan` for the same reason. Getting that resolution wrong is how a client filters out
+    the snapshots addressed to it, and a harness with its own copy would have tested the copy.
+
+    **A dev-only heartbeat makes the pipe watchable.** `MatchLink.sent`/`received`/`stale` and a
+    once-a-second `[sync] host: sent N, received M, …` line in `driveMatchLink`, gated on
+    `import.meta.env.DEV` and stripped from the build (verified: the string is absent from
+    `dist/`). Without it a silent `[sync]` is indistinguishable from a dead pipe — the counters
+    are what tell "they agree" apart from "nothing arrived".
+
+    **Verified end to end in two browsers, PARTLY.** Both contexts reached in-game through the
+    real relay via the LAN path, and the joiner console showed the full handshake — "LAN join:
+    connecting" → "in the room, waiting for start" → "start received". That is the harness
+    working: two contexts, one relay, the real `StartMatch` exchange, both entering the match.
+    **NOT captured live: the heartbeat's sent/received counts from a running match** — the
+    agent-browser daemon wedged under two simultaneous WebGL contexts before a clean reading, and
+    chasing it further was the time-sink CLAUDE.md warns against. The counter logic is instead
+    pinned headlessly: `loopback-test` (**51 checks**) asserts the host counts what it emits, the
+    client counts what it accepts, and a stale arrival bumps `stale` not `received`. A single-GPU
+    two-client capture of the live heartbeat is worth doing when the daemon is cooperative;
+    recorded as **10b-harness-shot**.
 
 10c. **The client renders from the snapshot.** The last step of option B's first half, and the
     largest: `rts.ts` reads `sim.units` throughout, and rendering an arriving snapshot instead

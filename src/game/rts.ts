@@ -3505,6 +3505,7 @@ export class RtsController {
     const link = this.matchLink;
     if (!link) return;
     this.matchTime += dt;
+    let drift = 0;
     if (this.matchLinkIsHost) {
       link.tickHost(dt, this.sim, {
         // `Viewpoint` satisfies `SnapshotViewer` (pinned by snapshot-viewer-conformance.ts),
@@ -3512,16 +3513,32 @@ export class RtsController {
         viewers: () => this.viewpoints.viewerSeats(),
         ghostsFor: (p) => this.ghosts.ghostsFor(p),
       }, this.matchTime);
-      return;
+    } else if (link.latest()) {
+      // Client: compare the authority's newest view against our own, for OUR seat.
+      const findings = link.compare(this.sim, this.local, this.ghosts.ghostsFor(this.localPlayer));
+      drift = findings.length;
+      if (drift) {
+        // A drift log, not an error: sequencing B expects disagreement and wants it named. One
+        // grouped line per tick, so a desynced match does not scroll the console to uselessness.
+        console.warn(`[sync] ${drift} divergence(s):`, link.describe().join(" | "));
+      }
     }
-    // Client: compare the authority's newest view against our own, for OUR seat.
-    if (!link.latest()) return;
-    const findings = link.compare(this.sim, this.local, this.ghosts.ghostsFor(this.localPlayer));
-    if (findings.length) {
-      // A drift log, not an error: sequencing B expects disagreement and wants it named. One
-      // grouped line per tick, so a desynced match does not scroll the console into uselessness.
-      console.warn(`[sync] ${findings.length} divergence(s):`, link.describe().join(" | "));
-    }
+    this.matchLinkHeartbeat(link, drift);
+  }
+
+  private hbAccum = 0;
+  /** A once-a-second dev line proving the pipe is alive — sent/received counts and current
+   *  drift. Dev-only (`import.meta.env.DEV` is folded to false in a build, so this whole method
+   *  and the counters it reads drop out), because it exists to make the two-client LAN harness
+   *  WATCHABLE (docs/multiplayer.md item 10b-harness); a silent [sync] is indistinguishable
+   *  from a dead one. */
+  private matchLinkHeartbeat(link: MatchLink, drift: number): void {
+    if (!import.meta.env.DEV) return;
+    this.hbAccum += 1;
+    if (this.hbAccum < 60) return; // ~1 s at 60 Hz
+    this.hbAccum = 0;
+    const role = this.matchLinkIsHost ? "host" : "client";
+    console.info(`[sync] ${role}: sent ${link.sent}, received ${link.received}, stale ${link.stale}, drift ${drift}`);
   }
 
   /**

@@ -4,6 +4,10 @@ import type { InstallFiles } from "../assets/opfs";
 import type { GateLoad } from "../ui/gate";
 import type { FogMode, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
+import { LanLobby, type LobbyState } from "../net/lobby";
+import type { StartMatch as StartMatchMsg } from "../net/protocol";
+import { buildStart, toConfig } from "../ui/fdfLan";
+import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 
 /**
  * Scripted boot for automated testing — the load gate without the human
@@ -35,7 +39,7 @@ export interface DevBootHooks {
   mountInstall(load: GateLoad): void;
   /** Show the main menu over its 3D scene — skipped when a map was asked for. */
   showMenu(load: GateLoad): void;
-  startGame(file: File, info: MapInfo, config: MeleeConfig): Promise<void>;
+  startGame(file: File, info: MapInfo, config: MeleeConfig, link?: MatchLinkSetup): Promise<void>;
 }
 
 interface Manifest {
@@ -114,6 +118,79 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const file = load.maps.get(mapPath);
   if (!file) throw new Error(`${mapPath} did not survive the mount`);
   const info = parseMapInfo(new Uint8Array(await file.arrayBuffer()), mapPath);
+
+  // Two-client LAN mode (docs/multiplayer.md Phase E item 10b-harness): the ONLY committed
+  // path that carries a match through a real relay and a real `MatchLink`, so the snapshot
+  // stream can be driven and watched between two browser contexts. `?dev` alone bypasses the
+  // lobby — which is exactly why it builds no link — so this is a separate branch.
+  const lan = params.get("lan"); // "host" | "join"
+  if (lan === "host" || lan === "join") {
+    await devLanBoot(hooks, lan, mapPath, info, file, seed, fog);
+    return;
+  }
+
   log(`starting ${info.name} as player ${player}, seed ${seed}`);
   await hooks.startGame(file, info, meleeConfigFor(info, player, seed, fog));
+}
+
+/** Resolve once the lobby's state satisfies `ready`, or reject after `timeoutMs`. */
+function waitForLobby(lobby: LanLobby, ready: (s: LobbyState) => boolean, timeoutMs = 15000): Promise<LobbyState> {
+  return new Promise((resolve, reject) => {
+    const check = (s: LobbyState): boolean => (ready(s) ? (resolve(s), true) : false);
+    if (check(lobby.snapshot)) return;
+    const prev = lobby.onChange;
+    const timer = setTimeout(() => reject(new Error("dev-LAN: timed out waiting for the lobby")), timeoutMs);
+    lobby.onChange = (s) => {
+      prev(s);
+      if (check(s)) {
+        clearTimeout(timer);
+        lobby.onChange = prev;
+      }
+    };
+  });
+}
+
+/**
+ * Drive one side of a two-client LAN match over the real relay.
+ *
+ * The host creates the room, waits for the joiner, pins the match on the seed both were given,
+ * and starts. The joiner finds the room, joins, and waits for the start message. BOTH then
+ * assemble their `MatchLink` through `matchLinkFrom` — the same call `fdfLan` makes — so what
+ * this proves is the production wiring, not a stand-in. Needs a relay: `node server/relay.mjs`.
+ */
+async function devLanBoot(
+  hooks: DevBootHooks,
+  side: "host" | "join",
+  mapPath: string,
+  info: MapInfo,
+  file: File,
+  seed: number,
+  fog: FogMode,
+): Promise<void> {
+  const lobby = new LanLobby();
+  log(`LAN ${side}: connecting to the relay…`);
+  await lobby.connect(); // ws://<page host>:8787 — node server/relay.mjs
+
+  let start: StartMatchMsg;
+  if (side === "host") {
+    lobby.host("dev-lan", "Host", info.name, mapPath, info.slots.length);
+    await waitForLobby(lobby, (s) => s.phase === "hosting" && s.you !== null);
+    log("LAN host: waiting for a joiner…");
+    await waitForLobby(lobby, (s) => s.peers.length >= 2);
+    start = buildStart(mapPath, info.name, info, lobby.snapshot, seed);
+    lobby.startMatch(start); // tell the joiner
+    log(`LAN host: started, seed ${seed}`);
+  } else {
+    await waitForLobby(lobby, (s) => s.rooms.length > 0);
+    lobby.join(lobby.snapshot.rooms[0].id, "Joiner");
+    await waitForLobby(lobby, (s) => s.phase === "joined" && s.you !== null);
+    log("LAN join: in the room, waiting for start…");
+    start = await new Promise<StartMatchMsg>((resolve) => (lobby.onStart = resolve));
+    log("LAN join: start received");
+  }
+
+  const me = lobby.snapshot.you?.id;
+  const link = matchLinkFrom(lobby, lobby.isHost, start.slots, me);
+  const config = { ...toConfig(start, me), fog };
+  await hooks.startGame(file, info, config, link);
 }
