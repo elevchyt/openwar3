@@ -992,11 +992,51 @@ export class Runtime {
    *  GetGameTypeSelected — the host sets it from the map's melee flag. */
   gameType = 4;
 
-  /** Which slot the human at this machine is playing (GetLocalPlayer). Everything
-   *  "for me" is gated on it: the BJ text helpers (IsPlayerInForce(GetLocalPlayer())),
-   *  SetCameraPositionForPlayer, the local selection. The lobby's user slot isn't
-   *  always 0, so the host sets this with applyLobby. */
+  /** Which slot the human at THIS MACHINE is playing. The lobby's user slot isn't always 0,
+   *  so the host sets this with applyLobby. */
   localPlayer = 0;
+
+  /**
+   * Which player the interpreter is currently evaluating FOR — what `GetLocalPlayer` answers.
+   * `null` means "this machine's own seat", i.e. `localPlayer`.
+   *
+   * The distinction exists because the interpreter runs ONCE. Today that is harmless: every
+   * client boots the map and runs `config()`/`main()` itself, so each machine's runtime really
+   * does have its own local player and `GetLocalPlayer` is already right. Phase E is what
+   * breaks it — one host runs the script and ships snapshots to N clients, at which point
+   * "local" on the authority means the host, and a script asking `GetLocalPlayer()` would get
+   * the host's answer for everybody.
+   *
+   * What makes that tractable is a contract Blizzard states in their own source. Every one of
+   * the 72 `GetLocalPlayer` sites in `Scripts\Blizzard.j` guards a block carrying the comment
+   * "Use only local code (no net traffic) within this block to avoid desyncs" — camera, text,
+   * sound, timer dialogs, cinematic. **A `GetLocalPlayer` gate is presentation-only by
+   * contract.** That is why our natives can intercept the `…ForPlayer` wrappers at the wrapper
+   * (taking the player argument and routing to a per-player hook) instead of evaluating the
+   * gate at all — see natives/sound.ts, natives/timerdialog.ts, natives/camera.ts.
+   *
+   * The exposure that remains is a MAP script calling `GetLocalPlayer` directly. For those,
+   * Phase E evaluates per recipient inside `forAudience`.
+   */
+  audience: number | null = null;
+
+  /** What `GetLocalPlayer` resolves to right now. */
+  get localViewer(): number {
+    return this.audience ?? this.localPlayer;
+  }
+
+  /** Evaluate `fn` as though the human at the keyboard were `player`. Restores the previous
+   *  audience even if `fn` throws, so a trigger error cannot leave the runtime answering
+   *  `GetLocalPlayer` as somebody else for the rest of the match. */
+  forAudience<T>(player: number, fn: () => T): T {
+    const prev = this.audience;
+    this.audience = player;
+    try {
+      return fn();
+    } finally {
+      this.audience = prev;
+    }
+  }
 
   /** Functions whose `CreateUnit` calls must be RECORDED, not spawned (7.3). The map's
    *  pre-placed units are already on the map — the viewer renders war3mapUnits.doo and

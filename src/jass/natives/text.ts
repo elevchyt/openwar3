@@ -125,11 +125,16 @@ export function registerTextNatives(rt: Runtime): void {
   def(rt, "DisplayTimedTextFromPlayer", (c, a) => {
     const idx = c.rt.data<JassPlayer>(a[0])?.index ?? 0;
     const msg = asStr(a[4]).replace(/%s/g, c.rt.playerName(idx));
-    c.rt.hooks?.displayText?.(c.rt.localPlayer, msg, asNum(a[3]));
+    // Goes to whoever is being evaluated for. The message is a BROADCAST (see above), so
+    // under Phase E this is delivered once per recipient rather than once to the host.
+    c.rt.hooks?.displayText?.(c.rt.localViewer, msg, asNum(a[3]));
     return JNULL;
   });
   def(rt, "ClearTextMessages", (c) => {
-    c.rt.hooks?.clearText?.(0); // local player (single-player: slot 0)
+    // Was hardcoded to slot 0 with the note "single-player: slot 0", which is wrong the
+    // moment the human is not in slot 0 — it cleared a bystander's message log and left the
+    // real one standing. The lobby has said which slot we are since applyLobby.
+    c.rt.hooks?.clearText?.(c.rt.localViewer);
     return JNULL;
   });
 

@@ -72,7 +72,12 @@ export function registerConfigNatives(rt: Runtime): void {
   // --- player queries (used by blizzard.j slot logic + custom triggers) ---
   def(rt, "Player", (c, a) => c.rt.playerHandle(asInt(a[0])));
   def(rt, "GetPlayerId", (c, a) => jInt(player(c, a[0])?.index ?? 0));
-  def(rt, "GetLocalPlayer", (c) => c.rt.playerHandle(c.rt.localPlayer)); // the human at THIS machine
+  // Resolves against the current AUDIENCE, not against the host's own seat — see
+  // Runtime.audience. Identical today (every client runs its own interpreter, so the audience
+  // is null and this is localPlayer); the difference appears when one authority evaluates for
+  // N recipients. Blizzard's own contract is that a GetLocalPlayer gate guards presentation
+  // only ("no net traffic within this block"), which is what makes that safe to do per viewer.
+  def(rt, "GetLocalPlayer", (c) => c.rt.playerHandle(c.rt.localViewer));
   // GetPlayersByMapControl(MAP_CONTROL_USER) — "for each human player" — is one of the most
   // common shapes in the whole corpus, and it is only as good as this answer.
   def(rt, "GetPlayerController", (c, a) =>

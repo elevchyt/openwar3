@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | items 1–5 done; 6–7 open (GetLocalPlayer per recipient; sim.visibleToTeam + the N-rebuild budget) |
+| D — N vision maps | in progress | items 1–6 done; only item 7 open (sim.visibleToTeam + the N-rebuild budget) |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -726,10 +726,37 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    CLAUDE.md the running game decides, and nobody has looked yet. Do not "fix" it from memory.
 
 
-6. **`GetLocalPlayer` resolves per recipient.** [`src/jass/natives/config.ts`](../src/jass/natives/config.ts)
-   reads `c.rt.localPlayer` — the authority's own notion of "local", which is meaningless once the
-   interpreter runs once and its output is sent to N clients. The classic WC3 desync native; it must
-   resolve against the recipient of the snapshot.
+6. ~~**`GetLocalPlayer` resolves per recipient.**~~ **Done — the seam, not the consumer.**
+   `Runtime.audience` is the player the interpreter is currently evaluating FOR; `null` means
+   this machine's own seat. `GetLocalPlayer` reads `localViewer` (`audience ?? localPlayer`),
+   and `forAudience(player, fn)` scopes it with a `finally`, so a trigger that throws
+   mid-evaluation cannot leave the runtime answering as somebody else for the rest of the
+   match. Pinned by [`tools/jass-audience-test.cjs`](../tools/jass-audience-test.cjs) (9 checks,
+   running real JASS through the interpreter), wired into `pnpm jass:test` **before** the
+   corpus test so it executes despite that suite's pre-existing failure.
+
+   **Today this changes nothing, and it is worth being precise about why.** Every client boots
+   the map and runs `config()`/`main()` itself, so each machine's runtime genuinely has its own
+   local player and `GetLocalPlayer` is *already* correct per client. The native only becomes
+   wrong when Phase E makes one host run the script for everybody. So this item lands the
+   resolution point; Phase E supplies the recipient.
+
+   **The finding that makes per-viewer evaluation safe at all**, from the real
+   `Scripts\Blizzard.j` in the MPQs: all 72 `GetLocalPlayer` sites guard a block carrying
+   Blizzard's own comment *"Use only local code (no net traffic) within this block to avoid
+   desyncs"* — camera, text, sound, timer dialogs, cinematic. **A `GetLocalPlayer` gate is
+   presentation-only by contract.** That is the justification for what our natives already do
+   with the `…ForPlayer` family: intercept at the wrapper, take the player argument, route to a
+   per-player hook, and never evaluate the gate. The residual exposure is a map script calling
+   `GetLocalPlayer` directly, which is what `forAudience` is for.
+
+   **Bug fixed in passing:** `ClearTextMessages` was hardcoded to slot 0 with the note
+   "single-player: slot 0". Wrong the moment the human is not in slot 0 — it cleared a
+   bystander's message log and left the real one standing. Now `localViewer`.
+   `DisplayTimedTextFromPlayer` moved to `localViewer` too; it is a broadcast, so under Phase E
+   it will be delivered once per recipient rather than once to the host.
+
+
 7. **`sim.visibleToTeam` consults the real grid for every team.** See the note above — this is the
    behaviour-changing one. Verify with creeps: a creep camp must stop aggroing a hero it has no
    sight on. Also the moment N rebuilds become real, so measure and record the frame cost.
