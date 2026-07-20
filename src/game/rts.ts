@@ -1,11 +1,12 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
-import { ORDER_IDS, orderIdToString } from "../jass/orders";
+import { orderIdToString } from "../jass/orders";
 import type { Command } from "./commands";
 import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
+import { Authority } from "./authority";
 export type { PlacedRef };
 import {
   type AnimSet,
@@ -421,6 +422,9 @@ export class RtsController {
   // single racing pass — see trySeed.
   private processedInstances = new Set<object>();
   private lastSeenUnitCount = -1; // map.units length at the last scan (grows as models stream in)
+  /** The authority half — ownership, economy, supply, hero rules, order plumbing.
+   *  See game/authority.ts; it imports no renderer, no DOM and no transport. */
+  private authority: Authority;
   private overlays: WorldOverlays; // floating HP bars + the hover slab (DOM, client-only)
   // The single floating name/owner slab shown above the unit (or gold mine / ground
   // item) under the cursor. Built lazily into the world layer so it tracks its target
@@ -479,6 +483,7 @@ export class RtsController {
     // (7.22) — so a script that allies two players actually stops them fighting. Creeps
     // (owner < 0) are excluded by SimWorld.playerAllegiance and keep the team rule.
     this.sim.alliedPlayers = (a, b) => this.alliances.coAllied(a, b);
+    this.authority = new Authority(this.sim, registry, abilities);
     this.overlays = new WorldOverlays(host);
   }
 
@@ -3442,64 +3447,30 @@ export class RtsController {
     return this.sim;
   }
 
-  /**
-   * A player's gold and lumber, as a **frozen copy**. For display and for greying buttons —
-   * never for spending.
-   *
-   * This used to hand out the sim's live stash object, and the renderer wrote to it in
-   * fourteen places: it checked what you could afford, deducted the price, and paid its own
-   * refunds, all before the sim was told anything. The whole economy ran client-side. Every
-   * one of those sites is now a `Command` and the charging happens in `execute`, so the
-   * escape hatch itself can close: a copy means a renderer CAN'T spend, and `Object.freeze`
-   * means an attempt fails loudly in dev rather than mutating a throwaway in silence.
-   */
+  /** @see Authority.stashFor — a frozen copy; the renderer may read, never spend. */
   stashFor(owner: number): Readonly<{ gold: number; lumber: number }> {
-    const s = this.sim.stashOf(owner);
-    return Object.freeze({ gold: s.gold, lumber: s.lumber });
+    return this.authority.stashFor(owner);
   }
 
-  /** How many of `typeId` a player owns or has in production. This picks the REQUIREMENT
-   *  TIER for that unit: WC3 gates the Nth copy, not the type — hero #1 is free, #2 needs a
-   *  Keep and #3 a Castle (`[Hpal] Requirescount=3, Requires1=hkee, Requires2=hcas`). Queued
-   *  ones count, or you could queue three heroes at a Town Hall in one click. */
+  /** @see Authority.countOwned */
   countOwned(owner: number, typeId: string): number {
-    let n = 0;
-    for (const u of this.sim.units.values()) {
-      if (u.hp <= 0) continue;
-      if (u.owner === owner && u.typeId === typeId) n++;
-      if (u.building && (u.owner === owner || u.neutralPassive)) {
-        for (const job of u.building.queue) {
-          if (job.kind !== "unit" || job.unitId !== typeId) continue;
-          // A NEUTRAL shop's queue belongs to nobody by ownership — a Tavern is Neutral
-          // Passive — so the job itself says who is buying. Without that, a hero one player is
-          // hiring would count toward every other player's copy count, and so pick their
-          // requirement tier for them (harmless in 1v1, wrong in an FFA).
-          if (job.buyer !== undefined ? job.buyer === owner : u.owner === owner) n++;
-        }
-      }
-    }
-    return n;
+    return this.authority.countOwned(owner, typeId);
   }
 
-  /** Food used/made by a player's units — including food RESERVED for units still
-   *  in training (WC3 takes food when training begins, like gold/lumber). A queued
-   *  unit's food moves seamlessly to the live count when it spawns (no double-up). */
+  /** @see Authority.foodFor */
   foodFor(owner: number): { used: number; made: number } {
-    let used = 0;
-    let made = 0;
-    for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
-      if (u && u.owner === owner) {
-        used += e.foodUsed;
-        made += e.foodMade;
-        if (u.building) for (const job of u.building.queue) used += this.registry.get(job.unitId)?.foodUsed ?? 0;
-      }
-    }
-    made += this.cheatFoodBonus.get(owner) ?? 0; // debug "add food" cheat
-    return { used, made };
+    return this.authority.foodFor(owner);
   }
 
-  private cheatFoodBonus = new Map<number, number>(); // debug: extra supply cap per player
+  /** @see Authority.hasFreeHero */
+  hasFreeHero(player: number): boolean {
+    return this.authority.hasFreeHero(player);
+  }
+
+  /** @see Authority.currentOrderId */
+  currentOrderId(unitId: number): number {
+    return this.authority.currentOrderId(unitId);
+  }
 
   /** Debug cheats (the bottom-right buttons): top up the local player's economy. */
   cheat(kind: "gold" | "lumber" | "food" | "fastbuild"): boolean {
@@ -3508,7 +3479,7 @@ export class RtsController {
       return this.sim.fastBuild;
     }
     if (kind === "food") {
-      this.cheatFoodBonus.set(this.localPlayer, (this.cheatFoodBonus.get(this.localPlayer) ?? 0) + 100);
+      this.authority.addFoodBonus(this.localPlayer, 100);
     } else {
       const stash = this.sim.stashOf(this.localPlayer);
       if (kind === "gold") stash.gold += 5000;
@@ -3650,22 +3621,7 @@ export class RtsController {
    *  command). Enemy/neutral/creep units can be single-selected to inspect, but
    *  never take orders — WC3 only lets you control your own. */
   private controls(id: number): boolean {
-    return this.ownedBy(this.localPlayer, id);
-  }
-
-  /**
-   * Does `player` own unit `id`? The AUTHORITY's ownership question, and deliberately not
-   * the same one as `controls()`.
-   *
-   * `controls()` asks "is this mine", where "mine" is this machine's own seat — the right
-   * question for the client half (may I click it, does it get a selection circle, does the
-   * command card light up). The authority must instead ask "is this the ISSUING player's",
-   * because on the host it judges commands that arrived from somebody else. Conflating the
-   * two is why `execute()` could not gate a remote peer: every check resolved to "does the
-   * host own it", which is false for every command a client ever sends.
-   */
-  private ownedBy(player: number, id: number): boolean {
-    return this.sim.units.get(id)?.owner === player;
+    return this.authority.ownedBy(this.localPlayer, id);
   }
 
   /** True if the selection holds at least one unit the local player controls. */
@@ -3690,53 +3646,53 @@ export class RtsController {
       case "order":
         return this.applyOrder(player, cmd.unitId, cmd.order, cmd.queued);
       case "cast":
-        return this.ownedBy(player, cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+        return this.authority.ownedBy(player, cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
       case "garrison":
-        return this.ownedBy(player, cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
+        return this.authority.ownedBy(player, cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
       case "getitem":
-        return this.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
+        return this.authority.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
       case "useitem":
-        return this.ownedBy(player, cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
+        return this.authority.ownedBy(player, cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
       case "dropitem":
-        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.authority.ownedBy(player, cmd.unitId)) return false;
         this.sim.dropItem(cmd.unitId, cmd.slot, cmd.x, cmd.y);
         return true;
       case "sellitem":
-        return this.ownedBy(player, cmd.unitId) && this.sim.issueSellItem(cmd.unitId, cmd.slot, cmd.shopId);
+        return this.authority.ownedBy(player, cmd.unitId) && this.sim.issueSellItem(cmd.unitId, cmd.slot, cmd.shopId);
       case "giveitem":
         // BOTH ends are checked: you may not push an item into a unit you don't own.
-        return this.ownedBy(player, cmd.unitId) && this.ownedBy(player, cmd.targetId)
+        return this.authority.ownedBy(player, cmd.unitId) && this.authority.ownedBy(player, cmd.targetId)
           && this.sim.issueGiveItem(cmd.unitId, cmd.slot, cmd.targetId);
       case "shopbuyer":
         // The SHOP is deliberately not ownership-checked — a neutral Goblin Merchant belongs
         // to nobody, which is the entire point. What must be the issuer's is the unit it
         // nominates, and the buyer is recorded against the ISSUER, never against this machine.
-        return (cmd.unitId === 0 || this.ownedBy(player, cmd.unitId))
+        return (cmd.unitId === 0 || this.authority.ownedBy(player, cmd.unitId))
           && this.sim.setShopBuyer(cmd.shopId, player, cmd.unitId);
       case "autocast":
-        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.authority.ownedBy(player, cmd.unitId)) return false;
         this.sim.toggleAutocast(cmd.unitId, cmd.code);
         return true;
       case "rally":
         // "Is it even a building that trains?" is a VALIDITY check, and so belongs to the
         // authority rather than to whichever caller happened to remember it — a client is
         // not trusted to only ever rally rally-capable buildings.
-        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.authority.ownedBy(player, cmd.unitId)) return false;
         if (!this.sim.units.get(cmd.unitId)?.building?.producesUnits) return false;
         this.sim.setRally(cmd.unitId, cmd.x, cmd.y, cmd.kind, cmd.targetId);
         return true;
       case "swapitem":
-        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.authority.ownedBy(player, cmd.unitId)) return false;
         this.sim.swapItems(cmd.unitId, cmd.from, cmd.to);
         return true;
       case "learnskill":
-        return this.ownedBy(player, cmd.unitId) && this.sim.learnAbility(cmd.unitId, cmd.abilityId);
+        return this.authority.ownedBy(player, cmd.unitId) && this.sim.learnAbility(cmd.unitId, cmd.abilityId);
       case "build": {
         // Everything the renderer used to decide for itself, decided here instead: that the
         // worker is yours and is a worker, what the building costs, and whether you can
         // afford it. Placement validity stays client-side for now — it needs the footprint
         // grid the renderer owns (docs/multiplayer.md).
-        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.authority.ownedBy(player, cmd.unitId)) return false;
         if (!this.sim.units.get(cmd.unitId)?.worker) return false;
         const def = this.registry.get(cmd.defId);
         if (!def) return false;
@@ -3755,7 +3711,7 @@ export class RtsController {
         // Everything the old call site checked CLIENT-side is re-checked here, because none of
         // it survives a trip over the wire: that it is your worker, that it is your building,
         // that the building is finished and actually damaged.
-        if (!this.ownedBy(player, cmd.unitId) || !this.ownedBy(player, cmd.buildingId)) return false;
+        if (!this.authority.ownedBy(player, cmd.unitId) || !this.authority.ownedBy(player, cmd.buildingId)) return false;
         if (!this.sim.units.get(cmd.unitId)?.worker) return false;
         const target = this.sim.units.get(cmd.buildingId);
         if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp) return false;
@@ -3791,23 +3747,23 @@ export class RtsController {
         // WC3 hero rules: unique per player, and MELEE_HERO_LIMIT across altars + tavern.
         let heroCount = 0;
         if (def.isHero) {
-          const inProduction = this.heroTypesInProduction(player);
+          const inProduction = this.authority.heroTypesInProduction(player);
           if (inProduction.has(cmd.unitId) || inProduction.size >= MELEE.MELEE_HERO_LIMIT) return false;
           heroCount = inProduction.size;
         }
         // Tech gate. A hero indexes the requirement tier by how many HEROES the player has,
         // not how many of this hero — see the trainTier note in mapViewer.
-        const owned = def.isHero ? heroCount : this.countOwned(player, cmd.unitId);
+        const owned = def.isHero ? heroCount : this.authority.countOwned(player, cmd.unitId);
         if (!this.sim.canMake(player, cmd.unitId, owned)) return false;
         // The melee free FIRST hero: gold- and lumber-free, food still counts. This record
         // lives here and not on the client precisely because it is worth 425 gold.
-        const freeHero = def.isHero && !this.freeHeroUsed.has(player);
+        const freeHero = def.isHero && this.authority.hasFreeHero(player);
         const gold = freeHero ? 0 : def.goldCost;
         const lumber = freeHero ? 0 : def.lumberCost;
         const stash = this.sim.stashOf(player);
         if (stash.gold < gold || stash.lumber < lumber) return false;
         // Food is committed when training BEGINS, exactly like gold and lumber.
-        const food = this.foodFor(player);
+        const food = this.authority.foodFor(player);
         if (food.used + def.foodUsed > food.made) return false;
         // A unit the building SELLS comes off its shelf, and hiring is loud — purchaseUnit
         // both depletes the stock and shouts to the creeps. It can still refuse (sold out,
@@ -3815,7 +3771,7 @@ export class RtsController {
         if (isSold && this.sim.purchaseUnit(cmd.buildingId, cmd.unitId, player) !== "ok") return false;
         stash.gold -= gold;
         stash.lumber -= lumber;
-        if (freeHero) this.freeHeroUsed.add(player);
+        if (freeHero) this.authority.takeFreeHero(player);
         // A neutral shop hires near-instantly; a building you own takes the unit's real
         // build time (altar heroes ~55s). Derived here — the client used to send it.
         const hireTime = b.neutralPassive ? TAVERN_HIRE_TIME : def.buildTime || 15;
@@ -3826,7 +3782,7 @@ export class RtsController {
       case "research": {
         // Ownership was never checked at this call site at all — the command card was, in
         // effect, the check, because you are only ever shown your own building's card.
-        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        if (!this.authority.ownedBy(player, cmd.buildingId)) return false;
         const b = this.sim.units.get(cmd.buildingId);
         if (!b?.building || b.hp <= 0) return false;
         const state = this.sim.tech;
@@ -3850,7 +3806,7 @@ export class RtsController {
         return this.sim.enqueueResearch(cmd.buildingId, cmd.upgradeId, next, cost.time || 1);
       }
       case "upgradebuilding": {
-        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        if (!this.authority.ownedBy(player, cmd.buildingId)) return false;
         const b = this.sim.units.get(cmd.buildingId);
         if (!b?.building || b.hp <= 0) return false;
         const to = this.registry.get(cmd.toTypeId);
@@ -3873,7 +3829,7 @@ export class RtsController {
         return this.sim.enqueueUpgrade(cmd.buildingId, cmd.toTypeId, to.buildTime || 1);
       }
       case "cancelbuild": {
-        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        if (!this.authority.ownedBy(player, cmd.buildingId)) return false;
         const b = this.sim.units.get(cmd.buildingId);
         // Only an UNFINISHED building can be cancelled — a finished one is demolished, which
         // is not this command and pays nothing back.
@@ -3918,7 +3874,7 @@ export class RtsController {
         // and cancelling one would simply mint 425 gold. It does hand the freebie back. That
         // `free` flag is the sim's own, set when the authority granted it.
         if (job.kind === "unit" && job.free) {
-          this.freeHeroUsed.delete(player);
+          this.authority.restoreFreeHero(player);
           return true;
         }
         const d = this.registry.get(job.unitId);
@@ -3932,38 +3888,14 @@ export class RtsController {
       case "battlestations":
         // The sim gathers peons belonging to the BURROW's owner, so without this an enemy
         // could have marched your workers off their gold and into your own burrow.
-        return this.ownedBy(player, cmd.buildingId) && this.sim.battleStations(cmd.buildingId);
+        return this.authority.ownedBy(player, cmd.buildingId) && this.sim.battleStations(cmd.buildingId);
       case "standdown":
-        return this.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId);
+        return this.authority.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId);
     }
   }
 
   /** Players who have already had their free first hero. Authority-side state: the melee
    *  freebie is worth a hero's full price, so who has spent it is not the client's to say. */
-  private freeHeroUsed = new Set<number>();
-
-  /** Has `player` still got their free first hero? Read-only — the command card greys and
-   *  prices its altar buttons off this, but only `execute` ever sets it. */
-  hasFreeHero(player: number): boolean {
-    return !this.freeHeroUsed.has(player);
-  }
-
-  /** Hero types the player already fields or has queued — at their own altars AND at any
-   *  neutral shop (a tavern) they are hiring from. WC3 heroes are unique per player, so this
-   *  is both the uniqueness check and the count the hero cap is measured against. */
-  private heroTypesInProduction(player: number): Set<string> {
-    const set = new Set<string>();
-    for (const u of this.sim.units.values()) {
-      if (u.owner === player && this.registry.get(u.typeId)?.isHero) set.add(u.typeId);
-      if (u.building && (u.owner === player || u.neutralPassive)) {
-        for (const job of u.building.queue) {
-          if (job.kind === "unit" && this.registry.get(job.unitId)?.isHero) set.add(job.unitId);
-        }
-      }
-    }
-    return set;
-  }
-
   /**
    * Route an order to a unit: either append it to the unit's shift-queue, or execute it
    * immediately (replacing its current order + queue). Silently ignores units the local
@@ -3977,42 +3909,13 @@ export class RtsController {
    * `order()` is itself a door.
    */
   private applyOrder(player: number, id: number, o: QueuedOrder, queued: boolean): boolean {
-    if (!this.ownedBy(player, id)) return false;
-    this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
+    if (!this.authority.ownedBy(player, id)) return false;
+    this.authority.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
     if (queued) {
       this.sim.queueOrder(id, o);
       return true;
     }
     return this.sim.issueOrder(id, o);
-  }
-
-  /** Record a player-issued group order (move / attack / attack-move / patrol / follow)
-   *  for the trigger engine's ISSUED-order events. A no-op unless a script is listening
-   *  (`sim.captureOrders`). Harvest/build/rally aren't mapped to a generic order id. */
-  private notePlayerOrder(id: number, o: QueuedOrder): void {
-    switch (o.kind) {
-      case "move":
-        this.sim.noteOrder(id, ORDER_IDS.move, "point", o.x, o.y, 0);
-        break;
-      case "attackmove":
-        this.sim.noteOrder(id, ORDER_IDS.attack, "point", o.x, o.y, 0);
-        break;
-      case "patrol":
-        this.sim.noteOrder(id, ORDER_IDS.patrol, "point", o.x, o.y, 0);
-        break;
-      case "attack":
-        this.sim.noteOrder(id, ORDER_IDS.attack, "target", 0, 0, o.targetId);
-        break;
-      case "follow":
-        this.sim.noteOrder(id, ORDER_IDS.smart, "target", 0, 0, o.targetId);
-        break;
-      case "hold":
-        this.sim.noteOrder(id, ORDER_IDS.holdposition, "immediate", 0, 0, 0);
-        break;
-      case "stop":
-        this.sim.noteOrder(id, ORDER_IDS.stop, "immediate", 0, 0, 0);
-        break;
-    }
   }
 
   /** JASS IssueXOrder → the sim (Phase 7 — issue #33). Maps a generic order id + target
@@ -4038,7 +3941,7 @@ export class RtsController {
     const s = order || orderIdToString(orderId);
     // Ability order? Find the ability on this unit whose Order/Orderon/Orderoff string
     // matches, and cast it (autocast toggles flip the autocast instead of casting).
-    const cast = this.castOrder(unitId, s, targetId, x, y);
+    const cast = this.authority.castOrder(unitId, s, targetId, x, y);
     if (cast !== null) {
       if (cast) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
       return cast;
@@ -4060,49 +3963,6 @@ export class RtsController {
     }
     if (ok) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
     return ok;
-  }
-
-  /** Is `order` one of this unit's ABILITY order strings? Then cast it (or toggle its
-   *  autocast) and report whether it took. Returns **null** when it isn't an ability
-   *  order at all, so the caller falls through to the generic move/attack/stop orders.
-   *  Order strings come from the ability data (AbilityFunc `Order`/`Orderon`/`Orderoff`
-   *  — e.g. Holy Light's "holybolt"). */
-  private castOrder(unitId: number, order: string, targetId: number, x: number, y: number): boolean | null {
-    if (!order || ORDER_IDS[order] !== undefined) return null; // a generic order
-    const u = this.sim.units.get(unitId);
-    if (!u) return null;
-    for (const ab of u.abilities) {
-      const def = this.abilities.get(ab.id);
-      if (!def) continue;
-      if (def.order === order) return this.sim.issueCast(unitId, ab.code, targetId, x, y);
-      // "…on"/"…off" are the autocast toggles (Heal's "autocastoff"/"autocaston").
-      if (def.orderOn === order || def.orderOff === order) {
-        const want = def.orderOn === order;
-        if (ab.autocastOn !== want) this.sim.toggleAutocast(unitId, ab.code);
-        return true;
-      }
-    }
-    return null; // no such ability on this unit — not an ability order we can serve
-  }
-
-  /** GetUnitCurrentOrder — the unit's active sim order as a generic order id (0 = none). */
-  currentOrderId(unitId: number): number {
-    const u = this.sim.units.get(unitId);
-    if (!u) return 0;
-    switch (u.order) {
-      case "move":
-      case "follow":
-        return ORDER_IDS.move;
-      case "attack":
-      case "attackmove":
-        return ORDER_IDS.attack;
-      case "patrol":
-        return ORDER_IDS.patrol;
-      case "hold":
-        return ORDER_IDS.holdposition;
-      default:
-        return 0; // idle / harvest / cast / repair / getitem / return → no generic id
-    }
   }
 
   /** Right-click: order the whole selection. Attack a hostile under the cursor;

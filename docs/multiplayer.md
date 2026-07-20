@@ -375,11 +375,35 @@ commit.
    `setFogState` need one owner per vision group, and `seesFor`/`cripplePlayer`/`exposed` need
    to resolve per snapshot recipient rather than against "local".
 
-6. **The authority core → `src/game/authority.ts`.** `execute`, `applyOrder`, `notePlayerOrder`,
-   `heroTypesInProduction`, `freeHeroUsed`/`hasFreeHero`, `ownedBy`, `castOrder`, `issueUnitOrder`,
-   `currentOrderId`, `resolveRally`, `stashFor`, `countOwned`, `foodFor` (~600 L). The tentpole.
-   Do it **after** 1–5, so what is left to disentangle is only what genuinely belongs. This is the
-   module that must compile with no renderer import.
+6. **The authority core → `src/game/authority.ts`.** The tentpole, split into two commits on the
+   developer's call, because ~450 lines including `execute()` is not a reviewable diff.
+
+   **6a — the leaves. Done.** `Authority` now holds `ownedBy`, `stashFor`, `countOwned`,
+   `foodFor`, `hasFreeHero`/`takeFreeHero`/`restoreFreeHero` (+ the `freeHeroUsed` set),
+   `heroTypesInProduction`, `notePlayerOrder`, `castOrder`, `currentOrderId`, and the
+   `cheatFoodBonus` map. It imports `SimWorld`, two registries and `ORDER_IDS` — **no renderer,
+   no DOM, no transport** — and reads **no client state**. Seven of the nine moved bodies are
+   byte-identical; `foodFor` changed deliberately (below) and the free-hero set gained named
+   accessors instead of being poked directly. rts.ts 4 624 → 4 484.
+
+   **6b — the gate. Next.** `execute()` and `applyOrder()` move across, now that everything
+   they lean on is already there. `RtsController` keeps thin delegators for the public surface
+   the renderer and JASS call (`stashFor`, `countOwned`, `foodFor`, `hasFreeHero`,
+   `currentOrderId`), so `mapViewer.ts` has not moved and will not need to in 6b either.
+
+   **`resolveRally` and `rallyFeedback` are NOT part of this** — the list was wrong to include
+   them, for the third time in the same way. `resolveRally` takes `(cssX, cssY)` and calls
+   `pickAt`/`groundPoint`/`treePickPoint`: it turns a MOUSE CLICK into a rally target.
+   `rallyFeedback` calls `flashTarget`/`queueArrow`. Both are client and stay.
+
+   **`foodFor` was computing the authority's supply cap from render records** — it iterated
+   `this.entries` for `e.foodUsed`/`e.foodMade`, and `SimUnit` carries no food fields at all,
+   so on a headless host every player would have had infinite supply. It now reads
+   `sim.units` + `registry.get(u.typeId)`. The two agree for anything a player can own, since
+   an `Entry`'s food is copied from that same registry row at seed time. The one divergence is
+   `seedNeutral`, which writes 0/0 over the def: harmless (neutrals are filtered by owner), but
+   a unit handed to a player by JASS `SetUnitOwner` now contributes its real food instead of
+   zero — which is the correct reading.
 7. **Narrow the `simWorld` getter.** Pairs with 6: the JASS `EngineHooks` in `mapViewer.ts` call
    into the authority module instead of the raw `SimWorld`, and the ~25 read-only lookups get a
    view interface. Expect to touch this and not finish it — the hooks are mixed
