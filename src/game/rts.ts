@@ -3482,21 +3482,13 @@ export class RtsController {
    *  rates: 35% of the build cost and 150% of the build time to go 1 HP→full. */
   private repairAt(picked: number | null, queued = false): boolean {
     if (picked === null) return false;
-    const target = this.sim.units.get(picked);
-    if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp || target.owner !== this.localPlayer) return false;
-    const def = this.registry.get(this.byId.get(picked)?.typeId ?? "");
-    if (!def) return false;
-    const maxHp = Math.max(1, target.maxHp);
-    const hpPerSec = maxHp / Math.max(1, (def.buildTime || 60) * 1.5);
-    const goldPerHp = (def.goldCost * 0.35) / maxHp;
-    const lumberPerHp = (def.lumberCost * 0.35) / maxHp;
     let any = false;
     for (const id of this.selected) {
-      const w = this.sim.units.get(id);
-      if (w?.worker && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "repair", buildingId: picked, hpPerSec, goldPerHp, lumberPerHp }, queued: queued })) any = true;
+      if (this.execute(this.localPlayer, { c: "repair", unitId: id, buildingId: picked, queued })) any = true;
     }
     return any;
   }
+
 
   selectedInfo(): SelectionInfo | null {
     if (this.selectedMine !== null) return this.mineInfo(this.selectedMine);
@@ -4191,6 +4183,29 @@ export class RtsController {
         return true;
       case "learnskill":
         return this.ownedBy(player, cmd.unitId) && this.sim.learnAbility(cmd.unitId, cmd.abilityId);
+      case "repair": {
+        // Everything the old call site checked CLIENT-side is re-checked here, because none of
+        // it survives a trip over the wire: that it is your worker, that it is your building,
+        // that the building is finished and actually damaged.
+        if (!this.ownedBy(player, cmd.unitId) || !this.ownedBy(player, cmd.buildingId)) return false;
+        if (!this.sim.units.get(cmd.unitId)?.worker) return false;
+        const target = this.sim.units.get(cmd.buildingId);
+        if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp) return false;
+        // The def comes off the SIM unit's own typeId, not the render Entry — a headless
+        // authority has no Entry, and reaching through one would silently return undefined
+        // and refuse every repair rather than failing loudly.
+        const def = this.registry.get(target.typeId);
+        if (!def) return false;
+        // WC3 repair rates: 35% of the build cost and 150% of the build time, 1 HP -> full.
+        const maxHp = Math.max(1, target.maxHp);
+        return this.applyOrder(player, cmd.unitId, {
+          kind: "repair",
+          buildingId: cmd.buildingId,
+          hpPerSec: maxHp / Math.max(1, (def.buildTime || 60) * 1.5),
+          goldPerHp: (def.goldCost * 0.35) / maxHp,
+          lumberPerHp: (def.lumberCost * 0.35) / maxHp,
+        }, cmd.queued);
+      }
     }
   }
 

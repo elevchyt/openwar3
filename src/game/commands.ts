@@ -51,4 +51,16 @@ export type Command =
   /** Rearrange a unit's own inventory. Not an order — nothing is performed, two slots swap. */
   | { c: "swapitem"; unitId: number; from: number; to: number }
   /** Spend a hero skill point. Not an order either — it mutates the hero, not its behaviour. */
-  | { c: "learnskill"; unitId: number; abilityId: string };
+  | { c: "learnskill"; unitId: number; abilityId: string }
+  /**
+   * Send a worker to repair a building. Carries INTENT ONLY — which worker, which building.
+   *
+   * `QueuedOrder`'s own `repair` member carries the derived rates (`hpPerSec`, `goldPerHp`,
+   * `lumberPerHp`), and those must never come off the wire: they are the price and speed of
+   * the repair, so a client that sent its own would be setting them. The authority derives
+   * them from the building's `UnitDef` in `execute` and builds the `QueuedOrder` itself.
+   *
+   * The general rule this is an instance of: a command carries what the player ASKED FOR,
+   * never what the engine DERIVED from it.
+   */
+  | { c: "repair"; unitId: number; buildingId: number; queued: boolean };

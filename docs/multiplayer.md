@@ -91,7 +91,7 @@ state.
 | Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster |
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | not started | the tentpole |
-| C — command funnel | **done** | 14 player actions through `execute(player, cmd)`; `Command` is the wire type |
+| C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | not started | |
 | E — snapshots & reconnect | not started | |
 
@@ -114,18 +114,25 @@ first; it reads the unpacked `Scripts/common.j` and fails without it.
 
 **Pick up here.** In order:
 
-1. **Serialize the acting group.** The formation solvers (`groupTargets`, `ringTargets`,
-   `followOffsets`) compute *authoritative* destinations from the *client's* `selected` set, so a
-   remote move order has no group to solve over. Either a command carries its unit set or the
-   client emits N per-unit commands — this decides the wire shape and blocks Phase E.
-2. **Unit-type metadata off `Entry`.** `repairAt`, `playImpacts`, `ack` and `moveAt` resolve
-   `UnitDef` through the RENDER record (`byId.get(id).typeId`). A headless authority has no
-   `Entry`, so these silently no-op rather than failing loudly. `typeId`/`race`/`selRadius` want to
-   live on `SimUnit` or a shared table.
-3. **Phase B — bisect `rts.ts`.** Mostly mechanical once 1 and 2 are done. Note the real coupling
-   is not the class's method list but `simWorld`, which the renderer and UI reach through at ~126
-   sites; splitting the class buys nothing while that stays open.
-4. **Phase D / E** — N vision maps, then snapshots and reconnect.
+1. **Phase B — bisect `rts.ts`.** Note the real coupling is not the class's method list but
+   `simWorld`, which the renderer and UI reach through at ~126 sites; splitting the class buys
+   very little while that stays open. Start by narrowing that escape hatch.
+2. **Phase D / E** — N vision maps, then snapshots and reconnect.
+
+**Two things that looked like blockers and are not.**
+
+*Serializing the acting group* was raised as a decision (does a command carry its unit set, or does
+the client emit N per-unit commands?). It is already answered, by construction: the formation
+solvers run client-side off `this.selected` and emit **self-contained per-unit commands**, each with
+its own resolved destination. `groupTargets` reads only `sim.units` and `sim.grid` — no client state
+beyond the ids handed to it — so it could move authority-side later if wanted, but nothing needs it
+to. The invariant that matters is that `execute` reads no client state, which it does not.
+
+*Unit-type metadata living on the render `Entry`* was raised as a headless-authority hazard. Mostly
+a non-issue: `SimUnit` already carries `typeId` and `race`, so the authority never needed `Entry`.
+The remaining `byId.get(id).typeId` lookups are all in `playImpacts`, which is client-side sound and
+is *better* off `Entry` — a unit that just died still has its render record when its death sound
+plays, but is already gone from `sim.units`.
 
 Phase C is done: all eleven player actions go through `RtsController.execute`, and `Command`
 ([`src/game/commands.ts`](../src/game/commands.ts)) is the type that will go on the wire. Nothing
