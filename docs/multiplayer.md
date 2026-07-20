@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c). Open: 6b (now measured, not built), 7b, then 8–12 — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b). Open: 6c, 7b, then 8–12 — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(374 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(386 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -1347,7 +1347,50 @@ enumerated by body rather than by name.
 
    Illusions were already handled at the source in item 5 and did not need touching here.
 
-6b. **A remembered building that has been DESTROYED stops appearing.** WC3 keeps the ghost image
+6b. ~~**A remembered building that has been DESTROYED stops appearing.**~~ **Done.**
+   [`src/game/ghosts.ts`](../src/game/ghosts.ts) `GhostMemory` — `noteDestroyed(u, viewers)`,
+   `forgetSeen(player, viewer)`, `ghostsFor(player)` — and `snapshotFor` takes an optional
+   `ghosts` list it prepends. **Ninth module to compile standalone**; nothing imports it yet, so
+   this commit cannot move a pixel.
+
+   **The developer's measurement decided both rules, and one of them is not the obvious one.**
+   The client keeps the image until you re-scout: no timeout, no decay, cleared by SIGHT of the
+   cell. So forgetting is one `fogBlocksAt` test per ghost per rebuild, and it is
+   self-correcting — the same eyes that would refresh a live building's record clear a dead
+   one's.
+
+   **A ghost is minted only for a viewer who was NOT watching**, and the test is
+   `visibilityFor(...) === "remembered"`, not `!== "omit"`. If you are looking at a Barracks
+   when it burns down you SAW it burn down, and leaving an image standing would be a lie the
+   real client does not tell. That distinction falls straight out of item 6's three states — the
+   second time that split has paid for itself, after it turned out to be what the AoI rule
+   needed too.
+
+   **The ghost's record is `rememberedUnit`'s, byte for byte.** A dead building must not be MORE
+   informative than a live one you cannot see, and a second redaction would be a second rule to
+   keep in step. It also means nothing downstream can tell a ghost from a live memory, which is
+   correct: to the player they are the same image.
+
+   **Only structures leave one.** WC3 leaves no image of a dead footman — a mobile unit has no
+   last-seen position worth trusting, which is the fog "concealing enemy movements" doing its
+   job.
+
+   **This is the first genuinely per-recipient HISTORY the authority carries**, and item 6 got
+   to avoid it for a reason worth restating: a LIVE remembered building needs no history because
+   its last-seen position is its current position, so the record is derivable on the spot. A
+   dead one has no current position to derive from, so somebody has to have written it down.
+
+   Three injections, each turning exactly one named check red with `typecheck` clean: minting a
+   ghost for the watcher (`!== "omit"`), dropping the structures-only guard, and inverting the
+   forget test so sight keeps rather than clears. `sim:test` 374 → **386**.
+
+   **Still open (item 6c): nothing calls `noteDestroyed`.** The authority has to call it on every
+   structure death, and `forgetSeen` on every fog rebuild. That is wiring into the tick loop
+   rather than a rule, and it lands with item 10 when snapshots are actually produced per tick —
+   at which point the local renderer also stops losing the ghost off its own screen, which is
+   the visible half of this bug and is NOT fixed by this commit.
+
+6b-old. **The original entry.** WC3 keeps the ghost image
    until you re-see the spot; ours vanishes the moment the building leaves `world.units`, because
    that is what `visibilityFor` classifies. Found while writing 6, **pre-existing rather than
    introduced** — the client has the same hole today for the same reason (`fogHides` reads live

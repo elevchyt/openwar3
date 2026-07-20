@@ -19,6 +19,7 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { snapshotFor, visibilityFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
+const { GhostMemory } = require(join(REPO, ".sim-build", "src", "game", "ghosts.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -325,6 +326,91 @@ console.log("a ground item in the dark is absent, because nothing remembers an i
   // Unlike a building, an item is a live widget that vanishes with the eyes on it
   // (`fogBlocksAt`'s own comment). So there is no "remembered" third state for it.
   check("out of sight, it is gone entirely", snapshotFor(world, viewer(0, seating, { fogBlocksAt: () => true }), 0, 0).items.length, 0);
+}
+
+// ---------------------------------------------------------------------------------------
+// Item 6b: a building destroyed while you were not looking keeps its image until you go back
+// and see the empty ground. MEASURED in the real 1.27a client: no timeout, no decay, cleared
+// by sight of the cell.
+// ---------------------------------------------------------------------------------------
+
+console.log("a building destroyed out of sight leaves a ghost; one destroyed in front of you does not");
+{
+  const seating = { 0: 0, 1: 1 };
+  const barracks = unit({
+    id: 1, owner: 1, team: 1, typeId: "hbar", x: 3000, y: 3000,
+    hp: 900, maxHp: 1500,
+    building: { constructionLeft: 0, buildTimeTotal: 60, queue: [], producesUnits: true, rallyX: 5, rallyY: 6, rallyKind: "point", rallyTargetId: 0 },
+  });
+
+  // Player 0 scouted it and left; player 1 owns it and is standing right there.
+  const away = viewer(0, seating, { fogHides: () => false, fogBlocksClick: () => true, fogBlocksAt: () => true });
+  const watching = viewer(1, seating);
+
+  const mem = new GhostMemory();
+  mem.noteDestroyed(barracks, [{ player: 0, viewer: away }, { player: 1, viewer: watching }]);
+
+  check("the player who was away keeps an image", mem.ghostsFor(0).length, 1);
+  // If you watch it burn down you KNOW it is gone. Minting a ghost here would be a lie the
+  // real client does not tell — and `!== "omit"` instead of `=== "remembered"` is exactly the
+  // edit that would do it.
+  check("the player watching it die keeps nothing", mem.ghostsFor(1).length, 0);
+
+  const g = mem.ghostsFor(0)[0];
+  check("the ghost is flagged as a memory", g.remembered, true);
+  check("it stands where it stood", [g.id, g.typeId, g.x, g.y], [1, "hbar", 3000, 3000]);
+  // A dead building must not be MORE informative than a live one you cannot see.
+  check("and is redacted exactly like a live memory", [g.hp, g.maxHp, g.building.queue.length, g.building.rallyX], [0, 0, 0, 0]);
+}
+
+console.log("only structures leave a ghost");
+{
+  const seating = { 0: 0, 1: 1 };
+  const footman = unit({ id: 2, owner: 1, team: 1, x: 3000, y: 3000, building: null });
+  const away = viewer(0, seating, { fogHides: () => false, fogBlocksClick: () => true, fogBlocksAt: () => true });
+  const mem = new GhostMemory();
+  mem.noteDestroyed(footman, [{ player: 0, viewer: away }]);
+  // WC3 leaves no image of a dead footman. A mobile unit has no last-seen position worth
+  // trusting — concealing enemy movement is the fog's whole job.
+  check("a dead footman leaves nothing", mem.ghostsFor(0).length, 0);
+}
+
+console.log("a ghost is forgotten by SIGHT, not by a clock");
+{
+  const seating = { 0: 0, 1: 1 };
+  const barracks = unit({
+    id: 1, owner: 1, team: 1, typeId: "hbar", x: 3000, y: 3000,
+    building: { constructionLeft: 0, buildTimeTotal: 60, queue: [], producesUnits: true, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 },
+  });
+  const blind = viewer(0, seating, { fogHides: () => false, fogBlocksClick: () => true, fogBlocksAt: () => true });
+  const mem = new GhostMemory();
+  mem.noteDestroyed(barracks, [{ player: 0, viewer: blind }]);
+
+  // Still in the dark: no amount of refreshing forgets it. There is no timeout to model.
+  mem.forgetSeen(0, blind);
+  mem.forgetSeen(0, blind);
+  check("staying away keeps the image indefinitely", mem.ghostsFor(0).length, 1);
+
+  // Walk back and look at the spot.
+  const returned = viewer(0, seating, { fogBlocksAt: () => false });
+  mem.forgetSeen(0, returned);
+  check("re-scouting the spot clears it", mem.ghostsFor(0).length, 0);
+}
+
+console.log("ghosts ride in the snapshot alongside the living");
+{
+  const seating = { 0: 0, 1: 1 };
+  const alive = unit({ id: 7, owner: 0, team: 0, x: 10, y: 20 });
+  const world = worldOf([alive]);
+  const v = viewer(0, seating);
+  const ghost = { ...unit({ id: 99, owner: 1, team: 1, typeId: "hbar", x: 3000, y: 3000 }), remembered: true };
+
+  const snap = snapshotFor(world, v, 0, 1.5, [ghost]);
+  check("both are present", snap.units.length, 2);
+  check("the ghost is one of them", snap.units.filter((u) => u.remembered).map((u) => u.id), [99]);
+  check("the living unit is untouched", snap.units.find((u) => u.id === 7).x, 10);
+  // Default is an empty list, so every existing caller keeps its old answer.
+  check("omitting ghosts changes nothing", snapshotFor(world, v, 0, 1.5).units.length, 1);
 }
 
 console.log(failed === 0 ? "\nsnapshot: all checks passed" : `\nsnapshot: ${failed} FAILED`);

@@ -339,7 +339,7 @@ function weaponOf(w: SimUnit["weapon"]): WeaponSnapshot | null {
  * but it is now a hole in a payload rather than in a render loop, which is a better place to
  * fix it from. Recorded as item 6b.
  */
-function rememberedUnit(u: SimUnit): UnitSnapshot {
+export function rememberedUnit(u: SimUnit): UnitSnapshot {
   return {
     id: u.id,
     owner: u.owner,
@@ -432,14 +432,21 @@ function rememberedUnit(u: SimUnit): UnitSnapshot {
  * That difference is the reason this takes a viewer AND a recipient rather than deriving one
  * from the other — an ally may not see where you are about to build, but an ally must be able
  * to tell your illusions from you, or Mirror Image would fool your own team.
+ *
+ * `ghosts` are the buildings this recipient still believes are standing — structures that have
+ * left the world while nobody of theirs was looking (`GhostMemory`, item 6b). They are appended
+ * rather than merged: by construction they are not in `world.units` any more, so there is
+ * nothing to merge them with, and a ghost whose id somehow IS live would be a bug in the
+ * memory rather than something to paper over here.
  */
 export function snapshotFor(
   world: SnapshotWorld,
   viewer: SnapshotViewer,
   recipient: number,
   time: number,
+  ghosts: readonly UnitSnapshot[] = [],
 ): WorldSnapshot {
-  const units: UnitSnapshot[] = [];
+  const units: UnitSnapshot[] = [...ghosts];
   for (const u of world.units.values()) {
     const vis = visibilityFor(viewer, u);
     if (vis === "omit") continue;
