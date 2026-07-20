@@ -973,11 +973,30 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    overrides at 108 and 117) and by `typecheck`, not by a runtime assertion. Echo Isles melee never
    calls either native, so neither was exercised in the browser.
 
-1d. **The gold-mine table.** `getUnitX`/`getUnitY`/`getResourceAmount`/`setResourceAmount`/
-   `createBlightedGoldMine` fall back to the mine table, because to a script a gold mine IS a unit
-   (`MeleeGetProjectedLoc` measures off `GetUnitLoc(nearestMine)`). That table is map-placement
-   state; [`placement.ts`](../src/game/placement.ts) already exists and compiles standalone, so
-   this is probably a move onto `PlacedIndex` rather than a new owner — check before assuming.
+1d. ~~**The gold-mine table.**~~ **Done, and the guess in this entry was wrong — which is why it
+   said "check before assuming".** It predicted a move onto `PlacedIndex` because "that table is
+   map-placement state". It is not. `mineForScript` reads `simView.mines` — the **sim's** mine
+   table, live world state — and `MINE_ID_BASE` is nothing but an id-space offset. So all five
+   natives needed `SimWorld` alone and went straight into `simHooks` with no new owner and no
+   `placement.ts` involvement at all. Renderer 91 → 86, `simHooks` 58 → 63, union still 149.
+
+   **`MINE_ID_BASE` and `mineForScript` now live in [`jassHooks.ts`](../src/game/jassHooks.ts)**,
+   exported. The base used to be a `private static` on `MapViewerScene`, which meant the fiction
+   "to a script a gold mine IS a unit" was owned by the one participant that can never be the
+   authority — and five natives plus the renderer's own enumeration all have to agree on it.
+   `mineForScript` takes `{ readonly mines: ReadonlyMap<…> }` rather than `SimWorld`, so the
+   renderer hands it `simView` and does not widen its grip on the world to resolve a handle.
+   That mattered: the first cut passed `simWorld` and pushed the escape-hatch count **up** from 32
+   to 33. The narrow type put it back to 32.
+
+   `nearestMineNode` died with the move — `createBlightedGoldMine` was its only caller.
+
+   **Verified in the browser, and this one genuinely was.** Echo Isles' melee start calls
+   `MeleeGetProjectedLoc(GetUnitLoc(nearestMine))`, which runs through the moved
+   `getUnitX`/`getUnitY` on a mine handle to clump the starting workers 320 units off the mine.
+   Workers at the mine rather than at the map origin is that path working end to end. The
+   regression test also fails correctly on the natural bug (returning a raw mine id instead of
+   `MINE_ID_BASE + id`): two named checks red, `typecheck` clean.
 
 1e. **The vision + alliance group — 13 entries, the largest coherent block left.**
    `createFogModifier`, `fogModifierStart`/`Stop`, `destroyFogModifier`, `setFogState`,

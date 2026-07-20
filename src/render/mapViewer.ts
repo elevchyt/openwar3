@@ -22,6 +22,7 @@ import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
+import { MINE_ID_BASE, mineForScript } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
@@ -1512,12 +1513,6 @@ export class MapViewerScene {
         this.rts?.setUnitFlyHeight(id, height);
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
-      // Position reads fall back to the mine table: to the script a gold mine IS a unit
-      // (MeleeGetProjectedLoc measures the hall/worker clump off GetUnitLoc(nearestMine)).
-      // `undefined` (not 0) when the unit is gone — the native then reads the handle's
-      // last-known value instead of the map origin. See SimWorld.getUnitX.
-      getUnitX: (id) => this.mineForScript(id)?.x ?? this.rts?.simView.getUnitX(id),
-      getUnitY: (id) => this.mineForScript(id)?.y ?? this.rts?.simView.getUnitY(id),
       // Orders (7.14): trigger issue → the sim; current order ← the sim.
       issueUnitOrder: (id, orderId, order, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, order, kind, x, y, targetId) ?? false,
       getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
@@ -1647,18 +1642,6 @@ export class MapViewerScene {
         this.target[0] = x;
         this.target[1] = y;
       },
-      getResourceAmount: (id) => this.mineForScript(id)?.gold ?? 0,
-      setResourceAmount: (id, amount) => {
-        const mine = this.mineForScript(id);
-        if (mine) mine.gold = amount;
-      },
-      // The Undead start's mine swap: our engine has no haunted mine, so hand back the
-      // one still standing at (x, y) (RemoveUnit left it alone). Acolytes then clump
-      // around a real mine instead of a null location.
-      createBlightedGoldMine: (_player, x, y) => {
-        const mine = this.nearestMineNode(x, y, MELEE.MELEE_MINE_SEARCH_RADIUS);
-        return mine ? MapViewerScene.MINE_ID_BASE + mine.id : -1;
-      },
       // Victory/defeat (MeleeInitVictoryDefeat): a melee player is beaten when their team
       // owns no structures, and "crippled" while they own no main hall.
       playerStructureCount: (player, includeIncomplete) => this.countUnits(player, includeIncomplete, (u) => !!u.building),
@@ -1694,7 +1677,7 @@ export class MapViewerScene {
       snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
     }
     for (const m of this.rts.simView.mines.values()) {
-      snap.push({ id: MapViewerScene.MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
+      snap.push({ id: MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
     }
     return snap;
   }
@@ -1704,10 +1687,12 @@ export class MapViewerScene {
    *  collide with unit ids, so the bridge offsets them into a range of their own. That
    *  fiction is what lets blizzard.j's MeleeFindNearestMine work: it enumerates units,
    *  keeps the nearest 'ngol', and clumps the starting workers 320 units off it. */
-  private static readonly MINE_ID_BASE = 1_000_000;
+  /** The id-space convention now lives with the bridge that invents it (game/jassHooks.ts) —
+   *  five natives moved there and the renderer's enumeration has to agree with them, so a
+   *  `private static` here would have been two definitions of one fiction. */
   private mineForScript(unitId: number): SimMine | undefined {
-    if (unitId < MapViewerScene.MINE_ID_BASE) return undefined;
-    return this.rts?.simView.mines.get(unitId - MapViewerScene.MINE_ID_BASE);
+    const view = this.rts?.simView;
+    return view ? mineForScript(view, unitId) : undefined;
   }
   /** Bind a PRE-PLACED `CreateUnit` row to the unit that is already standing there (7.22).
    *
@@ -1739,20 +1724,6 @@ export class MapViewerScene {
    *  They should agree exactly (same placement, two encodings) — a terrain tile of slack
    *  absorbs the sim's spawn re-settle without ever reaching the next unit over. */
   private static readonly PLACED_MATCH_RADIUS = 128;
-
-  /** The SimMine nearest (x, y) within `radius` (the node, not our melee-roster helper). */
-  private nearestMineNode(x: number, y: number, radius: number): SimMine | undefined {
-    let best: SimMine | undefined;
-    let bestD = radius * radius;
-    for (const m of this.rts?.simView.mines.values() ?? []) {
-      const d = (m.x - x) ** 2 + (m.y - y) ** 2;
-      if (d <= bestD) {
-        bestD = d;
-        best = m;
-      }
-    }
-    return best;
-  }
 
   /** GetPlayerStructureCount / GetPlayerUnitCount / GetPlayerTypedUnitCount (7.3) — how
    *  blizzard.j decides who has been defeated. `includeIncomplete` counts a building still

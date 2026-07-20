@@ -1,5 +1,35 @@
-import type { SimWorld } from "../sim/world";
+import type { SimWorld, SimMine } from "../sim/world";
 import type { EngineHooks } from "../jass/runtime";
+import { MELEE } from "../data/gameplayConstants";
+
+/**
+ * The id space gold mines occupy when a SCRIPT is looking at them.
+ *
+ * A mine is not a `SimUnit` for us — it lives in `SimWorld.mines`, its own table — but to JASS
+ * it IS a unit, and that fiction is load-bearing rather than cosmetic: `blizzard.j`'s
+ * `MeleeFindNearestMine` enumerates units, keeps the nearest `'ngol'`, and clumps the starting
+ * workers 320 units off it. Break the fiction and every melee start places its workers at the
+ * map origin.
+ *
+ * So mines are handed out as `MINE_ID_BASE + mine.id` and recognised on the way back in. The
+ * base lives here, with the bridge that invents it, because five natives and the renderer's
+ * enumeration all have to agree on it — it used to be a `private static` on the renderer, which
+ * meant the convention was owned by the one participant that could not be the authority.
+ */
+export const MINE_ID_BASE = 1_000_000;
+
+/**
+ * The mine behind a script's unit handle, or undefined if that handle is a real unit.
+ *
+ * Takes the narrowest thing that can answer — a map of mines — rather than `SimWorld`, so the
+ * renderer can hand it `simView` and not widen its grip on the world just to resolve a handle.
+ * `ReadonlyMap` still lets `setResourceAmount` write `mine.gold`: the map cannot gain or lose
+ * mines through here, which is the part that matters.
+ */
+export function mineForScript(world: { readonly mines: ReadonlyMap<number, SimMine> }, unitId: number): SimMine | undefined {
+  if (unitId < MINE_ID_BASE) return undefined;
+  return world.mines.get(unitId - MINE_ID_BASE);
+}
 
 // The half of the JASS `EngineHooks` table that is pure world (docs/multiplayer.md Phase E item 1).
 //
@@ -49,6 +79,34 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // and there is no model to re-tint, which is the correct behaviour rather than a gap.
     setUnitOwner: (id, player) => sim.setUnitOwner(id, player, teamOf(player)),
     setUnitFlyHeight: (id, height) => sim.setUnitFlyHeight(id, height),
+    // --- gold mines, which are units only to a script (see MINE_ID_BASE) --------------------
+    //
+    // Position reads fall back to the mine table because `MeleeGetProjectedLoc` measures the
+    // hall/worker clump off `GetUnitLoc(nearestMine)`. `undefined` (not 0) when the unit is
+    // gone — the native then reads the handle's last-known value instead of the map origin.
+    // See SimWorld.getUnitX.
+    getUnitX: (id) => mineForScript(sim, id)?.x ?? sim.getUnitX(id),
+    getUnitY: (id) => mineForScript(sim, id)?.y ?? sim.getUnitY(id),
+    getResourceAmount: (id) => mineForScript(sim, id)?.gold ?? 0,
+    setResourceAmount: (id, amount) => {
+      const mine = mineForScript(sim, id);
+      if (mine) mine.gold = amount;
+    },
+    // The Undead start's mine swap: our engine has no haunted mine, so hand back the one still
+    // standing at (x, y) — `RemoveUnit` deliberately left it alone (see the renderer's
+    // removeUnit). Acolytes then clump around a real mine instead of a null location.
+    createBlightedGoldMine: (_player, x, y) => {
+      let best: SimMine | undefined;
+      let bestD = MELEE.MELEE_MINE_SEARCH_RADIUS ** 2;
+      for (const m of sim.mines.values()) {
+        const d = (m.x - x) ** 2 + (m.y - y) ** 2;
+        if (d <= bestD) {
+          bestD = d;
+          best = m;
+        }
+      }
+      return best ? MINE_ID_BASE + best.id : -1;
+    },
     // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
     setUnitState: (id, state, value) => {
       const u = sim.units.get(id);
