@@ -36,7 +36,7 @@ const world = new SimWorld(grid);
 // file: it is what a dropped or renamed native is measured against.
 const EXPECTED = [
   "addHeroXp", "addToStock", "createBlightedGoldMine", "createItem", "enumItems",
-  "getHeroSkillPoints", "getHeroXp", "getResourceAmount",
+  "getHeroSkillPoints", "getHeroXp", "getResourceAmount", "killUnit", "removeUnit",
   "getTimeOfDay", "getUnitAbilityLevel", "getUnitFacing", "getUnitFlyHeight", "getUnitLevel",
   "getUnitMoveSpeed", "getUnitState", "getUnitX", "getUnitY",
   "isDawnDuskEnabled", "isUnitPaused", "itemInfo",
@@ -61,7 +61,7 @@ const teamOf = (p) => TEAMS[p] ?? p;
 const hooks = simHooks(world, teamOf);
 const got = Object.keys(hooks).sort();
 check("every expected native is present, and no extra", got, EXPECTED);
-check("all 63 of them are functions", got.filter((k) => typeof hooks[k] !== "function"), []);
+check("all 65 of them are functions", got.filter((k) => typeof hooks[k] !== "function"), []);
 check("setPlayerState is NOT here — it is the authority's", got.includes("setPlayerState"), false);
 
 // Not just present — actually wired to THIS world. A hook bound to the wrong object, or to a
@@ -122,6 +122,29 @@ check("createBlightedGoldMine returns a script handle", hooks.createBlightedGold
 check("…which resolves back to that mine", hooks.getResourceAmount(hooks.createBlightedGoldMine(0, 1510, 1710, 0)), 500);
 check("…and -1 when nothing is in range", hooks.createBlightedGoldMine(0, 90000, 90000, 0), -1);
 
+// RemoveUnit must REFUSE a mine handle. A mine is not a sim unit, so sim.removeUnit could not
+// take it off the map anyway — but the only caller that tries is the Undead start's mine swap,
+// which puts one straight back, so leaving it standing IS the swap. Spying on the sim rather
+// than driving it, because what is being checked is the routing, not SimWorld.removeUnit.
+console.log("\nRemoveUnit refuses a gold mine, and reaches the sim for anything else");
+const removed = [];
+const killed = [];
+const realRemove = world.removeUnit.bind(world);
+const realKill = world.killUnit.bind(world);
+world.removeUnit = (id) => removed.push(id);
+world.killUnit = (id) => killed.push(id);
+const spyHooks = simHooks(world, teamOf);
+
+spyHooks.removeUnit(mineHandle);
+check("a mine handle does not reach sim.removeUnit", removed, []);
+check("…and the mine is still standing", !!world.mines.get(3), true);
+spyHooks.removeUnit(3);
+check("a real unit id does reach it", removed, [3]);
+spyHooks.killUnit(3);
+check("killUnit reaches the sim", killed, [3]);
+world.removeUnit = realRemove;
+world.killUnit = realKill;
+
 // --- the authority half -------------------------------------------------------------------
 //
 // The player-resource pair. `setPlayerState` is the native that used to be the last live-stash
@@ -137,7 +160,8 @@ console.log("\nthe player-resource natives go through the authority");
 const stubRegistry = { get: () => undefined };
 const authority = new Authority(world, stubRegistry, stubRegistry, null, stubRegistry);
 const ah = authorityHooks(authority);
-check("authorityHooks is exactly the resource pair", Object.keys(ah).sort(), ["getPlayerState", "setPlayerState"]);
+check("authorityHooks holds the resource pair and the order pair", Object.keys(ah).sort(),
+  ["getPlayerState", "getUnitCurrentOrder", "issueUnitOrder", "setPlayerState"]);
 
 ah.setPlayerState(0, 1, 750);
 check("gold reached the LIVE stash", world.stashOf(0).gold, 750);

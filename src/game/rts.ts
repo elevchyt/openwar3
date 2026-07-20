@@ -1,7 +1,6 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
-import { orderIdToString } from "../jass/orders";
 import type { Command } from "./commands";
 import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
@@ -1831,16 +1830,7 @@ export class RtsController {
     return true;
   }
 
-  /** Remove a unit outright (JASS RemoveUnit): no death/corpse. The render side drops
-   *  it on the next tick's removal reconcile (onRemove hides the instance). */
-  removeUnit(simId: number): void {
-    this.sim.removeUnit(simId);
-  }
 
-  /** Kill a unit (JASS KillUnit): plays the death animation + leaves a corpse. */
-  killUnit(simId: number): void {
-    this.sim.killUnit(simId);
-  }
 
   // --- JASS render-only unit effects (Phase 7 — issue #33) -------------------
   // Scale, vertex colour, fly-height lift and team colour are pure render state on
@@ -3450,10 +3440,6 @@ export class RtsController {
     return this.authority.hasFreeHero(player);
   }
 
-  /** @see Authority.currentOrderId */
-  currentOrderId(unitId: number): number {
-    return this.authority.currentOrderId(unitId);
-  }
 
   /** Debug cheats (the bottom-right buttons): top up the local player's economy. */
   cheat(kind: "gold" | "lumber" | "food" | "fastbuild"): boolean {
@@ -3617,53 +3603,6 @@ export class RtsController {
 
   /** Players who have already had their free first hero. Authority-side state: the melee
    *  freebie is worth a hero's full price, so who has spent it is not the client's to say. */
-  /** JASS IssueXOrder → the sim (Phase 7 — issue #33). Maps a generic order id + target
-   *  kind to the matching sim command so a trigger-issued unit actually marches/attacks/
-   *  casts, then records the ISSUED-order event. Unlike the player `order()` path this
-   *  does NOT gate on ownership — a trigger can command any unit. Returns whether the
-   *  order took. `order` is the order string; an ABILITY order (the GUI's "Order <unit>
-   *  to <ability>" → `IssueTargetOrder(u, "holybolt", t)`) is matched by name against the
-   *  unit's own abilities — the engine's numeric ids for ability orders live in no data
-   *  file, so the STRING is the reliable key (7.17).
-   *
-   *  NOT A COMMAND, and not a hole in the funnel — do not "fix" it into one.
-   *  `order()` gates what a CLIENT originates, because a client must not be trusted to
-   *  command units it does not own. This is reached only from the JASS natives
-   *  (jass/natives/world.ts, groups.ts) through `EngineHooks`, and the interpreter runs on
-   *  the AUTHORITY, once (docs/multiplayer.md "JASS"). So a trigger order is an *effect of*
-   *  the authoritative sim, never an input to it: gating it on ownership would break every
-   *  map script, and putting it on the wire would have clients issuing orders nobody asked
-   *  for. Host-only is the correct behaviour here, not the bug it is for the player paths.
-   *  It needs no recording for replays either — same seed + same script + same state
-   *  re-derives it (seeded PRNG in jass/runtime.ts, game-time timers in interpreter.ts). */
-  issueUnitOrder(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
-    const s = order || orderIdToString(orderId);
-    // Ability order? Find the ability on this unit whose Order/Orderon/Orderoff string
-    // matches, and cast it (autocast toggles flip the autocast instead of casting).
-    const cast = this.authority.castOrder(unitId, s, targetId, x, y);
-    if (cast !== null) {
-      if (cast) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
-      return cast;
-    }
-    let ok = false;
-    if (kind === "point") {
-      if (s === "attack" || s === "attackground") ok = this.sim.issueAttackMove(unitId, x, y);
-      else if (s === "patrol") ok = this.sim.issuePatrol(unitId, x, y);
-      else ok = this.sim.issueMove(unitId, x, y); // move / smart / unknown-point → move
-    } else if (kind === "target") {
-      const u = this.sim.units.get(unitId);
-      const t = this.sim.units.get(targetId);
-      if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true);
-      // smart on a unit: attack a hostile (incl. team -1 creeps), else follow (ally/neutral).
-      else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false) : this.sim.issueFollow(unitId, targetId);
-    } else {
-      if (s === "stop") (this.sim.stop(unitId), (ok = true));
-      else if (s === "holdposition") ok = this.sim.issueHold(unitId);
-    }
-    if (ok) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
-    return ok;
-  }
-
   /** Right-click: order the whole selection. Attack a hostile under the cursor;
    *  workers resume a friendly build or harvest a resource; else move to ground.
    *  `queued` (Shift held) appends to each unit's order queue instead of replacing. */

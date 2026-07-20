@@ -1,7 +1,7 @@
 import type { SimWorld, QueuedOrder } from "../sim/world";
 import type { UnitRegistry } from "../data/units";
 import type { AbilityRegistry } from "../data/abilities";
-import { ORDER_IDS } from "../jass/orders";
+import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { TechRegistry } from "../data/techtree";
 import type { UpgradeRegistry } from "../data/upgrades";
 import type { Command } from "./commands";
@@ -87,6 +87,53 @@ export class Authority {
    */
   setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void {
     this.sim.stashOf(player)[resource] = value;
+  }
+
+  /** JASS IssueXOrder → the sim (Phase 7 — issue #33). Maps a generic order id + target
+   *  kind to the matching sim command so a trigger-issued unit actually marches/attacks/
+   *  casts, then records the ISSUED-order event. Unlike the player `order()` path this
+   *  does NOT gate on ownership — a trigger can command any unit. Returns whether the
+   *  order took. `order` is the order string; an ABILITY order (the GUI's "Order <unit>
+   *  to <ability>" → `IssueTargetOrder(u, "holybolt", t)`) is matched by name against the
+   *  unit's own abilities — the engine's numeric ids for ability orders live in no data
+   *  file, so the STRING is the reliable key (7.17).
+   *
+   *  NOT A COMMAND, and not a hole in the funnel — do not "fix" it into one.
+   *  `order()` gates what a CLIENT originates, because a client must not be trusted to
+   *  command units it does not own. This is reached only from the JASS natives
+   *  (jass/natives/world.ts, groups.ts) through `EngineHooks`, and the interpreter runs on
+   *  the AUTHORITY, once (docs/multiplayer.md "JASS"). So a trigger order is an *effect of*
+   *  the authoritative sim, never an input to it: gating it on ownership would break every
+   *  map script, and putting it on the wire would have clients issuing orders nobody asked
+   *  for. Host-only is the correct behaviour here, not the bug it is for the player paths.
+   *  It needs no recording for replays either — same seed + same script + same state
+   *  re-derives it (seeded PRNG in jass/runtime.ts, game-time timers in interpreter.ts). */
+  issueUnitOrder(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
+    const s = order || orderIdToString(orderId);
+    // Ability order? Find the ability on this unit whose Order/Orderon/Orderoff string
+    // matches, and cast it (autocast toggles flip the autocast instead of casting).
+    const cast = this.castOrder(unitId, s, targetId, x, y);
+    if (cast !== null) {
+      if (cast) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
+      return cast;
+    }
+    let ok = false;
+    if (kind === "point") {
+      if (s === "attack" || s === "attackground") ok = this.sim.issueAttackMove(unitId, x, y);
+      else if (s === "patrol") ok = this.sim.issuePatrol(unitId, x, y);
+      else ok = this.sim.issueMove(unitId, x, y); // move / smart / unknown-point → move
+    } else if (kind === "target") {
+      const u = this.sim.units.get(unitId);
+      const t = this.sim.units.get(targetId);
+      if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true);
+      // smart on a unit: attack a hostile (incl. team -1 creeps), else follow (ally/neutral).
+      else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false) : this.sim.issueFollow(unitId, targetId);
+    } else {
+      if (s === "stop") (this.sim.stop(unitId), (ok = true));
+      else if (s === "holdposition") ok = this.sim.issueHold(unitId);
+    }
+    if (ok) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
+    return ok;
   }
 
   /** How many of `typeId` a player owns or has in production. This picks the REQUIREMENT

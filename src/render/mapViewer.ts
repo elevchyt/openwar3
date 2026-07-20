@@ -1486,14 +1486,6 @@ export class MapViewerScene {
       setVolumeGroup: (group, scale) => this.sounds?.setVolumeGroup(group, scale),
       resetVolumeGroups: () => this.sounds?.resetVolumeGroups(),
       createUnit: (player, typeId, x, y, facing) => this.spawnScriptUnit(player, typeId, x, y, facing),
-      // A gold mine isn't a sim unit for us, so RemoveUnit can't take it off the map —
-      // and the only caller that tries is the Undead start's mine swap, which puts one
-      // straight back (see CreateBlightedGoldmine). Leaving it standing IS the swap.
-      removeUnit: (id) => {
-        if (this.mineForScript(id)) return;
-        this.rts?.removeUnit(id);
-      },
-      killUnit: (id) => this.rts?.killUnit(id),
       // --- unit-mutation effects (7.7 cont.) — a trigger visibly moves/alters a unit ---
       // SetUnitOwner: reassign in the sim (team decides allegiance/vision), then re-tint
       // the team-coloured model parts to the new slot's colour if changeColor is set.
@@ -1513,9 +1505,6 @@ export class MapViewerScene {
         this.rts?.setUnitFlyHeight(id, height);
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
-      // Orders (7.14): trigger issue → the sim; current order ← the sim.
-      issueUnitOrder: (id, orderId, order, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, order, kind, x, y, targetId) ?? false,
-      getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
       // Unit groups (7.16): every GroupEnumUnits* scan reads the live sim through here.
       // A dead unit is already out of SimWorld.units (it became a corpse), so an enum
       // only ever sees living units.

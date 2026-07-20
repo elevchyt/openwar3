@@ -79,6 +79,20 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // and there is no model to re-tint, which is the correct behaviour rather than a gap.
     setUnitOwner: (id, player) => sim.setUnitOwner(id, player, teamOf(player)),
     setUnitFlyHeight: (id, height) => sim.setUnitFlyHeight(id, height),
+    // --- unit lifecycle (7.7) ----------------------------------------------------------------
+    //
+    // Both are one line into the sim, which is the finding: the list had `removeUnit` filed as
+    // "entangled with model seeding", and it never was — `RtsController.removeUnit` was a bare
+    // pass-through to `sim.removeUnit`. Only `createUnit` is genuinely entangled, because
+    // spawning has to load a model.
+    killUnit: (id) => sim.killUnit(id),
+    // A gold mine isn't a sim unit for us, so RemoveUnit can't take it off the map — and the only
+    // caller that tries is the Undead start's mine swap, which puts one straight back (see
+    // createBlightedGoldMine). Leaving it standing IS the swap.
+    removeUnit: (id) => {
+      if (mineForScript(sim, id)) return;
+      sim.removeUnit(id);
+    },
     // --- gold mines, which are units only to a script (see MINE_ID_BASE) --------------------
     //
     // Position reads fall back to the mine table because `MeleeGetProjectedLoc` measures the
@@ -220,8 +234,31 @@ export function authorityHooks(authority: {
   stashFor(owner: number): Readonly<{ gold: number; lumber: number }>;
   foodFor(owner: number): { used: number; made: number };
   setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void;
+  currentOrderId(unitId: number): number;
+  issueUnitOrder(
+    unitId: number,
+    orderId: number,
+    order: string,
+    kind: "immediate" | "point" | "target",
+    x: number,
+    y: number,
+    targetId: number,
+  ): boolean;
 }): Partial<EngineHooks> {
   return {
+    // Orders (7.14): trigger issue → the sim; current order ← the sim.
+    //
+    // `issueUnitOrder` is on `Authority` rather than in `simHooks` because it is not a plain sim
+    // write: it first asks `castOrder` whether the order string names one of the unit's own
+    // ABILITIES, and only falls through to move/attack/patrol/hold if not. That question is the
+    // authority's, and its answer lives next to `execute` for the same reason.
+    //
+    // It is deliberately NOT gated on ownership and is NOT a hole in the command funnel — see
+    // the method's own comment. A trigger order is an effect of the authoritative sim, not an
+    // input to it.
+    issueUnitOrder: (id, orderId, order, kind, x, y, targetId) =>
+      authority.issueUnitOrder(id, orderId, order, kind, x, y, targetId),
+    getUnitCurrentOrder: (id) => authority.currentOrderId(id),
     // SetPlayerState → the live stash, via the authority's named setter. This is what grants a
     // custom map its starting gold/lumber (its init triggers set it). Food is derived from
     // units, so states 4 and 5 are read-only and a write to them is ignored rather than

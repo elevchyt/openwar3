@@ -1008,10 +1008,38 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    minting their own would collide). Moving it needs that decision revisited, not ignored. Do this
    one after item 2, which changes when viewpoints exist.
 
-1f. **The order-funnel natives.** `issueUnitOrder`, `getUnitCurrentOrder`, `killUnit`,
-   `createUnit`, `removeUnit`. These route through `RtsController` for spawning and the order
-   funnel. `getUnitCurrentOrder` is already an `Authority` delegator and is nearly free;
-   `createUnit`/`removeUnit` are entangled with model seeding and are not.
+1f. ~~**The order-funnel natives.**~~ **Four of the five done; this entry was wrong about
+   `removeUnit`.** It called `createUnit`/`removeUnit` both "entangled with model seeding".
+   `removeUnit` never was — `RtsController.removeUnit` was a bare one-line pass-through to
+   `sim.removeUnit`, and so was `killUnit`. Only `createUnit` is genuinely entangled, because
+   spawning has to load a model. Renderer 86 → 82, `simHooks` 63 → 65, `authorityHooks` 2 → 4,
+   union still 149.
+
+   **`issueUnitOrder` moved onto `Authority`** (byte-identical modulo `this.authority.castOrder`
+   → `this.castOrder`), which is where it belonged: it is not a plain sim write. It first asks
+   `castOrder` whether the order string names one of the unit's own abilities and only falls
+   through to move/attack/patrol/hold if not — an authority question, now sitting next to
+   `execute`. It stays ungated on ownership, which Phase C already established is correct: a
+   trigger order is an *effect of* the authoritative sim, not an input to it.
+
+   **All four delegators were dead after the move** — each had exactly one caller, the hook table
+   — so `issueUnitOrder`, `killUnit`, `removeUnit` and `currentOrderId` are gone from `rts.ts`
+   entirely. **`rts.ts` 4 158 → 4 122**; `authority.ts` 539 → 585.
+
+   The mine guard came with `removeUnit` and is the thing the new test pins: a mine handle must
+   not reach `sim.removeUnit`. Dropping the guard leaves `typecheck` clean and turns two named
+   checks red — confirmed by injecting it, restored after.
+
+   **Left: `createUnit`.** It routes to `spawnScriptUnit`, which loads a model. It is the last
+   member of this group and belongs with 1g below.
+
+1g. **`createUnit`, and the rest of the presentation half.** `createUnit` is the only world-ish
+   native still stuck in the renderer, because spawning loads a model. The likely shape is the
+   dual-writer trick from 1c — the authority creates the sim unit, the renderer decorates by
+   attaching a body — but `addSimUnit`/`addUnit`/`attachInstance` already split that way, so check
+   what the seam actually is before assuming. Everything else remaining in the renderer's 82
+   (camera, sound, weather, effects, text, selection, registries) is presentation by nature and is
+   what gets *injected* into a headless table rather than moved out of it.
 
 2. **Create player viewpoints at match start, not lazily.** Small. Removes Phase D item 4's known
    limitation outright (a one-shot `SetFogState` is not replayed onto viewpoints created later), and
