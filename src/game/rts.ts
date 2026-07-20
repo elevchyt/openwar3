@@ -6,7 +6,7 @@ import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
-import { simHooks, authorityHooks } from "./jassHooks";
+import { simHooks, authorityHooks, visionHooks } from "./jassHooks";
 import type { EngineHooks } from "../jass/runtime";
 import type { SimView } from "./simView";
 export type { PlacedRef };
@@ -381,8 +381,7 @@ export class RtsController {
   // with JASS; each rebuild is handed the running ones and picks out its own (Viewpoint
   // .rebuild). Created STOPPED — FogModifierStart is what runs one (the same "the BJ shows
   // it, the native doesn't" shape as timer dialogs), so `running` is not a formality.
-  private fogModifiers = new Map<number, FogModifier>();
-  private nextFogModifier = 1;
+
   private hovered: number | null = null;
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
   private hoveredItem: number | null = null; // a ground item under the cursor (yellow hover ring)
@@ -586,20 +585,16 @@ export class RtsController {
   /** CreateFogModifierRect / CreateFogModifierRadius[Loc] — created STOPPED (the native
    *  does not start it; FogModifierStart does). Returns the modifier's id. */
   createFogModifier(m: Omit<FogModifier, "running">): number {
-    const id = this.nextFogModifier++;
-    this.fogModifiers.set(id, { ...m, running: false });
-    return id;
+    return this.viewpoints.createFogModifier(m);
   }
   fogModifierStart(id: number): void {
-    const m = this.fogModifiers.get(id);
-    if (m) m.running = true;
+    this.viewpoints.fogModifierStart(id);
   }
   fogModifierStop(id: number): void {
-    const m = this.fogModifiers.get(id);
-    if (m) m.running = false;
+    this.viewpoints.fogModifierStop(id);
   }
   destroyFogModifier(id: number): void {
-    this.fogModifiers.delete(id);
+    this.viewpoints.destroyFogModifier(id);
   }
 
   /** SetFogStateRect / SetFogStateRadius[Loc] — a ONE-SHOT stamp, not a standing
@@ -616,16 +611,16 @@ export class RtsController {
   /** FogEnable / FogMaskEnable — the grey veil and the black mask, switched globally,
    *  and the IsFog*Enabled getters a cinematic saves and restores them through (7.24). */
   setFogEnabled(on: boolean): void {
-    this.local.setFogEnabled(on);
+    this.viewpoints.setFogEnabled(on);
   }
   setFogMaskEnabled(on: boolean): void {
-    this.local.setFogMaskEnabled(on);
+    this.viewpoints.setFogMaskEnabled(on);
   }
   isFogEnabled(): boolean {
-    return this.local.isFogEnabled();
+    return this.viewpoints.isFogEnabled();
   }
   isFogMaskEnabled(): boolean {
-    return this.local.isFogMaskEnabled();
+    return this.viewpoints.isFogMaskEnabled();
   }
 
   /** Does the local viewpoint render `player`'s fog? True for the local player and any
@@ -1965,7 +1960,7 @@ export class RtsController {
     // cheap. The initial accumulator > interval forces a rebuild on the first tick.
     // Every viewpoint keeps its own 10 Hz clock. Only the LOCAL one's rebuild re-prunes the
     // selection, because the selection is this machine's, not the match's.
-    if (this.viewpoints.tick(dt, this.fogModifiers.values()).includes(this.local)) {
+    if (this.viewpoints.tick(dt).includes(this.local)) {
       this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
     }
     for (const e of this.entries) {
@@ -3422,7 +3417,11 @@ export class RtsController {
    * has models re-declares them over this table and calls back into these entries.
    */
   worldHooks(teamOf: (player: number) => number): Partial<EngineHooks> {
-    return { ...simHooks(this.sim, teamOf), ...authorityHooks(this.authority) };
+    return {
+      ...simHooks(this.sim, teamOf),
+      ...authorityHooks(this.authority),
+      ...visionHooks(this.viewpoints, this.alliances),
+    };
   }
 
   /**

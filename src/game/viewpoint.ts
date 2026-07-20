@@ -18,12 +18,14 @@ import type { FogArea, FogModifier } from "./fog";
  * the local player still sees exactly what it saw. What it buys is that every one of these
  * rules is now a method on an object you can have more than one of.
  *
+ * The fog-modifier REGISTRY lives on `VisionSet`, not on a `Viewpoint` and no longer on the
+ * controller (Phase E item 1e). Modifier ids are a single global handle space shared with JASS,
+ * which rules out one counter per viewpoint but is satisfied exactly by one counter on the set.
+ * A standing modifier is still not "routed" anywhere: every viewpoint is offered all of them and
+ * keeps the ones its own `seesFor` accepts, which is what makes an ally's modifier show up in
+ * your fog and an opponent's not. One-shots go through `VisionSet.stampFor`.
+ *
  * Deliberately NOT here:
- *   • the fog-modifier REGISTRY — modifier ids are a single global handle space shared with
- *     JASS, so one registry stays on the controller and hands the running ones to `rebuild`.
- *     A standing modifier is not "routed" anywhere: every viewpoint is offered all of them and
- *     keeps the ones its own `seesFor` accepts, which is what makes an ally's modifier show up
- *     in your fog and an opponent's not. One-shots go through `VisionSet.stampFor`.
  *   • `pruneFogged` — it drops units from the SELECTION, which is client state, not vision.
  *     The controller calls it after `rebuild`.
  *   • anything that touches a render `Entry`. `applyFogTint` stays on the renderer side and
@@ -310,6 +312,10 @@ export class VisionSet {
   /** The lobby's slot→team seating, stated by `seat()`. The source of truth for
    *  `Viewpoint.teamOfPlayer`, and the only one that is right before any unit exists. */
   private readonly seats = new Map<number, number>();
+  /** Standing fog modifiers, by JASS handle. One counter for the whole match — see the
+   *  registry block at the bottom of this class. */
+  private readonly modifiers = new Map<number, FogModifier>();
+  private nextModifier = 1;
 
   constructor(
     private readonly world: VisionWorld,
@@ -473,11 +479,74 @@ export class VisionSet {
 
   /** Advance every viewpoint's rebuild clock. Returns those that actually rebuilt, so the
    *  caller can follow up on its own (the controller re-prunes its selection). */
-  tick(dt: number, modifiers: Iterable<FogModifier>): Viewpoint[] {
+  tick(dt: number): Viewpoint[] {
     const rebuilt: Viewpoint[] = [];
-    // `modifiers` is iterated once per viewpoint, so it must be re-iterable — a Map's
-    // .values() is, a bare generator is not. The controller passes the Map view.
-    for (const vp of this.all()) if (vp.tick(dt, modifiers)) rebuilt.push(vp);
+    // The modifier registry is iterated once per viewpoint, so it must be re-iterable — a
+    // Map's .values() is, a bare generator is not.
+    for (const vp of this.all()) if (vp.tick(dt, this.modifiers.values())) rebuilt.push(vp);
     return rebuilt;
+  }
+
+  // --- the fog-modifier registry (docs/multiplayer.md Phase E item 1e) ---------------------
+  //
+  // This lived on `RtsController` because "modifier ids are one global handle space shared
+  // with JASS, so N viewpoints minting their own would collide". That is true, and it argues
+  // against putting the registry on `Viewpoint` — not against putting it HERE. A `VisionSet` is
+  // a single object that owns every viewpoint, so one counter on it is exactly the one global
+  // handle space the constraint asks for, and the authority stops needing a controller to
+  // answer a fog native.
+  //
+  // Standing modifiers are still not "routed" anywhere: `tick` offers the whole registry to
+  // every viewpoint and each keeps the ones its own `seesFor` accepts. That is what makes an
+  // ally's modifier show up in your fog and an opponent's not.
+
+  /** CreateFogModifierRect / CreateFogModifierRadius[Loc] — created STOPPED (the native does
+   *  not start it; FogModifierStart does). Returns the modifier's id. */
+  createFogModifier(m: Omit<FogModifier, "running">): number {
+    const id = this.nextModifier++;
+    this.modifiers.set(id, { ...m, running: false });
+    return id;
+  }
+  fogModifierStart(id: number): void {
+    const m = this.modifiers.get(id);
+    if (m) m.running = true;
+  }
+  fogModifierStop(id: number): void {
+    const m = this.modifiers.get(id);
+    if (m) m.running = false;
+  }
+  destroyFogModifier(id: number): void {
+    this.modifiers.delete(id);
+  }
+
+  /**
+   * FogEnable / FogMaskEnable — the grey veil and the black mask.
+   *
+   * These are GLOBAL natives, and they now actually behave that way: every viewpoint gets the
+   * switch. They used to reach only the local one, which was invisible while a single viewpoint
+   * existed and became wrong the moment item 2 seated the rest — a map script disabling fog for
+   * a cinematic would have left every other seat's grid untouched, so a host answering for them
+   * would still have been filtering their world by a fog the script had turned off.
+   *
+   * Applying to ALL is a superset of applying to local, so the local player sees exactly what it
+   * saw. Recorded as a deliberate behaviour change all the same, because it is one.
+   */
+  setFogEnabled(on: boolean): void {
+    for (const vp of this.all()) vp.setFogEnabled(on);
+  }
+  setFogMaskEnabled(on: boolean): void {
+    for (const vp of this.all()) vp.setFogMaskEnabled(on);
+  }
+
+  /** IsFogEnabled / IsFogMaskEnabled — what a cinematic saves on the way in and restores on
+   *  the way out (7.24). Any viewpoint answers, because the setters above keep them all in
+   *  step; `true` is the default a match starts from when nothing has been seated yet. */
+  isFogEnabled(): boolean {
+    for (const vp of this.all()) return vp.isFogEnabled();
+    return true;
+  }
+  isFogMaskEnabled(): boolean {
+    for (const vp of this.all()) return vp.isFogMaskEnabled();
+    return true;
   }
 }

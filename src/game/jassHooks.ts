@@ -1,6 +1,8 @@
 import type { SimWorld, SimMine } from "../sim/world";
 import type { EngineHooks } from "../jass/runtime";
 import { MELEE } from "../data/gameplayConstants";
+import { fogStateOf, type FogState } from "../sim/vision";
+import type { FogArea } from "./fog";
 
 /**
  * The id space gold mines occupy when a SCRIPT is looking at them.
@@ -274,5 +276,71 @@ export function authorityHooks(authority: {
       if (state === 5) return authority.foodFor(p).used; // FOOD_USED
       return 0;
     },
+  };
+}
+
+// The natives about who can SEE what, and who counts as whose ally (docs/multiplayer.md
+// Phase E item 1e).
+//
+// These were the largest block still routed through `RtsController`, and the reason given was
+// that the fog-modifier registry had to stay there: modifier ids are one global handle space
+// shared with JASS, so N viewpoints minting their own would collide. That is true — and it is an
+// argument against putting the registry on a `Viewpoint`, not against putting it on the
+// `VisionSet`, which is a single object that owns all of them. Once it moved there, nothing in
+// this group needed a controller at all.
+//
+// `cripplePlayer` and `setFogState` are stated in terms of a RECIPIENT rather than "local", which
+// is what Phase D item 4 already fixed inside the set; this just stops routing them through an
+// object that also holds a camera.
+export function visionHooks(
+  vision: {
+    createFogModifier(m: { player: number; state: number; area: FogArea }): number;
+    fogModifierStart(id: number): void;
+    fogModifierStop(id: number): void;
+    destroyFogModifier(id: number): void;
+    stampFor(player: number, area: FogArea, state: FogState): void;
+    setExposed(recipient: number, player: number, flag: boolean): void;
+    setFogEnabled(on: boolean): void;
+    setFogMaskEnabled(on: boolean): void;
+    isFogEnabled(): boolean;
+    isFogMaskEnabled(): boolean;
+  },
+  alliances: {
+    set(source: number, other: number, type: number, value: boolean): void;
+    get(source: number, other: number, type: number): boolean;
+    coAllied(a: number, b: number): boolean;
+  },
+): Partial<EngineHooks> {
+  return {
+    // --- alliances + shared vision (7.22) ---
+    // IsPlayerAlly reads the alliance MATRIX, not the raw lobby team — a script that allies two
+    // players from different teams changes both, which is the whole point of the native.
+    isPlayerAlly: (p, q) => alliances.coAllied(p, q),
+    setPlayerAlliance: (src, other, type, value) => alliances.set(src, other, type, value),
+    getPlayerAlliance: (src, other, type) => alliances.get(src, other, type),
+    // CripplePlayer — blizzard.j's MeleeExposePlayer, what happens to a player whose "Build
+    // Town Hall" timer runs out. Every recipient in the force is told, not just this machine's
+    // player: the old early-out was correct while one viewpoint was rendered and silently wrong
+    // the moment the authority answers for somebody else.
+    cripplePlayer: (player, toPlayers, flag) => {
+      for (const recipient of toPlayers) vision.setExposed(recipient, player, flag);
+    },
+    // --- fog of war: script-placed modifiers (7.22) ---
+    createFogModifier: (player, state, area) => vision.createFogModifier({ player, state, area }),
+    fogModifierStart: (id) => vision.fogModifierStart(id),
+    fogModifierStop: (id) => vision.fogModifierStop(id),
+    destroyFogModifier: (id) => vision.destroyFogModifier(id),
+    // SetFogStateRect / SetFogStateRadius[Loc] — a ONE-SHOT stamp, not a standing modifier. On a
+    // `visible` layer rebuilt every tick a one-shot VISIBLE only *lights* the area for an
+    // instant; the lasting effect is on sticky `explored`, so the area ends up discovered (grey),
+    // and a one-shot MASKED un-discovers it. A script that wants an area held open uses a
+    // modifier — which is exactly the distinction the two APIs exist to draw.
+    setFogState: (player, state, area) => vision.stampFor(player, area, fogStateOf(state)),
+    // FogEnable / FogMaskEnable — the grey veil and the black mask. Global natives, and now
+    // actually global: every viewpoint gets the switch rather than only the local one.
+    fogEnable: (flag) => vision.setFogEnabled(flag),
+    fogMaskEnable: (flag) => vision.setFogMaskEnabled(flag),
+    isFogEnabled: () => vision.isFogEnabled(),
+    isFogMaskEnabled: () => vision.isFogMaskEnabled(),
   };
 }

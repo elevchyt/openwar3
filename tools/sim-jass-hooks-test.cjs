@@ -17,7 +17,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
-const { simHooks, authorityHooks, MINE_ID_BASE } = require(join(REPO, ".sim-build", "src", "game", "jassHooks.js"));
+const { simHooks, authorityHooks, visionHooks, MINE_ID_BASE } = require(join(REPO, ".sim-build", "src", "game", "jassHooks.js"));
 const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
 
 let failed = 0;
@@ -183,6 +183,55 @@ const copy = authority.stashFor(0);
 check("stashFor is frozen", Object.isFrozen(copy), true);
 try { copy.gold = 99999; } catch { /* strict mode throws; sloppy mode silently ignores */ }
 check("writing the copy does not reach the world", world.stashOf(0).gold, 750);
+
+// --- the vision + alliance half -------------------------------------------------------------
+//
+// The fog-modifier registry moved from RtsController onto VisionSet. The constraint that kept it
+// on the controller — modifier ids are one global handle space shared with JASS — is satisfied by
+// one counter on the set, and only ruled out one counter per viewpoint.
+//
+// The check that matters is fogEnable. It is a GLOBAL native and used to reach only the local
+// viewpoint, which was invisible while one viewpoint existed and became wrong the moment every
+// seat got its own. With N viewpoints seated, a script disabling fog for a cinematic has to
+// reach all of them.
+console.log("\nthe vision natives answer without a controller");
+const { VisionSet } = require(join(REPO, ".sim-build", "src", "game", "viewpoint.js"));
+const stubAlliances = { sharesVisionWith: () => false, coAllied: (a, b) => a === b, set: () => {}, get: () => false };
+const visionWorld = { units: new Map(), isDay: true, activeAttackReveals: () => [], teamDetects: () => false };
+const vset = new VisionSet(visionWorld, stubAlliances, () => [], 0, 0, 1024, 1024);
+vset.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }, { player: 2, team: 1 }]);
+const vh = visionHooks(vset, stubAlliances);
+
+check("visionHooks is exactly the 13 natives", Object.keys(vh).sort(), [
+  "createFogModifier", "cripplePlayer", "destroyFogModifier", "fogEnable", "fogMaskEnable",
+  "fogModifierStart", "fogModifierStop", "getPlayerAlliance", "isFogEnabled", "isFogMaskEnabled",
+  "isPlayerAlly", "setFogState", "setPlayerAlliance",
+].sort());
+
+// One handle space: ids are unique across the whole match, not per viewpoint.
+const rect = { kind: "rect", minX: 0, minY: 0, maxX: 100, maxY: 100 };
+const m1 = vh.createFogModifier(0, 4, rect);
+const m2 = vh.createFogModifier(1, 4, rect);
+check("modifier ids are distinct across players", m1 !== m2, true);
+check("…and are not per-viewpoint counters starting at the same number", [m1, m2], [1, 2]);
+
+console.log("\nFogEnable is global, not local-only  (the bug seating exposed)");
+check("fog starts enabled", vh.isFogEnabled(), true);
+vh.fogEnable(false);
+const allOff = [...vset.all()].every((vp) => vp.isFogEnabled() === false);
+check("EVERY seated viewpoint had its fog switched, not just one", allOff, true);
+vh.fogMaskEnable(false);
+check("the mask likewise", [...vset.all()].every((vp) => vp.isFogMaskEnabled() === false), true);
+vh.fogEnable(true);
+check("and it switches back", [...vset.all()].every((vp) => vp.isFogEnabled() === true), true);
+
+// CripplePlayer tells every recipient in the force, not just this machine's player.
+console.log("\nCripplePlayer exposes to every recipient in the force");
+vh.cripplePlayer(0, [1, 2], true);
+const victim = { owner: 0, x: 0, y: 0 };
+check("recipient 1 sees the crippled player's units", vset.viewpointFor(1).isExposed(victim), true);
+check("recipient 2 as well", vset.viewpointFor(2).isExposed(victim), true);
+check("a player not in the force does not", vset.viewpointFor(0).isExposed(victim), false);
 
 console.log(failed ? `\njass-hooks: ${failed} FAILED` : "\njass-hooks: all checks passed");
 process.exit(failed ? 1 : 0);

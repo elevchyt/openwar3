@@ -999,15 +999,43 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    regression test also fails correctly on the natural bug (returning a raw mine id instead of
    `MINE_ID_BASE + id`): two named checks red, `typecheck` clean.
 
-1e. **The vision + alliance group — 13 entries, the largest coherent block left.**
-   `createFogModifier`, `fogModifierStart`/`Stop`, `destroyFogModifier`, `setFogState`,
-   `fogEnable`/`fogMaskEnable`, `isFogEnabled`/`isFogMaskEnabled`, `cripplePlayer`,
-   `isPlayerAlly`, `setPlayerAlliance`, `getPlayerAlliance`. All route through `RtsController`
-   today. `VisionSet` and `AllianceTable` both compile standalone already, so the blocker is
-   **not** those — it is that the fog-modifier REGISTRY lives on the controller on purpose
-   (Phase D item 2: modifier ids are one global handle space shared with JASS, so N viewpoints
-   minting their own would collide). Moving it needs that decision revisited, not ignored. Do this
-   one after item 2, which changes when viewpoints exist.
+1e. ~~**The vision + alliance group — 13 entries.**~~ **Done, and the blocker dissolved on
+   inspection.** All 13 are in `visionHooks(vision, alliances)`
+   ([`jassHooks.ts`](../src/game/jassHooks.ts)), built from `VisionSet` and `AllianceTable` —
+   both of which already compiled standalone. Renderer 82 → **69**, `jassHooks` 69 → **82**: the
+   two halves have crossed over, and more of the table now lives outside the renderer than in it.
+   Union still 149, overlap still exactly the two dual-writers.
+
+   **The stated blocker conflated two claims.** "Modifier ids are one global handle space shared
+   with JASS, so N viewpoints minting their own would collide" is true — and it is an argument
+   against putting the registry on a `Viewpoint`. It says nothing against putting it on the
+   `VisionSet`, which is a *single object that owns every viewpoint*, i.e. exactly the one global
+   counter the constraint asks for. Moving it there needed no decision revisited at all; it needed
+   the sentence read twice.
+
+   **A real bug came out with it, and item 2 is what created it.** `FogEnable`/`FogMaskEnable` are
+   GLOBAL natives, but `RtsController` applied them to `this.local` only. That was invisible while
+   one viewpoint existed and became wrong the moment every seat got one: a script disabling fog
+   for a cinematic would have left every other seat's grid untouched, so a host answering for
+   those seats would still be filtering their world by a fog the script had switched off. Now
+   every viewpoint gets the switch. Applying to all is a **superset** of applying to local, so the
+   local player sees exactly what it saw — but it is a deliberate behaviour change and is recorded
+   as one. `isFogEnabled` reads any viewpoint, since the setters keep them in step.
+
+   **Verified with two clients.** BOTH minimaps are byte-identical to the previous commit (0 of
+   18 088 pixels each, max delta 0) — the registry move and the global fog switch did not move
+   either player's fog by a cell — while the two frames still differ by 56.6%. Whole-frame drift
+   0.487%, animation only.
+
+   **NOT verified at runtime, and checked rather than assumed:** `MeleeStartingVisibility` in the
+   real `Scripts\Blizzard.j` has its `FogMaskEnable(true)` and `FogEnable(true)` calls
+   **commented out**, so a melee map never calls them. The 13 natives are covered by the headless
+   checks only. A map with script-placed fog modifiers would be the way to exercise them.
+
+1e-note. **`isUnitAlly` was left behind deliberately.** It is a TEAM question
+   (`u.team === teamOf(player)`), not an alliance one, so it belongs with `simHooks` — which now
+   has both `sim` and `teamOf` and could take it in one line. Left out to keep this item to the
+   13 it named.
 
 1f. ~~**The order-funnel natives.**~~ **Four of the five done; this entry was wrong about
    `removeUnit`.** It called `createUnit`/`removeUnit` both "entangled with model seeding".

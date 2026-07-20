@@ -1522,21 +1522,6 @@ export class MapViewerScene {
         const u = this.rts?.simView.units.get(id);
         return !!u && u.team >= 0 && u.team === this.teamOf(player);
       },
-      // IsPlayerAlly/IsPlayerEnemy read the alliance matrix (7.22), not the raw lobby team
-      // — a script that allies two players from different teams changes both.
-      isPlayerAlly: (p, q) => this.rts?.playersAreCoAllied(p, q) ?? this.teamOf(p) === this.teamOf(q),
-      // --- alliances + shared vision (7.22) ---
-      setPlayerAlliance: (src, other, type, value) => this.rts?.setPlayerAlliance(src, other, type, value),
-      getPlayerAlliance: (src, other, type) => this.rts?.getPlayerAlliance(src, other, type) ?? false,
-      cripplePlayer: (player, toPlayers, flag) => this.rts?.cripplePlayer(player, toPlayers, flag),
-      // --- fog of war: script-placed modifiers (7.22) ---
-      createFogModifier: (player, state, area) => this.rts?.createFogModifier({ player, state, area }) ?? -1,
-      fogModifierStart: (id) => this.rts?.fogModifierStart(id),
-      fogModifierStop: (id) => this.rts?.fogModifierStop(id),
-      destroyFogModifier: (id) => this.rts?.destroyFogModifier(id),
-      setFogState: (player, state, area) => this.rts?.setFogState(player, state, area),
-      fogEnable: (flag) => this.rts?.setFogEnabled(flag),
-      fogMaskEnable: (flag) => this.rts?.setFogMaskEnabled(flag),
       // --- the atmospheric distance haze — a DIFFERENT system (7.22) ---
       // Replaces the map's w3i fog on `scene.distFog` (read fresh each frame, so this
       // lands next frame with no extra plumbing). Our shader is linear, which is all the
@@ -1622,8 +1607,6 @@ export class MapViewerScene {
         this.gameSpeed = speed;
       },
       getGameSpeed: () => this.gameSpeed,
-      isFogEnabled: () => this.rts?.isFogEnabled() ?? true,
-      isFogMaskEnabled: () => this.rts?.isFogMaskEnabled() ?? true,
       displayCineFilter: (filter) => this.cinematic?.setFilter(filter),
       setCinematicScene: (scene) => {
         if (this.cinematic?.setScene(scene) && scene) void this.loadCinematicPortrait(scene.portraitUnitId);
