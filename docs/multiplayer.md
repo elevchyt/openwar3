@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
+| E — snapshots & reconnect | **in progress** | [12-item list](#remaining-work-in-order-2) written; item 1 is the 149-entry [JASS hook table](#the-jass-hook-table) split, now unblocked by the headless boot |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -121,13 +121,10 @@ which inherits four things Phase D deliberately did not do — all recorded in t
 from: `dots`/`creepCamps` still iterate the local client's render records rather than `sim.units`;
 `minimapIcons` has no fog gate and nobody has checked the real client; a one-shot `SetFogState` is
 not replayed onto viewpoints created after it fires; and `forAudience` has no caller until
-snapshots exist.
-Next is **Phase D** (one `VisionMap` per vision group), which also inherits the fog modifiers,
-`cripplePlayer` and `seesFor`/`exposed` that Phase B declined to split early. Its
-[remaining-work list](#remaining-work-in-order-1) is written and is the handoff; its **item 1** is the
-committed headless boot path, pulled forward from Phase E because Phase D is the first phase no
-headless test can verify. The [JASS hook table](#the-jass-hook-table) split depends on that boot path
-too, and stays in Phase E.
+snapshots exist. Phase E's [remaining-work list](#remaining-work-in-order-2) is now written and is
+the handoff; its **item 1** is the [JASS hook table](#the-jass-hook-table) split, which was blocked
+on a committed headless boot path and no longer is (Phase D item 1 landed it). Two of the twelve
+items are gated on a developer decision and are marked as such — see [Open questions](#open-questions).
 
 ### The `simWorld` escape hatch
 
@@ -466,7 +463,9 @@ prefer `readonly` types over greps.
 
 ### The JASS hook table
 
-`MapViewerScene.textHooks()` builds a **151-entry** `EngineHooks` table inside the renderer.
+`MapViewerScene.textHooks()` builds a **149-entry** `EngineHooks` table inside the renderer
+(`mapViewer.ts` 1394–1758; the interface declares 152, the rest being optional members no renderer
+supplies — recounted at `771c642`, the old "151" was a count of a moving target).
 It is thoroughly mixed: `setUnitOwner`, `getUnitX` and `createItem` sit among `pingMinimap`,
 `showInterface`, `selectUnit` and `clearSelection`. The interpreter is authority-side and runs
 on the host once, so a headless host needs a hook table — and today one can only be built by a
@@ -821,6 +820,122 @@ The price is N rebuilds at 10 Hz each instead of one; measure it at item 7 and r
   contract, and `applyLobby(slots, localPlayer)` ([`src/jass/index.ts`](../src/jass/index.ts):91) is
   already the seam between "what the map allows" (`config()`) and "who is actually playing".
 
+#### The inventory — what the code actually contains
+
+Enumerated at `771c642`, by callee rather than by name, because that is the discipline that made
+three of Phase D's seven items shrink. Four findings, and three of them are smaller than the prose
+above predicted.
+
+**The `simWorld` escape hatch is now almost exactly the hook table.** 70 uses remain in
+`mapViewer.ts` (down from 136). Broken out by member:
+
+| What | Count | Where it goes |
+|---|---|---|
+| JASS world-mutating natives (`setUnitOwner`, `createItem`, `addHeroXp`, `setPathing`, …) | 66 | item 1 — out of the renderer with the table |
+| `timeOfDay` / `dawnDusk` **writes** (`SetTimeOfDay`, `SuspendTimeOfDay`) | 2 | also hooks; they are the two `simView` refused in Phase B 7a |
+| `initStash` ×2, `setPathStamp` | 3 | setup, called once at match start; fine where they are |
+
+So "narrow the getter" is no longer a refactor with a long tail — **it is one move, item 1**, and
+everything else on the hatch is already closed. The 55 read uses went to `simView` in Phase B.
+
+**The hook table is 149 built, 152 declared** — not 151. `MapViewerScene.textHooks()` spans
+`mapViewer.ts` 1394–1758 and populates 149 members; `EngineHooks` ([`runtime.ts`](../src/jass/runtime.ts):443)
+declares 152. The gap is optional members no renderer supplies. Use the real numbers; the old 151
+was a single count of a moving target.
+
+**The game-traffic pipe already exists and has exactly one user.** `LobbyClient.send(to, data)`
+([`lobby.ts`](../src/net/lobby.ts):93) wraps `{ t: "relay" }`, and the relay forwards `relay`/`deliver`
+without inspecting the payload ([`protocol.ts`](../src/net/protocol.ts)). `StartMatch` is the only
+`GameMessage` member. So commands and snapshots are **new members on an existing envelope**, not new
+plumbing — and `server/relay.mjs` (169 lines) needs no change to carry them.
+
+**Nothing is sent after `start`.** Both clients build the same world from one config and one seed,
+then each simulates independently and drifts within seconds. There is no snapshot code anywhere yet;
+this phase writes it from nothing rather than adapting something.
+
+**The renderer's read surface on `RtsController` is already narrow**, which is the good news for
+item 5: `simView` (13 uses), `selectedInfo` (9), `orderMode` (11, pure client), `foodFor` (3),
+`stashFor` (2), `itemVisible` (2), `getVision` (2). Making a client render someone else's world is
+mostly making `simView` per-recipient — which [`simView.ts`](../src/game/simView.ts)'s own header
+already nominates itself for.
+
+#### Remaining work, in order
+
+Each is independently shippable. **Behaviour-preserving unless the item says otherwise** — items 3
+and 4 say otherwise and are flagged. Two items are gated on a developer decision and say so.
+
+1. **The JASS hook table → its own module.** Inherited from
+   [Phase B item 7b](#remaining-work-in-order). Build it from `(SimWorld, Authority, Viewpoint-free
+   presentation hooks injected by whoever is drawing)`. This is what lets a headless host have a hook
+   table at all, and it closes the escape hatch above in one move. Blocked on the headless boot until
+   Phase D item 1; **no longer blocked**. Note while moving: `SetPlayerState` writes the live stash
+   (`sw.stashOf(p).gold = value`) and is the last live-stash write in the renderer — it wants to be an
+   `Authority` method. Do not route the other ~54 mutators through `Authority` pass-throughs; that
+   shape was rejected in Phase B item 5 and would not help.
+
+2. **Create player viewpoints at match start, not lazily.** Small. Removes Phase D item 4's known
+   limitation outright (a one-shot `SetFogState` is not replayed onto viewpoints created later), and
+   makes the N-rebuild cost a known constant from tick 0 rather than a surprise the first time
+   `MeleeExposePlayer` fires. **Gated on a developer decision** — see Open questions.
+
+3. **`dots()` and `creepCamps()` iterate `sim.units`, not `this.entries`.** Carried from
+   [Phase D item 5](#remaining-work-in-order-1). They take a viewpoint already, so they answer the fog
+   question for anyone; they still enumerate the LOCAL client's render records, so an authority
+   answering for a remote player sees only what this machine loaded a model for. **This one changes
+   what the local player sees** — units with no render record start showing dots — so it gets its own
+   before/after screenshots and its own verification, not a shared one.
+
+4. **Decide whether `minimapIcons()` should have a fog gate — by looking at the real client.**
+   Carried from Phase D item 5. It has none today: gold-mine and neutral-building glyphs draw on
+   pitch-black unexplored ground. Nobody has checked whether WC3 does the same. Per
+   [`CLAUDE.md`](../CLAUDE.md) the running game decides. **Do not fix it from a reference or from
+   memory.** If the real client shows them, this item closes with a comment and no code.
+
+5. **The snapshot: a type, and `snapshotFor(player)` on the authority side.** The payload is
+   whatever a client needs to render a frame it did not simulate — the `simView` surface above, plus
+   selection-relevant per-unit state. Emit it from the authority half; it must not import a transport.
+   **Gated on the encoding decision** — see Open questions.
+
+6. **AoI filtering, as a predicate distinct from `fogHides`.** `Viewpoint.fogHides` answers *should
+   this be drawn?*; the snapshot asks *may this be sent?*, which is strictly stronger — a client must
+   never receive what it cannot see, or the fog is a client-side suggestion and we have shipped a
+   maphack. Same grid, different question, and conflating them is the trap. Illusions
+   ([`illusions.md`](./illusions.md)) are the sharp case: `isIllusion` must not reach an enemy's
+   snapshot at all, not merely be ignored on arrival.
+
+7. **`forAudience` gets its caller.** `Runtime.audience` and `forAudience(player, fn)` landed in
+   Phase D item 6 with no caller by design — snapshot construction is the caller. Per-recipient
+   evaluation of a `GetLocalPlayer`-gated block, and per-recipient delivery of the broadcast text
+   natives (`DisplayTimedTextFromPlayer`, `ClearTextMessages`) that today resolve once against the
+   host's own seat.
+
+8. **An in-process transport adapter, and the reconnect test that rides on it.** `Transport`
+   ([`transport.ts`](../src/net/transport.ts)) is already the seam and `WebSocketTransport` is already
+   just an adapter. An in-process one makes two authorities/clients testable in one Node process,
+   which is what "keep reconnect exercised by a test from day one" requires. Write the test here, not
+   after item 11.
+
+9. **Commands cross the wire.** New `GameMessage` member carrying `Command`; the client's `execute`
+   becomes *send*, the host's becomes *receive, judge ownership, apply*. The gate already refuses a
+   faked `unitId` — that was Phase C's whole point — so this is wiring plus the ordering question in
+   the note below.
+
+10. **Snapshots cross the wire, and the client stops simulating.** The big one.
+    **Sequencing is genuinely unsettled between 9 and 10**: a client that sends commands while still
+    simulating locally drifts, and a client that renders snapshots without a command path cannot act.
+    They may have to land together, or 10 may land first with the local sim kept alongside purely to
+    diff against the arriving snapshot — which is a good bug-finder and a bad shipping state. Decide
+    when item 8 exists and record what was chosen here.
+
+11. **Reconnect: rejoin token → full snapshot → deltas resume.** Relay side is a token in the room
+    table (it must stay free-tier-shaped: no sim, no Blizzard data, no match state beyond that table).
+    Authority side is "answer a rejoin with a full snapshot instead of a delta". The test from item 8
+    is what says it works.
+
+12. **Flip the phase table**, once the authority takes commands and emits AoI-filtered snapshots over
+    a transport it does not name, two clients play a match through the relay, and a dropped client
+    rejoins to correct full state.
+
 ### JASS
 
 The interpreter is a good citizen: engine-agnostic by construction (it imports neither renderer nor
@@ -851,6 +966,15 @@ refactor can pass every suite while showing an enemy base through the fog.
   data channels with the cloud box as signaling only (cheaper to host, much more moving parts).
   Bandwidth on a free tier likely decides this.
 - **Snapshot encoding.** JSON is fine to start and trivially debuggable; binary when it hurts.
+  **Blocks [Phase E item 5](#remaining-work-in-order-2)** — asked, not yet answered. The lean above
+  is this file's own, not a decision: it was written before there was a snapshot to encode, and it
+  is the developer's call whether to take the JSON-first path knowingly or design for binary now.
+- **Are player viewpoints created at match START or lazily?** **Blocks
+  [Phase E item 2](#remaining-work-in-order-2)** — asked, not yet answered. At start: the one-shot
+  `SetFogState` replay hole closes for free (Phase D item 4), and N grids cost a known ~0.75 ms each
+  at 10 Hz from tick 0 (measured at Phase D item 7 — four viewpoints, 3.01 ms per round, Echo Isles
+  scale). Lazily: a two-player match on a twelve-slot map builds two grids instead of twelve, but
+  the fog-replay hole stays open and the cost arrives mid-match at an unpredictable moment.
 - **Cold start.** A free instance sleeping after 15 min means the first player waits ~30–60 s for the
   *relay* to wake. Survivable with an honest "waking server" screen — and note this only ever delays
   lobby join, never an in-progress match, since the match itself does not run there.
