@@ -955,7 +955,8 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    `MeleeConfig.slots`. Injecting beat looking it up because **there is no authority-side owner of
    that mapping to look it up from** — see 1c-note.
 
-   **1c-note, a real finding, not part of this move.** The lobby's player→team map exists in
+   **1c-note — ~~a real finding, not part of this move~~. FIXED in item 2**, where seating made
+   it load-bearing exactly as predicted. The lobby's player→team map exists in
    exactly one place: `mapViewer.meleeTeams`, built from `config.slots`. Everything else
    *re-derives* it. `Viewpoint.teamOfPlayer` scans `world.units` for a unit that player owns and
    falls back to the slot number — i.e. the authority's own vision code is reverse-engineering the
@@ -1041,11 +1042,36 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    (camera, sound, weather, effects, text, selection, registries) is presentation by nature and is
    what gets *injected* into a headless table rather than moved out of it.
 
-2. **Create player viewpoints at match start, not lazily.** Small. Removes Phase D item 4's known
-   limitation outright (a one-shot `SetFogState` is not replayed onto viewpoints created later), and
-   makes the N-rebuild cost a known constant from tick 0 rather than a surprise the first time
-   `MeleeExposePlayer` fires. **Decided: at match start** ([Open questions](#open-questions)) — no
-   longer gated.
+2. ~~**Create player viewpoints at match start, not lazily.**~~ **Done — and it was not small,
+   because seating exposed a real bug the moment it was tested.** `VisionSet.seat(seats)` +
+   `RtsController.seatPlayers`, called from `beginMatch` once the lobby's slots are known.
+   Computer slots are seated too: a host simulates them, so they need their own fog for the
+   acquisition gate exactly as a human does. Phase D item 4's `SetFogState` replay hole is closed
+   by construction — there is no longer a "later" for a viewpoint to be created in.
+
+   **The bug, which is 1c-note and is now fixed rather than merely recorded.** Seating states each
+   viewpoint's OWN team from the lobby. But `seesFor(other)` asks `teamOfPlayer(other)`, and that
+   still scanned `world.units` for a unit that player owns, falling back to the **slot number**.
+   With no units seeded yet, two ALLIED players seated on one team did not render each other's
+   fog — which is the entire point of a team. A plain 1v1 hides it completely, because there slot
+   and team happen to be equal; the test uses players 0 and 3 on team 0 for exactly that reason.
+   `VisionSet` now holds the seating and passes it into every `Viewpoint` it mints, so
+   `teamOfPlayer` consults the lobby FIRST and keeps the unit-scan and slot-number as fallbacks
+   for a world nobody seated. The whole seating is recorded before any viewpoint is built, or
+   seating ORDER would decide whether two allies recognise each other.
+
+   Shipping the seat without this would have meant a `team` field that nothing consulted. The
+   check was written expecting to pass and went red on the first run — which is a better proof
+   than injecting the bug afterwards, and is why it is kept.
+
+   **Verified with two clients, which is the only way this could be shown.** Echo Isles, seed
+   4242, `fog=unexplored`, players 0 and 1 in separate browser contexts: the frames differ by
+   56.7%, each looking at its own base through its own fog. And the invariant that matters —
+   player 1's **minimap is byte-identical** to the previous commit (0 of 18 088 pixels, max delta
+   0), so seating every slot did not move the local player's fog by a single cell, while player
+   0's minimap shows a different explored region entirely. Whole-frame drift 0.574% is animation
+   only; the fog itself did not move. 118 and 144 fps with every seat holding its own 10 Hz grid
+   (two browser instances sharing one GPU), against 116–144 measured before N viewpoints existed.
 
 3. **`dots()` and `creepCamps()` iterate `sim.units`, not `this.entries`.** Carried from
    [Phase D item 5](#remaining-work-in-order-1). They take a viewpoint already, so they answer the fog

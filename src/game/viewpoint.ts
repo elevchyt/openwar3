@@ -73,6 +73,10 @@ export class Viewpoint {
     originY: number,
     worldWidth: number,
     worldHeight: number,
+    /** The lobby's slot→team seating, if anyone has stated it (`VisionSet.seat`). Returns
+     *  undefined for an unseated slot, which is what keeps the old derivations as fallbacks
+     *  for a world nobody seated — a custom map that never calls it still behaves as before. */
+    private readonly seatedTeam: (player: number) => number | undefined = () => undefined,
   ) {
     this.vision = new VisionMap(originX, originY, worldWidth, worldHeight);
   }
@@ -93,9 +97,22 @@ export class Viewpoint {
     return player === this.player || this.teamOfPlayer(player) === this.team;
   }
 
-  /** The team a player slot is on, as the sim knows it (any unit they own carries it).
-   *  Falls back to the slot number, matching mapViewer.teamOf's own default. */
+  /**
+   * The team a player slot is on.
+   *
+   * The LOBBY's seating is consulted first, because it is the only source that is right before
+   * a single unit exists. Everything else here is a fallback for a world nobody seated: the sim
+   * (any unit that player owns carries their team), and finally the slot number, matching
+   * `mapViewer.teamOf`'s own default.
+   *
+   * The fallbacks used to be the whole implementation, and that was a real bug rather than an
+   * approximation — `seesFor` is team membership, so two ALLIED players seated on one team but
+   * owning no units yet did not render each other's fog, which is the entire point of a team.
+   * A plain 1v1 hides it, because there slot and team happen to be equal.
+   */
   teamOfPlayer(player: number): number {
+    const seated = this.seatedTeam(player);
+    if (seated !== undefined) return seated;
     for (const u of this.world.units.values()) if (u.owner === player) return u.team;
     return player;
   }
@@ -290,6 +307,9 @@ export class VisionSet {
   /** Teams with no player viewpoint of their own — creeps, and any side the local client
    *  holds no seat for. Keyed separately so a team is never rebuilt twice. */
   private readonly byTeam = new Map<number, Viewpoint>();
+  /** The lobby's slot→team seating, stated by `seat()`. The source of truth for
+   *  `Viewpoint.teamOfPlayer`, and the only one that is right before any unit exists. */
+  private readonly seats = new Map<number, number>();
 
   constructor(
     private readonly world: VisionWorld,
@@ -317,6 +337,7 @@ export class VisionSet {
       this.originY,
       this.worldWidth,
       this.worldHeight,
+      (p) => this.seats.get(p),
     );
     vp.setTeam(vp.teamOfPlayer(player));
     if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
@@ -325,6 +346,34 @@ export class VisionSet {
     for (const exposed of this.exposures.get(player) ?? []) vp.setExposed(exposed, true);
     this.byPlayer.set(player, vp);
     return vp;
+  }
+
+  /**
+   * Give every seat the lobby knows about its own eyes, at MATCH START
+   * (docs/multiplayer.md Phase E item 2). Idempotent — an already-created viewpoint is kept
+   * and only has its team restated.
+   *
+   * Two reasons this happens up front rather than on first ask, and neither is tidiness:
+   *
+   * 1. **The team comes from the LOBBY here.** `viewpointFor` has to guess it — `teamOfPlayer`
+   *    scans the world for a unit that player owns and falls back to the slot number — which is
+   *    wrong before the first unit is seeded and wrong forever for a player who owns nothing.
+   *    Seating states it, which is what this class's own doc comment always said should happen
+   *    "when the lobby settles".
+   * 2. **A one-shot `SetFogState` is not replayed onto viewpoints created later** (see
+   *    `stampFor`). That hole only exists while viewpoints can appear mid-match. If they all
+   *    exist from tick 0, there is no "later" to miss, and the limitation closes without
+   *    anybody having to remember every one-shot the match ever fired.
+   *
+   * The cost is paid up front and is known: ~0.75 ms per viewpoint per rebuild round at 10 Hz
+   * (measured at Phase D item 7 — four viewpoints, 3.01 ms per round, Echo Isles scale).
+   */
+  seat(seats: Iterable<{ player: number; team: number }>): void {
+    // Record the whole seating FIRST. `teamOfPlayer` consults this table, so a viewpoint
+    // created halfway through the loop must already be able to see the seats that come after
+    // it — otherwise seating order would decide whether two allies recognise each other.
+    for (const s of seats) this.seats.set(s.player, s.team);
+    for (const s of seats) this.viewpointFor(s.player).setTeam(s.team);
   }
 
   /** Every viewpoint that needs rebuilding. A team-only viewpoint is skipped once some

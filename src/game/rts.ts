@@ -531,6 +531,24 @@ export class RtsController {
     this.local.setTeam(team);
   }
 
+  /**
+   * Give every lobby seat its own viewpoint, at match start (docs/multiplayer.md Phase E
+   * item 2). Call once the slots are known and before the map script runs.
+   *
+   * This is the point where the authority stops being able to see only through the eyes it
+   * happens to be rendering. Until now a non-local player's grid was minted lazily — by
+   * `viewpointForTeam` when the sim asked whether that team could acquire something — and it
+   * had to GUESS the team by scanning units, because nothing ever told it. Seating states the
+   * lobby's answer instead.
+   *
+   * Seat computer slots too. A host simulates them, so they need their own fog for the
+   * acquisition gate exactly as a human does; leaving them out would gate an AI's army on
+   * nothing at all.
+   */
+  seatPlayers(seats: Iterable<{ player: number; team: number }>): void {
+    this.viewpoints.seat(seats);
+  }
+
   /** Seed the alliance matrix from the lobby's teams (7.22). Called once start setup
    *  knows who is on which team, BEFORE the map script runs — so the script's own
    *  `SetPlayerAlliance` calls land on top of it rather than under it. */

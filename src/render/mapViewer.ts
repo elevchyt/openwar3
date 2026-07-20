@@ -1154,6 +1154,10 @@ export class MapViewerScene {
     this.localRace = races.get(this.localPlayer) ?? "human";
     this.meleeTeams = new Map(config.slots.map((s) => [s.id, s.team]));
     this.rts!.setLocalTeam(this.teamOf(this.localPlayer)); // whose combined sight lifts the fog
+    // Every seat gets its own eyes NOW, with the lobby's team, rather than a grid conjured
+    // mid-match the first time something asks whether that side can see. Ordered before the
+    // fog-mode calls below so the match setting reaches all of them by both routes.
+    this.rts!.seatPlayers(config.slots.map((s) => ({ player: s.id, team: s.team })));
     // Seed the alliance matrix from those teams (7.22) BEFORE the map script runs, so the
     // script's own SetPlayerAlliance calls land on top of it rather than under it.
     this.rts!.seedAlliances((p) => this.teamOf(p));

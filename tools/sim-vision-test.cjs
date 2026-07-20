@@ -231,5 +231,38 @@ console.log("\na team is never rebuilt twice");
   check("viewpointForTeam now returns the player's", set.viewpointForTeam(4).player, 0);
 }
 
+// --- seating every slot at match start (docs/multiplayer.md Phase E item 2) ---------------
+//
+// The bug this exists for is not "a viewpoint is missing" — `viewpointFor` would mint one on
+// demand anyway. It is that a lazily minted viewpoint has to GUESS its team: `teamOfPlayer`
+// scans the world for a unit that player owns and falls back to the SLOT NUMBER. Before the
+// first unit is seeded there is nothing to scan, so every player silently lands on a team of
+// their own — and two ALLIED players on one team stop sharing vision with each other, which is
+// the whole reason teams exist. Slot and team are equal in a plain 1v1, which is exactly why
+// this has to be tested with a seating where they are not.
+console.log("\nseating states the lobby's team instead of guessing it from units");
+{
+  const set = setOf();
+  // Players 0 and 3 allied on team 0; player 5 alone on team 1. No units exist yet.
+  set.seat([{ player: 0, team: 0 }, { player: 3, team: 0 }, { player: 5, team: 1 }]);
+  check("player 3 is on the lobby's team, not its slot number", set.viewpointFor(3).team, 0);
+  check("player 5 likewise", set.viewpointFor(5).team, 1);
+  // The consequence that matters: seesFor is team membership, so the ally must be included.
+  check("allies render each other's fog", set.viewpointFor(0).seesFor(3), true);
+  check("…and the opponent's is not rendered", set.viewpointFor(0).seesFor(5), false);
+  check("every seat exists from tick 0", [...set.all()].length, 3);
+}
+
+console.log("\nseating is idempotent and restates rather than duplicating");
+{
+  const set = setOf();
+  const first = set.viewpointFor(2); // minted early, guessing team 2
+  set.seat([{ player: 2, team: 0 }]);
+  check("the same viewpoint object is kept", set.viewpointFor(2) === first, true);
+  check("…and its team is corrected to the lobby's", first.team, 0);
+  set.seat([{ player: 2, team: 0 }]);
+  check("seating twice does not add a second", [...set.all()].length, 1);
+}
+
 console.log(failed ? `\nvision: ${failed} FAILED` : "\nvision: all checks passed");
 process.exit(failed ? 1 : 0);
