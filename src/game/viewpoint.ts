@@ -479,6 +479,14 @@ export class VisionSet {
 
   /** Advance every viewpoint's rebuild clock. Returns those that actually rebuilt, so the
    *  caller can follow up on its own (the controller re-prunes its selection). */
+  /** Every viewpoint paired with the player it belongs to — the shape `GhostMemory` wants, so
+   *  it can ask each seat "were you watching?" without importing `VisionSet`. Kept here rather
+   *  than built at the call site because `all()` already knows the pairing and a caller
+   *  re-deriving it would be a second answer to who is seated. */
+  *viewerSeats(): Iterable<{ player: number; viewer: Viewpoint }> {
+    for (const vp of this.all()) yield { player: vp.player, viewer: vp };
+  }
+
   tick(dt: number): Viewpoint[] {
     const rebuilt: Viewpoint[] = [];
     // The modifier registry is iterated once per viewpoint, so it must be re-iterable — a

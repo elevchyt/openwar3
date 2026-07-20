@@ -1234,6 +1234,8 @@ export class SimWorld {
    *  out. Nothing else in the game switches it. */
   dawnDusk = true;
   private deaths: number[] = [];
+  /** Dead STRUCTURES, kept whole for the ghost path — see drainDeadStructures. */
+  private deadStructures: SimUnit[] = [];
   /** Whether to record death/damage/attack events for the trigger engine (the host
    *  sets each only when the loaded script actually registers that event kind — off
    *  for melee and for maps that don't listen, so nothing accumulates unread). */
@@ -3415,6 +3417,32 @@ export class SimWorld {
     if (!this.deaths.length) return this.deaths;
     const out = this.deaths;
     this.deaths = [];
+    return out;
+  }
+
+  /**
+   * The STRUCTURES that died since the last drain, as whole units rather than ids
+   * (docs/multiplayer.md Phase E item 6c).
+   *
+   * `drainDeaths` above hands out ids, and for a ghost that is one field too few. A player who
+   * scouted a building and walked away must keep its last-seen image until they re-scout, so
+   * the authority has to record WHERE it stood, WHAT it was and WHOSE it was — and by the time
+   * anybody drains, `killUnit` has already done `this.units.delete(u.id)`, so the id resolves
+   * to nothing. Same trap the trigger engine hit two lines below that delete, and it left the
+   * same note: "the victim is gone from `units` next tick".
+   *
+   * Only buildings are pushed. That is not an optimisation, it is the rule — WC3 leaves no
+   * image of a dead footman — and it keeps this list naturally tiny, since structures die a
+   * handful of times a match.
+   *
+   * The unit object is handed over as-is rather than copied. It has just been removed from the
+   * world, so nothing will mutate it again, and the one consumer (`GhostMemory`) immediately
+   * reduces it to a redacted `rememberedUnit` record.
+   */
+  drainDeadStructures(): SimUnit[] {
+    if (!this.deadStructures.length) return this.deadStructures;
+    const out = this.deadStructures;
+    this.deadStructures = [];
     return out;
   }
 
@@ -8138,6 +8166,10 @@ export class SimWorld {
     this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
+    // A structure is kept WHOLE, not just as an id: a player who cannot see this spot must go
+    // on being shown the building until they re-scout it, and the id above resolves to nothing
+    // the moment the delete on the previous line runs. See drainDeadStructures.
+    if (u.building != null) this.deadStructures.push(u);
     // Record a death event for the trigger engine (Phase 7 — EVENT_UNIT_DEATH /
     // EVENT_PLAYER_UNIT_DEATH). Only when a script is listening (captureDeaths), so a
     // melee match with no trigger pump doesn't accumulate these. Snapshot both units

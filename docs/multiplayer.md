@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9). Open: 6c, 7b, 9b, then 10–12 — **nothing is sent yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c). Open: 6d, 7b, 9b, then 10–12 — **nothing is sent yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(386 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(392 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -1384,11 +1384,44 @@ enumerated by body rather than by name.
    ghost for the watcher (`!== "omit"`), dropping the structures-only guard, and inverting the
    forget test so sight keeps rather than clears. `sim:test` 374 → **386**.
 
-   **Still open (item 6c): nothing calls `noteDestroyed`.** The authority has to call it on every
-   structure death, and `forgetSeen` on every fog rebuild. That is wiring into the tick loop
-   rather than a rule, and it lands with item 10 when snapshots are actually produced per tick —
-   at which point the local renderer also stops losing the ghost off its own screen, which is
-   the visible half of this bug and is NOT fixed by this commit.
+6c. ~~**Nothing calls `noteDestroyed`.**~~ **Done, and it was not the tick-loop wiring this
+   entry called it — there was a real obstacle in the sim.** `GhostMemory.noteDestroyed(u, …)`
+   needs the UNIT: where it stood, what it was, whose it was. `SimWorld.kill` does
+   `this.units.delete(u.id)` on the line **before** `this.deaths.push(u.id)`, so by the time
+   anybody drains, the id resolves to nothing and no drain-based caller could ever have
+   supplied it. The trigger engine hit this exact wall two lines further down and left the note
+   that gave it away: *"the victim is gone from `units` next tick"*.
+
+   **So the sim now hands the structure over whole.** `SimWorld.drainDeadStructures(): SimUnit[]`
+   alongside the existing `drainDeaths(): number[]`. Only buildings are pushed — that is the
+   rule (WC3 leaves no image of a dead footman) rather than an optimisation, and it keeps the
+   list naturally tiny since structures die a handful of times a match. The unit is handed over
+   as-is rather than copied: it has just left the world so nothing will mutate it again, and
+   `GhostMemory` immediately reduces it to a redacted `rememberedUnit`.
+
+   **Ordering in the tick is load-bearing and stated in the code.** Dead structures are offered
+   to the memory BEFORE the fog rebuilds, so each viewpoint is judged on the sight it had when
+   the building fell rather than on sight it gains this tick — otherwise a player whose scout
+   arrives the same tick would be handed a ghost of something they are looking at. `forgetSeen`
+   runs on exactly the viewpoints `VisionSet.tick` reports as rebuilt, which is the moment their
+   sight changed. `VisionSet.viewerSeats()` pairs each viewpoint with its player (named around
+   the existing private `seats` field).
+
+   **Verified in the browser, because this one runs every tick on the live path** — unlike 5, 6,
+   6b and 9. Echo Isles seed 4242: boots and plays at 144 fps with 103 units, and the minimap is
+   **byte-identical to the parent commit** (0 of 18 088 pixels) across a stash/restore A/B.
+   `sim:test` 386 → **392**; two injections (dropping the structures-only guard, and a drain that
+   does not clear) each turn their own checks red.
+
+6d. **The local player still loses a destroyed building off its own screen.** The memory is now
+   correct and nothing RENDERS it. `rts.ts` `onDeath` plays the collapse and adopts the model as
+   a corpse the moment the sim reports the death, whether or not this client can see the spot —
+   so a building you scouted and walked away from vanishes when its owner razes it, where the
+   real client keeps the intact image until you re-scout. Fixing it means `onDeath` consulting
+   the local viewpoint and, for a building it holds as `remembered`, leaving the model standing
+   frozen instead of playing Death, then hiding it when `forgetSeen` clears the ghost. That is a
+   renderer change entangled with the corpse path, it is the VISIBLE half of 6b, and it is hard
+   to stage (it needs an enemy to raze a building you have scouted and left).
 
 6b-old. **The original entry.** WC3 keeps the ghost image
    until you re-see the spot; ours vanishes the moment the building leaves `world.units`, because

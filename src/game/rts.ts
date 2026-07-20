@@ -24,6 +24,7 @@ import {
 import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
+import { GhostMemory } from "./ghosts";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons } from "./minimapView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
@@ -382,6 +383,11 @@ export class RtsController {
   // runtime — the local player's — because nothing asks for a second yet; Phase E's snapshots
   // are what start calling viewpointFor with somebody else's slot.
   private viewpoints!: VisionSet;
+  /** Buildings each player still believes are standing (docs/multiplayer.md item 6b/6c). Fed
+   *  from `drainDeadStructures` and cleared by sight. Nothing RENDERS these yet — the local
+   *  player still loses a destroyed building off its own screen, which is item 6d — but the
+   *  memory is now correct, which is what a snapshot needs. */
+  private ghosts = new GhostMemory();
   // …and this machine's own, cached because the render path asks it many times a frame.
   // Re-pointed by setLocalPlayer, which is the only thing that can change it.
   private local!: Viewpoint;
@@ -2027,6 +2033,10 @@ export class RtsController {
     this.playImpacts(); // BEFORE deaths — a killed target's entry is still around to read its armour
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
     for (const id of this.sim.drainRemovals()) this.onRemove(id);
+    // Offer every dead structure to the ghost memory BEFORE the fog rebuilds below, so each
+    // viewpoint is judged on the sight it had when the building fell rather than on sight it
+    // gains this tick. A viewpoint that was watching keeps no image — it saw the collapse.
+    for (const u of this.sim.drainDeadStructures()) this.ghosts.noteDestroyed(u, this.viewpoints.viewerSeats());
     this.tickCorpses(dt);
     if (this.hovered !== null && !this.byId.has(this.hovered)) this.hovered = null;
     if (this.hoveredMine !== null && !this.sim.mines.has(this.hoveredMine)) this.hoveredMine = null;
@@ -2036,7 +2046,11 @@ export class RtsController {
     // cheap. The initial accumulator > interval forces a rebuild on the first tick.
     // Every viewpoint keeps its own 10 Hz clock. Only the LOCAL one's rebuild re-prunes the
     // selection, because the selection is this machine's, not the match's.
-    if (this.viewpoints.tick(dt).includes(this.local)) {
+    const rebuilt = this.viewpoints.tick(dt);
+    // A ghost is forgotten by SIGHT, not by a clock (measured against the real 1.27a client),
+    // and the moment a viewpoint's sight changes is exactly when it rebuilt.
+    for (const vp of rebuilt) this.ghosts.forgetSeen(vp.player, vp);
+    if (rebuilt.includes(this.local)) {
       this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
     }
     for (const e of this.entries) {

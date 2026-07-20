@@ -413,5 +413,42 @@ console.log("ghosts ride in the snapshot alongside the living");
   check("omitting ghosts changes nothing", snapshotFor(world, v, 0, 1.5).units.length, 1);
 }
 
+// ---------------------------------------------------------------------------------------
+// Item 6c: the wiring. The rules above were tested against stubs; these run against the REAL
+// SimWorld and the REAL VisionSet, because the thing that was actually wrong was neither rule
+// — it was that the sim deletes a unit before anybody can look at it.
+// ---------------------------------------------------------------------------------------
+
+console.log("the sim hands over a dead structure whole, because its id resolves to nothing");
+{
+  const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
+  const w = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8Array(64) }, 1);
+
+  // Seeded straight into `world.units`, the same way every other sim test does it.
+  const put = (o) => {
+    const u = unit({ ...o, weapons: [], abilities: [], buffs: [], inventory: [], garrison: [], orderQueue: [], linkGroup: [], path: [] });
+    w.units.set(u.id, u);
+    return u;
+  };
+  // A structure and a footman, so the structures-only rule is exercised on the SIM side rather
+  // than only inside GhostMemory.
+  const hall = put({ id: 501, typeId: "htow", owner: 0, x: 300, y: 300, building: { constructionLeft: 0, queue: [] } });
+  const foot = put({ id: 502, typeId: "hfoo", owner: 0, x: 900, y: 900, building: null });
+
+  w.killUnit(hall.id);
+  w.killUnit(foot.id);
+
+  // THE check, and the reason this item needed a sim change at all: `kill` does
+  // `this.units.delete(u.id)` on the line BEFORE it queues the death, so a drain that yields
+  // ids alone cannot answer "what was it and where did it stand".
+  check("the dead building is gone from the world", w.units.has(hall.id), false);
+  check("its id is in the plain death drain", w.drainDeaths().includes(501), true);
+  const dead = w.drainDeadStructures();
+  check("and the structure drain still has it, whole", dead.length, 1);
+  check("with the fields a ghost needs", [dead[0].id, dead[0].typeId, dead[0].x, dead[0].y], [501, "htow", 300, 300]);
+  check("the dead footman is not in it", dead.some((u) => u.id === 502), false);
+  check("draining twice does not repeat it", w.drainDeadStructures().length, 0);
+}
+
 console.log(failed === 0 ? "\nsnapshot: all checks passed" : `\nsnapshot: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
