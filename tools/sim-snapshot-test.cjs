@@ -20,6 +20,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { snapshotFor, visibilityFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
 const { GhostMemory } = require(join(REPO, ".sim-build", "src", "game", "ghosts.js"));
+const { divergence, describeDivergence } = require(join(REPO, ".sim-build", "src", "game", "divergence.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -448,6 +449,112 @@ console.log("the sim hands over a dead structure whole, because its id resolves 
   check("with the fields a ghost needs", [dead[0].id, dead[0].typeId, dead[0].x, dead[0].y], [501, "htow", 300, 300]);
   check("the dead footman is not in it", dead.some((u) => u.id === 502), false);
   check("draining twice does not repeat it", w.drainDeadStructures().length, 0);
+}
+
+// ---------------------------------------------------------------------------------------
+// Item 10a: the divergence detector. The developer chose sequencing B — the client renders
+// snapshots AND keeps simulating — so the whole value of that choice is being able to say
+// exactly WHERE the two disagree.
+// ---------------------------------------------------------------------------------------
+
+console.log("two identical worlds report nothing");
+{
+  const seating = { 0: 0, 1: 1 };
+  const v = viewer(0, seating);
+  const w = worldOf([unit({ id: 1, owner: 0, x: 10, y: 20, hp: 300 })]);
+  // Both sides go through the SAME snapshotFor. That is the point: a comparator that read the
+  // local SimUnit directly would report the AoI redaction and the illusion mask as drift on
+  // every tick and drown the signal on its first run.
+  check("no findings", divergence(snapshotFor(w, v, 0, 1), snapshotFor(w, v, 0, 1)), []);
+}
+
+console.log("a field that actually drifted is named, with both values");
+{
+  const seating = { 0: 0, 1: 1 };
+  const v = viewer(0, seating);
+  const host = worldOf([unit({ id: 1, owner: 0, x: 10, y: 20, hp: 245 })]);
+  const client = worldOf([unit({ id: 1, owner: 0, x: 10, y: 20, hp: 260 })]);
+  const d = divergence(snapshotFor(host, v, 0, 1), snapshotFor(client, v, 0, 1));
+  check("one finding", d.length, 1);
+  check("it names the unit, the field and both sides", [d[0].kind, d[0].id, d[0].field, d[0].local, d[0].authority], ["field", 1, "hp", 260, 245]);
+  check("and reads as a line a human can act on", describeDivergence(d[0]), "unit 1.hp: local 260 vs authority 245");
+}
+
+console.log("float noise is not drift, but a real gap is");
+{
+  const seating = { 0: 0, 1: 1 };
+  const v = viewer(0, seating);
+  const host = worldOf([unit({ id: 1, owner: 0, x: 100, y: 100 })]);
+  // Two sims stepping the same movement over different numbers of frames land fractionally
+  // apart every tick. Reporting that would make the detector useless on its first run.
+  const near = worldOf([unit({ id: 1, owner: 0, x: 100.2, y: 99.8 })]);
+  check("a fifth of a unit is not worth reporting", divergence(snapshotFor(host, v, 0, 1), snapshotFor(near, v, 0, 1)), []);
+  const far = worldOf([unit({ id: 1, owner: 0, x: 140, y: 100 })]);
+  check("forty units apart is", divergence(snapshotFor(host, v, 0, 1), snapshotFor(far, v, 0, 1)).map((x) => x.field), ["x"]);
+}
+
+console.log("a unit on one side only is reported, and the two cases are told apart");
+{
+  const seating = { 0: 0, 1: 1 };
+  const v = viewer(0, seating);
+  const host = worldOf([unit({ id: 1, owner: 0 }), unit({ id: 2, owner: 0, x: 500, y: 500 })]);
+  const client = worldOf([unit({ id: 1, owner: 0 })]);
+  check("the authority has one we do not", divergence(snapshotFor(host, v, 0, 1), snapshotFor(client, v, 0, 1)), [{ kind: "missing", id: 2 }]);
+  // The reverse is deliberately NOT called drift in the message: the authority withholds what
+  // this recipient cannot see, so a locally-simulated unit that was not sent may just be fogged.
+  const back = divergence(snapshotFor(client, v, 0, 1), snapshotFor(host, v, 0, 1));
+  check("we have one it did not send", back, [{ kind: "extra", id: 2 }]);
+  check("and the wording admits it may be fog", describeDivergence(back[0]).includes("fogged"), true);
+}
+
+console.log("a remembered building is compared on what it claims to know, not on its redaction");
+{
+  const seating = { 0: 0, 1: 1 };
+  const away = viewer(0, seating, { fogHides: () => false, fogBlocksClick: () => true });
+  const bar = (hp) => unit({
+    id: 1, owner: 1, team: 1, typeId: "hbar", x: 3000, y: 3000, hp,
+    building: { constructionLeft: 0, buildTimeTotal: 60, queue: [], producesUnits: true, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 },
+  });
+  // THE case this rule exists for, and the first version of this check did NOT reach it: if
+  // both sides go through the same viewer they are both redacted to zeros, so the comparison
+  // is trivially equal and deleting the rule changes nothing. The rule only bites when the two
+  // sides DISAGREE about visibility — the authority sends a memory while this client's own fog
+  // still has eyes on the building, which is exactly what a client one rebuild out of step
+  // looks like. Comparing every field then reports hp, the queue and the rally point as drift
+  // for every fogged building on the map.
+  const watching = viewer(0, seating);
+  const d = divergence(snapshotFor(worldOf([bar(400)]), away, 0, 1), snapshotFor(worldOf([bar(400)]), watching, 0, 1));
+  check("a memory is not diffed against a live record's fields", d, []);
+  // But its POSE is knowledge on both sides, and a building in two places is a real
+  // disagreement even when one side is remembering it.
+  const moved = { ...bar(400), x: 5000 };
+  const d2 = divergence(snapshotFor(worldOf([bar(400)]), away, 0, 1), snapshotFor(worldOf([moved]), watching, 0, 1));
+  check("a position it does claim to know still is", d2.map((x) => x.field), ["x"]);
+  // `remembered` is a fact about the OBSERVER's fog, not about the world. Both sides rebuild
+  // their grid on their own 10 Hz clock, so they disagree by one rebuild constantly — skew,
+  // not drift. Comparing it puts a finding on the log for every fogged structure on the map
+  // several times a second and buries the one line that matters.
+  check("whether each side currently has eyes on it is not a disagreement", d.concat(d2).some((x) => x.field === "remembered"), false);
+}
+
+console.log("the report is bounded, and a mis-addressed snapshot is not called drift");
+{
+  const seating = { 0: 0, 1: 1 };
+  const v = viewer(0, seating);
+  const many = [], none = [];
+  for (let i = 1; i <= 40; i++) many.push(unit({ id: i, owner: 0 }));
+  const d = divergence(snapshotFor(worldOf(many), v, 0, 1), snapshotFor(worldOf(none), v, 0, 1));
+  // A fully desynced world produces one finding per unit per field. A log line per unit per
+  // tick is not a diagnostic; the first few are the interesting ones anyway.
+  check("capped at the default limit", d.length, 24);
+  check("and the cap is configurable", divergence(snapshotFor(worldOf(many), v, 0, 1), snapshotFor(worldOf(none), v, 0, 1), { limit: 3 }).length, 3);
+
+  // Comparing two DIFFERENT recipients' snapshots compares two redactions and would report
+  // hundreds of phantom differences. It is one finding, so somebody reads "mis-addressed"
+  // instead of hunting a desync that does not exist.
+  const forOne = snapshotFor(worldOf(many), viewer(1, seating), 1, 1);
+  const mis = divergence(forOne, snapshotFor(worldOf(many), v, 0, 1));
+  check("a snapshot for the wrong player is one clear finding", [mis.length, mis[0].field], [1, "recipient"]);
 }
 
 console.log(failed === 0 ? "\nsnapshot: all checks passed" : `\nsnapshot: ${failed} FAILED`);

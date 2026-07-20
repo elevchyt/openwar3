@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c). Open: 6d, 7b, 9b, then 10–12 — **nothing is sent yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a). Open: 6d, 7b, 9b, 10b, 10c, then 11–12 — **nothing is sent yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(392 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(407 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -1579,12 +1579,59 @@ enumerated by body rather than by name.
    locally and start sending" cannot land before there is a snapshot stream to render instead.
    Whoever takes item 10 takes this with it.
 
-10. **Snapshots cross the wire, and the client stops simulating.** The big one.
-    **Sequencing is genuinely unsettled between 9 and 10**: a client that sends commands while still
-    simulating locally drifts, and a client that renders snapshots without a command path cannot act.
-    They may have to land together, or 10 may land first with the local sim kept alongside purely to
-    diff against the arriving snapshot — which is a good bug-finder and a bad shipping state. Decide
-    when item 8 exists and record what was chosen here.
+10. **Snapshots cross the wire.** ~~Sequencing unsettled.~~ **DECIDED by the developer: B — the
+    client renders snapshots AND keeps simulating**, so the two can be compared and the
+    difference logged. A good bug-finder and a bad shipping state, taken knowingly; tearing the
+    local sim out is its own follow-up once the log is quiet.
+
+10a. ~~**The divergence detector.**~~ **Done** — [`src/game/divergence.ts`](../src/game/divergence.ts),
+    the thing option B exists for. "They drift" is a bug report nobody can act on; "unit 41's hp
+    is 260 here and 245 there" is a lead. **Eleventh module to compile standalone**; nothing
+    imports it yet.
+
+    **It compares two SNAPSHOTS, never a snapshot against a live world.** The local side goes
+    through the same `snapshotFor`, so both are the same shape, redacted by the same rules, for
+    the same recipient — which is what makes a finding mean "these two worlds disagree" rather
+    than "these two representations disagree". A comparator reading the local `SimUnit` directly
+    would report the AoI redaction and the illusion mask as drift on every tick and drown the
+    signal on its first run.
+
+    **Two rules earned by getting them wrong first:**
+    - Floats compare with tolerance (0.5 world units). Two sims stepping the same movement over
+      different numbers of frames land fractionally apart every tick.
+    - A `remembered` record is compared only on what it CLAIMS to know. The first version of
+      this check did not reach that branch at all — both sides went through the same viewer, so
+      both were redacted to zeros and deleting the rule changed nothing. It only bites when the
+      two sides **disagree about visibility**, which is what a client one fog-rebuild out of
+      step looks like.
+
+    **And that fixed test immediately found a real flaw: `remembered` must not itself be
+    compared.** It is a fact about the OBSERVER's fog, not about the world. Both sides rebuild
+    their grid on their own 10 Hz clock, so they disagree by one rebuild constantly — skew, not
+    drift — and diffing it would put a finding on the log for every fogged structure several
+    times a second, burying the one line that matters.
+
+    `extra` (local has a unit the authority did not send) is reported but deliberately NOT
+    called drift in its message: the authority withholds what the recipient cannot see, so it
+    may simply be fogged. The report is capped (24 by default) because a desynced world produces
+    one finding per unit per field, and the `ignore` list is **empty by default on purpose** — a
+    field silenced before anybody understood why it was noisy is a desync nobody will ever find.
+    `sim:test` 392 → **407**.
+
+10b. **The match channel, and the pump.** `RtsController` has no transport and cannot get one:
+    `LanLobby` is constructed in [`src/ui/fdfLan.ts`](../src/ui/fdfLan.ts), a UI module, and the
+    game layer has no reference to it. So before any snapshot can be sent, the match needs a
+    narrow channel seam — `{ send(data, to?), onMessage }`, which `LanLobby` already satisfies
+    structurally — passed into the controller. Then: the host builds `snapshotFor` per recipient
+    on a cadence and sends; every client keeps the latest and runs `divergence` against its own.
+    This is the wiring item, and it is where `CommandRouter` (item 9) and `GhostMemory.ghostsFor`
+    (item 6c) finally get their callers.
+
+10c. **The client renders from the snapshot.** The last step of option B's first half, and the
+    largest: `rts.ts` reads `sim.units` throughout, and rendering an arriving snapshot instead
+    means the renderer's world becomes the payload. Item 5's field set was chosen off exactly
+    those read sites, so the shape is already right — but the substitution is broad and belongs
+    on its own.
 
 11. **Reconnect: rejoin token → full snapshot → deltas resume.** Relay side is a token in the room
     table (it must stay free-tier-shaped: no sim, no Blizzard data, no match state beyond that table).
@@ -1620,6 +1667,7 @@ refactor can pass every suite while showing an enemy base through the fog.
 
 ## Open questions
 
+- ~~**9/10 sequencing.**~~ **Decided — B: the client renders snapshots and keeps simulating**, so the two can be diffed and the divergence logged (item 10a is that detector). A deliberate temporary state: the local sim comes out once the log is quiet.
 - **Host input delay.** Handicap the host to the room's median RTT, or accept the advantage in v1?
 - **NAT traversal.** Pure relay (simple, all traffic through the free box, bandwidth-bound) vs. WebRTC
   data channels with the cloud box as signaling only (cheaper to host, much more moving parts).
