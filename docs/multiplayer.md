@@ -91,12 +91,14 @@ state.
 | Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster |
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | not started | the tentpole |
-| C — command funnel | not started | **close the 8 bypasses first** — the next thing to do |
+| C — command funnel | **done** | all 11 player actions go through `execute()`; `Command` is the wire type |
 | D — N vision maps | not started | |
 | E — snapshots & reconnect | not started | |
 
 **Shipped so far** (newest first — `git log` for detail):
 
+- Phase C: `Command` (`src/game/commands.ts`) + `RtsController.execute` — all eleven player
+  actions now go through one gate, and `stop`/`hold` joined `QueuedOrder`
 - map selection + Start: `LocalMultiplayerCreate.fdf` as its own screen, the map summary pane
   on the LAN screen, and the `start` handshake that puts both clients in the same match
 - `5a0ec84` sim ids come from war3mapUnits.doo order, not model-load order
@@ -105,24 +107,30 @@ state.
 - `be9285c` relay, transport seam, LAN screen (create / discover / join / roster)
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
-**Tests:** `pnpm relay:test` (relay flow, headless) and `pnpm sim:test` (includes
-`sim-determinism-test.cjs` — same seed reproduces, different seed diverges). Both green.
+**Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
+(181 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
+first; it reads the unpacked `Scripts/common.j` and fails without it.
 
 **Pick up here.** In order:
 
-1. **Phase C, bypasses before transport.** The funnel at [`src/game/rts.ts`](../src/game/rts.ts)
-   `order()` is not exhaustive: **eleven** player actions still reach the sim directly, in three
-   groups (see Phase C for the audit and the table). Close those FIRST; wiring the transport first
-   just makes those actions silently host-only and the bug hard to see. `issueHold` is done.
-   (`issueUnitOrder` is *not* on the list — it is a trigger path, see Phase C.)
-2. **Phase E** — snapshots and reconnect.
+1. **Phase B — bisect `rts.ts`.** The tentpole, and now the thing in the way: D and E both need
+   it. `execute()` gives it a clean seam to cut along that did not exist before — commands in on
+   one side, sim on the other.
+2. **Phase D / E** — N vision maps, then snapshots and reconnect.
+
+Phase C is done: all eleven player actions go through `RtsController.execute`, and `Command`
+([`src/game/commands.ts`](../src/game/commands.ts)) is the type that will go on the wire. Nothing
+is *sent* yet — that is Phase E — but there is now exactly one place to send from, and exactly one
+place that decides whether a command is allowed.
 
 **What "Start" does and does not do today.** Both clients load the same map, seat themselves in
 different slots off one shared config, and run off one seed — so the two windows open on the same
 world, each looking at its own base. Nothing is sent after that: each machine then simulates
-independently and they drift apart within seconds. That is expected and is exactly the hole Phase C
-fills. The point of landing this first is that the identity of a match (map, slots, seed, who is
-who) is now settled and testable before any command crosses the wire.
+independently and they drift apart within seconds. Phase C has since given every player action one
+door to leave by (`execute()`), but nothing yet carries it to the other machine — that is Phase E.
+The point of landing Start first is that the identity of a match (map, slots, seed, who is who) was
+settled and testable before any command crossed the wire.
 
 **Map files never cross the wire.** A room advertises its map's PATH and every client opens that
 path in its own install ([`src/net/protocol.ts`](../src/net/protocol.ts) `RoomInfo.mapPath`). This
@@ -203,24 +211,20 @@ wire format:
 | **Inventory actions** | `useItem` (point + instant), `dropItem`, `issueSellItem`, `issueGiveItem` | new `QueuedOrder` members, all keyed by inventory **slot** |
 | **Not unit orders at all** | `setShopBuyer`, `toggleAutocast` | **do not fit `QueuedOrder`** |
 
-`issueHold` was a twelfth and is already done — it was the one action already expressible as a
-`QueuedOrder` that merely skipped `order()`, so it served as the routing proof (`sim-hold-test.cjs`).
+**All eleven are now closed.** `stop` and `hold` went into `QueuedOrder` and route through
+`order()`; the other nine became `Command` members applied by `RtsController.execute`. The audit
+grep above should return nothing outside `execute()`, `order()` and the JASS path — that is the
+check that this stays true.
 
 **`QueuedOrder` is not the whole wire format.** This file used to say it "is already a wire format,
 by accident", which is true but incomplete: it is the wire format for *orders a unit performs and
 can queue*. `setShopBuyer` is a player's choice about a **shop** it does not own (that is the whole
 point of a neutral Goblin Merchant) and `toggleAutocast` is a **toggle on an ability**, not an
 order — neither is queueable and neither is addressed to a unit as an order. So the command stream
-has to be a union one level up:
-
-```
-Command = { c: "order"; unitId; order: QueuedOrder; queued: boolean }
-        | { c: "shopbuyer"; shopId; unitId }
-        | { c: "autocast"; unitId; code }
-```
-
-Cast is the awkward member of the first group: its target kind (none / point / unit) has to be part
-of the shape, and `castFromSelection` currently resolves the ability's target rules at the call site.
+has to be a union one level up. That is [`src/game/commands.ts`](../src/game/commands.ts) `Command`,
+and [`src/game/rts.ts`](../src/game/rts.ts) `execute()` is the one place it is applied — and so the
+one place ownership is judged. A command says what was *asked for*, never who may ask; when these go
+over the wire, a peer that fakes a `unitId` it does not own is refused there rather than trusted.
 
 Every one of these must be expressible as a command before the wire exists, or those actions
 silently become host-only.

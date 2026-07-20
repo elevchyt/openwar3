@@ -2,6 +2,7 @@ import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
+import type { Command } from "./commands";
 import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
@@ -3106,7 +3107,7 @@ export class RtsController {
       // ability: "Select a unit with an inventory." (commandstrings.txt Inventoryinteract).
       const target = picked === null ? undefined : this.sim.units.get(picked);
       if (!target || !this.controls(picked!) || !target.inventory.length) return this.refuseOrder("Inventoryinteract");
-      if (!this.sim.setShopBuyer(shopId, this.localPlayer, picked!)) return this.refuseOrder("Neednearbypatron");
+      if (!this.execute({ c: "shopbuyer", shopId, unitId: picked! })) return this.refuseOrder("Neednearbypatron");
       this.orderMode = null;
       this.armedShopUser = null;
       return true;
@@ -3152,7 +3153,7 @@ export class RtsController {
       if (!armed || id === null || !this.controls(id)) return true;
       if (armed.mode === "usepoint") {
         const hit = this.groundHitAt(cssX, cssY);
-        if (hit) this.sim.useItem(id, armed.slot, 0, hit[0], hit[1]);
+        if (hit) this.execute({ c: "useitem", unitId: id, slot: armed.slot, targetId: 0, x: hit[0], y: hit[1] });
         return true;
       }
       // "move": the carried item goes to whatever was clicked — a SHOP buys it back (WC3 sells
@@ -3161,13 +3162,13 @@ export class RtsController {
       const picked = this.pickAt(cssX, cssY);
       const to = picked !== null ? this.sim.units.get(picked) : undefined;
       if (to && picked !== null && picked !== id && this.sim.canPawnAt(to)) {
-        this.sim.issueSellItem(id, armed.slot, picked);
+        this.execute({ c: "sellitem", unitId: id, slot: armed.slot, shopId: picked });
       } else if (to && picked !== null && picked !== id && this.controls(picked) && to.inventory.length) {
-        this.sim.issueGiveItem(id, armed.slot, picked);
+        this.execute({ c: "giveitem", unitId: id, slot: armed.slot, targetId: picked });
       } else {
         const hit = this.groundHitAt(cssX, cssY);
         if (hit) {
-          this.sim.dropItem(id, armed.slot, hit[0], hit[1]);
+          this.execute({ c: "dropitem", unitId: id, slot: armed.slot, x: hit[0], y: hit[1] });
           this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move feedback — the hero walks over to drop
         }
       }
@@ -3308,8 +3309,7 @@ export class RtsController {
   private castFromSelection(code: string, targetId: number, x: number, y: number): void {
     let any = false;
     for (const id of this.selected) {
-      if (this.sim.units.get(id)?.owner !== this.localPlayer) continue;
-      if (this.sim.issueCast(id, code, targetId, x, y)) any = true;
+      if (this.execute({ c: "cast", unitId: id, code, targetId, x, y })) any = true;
     }
     if (any) this.ack(false);
   }
@@ -3411,7 +3411,8 @@ export class RtsController {
       this.orderMode = "item";
       return;
     }
-    this.sim.useItem(id, slot, 0, u.x, u.y); // self/instant consumable — fire immediately
+    // self/instant consumable — fire immediately
+    this.execute({ c: "useitem", unitId: id, slot, targetId: 0, x: u.x, y: u.y });
   }
 
   /** Right-click an inventory slot: enter "target to move" mode. The next click
@@ -3431,12 +3432,7 @@ export class RtsController {
 
   /** Toggle an autocast ability (Heal, Slow, …) on the whole own selection. */
   toggleAutocast(code: string): void {
-    let state: boolean | null = null;
-    for (const id of this.selected) {
-      if (this.sim.units.get(id)?.owner !== this.localPlayer) continue;
-      const s = this.sim.toggleAutocast(id, code);
-      if (state === null) state = s;
-    }
+    for (const id of this.selected) this.execute({ c: "autocast", unitId: id, code });
   }
 
   /** The primary-selected unit's live sim state (for the command card + HUD). */
@@ -4123,6 +4119,51 @@ export class RtsController {
     return false;
   }
 
+  /**
+   * Apply a player command. THE choke point (docs/multiplayer.md Phase C).
+   *
+   * Every player action arrives here, ownership is judged here, and only then does the sim
+   * hear about it. That is what makes the set of things a client may ask for a closed,
+   * inspectable list — and once commands go over the wire this is where a peer's command
+   * lands, so a client that fakes a `unitId` it does not own is refused right here rather
+   * than being trusted because it asked nicely.
+   *
+   * Returns whether the command took.
+   */
+  execute(cmd: Command): boolean {
+    switch (cmd.c) {
+      case "order":
+        return this.order(cmd.unitId, cmd.order, cmd.queued);
+      case "cast":
+        return this.controls(cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+      case "garrison":
+        return this.controls(cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
+      case "getitem":
+        return this.controls(cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
+      case "useitem":
+        return this.controls(cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
+      case "dropitem":
+        if (!this.controls(cmd.unitId)) return false;
+        this.sim.dropItem(cmd.unitId, cmd.slot, cmd.x, cmd.y);
+        return true;
+      case "sellitem":
+        return this.controls(cmd.unitId) && this.sim.issueSellItem(cmd.unitId, cmd.slot, cmd.shopId);
+      case "giveitem":
+        // BOTH ends are checked: you may not push an item into a unit you don't control.
+        return this.controls(cmd.unitId) && this.controls(cmd.targetId)
+          && this.sim.issueGiveItem(cmd.unitId, cmd.slot, cmd.targetId);
+      case "shopbuyer":
+        // The SHOP is deliberately not ownership-checked — a neutral Goblin Merchant belongs
+        // to nobody, which is the entire point. What must be yours is the unit you nominate.
+        return (cmd.unitId === 0 || this.controls(cmd.unitId))
+          && this.sim.setShopBuyer(cmd.shopId, this.localPlayer, cmd.unitId);
+      case "autocast":
+        if (!this.controls(cmd.unitId)) return false;
+        this.sim.toggleAutocast(cmd.unitId, cmd.code);
+        return true;
+    }
+  }
+
   /** Route an order to a unit: either append it to the unit's shift-queue, or
    *  execute it immediately (replacing its current order + queue). Silently
    *  ignores units the local player doesn't own — the single choke point that
@@ -4297,7 +4338,7 @@ export class RtsController {
         for (const id of this.selected) {
           const u = this.sim.units.get(id);
           if (this.controls(id) && u?.inventory.length) {
-            if (this.sim.issueGetItem(id, gitem.id)) any = true;
+            if (this.execute({ c: "getitem", unitId: id, itemId: gitem.id })) any = true;
           }
         }
         if (any) {
@@ -4473,7 +4514,7 @@ export class RtsController {
       const room = target.garrisonCap - target.garrison.length;
       const workers = room > 0 ? [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room) : [];
       let any = false;
-      for (const id of workers) if (this.sim.issueGarrison(id, picked)) any = true;
+      for (const id of workers) if (this.execute({ c: "garrison", unitId: id, buildingId: picked })) any = true;
       if (any) {
         this.flashRing(target.x, target.y, selR, FLASH_GREEN);
         return;
