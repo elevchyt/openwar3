@@ -1612,7 +1612,7 @@ export class RtsController {
       this.orderMode = null;
       const t = this.sim.units.get(simId);
       if (t && simId !== this.primary) {
-        for (const id of this.selected) if (id !== simId) this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true }, queued: false });
+        for (const id of this.selected) if (id !== simId) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true }, queued: false });
         this.ack(true);
       }
       return true;
@@ -3107,7 +3107,7 @@ export class RtsController {
       // ability: "Select a unit with an inventory." (commandstrings.txt Inventoryinteract).
       const target = picked === null ? undefined : this.sim.units.get(picked);
       if (!target || !this.controls(picked!) || !target.inventory.length) return this.refuseOrder("Inventoryinteract");
-      if (!this.execute({ c: "shopbuyer", shopId, unitId: picked! })) return this.refuseOrder("Neednearbypatron");
+      if (!this.execute(this.localPlayer, { c: "shopbuyer", shopId, unitId: picked! })) return this.refuseOrder("Neednearbypatron");
       this.orderMode = null;
       this.armedShopUser = null;
       return true;
@@ -3153,7 +3153,7 @@ export class RtsController {
       if (!armed || id === null || !this.controls(id)) return true;
       if (armed.mode === "usepoint") {
         const hit = this.groundHitAt(cssX, cssY);
-        if (hit) this.execute({ c: "useitem", unitId: id, slot: armed.slot, targetId: 0, x: hit[0], y: hit[1] });
+        if (hit) this.execute(this.localPlayer, { c: "useitem", unitId: id, slot: armed.slot, targetId: 0, x: hit[0], y: hit[1] });
         return true;
       }
       // "move": the carried item goes to whatever was clicked — a SHOP buys it back (WC3 sells
@@ -3162,13 +3162,13 @@ export class RtsController {
       const picked = this.pickAt(cssX, cssY);
       const to = picked !== null ? this.sim.units.get(picked) : undefined;
       if (to && picked !== null && picked !== id && this.sim.canPawnAt(to)) {
-        this.execute({ c: "sellitem", unitId: id, slot: armed.slot, shopId: picked });
+        this.execute(this.localPlayer, { c: "sellitem", unitId: id, slot: armed.slot, shopId: picked });
       } else if (to && picked !== null && picked !== id && this.controls(picked) && to.inventory.length) {
-        this.execute({ c: "giveitem", unitId: id, slot: armed.slot, targetId: picked });
+        this.execute(this.localPlayer, { c: "giveitem", unitId: id, slot: armed.slot, targetId: picked });
       } else {
         const hit = this.groundHitAt(cssX, cssY);
         if (hit) {
-          this.execute({ c: "dropitem", unitId: id, slot: armed.slot, x: hit[0], y: hit[1] });
+          this.execute(this.localPlayer, { c: "dropitem", unitId: id, slot: armed.slot, x: hit[0], y: hit[1] });
           this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move feedback — the hero walks over to drop
         }
       }
@@ -3179,7 +3179,7 @@ export class RtsController {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
         for (const id of this.selected) {
-          if (this.controls(id) && this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
+          this.execute(this.localPlayer, { c: "rally", unitId: id, x: r.x, y: r.y, kind: r.kind, targetId: r.targetId });
         }
         this.rallyFeedback(r);
         this.sounds?.playUi("RallyPointPlace");
@@ -3199,7 +3199,7 @@ export class RtsController {
         // friendly/own units and buildings (WC3 force attack).
         if (target && target.id !== this.primary) {
           let any = false;
-          for (const id of this.selected) if (id !== picked && this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
+          for (const id of this.selected) if (id !== picked && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
           if (any) {
             this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
             return true;
@@ -3223,7 +3223,7 @@ export class RtsController {
    *  terrain) and a click on the MINIMAP, which resolves straight to a world point. */
   private groundOrder(mode: "move" | "attack" | "patrol", wx: number, wy: number, queued: boolean): void {
     if (mode === "patrol") {
-      for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "patrol", x: wx, y: wy }, queued: queued });
+      for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "patrol", x: wx, y: wy }, queued: queued });
       this.queueArrow(wx, wy, MOVE_ARROW);
     } else if (mode === "attack") {
       this.groupAttackMove(wx, wy, queued); // distinct formation slot per unit (like move)
@@ -3272,7 +3272,7 @@ export class RtsController {
     if (mode === "rally") {
       this.orderMode = null;
       for (const id of this.selected) {
-        if (this.controls(id) && this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, wx, wy, "point", 0);
+        this.execute(this.localPlayer, { c: "rally", unitId: id, x: wx, y: wy, kind: "point", targetId: 0 });
       }
       this.rallyFeedback({ x: wx, y: wy, kind: "point", targetId: 0 });
       this.sounds?.playUi("RallyPointPlace");
@@ -3309,7 +3309,7 @@ export class RtsController {
   private castFromSelection(code: string, targetId: number, x: number, y: number): void {
     let any = false;
     for (const id of this.selected) {
-      if (this.execute({ c: "cast", unitId: id, code, targetId, x, y })) any = true;
+      if (this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId, x, y })) any = true;
     }
     if (any) this.ack(false);
   }
@@ -3397,7 +3397,7 @@ export class RtsController {
       const from = this.armedItem.slot;
       this.armedItem = null;
       this.orderMode = null;
-      if (from !== slot) this.sim.swapItems(id, from, slot);
+      if (from !== slot) this.execute(this.localPlayer, { c: "swapitem", unitId: id, from, to: slot });
       return;
     }
     const u = this.sim.units.get(id);
@@ -3412,7 +3412,7 @@ export class RtsController {
       return;
     }
     // self/instant consumable — fire immediately
-    this.execute({ c: "useitem", unitId: id, slot, targetId: 0, x: u.x, y: u.y });
+    this.execute(this.localPlayer, { c: "useitem", unitId: id, slot, targetId: 0, x: u.x, y: u.y });
   }
 
   /** Right-click an inventory slot: enter "target to move" mode. The next click
@@ -3427,12 +3427,12 @@ export class RtsController {
 
   /** Learn (or rank up) a hero ability on the primary-selected hero (own only). */
   learnSkill(abilityId: string): boolean {
-    return this.primary !== null && this.controls(this.primary) && this.sim.learnAbility(this.primary, abilityId);
+    return this.primary !== null && this.execute(this.localPlayer, { c: "learnskill", unitId: this.primary, abilityId });
   }
 
   /** Toggle an autocast ability (Heal, Slow, …) on the whole own selection. */
   toggleAutocast(code: string): void {
-    for (const id of this.selected) this.execute({ c: "autocast", unitId: id, code });
+    for (const id of this.selected) this.execute(this.localPlayer, { c: "autocast", unitId: id, code });
   }
 
   /** The primary-selected unit's live sim state (for the command card + HUD). */
@@ -3460,7 +3460,7 @@ export class RtsController {
    *  `issueOrder` does the queue-clearing itself, and exempts stop from the cast-lock guard
    *  so it keeps its one special power: aborting a wind-up that has started but not fired. */
   stopSelected(): void {
-    for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "stop" }, queued: false });
+    for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "stop" }, queued: false });
   }
 
   /** Hold Position on the selection: each unit plants where it stands and attacks
@@ -3475,7 +3475,7 @@ export class RtsController {
    *  for a Hold that `issueHold`'s own castLocked guard then refused ("don't even drop the
    *  queue for an ignored order", world.ts). */
   holdSelected(): void {
-    for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "hold" }, queued: false });
+    for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "hold" }, queued: false });
   }
 
   /** Order the selected workers to repair a damaged friendly building. WC3
@@ -3493,7 +3493,7 @@ export class RtsController {
     let any = false;
     for (const id of this.selected) {
       const w = this.sim.units.get(id);
-      if (w?.worker && this.execute({ c: "order", unitId: id, order: { kind: "repair", buildingId: picked, hpPerSec, goldPerHp, lumberPerHp }, queued: queued })) any = true;
+      if (w?.worker && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "repair", buildingId: picked, hpPerSec, goldPerHp, lumberPerHp }, queued: queued })) any = true;
     }
     return any;
   }
@@ -4110,7 +4110,22 @@ export class RtsController {
    *  command). Enemy/neutral/creep units can be single-selected to inspect, but
    *  never take orders — WC3 only lets you control your own. */
   private controls(id: number): boolean {
-    return this.sim.units.get(id)?.owner === this.localPlayer;
+    return this.ownedBy(this.localPlayer, id);
+  }
+
+  /**
+   * Does `player` own unit `id`? The AUTHORITY's ownership question, and deliberately not
+   * the same one as `controls()`.
+   *
+   * `controls()` asks "is this mine", where "mine" is this machine's own seat — the right
+   * question for the client half (may I click it, does it get a selection circle, does the
+   * command card light up). The authority must instead ask "is this the ISSUING player's",
+   * because on the host it judges commands that arrived from somebody else. Conflating the
+   * two is why `execute()` could not gate a remote peer: every check resolved to "does the
+   * host own it", which is false for every command a client ever sends.
+   */
+  private ownedBy(player: number, id: number): boolean {
+    return this.sim.units.get(id)?.owner === player;
   }
 
   /** True if the selection holds at least one unit the local player controls. */
@@ -4130,37 +4145,52 @@ export class RtsController {
    *
    * Returns whether the command took.
    */
-  execute(cmd: Command): boolean {
+  execute(player: number, cmd: Command): boolean {
     switch (cmd.c) {
       case "order":
-        return this.applyOrder(cmd.unitId, cmd.order, cmd.queued);
+        return this.applyOrder(player, cmd.unitId, cmd.order, cmd.queued);
       case "cast":
-        return this.controls(cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
       case "garrison":
-        return this.controls(cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
       case "getitem":
-        return this.controls(cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
       case "useitem":
-        return this.controls(cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
+        return this.ownedBy(player, cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
       case "dropitem":
-        if (!this.controls(cmd.unitId)) return false;
+        if (!this.ownedBy(player, cmd.unitId)) return false;
         this.sim.dropItem(cmd.unitId, cmd.slot, cmd.x, cmd.y);
         return true;
       case "sellitem":
-        return this.controls(cmd.unitId) && this.sim.issueSellItem(cmd.unitId, cmd.slot, cmd.shopId);
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueSellItem(cmd.unitId, cmd.slot, cmd.shopId);
       case "giveitem":
-        // BOTH ends are checked: you may not push an item into a unit you don't control.
-        return this.controls(cmd.unitId) && this.controls(cmd.targetId)
+        // BOTH ends are checked: you may not push an item into a unit you don't own.
+        return this.ownedBy(player, cmd.unitId) && this.ownedBy(player, cmd.targetId)
           && this.sim.issueGiveItem(cmd.unitId, cmd.slot, cmd.targetId);
       case "shopbuyer":
         // The SHOP is deliberately not ownership-checked — a neutral Goblin Merchant belongs
-        // to nobody, which is the entire point. What must be yours is the unit you nominate.
-        return (cmd.unitId === 0 || this.controls(cmd.unitId))
-          && this.sim.setShopBuyer(cmd.shopId, this.localPlayer, cmd.unitId);
+        // to nobody, which is the entire point. What must be the issuer's is the unit it
+        // nominates, and the buyer is recorded against the ISSUER, never against this machine.
+        return (cmd.unitId === 0 || this.ownedBy(player, cmd.unitId))
+          && this.sim.setShopBuyer(cmd.shopId, player, cmd.unitId);
       case "autocast":
-        if (!this.controls(cmd.unitId)) return false;
+        if (!this.ownedBy(player, cmd.unitId)) return false;
         this.sim.toggleAutocast(cmd.unitId, cmd.code);
         return true;
+      case "rally":
+        // "Is it even a building that trains?" is a VALIDITY check, and so belongs to the
+        // authority rather than to whichever caller happened to remember it — a client is
+        // not trusted to only ever rally rally-capable buildings.
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.sim.units.get(cmd.unitId)?.building?.producesUnits) return false;
+        this.sim.setRally(cmd.unitId, cmd.x, cmd.y, cmd.kind, cmd.targetId);
+        return true;
+      case "swapitem":
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        this.sim.swapItems(cmd.unitId, cmd.from, cmd.to);
+        return true;
+      case "learnskill":
+        return this.ownedBy(player, cmd.unitId) && this.sim.learnAbility(cmd.unitId, cmd.abilityId);
     }
   }
 
@@ -4176,8 +4206,8 @@ export class RtsController {
    * the audit that caught it: closing the direct *sim* calls is only half of it, because
    * `order()` is itself a door.
    */
-  private applyOrder(id: number, o: QueuedOrder, queued: boolean): boolean {
-    if (!this.controls(id)) return false;
+  private applyOrder(player: number, id: number, o: QueuedOrder, queued: boolean): boolean {
+    if (!this.ownedBy(player, id)) return false;
     this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
     if (queued) {
       this.sim.queueOrder(id, o);
@@ -4316,7 +4346,7 @@ export class RtsController {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
         for (const id of this.selected) {
-          if (this.controls(id) && this.sim.units.get(id)?.building?.producesUnits) this.sim.setRally(id, r.x, r.y, r.kind, r.targetId);
+          this.execute(this.localPlayer, { c: "rally", unitId: id, x: r.x, y: r.y, kind: r.kind, targetId: r.targetId });
         }
         this.rallyFeedback(r);
         this.sounds?.playUi("RallyPointPlace");
@@ -4346,7 +4376,7 @@ export class RtsController {
         for (const id of this.selected) {
           const u = this.sim.units.get(id);
           if (this.controls(id) && u?.inventory.length) {
-            if (this.execute({ c: "getitem", unitId: id, itemId: gitem.id })) any = true;
+            if (this.execute(this.localPlayer, { c: "getitem", unitId: id, itemId: gitem.id })) any = true;
           }
         }
         if (any) {
@@ -4365,7 +4395,7 @@ export class RtsController {
         if (enemy && !target.building) {
           // Hostile UNIT: attack + red flash (constant ring, matching its hover).
           let any = false;
-          for (const id of this.selected) if (this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued })) any = true;
+          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued })) any = true;
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
@@ -4386,7 +4416,7 @@ export class RtsController {
           let any = false;
           for (const id of followers) {
             const o = offs.get(id);
-            if (this.execute({ c: "order", unitId: id, order: { kind: "follow", targetId: picked, offX: o?.[0], offY: o?.[1] }, queued: queued })) any = true;
+            if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "follow", targetId: picked, offX: o?.[0], offY: o?.[1] }, queued: queued })) any = true;
           }
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift); // green follow confirm
@@ -4421,7 +4451,7 @@ export class RtsController {
       let any = false;
       for (const id of workers) {
         const p = spread.get(id);
-        if (this.execute({ c: "order", unitId: id, order: { kind: "harvest", res: "gold", nodeId: mine.id, ax: p?.[0], ay: p?.[1] }, queued: queued })) any = true;
+        if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "gold", nodeId: mine.id, ax: p?.[0], ay: p?.[1] }, queued: queued })) any = true;
       }
       if (any) {
         this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE); // match the mine's hover/selection ring
@@ -4456,7 +4486,7 @@ export class RtsController {
               best = t;
             }
           }
-          if (this.execute({ c: "order", unitId: id, order: { kind: "harvest", res: "lumber", nodeId: best.id }, queued: queued })) {
+          if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "harvest", res: "lumber", nodeId: best.id }, queued: queued })) {
             load.set(best.id, load.get(best.id)! + 1);
             targeted.add(best.id);
             any = true;
@@ -4511,7 +4541,7 @@ export class RtsController {
    *  worker) else move, green; allied/neutral → move, yellow. */
   private orderOnBuilding(target: SimUnit, picked: number, enemy: boolean, selR: number, queued: boolean): void {
     if (enemy) {
-      for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued });
+      for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued });
       this.flashRing(target.x, target.y, selR, FLASH_RED);
       return;
     }
@@ -4522,7 +4552,7 @@ export class RtsController {
       const room = target.garrisonCap - target.garrison.length;
       const workers = room > 0 ? [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room) : [];
       let any = false;
-      for (const id of workers) if (this.execute({ c: "garrison", unitId: id, buildingId: picked })) any = true;
+      for (const id of workers) if (this.execute(this.localPlayer, { c: "garrison", unitId: id, buildingId: picked })) any = true;
       if (any) {
         this.flashRing(target.x, target.y, selR, FLASH_GREEN);
         return;
@@ -4540,7 +4570,7 @@ export class RtsController {
       const spread = this.ringTargets(workers, target.x, target.y, target.radius, SPEED_BUILD_SPREAD);
       for (const id of workers) {
         const p = spread.get(id);
-        this.execute({ c: "order", unitId: id, order: { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued: queued });
+        this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued: queued });
       }
       handled = workers.length > 0;
     } else if (own && target.hp < target.maxHp) {
@@ -4764,7 +4794,7 @@ export class RtsController {
    *  each unit's slot move when Shift is held). */
   private groupMove(tx: number, ty: number, queued = false): void {
     const targets = this.groupTargets([...this.selected], tx, ty);
-    for (const [id, [x, y]] of targets) this.execute({ c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued });
+    for (const [id, [x, y]] of targets) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued });
   }
 
   /** Attack-move the whole selection to a ground point. Same destination logic as
@@ -4773,7 +4803,7 @@ export class RtsController {
    *  each unit fights the nearest enemy in its path and resumes to its slot afterwards. */
   private groupAttackMove(tx: number, ty: number, queued = false): void {
     const targets = this.groupTargets([...this.selected], tx, ty);
-    for (const [id, [x, y]] of targets) this.execute({ c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued });
+    for (const [id, [x, y]] of targets) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued });
   }
 
   /** Queue a target-circle flash — the renderer draws it as a flat ground circle

@@ -91,7 +91,7 @@ state.
 | Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster |
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | not started | the tentpole |
-| C — command funnel | **done** | all 11 player actions go through `execute()`; `Command` is the wire type |
+| C — command funnel | **done** | 14 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | not started | |
 | E — snapshots & reconnect | not started | |
 
@@ -114,10 +114,18 @@ first; it reads the unpacked `Scripts/common.j` and fails without it.
 
 **Pick up here.** In order:
 
-1. **Phase B — bisect `rts.ts`.** The tentpole, and now the thing in the way: D and E both need
-   it. `execute()` gives it a clean seam to cut along that did not exist before — commands in on
-   one side, sim on the other.
-2. **Phase D / E** — N vision maps, then snapshots and reconnect.
+1. **Serialize the acting group.** The formation solvers (`groupTargets`, `ringTargets`,
+   `followOffsets`) compute *authoritative* destinations from the *client's* `selected` set, so a
+   remote move order has no group to solve over. Either a command carries its unit set or the
+   client emits N per-unit commands — this decides the wire shape and blocks Phase E.
+2. **Unit-type metadata off `Entry`.** `repairAt`, `playImpacts`, `ack` and `moveAt` resolve
+   `UnitDef` through the RENDER record (`byId.get(id).typeId`). A headless authority has no
+   `Entry`, so these silently no-op rather than failing loudly. `typeId`/`race`/`selRadius` want to
+   live on `SimUnit` or a shared table.
+3. **Phase B — bisect `rts.ts`.** Mostly mechanical once 1 and 2 are done. Note the real coupling
+   is not the class's method list but `simWorld`, which the renderer and UI reach through at ~126
+   sites; splitting the class buys nothing while that stays open.
+4. **Phase D / E** — N vision maps, then snapshots and reconnect.
 
 Phase C is done: all eleven player actions go through `RtsController.execute`, and `Command`
 ([`src/game/commands.ts`](../src/game/commands.ts)) is the type that will go on the wire. Nothing
@@ -217,12 +225,18 @@ that door, including move, attack, attack-move, harvest, patrol, follow and repa
 calls was only half the job: `order()` was itself a bypass, and the commonest orders in the game were
 going through it. It is now `applyOrder`, private, and reached only from `execute`'s `order` member.
 
-Two greps keep this true, and both should return nothing:
+**Do not audit this with an enumerated grep.** A pattern listing the methods you already know
+about can only ever confirm what you already knew, and it missed something all three times it was
+used here: first `issueUnitOrder` (miscategorised), then `order()` itself (not a `this.sim.` call at
+all, and fourteen sites went through it), then `setRally` / `swapItems` / `learnAbility` (simply not
+in the pattern). The count went 6 → 11 → 14. Enumerate the callee instead and classify what comes
+back:
 
 ```
-# 1. no player path may touch the sim outside execute(), applyOrder() and the JASS path
-grep -n 'this\.sim\.\(issue[A-Z]\|useItem\|dropItem\|setShopBuyer\|toggleAutocast\|stop(\)' src/game/rts.ts
-# 2. nothing may reach applyOrder except execute()
+# every sim method rts.ts calls, by frequency — then ask of each: is it a PLAYER action?
+grep -o 'this\.sim\.[a-zA-Z]*(' src/game/rts.ts | sed 's/this\.sim\.//;s/(//' | sort | uniq -c | sort -rn
+
+# and: nothing may reach applyOrder except execute()
 grep -n 'this\.applyOrder(' src/game/rts.ts   # expect exactly one hit, inside execute()
 ```
 
