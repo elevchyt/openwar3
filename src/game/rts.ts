@@ -3470,14 +3470,17 @@ export class RtsController {
 
   /** Hold Position on the selection: each unit plants where it stands and attacks
    *  only enemies that walk into its weapon range, never chasing (WC3 Hold). Like
-   *  Stop, it wipes the shift-queue so the unit doesn't resume a queued order. */
+   *  Stop, it wipes the shift-queue so the unit doesn't resume a queued order.
+   *
+   *  Goes through `order()` like every other player order (Phase C, docs/multiplayer.md):
+   *  hold was the one order already expressible as a `QueuedOrder` that still reached the
+   *  sim by hand, which would have made it silently host-only once commands go on the wire.
+   *  `issueOrder` clears the queue itself, so the only thing lost is the hand-rolled
+   *  `clearQueue` — and losing it fixes a bug: it used to drop a channeling unit's queue
+   *  for a Hold that `issueHold`'s own castLocked guard then refused ("don't even drop the
+   *  queue for an ignored order", world.ts). */
   holdSelected(): void {
-    for (const id of this.selected) {
-      if (!this.controls(id)) continue; // only your own units obey Hold
-      this.sim.clearQueue(id);
-      this.sim.issueHold(id);
-      this.sim.noteOrder(id, ORDER_IDS.holdposition, "immediate", 0, 0, 0); // ISSUED_ORDER for the trigger engine
-    }
+    for (const id of this.selected) this.order(id, { kind: "hold" }, false);
   }
 
   /** Order the selected workers to repair a damaged friendly building. WC3
@@ -4153,6 +4156,9 @@ export class RtsController {
         break;
       case "follow":
         this.sim.noteOrder(id, ORDER_IDS.smart, "target", 0, 0, o.targetId);
+        break;
+      case "hold":
+        this.sim.noteOrder(id, ORDER_IDS.holdposition, "immediate", 0, 0, 0);
         break;
     }
   }
