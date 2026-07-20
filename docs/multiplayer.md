@@ -408,10 +408,29 @@ commit.
    `seedNeutral`, which writes 0/0 over the def: harmless (neutrals are filtered by owner), but
    a unit handed to a player by JASS `SetUnitOwner` now contributes its real food instead of
    zero — which is the correct reading.
-7. **Narrow the `simWorld` getter.** Pairs with 6: the JASS `EngineHooks` in `mapViewer.ts` call
-   into the authority module instead of the raw `SimWorld`, and the ~25 read-only lookups get a
-   view interface. Expect to touch this and not finish it — the hooks are mixed
-   (`SetUnitOwner` next to `PanCameraTo`) and cannot move wholesale.
+7. **Narrow the `simWorld` getter.** Split in two, as this entry predicted.
+
+   **7a — the read-only view. Done.** [`src/game/simView.ts`](../src/game/simView.ts) `SimView`
+   is 21 members, all reads, with `ReadonlyMap` for `units`/`mines`/`items`; `SimWorld`
+   satisfies it structurally. `RtsController.simView` exposes it and **55 renderer uses moved
+   across** — `simWorld` in `mapViewer.ts` went **127 → 70**. `stashOf` is deliberately NOT on
+   the view, so the two live-stash *reads* in the JASS hooks now go through the frozen
+   `stashFor()` instead.
+
+   The `readonly` types earned their keep immediately: they caught two sites the
+   by-name scan had filed as reads. `SetTimeOfDay` and `SuspendTimeOfDay` **write**
+   `timeOfDay`/`dawnDusk`, so they stayed on `simWorld`. That is the fourth misclassification
+   this phase, and the first one a type caught rather than a person.
+
+   **7b — the hooks onto `Authority`. Remaining.** What is left of `simWorld` in the renderer
+   is now almost exactly the JASS `EngineHooks` that MUTATE the world (`setUnitOwner`,
+   `addHeroXp`, `createItem`, `unitAddItem`, the waygate and inventory natives) plus `initStash`
+   / `setPathStamp` / `setTypeSlots` setup. Those are authority operations wired up inside the
+   renderer; they belong on `Authority`. **Two things to know before starting:**
+   `SetPlayerState` writes the live stash (`sw.stashOf(p).gold = value`) — legitimate as a JASS
+   native, but it is the last live-stash write anywhere and wants to become an `Authority`
+   method; and the hooks table is genuinely mixed, with `SetUnitOwner` sitting beside
+   `PanCameraTo`, so it moves entry by entry rather than wholesale.
 8. **Flip the phase table** once 1–7 land and the authority half imports no renderer, no DOM and
    no transport.
 

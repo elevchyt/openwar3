@@ -7,6 +7,7 @@ import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
+import type { SimView } from "./simView";
 export type { PlacedRef };
 import {
   type AnimSet,
@@ -3441,6 +3442,23 @@ export class RtsController {
   }
 
   /** Direct access to the headless sim (map wiring: trees/mines/stash). */
+  /**
+   * READ-ONLY view of the world, for everything the renderer needs in order to draw.
+   * `SimWorld` satisfies it structurally; the maps are `ReadonlyMap`, so a consumer that
+   * tries to edit the authoritative world stops compiling. See game/simView.ts.
+   */
+  get simView(): SimView {
+    return this.sim;
+  }
+
+  /**
+   * The whole authoritative world. What remains of this escape hatch is the JASS
+   * `EngineHooks` — natives that MUTATE the world (`SetUnitOwner`, `AddHeroXP`,
+   * `CreateItem`), which are authority-side work that happens to be wired up inside the
+   * renderer — plus a handful of setup calls. Every plain lookup now goes through
+   * `simView` instead. Narrowing the rest means moving those hooks onto `Authority`,
+   * which is the remaining half of Phase B item 7.
+   */
   get simWorld(): SimWorld {
     return this.sim;
   }

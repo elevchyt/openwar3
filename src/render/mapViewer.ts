@@ -1199,7 +1199,7 @@ export class MapViewerScene {
     // No script (or it created nothing for the local player — a script that leans on
     // natives we haven't written yet): fall back to our own roster so the match still
     // starts, rather than dropping the player onto an empty map.
-    const spawned = [...this.rts.simWorld.units.values()].some((u) => u.owner === this.localPlayer);
+    const spawned = [...this.rts.simView.units.values()].some((u) => u.owner === this.localPlayer);
     if (!engine || !spawned) {
       console.warn(`[jass] melee init did not spawn a base (script: ${engine ? "ran" : "absent"}) — using the built-in roster.`);
       await this.startMeleeFallback(config, races);
@@ -1299,7 +1299,7 @@ export class MapViewerScene {
   private nearestMine(x: number, y: number, radius: number): { x: number; y: number } | null {
     let best: { x: number; y: number } | null = null;
     let bestD = radius * radius;
-    for (const m of this.rts?.simWorld.mines.values() ?? []) {
+    for (const m of this.rts?.simView.mines.values() ?? []) {
       const d = (m.x - x) ** 2 + (m.y - y) ** 2;
       if (d <= bestD) {
         bestD = d;
@@ -1484,15 +1484,15 @@ export class MapViewerScene {
       },
       getPlayerState: (p, state) => {
         if (!this.rts) return 0;
-        if (state === 1) return Math.floor(this.rts.simWorld.stashOf(p).gold);
-        if (state === 2) return Math.floor(this.rts.simWorld.stashOf(p).lumber);
+        if (state === 1) return Math.floor(this.rts.stashFor(p).gold);
+        if (state === 2) return Math.floor(this.rts.stashFor(p).lumber);
         if (state === 4) return this.rts.foodFor(p).made; // FOOD_CAP
         if (state === 5) return this.rts.foodFor(p).used; // FOOD_USED
         return 0;
       },
       // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
       setUnitState: (id, state, value) => {
-        const u = this.rts?.simWorld.units.get(id);
+        const u = this.rts?.simView.units.get(id);
         if (!u) return;
         if (state === 0) u.hp = Math.max(0, Math.min(u.maxHp, value));
         else if (state === 1) u.maxHp = Math.max(1, value);
@@ -1500,7 +1500,7 @@ export class MapViewerScene {
         else if (state === 3) u.maxMana = Math.max(0, value);
       },
       getUnitState: (id, state) => {
-        const u = this.rts?.simWorld.units.get(id);
+        const u = this.rts?.simView.units.get(id);
         if (!u) return 0;
         return state === 0 ? u.hp : state === 1 ? u.maxHp : state === 2 ? u.mana : state === 3 ? u.maxMana : 0;
       },
@@ -1516,7 +1516,7 @@ export class MapViewerScene {
       },
       setUnitColor: (id, color) => this.rts?.setUnitTeamColor(id, color),
       pauseUnit: (id, flag) => this.rts?.simWorld.pauseUnit(id, flag),
-      isUnitPaused: (id) => this.rts?.simWorld.isUnitPaused(id) ?? false,
+      isUnitPaused: (id) => this.rts?.simView.isUnitPaused(id) ?? false,
       setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
@@ -1524,18 +1524,18 @@ export class MapViewerScene {
         this.rts?.simWorld.setUnitFlyHeight(id, height);
         this.rts?.setUnitFlyHeight(id, height);
       },
-      getUnitFlyHeight: (id) => this.rts?.simWorld.getUnitFlyHeight(id),
+      getUnitFlyHeight: (id) => this.rts?.simView.getUnitFlyHeight(id),
       setUnitMoveSpeed: (id, speed) => this.rts?.simWorld.setUnitMoveSpeed(id, speed),
-      getUnitMoveSpeed: (id) => this.rts?.simWorld.getUnitMoveSpeed(id),
+      getUnitMoveSpeed: (id) => this.rts?.simView.getUnitMoveSpeed(id),
       setUnitTurnSpeed: (id, turn) => this.rts?.simWorld.setUnitTurnSpeed(id, turn),
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
       // Position reads fall back to the mine table: to the script a gold mine IS a unit
       // (MeleeGetProjectedLoc measures the hall/worker clump off GetUnitLoc(nearestMine)).
       // `undefined` (not 0) when the unit is gone — the native then reads the handle's
       // last-known value instead of the map origin. See SimWorld.getUnitX.
-      getUnitX: (id) => this.mineForScript(id)?.x ?? this.rts?.simWorld.getUnitX(id),
-      getUnitY: (id) => this.mineForScript(id)?.y ?? this.rts?.simWorld.getUnitY(id),
-      getUnitFacing: (id) => this.rts?.simWorld.getUnitFacing(id),
+      getUnitX: (id) => this.mineForScript(id)?.x ?? this.rts?.simView.getUnitX(id),
+      getUnitY: (id) => this.mineForScript(id)?.y ?? this.rts?.simView.getUnitY(id),
+      getUnitFacing: (id) => this.rts?.simView.getUnitFacing(id),
       // Orders (7.14): trigger issue → the sim; current order ← the sim.
       issueUnitOrder: (id, orderId, order, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, order, kind, x, y, targetId) ?? false,
       getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
@@ -1549,7 +1549,7 @@ export class MapViewerScene {
       isUnitType: (id, t, typeId) => this.unitTypeIs(id, t, typeId),
       // IsUnitAlly/IsUnitEnemy: team-based, so neutral hostile (team -1) is nobody's ally.
       isUnitAlly: (id, player) => {
-        const u = this.rts?.simWorld.units.get(id);
+        const u = this.rts?.simView.units.get(id);
         return !!u && u.team >= 0 && u.team === this.teamOf(player);
       },
       // IsPlayerAlly/IsPlayerEnemy read the alliance matrix (7.22), not the raw lobby team
@@ -1580,8 +1580,8 @@ export class MapViewerScene {
       // --- way gates (7.22) ---
       waygateSetDestination: (id, x, y) => this.rts?.simWorld.setWaygateDestination(id, x, y),
       waygateActivate: (id, active) => this.rts?.simWorld.waygateActivate(id, active),
-      waygateDestination: (id) => this.rts?.simWorld.waygateDestination(id) ?? null,
-      waygateIsActive: (id) => this.rts?.simWorld.waygateIsActive(id) ?? false,
+      waygateDestination: (id) => this.rts?.simView.waygateDestination(id) ?? null,
+      waygateIsActive: (id) => this.rts?.simView.waygateIsActive(id) ?? false,
       // Bind a record-only CreateUnit row (inside CreateAllUnits) to the pre-placed unit
       // already standing there, so the script can keep configuring it (7.22).
       findPlacedUnit: (typeId, x, y) => this.findPlacedUnit(typeId, x, y),
@@ -1651,7 +1651,7 @@ export class MapViewerScene {
       setDawnDusk: (enable) => {
         if (this.rts) this.rts.simWorld.dawnDusk = enable;
       },
-      isDawnDuskEnabled: () => this.rts?.simWorld.dawnDusk ?? true,
+      isDawnDuskEnabled: () => this.rts?.simView.dawnDusk ?? true,
       // SetGameSpeed is RECORDED, not applied: WC3's five speeds are engine constants that
       // live in no data file we have, and guessing a multiplier would be exactly the kind of
       // invented number CLAUDE.md forbids. Recording it is still load-bearing — cinematic
@@ -1673,7 +1673,7 @@ export class MapViewerScene {
       setTimeOfDay: (hour) => {
         if (this.rts) this.rts.simWorld.timeOfDay = hour;
       },
-      getTimeOfDay: () => this.rts?.simWorld.timeOfDay ?? MELEE.MELEE_STARTING_TOD,
+      getTimeOfDay: () => this.rts?.simView.timeOfDay ?? MELEE.MELEE_STARTING_TOD,
       // MeleeStartingUnits* frames the view on the starting WORKERS, not the hall.
       setCameraPosition: (x, y) => {
         this.target[0] = x;
@@ -1698,22 +1698,22 @@ export class MapViewerScene {
       playerTypedUnitCount: (player, typeName, includeIncomplete, includeUpgrades) =>
         this.countUnits(player, includeIncomplete, (u) => this.unitIsTyped(u.typeId, typeName, includeUpgrades)),
       // --- the tech tree (issue #57) ---
-      playerTechCount: (player, tech) => this.rts?.simWorld.tech?.count(player, tech) ?? 0,
-      setPlayerTechResearched: (player, tech, level) => this.rts?.simWorld.tech?.setResearchLevel(player, tech, level),
-      setPlayerTechMaxAllowed: (player, tech, max) => this.rts?.simWorld.tech?.setMaxAllowed(player, tech, max),
+      playerTechCount: (player, tech) => this.rts?.simView.tech?.count(player, tech) ?? 0,
+      setPlayerTechResearched: (player, tech, level) => this.rts?.simView.tech?.setResearchLevel(player, tech, level),
+      setPlayerTechMaxAllowed: (player, tech, max) => this.rts?.simView.tech?.setMaxAllowed(player, tech, max),
       // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
       unitAddAbility: (id, abilityId) => this.rts?.simWorld.addAbility(id, abilityId) ?? false,
       unitRemoveAbility: (id, abilityId) => this.rts?.simWorld.removeAbility(id, abilityId) ?? false,
-      getUnitAbilityLevel: (id, abilityId) => this.rts?.simWorld.abilityLevelOf(id, abilityId) ?? 0,
+      getUnitAbilityLevel: (id, abilityId) => this.rts?.simView.abilityLevelOf(id, abilityId) ?? 0,
       setUnitAbilityLevel: (id, abilityId, level) => this.rts?.simWorld.setAbilityLevel(id, abilityId, level) ?? 0,
       selectHeroSkill: (id, abilityId) => this.rts?.simWorld.learnAbility(id, abilityId) ?? false,
       resetUnitCooldown: (id) => this.rts?.simWorld.resetCooldowns(id),
-      getUnitLevel: (id) => this.rts?.simWorld.units.get(id)?.level ?? 0,
+      getUnitLevel: (id) => this.rts?.simView.units.get(id)?.level ?? 0,
       setHeroLevel: (id, level) => this.rts?.simWorld.setHeroLevel(id, level),
-      getHeroXp: (id) => this.rts?.simWorld.units.get(id)?.xp ?? 0,
+      getHeroXp: (id) => this.rts?.simView.units.get(id)?.xp ?? 0,
       setHeroXp: (id, xp) => this.rts?.simWorld.setHeroXp(id, xp),
       addHeroXp: (id, xp) => this.rts?.simWorld.addHeroXp(id, xp),
-      getHeroSkillPoints: (id) => this.rts?.simWorld.units.get(id)?.skillPoints ?? 0,
+      getHeroSkillPoints: (id) => this.rts?.simView.units.get(id)?.skillPoints ?? 0,
       modifySkillPoints: (id, delta) => this.rts?.simWorld.modifySkillPoints(id, delta) ?? false,
       // --- per-unit flags + animation (7.17) ---
       setUnitInvulnerable: (id, flag) => this.rts?.simWorld.setInvulnerable(id, flag),
@@ -1726,7 +1726,7 @@ export class MapViewerScene {
       // renderer models it (drainItemSpawns) and a hero can walk over and pick it up.
       createItem: (typeId, x, y) => this.rts?.simWorld.createItem(typeId, x, y) ?? -1,
       removeItem: (id) => void this.rts?.simWorld.removeItemById(id),
-      itemInfo: (id) => this.rts?.simWorld.itemSnapshot(id) ?? null,
+      itemInfo: (id) => this.rts?.simView.itemSnapshot(id) ?? null,
       setItemCharges: (id, charges) => void this.rts?.simWorld.setItemCharges(id, charges),
       setItemPosition: (id, x, y) => void this.rts?.simWorld.setItemPosition(id, x, y),
       itemTypeInfo: (typeId) => {
@@ -1746,9 +1746,9 @@ export class MapViewerScene {
       unitDropItemSlot: (unitId, itemId, slot) => this.rts?.simWorld.unitDropItemSlot(unitId, itemId, slot) ?? false,
       unitDropItemTarget: (unitId, itemId, targetId) => this.rts?.simWorld.unitDropItemTarget(unitId, itemId, targetId) ?? false,
       unitUseItem: (unitId, itemId, targetId, x, y) => this.rts?.simWorld.unitUseItem(unitId, itemId, targetId, x, y) ?? false,
-      unitInventorySize: (unitId) => this.rts?.simWorld.inventorySizeOf(unitId) ?? 0,
-      unitItemInSlot: (unitId, slot) => this.rts?.simWorld.itemInSlot(unitId, slot) ?? 0,
-      enumItems: () => this.rts?.simWorld.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: 15 })) ?? [],
+      unitInventorySize: (unitId) => this.rts?.simView.inventorySizeOf(unitId) ?? 0,
+      unitItemInSlot: (unitId, slot) => this.rts?.simView.itemInSlot(unitId, slot) ?? 0,
+      enumItems: () => this.rts?.simView.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: 15 })) ?? [],
       // ChooseRandomItem(Ex): draw from the registry's random-drop pool. The RNG is the
       // interpreter's seeded one, so the pick stays deterministic (replays / future MP).
       chooseRandomItem: (classType, level) => this.mapScript?.interp.rt.random
@@ -1764,10 +1764,10 @@ export class MapViewerScene {
   private unitSnapshots(): UnitSnapshot[] {
     const snap: UnitSnapshot[] = [];
     if (!this.rts) return snap;
-    for (const u of this.rts.simWorld.units.values()) {
+    for (const u of this.rts.simView.units.values()) {
       snap.push({ id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing });
     }
-    for (const m of this.rts.simWorld.mines.values()) {
+    for (const m of this.rts.simView.mines.values()) {
       snap.push({ id: MapViewerScene.MINE_ID_BASE + m.id, typeId: "ngol", owner: 15, x: m.x, y: m.y, facing: 0 });
     }
     return snap;
@@ -1781,7 +1781,7 @@ export class MapViewerScene {
   private static readonly MINE_ID_BASE = 1_000_000;
   private mineForScript(unitId: number): SimMine | undefined {
     if (unitId < MapViewerScene.MINE_ID_BASE) return undefined;
-    return this.rts?.simWorld.mines.get(unitId - MapViewerScene.MINE_ID_BASE);
+    return this.rts?.simView.mines.get(unitId - MapViewerScene.MINE_ID_BASE);
   }
   /** Bind a PRE-PLACED `CreateUnit` row to the unit that is already standing there (7.22).
    *
@@ -1818,7 +1818,7 @@ export class MapViewerScene {
   private nearestMineNode(x: number, y: number, radius: number): SimMine | undefined {
     let best: SimMine | undefined;
     let bestD = radius * radius;
-    for (const m of this.rts?.simWorld.mines.values() ?? []) {
+    for (const m of this.rts?.simView.mines.values() ?? []) {
       const d = (m.x - x) ** 2 + (m.y - y) ** 2;
       if (d <= bestD) {
         bestD = d;
@@ -1833,7 +1833,7 @@ export class MapViewerScene {
    *  under construction (WC3 does: a half-built town hall still keeps you in the game). */
   private countUnits(player: number, includeIncomplete: boolean, match: (u: SimUnit) => boolean): number {
     let n = 0;
-    for (const u of this.rts?.simWorld.units.values() ?? []) {
+    for (const u of this.rts?.simView.units.values() ?? []) {
       if (u.owner !== player || u.hp <= 0) continue;
       if (!includeIncomplete && u.building && u.building.constructionLeft > 0) continue;
       if (match(u)) n++;
@@ -1863,7 +1863,7 @@ export class MapViewerScene {
     // wipes the non-structure neutrals around a start location — so a mine that answered
     // "not a structure" (or "dead", the no-sim-unit default below) would be deleted.
     if (this.mineForScript(id)) return t === 2 || t === 4; // STRUCTURE, GROUND
-    const u = this.rts?.simWorld.units.get(id);
+    const u = this.rts?.simView.units.get(id);
     if (!u) return this.deadUnitTypeIs(t, typeId); // gone from the sim = a corpse — classify from its TYPE
     switch (t) {
       case 0: return u.isHero; // UNIT_TYPE_HERO
@@ -2140,8 +2140,8 @@ export class MapViewerScene {
       if (playing && s.is3D && s.attachUnit >= 0) {
         // A unit that died out from under its sound has no position left to follow: leave
         // the sound where it last was rather than yanking it to the map origin.
-        const x = this.rts.simWorld.getUnitX(s.attachUnit);
-        const y = this.rts.simWorld.getUnitY(s.attachUnit);
+        const x = this.rts.simView.getUnitX(s.attachUnit);
+        const y = this.rts.simView.getUnitY(s.attachUnit);
         if (x !== undefined && y !== undefined) {
           this.sounds.moveScript(s.handleId, { x, y, z: this.rts.groundHeightAt(x, y) });
         }
@@ -2252,8 +2252,8 @@ export class MapViewerScene {
       uiScale: (this.canvas.clientHeight || GAME_HEIGHT) / UI_HEIGHT,
       groundHeight: (x, y) => rts.groundHeightAt(x, y),
       unitAt: (simId) => {
-        const u = rts.simWorld.units.get(simId);
-        return u ? { x: u.x, y: u.y, flyHeight: rts.simWorld.getUnitFlyHeight(simId) ?? 0 } : null;
+        const u = rts.simView.units.get(simId);
+        return u ? { x: u.x, y: u.y, flyHeight: rts.simView.getUnitFlyHeight(simId) ?? 0 } : null;
       },
       visible: (x, y) => vision.stateAt(x, y) === FogState.Visible,
       project: (x, y, z) => {
@@ -2347,7 +2347,7 @@ export class MapViewerScene {
     const n = footprintCells(collision);
     // Building half-extents in world units (cell = 32 → half-cell = 16). Fall back
     // to a 3×3-ish structure if we somehow have no stamped footprint on record.
-    const fp = this.rts?.simWorld.units.get(buildingId)?.pathStamp?.fp;
+    const fp = this.rts?.simView.units.get(buildingId)?.pathStamp?.fp;
     const halfW = fp ? fp.w * 16 : 48;
     const halfH = fp ? fp.h * 16 : 48;
     // Four corners in counterclockwise order (WC3 rotates CCW): SW → SE → NE → NW,
@@ -2445,7 +2445,7 @@ export class MapViewerScene {
     const map = this.viewer.map;
     const def = this.registry.get(toTypeId);
     if (!map || !this.rts || !def) return;
-    const su = this.rts.simWorld.units.get(simId);
+    const su = this.rts.simView.units.get(simId);
     if (!su || su.hp <= 0) return; // died while the new model streamed in
     const model = await this.viewer.load(def.model, this.solver);
     if (!model) return;
@@ -2819,7 +2819,7 @@ export class MapViewerScene {
     this.itemLoading.delete(itemId);
     const map = this.viewer.map;
     // The item may have been picked up while its model was still loading.
-    if (!model || !map || !this.rts?.simWorld.items.has(itemId) || this.itemInstances.has(itemId)) return;
+    if (!model || !map || !this.rts?.simView.items.has(itemId) || this.itemInstances.has(itemId)) return;
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
     this.loc3[0] = x;
@@ -3143,7 +3143,7 @@ export class MapViewerScene {
     if (inst) {
       this.settleBuffFx(key, inst);
       if (this.buffFxParented.has(key)) return; // rides its attachment node
-      const u = this.rts?.simWorld.units.get(simId);
+      const u = this.rts?.simView.units.get(simId);
       if (u) {
         this.loc3[0] = u.x;
         this.loc3[1] = u.y;
@@ -3165,7 +3165,7 @@ export class MapViewerScene {
     }
     this.buffFxLoading.delete(key);
     const map = this.viewer.map;
-    const u = this.rts?.simWorld.units.get(simId);
+    const u = this.rts?.simView.units.get(simId);
     if (!model || !map || !u || u.hp <= 0 || this.buffFx.has(key)) return;
     const inst = model.addInstance();
     inst.setScene(map.worldScene);
@@ -3269,7 +3269,7 @@ export class MapViewerScene {
 
   /** AddSpecialEffectTarget — a persistent model riding a unit's attachment point. */
   private addSpecialEffectTarget(path: string, unitId: number, attach: string[]): number {
-    const u = this.rts?.simWorld.units.get(unitId);
+    const u = this.rts?.simView.units.get(unitId);
     if (!u) return -1;
     return this.createSpecialFx(path, unitId, attach, u.x, u.y);
   }
@@ -3359,7 +3359,7 @@ export class MapViewerScene {
     if (fx.parented) return; // rides its host's node — nothing to do
     // On the ground: an attached effect whose host has no usable node still follows him
     // (the engine falls back to the unit's origin), so re-read the host's live position.
-    const u = fx.hostId >= 0 ? this.rts?.simWorld.units.get(fx.hostId) : undefined;
+    const u = fx.hostId >= 0 ? this.rts?.simView.units.get(fx.hostId) : undefined;
     if (u) {
       fx.x = u.x;
       fx.y = u.y;
@@ -3383,7 +3383,7 @@ export class MapViewerScene {
     for (const [id, fx] of this.specialFx) {
       // An effect attached to a unit dies with him: WC3 destroys it when the widget leaves
       // the game, and our attachment node goes with the host's model either way.
-      if (fx.hostId >= 0 && !this.rts?.simWorld.units.has(fx.hostId)) {
+      if (fx.hostId >= 0 && !this.rts?.simView.units.has(fx.hostId)) {
         this.destroySpecialFx(id);
         continue;
       }
@@ -3510,7 +3510,7 @@ export class MapViewerScene {
     }
     this.bloodMageSpheresLoading.delete(simId);
     const map = this.viewer.map;
-    const u = this.rts?.simWorld.units.get(simId);
+    const u = this.rts?.simView.units.get(simId);
     const inst = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
     if (!model || !map || !u || u.hp <= 0 || !inst || this.bloodMageSpheres.has(simId)) return;
     // Find the three "Sprite N Ref" attachment indices by name (Asph Targetattach =
@@ -4608,7 +4608,7 @@ export class MapViewerScene {
       this.warmedPortraits.add(path);
       this.portraitWarmQueue.push(path);
     };
-    for (const u of this.rts.simWorld.units.values()) consider(u.typeId);
+    for (const u of this.rts.simView.units.values()) consider(u.typeId);
     // Everything the local player is likely to make: what their worker builds, and what each
     // of those buildings trains or becomes.
     const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
@@ -4930,7 +4930,7 @@ export class MapViewerScene {
    *  pseudo-techs have names of their own ("Keep or Stronghold or Tree of Ages or Halls of
    *  the Dead" for TWN2), which is why they live in the data rather than being spelled out. */
   private requirementLine(id: string, tier = 0, override?: string[]): string {
-    const state = this.rts?.simWorld.tech;
+    const state = this.rts?.simView.tech;
     if (!state) return "";
     // `override` lets a caller narrow the list — a neutral shop asks less of a buyer than the
     // item's raw data does (SimWorld.missingForShop), and the red line must say the same thing
@@ -5074,7 +5074,7 @@ export class MapViewerScene {
     // Cards fill the TOP row(s) left→right (developer request), each showing a "+"
     // affordance and the effect it grants at the next rank.
     if (this.cardPage === "learn" && sel.isHero) {
-      const su = this.rts!.simWorld.units.get(sel.id);
+      const su = this.rts!.simView.units.get(sel.id);
       if (su) {
         for (const ab of su.abilities) {
           const def = this.abilities.get(ab.id);
@@ -5200,7 +5200,7 @@ export class MapViewerScene {
    *  autocast abilities (Heal/Slow) toggle; the rest arm a target or fire. */
   private pushAbilityButtons(sel: { id: number; isHero: boolean }, out: CommandButton[]): void {
     if (!this.rts) return;
-    const su = this.rts.simWorld.units.get(sel.id);
+    const su = this.rts.simView.units.get(sel.id);
     if (!su || su.owner !== this.localPlayer) return;
     // A Mirror Image illusion copies the hero's abilities onto its sheet but can't use any
     // of them, so it doesn't get the buttons at all — a card full of spells that silently
@@ -5213,7 +5213,7 @@ export class MapViewerScene {
       // Requires=Rhss` (Control Magic). It sits on the unit from birth and the RESEARCH is what
       // reveals it, which is the whole job of the six Human upgrades that grant no stat at all.
       // Abilities with no requirement (every hero spell) pass this untouched.
-      if (!this.rts.simWorld.techMeets(su.owner, ab.id)) continue;
+      if (!this.rts.simView.techMeets(su.owner, ab.id)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -5439,7 +5439,7 @@ export class MapViewerScene {
       }
       // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
       // since a Tavern with no stock looks identical to one that just refused silently.
-      if (this.rts.simWorld.shopStock(buildingId, unitId) === 0) {
+      if (this.rts.simView.shopStock(buildingId, unitId) === 0) {
         this.refuse(SHOP_ERROR.nostock);
         return;
       }
@@ -5477,7 +5477,7 @@ export class MapViewerScene {
     if (d) {
       // Feedback only — the same difference `execute` will compute, purely so a refusal can
       // say "Not enough gold" rather than nothing at all.
-      const [gold, lumber] = this.upgradeCost(this.rts.simWorld.units.get(buildingId)?.typeId, d);
+      const [gold, lumber] = this.upgradeCost(this.rts.simView.units.get(buildingId)?.typeId, d);
       if (!this.canAfford(gold, lumber)) return;
     }
     this.rts.execute(this.localPlayer, { c: "upgradebuilding", buildingId, toTypeId });
@@ -5510,7 +5510,7 @@ export class MapViewerScene {
     if (!this.rts) return;
     // Grab the building's position BEFORE the authority removes it, for the explosion. This
     // is a read; the refund and the removal both belong to `execute`.
-    const b = this.rts.simWorld.units.get(buildingId);
+    const b = this.rts.simView.units.get(buildingId);
     const fx = b ? { x: b.x, y: b.y, z: this.rts.groundHeightAt(b.x, b.y) } : null;
     if (!this.rts.execute(this.localPlayer, { c: "cancelbuild", buildingId })) return;
     if (fx) void this.spawnEffect(CANCEL_FX[this.localRace], fx.x, fx.y, fx.z);
@@ -5594,7 +5594,7 @@ export class MapViewerScene {
     // Collect every desired build site (keyed by defId + snapped position, unique per
     // footprint) from the local player's workers.
     const desired = new Map<string, { defId: string; x: number; y: number }>();
-    for (const u of this.rts.simWorld.units.values()) {
+    for (const u of this.rts.simView.units.values()) {
       if (u.owner !== this.localPlayer) continue;
       if (u.buildPending) {
         const pb = u.buildPending;
@@ -6805,7 +6805,7 @@ export class MapViewerScene {
     if (this.scriptCam.active) {
       const cam = this.readCamera();
       this.scriptCam.update(Math.min(dtMs, 100) / 1000, cam, (id) => {
-        const u = this.rts?.simWorld.units.get(id);
+        const u = this.rts?.simView.units.get(id);
         return u ? { x: u.x, y: u.y } : null;
       });
       this.writeCamera(cam);
