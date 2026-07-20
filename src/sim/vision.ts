@@ -64,10 +64,21 @@ export class VisionMap {
   readonly height: number;
   readonly originX: number; // world-space low corner (== map centerOffset)
   readonly originY: number;
-  // Two bitmaps over the same grid: `visible` is rebuilt every update (who can I
-  // see RIGHT NOW), `explored` is sticky (where have I EVER seen — terrain memory).
+  // Three bitmaps over the same grid:
+  //   `visible`  — rebuilt every update: what can I see RIGHT NOW.
+  //   `explored` — sticky: do I know the TERRAIN here (grey rather than black).
+  //   `seen`     — sticky: did I ever have EYES here.
+  //
+  // The last two look like the same fact and were one bitmap until they demonstrably
+  // weren't. They come apart wherever knowledge of the ground is handed out without
+  // anybody looking at it: the "start explored" lobby option, and a FOGGED fog modifier.
+  // WC3's own three fogstates say which is which — FOG_OF_WAR_FOGGED is documented as
+  // "explored, not seen", and a building shows through fog because you REMEMBER it, not
+  // because the tile is grey. Fog a region a player has never visited and they get grey
+  // terrain with nothing standing on it.
   private visible: Uint8Array;
   private explored: Uint8Array;
+  private seen: Uint8Array;
   // `iseedeadpeople`: a pure override that reports the whole map Visible without
   // touching `explored`, so toggling it back off restores the real fog.
   private revealAll = false;
@@ -96,6 +107,7 @@ export class VisionMap {
     this.height = Math.max(1, Math.ceil(worldHeight / VISION_CELL));
     this.visible = new Uint8Array(this.width * this.height);
     this.explored = new Uint8Array(this.width * this.height);
+    this.seen = new Uint8Array(this.width * this.height);
   }
 
   /** Install the terrain height field so reveal() does line-of-sight. `heightAt` is
@@ -189,7 +201,11 @@ export class VisionMap {
   /** Mark every cell Explored (terrain memory) without making it Visible — the
    *  "start explored" lobby option: the whole map shows dimmed grey instead of
    *  pitch black, while live sight and enemy-movement concealment still work
-   *  (non-visible cells stay Explored, never promoted to Visible). */
+   *  (non-visible cells stay Explored, never promoted to Visible).
+   *
+   *  `seen` is pointedly NOT filled. Start-explored gives you the map, not the enemy:
+   *  in the real game you still have to scout their base. Filling both was one bitmap's
+   *  worth of code and put every opponent's town hall on the minimap from turn 0. */
   exploreAll(): void {
     this.explored.fill(1);
   }
@@ -231,6 +247,7 @@ export class VisionMap {
           const i = y * this.width + x;
           this.visible[i] = 1;
           this.explored[i] = 1;
+          this.seen[i] = 1;
         }
       }
     }
@@ -251,6 +268,7 @@ export class VisionMap {
     // The unit always sees its own cell.
     this.visible[ucy * this.width + ucx] = 1;
     this.explored[ucy * this.width + ucx] = 1;
+    this.seen[ucy * this.width + ucx] = 1;
     // Cast to every cell on the square ring at Chebyshev distance R; the ray walk
     // clips to the circular radius. Adjacent rays overlap enough to cover the disk.
     for (let t = -R; t <= R; t++) {
@@ -289,6 +307,7 @@ export class VisionMap {
       if ((ground[i] - eyeH) / dWorld >= maxAngle - ANGLE_EPS) {
         this.visible[i] = 1;
         this.explored[i] = 1;
+        this.seen[i] = 1;
       }
       // Then this cell's BLOCK height (terrain + any tree) raises the horizon for
       // everything beyond it along this ray.
@@ -402,10 +421,19 @@ export class VisionMap {
     return this.maskEnabled;
   }
 
-  /** Has this cell ever been seen? (Progressive doodad reveal in the renderer.) */
-  isExplored(cx: number, cy: number): boolean {
-    if (this.revealAll || !this.maskEnabled) return true;
-    return this.inBounds(cx, cy) && this.explored[cy * this.width + cx] === 1;
+  /** Did this player ever have EYES on this cell — as opposed to merely knowing the
+   *  terrain here? This is the question a remembered BUILDING asks: WC3 leaves the last
+   *  thing you saw standing on the ground, and "the last thing you saw" is empty until
+   *  you have looked. Handing out terrain memory (start-explored, a FOGGED modifier)
+   *  does not answer it; only real sight and a VISIBLE modifier do.
+   *
+   *  Deliberately does NOT consult `maskEnabled`, though the old `isExplored` did.
+   *  `FogMaskEnable(false)` turns off the black layer — it makes terrain legible, it does
+   *  not tell you what is built on it. Same distinction one level up. `revealAll` still
+   *  wins, because `iseedeadpeople` is meant to show you everything. */
+  hasSeen(cx: number, cy: number): boolean {
+    if (this.revealAll) return true;
+    return this.inBounds(cx, cy) && this.seen[cy * this.width + cx] === 1;
   }
 
   /** Hold a rectangle at a fog state — a script-placed `CreateFogModifierRect` /
@@ -447,14 +475,20 @@ export class VisionMap {
    *  otherwise write-once. That's what makes a re-masked area go properly black again. */
   private stampCell(i: number, state: FogState): void {
     if (state === FogState.Visible) {
+      // A VISIBLE modifier hands out real eyes — the TD showing you its whole maze shows
+      // you the towers in it, not bare ground.
       this.visible[i] = 1;
       this.explored[i] = 1;
+      this.seen[i] = 1;
     } else if (state === FogState.Explored) {
+      // FOGGED is "explored, not seen": grey terrain, and NOT a memory of what stands on
+      // it. `seen` is deliberately left alone — that is the whole distinction.
       this.visible[i] = 0;
       this.explored[i] = 1;
     } else {
       this.visible[i] = 0;
       this.explored[i] = 0;
+      this.seen[i] = 0; // re-masked ground forgets its buildings too
     }
   }
 

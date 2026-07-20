@@ -732,9 +732,13 @@ export class RtsController {
   }
 
   /** Should this unit's model be hidden by the fog of war right now? Your own team
-   *  is always visible. Enemy/neutral STRUCTURES persist once explored (WC3 shows
+   *  is always visible. Enemy/neutral STRUCTURES persist once SEEN (WC3 shows
    *  the last-seen building greyed in fog); mobile units and critters vanish unless
-   *  currently in sight — "concealing enemy movements". */
+   *  currently in sight — "concealing enemy movements".
+   *
+   *  "Seen", not "explored": those are different facts and the difference is exactly the
+   *  start-explored lobby option, which hands you the terrain and no eyes. See
+   *  VisionMap.hasSeen. */
   private fogHides(u: SimUnit): boolean {
     if (this.vision.revealed) return false;
     if (u.team === this.localTeam && !u.neutralPassive) return false;
@@ -744,7 +748,7 @@ export class RtsController {
     if (u.owner >= 0 && this.exposed.has(u.owner)) return false;
     if (u.building != null) {
       const [cx, cy] = this.vision.worldToCell(u.x, u.y);
-      return !this.vision.isExplored(cx, cy);
+      return !this.vision.hasSeen(cx, cy);
     }
     return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
   }

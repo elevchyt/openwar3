@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(181 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(198 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -646,14 +646,17 @@ Two clients on Echo Isles, same seed, slots 0 and 1, `explored` vs `unexplored`:
   the world outside sight is genuinely black. Phase D is adding viewpoints to something that works,
   not repairing something that doesn't — which is why "behaviour must not change for the local
   player" is a testable claim and not a hope.
-- **BUG — `fog: "explored"` reveals enemy BUILDINGS, not just terrain.** `exploreAll()` marks every
-  cell explored; `fogHides` shows any building standing on an explored cell, on the theory that an
-  explored cell is one you have *looked* at. With start-explored those are different claims for the
-  first time, and the enemy's town hall is on the minimap from turn 0 (visible as the blue dot in
-  the left-hand shot on the commit). Real WC3's start-explored reveals terrain memory only — you
-  still have to scout the buildings. Fix belongs with item 4, which is already the item about not
-  collapsing sticky `explored` into per-tick `visible`; this is the same confusion one layer up.
-  It is pre-existing and unrelated to the boot path.
+- ~~**BUG — `fog: "explored"` reveals enemy BUILDINGS, not just terrain.**~~ **Fixed.**
+  `VisionMap` now carries a third bitmap: `explored` is "do I know the terrain here", `seen` is
+  "did I ever have EYES here", and `VisionMap.hasSeen` is what a remembered building asks.
+  `exploreAll()` fills only the first, so start-explored hands out the map and not the enemy.
+  A FOGGED fog modifier follows the same rule (`FOG_OF_WAR_FOGGED` is documented as "explored,
+  not seen"); a VISIBLE one grants both; a MASKED one wipes both. Pinned by
+  [`tools/sim-vision-test.cjs`](../tools/sim-vision-test.cjs) — 17 checks, and it was confirmed to
+  FAIL against the old one-bitmap behaviour before being kept. Also changed, deliberately:
+  `hasSeen` no longer consults `maskEnabled`, because `FogMaskEnable(false)` makes terrain legible
+  rather than telling you what is built on it. That branch is **not** exercised by a test or by
+  the browser — no map in the boot path calls it.
 - **Unverified — gold-mine and creep-camp glyphs draw on unexplored black.** `minimapIcons()` and
   `creepCamps()` both paint through pitch-black fog. This may well be correct: WC3's melee minimap
   does show some neutral furniture from the start. **Check against the real client before touching
