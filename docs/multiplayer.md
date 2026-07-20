@@ -386,10 +386,14 @@ commit.
    byte-identical; `foodFor` changed deliberately (below) and the free-hero set gained named
    accessors instead of being poked directly. rts.ts 4 624 → 4 484.
 
-   **6b — the gate. Next.** `execute()` and `applyOrder()` move across, now that everything
-   they lean on is already there. `RtsController` keeps thin delegators for the public surface
-   the renderer and JASS call (`stashFor`, `countOwned`, `foodFor`, `hasFreeHero`,
-   `currentOrderId`), so `mapViewer.ts` has not moved and will not need to in 6b either.
+   **6b — the gate. Done.** `execute()` (252 L) and `applyOrder()` are in `Authority`, both
+   byte-identical modulo the receiver rewrite, along with `TAVERN_HIRE_TIME`. `Authority` took
+   `TechRegistry` and `UpgradeRegistry` to go with them. **`applyOrder` is now `private` to
+   `Authority`**, so "nothing reaches `applyOrder` except `execute`" is a rule the compiler
+   keeps rather than one a grep polices — `rts.ts` has zero mentions of it. `RtsController`
+   keeps one-line delegators for the surface the renderer and JASS call (`execute`, `stashFor`,
+   `countOwned`, `foodFor`, `hasFreeHero`, `currentOrderId`), so all 37 emit sites and
+   `mapViewer.ts` are untouched. rts.ts 4 484 → 4 209; authority.ts 518.
 
    **`resolveRally` and `rallyFeedback` are NOT part of this** — the list was wrong to include
    them, for the third time in the same way. `resolveRally` takes `(cssX, cssY)` and calls

@@ -2,19 +2,27 @@ import type { SimWorld, QueuedOrder } from "../sim/world";
 import type { UnitRegistry } from "../data/units";
 import type { AbilityRegistry } from "../data/abilities";
 import { ORDER_IDS } from "../jass/orders";
+import type { TechRegistry } from "../data/techtree";
+import type { UpgradeRegistry } from "../data/upgrades";
+import type { Command } from "./commands";
+import { MELEE, MISC_GAME } from "../data/gameplayConstants";
 
 // The authority half of the bridge (docs/multiplayer.md Phase B): the questions whose
 // answers are THE GAME'S, not one machine's view of it — who owns what, what a player can
 // afford, how much supply they are using, which hero types they already field, and how an
 // order reaches the sim.
 //
-// It imports `SimWorld`, the registries and the order ids, and NOTHING else. No renderer,
-// no DOM, no transport. That is the whole point: this is the code that has to keep working
-// when the match runs on a host with no window open.
+// It imports `SimWorld`, the registries, the order ids and the `Command` type, and NOTHING
+// else. No renderer, no DOM, no transport. That is the whole point: this is the code that has
+// to keep working when the match runs on a host with no window open.
 //
-// This is landing in two commits. Right now it holds the LEAVES — the helpers `execute()`
-// calls. `execute()` and `applyOrder()` themselves follow in the next one, once the things
-// they lean on are already over here.
+// `execute()` is THE choke point (docs/multiplayer.md Phase C): every player action arrives
+// here, ownership is judged here, and only then does the sim hear about it. `applyOrder()` is
+// `private` to this class, which is what finally makes "nothing reaches applyOrder except
+// execute" a rule the compiler keeps rather than one a grep has to police.
+
+/** Tavern heroes are HIRED, not trained — no build time, the hero just spawns (pops next tick). */
+const TAVERN_HIRE_TIME = 0;
 
 export class Authority {
   /** Players who have already taken their free first hero. Lives here, not on a client:
@@ -27,6 +35,8 @@ export class Authority {
     private sim: SimWorld,
     private registry: UnitRegistry,
     private abilities: AbilityRegistry,
+    private tech: TechRegistry,
+    private upgrades: UpgradeRegistry,
   ) {}
 
   /**
@@ -218,5 +228,292 @@ export class Authority {
       default:
         return 0; // idle / harvest / cast / repair / getitem / return → no generic id
     }
+  }
+
+  /**
+   * Apply a player command. THE choke point (docs/multiplayer.md Phase C).
+   *
+   * Every player action arrives here, ownership is judged here, and only then does the sim
+   * hear about it. That is what makes the set of things a client may ask for a closed,
+   * inspectable list — and once commands go over the wire this is where a peer's command
+   * lands, so a client that fakes a `unitId` it does not own is refused right here rather
+   * than being trusted because it asked nicely.
+   *
+   * Returns whether the command took.
+   */
+  execute(player: number, cmd: Command): boolean {
+    switch (cmd.c) {
+      case "order":
+        return this.applyOrder(player, cmd.unitId, cmd.order, cmd.queued);
+      case "cast":
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+      case "garrison":
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
+      case "getitem":
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
+      case "useitem":
+        return this.ownedBy(player, cmd.unitId) && this.sim.useItem(cmd.unitId, cmd.slot, cmd.targetId, cmd.x, cmd.y);
+      case "dropitem":
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        this.sim.dropItem(cmd.unitId, cmd.slot, cmd.x, cmd.y);
+        return true;
+      case "sellitem":
+        return this.ownedBy(player, cmd.unitId) && this.sim.issueSellItem(cmd.unitId, cmd.slot, cmd.shopId);
+      case "giveitem":
+        // BOTH ends are checked: you may not push an item into a unit you don't own.
+        return this.ownedBy(player, cmd.unitId) && this.ownedBy(player, cmd.targetId)
+          && this.sim.issueGiveItem(cmd.unitId, cmd.slot, cmd.targetId);
+      case "shopbuyer":
+        // The SHOP is deliberately not ownership-checked — a neutral Goblin Merchant belongs
+        // to nobody, which is the entire point. What must be the issuer's is the unit it
+        // nominates, and the buyer is recorded against the ISSUER, never against this machine.
+        return (cmd.unitId === 0 || this.ownedBy(player, cmd.unitId))
+          && this.sim.setShopBuyer(cmd.shopId, player, cmd.unitId);
+      case "autocast":
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        this.sim.toggleAutocast(cmd.unitId, cmd.code);
+        return true;
+      case "rally":
+        // "Is it even a building that trains?" is a VALIDITY check, and so belongs to the
+        // authority rather than to whichever caller happened to remember it — a client is
+        // not trusted to only ever rally rally-capable buildings.
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.sim.units.get(cmd.unitId)?.building?.producesUnits) return false;
+        this.sim.setRally(cmd.unitId, cmd.x, cmd.y, cmd.kind, cmd.targetId);
+        return true;
+      case "swapitem":
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        this.sim.swapItems(cmd.unitId, cmd.from, cmd.to);
+        return true;
+      case "learnskill":
+        return this.ownedBy(player, cmd.unitId) && this.sim.learnAbility(cmd.unitId, cmd.abilityId);
+      case "build": {
+        // Everything the renderer used to decide for itself, decided here instead: that the
+        // worker is yours and is a worker, what the building costs, and whether you can
+        // afford it. Placement validity stays client-side for now — it needs the footprint
+        // grid the renderer owns (docs/multiplayer.md).
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.sim.units.get(cmd.unitId)?.worker) return false;
+        const def = this.registry.get(cmd.defId);
+        if (!def) return false;
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < def.goldCost || stash.lumber < def.lumberCost) return false;
+        stash.gold -= def.goldCost;
+        stash.lumber -= def.lumberCost;
+        // The cost rides on the order so the sim can refund it if the build is abandoned
+        // before it starts — but it is OUR figure now, not one the caller handed us.
+        return this.applyOrder(player, cmd.unitId, {
+          kind: "buildnew", defId: cmd.defId, x: cmd.x, y: cmd.y,
+          gold: def.goldCost, lumber: def.lumberCost,
+        }, cmd.queued);
+      }
+      case "repair": {
+        // Everything the old call site checked CLIENT-side is re-checked here, because none of
+        // it survives a trip over the wire: that it is your worker, that it is your building,
+        // that the building is finished and actually damaged.
+        if (!this.ownedBy(player, cmd.unitId) || !this.ownedBy(player, cmd.buildingId)) return false;
+        if (!this.sim.units.get(cmd.unitId)?.worker) return false;
+        const target = this.sim.units.get(cmd.buildingId);
+        if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp) return false;
+        // The def comes off the SIM unit's own typeId, not the render Entry — a headless
+        // authority has no Entry, and reaching through one would silently return undefined
+        // and refuse every repair rather than failing loudly.
+        const def = this.registry.get(target.typeId);
+        if (!def) return false;
+        // WC3 repair rates: 35% of the build cost and 150% of the build time, 1 HP -> full.
+        const maxHp = Math.max(1, target.maxHp);
+        return this.applyOrder(player, cmd.unitId, {
+          kind: "repair",
+          buildingId: cmd.buildingId,
+          hpPerSec: maxHp / Math.max(1, (def.buildTime || 60) * 1.5),
+          goldPerHp: (def.goldCost * 0.35) / maxHp,
+          lumberPerHp: (def.lumberCost * 0.35) / maxHp,
+        }, cmd.queued);
+      }
+      case "train": {
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building || b.hp <= 0) return false;
+        // A SHOP is deliberately exempt from ownership — a Tavern is Neutral Passive, so
+        // nobody owns the building you hire your first hero from. Anything else must be
+        // yours. (Same carve-out the command card makes for a foreign shop.)
+        if (b.owner !== player && !this.sim.isShopUnit(cmd.buildingId)) return false;
+        const def = this.registry.get(cmd.unitId);
+        if (!def) return false;
+        // "Does this building even train that?" — never checked before, because the card
+        // only ever offered what the building trains. The card does not come over the wire.
+        const isSold = this.tech.get(b.typeId).sellunits.includes(cmd.unitId);
+        if (!isSold && !this.tech.trains(b.typeId).includes(cmd.unitId)) return false;
+        if (this.sim.queueFull(cmd.buildingId)) return false; // 7-deep — before charging
+        // WC3 hero rules: unique per player, and MELEE_HERO_LIMIT across altars + tavern.
+        let heroCount = 0;
+        if (def.isHero) {
+          const inProduction = this.heroTypesInProduction(player);
+          if (inProduction.has(cmd.unitId) || inProduction.size >= MELEE.MELEE_HERO_LIMIT) return false;
+          heroCount = inProduction.size;
+        }
+        // Tech gate. A hero indexes the requirement tier by how many HEROES the player has,
+        // not how many of this hero — see the trainTier note in mapViewer.
+        const owned = def.isHero ? heroCount : this.countOwned(player, cmd.unitId);
+        if (!this.sim.canMake(player, cmd.unitId, owned)) return false;
+        // The melee free FIRST hero: gold- and lumber-free, food still counts. This record
+        // lives here and not on the client precisely because it is worth 425 gold.
+        const freeHero = def.isHero && this.hasFreeHero(player);
+        const gold = freeHero ? 0 : def.goldCost;
+        const lumber = freeHero ? 0 : def.lumberCost;
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < gold || stash.lumber < lumber) return false;
+        // Food is committed when training BEGINS, exactly like gold and lumber.
+        const food = this.foodFor(player);
+        if (food.used + def.foodUsed > food.made) return false;
+        // A unit the building SELLS comes off its shelf, and hiring is loud — purchaseUnit
+        // both depletes the stock and shouts to the creeps. It can still refuse (sold out,
+        // requirements), so it runs before anything is charged.
+        if (isSold && this.sim.purchaseUnit(cmd.buildingId, cmd.unitId, player) !== "ok") return false;
+        stash.gold -= gold;
+        stash.lumber -= lumber;
+        if (freeHero) this.takeFreeHero(player);
+        // A neutral shop hires near-instantly; a building you own takes the unit's real
+        // build time (altar heroes ~55s). Derived here — the client used to send it.
+        const hireTime = b.neutralPassive ? TAVERN_HIRE_TIME : def.buildTime || 15;
+        // Tagged with its BUYER: a Tavern belongs to nobody, so countOwned (which picks the
+        // requirement tier) has no other way to tell whose queued hero this is.
+        return this.sim.enqueueTrain(cmd.buildingId, cmd.unitId, hireTime, freeHero, player);
+      }
+      case "research": {
+        // Ownership was never checked at this call site at all — the command card was, in
+        // effect, the check, because you are only ever shown your own building's card.
+        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building || b.hp <= 0) return false;
+        const state = this.sim.tech;
+        const d = this.upgrades.get(cmd.upgradeId);
+        if (!d || !state) return false;
+        // Does this building even research that? Same gap as `train` had.
+        if (!this.tech.researches(b.typeId).includes(cmd.upgradeId)) return false;
+        if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
+        // The LEVEL is derived, not sent: an upgrade's price climbs with its level, so a
+        // client naming its own level would buy level 3 at level 1's price. It is one past
+        // whatever the player already has, or already has queued here — whichever is further.
+        const have = state.researchLevel(player, cmd.upgradeId);
+        const next = Math.max(have, this.sim.researchingLevel(cmd.buildingId, cmd.upgradeId)) + 1;
+        if (next > d.maxLevel) return false;
+        if (!state.meets(player, cmd.upgradeId, next - 1)) return false;
+        const cost = this.upgrades.cost(cmd.upgradeId, next);
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < cost.gold || stash.lumber < cost.lumber) return false;
+        stash.gold -= cost.gold;
+        stash.lumber -= cost.lumber;
+        return this.sim.enqueueResearch(cmd.buildingId, cmd.upgradeId, next, cost.time || 1);
+      }
+      case "upgradebuilding": {
+        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building || b.hp <= 0) return false;
+        const to = this.registry.get(cmd.toTypeId);
+        if (!to) return false;
+        if (!this.tech.upgradesTo(b.typeId).includes(cmd.toTypeId)) return false;
+        if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
+        // Not merely hidden on the card: without this a second click pays for the Keep twice.
+        if (this.sim.isUpgrading(cmd.buildingId)) return false;
+        if (!this.sim.canMake(player, cmd.toTypeId, 0)) return false;
+        // A tier upgrade costs the DIFFERENCE between the two buildings, not the full price
+        // of the new one (WC3): a Stronghold (700/375) over a Great Hall (385/185) is
+        // 315/190. Both halves of that subtraction are read here, from the registry.
+        const from = this.registry.get(b.typeId);
+        const gold = Math.max(0, to.goldCost - (from?.goldCost ?? 0));
+        const lumber = Math.max(0, to.lumberCost - (from?.lumberCost ?? 0));
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < gold || stash.lumber < lumber) return false;
+        stash.gold -= gold;
+        stash.lumber -= lumber;
+        return this.sim.enqueueUpgrade(cmd.buildingId, cmd.toTypeId, to.buildTime || 1);
+      }
+      case "cancelbuild": {
+        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        const b = this.sim.units.get(cmd.buildingId);
+        // Only an UNFINISHED building can be cancelled — a finished one is demolished, which
+        // is not this command and pays nothing back.
+        if (!b?.building || b.building.constructionLeft <= 0) return false;
+        // The typeId comes off the sim unit, never off the caller. It used to ride along in
+        // the call from the renderer's own selection, so cancelling a Farm while naming a
+        // Castle would have refunded a Castle.
+        const def = this.registry.get(b.typeId);
+        if (def) {
+          const stash = this.sim.stashOf(player);
+          stash.gold += Math.round(def.goldCost * MISC_GAME.ConstructionRefundRate);
+          stash.lumber += Math.round(def.lumberCost * MISC_GAME.ConstructionRefundRate);
+        }
+        return this.sim.cancelBuilding(cmd.buildingId); // frees its footprint's cells too
+      }
+      case "canceltrain": {
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building) return false;
+        // Both ends. Normally the building must be yours — but a hero you are hiring at a
+        // Tavern sits in a queue owned by nobody, so a job's own `buyer` also entitles you to
+        // cancel it. Checked against the job that is actually there, before removing it.
+        const slot = cmd.index < 0 ? b.building.queue[b.building.queue.length - 1] : b.building.queue[cmd.index];
+        if (!slot) return false;
+        const owns = b.owner === player || (slot.kind === "unit" && slot.buyer === player);
+        if (!owns) return false;
+        const job = cmd.index < 0
+          ? this.sim.cancelLastTrain(cmd.buildingId)
+          : this.sim.cancelTrainAt(cmd.buildingId, cmd.index);
+        if (!job) return false;
+        // Refund the job the SIM removed, at the rate its own kind carries in MiscGame.txt:
+        // training and research come back in full (Train/ResearchRefundRate = 1.0), a
+        // structure upgrade only 75% (UpgradeRefundRate) — the same haircut as cancelling a
+        // building mid-construction.
+        const stash = this.sim.stashOf(player);
+        if (job.kind === "research") {
+          const c = this.upgrades.cost(job.unitId, job.level);
+          stash.gold += Math.round(c.gold * MISC_GAME.ResearchRefundRate);
+          stash.lumber += Math.round(c.lumber * MISC_GAME.ResearchRefundRate);
+          return true;
+        }
+        // The melee free first hero cost nothing, so it refunds nothing — otherwise queueing
+        // and cancelling one would simply mint 425 gold. It does hand the freebie back. That
+        // `free` flag is the sim's own, set when the authority granted it.
+        if (job.kind === "unit" && job.free) {
+          this.restoreFreeHero(player);
+          return true;
+        }
+        const d = this.registry.get(job.unitId);
+        if (d) {
+          const rate = job.kind === "upgrade" ? MISC_GAME.UpgradeRefundRate : MISC_GAME.TrainRefundRate;
+          stash.gold += Math.round(d.goldCost * rate);
+          stash.lumber += Math.round(d.lumberCost * rate);
+        }
+        return true;
+      }
+      case "battlestations":
+        // The sim gathers peons belonging to the BURROW's owner, so without this an enemy
+        // could have marched your workers off their gold and into your own burrow.
+        return this.ownedBy(player, cmd.buildingId) && this.sim.battleStations(cmd.buildingId);
+      case "standdown":
+        return this.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId);
+    }
+  }
+
+
+  /**
+   * Route an order to a unit: either append it to the unit's shift-queue, or execute it
+   * immediately (replacing its current order + queue). Silently ignores units the local
+   * player doesn't own.
+   *
+   * **Call `execute({ c: "order", … })`, never this.** It is the implementation of one
+   * `Command` member, not a second way in — reaching it directly is how move/attack/harvest
+   * (i.e. nearly every order in the game) would end up never becoming a `Command` and so
+   * never crossing the wire. That is exactly what happened between the first Phase C pass and
+   * the audit that caught it: closing the direct *sim* calls is only half of it, because
+   * `order()` is itself a door.
+   */
+  private applyOrder(player: number, id: number, o: QueuedOrder, queued: boolean): boolean {
+    if (!this.ownedBy(player, id)) return false;
+    this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
+    if (queued) {
+      this.sim.queueOrder(id, o);
+      return true;
+    }
+    return this.sim.issueOrder(id, o);
   }
 }
