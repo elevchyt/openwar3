@@ -22,6 +22,7 @@ import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
+import { simHooks } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
@@ -1393,6 +1394,17 @@ export class MapViewerScene {
    *  spam duplicates. */
   private textHooks(): EngineHooks {
     return {
+      // The pure-world half of the table (src/game/jassHooks.ts) — every native that needs
+      // `SimWorld` and nothing else. It is spread FIRST so that the presentation entries below
+      // win any overlap, which is how the two natives that write both halves (setUnitFlyHeight,
+      // setUnitOwner) keep their renderer bodies.
+      //
+      // The guard is the one behavioural difference: each moved entry used to be `this.rts?.…`,
+      // re-checked on every call, and is now bound once when the table is built. `runMapScript`
+      // runs long after `RtsController` is constructed — a map script cannot execute before the
+      // world it mutates exists — so the null branch is unreachable in practice; when it is
+      // taken, the natives fall back to their own defaults instead of silently no-opping.
+      ...(this.rts ? simHooks(this.rts.simWorld) : {}),
       // `duration` is seconds (timed action) or < 0 (untimed) — showMessage handles both.
       displayText: (player, msg, duration) => {
         if (player === this.localPlayer) this.hud?.showMessage(msg, duration);
@@ -1473,15 +1485,10 @@ export class MapViewerScene {
         this.rts?.removeUnit(id);
       },
       killUnit: (id) => this.rts?.killUnit(id),
-      // Player resources: SetPlayerState/GetPlayerState → the sim stash. This is what
-      // grants a custom map its starting gold/lumber (its init triggers set it). Food
-      // is derived from units, so it's read-only. state: 1=gold 2=lumber 4=cap 5=used.
-      setPlayerState: (p, state, value) => {
-        const sw = this.rts?.simWorld;
-        if (!sw) return;
-        if (state === 1) sw.stashOf(p).gold = value;
-        else if (state === 2) sw.stashOf(p).lumber = value;
-      },
+      // GetPlayerState reads the stash through `stashFor`'s FROZEN copy and derives food from
+      // `foodFor` — both `Authority` accessors rather than the live stash, which is why it stays
+      // here while its `setPlayerState` twin moved to jassHooks.ts. state: 1=gold 2=lumber
+      // 4=cap 5=used; food is derived from units, so it is read-only.
       getPlayerState: (p, state) => {
         if (!this.rts) return 0;
         if (state === 1) return Math.floor(this.rts.stashFor(p).gold);
@@ -1490,23 +1497,7 @@ export class MapViewerScene {
         if (state === 5) return this.rts.foodFor(p).used; // FOOD_USED
         return 0;
       },
-      // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
-      setUnitState: (id, state, value) => {
-        const u = this.rts?.simView.units.get(id);
-        if (!u) return;
-        if (state === 0) u.hp = Math.max(0, Math.min(u.maxHp, value));
-        else if (state === 1) u.maxHp = Math.max(1, value);
-        else if (state === 2) u.mana = Math.max(0, Math.min(u.maxMana, value));
-        else if (state === 3) u.maxMana = Math.max(0, value);
-      },
-      getUnitState: (id, state) => {
-        const u = this.rts?.simView.units.get(id);
-        if (!u) return 0;
-        return state === 0 ? u.hp : state === 1 ? u.maxHp : state === 2 ? u.mana : state === 3 ? u.maxMana : 0;
-      },
       // --- unit-mutation effects (7.7 cont.) — a trigger visibly moves/alters a unit ---
-      setUnitPosition: (id, x, y) => this.rts?.simWorld.setUnitPosition(id, x, y),
-      setUnitFacing: (id, rad, instant) => this.rts?.simWorld.setUnitFacing(id, rad, instant),
       // SetUnitOwner: reassign in the sim (team decides allegiance/vision), then re-tint
       // the team-coloured model parts to the new slot's colour if changeColor is set.
       setUnitOwner: (id, player, changeColor) => {
@@ -1515,8 +1506,6 @@ export class MapViewerScene {
         if (changeColor) this.rts.setUnitTeamColor(id, player);
       },
       setUnitColor: (id, color) => this.rts?.setUnitTeamColor(id, color),
-      pauseUnit: (id, flag) => this.rts?.simWorld.pauseUnit(id, flag),
-      isUnitPaused: (id) => this.rts?.simView.isUnitPaused(id) ?? false,
       setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
@@ -1524,10 +1513,6 @@ export class MapViewerScene {
         this.rts?.simWorld.setUnitFlyHeight(id, height);
         this.rts?.setUnitFlyHeight(id, height);
       },
-      getUnitFlyHeight: (id) => this.rts?.simView.getUnitFlyHeight(id),
-      setUnitMoveSpeed: (id, speed) => this.rts?.simWorld.setUnitMoveSpeed(id, speed),
-      getUnitMoveSpeed: (id) => this.rts?.simView.getUnitMoveSpeed(id),
-      setUnitTurnSpeed: (id, turn) => this.rts?.simWorld.setUnitTurnSpeed(id, turn),
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
       // Position reads fall back to the mine table: to the script a gold mine IS a unit
       // (MeleeGetProjectedLoc measures the hall/worker clump off GetUnitLoc(nearestMine)).
@@ -1535,7 +1520,6 @@ export class MapViewerScene {
       // last-known value instead of the map origin. See SimWorld.getUnitX.
       getUnitX: (id) => this.mineForScript(id)?.x ?? this.rts?.simView.getUnitX(id),
       getUnitY: (id) => this.mineForScript(id)?.y ?? this.rts?.simView.getUnitY(id),
-      getUnitFacing: (id) => this.rts?.simView.getUnitFacing(id),
       // Orders (7.14): trigger issue → the sim; current order ← the sim.
       issueUnitOrder: (id, orderId, order, kind, x, y, targetId) => this.rts?.issueUnitOrder(id, orderId, order, kind, x, y, targetId) ?? false,
       getUnitCurrentOrder: (id) => this.rts?.currentOrderId(id) ?? 0,
@@ -1577,11 +1561,6 @@ export class MapViewerScene {
       resetTerrainFog: () => {
         this.mapFog = this.w3iFog;
       },
-      // --- way gates (7.22) ---
-      waygateSetDestination: (id, x, y) => this.rts?.simWorld.setWaygateDestination(id, x, y),
-      waygateActivate: (id, active) => this.rts?.simWorld.waygateActivate(id, active),
-      waygateDestination: (id) => this.rts?.simView.waygateDestination(id) ?? null,
-      waygateIsActive: (id) => this.rts?.simView.waygateIsActive(id) ?? false,
       // Bind a record-only CreateUnit row (inside CreateAllUnits) to the pre-placed unit
       // already standing there, so the script can keep configuring it (7.22).
       findPlacedUnit: (typeId, x, y) => this.findPlacedUnit(typeId, x, y),
@@ -1648,10 +1627,6 @@ export class MapViewerScene {
           this.hud?.clearOrderMode();
         }
       },
-      setDawnDusk: (enable) => {
-        if (this.rts) this.rts.simWorld.dawnDusk = enable;
-      },
-      isDawnDuskEnabled: () => this.rts?.simView.dawnDusk ?? true,
       // SetGameSpeed is RECORDED, not applied: WC3's five speeds are engine constants that
       // live in no data file we have, and guessing a multiplier would be exactly the kind of
       // invented number CLAUDE.md forbids. Recording it is still load-bearing — cinematic
@@ -1669,11 +1644,6 @@ export class MapViewerScene {
       },
       pingMinimap: (ping) => this.hud?.ping(ping),
       // --- melee from the script (7.3) ---
-      // MeleeStartingVisibility opens a melee game at 08:00 (bj_MELEE_STARTING_TOD).
-      setTimeOfDay: (hour) => {
-        if (this.rts) this.rts.simWorld.timeOfDay = hour;
-      },
-      getTimeOfDay: () => this.rts?.simView.timeOfDay ?? MELEE.MELEE_STARTING_TOD,
       // MeleeStartingUnits* frames the view on the starting WORKERS, not the hall.
       setCameraPosition: (x, y) => {
         this.target[0] = x;
@@ -1697,58 +1667,16 @@ export class MapViewerScene {
       playerUnitCount: (player, includeIncomplete) => this.countUnits(player, includeIncomplete, () => true),
       playerTypedUnitCount: (player, typeName, includeIncomplete, includeUpgrades) =>
         this.countUnits(player, includeIncomplete, (u) => this.unitIsTyped(u.typeId, typeName, includeUpgrades)),
-      // --- the tech tree (issue #57) ---
-      playerTechCount: (player, tech) => this.rts?.simView.tech?.count(player, tech) ?? 0,
-      setPlayerTechResearched: (player, tech, level) => this.rts?.simView.tech?.setResearchLevel(player, tech, level),
-      setPlayerTechMaxAllowed: (player, tech, max) => this.rts?.simView.tech?.setMaxAllowed(player, tech, max),
-      // --- abilities + heroes (7.17): a trigger grants a spell / levels a hero ---
-      unitAddAbility: (id, abilityId) => this.rts?.simWorld.addAbility(id, abilityId) ?? false,
-      unitRemoveAbility: (id, abilityId) => this.rts?.simWorld.removeAbility(id, abilityId) ?? false,
-      getUnitAbilityLevel: (id, abilityId) => this.rts?.simView.abilityLevelOf(id, abilityId) ?? 0,
-      setUnitAbilityLevel: (id, abilityId, level) => this.rts?.simWorld.setAbilityLevel(id, abilityId, level) ?? 0,
-      selectHeroSkill: (id, abilityId) => this.rts?.simWorld.learnAbility(id, abilityId) ?? false,
-      resetUnitCooldown: (id) => this.rts?.simWorld.resetCooldowns(id),
-      getUnitLevel: (id) => this.rts?.simView.units.get(id)?.level ?? 0,
-      setHeroLevel: (id, level) => this.rts?.simWorld.setHeroLevel(id, level),
-      getHeroXp: (id) => this.rts?.simView.units.get(id)?.xp ?? 0,
-      setHeroXp: (id, xp) => this.rts?.simWorld.setHeroXp(id, xp),
-      addHeroXp: (id, xp) => this.rts?.simWorld.addHeroXp(id, xp),
-      getHeroSkillPoints: (id) => this.rts?.simView.units.get(id)?.skillPoints ?? 0,
-      modifySkillPoints: (id, delta) => this.rts?.simWorld.modifySkillPoints(id, delta) ?? false,
-      // --- per-unit flags + animation (7.17) ---
-      setUnitInvulnerable: (id, flag) => this.rts?.simWorld.setInvulnerable(id, flag),
-      setUnitPathing: (id, flag) => this.rts?.simWorld.setPathing(id, flag),
+      // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
-      // --- items (7.18): a trigger creates/gives/drops/uses an item ---
-      // The sim already owns the item system (ground items, hero inventories, charges,
-      // powerups, item abilities), so each of these is a one-line bridge into it. A
-      // trigger-created item is spawned through the sim's normal ground-item queue, so the
-      // renderer models it (drainItemSpawns) and a hero can walk over and pick it up.
-      createItem: (typeId, x, y) => this.rts?.simWorld.createItem(typeId, x, y) ?? -1,
-      removeItem: (id) => void this.rts?.simWorld.removeItemById(id),
-      itemInfo: (id) => this.rts?.simView.itemSnapshot(id) ?? null,
-      setItemCharges: (id, charges) => void this.rts?.simWorld.setItemCharges(id, charges),
-      setItemPosition: (id, x, y) => void this.rts?.simWorld.setItemPosition(id, x, y),
+      // --- items (7.18) ---
+      // The item natives themselves moved to jassHooks.ts (the sim owns the item system).
+      // These two stayed: both read the ItemRegistry — a DATA table with the custom .w3t
+      // overlay applied — rather than world state.
       itemTypeInfo: (typeId) => {
         const d = this.items.get(typeId); // the ItemRegistry (custom .w3t overlay first)
         return d ? { name: d.name, level: d.level, classType: d.classType, powerup: d.powerup, sellable: d.sellable, pawnable: d.pawnable } : null;
       },
-      // Neutral-building stock (issue #57): Blizzard.j stocks the Marketplace itself, off its
-      // own 30s timer — these just hand its natives the shelves. See src/jass/natives/stock.ts.
-      addToStock: (shopId, wareId, kind, count, max) => void this.rts?.simWorld.addToStock(shopId, wareId, kind, count, max),
-      removeFromStock: (shopId, wareId) => void this.rts?.simWorld.removeFromStock(shopId, wareId),
-      setTypeSlots: (shopId, kind, slots) => void this.rts?.simWorld.setTypeSlots(shopId, kind, slots),
-      setAllTypeSlots: (kind, slots) => void this.rts?.simWorld.setAllTypeSlots(kind, slots),
-      unitAddItem: (unitId, itemId, slot) => this.rts?.simWorld.unitAddItem(unitId, itemId, slot) ?? false,
-      unitRemoveItem: (unitId, itemId) => this.rts?.simWorld.unitRemoveItem(unitId, itemId) ?? false,
-      unitRemoveItemFromSlot: (unitId, slot) => this.rts?.simWorld.unitRemoveItemFromSlot(unitId, slot) ?? 0,
-      unitDropItemPoint: (unitId, itemId, x, y) => this.rts?.simWorld.unitDropItemPoint(unitId, itemId, x, y) ?? false,
-      unitDropItemSlot: (unitId, itemId, slot) => this.rts?.simWorld.unitDropItemSlot(unitId, itemId, slot) ?? false,
-      unitDropItemTarget: (unitId, itemId, targetId) => this.rts?.simWorld.unitDropItemTarget(unitId, itemId, targetId) ?? false,
-      unitUseItem: (unitId, itemId, targetId, x, y) => this.rts?.simWorld.unitUseItem(unitId, itemId, targetId, x, y) ?? false,
-      unitInventorySize: (unitId) => this.rts?.simView.inventorySizeOf(unitId) ?? 0,
-      unitItemInSlot: (unitId, slot) => this.rts?.simView.itemInSlot(unitId, slot) ?? 0,
-      enumItems: () => this.rts?.simView.groundItems().map((it) => ({ id: it.id, typeId: it.itemId, charges: it.charges, x: it.x, y: it.y, holder: 0, slot: -1, owner: 15 })) ?? [],
       // ChooseRandomItem(Ex): draw from the registry's random-drop pool. The RNG is the
       // interpreter's seeded one, so the pick stays deterministic (replays / future MP).
       chooseRandomItem: (classType, level) => this.mapScript?.interp.rt.random

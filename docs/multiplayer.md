@@ -837,6 +837,9 @@ above predicted.
 | `timeOfDay` / `dawnDusk` **writes** (`SetTimeOfDay`, `SuspendTimeOfDay`) | 2 | also hooks; they are the two `simView` refused in Phase B 7a |
 | `initStash` ×2, `setPathStamp` | 3 | setup, called once at match start; fine where they are |
 
+**Item 1 has since taken this 70 → 35** (and `simView` 55 → 34) by moving the 57 natives that need
+`SimWorld` alone into `jassHooks.ts`. What remains is listed under item 1b.
+
 So "narrow the getter" is no longer a refactor with a long tail — **it is one move, item 1**, and
 everything else on the hatch is already closed. The 55 read uses went to `simView` in Phase B.
 
@@ -866,14 +869,48 @@ already nominates itself for.
 Each is independently shippable. **Behaviour-preserving unless the item says otherwise** — items 3
 and 4 say otherwise and are flagged. Two items are gated on a developer decision and say so.
 
-1. **The JASS hook table → its own module.** Inherited from
-   [Phase B item 7b](#remaining-work-in-order). Build it from `(SimWorld, Authority, Viewpoint-free
-   presentation hooks injected by whoever is drawing)`. This is what lets a headless host have a hook
-   table at all, and it closes the escape hatch above in one move. Blocked on the headless boot until
-   Phase D item 1; **no longer blocked**. Note while moving: `SetPlayerState` writes the live stash
-   (`sw.stashOf(p).gold = value`) and is the last live-stash write in the renderer — it wants to be an
-   `Authority` method. Do not route the other ~54 mutators through `Authority` pass-throughs; that
-   shape was rejected in Phase B item 5 and would not help.
+1. ~~**The JASS hook table → its own module.**~~ **Half done, and the half is the clean one.**
+   [`src/game/jassHooks.ts`](../src/game/jassHooks.ts) `simHooks(sim)` holds the **57** natives that
+   need `SimWorld` and nothing else; `textHooks()` keeps the other **92** and composes by spread.
+   57 + 92 = 149, and the merged key set was diffed against `HEAD` — no overlap, nothing lost,
+   nothing gained. `simWorld` in `mapViewer.ts` **70 → 35**, `simView` **55 → 34**. `jassHooks.ts`
+   compiles standalone, so the headless host now has most of a hook table with no WebGL context in
+   its import closure.
+
+   **The selection rule was "what does the body actually read", and it cut smaller than
+   `(SimWorld, Authority)` predicted.** `Authority` never entered it: the natives that would have
+   needed it (`getPlayerState`, `issueUnitOrder`, `getUnitCurrentOrder`) also read something else,
+   so the honest boundary was `SimWorld` alone. `setPlayerState` DID move — it writes the live
+   stash, which is the authority acting rather than a client spending, and it was the last
+   live-stash write in the renderer. Promoting it to a named `Authority` method is still worth
+   doing and is **now item 1b**, not part of this.
+
+   **What is left — item 1b.** The 92 that stayed are not all presentation. Four groups, and each
+   needs a different answer rather than one sweep:
+   - **Dual-writers** (`setUnitFlyHeight`, `setUnitOwner`): write the sim AND the model. They need
+     the presentation half to have a seam before they can split.
+   - **Gold-mine table** (`getUnitX`/`getUnitY`/`getResourceAmount`/`createBlightedGoldMine`):
+     to a script a mine IS a unit, but mines are map-placement state the renderer owns.
+   - **`RtsController` routes** (`createUnit`/`removeUnit`/`killUnit`/`issueUnitOrder`/
+     `getPlayerState`/alliances/fog modifiers): spawning, the order funnel and the viewpoint
+     registry.
+   - **Genuine presentation** (camera, sound, weather, effects, text, selection, registries): stays
+     with whoever is drawing, and is what gets *injected* into the headless table.
+
+   **A test was required here and is not ceremony.** All 152 `EngineHooks` members are optional, so
+   dropping a native during a split compiles clean and passes every suite. Confirmed by doing it:
+   deleting `addHeroXp` left `pnpm typecheck` green and was caught only by the new
+   [`tools/sim-jass-hooks-test.cjs`](../tools/sim-jass-hooks-test.cjs) (11 checks — the exact
+   roster, plus that the hooks read/write the world they were built from, plus that
+   `setPlayerState` reaches the live stash). Restored after.
+
+   One behavioural difference, deliberate and stated in the code: the moved entries used to
+   re-check `this.rts?` on every call and are now bound once when the table is built. `runMapScript`
+   runs long after `RtsController` exists, so the null branch is unreachable in practice.
+
+1b. **`setPlayerState` → a named `Authority` method**, and the dual-writers / mine-table / rts-route
+   groups above resolved so the presentation half can be injected rather than assumed. Split out of
+   item 1 because item 1 was already a 149-entry diff.
 
 2. **Create player viewpoints at match start, not lazily.** Small. Removes Phase D item 4's known
    limitation outright (a one-shot `SetFogState` is not replayed onto viewpoints created later), and
