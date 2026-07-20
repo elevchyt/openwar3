@@ -7,6 +7,8 @@ import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
+import { simHooks, authorityHooks } from "./jassHooks";
+import type { EngineHooks } from "../jass/runtime";
 import type { SimView } from "./simView";
 export type { PlacedRef };
 import {
@@ -3390,6 +3392,24 @@ export class RtsController {
    */
   get simWorld(): SimWorld {
     return this.sim;
+  }
+
+  /**
+   * The non-presentation half of the JASS `EngineHooks` table (docs/multiplayer.md Phase E
+   * item 1/1b) — every native whose answer comes from the world or the authority.
+   *
+   * This exists so the renderer does not have to reach for `simWorld` or for `authority` to
+   * build a hook table. `authority` is PRIVATE and stays private: handing it out would open
+   * exactly the escape hatch `simWorld` already is, one layer up, and `execute()` would stop
+   * being the only door. Composing here is what lets both stay shut — the controller holds
+   * both halves already, so it is the one place that can hand over a finished table without
+   * handing over the pieces.
+   *
+   * A headless host builds the same two factories directly and injects its own presentation
+   * entries (or none), which is the whole point of the split.
+   */
+  worldHooks(): Partial<EngineHooks> {
+    return { ...simHooks(this.sim), ...authorityHooks(this.authority) };
   }
 
   /**

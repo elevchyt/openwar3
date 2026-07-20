@@ -885,8 +885,9 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    live-stash write in the renderer. Promoting it to a named `Authority` method is still worth
    doing and is **now item 1b**, not part of this.
 
-   **What is left — item 1b.** The 92 that stayed are not all presentation. Four groups, and each
-   needs a different answer rather than one sweep:
+   **What is left — items 1b–1f.** The 92 that stayed are not all presentation. Four groups, and
+   each needs a different answer rather than one sweep (item 1b has since taken the
+   player-resource pair out, leaving 91):
    - **Dual-writers** (`setUnitFlyHeight`, `setUnitOwner`): write the sim AND the model. They need
      the presentation half to have a seam before they can split.
    - **Gold-mine table** (`getUnitX`/`getUnitY`/`getResourceAmount`/`createBlightedGoldMine`):
@@ -908,9 +909,61 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    re-check `this.rts?` on every call and are now bound once when the table is built. `runMapScript`
    runs long after `RtsController` exists, so the null branch is unreachable in practice.
 
-1b. **`setPlayerState` → a named `Authority` method**, and the dual-writers / mine-table / rts-route
-   groups above resolved so the presentation half can be injected rather than assumed. Split out of
-   item 1 because item 1 was already a 149-entry diff.
+1b. ~~**`setPlayerState` → a named `Authority` method.**~~ **Done**, and it dragged its twin along,
+   which was the right answer rather than scope creep. `Authority.setPlayerResource(player,
+   "gold"|"lumber", value)` is the ONLY live-stash write outside `execute()`, and it is named so
+   that exception is visible instead of implied. `authorityHooks(authority)` in
+   [`jassHooks.ts`](../src/game/jassHooks.ts) holds `setPlayerState` **and** `getPlayerState`: they
+   are one concern (the player-resource pair), and leaving the reader in the renderer would have
+   split a pair across the seam for no reason. `simHooks` 57 → 56, `authorityHooks` 2, renderer
+   92 → 91. Still 149.
+
+   **The method takes a resource NAME, not JASS's `PLAYER_STATE` number.** The 1=gold/2=lumber
+   encoding is the interpreter's, and having the authority learn it would drag the JASS numbering
+   into the one module that has to survive the interpreter. The mapping stops at the seam.
+
+   **The bigger finding is the seam itself.** The renderer no longer reaches for `simWorld` OR for
+   `authority` to build a table: `RtsController.worldHooks()` composes both factories, because the
+   controller is the only object already holding both. `authority` stays **private** — handing it
+   out would have opened the `simWorld` hatch again one layer up, and `execute()` would have
+   stopped being the only door. `simWorld` in `mapViewer.ts` **35 → 34**. A headless host calls the
+   two factories directly and injects its own presentation entries, or none.
+
+   **`authorityHooks` takes a structural type, not `Authority`.** Three members —
+   `stashFor`/`foodFor`/`setPlayerResource`. `Authority` satisfies it, the compiler still checks
+   it, `jassHooks.ts` keeps a narrower import closure, and the test can stub it. Same trick as
+   `FormationWorld` in Phase B item 1.
+
+   **The regression test earned its keep again.** The plausible lazy refactor here is making
+   `setPlayerResource` write through `stashFor` — and it *throws*, because the copy is frozen, so
+   `stashFor`'s promise to "fail loudly rather than mutate a throwaway in silence" turns out to be
+   load-bearing rather than decorative. Confirmed by doing it: `pnpm typecheck` stayed green, the
+   suite exited 1 on a `Cannot assign to read only property 'gold'`. Restored after.
+
+1c. **The dual-writers.** `setUnitFlyHeight` and `setUnitOwner` write the sim AND the model. They
+   need the presentation half to have a seam of its own before they can split; until then a
+   headless host simply has the sim half of each and no model to re-tint.
+
+1d. **The gold-mine table.** `getUnitX`/`getUnitY`/`getResourceAmount`/`setResourceAmount`/
+   `createBlightedGoldMine` fall back to the mine table, because to a script a gold mine IS a unit
+   (`MeleeGetProjectedLoc` measures off `GetUnitLoc(nearestMine)`). That table is map-placement
+   state; [`placement.ts`](../src/game/placement.ts) already exists and compiles standalone, so
+   this is probably a move onto `PlacedIndex` rather than a new owner — check before assuming.
+
+1e. **The vision + alliance group — 13 entries, the largest coherent block left.**
+   `createFogModifier`, `fogModifierStart`/`Stop`, `destroyFogModifier`, `setFogState`,
+   `fogEnable`/`fogMaskEnable`, `isFogEnabled`/`isFogMaskEnabled`, `cripplePlayer`,
+   `isPlayerAlly`, `setPlayerAlliance`, `getPlayerAlliance`. All route through `RtsController`
+   today. `VisionSet` and `AllianceTable` both compile standalone already, so the blocker is
+   **not** those — it is that the fog-modifier REGISTRY lives on the controller on purpose
+   (Phase D item 2: modifier ids are one global handle space shared with JASS, so N viewpoints
+   minting their own would collide). Moving it needs that decision revisited, not ignored. Do this
+   one after item 2, which changes when viewpoints exist.
+
+1f. **The order-funnel natives.** `issueUnitOrder`, `getUnitCurrentOrder`, `killUnit`,
+   `createUnit`, `removeUnit`. These route through `RtsController` for spawning and the order
+   funnel. `getUnitCurrentOrder` is already an `Authority` delegator and is nearly free;
+   `createUnit`/`removeUnit` are entangled with model seeding and are not.
 
 2. **Create player viewpoints at match start, not lazily.** Small. Removes Phase D item 4's known
    limitation outright (a one-shot `SetFogState` is not replayed onto viewpoints created later), and

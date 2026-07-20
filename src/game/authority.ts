@@ -70,6 +70,25 @@ export class Authority {
     return Object.freeze({ gold: s.gold, lumber: s.lumber });
   }
 
+  /**
+   * Set a player's gold or lumber outright. The counterpart to `stashFor`'s frozen copy, and
+   * the ONLY write to the live stash that does not go through `execute()`.
+   *
+   * That exception is deliberate rather than an oversight. `execute` judges a player's
+   * COMMANDS — it asks "can this player afford this, do they own that" — but a map script
+   * setting starting gold is not a command from a player: it is the map's own configuration,
+   * arriving through the JASS `SetPlayerState` native, and the interpreter runs on the
+   * authority. There is nobody to judge. Routing it through `execute` would mean inventing a
+   * command that no client may ever send, which is worse than naming the exception.
+   *
+   * It takes a resource NAME, not JASS's `PLAYER_STATE` number: the 1=gold/2=lumber encoding
+   * is the interpreter's, and the authority should not have to learn it to do its job. The
+   * mapping lives at the seam, in `authorityHooks` (src/game/jassHooks.ts).
+   */
+  setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void {
+    this.sim.stashOf(player)[resource] = value;
+  }
+
   /** How many of `typeId` a player owns or has in production. This picks the REQUIREMENT
    *  TIER for that unit: WC3 gates the Nth copy, not the type — hero #1 is free, #2 needs a
    *  Keep and #3 a Castle (`[Hpal] Requirescount=3, Requires1=hkee, Requires2=hcas`). Queued

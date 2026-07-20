@@ -22,7 +22,6 @@ import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
-import { simHooks } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
@@ -1394,17 +1393,21 @@ export class MapViewerScene {
    *  spam duplicates. */
   private textHooks(): EngineHooks {
     return {
-      // The pure-world half of the table (src/game/jassHooks.ts) — every native that needs
-      // `SimWorld` and nothing else. It is spread FIRST so that the presentation entries below
-      // win any overlap, which is how the two natives that write both halves (setUnitFlyHeight,
-      // setUnitOwner) keep their renderer bodies.
+      // The non-presentation half of the table — every native whose answer comes from the world
+      // (src/game/jassHooks.ts `simHooks`) or from the authority (`authorityHooks`). The
+      // controller composes both, because it is the only object holding both and neither the
+      // world nor the authority should have to be handed out to build a table.
+      //
+      // Spread FIRST so the presentation entries below win any overlap, which is how the two
+      // natives that write both halves (setUnitFlyHeight, setUnitOwner) keep their renderer
+      // bodies.
       //
       // The guard is the one behavioural difference: each moved entry used to be `this.rts?.…`,
       // re-checked on every call, and is now bound once when the table is built. `runMapScript`
       // runs long after `RtsController` is constructed — a map script cannot execute before the
       // world it mutates exists — so the null branch is unreachable in practice; when it is
       // taken, the natives fall back to their own defaults instead of silently no-opping.
-      ...(this.rts ? simHooks(this.rts.simWorld) : {}),
+      ...(this.rts?.worldHooks() ?? {}),
       // `duration` is seconds (timed action) or < 0 (untimed) — showMessage handles both.
       displayText: (player, msg, duration) => {
         if (player === this.localPlayer) this.hud?.showMessage(msg, duration);
@@ -1485,18 +1488,6 @@ export class MapViewerScene {
         this.rts?.removeUnit(id);
       },
       killUnit: (id) => this.rts?.killUnit(id),
-      // GetPlayerState reads the stash through `stashFor`'s FROZEN copy and derives food from
-      // `foodFor` — both `Authority` accessors rather than the live stash, which is why it stays
-      // here while its `setPlayerState` twin moved to jassHooks.ts. state: 1=gold 2=lumber
-      // 4=cap 5=used; food is derived from units, so it is read-only.
-      getPlayerState: (p, state) => {
-        if (!this.rts) return 0;
-        if (state === 1) return Math.floor(this.rts.stashFor(p).gold);
-        if (state === 2) return Math.floor(this.rts.stashFor(p).lumber);
-        if (state === 4) return this.rts.foodFor(p).made; // FOOD_CAP
-        if (state === 5) return this.rts.foodFor(p).used; // FOOD_USED
-        return 0;
-      },
       // --- unit-mutation effects (7.7 cont.) — a trigger visibly moves/alters a unit ---
       // SetUnitOwner: reassign in the sim (team decides allegiance/vision), then re-tint
       // the team-coloured model parts to the new slot's colour if changeColor is set.

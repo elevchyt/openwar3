@@ -21,28 +21,17 @@ import type { EngineHooks } from "../jass/runtime";
 //     table, which is map-placement state the renderer owns.
 //   * `createUnit`/`removeUnit`/`killUnit`/`issueUnitOrder` route through `RtsController`, which
 //     owns spawning and the order funnel.
-//   * `getPlayerState` reads `stashFor`/`foodFor` — the frozen-copy accessors on `Authority`, not
-//     the live stash. It stays put deliberately; see `setPlayerState` below.
 //   * selection, camera, sound, weather, effects, text and the registries are presentation by
 //     nature and belong to whoever is drawing.
+//
+// The player-resource pair (`setPlayerState`/`getPlayerState`) is NOT here either, and for a
+// third reason again: their answer is the authority's rather than the raw world's. They live in
+// `authorityHooks` at the bottom of this file.
 //
 // Composition is a spread: every `EngineHooks` member is optional, so the renderer merges this
 // table with its own and the compiler still checks both halves against the same interface.
 export function simHooks(sim: SimWorld): Partial<EngineHooks> {
   return {
-    // Player resources: SetPlayerState/GetPlayerState → the sim stash. This is what grants a
-    // custom map its starting gold/lumber (its init triggers set it). Food is derived from
-    // units, so it's read-only. state: 1=gold 2=lumber 4=cap 5=used.
-    //
-    // This is the last live-stash WRITE that used to live in the renderer, and it is legitimate:
-    // a JASS native is the authority acting, not a client spending. It reads the live stash
-    // rather than `Authority.stashFor`'s frozen copy for exactly that reason. Promoting it to a
-    // named `Authority` method is still worth doing (docs/multiplayer.md Phase E item 1) — but
-    // that is a second change, and getting it out of the renderer is this one.
-    setPlayerState: (p, state, value) => {
-      if (state === 1) sim.stashOf(p).gold = value;
-      else if (state === 2) sim.stashOf(p).lumber = value;
-    },
     // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
     setUnitState: (id, state, value) => {
       const u = sim.units.get(id);
@@ -136,5 +125,42 @@ export function simHooks(sim: SimWorld): Partial<EngineHooks> {
     removeFromStock: (shopId, wareId) => void sim.removeFromStock(shopId, wareId),
     setTypeSlots: (shopId, kind, slots) => void sim.setTypeSlots(shopId, kind, slots),
     setAllTypeSlots: (kind, slots) => void sim.setAllTypeSlots(kind, slots),
+  };
+}
+
+// The natives whose answer is the AUTHORITY'S, not the raw world's.
+//
+// The distinction is not pedantry, and `getPlayerState` is the case that shows why. Food is
+// not stored anywhere: `Authority.foodFor` derives it by walking the units and reading each
+// one's registry row, and it was the bug Phase B 6a found — the old body iterated the
+// renderer's `Entry` records, so a headless host would have handed every player infinite
+// supply. Gold and lumber come back through `stashFor`, the FROZEN copy, because a reader has
+// no business holding the live object. Only the write takes the live stash, and only through
+// the one named method that is allowed to.
+//
+// This is also where JASS's `PLAYER_STATE` numbering stops. `Authority.setPlayerResource`
+// takes "gold" | "lumber"; the 1/2/4/5 encoding is the interpreter's business and it ends
+// here, at the seam, rather than leaking into the authority.
+export function authorityHooks(authority: {
+  stashFor(owner: number): Readonly<{ gold: number; lumber: number }>;
+  foodFor(owner: number): { used: number; made: number };
+  setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void;
+}): Partial<EngineHooks> {
+  return {
+    // SetPlayerState → the live stash, via the authority's named setter. This is what grants a
+    // custom map its starting gold/lumber (its init triggers set it). Food is derived from
+    // units, so states 4 and 5 are read-only and a write to them is ignored rather than
+    // invented. state: 1=gold 2=lumber 4=cap 5=used.
+    setPlayerState: (p, state, value) => {
+      if (state === 1) authority.setPlayerResource(p, "gold", value);
+      else if (state === 2) authority.setPlayerResource(p, "lumber", value);
+    },
+    getPlayerState: (p, state) => {
+      if (state === 1) return Math.floor(authority.stashFor(p).gold);
+      if (state === 2) return Math.floor(authority.stashFor(p).lumber);
+      if (state === 4) return authority.foodFor(p).made; // FOOD_CAP
+      if (state === 5) return authority.foodFor(p).used; // FOOD_USED
+      return 0;
+    },
   };
 }
