@@ -5453,44 +5453,35 @@ export class MapViewerScene {
    *  exactly as WC3 does. */
   private startResearch(buildingId: number, upgradeId: string): void {
     if (!this.rts) return;
+    // Feedback only: work out the level the authority will pick so the refusal can name the
+    // resource the player is short of. `execute` derives the level and the price again, and
+    // its answer is the one that counts.
     const world = this.rts.simWorld;
     const state = world.tech;
     const d = this.upgrades.get(upgradeId);
-    if (!d || !state) return;
-    if (world.queueFull(buildingId)) return; // before charging — see SimWorld.queueFull
-    const have = state.researchLevel(this.localPlayer, upgradeId);
-    const next = Math.max(have, world.researchingLevel(buildingId, upgradeId)) + 1;
-    if (next > d.maxLevel) return;
-    if (!state.meets(this.localPlayer, upgradeId, next - 1)) return;
-    const cost = this.upgrades.cost(upgradeId, next);
-    if (!this.canAfford(cost.gold, cost.lumber)) return;
-    const stash = this.rts.stashFor(this.localPlayer);
-    stash.gold -= cost.gold;
-    stash.lumber -= cost.lumber;
-    world.enqueueResearch(buildingId, upgradeId, next, cost.time || 1);
+    if (d && state) {
+      const have = state.researchLevel(this.localPlayer, upgradeId);
+      const next = Math.max(have, world.researchingLevel(buildingId, upgradeId)) + 1;
+      if (next <= d.maxLevel) {
+        const cost = this.upgrades.cost(upgradeId, next);
+        if (!this.canAfford(cost.gold, cost.lumber)) return;
+      }
+    }
+    this.rts.execute(this.localPlayer, { c: "research", buildingId, upgradeId });
   }
 
   /** Start a building's transformation (Town Hall → Keep, Scout Tower → Guard Tower). The
    *  cost and time are the TARGET's own; the structure keeps working while it upgrades. */
   private startBuildingUpgrade(buildingId: number, toTypeId: string): void {
     if (!this.rts) return;
-    const world = this.rts.simWorld;
     const d = this.registry.get(toTypeId);
-    if (!d) return;
-    if (world.queueFull(buildingId)) return; // before charging — see SimWorld.queueFull
-    if (!this.tech.upgradesTo(world.units.get(buildingId)?.typeId ?? "").includes(toTypeId)) return;
-    // Enforced here, not merely hidden on the card, so a hotkey can't queue it twice and pay
-    // for the Keep twice over.
-    if (world.isUpgrading(buildingId)) return;
-    if (!world.canMake(this.localPlayer, toTypeId, 0)) return;
-    // A tier upgrade costs the DIFFERENCE between the two buildings, not the full price of the
-    // new one (WC3): a Stronghold (700/375) over a Great Hall (385/185) is 315/190, not 700/375.
-    const [gold, lumber] = this.upgradeCost(world.units.get(buildingId)?.typeId, d);
-    if (!this.canAfford(gold, lumber)) return;
-    const stash = this.rts.stashFor(this.localPlayer);
-    stash.gold -= gold;
-    stash.lumber -= lumber;
-    world.enqueueUpgrade(buildingId, toTypeId, d.buildTime || 1);
+    if (d) {
+      // Feedback only — the same difference `execute` will compute, purely so a refusal can
+      // say "Not enough gold" rather than nothing at all.
+      const [gold, lumber] = this.upgradeCost(this.rts.simWorld.units.get(buildingId)?.typeId, d);
+      if (!this.canAfford(gold, lumber)) return;
+    }
+    this.rts.execute(this.localPlayer, { c: "upgradebuilding", buildingId, toTypeId });
   }
 
   /** Buy an item from a shop. WC3 hands it to a "valid patron" — a nearby unit with an

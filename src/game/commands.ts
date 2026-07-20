@@ -90,4 +90,24 @@ export type Command =
    * 7-deep queue, shop stock, and "does this building even train that?" are all re-checked
    * there. A command card is a picture of what is allowed, not the thing that allows it.
    */
-  | { c: "train"; buildingId: number; unitId: string };
+  | { c: "train"; buildingId: number; unitId: string }
+  /**
+   * Research an upgrade at a building. Intent only: which building, which upgrade.
+   *
+   * The LEVEL is not on the wire either, and that is the subtle one — an upgrade's price
+   * rises with its level (Steel Forged Swords costs more than Iron), so a client that named
+   * its own level would be buying level 3 at level 1's price. The authority works the next
+   * level out from what the player has already researched plus what is already queued here.
+   * The cost and the research time come from `UpgradeRegistry`, never from the caller.
+   */
+  | { c: "research"; buildingId: number; upgradeId: string }
+  /**
+   * Transform a building into its next tier (Town Hall → Keep, Scout Tower → Guard Tower).
+   * Intent only: which building, what it becomes.
+   *
+   * A tier upgrade costs the DIFFERENCE between the two buildings, and that subtraction is
+   * exactly the kind of arithmetic a client must not be trusted with — the renderer used to
+   * do it, deduct the result itself, and hand the sim its own build time. `execute` computes
+   * the difference from both registry entries and derives the time from the target.
+   */
+  | { c: "upgradebuilding"; buildingId: number; toTypeId: string };

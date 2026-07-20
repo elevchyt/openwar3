@@ -154,17 +154,24 @@ the command card was the only thing enforcing it and the card does not cross the
 in the renderer is a feedback-only pre-check, so a refusal still says *why* in the game's voice.
 One transitional hole: `RtsController.restoreFreeHero`, which cancel-train still needs until (2).
 
+**Done:** `research` and `upgradebuilding`. Neither call site checked ownership *at all* — the
+command card was doing it by construction, since you are only shown your own building's card.
+`research` also derives the **level**, which is the subtle half: an upgrade's price climbs per
+level, so a client naming its own level would buy Steel Forged Swords at Iron's price.
+`upgradebuilding` computes the tier DIFFERENCE (Stronghold over Great Hall = 315/190) from both
+registry entries rather than trusting the renderer's subtraction. Both keep a feedback-only
+pre-check in the renderer so a refusal still names the resource.
+
 **Remaining, in order:**
 
-1. `research` (~5450), `startBuildingUpgrade` (~5473) — same shape as `train` was: check → charge →
-   enqueue, all client-side. Each needs a command whose cost the authority derives.
-2. The refunds — cancel building (~5557), cancel research (~5587), cancel train (~5600). Refund
-   *rates* are as forgeable as prices.
-3. `battlestations`, `standdown`, `cancelBuilding`, `cancelLastTrain`, `cancelTrainAt` — plain
+1. The refunds — cancel building, cancel research, cancel train (grep `stash.gold +=`). Refund
+   *rates* are as forgeable as prices, and cancel-train also absorbs the transitional
+   `RtsController.restoreFreeHero`.
+2. `battlestations`, `standdown`, `cancelBuilding`, `cancelLastTrain`, `cancelTrainAt` — plain
    commands, no economy.
-4. **Then make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
+3. **Then make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
    breaks all 14 sites at once, and it is only safe once they are gone.
-5. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
+4. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
 
 **Two things that looked like blockers and are not.**
 

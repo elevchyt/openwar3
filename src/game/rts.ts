@@ -4278,6 +4278,55 @@ export class RtsController {
         // requirement tier) has no other way to tell whose queued hero this is.
         return this.sim.enqueueTrain(cmd.buildingId, cmd.unitId, hireTime, freeHero, player);
       }
+      case "research": {
+        // Ownership was never checked at this call site at all — the command card was, in
+        // effect, the check, because you are only ever shown your own building's card.
+        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building || b.hp <= 0) return false;
+        const state = this.sim.tech;
+        const d = this.upgrades.get(cmd.upgradeId);
+        if (!d || !state) return false;
+        // Does this building even research that? Same gap as `train` had.
+        if (!this.tech.researches(b.typeId).includes(cmd.upgradeId)) return false;
+        if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
+        // The LEVEL is derived, not sent: an upgrade's price climbs with its level, so a
+        // client naming its own level would buy level 3 at level 1's price. It is one past
+        // whatever the player already has, or already has queued here — whichever is further.
+        const have = state.researchLevel(player, cmd.upgradeId);
+        const next = Math.max(have, this.sim.researchingLevel(cmd.buildingId, cmd.upgradeId)) + 1;
+        if (next > d.maxLevel) return false;
+        if (!state.meets(player, cmd.upgradeId, next - 1)) return false;
+        const cost = this.upgrades.cost(cmd.upgradeId, next);
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < cost.gold || stash.lumber < cost.lumber) return false;
+        stash.gold -= cost.gold;
+        stash.lumber -= cost.lumber;
+        return this.sim.enqueueResearch(cmd.buildingId, cmd.upgradeId, next, cost.time || 1);
+      }
+      case "upgradebuilding": {
+        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building || b.hp <= 0) return false;
+        const to = this.registry.get(cmd.toTypeId);
+        if (!to) return false;
+        if (!this.tech.upgradesTo(b.typeId).includes(cmd.toTypeId)) return false;
+        if (this.sim.queueFull(cmd.buildingId)) return false; // before charging
+        // Not merely hidden on the card: without this a second click pays for the Keep twice.
+        if (this.sim.isUpgrading(cmd.buildingId)) return false;
+        if (!this.sim.canMake(player, cmd.toTypeId, 0)) return false;
+        // A tier upgrade costs the DIFFERENCE between the two buildings, not the full price
+        // of the new one (WC3): a Stronghold (700/375) over a Great Hall (385/185) is
+        // 315/190. Both halves of that subtraction are read here, from the registry.
+        const from = this.registry.get(b.typeId);
+        const gold = Math.max(0, to.goldCost - (from?.goldCost ?? 0));
+        const lumber = Math.max(0, to.lumberCost - (from?.lumberCost ?? 0));
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < gold || stash.lumber < lumber) return false;
+        stash.gold -= gold;
+        stash.lumber -= lumber;
+        return this.sim.enqueueUpgrade(cmd.buildingId, cmd.toTypeId, to.buildTime || 1);
+      }
     }
   }
 
