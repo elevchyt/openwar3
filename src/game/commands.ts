@@ -132,4 +132,18 @@ export type Command =
    * refunding nothing and minting 425 gold. `execute` reads the job the sim actually removed
    * and refunds off that.
    */
-  | { c: "canceltrain"; buildingId: number; index: number };
+  | { c: "canceltrain"; buildingId: number; index: number }
+  /**
+   * Battle Stations (`Abtl`) — pull nearby idle peons into this burrow and its neighbours.
+   *
+   * Nothing to derive here; the whole bug was that there was no gate at all. The sim picks
+   * the peons off the BURROW's owner, so an ungated command let a client battle-station an
+   * enemy's burrow and march that enemy's workers off their gold into it. Ownership is the
+   * entire fix.
+   */
+  | { c: "battlestations"; buildingId: number }
+  /**
+   * Stand Down — eject every peon from a burrow, back to work. Ownership only, same as
+   * `battlestations`: an ungated version emptied an enemy's burrow of its defenders.
+   */
+  | { c: "standdown"; buildingId: number };

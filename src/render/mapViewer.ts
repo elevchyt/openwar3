@@ -5348,12 +5348,12 @@ export class MapViewerScene {
     }
     if (id === "battlestations") {
       const sel = this.rts.selectedInfo();
-      if (sel) this.rts.simWorld.battleStations(sel.id); // pull nearby peons into the burrow
+      if (sel) this.rts.execute(this.localPlayer, { c: "battlestations", buildingId: sel.id });
       return;
     }
     if (id === "standdown") {
       const sel = this.rts.selectedInfo();
-      if (sel) this.rts.simWorld.unloadBurrow(sel.id); // eject peons back to work
+      if (sel) this.rts.execute(this.localPlayer, { c: "standdown", buildingId: sel.id });
       return;
     }
     if (id.startsWith("train:")) {

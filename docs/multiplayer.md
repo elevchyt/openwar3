@@ -128,7 +128,7 @@ not a scattering, which is the good news. They are not all the same thing:
 |---|---|---|
 | JASS `EngineHooks` (`textHooks`, lines ~1396–1760) | ~66 | Authority-side by nature; JASS runs on the authority. Misplaced (it lives in the renderer) but not a bypass. Genuinely mixed — `SetUnitOwner` sits next to `PanCameraTo` — so it cannot be moved wholesale. |
 | Read-only lookups (`units`, `mines`, `items`) | ~25 | Fine in principle. Becomes a read-only snapshot view under AoI (Phase E). |
-| **Player commands bypassing `execute()`** | ~13 | **Bugs.** Build placement, battlestations, standdown, cancel building / train / research. |
+| **Player commands bypassing `execute()`** | ~13 | **All closed.** Build placement, battlestations, standdown, cancel building / train / research all go through the gate. |
 | **Direct stash mutation via `stashFor()`** | 14 | **Was the worst of it. All 14 are gone** — the renderer no longer writes to a stash. |
 | Setup (`initStash`, `setPathStamp`) | few | Fine. |
 
@@ -169,13 +169,17 @@ constants live only where the economy is decided. `restoreFreeHero` is gone, abs
 `canceltrain`. `cancelbuild` no longer takes a typeId from the client's selection: it used to,
 so cancelling a Farm while naming a Castle refunded a Castle.
 
+**Done:** `battlestations` and `standdown` — the last two ungated card actions. A full
+callee-enumeration sweep now shows **no player action left outside `execute()`**: of the
+`simWorld.*` uses remaining in `mapViewer.ts`, everything outside the JASS hook block is a read,
+except `initStash` and `setPathStamp`, which are setup. `src/ui/` touches neither `simWorld` nor
+`stashFor`.
+
 **Remaining, in order:**
 
-1. `unloadBurrow` (~5356) and the rest of the plain no-economy card commands —
-   `battlestations`, `standdown`. Ownership only; nothing to derive.
-2. **Then make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
+1. **Make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
    breaks all 14 sites at once, and it is only safe once they are gone.
-3. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
+2. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
 
 **Two things that looked like blockers and are not.**
 

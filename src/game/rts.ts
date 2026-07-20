@@ -4384,6 +4384,12 @@ export class RtsController {
         }
         return true;
       }
+      case "battlestations":
+        // The sim gathers peons belonging to the BURROW's owner, so without this an enemy
+        // could have marched your workers off their gold and into your own burrow.
+        return this.ownedBy(player, cmd.buildingId) && this.sim.battleStations(cmd.buildingId);
+      case "standdown":
+        return this.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId);
     }
   }
 
