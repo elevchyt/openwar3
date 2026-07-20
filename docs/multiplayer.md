@@ -111,10 +111,11 @@ state.
 **Pick up here.** In order:
 
 1. **Phase C, bypasses before transport.** The funnel at [`src/game/rts.ts`](../src/game/rts.ts)
-   `order()` is not exhaustive — `issueCast`, `issueSellItem`, `issueGiveItem`, `issueHold`,
-   `issueGetItem`, `issueGarrison`, `setShopBuyer`, and the trigger path `issueUnitOrder` all go
-   round it, and casts are absent from `QueuedOrder` entirely. Close those FIRST; wiring the
-   transport first just makes those actions silently host-only and the bug hard to see.
+   `order()` is not exhaustive — `issueHold` goes round it, and `issueCast`, `issueSellItem`,
+   `issueGiveItem`, `issueGetItem`, `issueGarrison` and `setShopBuyer` are not expressible as
+   commands at all. Close those FIRST; wiring the transport first just makes those actions
+   silently host-only and the bug hard to see. (`issueUnitOrder` is *not* on this list — see
+   Phase C.)
 2. **Phase E** — snapshots and reconnect.
 
 **What "Start" does and does not do today.** Both clients load the same map, seat themselves in
@@ -187,16 +188,28 @@ This is the largest single refactor in the path. The sim underneath is already c
 [`src/sim/world.ts`](../src/sim/world.ts):495 defines `QueuedOrder`, a discriminated union of plain
 JSON with numeric IDs and no object references. **It is already a wire format**, by accident.
 
-[`src/game/rts.ts`](../src/game/rts.ts):4052 `order()` is the ownership choke point — its own comment
+[`src/game/rts.ts`](../src/game/rts.ts) `order()` is the ownership choke point — its own comment
 calls it "the single choke point that keeps enemy/neutral/creep units uncommandable." But it is **not
-exhaustive**. These bypass it and call the sim directly:
+exhaustive**. **Seven** player paths bypass it and call the sim directly, and they split in two:
 
-`issueCast` (:3237), `issueSellItem` (:3089), `issueGiveItem` (:3091), `issueHold` (:3403),
-`issueGetItem` (:4205), `issueGarrison` (:4381), `setShopBuyer` (:3034), plus `issueUnitOrder`
-(:4093) which deliberately skips the ownership gate because triggers need it.
+- **Not expressible as a command at all** — `issueCast`, `issueSellItem`, `issueGiveItem`,
+  `issueGetItem`, `issueGarrison`, `setShopBuyer`. `QueuedOrder` has no member for any of them, so
+  these need the wire shape extended before they can be routed. Casts are the awkward one: the
+  target kind (none / point / unit) has to be part of the shape.
+- **Expressible, but skipping the gate** — `issueHold` only. `{ kind: "hold" }` is already in
+  `QueuedOrder`; the call simply goes round `order()`. A routing fix, and the cheapest proof of the
+  pattern.
 
-Casts are absent from `QueuedOrder` entirely. Every one of these must be expressible as a command
-before the wire exists, or those actions silently become host-only.
+Every one of these must be expressible as a command before the wire exists, or those actions
+silently become host-only.
+
+**`issueUnitOrder` is NOT one of them** — an earlier draft of this file listed it as an eighth
+bypass and that was wrong. It is reached only from the JASS natives through `EngineHooks`, and the
+interpreter runs on the authority, once (see [JASS](#jass) below). A trigger order is therefore an
+*effect of* the authoritative sim rather than an input to it: host-only is correct there, gating it
+on ownership would break every map script, and replays re-derive it from the seed rather than
+recording it. Only cross-machine replay *verification* would overturn that, and it is deferred
+(see the transcendental-determinism note above).
 
 ### Phase D — one `VisionMap` per vision group
 

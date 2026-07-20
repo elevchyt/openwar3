@@ -4164,7 +4164,18 @@ export class RtsController {
    *  order took. `order` is the order string; an ABILITY order (the GUI's "Order <unit>
    *  to <ability>" → `IssueTargetOrder(u, "holybolt", t)`) is matched by name against the
    *  unit's own abilities — the engine's numeric ids for ability orders live in no data
-   *  file, so the STRING is the reliable key (7.17). */
+   *  file, so the STRING is the reliable key (7.17).
+   *
+   *  NOT A COMMAND, and not a hole in the funnel — do not "fix" it into one.
+   *  `order()` gates what a CLIENT originates, because a client must not be trusted to
+   *  command units it does not own. This is reached only from the JASS natives
+   *  (jass/natives/world.ts, groups.ts) through `EngineHooks`, and the interpreter runs on
+   *  the AUTHORITY, once (docs/multiplayer.md "JASS"). So a trigger order is an *effect of*
+   *  the authoritative sim, never an input to it: gating it on ownership would break every
+   *  map script, and putting it on the wire would have clients issuing orders nobody asked
+   *  for. Host-only is the correct behaviour here, not the bug it is for the player paths.
+   *  It needs no recording for replays either — same seed + same script + same state
+   *  re-derives it (seeded PRNG in jass/runtime.ts, game-time timers in interpreter.ts). */
   issueUnitOrder(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
     const s = order || orderIdToString(orderId);
     // Ability order? Find the ability on this unit whose Order/Orderon/Orderoff string
