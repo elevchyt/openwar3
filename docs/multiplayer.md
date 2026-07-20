@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a). Open: 7b, 10c-2b+ (feed the entry sync a snapshot, with 6d), 11–12; 10b-harness-shot + 9b-cmd-shot are browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a). Open: 7b, 10c-2b+ (feed the entry sync a snapshot, with 6d), 11a-client, 11b, 12; 10b-harness-shot + 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1848,10 +1848,46 @@ enumerated by body rather than by name.
     them (a model at the snapshot's position with a health bar at the sim's would be a
     Frankenstein). `6d` (a razed building's ghost) rides in the slice that reworks `onDeath`.
 
-11. **Reconnect: rejoin token → full snapshot → deltas resume.** Relay side is a token in the room
-    table (it must stay free-tier-shaped: no sim, no Blizzard data, no match state beyond that table).
-    Authority side is "answer a rejoin with a full snapshot instead of a delta". The test from item 8
-    is what says it works.
+11a. ~~**Reconnect, the relay side: a rejoin token holds the slot.**~~ **Done.** A dropped
+    connection is no longer a departure. `RelayCore.disconnect` (the socket-closed path, distinct
+    from the `leave` MESSAGE) now HOLDS a non-host peer's slot: the peer stays in the room table
+    marked `disconnected`, its rejoin `token` still opens it, and a `join` carrying that token
+    reclaims the SAME peer id. Protocol → **3**: `join` gains an optional `token`,
+    `created`/`joined` carry the peer's own secret token, and `peer-drop`/`peer-rejoin` join
+    `peer-leave` so a roster can tell "reconnecting" from "gone".
+
+    **The drop/leave split already existed at the adapter and just needed honouring.**
+    `relay.mjs` routes a socket close to `disconnect` and a `leave` message to `handle` — two
+    doors that both used to call `leaveRoom`. Now `disconnect` holds and `leaveRoom` frees, which
+    is the whole distinction the pinned test demanded ("a drop is not a leave").
+
+    **Stayed free-tier-shaped, as the item required:** the held slot is one boolean and a token
+    on the existing room-table peer — no sim, no match state, no Blizzard byte. The host is still
+    the exception (v1 has no host migration): a host drop closes the room, as does a drop that
+    leaves nobody connected, so held slots cannot leak a room nobody is in.
+
+    **Tests: the pinned "comes back as a stranger" checks flipped to "comes back as itself"** —
+    the discipline item 3c set, inverted. `loopback` 56 → **65**, over the real `RelayCore`
+    (`relay:test` runs the same core over real sockets, still green). The two injections — a drop
+    that frees instead of holding, and a rejoin that ignores the token — each turn their own named
+    checks red. A held slot is kept even against a full room (a tokenless intruder is refused, the
+    token holder gets back in); a wrong token is just a stranger; a chosen `leave` still frees.
+
+    **No browser check, and it is checkable why:** no `src/game` render code changed, the client
+    lobby does not consult the token YET (that is 11a-client), and reconnect needs a drop/rejoin
+    sequence a single client cannot show. The relay logic is covered over both the in-process and
+    real-socket paths.
+
+11a-client. **The client stashes its token and auto-rejoins on a drop.** `LanLobby` receives the
+    token in `created`/`joined` and ignores it today; it needs to keep it and, on
+    `WebSocketTransport.onClose` mid-match, reconnect and `join` with it. Small, but it is the
+    client half and belongs on its own.
+
+11b. **Reconnect, the authority side: answer a rejoin with a FULL snapshot.** The relay puts the
+    player back in the room; the host must then hand it the state it missed. `MatchLink` already
+    sends per-recipient snapshots each tick, so this is "on a `peer-rejoin`, send that seat a full
+    snapshot immediately" rather than waiting for the next cadence tick. Its pinned checks
+    ("nothing replays what they missed") are the ones still standing in `loopback-test`.
 
 12. **Flip the phase table**, once the authority takes commands and emits AoI-filtered snapshots over
     a transport it does not name, two clients play a match through the relay, and a dropped client

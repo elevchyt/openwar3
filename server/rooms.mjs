@@ -19,7 +19,7 @@
 // data, no match state beyond this table. Keep it that way — it is what makes a free tier
 // viable and what keeps us clear of hosting Blizzard content.
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** The game list entry, as LocalMultiplayerJoin.fdf wants it. */
 const roomInfo = (r) => ({
@@ -35,6 +35,10 @@ const roomInfo = (r) => ({
 });
 
 const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
+
+/** A rejoin token: unguessable enough that another client cannot seize a dropped player's
+ *  slot, cheap enough to mint on a free tier. Node's global crypto in every runtime we target. */
+const mkToken = () => globalThis.crypto.randomUUID();
 
 export class RelayCore {
   constructor() {
@@ -56,7 +60,9 @@ export class RelayCore {
   }
 
   inRoom(room, msg, exceptId) {
-    for (const p of room.peers.values()) if (p.id !== exceptId) p.conn.send(msg);
+    // A dropped peer being held for reconnect (item 11) has no live conn — skip it. It catches
+    // up on rejoin, via the host's full snapshot, not by replaying what it missed while gone.
+    for (const p of room.peers.values()) if (p.id !== exceptId && p.conn) p.conn.send(msg);
   }
 
   /** A new connection. Sends the handshake and the current game list, in that order — the
@@ -70,13 +76,47 @@ export class RelayCore {
     conn.send({ t: "rooms", rooms: this.listing() });
   }
 
-  /** The connection is gone (closed, errored, or the process it lived in went away). */
+  /**
+   * The connection DROPPED — the socket closed, the process died, the wifi went (item 11).
+   *
+   * A drop is NOT a leave. A leave is a player choosing to quit and frees the slot at once; a
+   * drop is an accident the player wants to recover from, so the slot is HELD — the peer stays
+   * in the room table, marked disconnected, and its rejoin token still opens it. A `join`
+   * carrying that token reclaims the SAME peer id, which is the whole of what "reconnect" means
+   * on the relay side.
+   *
+   * The host is the exception, because v1 has no host migration: if the authority's connection
+   * drops, the match cannot continue and the room closes, exactly as a host leave does. So does
+   * a drop that empties the room of live connections.
+   */
   disconnect(conn) {
-    this.leaveRoom(conn);
     this.conns.delete(conn);
+    const room = this.rooms.get(conn.roomId);
+    if (!room) return;
+    const peer = room.peers.get(conn.peerId);
+    conn.roomId = null;
+    if (!peer) return;
+
+    // Host drop, or nobody left connected → close, same as a host leave. A room whose every
+    // peer is disconnected is holding slots for a match nobody is in; reap it rather than leak.
+    const anyLive = [...room.peers.values()].some((p) => p !== peer && !p.disconnected);
+    if (peer.host || !anyLive) {
+      this.inRoom(room, { t: "room-closed", reason: peer.host ? "The host left the game." : "Empty." });
+      for (const p of room.peers.values()) if (p.conn) p.conn.roomId = null;
+      this.rooms.delete(room.id);
+      this.broadcastRooms();
+      return;
+    }
+
+    // A non-host client dropped and others are still here: hold the slot for its return.
+    peer.disconnected = true;
+    peer.conn = null; // the old connection is gone; a rejoin reattaches a fresh one
+    this.inRoom(room, { t: "peer-drop", peerId: peer.id });
+    this.broadcastRooms();
   }
 
-  /** Remove a connection from its room, closing the room if the host left. */
+  /** A CHOSEN departure (the `leave` message). Frees the slot immediately — the opposite of a
+   *  drop. Closes the room if the host left or nobody is left. */
   leaveRoom(conn) {
     const room = this.rooms.get(conn.roomId);
     if (!room) return;
@@ -88,7 +128,7 @@ export class RelayCore {
     // the only copy of game state, so its departure ends the room for everyone.
     if (peer?.host || room.peers.size === 0) {
       this.inRoom(room, { t: "room-closed", reason: peer?.host ? "The host left the game." : "Empty." });
-      for (const p of room.peers.values()) p.conn.roomId = null;
+      for (const p of room.peers.values()) if (p.conn) p.conn.roomId = null;
       this.rooms.delete(room.id);
     } else {
       this.inRoom(room, { t: "peer-leave", peerId: conn.peerId });
@@ -105,7 +145,7 @@ export class RelayCore {
       case "create": {
         if (conn.roomId) return conn.send({ t: "error", message: "Already in a game." });
         const id = String(this.nextRoomId++);
-        const peer = { id: 1, name: msg.playerName || "Player", host: true, conn };
+        const peer = { id: 1, name: msg.playerName || "Player", host: true, conn, token: mkToken(), disconnected: false };
         const room = {
           id,
           name: msg.name || "OpenWar3 Game",
@@ -119,7 +159,7 @@ export class RelayCore {
         this.rooms.set(id, room);
         conn.roomId = id;
         conn.peerId = peer.id;
-        conn.send({ t: "created", room: roomInfo(room), you: peerInfo(peer) });
+        conn.send({ t: "created", room: roomInfo(room), you: peerInfo(peer), token: peer.token });
         this.broadcastRooms();
         return;
       }
@@ -128,8 +168,33 @@ export class RelayCore {
         if (conn.roomId) return conn.send({ t: "error", message: "Already in a game." });
         const room = this.rooms.get(msg.roomId);
         if (!room) return conn.send({ t: "error", message: "That game is no longer available." });
+
+        // RECONNECT (item 11): a `token` matching a slot this room is HOLDING for a dropped
+        // player reclaims that exact slot — same peer id, same token — rather than minting a
+        // new one. Checked before the full-room test, because reclaiming your own held slot is
+        // not taking a new one; a room that is "full" of held slots must still let its own
+        // players back in.
+        const held = msg.token && [...room.peers.values()].find((p) => p.disconnected && p.token === msg.token);
+        if (held) {
+          held.conn = conn;
+          held.disconnected = false;
+          if (msg.playerName) held.name = msg.playerName;
+          conn.roomId = room.id;
+          conn.peerId = held.id;
+          conn.send({
+            t: "joined",
+            room: roomInfo(room),
+            you: peerInfo(held),
+            peers: [...room.peers.values()].map(peerInfo),
+            token: held.token,
+          });
+          this.inRoom(room, { t: "peer-rejoin", peer: peerInfo(held) }, held.id);
+          this.broadcastRooms();
+          return;
+        }
+
         if (room.peers.size >= room.maxPlayers) return conn.send({ t: "error", message: "That game is full." });
-        const peer = { id: room.nextPeerId++, name: msg.playerName || "Player", host: false, conn };
+        const peer = { id: room.nextPeerId++, name: msg.playerName || "Player", host: false, conn, token: mkToken(), disconnected: false };
         room.peers.set(peer.id, peer);
         conn.roomId = room.id;
         conn.peerId = peer.id;
@@ -138,6 +203,7 @@ export class RelayCore {
           room: roomInfo(room),
           you: peerInfo(peer),
           peers: [...room.peers.values()].map(peerInfo),
+          token: peer.token,
         });
         this.inRoom(room, { t: "peer-join", peer: peerInfo(peer) }, peer.id);
         this.broadcastRooms();

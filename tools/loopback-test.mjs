@@ -54,7 +54,7 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 2);
+  check("and it speaks our protocol", c.last("hello").protocol, 3);
 }
 
 console.log("the room forms exactly as it does over a socket");
@@ -145,51 +145,103 @@ console.log("the host leaving ends the room, as v1 says it must");
 }
 
 // ---------------------------------------------------------------------------------------
-// RECONNECT — pinned as it behaves TODAY, which is: not at all.
-//
-// Item 11 is "rejoin token → full snapshot → deltas resume". None of that exists. These
-// checks describe the gap precisely so that landing item 11 has to change them on purpose.
+// RECONNECT, relay side (item 11a). A dropped connection is not a departure: the slot is HELD
+// under a rejoin token, and a `join` carrying that token reclaims the SAME peer id. The host's
+// full-snapshot catch-up is item 11b; here the relay-level protocol is what is pinned.
 // ---------------------------------------------------------------------------------------
 
-console.log("\nNOT YET RECONNECT, pinned as-is: a dropped client comes back as a stranger (item 11)");
+console.log("\na dropped client reclaims its own slot on its token (item 11a)");
 {
   const { relay, host, peer, roomId } = await room();
+  const token = peer.last("joined").token;
+  check("the joiner was handed a rejoin token", typeof token, "string");
   host.clear();
 
   peer.drop();
   await tick();
-  // The host IS told, which is the half that already works — item 11 does not have to invent
-  // notification, only what happens next.
-  check("the host learns the peer went away", host.last("peer-leave").peerId, 2);
+  // A drop is announced as a DROP, not a leave: the slot is held, and a roster may say
+  // "reconnecting" rather than removing the player.
+  check("the host is told the peer DROPPED, not left", host.last("peer-drop")?.peerId, 2);
+  check("no peer-leave was sent", host.seen("peer-leave").length, 0);
 
   const back = relay.connect("peer-again");
   await tick();
-  back.send({ t: "join", roomId, playerName: "Joiner" });
+  back.send({ t: "join", roomId, playerName: "Joiner", token });
   await tick();
 
-  // THE GAP. A returning player is a brand-new peer: new id, no memory that slot 2 was theirs,
-  // and nothing that hands them the state they missed. In a real match they would be seated as
-  // an extra player in a room that already started.
-  check("they are given a NEW peer id, not their old one", back.last("joined").you.id, 3);
-  check("nothing tells them a match is already running", back.seen("deliver").length, 0);
-  check("and nothing replays what they missed", back.seen().map((m) => m.t), ["hello", "rooms", "joined"]);
-
-  // What item 11 has to add, stated as the assertions that will replace these:
-  //   • the room keeps the slot alive for a grace period, keyed by a rejoin token
-  //   • `join` with that token restores peer id 2 rather than minting 3
-  //   • the host answers the rejoin with a FULL snapshot instead of a delta
+  // THE FLIP. With the token, the returning connection is the SAME player, not a stranger.
+  check("it reclaims peer id 2, not a fresh 3", back.last("joined")?.you.id, 2);
+  check("the host is told it is a REJOIN", host.last("peer-rejoin")?.peer.id, 2);
+  // 11a stops here: the relay has put the player back in the room. Handing it the state it
+  // missed is 11b (the host's full snapshot), so nothing is delivered yet.
+  check("no game state is replayed by the relay itself", back.seen("deliver").length, 0);
 }
 
-console.log("\na drop is not a leave, even though the relay cannot yet tell");
+console.log("a held slot is kept even against a full room, but a wrong token is a stranger");
+{
+  const { relay, host, peer, roomId } = await room(); // maxPlayers 2, so host + joiner = full
+  const token = peer.last("joined").token;
+  peer.drop();
+  await tick();
+
+  // Someone else tries to walk into the held slot with no token: the room is full (the slot is
+  // reserved), so they are refused rather than seated over the dropped player.
+  const intruder = relay.connect("intruder");
+  await tick();
+  intruder.send({ t: "join", roomId, playerName: "Intruder" });
+  await tick();
+  check("a tokenless join cannot take a held slot in a full room", intruder.last("error")?.message, "That game is full.");
+
+  // The real player returns on the token and gets in, full room or not.
+  const back = relay.connect("back");
+  await tick();
+  back.send({ t: "join", roomId, playerName: "Joiner", token });
+  await tick();
+  check("the token holder still gets back in", back.last("joined")?.you.id, 2);
+
+  // A wrong token is just a new join (and now the room really is full again).
+  const wrong = relay.connect("wrong");
+  await tick();
+  wrong.send({ t: "join", roomId, playerName: "Wrong", token: "not-the-token" });
+  await tick();
+  check("a wrong token does not reclaim the slot", wrong.last("error")?.message, "That game is full.");
+}
+
+console.log("a chosen LEAVE frees the slot; only a DROP holds it");
+{
+  const { relay, host, peer, roomId } = await room();
+  const token = peer.last("joined").token;
+  host.clear();
+  peer.send({ t: "leave" });
+  await tick();
+  check("a leave is announced as a leave", host.last("peer-leave")?.peerId, 2);
+  check("and not as a drop", host.seen("peer-drop").length, 0);
+
+  // The slot is GONE: the token no longer opens it, and rejoining is an ordinary new join.
+  const back = relay.connect("back");
+  await tick();
+  back.send({ t: "join", roomId, playerName: "Joiner", token });
+  await tick();
+  check("the freed slot cannot be reclaimed on the old token", back.last("joined")?.you.id, 3);
+}
+
+console.log("the host dropping still ends the room — no host migration in v1");
+{
+  const { host, peer } = await room();
+  peer.clear();
+  host.drop();
+  await tick();
+  // A client drop holds a slot; the HOST is the authority, and v1 cannot continue without it.
+  check("the joiner is told the room closed", peer.last("room-closed").reason, "The host left the game.");
+}
+
+console.log("a drop tells the client its connection was lost");
 {
   const { peer } = await room();
   let told = "";
   peer.onClose = (r) => (told = r);
   peer.drop();
   await tick();
-  // `close()` is the player choosing to quit; `drop()` is the wifi dying. They are the same
-  // path through the relay today and must not be when item 11 lands — a drop has to hold the
-  // slot, a leave has to free it.
   check("a drop notifies the client it lost the connection", told, "Connection to the game host was lost.");
   check("and the endpoint knows it is down", peer.connected, false);
 }

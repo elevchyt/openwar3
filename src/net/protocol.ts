@@ -47,7 +47,10 @@ export type ClientMessage =
   | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number }
   /** Ask for the game list. The relay also pushes `rooms` unprompted when it changes. */
   | { t: "list" }
-  | { t: "join"; roomId: string; playerName: string }
+  /** Join a room. `token` is a REJOIN token from an earlier `created`/`joined` in this room —
+   *  present it to reclaim the same slot after a dropped connection (Phase E item 11). Absent
+   *  for a first-time join. */
+  | { t: "join"; roomId: string; playerName: string; token?: string }
   | { t: "leave" }
   /** Opaque game traffic. `to` omitted = everyone else in the room. */
   | { t: "relay"; to?: number; data: unknown };
@@ -57,11 +60,18 @@ export type ClientMessage =
 export type ServerMessage =
   /** Handshake: sent once on connect, before anything else. */
   | { t: "hello"; protocol: number }
-  | { t: "created"; room: RoomInfo; you: PeerInfo }
+  /** `token` is this peer's OWN rejoin token — secret, sent only to it, never in a peer list.
+   *  Stash it; presenting it on a later `join` reclaims this exact slot (item 11). */
+  | { t: "created"; room: RoomInfo; you: PeerInfo; token: string }
   | { t: "rooms"; rooms: RoomInfo[] }
-  | { t: "joined"; room: RoomInfo; you: PeerInfo; peers: PeerInfo[] }
+  | { t: "joined"; room: RoomInfo; you: PeerInfo; peers: PeerInfo[]; token: string }
   | { t: "peer-join"; peer: PeerInfo }
   | { t: "peer-leave"; peerId: number }
+  /** A peer's connection DROPPED (item 11). Its slot is HELD for reconnect, not freed — this
+   *  is distinct from `peer-leave`, which is a chosen departure. A roster may show "reconnecting". */
+  | { t: "peer-drop"; peerId: number }
+  /** A dropped peer came back on its token, reclaiming the SAME id it had before. */
+  | { t: "peer-rejoin"; peer: PeerInfo }
   /** The host vanished. The match cannot continue — v1 has no host migration. */
   | { t: "room-closed"; reason: string }
   | { t: "deliver"; from: number; data: unknown }
@@ -115,7 +125,7 @@ export type GameMessage = StartMatch | import("./commandLink").CommandMessage;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;
