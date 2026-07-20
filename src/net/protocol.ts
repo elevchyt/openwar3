@@ -103,7 +103,15 @@ export interface StartMatch {
   }>;
 }
 
-export type GameMessage = StartMatch;
+/**
+ * One player action, on its way to the host (Phase E item 9). The shape and the identity rule
+ * live in [`commandLink.ts`](./commandLink.ts) — deliberately not here, because the rule that
+ * matters (the sender is the relay's `from` stamp, never anything in the payload) wants to sit
+ * next to the code that enforces it rather than next to a type alias.
+ */
+export type { CommandMessage } from "./commandLink";
+
+export type GameMessage = StartMatch | import("./commandLink").CommandMessage;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */

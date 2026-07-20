@@ -12,7 +12,14 @@
 // notices.
 //
 // Run: pnpm loopback:test
+import { join } from "node:path";
 import { LoopbackRelay, tick } from "./loopback.mjs";
+
+// The command router is TypeScript, compiled by `tsc -p tools/tsconfig.sim.json` into
+// .sim-build alongside the sim. `pnpm sim:test` runs that build; run it before this file.
+const { CommandRouter, commandMessage, accepted } = await import(
+  "file://" + join(process.cwd(), ".sim-build", "src", "net", "commandLink.js")
+);
 
 let failed = 0;
 function check(what, got, want) {
@@ -184,6 +191,79 @@ console.log("\na drop is not a leave, even though the relay cannot yet tell");
   // slot, a leave has to free it.
   check("a drop notifies the client it lost the connection", told, "Connection to the game host was lost.");
   check("and the endpoint knows it is down", peer.connected, false);
+}
+
+// ---------------------------------------------------------------------------------------
+// Item 9: commands cross the wire. The rule under test is that the SENDER'S IDENTITY comes
+// from the relay's `from` stamp and never from the payload — Phase C gated a faked unit id,
+// this gates a faked player, and they are different holes.
+// ---------------------------------------------------------------------------------------
+
+console.log("\na command crosses the wire and the host learns who really sent it");
+{
+  const { host, peer } = await room();
+  // The seating the host already broadcast in StartMatch: player 0 is the host (peer 1),
+  // player 1 is the joiner (peer 2), player 2 is a computer and has no peer at all.
+  const router = new CommandRouter([
+    { id: 0, peer: 1 },
+    { id: 1, peer: 2 },
+    { id: 2 },
+  ]);
+  host.clear();
+
+  const move = { c: "order", unitId: 42, order: { kind: "move", x: 100, y: 200 }, queued: false };
+  peer.send({ t: "relay", to: 1, data: commandMessage(move) });
+  await tick();
+
+  const env = host.last("deliver");
+  check("the host received it", env.data.k, "cmd");
+  const judged = router.receive(env.from, env.data);
+  check("and resolved the sender to player 1", accepted(judged) && judged.player, 1);
+  check("with the command intact", accepted(judged) && judged.cmd.unitId, 42);
+}
+
+console.log("a client cannot claim to be somebody else");
+{
+  const { host, peer } = await room();
+  const router = new CommandRouter([{ id: 0, peer: 1 }, { id: 1, peer: 2 }]);
+  host.clear();
+
+  // The joiner (peer 2 = player 1) sends a command with player 0 written all over the payload.
+  // Every field here is the sender's to choose, which is exactly why none of them may decide
+  // identity. If the host ever reads `player` off the envelope, this is the test that dies.
+  const forged = { ...commandMessage({ c: "order", unitId: 7, order: { kind: "move", x: 0, y: 0 }, queued: false }), player: 0, from: 1 };
+  peer.send({ t: "relay", to: 1, data: forged });
+  await tick();
+
+  const env = host.last("deliver");
+  check("the payload's own claim says player 0", env.data.player, 0);
+  check("the relay's stamp says peer 2", env.from, 2);
+  // The stamp wins. This is the whole item.
+  const judged = router.receive(env.from, env.data);
+  check("the host bills it to player 1, not player 0", accepted(judged) && judged.player, 1);
+}
+
+console.log("a peer with no seat is refused rather than guessed at");
+{
+  const router = new CommandRouter([{ id: 0, peer: 1 }, { id: 1, peer: 2 }]);
+  const cmd = commandMessage({ c: "order", unitId: 1, order: { kind: "move", x: 0, y: 0 }, queued: false });
+  // A spectator, a peer that joined the room after the match started, or a stale connection.
+  check("an unseated peer gets no player", router.receive(9, cmd), "no-seat");
+  // A computer slot has no peer, so nothing on the wire can ever speak for it — the host
+  // simulates it. `peer: 0` would be a REAL peer, which is why the seating test is an
+  // explicit `!== undefined` and not a truthiness check.
+  check("a computer slot cannot be spoken for", new CommandRouter([{ id: 3 }]).playerFor(undefined), null);
+  check("peer 0 is a real peer, not an absent one", new CommandRouter([{ id: 5, peer: 0 }]).playerFor(0), 5);
+}
+
+console.log("rubbish on the game channel is refused, not thrown");
+{
+  const router = new CommandRouter([{ id: 0, peer: 1 }]);
+  // A hostile or simply buggy peer must not be able to interrupt the host's tick, so these
+  // return a reason instead of raising.
+  check("a start message is not a command", router.receive(1, { k: "start" }), "not-a-command");
+  check("nor is null", router.receive(1, null), "not-a-command");
+  check("nor is a bare string", router.receive(1, "cmd"), "not-a-command");
 }
 
 console.log(failed === 0 ? "\nloopback: all checks passed" : `\nloopback: ${failed} FAILED`);

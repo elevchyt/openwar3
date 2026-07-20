@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8). Open: 6c, 7b, then 9–12 — **nothing crosses the wire yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9). Open: 6c, 7b, 9b, then 10–12 — **nothing is sent yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1511,10 +1511,40 @@ enumerated by body rather than by name.
    checks**, and no file under `src/` was touched — the client bundle is byte-for-byte the same,
    which is why there is no screenshot here.
 
-9. **Commands cross the wire.** New `GameMessage` member carrying `Command`; the client's `execute`
-   becomes *send*, the host's becomes *receive, judge ownership, apply*. The gate already refuses a
-   faked `unitId` — that was Phase C's whole point — so this is wiring plus the ordering question in
-   the note below.
+9. ~~**Commands cross the wire.**~~ **Half done — the wire format and the host's door, not the
+   client's `execute`.** [`src/net/commandLink.ts`](../src/net/commandLink.ts) adds the
+   `CommandMessage` member (`{ k: "cmd", cmd }`) to `GameMessage` and `CommandRouter`, which
+   turns a delivered envelope into a judged `(player, cmd)` or a stated refusal. **Tenth module
+   to compile standalone.** Nothing calls it yet, and both references from `protocol.ts` are
+   type-only, so no runtime import was added and the client bundle behaves identically.
+
+   **The security content is one rule, and it is a DIFFERENT hole from Phase C's.** Phase C
+   gated a faked `unitId`: `Authority.execute` asks "does player P own unit U". That gate is
+   useless against a client that simply claims to BE player P — it would wave through spending
+   another player's gold, cancelling their buildings, walking their army off a cliff. So the
+   sender's identity must never come from the payload, which the client controls entirely. It
+   comes from the relay's `from` stamp, which `server/rooms.mjs` writes from the peer id it
+   assigned at join time and no client can author. `CommandRouter` resolves that stamp through
+   the seating the host already broadcast in `StartMatch`, so there is no second source of truth
+   about who sits where, and an unseated peer is refused rather than guessed at.
+
+   **A computer slot has no `peer` and therefore cannot be spoken for from the wire**, which is
+   correct — the host simulates it. That is why the seating test is `s.peer !== undefined` and
+   not `if (s.peer)`: **peer id 0 is a real peer**, and the truthy version silently unseats it.
+   There is a check for exactly that, and it goes red on exactly that edit.
+
+   Refusals are RETURNED, not thrown. A hostile or merely buggy peer must not be able to
+   interrupt the host's tick by sending rubbish on the game channel.
+
+   The module imports no `Authority`, no sim and no transport — it judges and stops. `pnpm
+   relay:test` now carries **34** loopback checks; the two injections (trusting a `player` field
+   in the payload, and the truthiness seating check) each turn exactly one named check red.
+
+9b. **The client's `execute` becomes *send*.** The other half, and it is deliberately NOT in
+   item 9's commit because it is the same decision as item 10: a client that sends commands
+   while still simulating locally drifts from the host within seconds, so "stop executing
+   locally and start sending" cannot land before there is a snapshot stream to render instead.
+   Whoever takes item 10 takes this with it.
 
 10. **Snapshots cross the wire, and the client stops simulating.** The big one.
     **Sequencing is genuinely unsettled between 9 and 10**: a client that sends commands while still
