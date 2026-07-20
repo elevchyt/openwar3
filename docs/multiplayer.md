@@ -1171,22 +1171,38 @@ enumerated by body rather than by name.
    whose models this machine never loaded now gets dots at all, instead of an empty minimap. That
    cannot be shown until snapshots exist.
 
-3b. **`dots`/`creepCamps`/`hiddenFor` off the controller, so they can be tested.** After item 3
-   they read `sim.units` and a `Viewpoint` and touch no render record, no model and no DOM — they
-   are authority-side data wearing a client-side address. Living on `RtsController` means they are
-   unreachable from any headless test (`rts.ts` imports `mdx-m3-viewer`), so item 3 shipped a
-   behaviour-changing move with **no test at all** and a browser check that proved only "nothing
-   regressed". A `minimapView.ts` taking `({ units }, Viewpoint)` fixes that and would let the
-   real property be pinned: dots answered for a viewpoint whose client rendered nothing. Split out
-   of item 3 rather than bolted on, because it is a rewrite of four `rts.ts` bodies and the item
-   itself was a two-line change.
+3b. ~~**`dots`/`creepCamps`/`hiddenFor` off the controller, so they can be tested.**~~ **Done.**
+   [`src/game/minimapView.ts`](../src/game/minimapView.ts) holds `hiddenFor`, `minimapDots`,
+   `minimapIcons` and `CreepCamps`; `rts.ts` keeps four one-line delegators, so no caller changed.
+   It compiles standalone (seventh module to do so) and `rts.ts` 4 143 lines.
 
-4. **Decide whether `minimapIcons()` should have a fog gate — by looking at the real client.**
-   Carried from Phase D item 5. It has none today: gold-mine and neutral-building glyphs draw on
-   pitch-black unexplored ground. Nobody has checked whether WC3 does the same. Per
-   [`CLAUDE.md`](../CLAUDE.md) the running game decides. **Do not fix it from a reference or from
-   memory.** If the real client shows them, this item closes with a comment and no code.
+   **The move was for testability, and it immediately paid.** The new
+   [`tools/sim-minimap-test.cjs`](../tools/sim-minimap-test.cjs) (23 checks) can finally assert the
+   thing item 3 existed for and could not state: **dots computed for a viewpoint whose client
+   rendered nothing.** In the test there is no renderer at all, so "units I drew" is empty by
+   construction — under the old `this.entries` walk every one of those lists would have been.
 
+3c. **A garrisoned friendly still gets a minimap dot.** Found while writing 3b's test, pinned
+   rather than fixed. `minimapDots`'s `|| u.team === vp.team` looks like "your own army shows
+   through the fog", but `Viewpoint.fogHides` **already** returns false for your own team — so the
+   clause cannot be about fog. The only thing it overrides is the viewpoint-INDEPENDENT half of
+   `hiddenFor`: `inMine`, `insideBuild`, `inBurrow`, `devouredBy`, `vanished`. So a peasant inside
+   a gold mine and a worker in a burrow each draw a dot at the spot they entered from. The real
+   1.27a client gives garrisoned and mining units no dot of their own. Pre-existing — the clause
+   was carried across byte-for-byte by items 3 and 3b — so it is asserted as current behaviour in
+   the test, flagged there in capitals, and left for a deliberate fix. **Check the running client
+   before fixing**, per CLAUDE.md; the suspicion above is from memory of WC3, not from measurement.
+
+4. ~~**Decide whether `minimapIcons()` should have a fog gate.**~~ **Closed: no gate, and it was
+   already answered in the code.** The comment above `minimapIcons` records the measurement —
+   both glyph types "were plainly visible over unexplored ground in a fresh 1.27a melee game" —
+   so somebody drove the running client, which is what Phase D asked for and what CLAUDE.md
+   requires. No behaviour change. The absence of a gate is now **asserted** in the test rather
+   than merely described, so adding one later goes red and has to be justified against the game.
+
+   It was not a pure doc close, though: `minimapIcons` still walked `this.entries` and read
+   `Entry.typeId`, the same defect item 3 fixed in its neighbours. It moved to `minimapView.ts`
+   with them and now reads `sim.units` + `sim.mines`.
 5. **The snapshot: a type, and `snapshotFor(player)` on the authority side.** The payload is
    whatever a client needs to render a frame it did not simulate — the `simView` surface above, plus
    selection-relevant per-unit state. Emit it from the authority half; it must not import a transport.

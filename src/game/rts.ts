@@ -24,6 +24,7 @@ import {
 import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
+import { CreepCamps, hiddenFor, minimapDots, minimapIcons } from "./minimapView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -466,6 +467,7 @@ export class RtsController {
     // Seed 1 is a placeholder: the real match seed isn't known until the lobby settles,
     // and arrives via setSeed() at beginMatch — before anything rolls. See setSeed.
     this.sim = new SimWorld(grid, 1, this.abilities, this.items, this.registry, this.tech, this.upgrades);
+    this.creepCampView = new CreepCamps(this.sim); // minimap camp clustering, cached off sim.units
     // Fog-of-war grid, aligned to the same world origin as the pathing grid and
     // spanning the whole map (pathing is 32-unit cells; span = cells × 32).
     const [vox, voy] = grid.origin;
@@ -721,9 +723,9 @@ export class RtsController {
    *  invisibility are answers that depend on who is looking. The minimap used to read
    *  `Entry.hidden` for this, which is the same sum computed once for the local viewpoint —
    *  fine for the one client rendering it, useless for asking about anybody else. */
+  /** @see minimapView.hiddenFor — the viewpoint-independent reasons, then fog and invisibility. */
   private hiddenFor(vp: Viewpoint, u: SimUnit): boolean {
-    if (u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished) return true;
-    return vp.fogHides(u) || vp.invisHides(u);
+    return hiddenFor(vp, u);
   }
 
   /** May the local player CLICK this unit right now — select it, hover it, aim an order at
@@ -1594,7 +1596,7 @@ export class RtsController {
       };
       this.entries.push(entry);
       this.byId.set(simId, entry);
-      this.creepCampData = null; // a creep arrived — rebuild camp clusters lazily
+      this.creepCampView.reset(); // a creep arrived — re-cluster camps lazily
     }
     this.seeded = true;
   }
@@ -3582,75 +3584,12 @@ export class RtsController {
    *  their own (minimapIcons), and the rest would only speckle the map. Creeps do
    *  get a dot once visible — and their camp marker steps aside for it. */
   dots(vp: Viewpoint = this.local): Array<{ x: number; y: number; owner: number }> {
-    const out: Array<{ x: number; y: number; owner: number }> = [];
-    // The SIM's units, not this machine's render records (docs/multiplayer.md Phase E item 3).
-    //
-    // It used to walk `this.entries` and look each one up in the sim, which quietly made the
-    // answer "units this client has drawn" rather than "units that exist". Correct for the one
-    // viewpoint being rendered; useless for an authority answering for a player whose models
-    // this machine never loaded — every remote dot would simply be missing.
-    //
-    // What changes locally: a unit whose model is still loading now gets a dot. That is the
-    // right answer — the unit exists in the world and the fog says you can see it — and it is
-    // the deliberate behaviour change this item exists for.
-    for (const u of this.sim.units.values()) {
-      if (u.neutralPassive) continue;
-      if (!this.hiddenFor(vp, u) || u.team === vp.team) {
-        out.push({ x: u.x, y: u.y, owner: u.owner });
-      }
-    }
-    return out;
+    return minimapDots(this.sim, vp);
   }
 
-  // Creep-camp minimap markers. WC3 groups a map's Neutral Hostile creeps into
-  // camps and marks each on the minimap with a difficulty dot coloured by the
-  // camp's COMBINED creep level — green 1–9, yellow 10–19, red 20+ (Liquipedia
-  // "Creeps"). The level is fixed map data: computed once from the placed creeps
-  // and never recomputed, so the colour never drifts as the camp is whittled
-  // down. Camps are clustered by guard-post proximity using the same "acts as one
-  // camp" radius the guard AI already uses (MiscGame CreepCallForHelp).
-  private static readonly CAMP_LINK = 600; // world units — CreepCallForHelp; matches world.ts sameCamp
-  private creepCampData: Array<{ x: number; y: number; level: number; members: number[] }> | null = null;
-
-  /** Cluster the seeded creeps into camps once (guard posts are fixed, so this is
-   *  stable). Each camp keeps its centre, its fixed total level, and its member
-   *  sim ids so the marker can vanish once the whole camp is dead. */
-  private buildCreepCamps(): Array<{ x: number; y: number; level: number; members: number[] }> {
-    const creeps: Array<{ id: number; gx: number; gy: number; level: number }> = [];
-    // `sim.units` and `u.level`, not the render records and `Entry.level` — same reason as
-    // `dots()`. The two levels agree by construction: both are copied from `def.level` at seed
-    // time (`addSimUnit` and the `Entry` literal read the same field), so the camp difficulty
-    // colours are unchanged. Phase B item 4 flagged this dependency as worth revisiting; this
-    // is that revisit.
-    for (const u of this.sim.units.values()) {
-      if (!u.isCreep) continue;
-      creeps.push({ id: u.id, gx: u.guardX, gy: u.guardY, level: u.level });
-    }
-    // Union-find connected components over the "same camp" (guard posts within
-    // CAMP_LINK of each other) relation.
-    const parent = creeps.map((_, i) => i);
-    const find = (i: number): number => {
-      while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
-      return i;
-    };
-    const link2 = RtsController.CAMP_LINK * RtsController.CAMP_LINK;
-    for (let i = 0; i < creeps.length; i++) {
-      for (let j = i + 1; j < creeps.length; j++) {
-        const dx = creeps[i].gx - creeps[j].gx, dy = creeps[i].gy - creeps[j].gy;
-        if (dx * dx + dy * dy <= link2) parent[find(i)] = find(j);
-      }
-    }
-    const groups = new Map<number, { sx: number; sy: number; level: number; members: number[] }>();
-    for (let i = 0; i < creeps.length; i++) {
-      const r = find(i);
-      const g = groups.get(r) ?? { sx: 0, sy: 0, level: 0, members: [] };
-      g.sx += creeps[i].gx; g.sy += creeps[i].gy; g.level += creeps[i].level; g.members.push(creeps[i].id);
-      groups.set(r, g);
-    }
-    return [...groups.values()].map((g) => ({
-      x: g.sx / g.members.length, y: g.sy / g.members.length, level: g.level, members: g.members,
-    }));
-  }
+  /** The creep-camp clustering + markers, cached. @see minimapView.CreepCamps — it reads
+   *  `sim.units`, so it answers for a viewpoint whose client rendered nothing. */
+  private readonly creepCampView: CreepCamps;
 
   /** Creep-camp difficulty markers for the minimap: camp centre + fixed combined
    *  level. Fog does NOT gate them — a fresh melee game in the real 1.27a client
@@ -3660,46 +3599,14 @@ export class RtsController {
    *  starts drawing that creep, and the two must never show at once. Gone for good
    *  once every creep in the camp is dead. */
   creepCamps(vp: Viewpoint = this.local): Array<{ x: number; y: number; level: number }> {
-    if (!this.seeded) return [];
-    if (this.creepCampData === null) this.creepCampData = this.buildCreepCamps();
-    const out: Array<{ x: number; y: number; level: number }> = [];
-    for (const camp of this.creepCampData) {
-      const alive = camp.members.filter((id) => this.sim.units.has(id));
-      if (alive.length === 0) continue; // camp cleared
-      // A creep this viewpoint can actually see speaks for itself — the camp marker is for
-      // camps you know are there but cannot currently see.
-      if (alive.some((id) => !this.hiddenFor(vp, this.sim.units.get(id)!))) continue;
-      out.push({ x: camp.x, y: camp.y, level: camp.level });
-    }
-    return out;
+    if (!this.seeded) return []; // seeding is the client's; nothing to cluster yet
+    return this.creepCampView.markers(vp);
   }
 
-  // Minimap glyphs the client paints over the map picture whatever the fog says —
-  // both were plainly visible over unexplored ground in a fresh 1.27a melee game.
-  //
-  //  · Gold mines wear `MiniMap-Goldmine.mdx`'s texture. (The client swaps in
-  //    `minimap-gold-haunted`/`-entangled` once a mine is claimed; we do not model
-  //    the claimed-mine unit yet, so every mine draws the plain icon.)
-  //  · A neutral building wears the house glyph only if its unitUI row sets
-  //    `nbmmIcon` — the useful ones (tavern, shops, mercenary camp, fountains,
-  //    goblin laboratory) do; the scenery ones (murloc/gnoll huts, city buildings)
-  //    do not, and fall through to a plain neutral dot like any other unit.
-  private static readonly ICON_GOLD_MINE = "UI\\MiniMap\\minimap-gold.blp";
-  private static readonly ICON_NEUTRAL_BUILDING = "UI\\MiniMap\\MiniMap-NeutralBuilding.blp";
-
-  /** Persistent minimap glyphs: each world position and the BLP to stamp there. */
+  /** Persistent minimap glyphs (gold mines, icon-bearing neutral buildings). Deliberately NOT
+   *  fog-gated — verified against the real 1.27a client. @see minimapView.minimapIcons. */
   minimapIcons(): Array<{ x: number; y: number; icon: string }> {
-    const out: Array<{ x: number; y: number; icon: string }> = [];
-    for (const m of this.sim.mines.values()) {
-      out.push({ x: m.x, y: m.y, icon: RtsController.ICON_GOLD_MINE });
-    }
-    for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
-      if (!u || !u.neutralPassive || u.building == null) continue;
-      if (!this.registry.get(e.typeId)?.minimapIcon) continue;
-      out.push({ x: u.x, y: u.y, icon: RtsController.ICON_NEUTRAL_BUILDING });
-    }
-    return out;
+    return minimapIcons(this.sim, this.registry);
   }
 
   /** True if this unit belongs to the local player (the only units they may
