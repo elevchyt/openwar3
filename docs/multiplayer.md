@@ -1154,12 +1154,32 @@ enumerated by body rather than by name.
    only; the fog itself did not move. 118 and 144 fps with every seat holding its own 10 Hz grid
    (two browser instances sharing one GPU), against 116–144 measured before N viewpoints existed.
 
-3. **`dots()` and `creepCamps()` iterate `sim.units`, not `this.entries`.** Carried from
-   [Phase D item 5](#remaining-work-in-order-1). They take a viewpoint already, so they answer the fog
-   question for anyone; they still enumerate the LOCAL client's render records, so an authority
-   answering for a remote player sees only what this machine loaded a model for. **This one changes
-   what the local player sees** — units with no render record start showing dots — so it gets its own
-   before/after screenshots and its own verification, not a shared one.
+3. ~~**`dots()` and `creepCamps()` iterate `sim.units`, not `this.entries`.**~~ **Done, and the
+   predicted local behaviour change did not materialise.** Both now walk `sim.units`;
+   `buildCreepCamps` reads `u.level` instead of `Entry.level`, which Phase B item 4 flagged as
+   worth revisiting. The two levels agree by construction — `addSimUnit` and the `Entry` literal
+   both copy `def.level` — so camp difficulty colours are untouched.
+
+   **The item predicted "units with no render record start showing dots". On Echo Isles there are
+   none.** By the time the client reports in-game every model has loaded, so "units this machine
+   drew" and "units that exist" are the same set. Four frames were captured to try to catch the
+   transient — old and new, immediately at in-game and 8 s later — and all four minimaps are
+   byte-identical (0 of 18 088 pixels). The move is invisible here, and that is the honest result
+   rather than a weaker claim dressed up.
+
+   **What it actually buys is unobservable from one client**: an authority answering for a player
+   whose models this machine never loaded now gets dots at all, instead of an empty minimap. That
+   cannot be shown until snapshots exist.
+
+3b. **`dots`/`creepCamps`/`hiddenFor` off the controller, so they can be tested.** After item 3
+   they read `sim.units` and a `Viewpoint` and touch no render record, no model and no DOM — they
+   are authority-side data wearing a client-side address. Living on `RtsController` means they are
+   unreachable from any headless test (`rts.ts` imports `mdx-m3-viewer`), so item 3 shipped a
+   behaviour-changing move with **no test at all** and a browser check that proved only "nothing
+   regressed". A `minimapView.ts` taking `({ units }, Viewpoint)` fixes that and would let the
+   real property be pinned: dots answered for a viewpoint whose client rendered nothing. Split out
+   of item 3 rather than bolted on, because it is a rewrite of four `rts.ts` bodies and the item
+   itself was a two-line change.
 
 4. **Decide whether `minimapIcons()` should have a fog gate — by looking at the real client.**
    Carried from Phase D item 5. It has none today: gold-mine and neutral-building glyphs draw on

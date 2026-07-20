@@ -3583,9 +3583,18 @@ export class RtsController {
    *  get a dot once visible — and their camp marker steps aside for it. */
   dots(vp: Viewpoint = this.local): Array<{ x: number; y: number; owner: number }> {
     const out: Array<{ x: number; y: number; owner: number }> = [];
-    for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
-      if (!u || u.neutralPassive) continue;
+    // The SIM's units, not this machine's render records (docs/multiplayer.md Phase E item 3).
+    //
+    // It used to walk `this.entries` and look each one up in the sim, which quietly made the
+    // answer "units this client has drawn" rather than "units that exist". Correct for the one
+    // viewpoint being rendered; useless for an authority answering for a player whose models
+    // this machine never loaded — every remote dot would simply be missing.
+    //
+    // What changes locally: a unit whose model is still loading now gets a dot. That is the
+    // right answer — the unit exists in the world and the fog says you can see it — and it is
+    // the deliberate behaviour change this item exists for.
+    for (const u of this.sim.units.values()) {
+      if (u.neutralPassive) continue;
       if (!this.hiddenFor(vp, u) || u.team === vp.team) {
         out.push({ x: u.x, y: u.y, owner: u.owner });
       }
@@ -3608,10 +3617,14 @@ export class RtsController {
    *  sim ids so the marker can vanish once the whole camp is dead. */
   private buildCreepCamps(): Array<{ x: number; y: number; level: number; members: number[] }> {
     const creeps: Array<{ id: number; gx: number; gy: number; level: number }> = [];
-    for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
-      if (!u || !u.isCreep) continue;
-      creeps.push({ id: e.simId, gx: u.guardX, gy: u.guardY, level: e.level });
+    // `sim.units` and `u.level`, not the render records and `Entry.level` — same reason as
+    // `dots()`. The two levels agree by construction: both are copied from `def.level` at seed
+    // time (`addSimUnit` and the `Entry` literal read the same field), so the camp difficulty
+    // colours are unchanged. Phase B item 4 flagged this dependency as worth revisiting; this
+    // is that revisit.
+    for (const u of this.sim.units.values()) {
+      if (!u.isCreep) continue;
+      creeps.push({ id: u.id, gx: u.guardX, gy: u.guardY, level: u.level });
     }
     // Union-find connected components over the "same camp" (guard posts within
     // CAMP_LINK of each other) relation.
