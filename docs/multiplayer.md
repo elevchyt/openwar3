@@ -129,7 +129,7 @@ not a scattering, which is the good news. They are not all the same thing:
 | JASS `EngineHooks` (`textHooks`, lines ~1396–1760) | ~66 | Authority-side by nature; JASS runs on the authority. Misplaced (it lives in the renderer) but not a bypass. Genuinely mixed — `SetUnitOwner` sits next to `PanCameraTo` — so it cannot be moved wholesale. |
 | Read-only lookups (`units`, `mines`, `items`) | ~25 | Fine in principle. Becomes a read-only snapshot view under AoI (Phase E). |
 | **Player commands bypassing `execute()`** | ~13 | **Bugs.** Build placement, battlestations, standdown, cancel building / train / research. |
-| **Direct stash mutation via `stashFor()`** | 14 | **The worst of it.** |
+| **Direct stash mutation via `stashFor()`** | 14 | **Was the worst of it. All 14 are gone** — the renderer no longer writes to a stash. |
 | Setup (`initStash`, `setPathStamp`) | few | Fine. |
 
 **Phase C audited the wrong file.** It swept `rts.ts` and found 15 actions. But player commands
@@ -162,16 +162,20 @@ level, so a client naming its own level would buy Steel Forged Swords at Iron's 
 registry entries rather than trusting the renderer's subtraction. Both keep a feedback-only
 pre-check in the renderer so a refusal still names the resource.
 
+**Done:** the refunds — `cancelbuild` and `canceltrain`. **`stash.gold`/`stash.lumber` are now
+never written in `mapViewer.ts`**; every remaining mention is a read (button greying, the
+"Not enough gold" refusal). `MISC_GAME` is no longer imported there at all — the economy's
+constants live only where the economy is decided. `restoreFreeHero` is gone, absorbed into
+`canceltrain`. `cancelbuild` no longer takes a typeId from the client's selection: it used to,
+so cancelling a Farm while naming a Castle refunded a Castle.
+
 **Remaining, in order:**
 
-1. The refunds — cancel building, cancel research, cancel train (grep `stash.gold +=`). Refund
-   *rates* are as forgeable as prices, and cancel-train also absorbs the transitional
-   `RtsController.restoreFreeHero`.
-2. `battlestations`, `standdown`, `cancelBuilding`, `cancelLastTrain`, `cancelTrainAt` — plain
-   commands, no economy.
-3. **Then make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
+1. `unloadBurrow` (~5356) and the rest of the plain no-economy card commands —
+   `battlestations`, `standdown`. Ownership only; nothing to derive.
+2. **Then make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
    breaks all 14 sites at once, and it is only safe once they are gone.
-4. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
+3. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
 
 **Two things that looked like blockers and are not.**
 

@@ -7,7 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
-import { jassOwnerOf, type BuildJob, type RallyKind, type ShopResult, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
+import { jassOwnerOf, type RallyKind, type ShopResult, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -31,7 +31,7 @@ import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, ty
 import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
-import { CAMERA, MELEE, MISC_DATA, MISC_GAME } from "../data/gameplayConstants";
+import { CAMERA, MELEE, MISC_DATA } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
 import { makeFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
@@ -161,7 +161,6 @@ const FIELD_LOOP_SOUND: Record<string, string> = {
   AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardLoop1.wav", // 4s wind, looped for the 6s channel
   ANrf: "Abilities\\Spells\\Demon\\RainOfFire\\RainOfFireLoop1.wav", // the roar under the Pit Lord's waves
 };
-const CANCEL_BUILDING_REFUND = MISC_GAME.ConstructionRefundRate;
 // The item icon carried on the cursor while moving it, as a fraction of an inventory
 // slot: just under it, so the hand looks like it's holding that same icon.
 const CARRIED_ITEM_SCALE = 0.85;
@@ -5331,8 +5330,8 @@ export class MapViewerScene {
         this.cardPage = "root";
       } else {
         const sel = this.rts.selectedInfo();
-        if (sel?.underConstruction) this.cancelConstruction(sel.id, sel.typeId);
-        else if (sel?.isBuilding) this.cancelTrain(sel.id); // refund the last queued unit
+        if (sel?.underConstruction) this.cancelConstruction(sel.id);
+        else if (sel?.isBuilding) this.cancelTrainAt(sel.id, -1); // -1 = the last queued job
       }
       return;
     }
@@ -5507,57 +5506,20 @@ export class MapViewerScene {
    *  cancelled-construction rate), free its pathing footprint, remove it, and
    *  play the race's dedicated **cancel explosion** (`<Race>CancelDeath.mdx` —
    *  distinct from the building's own Death collapse used for combat). */
-  private cancelConstruction(buildingId: number, typeId: string): void {
+  private cancelConstruction(buildingId: number): void {
     if (!this.rts) return;
-    const def = this.registry.get(typeId);
-    if (def) {
-      const stash = this.rts.stashFor(this.localPlayer);
-      stash.gold += Math.round(def.goldCost * CANCEL_BUILDING_REFUND);
-      stash.lumber += Math.round(def.lumberCost * CANCEL_BUILDING_REFUND);
-    }
-    // Grab the building's position before it's removed, for the explosion.
+    // Grab the building's position BEFORE the authority removes it, for the explosion. This
+    // is a read; the refund and the removal both belong to `execute`.
     const b = this.rts.simWorld.units.get(buildingId);
     const fx = b ? { x: b.x, y: b.y, z: this.rts.groundHeightAt(b.x, b.y) } : null;
-    this.rts.simWorld.cancelBuilding(buildingId); // frees its footprint's cells too
+    if (!this.rts.execute(this.localPlayer, { c: "cancelbuild", buildingId })) return;
     if (fx) void this.spawnEffect(CANCEL_FX[this.localRace], fx.x, fx.y, fx.z);
   }
 
-  private cancelTrain(buildingId: number): void {
-    const job = this.rts?.simWorld.cancelLastTrain(buildingId);
-    this.refundJob(job);
-  }
-
-  /** Cancel a specific queue slot (0 = currently in progress) and refund it. */
+  /** Cancel a queue slot (0 = the job in progress, -1 = the last one queued) and refund it.
+   *  Which slot is the only thing asked for; the rate and the payout are the authority's. */
   private cancelTrainAt(buildingId: number, index: number): void {
-    const job = this.rts?.simWorld.cancelTrainAt(buildingId, index);
-    this.refundJob(job);
-  }
-
-  /** Refund a cancelled queue job. Each kind has its own rate in MiscGame.txt: training and
-   *  research come back in FULL (TrainRefundRate / ResearchRefundRate = 1.0) but a cancelled
-   *  structure upgrade only pays back 75% (UpgradeRefundRate) — the same haircut as cancelling
-   *  a building under construction. */
-  private refundJob(job: BuildJob | null | undefined): void {
-    if (!job || !this.rts) return;
-    const stash = this.rts.stashFor(this.localPlayer);
-    if (job.kind === "research") {
-      const c = this.upgrades.cost(job.unitId, job.level);
-      stash.gold += Math.round(c.gold * MISC_GAME.ResearchRefundRate);
-      stash.lumber += Math.round(c.lumber * MISC_GAME.ResearchRefundRate);
-      return;
-    }
-    // The melee free first hero cost nothing, so it refunds nothing — otherwise queueing and
-    // cancelling one would simply mint 425 gold. Cancelling it also hands the freebie back.
-    if (job.kind === "unit" && job.free) {
-      this.rts.restoreFreeHero(this.localPlayer);
-      return;
-    }
-    const d = this.registry.get(job.unitId);
-    if (d) {
-      const rate = job.kind === "upgrade" ? MISC_GAME.UpgradeRefundRate : MISC_GAME.TrainRefundRate;
-      stash.gold += Math.round(d.goldCost * rate);
-      stash.lumber += Math.round(d.lumberCost * rate);
-    }
+    this.rts?.execute(this.localPlayer, { c: "canceltrain", buildingId, index });
   }
 
   private cancelPlacement(): void {

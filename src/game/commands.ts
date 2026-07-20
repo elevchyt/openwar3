@@ -110,4 +110,26 @@ export type Command =
    * do it, deduct the result itself, and hand the sim its own build time. `execute` computes
    * the difference from both registry entries and derives the time from the target.
    */
-  | { c: "upgradebuilding"; buildingId: number; toTypeId: string };
+  | { c: "upgradebuilding"; buildingId: number; toTypeId: string }
+  /**
+   * Cancel a building that is still under construction. Intent only: which building.
+   *
+   * It used to carry the building's **typeId**, taken from the client's own selection, and
+   * the renderer paid the refund out of it — so a client could cancel a Farm while naming a
+   * Castle and collect 75% of a Castle. The authority reads the typeId off the sim unit it
+   * is actually destroying, and `ConstructionRefundRate` out of MiscGame.txt.
+   */
+  | { c: "cancelbuild"; buildingId: number }
+  /**
+   * Cancel a job in a building's production queue. Intent only: which building, which slot
+   * (`index` 0 is the job in progress; **-1** means "the last one queued", which is what the
+   * card's Cancel button does).
+   *
+   * The REFUND RATE is not on the wire and never was safe to be: each kind has its own rate
+   * in MiscGame.txt (training and research come back in full, a structure upgrade only 75%),
+   * and the renderer both picked the rate and paid itself. It also decided, from a client-side
+   * set, whether the cancelled hero was the free one — which is the difference between
+   * refunding nothing and minting 425 gold. `execute` reads the job the sim actually removed
+   * and refunds off that.
+   */
+  | { c: "canceltrain"; buildingId: number; index: number };

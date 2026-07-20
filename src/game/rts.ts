@@ -10,7 +10,7 @@ import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PrimaryAttribute } from "../data/enums";
-import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
+import { MELEE, MISC_GAME, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { type ItemRegistry } from "../data/items";
@@ -4327,6 +4327,63 @@ export class RtsController {
         stash.lumber -= lumber;
         return this.sim.enqueueUpgrade(cmd.buildingId, cmd.toTypeId, to.buildTime || 1);
       }
+      case "cancelbuild": {
+        if (!this.ownedBy(player, cmd.buildingId)) return false;
+        const b = this.sim.units.get(cmd.buildingId);
+        // Only an UNFINISHED building can be cancelled — a finished one is demolished, which
+        // is not this command and pays nothing back.
+        if (!b?.building || b.building.constructionLeft <= 0) return false;
+        // The typeId comes off the sim unit, never off the caller. It used to ride along in
+        // the call from the renderer's own selection, so cancelling a Farm while naming a
+        // Castle would have refunded a Castle.
+        const def = this.registry.get(b.typeId);
+        if (def) {
+          const stash = this.sim.stashOf(player);
+          stash.gold += Math.round(def.goldCost * MISC_GAME.ConstructionRefundRate);
+          stash.lumber += Math.round(def.lumberCost * MISC_GAME.ConstructionRefundRate);
+        }
+        return this.sim.cancelBuilding(cmd.buildingId); // frees its footprint's cells too
+      }
+      case "canceltrain": {
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building) return false;
+        // Both ends. Normally the building must be yours — but a hero you are hiring at a
+        // Tavern sits in a queue owned by nobody, so a job's own `buyer` also entitles you to
+        // cancel it. Checked against the job that is actually there, before removing it.
+        const slot = cmd.index < 0 ? b.building.queue[b.building.queue.length - 1] : b.building.queue[cmd.index];
+        if (!slot) return false;
+        const owns = b.owner === player || (slot.kind === "unit" && slot.buyer === player);
+        if (!owns) return false;
+        const job = cmd.index < 0
+          ? this.sim.cancelLastTrain(cmd.buildingId)
+          : this.sim.cancelTrainAt(cmd.buildingId, cmd.index);
+        if (!job) return false;
+        // Refund the job the SIM removed, at the rate its own kind carries in MiscGame.txt:
+        // training and research come back in full (Train/ResearchRefundRate = 1.0), a
+        // structure upgrade only 75% (UpgradeRefundRate) — the same haircut as cancelling a
+        // building mid-construction.
+        const stash = this.sim.stashOf(player);
+        if (job.kind === "research") {
+          const c = this.upgrades.cost(job.unitId, job.level);
+          stash.gold += Math.round(c.gold * MISC_GAME.ResearchRefundRate);
+          stash.lumber += Math.round(c.lumber * MISC_GAME.ResearchRefundRate);
+          return true;
+        }
+        // The melee free first hero cost nothing, so it refunds nothing — otherwise queueing
+        // and cancelling one would simply mint 425 gold. It does hand the freebie back. That
+        // `free` flag is the sim's own, set when the authority granted it.
+        if (job.kind === "unit" && job.free) {
+          this.freeHeroUsed.delete(player);
+          return true;
+        }
+        const d = this.registry.get(job.unitId);
+        if (d) {
+          const rate = job.kind === "upgrade" ? MISC_GAME.UpgradeRefundRate : MISC_GAME.TrainRefundRate;
+          stash.gold += Math.round(d.goldCost * rate);
+          stash.lumber += Math.round(d.lumberCost * rate);
+        }
+        return true;
+      }
     }
   }
 
@@ -4338,17 +4395,6 @@ export class RtsController {
    *  prices its altar buttons off this, but only `execute` ever sets it. */
   hasFreeHero(player: number): boolean {
     return !this.freeHeroUsed.has(player);
-  }
-
-  /**
-   * Hand the free-hero freebie back — cancelling the queued first hero must not consume it.
-   *
-   * **Transitional.** Cancelling a training job is still a client-side call site
-   * (`refundJob` in mapViewer); when it becomes a `Command` this collapses into that case
-   * and this method goes away. See docs/multiplayer.md.
-   */
-  restoreFreeHero(player: number): void {
-    this.freeHeroUsed.delete(player);
   }
 
   /** Hero types the player already fields or has queued — at their own altars AND at any
