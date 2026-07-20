@@ -60,6 +60,43 @@ export function minimapDots(world: MinimapWorld, vp: Viewpoint): Array<{ x: numb
   return out;
 }
 
+/** The fields `dotsFromSnapshot` reads — a structural slice of `UnitSnapshot`, so this file
+ *  needs no import of it and a test can hand it a literal. */
+export interface SnapshotDotUnit {
+  x: number;
+  y: number;
+  owner: number;
+  neutralPassive: boolean;
+  inMine: boolean;
+  insideBuild: boolean;
+  inBurrow: boolean;
+  devouredBy: number;
+  vanished: boolean;
+}
+
+/**
+ * The coloured dots, drawn straight from a per-recipient snapshot (docs/multiplayer.md item 10c).
+ *
+ * This is the client half of the same picture `minimapDots` computes on the host — and there is
+ * **NO fog test here**, deliberately, which is the whole point of rendering from the payload.
+ * The snapshot arrived AoI-filtered (item 6): it already contains exactly the units this player
+ * is allowed to see, and only those. Re-applying `hiddenFor` would be asking a fog grid the
+ * authority already consulted, and a client that could DECIDE its own fog is a client that can
+ * turn it off — the maphack the whole per-recipient design exists to prevent. So the client
+ * draws what it was sent, and the only local decisions left are the two that are facts about the
+ * unit rather than about who may see it: neutral-passive furniture and off-the-field units get
+ * no dot, exactly as on the host, through the SAME `isOffField`.
+ */
+export function dotsFromSnapshot(units: readonly SnapshotDotUnit[]): Array<{ x: number; y: number; owner: number }> {
+  const out: Array<{ x: number; y: number; owner: number }> = [];
+  for (const u of units) {
+    if (u.neutralPassive) continue;
+    if (isOffField(u)) continue;
+    out.push({ x: u.x, y: u.y, owner: u.owner });
+  }
+  return out;
+}
+
 export const ICON_GOLD_MINE = "UI\\MiniMap\\minimap-gold.blp";
 export const ICON_NEUTRAL_BUILDING = "UI\\MiniMap\\MiniMap-NeutralBuilding.blp";
 

@@ -15,7 +15,8 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { VisionSet } = require(join(REPO, ".sim-build", "src", "game", "viewpoint.js"));
-const { minimapDots, hiddenFor, CreepCamps, minimapIcons, ICON_GOLD_MINE, ICON_NEUTRAL_BUILDING } = require(join(REPO, ".sim-build", "src", "game", "minimapView.js"));
+const { minimapDots, hiddenFor, CreepCamps, minimapIcons, ICON_GOLD_MINE, ICON_NEUTRAL_BUILDING, dotsFromSnapshot } = require(join(REPO, ".sim-build", "src", "game", "minimapView.js"));
+const { snapshotFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -188,6 +189,64 @@ console.log("\nminimap glyphs are NOT fog-gated (verified against the real 1.27a
   check("the tavern draws too (nbmmIcon set)", icons.filter((i) => i.icon === ICON_NEUTRAL_BUILDING).length, 1);
   check("the murloc hut does not (no nbmmIcon)", icons.some((i) => i.x === 800), false);
   check("an ENEMY building is not a neutral glyph", icons.some((i) => i.x === 900), false);
+}
+
+// ---------------------------------------------------------------------------------------
+// Item 10c: a CLIENT draws its minimap dots from the AoI snapshot it was sent, not from its
+// own sim + local fog. The load-bearing property is that the two produce the SAME dots for the
+// same viewer — a client renders the authority's answer, and byte-for-byte it is the host's.
+// ---------------------------------------------------------------------------------------
+
+/** A SnapshotWorld from the same units (snapshotFor needs mines/items/time; the minimap ones
+ *  don't matter to dots). */
+const snapWorld = (units) => {
+  const m = new Map();
+  for (const u of units) m.set(u.id, u);
+  return { units: m, mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true };
+};
+
+console.log("\nthe client's snapshot dots equal the host's sim+fog dots — revealed");
+{
+  const units = [
+    unit({ id: 1, owner: 0, team: 0, x: 100, y: 100 }), // own — a dot
+    unit({ id: 2, owner: 0, team: 0, x: 200, y: 200, inMine: true }), // own but off-field — no dot
+    unit({ id: 3, owner: 15, team: 15, neutralPassive: true, x: 300, y: 300 }), // furniture — no dot
+    unit({ id: 4, owner: 1, team: 1, x: 400, y: 400 }), // an enemy in the open — a dot
+  ];
+  const set = new VisionSet(worldOf(units), noAlliances, () => [], 0, 0, 1024, 1024);
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
+  set.setStartFog("revealall"); // everything visible: the snapshot carries all four
+  const vp = set.viewpointFor(0);
+
+  const fromSim = minimapDots(worldOf(units), vp);
+  const fromSnap = dotsFromSnapshot(snapshotFor(snapWorld(units), vp, 0, 1).units);
+  // THE check. If dotsFromSnapshot re-applied fog it would need a viewpoint it does not have;
+  // the bugs it CAN have are dropping the neutral-passive or the off-field skip, and either
+  // puts a dot in the snapshot list that the sim list does not have.
+  check("client dots match host dots exactly", fromSnap, fromSim);
+  check("and it is the two on-field, non-furniture units", fromSim.map((d) => `${d.x}:${d.owner}`), ["100:0", "400:1"]);
+}
+
+console.log("the client is shown no more than the authority sent — fogged");
+{
+  const units = [
+    unit({ id: 1, owner: 0, team: 0, x: 100, y: 100 }), // own — always on the minimap
+    unit({ id: 2, owner: 1, team: 1, x: 5000, y: 5000 }), // enemy far in the black — fogged
+    unit({ id: 3, owner: 1, team: 1, building: { constructionLeft: 0 }, x: 6000, y: 6000 }), // never-seen enemy building
+  ];
+  const set = new VisionSet(worldOf(units), noAlliances, () => [], 0, 0, 8192, 8192);
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
+  // No revealall, no rebuild: the fog is black, so both the fogged enemy and the unseen
+  // building are dropped by the sim minimap AND are absent from the snapshot entirely.
+  const vp = set.viewpointFor(0);
+  const fromSim = minimapDots(worldOf(units), vp);
+  const fromSnap = dotsFromSnapshot(snapshotFor(snapWorld(units), vp, 0, 1).units);
+  check("a fogged enemy is a dot on neither side", fromSnap, fromSim);
+  check("only the own unit shows", fromSim.map((d) => d.owner), [0]);
+  // And the maphack guard: the snapshot the client draws from never CONTAINED the fogged
+  // enemy, so no client-side code — correct or tampered — can turn it into a dot.
+  const sent = snapshotFor(snapWorld(units), vp, 0, 1).units.map((u) => u.id);
+  check("the fogged units were never sent", [sent.includes(2), sent.includes(3)], [false, false]);
 }
 
 console.log(failed ? `\nminimap: ${failed} FAILED` : "\nminimap: all checks passed");

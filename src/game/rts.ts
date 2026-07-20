@@ -27,7 +27,7 @@ import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
 import { MatchLink, type MatchLinkSetup } from "./matchLink";
 import { CommandRouter, accepted } from "../net/commandLink";
-import { CreepCamps, hiddenFor, minimapDots, minimapIcons } from "./minimapView";
+import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -3687,6 +3687,12 @@ export class RtsController {
    *  their own (minimapIcons), and the rest would only speckle the map. Creeps do
    *  get a dot once visible — and their camp marker steps aside for it. */
   dots(vp: Viewpoint = this.local): Array<{ x: number; y: number; owner: number }> {
+    // On a CLIENT, draw the authority's answer, not our own prediction (item 10c). A received
+    // snapshot is already AoI-filtered for this seat, so `dotsFromSnapshot` re-applies no fog —
+    // it draws what it was sent. `latest()` is non-null only on a client that has received one:
+    // the host never receives, single-player has no link, and both keep the sim path below.
+    const snap = this.matchLink?.latest();
+    if (snap) return dotsFromSnapshot(snap.units);
     return minimapDots(this.sim, vp);
   }
 

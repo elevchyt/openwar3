@@ -942,17 +942,28 @@ export interface SimUnit {
  * not on the map. Nothing draws it, nothing can target it, and — measured against the real
  * 1.27a client — **it gets no minimap dot, not even its owner's**.
  *
- * It lives here, next to `SimUnit`, because three separate places have to agree on it and the
+ * It lives here, next to `SimUnit`, because four separate places have to agree on it and the
  * expression had already been written out twice: `hiddenFor` (the render/fog question),
- * `minimapDots` (which used to override it and was wrong for it — Phase E item 3c) and
- * `visibilityFor` (the snapshot send rule, which drops these for everyone but the owner). Three
- * copies of a five-term disjunction is three chances to add a sixth term to two of them.
+ * `minimapDots` (which used to override it and was wrong for it — Phase E item 3c),
+ * `visibilityFor` (the snapshot send rule, which drops these for everyone but the owner) and
+ * now `dotsFromSnapshot` (item 10c — the client's minimap reading the same off-field rule off a
+ * `UnitSnapshot`). Copies of a five-term disjunction are chances to add a sixth term to some.
+ *
+ * The parameter is a STRUCTURAL type, not `SimUnit`: a `UnitSnapshot` carries the same five
+ * flags and must give the same answer, so the client's snapshot minimap and the host's sim
+ * minimap cannot drift on what counts as off the field.
  *
  * Deliberately NOT a fog or ownership test. Whether the OWNER should still be told about the
  * unit is a separate question each caller answers differently — a snapshot says yes (a Burrow
  * must list its garrison), the minimap says no (WC3 draws no dot).
  */
-export function isOffField(u: SimUnit): boolean {
+export function isOffField(u: {
+  inMine: boolean;
+  insideBuild: boolean;
+  inBurrow: boolean;
+  devouredBy: number;
+  vanished: boolean;
+}): boolean {
   return u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished;
 }
 
