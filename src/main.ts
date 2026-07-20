@@ -6,6 +6,7 @@ import { mountFdfMainMenu } from "./ui/fdfMainMenu";
 import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountLanScreen } from "./ui/fdfLan";
+import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { GlueManager } from "./ui/glue";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
 import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
@@ -141,13 +142,44 @@ function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Pro
  *  Chrome `BattlenetCustom` — read out of the panel model's own sequence table. The game
  *  has no LAN-specific chrome: LocalMultiplayerJoin.fdf is the transport-swapped twin of
  *  BattleNetCustomJoinPanel.fdf and they share this triple (see menuScene.ts). */
-function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
+function lanScreen(
+  vfs: DataSource,
+  /** A map the create screen just picked: announce the room the moment the screen is up. */
+  hostMap?: { path: string; info: MapInfo },
+): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "BattlenetCustom",
-    mount: () => mountLanScreen(ui, vfs, {
-      onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
+    mount: async () => {
+      const screen = await mountLanScreen(ui, vfs, installMaps, {
+        onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
+        onCreateGame: () => void glue.goTo(lanCreateScreen(vfs)),
+        onStart: (_path, info, config) => void startGame(mapFileFor(_path), info, config),
+      });
+      // Coming back from the create screen: the room is announced here rather than there,
+      // because the LAN screen is the one holding the lobby connection.
+      if (hostMap) screen.hostWith(hostMap.path, hostMap.info);
+      return screen;
+    },
+  };
+}
+
+/** "Create Game" on the LAN screen: pick the map to host, then come back and announce it. */
+function lanCreateScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
+  return {
+    chrome: "BattlenetCustom",
+    mount: () => mountLanCreateScreen(ui, vfs, installMaps, {
+      onCreate: (path, info) => void glue.goTo(lanScreen(vfs, { path, info })),
+      onCancel: () => void glue.goTo(lanScreen(vfs)),
     }),
   };
+}
+
+/** The install's own file for a map path — every client opens the map out of its own
+ *  install, so a LAN start carries the path and each side resolves it here. */
+function mapFileFor(path: string): File {
+  const file = installMaps.get(path);
+  if (!file) throw new Error(`No such map in this install: ${path}`);
+  return file;
 }
 
 function singlePlayerScreen(vfs: DataSource): { chrome: "SinglePlayer"; mount: () => Promise<FdfScreen> } {

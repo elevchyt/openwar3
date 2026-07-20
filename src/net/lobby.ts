@@ -1,4 +1,4 @@
-import type { PeerInfo, RoomInfo, ServerMessage } from "./protocol";
+import type { GameMessage, PeerInfo, RoomInfo, ServerMessage } from "./protocol";
 import { WebSocketTransport, type Transport } from "./transport";
 
 // Client-side LAN lobby state: the game list, the room you are in, and who is in it.
@@ -38,6 +38,9 @@ export class LanLobby {
   onChange: (state: LobbyState) => void = () => {};
   /** Opaque in-room traffic from a peer — the seam the command stream will arrive through. */
   onPeerData: (from: number, data: unknown) => void = () => {};
+  /** The host said go. Fires on every client in the room EXCEPT the host, which acts on its
+   *  own `startMatch` call directly (the relay never echoes a sender its own message). */
+  onStart: (msg: GameMessage & { k: "start" }) => void = () => {};
 
   get snapshot(): LobbyState {
     return this.state;
@@ -68,8 +71,8 @@ export class LanLobby {
     this.set({ phase: "browsing", error: null });
   }
 
-  host(name: string, playerName: string, mapName: string, maxPlayers = 12): void {
-    this.transport?.send({ t: "create", name, playerName, mapName, maxPlayers });
+  host(name: string, playerName: string, mapName: string, mapPath: string, maxPlayers = 12): void {
+    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers });
   }
 
   join(roomId: string, playerName: string): void {
@@ -88,6 +91,11 @@ export class LanLobby {
   /** Send opaque data to the room (or one peer). Game traffic rides this. */
   send(data: unknown, to?: number): void {
     this.transport?.send({ t: "relay", to, data });
+  }
+
+  /** Host only: tell the room to load the map and play. */
+  startMatch(msg: GameMessage & { k: "start" }): void {
+    this.send(msg);
   }
 
   dispose(): void {
@@ -110,8 +118,13 @@ export class LanLobby {
         return this.set({ peers: this.state.peers.filter((p) => p.id !== m.peerId) });
       case "room-closed":
         return this.set({ phase: "browsing", room: null, peers: [], you: null, error: m.reason });
-      case "deliver":
+      case "deliver": {
+        // Game traffic. `start` is the one message the lobby itself understands — everything
+        // else is passed through to whoever owns the match (Phase C/E).
+        const data = m.data as Partial<GameMessage> | null;
+        if (data && data.k === "start") return this.onStart(data as GameMessage & { k: "start" });
         return this.onPeerData(m.from, m.data);
+      }
       case "error":
         return this.set({ error: m.message });
       case "hello":

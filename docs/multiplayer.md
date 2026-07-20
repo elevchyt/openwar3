@@ -88,15 +88,17 @@ state.
 | Phase | State | Notes |
 |---|---|---|
 | A — timestep & identity | **done** | fixed 60 Hz step, `.doo`-order ids, seed from the lobby |
-| Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster; no match launch yet |
+| Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster |
+| Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | not started | the tentpole |
-| C — command funnel | not started | **close the 8 bypasses first** |
+| C — command funnel | not started | **close the 8 bypasses first** — the next thing to do |
 | D — N vision maps | not started | |
 | E — snapshots & reconnect | not started | |
-| Map selection + Start | not started | the next visible milestone |
 
 **Shipped so far** (newest first — `git log` for detail):
 
+- map selection + Start: `LocalMultiplayerCreate.fdf` as its own screen, the map summary pane
+  on the LAN screen, and the `start` handshake that puts both clients in the same match
 - `5a0ec84` sim ids come from war3mapUnits.doo order, not model-load order
 - `97d58be` match seed plumbed from the lobby; hero-name draw onto the seeded stream
 - `d4a658c` fixed 60 Hz timestep with a tick counter
@@ -108,16 +110,25 @@ state.
 
 **Pick up here.** In order:
 
-1. **Map selection + Start** (`LocalMultiplayerCreate.fdf`). Host picks a map, broadcasts
-   `{map, slots, seed}`, both clients load and enter. Needs no new sim work — seed and ids are
-   settled. It will look synced for a few seconds and then drift, which is the point: that drift is
-   what Phase C fixes. Do the LAN screen's empty summary panel (`MapInfoPane`) with this.
-2. **Phase C, bypasses before transport.** The funnel at [`src/game/rts.ts`](../src/game/rts.ts)
+1. **Phase C, bypasses before transport.** The funnel at [`src/game/rts.ts`](../src/game/rts.ts)
    `order()` is not exhaustive — `issueCast`, `issueSellItem`, `issueGiveItem`, `issueHold`,
    `issueGetItem`, `issueGarrison`, `setShopBuyer`, and the trigger path `issueUnitOrder` all go
    round it, and casts are absent from `QueuedOrder` entirely. Close those FIRST; wiring the
    transport first just makes those actions silently host-only and the bug hard to see.
-3. **Phase E** — snapshots and reconnect.
+2. **Phase E** — snapshots and reconnect.
+
+**What "Start" does and does not do today.** Both clients load the same map, seat themselves in
+different slots off one shared config, and run off one seed — so the two windows open on the same
+world, each looking at its own base. Nothing is sent after that: each machine then simulates
+independently and they drift apart within seconds. That is expected and is exactly the hole Phase C
+fills. The point of landing this first is that the identity of a match (map, slots, seed, who is
+who) is now settled and testable before any command crosses the wire.
+
+**Map files never cross the wire.** A room advertises its map's PATH and every client opens that
+path in its own install ([`src/net/protocol.ts`](../src/net/protocol.ts) `RoomInfo.mapPath`). This
+is the legal boundary (CLAUDE.md — we ship and host zero Blizzard content) and it is also the only
+affordable option: a map is megabytes and the relay is meant to fit a free tier. A player whose
+install lacks the map is told so on the LAN screen and cannot join.
 
 **Deliberately deferred**, with reasons, so nobody re-derives them:
 

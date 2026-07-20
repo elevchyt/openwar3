@@ -1129,7 +1129,12 @@ export class MapViewerScene {
     // seeding, the map script and the first tick, which is the last moment it is safe.
     // Until this existed every match ran off a hardcoded 1 and rolled identically.
     this.rts!.setSeed(config.seed ?? randomSeed());
-    this.localPlayer = config.slots.find((s) => s.controller === "user")?.id ?? config.slots[0]?.id ?? 0;
+    // Who WE are. A LAN client is told (every human slot in a shared config says "user", so
+    // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
+    this.localPlayer = config.localPlayer
+      ?? config.slots.find((s) => s.controller === "user")?.id
+      ?? config.slots[0]?.id
+      ?? 0;
     this.rts!.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
     // Owner-line names for the hover tooltip: an AI slot reads "Computer (Normal)"
     // (the one difficulty we model, matching the Custom Game screen's label); a human

@@ -18,10 +18,10 @@
 import { WebSocketServer } from "ws";
 
 const PORT = Number(process.env.PORT) || 8787;
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 /** Rooms live only in memory. Losing them on restart loses lobbies, not matches. */
-const rooms = new Map(); // roomId -> { id, name, hostName, mapName, maxPlayers, peers: Map<id, {id,name,host,ws}> }
+const rooms = new Map(); // roomId -> { id, name, hostName, mapName, mapPath, maxPlayers, peers: Map<id, {id,name,host,ws}> }
 let nextRoomId = 1;
 
 const send = (ws, msg) => {
@@ -34,6 +34,9 @@ const roomInfo = (r) => ({
   name: r.name,
   hostName: r.hostName,
   mapName: r.mapName,
+  // The PATH, not the file: joiners open the same map out of their own install. The relay
+  // never carries Blizzard content — see src/net/protocol.ts RoomInfo.mapPath.
+  mapPath: r.mapPath,
   players: r.peers.size,
   maxPlayers: r.maxPlayers,
 });
@@ -102,6 +105,7 @@ wss.on("connection", (ws) => {
           name: msg.name || "OpenWar3 Game",
           hostName: peer.name,
           mapName: msg.mapName || "",
+          mapPath: msg.mapPath || "",
           maxPlayers: Math.max(2, Math.min(12, msg.maxPlayers || 12)),
           peers: new Map([[peer.id, peer]]),
           nextPeerId: 2,

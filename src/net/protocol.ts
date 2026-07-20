@@ -24,7 +24,18 @@ export interface RoomInfo {
   /** Game name as the host typed it — the "Game Creator" column on LocalMultiplayerJoin. */
   name: string;
   hostName: string;
+  /** The map's own name, for the game list ("Echo Isles"). */
   mapName: string;
+  /**
+   * The map's path inside the install ("Maps\\FrozenThrone\\(2)EchoIsles.w3x") — how a
+   * joiner finds the SAME map in ITS OWN install.
+   *
+   * The map file itself is never sent. It is Blizzard content (CLAUDE.md "Legal boundary"),
+   * every player already holds a licensed copy of it, and it is megabytes we would be pushing
+   * through a free-tier relay. The path is the whole handshake; a player whose install lacks
+   * that map is told so, rather than being handed one.
+   */
+  mapPath: string;
   players: number;
   maxPlayers: number;
 }
@@ -33,7 +44,7 @@ export interface RoomInfo {
 
 export type ClientMessage =
   /** Announce a game. The sender becomes the room's host, hence its authority. */
-  | { t: "create"; name: string; playerName: string; mapName: string; maxPlayers: number }
+  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number }
   /** Ask for the game list. The relay also pushes `rooms` unprompted when it changes. */
   | { t: "list" }
   | { t: "join"; roomId: string; playerName: string }
@@ -56,9 +67,47 @@ export type ServerMessage =
   | { t: "deliver"; from: number; data: unknown }
   | { t: "error"; message: string };
 
+// --- game traffic (inside `relay`/`deliver`) ---------------------------------------
+//
+// Everything below is opaque to the relay — it forwards these without looking. This is the
+// layer the command stream and the snapshot stream will join (docs/multiplayer.md Phase C/E);
+// `start` is the first member, and the only one so far.
+
+/**
+ * The host's "we are playing this, now". Sent to every peer the instant the host presses
+ * Start Game, and the host acts on its own copy at the same moment.
+ *
+ * It carries the whole match identity: which map, who is in which slot, and the seed. Every
+ * recipient builds the SAME `MeleeConfig` from it — the one difference between two clients is
+ * which slot each calls its own, and each works that out from `slots[].peer` rather than from
+ * anything the host has to say separately.
+ */
+export interface StartMatch {
+  k: "start";
+  /** Where the map lives in the install. Resolved locally by every client — see RoomInfo. */
+  mapPath: string;
+  /** The map's name, for the "you don't have this map" message a joiner may have to show. */
+  mapName: string;
+  /** The match's RNG seed. The host rolls it once; nobody else rolls one (Phase A). */
+  seed: number;
+  /** The seated slots, exactly as `MeleeConfig.slots` — plus, for a human slot, the relay
+   *  peer id sitting in it. A client's own slot is the one whose `peer` is its own id. */
+  slots: Array<{
+    id: number;
+    controller: "user" | "computer";
+    race: string;
+    team: number;
+    startX: number;
+    startY: number;
+    peer?: number;
+  }>;
+}
+
+export type GameMessage = StartMatch;
+
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;

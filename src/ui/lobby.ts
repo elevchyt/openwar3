@@ -17,6 +17,9 @@ export interface SlotConfig {
   team: number;
   startX: number;
   startY: number;
+  /** In a LAN game, the relay peer sitting in this slot (src/net/protocol.ts). Absent in a
+   *  single-player match, and absent on a computer slot in any match. */
+  peer?: number;
 }
 
 /** Fog-of-war start mode chosen in the lobby:
@@ -34,4 +37,15 @@ export interface MeleeConfig {
    *  game the host picks it and every client is told (docs/multiplayer.md). Omitted means
    *  "roll one" — only single-player setup may leave it out. */
   seed?: number;
+  /**
+   * Which slot THIS MACHINE plays — the one whose units it selects and whose sight lifts its
+   * fog. Omitted means "the first `user` slot", which is the whole answer in single player
+   * because there is only one.
+   *
+   * A LAN match is the case that needs it stated: every client is handed the SAME config (it
+   * is the match's identity, not one machine's) and every human slot in it says `user`, so
+   * "the first user slot" would point all of them at the same player. Each client sets this
+   * from the slot holding its own peer id instead. See docs/multiplayer.md.
+   */
+  localPlayer?: number;
 }
