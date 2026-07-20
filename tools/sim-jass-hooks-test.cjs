@@ -167,9 +167,26 @@ world.killUnit = realKill;
 console.log("\nthe player-resource natives go through the authority");
 const stubRegistry = { get: () => undefined };
 const authority = new Authority(world, stubRegistry, stubRegistry, null, stubRegistry);
-const ah = authorityHooks(authority);
-check("authorityHooks holds the resource pair and the order pair", Object.keys(ah).sort(),
-  ["getPlayerState", "getUnitCurrentOrder", "issueUnitOrder", "setPlayerState"]);
+// createScriptUnit lives on the CONTROLLER, not on Authority — resolving placement reads the
+// pathing grid and the footprint reader — so the structural dep is assembled here the same way
+// RtsController.worldHooks assembles it. Spying on it also checks the native routes at all.
+const created = [];
+const ah = authorityHooks({
+  stashFor: (o) => authority.stashFor(o),
+  foodFor: (o) => authority.foodFor(o),
+  setPlayerResource: (p, r, v) => authority.setPlayerResource(p, r, v),
+  currentOrderId: (id) => authority.currentOrderId(id),
+  issueUnitOrder: (...a) => authority.issueUnitOrder(...a),
+  createScriptUnit: (...a) => { created.push(a); return 909; },
+});
+check("authorityHooks holds the resource, order and create natives", Object.keys(ah).sort(),
+  ["createUnit", "getPlayerState", "getUnitCurrentOrder", "issueUnitOrder", "setPlayerState"]);
+
+// CreateUnit is SYNCHRONOUS in JASS: the id must come back from the call itself, because the
+// next statement may order or configure that unit. A queue-only implementation that returned
+// nothing would typecheck and break every trigger that keeps the handle.
+check("createUnit returns the sim id immediately", ah.createUnit(2, "hfoo", 100, 200, 270), 909);
+check("…having passed the arguments straight through", created, [[2, "hfoo", 100, 200, 270]]);
 
 ah.setPlayerState(0, 1, 750);
 check("gold reached the LIVE stash", world.stashOf(0).gold, 750);

@@ -2,8 +2,8 @@ import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import type { Command } from "./commands";
-import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
-import type { PlacedFootprint } from "../sim/destructibles";
+import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
+import type { PlacedFootprint, Footprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
 import { simHooks, authorityHooks, visionHooks, rosterHooks } from "./jassHooks";
@@ -341,6 +341,18 @@ export interface SelIcon {
 const HOVER_OWNER_ENEMY = "#ff0303"; // WC3 red — a hostile player's name
 const HOVER_OWNER_ALLY = "#ffcc00"; // WC3 gold — an allied player's name
 const HOVER_TEXT = "#ffffff"; // unit name, "Level N", "Gold: N" — always white
+
+/** A body owed to a script-created unit: the sim unit already exists at this resolved
+ *  position, and the renderer attaches a model to it when one has loaded. */
+export interface ScriptSpawn {
+  typeId: string;
+  x: number;
+  y: number;
+  facing: number;
+  player: number;
+  team: number;
+  simId: number;
+}
 
 export class RtsController {
   private sim: SimWorld;
@@ -1006,6 +1018,68 @@ export class RtsController {
 
   setPlacedFootprints(stamps: PlacedFootprint[]): void {
     this.placed.setPlacedFootprints(stamps);
+  }
+
+  /**
+   * How to read a building's pathing footprint out of its `pathTex`. Injected because decoding
+   * one is a VFS read and this half must not import an archive — the renderer already caches
+   * them, a headless host would read its own install.
+   */
+  setFootprintReader(read: (texPath: string) => Footprint | null): void {
+    this.footprintOf = read;
+  }
+  private footprintOf: (texPath: string) => Footprint | null = () => null;
+
+  /**
+   * JASS `CreateUnit` — the AUTHORITY half (docs/multiplayer.md Phase E item 1h).
+   *
+   * `CreateUnit` is SYNCHRONOUS: the very next statement may add an ability, set the hero's
+   * level, or order the unit somewhere. So the sim unit is created right here and its id returned
+   * at once; the BODY is queued and attached a few frames later, when its model has loaded.
+   *
+   * This is why the dual-writer trick from item 1c does not fit `createUnit` and the list was
+   * wrong to predict it: the placement is RESOLVED here — a building snaps to the build grid, a
+   * ground unit created on a blocked cell is displaced to the nearest fit — and
+   * `createUnit(): number` can only carry an id back, not the resolved position the renderer needs
+   * to put a model at. A queue carries both.
+   */
+  createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number, teamOf: (p: number) => number): number {
+    const def = this.registry.get(typeId);
+    if (!def) return -1;
+    const grid = this.sim.grid;
+    const fp = def.isBuilding && def.pathTex ? this.footprintOf(def.pathTex) : null;
+    if (fp) [x, y] = grid.snapForBuildingRect(x, y, fp.w, fp.h);
+    // A ground unit created ON a blocked cell — the classic "spawn a creep out of a building"
+    // trigger passes the building's own centre — is displaced by WC3 to the nearest free spot,
+    // so it emerges beside the structure rather than stuck inside it. Snap it to the nearest
+    // cell its footprint fits, exactly as a freshly-trained unit leaves its factory. Flyers and
+    // buildings are exempt (buildings snap above).
+    if (!def.isBuilding && def.moveType !== MoveType.Fly) {
+      const n = footprintCells(def.collision || 16);
+      const [cx, cy] = grid.worldToCell(x, y);
+      if (!grid.footprintFits(cx, cy, n)) {
+        const fit = grid.nearestFit(cx, cy, n) ?? grid.nearestWalkable(cx, cy);
+        if (fit) [x, y] = grid.cellToWorld(fit[0], fit[1]);
+      }
+    }
+    const facing = (facingDeg * Math.PI) / 180;
+    const team = teamOf(player);
+    const simId = this.reserveUnitId();
+    this.addSimUnit(def, x, y, facing, player, team, 0, simId); // exists NOW
+    this.scriptSpawns.push({ typeId, x, y, facing, player, team, simId }); // …gets a body later
+    return simId;
+  }
+
+  private scriptSpawns: ScriptSpawn[] = [];
+
+  /** Bodies owed to script-created units since the last drain. The renderer loads each model
+   *  and attaches it to the sim unit that already exists — the same shape as
+   *  `drainSummonRequests`, and for the same reason. A headless host simply never drains. */
+  drainScriptSpawns(): ScriptSpawn[] {
+    if (!this.scriptSpawns.length) return this.scriptSpawns;
+    const out = this.scriptSpawns;
+    this.scriptSpawns = [];
+    return out;
   }
 
   /** Attach the map-stamped footprint at this position (if any) to a freshly-seeded
@@ -3419,7 +3493,16 @@ export class RtsController {
   worldHooks(teamOf: (player: number) => number): Partial<EngineHooks> {
     return {
       ...simHooks(this.sim, teamOf),
-      ...authorityHooks(this.authority),
+      ...authorityHooks({
+        stashFor: (o) => this.authority.stashFor(o),
+        foodFor: (o) => this.authority.foodFor(o),
+        setPlayerResource: (p, r, v) => this.authority.setPlayerResource(p, r, v),
+        currentOrderId: (id) => this.authority.currentOrderId(id),
+        issueUnitOrder: (id, oid, o, k, x, y, t) => this.authority.issueUnitOrder(id, oid, o, k, x, y, t),
+        // CreateUnit needs the CONTROLLER, not the authority object: resolving placement reads
+        // the pathing grid and the footprint reader, and attaching a body needs the spawn queue.
+        createScriptUnit: (p, t, x, y, f) => this.createScriptUnit(p, t, x, y, f, teamOf),
+      }),
       ...visionHooks(this.viewpoints, this.alliances),
       ...rosterHooks(this.sim, this.registry, teamOf),
     };

@@ -44,7 +44,6 @@ interface CreepSeed {
   drops: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
-import { MoveType } from "../data/enums";
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
@@ -928,6 +927,7 @@ export class MapViewerScene {
       this.heightSampler = makeHeightSampler(terrain);
       this.footMaxHeight = makeFootprintMaxSampler(terrain);
       this.rts = new RtsController(grid, this.heightSampler, host, this.registry, this.abilities, this.items, this.tech, this.upgrades, this.footMaxHeight);
+      this.rts.setFootprintReader((tex) => this.footprintFor(tex)); // pathTex decode is a VFS read
       this.rts.setSoundBoard(this.sounds);
       this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
       this.registerResourceNodes(nodes);
@@ -1488,7 +1488,6 @@ export class MapViewerScene {
       setMusicVolume: (v) => this.sounds?.setMusicVolume(v),
       setVolumeGroup: (group, scale) => this.sounds?.setVolumeGroup(group, scale),
       resetVolumeGroups: () => this.sounds?.resetVolumeGroups(),
-      createUnit: (player, typeId, x, y, facing) => this.spawnScriptUnit(player, typeId, x, y, facing),
       // --- unit-mutation effects (7.7 cont.) — a trigger visibly moves/alters a unit ---
       // SetUnitOwner: reassign in the sim (team decides allegiance/vision), then re-tint
       // the team-coloured model parts to the new slot's colour if changeColor is set.
@@ -1629,38 +1628,6 @@ export class MapViewerScene {
 
 
 
-  /** Spawn a unit a trigger created via CreateUnit. JASS `CreateUnit` is SYNCHRONOUS —
-   *  the very next statement may add an ability, set the hero's level, or order the unit
-   *  somewhere — so the SIM unit is created right here, while the model (which loads
-   *  async) attaches to it a few frames later (RtsController.addSimUnit/attachInstance).
-   *  A script-created building is snapped to the build grid first, so its sim position
-   *  matches the footprint the render path will stamp. JASS facing is in degrees; the sim
-   *  wants radians. Returns -1 if the type id isn't in our data. */
-  private spawnScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number): number {
-    const def = this.registry.get(typeId);
-    if (!def || !this.rts) return -1;
-    const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
-    if (fp && this.grid) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
-    // A ground unit created ON a blocked cell — the classic "spawn a creep out of a
-    // building" trigger passes the building's own centre — is displaced by WC3 to the
-    // nearest free spot, so it emerges beside the structure rather than stuck inside it.
-    // Snap it to the nearest cell its footprint fits, exactly as a freshly-trained unit
-    // leaves its factory. Flyers and buildings are exempt (buildings snap above).
-    if (!def.isBuilding && def.moveType !== MoveType.Fly && this.grid) {
-      const n = footprintCells(def.collision || 16);
-      const [cx, cy] = this.grid.worldToCell(x, y);
-      if (!this.grid.footprintFits(cx, cy, n)) {
-        const fit = this.grid.nearestFit(cx, cy, n) ?? this.grid.nearestWalkable(cx, cy);
-        if (fit) [x, y] = this.grid.cellToWorld(fit[0], fit[1]);
-      }
-    }
-    const facing = (facingDeg * Math.PI) / 180;
-    const team = this.teamOf(player);
-    const simId = this.rts.reserveUnitId();
-    this.rts.addSimUnit(def, x, y, facing, player, team, 0, simId); // exists NOW
-    void this.spawnUnit(def, x, y, player, team, 0, facing, simId); // …gets its body when the model lands
-    return simId;
-  }
 
   /** Merge the map's custom object data (war3map.w3u units + war3map.w3a abilities)
    *  into the registry overlays (Phase 7 — issue #33). Best-effort: a missing/bad file
@@ -5740,6 +5707,13 @@ export class MapViewerScene {
         // of the caster, or ON the targeted point for a ward — see summonSpot), play their
         // birth clip, then flag temporary summons (Water Elemental) so the sim expires them.
         for (const m of world.drainMirrorMissiles()) void this.spawnMirrorMissile(m);
+        // Bodies owed to units a TRIGGER created. The sim unit already exists at a resolved
+        // position (RtsController.createScriptUnit ran synchronously inside the native); this
+        // only loads its model and attaches it. A headless host never drains this queue.
+        for (const sp of this.rts?.drainScriptSpawns() ?? []) {
+          const d = this.registry.get(sp.typeId);
+          if (d) void this.spawnUnit(d, sp.x, sp.y, sp.player, sp.team, 0, sp.facing, sp.simId);
+        }
         const summonClaimed = new Set<string>(); // cells handed out this frame (see summonSpot)
         for (const s of world.drainSummonRequests()) {
           const d = this.registry.get(s.unitId);

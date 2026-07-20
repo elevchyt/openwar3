@@ -1085,11 +1085,43 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    unit and queues a spawn the renderer drains to attach a body. That is its own item, **1h**,
    because it changes the spawn path rather than moving a hook.
 
-1h. **`createUnit` via a spawn drain-queue.** The authority resolves placement and creates the sim
-   unit; the renderer drains a queue and attaches the model. Mirrors `drainSummonRequests`, which
-   already does exactly this for summons. Everything left in the renderer's 62 after that
-   (camera, sound, weather, effects, cinematics, text, selection) is presentation and gets
-   *injected* into a headless table rather than moved out of it.
+1h. ~~**`createUnit` via a spawn drain-queue.**~~ **Done. The 149-entry table is fully split.**
+   `RtsController.createScriptUnit` resolves placement — a building snaps to the build grid, a
+   ground unit created on a blocked cell is displaced to the nearest fit — creates the sim unit,
+   and pushes a `ScriptSpawn` the renderer drains to attach a model. Renderer 62 → **61**,
+   `jassHooks`/authority 89 → **90**. Union still 149; the only overlap is still the two
+   dual-writers.
+
+   **Why the drain queue and not item 1c's dual-writer trick**, which the list predicted:
+   `createUnit(): number` can carry an id back and nothing else, and the renderer needs the
+   RESOLVED position to put a model at. A decorator would have had to redo the snapping and hope
+   it landed on the same cell. The queue carries both, and the codebase already does exactly this
+   for summons (`drainSummonRequests`), deaths and tree pulses.
+
+   **The synchronous contract is the thing to protect.** JASS `CreateUnit` is synchronous — the
+   next statement may order or configure the unit — so the id comes back from the call itself and
+   only the BODY is deferred. A queue-only version that returned 0 and let the drain assign an id
+   typechecks fine and breaks every trigger that keeps the handle; that is what the new check
+   pins, confirmed by injecting it.
+
+   `setFootprintReader` injects the `pathTex` decode, because reading one is a VFS read and this
+   half must not import an archive. Same injection shape as `teamOf`.
+
+   **NOT verified at runtime.** Echo Isles seeds its melee roster through our own starting-units
+   code rather than through the script, so the trigger `CreateUnit` path was almost certainly not
+   called on the verification boot. Unit population, resources and fog were all unchanged, which
+   says nothing regressed — not that this path works. A map whose triggers spawn units is what
+   would exercise it.
+
+**The hook table is now split, and here is what the 61 in the renderer are.** Camera and
+cinematics, sound and music, weather, special effects, text and the leaderboard/dialog surface,
+selection, the terrain-haze natives, `objectName`/`localizedString`/`itemTypeInfo`/
+`chooseRandomItem` (data tables the renderer already holds), and the model-only unit mutators
+(`setUnitScale`, `setUnitVertexColor`, `setUnitTimeScale`, `setUnitAnimation`, `setUnitColor`).
+Every one is presentation, and a headless host **injects** these rather than moving them — most
+as no-ops. That claim has been wrong twice in this phase (items 1g and 1e both found world natives
+hiding in it), so it is worth re-checking rather than trusting, but the remaining list has been
+enumerated by body rather than by name.
 
 2. ~~**Create player viewpoints at match start, not lazily.**~~ **Done — and it was not small,
    because seating exposed a real bug the moment it was tested.** `VisionSet.seat(seats)` +

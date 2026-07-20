@@ -239,6 +239,7 @@ export function authorityHooks(authority: {
   foodFor(owner: number): { used: number; made: number };
   setPlayerResource(player: number, resource: "gold" | "lumber", value: number): void;
   currentOrderId(unitId: number): number;
+  createScriptUnit(player: number, typeId: string, x: number, y: number, facingDeg: number): number;
   issueUnitOrder(
     unitId: number,
     orderId: number,
@@ -263,6 +264,12 @@ export function authorityHooks(authority: {
     issueUnitOrder: (id, orderId, order, kind, x, y, targetId) =>
       authority.issueUnitOrder(id, orderId, order, kind, x, y, targetId),
     getUnitCurrentOrder: (id) => authority.currentOrderId(id),
+    // CreateUnit — the sim unit exists the instant this returns, because the native is
+    // SYNCHRONOUS and the next JASS statement may order or configure it. Its BODY is queued for
+    // whoever is drawing (`drainScriptSpawns`); a headless host simply never drains, which is the
+    // correct behaviour rather than a gap. See `RtsController.createScriptUnit` for why the
+    // dual-writer trick from item 1c could not be used here.
+    createUnit: (player, typeId, x, y, facing) => authority.createScriptUnit(player, typeId, x, y, facing),
     // SetPlayerState → the live stash, via the authority's named setter. This is what grants a
     // custom map its starting gold/lumber (its init triggers set it). Food is derived from
     // units, so states 4 and 5 are read-only and a write to them is ignored rather than
