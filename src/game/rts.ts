@@ -3,8 +3,9 @@ import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine,
 import { KNOWN_ABILITIES } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { Command } from "./commands";
-import { footprintCells, PATHING_CELL, type PathingGrid } from "../sim/pathing";
+import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
+import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -519,9 +520,6 @@ const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 // bunching up (a body-and-a-half wider than the tight gold-mine approach).
 const SPEED_BUILD_SPREAD = 48;
 const MINE_APPROACH_SPREAD = 16; // gentle widening of the gold-mine approach ring
-// Edge gap between the leader's body and the innermost ring of a follow formation
-// — a comfortable body's-length behind, so followers trail rather than crowd.
-const FOLLOW_RING_GAP = 40;
 // Order-confirmation arrow tints (Confirmation.mdx): green = move, red = a-move.
 const MOVE_ARROW: [number, number, number] = [0.1, 1, 0.1];
 const ATTACK_ARROW: [number, number, number] = [1, 0.15, 0.1];
@@ -4649,7 +4647,7 @@ export class RtsController {
           // the group into distinct slots around the leader (formation offsets) so
           // they hold a spread instead of stacking on its centre and shoving.
           const followers = [...this.selected].filter((id) => id !== picked);
-          const offs = this.followOffsets(followers, target);
+          const offs = followOffsets(this.sim, followers, target);
           let any = false;
           for (const id of followers) {
             const o = offs.get(id);
@@ -4684,7 +4682,7 @@ export class RtsController {
       const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
       // A little extra breathing room on the approach ring so they don't bunch on
       // one side of the mine (kept modest — miners must still land within entry reach).
-      const spread = this.ringTargets(workers, mine.x, mine.y, mine.radius, MINE_APPROACH_SPREAD);
+      const spread = ringTargets(this.sim, workers, mine.x, mine.y, mine.radius, MINE_APPROACH_SPREAD);
       let any = false;
       for (const id of workers) {
         const p = spread.get(id);
@@ -4804,7 +4802,7 @@ export class RtsController {
       // Speed-build: fan the builders WIDE around the structure (extra spacing) so
       // they ring the whole footprint instead of bunching on the near edge and
       // shoving. A gold-mine approach stays tight; this doesn't need to.
-      const spread = this.ringTargets(workers, target.x, target.y, target.radius, SPEED_BUILD_SPREAD);
+      const spread = ringTargets(this.sim, workers, target.x, target.y, target.radius, SPEED_BUILD_SPREAD);
       for (const id of workers) {
         const p = spread.get(id);
         this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued: queued });
@@ -4817,220 +4815,10 @@ export class RtsController {
     this.flashRing(target.x, target.y, selR, own ? FLASH_GREEN : FLASH_YELLOW);
   }
 
-  /** Give each unit in the group its OWN destination tile so they don't pile onto
-   *  one spot — a COMPACT concentric-ring formation centred on the clicked point,
-   *  spaced just enough that collision hulls don't overlap (so the group converges
-   *  on the target rather than fanning out wide). Every slot is a distinct spot the
-   *  unit's footprint fits on; nearest unit takes the nearest slot to minimise crossing. */
-  private groupTargets(ids: number[], tx: number, ty: number): Map<number, [number, number]> {
-    const out = new Map<number, [number, number]>();
-    const list = ids
-      .map((id) => ({ id, u: this.sim.units.get(id) }))
-      .filter((x): x is { id: number; u: SimUnit } => !!x.u);
-    if (list.length <= 1) {
-      for (const { id } of list) out.set(id, [tx, ty]);
-      return out;
-    }
-    const grid = this.sim.grid;
-    // A gap on top of the collision diameter: tight formation, but with a little
-    // breathing room so units aren't shoulder-to-shoulder.
-    let radius = 16;
-    for (const { u } of list) radius = Math.max(radius, u.radius);
-    const spacing = radius * 2 + 36;
-    // Slots are sized/claimed for the group's LARGEST footprint so big units
-    // (Knights, Tauren) reliably get a spot their whole body fits — claiming only
-    // a single cell used to hand them a slot clipping terrain, which path-failed
-    // and collapsed them back onto the centre.
-    const fp = Math.max(1, footprintCells(radius));
-
-    // Claim a distinct spot whose full fp×fp footprint is walkable and unclaimed
-    // (spiral out from the desired point); reserve exactly the cells the unit will
-    // settle on, using the sim's own snap math so the target is a valid stance.
-    const used = new Set<number>();
-    const claim = (wx: number, wy: number): [number, number] => {
-      const [c0x, c0y] = grid.worldToCell(wx, wy);
-      for (let r = 0; r <= 12; r++) {
-        for (let dy = -r; dy <= r; dy++) {
-          for (let dx = -r; dx <= r; dx++) {
-            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring perimeter only
-            const [cwx, cwy] = grid.cellToWorld(c0x + dx, c0y + dy);
-            const [sx, sy] = grid.snapForFootprint(cwx, cwy, fp);
-            const [ox, oy] = grid.footprintOrigin(sx, sy, fp);
-            let ok = true;
-            for (let yy = 0; yy < fp && ok; yy++) {
-              for (let xx = 0; xx < fp; xx++) {
-                const key = (oy + yy) * grid.width + (ox + xx);
-                if (used.has(key) || !grid.walkable(ox + xx, oy + yy)) { ok = false; break; }
-              }
-            }
-            if (!ok) continue;
-            for (let yy = 0; yy < fp; yy++) for (let xx = 0; xx < fp; xx++) used.add((oy + yy) * grid.width + (ox + xx));
-            return [sx, sy];
-          }
-        }
-      }
-      return [wx, wy];
-    };
-
-    // Concentric hex rings around the target (centre-out), just big enough.
-    const slots: Array<[number, number]> = [];
-    for (let ring = 0; slots.length < list.length && ring < 24; ring++) {
-      if (ring === 0) { slots.push([tx, ty]); continue; }
-      const n = ring * 6;
-      for (let i = 0; i < n && slots.length < list.length; i++) {
-        const a = (i / n) * Math.PI * 2;
-        slots.push([tx + Math.cos(a) * ring * spacing, ty + Math.sin(a) * ring * spacing]);
-      }
-    }
-    // Nearest unit → nearest slot (centre-out), each on its own claimed cell.
-    const remaining = new Set(list.map((x) => x.id));
-    for (const slot of slots) {
-      if (!remaining.size) break;
-      let best: number | null = null;
-      let bestD = Infinity;
-      for (const id of remaining) {
-        const u = this.sim.units.get(id)!;
-        const d = Math.hypot(u.x - slot[0], u.y - slot[1]);
-        if (d < bestD) { bestD = d; best = id; }
-      }
-      if (best !== null) { out.set(best, claim(slot[0], slot[1])); remaining.delete(best); }
-    }
-    for (const id of remaining) out.set(id, claim(tx, ty));
-    return out;
-  }
-
-  /** Distinct approach points fanned around a circular target (a building being
-   *  raised, or a gold mine) so a group ordered together spreads over its rim
-   *  instead of all pathing to the one centre point and shoving. Concentric rings
-   *  start just outside `radius`; nearest worker claims the nearest free walkable
-   *  slot (centre-out, like groupTargets — but ringed around an obstacle rather
-   *  than filling a point). A single unit gets the plain centre, so the spread
-   *  only kicks in when several are commanded at once. */
-  private ringTargets(ids: number[], cx: number, cy: number, radius: number, extraSpacing = 0): Map<number, [number, number]> {
-    const out = new Map<number, [number, number]>();
-    const list = ids
-      .map((id) => ({ id, u: this.sim.units.get(id) }))
-      .filter((x): x is { id: number; u: SimUnit } => !!x.u);
-    if (list.length <= 1) {
-      for (const { id } of list) out.set(id, [cx, cy]);
-      return out;
-    }
-    const grid = this.sim.grid;
-    let wr = 16;
-    for (const { u } of list) wr = Math.max(wr, u.radius);
-    // Neighbour gap along a ring / between rings. `extraSpacing` widens the fan
-    // for callers that want the group spread further apart (speed-build) rather
-    // than hugging the target tightly (a gold miner must land within entry reach).
-    const spacing = wr * 2 + 24 + extraSpacing;
-
-    // Claim a distinct, walkable cell near a world point (spiral out from it).
-    const used = new Set<number>();
-    const claim = (wx: number, wy: number): [number, number] => {
-      const [c0x, c0y] = grid.worldToCell(wx, wy);
-      for (let r = 0; r <= 12; r++) {
-        for (let dy = -r; dy <= r; dy++) {
-          for (let dx = -r; dx <= r; dx++) {
-            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring perimeter only
-            const gx = c0x + dx, gy = c0y + dy;
-            const key = gy * grid.width + gx;
-            if (used.has(key) || !grid.walkable(gx, gy)) continue;
-            used.add(key);
-            return grid.cellToWorld(gx, gy);
-          }
-        }
-      }
-      return [wx, wy];
-    };
-
-    // Ring 0 hugs the footprint edge (radius + a body + slack, so a gold miner
-    // lands within its entry reach); outer rings step out by `spacing`. Each ring
-    // is filled WHOLE — cutting it off after `list.length` points (as this used to)
-    // only ever emitted the arc starting at angle 0, so five peasants sent to a gold
-    // mine were all handed slots on its EAST rim and walked around it to enter from
-    // behind (issue #63). A full ring lets the assignment below pick the near side.
-    const slots: Array<[number, number]> = [];
-    for (let ring = 0; slots.length < list.length && ring < 24; ring++) {
-      const rr = radius + wr + 8 + extraSpacing + ring * spacing;
-      const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
-      for (let i = 0; i < n; i++) {
-        const a = (i / n) * Math.PI * 2 + ring * 0.618; // golden-ish stagger between rings
-        slots.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]);
-      }
-    }
-    // Shortest walk first: take every (unit, slot) pair in ascending distance and
-    // hand each unit the nearest slot still free. Greedily walking the SLOTS instead
-    // (each grabbing its nearest unit) let a far-side slot claim a unit that had a
-    // free slot right in front of it — the other half of the walk-around-the-mine bug.
-    const pairs: Array<{ id: number; slot: number; d: number }> = [];
-    for (const { id, u } of list) {
-      for (let s = 0; s < slots.length; s++) {
-        pairs.push({ id, slot: s, d: Math.hypot(u.x - slots[s][0], u.y - slots[s][1]) });
-      }
-    }
-    pairs.sort((a, b) => a.d - b.d);
-    const takenSlot = new Set<number>();
-    for (const p of pairs) {
-      if (out.has(p.id) || takenSlot.has(p.slot)) continue;
-      takenSlot.add(p.slot);
-      out.set(p.id, claim(slots[p.slot][0], slots[p.slot][1])); // its own walkable cell
-    }
-    for (const { id } of list) if (!out.has(id)) out.set(id, claim(cx, cy));
-    return out;
-  }
-
-  /** Formation offsets for a group told to FOLLOW one leader: each follower gets a
-   *  distinct slot around the leader (returned as a world-space offset from its
-   *  centre, since the leader moves) so the group holds a spread instead of all
-   *  homing on the centre point and shoving. Concentric rings start a body behind
-   *  the leader; nearest follower claims the nearest slot (least crossing). A lone
-   *  follower gets (0,0) and simply trails — matching WC3's plain follow. */
-  private followOffsets(ids: number[], leader: SimUnit): Map<number, [number, number]> {
-    const out = new Map<number, [number, number]>();
-    const list = ids
-      .map((id) => ({ id, u: this.sim.units.get(id) }))
-      .filter((x): x is { id: number; u: SimUnit } => !!x.u);
-    if (list.length <= 1) {
-      for (const { id } of list) out.set(id, [0, 0]);
-      return out;
-    }
-    let wr = 16;
-    for (const { u } of list) wr = Math.max(wr, u.radius);
-    const spacing = wr * 2 + 24; // neighbour gap so collision hulls don't overlap
-    const ring0 = leader.radius + wr + FOLLOW_RING_GAP; // innermost ring, a body behind the leader
-
-    // Concentric rings around the leader; each holds as many evenly-spaced slots
-    // as fit, staggered so rings interleave rather than line up radially.
-    const slots: Array<[number, number]> = [];
-    for (let ring = 0; slots.length < list.length && ring < 24; ring++) {
-      const rr = ring0 + ring * spacing;
-      const n = Math.max(1, Math.floor((2 * Math.PI * rr) / spacing));
-      for (let i = 0; i < n && slots.length < list.length; i++) {
-        const a = (i / n) * Math.PI * 2 + ring * 0.618; // golden-ish stagger between rings
-        slots.push([Math.cos(a) * rr, Math.sin(a) * rr]);
-      }
-    }
-    // Nearest follower → nearest slot, so each takes the side it already approaches
-    // from and paths cross as little as possible.
-    const remaining = new Set(list.map((x) => x.id));
-    for (const slot of slots) {
-      if (!remaining.size) break;
-      let best: number | null = null;
-      let bestD = Infinity;
-      for (const id of remaining) {
-        const u = this.sim.units.get(id)!;
-        const d = Math.hypot(u.x - (leader.x + slot[0]), u.y - (leader.y + slot[1]));
-        if (d < bestD) { bestD = d; best = id; }
-      }
-      if (best !== null) { out.set(best, slot); remaining.delete(best); }
-    }
-    for (const id of remaining) out.set(id, [0, 0]);
-    return out;
-  }
-
   /** Issue a formation move for the whole selection to a ground point (or queue
    *  each unit's slot move when Shift is held). */
   private groupMove(tx: number, ty: number, queued = false): void {
-    const targets = this.groupTargets([...this.selected], tx, ty);
+    const targets = groupTargets(this.sim, [...this.selected], tx, ty);
     for (const [id, [x, y]] of targets) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued });
   }
 
@@ -5039,7 +4827,7 @@ export class RtsController {
    *  spread out there instead of cramming on one tile — but issued as attack-move, so
    *  each unit fights the nearest enemy in its path and resumes to its slot afterwards. */
   private groupAttackMove(tx: number, ty: number, queued = false): void {
-    const targets = this.groupTargets([...this.selected], tx, ty);
+    const targets = groupTargets(this.sim, [...this.selected], tx, ty);
     for (const [id, [x, y]] of targets) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued });
   }
 

@@ -317,10 +317,10 @@ Smallest and least-entangled first; each is independently shippable. **Behaviour
 if a real bug turns up mid-move, note it here as its own item rather than fixing it in the same
 commit.
 
-1. **Formation solvers → `src/game/formations.ts`.** `groupTargets`, `ringTargets`,
-   `followOffsets` (~207 L). Pure geometry over `sim.units`/`sim.grid`, zero client state, zero
-   DOM. The single largest clean lift in the file and the safest place to start. Verify with a
-   group move, a follow, and an attack-move on Echo Isles — formation bugs are extremely visible.
+1. ~~**Formation solvers → `src/game/formations.ts`.**~~ **Done.** `groupTargets`, `ringTargets`,
+   `followOffsets` (210 L) now take a `FormationWorld` — a two-member interface
+   (`units`, `grid`) narrowed deliberately, so the file compiles with no dependency on the
+   bridge and structurally accepts `SimWorld` unchanged. `rts.ts` 5 382 → 5 170 lines.
 2. **HP-bar + hover-tooltip DOM → `src/render/worldOverlays.ts`.** `makeHpBar`, `makeHoverTip`,
    `updateHealthBars`, `computeHoverTip`, `updateHoverTooltip` (~190 L). This is the move that
    **removes `worldLayer` and every `document.` from `rts.ts`** — the import test's whole point.
