@@ -40,8 +40,18 @@ export interface VisionWorld {
   teamDetects(team: number, x: number, y: number): boolean;
 }
 
+/** Fog rebuild cadence — 10 Hz, as it has always been. Cheap enough that N of them is a
+ *  budget question rather than a design one, which is what item 7 measures. */
+const REBUILD_INTERVAL = 0.1;
+
+/** How the match starts every player's fog (the lobby's FogMode, minus the default). */
+export type StartFog = "explored" | "revealall" | null;
+
 export class Viewpoint {
   readonly vision: VisionMap;
+  /** Seconds since this viewpoint's last rebuild. Starts above the interval so the first
+   *  tick rebuilds rather than showing a frame of blank fog. */
+  private accum = 1;
   /** Players whose units are REVEALED to this viewpoint — blizzard.j `CripplePlayer`, what
    *  MeleeExposePlayer does to a player whose crippled timer ran out. Their units show
    *  through the fog wherever they stand, which is the punishment itself and the one thing
@@ -171,6 +181,17 @@ export class Viewpoint {
    *
    *  `modifiers` is every script-placed modifier the controller holds; the ones this
    *  viewpoint renders are picked out here. */
+  /** Advance this viewpoint's own rebuild clock; rebuild if it is due. Returns whether it
+   *  did. Per-viewpoint rather than one shared clock so N viewpoints stagger naturally
+   *  instead of all rebuilding on the same frame. */
+  tick(dt: number, modifiers: Iterable<FogModifier>): boolean {
+    this.accum += dt;
+    if (this.accum < REBUILD_INTERVAL) return false;
+    this.accum = 0;
+    this.rebuild(modifiers);
+    return true;
+  }
+
   rebuild(modifiers: Iterable<FogModifier>): void {
     const day = this.world.isDay;
     this.vision.beginFrame();
@@ -236,5 +257,104 @@ export class Viewpoint {
   }
   exploreAll(): void {
     this.vision.exploreAll();
+  }
+}
+
+/**
+ * Every viewpoint in the match, created on demand (docs/multiplayer.md Phase D item 3).
+ *
+ * The registry exists rather than a bare `Map` because a viewpoint is not just a blank grid:
+ * it has to be caught up on everything the world has already told the others. The boot order
+ * makes that concrete — `initVisionBlockers` runs while the terrain loads, a good half-second
+ * BEFORE `setLocalPlayer` says who is playing. A viewpoint minted after that moment and handed
+ * out bare would have no height field and no tree blockers, and would see straight through
+ * every cliff and treeline on the map. So the set records world setup and replays it onto each
+ * viewpoint it creates.
+ *
+ * Tree blockers are seeded from the LIVE tree collection rather than from a replayed log,
+ * because `SimWorld` deletes a felled tree from `trees` — so "the trees standing right now" is
+ * already the correct answer for a viewpoint created right now, and stays correct for free.
+ *
+ * Exactly one viewpoint exists at runtime today: nothing asks for a second yet. Phase E's
+ * snapshots are what start calling `viewpointFor` with somebody else's slot.
+ */
+export class VisionSet {
+  private readonly byPlayer = new Map<number, Viewpoint>();
+  private cliffHeight: HeightSampler | null = null;
+  private startFog: StartFog = null;
+
+  constructor(
+    private readonly world: VisionWorld,
+    private readonly alliances: AllianceTable,
+    /** The trees standing right now — read afresh each time a viewpoint is created. */
+    private readonly trees: () => Iterable<{ x: number; y: number; blockRadius: number }>,
+    private readonly originX: number,
+    private readonly originY: number,
+    private readonly worldWidth: number,
+    private readonly worldHeight: number,
+  ) {}
+
+  /** This player's eyes, created (and caught up) on first ask. `team` seeds from whatever the
+   *  sim currently says; the caller states it authoritatively via `Viewpoint.setTeam` when the
+   *  lobby settles, because at boot there are no units yet to derive it from. */
+  viewpointFor(player: number): Viewpoint {
+    const existing = this.byPlayer.get(player);
+    if (existing) return existing;
+    const vp = new Viewpoint(
+      player,
+      player, // provisional team — see doc comment
+      this.world,
+      this.alliances,
+      this.originX,
+      this.originY,
+      this.worldWidth,
+      this.worldHeight,
+    );
+    vp.setTeam(vp.teamOfPlayer(player));
+    if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
+    if (this.startFog === "explored") vp.exploreAll();
+    else if (this.startFog === "revealall") vp.setRevealAll(true);
+    this.byPlayer.set(player, vp);
+    return vp;
+  }
+
+  all(): Iterable<Viewpoint> {
+    return this.byPlayer.values();
+  }
+
+  /** Install the fog's line-of-sight height field on every viewpoint, present and future. */
+  initBlockers(cliffHeightAt: HeightSampler): void {
+    this.cliffHeight = cliffHeightAt;
+    for (const vp of this.byPlayer.values()) vp.initBlockers(cliffHeightAt, this.trees());
+  }
+
+  /** A tree was felled — it stops blocking sight for everyone. */
+  onTreeFelled(x: number, y: number, radius: number): void {
+    for (const vp of this.byPlayer.values()) vp.onTreeFelled(x, y, radius);
+  }
+
+  /** The lobby's fog mode. A MATCH setting, so it applies to every viewpoint and is
+   *  remembered for ones created later — unlike `iseedeadpeople`, which reveals the map to
+   *  the one player who typed it and stays on their viewpoint alone. */
+  setStartFog(mode: StartFog): void {
+    this.startFog = mode;
+    for (const vp of this.byPlayer.values()) {
+      // revealall is a toggle and is set BOTH ways, so that clearing the mode actually
+      // clears it rather than merely declining to apply it to viewpoints created later.
+      vp.setRevealAll(mode === "revealall");
+      // explored is sticky by construction — terrain memory is not un-learned — so there is
+      // no "off" to apply here. Un-exploring is what a MASKED fog modifier is for.
+      if (mode === "explored") vp.exploreAll();
+    }
+  }
+
+  /** Advance every viewpoint's rebuild clock. Returns those that actually rebuilt, so the
+   *  caller can follow up on its own (the controller re-prunes its selection). */
+  tick(dt: number, modifiers: Iterable<FogModifier>): Viewpoint[] {
+    const rebuilt: Viewpoint[] = [];
+    // `modifiers` is iterated once per viewpoint, so it must be re-iterable — a Map's
+    // .values() is, a bare generator is not. The controller passes the Map view.
+    for (const vp of this.byPlayer.values()) if (vp.tick(dt, modifiers)) rebuilt.push(vp);
+    return rebuilt;
   }
 }

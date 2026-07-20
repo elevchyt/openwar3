@@ -22,7 +22,7 @@ import {
 } from "../render/unitAnims";
 import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
-import { Viewpoint } from "./viewpoint";
+import { Viewpoint, VisionSet } from "./viewpoint";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -364,11 +364,13 @@ export class RtsController {
   // map renderer skips these when it fog-hides the remaining static map widgets, so
   // the two systems never fight over the same instance. Populated once at seed time.
   private seededInstances = new Set<unknown>();
-  // This machine's eyes (viewpoint.ts). ONE today — the local player's — which is exactly
-  // what it was before, one object instead of a field plus a dozen methods. Phase D item 3
-  // turns this into a registry with one per player.
+  // Every viewpoint in the match, created on demand (viewpoint.ts). Exactly ONE exists at
+  // runtime — the local player's — because nothing asks for a second yet; Phase E's snapshots
+  // are what start calling viewpointFor with somebody else's slot.
+  private viewpoints!: VisionSet;
+  // …and this machine's own, cached because the render path asks it many times a frame.
+  // Re-pointed by setLocalPlayer, which is the only thing that can change it.
   private local!: Viewpoint;
-  private visionAccum = 1; // seconds since the last vision rebuild (>interval → rebuild on first tick)
   // Who is allied with whom (7.22). Seeded from the lobby's teams, then mutable by the
   // script (SetPlayerAlliance) — so "Player - Make X treat Y as an Ally" and shared
   // vision are real. The sim reads it through SimWorld.alliedPlayers (installed below).
@@ -455,7 +457,16 @@ export class RtsController {
     // Fog-of-war grid, aligned to the same world origin as the pathing grid and
     // spanning the whole map (pathing is 32-unit cells; span = cells × 32).
     const [vox, voy] = grid.origin;
-    this.local = new Viewpoint(0, 0, this.sim, this.alliances, vox, voy, grid.width * PATHING_CELL, grid.height * PATHING_CELL);
+    this.viewpoints = new VisionSet(
+      this.sim,
+      this.alliances,
+      () => this.sim.trees.values(),
+      vox,
+      voy,
+      grid.width * PATHING_CELL,
+      grid.height * PATHING_CELL,
+    );
+    this.local = this.viewpoints.viewpointFor(0); // re-pointed once the lobby says who we are
     // Gate the sim's auto-acquisition on the fog of war (issue #17): idle units only
     // aggro enemies their team can actually SEE. Only the local team's sight is
     // modelled, so other teams pass through as visible (unchanged behaviour).
@@ -480,7 +491,12 @@ export class RtsController {
   /** Which player's units a drag-box selects (set at melee start). */
   setLocalPlayer(id: number): void {
     this.localPlayer = id;
-    this.local.setPlayer(id);
+    // Ask the SET rather than renaming the viewpoint we happen to hold: the set catches a new
+    // one up on the height field, the tree blockers and the lobby's fog mode, all of which are
+    // installed before this is called (mapViewer runs initVisionBlockers while the terrain
+    // loads, a good half-second earlier).
+    this.local = this.viewpoints.viewpointFor(id);
+    this.local.setTeam(this.localTeam);
   }
 
   /** Start the match's RNG from the lobby's seed. Called at beginMatch, which is after the
@@ -637,26 +653,18 @@ export class RtsController {
   /** `iseedeadpeople`: reveal the whole map (toggle). A pure override — turning it
    *  back off restores the real fog you'd actually explored. */
   setRevealAll(on: boolean): void {
-    this.local.setRevealAll(on);
+    this.viewpoints.setStartFog(on ? "revealall" : null);
   }
 
   /** Lobby "start explored": reveal the whole map as grey terrain memory, keeping
    *  live fog (current sight stays lit, enemy movement in the grey stays hidden). */
   exploreAll(): void {
-    this.local.exploreAll();
+    this.viewpoints.setStartFog("explored");
   }
   toggleRevealAll(): boolean {
     const on = !this.local.revealed;
     this.local.setRevealAll(on);
     return on;
-  }
-
-  /** Rebuild the "currently visible" fog layer from this team's live sight. Each
-   *  friendly unit reveals a circle of its day- or night-sight radius; buildings
-   *  and allies count too. Neutral shops grant no vision. Throttled (see tick). */
-  private updateVision(): void {
-    this.local.rebuild(this.fogModifiers.values());
-    this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
   }
 
   /** Install the fog's line-of-sight height field + tree blockers, so vision is
@@ -665,13 +673,13 @@ export class RtsController {
    *  terrain height — only real cliff levels block WC3 sight, not rolling groundHeight
    *  (see hiveworkshop "About high ground advantage" #255594). */
   initVisionBlockers(cliffHeightAt: HeightSampler): void {
-    this.local.initBlockers(cliffHeightAt, this.sim.trees.values());
+    this.viewpoints.initBlockers(cliffHeightAt);
   }
 
   /** A tree was felled — it stops blocking sight (harvesting can open a sight line).
    *  `radius` must match the one it was stamped with, so it releases its own cells. */
   onTreeFelled(x: number, y: number, radius: number): void {
-    this.local.onTreeFelled(x, y, radius);
+    this.viewpoints.onTreeFelled(x, y, radius);
   }
 
   /** Should this unit's model be hidden by the fog of war right now? Your own team
@@ -1953,10 +1961,10 @@ export class RtsController {
     // Fog of war: rebuild the "currently visible" layer a few times a second — WC3
     // refreshes fog periodically, not every frame, and this keeps circle-stamping
     // cheap. The initial accumulator > interval forces a rebuild on the first tick.
-    this.visionAccum += dt;
-    if (this.visionAccum >= 0.1) {
-      this.visionAccum = 0;
-      this.updateVision();
+    // Every viewpoint keeps its own 10 Hz clock. Only the LOCAL one's rebuild re-prunes the
+    // selection, because the selection is this machine's, not the match's.
+    if (this.viewpoints.tick(dt, this.fogModifiers.values()).includes(this.local)) {
+      this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
     }
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;

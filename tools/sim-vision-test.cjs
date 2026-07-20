@@ -92,5 +92,59 @@ console.log("\niseedeadpeople still shows everything");
   check("…and toggling it back off restores the truth", v.hasSeen(14, 14), false);
 }
 
+// --- the viewpoint registry (docs/multiplayer.md Phase D item 3) ----------------------
+//
+// The hazard this section exists for: mapViewer installs the fog's height field and tree
+// blockers while the terrain loads, a good half-second BEFORE setLocalPlayer says who is
+// playing. A viewpoint minted after that moment and handed out bare would see through every
+// cliff and treeline on the map. So the SET replays world setup onto whatever it creates.
+const { VisionSet } = require(join(REPO, ".sim-build", "src", "game", "viewpoint.js"));
+
+const noWorld = { units: new Map(), isDay: true, activeAttackReveals: () => [], teamDetects: () => false };
+const noAlliances = { sharesVisionWith: () => false, coAllied: () => false };
+const trees = [{ x: 320, y: 320, blockRadius: 64 }];
+const setOf = () => new VisionSet(noWorld, noAlliances, () => trees, 0, 0, 1024, 1024);
+
+console.log("\na viewpoint asked for twice is the same viewpoint");
+{
+  const set = setOf();
+  check("same object back", set.viewpointFor(3) === set.viewpointFor(3), true);
+  check("a different slot is a different object", set.viewpointFor(3) === set.viewpointFor(4), false);
+}
+
+console.log("\nworld setup reaches viewpoints created AFTER it  (the boot-order trap)");
+{
+  const set = setOf();
+  set.initBlockers(() => 0); // flat terrain, but the field is now installed
+  set.setStartFog("explored");
+  // …now the lobby finally says who we are, and a fresh viewpoint is minted.
+  const late = set.viewpointFor(7);
+  check("the late viewpoint got the lobby's start-explored", late.vision.stateAt(900, 900), FogState.Explored);
+  check("…and is still not SEEN there", late.vision.hasSeen(cellOf(900), cellOf(900)), false);
+}
+
+console.log("\nreveal-all is set both ways, so clearing it clears it");
+{
+  const set = setOf();
+  const vp = set.viewpointFor(0);
+  set.setStartFog("revealall");
+  check("revealall on", vp.revealed, true);
+  set.setStartFog(null);
+  check("…and off again", vp.revealed, false);
+}
+
+console.log("\neach viewpoint keeps its own rebuild clock");
+{
+  const set = setOf();
+  const vp = set.viewpointFor(0);
+  check("the first tick rebuilds (accum starts above the interval)", set.tick(0.016, []).length, 1);
+  check("the very next frame does not", set.tick(0.016, []).length, 0);
+  check("…nor the one after", set.tick(0.016, []).length, 0);
+  let rebuilt = 0;
+  for (let i = 0; i < 8; i++) rebuilt += set.tick(0.016, []).length;
+  check("but ~0.1s later it does", rebuilt, 1);
+  check("and it is the viewpoint we hold", set.tick(1, []).includes(vp), true);
+}
+
 console.log(failed ? `\nvision: ${failed} FAILED` : "\nvision: all checks passed");
 process.exit(failed ? 1 : 0);

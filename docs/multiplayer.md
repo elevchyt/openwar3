@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | items 1–2 done (`?dev` boot; `Viewpoint` extracted); items 3–7 open |
+| D — N vision maps | in progress | items 1–3 done (`?dev` boot; `Viewpoint`; `VisionSet` registry); items 4–7 open |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(198 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(209 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -634,9 +634,34 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    so no importer changed.
 
 
-3. **A `VisionSet` registry** — `viewpointFor(player)`, creating on demand, each rebuilding at its
-   own 10 Hz. The local player's viewpoint becomes `viewpointFor(this.localPlayer)`. Still exactly
-   one instance at runtime, because nothing else asks for one yet; the cost lands in item 7.
+3. ~~**A `VisionSet` registry.**~~ **Done.** `VisionSet` (in
+   [`viewpoint.ts`](../src/game/viewpoint.ts)) mints a `Viewpoint` per player on demand via
+   `viewpointFor(player)`; `rts.ts` holds the set plus a cached `local` that `setLocalPlayer`
+   re-points. Each viewpoint carries its own 10 Hz clock (`Viewpoint.tick`), so N of them
+   stagger naturally instead of all rebuilding on one frame, and `VisionSet.tick` returns those
+   that rebuilt — the controller re-prunes its selection only when the LOCAL one did, because
+   the selection is this machine's and not the match's.
+
+   **Why a registry and not a `Map`.** A viewpoint is not a blank grid: it has to be caught up
+   on what the world already told the others. The boot order makes that concrete —
+   `initVisionBlockers` runs while the terrain loads, a good half-second *before*
+   `setLocalPlayer` says who is playing. A viewpoint minted after that and handed out bare has
+   no height field and no tree blockers, and sees straight through every cliff and treeline on
+   the map. So the set records world setup (height field, start fog) and replays it onto
+   whatever it creates. Tree blockers seed from the LIVE tree collection rather than a replayed
+   log, because `SimWorld` deletes a felled tree from `trees` — so "the trees standing now" is
+   already right for a viewpoint created now, and stays right for free.
+
+   Also settled here: the lobby's fog mode is a MATCH setting and goes through the set
+   (`setStartFog`, applied to all and remembered for later arrivals), while `iseedeadpeople`
+   stays on the one viewpoint whose player typed it. `setStartFog` sets reveal-all in BOTH
+   directions so that clearing the mode clears it, rather than merely declining to apply it.
+
+   **Cost: unchanged.** Exactly one viewpoint exists at runtime — nothing calls `viewpointFor`
+   with another slot yet — so this is still one rebuild at 10 Hz. Echo Isles held 118–134 fps
+   before and after. The real N-rebuild budget lands at item 7.
+
+
 4. **Fog modifiers and `exposed` move onto the viewpoint they belong to.** Today `setFogState`
    early-outs on `seesFor(player)` and stamps into the single local grid, and `cripplePlayer`
    early-outs on `toPlayers.includes(this.localPlayer)`. Both are client-by-construction. They
