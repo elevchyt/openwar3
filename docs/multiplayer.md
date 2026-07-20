@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5). Open: 3c, then 6–12 — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6). Open: 3c and 6b, then 7–12 — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(345 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(373 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -1261,12 +1261,72 @@ enumerated by body rather than by name.
    (`BuildingState.stock` is the live one) a thing that survives the compiler and dies on the
    wire. `sim:test` 323 → **345**.
 
-6. **AoI filtering, as a predicate distinct from `fogHides`.** `Viewpoint.fogHides` answers *should
-   this be drawn?*; the snapshot asks *may this be sent?*, which is strictly stronger — a client must
-   never receive what it cannot see, or the fog is a client-side suggestion and we have shipped a
-   maphack. Same grid, different question, and conflating them is the trap. Illusions
-   ([`illusions.md`](./illusions.md)) are the sharp case: `isIllusion` must not reach an enemy's
-   snapshot at all, not merely be ignored on arrival.
+6. ~~**AoI filtering, as a predicate distinct from `fogHides`.**~~ **Done — and it is not a
+   predicate, which is the finding.** `visibilityFor(viewer, u)` in
+   [`snapshot.ts`](../src/game/snapshot.ts) returns **`"live" | "remembered" | "omit"`**, and the
+   third value is not an embellishment: it is the one case `fogHides` deliberately answers
+   "draw" to. WC3 leaves the last-seen image of an enemy STRUCTURE standing in the fog, so
+   `fogHides` is false for a building you saw an hour ago — while its live hp, construction
+   timer and production queue are things you demonstrably do not know. Sending the record whole
+   leaks exactly what the fog exists to withhold; omitting it deletes a building off the
+   player's screen that the real game keeps there. Two-valued is wrong in both directions.
+
+   **The rule needed no new fog logic, only the observation that the existing pair already spans
+   three states.** `fogHides` false + `fogBlocksClick` true IS "drawn from memory" — the
+   distinction issue #62 was opened for (you can see the Goblin Merchant across the map; you
+   cannot shop at it). `SnapshotViewer` grew from one method to five and `Viewpoint` already
+   satisfied all of them.
+
+   **The redaction needs no per-viewpoint history, and the reason is worth stating** because it
+   looks like it should. A remembered record would in general have to carry where the thing was
+   WHEN SEEN — per-recipient memory the authority would have to keep and age. It does not,
+   because **the only things WC3 remembers are buildings, and a building's last-seen position is
+   its current position**. The memory case collapses into a field mask. That is the whole of why
+   this fitted one move instead of three.
+
+   **What each of the four rules turned out to be:**
+   - **Off-the-field** (`inMine`/`insideBuild`/`inBurrow`/`devouredBy`/`vanished`) is a `seesFor`
+     gate, **not a drop**. It looks like "gone for everyone" — `hiddenFor` treats it that way —
+     but the owner still needs them or a Burrow could not list its garrison and a mining peasant
+     would blink out of its owner's own world. An enemy gets nothing.
+   - **Undetected invisibility is the sharp one and `fogHides` says nothing about it.** The
+     client ORs the two, which is right for drawing and far too weak for sending: a Wind Walking
+     hero standing in plain sight is `fogHides === false`. A send rule written as "if fogHides,
+     drop" passes every other check in the suite and puts that hero's coordinates in the enemy's
+     payload. There is a check for exactly that, and it goes red on exactly that edit.
+   - **A mine is always sent and its gold is not** (`-1`, not `0` — an empty mine and an
+     unscouted one are different facts, and conflating them would route workers away from a full
+     expansion). Omitting the mine was the tempting symmetry and it is wrong: `minimapIcons`
+     paints the glyph over unexplored ground *deliberately*, measured against the real client in
+     item 4, so dropping it would put a hole in the minimap the real game does not have.
+   - **A ground item gets no memory at all.** `fogBlocksAt`'s own comment says why: an item is a
+     live widget that vanishes with the eyes on it, not a building whose image persists.
+
+   **A structural interface has a hole this move had to close.** `SnapshotViewer` is structural
+   so `snapshot.ts` need not import the fog implementation — but that means the test's own stub
+   satisfies it *by construction*, so the interface could drift away from `Viewpoint` with every
+   suite green until they were finally wired at item 9/10, which is the worst moment to find
+   out. [`tools/snapshot-viewer-conformance.ts`](../tools/snapshot-viewer-conformance.ts) is a
+   compile-time-only assertion that a real `Viewpoint` is a `SnapshotViewer`; `tsc -p
+   tools/tsconfig.sim.json` runs it on every `pnpm sim:test`. Confirmed it bites by adding a
+   method to the interface — `TS2741: Property … is missing in type 'Viewpoint'`.
+
+   **Both bugs the rule exists to prevent were injected.** Collapsing `remembered` into `live` —
+   the "AoI filtering is just fog" mistake — leaves `pnpm typecheck` green and turns **9** checks
+   red. Dropping the invisibility gate turns 2 red. Restored after both. `sim:test` 345 → **373**.
+
+   Illusions were already handled at the source in item 5 and did not need touching here.
+
+6b. **A remembered building that has been DESTROYED stops appearing.** WC3 keeps the ghost image
+   until you re-see the spot; ours vanishes the moment the building leaves `world.units`, because
+   that is what `visibilityFor` classifies. Found while writing 6, **pre-existing rather than
+   introduced** — the client has the same hole today for the same reason (`fogHides` reads live
+   units), so it is not a regression. It is now a hole in a payload rather than in a render loop,
+   which is a better place to fix it from: the authority would have to keep a per-viewpoint
+   last-seen set of destroyed structures and emit them as `remembered` until the cell is seen
+   again. That IS the per-viewpoint history item 6 got to avoid, so it is its own item and should
+   be measured against the running client first (how long does the ghost persist, does it survive
+   a re-scout that shows empty ground).
 
 7. **`forAudience` gets its caller.** `Runtime.audience` and `forAudience(player, fn)` landed in
    Phase D item 6 with no caller by design — snapshot construction is the caller. Per-recipient

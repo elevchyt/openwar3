@@ -18,7 +18,7 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { snapshotFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
+const { snapshotFor, visibilityFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -62,8 +62,20 @@ function worldOf(units, mines = [], items = []) {
   return { units: um, mines: mm, items: im, timeOfDay: 12, dawnDusk: true };
 }
 
-/** `Viewpoint.seesFor` in two lines: yourself and your team-mates. */
-const viewer = (team, seating) => ({ seesFor: (p) => seating[p] === team });
+/** A stand-in for `Viewpoint`: the five questions `SnapshotViewer` asks. Defaults are
+ *  "everything in plain sight", so each test overrides only the rule it is about.
+ *
+ *  That the REAL `Viewpoint` still answers all five is not checked here — a stub satisfies the
+ *  interface by construction, which is exactly how the two would drift apart unnoticed. It is
+ *  checked by `tools/snapshot-viewer-conformance.ts`, at compile time, on every sim:test. */
+const viewer = (team, seating, o = {}) => ({
+  seesFor: (p) => seating[p] === team,
+  fogHides: () => false,
+  fogBlocksClick: () => false,
+  invisHides: () => false,
+  fogBlocksAt: () => false,
+  ...o,
+});
 
 console.log("the snapshot is a subset of the sim unit, not a serialisation of it");
 {
@@ -178,6 +190,141 @@ console.log("the payload is JSON, by decision");
   // The shop `stock` Map is the concrete thing that would have gone through as `{}`.
   check("the building's stock Map did not come along", "stock" in snap.units[0].building, false);
   check("nor the speed-build accounting", ["builderIds", "goldCost", "lumberCost"].filter((k) => k in snap.units[0].building), []);
+}
+
+// ---------------------------------------------------------------------------------------
+// Item 6: AoI. "May this be SENT" is strictly stronger than "should this be DRAWN", and the
+// difference is the whole of the maphack question — a filter a client applies is a filter a
+// modified client removes.
+// ---------------------------------------------------------------------------------------
+
+console.log("what the fog hides is not sent at all, not sent and ignored");
+{
+  const seating = { 0: 0, 1: 1 };
+  const world = worldOf([unit({ id: 1, owner: 1, team: 1, x: 5000, y: 5000 })]);
+  // An enemy footman standing in black fog: fogHides true, so it is not drawn — and the send
+  // rule says it must not be in the payload for the client to have had the chance.
+  const foe = viewer(0, seating, { fogHides: () => true, fogBlocksClick: () => true });
+  const snap = snapshotFor(world, foe, 0, 0);
+  check("a fogged enemy is absent from the payload", snap.units.length, 0);
+  check("visibilityFor says so directly", visibilityFor(foe, world.units.get(1)), "omit");
+}
+
+console.log("an undetected invisible unit is absent, not merely undrawn");
+{
+  const seating = { 0: 0, 1: 1 };
+  const hero = unit({ id: 1, owner: 1, team: 1, invisible: true, x: 100, y: 100 });
+  const world = worldOf([hero]);
+  // The sharp one: fog does NOT hide it — it is standing in plain sight — and only
+  // `invisHides` is true. A rule written as "if fogHides, drop" passes every other check in
+  // this file and puts a Wind Walking hero's coordinates in the enemy's payload.
+  const foe = viewer(0, seating, { invisHides: () => true });
+  check("an enemy gets nothing", snapshotFor(world, foe, 0, 0).units.length, 0);
+  check("visibilityFor: omit", visibilityFor(foe, hero), "omit");
+  // Its owner still sees it (faded) — invisHides is false for your own side.
+  const own = viewer(1, seating);
+  check("the owner still gets it", snapshotFor(world, own, 1, 0).units.length, 1);
+  check("and it is flagged invisible for the fade", snapshotFor(world, own, 1, 0).units[0].invisible, true);
+}
+
+console.log("a building seen once is remembered, and the memory is redacted");
+{
+  const seating = { 0: 0, 1: 1 };
+  // A damaged enemy Barracks mid-upgrade, currently unwatched. WC3 keeps the last-seen image
+  // on screen — so fogHides is FALSE — but there are no eyes on it, so fogBlocksClick is TRUE.
+  // That pair is the whole three-valued rule.
+  const barracks = unit({
+    id: 1, owner: 1, team: 1, typeId: "hbar", x: 3000, y: 3000, facing: 1.5, altModel: true,
+    hp: 400, maxHp: 1500, level: 3, garrison: [8, 9], garrisonCap: 4,
+    abilities: [{ id: "Adef", code: "Adef", level: 1 }],
+    buffs: [{ kind: "armor", value: 3 }],
+    building: {
+      constructionLeft: 3, buildTimeTotal: 60, queue: [{ kind: "unit", unitId: "hfoo", timeLeft: 2, buildTime: 20 }],
+      producesUnits: true, rallyX: 111, rallyY: 222, rallyKind: "point", rallyTargetId: 0,
+    },
+  });
+  const world = worldOf([barracks]);
+  const foe = viewer(0, seating, { fogHides: () => false, fogBlocksClick: () => true });
+  const snap = snapshotFor(world, foe, 0, 0);
+  const b = snap.units[0];
+
+  check("visibilityFor: remembered", visibilityFor(foe, barracks), "remembered");
+  check("the image is still sent", snap.units.length, 1);
+  check("and flagged as a memory", b.remembered, true);
+  // What a memory legitimately carries: where it is, what it is, whose it is, which model half.
+  check("identity and pose survive", [b.id, b.typeId, b.owner, b.x, b.y, b.facing, b.altModel], [1, "hbar", 1, 3000, 3000, 1.5, true]);
+  check("it is still shaped like a building", b.building !== null, true);
+
+  // THE checks. Every one of these is a fact about the present that the player cannot know.
+  check("its damage is not knowledge", [b.hp, b.maxHp], [0, 0]);
+  check("nor is the construction timer", [b.building.constructionLeft, b.building.buildTimeTotal], [0, 0]);
+  check("nor what it is training", b.building.queue.length, 0);
+  check("nor where it rallies", [b.building.rallyX, b.building.rallyY], [0, 0]);
+  check("nor its garrison", [b.garrison.length, b.garrisonCap], [0, 0]);
+  check("nor its abilities or buffs", [b.abilities.length, b.buffs.length], [0, 0]);
+  check("nor its level", b.level, 0);
+
+  // The same building WATCHED is the full record — the redaction must be about sight, not
+  // about being a building.
+  const watching = viewer(0, seating, { fogHides: () => false, fogBlocksClick: () => false });
+  const live = snapshotFor(world, watching, 0, 0).units[0];
+  check("with eyes on it, everything comes back", [live.remembered, live.hp, live.building.queue.length], [false, 400, 1]);
+}
+
+console.log("your own units are never fogged out of your own snapshot");
+{
+  const seating = { 0: 0, 1: 0 };
+  const world = worldOf([
+    unit({ id: 1, owner: 0, team: 0 }),
+    unit({ id: 2, owner: 1, team: 0 }), // an ally's
+  ]);
+  // A viewer whose fog would hide everything. `fogHides` on the real Viewpoint returns false
+  // for your own team before it looks at the grid; a send rule that skipped that would empty
+  // a player's own army out of their own payload.
+  const blind = viewer(0, seating, { fogHides: (u) => u.team !== 0, fogBlocksClick: (u) => u.team !== 0 });
+  check("own and allied units are all live", snapshotFor(world, blind, 0, 0).units.map((u) => u.remembered), [false, false]);
+}
+
+console.log("units off the field belong to their owner, and to nobody else");
+{
+  const seating = { 0: 0, 1: 1 };
+  const world = worldOf([
+    unit({ id: 1, owner: 0, team: 0, inMine: true }),
+    unit({ id: 2, owner: 0, team: 0, inBurrow: true }),
+    unit({ id: 3, owner: 0, team: 0, vanished: true }),
+  ]);
+  // The owner needs them: a Burrow cannot list a garrison it was not told about, and a mining
+  // peasant that vanished from its owner's payload would blink out of its owner's own world.
+  check("the owner keeps all three", snapshotFor(world, viewer(0, seating), 0, 0).units.length, 3);
+  // An enemy must not learn that a peasant is in that mine, or that a Blademaster is mid-shuffle.
+  check("an enemy gets none of them", snapshotFor(world, viewer(1, seating), 1, 0).units.length, 0);
+  check("even standing in plain sight", visibilityFor(viewer(1, seating), world.units.get(1)), "omit");
+}
+
+console.log("a mine's position is public; how much gold is left in it is not");
+{
+  const seating = { 0: 0 };
+  const world = worldOf([], [{ id: 90, x: 1, y: 2, radius: 96, gold: 12500, busy: false }]);
+
+  const watching = snapshotFor(world, viewer(0, seating), 0, 0);
+  check("with eyes on it, the gold is real", watching.mines[0].gold, 12500);
+
+  // minimapIcons paints a mine glyph over UNEXPLORED ground deliberately — measured against
+  // the real 1.27a client (item 4) — so omitting the mine would put a hole in the minimap the
+  // real game does not have. Its contents are the opposite: the best scouting fact on the map.
+  const dark = snapshotFor(world, viewer(0, seating, { fogBlocksAt: () => true }), 0, 0);
+  check("unscouted, the mine is still on the map", [dark.mines.length, dark.mines[0].x], [1, 1]);
+  check("but its gold reads unknown, not empty", dark.mines[0].gold, -1);
+}
+
+console.log("a ground item in the dark is absent, because nothing remembers an item");
+{
+  const seating = { 0: 0 };
+  const world = worldOf([], [], [{ id: 70, itemId: "ratf", x: 3, y: 4, charges: 3 }]);
+  check("in sight, it is sent", snapshotFor(world, viewer(0, seating), 0, 0).items.length, 1);
+  // Unlike a building, an item is a live widget that vanishes with the eyes on it
+  // (`fogBlocksAt`'s own comment). So there is no "remembered" third state for it.
+  check("out of sight, it is gone entirely", snapshotFor(world, viewer(0, seating, { fogBlocksAt: () => true }), 0, 0).items.length, 0);
 }
 
 console.log(failed === 0 ? "\nsnapshot: all checks passed" : `\nsnapshot: ${failed} FAILED`);

@@ -38,12 +38,36 @@ import type { SimUnit, SimMine, SimItem, BuildJob, SimBuff, SimAbility, HeldItem
  *     — but "where my opponent is about to drop a tower" is the strongest intel in the game and
  *     it has no business being sent at all.
  *
- * Both are TEAM/OWNERSHIP questions, answered by `seesFor` and a slot comparison. The GRID
- * question — may this unit be sent at all, given where the recipient's fog is — is deliberately
- * NOT here. That is item 6, it is a different predicate from `fogHides` (which only answers
- * "draw?"), and conflating the two is the trap that ships a maphack. Until item 6 lands, a
- * snapshot describes the whole world: it is not yet safe to send to an opponent, and nothing
- * sends it.
+ * Both are TEAM/OWNERSHIP questions, answered by `seesFor` and a slot comparison.
+ *
+ * ## The GRID question (item 6), and why it is not a predicate
+ *
+ * `fogHides` answers *should this be drawn?*. The snapshot asks *may this be sent?*, which is
+ * strictly stronger: a client must never RECEIVE what it cannot see, or the fog is a
+ * client-side suggestion and we have shipped a maphack.
+ *
+ * The item predicted a predicate. It is **three-valued**, and the third value is not an
+ * embellishment — it is the one case `fogHides` deliberately answers "draw" to. WC3 leaves the
+ * last-seen image of an enemy STRUCTURE standing in the fog, so `fogHides` is false for a
+ * building you saw an hour ago; but its live hp, its construction progress and its production
+ * queue are things you demonstrably do not know. Sending the record whole would leak exactly
+ * the intel the fog exists to withhold, and omitting it would delete a building off the
+ * player's screen that WC3 keeps there. Neither is right, so `visibilityFor` returns
+ * `"live" | "remembered" | "omit"` and `remembered` records are REDACTED to the identity and
+ * pose a last-seen image needs.
+ *
+ * **The reason that redaction needs no per-viewpoint memory is worth stating**, because it
+ * looks like it should. A remembered record would in general have to carry where the thing was
+ * WHEN IT WAS SEEN, which is per-recipient history the authority would have to keep. It does
+ * not here — because the only things WC3 remembers are BUILDINGS, and a building's last-seen
+ * position is its current position. The memory case collapses into a field mask. That is the
+ * whole of why this fits in one move.
+ *
+ * The classification falls out of the two predicates the viewpoint already has, and the pairing
+ * is not a coincidence: `fogHides` false + `fogBlocksClick` true IS "drawn from memory" — the
+ * distinction issue #62 exists for (you can see the Goblin Merchant across the map; you cannot
+ * shop at it). So item 6 needed no new fog rule, only the observation that the existing pair
+ * already spans three states rather than two.
  */
 
 /** The slice of the world a snapshot is built from. `SimView` satisfies it structurally, so
@@ -56,12 +80,54 @@ export interface SnapshotWorld {
   readonly dawnDusk: boolean;
 }
 
-/** The per-recipient half. `Viewpoint` satisfies it; a test can pass a two-line stub.
- *  Narrow on purpose — a snapshot must not become a second handle on the fog grid, which is
- *  what item 6 will widen this with, deliberately and visibly. */
+/** The per-recipient half. `Viewpoint` satisfies it; a test can pass a five-line stub.
+ *  Still narrow: these are the four questions the send rule asks, not a handle on the grid. */
 export interface SnapshotViewer {
   /** True for the recipient itself and for every team-mate (`Viewpoint.seesFor`). */
   seesFor(player: number): boolean;
+  /** Is this unit's model hidden by fog right now? False for a SEEN building out of sight —
+   *  WC3 keeps its image — which is the case that makes the send rule three-valued. */
+  fogHides(u: SimUnit): boolean;
+  /** Are there eyes on this unit right now? The stricter of the pair: true for that same
+   *  remembered building, because the image is a memory rather than sight. */
+  fogBlocksClick(u: SimUnit): boolean;
+  /** Is this unit invisible to these eyes (undetected)? */
+  invisHides(u: SimUnit): boolean;
+  /** No eyes on this spot at all — the test for things with their own pick paths, a mine
+   *  and a ground item, neither of which is remembered the way a building is. */
+  fogBlocksAt(p: { x: number; y: number }): boolean;
+}
+
+/** How much of a unit this recipient is entitled to.
+ *
+ *  • `live` — eyes on it: the whole record.
+ *  • `remembered` — a structure seen before and not currently watched. Identity and pose only;
+ *    every live value is redacted, because the player's knowledge of them is an hour old.
+ *  • `omit` — not in the snapshot at all. Not "sent and ignored": absent. */
+export type Visibility = "live" | "remembered" | "omit";
+
+/**
+ * What may be sent about `u` to these eyes.
+ *
+ * Exported because it is the rule, and a rule buried inside the builder is a rule nobody can
+ * test at the boundary that matters. The order of the tests is load-bearing and each one is a
+ * different reason:
+ *
+ *  1. **Off the field entirely** (in a mine, inside a building under construction, in a burrow,
+ *     swallowed, whisked away by Mirror Image). Gone for everyone — but the OWNER and its
+ *     allies still need them, or a burrow could not list its garrison and a mining peasant
+ *     would blink out of its owner's own world. So this is a `seesFor` gate, not a drop.
+ *  2. **Undetected invisibility.** `fogHides` says nothing about it; the client currently ORs
+ *     the two, which is right for drawing and far too weak for sending. A Wind Walking hero's
+ *     coordinates must not be in the enemy's payload at all.
+ *  3. **Fog.** Then the memory split above.
+ */
+export function visibilityFor(viewer: SnapshotViewer, u: SimUnit): Visibility {
+  const off = u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished;
+  if (off) return viewer.seesFor(u.owner) ? "live" : "omit";
+  if (viewer.invisHides(u)) return "omit";
+  if (viewer.fogHides(u)) return "omit";
+  return viewer.fogBlocksClick(u) ? "remembered" : "live";
 }
 
 /** A weapon, as the client reads it: the HUD's damage figures plus the two ratios
@@ -113,6 +179,12 @@ export interface UnitSnapshot {
   isHero: boolean;
   properName: string;
   isCreep: boolean;
+  /** This record is a last-seen IMAGE, not sight (`visibilityFor` → `"remembered"`). Every
+   *  live value below it is redacted to a zero, so a client must not read them — and the
+   *  renderer already knows not to: it cannot be clicked (`fogBlocksClick`) and it draws
+   *  dimmed (`showsFromMemory`), which is the same fact arriving as data instead of as a
+   *  second derivation of the grid. */
+  remembered: boolean;
 
   // --- pose and animation ---------------------------------------------------
   x: number;
@@ -201,6 +273,9 @@ export interface MineSnapshot {
   x: number;
   y: number;
   radius: number;
+  /** Gold remaining, or **-1 when this recipient has no eyes on the mine**. Not 0: an empty
+   *  mine and an unscouted one are different facts, and a client that conflated them would
+   *  route workers away from a full expansion. */
   gold: number;
 }
 
@@ -242,6 +317,115 @@ function weaponOf(w: SimUnit["weapon"]): WeaponSnapshot | null {
 }
 
 /**
+ * A last-seen image: what the player is entitled to remember about a structure nobody is
+ * currently looking at.
+ *
+ * Everything here is either immutable for the life of the building (id, owner, team, type,
+ * race) or the pose of something that cannot move — which is why this needs no history. What
+ * is redacted is everything that CHANGES while you are not watching: hp, mana, the
+ * construction timer, the production queue, the rally point, buffs, abilities, garrison,
+ * upgrades in progress. A player who could read those through the fog would know an enemy
+ * expansion was being repaired, or that a Keep upgrade was 3 seconds out.
+ *
+ * `building` is a fixed non-null stub rather than the real one: the renderer keys "is this a
+ * structure" (health-bar suppression, minimap glyph, selection-ring size) off its presence, so
+ * dropping it would change the drawn shape of the memory, while passing the live one is the
+ * leak. `altModel` is carried because it is which HALF of the model is showing — a rooted
+ * Ancient looks different from a walking one, and you saw which.
+ *
+ * **Known gap, and it is pre-existing rather than introduced here.** A remembered building that
+ * has since been DESTROYED simply stops appearing, because it is no longer in `world.units` to
+ * be classified. WC3 keeps the ghost image until you re-see the spot. The client has the same
+ * hole today for the same reason (`fogHides` reads live units), so this is not a regression —
+ * but it is now a hole in a payload rather than in a render loop, which is a better place to
+ * fix it from. Recorded as item 6b.
+ */
+function rememberedUnit(u: SimUnit): UnitSnapshot {
+  return {
+    id: u.id,
+    owner: u.owner,
+    team: u.team,
+    typeId: u.typeId,
+    race: u.race,
+    neutralPassive: u.neutralPassive,
+    isHero: u.isHero,
+    properName: "",
+    isCreep: u.isCreep,
+    remembered: true,
+
+    x: u.x,
+    y: u.y,
+    facing: u.facing,
+    flyHeight: u.flyHeight,
+    speed: 0,
+    radius: u.radius,
+    flying: u.flying,
+    order: "idle",
+    moving: false,
+    inCombat: false,
+    working: false,
+    swingSeq: 0,
+    chopSeq: 0,
+    swingBroken: false,
+    swingSlam: false,
+    altModel: u.altModel,
+    spawning: 0,
+    constructing: 0,
+    repairing: false,
+
+    inMine: false,
+    insideBuild: false,
+    inBurrow: false,
+    devouredBy: 0,
+    vanished: false,
+    invisible: false,
+    ethereal: false,
+
+    hp: 0,
+    maxHp: 0,
+    mana: 0,
+    maxMana: 0,
+    armor: 0,
+    bonusArmor: 0,
+    bonusDamage: 0,
+    invulnerable: false,
+    weapon: null,
+    swingWeapon: null,
+
+    level: 0,
+    xp: 0,
+    skillPoints: 0,
+    str: 0,
+    agi: 0,
+    int: 0,
+    bonusStr: 0,
+    bonusAgi: 0,
+    bonusInt: 0,
+
+    worker: null,
+    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 },
+    abilities: [],
+    buffs: [],
+    inventory: [],
+    garrison: [],
+    garrisonCap: 0,
+
+    isSummon: false,
+    summonLeft: 0,
+    summonMax: 0,
+    isIllusion: false,
+    illusionOf: 0,
+
+    guardX: 0,
+    guardY: 0,
+
+    buildPending: null,
+    orderQueue: null,
+    pendingCastCode: null,
+  };
+}
+
+/**
  * Build `player`'s view of the world.
  *
  * `own` (the recipient's own units) and `friendly` (`seesFor` — itself plus team-mates) are two
@@ -258,6 +442,12 @@ export function snapshotFor(
 ): WorldSnapshot {
   const units: UnitSnapshot[] = [];
   for (const u of world.units.values()) {
+    const vis = visibilityFor(viewer, u);
+    if (vis === "omit") continue;
+    if (vis === "remembered") {
+      units.push(rememberedUnit(u));
+      continue;
+    }
     const own = u.owner === recipient;
     // The illusion tell, resolved HERE rather than on arrival. `seesFor` and not `own`
     // deliberately: docs/illusions.md gates the tells on the viewpoint, and a team-mate is
@@ -276,6 +466,7 @@ export function snapshotFor(
       isHero: u.isHero,
       properName: u.properName,
       isCreep: u.isCreep,
+      remembered: false,
 
       x: u.x,
       y: u.y,
@@ -367,11 +558,26 @@ export function snapshotFor(
     });
   }
 
+  // Mines are always SENT and their gold is not. A gold mine is map-placement furniture: its
+  // position is public knowledge from tick 0 — `minimapIcons` paints its glyph over unexplored
+  // ground deliberately, measured against the real 1.27a client (item 4) — so omitting it would
+  // put a hole in the minimap the real game does not have. How much gold is LEFT in it is the
+  // opposite: it is the single most valuable scouting fact on the map, and a player with no
+  // eyes on a mine does not know whether it is full or nearly dry.
   const mines: MineSnapshot[] = [];
-  for (const m of world.mines.values()) mines.push({ id: m.id, x: m.x, y: m.y, radius: m.radius, gold: m.gold });
+  for (const m of world.mines.values()) {
+    const seen = !viewer.fogBlocksAt(m);
+    mines.push({ id: m.id, x: m.x, y: m.y, radius: m.radius, gold: seen ? m.gold : -1 });
+  }
 
+  // Ground items are the strict case and get no memory at all. `fogBlocksAt`'s own comment
+  // says why: an item is a live widget that vanishes with the eyes on it, not a building whose
+  // image persists. So an item in the dark is absent, not remembered.
   const items: GroundItemSnapshot[] = [];
-  for (const it of world.items.values()) items.push({ id: it.id, itemId: it.itemId, x: it.x, y: it.y });
+  for (const it of world.items.values()) {
+    if (viewer.fogBlocksAt(it)) continue;
+    items.push({ id: it.id, itemId: it.itemId, x: it.x, y: it.y });
+  }
 
   return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, units, mines, items };
 }

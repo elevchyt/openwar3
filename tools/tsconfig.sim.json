@@ -16,5 +16,5 @@
     "noEmit": false
   },
   "//files": "world.ts and vision.ts are INDEPENDENT entries, not a chain — vision.ts imports nothing, so listing it here does not weaken the standing invariant that world.ts compiles standalone.",
-  "files": ["../src/sim/world.ts", "../src/sim/vision.ts", "../src/game/viewpoint.ts", "../src/game/jassHooks.ts", "../src/game/authority.ts", "../src/game/minimapView.ts", "../src/game/snapshot.ts"]
+  "files": ["../src/sim/world.ts", "../src/sim/vision.ts", "../src/game/viewpoint.ts", "../src/game/jassHooks.ts", "../src/game/authority.ts", "../src/game/minimapView.ts", "../src/game/snapshot.ts", "./snapshot-viewer-conformance.ts"]
 }
