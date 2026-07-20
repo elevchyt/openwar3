@@ -14,9 +14,6 @@ import type { EngineHooks } from "../jass/runtime";
 // The entries that did NOT come across are the ones whose bodies genuinely read something else,
 // and each is a different reason rather than one:
 //
-//   * `setUnitFlyHeight` writes the sim AND the render lift; `setUnitOwner` writes the sim AND
-//     re-tints the model. Two systems in one native — they cannot move until the presentation
-//     half has a seam of its own.
 //   * `getUnitX`/`getUnitY`/`getResourceAmount`/`createBlightedGoldMine` fall back to the gold-mine
 //     table, which is map-placement state the renderer owns.
 //   * `createUnit`/`removeUnit`/`killUnit`/`issueUnitOrder` route through `RtsController`, which
@@ -30,8 +27,28 @@ import type { EngineHooks } from "../jass/runtime";
 //
 // Composition is a spread: every `EngineHooks` member is optional, so the renderer merges this
 // table with its own and the compiler still checks both halves against the same interface.
-export function simHooks(sim: SimWorld): Partial<EngineHooks> {
+//
+// `teamOf` is the one thing the world half cannot answer for itself. `SetUnitOwner` has to write
+// a TEAM alongside the new owner — the sim decides allegiance and vision by team, not by slot —
+// and the slot→team seating is the LOBBY's, which the world does not carry. It is injected rather
+// than looked up so that both callers can supply the mapping they actually have: the renderer
+// passes its `meleeTeams` lookup, a headless host passes `MeleeConfig.slots`. See item 1c-note in
+// docs/multiplayer.md — that this mapping has no authority-side owner at all is a real finding,
+// and a separate one.
+export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Partial<EngineHooks> {
   return {
+    // --- the two DUAL-WRITERS, sim half only -------------------------------------------------
+    //
+    // `SetUnitOwner` and `SetUnitFlyHeight` each write two systems: the world, and the model
+    // standing in it (a re-tint of the team-coloured parts; the render lift). Only the world half
+    // is here. The renderer re-declares both AFTER spreading this table and calls back into these
+    // entries, so the model half decorates the world half instead of replacing it — which is why
+    // these are the only two keys that legitimately appear on both sides of the split.
+    //
+    // A headless host spreads this table and declares nothing over it: it gets the world write
+    // and there is no model to re-tint, which is the correct behaviour rather than a gap.
+    setUnitOwner: (id, player) => sim.setUnitOwner(id, player, teamOf(player)),
+    setUnitFlyHeight: (id, height) => sim.setUnitFlyHeight(id, height),
     // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
     setUnitState: (id, state, value) => {
       const u = sim.units.get(id);

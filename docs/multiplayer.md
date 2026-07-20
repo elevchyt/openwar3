@@ -940,9 +940,38 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
    load-bearing rather than decorative. Confirmed by doing it: `pnpm typecheck` stayed green, the
    suite exited 1 on a `Cannot assign to read only property 'gold'`. Restored after.
 
-1c. **The dual-writers.** `setUnitFlyHeight` and `setUnitOwner` write the sim AND the model. They
-   need the presentation half to have a seam of its own before they can split; until then a
-   headless host simply has the sim half of each and no model to re-tint.
+1c. ~~**The dual-writers.**~~ **Done, and the entry above was wrong about the blocker.** It said
+   these needed "the presentation half to have a seam of its own" first. They did not. A dual
+   native does not have to move whole: its WORLD half goes into `simHooks`, and the renderer
+   **re-declares the same key after spreading the table and calls back into it**, so the model
+   half decorates rather than replaces. `setUnitOwner` and `setUnitFlyHeight` are therefore the
+   only two keys that legitimately appear on both sides, and the union is still 149.
+   `simHooks` 56 → 58; `simWorld` in `mapViewer.ts` **34 → 32**.
+
+   **The real blocker was `teamOf`, and finding it is worth more than the move.** `SetUnitOwner`
+   must write a TEAM alongside the new owner — the sim decides allegiance and vision by team, not
+   by slot — and the slot→team seating is the LOBBY's. It is now injected
+   (`worldHooks(teamOf)`): the renderer passes its `meleeTeams` lookup, a headless host passes
+   `MeleeConfig.slots`. Injecting beat looking it up because **there is no authority-side owner of
+   that mapping to look it up from** — see 1c-note.
+
+   **1c-note, a real finding, not part of this move.** The lobby's player→team map exists in
+   exactly one place: `mapViewer.meleeTeams`, built from `config.slots`. Everything else
+   *re-derives* it. `Viewpoint.teamOfPlayer` scans `world.units` for a unit that player owns and
+   falls back to the slot number — i.e. the authority's own vision code is reverse-engineering the
+   seating from unit ownership because it cannot reach the seating. That is wrong before the first
+   unit is seeded and for any player who owns nothing, and it is the kind of thing that will bite
+   once a host answers for players it is not rendering. **It is its own item** (see item 2's
+   neighbourhood — viewpoints at match start is when this becomes load-bearing). Do not fold it
+   into a hook move.
+
+   **Verification honesty:** the world half of both natives is unit-tested, including that the
+   injected `teamOf` is actually applied (the check fails on `teamOf(id)` vs `teamOf(player)` with
+   `typecheck` clean — confirmed by injecting it). The *decorator* is not covered by any test: the
+   risk is spread order, since declaring the overrides BEFORE `...world` would silently drop the
+   model half. That is checked by reading the source (`...world` at literal position 22, the two
+   overrides at 108 and 117) and by `typecheck`, not by a runtime assertion. Echo Isles melee never
+   calls either native, so neither was exercised in the browser.
 
 1d. **The gold-mine table.** `getUnitX`/`getUnitY`/`getResourceAmount`/`setResourceAmount`/
    `createBlightedGoldMine` fall back to the mine table, because to a script a gold mine IS a unit

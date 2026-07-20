@@ -1392,6 +1392,11 @@ export class MapViewerScene {
    *  HUD — the BJ force helpers already gate on GetLocalPlayer, so a per-player loop won't
    *  spam duplicates. */
   private textHooks(): EngineHooks {
+    // The world/authority half, built once so the two DUAL-WRITER natives below can call back
+    // into it. `SetUnitOwner` and `SetUnitFlyHeight` each write the world AND the model, and the
+    // model half only exists here — so the renderer decorates those two rather than replacing
+    // them, and the world write happens exactly once either way.
+    const world = this.rts?.worldHooks((p) => this.teamOf(p)) ?? {};
     return {
       // The non-presentation half of the table — every native whose answer comes from the world
       // (src/game/jassHooks.ts `simHooks`) or from the authority (`authorityHooks`). The
@@ -1407,7 +1412,7 @@ export class MapViewerScene {
       // runs long after `RtsController` is constructed — a map script cannot execute before the
       // world it mutates exists — so the null branch is unreachable in practice; when it is
       // taken, the natives fall back to their own defaults instead of silently no-opping.
-      ...(this.rts?.worldHooks() ?? {}),
+      ...world,
       // `duration` is seconds (timed action) or < 0 (untimed) — showMessage handles both.
       displayText: (player, msg, duration) => {
         if (player === this.localPlayer) this.hud?.showMessage(msg, duration);
@@ -1491,17 +1496,19 @@ export class MapViewerScene {
       // --- unit-mutation effects (7.7 cont.) — a trigger visibly moves/alters a unit ---
       // SetUnitOwner: reassign in the sim (team decides allegiance/vision), then re-tint
       // the team-coloured model parts to the new slot's colour if changeColor is set.
+      // DUAL-WRITER: the reassignment is `world`'s (and the only half a headless host has);
+      // this entry adds the re-tint, which needs a model.
       setUnitOwner: (id, player, changeColor) => {
-        if (!this.rts) return;
-        this.rts.simWorld.setUnitOwner(id, player, this.teamOf(player));
-        if (changeColor) this.rts.setUnitTeamColor(id, player);
+        world.setUnitOwner?.(id, player, changeColor);
+        if (changeColor) this.rts?.setUnitTeamColor(id, player);
       },
       setUnitColor: (id, color) => this.rts?.setUnitTeamColor(id, color),
       setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
+      // DUAL-WRITER, same shape as setUnitOwner above — `world` writes the sim, this adds the lift.
       setUnitFlyHeight: (id, height) => {
-        this.rts?.simWorld.setUnitFlyHeight(id, height);
+        world.setUnitFlyHeight?.(id, height);
         this.rts?.setUnitFlyHeight(id, height);
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),

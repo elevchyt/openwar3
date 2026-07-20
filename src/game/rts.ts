@@ -3407,9 +3407,14 @@ export class RtsController {
    *
    * A headless host builds the same two factories directly and injects its own presentation
    * entries (or none), which is the whole point of the split.
+   *
+   * `teamOf` is passed in rather than read here because the slot→team seating is the LOBBY's and
+   * this controller does not hold it — see `simHooks`. The two dual-writer natives it feeds
+   * (`SetUnitOwner`, `SetUnitFlyHeight`) come back with their WORLD half only; a caller that also
+   * has models re-declares them over this table and calls back into these entries.
    */
-  worldHooks(): Partial<EngineHooks> {
-    return { ...simHooks(this.sim), ...authorityHooks(this.authority) };
+  worldHooks(teamOf: (player: number) => number): Partial<EngineHooks> {
+    return { ...simHooks(this.sim, teamOf), ...authorityHooks(this.authority) };
   }
 
   /**

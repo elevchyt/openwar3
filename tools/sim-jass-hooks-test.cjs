@@ -42,7 +42,8 @@ const EXPECTED = [
   "resetUnitCooldown", "selectHeroSkill", "setAllTypeSlots", "setDawnDusk", "setHeroLevel",
   "setHeroXp", "setItemCharges", "setItemPosition", "setPlayerTechMaxAllowed",
   "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel",
-  "setUnitFacing", "setUnitInvulnerable", "setUnitMoveSpeed", "setUnitPathing", "setUnitPosition",
+  "setUnitFacing", "setUnitFlyHeight", "setUnitInvulnerable", "setUnitMoveSpeed", "setUnitOwner",
+  "setUnitPathing", "setUnitPosition",
   "setUnitState", "setUnitTurnSpeed", "unitAddAbility", "unitAddItem", "unitDropItemPoint",
   "unitDropItemSlot", "unitDropItemTarget", "unitInventorySize", "unitItemInSlot",
   "unitRemoveAbility", "unitRemoveItem", "unitRemoveItemFromSlot", "unitUseItem",
@@ -50,10 +51,14 @@ const EXPECTED = [
 ].sort();
 
 console.log("the pure-world half of the hook table is complete");
-const hooks = simHooks(world);
+// teamOf is injected — the slot->team seating is the lobby's, not the world's. A stub that is
+// deliberately NOT the identity function, so a hook that forgot to apply it is visible.
+const TEAMS = { 0: 7, 1: 7, 2: 9 };
+const teamOf = (p) => TEAMS[p] ?? p;
+const hooks = simHooks(world, teamOf);
 const got = Object.keys(hooks).sort();
 check("every expected native is present, and no extra", got, EXPECTED);
-check("all 56 of them are functions", got.filter((k) => typeof hooks[k] !== "function"), []);
+check("all 58 of them are functions", got.filter((k) => typeof hooks[k] !== "function"), []);
 check("setPlayerState is NOT here — it is the authority's", got.includes("setPlayerState"), false);
 
 // Not just present — actually wired to THIS world. A hook bound to the wrong object, or to a
@@ -69,6 +74,22 @@ world.dawnDusk = true;
 hooks.setDawnDusk(false);
 check("setDawnDusk writes the sim", world.dawnDusk, false);
 check("isDawnDuskEnabled reads it", hooks.isDawnDuskEnabled(), false);
+
+// --- the dual-writers ------------------------------------------------------------------------
+//
+// SetUnitOwner and SetUnitFlyHeight each write the world AND the model. Only the world half is
+// here; the renderer decorates. What is checked is the half that MOVED — and specifically that
+// the injected teamOf is actually applied, because the sim decides allegiance and vision by TEAM
+// rather than by slot. A setUnitOwner that set the owner and left the team behind would leave a
+// gifted unit fighting for its old side and lifting fog for it, which is the exact bug this
+// native exists to avoid.
+console.log("\nthe dual-writers write their world half, teamOf applied");
+world.units.set(4242, { id: 4242, owner: 0, team: 7, flyHeight: 0 });
+hooks.setUnitOwner(4242, 2);
+check("owner was reassigned", world.units.get(4242).owner, 2);
+check("team came from the INJECTED teamOf, not the slot", world.units.get(4242).team, 9);
+hooks.setUnitFlyHeight(4242, 350);
+check("fly height reached the sim", world.units.get(4242).flyHeight, 350);
 
 // --- the authority half -------------------------------------------------------------------
 //
