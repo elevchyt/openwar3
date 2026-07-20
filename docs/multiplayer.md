@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | not started | |
+| D — N vision maps | in progress | [remaining-work list](#remaining-work-in-order-1) written; no code moved yet. Blocked on two decisions: how the dev boot is gated, and the unit of vision |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -118,9 +118,11 @@ first; it reads the unpacked `Scripts/common.j` and fails without it.
 
 **Pick up here.** Phase B is **done** — see [what it proves](#phase-b-is-done-what-it-proves).
 Next is **Phase D** (one `VisionMap` per vision group), which also inherits the fog modifiers,
-`cripplePlayer` and `seesFor`/`exposed` that Phase B declined to split early. Then **Phase E**,
-whose first job is a committed headless boot path, because the [JASS hook table](#the-jass-hook-table)
-split depends on it.
+`cripplePlayer` and `seesFor`/`exposed` that Phase B declined to split early. Its
+[remaining-work list](#remaining-work-in-order-1) is written and is the handoff; its **item 1** is the
+committed headless boot path, pulled forward from Phase E because Phase D is the first phase no
+headless test can verify. The [JASS hook table](#the-jass-hook-table) split depends on that boot path
+too, and stays in Phase E.
 
 ### The `simWorld` escape hatch
 
@@ -551,16 +553,103 @@ recording it. Only cross-machine replay *verification* would overturn that, and 
 
 ### Phase D — one `VisionMap` per vision group
 
-Today there is exactly **one**, and it is the local team's:
-[`src/game/rts.ts`](../src/game/rts.ts):633, constructed once at :729, with visibility
-short-circuiting on `team !== this.localTeam` at :734. AoI filtering needs one per player or
-vision-sharing group. `VisionMap` ([`src/sim/vision.ts`](../src/sim/vision.ts):62) is cleanly
-parameterised and instantiable N times, so this is instantiation and wiring, not redesign. Rebuilds
-are already throttled to 10 Hz (:2311).
+Today there is exactly **one** `VisionMap` and it is the local team's — `private vision!: VisionMap`
+in [`src/game/rts.ts`](../src/game/rts.ts), built once in the constructor, with every read
+short-circuiting on `this.localTeam`. AoI filtering (Phase E) needs one per player.
+`VisionMap` ([`src/sim/vision.ts`](../src/sim/vision.ts)) takes `(originX, originY, width, height)`
+and is cleanly instantiable N times, so **this is instantiation and wiring, not redesign**. Rebuilds
+are already throttled to 10 Hz.
 
-The other per-viewpoint systems that follow the same rule: unit hiding in fog (:2325), detection and
-invisibility (:1164), illusion tells (see [`illusions.md`](./illusions.md)), minimap dots
-([`vision.ts`](../src/sim/vision.ts):357), and per-player text/leaderboard/multiboard.
+*(Line numbers are deliberately absent from this section. The ones that used to be here were written
+before Phase B moved ~1 150 lines out of `rts.ts` and were all wrong by the time anyone read them.
+Grep for the names instead — they are all distinctive.)*
+
+#### The inventory — what actually reads the local viewpoint
+
+`grep -n "localTeam\|localPlayer" src/game/rts.ts` returns ~60 hits. They are **not** one thing.
+Classified by what each site's consumers actually read:
+
+**Stays client-side — "which viewpoint is this machine rendering?"** (~45 sites, no change needed)
+
+- The `localPlayer`/`localTeam` fields themselves, `setLocalPlayer`, `setLocalTeam`.
+- Every `this.execute(this.localPlayer, …)` call (~35 of them). Phase C already made `execute` take
+  the acting player; the argument being the local one is exactly right — this is "the human at this
+  keyboard issued a command".
+- Ownership tests behind local UI: drag-box selection, subgroup/hero hotkeys, order voice lines
+  (buildings don't voice), idle-worker cycling, the command-card owner check, cursor category,
+  `ownedBy(this.localPlayer, …)`, the cheat codes (`addFoodBonus`, `stashOf`).
+
+**Needs a viewpoint parameter — "may THIS player see that?"** (the actual work)
+
+`seesFor`, `revealsForLocal`, `fogHides`, `fogBlocksClick`, `fogBlocksMine`, `fogBlocksItem`,
+`itemVisible`, `pruneFogged`, `invisHides`, `applyFogTint`, the summon/illusion tells in the
+selection payload, the attack-reveal team filter inside `updateVision`, `setFogState`,
+the fog-modifier stamping loop, the `exposed` set, `dots()`, `creepCamps()`, `minimapIcons()`.
+
+**A category of its own — `sim.visibleToTeam`.** Installed in the constructor as
+`team !== this.localTeam || this.vision.stateAt(x, y) === FogState.Visible`. This is **not** a
+viewpoint: it is the sim's authoritative auto-acquisition gate (issue #17), and today every
+non-local team passes through as "sees everything" because no grid exists for them. Once N maps
+exist it must consult the real one — at which point it stops being viewpoint code and becomes
+authority state. It is the one item in this phase that **deliberately changes behaviour** (enemy
+creeps currently aggro through fog and will stop), so it is last and gets its own verification.
+
+#### Remaining work, in order
+
+1. **The headless boot path.** No committed scripted boot exists: `mountLoadGate` always requires a
+   human folder-picker gesture and the only URL param in `src/` is `?menudebug`. Every visual
+   verification so far has been a hand-patched temp `?dev=` boot, applied and reverted **ten times**
+   during Phase B. Land a real one — a vite `configureServer` middleware serving `/wc3/*` from the
+   local install plus a scripted `devBoot()` in `main.ts` — gated so the shipped build can never
+   serve a Blizzard byte. **Blocked on the developer: how it is gated** (dev-only vite plugin, env
+   var, or separate entry point). Shipping an asset route by accident is not recoverable by a
+   follow-up commit, so this is not a call to make unilaterally. Then: two browser contexts,
+   different player slots, same map and seed.
+2. **Extract a `Viewpoint`** (new file, `src/game/viewpoint.ts`). One object owning one `VisionMap`
+   plus the `exposed` set and the fog modifiers that bear on it, exposing `seesFor(player)`,
+   `revealsFor(u)`, `fogHides(u)`, `fogBlocksClick(u)`, `fogBlocksAt(x, y)`, `isExplored(x, y)`.
+   `rts.ts` keeps a single `private local: Viewpoint` and every current call becomes
+   `this.local.…`. **Zero behaviour change, zero new maps.** This is the move that makes items 3–7
+   one-liners instead of seventeen scattered edits.
+3. **A `VisionSet` registry** — `viewpointFor(player)`, creating on demand, each rebuilding at its
+   own 10 Hz. The local player's viewpoint becomes `viewpointFor(this.localPlayer)`. Still exactly
+   one instance at runtime, because nothing else asks for one yet; the cost lands in item 7.
+4. **Fog modifiers and `exposed` move onto the viewpoint they belong to.** Today `setFogState`
+   early-outs on `seesFor(player)` and stamps into the single local grid, and `cripplePlayer`
+   early-outs on `toPlayers.includes(this.localPlayer)`. Both are client-by-construction. They
+   become: stamp into `viewpointFor(player)`; record exposure on each recipient's viewpoint.
+   **Do not collapse `explored` (sticky) into `visible` (rebuilt every tick)** — a one-shot
+   `SetFogState` VISIBLE lights the area for an instant but leaves it explored forever, while a
+   standing modifier is re-stamped on every rebuild.
+5. **Minimap and per-player HUD take a viewpoint** — `dots()`, `creepCamps()`, `minimapIcons()`,
+   and the `leaderboardFor` / `displayText` / dialog gating in `mapViewer.ts`.
+6. **`GetLocalPlayer` resolves per recipient.** [`src/jass/natives/config.ts`](../src/jass/natives/config.ts)
+   reads `c.rt.localPlayer` — the authority's own notion of "local", which is meaningless once the
+   interpreter runs once and its output is sent to N clients. The classic WC3 desync native; it must
+   resolve against the recipient of the snapshot.
+7. **`sim.visibleToTeam` consults the real grid for every team.** See the note above — this is the
+   behaviour-changing one. Verify with creeps: a creep camp must stop aggroing a hero it has no
+   sight on. Also the moment N rebuilds become real, so measure and record the frame cost.
+
+**Illusion tells are already viewpoint-gated** — the blue wash, the summon timer and the portrait all
+key off `seesFor(u.owner)` today, which is the correct rule (see [`illusions.md`](./illusions.md):
+the enemy must not be able to tell). Item 2 carries them along unchanged; do not re-derive them.
+
+#### Open decision — what is the unit of vision?
+
+`VisionMap` is per-**TEAM** today, and teams are not players (`teamOfPlayer` falls back to the slot
+number). The candidates differ the moment a script calls `SetPlayerAlliance` with shared vision,
+which is exactly the feature this is for:
+
+- **per player** — N maps, sharing folded in at reveal time (`revealsFor` already ORs team membership
+  with `alliances.sharesVisionWith`). Survives a runtime alliance change with no re-partitioning.
+- **per team** — what exists; cheapest; wrong as soon as vision is shared across teams.
+- **per sharing group** — fewest rebuilds, but the groups have to be recomputed whenever an alliance
+  changes, and a half-shared alliance (A sees B but not vice versa) has no group.
+
+Recommendation on the table: **per player**, because `seesFor` and `revealsFor` already OR the three
+notions together and per-player is the only one of the three that is closed under a runtime
+`SetPlayerAlliance`. Not yet ratified.
 
 ### Phase E — transport, lobby, reconnect
 
@@ -593,8 +682,11 @@ of a snapshot, never on the authority's own notion of "local".
 There is no committed headless boot path. `?dev=` is described in
 [`CLAUDE.md`](../CLAUDE.md) and [`triggers.md`](./triggers.md) as a **temp, uncommitted** local patch;
 the only URL param in `src/` is `?menudebug`. The load gate always requires a human folder-picker
-gesture ([`src/ui/gate.ts`](../src/ui/gate.ts):55). Automated two-client testing needs a real
-scripted-boot path — worth landing early, since it is how every later phase gets verified.
+gesture (`mountLoadGate`, [`src/ui/gate.ts`](../src/ui/gate.ts)). Automated two-client testing needs
+a real scripted-boot path — worth landing early, since it is how every later phase gets verified.
+This is now **[Phase D item 1](#remaining-work-in-order-1)**, since Phase D is the first phase whose
+correctness cannot be shown by any headless test: fog is invisible to `sim:test`, and a vision
+refactor can pass every suite while showing an enemy base through the fog.
 
 ## Open questions
 
