@@ -321,11 +321,15 @@ commit.
    `followOffsets` (210 L) now take a `FormationWorld` — a two-member interface
    (`units`, `grid`) narrowed deliberately, so the file compiles with no dependency on the
    bridge and structurally accepts `SimWorld` unchanged. `rts.ts` 5 382 → 5 170 lines.
-2. **HP-bar + hover-tooltip DOM → `src/render/worldOverlays.ts`.** `makeHpBar`, `makeHoverTip`,
-   `updateHealthBars`, `computeHoverTip`, `updateHoverTooltip` (~190 L). This is the move that
-   **removes `worldLayer` and every `document.` from `rts.ts`** — the import test's whole point.
-   `computeHoverTip` reads `alliances` and `localPlayer`: that is correct, a tooltip is one
-   machine's UI, so it belongs on the render side and takes those as inputs.
+2. ~~**HP-bar + hover-tooltip DOM → `src/render/worldOverlays.ts`.**~~ **Done.** `WorldOverlays`
+   owns the pooled bar elements, the hover slab and the projection; `rts.ts` keeps the two
+   *queries* (which units get a bar, what the slab says) and hands the answers over as
+   `BarSpec[]` / `HoverTip`. **`rts.ts` now contains no `document`, no `window`, and no
+   `../ui/*` import at all** — the import test's whole point. Seam count 20 → 17.
+   The cut landed one notch further back than this entry predicted: `computeHoverTip` stayed
+   in the controller rather than moving, because it reads `hovered`, `localPlayer`,
+   `alliances`, the registries and the fog tests — passing all of that across a boundary
+   would have been worse coupling than the DOM it was mixed with. Data crosses; state does not.
 3. **Animation resolution → `src/render/unitAnims.ts`.** Module-level `applyAnimProps`,
    `animPropsFor`, `buildAnimSet`, `findBirthFields`, plus `pickSequence`, `attackAnimRate`,
    `walkAnim`, `seqDuration`, `setAnimRate` and the anim constants (~300 L). Pure client. Big line

@@ -19,7 +19,7 @@ import { WORKERS, DEPOT_IDS } from "../data/races";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
-import { worldLayer } from "../ui/stage";
+import { WorldOverlays, type HoverLine, type BarSpec } from "../render/worldOverlays";
 
 // Ties the headless SimWorld to the rendered map (plan §5 vertical slice):
 // seeds movable units from the loaded map, syncs sim state → model instances
@@ -514,7 +514,6 @@ const PISSED_AFTER = 3;
 const MINE_RING_SCALE = 1.4;
 const ITEM_PICK_RADIUS = 72; // click/hover pick radius around a ground item
 const ITEM_RING_RADIUS = 40; // yellow selection/hover ring radius under a ground item
-const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 // Extra world-unit gap added to the builder fan-out when several workers speed-
 // build one structure, so they spread around the whole footprint instead of
 // bunching up (a body-and-a-half wider than the tight gold-mine approach).
@@ -558,64 +557,6 @@ export interface SelIcon {
 const HOVER_OWNER_ENEMY = "#ff0303"; // WC3 red — a hostile player's name
 const HOVER_OWNER_ALLY = "#ffcc00"; // WC3 gold — an allied player's name
 const HOVER_TEXT = "#ffffff"; // unit name, "Level N", "Gold: N" — always white
-
-/** One line of a hover tooltip: its text and the colour WC3 draws it in. */
-interface HoverLine {
-  text: string;
-  color: string;
-}
-
-// A floating status bar drawn above a unit: a hero level badge (left), an HP bar,
-// and a mana bar below it (for units with mana). Pooled, one per visible unit, so
-// bars are always on screen (WC3's "always show health bars"). The bars are single
-// solid fills — WC3's floating bars read as one continuous bar, not visible slices.
-interface HpBar {
-  root: HTMLDivElement;
-  bars: HTMLDivElement;
-  level: HTMLDivElement;
-  hp: HTMLDivElement;
-  manaTrack: HTMLDivElement;
-  mana: HTMLDivElement;
-}
-
-function makeHpBar(): HpBar {
-  const root = document.createElement("div");
-  root.className = "unit-hpbar";
-  root.hidden = true;
-  const level = document.createElement("div");
-  level.className = "unit-hpbar-level";
-  const bars = document.createElement("div");
-  bars.className = "unit-hpbar-bars";
-  const hpTrack = document.createElement("div");
-  hpTrack.className = "unit-hpbar-track";
-  const hp = document.createElement("div");
-  hp.className = "unit-hpbar-fill";
-  hpTrack.appendChild(hp);
-  const manaTrack = document.createElement("div");
-  manaTrack.className = "unit-hpbar-track unit-hpbar-manatrack";
-  const mana = document.createElement("div");
-  mana.className = "unit-hpbar-mana";
-  manaTrack.appendChild(mana);
-  bars.append(hpTrack, manaTrack);
-  root.append(level, bars);
-  // Into the world layer, whose box IS the canvas's — the bar's position is computed in
-  // canvas CSS pixels, so parenting it to the window instead offsets every bar by the
-  // letterbox (see ui/stage.ts).
-  worldLayer().appendChild(root);
-  return { root, bars, level, hp, manaTrack, mana };
-}
-
-/** The hover slab element, into the same world layer as the HP bars so its position
- *  is written in canvas CSS pixels with no letterbox offset (see ui/stage.ts). Skinned
- *  by the human-tooltip-border nine-patch when a real install is mounted (the vars are
- *  lifted to `:root` by ui/hud.ts applyWidgetSkin); a plain placeholder otherwise. */
-function makeHoverTip(): HTMLDivElement {
-  const root = document.createElement("div");
-  root.className = "unit-hover-tooltip";
-  root.hidden = true;
-  worldLayer().appendChild(root);
-  return root;
-}
 
 export class RtsController {
   private sim: SimWorld;
@@ -692,13 +633,9 @@ export class RtsController {
   private nextId = 1;
   /** Placed units in .doo order, each with the sim id reserved for it. See setPlacedOrder. */
   private placedIds: Array<{ x: number; y: number; typeId: string; id: number; taken: boolean }> = [];
-  private hpBars: HpBar[] = []; // pool, one shown per visible unit each frame
+  private overlays: WorldOverlays; // floating HP bars + the hover slab (DOM, client-only)
   // The single floating name/owner slab shown above the unit (or gold mine / ground
   // item) under the cursor. Built lazily into the world layer so it tracks its target
-  // in canvas space exactly like the HP bars; `hoverTipSig` caches the last rendered
-  // content so the DOM is only rebuilt when the lines actually change, not every frame.
-  private hoverTip: HTMLDivElement | null = null;
-  private hoverTipSig = "";
   // Display names for the owner line ("Computer (Normal)", a human's account name).
   // Seeded from the lobby at match start; a player with no entry falls back to "Player N".
   private playerNames = new Map<number, string>();
@@ -754,13 +691,11 @@ export class RtsController {
     // (7.22) — so a script that allies two players actually stops them fighting. Creeps
     // (owner < 0) are excluded by SimWorld.playerAllegiance and keep the team rule.
     this.sim.alliedPlayers = (a, b) => this.alliances.coAllied(a, b);
+    this.overlays = new WorldOverlays(host);
   }
 
   dispose(): void {
-    for (const b of this.hpBars) b.root.remove();
-    this.hpBars = [];
-    this.hoverTip?.remove();
-    this.hoverTip = null;
+    this.overlays.dispose();
   }
 
   /** Which player's units a drag-box selects (set at melee start). */
@@ -1775,7 +1710,7 @@ export class RtsController {
 
   /** Hide the floating health bars (e.g. when the map view is not active). */
   pause(): void {
-    for (const b of this.hpBars) b.root.hidden = true;
+    this.overlays.hideBars();
   }
 
   /** Seed movable units (creeps) and neutral-passive sites from the map.
@@ -2558,7 +2493,7 @@ export class RtsController {
       }
     }
     this.updateHealthBars();
-    this.updateHoverTooltip();
+    this.overlays.syncHoverTip(this.computeHoverTip());
   }
 
   /** The sim removed this unit: play its death animation, then decay the corpse
@@ -4962,13 +4897,15 @@ export class RtsController {
 
   /** Draw a floating HP bar above every visible unit each frame (always-on),
    *  reusing a pool of DOM elements. Off-screen / hidden units release theirs. */
+  /**
+   * Which units get a floating status bar this frame, and what it reads. The DOM and
+   * the projection belong to `WorldOverlays`; what is on the map, and whether this
+   * viewer may see it, is this object's question — so the filtering stays here and
+   * the answer crosses as plain data.
+   */
   private updateHealthBars(): void {
     this.pruneSelection();
-    const viewport = this.host.viewport();
-    const dpr = this.dpr();
-    const w = this.host.canvas.width;
-    const h = this.host.canvas.height;
-    let n = 0;
+    const specs: BarSpec[] = [];
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
       if (!u || e.hidden) continue; // no model on screen (worker in a mine, unexplored fog)
@@ -4978,54 +4915,21 @@ export class RtsController {
       // exactly as WC3 does — otherwise you could watch an enemy tower's health from across the
       // map without ever scouting it. Same test the cursor uses (issue #62).
       if (this.fogBlocksClick(u)) continue;
-      this.world[0] = u.x;
-      this.world[1] = u.y;
-      // Bar floats at the unit's drawn base — for air units, their altitude.
-      this.world[2] = this.heightAt(u.x, u.y) + e.moveHeight;
-      this.host.camera.worldToScreen(this.screen, this.world, viewport);
-      const sx = this.screen[0];
-      const sy = this.screen[1];
-      if (sx < 0 || sx > w || sy < 0 || sy > h) continue;
-      // Foreshortened selection radius → how far above the base to float the bar
-      // and how wide to draw it, so both track zoom.
-      this.world2.set(this.world);
-      this.world2[1] = u.y + e.selRadius;
-      this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-      const ry = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - sx, this.screen2[1] - sy) / dpr);
-      const bar = this.hpBars[n] ?? (this.hpBars[n] = makeHpBar());
-      n++;
-      const frac = u.maxHp > 0 ? Math.max(0, Math.min(1, u.hp / u.maxHp)) : 0;
-      bar.hp.style.width = `${frac * 100}%`;
-      // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy
-      // alike — the floating bars aren't team-coloured). CSS adds the vertical sheen.
-      bar.hp.style.backgroundColor = frac > 0.6 ? "#3fbf46" : frac > 0.3 ? "#d6b93b" : "#c8402f";
-      // Mana bar (units/heroes with a mana pool).
-      if (u.maxMana > 0) {
-        bar.manaTrack.hidden = false;
-        bar.mana.style.width = `${Math.max(0, Math.min(1, u.mana / u.maxMana)) * 100}%`;
-      } else {
-        bar.manaTrack.hidden = true;
-      }
-      // Hero level badge to the left of the bars. Read the LIVE level from the sim
-      // unit (u.level) — e.level is the spawn-time level and doesn't track level-ups.
-      if (e.isHero && u.level > 0) {
-        bar.level.hidden = false;
-        bar.level.textContent = String(u.level);
-      } else {
-        bar.level.hidden = true;
-      }
-      bar.root.hidden = false;
-      // Bar width tracks the unit/building on-screen size (≈ its footprint).
-      // Heroes get a wider bar (and a higher floor/ceiling) so their HP + mana
-      // read clearly and stand out from regular units.
-      const barW = e.isHero
-        ? Math.max(46, Math.min(210, ry * 3))
-        : Math.max(30, Math.min(170, ry * 2.4));
-      bar.bars.style.width = `${barW}px`;
-      bar.root.style.left = `${sx / dpr}px`;
-      bar.root.style.top = `${(h - sy) / dpr - (ry + 24)}px`; // gl y-up → css y-down (floats above the unit)
+      specs.push({
+        x: u.x,
+        y: u.y,
+        // Bar floats at the unit's drawn base — for air units, their altitude.
+        z: this.heightAt(u.x, u.y) + e.moveHeight,
+        selRadius: e.selRadius,
+        hpFrac: u.maxHp > 0 ? Math.max(0, Math.min(1, u.hp / u.maxHp)) : 0,
+        manaFrac: u.maxMana > 0 ? Math.max(0, Math.min(1, u.mana / u.maxMana)) : null,
+        // Read the LIVE level from the sim unit (u.level) — e.level is the spawn-time
+        // level and doesn't track level-ups.
+        level: e.isHero && u.level > 0 ? u.level : null,
+        isHero: e.isHero,
+      });
     }
-    for (let k = n; k < this.hpBars.length; k++) this.hpBars[k].root.hidden = true;
+    this.overlays.syncBars(specs);
   }
 
   /** What the hover slab should say for whatever the cursor is over — the ordered,
@@ -5083,56 +4987,6 @@ export class RtsController {
       return { x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: 32, lines: [{ text: name, color: HOVER_TEXT }] };
     }
     return null;
-  }
-
-  /** Float the hover slab above whatever the cursor is over, tracking it in canvas
-   *  space like the HP bars. Rebuilds the DOM only when the lines change (cached by
-   *  `hoverTipSig`); repositions every frame. Anchored bottom-centre a small gap above
-   *  the unit's HP bar so it only ever grows upward as the text gets taller. */
-  private updateHoverTooltip(): void {
-    const tip = this.computeHoverTip();
-    if (!tip) {
-      if (this.hoverTip) this.hoverTip.hidden = true;
-      this.hoverTipSig = "";
-      return;
-    }
-    if (!this.hoverTip) this.hoverTip = makeHoverTip();
-    const root = this.hoverTip;
-    const sig = tip.lines.map((l) => `${l.color}${l.text}`).join("");
-    if (sig !== this.hoverTipSig) {
-      this.hoverTipSig = sig;
-      root.replaceChildren();
-      for (const l of tip.lines) {
-        const div = document.createElement("div");
-        div.className = "uht-line";
-        div.style.color = l.color;
-        div.textContent = l.text;
-        root.appendChild(div);
-      }
-    }
-    // Project the target's base, and a point one selection-radius above it, exactly
-    // as updateHealthBars does — so the slab floats at the same zoom-tracked height.
-    const viewport = this.host.viewport();
-    const dpr = this.dpr();
-    const w = this.host.canvas.width;
-    const h = this.host.canvas.height;
-    this.world[0] = tip.x;
-    this.world[1] = tip.y;
-    this.world[2] = tip.z;
-    this.host.camera.worldToScreen(this.screen, this.world, viewport);
-    const sx = this.screen[0];
-    const sy = this.screen[1];
-    if (sx < 0 || sx > w || sy < 0 || sy > h) {
-      root.hidden = true;
-      return;
-    }
-    this.world2.set(this.world);
-    this.world2[1] = tip.y + tip.radius;
-    this.host.camera.worldToScreen(this.screen2, this.world2, viewport);
-    const ry = Math.max(MIN_RING_PX / 2, Math.hypot(this.screen2[0] - sx, this.screen2[1] - sy) / dpr);
-    root.style.left = `${sx / dpr}px`;
-    root.style.top = `${(h - sy) / dpr - (ry + 34)}px`; // just above the HP bar (ry + 24), which sits above the unit
-    root.hidden = false;
   }
 
   /** CSS px → GL px (device pixels, y-up) to match camera.worldToScreen. */
