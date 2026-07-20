@@ -129,7 +129,7 @@ not a scattering, which is the good news. They are not all the same thing:
 | JASS `EngineHooks` (`textHooks`, lines ~1396–1760) | ~66 | Authority-side by nature; JASS runs on the authority. Misplaced (it lives in the renderer) but not a bypass. Genuinely mixed — `SetUnitOwner` sits next to `PanCameraTo` — so it cannot be moved wholesale. |
 | Read-only lookups (`units`, `mines`, `items`) | ~25 | Fine in principle. Becomes a read-only snapshot view under AoI (Phase E). |
 | **Player commands bypassing `execute()`** | ~13 | **All closed.** Build placement, battlestations, standdown, cancel building / train / research all go through the gate. |
-| **Direct stash mutation via `stashFor()`** | 14 | **Was the worst of it. All 14 are gone** — the renderer no longer writes to a stash. |
+| **Direct stash mutation via `stashFor()`** | 14 | **Was the worst of it. All 14 are gone**, and `stashFor()` now returns a frozen copy, so they cannot come back. |
 | Setup (`initStash`, `setPathStamp`) | few | Fine. |
 
 **Phase C audited the wrong file.** It swept `rts.ts` and found 15 actions. But player commands
@@ -175,11 +175,17 @@ callee-enumeration sweep now shows **no player action left outside `execute()`**
 except `initStash` and `setPathStamp`, which are setup. `src/ui/` touches neither `simWorld` nor
 `stashFor`.
 
+**Done:** `stashFor()` returns a **frozen copy**. The ratchet is on — a renderer can no longer
+spend, and an attempt fails loudly rather than mutating a throwaway in silence. That `pnpm
+typecheck` stayed clean through the change is itself the proof that every remaining use is a
+read.
+
 **Remaining, in order:**
 
-1. **Make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
-   breaks all 14 sites at once, and it is only safe once they are gone.
-2. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
+1. Narrow the `simWorld` getter itself — hooks to an authority module, reads to a view interface.
+   This is the last piece, and unlike everything above it is a **refactor, not a bug**: no player
+   action goes around the gate any more. It wants doing alongside Phase B (bisecting `rts.ts`),
+   since both are about where these ~66 JASS hooks should actually live.
 
 **Two things that looked like blockers and are not.**
 

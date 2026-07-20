@@ -3909,8 +3909,20 @@ export class RtsController {
     return this.sim;
   }
 
-  stashFor(owner: number): { gold: number; lumber: number } {
-    return this.sim.stashOf(owner);
+  /**
+   * A player's gold and lumber, as a **frozen copy**. For display and for greying buttons —
+   * never for spending.
+   *
+   * This used to hand out the sim's live stash object, and the renderer wrote to it in
+   * fourteen places: it checked what you could afford, deducted the price, and paid its own
+   * refunds, all before the sim was told anything. The whole economy ran client-side. Every
+   * one of those sites is now a `Command` and the charging happens in `execute`, so the
+   * escape hatch itself can close: a copy means a renderer CAN'T spend, and `Object.freeze`
+   * means an attempt fails loudly in dev rather than mutating a throwaway in silence.
+   */
+  stashFor(owner: number): Readonly<{ gold: number; lumber: number }> {
+    const s = this.sim.stashOf(owner);
+    return Object.freeze({ gold: s.gold, lumber: s.lumber });
   }
 
   /** How many of `typeId` a player owns or has in production. This picks the REQUIREMENT
