@@ -123,8 +123,10 @@ from: `dots`/`creepCamps` still iterate the local client's render records rather
 not replayed onto viewpoints created after it fires; and `forAudience` has no caller until
 snapshots exist. Phase E's [remaining-work list](#remaining-work-in-order-2) is now written and is
 the handoff; its **item 1** is the [JASS hook table](#the-jass-hook-table) split, which was blocked
-on a committed headless boot path and no longer is (Phase D item 1 landed it). Two of the twelve
-items are gated on a developer decision and are marked as such — see [Open questions](#open-questions).
+on a committed headless boot path and no longer is (Phase D item 1 landed it). The two decisions
+that gated items 2 and 5 have been asked and answered — viewpoints at match START, snapshots as
+JSON first — so **no item in this phase is blocked on the developer**; see
+[Open questions](#open-questions) for the reasoning.
 
 ### The `simWorld` escape hatch
 
@@ -876,7 +878,8 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
 2. **Create player viewpoints at match start, not lazily.** Small. Removes Phase D item 4's known
    limitation outright (a one-shot `SetFogState` is not replayed onto viewpoints created later), and
    makes the N-rebuild cost a known constant from tick 0 rather than a surprise the first time
-   `MeleeExposePlayer` fires. **Gated on a developer decision** — see Open questions.
+   `MeleeExposePlayer` fires. **Decided: at match start** ([Open questions](#open-questions)) — no
+   longer gated.
 
 3. **`dots()` and `creepCamps()` iterate `sim.units`, not `this.entries`.** Carried from
    [Phase D item 5](#remaining-work-in-order-1). They take a viewpoint already, so they answer the fog
@@ -894,7 +897,8 @@ and 4 say otherwise and are flagged. Two items are gated on a developer decision
 5. **The snapshot: a type, and `snapshotFor(player)` on the authority side.** The payload is
    whatever a client needs to render a frame it did not simulate — the `simView` surface above, plus
    selection-relevant per-unit state. Emit it from the authority half; it must not import a transport.
-   **Gated on the encoding decision** — see Open questions.
+   **Decided: JSON first, binary when it hurts** ([Open questions](#open-questions)) — no longer
+   gated.
 
 6. **AoI filtering, as a predicate distinct from `fogHides`.** `Viewpoint.fogHides` answers *should
    this be drawn?*; the snapshot asks *may this be sent?*, which is strictly stronger — a client must
@@ -965,16 +969,20 @@ refactor can pass every suite while showing an enemy base through the fog.
 - **NAT traversal.** Pure relay (simple, all traffic through the free box, bandwidth-bound) vs. WebRTC
   data channels with the cloud box as signaling only (cheaper to host, much more moving parts).
   Bandwidth on a free tier likely decides this.
-- **Snapshot encoding.** JSON is fine to start and trivially debuggable; binary when it hurts.
-  **Blocks [Phase E item 5](#remaining-work-in-order-2)** — asked, not yet answered. The lean above
-  is this file's own, not a decision: it was written before there was a snapshot to encode, and it
-  is the developer's call whether to take the JSON-first path knowingly or design for binary now.
-- **Are player viewpoints created at match START or lazily?** **Blocks
-  [Phase E item 2](#remaining-work-in-order-2)** — asked, not yet answered. At start: the one-shot
-  `SetFogState` replay hole closes for free (Phase D item 4), and N grids cost a known ~0.75 ms each
-  at 10 Hz from tick 0 (measured at Phase D item 7 — four viewpoints, 3.01 ms per round, Echo Isles
-  scale). Lazily: a two-player match on a twelve-slot map builds two grids instead of twelve, but
-  the fog-replay hole stays open and the cost arrives mid-match at an unpredictable moment.
+- ~~**Snapshot encoding.**~~ **Decided — JSON first, binary when it hurts.** The developer's call,
+  taken knowingly rather than inherited: this file had leaned that way since before there was a
+  snapshot to encode, which made it a guess and not a decision. Snapshots are new code and will be
+  wrong at first, and a payload readable in devtools is worth more during that stretch than the
+  bandwidth a binary format would save. Relay bandwidth on a free tier is the thing that would
+  force the change; revisit then, not before. Unblocks [item 5](#remaining-work-in-order-2).
+- ~~**Are player viewpoints created at match START or lazily?**~~ **Decided — at match start.**
+  Every slot gets a `Viewpoint` at tick 0. This closes Phase D item 4's known limitation outright
+  (a one-shot `SetFogState` is not replayed onto viewpoints created later) rather than carrying it
+  as a live bug, and it makes the N-rebuild cost a constant paid up front — ~0.75 ms per viewpoint
+  at 10 Hz, four viewpoints = 3.01 ms per round at Echo Isles scale (measured, Phase D item 7).
+  The lazy alternative would have saved ten grids on a twelve-slot two-player match and paid for it
+  with an unpredictable mid-match cost spike and a fog hole left open. Unblocks
+  [item 2](#remaining-work-in-order-2).
 - **Cold start.** A free instance sleeping after 15 min means the first player waits ~30–60 s for the
   *relay* to wake. Survivable with an honest "waking server" screen — and note this only ever delays
   lobby join, never an in-progress match, since the match itself does not run there.
