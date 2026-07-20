@@ -330,10 +330,13 @@ commit.
    in the controller rather than moving, because it reads `hovered`, `localPlayer`,
    `alliances`, the registries and the fog tests — passing all of that across a boundary
    would have been worse coupling than the DOM it was mixed with. Data crosses; state does not.
-3. **Animation resolution → `src/render/unitAnims.ts`.** Module-level `applyAnimProps`,
-   `animPropsFor`, `buildAnimSet`, `findBirthFields`, plus `pickSequence`, `attackAnimRate`,
-   `walkAnim`, `seqDuration`, `setAnimRate` and the anim constants (~300 L). Pure client. Big line
-   win; does not move the seam by itself but shrinks the pile the seam has to be found in.
+3. ~~**Animation resolution → `src/render/unitAnims.ts`.**~~ **Done.** `AnimSet`,
+   `applyAnimProps`, `animPropsFor`, `buildAnimSet`, `findBirthFields`, `pickSequence`,
+   `attackAnimRate`, `walkAnim`, `seqDuration`, `setAnimRate` (302 L). All nine bodies moved
+   **byte-identical** (verified by diffing against `git show HEAD:src/game/rts.ts`); only the
+   receivers changed — `Entry` → a seven-member `AnimEntry`, `Instance` → a one-member
+   `SeqSource`. The anim CONSTANTS stayed put: `DEATH_CLIP_FALLBACK` and friends are passed in
+   as arguments at their call sites, so they belong to the caller. rts.ts 5 024 → 4 722.
 4. **Map-placement metadata → `src/game/placement.ts`.** `setNeutralPassive`, `setPlacedOrder`,
    `setCreepData`, `setPlayerUnitSeeds`, `setPlacedFootprints` and the `*At` lookups
    (`reserveIdAt`, `isNeutralPassiveAt`, `creepAggroAt`, `creepDropsAt`, `playerSeedAt`,
