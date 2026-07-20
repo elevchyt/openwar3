@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | [remaining-work list](#remaining-work-in-order-1) written; both blocking decisions settled (dev-only vite plugin; vision is per-PLAYER). Item 1 next |
+| D — N vision maps | in progress | item 1 done (committed `?dev` boot, two clients); items 2–7 open |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -596,17 +596,21 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
 
 #### Remaining work, in order
 
-1. **The headless boot path.** No committed scripted boot exists: `mountLoadGate` always requires a
-   human folder-picker gesture and the only URL param in `src/` is `?menudebug`. Every visual
-   verification so far has been a hand-patched temp `?dev=` boot, applied and reverted **ten times**
-   during Phase B. Land a real one — a vite `configureServer` middleware serving `/wc3/*` from the
-   local install plus a scripted `devBoot()` in `main.ts` — gated so the shipped build can never
-   serve a Blizzard byte. **Decided: a dev-only vite plugin** carrying `apply: "serve"`, so the
-   `/wc3/*` middleware is structurally absent from `pnpm build` rather than present-but-disabled,
-   with `devBoot()` behind a dynamic import so it tree-shakes out of the bundle. The route must be
-   code that was never emitted, not code that got switched off — an env var can be mis-set in CI and
-   an accidentally-shipped asset route is not recoverable by a follow-up commit. Then: two browser
-   contexts, different player slots, same map and seed.
+1. ~~**The headless boot path.**~~ **Done.** [`tools/vite-plugin-dev-install.ts`](../tools/vite-plugin-dev-install.ts)
+   serves the developer's own install at `/wc3/manifest.json` and `/wc3/file?path=…`;
+   [`src/dev/devBoot.ts`](../src/dev/devBoot.ts) fetches it and boots straight into a match.
+   `?dev&map=EchoIsles&player=1&seed=4242&fog=unexplored`. Two browser contexts on the same map and
+   seed with different `player` values are two clients in one world, which is how the rest of this
+   phase gets verified.
+
+   **Gating — two independent structural gates, neither a runtime flag.** The plugin carries
+   `apply: "serve"`, so Vite never loads it for `pnpm build`; `main.ts` branches on
+   `import.meta.env.DEV`, a compile-time constant Vite folds to `false`, taking the dynamic
+   `import("./dev/devBoot")` with it. The route is not disabled in production, it is *absent* from
+   it. Proof, and it is worth re-running if anyone touches this: `pnpm build` then grep `dist/` for
+   `wc3/manifest`, `devBoot`, `OPENWAR3_INSTALL` — zero hits, while the *other* dynamic import in
+   `main.ts` (`menuDebug`) still emits its own chunk, so dynamic imports plainly do survive the
+   build and this one's absence is the fold working rather than luck.
 2. **Extract a `Viewpoint`** (new file, `src/game/viewpoint.ts`). One object owning one `VisionMap`
    plus the `exposed` set and the fog modifiers that bear on it, exposing `seesFor(player)`,
    `revealsFor(u)`, `fogHides(u)`, `fogBlocksClick(u)`, `fogBlocksAt(x, y)`, `isExplored(x, y)`.
@@ -632,6 +636,28 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
 7. **`sim.visibleToTeam` consults the real grid for every team.** See the note above — this is the
    behaviour-changing one. Verify with creeps: a creep camp must stop aggroing a hero it has no
    sight on. Also the moment N rebuilds become real, so measure and record the frame cost.
+
+#### Found while verifying item 1 — not item 1's to fix
+
+Two clients on Echo Isles, same seed, slots 0 and 1, `explored` vs `unexplored`:
+
+- **The good news, and it is worth stating.** The existing per-team `VisionMap` is *correct* for the
+  one viewpoint it serves. Under `fog=unexplored` the enemy's minimap dot is genuinely absent and
+  the world outside sight is genuinely black. Phase D is adding viewpoints to something that works,
+  not repairing something that doesn't — which is why "behaviour must not change for the local
+  player" is a testable claim and not a hope.
+- **BUG — `fog: "explored"` reveals enemy BUILDINGS, not just terrain.** `exploreAll()` marks every
+  cell explored; `fogHides` shows any building standing on an explored cell, on the theory that an
+  explored cell is one you have *looked* at. With start-explored those are different claims for the
+  first time, and the enemy's town hall is on the minimap from turn 0 (visible as the blue dot in
+  the left-hand shot on the commit). Real WC3's start-explored reveals terrain memory only — you
+  still have to scout the buildings. Fix belongs with item 4, which is already the item about not
+  collapsing sticky `explored` into per-tick `visible`; this is the same confusion one layer up.
+  It is pre-existing and unrelated to the boot path.
+- **Unverified — gold-mine and creep-camp glyphs draw on unexplored black.** `minimapIcons()` and
+  `creepCamps()` both paint through pitch-black fog. This may well be correct: WC3's melee minimap
+  does show some neutral furniture from the start. **Check against the real client before touching
+  it** (CLAUDE.md: the MPQ and the running game win over any reference). Belongs to item 5.
 
 **Illusion tells are already viewpoint-gated** — the blue wash, the summon timer and the portrait all
 key off `seesFor(u.owner)` today, which is the correct rule (see [`illusions.md`](./illusions.md):

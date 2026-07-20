@@ -277,8 +277,10 @@ async function showMainMenu(vfs: DataSource): Promise<void> {
   }
 }
 
-/** Hand off from the load gate to the main menu once the archives are mounted. */
-function onFilesLoaded(load: GateLoad): void {
+/** Everything mounting an install sets up EXCEPT showing the menu: the resolver, the map list,
+ *  the cursor and the audio. Split out from onFilesLoaded because a scripted boot that goes
+ *  straight into a match (src/dev/devBoot.ts) needs all of this and none of the menu. */
+function mountInstall(load: GateLoad): void {
   resolver.setInstall(load.vfs);
   installMaps = load.maps; // the Custom Game screen's map list
   ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {}).vfs = load.vfs;
@@ -297,12 +299,21 @@ function onFilesLoaded(load: GateLoad): void {
   // played into a context that is still suspended, i.e. dropped. The model load below buys the
   // resume all the time it needs.
   sounds.unlock();
-  // The 3D scene has to exist before the menus do: it owns the panel chrome whose
-  // Birth/Death clips time their transitions (ui/glue.ts).
+}
+
+/** Bring up the main menu over its animated 3D scene. The scene has to exist before the menus
+ *  do: it owns the panel chrome whose Birth/Death clips time their transitions (ui/glue.ts). */
+function showMenu(load: GateLoad): void {
   void showMenuBackground(load.vfs).then(() => {
     glue.setScene(menuScene);
     void showMainMenu(load.vfs);
   });
+}
+
+/** Hand off from the load gate to the main menu once the archives are mounted. */
+function onFilesLoaded(load: GateLoad): void {
+  mountInstall(load);
+  showMenu(load);
 }
 
 // The right mouse button belongs to the GAME (it is the move/attack order), and a game has no
@@ -310,7 +321,23 @@ function onFilesLoaded(load: GateLoad): void {
 // individual canvases already swallowed it; this closes the rest of the page.
 window.addEventListener("contextmenu", (e) => e.preventDefault());
 
-gate = mountLoadGate(ui, onFilesLoaded);
+// Boot. Normally the load gate: a human picks their Warcraft III folder, because that gesture
+// is also what opens the browser's autoplay gate. Under `?dev` on a DEV SERVER ONLY, a scripted
+// boot fetches the install over HTTP instead, so the game can be driven — and driven twice at
+// once, from two player slots — by automation. `import.meta.env.DEV` is a compile-time constant
+// that Vite folds to `false` for `pnpm build`, so this branch and the dynamic import inside it
+// are dropped from the bundle entirely; there is no path from a shipped artifact to an asset
+// route. See src/dev/devBoot.ts and tools/vite-plugin-dev-install.ts.
+if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
+  void import("./dev/devBoot")
+    .then((m) => m.devBoot({ mountInstall, showMenu, startGame }))
+    .catch((err) => {
+      console.error("[dev-boot] failed:", err);
+      gate = mountLoadGate(ui, onFilesLoaded); // fall back to the human path
+    });
+} else {
+  gate = mountLoadGate(ui, onFilesLoaded);
+}
 
 // Console hooks for the phase exit criteria (see README "Testing manually").
 (window as unknown as { openwar3: Record<string, unknown> }).openwar3 = {
