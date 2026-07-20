@@ -90,7 +90,7 @@ state.
 | A — timestep & identity | **done** | fixed 60 Hz step, `.doo`-order ids, seed from the lobby |
 | Relay + transport + LAN lobby | **done** | rooms, discovery, join, roster |
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
-| B — bisect `rts.ts` | not started | the tentpole |
+| B — bisect `rts.ts` | **in progress** | the tentpole; inventory done, [ordered move list](#remaining-work-in-order) is the handoff |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | not started | |
 | E — snapshots & reconnect | not started | |
@@ -112,11 +112,10 @@ state.
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
-**Pick up here.** In order:
-
-1. **The `simWorld` escape hatch — finish it.** See below; this is the live piece of work.
-2. **Phase B — bisect `rts.ts`.**
-3. **Phase D / E** — N vision maps, then snapshots and reconnect.
+**Pick up here.** Phase B is the live piece of work, and its
+[**remaining-work list**](#remaining-work-in-order) is the source of truth for what to do next —
+take the first unfinished item. Narrowing the `simWorld` getter is item 7 on that list, since it
+turned out to be the same question as "where do the JASS hooks live". Phase D / E follow.
 
 ### The `simWorld` escape hatch
 
@@ -184,8 +183,9 @@ read.
 
 1. Narrow the `simWorld` getter itself — hooks to an authority module, reads to a view interface.
    This is the last piece, and unlike everything above it is a **refactor, not a bug**: no player
-   action goes around the gate any more. It wants doing alongside Phase B (bisecting `rts.ts`),
-   since both are about where these ~66 JASS hooks should actually live.
+   action goes around the gate any more. It is now tracked as **item 7 of
+   [Phase B's list](#remaining-work-in-order)**, because it is the same question as "where do
+   these ~66 JASS hooks actually live" and cannot be answered before `rts.ts` is bisected.
 
 **Two things that looked like blockers and are not.**
 
@@ -260,18 +260,100 @@ Needed regardless of topology, and it also buys replays. What landed, and the tr
 
 ### Phase B — bisect `rts.ts`
 
-[`src/game/rts.ts`](../src/game/rts.ts) is 258 KB and mixes concerns that must end up on opposite
-sides of the wire:
+[`src/game/rts.ts`](../src/game/rts.ts) is 5 382 lines and mixes concerns that must end up on
+opposite sides of the wire:
 
 | Authority-side | Client-side |
 |---|---|
 | vision rebuild, alliances | model instance sync, animation |
 | unit seeding / spawning | portraits, HP bars, hover tips |
-| order validation (`controls()`) | selection, command card |
+| order validation (`ownedBy()`), `execute()` | selection, command card |
 
 This is the largest single refactor in the path. The sim underneath is already clean —
 [`src/sim/`](../src/sim/) imports no DOM, no renderer, no VFS, and `pnpm sim:test` already compiles
 `world.ts` standalone and drives it in Node. The bridge is the problem, not the core.
+
+**Two seam tests**, applied to every move:
+
+- **Import test.** The authority half may not import `mdx-m3-viewer`, `../ui/*`, or touch
+  `document`/`window`. `grep -c "WidgetState\|worldLayer" src/game/rts.ts` is **20** at the start of
+  Phase B. It must fall and never rise.
+- **Client-state test.** The authority may not read `this.selected`, `this.primary`, `this.armed*`,
+  `this.hovered`, `this.orderMode` or `this.localPlayer`/`this.localTeam`. `execute()` and
+  `applyOrder()` already satisfy this.
+
+#### The inventory
+
+Every method in the class was classified by which fields its body actually touches (client:
+`byId`/instances, selection, DOM, armed/hover, `localPlayer`/`localTeam`, camera — authority:
+`this.sim`, `this.vision`, `this.alliances`). Three piles came back.
+
+**Clean client** — instances, animation, camera, picking, selection, DOM overlays, the info card.
+Roughly 2 000 lines. Nothing on this side is contentious; it is where the file's bulk lives.
+
+**Clean authority** — touches `this.sim` and *no* client field at all: `execute`, `applyOrder`,
+`notePlayerOrder`, `heroTypesInProduction`, `hasFreeHero`/`freeHeroUsed`, `ownedBy`, `castOrder`,
+`issueUnitOrder`, `currentOrderId`, `resolveRally`, `rallyFeedback`, `stashFor`, `countOwned`,
+`foodFor`, `groupTargets`, `ringTargets`, `followOffsets`, `buildCreepCamps`, `markerFor`,
+`itemInfo`/`mineInfo`, `adoptPlacedFootprint`, `teamOfPlayer`, the alliance delegators and the
+whole `FogModifier` block. Roughly 900 lines, already free of client state.
+
+**Genuinely mixed** — the real content of this phase. For each, *why* it is mixed and where the cut
+goes:
+
+| Method | Why mixed | Where the cut goes |
+|---|---|---|
+| `tick` (191 L) | steps the sim AND syncs every model instance in the same loop | sim-advance + death/removal bookkeeping is authority; the per-`Entry` instance/animation body is client. The cut is the loop body, not the loop. |
+| `trySeed` / `seedNeutral` / `seedPlayerUnit` (278 L) | seeding CREATES sim units (authority) but is driven by model-load order and attaches instances | already half-cut: `addSimUnit` is the authority half, `addUnit`/`attachInstance` the client half. The scan itself is client-driven and must invert — the authority seeds from the `.doo`, the client attaches bodies later. |
+| `moveAt` (167 L) / `orderClickAt` (132 L) | resolve a target from a **screen click** (client) then emit commands | already funnelled through `execute`; everything before the `execute` call is client and stays. Documented, not moved. |
+| `controls` vs `ownedBy` | same question asked of two different subjects | **already cut and documented in the code.** No work. |
+| `updateVision` / `fogHides` / `applyFogTint` / `revealsForLocal` / `seesFor` / `invisHides` | one `VisionMap`, and it is the local team's | not a Phase B move — this is **Phase D**. Leave alone. |
+| `getVision` | authority state handed to the renderer wholesale | narrows with Phase D, same as `simWorld`. |
+| `simWorld` getter | 136 uses in `mapViewer.ts`; ~66 are JASS `EngineHooks` (authority, misplaced) and ~25 are reads | pairs with move 7 below. |
+
+#### Remaining work, in order
+
+Smallest and least-entangled first; each is independently shippable. **Behaviour-preserving only** —
+if a real bug turns up mid-move, note it here as its own item rather than fixing it in the same
+commit.
+
+1. **Formation solvers → `src/game/formations.ts`.** `groupTargets`, `ringTargets`,
+   `followOffsets` (~207 L). Pure geometry over `sim.units`/`sim.grid`, zero client state, zero
+   DOM. The single largest clean lift in the file and the safest place to start. Verify with a
+   group move, a follow, and an attack-move on Echo Isles — formation bugs are extremely visible.
+2. **HP-bar + hover-tooltip DOM → `src/render/worldOverlays.ts`.** `makeHpBar`, `makeHoverTip`,
+   `updateHealthBars`, `computeHoverTip`, `updateHoverTooltip` (~190 L). This is the move that
+   **removes `worldLayer` and every `document.` from `rts.ts`** — the import test's whole point.
+   `computeHoverTip` reads `alliances` and `localPlayer`: that is correct, a tooltip is one
+   machine's UI, so it belongs on the render side and takes those as inputs.
+3. **Animation resolution → `src/render/unitAnims.ts`.** Module-level `applyAnimProps`,
+   `animPropsFor`, `buildAnimSet`, `findBirthFields`, plus `pickSequence`, `attackAnimRate`,
+   `walkAnim`, `seqDuration`, `setAnimRate` and the anim constants (~300 L). Pure client. Big line
+   win; does not move the seam by itself but shrinks the pile the seam has to be found in.
+4. **Map-placement metadata → `src/game/placement.ts`.** `setNeutralPassive`, `setPlacedOrder`,
+   `setCreepData`, `setPlayerUnitSeeds`, `setPlacedFootprints` and the `*At` lookups
+   (`reserveIdAt`, `isNeutralPassiveAt`, `creepAggroAt`, `creepDropsAt`, `playerSeedAt`,
+   `buildCreepCamps`) (~200 L). Authority-side, pure data over arrays parsed from the `.doo`.
+   **Trap:** `reserveIdAt` is load-bearing for Phase A's deterministic ids — do not change when it
+   is called.
+5. **Fog modifiers + alliances → a `PlayerRelations` module.** The `FogModifier` block and the
+   alliance delegators are already thin pass-throughs; the item is that `rts.ts` should not be the
+   only door to them once JASS runs on a headless authority. Small.
+6. **The authority core → `src/game/authority.ts`.** `execute`, `applyOrder`, `notePlayerOrder`,
+   `heroTypesInProduction`, `freeHeroUsed`/`hasFreeHero`, `ownedBy`, `castOrder`, `issueUnitOrder`,
+   `currentOrderId`, `resolveRally`, `stashFor`, `countOwned`, `foodFor` (~600 L). The tentpole.
+   Do it **after** 1–5, so what is left to disentangle is only what genuinely belongs. This is the
+   module that must compile with no renderer import.
+7. **Narrow the `simWorld` getter.** Pairs with 6: the JASS `EngineHooks` in `mapViewer.ts` call
+   into the authority module instead of the raw `SimWorld`, and the ~25 read-only lookups get a
+   view interface. Expect to touch this and not finish it — the hooks are mixed
+   (`SetUnitOwner` next to `PanCameraTo`) and cannot move wholesale.
+8. **Flip the phase table** once 1–7 land and the authority half imports no renderer, no DOM and
+   no transport.
+
+**Noted, not fixed** (found during the inventory; each is its own item, none is a Phase B blocker):
+
+- *(none yet)*
 
 ### Phase C — close the command funnel
 
