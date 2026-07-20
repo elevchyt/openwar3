@@ -7,7 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
-import { jassOwnerOf, type BuildJob, type QueuedOrder, type RallyKind, type ShopResult, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
+import { jassOwnerOf, type BuildJob, type RallyKind, type ShopResult, type SimMine, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -2530,15 +2530,11 @@ export class MapViewerScene {
       this.refuse("Cantplace"); // "Unable to build there." — the worker says so out loud
       return;
     }
-    if (!this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
-    const stash = this.rts.stashFor(this.localPlayer);
-    stash.gold -= p.def.goldCost;
-    stash.lumber -= p.def.lumberCost;
-    // Carry the spent cost on the order so the sim can refund it if the build is
-    // ever abandoned before construction begins (re-tasked, killed, timed out).
-    const order: QueuedOrder = { kind: "buildnew", defId: p.def.id, x, y, gold: p.def.goldCost, lumber: p.def.lumberCost };
-    if (queued) this.rts.simWorld.queueOrder(p.workerId, order);
-    else this.rts.simWorld.issueOrder(p.workerId, order); // walk there now
+    // Affordability, the charge and the order are all the authority's now — the renderer
+    // used to charge the stash itself and post the price into the order (docs/multiplayer.md).
+    if (!this.rts.execute(this.localPlayer, {
+      c: "build", unitId: p.workerId, defId: p.def.id, x, y, queued,
+    })) return;
     this.sounds?.playUi("PlaceBuildingDefault"); // WC3 building-placement confirm
     this.cardPage = "root";
     this.cancelPlacement();

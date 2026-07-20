@@ -63,4 +63,14 @@ export type Command =
    * The general rule this is an instance of: a command carries what the player ASKED FOR,
    * never what the engine DERIVED from it.
    */
-  | { c: "repair"; unitId: number; buildingId: number; queued: boolean };
+  | { c: "repair"; unitId: number; buildingId: number; queued: boolean }
+  /**
+   * Send a worker to put up a building. Intent only: which worker, what, where.
+   *
+   * The PRICE is not on the wire and must never be. The renderer used to deduct gold and
+   * lumber from the live stash itself and then post the amounts it had charged into the
+   * `buildnew` order, which the sim trusts for the abandon-refund — so a client set both what
+   * it paid and what it got back. `execute` looks the cost up in the registry, checks the
+   * player can afford it, charges, and only then issues the order.
+   */
+  | { c: "build"; unitId: number; defId: string; x: number; y: number; queued: boolean };

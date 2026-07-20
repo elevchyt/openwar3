@@ -114,10 +114,49 @@ first; it reads the unpacked `Scripts/common.j` and fails without it.
 
 **Pick up here.** In order:
 
-1. **Phase B — bisect `rts.ts`.** Note the real coupling is not the class's method list but
-   `simWorld`, which the renderer and UI reach through at ~126 sites; splitting the class buys
-   very little while that stays open. Start by narrowing that escape hatch.
-2. **Phase D / E** — N vision maps, then snapshots and reconnect.
+1. **The `simWorld` escape hatch — finish it.** See below; this is the live piece of work.
+2. **Phase B — bisect `rts.ts`.**
+3. **Phase D / E** — N vision maps, then snapshots and reconnect.
+
+### The `simWorld` escape hatch
+
+`RtsController.simWorld` is a public getter handing out the whole authoritative `SimWorld`.
+136 uses, **all of them in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts)** — one consumer,
+not a scattering, which is the good news. They are not all the same thing:
+
+| Kind | Count | Verdict |
+|---|---|---|
+| JASS `EngineHooks` (`textHooks`, lines ~1396–1760) | ~66 | Authority-side by nature; JASS runs on the authority. Misplaced (it lives in the renderer) but not a bypass. Genuinely mixed — `SetUnitOwner` sits next to `PanCameraTo` — so it cannot be moved wholesale. |
+| Read-only lookups (`units`, `mines`, `items`) | ~25 | Fine in principle. Becomes a read-only snapshot view under AoI (Phase E). |
+| **Player commands bypassing `execute()`** | ~13 | **Bugs.** Build placement, battlestations, standdown, cancel building / train / research. |
+| **Direct stash mutation via `stashFor()`** | 14 | **The worst of it.** |
+| Setup (`initStash`, `setPathStamp`) | few | Fine. |
+
+**Phase C audited the wrong file.** It swept `rts.ts` and found 15 actions. But player commands
+also originate in `mapViewer.ts` — the command card and build placement are there — and those never
+went through the funnel at all.
+
+**The economy runs client-side.** `stashFor()` returns the *live, mutable* stash object out of the
+sim, and the renderer writes to it in 14 places: it checks affordability, deducts gold and lumber,
+and issues refunds on cancel, all before telling the sim anything. Over the wire every purchase and
+every refund would be the client's decision. Build placement additionally posted the price it had
+charged *into* the `buildnew` order, which the sim trusts for the abandon-refund — the same shape as
+the repair-rate bug, so the client set both what it paid and what it got back.
+
+**Done:** `build` — placement now carries intent only; `execute` looks the cost up, checks
+affordability, charges, and issues the order.
+
+**Remaining, in order:**
+
+1. `train` (~5472), `research` (~5501), `startBuildingUpgrade` (~5524) — same shape: check → charge →
+   enqueue, all client-side. Each needs a command whose cost the authority derives.
+2. The refunds — cancel building (~5557), cancel research (~5587), cancel train (~5600). Refund
+   *rates* are as forgeable as prices.
+3. `battlestations`, `standdown`, `cancelBuilding`, `cancelLastTrain`, `cancelTrainAt` — plain
+   commands, no economy.
+4. **Then make `stashFor()` return a copy**, so this class of bug cannot come back. Do it last: it
+   breaks all 14 sites at once, and it is only safe once they are gone.
+5. Only then narrow the getter itself — hooks to an authority module, reads to a view interface.
 
 **Two things that looked like blockers and are not.**
 

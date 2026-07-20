@@ -4183,6 +4183,26 @@ export class RtsController {
         return true;
       case "learnskill":
         return this.ownedBy(player, cmd.unitId) && this.sim.learnAbility(cmd.unitId, cmd.abilityId);
+      case "build": {
+        // Everything the renderer used to decide for itself, decided here instead: that the
+        // worker is yours and is a worker, what the building costs, and whether you can
+        // afford it. Placement validity stays client-side for now — it needs the footprint
+        // grid the renderer owns (docs/multiplayer.md).
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        if (!this.sim.units.get(cmd.unitId)?.worker) return false;
+        const def = this.registry.get(cmd.defId);
+        if (!def) return false;
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < def.goldCost || stash.lumber < def.lumberCost) return false;
+        stash.gold -= def.goldCost;
+        stash.lumber -= def.lumberCost;
+        // The cost rides on the order so the sim can refund it if the build is abandoned
+        // before it starts — but it is OUR figure now, not one the caller handed us.
+        return this.applyOrder(player, cmd.unitId, {
+          kind: "buildnew", defId: cmd.defId, x: cmd.x, y: cmd.y,
+          gold: def.goldCost, lumber: def.lumberCost,
+        }, cmd.queued);
+      }
       case "repair": {
         // Everything the old call site checked CLIENT-side is re-checked here, because none of
         // it survives a trip over the wire: that it is your worker, that it is your building,
