@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | [12-item list](#remaining-work-in-order-2) written; item 1 is the 149-entry [JASS hook table](#the-jass-hook-table) split, now unblocked by the headless boot |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5). Open: 3c, then 6–12 — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(216 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(345 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -1193,6 +1193,14 @@ enumerated by body rather than by name.
    the test, flagged there in capitals, and left for a deliberate fix. **Check the running client
    before fixing**, per CLAUDE.md; the suspicion above is from memory of WC3, not from measurement.
 
+   **Still open, and deliberately skipped once (item 5's iteration) rather than fixed on a
+   hunch.** The measurement needs the real 1.27a client driven with global mouse/keyboard —
+   launch, melee game, send a peasant into a mine, read the minimap — and the developer's
+   desktop was in active use at the time, which makes input injection somebody else's problem
+   rather than a test. The fix itself is one line (`hiddenFor`'s viewpoint-INDEPENDENT half must
+   win over the own-team clause); what is missing is the ground truth that says it is a fix.
+   Take it when the machine is free.
+
 4. ~~**Decide whether `minimapIcons()` should have a fog gate.**~~ **Closed: no gate, and it was
    already answered in the code.** The comment above `minimapIcons` records the measurement —
    both glyph types "were plainly visible over unexplored ground in a fresh 1.27a melee game" —
@@ -1203,11 +1211,55 @@ enumerated by body rather than by name.
    It was not a pure doc close, though: `minimapIcons` still walked `this.entries` and read
    `Entry.typeId`, the same defect item 3 fixed in its neighbours. It moved to `minimapView.ts`
    with them and now reads `sim.units` + `sim.mines`.
-5. **The snapshot: a type, and `snapshotFor(player)` on the authority side.** The payload is
-   whatever a client needs to render a frame it did not simulate — the `simView` surface above, plus
-   selection-relevant per-unit state. Emit it from the authority half; it must not import a transport.
-   **Decided: JSON first, binary when it hurts** ([Open questions](#open-questions)) — no longer
-   gated.
+5. ~~**The snapshot: a type, and `snapshotFor(player)` on the authority side.**~~ **Done.**
+   [`src/game/snapshot.ts`](../src/game/snapshot.ts) holds `WorldSnapshot` / `UnitSnapshot` /
+   `MineSnapshot` / `GroundItemSnapshot` and the producer
+   `snapshotFor(world, viewer, recipient, time)`. It compiles standalone (the **eighth** module
+   to), imports no transport and no renderer, and **nothing imports it yet** — so this commit
+   cannot move a pixel, which is stated here rather than dressed up with a screenshot.
+
+   **The field set was read off the consumers, not off `SimUnit`.** ~150 fields on the struct,
+   about 60 read by the client half. Everything else — the pathing scratch values, the
+   stuck/stall timers, every `base*` baseline `recomputeStats` derives from, `SimMine.busy`,
+   `BuildingState.builderIds`/`goldCost`/`stock` — is how the sim REACHES its answers rather
+   than the answers, and shipping it would hand a client the means to second-guess the
+   authority. The enumeration walked `rts.ts`'s entry sync + `infoFor` + the health bars,
+   `mapViewer.ts`'s command card and effects, `minimapView.ts` and `viewpoint.ts`. Same
+   discipline as 1c–1h, and it held again.
+
+   **`snapshotFor` takes a recipient already, and the reason is not fog.** Two classes of
+   field are per-recipient without any reference to the grid, so they are answered here:
+   - **The illusion mask.** `docs/illusions.md`: to an enemy an illusion reports as an ordinary
+     unit. The client gets that right TODAY by reading `isIllusion` and discarding it
+     (`applyFogTint`, `infoFor`) — correct behaviour, wrong architecture, because a filter
+     applied after the bit crossed the wire is a filter a modified client deletes. Now the bit
+     never leaves. The summon TRIPLE is masked with it, not just the flag: a bar counting down
+     over one of two identical Blademasters is as loud a tell as the flag. A real Water
+     Elemental is untouched — masking every summon is the lazy over-correction, and there is a
+     check for it.
+   - **Private intent** (`buildPending`, `orderQueue`, `pendingCast`). Gated on OWNERSHIP, not
+     `seesFor` — an ally does not get to see where you are about to drop a tower either. That
+     is the one gate deliberately narrower than the illusion one, and the pair of them is why
+     the signature takes a viewer AND a recipient instead of deriving one from the other.
+
+   **No `Authority.snapshotFor` delegator was added.** The free function already sits on the
+   authority side of the seam and `Authority` does not hold the `VisionSet` the viewer comes
+   from, so a forwarding method would have been a one-caller delegator with, right now, zero
+   callers — exactly what item 1f found was dead weight four times over. Item 9/10 wires it
+   from wherever the tick loop ends up.
+
+   **The AoI question is NOT here, on purpose.** Until item 6 lands a snapshot describes the
+   whole world and is not safe to send to an opponent. Nothing sends it.
+
+   **The test is [`tools/sim-snapshot-test.cjs`](../tools/sim-snapshot-test.cjs) (22 checks),
+   and both bugs it exists for were injected.** Spreading the sim unit into the payload — the
+   plausible "simplification", since it renders identically — leaves `pnpm typecheck` green and
+   turns *no sim-internal field survives the trip* and *enemy sight radii are not derivable
+   client-side* red. Reading `u.isIllusion` straight through likewise typechecks and turns *the
+   enemy is not* red while the owner and ally checks stay green. Restored after both. There is
+   also a JSON round-trip check, because "JSON first" makes a stray `Map` in the payload
+   (`BuildingState.stock` is the live one) a thing that survives the compiler and dies on the
+   wire. `sim:test` 323 → **345**.
 
 6. **AoI filtering, as a predicate distinct from `fogHides`.** `Viewpoint.fogHides` answers *should
    this be drawn?*; the snapshot asks *may this be sent?*, which is strictly stronger — a client must
