@@ -146,5 +146,46 @@ console.log("\neach viewpoint keeps its own rebuild clock");
   check("and it is the viewpoint we hold", set.tick(1, []).includes(vp), true);
 }
 
+console.log("\nexposure and one-shots resolve per RECIPIENT, not per 'local'");
+{
+  // Two players on two teams. Slot 0's viewpoint exists; slot 1's does not yet.
+  const units = new Map([
+    [1, { id: 1, owner: 0, team: 0, x: 0, y: 0 }],
+    [2, { id: 2, owner: 1, team: 1, x: 900, y: 900 }],
+  ]);
+  const world = { units, isDay: true, activeAttackReveals: () => [], teamDetects: () => false };
+  const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
+  const zero = set.viewpointFor(0);
+  zero.setTeam(0);
+
+  const victim = units.get(2); // player 1's unit, far away in the dark
+
+  check("player 1's unit is hidden from player 0 to begin with", zero.fogHides(victim), true);
+  // CripplePlayer(1, [0], true): reveal player 1's units TO player 0.
+  set.setExposed(0, 1, true);
+  check("…and exposed once player 0 is a recipient", zero.fogHides(victim), false);
+  set.setExposed(0, 1, false);
+  check("…and hidden again when the cripple clears", zero.fogHides(victim), true);
+
+  // The recipient that has no viewpoint yet must still inherit it when one is minted —
+  // otherwise recording exposure would have to conjure twelve grids to hold a flag.
+  set.setExposed(5, 1, true);
+  const late = set.viewpointFor(5);
+  late.setTeam(5);
+  check("a viewpoint created later inherits its standing exposure", late.fogHides(victim), false);
+  check("…and a bystander viewpoint does not", set.viewpointFor(6).fogHides(victim), true);
+}
+
+console.log("\na one-shot SetFogState reaches whoever renders that player's fog");
+{
+  const world = { units: new Map(), isDay: true, activeAttackReveals: () => [], teamDetects: () => false };
+  const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
+  const zero = set.viewpointFor(0);
+  const one = set.viewpointFor(1);
+  set.stampFor(0, { kind: "rect", minX: 0, minY: 0, maxX: 256, maxY: 256 }, FogState.Visible);
+  check("the owning player's grid got it", zero.vision.hasSeen(cellOf(128), cellOf(128)), true);
+  check("…and an unrelated player's did not", one.vision.hasSeen(cellOf(128), cellOf(128)), false);
+}
+
 console.log(failed ? `\nvision: ${failed} FAILED` : "\nvision: all checks passed");
 process.exit(failed ? 1 : 0);

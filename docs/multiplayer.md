@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | items 1–3 done (`?dev` boot; `Viewpoint`; `VisionSet` registry); items 4–7 open |
+| D — N vision maps | in progress | items 1–4 done; items 5–7 open (minimap/HUD viewpoint, GetLocalPlayer per recipient, sim.visibleToTeam) |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -112,7 +112,7 @@ state.
 - FDF fixes that fell out of the LAN screen: `5187945`, `b80df35`
 
 **Tests:** `pnpm relay:test` (relay flow + the `start` handshake, headless) and `pnpm sim:test`
-(209 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
+(216 checks, including `sim-determinism-test.cjs` — same seed reproduces, different seed diverges —
 and `sim-order-funnel-test.cjs` for Phase C). Both green. `pnpm jass:test` needs `pnpm data:extract`
 first; it reads the unpacked `Scripts/common.j` and fails without it.
 
@@ -662,13 +662,37 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    before and after. The real N-rebuild budget lands at item 7.
 
 
-4. **Fog modifiers and `exposed` move onto the viewpoint they belong to.** Today `setFogState`
-   early-outs on `seesFor(player)` and stamps into the single local grid, and `cripplePlayer`
-   early-outs on `toPlayers.includes(this.localPlayer)`. Both are client-by-construction. They
-   become: stamp into `viewpointFor(player)`; record exposure on each recipient's viewpoint.
-   **Do not collapse `explored` (sticky) into `visible` (rebuilt every tick)** — a one-shot
-   `SetFogState` VISIBLE lights the area for an instant but leaves it explored forever, while a
-   standing modifier is re-stamped on every rebuild.
+4. ~~**Fog modifiers and `exposed` move onto the viewpoint they belong to.**~~ **Done**, though
+   the shape turned out different from what item 2 predicted, which is worth recording.
+
+   **Standing modifiers needed no routing at all.** They were already per-viewpoint the moment
+   `rebuild` became a `Viewpoint` method: every viewpoint is offered the whole registry and
+   keeps the ones its own `seesFor` accepts. That is also the correct WC3 rule — an ally's
+   modifier shows up in your fog, an opponent's does not — and it falls out of asking each
+   viewpoint rather than asking "local". The registry itself stays on the controller because
+   modifier ids are one global handle space shared with JASS.
+
+   What actually needed the work was the two **client-by-construction** sites:
+
+   - `setFogState` (the one-shot) early-returned unless the LOCAL viewpoint rendered that
+     player's fog. Now `VisionSet.stampFor` offers it to every viewpoint that does.
+   - `cripplePlayer` early-returned unless the local player was in the force. Now every
+     recipient gets it, via `VisionSet.setExposed`.
+
+   **Exposure is recorded on the SET, not pushed at a viewpoint**, so that recording a flag
+   does not conjure a grid. It is standing state — it lasts until the cripple timer clears — so
+   a viewpoint created later inherits it, the same way it inherits the height field and the
+   lobby's fog mode. Pushing straight at `viewpointFor(recipient)` would have made every melee
+   match build twelve `VisionMap`s the first time `MeleeExposePlayer` fired, paying item 7's
+   cost early and by accident.
+
+   **Known limitation, deliberate:** a one-shot `SetFogState` applies to the viewpoints that
+   exist when it fires and is not replayed onto later ones. Replaying would mean remembering
+   every one-shot the match ever fired, forever. It only bites if Phase E creates player
+   viewpoints lazily mid-match; creating them at match start removes the note entirely, and is
+   probably what Phase E should do anyway.
+
+
 5. **Minimap and per-player HUD take a viewpoint** — `dots()`, `creepCamps()`, `minimapIcons()`,
    and the `leaderboardFor` / `displayText` / dialog gating in `mapViewer.ts`.
 6. **`GetLocalPlayer` resolves per recipient.** [`src/jass/natives/config.ts`](../src/jass/natives/config.ts)

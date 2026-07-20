@@ -21,7 +21,9 @@ import type { FogArea, FogModifier } from "./fog";
  * Deliberately NOT here:
  *   • the fog-modifier REGISTRY — modifier ids are a single global handle space shared with
  *     JASS, so one registry stays on the controller and hands the running ones to `rebuild`.
- *     Routing each modifier to the viewpoint it was created for is item 4.
+ *     A standing modifier is not "routed" anywhere: every viewpoint is offered all of them and
+ *     keeps the ones its own `seesFor` accepts, which is what makes an ally's modifier show up
+ *     in your fog and an opponent's not. One-shots go through `VisionSet.stampFor`.
  *   • `pruneFogged` — it drops units from the SELECTION, which is client state, not vision.
  *     The controller calls it after `rebuild`.
  *   • anything that touches a render `Entry`. `applyFogTint` stays on the renderer side and
@@ -282,6 +284,9 @@ export class VisionSet {
   private readonly byPlayer = new Map<number, Viewpoint>();
   private cliffHeight: HeightSampler | null = null;
   private startFog: StartFog = null;
+  /** recipient → the players revealed to them (CripplePlayer). Held here rather than only on
+   *  the viewpoints so a viewpoint created later inherits it. */
+  private readonly exposures = new Map<number, Set<number>>();
 
   constructor(
     private readonly world: VisionWorld,
@@ -314,6 +319,7 @@ export class VisionSet {
     if (this.cliffHeight) vp.initBlockers(this.cliffHeight, this.trees());
     if (this.startFog === "explored") vp.exploreAll();
     else if (this.startFog === "revealall") vp.setRevealAll(true);
+    for (const exposed of this.exposures.get(player) ?? []) vp.setExposed(exposed, true);
     this.byPlayer.set(player, vp);
     return vp;
   }
@@ -346,6 +352,36 @@ export class VisionSet {
       // no "off" to apply here. Un-exploring is what a MASKED fog modifier is for.
       if (mode === "explored") vp.exploreAll();
     }
+  }
+
+  /** A ONE-SHOT `SetFogState` for `player` — stamped into every viewpoint that renders that
+   *  player's fog, which is their own and any team-mate's or shared-vision ally's.
+   *
+   *  Applies to the viewpoints that exist WHEN IT FIRES, and is not replayed onto ones created
+   *  later. That is a real limitation and it is deliberate: a one-shot's lasting effect is on
+   *  the sticky `explored`/`seen` layers, so replaying would mean remembering every one-shot
+   *  the match ever fired, forever, against the chance that a viewpoint appears afterwards.
+   *  Standing modifiers do not have this problem — they are re-stamped on every rebuild by
+   *  whoever is listening, which is exactly the distinction the two APIs exist to draw. It
+   *  only bites if Phase E creates player viewpoints lazily mid-match rather than at match
+   *  start; creating them at start is both easier and what removes this note. */
+  stampFor(player: number, area: FogArea, state: FogState): void {
+    for (const vp of this.byPlayer.values()) if (vp.seesFor(player)) vp.stampArea(area, state);
+  }
+
+  /** blizzard.j `CripplePlayer`: reveal `player`'s units to `recipient`, wherever they stand.
+   *
+   *  Recorded on the SET rather than pushed straight at a viewpoint, so that it does not
+   *  conjure one. Exposure is standing state — it lasts until the cripple timer is cleared —
+   *  so a viewpoint created later must inherit it, the same way it inherits the height field
+   *  and the lobby's fog mode. Creating twelve grids to record a flag would have made every
+   *  melee match pay item 7's cost early and by accident. */
+  setExposed(recipient: number, player: number, flag: boolean): void {
+    let set = this.exposures.get(recipient);
+    if (!set) this.exposures.set(recipient, (set = new Set()));
+    if (flag) set.add(player);
+    else set.delete(player);
+    this.byPlayer.get(recipient)?.setExposed(player, flag);
   }
 
   /** Advance every viewpoint's rebuild clock. Returns those that actually rebuilt, so the

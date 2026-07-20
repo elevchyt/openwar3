@@ -553,8 +553,10 @@ export class RtsController {
    *
    *  We render one viewpoint, so only the local player's membership of the force matters. */
   cripplePlayer(player: number, toPlayers: readonly number[], flag: boolean): void {
-    if (!toPlayers.includes(this.localPlayer)) return;
-    this.local.setExposed(player, flag);
+    // Every recipient in the force, not just this machine's player. The old early-out was
+    // client-by-construction: correct while one viewpoint was rendered, and silently wrong
+    // the moment the authority has to answer for somebody else.
+    for (const recipient of toPlayers) this.viewpoints.setExposed(recipient, player, flag);
   }
 
   /** CreateFogModifierRect / CreateFogModifierRadius[Loc] — created STOPPED (the native
@@ -584,8 +586,7 @@ export class RtsController {
    *  native is used for in practice; a script that wants an area held open uses a
    *  modifier, which is exactly the distinction the two APIs exist to draw. */
   setFogState(player: number, state: number, area: FogArea): void {
-    if (!this.local.seesFor(player)) return;
-    this.local.stampArea(area, fogStateOf(state));
+    this.viewpoints.stampFor(player, area, fogStateOf(state));
   }
 
   /** FogEnable / FogMaskEnable — the grey veil and the black mask, switched globally,
