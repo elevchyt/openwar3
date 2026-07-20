@@ -1612,7 +1612,7 @@ export class RtsController {
       this.orderMode = null;
       const t = this.sim.units.get(simId);
       if (t && simId !== this.primary) {
-        for (const id of this.selected) if (id !== simId) this.order(id, { kind: "attack", targetId: simId, force: true }, false);
+        for (const id of this.selected) if (id !== simId) this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true }, queued: false });
         this.ack(true);
       }
       return true;
@@ -3199,7 +3199,7 @@ export class RtsController {
         // friendly/own units and buildings (WC3 force attack).
         if (target && target.id !== this.primary) {
           let any = false;
-          for (const id of this.selected) if (id !== picked && this.order(id, { kind: "attack", targetId: picked, force: true }, queued)) any = true;
+          for (const id of this.selected) if (id !== picked && this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
           if (any) {
             this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
             return true;
@@ -3223,7 +3223,7 @@ export class RtsController {
    *  terrain) and a click on the MINIMAP, which resolves straight to a world point. */
   private groundOrder(mode: "move" | "attack" | "patrol", wx: number, wy: number, queued: boolean): void {
     if (mode === "patrol") {
-      for (const id of this.selected) this.order(id, { kind: "patrol", x: wx, y: wy }, queued);
+      for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "patrol", x: wx, y: wy }, queued: queued });
       this.queueArrow(wx, wy, MOVE_ARROW);
     } else if (mode === "attack") {
       this.groupAttackMove(wx, wy, queued); // distinct formation slot per unit (like move)
@@ -3460,7 +3460,7 @@ export class RtsController {
    *  `issueOrder` does the queue-clearing itself, and exempts stop from the cast-lock guard
    *  so it keeps its one special power: aborting a wind-up that has started but not fired. */
   stopSelected(): void {
-    for (const id of this.selected) this.order(id, { kind: "stop" }, false);
+    for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "stop" }, queued: false });
   }
 
   /** Hold Position on the selection: each unit plants where it stands and attacks
@@ -3475,7 +3475,7 @@ export class RtsController {
    *  for a Hold that `issueHold`'s own castLocked guard then refused ("don't even drop the
    *  queue for an ignored order", world.ts). */
   holdSelected(): void {
-    for (const id of this.selected) this.order(id, { kind: "hold" }, false);
+    for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "hold" }, queued: false });
   }
 
   /** Order the selected workers to repair a damaged friendly building. WC3
@@ -3493,7 +3493,7 @@ export class RtsController {
     let any = false;
     for (const id of this.selected) {
       const w = this.sim.units.get(id);
-      if (w?.worker && this.order(id, { kind: "repair", buildingId: picked, hpPerSec, goldPerHp, lumberPerHp }, queued)) any = true;
+      if (w?.worker && this.execute({ c: "order", unitId: id, order: { kind: "repair", buildingId: picked, hpPerSec, goldPerHp, lumberPerHp }, queued: queued })) any = true;
     }
     return any;
   }
@@ -4133,7 +4133,7 @@ export class RtsController {
   execute(cmd: Command): boolean {
     switch (cmd.c) {
       case "order":
-        return this.order(cmd.unitId, cmd.order, cmd.queued);
+        return this.applyOrder(cmd.unitId, cmd.order, cmd.queued);
       case "cast":
         return this.controls(cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
       case "garrison":
@@ -4164,11 +4164,19 @@ export class RtsController {
     }
   }
 
-  /** Route an order to a unit: either append it to the unit's shift-queue, or
-   *  execute it immediately (replacing its current order + queue). Silently
-   *  ignores units the local player doesn't own — the single choke point that
-   *  keeps enemy/neutral/creep units uncommandable. */
-  private order(id: number, o: QueuedOrder, queued: boolean): boolean {
+  /**
+   * Route an order to a unit: either append it to the unit's shift-queue, or execute it
+   * immediately (replacing its current order + queue). Silently ignores units the local
+   * player doesn't own.
+   *
+   * **Call `execute({ c: "order", … })`, never this.** It is the implementation of one
+   * `Command` member, not a second way in — reaching it directly is how move/attack/harvest
+   * (i.e. nearly every order in the game) would end up never becoming a `Command` and so
+   * never crossing the wire. That is exactly what happened between the first Phase C pass and
+   * the audit that caught it: closing the direct *sim* calls is only half of it, because
+   * `order()` is itself a door.
+   */
+  private applyOrder(id: number, o: QueuedOrder, queued: boolean): boolean {
     if (!this.controls(id)) return false;
     this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
     if (queued) {
@@ -4357,7 +4365,7 @@ export class RtsController {
         if (enemy && !target.building) {
           // Hostile UNIT: attack + red flash (constant ring, matching its hover).
           let any = false;
-          for (const id of this.selected) if (this.order(id, { kind: "attack", targetId: picked }, queued)) any = true;
+          for (const id of this.selected) if (this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued })) any = true;
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
@@ -4378,7 +4386,7 @@ export class RtsController {
           let any = false;
           for (const id of followers) {
             const o = offs.get(id);
-            if (this.order(id, { kind: "follow", targetId: picked, offX: o?.[0], offY: o?.[1] }, queued)) any = true;
+            if (this.execute({ c: "order", unitId: id, order: { kind: "follow", targetId: picked, offX: o?.[0], offY: o?.[1] }, queued: queued })) any = true;
           }
           if (any) {
             this.flashRing(target.x, target.y, selR, FLASH_GREEN, false, lift); // green follow confirm
@@ -4413,7 +4421,7 @@ export class RtsController {
       let any = false;
       for (const id of workers) {
         const p = spread.get(id);
-        if (this.order(id, { kind: "harvest", res: "gold", nodeId: mine.id, ax: p?.[0], ay: p?.[1] }, queued)) any = true;
+        if (this.execute({ c: "order", unitId: id, order: { kind: "harvest", res: "gold", nodeId: mine.id, ax: p?.[0], ay: p?.[1] }, queued: queued })) any = true;
       }
       if (any) {
         this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE); // match the mine's hover/selection ring
@@ -4448,7 +4456,7 @@ export class RtsController {
               best = t;
             }
           }
-          if (this.order(id, { kind: "harvest", res: "lumber", nodeId: best.id }, queued)) {
+          if (this.execute({ c: "order", unitId: id, order: { kind: "harvest", res: "lumber", nodeId: best.id }, queued: queued })) {
             load.set(best.id, load.get(best.id)! + 1);
             targeted.add(best.id);
             any = true;
@@ -4503,7 +4511,7 @@ export class RtsController {
    *  worker) else move, green; allied/neutral → move, yellow. */
   private orderOnBuilding(target: SimUnit, picked: number, enemy: boolean, selR: number, queued: boolean): void {
     if (enemy) {
-      for (const id of this.selected) this.order(id, { kind: "attack", targetId: picked }, queued);
+      for (const id of this.selected) this.execute({ c: "order", unitId: id, order: { kind: "attack", targetId: picked }, queued: queued });
       this.flashRing(target.x, target.y, selR, FLASH_RED);
       return;
     }
@@ -4532,7 +4540,7 @@ export class RtsController {
       const spread = this.ringTargets(workers, target.x, target.y, target.radius, SPEED_BUILD_SPREAD);
       for (const id of workers) {
         const p = spread.get(id);
-        this.order(id, { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued);
+        this.execute({ c: "order", unitId: id, order: { kind: "buildresume", buildingId: picked, ax: p?.[0], ay: p?.[1] }, queued: queued });
       }
       handled = workers.length > 0;
     } else if (own && target.hp < target.maxHp) {
@@ -4756,7 +4764,7 @@ export class RtsController {
    *  each unit's slot move when Shift is held). */
   private groupMove(tx: number, ty: number, queued = false): void {
     const targets = this.groupTargets([...this.selected], tx, ty);
-    for (const [id, [x, y]] of targets) this.order(id, { kind: "move", x, y }, queued);
+    for (const [id, [x, y]] of targets) this.execute({ c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued });
   }
 
   /** Attack-move the whole selection to a ground point. Same destination logic as
@@ -4765,7 +4773,7 @@ export class RtsController {
    *  each unit fights the nearest enemy in its path and resumes to its slot afterwards. */
   private groupAttackMove(tx: number, ty: number, queued = false): void {
     const targets = this.groupTargets([...this.selected], tx, ty);
-    for (const [id, [x, y]] of targets) this.order(id, { kind: "attackmove", x, y }, queued);
+    for (const [id, [x, y]] of targets) this.execute({ c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued });
   }
 
   /** Queue a target-circle flash — the renderer draws it as a flat ground circle

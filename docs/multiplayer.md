@@ -211,10 +211,20 @@ wire format:
 | **Inventory actions** | `useItem` (point + instant), `dropItem`, `issueSellItem`, `issueGiveItem` | new `QueuedOrder` members, all keyed by inventory **slot** |
 | **Not unit orders at all** | `setShopBuyer`, `toggleAutocast` | **do not fit `QueuedOrder`** |
 
-**All eleven are now closed.** `stop` and `hold` went into `QueuedOrder` and route through
-`order()`; the other nine became `Command` members applied by `RtsController.execute`. The audit
-grep above should return nothing outside `execute()`, `order()` and the JASS path — that is the
-check that this stays true.
+**All eleven are now closed**, but note what "closed" had to mean. The first pass routed the direct
+*sim* calls into `execute()` and left `order()` reachable on its own — and fourteen call sites took
+that door, including move, attack, attack-move, harvest, patrol, follow and repair. Closing the sim
+calls was only half the job: `order()` was itself a bypass, and the commonest orders in the game were
+going through it. It is now `applyOrder`, private, and reached only from `execute`'s `order` member.
+
+Two greps keep this true, and both should return nothing:
+
+```
+# 1. no player path may touch the sim outside execute(), applyOrder() and the JASS path
+grep -n 'this\.sim\.\(issue[A-Z]\|useItem\|dropItem\|setShopBuyer\|toggleAutocast\|stop(\)' src/game/rts.ts
+# 2. nothing may reach applyOrder except execute()
+grep -n 'this\.applyOrder(' src/game/rts.ts   # expect exactly one hit, inside execute()
+```
 
 **`QueuedOrder` is not the whole wire format.** This file used to say it "is already a wire format,
 by accident", which is true but incomplete: it is the wire format for *orders a unit performs and
