@@ -92,7 +92,7 @@ state.
 | Map selection + Start | **done** | create screen, map summary, `start` handshake, both clients enter |
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
-| D — N vision maps | in progress | items 1–4 done; items 5–7 open (minimap/HUD viewpoint, GetLocalPlayer per recipient, sim.visibleToTeam) |
+| D — N vision maps | in progress | items 1–5 done; 6–7 open (GetLocalPlayer per recipient; sim.visibleToTeam + the N-rebuild budget) |
 | E — snapshots & reconnect | not started | also inherits the 151-entry [JASS hook table](#the-jass-hook-table) split, which needs the headless boot first |
 
 **Shipped so far** (newest first — `git log` for detail):
@@ -693,8 +693,39 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    probably what Phase E should do anyway.
 
 
-5. **Minimap and per-player HUD take a viewpoint** — `dots()`, `creepCamps()`, `minimapIcons()`,
-   and the `leaderboardFor` / `displayText` / dialog gating in `mapViewer.ts`.
+5. ~~**Minimap and per-player HUD take a viewpoint.**~~ **Done.** `dots(vp)` and `creepCamps(vp)`
+   now take one, defaulting to the local viewpoint so no caller changed.
+
+   **The thing that had to be untangled** is that both read `Entry.hidden` — the RENDER
+   record's flag. That flag is a sum of two different kinds of reason: a unit inside a gold
+   mine, in a burrow, swallowed by a Kodo or removed is off screen for *everyone*, while fog
+   and invisibility depend on who is looking. Computed once for the local viewpoint, the sum is
+   exactly right for the client drawing it and useless for asking about anybody else. So
+   `RtsController.hiddenFor(vp, u)` splits it: the viewpoint-independent reasons first, then
+   `vp.fogHides(u) || vp.invisHides(u)`. The old `fogHides`/`invisHides` delegating wrappers
+   died with it.
+
+   **The HUD half needed no work, and that is the finding.** `leaderboardFor(player)`,
+   `DialogObj.visibleFor: Set<number>` and the `displayText(player, …)` hook are already
+   per-player in the data model; `mapViewer` picks `this.localPlayer` out of them because the
+   renderer renders for the local player. That is the client question, correctly answered —
+   the same category as the ~35 `execute(this.localPlayer, …)` calls. Nothing there was
+   client-by-construction.
+
+   **Still coupled, and Phase E owns it:** `dots` and `creepCamps` iterate `this.entries`, the
+   local client's render records. A viewpoint parameter makes them answer *the fog question*
+   for anyone; it does not make them enumerate units the local client never loaded a model
+   for. An authority answering for a remote player must iterate `sim.units` instead. Changing
+   the iteration source now would alter what the local player sees (units without render
+   records would start showing dots), so it is deliberately not part of this item.
+
+   **Open, and needs the real client:** `minimapIcons()` has no fog gate at all — gold-mine and
+   neutral-building glyphs draw on pitch-black unexplored ground. It therefore takes no
+   viewpoint, because it does not currently depend on one. Whether that is *correct* is
+   unresolved; WC3's melee minimap may well show some neutral furniture from the start. Per
+   CLAUDE.md the running game decides, and nobody has looked yet. Do not "fix" it from memory.
+
+
 6. **`GetLocalPlayer` resolves per recipient.** [`src/jass/natives/config.ts`](../src/jass/natives/config.ts)
    reads `c.rt.localPlayer` — the authority's own notion of "local", which is meaningless once the
    interpreter runs once and its output is sent to N clients. The classic WC3 desync native; it must

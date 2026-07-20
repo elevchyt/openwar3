@@ -683,16 +683,16 @@ export class RtsController {
     this.viewpoints.onTreeFelled(x, y, radius);
   }
 
-  /** Should this unit's model be hidden by the fog of war right now? Your own team
-   *  is always visible. Enemy/neutral STRUCTURES persist once SEEN (WC3 shows
-   *  the last-seen building greyed in fog); mobile units and critters vanish unless
-   *  currently in sight — "concealing enemy movements".
+  /** Is this unit off screen for `vp` — for ANY reason, not just fog?
    *
-   *  "Seen", not "explored": those are different facts and the difference is exactly the
-   *  start-explored lobby option, which hands you the terrain and no eyes. See
-   *  VisionMap.hasSeen. */
-  private fogHides(u: SimUnit): boolean {
-    return this.local.fogHides(u);
+   *  Two kinds of reason, and keeping them apart is the point. A unit inside a gold mine, in
+   *  a burrow, swallowed by a Kodo or removed outright is off screen for EVERYONE; fog and
+   *  invisibility are answers that depend on who is looking. The minimap used to read
+   *  `Entry.hidden` for this, which is the same sum computed once for the local viewpoint —
+   *  fine for the one client rendering it, useless for asking about anybody else. */
+  private hiddenFor(vp: Viewpoint, u: SimUnit): boolean {
+    if (u.inMine || u.insideBuild || u.inBurrow || u.devouredBy > 0 || u.vanished) return true;
+    return vp.fogHides(u) || vp.invisHides(u);
   }
 
   /** May the local player CLICK this unit right now — select it, hover it, aim an order at
@@ -800,7 +800,7 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
-    const hide = u.inMine || u.insideBuild || u.inBurrow || devoured || u.vanished || this.fogHides(u) || this.invisHides(u);
+    const hide = this.hiddenFor(this.local, u);
     if (hide !== e.hidden) {
       e.hidden = hide;
       if (hide) {
@@ -847,20 +847,6 @@ export class RtsController {
     e.curSeq = e.anims.morph;
     e.unit.state = WidgetState.WALK; // hold it against the idle picker, as a cast clip does
     e.castAnimT = seqDuration(inst, e.anims.morph, CAST_ANIM_HOLD);
-  }
-
-  /** Is this unit concealed from the LOCAL viewpoint by invisibility? The sim already
-   *  refuses an invisible unit down every automatic aggro path (canSee), but concealment
-   *  is a thing you SEE, not only a thing the AI respects: to an enemy without detection a
-   *  Wind Walking Blademaster is not a faded ghost, he is simply not on the screen. Same
-   *  viewpoint rule as the illusion wash (seesFor) — your own and your allies' invisible
-   *  units stay drawn (half-faded, INVIS_ALPHA) so you can still command them.
-   *
-   *  …and True Sight takes it back: detection is a TEAM property in WC3 (one Shade uncovers
-   *  a hero for the whole army), so we ask the sim's own teamDetects rather than re-deriving
-   *  it here — that keeps what you can shoot and what you can see the same answer. */
-  private invisHides(u: SimUnit): boolean {
-    return this.local.invisHides(u);
   }
 
   /** Dim an enemy/neutral BUILDING that's shown from fog memory (last-seen, out of
@@ -3478,12 +3464,12 @@ export class RtsController {
    *  shops alike are furniture: the ones worth finding already carry a glyph of
    *  their own (minimapIcons), and the rest would only speckle the map. Creeps do
    *  get a dot once visible — and their camp marker steps aside for it. */
-  dots(): Array<{ x: number; y: number; owner: number }> {
+  dots(vp: Viewpoint = this.local): Array<{ x: number; y: number; owner: number }> {
     const out: Array<{ x: number; y: number; owner: number }> = [];
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId);
       if (!u || u.neutralPassive) continue;
-      if (!e.hidden || u.team === this.localTeam) {
+      if (!this.hiddenFor(vp, u) || u.team === vp.team) {
         out.push({ x: u.x, y: u.y, owner: u.owner });
       }
     }
@@ -3543,14 +3529,16 @@ export class RtsController {
    *  cannot see, so it yields the moment any of them is: exactly then `dots()`
    *  starts drawing that creep, and the two must never show at once. Gone for good
    *  once every creep in the camp is dead. */
-  creepCamps(): Array<{ x: number; y: number; level: number }> {
+  creepCamps(vp: Viewpoint = this.local): Array<{ x: number; y: number; level: number }> {
     if (!this.seeded) return [];
     if (this.creepCampData === null) this.creepCampData = this.buildCreepCamps();
     const out: Array<{ x: number; y: number; level: number }> = [];
     for (const camp of this.creepCampData) {
       const alive = camp.members.filter((id) => this.sim.units.has(id));
       if (alive.length === 0) continue; // camp cleared
-      if (alive.some((id) => !this.byId.get(id)?.hidden)) continue; // a creep is in sight — it speaks for itself
+      // A creep this viewpoint can actually see speaks for itself — the camp marker is for
+      // camps you know are there but cannot currently see.
+      if (alive.some((id) => !this.hiddenFor(vp, this.sim.units.get(id)!))) continue;
       out.push({ x: camp.x, y: camp.y, level: camp.level });
     }
     return out;
