@@ -111,11 +111,10 @@ state.
 **Pick up here.** In order:
 
 1. **Phase C, bypasses before transport.** The funnel at [`src/game/rts.ts`](../src/game/rts.ts)
-   `order()` is not exhaustive — `issueHold` goes round it, and `issueCast`, `issueSellItem`,
-   `issueGiveItem`, `issueGetItem`, `issueGarrison` and `setShopBuyer` are not expressible as
-   commands at all. Close those FIRST; wiring the transport first just makes those actions
-   silently host-only and the bug hard to see. (`issueUnitOrder` is *not* on this list — see
-   Phase C.)
+   `order()` is not exhaustive: **eleven** player actions still reach the sim directly, in three
+   groups (see Phase C for the audit and the table). Close those FIRST; wiring the transport first
+   just makes those actions silently host-only and the bug hard to see. `issueHold` is done.
+   (`issueUnitOrder` is *not* on the list — it is a trigger path, see Phase C.)
 2. **Phase E** — snapshots and reconnect.
 
 **What "Start" does and does not do today.** Both clients load the same map, seat themselves in
@@ -190,15 +189,38 @@ JSON with numeric IDs and no object references. **It is already a wire format**,
 
 [`src/game/rts.ts`](../src/game/rts.ts) `order()` is the ownership choke point — its own comment
 calls it "the single choke point that keeps enemy/neutral/creep units uncommandable." But it is **not
-exhaustive**. **Seven** player paths bypass it and call the sim directly, and they split in two:
+exhaustive**.
 
-- **Not expressible as a command at all** — `issueCast`, `issueSellItem`, `issueGiveItem`,
-  `issueGetItem`, `issueGarrison`, `setShopBuyer`. `QueuedOrder` has no member for any of them, so
-  these need the wire shape extended before they can be routed. Casts are the awkward one: the
-  target kind (none / point / unit) has to be part of the shape.
-- **Expressible, but skipping the gate** — `issueHold` only. `{ kind: "hold" }` is already in
-  `QueuedOrder`; the call simply goes round `order()`. A routing fix, and the cheapest proof of the
-  pattern.
+**The real audit** (`grep -n 'this\.sim\.\(issue[A-Z]\|useItem\|dropItem\|setShopBuyer\|toggleAutocast\|stop\)' src/game/rts.ts`,
+excluding the JASS path and `order()`'s own internals) is **eleven** player actions, not the six an
+earlier draft of this file listed — it missed `useItem` in both its modes, `dropItem`,
+`toggleAutocast` and `stop`. They fall into three groups, and the third is the one that shapes the
+wire format:
+
+| Group | Actions | Shape |
+|---|---|---|
+| **Queueable unit orders** | `stop`, `issueCast`, `issueGarrison`, `issueGetItem` | new `QueuedOrder` members |
+| **Inventory actions** | `useItem` (point + instant), `dropItem`, `issueSellItem`, `issueGiveItem` | new `QueuedOrder` members, all keyed by inventory **slot** |
+| **Not unit orders at all** | `setShopBuyer`, `toggleAutocast` | **do not fit `QueuedOrder`** |
+
+`issueHold` was a twelfth and is already done — it was the one action already expressible as a
+`QueuedOrder` that merely skipped `order()`, so it served as the routing proof (`sim-hold-test.cjs`).
+
+**`QueuedOrder` is not the whole wire format.** This file used to say it "is already a wire format,
+by accident", which is true but incomplete: it is the wire format for *orders a unit performs and
+can queue*. `setShopBuyer` is a player's choice about a **shop** it does not own (that is the whole
+point of a neutral Goblin Merchant) and `toggleAutocast` is a **toggle on an ability**, not an
+order — neither is queueable and neither is addressed to a unit as an order. So the command stream
+has to be a union one level up:
+
+```
+Command = { c: "order"; unitId; order: QueuedOrder; queued: boolean }
+        | { c: "shopbuyer"; shopId; unitId }
+        | { c: "autocast"; unitId; code }
+```
+
+Cast is the awkward member of the first group: its target kind (none / point / unit) has to be part
+of the shape, and `castFromSelection` currently resolves the ability's target rules at the call site.
 
 Every one of these must be expressible as a command before the wire exists, or those actions
 silently become host-only.
