@@ -497,6 +497,10 @@ export type QueuedOrder =
   | { kind: "attackmove"; x: number; y: number }
   | { kind: "patrol"; x: number; y: number }
   | { kind: "hold" }
+  // Stop wipes the unit's queue and its current order. It is a QueuedOrder so that the player
+  // path can go through the one funnel (docs/multiplayer.md Phase C) — not because you would
+  // ever shift-queue one; `issueOrder` clears the queue before dispatching it either way.
+  | { kind: "stop" }
   | { kind: "attack"; targetId: number; force?: boolean }
   // offX/offY: optional formation offset from the leader's centre, so a group told
   // to follow one unit fans into distinct slots instead of stacking on its centre.
@@ -3861,7 +3865,10 @@ export class SimWorld {
    *  whole queue (every fresh, non-shift order goes through here). */
   issueOrder(id: number, order: QueuedOrder): boolean {
     const u = this.units.get(id);
-    if (u && this.castLocked(u)) return false; // don't even drop the queue for an ignored order
+    // Stop is exempt: it is the one command that ABORTS a locked-in wind-up (see stop()), so
+    // being refused by the lock would make it the one order that can't do its own job.
+    // Everything else is ignored mid-wind-up, and ignored without dropping the queue.
+    if (u && order.kind !== "stop" && this.castLocked(u)) return false;
     this.clearQueue(id);
     return this.dispatch(id, order);
   }
@@ -3874,6 +3881,7 @@ export class SimWorld {
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
       case "patrol": return this.issuePatrol(id, o.x, o.y);
       case "hold": return this.issueHold(id);
+      case "stop": this.stop(id); return true;
       case "attack": return this.issueAttack(id, o.targetId, o.force);
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);

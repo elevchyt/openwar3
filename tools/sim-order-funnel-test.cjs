@@ -1,14 +1,16 @@
-// Headless check of Hold Position as a QUEUED ORDER (docs/multiplayer.md Phase C).
+// Headless check of the ORDER FUNNEL (docs/multiplayer.md Phase C) — the sim half.
 //
-// Hold was the one player order already expressible as a `QueuedOrder` that still reached the
-// sim by hand (`rts.holdSelected` called `clearQueue` + `issueHold` directly), so it would have
-// gone silently host-only the moment commands went on the wire. It now goes through
-// `RtsController.order()` like every other order, i.e. through `SimWorld.issueOrder`.
+// Phase C is about every player order reaching the sim through the ONE choke point
+// (`RtsController.order()` -> `SimWorld.issueOrder`), so that commands can go on the wire without
+// some of them silently staying host-only. Hold and Stop were the two orders already expressible
+// as a `QueuedOrder` that nevertheless reached the sim by hand, so they went first.
 //
-// What is checked here is the sim half of that — that `issueOrder({kind:"hold"})` is equivalent
-// to the old hand-rolled pair, and that it is BETTER in the one case they differ: a unit locked
-// into a cast wind-up refuses Hold, and the old path had already thrown its shift-queue away by
-// the time the refusal happened ("don't even drop the queue for an ignored order", world.ts).
+// The two are NOT symmetric, and that is most of what is checked here:
+//   * Hold is refused by a locked-in cast wind-up, and refused WITHOUT dropping the unit's
+//     shift-queue ("don't even drop the queue for an ignored order", world.ts). The old
+//     hand-rolled `clearQueue` + `issueHold` pair dropped it before the refusal — a real bug.
+//   * Stop is EXEMPT from that lock, because stop() is the one command that aborts a wind-up.
+//     Route it naively and Stop becomes the single order that cannot do its own job.
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
@@ -79,6 +81,30 @@ console.log("a locked-in cast refuses hold and KEEPS its queue");
   check("queue survived the refused hold", u.orderQueue.length, 1);
 }
 
+console.log("stop is exempt from the cast lock — it is what aborts a wind-up");
+{
+  const u = unit();
+  u.order = "cast";
+  u.pendingCast = { started: true, fired: false };
+  // The trap in routing stopSelected through order(): issueOrder refuses every order during a
+  // locked-in wind-up, but stop() is documented as "the one command that aborts" one. Refuse it
+  // here and Stop becomes the single order that cannot do its own job.
+  check("issueOrder(stop) took anyway", world.issueOrder(u.id, { kind: "stop" }), true);
+  check("unit is idle", u.order, "idle");
+  check("the wind-up was cleared", u.pendingCast, null);
+}
+
+console.log("stop clears the shift-queue");
+{
+  const u = unit();
+  world.queueOrder(u.id, { kind: "move", x: 700, y: 700 });
+  world.queueOrder(u.id, { kind: "move", x: 900, y: 900 });
+  check("queue primed", u.orderQueue.length, 2);
+  check("issueOrder(stop) took", world.issueOrder(u.id, { kind: "stop" }), true);
+  check("stop wiped the queue", u.orderQueue.length, 0);
+  check("unit is idle", u.order, "idle");
+}
+
 console.log("hold still dispatches out of the shift-queue");
 {
   const u = unit();
@@ -90,5 +116,5 @@ console.log("hold still dispatches out of the shift-queue");
   check("unit is holding", u.order, "hold");
 }
 
-console.log(failed === 0 ? "\nhold: all checks passed" : `\nhold: ${failed} check(s) failed`);
+console.log(failed === 0 ? "\norder funnel: all checks passed" : `\norder funnel: ${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

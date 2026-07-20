@@ -3458,14 +3458,13 @@ export class RtsController {
   }
 
   /** Stop halts the selection AND clears their shift-queues (WC3: Stop wipes the
-   *  action queue), so a stopped unit doesn't resume a queued order. */
+   *  action queue), so a stopped unit doesn't resume a queued order.
+   *
+   *  Through `order()` like Hold, for the same Phase C reason (docs/multiplayer.md).
+   *  `issueOrder` does the queue-clearing itself, and exempts stop from the cast-lock guard
+   *  so it keeps its one special power: aborting a wind-up that has started but not fired. */
   stopSelected(): void {
-    for (const id of this.selected) {
-      if (!this.controls(id)) continue; // only your own units obey Stop
-      this.sim.clearQueue(id);
-      this.sim.stop(id);
-      this.sim.noteOrder(id, ORDER_IDS.stop, "immediate", 0, 0, 0); // ISSUED_ORDER for the trigger engine
-    }
+    for (const id of this.selected) this.order(id, { kind: "stop" }, false);
   }
 
   /** Hold Position on the selection: each unit plants where it stands and attacks
@@ -3880,7 +3879,8 @@ export class RtsController {
       case "buildnew":
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
       case "hold":
-        return null; // Hold Position has no destination/target to draw a marker for
+      case "stop":
+        return null; // neither has a destination/target to draw a marker for
       case "attack":
       case "follow": {
         const t = this.sim.units.get(o.targetId);
@@ -4159,6 +4159,9 @@ export class RtsController {
         break;
       case "hold":
         this.sim.noteOrder(id, ORDER_IDS.holdposition, "immediate", 0, 0, 0);
+        break;
+      case "stop":
+        this.sim.noteOrder(id, ORDER_IDS.stop, "immediate", 0, 0, 0);
         break;
     }
   }
