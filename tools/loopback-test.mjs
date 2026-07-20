@@ -20,6 +20,7 @@ import { LoopbackRelay, tick } from "./loopback.mjs";
 const { CommandRouter, commandMessage, accepted } = await import(
   "file://" + join(process.cwd(), ".sim-build", "src", "net", "commandLink.js")
 );
+const { MatchLink } = await import("file://" + join(process.cwd(), ".sim-build", "src", "game", "matchLink.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -264,6 +265,121 @@ console.log("rubbish on the game channel is refused, not thrown");
   check("a start message is not a command", router.receive(1, { k: "start" }), "not-a-command");
   check("nor is null", router.receive(1, null), "not-a-command");
   check("nor is a bare string", router.receive(1, "cmd"), "not-a-command");
+}
+
+// ---------------------------------------------------------------------------------------
+// Item 10b: snapshots actually cross the wire, through the real relay core, and the receiving
+// client diffs them against what it simulated for itself. This is the first test in the whole
+// phase where the authority's payload reaches another endpoint.
+// ---------------------------------------------------------------------------------------
+
+/** A `MatchChannel` over one loopback endpoint — what `LanLobby` provides in the real app. */
+function channelFor(t) {
+  const ch = { send: (data, to) => t.send({ t: "relay", to, data }), onPeerData: () => {} };
+  t.onMessage = (m) => { if (m.t === "deliver") ch.onPeerData(m.from, m.data); };
+  return ch;
+}
+
+const SEATS = [{ id: 0, peer: 1 }, { id: 1, peer: 2 }, { id: 2 }]; // p2 is a computer
+
+/** A world with one unit at a given hp, plus the stub viewer/sources the link needs. */
+function worldAt(hp) {
+  const u = {
+    id: 1, owner: 0, team: 0, typeId: "hfoo", race: "human", neutralPassive: false,
+    isHero: false, properName: "", isCreep: false, x: 10, y: 20, facing: 0, flyHeight: 0,
+    speed: 270, radius: 16, flying: false, order: "idle", moving: false, inCombat: false,
+    working: false, swingSeq: 0, chopSeq: 0, swingBroken: false, swingSlam: false,
+    altModel: false, spawning: 0, constructing: 0, repair: null, inMine: false,
+    insideBuild: false, inBurrow: false, devouredBy: 0, vanished: false, invisible: false,
+    ethereal: false, hp, maxHp: 420, mana: 0, maxMana: 0, armor: 2, bonusArmor: 0,
+    bonusDamage: 0, invulnerable: false, weapon: null, swingWeapon: null, level: 0, xp: 0,
+    skillPoints: 0, str: 0, agi: 0, int: 0, bonusStr: 0, bonusAgi: 0, bonusInt: 0,
+    worker: null, building: null, abilities: [], buffs: [], inventory: [], garrison: [],
+    garrisonCap: 0, isSummon: false, summonLeft: 0, summonMax: 0, isIllusion: false,
+    illusionOf: 0, guardX: 0, guardY: 0, buildPending: null, orderQueue: [], pendingCast: null,
+  };
+  return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true };
+}
+const seer = { seesFor: () => true, fogHides: () => false, fogBlocksClick: () => false, invisHides: () => false, fogBlocksAt: () => false };
+const sources = { viewers: () => [{ player: 0, viewer: seer }, { player: 1, viewer: seer }, { player: 2, viewer: seer }], ghostsFor: () => [] };
+
+console.log("\nthe host's snapshot reaches the client it was addressed to");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  peer.clear();
+
+  const sent = hostLink.tickHost(1, worldAt(420), sources, 5);
+  await tick();
+  // Player 0 is the host itself — already looking at the authoritative world, so sending it a
+  // round trip to learn what it knows would be waste. Player 2 is a computer with no peer.
+  check("one snapshot sent, not three", sent, 1);
+  check("the client is holding it", peerLink.latest()?.recipient, 1);
+  check("with the world in it", peerLink.latest()?.units[0].hp, 420);
+  check("stamped with the authority's clock", peerLink.latest()?.time, 5);
+}
+
+console.log("the client diffs what it was sent against what it simulated");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+
+  hostLink.tickHost(1, worldAt(245), sources, 5);
+  await tick();
+  // Sequencing B: the client kept simulating and reached a different answer.
+  const found = peerLink.compare(worldAt(260), seer);
+  check("the disagreement is found", found.length, 1);
+  check("named down to the field and both values", [found[0].id, found[0].field, found[0].local, found[0].authority], [1, "hp", 260, 245]);
+  check("and it reads as a line a human can act on", peerLink.describe()[0], "unit 1.hp: local 260 vs authority 245");
+
+  // Agreement is silence — otherwise the log is useless the moment it works.
+  hostLink.tickHost(1, worldAt(260), sources, 6);
+  await tick();
+  check("agreement reports nothing", peerLink.compare(worldAt(260), seer), []);
+}
+
+console.log("an out-of-order or mis-addressed snapshot is refused, not rendered");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+
+  hostLink.tickHost(1, worldAt(300), sources, 10);
+  await tick();
+  check("the newer one is held", peerLink.latest().time, 10);
+
+  // Over a relay "arrived later" and "happened later" are different claims. Rendering an older
+  // world would jerk every unit backwards.
+  hostLink.tickHost(1, worldAt(999), sources, 4);
+  await tick();
+  check("an older snapshot is dropped", peerLink.latest().time, 10);
+  check("and counted, because a rising count is itself a diagnostic", peerLink.stale, 1);
+
+  // Addressed to player 0, delivered to player 1's endpoint: a routing bug, and `recipient`
+  // is carried in the payload (item 5) precisely so it is noticed instead of quietly drawn.
+  host.send({ t: "relay", to: 2, data: { k: "snap", snap: { recipient: 0, time: 99, timeOfDay: 12, dawnDusk: true, units: [], mines: [], items: [] } } });
+  await tick();
+  check("somebody else's snapshot is ignored", peerLink.latest().time, 10);
+}
+
+console.log("the link leaves traffic that is not a snapshot alone");
+{
+  const { host, peer } = await room();
+  const seen = [];
+  const ch = channelFor(peer);
+  ch.onPeerData = (from, data) => seen.push(data.k);
+  new MatchLink(ch, 1, SEATS); // wraps the handler above
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+
+  host.send({ t: "relay", to: 2, data: commandMessage({ c: "order", unitId: 4, order: { kind: "move", x: 0, y: 0 }, queued: false }) });
+  await tick();
+  hostLink.tickHost(1, worldAt(420), sources, 5);
+  await tick();
+  // Commands (item 9b) share this channel. The link must take the snapshots and pass the rest
+  // through, or wiring one would silently swallow the other.
+  check("the command still reached its handler", seen, ["cmd"]);
 }
 
 console.log(failed === 0 ? "\nloopback: all checks passed" : `\nloopback: ${failed} FAILED`);

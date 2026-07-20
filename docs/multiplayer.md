@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a). Open: 6d, 7b, 9b, 10b, 10c, then 11–12 — **nothing is sent yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b). Open: 6d, 7b, 9b, 10b-note, 10c, then 11–12 — **wired in tests, not yet in the app** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1618,7 +1618,41 @@ enumerated by body rather than by name.
     field silenced before anybody understood why it was noisy is a desync nobody will ever find.
     `sim:test` 392 → **407**.
 
-10b. **The match channel, and the pump.** `RtsController` has no transport and cannot get one:
+10b. ~~**The match channel, and the pump.**~~ **Done — and the seam already existed.**
+    [`src/game/matchLink.ts`](../src/game/matchLink.ts) `MatchLink`: the host builds one
+    snapshot per recipient at 10 Hz and sends it; a client keeps the newest and diffs it against
+    what it simulated. **Twelfth module to compile standalone.** This is the first time in the
+    whole phase that the authority's payload reaches another endpoint, tested end to end through
+    the real `RelayCore`.
+
+    **`MatchChannel` is a two-method structural type, and `LanLobby` already satisfies it.** The
+    entry predicted inventing a seam; `send(data, to?)` and `onPeerData(from, data)` were both
+    already on `LanLobby`, and `onPeerData` was already the "everything that is not `start`"
+    hand-off. So the game layer names what it needs and never imports the lobby — which matters
+    in the other direction too: importing it would have made the authority depend on the lobby
+    UI and undone Phase B/C/D's separation from the far end.
+
+    **Three refusals, each its own check.** A snapshot addressed to another player is dropped
+    (`recipient` is carried in the payload for exactly this — item 5 — so it is *noticed*, not
+    quietly drawn as ours). One older than what we hold is dropped and **counted**, because over
+    a relay "arrived later" and "happened later" are different claims and a rising `stale` count
+    is itself a diagnostic. And traffic that is not a snapshot is passed through untouched, or
+    wiring this would silently swallow the command stream that shares the channel.
+
+    The host skips its **own** seat — it is already looking at the authoritative world, and a
+    round trip to learn what it knows is waste — and skips computer slots, which have no peer
+    and nobody watching. `sent === 1`, not 3, in a 1v1-plus-AI room.
+
+    `pnpm relay:test` now carries **47** loopback checks. Three injections, each turning its own
+    checks red: dropping the recipient guard, the staleness guard, and the pass-through.
+
+10b-note. **Nothing constructs a `MatchLink` yet, and that is the remaining wiring.**
+    `startGame` in [`src/main.ts`](../src/main.ts) builds the match from `onStart(path, info,
+    config)` and is never handed the `LanLobby` that produced it, so the controller still has no
+    channel to attach. That hand-off is UI plumbing rather than a rule — one more argument
+    through two call sites — and it is what turns this from a tested module into live traffic.
+
+10b-old. **The original entry.** `RtsController` has no transport and cannot get one:
     `LanLobby` is constructed in [`src/ui/fdfLan.ts`](../src/ui/fdfLan.ts), a UI module, and the
     game layer has no reference to it. So before any snapshot can be sent, the match needs a
     narrow channel seam — `{ send(data, to?), onMessage }`, which `LanLobby` already satisfies
