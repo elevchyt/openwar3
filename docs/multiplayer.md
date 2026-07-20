@@ -349,9 +349,32 @@ commit.
    creeps for the minimap. That is a post-seeding view over render state, not `.doo` metadata,
    so it is client-side and belongs where it is. Its `e.level` dependency is worth revisiting
    under item 6 (`SimUnit` carries a level too), but not as a move.
-5. **Fog modifiers + alliances → a `PlayerRelations` module.** The `FogModifier` block and the
-   alliance delegators are already thin pass-throughs; the item is that `rts.ts` should not be the
-   only door to them once JASS runs on a headless authority. Small.
+5. ~~**Fog modifiers + alliances → a `PlayerRelations` module.**~~ **Dissolved — this was not a
+   real move, and inventing the module would have made things worse.** Three findings, each
+   checked against the code rather than assumed:
+
+   - **Alliances are already across the seam.** `AllianceTable`
+     ([`src/sim/alliances.ts`](../src/sim/alliances.ts)) has **zero imports** and holds the whole
+     per-pair matrix. `seedAlliances` / `setPlayerAlliance` / `getPlayerAlliance` /
+     `playersAreCoAllied` on `RtsController` are one-line pass-throughs that exist only as the
+     JASS `EngineHooks` surface. A `PlayerRelations` wrapper would make the chain
+     `mapViewer hook → rts delegator → PlayerRelations delegator → AllianceTable` — a third
+     layer of indirection over a module that is already clean. Nothing to move.
+   - **The fog-modifier block's cut is the Phase D line, not a Phase B line.** The storage
+     (`fogModifiers` map, id counter, start/stop/destroy) looks authority-shaped, but its only
+     consumer is `updateVision`, which gates every modifier on `seesFor(m.player)` — i.e. on
+     `localPlayer`/`localTeam` — and stamps it into `this.vision`, the single local-team
+     `VisionMap`. Storage cannot be separated from application until there is more than one
+     vision map to apply it to, and deciding that shape **is Phase D**. Splitting it now would
+     mean designing Phase D inside a Phase B commit.
+   - **`cripplePlayer` is client by construction**, as its own comment already says: it writes
+     `this.exposed`, read only by `fogHides`, `fogBlocksClick` and `applyFogTint` — all
+     one-viewpoint. It becomes per-recipient in Phase D/E alongside `GetLocalPlayer`.
+
+   **Handed to Phase D**, which is where these actually belong: the `FogModifier` map and
+   `setFogState` need one owner per vision group, and `seesFor`/`cripplePlayer`/`exposed` need
+   to resolve per snapshot recipient rather than against "local".
+
 6. **The authority core → `src/game/authority.ts`.** `execute`, `applyOrder`, `notePlayerOrder`,
    `heroTypesInProduction`, `freeHeroUsed`/`hasFreeHero`, `ownedBy`, `castOrder`, `issueUnitOrder`,
    `currentOrderId`, `resolveRally`, `stashFor`, `countOwned`, `foodFor` (~600 L). The tentpole.
