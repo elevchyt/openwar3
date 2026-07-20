@@ -181,7 +181,6 @@ const FIXED_CARD_ICONS = [
 const DAWN_SOUND = "RoosterSound";
 const DUSK_SOUND = "WolfSound";
 const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
-const TAVERN_HIRE_TIME = 0; // tavern heroes are HIRED instantly — no build time, the hero just spawns (pops next tick)
 
 // Our race ids → the suffix WC3's UISounds.slk uses on its per-race cues
 // (ResearchCompleteHuman, UpgradeCompleteNightElf, …).
@@ -4716,7 +4715,7 @@ export class MapViewerScene {
       if (world.tech && world.tech.maxAllowed(this.localPlayer, uid) === 0) continue;
 
       const owned = this.trainTier(uid, heroesInProduction.size);
-      const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer); // first hero is free
+      const freeHero = d.isHero && this.rts!.hasFreeHero(this.localPlayer); // first hero is free
       const gold = freeHero ? 0 : d.goldCost;
       const lumber = freeHero ? 0 : d.lumberCost;
       const stock = sold.has(uid) ? world.shopStock(sel.id, uid) : -1;
@@ -5424,57 +5423,29 @@ export class MapViewerScene {
     return true;
   }
 
-  private freeHeroUsed = new Set<number>(); // players who've had their free first hero
+  /** Ask to train (or hire) a unit. Every gate that decides whether this HAPPENS now lives in
+   *  `execute` — cost, food, tech, hero cap, queue depth, shop stock. What stays here is the
+   *  part `execute` cannot do: telling the player WHY it was refused, in the game's own voice.
+   *  These are feedback pre-checks, deliberately duplicated, and nothing depends on them. */
   private trainUnit(buildingId: number, unitId: string): void {
+    if (!this.rts) return;
     const d = this.registry.get(unitId);
-    if (!d || !this.rts) return;
-    if (this.rts.simWorld.queueFull(buildingId)) return; // 7-deep queue — checked BEFORE charging
-    // WC3 hero rules, enforced here too (not just hidden on the card) so a hotkey
-    // can't queue a duplicate hero or exceed the 3-hero cap.
-    let heroCount = 0;
-    if (d.isHero) {
-      const inProduction = this.heroTypesInProduction(this.localPlayer);
-      if (inProduction.has(unitId) || inProduction.size >= MAX_HEROES) return;
-      heroCount = inProduction.size;
-    }
-    const stash = this.rts.stashFor(this.localPlayer);
-    const food = this.rts.foodFor(this.localPlayer);
-    // WC3 melee: a player's FIRST hero is free of gold/lumber (only food).
-    const freeHero = d.isHero && !this.freeHeroUsed.has(this.localPlayer);
-    const gold = freeHero ? 0 : d.goldCost;
-    const lumber = freeHero ? 0 : d.lumberCost;
-    // Food (like gold/lumber) is committed when training begins; block if the
-    // supply cap would be exceeded (WC3: "not enough food").
-    if (!this.canAfford(gold, lumber)) return;
-    if (food.used + d.foodUsed > food.made) {
-      this.refuse(ERR_NOFOOD);
-      return;
-    }
-    const world = this.rts.simWorld;
-    // Tech gate, enforced here and not merely greyed on the card, so a hotkey can't bypass it.
-    const owned = this.trainTier(unitId, heroCount);
-    if (!world.canMake(this.localPlayer, unitId, owned)) return;
-    // A unit the building SELLS (a Tavern hero, a Mercenary Camp creep) comes off its stock,
-    // and hiring is loud — purchaseUnit both depletes the shelf and shouts to the creeps.
-    const isSold = this.tech.get(this.rts.simWorld.units.get(buildingId)?.typeId ?? "").sellunits.includes(unitId);
-    if (isSold) {
-      const result = world.purchaseUnit(buildingId, unitId, this.localPlayer);
-      if (result !== "ok") {
-        if (SHOP_ERROR[result]) this.refuse(SHOP_ERROR[result]);
+    if (d) {
+      const freeHero = d.isHero && this.rts.hasFreeHero(this.localPlayer);
+      if (!this.canAfford(freeHero ? 0 : d.goldCost, freeHero ? 0 : d.lumberCost)) return;
+      const food = this.rts.foodFor(this.localPlayer);
+      if (food.used + d.foodUsed > food.made) {
+        this.refuse(ERR_NOFOOD);
+        return;
+      }
+      // A sold-out shelf has its own line ("That unit is not available") — worth keeping,
+      // since a Tavern with no stock looks identical to one that just refused silently.
+      if (this.rts.simWorld.shopStock(buildingId, unitId) === 0) {
+        this.refuse(SHOP_ERROR.nostock);
         return;
       }
     }
-
-    stash.gold -= gold;
-    stash.lumber -= lumber;
-    if (freeHero) this.freeHeroUsed.add(this.localPlayer);
-    // A neutral shop (tavern) hires heroes near-instantly; own buildings use the
-    // unit's real build time (altar heroes ~55s).
-    const shop = world.units.get(buildingId)?.neutralPassive;
-    // Tag the job with its BUYER: a Tavern is Neutral Passive, so a hero queued in it belongs
-    // to nobody by ownership, and countOwned (which picks the requirement tier) has no other
-    // way to tell whose it is. See BuildJob.buyer.
-    world.enqueueTrain(buildingId, unitId, shop ? TAVERN_HIRE_TIME : d.buildTime || 15, freeHero, this.localPlayer);
+    this.rts.execute(this.localPlayer, { c: "train", buildingId, unitId });
   }
 
   /** Start researching an upgrade at a building. Charges the level's own cost (Steel Forged
@@ -5587,7 +5558,7 @@ export class MapViewerScene {
     // The melee free first hero cost nothing, so it refunds nothing — otherwise queueing and
     // cancelling one would simply mint 425 gold. Cancelling it also hands the freebie back.
     if (job.kind === "unit" && job.free) {
-      this.freeHeroUsed.delete(this.localPlayer);
+      this.rts.restoreFreeHero(this.localPlayer);
       return;
     }
     const d = this.registry.get(job.unitId);

@@ -25,6 +25,9 @@ import { worldLayer } from "../ui/stage";
 // each frame, and handles click-to-select / right-click-to-move picking.
 // Keeps the sim authoritative; the instances just display it.
 
+/** Tavern heroes are HIRED, not trained — no build time, the hero just spawns (pops next tick). */
+const TAVERN_HIRE_TIME = 0;
+
 // Minimal shapes for the mdx-m3-viewer bits we drive.
 interface Instance {
   localLocation: Float32Array;
@@ -4226,7 +4229,93 @@ export class RtsController {
           lumberPerHp: (def.lumberCost * 0.35) / maxHp,
         }, cmd.queued);
       }
+      case "train": {
+        const b = this.sim.units.get(cmd.buildingId);
+        if (!b?.building || b.hp <= 0) return false;
+        // A SHOP is deliberately exempt from ownership — a Tavern is Neutral Passive, so
+        // nobody owns the building you hire your first hero from. Anything else must be
+        // yours. (Same carve-out the command card makes for a foreign shop.)
+        if (b.owner !== player && !this.sim.isShopUnit(cmd.buildingId)) return false;
+        const def = this.registry.get(cmd.unitId);
+        if (!def) return false;
+        // "Does this building even train that?" — never checked before, because the card
+        // only ever offered what the building trains. The card does not come over the wire.
+        const isSold = this.tech.get(b.typeId).sellunits.includes(cmd.unitId);
+        if (!isSold && !this.tech.trains(b.typeId).includes(cmd.unitId)) return false;
+        if (this.sim.queueFull(cmd.buildingId)) return false; // 7-deep — before charging
+        // WC3 hero rules: unique per player, and MELEE_HERO_LIMIT across altars + tavern.
+        let heroCount = 0;
+        if (def.isHero) {
+          const inProduction = this.heroTypesInProduction(player);
+          if (inProduction.has(cmd.unitId) || inProduction.size >= MELEE.MELEE_HERO_LIMIT) return false;
+          heroCount = inProduction.size;
+        }
+        // Tech gate. A hero indexes the requirement tier by how many HEROES the player has,
+        // not how many of this hero — see the trainTier note in mapViewer.
+        const owned = def.isHero ? heroCount : this.countOwned(player, cmd.unitId);
+        if (!this.sim.canMake(player, cmd.unitId, owned)) return false;
+        // The melee free FIRST hero: gold- and lumber-free, food still counts. This record
+        // lives here and not on the client precisely because it is worth 425 gold.
+        const freeHero = def.isHero && !this.freeHeroUsed.has(player);
+        const gold = freeHero ? 0 : def.goldCost;
+        const lumber = freeHero ? 0 : def.lumberCost;
+        const stash = this.sim.stashOf(player);
+        if (stash.gold < gold || stash.lumber < lumber) return false;
+        // Food is committed when training BEGINS, exactly like gold and lumber.
+        const food = this.foodFor(player);
+        if (food.used + def.foodUsed > food.made) return false;
+        // A unit the building SELLS comes off its shelf, and hiring is loud — purchaseUnit
+        // both depletes the stock and shouts to the creeps. It can still refuse (sold out,
+        // requirements), so it runs before anything is charged.
+        if (isSold && this.sim.purchaseUnit(cmd.buildingId, cmd.unitId, player) !== "ok") return false;
+        stash.gold -= gold;
+        stash.lumber -= lumber;
+        if (freeHero) this.freeHeroUsed.add(player);
+        // A neutral shop hires near-instantly; a building you own takes the unit's real
+        // build time (altar heroes ~55s). Derived here — the client used to send it.
+        const hireTime = b.neutralPassive ? TAVERN_HIRE_TIME : def.buildTime || 15;
+        // Tagged with its BUYER: a Tavern belongs to nobody, so countOwned (which picks the
+        // requirement tier) has no other way to tell whose queued hero this is.
+        return this.sim.enqueueTrain(cmd.buildingId, cmd.unitId, hireTime, freeHero, player);
+      }
     }
+  }
+
+  /** Players who have already had their free first hero. Authority-side state: the melee
+   *  freebie is worth a hero's full price, so who has spent it is not the client's to say. */
+  private freeHeroUsed = new Set<number>();
+
+  /** Has `player` still got their free first hero? Read-only — the command card greys and
+   *  prices its altar buttons off this, but only `execute` ever sets it. */
+  hasFreeHero(player: number): boolean {
+    return !this.freeHeroUsed.has(player);
+  }
+
+  /**
+   * Hand the free-hero freebie back — cancelling the queued first hero must not consume it.
+   *
+   * **Transitional.** Cancelling a training job is still a client-side call site
+   * (`refundJob` in mapViewer); when it becomes a `Command` this collapses into that case
+   * and this method goes away. See docs/multiplayer.md.
+   */
+  restoreFreeHero(player: number): void {
+    this.freeHeroUsed.delete(player);
+  }
+
+  /** Hero types the player already fields or has queued — at their own altars AND at any
+   *  neutral shop (a tavern) they are hiring from. WC3 heroes are unique per player, so this
+   *  is both the uniqueness check and the count the hero cap is measured against. */
+  private heroTypesInProduction(player: number): Set<string> {
+    const set = new Set<string>();
+    for (const u of this.sim.units.values()) {
+      if (u.owner === player && this.registry.get(u.typeId)?.isHero) set.add(u.typeId);
+      if (u.building && (u.owner === player || u.neutralPassive)) {
+        for (const job of u.building.queue) {
+          if (job.kind === "unit" && this.registry.get(job.unitId)?.isHero) set.add(job.unitId);
+        }
+      }
+    }
+    return set;
   }
 
   /**

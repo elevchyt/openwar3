@@ -146,9 +146,17 @@ the repair-rate bug, so the client set both what it paid and what it got back.
 **Done:** `build` — placement now carries intent only; `execute` looks the cost up, checks
 affordability, charges, and issues the order.
 
+**Done:** `train` — the command carries only *which building, which unit*. The cost, the build
+time and the **free first hero** are all derived authority-side; `freeHeroUsed` moved onto
+`RtsController` (a client that kept that set could hire a hero a game for free). `execute` also
+now asks the question the old call site never did — *does this building even train that?* — since
+the command card was the only thing enforcing it and the card does not cross the wire. What stays
+in the renderer is a feedback-only pre-check, so a refusal still says *why* in the game's voice.
+One transitional hole: `RtsController.restoreFreeHero`, which cancel-train still needs until (2).
+
 **Remaining, in order:**
 
-1. `train` (~5472), `research` (~5501), `startBuildingUpgrade` (~5524) — same shape: check → charge →
+1. `research` (~5450), `startBuildingUpgrade` (~5473) — same shape as `train` was: check → charge →
    enqueue, all client-side. Each needs a command whose cost the authority derives.
 2. The refunds — cancel building (~5557), cancel research (~5587), cancel train (~5600). Refund
    *rates* are as forgeable as prices.

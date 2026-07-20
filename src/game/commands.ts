@@ -73,4 +73,21 @@ export type Command =
    * it paid and what it got back. `execute` looks the cost up in the registry, checks the
    * player can afford it, charges, and only then issues the order.
    */
-  | { c: "build"; unitId: number; defId: string; x: number; y: number; queued: boolean };
+  | { c: "build"; unitId: number; defId: string; x: number; y: number; queued: boolean }
+  /**
+   * Train a unit at a production building, or HIRE one from a shop (a Tavern hero, a
+   * Mercenary Camp creep). Intent only: which building, which unit.
+   *
+   * Four derived things that used to be the client's are deliberately absent from the wire:
+   * the gold and lumber cost, the build time, and whether this is the player's **free first
+   * hero**. The renderer decided all of them — it read the live stash, consulted its own
+   * `freeHeroUsed` set, deducted the price itself, and then handed the sim whichever build
+   * time it liked — so a client could have hired a Mountain King for nothing, instantly.
+   * `execute` looks the cost and the build time up in the registry and keeps the free-hero
+   * record itself, one per player, authority-side.
+   *
+   * The card's gates go with them: hero cap and uniqueness, food, tech requirements, the
+   * 7-deep queue, shop stock, and "does this building even train that?" are all re-checked
+   * there. A command card is a picture of what is allowed, not the thing that allows it.
+   */
+  | { c: "train"; buildingId: number; unitId: string };
