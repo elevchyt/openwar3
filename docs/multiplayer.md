@@ -337,12 +337,18 @@ commit.
    receivers changed — `Entry` → a seven-member `AnimEntry`, `Instance` → a one-member
    `SeqSource`. The anim CONSTANTS stayed put: `DEATH_CLIP_FALLBACK` and friends are passed in
    as arguments at their call sites, so they belong to the caller. rts.ts 5 024 → 4 722.
-4. **Map-placement metadata → `src/game/placement.ts`.** `setNeutralPassive`, `setPlacedOrder`,
-   `setCreepData`, `setPlayerUnitSeeds`, `setPlacedFootprints` and the `*At` lookups
-   (`reserveIdAt`, `isNeutralPassiveAt`, `creepAggroAt`, `creepDropsAt`, `playerSeedAt`,
-   `buildCreepCamps`) (~200 L). Authority-side, pure data over arrays parsed from the `.doo`.
-   **Trap:** `reserveIdAt` is load-bearing for Phase A's deterministic ids — do not change when it
-   is called.
+4. ~~**Map-placement metadata → `src/game/placement.ts`.**~~ **Done.** `PlacedIndex` owns the
+   six `.doo` registries (neutral-passive sites, placed order + reserved ids, creep data,
+   player seeds, footprints) and their 48u lookups, plus `PlacedRef`. Ten of the eleven bodies
+   moved byte-identical; `adoptPlacedFootprint` split into `claimFootprintAt` (search + claim,
+   authority data) and the `sim.setPathStamp` call, which stayed with the controller. The
+   renderer's public setters are unchanged — `rts.ts` keeps them as one-line delegators — so
+   `mapViewer.ts` did not move at all. rts.ts 4 722 → 4 624.
+   **`buildCreepCamps` did NOT move, and the earlier entry was wrong to list it.** It reads
+   `this.entries` — RENDER records, for `e.level` and `e.simId` — and groups already-seeded
+   creeps for the minimap. That is a post-seeding view over render state, not `.doo` metadata,
+   so it is client-side and belongs where it is. Its `e.level` dependency is worth revisiting
+   under item 6 (`SimUnit` carries a level too), but not as a move.
 5. **Fog modifiers + alliances → a `PlayerRelations` module.** The `FogModifier` block and the
    alliance delegators are already thin pass-throughs; the item is that `rts.ts` should not be the
    only door to them once JASS runs on a headless authority. Small.

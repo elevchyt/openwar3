@@ -5,6 +5,8 @@ import { ORDER_IDS, orderIdToString } from "../jass/orders";
 import type { Command } from "./commands";
 import { PATHING_CELL, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint } from "../sim/destructibles";
+import { PlacedIndex, type PlacedRef } from "./placement";
+export type { PlacedRef };
 import {
   type AnimSet,
   animPropsFor,
@@ -75,11 +77,6 @@ interface Camera {
 }
 /** One pre-placed unit, as war3mapUnits.doo lists it. Position + type is enough to match a
  *  rendered instance back to its row, and the row's INDEX is what fixes its sim id. */
-export interface PlacedRef {
-  x: number;
-  y: number;
-  typeId: string;
-}
 
 export interface RtsHost {
   readonly canvas: HTMLCanvasElement;
@@ -400,16 +397,12 @@ export class RtsController {
   private hoveredMine: number | null = null; // a gold mine under the cursor (neutral)
   private hoveredItem: number | null = null; // a ground item under the cursor (yellow hover ring)
   private previewIds: number[] = []; // units under the live drag-box (marquee preview rings)
-  private neutralPositions: Array<{ x: number; y: number }> = []; // Neutral Passive sites (from the doo)
-  private creepData: Array<{ x: number; y: number; aggro: number; drops?: Array<{ items: Array<{ id: string; chance: number }> }> }> = []; // Neutral Hostile guard/aggro/drop data (from the doo)
   // Custom-map pre-placed PLAYER units (war3mapUnits.doo, owner slots 0–11). Unlike
   // creeps (owner -1) these are seeded OWNED + simulated, so the local player's own
   // units lift the fog of war (issue #33) and are selectable/commandable. Empty on
   // melee maps (which pre-place no player units — WC3 spawns those at runtime).
-  private playerSeeds: Array<{ x: number; y: number; owner: number; team: number }> = [];
   // The pathing footprint stamped for each pre-placed building, by position. Handed to
   // the building's sim unit as it seeds so its death frees the ground it stood on.
-  private placedFootprints: PlacedFootprint[] = [];
   private seedingEnabled = false; // gate: don't adopt map units until start setup (teams/local player) is ready
   private seeded = false; // true once trySeed has run at least one scan (creepCamps gate)
   // Melee start-location clear zones (blizzard.j MeleeClearExcessUnits): each USED
@@ -428,9 +421,6 @@ export class RtsController {
   // single racing pass — see trySeed.
   private processedInstances = new Set<object>();
   private lastSeenUnitCount = -1; // map.units length at the last scan (grows as models stream in)
-  private nextId = 1;
-  /** Placed units in .doo order, each with the sim id reserved for it. See setPlacedOrder. */
-  private placedIds: Array<{ x: number; y: number; typeId: string; id: number; taken: boolean }> = [];
   private overlays: WorldOverlays; // floating HP bars + the hover slab (DOM, client-only)
   // The single floating name/owner slab shown above the unit (or gold mine / ground
   // item) under the cursor. Built lazily into the world layer so it tracks its target
@@ -1046,124 +1036,36 @@ export class RtsController {
     if (def?.soundSet) this.sounds.play(def.soundSet, attack ? "YesAttack" : "Yes", undefined, this.primary); // source = focused unit
   }
 
-  /** Register the world positions of Neutral Passive entities (from the map's
-   *  war3mapUnits.doo, player 15). trySeed matches rendered units to these and
-   *  seeds them as non-hostile, yellow-ringed selectables. */
+  /** What war3mapUnits.doo declares about every placed entity, and the id it reserved
+   *  for each. See game/placement.ts — the renderer still hands this data in through the
+   *  setters below, which are the same public surface it always called. */
+  private placed = new PlacedIndex();
+
   setNeutralPassive(positions: Array<{ x: number; y: number }>): void {
-    this.neutralPositions = positions;
+    this.placed.setNeutralPassive(positions);
   }
 
-  /**
-   * Every placed unit in war3mapUnits.doo ORDER, which fixes each one's sim id.
-   *
-   * Sim ids used to be handed out by trySeed in the order the viewer finished LOADING
-   * each unit's model — i.e. in disk/network/cache order. That made a unit's identity a
-   * property of one machine's I/O timing: the same map could number the same creep
-   * differently on two runs, let alone on two machines. Harmless while nothing outside
-   * the process ever named a unit; fatal the moment a command says "attack unit 57"
-   * (docs/multiplayer.md), because 57 is a different creep on the other end.
-   *
-   * The .doo's own order is the identity the MAP gives its units — every client reads
-   * the same file and agrees, with no coordination. So ids are reserved up front, before
-   * a single model has loaded, and adoption just looks its own up.
-   */
   setPlacedOrder(order: PlacedRef[]): void {
-    this.placedIds = order.map((p, i) => ({ ...p, id: i + 1, taken: false }));
-    // Dynamically created units (trained, summoned, JASS CreateUnit) continue ABOVE the
-    // reserved block. Their ids stay ordinal because the creating events are themselves
-    // ordered by the sim clock — the host decides them, and tells everyone.
-    this.nextId = order.length + 1;
+    this.placed.setPlacedOrder(order);
   }
 
-  /**
-   * The id reserved for the placed unit at this position, consumed so two units stacked
-   * on one spot still get distinct ids. Falls back to the running counter for anything
-   * the .doo doesn't describe (a unit the map's script created before seeding finished).
-   *
-   * 48u tolerance, matching isNeutralPassiveAt/playerSeedAt: the renderer's location and
-   * the .doo's differ slightly for units the engine settles onto the ground.
-   */
-  private reserveIdAt(x: number, y: number, typeId: string): number {
-    let best = -1;
-    let bestD = Infinity;
-    for (let i = 0; i < this.placedIds.length; i++) {
-      const p = this.placedIds[i];
-      if (p.taken || p.typeId !== typeId) continue;
-      const dx = Math.abs(p.x - x);
-      const dy = Math.abs(p.y - y);
-      if (dx >= 48 || dy >= 48) continue;
-      const d = dx + dy;
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    if (best < 0) return this.nextId++;
-    this.placedIds[best].taken = true;
-    return this.placedIds[best].id;
-  }
-
-  private isNeutralPassiveAt(x: number, y: number): boolean {
-    for (const p of this.neutralPositions) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return true;
-    return false;
-  }
-
-  /** Register the world positions + per-instance target-acquisition of Neutral
-   *  Hostile creeps (from war3mapUnits.doo, player 12+). trySeed matches each
-   *  rendered creep to this to set its guard post and aggro range. */
   setCreepData(data: Array<{ x: number; y: number; aggro: number; drops?: Array<{ items: Array<{ id: string; chance: number }> }> }>): void {
-    this.creepData = data;
+    this.placed.setCreepData(data);
   }
 
-  /** The placed creep's editor target-acquisition at a position (-1 if none):
-   *  -1 = use the unit's default acquisition, -2 = "Camp", >0 = a custom range. */
-  private creepAggroAt(x: number, y: number): number {
-    for (const p of this.creepData) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return p.aggro;
-    return -1;
-  }
-
-  /** The placed creep's dropped-item table at a position (empty if none). */
-  private creepDropsAt(x: number, y: number): Array<{ items: Array<{ id: string; chance: number }> }> {
-    for (const p of this.creepData) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return p.drops ?? [];
-    return [];
-  }
-
-  /** Register the world positions + owner/team of pre-placed PLAYER units (custom
-   *  maps, war3mapUnits.doo owner 0–11). trySeed matches each rendered unit to this
-   *  and adopts it as an OWNED sim unit (see seedPlayerUnit / issue #33). */
   setPlayerUnitSeeds(seeds: Array<{ x: number; y: number; owner: number; team: number }>): void {
-    this.playerSeeds = seeds;
+    this.placed.setPlayerUnitSeeds(seeds);
   }
 
-  /** Register the pathing footprint the map loader stamped for each pre-placed BUILDING.
-   *  trySeed hands each one to the sim unit that adopts that spot, so the building owns
-   *  its own collision and takes it away when it dies — the same deal a building the
-   *  player raises gets from the spawner. */
   setPlacedFootprints(stamps: PlacedFootprint[]): void {
-    this.placedFootprints = stamps;
+    this.placed.setPlacedFootprints(stamps);
   }
 
   /** Attach the map-stamped footprint at this position (if any) to a freshly-seeded
-   *  building. Matched by position on the same 48u tolerance as every other .doo lookup
-   *  here — the sim unit is seeded from the instance the .doo placed, so the two agree.
-   *  The nearest match wins and is then CLAIMED (dropped from the list): a stamp belongs
-   *  to one building, or two neighbours could each free the same cells while the other's
-   *  collision stayed behind forever. */
+   *  building, so it owns its collision and takes it away when it dies. */
   private adoptPlacedFootprint(simId: number, x: number, y: number): void {
-    let best = -1;
-    let bestD = Infinity;
-    for (let i = 0; i < this.placedFootprints.length; i++) {
-      const p = this.placedFootprints[i];
-      if (Math.abs(p.x - x) >= 48 || Math.abs(p.y - y) >= 48) continue;
-      const d = (p.x - x) ** 2 + (p.y - y) ** 2;
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    if (best < 0) return;
-    const [p] = this.placedFootprints.splice(best, 1);
-    this.sim.setPathStamp(simId, p.fp, p.x, p.y);
-  }
-
-  /** The owner/team of a pre-placed player unit at a position, or null. */
-  private playerSeedAt(x: number, y: number): { owner: number; team: number } | null {
-    for (const p of this.playerSeeds) if (Math.abs(p.x - x) < 48 && Math.abs(p.y - y) < 48) return { owner: p.owner, team: p.team };
-    return null;
+    const p = this.placed.claimFootprintAt(x, y);
+    if (p) this.sim.setPathStamp(simId, p.fp, p.x, p.y);
   }
 
   /** Open the seeding gate. Called once start setup (start locations / teams / local
@@ -1549,7 +1451,7 @@ export class RtsController {
       // simulated unit (issue #33) — this is what gives the local player vision of
       // and control over their own units. Checked before the neutral/creep branches
       // (owners are disjoint) and before the movetp gate (so owned buildings seed too).
-      const seed = def ? this.playerSeedAt(loc[0], loc[1]) : null;
+      const seed = def ? this.placed.playerSeedAt(loc[0], loc[1]) : null;
       if (seed) {
         this.seedPlayerUnit(unit, def!, loc, seed.owner, seed.team);
         continue;
@@ -1557,7 +1459,7 @@ export class RtsController {
       // Neutral Passive (shops/taverns/labs/merchants/fountains/critters): seed
       // it as a static, non-hostile, yellow-ringed selectable — even though it's
       // a building with no walk clip.
-      if (this.isNeutralPassiveAt(loc[0], loc[1])) {
+      if (this.placed.isNeutralPassiveAt(loc[0], loc[1])) {
         // MeleeClearExcessUnit clears NON-structure Neutral Passive units (loose
         // critters) from a used start location, but leaves the structures (shops,
         // fountains, gold mines) standing. Match that: drop critters, keep buildings.
@@ -1582,7 +1484,7 @@ export class RtsController {
       const anims = buildAnimSet(seqs, def?.animProps);
       unit.instance.setBlendTime?.(def?.animBlend ?? 0.15); // per-unit anim cross-fade (issue #8)
       // The id this creep's .doo row reserved — NOT the order its model happened to load in.
-      const simId = this.reserveIdAt(loc[0], loc[1], def?.id ?? "");
+      const simId = this.placed.reserveIdAt(loc[0], loc[1], def?.id ?? "");
       const su = this.sim.add(
         {
           id: simId,
@@ -1625,7 +1527,7 @@ export class RtsController {
       su.guardX = loc[0];
       su.guardY = loc[1];
       su.guardFacing = su.facing;
-      const aggro = this.creepAggroAt(loc[0], loc[1]);
+      const aggro = this.placed.creepAggroAt(loc[0], loc[1]);
       su.aggroRange = aggro > 0 ? aggro : su.weapon?.acquire ?? def?.acquireRange ?? 0;
       // Normal (-1) vs Camp (-2) — the World Editor's two-way "Target Acquisition Range"
       // radio (WorldEditStrings WESTRING_UPROPS_AR_NORMAL / _AR_CAMP). Melee mapmakers put
@@ -1633,7 +1535,7 @@ export class RtsController {
       // the building-placement notification, so you can build beside it in peace.
       su.campGuard = aggro === -2;
       su.canSleep = def?.canSleep ?? false;
-      this.sim.setUnitDrops(simId, this.creepDropsAt(loc[0], loc[1])); // scatter loot on death
+      this.sim.setUnitDrops(simId, this.placed.creepDropsAt(loc[0], loc[1])); // scatter loot on death
       this.seededInstances.add(unit.instance); // RTS drives this creep's fog visibility
       const entry: Entry = {
         simId,
@@ -1681,7 +1583,7 @@ export class RtsController {
    *  instance in tick() (the map viewer already renders it) — this record just
    *  makes it hoverable/selectable and rings it. */
   private seedNeutral(unit: MapUnit, def: UnitDef | undefined, loc: Float32Array): void {
-    const simId = this.reserveIdAt(loc[0], loc[1], def?.id ?? "");
+    const simId = this.placed.reserveIdAt(loc[0], loc[1], def?.id ?? "");
     this.seededInstances.add(unit.instance); // RTS drives this shop/critter's fog visibility
     const isBuilding = def?.isBuilding ?? false;
     // Buildings get a (complete) building state so pickAt/rings treat them as
@@ -1776,7 +1678,7 @@ export class RtsController {
     // addSimUnit + attachInstance rather than addUnit, because addUnit's `reservedId` means
     // "the sim unit already exists, just give it a body" (the JASS CreateUnit path) and
     // returns -1 when it doesn't. A pre-placed unit needs its reserved id at CREATION.
-    const simId = this.addSimUnit(def, loc[0], loc[1], facing, owner, team, 0, this.reserveIdAt(loc[0], loc[1], def.id));
+    const simId = this.addSimUnit(def, loc[0], loc[1], facing, owner, team, 0, this.placed.reserveIdAt(loc[0], loc[1], def.id));
     this.attachInstance(simId, unit.instance, def);
     // A pre-placed BUILDING takes ownership of the footprint the map loader stamped for
     // it, so levelling it reopens the ground — WarChasers' gnoll huts are exactly this.
@@ -1800,7 +1702,7 @@ export class RtsController {
    *  hand JASS a unit handle synchronously, but the render instance loads later). The
    *  reserved id is later passed to addUnit so both refer to the same unit. */
   reserveUnitId(): number {
-    return this.nextId++;
+    return this.placed.nextUnitId();
   }
 
   addUnit(instance: Instance, def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0, reservedId?: number): number {
@@ -1824,7 +1726,7 @@ export class RtsController {
    *  but the model streams in async. `attachInstance` gives it a body when it arrives; the
    *  render loop syncs its position from the sim, so it simply appears where it has got to. */
   addSimUnit(def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0, reservedId?: number): number {
-    const simId = reservedId ?? this.nextId++;
+    const simId = reservedId ?? this.placed.nextUnitId();
     const profile = WORKERS[def.id];
     // baseLumberCapacity is the pre-upgrade load; Improved Lumber Harvesting raises the live
     // `lumberCapacity` off it each tick (recomputeStats), so the profile stays the baseline.
