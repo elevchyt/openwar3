@@ -207,7 +207,14 @@ export interface UnitSnapshot {
   altModel: boolean;
   spawning: number;
   constructing: number;
-  repairing: boolean;
+  /** Whether this worker is hammering. Kept as an OBJECT rather than the flat `repairing`
+   *  boolean it was until item 10c-2b: the renderer's animation picker is typed against
+   *  `RenderUnit`, which `SimUnit` must satisfy too, and the sim's field is
+   *  `repair: RepairState | null`. The derived shape moves so the two can share one type —
+   *  flattening here would have cost an adapter allocation per unit per frame on the host,
+   *  which is the path that has to stay free. The rest of `RepairState` (the target, the
+   *  rates, the costs) is how the sim charges for a repair and stays behind. */
+  repair: { active: boolean } | null;
 
   // --- hidden / faded (viewpoint-independent: gone for EVERYONE) -------------
   inMine: boolean;
@@ -370,7 +377,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     altModel: u.altModel,
     spawning: 0,
     constructing: 0,
-    repairing: false,
+    repair: null,
 
     inMine: false,
     insideBuild: false,
@@ -492,7 +499,7 @@ export function snapshotFor(
       altModel: u.altModel,
       spawning: u.spawning,
       constructing: u.constructing,
-      repairing: u.repair?.active ?? false,
+      repair: u.repair ? { active: u.repair.active } : null,
 
       inMine: u.inMine,
       insideBuild: u.insideBuild,

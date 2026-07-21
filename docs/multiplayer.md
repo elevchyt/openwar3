@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client). Open: 7b, 10c-2b+ (feed the entry sync a snapshot, with 6d), 11b, 12; 10b-harness-shot + 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b). Open: 7b, 10c-2c (feed the entry sync a snapshot, with 6d), 11b, 12; 10b-harness-shot + 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1841,11 +1841,56 @@ enumerated by body rather than by name.
     test: the change is a field-source swap inside a loop `sim:test` cannot enter. `sim:test`
     stays 412.
 
-10c-2b+. **Feed the entry sync a snapshot on a client** — now unblocked. The sync's `u` becomes a
-    `RenderUnit` (the readonly shape both `SimUnit` and `UnitSnapshot` satisfy), sourced from the
-    local sim on host/single-player and the received snapshot on a client. Then selection, health
-    bars, the command card — each reads through the same source, and the switch is ATOMIC across
-    them (a model at the snapshot's position with a health bar at the sim's would be a
+10c-2b. ~~**`RenderUnit`: the shape the renderer reads, which both structs satisfy.**~~ **Done —
+    and it found the entry sync's real remaining blocker, which is not a field.**
+    [`src/game/renderUnit.ts`](../src/game/renderUnit.ts) is the readonly surface a render
+    consumer is typed against instead of `SimUnit`, and
+    [`tools/render-unit-conformance.ts`](../tools/render-unit-conformance.ts) pins that BOTH
+    `SimUnit` and `UnitSnapshot` satisfy it (the same compile-time-guard trick as
+    `snapshot-viewer-conformance.ts`, and it fails on either struct drifting — confirmed by
+    renaming a member and watching all three sites go red). The animation resolver moved over
+    whole: `pickSequence`, `walkAnim` and `attackAnimRate` in
+    [`unitAnims.ts`](../src/render/unitAnims.ts) now take a `RenderUnit`, as does
+    `applyFormAnims`. That file was only ever typed against `SimUnit` because the first caller
+    happened to hold one — it imports nothing else, and it already answered questions about a
+    unit rather than about the world.
+
+    **The one shape mismatch was `repair`, and the DERIVED struct is the one that moved.** The
+    sim has `repair: RepairState | null`; item 5 flattened it to `repairing: boolean` because
+    that is all a reader reads. Flattening is the better payload and the worse shared type — it
+    would have forced an adapter allocation per unit per frame on the HOST path, which is the
+    one that has to stay free. So `UnitSnapshot` now carries `repair: { active } | null` and the
+    two agree. Nothing read `repairing`, so this cost no reader.
+
+    **The blocker for feeding the sync a snapshot is the FOG half, not a missing field.** The
+    sync's loop body is `applyVisibility` + the animation picker, and only the picker is a
+    question about the unit. `applyVisibility` → `hiddenFor` → `Viewpoint.fogHides`, and
+    `applyFogTint` → `showsFromMemory`, are the local client consulting its own fog grid — which
+    is exactly what a client rendering from a snapshot **must not do** (the payload arrived
+    AoI-filtered; asking again is the maphack `dotsFromSnapshot` refuses to ship). So 10c-2c is
+    not "widen two more signatures", it is "on a client, the visibility branch does not run at
+    all". Widening the viewpoint predicates to `RenderUnit` would be work in the wrong direction.
+
+    **The test is an EQUIVALENCE, the same shape as 10c-1's.** Ten unit states — idle, walking,
+    each carry, constructing, repairing, a building mid-production, chopping, holding lumber
+    without chopping, hasted mid-swing — each asserted to pick the same clip and the same rate
+    from the `UnitSnapshot` as from the `SimUnit` it was built from, plus a check that the states
+    really do reach distinct branches (a picker returning one constant would otherwise pass every
+    line). `unitAnims.ts` joins the sim build to make that runnable headlessly — it imports only
+    a type, so it compiles to CommonJS untouched. Two injections, each a real bug: a payload that
+    stops carrying `repair`, and one that stops carrying `carryGold`. Both go red on exactly
+    their own state and nowhere else. `sim:test` 432 → **463**.
+
+    **Browser: booted Echo Isles single-player and drove a peon through a full harvest trip** —
+    the walk, carry-gold and mine-entry branches all resolved through the retyped picker, units
+    posed and animated normally. That is a no-regression check on the hot path (the picker runs
+    per unit per frame), not a demonstration of anything new: nothing about what is drawn changed.
+
+10c-2c. **Feed the entry sync a snapshot on a client.** `u` is sourced from the local sim on
+    host/single-player and from the received snapshot on a client, and the visibility branch is
+    SKIPPED on the snapshot path (see above — the payload already answered it). Then selection,
+    health bars, the command card — each reads through the same source, and the switch is ATOMIC
+    across them (a model at the snapshot's position with a health bar at the sim's would be a
     Frankenstein). `6d` (a razed building's ghost) rides in the slice that reworks `onDeath`.
 
 11a. ~~**Reconnect, the relay side: a rejoin token holds the slot.**~~ **Done.** A dropped

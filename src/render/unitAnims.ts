@@ -1,10 +1,15 @@
-import type { SimUnit } from "../sim/world";
+import type { RenderUnit } from "../game/renderUnit";
 
 // Animation RESOLUTION: which of a model's sequences a unit should be playing, and how
 // fast. Pure CLIENT (docs/multiplayer.md Phase B) — a headless authority runs the same
 // match without ever asking these questions, because nothing here feeds back into game
 // state. Every function is a pure function of its arguments; the only mutation is
 // `setAnimRate`, which writes the rate it computed onto the instance it was handed.
+//
+// The unit parameter is `RenderUnit`, not `SimUnit` (Phase E item 10c-2b): a client draws
+// the snapshot it was SENT, so the picker has to answer the same for a `UnitSnapshot` as for
+// the `SimUnit` the host holds. Typing it against the sim struct was never a requirement of
+// this file — it was just what the first caller happened to have.
 //
 // Kept out of `rts.ts` so the sequence-name matching (which is most of the volume, and
 // all of the WC3 archaeology) can be read on its own.
@@ -273,7 +278,7 @@ export function setAnimRate(e: AnimEntry, rate: number): void {
  *  disagree: the Peasant's "Attack" is 1000ms and his "Attack -2" 1270ms under ONE
  *  dmgpt1/backSw1 pair, so no rate fitted to that pair can be right for both — the
  *  engine simply plays each at its authored length. */
-export function attackAnimRate(u: SimUnit): number {
+export function attackAnimRate(u: RenderUnit): number {
   const w = u.swingWeapon ?? u.weapon;
   if (!w) return 1;
   const swing = w.damagePoint + w.backswing;
@@ -293,7 +298,7 @@ export function attackAnimRate(u: SimUnit): number {
  *  longer stride per cycle, so it must play slower to cover the same ground (the four
  *  Quillbeast tiers share one model and one 90/300 gait, differing only in modelScale) —
  *  but it is the one part of this I could not verify against the real client. */
-export function walkAnim(e: AnimEntry, u: SimUnit, seq: number): { seq: number; rate: number } {
+export function walkAnim(e: AnimEntry, u: RenderUnit, seq: number): { seq: number; rate: number } {
   const { animWalkSpeed: walk, animRunSpeed: run } = e;
   if (walk <= 0) return { seq, rate: 1 }; // no gait data — leave the clip at its authored rate
   let gait = walk;
@@ -308,7 +313,7 @@ export function walkAnim(e: AnimEntry, u: SimUnit, seq: number): { seq: number; 
 }
 
 
-export function pickSequence(a: AnimSet, u: SimUnit, moving: boolean): number {
+export function pickSequence(a: AnimSet, u: RenderUnit, moving: boolean): number {
   const carry = u.worker
     ? u.worker.carryGold > 0
       ? "gold"

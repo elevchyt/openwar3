@@ -21,6 +21,9 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const { snapshotFor, visibilityFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
 const { GhostMemory } = require(join(REPO, ".sim-build", "src", "game", "ghosts.js"));
 const { divergence, describeDivergence } = require(join(REPO, ".sim-build", "src", "game", "divergence.js"));
+// The animation picker (`src/render/unitAnims.ts`) imports only a TYPE, so it compiles into the
+// sim build and can be driven headlessly against both structs -- see the equivalence block below.
+const { pickSequence, walkAnim, attackAnimRate } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -555,6 +558,59 @@ console.log("the report is bounded, and a mis-addressed snapshot is not called d
   const forOne = snapshotFor(worldOf(many), viewer(1, seating), 1, 1);
   const mis = divergence(forOne, snapshotFor(worldOf(many), v, 0, 1));
   check("a snapshot for the wrong player is one clear finding", [mis.length, mis[0].field], [1, "recipient"]);
+}
+
+console.log("the animation picker answers the same off the payload as off the sim unit");
+{
+  // The point of item 10c-2b. A host draws its `SimUnit`; a client draws the `UnitSnapshot` it
+  // was sent, through the SAME `unitAnims` picker. If the payload drops a field the picker
+  // reads -- or renames one, as `repair` was `repairing` until this item -- the client silently
+  // falls through to a different clip and every other suite stays green: the snapshot is still
+  // a valid snapshot, the picker still returns a number, nothing throws. A worker would just
+  // stand there instead of hammering.
+  //
+  // So this is an EQUIVALENCE, the same shape as the minimap-dot check in item 10c-1: for every
+  // state that reaches a different branch, the two structs must pick the same clip. Sentinel
+  // sequence numbers make "which branch" readable in the failure output.
+  const anims = {
+    stand: 1, standVariants: [1], walk: 2, walkFast: 3, attack: 4, attackVariants: [4],
+    attackGold: [], attackLumber: [], attackSlam: -1, death: 5,
+    standGold: 6, walkGold: 7, standLumber: 8, walkLumber: 9, chopLumber: 10, build: 11,
+    decayFlesh: -1, decayBone: -1, morph: -1, seqNames: [],
+  };
+  const entry = {
+    unit: { instance: { timeScale: 1 } }, anims,
+    timeScale: 1, curRate: 0, animWalkSpeed: 270, animRunSpeed: 0, baseScale: 1,
+  };
+  const wep = (dp, bs) => ({
+    damage: 12, dice: 1, sides: 3, range: 90, cooldown: 1.5,
+    damagePoint: dp, backswing: bs, baseDamagePoint: 0.5, baseBackswing: 0.5,
+  });
+  // One state per branch of `pickSequence`, plus the two rates.
+  const states = {
+    "idle, empty-handed": {},
+    "walking": { moving: true },
+    "carrying gold": { worker: { gold: true, lumber: false, carryGold: 10, carryLumber: 0 } },
+    "walking with lumber": { moving: true, worker: { gold: false, lumber: true, carryGold: 0, carryLumber: 20 } },
+    "constructing": { constructing: 3 },
+    "repairing": { repair: { targetId: 3, hpPerSec: 5, goldPerHp: 0.1, lumberPerHp: 0, active: true } },
+    "a building mid-production": { building: { constructionLeft: 0, buildTimeTotal: 60, queue: [{ defId: "hfoo" }], producesUnits: true, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 } },
+    "chopping": { working: true, order: "harvest" },
+    "holding lumber, not chopping": { working: false, order: "return", worker: { gold: false, lumber: true, carryGold: 0, carryLumber: 20 } },
+    "hasted mid-swing": { speed: 380, weapon: wep(0.36, 0.36), swingWeapon: wep(0.36, 0.36) },
+  };
+  for (const [what, over] of Object.entries(states)) {
+    const sim = unit({ id: 1, owner: 0, ...over });
+    const snap = snapshotFor(worldOf([sim]), viewer(0, { 0: 0 }), 0, 1).units[0];
+    const moving = !!sim.moving;
+    check(`${what}: same clip`, pickSequence(anims, snap, moving), pickSequence(anims, sim, moving));
+    check(`${what}: same attack rate`, attackAnimRate(snap), attackAnimRate(sim));
+    check(`${what}: same walk clip and rate`, walkAnim(entry, snap, anims.walk), walkAnim(entry, sim, anims.walk));
+  }
+  // The matrix is only worth anything if the states really do land on different clips -- a
+  // picker that returned 1 for everything would pass every line above.
+  const clips = new Set(Object.values(states).map((o) => pickSequence(anims, unit({ id: 1, ...o }), !!o.moving)));
+  check("the states reach distinct branches", clips.size >= 7, true);
 }
 
 console.log(failed === 0 ? "\nsnapshot: all checks passed" : `\nsnapshot: ${failed} FAILED`);

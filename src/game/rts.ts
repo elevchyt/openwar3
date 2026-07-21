@@ -28,6 +28,7 @@ import { GhostMemory } from "./ghosts";
 import { MatchLink, type MatchLinkSetup } from "./matchLink";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
+import type { RenderUnit } from "./renderUnit";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -886,7 +887,7 @@ export class RtsController {
    *
    *  The first call for a unit sets the baseline without playing anything: a freshly built
    *  Ancient is already rooted and should simply BE planted, not animate itself into it. */
-  private applyFormAnims(e: Entry, u: SimUnit, def: UnitDef | undefined): void {
+  private applyFormAnims(e: Entry, u: RenderUnit, def: UnitDef | undefined): void {
     const alt = u.altModel;
     if (e.altModel === alt) return;
     const first = e.altModel === undefined;
