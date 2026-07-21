@@ -17,6 +17,7 @@ require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"ty
 const { VisionSet } = require(join(REPO, ".sim-build", "src", "game", "viewpoint.js"));
 const { minimapDots, hiddenFor, CreepCamps, minimapIcons, ICON_GOLD_MINE, ICON_NEUTRAL_BUILDING, dotsFromSnapshot } = require(join(REPO, ".sim-build", "src", "game", "minimapView.js"));
 const { snapshotFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
+const { SnapshotIndex } = require(join(REPO, ".sim-build", "src", "game", "renderView.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -247,6 +248,71 @@ console.log("the client is shown no more than the authority sent — fogged");
   // enemy, so no client-side code — correct or tampered — can turn it into a dot.
   const sent = snapshotFor(snapWorld(units), vp, 0, 1).units.map((u) => u.id);
   check("the fogged units were never sent", [sent.includes(2), sent.includes(3)], [false, false]);
+}
+
+// Item 10c-2c: a CLIENT decides whether to draw a MODEL from the payload it was sent, not from
+// its own fog grid -- the same rule as the dots above, applied to the units themselves. The
+// property is again an EQUALITY, and it is the only thing that makes the switch safe: if
+// `hiddenFromSnapshot` and `hiddenFor` ever disagree, a client either loses a unit the host is
+// drawing or draws one the host is hiding, and the second of those is a maphack.
+// ---------------------------------------------------------------------------------------
+
+console.log("\nthe client hides exactly what the host's fog hides");
+{
+  const units = [
+    unit({ id: 1, owner: 0, team: 0, x: 100, y: 100 }), // own, in the open
+    unit({ id: 2, owner: 0, team: 0, x: 150, y: 150, inMine: true }), // own but off-field: SENT, still not drawn
+    unit({ id: 3, owner: 1, team: 1, x: 5000, y: 5000 }), // enemy in the black: never sent
+    unit({ id: 4, owner: 1, team: 1, x: 200, y: 200 }), // enemy under our eyes
+    unit({ id: 5, owner: 1, team: 1, x: 260, y: 260, invisible: true }), // undetected: never sent
+    unit({ id: 6, owner: 15, team: 15, neutralPassive: true, x: 300, y: 300 }), // furniture, in sight
+  ];
+  const set = new VisionSet(worldOf(units), noAlliances, () => [], 0, 0, 8192, 8192);
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
+  const vp = set.viewpointFor(0);
+  vp.rebuild([]);
+
+  const idx = new SnapshotIndex();
+  idx.update(snapshotFor(snapWorld(units), vp, 0, 1));
+
+  // THE check. The host asks its grid; the client asks the payload; the frame is the same.
+  check("client hides exactly what the host hides", units.map((u) => idx.hidden(u.id)), units.map((u) => hiddenFor(vp, u)));
+  // ...and the equality is not the trivial one. Without this line a `hidden()` that always
+  // returned true would pass above only if `hiddenFor` also did -- pin the actual answers.
+  check("and that is a real mix, not hide-everything", units.map((u) => hiddenFor(vp, u)), [false, true, true, false, true, false]);
+  // The off-field case is the one that cannot ride on absence: the snapshot deliberately SENDS
+  // a mining worker to its own owner (a Burrow has to be able to list its garrison), so the
+  // client is holding the record and must still refuse to draw it.
+  check("the mining worker WAS sent, and is still not drawn", [idx.unit(2) !== undefined, idx.hidden(2)], [true, true]);
+  // The maphack guard, restated for models: the fogged and the invisible are not in the payload
+  // at all, so no client-side code -- correct or tampered -- can put them on screen.
+  check("the fogged and the invisible were never sent", [idx.unit(3), idx.unit(5)], [undefined, undefined]);
+}
+
+console.log("a building you have SEEN keeps its image on the client too");
+{
+  // WC3 leaves the last-seen structure standing in the fog, which is the case `fogHides`
+  // deliberately answers "draw" to -- and the reason the send rule is three-valued. A client
+  // that treated "not currently visible" as "do not draw" would delete enemy buildings off the
+  // player's screen the moment a scout walked away.
+  const scout = unit({ id: 1, owner: 0, team: 0, x: 200, y: 200 });
+  const hall = unit({ id: 2, owner: 1, team: 1, x: 300, y: 300, building: { constructionLeft: 0 } });
+  const units = [scout, hall];
+  const set = new VisionSet(worldOf(units), noAlliances, () => [], 0, 0, 8192, 8192);
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
+  const vp = set.viewpointFor(0);
+  vp.rebuild([]); // the scout is standing next to it: seen AND visible
+  const watched = new SnapshotIndex();
+  watched.update(snapshotFor(snapWorld(units), vp, 0, 1));
+  check("watched: drawn on both sides, off a LIVE record", [hiddenFor(vp, hall), watched.hidden(2), watched.unit(2).remembered], [false, false, false]);
+
+  scout.x = 7000; // walk away
+  scout.y = 7000;
+  vp.rebuild([]); // seen, no longer visible -- remembered
+  const idx = new SnapshotIndex();
+  idx.update(snapshotFor(snapWorld(units), vp, 0, 1));
+  check("remembered: the host still draws it", hiddenFor(vp, hall), false);
+  check("...and so does the client, off a redacted record", [idx.hidden(2), idx.unit(2).remembered, idx.unit(2).hp], [false, true, 0]);
 }
 
 console.log(failed ? `\nminimap: ${failed} FAILED` : "\nminimap: all checks passed");

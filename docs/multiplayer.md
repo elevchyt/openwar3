@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b). Open: 7b, 10c-2c (feed the entry sync a snapshot, with 6d), 11b, 12; 10b-harness-shot + 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). Open: 7b, 10c-2c-2 (the rest of the render switch, with 6d), 11b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1765,7 +1765,9 @@ enumerated by body rather than by name.
     pinned headlessly: `loopback-test` (**51 checks**) asserts the host counts what it emits, the
     client counts what it accepts, and a stale arrival bumps `stale` not `received`. A single-GPU
     two-client capture of the live heartbeat is worth doing when the daemon is cooperative;
-    recorded as **10b-harness-shot**.
+    recorded as **10b-harness-shot**. ~~Recorded as 10b-harness-shot.~~ **Captured in 10c-2c-1**:
+    the joining client logged `[sync] client: sent 0, received 332, stale 0, drift 0` from a live
+    two-context match. The daemon was cooperative that run; nothing about it was fixed.
 
 10c. **The client renders from the snapshot.** The last step of option B's first half, and the
     largest: `rts.ts` reads `sim.units` throughout, and rendering an arriving snapshot instead
@@ -1886,12 +1888,58 @@ enumerated by body rather than by name.
     posed and animated normally. That is a no-regression check on the hot path (the picker runs
     per unit per frame), not a demonstration of anything new: nothing about what is drawn changed.
 
-10c-2c. **Feed the entry sync a snapshot on a client.** `u` is sourced from the local sim on
-    host/single-player and from the received snapshot on a client, and the visibility branch is
-    SKIPPED on the snapshot path (see above — the payload already answered it). Then selection,
-    health bars, the command card — each reads through the same source, and the switch is ATOMIC
-    across them (a model at the snapshot's position with a health bar at the sim's would be a
-    Frankenstein). `6d` (a razed building's ghost) rides in the slice that reworks `onDeath`.
+10c-2c-1. ~~**Whether a MODEL is drawn comes from the payload, not from the client's own fog
+    grid.**~~ **Done**, and it is the half of 10c-2c that stands alone — because the answer is
+    provably the SAME answer, so nothing on screen changes while the decision changes hands.
+    Exactly the shape of 10c-1 (the minimap dots), applied to the units themselves.
+
+    **`hiddenFromSnapshot(u)` is `!u || isOffField(u)`, and the short body is the finding.** The
+    host's `hiddenFor` has three terms — off-field, fog, undetected invisibility. Two of those
+    collapse into **absence**: `visibilityFor` answered `"omit"`, so the record never left the
+    host, and the client's "I cannot see it" is a fact it was handed rather than a grid it
+    re-derives. The one that does NOT collapse is off-field, because the snapshot deliberately
+    still sends a mining worker to its own owner (a Burrow has to be able to list its garrison),
+    so absence cannot carry that message and the test survives on the client side.
+
+    **`SnapshotIndex`** ([`renderView.ts`](../src/game/renderView.ts)) is the id index a render
+    loop needs over a payload that is a flat array, re-indexed only when the snapshot OBJECT
+    changes — 10 Hz, not the 60 Hz the sync runs at. `active` is the switch, and it is false in
+    the three cases that must keep the sim path: single-player, the host (it never receives) and
+    a client that has connected but not yet been sent a frame. `applyVisibility` now TAKES the
+    decision (`modelHidden`) instead of computing it, so it cannot know which of the two answers
+    it got — which is the point.
+
+    **The test is an EQUALITY and it is the correctness of the whole file**:
+    `SnapshotIndex.hidden(id)` equals `hiddenFor(vp, simUnit)` for every unit in a world — own,
+    own-but-in-a-mine, an enemy in the black, an enemy under our eyes, an undetected invisible
+    one, neutral furniture — plus a second block for the case `fogHides` deliberately answers
+    "draw" to: a building you SAW and walked away from is still drawn on both sides, on the
+    client off a `remembered` record with its hp redacted to 0. The mix is pinned as well as the
+    equality, or a `hidden()` that returned true for everything would pass. Two injections, each
+    a bug somebody would really write: dropping the off-field term (the mining worker appears on
+    screen), and treating `remembered` as hidden (every scouted enemy building blinks out the
+    moment the scout leaves). Each turns its own checks red. `sim:test` 463 → **470**.
+
+    **Verified with TWO clients through the real relay** — and this is also the capture
+    **10b-harness-shot** was waiting for. The joining client reported `[sync] client: sent 0,
+    received 332, stale 0, drift 0` while drawing all 103 units with correct fog: `active` was
+    true, so every hide/show decision in that frame came off the wire, and the frame is right.
+    Host and client each render their own seat (Human and Orc bases, each with its own fog).
+    Single-player minimap is byte-identical to the parent commit's (0 of 18 088 pixels), which
+    is the no-regression half.
+
+    **Noted, not fixed:** `dots()` and the entry sync now both ask `matchLink?.latest()`
+    independently. One of them should read through `SnapshotIndex` once the next slice gives it
+    a units accessor — two readers of the same fact is how they drift.
+
+10c-2c-2. **The rest of the switch: pose, health bars, selection, the command card.** `u` itself
+    becomes the snapshot record on a client, not just the visibility answer. This is the big
+    one — `rts.ts` has **73** `sim.units.get` sites — so it splits again by consumer, but the
+    ones that land on the same FRAME must land together (a model at the snapshot's position with
+    a health bar at the sim's would be a Frankenstein). `applyFogTint`'s `showsFromMemory` is
+    next: on a snapshot it is simply `u.remembered`, and `isIllusion` needs no `seesFor` at all
+    because item 5 already masked it per recipient. `6d` (a razed building's ghost) rides in the
+    slice that reworks `onDeath`.
 
 11a. ~~**Reconnect, the relay side: a rejoin token holds the slot.**~~ **Done.** A dropped
     connection is no longer a departure. `RelayCore.disconnect` (the socket-closed path, distinct

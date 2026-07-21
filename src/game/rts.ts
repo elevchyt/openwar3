@@ -29,6 +29,7 @@ import { MatchLink, type MatchLinkSetup } from "./matchLink";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
 import type { RenderUnit } from "./renderUnit";
+import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
@@ -404,6 +405,9 @@ export class RtsController {
    *  single-player, where the local sim is the only authority and there is nothing to send to
    *  or diff against. */
   private matchLink: MatchLink | null = null;
+  /** The latest snapshot, id-indexed. Empty on the host and in single-player; on a client it
+   *  is where the renderer's visibility answers come from (see `modelHidden`). */
+  private readonly snapshot = new SnapshotIndex();
   /** Seconds since the match began — the authority's clock the snapshot is stamped with, so a
    *  client can drop one that arrived out of order. */
   private matchTime = 0;
@@ -826,9 +830,25 @@ export class RtsController {
     if (hm && this.fogBlocksMine(hm)) this.hoveredMine = null;
   }
 
+  /** Should this unit's model be on screen at all?
+   *
+   *  Two answers to one question, and which one is asked is the whole of item 10c-2c. The host
+   *  and single-player consult the LOCAL fog grid, because they hold the world. A client that
+   *  has been sent a snapshot reads the answer OUT of the payload instead — it arrived
+   *  AoI-filtered, so asking our own grid again would be re-deriving a decision the authority
+   *  already made, and a client that re-derives it is a client that can decide differently
+   *  (the maphack `dotsFromSnapshot` refuses to ship). Pinned equal to `hiddenFor` in
+   *  `tools/sim-minimap-test.cjs`, so the switch cannot change what is drawn. */
+  private modelHidden(e: Entry, u: SimUnit): boolean {
+    return this.snapshot.active ? this.snapshot.hidden(e.simId) : this.hiddenFor(this.local, u);
+  }
+
   /** Apply the combined visibility decision (gold-mine + fog) to one render entry,
-   *  toggling the instance and firing the mine-entry deselect side-effect once. */
-  private applyVisibility(e: Entry, u: SimUnit): void {
+   *  toggling the instance and firing the mine-entry deselect side-effect once.
+   *
+   *  `hide` is decided by the caller (`modelHidden`) rather than here: on a client it is the
+   *  payload's answer, and this method has no business knowing which of the two it got. */
+  private applyVisibility(e: Entry, u: SimUnit, hide: boolean): void {
     if (u.inMine !== e.inMine) {
       e.inMine = u.inMine;
       if (u.inMine) {
@@ -858,7 +878,6 @@ export class RtsController {
         if (this.hovered === e.simId) this.hovered = null;
       }
     }
-    const hide = this.hiddenFor(this.local, u);
     if (hide !== e.hidden) {
       e.hidden = hide;
       if (hide) {
@@ -2079,6 +2098,9 @@ export class RtsController {
       this.pruneFogged(); // whatever the new fog swallowed leaves the selection (issue #62)
     }
     this.driveMatchLink(dt);
+    // Adopt the newest payload once per tick. On a client this is where "what may I see" stops
+    // being a question we answer and becomes one we were answered (`modelHidden`).
+    this.snapshot.update(this.matchLink?.latest() ?? null);
     for (const e of this.entries) {
       const u = this.sim.units.get(e.simId)!;
       // How far this unit moved SINCE IT WAS LAST DRAWN — a render fact the walk/stand picker
@@ -2091,7 +2113,7 @@ export class RtsController {
       e.prevDrawnX = u.x;
       e.prevDrawnY = u.y;
       if (u.neutralPassive) {
-        this.applyVisibility(e, u); // static & viewer-rendered, but fog still hides/reveals it
+        this.applyVisibility(e, u, this.modelHidden(e, u)); // static & viewer-rendered, but fog still hides/reveals it
         continue;
       }
       this.loc[0] = u.x;
@@ -2104,7 +2126,7 @@ export class RtsController {
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
-      this.applyVisibility(e, u);
+      this.applyVisibility(e, u, this.modelHidden(e, u));
       // A unit that has changed FORM wears the other half of its model — a rooted Ancient, a
       // burrowed Crypt Fiend. Skipped entirely for the vast majority, which have only one.
       if (u.altModel || e.altModel !== undefined) this.applyFormAnims(e, u, this.registry.get(e.typeId));
