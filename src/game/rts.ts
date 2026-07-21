@@ -2592,7 +2592,7 @@ export class RtsController {
     const picked: number[] = [];
     for (const e of this.entries) {
       if (e.typeId !== typeId || e.hidden) continue;
-      const u = this.sim.units.get(e.simId);
+      const u = this.frameUnit(e.simId); // "on screen" is a question about the DRAWN position
       if (!u || u.owner !== this.localPlayer || u.building) continue;
       if (this.onScreen(u, e)) picked.push(e.simId);
     }
@@ -2609,7 +2609,7 @@ export class RtsController {
   }
 
   /** True if a unit currently projects inside the viewport (for same-type select). */
-  private onScreen(u: SimUnit, e: Entry): boolean {
+  private onScreen(u: RenderUnit, e: Entry): boolean {
     const viewport = this.host.viewport();
     const dpr = this.dpr();
     const h = this.host.canvas.height;
@@ -2640,7 +2640,10 @@ export class RtsController {
     const units: number[] = [];
     const buildings: number[] = [];
     for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
+      // Projected to screen and compared against the drag box, so it must be the position the
+      // model was DRAWN at — box-selecting off the sim while drawing off the snapshot would
+      // catch units the player can see just outside the box and miss ones inside it.
+      const u = this.frameUnit(e.simId);
       if (!u || e.hidden) continue;
       if (u.owner !== this.localPlayer) continue; // own entities only
       this.world[0] = u.x;
@@ -3502,7 +3505,11 @@ export class RtsController {
    *  birth freeze when paused and resume exactly with progress. */
   repinConstructionFrames(): void {
     for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
+      // The SAME record the entry sync scrubbed this frame (item 10c-2c-4). Reading the sim
+      // here while the sync read the snapshot would set the birth frame twice per frame from
+      // two different progresses — a building that visibly stutters between two states of
+      // construction on a client, and only on a client.
+      const u = this.frameUnit(e.simId);
       if (!u?.building || u.building.constructionLeft <= 0 || e.birthSeq < 0) continue;
       const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
       e.unit.instance.frame = e.birthStart + prog * (e.birthEnd - e.birthStart);
@@ -4163,12 +4170,17 @@ export class RtsController {
     let bestBldg: number | null = null;
     let bestBldgScore = Infinity;
     for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId)!;
-      // `hidden` is "no model on screen"; fogBlocksClick is "no eyes on it" — and an explored
-      // enemy BUILDING is drawn but unseen, so the second test is the one that keeps the
-      // cursor from grabbing a shop across the map (issue #62). Every click, hover, order and
-      // spell target comes through here, so gating the pick gates all of them at once.
-      if (e.hidden || this.fogBlocksClick(u)) continue;
+      // The cursor must hit the unit WHERE IT IS DRAWN. This projects the unit's mid-body to
+      // screen and measures the click against it, so reading the sim while the model came from
+      // the snapshot would put the clickable disc somewhere the player cannot see it — the
+      // cursor lying is worse than the model being a frame stale (item 10c-2c-4).
+      const u = this.frameUnit(e.simId);
+      if (u === undefined) continue; // gone from the sim, or never sent to this client
+      // `hidden` is "no model on screen"; the memory test is "no eyes on it" — and an explored
+      // enemy BUILDING is drawn but unseen, so the second one is what keeps the cursor from
+      // grabbing a shop across the map (issue #62). Every click, hover, order and spell target
+      // comes through here, so gating the pick gates all of them at once.
+      if (e.hidden || this.drawnFromMemory(e.simId, u)) continue;
       if (ground && Math.hypot(u.x - ground[0], u.y - ground[1]) > PICK_WORLD_MAX) continue;
       const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
       // Project the unit's mid-body (base + ~half its height) to screen. Buildings

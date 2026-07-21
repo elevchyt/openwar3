@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) and its selection panel too (10c-2c-3). Open: 10c-2c-4 (the input/order sites, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) its selection panel too (10c-2c-3), and every screen-position question with them (10c-2c-4). Open: 10c-2c-5 (6d + the onDeath rework), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2033,14 +2033,53 @@ enumerated by body rather than by name.
     250/250, Damage 7-8, Armor 0, command card populated — which are the real 1.27a numbers, off
     the wire. Single-player minimap byte-identical to the parent (0 of 18 088).
 
-10c-2c-4. **What is left of `sim.units.get` in `rts.ts` — 59 sites, and most of them are not
-    reads at all.** They are INPUT and ORDER ISSUING: what may I click, where may I build, which
-    unit did this order name. Those ask a different question from "what do I draw", and the
-    answer is probably NOT `frameUnit` — an order is aimed with the local sim's ids and judged
-    by the host, so a client asking the payload "may I click this" would be asking the wrong
-    oracle. **Classify before converting**; the doc's own rule (what do the consumers actually
-    read) has been right every time here. `6d` (a razed building's ghost) rides in the slice that
-    reworks `onDeath`.
+10c-2c-4. ~~**Classify the rest.**~~ **Done, and the classification came out on a different axis
+    than this entry predicted.** It guessed "input vs output". The line that actually matters is
+    **does this question involve WHERE the unit appears on screen?** — and by that test some of
+    the most input-shaped code in the file belongs with the frame.
+
+    Four sites moved, for one reason each expressed the same way: they project `u.x/u.y` through
+    the camera and compare the result against something the player is looking at.
+    - **`pickAt`** — every click, hover, order and spell target. It measures the cursor against
+      the unit's projected mid-body, so reading the sim while the model came from the snapshot
+      would put the clickable disc somewhere the player cannot see it. **A cursor that lies is
+      worse than a model one frame stale.** Its `fogBlocksClick` became `drawnFromMemory` with
+      it — same question, already answered in the payload.
+    - **`unitsInBox`** — the drag box would catch units just outside it and miss ones inside.
+    - **`onScreen`** (via `selectByType`) — "is it on screen" is a fact about the drawn frame.
+    - **`repinConstructionFrames`** — **and this one was a real bug, introduced by 10c-2c-2 and
+      missed by it.** It re-pins a building's Birth frame to construction progress each frame,
+      AFTER the renderer's update — the same scrub the entry sync does. The sync had switched to
+      the snapshot and this had not, so on a client the birth frame was being set twice per
+      frame from two different progresses. A building visibly stuttering between two states of
+      construction, on the client only. Exactly the Frankenstein the item warned about, in the
+      one place it was easy to miss: a separate method, called from outside the sync loop.
+
+    **What deliberately did NOT move, and this is the finding worth keeping.** Ownership tests,
+    `controls(id)`, inventory slots, worker filters, `selectHero`, rally targets, order issuing —
+    they ask about IDENTITY and PERMISSION, not about pixels. An order is aimed with the local
+    sim's ids and judged by the host anyway, so routing them through the payload would add a
+    failure mode (a command that cannot be issued because the snapshot has not arrived) to buy
+    nothing. `sim.units.get` in `rts.ts` **59 → 55**, and the remaining 55 are that set. **The
+    count is not the target** — a zero here would mean the client had stopped being able to
+    reason about its own world.
+
+    **No headless coverage, and that is honest rather than an omission**: all four sites live in
+    `rts.ts`, which imports `mdx-m3-viewer` and cannot load in the sim build, and three of the
+    four are questions about a camera projection. Verified in the browser instead, with two
+    clients: on the CLIENT, clicking a unit and then a building both resolved through the
+    payload-sourced picker — Peon 250/250, then Great Hall 1500/1500 Armor 5 with its own
+    command card. Those are the real 1.27a numbers, picked and printed off the wire.
+    Single-player minimap byte-identical to the parent (0 of 18 088). **The construction-stutter
+    fix was NOT captured** — staging a build on a client through the harness was more than the
+    fix was worth; it is a code-reading fix and is stated as one.
+
+10c-2c-5. **`6d` — a razed building's ghost, and the `onDeath` rework it rides in.** The last
+    piece of 10c. A structure that falls while nobody of the owner's is watching leaves a ghost
+    in the payload (6b/6c), but the RENDERER still deletes its model on the sim's death event —
+    so the client is sent an image it has already thrown away. `onDeath` currently fires off
+    `sim.drainDeaths()`, which on a client is its own sim's opinion; the model's life should
+    follow the payload the way its pose now does.
 
 11a. ~~**Reconnect, the relay side: a rejoin token holds the slot.**~~ **Done.** A dropped
     connection is no longer a departure. `RelayCore.disconnect` (the socket-closed path, distinct
