@@ -95,7 +95,7 @@ state.
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
 | F — the LAN punch list | **done** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). and a client leaving no longer crashes the relay (8). **All eight items are closed and the stop condition is met**: menu → Local Area Network → Create Game → join → Start → play → a natural end, with no dead room, no stuck lobby and no desync — driven clean end to end on the fixed build (see [the closing run](#the-closing-run)). Next phase: the client's local sim stops stepping and becomes a record store the snapshot writes (Open questions — decided, option 2). |
-| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1); verified on Lost Temple with four seats, where one player's defeat leaves the room up and the wire feeding. `?maps=` takes map NAMES so the harness can be pointed at a specific map (2). |
+| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1); verified on Lost Temple with four seats, where one player's defeat leaves the room up and the wire feeding. `?maps=` takes map NAMES so the harness can be pointed at a specific map (2). The six playtest bugs are reproduced and their mechanisms pinned in code (3): trained units spawn as `localPlayer` in the drain (bug 4, NOT fixed by option 2 alone), snapshot-id vs local-entry-id divergence (bugs 1/5/6, option 2's target), the rAF-pumped host sim (bug 2, unreproducible headless — needs real windows), and a healthy 10 Hz wire rendering verbatim (bug 3). |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2721,6 +2721,68 @@ rather than an expedition.
 
    Found the hard way: two runs were spent on Adrenaline instead, a heavily forested 4-player map
    where the heroes took minutes to path anywhere and the base hunt never finished.
+
+3. **The six-bug reproduction session.** The developer's live two-window playtest reported six
+   bugs; before fixing any of them, one scripted two-window session (`?dev&map=EchoIsles&lan=host`
+   / `lan=join`, fresh relay) reproduced what it could and pinned each mechanism in code. What was
+   actually seen, per bug — corrections to the report included:
+
+   - **Bug 4 (client-trained unit comes out host-owned) — reproduced, and the root cause is NOT
+     the id collision.** The client trained a peon from its Great Hall; the peon came out with a
+     red "Player 1" tooltip, a red selection circle and an EMPTY command card on the client — and
+     the HOST's food climbed 5/12 → 6/12 and its worker count 5 → 6, so the mis-ownership is real
+     on the authority, not a presentation artifact. Mechanism:
+     `world.trainCompletions` carries no owner (`src/sim/world.ts:1317`, pushed at `:2600`), and
+     the renderer's drain spawns every trained unit as
+     `this.spawnUnit(d, sx, sy, this.localPlayer, ...)` (`src/render/mapViewer.ts:5830`).
+     Harmless in single-player, where only the local player ever trains; on a host applying a
+     client's command it hands the client's unit to the host. **Option 2 does not fix this** —
+     the host's drain is the bug; the event must carry (or the drain must derive, via
+     `buildingId`) the building's owner. A consequence observed live: the host-owned twin then
+     stands inside the client's base granting the HOST live vision there — an intel leak.
+   - **Bug 6 (client-built building is only an ubersplat) — reproduced.** The client placed an
+     Orc Burrow (cost deducted 160g/40w, local food cap 10 → 20 on completion); 60+ s later the
+     site showed the ground splat and a floating health bar and **no model**, on the client,
+     while its peon stood beside it idle. The dot/model split showed up here too: the client's
+     minimap draws every payload unit (`dotsFromSnapshot`, host-id-keyed) while a model needs a
+     render `Entry` under that id — and entries are created ONLY by the local sim's own spawns
+     (`mapViewer` never iterates snapshot units; grep confirms). A host id with no local entry is
+     a dot with no body; a local entry whose id means something else on the host is a body lying
+     about itself. That is item 2c's missing path, verbatim.
+   - **Bug 1 (client cannot see the host) — reproduced with a caveat.** A client peon marched
+     into the host's base and stood on empty grass: no Town Hall, no peasants, nothing — while a
+     neutral creep nearby DID draw, so the AoI wire itself was delivering. The caveat: it was
+     night, the peon's night sight is short, and the client's minimap did afterwards show the
+     host's mine and one red dot as explored — so "cannot see AT ALL" may be "the payload never
+     contained what the report expected" rather than "nothing is ever sent". Per the plan: pin it
+     properly after 2b, when ids can no longer diverge.
+   - **Bug 2 (host must stay focused) — does NOT reproduce in this harness, and that is itself
+     the finding.** Both agent-browser windows ran unthrottled: the host held a steady ~10 Hz
+     snapshot cadence (measured 137 sent over 16 s) with neither window focused. The bug needs
+     real, visible, occludable Chrome windows. The mechanism is confirmed in code regardless:
+     the host's fixed-timestep sim is pumped ONLY from the render loop's
+     `requestAnimationFrame` (`src/render/mapViewer.ts:5771`, loop at `:6091`), which Chrome
+     throttles to ~0 for hidden/occluded windows — and `MAX_STEPS_PER_FRAME` then DROPS the
+     accumulated backlog on refocus (`:5777`), so the lost time is lost for good. The moving
+     shadows are the other half, confirmed: `updateShadowBatch` iterates the client's LOCAL
+     `world.units` (`src/render/mapViewer.ts:6274`) while models draw from the snapshot — the
+     shadows animate off the client's own prediction while the models wait for snapshots that
+     are not coming. **Any fix must be verified with real visible windows, not this harness.**
+   - **Bug 3 (jitter) — deferred, wire measured healthy.** Snapshots arrived at a steady ~10 Hz
+     with `stale 0`; positions render verbatim with no interpolation (by design, "none in v1").
+     Consistent with 10 Hz-shaped stepping; judged properly only once the world steps and ids
+     are stable, per the plan.
+   - **Bug 5 (Archmage wearing an Altar's model) — not re-created verbatim**; it needs the host
+     and client to allocate colliding ids to different unit kinds, which this session's light
+     play did not line up. The family is demonstrated structurally by bugs 4/6: position/stats
+     from the host's snapshot under one id, model/identity from the client's local entry under
+     the same number meaning something else.
+
+   Two more facts recorded for 2d: the client's HUD resources are its own prediction (its gold
+   kept climbing from local-sim mining while the host's books differ), and a client's local-sim
+   deaths move its food/unit counters (its first peon died to a creep camp on both sims and the
+   client's HUD read the local copy). Both freeze or lie the moment the client stops stepping —
+   the snapshot must carry the recipient's stash.
 
 ### The closing run
 
