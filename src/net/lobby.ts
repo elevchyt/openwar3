@@ -77,6 +77,11 @@ export class LanLobby {
    *  for the MATCH, whose host owes that seat the world it missed (item 11b). Separate from
    *  `onPeerData` because it is relay news about who is in the room, not game traffic. */
   onPeerRejoin: (peer: number) => void = () => {};
+  /** The room is gone — in v1 that means the HOST left, since a host drop closes the room and
+   *  there is no migration. For the LAN screen this is just an error line; for a MATCH in
+   *  progress it is the end of the game, and nothing else will ever say so: the wire simply
+   *  goes quiet and a client would otherwise keep simulating alone against it (item F6). */
+  onRoomClosed: (reason: string) => void = () => {};
 
   constructor(
     /** How to make a transport. Injected so the lobby carries no value dependency on
@@ -232,10 +237,14 @@ export class LanLobby {
         // another client it is ignored. Fired AFTER the roster heals, so anything that reads
         // the roster in response sees the peer already in it.
         return this.onPeerRejoin(m.peer.id);
-      case "room-closed":
+      case "room-closed": {
         this.store.save(null); // the game is gone; nothing to rejoin
         this.reconnecting = false;
-        return this.set({ phase: "browsing", room: null, peers: [], you: null, error: m.reason });
+        this.set({ phase: "browsing", room: null, peers: [], you: null, error: m.reason });
+        // Then the match, AFTER the state settles — the same order `peer-rejoin` uses, so
+        // anything reading the lobby in response sees the room already gone.
+        return this.onRoomClosed(m.reason);
+      }
       case "deliver": {
         // Game traffic. `start` is the one message the lobby itself understands — everything
         // else is passed through to whoever owns the match (Phase C/E).

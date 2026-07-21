@@ -94,7 +94,7 @@ state.
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
-| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. Open: local-sim drift after a move order (5), and what a client shows when the host ends the game (6). |
+| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), and a host ending the game ends it on the client too, with the game's own words (6). Open: **when the client's local sim comes out** — the developer's call. |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2457,17 +2457,73 @@ each break is its own item, not a bigger commit.
    the result came back down the pipe. Finally End Game: the room vanished from the relay, which is
    the other half of the change (`close()`) doing its job.
 
-5. **After a move order the local sim settles ~32 world units from the authority on one unit**
-   (`unit 107.x: local 5216 vs authority 5184`, steady, drift 13–14 while units move). This is the
-   sequencing-B diagnostic doing exactly what it was built for. It does not affect what is drawn —
-   the client renders the authority's position — but it is a real disagreement between two sims
-   stepping the same movement, and the divergence log is a bad shipping state left knowingly
-   (item 10b). Worth chasing before the local sim comes out.
+5. ~~**After a move order the local sim drifts from the authority.**~~ **Fixed — and the fix is to
+   the DETECTOR, because the drift was never a bug.** One ordinary move order took the client's log
+   from silent to **13 findings a tick**, and reading them is what settles it:
 
-6. **What a client shows when the host ends the game is unverified.** The host's End Game closes the
-   room correctly; the client was mid-check when the browser daemon wedged. v1 has no host
-   migration, so "the host left" must end the match on the client with a message rather than leave
-   it simulating alone against a dead wire.
+   ```
+   unit 107.order:  local "harvest"                vs authority "return"
+   unit 107.worker: local {…,"carryLumber":0}      vs authority {…,"carryLumber":10}
+   unit 109.x:      local 4992                     vs authority 5152
+   ```
+
+   Those two worlds are not disagreeing about physics. They are **running different matches**. A
+   client's local sim is an uncorrected prediction fed only its OWN input: it applies this
+   player's commands the instant they are issued, the authority applies them a round trip later,
+   and it never hears about anybody else's at all. From the first command onward, every
+   difference is explained by the missing inputs, and reporting it is a false positive per moving
+   unit per tick — which drowns the one line that would matter.
+
+   **So the comparison now states its own precondition and stops when it is broken.** Every
+   snapshot carries `commands` — `Authority.applied`, the number of commands that world has
+   taken — and `MatchLink.compare` only diffs while that is 0 **on both sides**. The authority's
+   half is not optional and cannot be replaced by a local flag: a client that has issued nothing
+   has no other way to learn that the HOST player has, and its own units would keep comparing
+   clean while the shared creeps quietly parted. When the streams separate it says so once
+   (`[sync] divergence checking stopped…`) rather than falling silent, because a quiet detector
+   reads as a detector finding nothing, which is the comfortable reading and the wrong one.
+
+   **The window that remains is the valuable one**, not a consolation prize: match start, before
+   any input, is exactly where a seeding, RNG, map-script or unit-placement desync shows itself —
+   real bugs, in the only window this could ever have caught them. Nothing detectable was lost:
+   after the inputs part, the detector never had the information to tell a desync from a
+   different match.
+
+   **Tests: `relay:test` 92 → 100.** A real difference is still found while both worlds are
+   pristine (so the gate is the gate, not the diff quietly breaking); our own command ends it;
+   and — the check a local-only flag would fail — a commanded AUTHORITY ends it even though this
+   client has issued nothing, with the count riding in the snapshot. Two injections, one per half
+   of the condition, each turning its own check red. **Verified in the browser**: after the same
+   move order that used to log 13 findings a tick, the client prints the notice **once** and
+   `drift` stays **0**.
+
+   Still open, and now separable from the noise: **when does the client's local sim come out?**
+   Sequencing B called it "a deliberate temporary state — the local sim comes out once the log is
+   quiet". The log can now be quiet, but that is because the comparison is scoped, not because
+   the sims agree; they cannot, by construction. That decision is the developer's.
+
+6. ~~**A client whose host ended the game was told nothing.**~~ **Fixed.** v1 has no host
+   migration, so a host leaving IS the end of the match — and the relay says so exactly once, with
+   `room-closed`. Nothing was listening: `LanLobby` turned it into an error string for a LAN screen
+   that had been unmounted since the match began, so the client kept simulating a world nobody
+   owned any more, against a wire that would never speak again.
+
+   `LanLobby.onRoomClosed` now fires after the room state settles, `MatchChannel` requires it (for
+   the same reason `onPeerRejoin` is required — a channel that quietly lacked it strands a player
+   with nothing on screen to say why), and `main.ts` routes it to a modal that freezes the world.
+
+   **The words are the game's own**, read from `UI\FrameDef\GlobalStrings.fdf` through the
+   `GetLocalizedString` table the renderer already loads: `GAMEOVER_GAME_OVER` ("Game over."),
+   `GAMEOVER_DISCONNECTED` ("You were disconnected.") and `GAMEOVER_QUIT_GAME` — whose `|CFFFFFFFF…|R`
+   codes mark the accelerator letter and are stripped, since we render text rather than parse it.
+   The English literals in the code are only the fallback for a table that has not loaded; a
+   localized install says what it says.
+
+   **Tests: `sim:test` 494 → 496** — the match is told, with the reason, and only after the lobby
+   has stopped claiming to be in a room; the rejoin token is forgotten, because there is nothing to
+   come back to. The injection (the notification dropped) turns the first red. **Verified in the
+   browser**: the host chose End Game and the client's screen froze under the dialog, whose button
+   returned it to the main menu.
 
 ### JASS
 

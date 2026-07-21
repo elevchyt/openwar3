@@ -308,6 +308,26 @@ export class Authority {
    * Returns whether the command took.
    */
   execute(player: number, cmd: Command): boolean {
+    const took = this.dispatch(player, cmd);
+    if (took) this.appliedCount++;
+    return took;
+  }
+
+  /**
+   * How many commands this world has accepted.
+   *
+   * Not a statistic — the PRECONDITION of the drift detector (docs/multiplayer.md Phase F
+   * item 5). A client's local sim is an uncorrected prediction that is fed only its OWN input,
+   * so the moment any command has been applied to either world the two are no longer running
+   * the same match and a difference between them says "different inputs", not "different
+   * code". The count is what lets `MatchLink.compare` know that and stop guessing.
+   */
+  get applied(): number {
+    return this.appliedCount;
+  }
+  private appliedCount = 0;
+
+  private dispatch(player: number, cmd: Command): boolean {
     switch (cmd.c) {
       case "order":
         return this.applyOrder(player, cmd.unitId, cmd.order, cmd.queued);

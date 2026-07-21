@@ -46,6 +46,15 @@ export interface MatchChannel {
    */
   onPeerRejoin: (peer: number) => void;
   /**
+   * The room is gone, so the match is over (item F6).
+   *
+   * Required, for the same reason `onPeerRejoin` is: v1 has no host migration, so a host
+   * leaving ends the game for everyone — and the only evidence a client gets is this message.
+   * A channel that quietly lacked it would leave that client simulating alone against a wire
+   * that will never speak again, with nothing on screen to say why.
+   */
+  onRoomClosed: (reason: string) => void;
+  /**
    * End the wire — the match is over.
    *
    * Optional because a channel that outlives nothing (a test fake, a loopback pair) has nothing
@@ -82,6 +91,11 @@ export interface HostSources {
   viewers(): Iterable<{ player: number; viewer: SnapshotViewer }>;
   /** Buildings this recipient still believes are standing (`GhostMemory.ghostsFor`). */
   ghostsFor(player: number): UnitSnapshot[];
+  /** `Authority.applied` — how many commands this world has taken. Stamped into every
+   *  snapshot so a client can tell whether diffing it against its own sim means anything
+   *  (docs/multiplayer.md Phase F item 5). Injected like the rest, so this module still needs
+   *  neither `Authority` nor a `SimWorld` in its import closure. */
+  commandsApplied(): number;
 }
 
 /** How often the host emits. 10 Hz, matching the fog rebuild — there is no point sending a
@@ -251,7 +265,7 @@ export class MatchLink {
       const peer = this.peerFor(player);
       if (peer === undefined) continue; // a computer slot: nobody is watching
       if (!due && !this.owed.has(peer)) continue; // off-cadence: only the returning peers
-      const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player));
+      const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player), sources.commandsApplied());
       this.channel.send({ k: "snap", snap } satisfies SnapshotMessage, peer);
       sent++;
       this.emitted++;
@@ -299,14 +313,52 @@ export class MatchLink {
    * The local world goes through the same `snapshotFor`, with the same viewer and recipient —
    * see `divergence`'s header for why anything else reports the redaction as drift. Returns an
    * empty array when there is nothing to compare yet, which is every tick on the host.
+   *
+   * **It only means anything while NEITHER world has taken a command** (docs/multiplayer.md
+   * Phase F item 5). Sequencing B keeps a client simulating alongside the authority, but that
+   * local sim is an uncorrected prediction fed only its OWN input: it applies this player's
+   * commands the instant they are issued, the authority applies them a round trip later, and
+   * it never hears about anybody else's at all. So the moment a command lands on either side
+   * the two are running different matches, and every difference between them is explained by
+   * that rather than by a bug. Reporting it anyway is a false positive per moving unit per
+   * tick — measured live, an ordinary move order took the log from silent to 13 findings a
+   * tick, none of which anyone could have acted on.
+   *
+   * The window that remains is the valuable one and is not a consolation prize: match start,
+   * before any input, is exactly where a seeding, RNG, map-script or unit-placement desync
+   * shows itself — and those are real bugs this catches, in the only window it ever could.
+   * When the input streams part, it says so once and goes quiet.
    */
-  compare(world: SnapshotWorld, viewer: SnapshotViewer, ghosts: UnitSnapshot[] = []): Divergence[] {
+  compare(
+    world: SnapshotWorld,
+    viewer: SnapshotViewer,
+    ghosts: UnitSnapshot[] = [],
+    /** `Authority.applied` on THIS machine — our half of the input-parity question. */
+    localCommands = 0,
+  ): Divergence[] {
     const authority = this.newest;
     if (!authority) return [];
-    const local = snapshotFor(world, viewer, this.localPlayer, authority.time, ghosts);
+    if (authority.commands !== 0 || localCommands !== 0) {
+      this.inputsParted = true;
+      this.lastFindings = [];
+      return this.lastFindings;
+    }
+    const local = snapshotFor(world, viewer, this.localPlayer, authority.time, ghosts, localCommands);
     this.lastFindings = divergence(authority, local);
     return this.lastFindings;
   }
+
+  /**
+   * Has a command been applied on either side, so that the comparison has stopped?
+   *
+   * Read by the caller to say so ONCE in the console. A detector that simply went silent would
+   * be indistinguishable from a detector that was finding nothing, which is the more
+   * comfortable of the two readings and the wrong one.
+   */
+  get comparisonStopped(): boolean {
+    return this.inputsParted;
+  }
+  private inputsParted = false;
 
   /** The last comparison's findings, already formatted. For a console line or an overlay. */
   describe(): string[] {

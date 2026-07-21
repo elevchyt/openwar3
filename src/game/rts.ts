@@ -3697,20 +3697,31 @@ export class RtsController {
         // and `viewerSeats` already pairs each with its player.
         viewers: () => this.viewpoints.viewerSeats(),
         ghostsFor: (p) => this.ghosts.ghostsFor(p),
+        commandsApplied: () => this.authority.applied,
       }, this.matchTime);
     } else if (link.latest()) {
-      // Client: compare the authority's newest view against our own, for OUR seat.
-      const findings = link.compare(this.sim, this.local, this.ghosts.ghostsFor(this.localPlayer));
+      // Client: compare the authority's newest view against our own, for OUR seat — while that
+      // still means anything. `compare` refuses once a command has landed on either side (F5):
+      // the local sim is a prediction fed only OUR input, so from then on a difference reports
+      // the missing inputs, not a bug.
+      const findings = link.compare(this.sim, this.local, this.ghosts.ghostsFor(this.localPlayer), this.authority.applied);
       drift = findings.length;
       if (drift) {
         // A drift log, not an error: sequencing B expects disagreement and wants it named. One
         // grouped line per tick, so a desynced match does not scroll the console to uselessness.
         console.warn(`[sync] ${drift} divergence(s):`, link.describe().join(" | "));
+      } else if (link.comparisonStopped && !this.saidComparisonStopped) {
+        // Said ONCE, and said at all: a detector that just went quiet reads as a detector that
+        // is finding nothing, which is the comfortable reading and the wrong one.
+        this.saidComparisonStopped = true;
+        console.info("[sync] divergence checking stopped: a command has been applied, so the local sim and the authority are no longer running the same inputs (docs/multiplayer.md F5).");
       }
     }
     this.matchLinkHeartbeat(link, drift);
   }
 
+  /** The one-time notice that the drift comparison has ended (item F5) has been printed. */
+  private saidComparisonStopped = false;
   private hbAccum = 0;
   /** A once-a-second dev line proving the pipe is alive — sent/received counts and current
    *  drift. Dev-only (`import.meta.env.DEV` is folded to false in a build, so this whole method

@@ -211,6 +211,28 @@ const ME = { id: 2, name: "Joiner", host: false };
     check("a screen that never handed off still closes its own wire", t().connected, false);
   }
 
+  // -------------------------------------------------------------------------------------
+  // Phase F item 6: the room closing IS the end of the match, and the match has to be told.
+  //
+  // v1 has no host migration, so a host leaving ends the game for everyone. The relay says so
+  // once, with `room-closed`, and nothing else ever will — the wire just goes quiet. A client
+  // that is not told keeps simulating a world nobody owns and shows the player nothing.
+  // -------------------------------------------------------------------------------------
+
+  console.log("\nthe match is told when the room closes (item F6)");
+  {
+    const { lobby, store, t } = await joinedLobby();
+    lobby.handOff(); // in a match: the screen is long gone, so onChange reaches nobody
+    const told = [];
+    // Recorded WITH the room state at the moment of the call: the match must not be told while
+    // the lobby still claims to be in a room, or anything that reads it in response sees a lie.
+    lobby.onRoomClosed = (reason) => told.push(`${reason} | inRoom=${lobby.snapshot.room !== null}`);
+    t().onMessage({ t: "room-closed", reason: "The host left the game." });
+    check("the match is told, with the reason, after the room is gone",
+      told, ["The host left the game. | inRoom=false"]);
+    check("and the rejoin token is forgotten — there is nothing to come back to", store.load(), null);
+  }
+
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);
   process.exit(failed === 0 ? 0 : 1);
 })();

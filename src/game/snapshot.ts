@@ -305,6 +305,16 @@ export interface WorldSnapshot {
   units: UnitSnapshot[];
   mines: MineSnapshot[];
   items: GroundItemSnapshot[];
+  /**
+   * How many commands the world this was built from has applied (docs/multiplayer.md F5).
+   *
+   * Carried so a client can tell whether comparing this against its own sim means anything.
+   * A client keeps simulating (sequencing B) but is fed only its OWN input — it never sees
+   * another player's commands — so once either side has applied one, the two worlds are
+   * running different matches and every difference between them is explained by that. Zero on
+   * both sides is the only state in which a difference is a bug rather than an input.
+   */
+  commands: number;
 }
 
 function weaponOf(w: SimUnit["weapon"]): WeaponSnapshot | null {
@@ -452,6 +462,9 @@ export function snapshotFor(
   recipient: number,
   time: number,
   ghosts: readonly UnitSnapshot[] = [],
+  /** `Authority.applied` for the world being snapshotted. Defaults to 0, which is the honest
+   *  answer for a synthetic world nobody has commanded — every test builds one of those. */
+  commands = 0,
 ): WorldSnapshot {
   const units: UnitSnapshot[] = [...ghosts];
   for (const u of world.units.values()) {
@@ -592,5 +605,5 @@ export function snapshotFor(
     items.push({ id: it.id, itemId: it.itemId, x: it.x, y: it.y });
   }
 
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, units, mines, items };
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, units, mines, items, commands };
 }

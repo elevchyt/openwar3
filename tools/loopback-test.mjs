@@ -359,7 +359,10 @@ function worldAt(hp) {
   return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true };
 }
 const seer = { seesFor: () => true, fogHides: () => false, fogBlocksClick: () => false, invisHides: () => false, fogBlocksAt: () => false };
-const sources = { viewers: () => [{ player: 0, viewer: seer }, { player: 1, viewer: seer }, { player: 2, viewer: seer }], ghostsFor: () => [] };
+// `commandsApplied` is the input-parity stamp every snapshot carries (item F5). 0 here: these
+// worlds are built by hand and nobody has commanded them, which is what makes the drift checks
+// below comparable at all.
+const sources = { viewers: () => [{ player: 0, viewer: seer }, { player: 1, viewer: seer }, { player: 2, viewer: seer }], ghostsFor: () => [], commandsApplied: () => 0 };
 
 console.log("\nthe host's snapshot reaches the client it was addressed to");
 {
@@ -396,6 +399,49 @@ console.log("the client diffs what it was sent against what it simulated");
   hostLink.tickHost(1, worldAt(260), sources, 6);
   await tick();
   check("agreement reports nothing", peerLink.compare(worldAt(260), seer), []);
+}
+
+// The diff is only a bug report while both worlds have taken the SAME input: none. A client's
+// local sim applies this player's commands at once, the authority applies them a round trip
+// later, and it never hears anybody else's at all — so after the first command a difference
+// reports the missing inputs. Measured live: one ordinary move order took the log from silent
+// to 13 findings a tick, not one of them actionable (docs/multiplayer.md Phase F item 5).
+console.log("once a command has landed, the comparison stops rather than reporting inputs as drift");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+
+  // Same disagreement as above, and while both worlds are pristine it is still reported —
+  // pinning that the gate below is the gate, and not the diff having quietly stopped working.
+  hostLink.tickHost(1, worldAt(245), sources, 5);
+  await tick();
+  check("while nobody has commanded, a real difference is still found", peerLink.compare(worldAt(260), seer, [], 0).length, 1);
+  check("…and the comparison has not been declared over", peerLink.comparisonStopped, false);
+
+  // Now OUR side has applied one. Same two worlds, same disagreement, no longer a finding.
+  check("our own command ends it", peerLink.compare(worldAt(260), seer, [], 1), []);
+  check("and it says so, once", peerLink.comparisonStopped, true);
+}
+
+console.log("…and the AUTHORITY's own input ends it too, which a client cannot see any other way");
+{
+  const { host, peer } = await room();
+  const commanded = { ...sources, commandsApplied: () => 3 }; // the host player moved something
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+
+  hostLink.tickHost(1, worldAt(245), sources, 5);
+  await tick();
+  check("a pristine snapshot still compares", peerLink.compare(worldAt(260), seer, [], 0).length, 1);
+
+  hostLink.tickHost(1, worldAt(245), commanded, 6);
+  await tick();
+  // THE check that a local-only gate would fail: this client has issued nothing, so it could
+  // never have known on its own that the match had inputs in it. The stamp is how it learns.
+  check("the count rides in the snapshot", peerLink.latest()?.commands, 3);
+  check("a commanded authority ends it even though we issued nothing", peerLink.compare(worldAt(260), seer, [], 0), []);
+  check("and it says so", peerLink.comparisonStopped, true);
 }
 
 console.log("an out-of-order or mis-addressed snapshot is refused, not rendered");

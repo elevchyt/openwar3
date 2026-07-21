@@ -222,7 +222,13 @@ async function startGame(file: File, info: MapInfo, config: MeleeConfig, link?: 
   // A LAN match hands over the match's end of the wire (docs/multiplayer.md item 10b-note); a
   // skirmish passes none, and the controller runs exactly as it always has. Attach it AFTER
   // setup so the world it snapshots exists.
-  if (link) mapScene?.attachMatchLink(link);
+  if (link) {
+    mapScene?.attachMatchLink(link);
+    // v1 has no host migration, so the room closing IS the end of the match — and this message
+    // is the only evidence a client gets (docs/multiplayer.md Phase F item 6). Without it the
+    // wire simply goes quiet and the client keeps simulating a world nobody owns any more.
+    link.channel.onRoomClosed = () => mapScene?.showMatchOver();
+  }
 }
 
 /** Enumerable unit models from the mounted install (portraits excluded). */

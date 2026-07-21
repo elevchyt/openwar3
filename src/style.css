@@ -648,6 +648,14 @@ body.in-game .menu-panel { display: none; }
   margin-bottom: 6px;
   text-shadow: 0 1px 3px #000;
 }
+/* The one line of the match-over modal (the host left) — the same panel, no Return button. */
+.game-menu-message {
+  text-align: center;
+  color: #e8e0cc;
+  font: 400 15px/1.4 Georgia, serif;
+  margin-bottom: 6px;
+  text-shadow: 0 1px 2px #000;
+}
 .game-menu-row { display: flex; gap: 11px; }
 .game-menu-row .game-menu-btn { flex: 1; }
 .game-menu-btn {

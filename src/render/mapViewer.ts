@@ -51,7 +51,7 @@ import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, worldLayer } from "../ui/stage";
 import { UI_HEIGHT } from "../ui/fdf/layout";
-import { GameMenu } from "../ui/gameMenu";
+import { GameMenu, MatchOverDialog } from "../ui/gameMenu";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
@@ -591,6 +591,9 @@ export class MapViewerScene {
    *  polled per tick rather than raised by the sim, so it needs its own gate (7.17). */
   private scriptWatchesUnitState = false;
   private gameMenu: GameMenu | null = null;
+  /** Shown when the match ends out from under the player — v1's only cause is the host
+   *  leaving, since there is no migration (docs/multiplayer.md Phase F item 6). */
+  private matchOver: MatchOverDialog | null = null;
   private paused = false; // F10 game menu freezes the sim (rendering continues)
   private simAccum = 0; // unspent real time, in seconds, waiting to become whole sim steps
   /** Ticks elapsed since the match began. THE match clock — the number a multiplayer
@@ -4127,6 +4130,39 @@ export class MapViewerScene {
     });
   }
 
+  /**
+   * The match ended out from under us: the room is gone, which in v1 means the host left.
+   *
+   * Freeze the world and say so. Freezing is the point — a client whose authority has gone
+   * would otherwise keep simulating a world nobody owns, drifting further from a truth that no
+   * longer exists, and every order it issued would go into a socket with nothing at the other
+   * end. The words are the GAME'S (`UI\FrameDef\GlobalStrings.fdf`), not ours, so a localized
+   * install says what it says; the literals are the fallback for a table that never loaded.
+   */
+  showMatchOver(): void {
+    if (this.matchOver) return; // already said; a second `room-closed` is not a second dialog
+    this.paused = true;
+    const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
+    // The same root the HUD and the F10 menu mount into (`mountHud`).
+    const ui = document.getElementById("ui") ?? document.body;
+    this.matchOver = new MatchOverDialog(
+      ui,
+      {
+        title: s("GAMEOVER_GAME_OVER", "Game over."),
+        message: s("GAMEOVER_DISCONNECTED", "You were disconnected."),
+        // The colour codes in GAMEOVER_QUIT_GAME mark the accelerator letter; we render text,
+        // so strip them rather than print "|CFFFFFFFFQ|Ruit Game".
+        quit: s("GAMEOVER_QUIT_GAME", "Quit Game").replace(/\|[cC][0-9a-fA-F]{8}|\|[rR]/g, ""),
+      },
+      () => {
+        this.matchOver?.dispose();
+        this.matchOver = null;
+        this.paused = false;
+        this.onExit?.();
+      },
+    );
+  }
+
   /** Give the HUD's clock slot the local race's real TimeIndicator model, on its own
    *  little canvas. We drive it from this scene's frame loop (see updateClock) rather
    *  than letting it play, because its animation IS the day/night clock. */
@@ -6022,6 +6058,8 @@ export class MapViewerScene {
     this.items.clearCustom();
     this.gameMenu?.dispose();
     this.gameMenu = null;
+    this.matchOver?.dispose();
+    this.matchOver = null;
     this.paused = false;
     this.ghost?.remove();
     this.ghost = null;
