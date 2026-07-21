@@ -94,7 +94,7 @@ state.
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
-| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), and a host ending the game ends it on the client too, with the game's own words (6). Open: **when the client's local sim comes out** — the developer's call. |
+| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). Open: a client LEAVING crashes the relay (8), and **when the client's local sim comes out** — the developer's call. |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2524,6 +2524,58 @@ each break is its own item, not a bigger commit.
    come back to. The injection (the notification dropped) turns the first red. **Verified in the
    browser**: the host chose End Game and the client's screen froze under the dialog, whose button
    returned it to the main menu.
+
+7. ~~**The loser was never told it lost.**~~ **Fixed.** The stop condition says "play a match to a
+   natural end", so the match was played to one: the host marched its five peasants across Echo
+   Isles and razed the client's Great Hall. The host got the real **Victory!** screen and the log
+   line "Player 2 was defeated. Player 1 was victorious." The client watched its base turn to
+   rubble — the snapshot got that right — **and went on playing.** No defeat screen, HUD still
+   reading `5/10` food, 103 units to the host's 102.
+
+   **Because the verdict was computed from the wrong world.** The melee victory/defeat screen is a
+   plain JASS `dialog`, and every machine runs the map script. blizzard.j's defeat check fires off
+   unit DEATH events in the world its script can see — and a client's world never receives the
+   host's commands, so the army that razed the hall never moved there, the hall never died
+   locally, and no check ever ran. Meanwhile the host's script raised a dialog addressed to
+   player 1, which the host correctly did not show (it only renders dialogs visible for its own
+   seat). The verdict existed on exactly one machine and reached nobody.
+
+   **So the outcome crosses the wire.** `DialogMessage` is a new member of the game channel:
+   the host relays any dialog its script raises for a player who is not sitting here, addressed
+   to that player's peer, once per `handleId:revision`. The client rebuilds it into the same
+   `DialogObj` its own script would have produced, so `GameDialog` renders the real screen off
+   the game's own `ScriptDialog.fdf` and `GlobalStrings.fdf`.
+
+   **One way, deliberately.** The two behaviours a dialog button has are the ENGINE's and both are
+   local — any click closes it, a quit button leaves the match — so nothing has to travel back and
+   the client's own UI answers its own buttons. That also means this is not a general dialog-relay
+   feature: it carries the message and the buttons, and a map script that wants a click routed
+   back to the host still cannot have one. Said here rather than discovered later.
+
+   **Tests: `relay:test` 100 → 107.** The loser is told with the game's own words and the button
+   that ends the match comes with it; a THIRD player in the room is not handed the loser's screen;
+   a verdict for the host's own seat or for a computer slot reports that it went nowhere, so a
+   caller retries an unseated peer instead of writing it off. **Two traps hit while writing it,
+   both worth recording.** The bystander check first asked the HOST whether it received its own
+   broadcast — which proves nothing, because the relay never echoes a sender its own message, and
+   the broadcast injection walked straight through it; it needs a real third peer, and `room()`
+   caps at two, so a third `join` was being refused as full and receiving nothing for the most
+   boring possible reason. And the check for "the host's own seat is not relayed to itself" went
+   red on the first run: `sendDialog`'s comment claimed that skip and its code did not.
+
+   **Verified in the browser, end to end, twice** — once to see the break and once to see it fixed.
+   Same scenario both times: host razes the client's hall. Now the client gets "You failed to
+   achieve victory." in the game's own chrome, and its Quit Game button leaves the match.
+
+8. **A client leaving a match CRASHES the relay — the whole process, for every room on it.**
+   Found in the same run, seconds after the fix above was confirmed: the client clicked Quit Game,
+   and `server/rooms.mjs`:225 threw `Cannot read properties of null (reading 'send')`.
+
+   `case "relay"` does `if (target) target.conn.send(out)` — but a peer whose slot is HELD after a
+   drop has `peer.conn = null` by design (item 11a keeps the peer in the room table so its token
+   can reclaim the seat). The host goes on addressing snapshots to that peer at 10 Hz, and the
+   first one kills the server. It is a one-line dereference and a total outage: every other game
+   on that relay dies with it. Next item, with a real-socket test.
 
 ### JASS
 

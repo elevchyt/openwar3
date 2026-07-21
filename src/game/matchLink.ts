@@ -66,6 +66,33 @@ export interface MatchChannel {
   close?(): void;
 }
 
+/**
+ * A dialog the AUTHORITY's script raised for one recipient (docs/multiplayer.md Phase F item 7).
+ *
+ * The melee victory/defeat screen is a plain JASS `dialog` (see ui/gameDialog.ts), and on a
+ * client its own script will never raise one: blizzard.j's defeat check runs off UNIT DEATH
+ * events in the world the script can see, and a client's world never receives the host's
+ * commands — so the army that razed its hall never moved there, the hall never died locally,
+ * and the loser was simply never told. Observed exactly that way: the client watched its base
+ * turn to rubble (the snapshot got that right) and went on playing.
+ *
+ * So the outcome crosses the wire. It is not state — it is a decision the authority made, and
+ * the one piece of presentation whose absence means the match never ends for somebody.
+ *
+ * ONE WAY, deliberately. The two behaviours a dialog button has are the engine's and both are
+ * local (any click closes it; a quit button leaves the match), so a relayed dialog needs no
+ * click sent back and the client's own UI answers its own buttons.
+ */
+export interface DialogMessage {
+  k: "dlg";
+  message: string;
+  buttons: { text: string; quit: boolean }[];
+}
+
+export function isDialogMessage(data: unknown): data is DialogMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "dlg";
+}
+
 /** The `GameMessage` member carrying one recipient's view of the world. */
 export interface SnapshotMessage {
   k: "snap";
@@ -178,6 +205,28 @@ export class MatchLink {
    */
   onCommand: (from: number, cmd: CommandMessage) => void = () => {};
 
+  /**
+   * The authority raised a dialog for us (client side only) — in v1 that is the melee
+   * victory/defeat screen. Default no-op: the host raises its own and never receives one.
+   */
+  onDialog: (msg: DialogMessage) => void = () => {};
+
+  /**
+   * Host side: hand a recipient a dialog its own script will never raise.
+   *
+   * Addressed to that player's peer, never broadcast — a defeat belongs to one person, and a
+   * room-wide "You failed to achieve victory." would be the funniest possible desync. A player
+   * with no peer (a computer slot, or the host itself) is skipped: the host's own script
+   * already showed it, and nobody is watching an AI's screen.
+   */
+  sendDialog(player: number, msg: DialogMessage): boolean {
+    if (player === this.localPlayer) return false; // our own script raised it; we are looking at it
+    const peer = this.peerFor(player);
+    if (peer === undefined) return false;
+    this.channel.send(msg, peer);
+    return true;
+  }
+
   constructor(
     private readonly channel: MatchChannel,
     /** This machine's own slot. A snapshot addressed to anybody else is a routing bug. */
@@ -194,6 +243,7 @@ export class MatchLink {
     channel.onPeerData = (from, data) => {
       if (isSnapshotMessage(data)) this.receive(data.snap);
       else if (isCommandMessage(data)) this.onCommand(from, data);
+      else if (isDialogMessage(data)) this.onDialog(data);
       else previous(from, data);
     };
     // A returning peer is owed the world it missed, and owed it NOW rather than whenever the

@@ -11,7 +11,7 @@ import { type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "..
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
-import { MAP_CONTROL, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
+import { MAP_CONTROL, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
@@ -591,6 +591,11 @@ export class MapViewerScene {
    *  polled per tick rather than raised by the sim, so it needs its own gate (7.17). */
   private scriptWatchesUnitState = false;
   private gameMenu: GameMenu | null = null;
+  /** Dialogs already relayed to a remote player, by `handleId:revision` — so a screen that is
+   *  shown for the rest of the match is sent once rather than sixty times a second (item F7). */
+  private readonly relayedDialogs = new Map<number, string>();
+  /** A dialog the AUTHORITY raised for us, when we are a client. Null on the host. */
+  private remoteDialog: DialogObj | null = null;
   /** Shown when the match ends out from under the player — v1's only cause is the host
    *  leaving, since there is no migration (docs/multiplayer.md Phase F item 6). */
   private matchOver: MatchOverDialog | null = null;
@@ -1203,6 +1208,22 @@ export class MapViewerScene {
    *  owns the setup; neither should reach across the other. */
   attachMatchLink(setup: MatchLinkSetup): void {
     this.rts?.attachMatchLink(setup);
+    // A client turns the authority's payload back into the same `DialogObj` its own script
+    // would have built, so `GameDialog` renders the real screen off the game's own FDF and the
+    // two engine button behaviours (any click closes; a quit button leaves) work unchanged.
+    if (this.rts) {
+      this.rts.onRemoteDialog = (msg) => {
+        this.remoteDialog = {
+          handleId: -1, // not the script's; nothing looks it up
+          message: msg.message,
+          buttons: msg.buttons.map((b, i) => ({
+            handleId: -(i + 2), dialogId: -1, text: b.text, hotkey: 0, quit: b.quit, doScoreScreen: false,
+          })),
+          visibleFor: new Set([this.localPlayer]),
+          revision: 0,
+        };
+      };
+    }
   }
 
   async startMelee(config: MeleeConfig): Promise<void> {
@@ -1951,6 +1972,10 @@ export class MapViewerScene {
           dialog.visibleFor.delete(this.localPlayer);
           dialog.revision++;
         }
+        // A RELAYED dialog (item F7) belongs to no script here, so dismissing it is dropping
+        // it. Without this the per-frame update below would hand it straight back and the
+        // screen could never be closed.
+        this.remoteDialog = null;
         this.dialog?.update(null);
         engine?.interp.fireDialogClick(button.handleId, button.dialogId, this.localPlayer);
         if (button.quit) {
@@ -1992,7 +2017,29 @@ export class MapViewerScene {
       const below = underBoard + (this.multiboard?.occupiedHeight() ?? 0);
       this.timerDialogs.update(rt.timerDialogs, (td) => rt.timerDialogSeconds(td), below ? below + TIMER_STACK_GAP : 0);
     }
-    this.dialog?.update(rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
+    // The AUTHORITY's dialogs, for players who are not sitting here (item F7). A client's own
+    // script never raises the melee victory/defeat screen — blizzard.j's check runs off unit
+    // DEATH events in the world it can see, and a client's world never receives the host's
+    // commands, so the hall that was razed is still standing in it. The host is the only
+    // machine that knows, and this is where it says so.
+    for (const d of rt.dialogs) {
+      for (const p of d.visibleFor) {
+        if (p === this.localPlayer) continue; // ours; rendered below, not relayed
+        const stamp = `${d.handleId}:${d.revision}`;
+        if (this.relayedDialogs.get(p) === stamp) continue;
+        const sent = this.rts?.relayDialog(p, {
+          k: "dlg",
+          message: d.message,
+          buttons: d.buttons.map((b) => ({ text: b.text, quit: b.quit })),
+        });
+        // Remembered only when it actually went somewhere, so a player who has not been
+        // seated yet is retried rather than silently written off.
+        if (sent) this.relayedDialogs.set(p, stamp);
+      }
+    }
+    // A dialog the authority sent US wins over our own script's, which on a client is empty
+    // anyway — and on the host `remoteDialog` is never set, so this reads as it always did.
+    this.dialog?.update(this.remoteDialog ?? rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
   }
 
   /** The world→screen bridge the floating-text pass runs on. */

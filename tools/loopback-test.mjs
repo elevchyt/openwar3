@@ -424,6 +424,66 @@ console.log("once a command has landed, the comparison stops rather than reporti
   check("and it says so, once", peerLink.comparisonStopped, true);
 }
 
+// The melee victory/defeat screen is a plain JASS dialog, and a CLIENT's own script will never
+// raise one: blizzard.j's defeat check runs off unit DEATH events in the world it can see, and a
+// client's world never receives the host's commands — so the army that razed its hall never
+// moved there and the hall is still standing in it. Observed exactly that way in a real match:
+// the loser watched its base turn to rubble and went on playing (docs/multiplayer.md item F7).
+console.log("the authority's verdict reaches the player it is about, and nobody else");
+{
+  // A THREE-seat room, built here rather than with `room()`, because the bystander below is
+  // the whole point and `room()` caps at two — a third `join` is refused as full and then
+  // receives nothing for the most boring possible reason.
+  const relay = new LoopbackRelay();
+  const host = relay.connect("host");
+  const peer = relay.connect("peer");
+  const third = relay.connect("third");
+  await tick();
+  host.send({ ...CREATE, maxPlayers: 3 });
+  await tick();
+  const roomId = host.last("created").room.id;
+  peer.send({ t: "join", roomId, playerName: "Joiner" });
+  third.send({ t: "join", roomId, playerName: "Bystander" });
+  await tick();
+  const THREE = [{ id: 0, peer: 1 }, { id: 1, peer: 2 }, { id: 2, peer: 3 }];
+  const hostLink = new MatchLink(channelFor(host), 0, THREE);
+  const peerLink = new MatchLink(channelFor(peer), 1, THREE);
+  const seen = [];
+  peerLink.onDialog = (d) => seen.push(d);
+
+  const defeat = { k: "dlg", message: "You failed to achieve victory.", buttons: [{ text: "Quit Game", quit: true }] };
+  check("the host says it went somewhere", hostLink.sendDialog(1, defeat), true);
+  await tick();
+  check("the loser is told, with the game's own words", seen.map((d) => d.message), ["You failed to achieve victory."]);
+  check("…and the button that ends the match came with it", seen[0]?.buttons, [{ text: "Quit Game", quit: true }]);
+
+  // A defeat belongs to ONE person. Addressed, never broadcast — a room-wide "You failed to
+  // achieve victory." would be the funniest possible desync.
+  //
+  // The bystander has to be a THIRD peer, and that is the whole point of this block. Asking the
+  // HOST whether it received its own broadcast proves nothing: the relay never echoes a sender
+  // its own message, so a `send` with no recipient passes that check while spraying the room.
+  // Written the easy way first, and the injection walked straight through it.
+  const thirdLink = new MatchLink(channelFor(third), 2, THREE);
+  const bystander = [];
+  thirdLink.onDialog = (d) => bystander.push(d);
+  hostLink.sendDialog(1, { k: "dlg", message: "You failed to achieve victory.", buttons: [] });
+  await tick();
+  check("a third player in the room is not handed the loser's screen", bystander, []);
+  check("…while the loser got this one too", seen.length, 2);
+}
+
+console.log("a verdict for a seat nobody is sitting in goes nowhere, and says so");
+{
+  const { host } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  // Player 0 is the host itself — its own script already showed it — and a computer slot has
+  // no peer at all. Both must report FALSE rather than being silently counted as delivered,
+  // so the caller retries a seat that simply is not seated yet instead of writing it off.
+  check("the host's own seat is not relayed to itself", hostLink.sendDialog(0, { k: "dlg", message: "Victory!", buttons: [] }), false);
+  check("nor is a computer slot", hostLink.sendDialog(2, { k: "dlg", message: "Victory!", buttons: [] }), false);
+}
+
 console.log("…and the AUTHORITY's own input ends it too, which a client cannot see any other way");
 {
   const { host, peer } = await room();

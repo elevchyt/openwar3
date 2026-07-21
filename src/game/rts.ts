@@ -25,7 +25,7 @@ import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
-import { MatchLink, type MatchLinkSetup } from "./matchLink";
+import { MatchLink, type DialogMessage, type MatchLinkSetup } from "./matchLink";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
 import type { RenderUnit } from "./renderUnit";
@@ -3669,6 +3669,7 @@ export class RtsController {
     const link = new MatchLink(setup.channel, setup.localPlayer, setup.seats, setup.hostPeer);
     this.matchLink = link;
     this.matchLinkIsHost = setup.isHost;
+    link.onDialog = this.remoteDialog; // set before the link existed, in either order
     if (setup.isHost) {
       // The host is the only party that judges an arriving command. `CommandRouter` resolves
       // the relay's `from` stamp — which no client can forge — to a slot, and a command whose
@@ -3682,6 +3683,25 @@ export class RtsController {
     }
   }
   private matchLinkIsHost = false;
+
+  /**
+   * Host: hand a remote player the dialog its own script will never raise (item F7).
+   *
+   * Returns whether it went anywhere, so the caller can tell "relayed" from "that player is
+   * the host, or a computer" and not bookkeep a send that never happened. A no-op in single
+   * player and on a client, where `matchLink` is null or we are not the authority.
+   */
+  relayDialog(player: number, msg: DialogMessage): boolean {
+    if (!this.matchLink || !this.matchLinkIsHost) return false;
+    return this.matchLink.sendDialog(player, msg);
+  }
+
+  /** Client: the authority raised a dialog for us. Set by whoever owns the dialog UI. */
+  set onRemoteDialog(fn: (msg: DialogMessage) => void) {
+    this.remoteDialog = fn;
+    if (this.matchLink) this.matchLink.onDialog = fn;
+  }
+  private remoteDialog: (msg: DialogMessage) => void = () => {};
 
   /** Once a tick: the host emits a snapshot per recipient; a client diffs the newest arrival
    *  against what it simulated and logs where they disagree. Nothing here changes what is
