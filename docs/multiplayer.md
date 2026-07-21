@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) its selection panel too (10c-2c-3), every screen-position question with them (10c-2c-4), and a razed building's ghost survives on its screen (10c-2c-5 / 6d — **10c closed**). Open: 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1793,9 +1793,17 @@ enumerated by body rather than by name.
 
     **A dev-only heartbeat makes the pipe watchable.** `MatchLink.sent`/`received`/`stale` and a
     once-a-second `[sync] host: sent N, received M, …` line in `driveMatchLink`, gated on
-    `import.meta.env.DEV` and stripped from the build (verified: the string is absent from
-    `dist/`). Without it a silent `[sync]` is indistinguishable from a dead pipe — the counters
-    are what tell "they agree" apart from "nothing arrived".
+    `import.meta.env.DEV` and stripped from the build. Without it a silent `[sync]` is
+    indistinguishable from a dead pipe — the counters are what tell "they agree" apart from
+    "nothing arrived".
+
+    **The check for that was wrong, and item 12 found it.** "The string `[sync]` is absent from
+    `dist/`" cannot be true and must not be asserted: `driveMatchLink` logs `[sync] N
+    divergence(s)` too, and THAT one is not dev-only — a desync in a shipped build is exactly
+    when you want a line in the console. The two share a prefix, so grepping the prefix reads as
+    a violation of an invariant that is actually holding. **Grep the heartbeat's own words
+    instead** (`", received "` or `"stale "`), which are absent from `dist/` — verified at the
+    phase close.
 
     **Verified end to end in two browsers, PARTLY.** Both contexts reached in-game through the
     real relay via the LAN path, and the joiner console showed the full handshake — "LAN join:
@@ -2267,9 +2275,34 @@ enumerated by body rather than by name.
     disconnected, and once caught up the authority's view and its own agree. The daemon wedged
     once mid-run and needed a PID kill; that is the known fragility, not a finding.
 
-12. **Flip the phase table**, once the authority takes commands and emits AoI-filtered snapshots over
-    a transport it does not name, two clients play a match through the relay, and a dropped client
-    rejoins to correct full state.
+12. ~~**Flip the phase table.**~~ **Done — Phase E is closed**, and the flip was an AUDIT
+    rather than a doc edit. The three clauses of the stop condition were re-checked against HEAD
+    rather than against the entries claiming them:
+
+    - **The authority takes commands and emits AoI-filtered snapshots over a transport it does
+      not name.** `MatchChannel` is three methods; `MatchLink` names no socket, and `snapshot.ts`
+      imports no transport and no renderer. Commands arrive stamped by the relay and are judged
+      by `CommandRouter` against the seating, so a client cannot act as somebody else.
+    - **Two clients play a match through the relay.** Re-run at the close: host and client both
+      in-game on Echo Isles, the client logging `received 42 → 51 … stale 0, drift 0` while
+      drawing its whole frame from the payload.
+    - **A dropped client rejoins to correct full state.** Same run, client forced offline: the
+      counter **froze at 56** for the duration, then resumed and climbed to **342 — `stale 0,
+      drift 0` throughout, including after the reconnect.** Drift 0 on the far side is the
+      clause that matters: the client's own sim kept running while it was disconnected, and once
+      caught up the authority's view and its own agree.
+
+    **Two things the audit turned up, and neither is cosmetic.** The phase-table row still
+    carried the trailing claims "nothing renders from it yet" and "nothing crosses the wire
+    yet" — both false for several commits, and both the kind of stale sentence a reader trusts.
+    And the `[sync]`-absent-from-`dist/` invariant does not hold as written (see item 10b);
+    the heartbeat IS stripped, the divergence warning is not and should not be.
+
+    **Still outstanding and deliberately not blocking the flip:** `9b-cmd-shot`, a browser
+    capture of an order issued on one client reaching the other's host. It is a CAPTURE, not
+    work — the path is covered end to end by `loopback-test` over the real `RelayCore` — and the
+    phase does not depend on it. The v1 design questions in [Open questions](#open-questions)
+    (host input delay, NAT traversal, cold start) are the next phase's, not this one's.
 
 ### JASS
 
