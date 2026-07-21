@@ -20,6 +20,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { snapshotFor, visibilityFor } = require(join(REPO, ".sim-build", "src", "game", "snapshot.js"));
 const { GhostMemory } = require(join(REPO, ".sim-build", "src", "game", "ghosts.js"));
+const { SnapshotIndex } = require(join(REPO, ".sim-build", "src", "game", "renderView.js"));
 const { divergence, describeDivergence } = require(join(REPO, ".sim-build", "src", "game", "divergence.js"));
 // The animation picker (`src/render/unitAnims.ts`) imports only a TYPE, so it compiles into the
 // sim build and can be driven headlessly against both structs -- see the equivalence block below.
@@ -671,6 +672,50 @@ console.log("a production queue reaches the panel with what each slot needs");
   // The construction pair drives the build progress bar AND the Birth-clip scrub on the model,
   // so it is read by both halves of the render switch.
   check("and the construction pair with it", [snap.building.constructionLeft, snap.building.buildTimeTotal], [0, 60]);
+}
+
+console.log("the three signals a client reads before it collapses a building (item 6d)");
+{
+  // `onDeath` no longer acts on its own sim's death event alone. It asks the payload for
+  // PERMISSION, and the payload answers with the sequence below. This pins the sequence --
+  // the renderer half that consumes it lives in rts.ts and no headless test can reach it, so
+  // what is under test here is that the host still says these three things in this order.
+  const seating = { 0: 0, 1: 1 };
+  const tower = unit({
+    id: 7, owner: 1, team: 1, typeId: "htow", x: 3000, y: 3000,
+    building: { constructionLeft: 0, buildTimeTotal: 60, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 },
+  });
+  const blind = viewer(0, seating, { fogHides: () => false, fogBlocksClick: () => true, fogBlocksAt: () => true });
+  const mem = new GhostMemory();
+  mem.noteDestroyed(tower, [{ player: 0, viewer: blind }]);
+  // The tower is GONE from the world -- this is the state right after it was razed.
+  const gone = worldOf([]);
+
+  const idx = new SnapshotIndex();
+  idx.update(snapshotFor(gone, blind, 0, 1, mem.ghostsFor(0)));
+  // 1. Still SENT, as a memory. This is the permission `onDeath` reads: the authority minted
+  //    an image precisely because this seat had no way to know, so collapsing the model would
+  //    be the client volunteering intelligence its own sim happens to hold.
+  check("razed out of sight: still sent, flagged as a memory", [idx.unit(7)?.remembered, idx.hidden(7)], [true, false]);
+  // 2. And drawn -- an image left standing is the whole point; a hidden ghost is just a leak.
+  check("...so the model keeps standing", idx.hidden(7), false);
+
+  // 3. Walk back and look. The host drops the image, and absence is what retires the entry.
+  const returned = viewer(0, seating, { fogBlocksAt: () => false });
+  mem.forgetSeen(0, returned);
+  idx.update(snapshotFor(gone, returned, 0, 2, mem.ghostsFor(0)));
+  check("re-scouted: dropped from the payload entirely", idx.unit(7), undefined);
+  check("...and absent means hidden, which is what retires the model", idx.hidden(7), true);
+
+  // The contrast case, which is the one that MUST still collapse: a viewer who was watching
+  // gets no ghost, so the building is simply absent from the first frame after its death and
+  // the client's own death event is free to play out.
+  const watcher = viewer(1, seating, { fogHides: () => false, fogBlocksClick: () => false, fogBlocksAt: () => false });
+  const seen = new GhostMemory();
+  seen.noteDestroyed(tower, [{ player: 1, viewer: watcher }]);
+  const idx2 = new SnapshotIndex();
+  idx2.update(snapshotFor(gone, watcher, 1, 1, seen.ghostsFor(1)));
+  check("razed in front of you: no image, so the collapse plays", idx2.unit(7), undefined);
 }
 
 console.log(failed === 0 ? "\nsnapshot: all checks passed" : `\nsnapshot: ${failed} FAILED`);

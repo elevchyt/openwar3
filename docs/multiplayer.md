@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) its selection panel too (10c-2c-3), and every screen-position question with them (10c-2c-4). Open: 10c-2c-5 (6d + the onDeath rework), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) its selection panel too (10c-2c-3), every screen-position question with them (10c-2c-4), and a razed building's ghost survives on its screen (10c-2c-5 / 6d — **10c closed**). Open: 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1413,8 +1413,10 @@ enumerated by body rather than by name.
    `sim:test` 386 → **392**; two injections (dropping the structures-only guard, and a drain that
    does not clear) each turn their own checks red.
 
-6d. **The local player still loses a destroyed building off its own screen.** *(Deferred to
-   land with [item 10c](#remaining-work-in-order-2), for a stated reason.)* This is a
+6d. ~~**The local player still loses a destroyed building off its own screen.**~~ **Done in
+   [10c-2c-5](#remaining-work-in-order-2)**, where it was deferred to and for the reason stated
+   below — `onDeath` asks the payload for permission before it collapses anything. *(Original
+   entry follows.)* This is a
    RENDERER-only change — `onDeath` and the corpse path — so no headless test can reach it
    (`sim:test` and `loopback` have no renderer), and staging it in a browser needs an enemy to
    raze a building you scouted and left, a two-client scenario that is expensive even with the
@@ -2074,12 +2076,50 @@ enumerated by body rather than by name.
     fix was NOT captured** — staging a build on a client through the harness was more than the
     fix was worth; it is a code-reading fix and is stated as one.
 
-10c-2c-5. **`6d` — a razed building's ghost, and the `onDeath` rework it rides in.** The last
-    piece of 10c. A structure that falls while nobody of the owner's is watching leaves a ghost
-    in the payload (6b/6c), but the RENDERER still deletes its model on the sim's death event —
-    so the client is sent an image it has already thrown away. `onDeath` currently fires off
-    `sim.drainDeaths()`, which on a client is its own sim's opinion; the model's life should
-    follow the payload the way its pose now does.
+10c-2c-5. ~~**`6d` — a razed building's ghost, and the `onDeath` rework it rides in.**~~ **Done**,
+    and it turned out to be one sentence: **a death you did not witness is not a death you may
+    animate.** `GhostMemory` mints an image only for a viewer who was NOT watching (6b), so a
+    `remembered` record still in our payload IS the authority saying "you have no way to know
+    this happened". `onDeath` asks it for permission; if the image is there it sets `ghosted`
+    and returns, and the model stands frozen (already dimmed by `drawnFromMemory`) instead of
+    collapsing.
+
+    **The local sim's death is still the TRIGGER, and that is deliberate rather than a
+    leftover.** Sequencing B means the client simulates the same match, so it learns of the
+    death at exactly the right moment. What it must not do is ACT on it. The payload is
+    consulted only for permission — which is the same shape as every other switch in 10c: the
+    client keeps its own knowledge and stops using it to answer questions that are the
+    authority's.
+
+    **Absence is what retires the model, and that fell out of 10c-2c-2 for free.** When the
+    player re-scouts the spot the host drops the image (`forgetSeen`), the id stops arriving,
+    and the entry sync's existing `undefined` branch sees it. WC3 shows rubble rather than a
+    replayed collapse, so the ghost entry is dropped without a death clip. `onRemove` and this
+    now share `dropEntry`.
+
+    **One bug avoided by construction, worth recording because it is easy to write:**
+    `dropEntry` splices `this.entries`, and splicing an array a `for…of` is walking silently
+    skips the next element. The forgotten entries are collected during the sync and retired
+    after it (`forgotten`).
+
+    **Tests: `sim:test` 484 → 489**, pinning the three signals the renderer now reads, in the
+    order it reads them — razed out of sight is still SENT and flagged as a memory (so the
+    model keeps standing), re-scouting drops it from the payload entirely (so absence retires
+    it), and the contrast case that must still collapse: razed in front of you mints no image,
+    so the client's own death event plays out. Two injections, both in `ghosts.ts`: minting a
+    ghost for a watcher (the collapse you saw stops playing), and inverting the forget rule
+    (the image is forgotten while you are blind and kept while you look).
+
+    **The VISIBLE half was NOT captured, exactly as item 6d predicted, and the reason is
+    unchanged**: it needs an enemy to raze a building you scouted and walked away from, and the
+    LAN harness has no way to destroy a building — there is no kill in the dev panel and no
+    console reaching `KillUnit`. What was checked in the browser is that nothing regressed: two
+    clients play through the relay (`stale 0, drift 0`) and the single-player minimap is
+    byte-identical to the parent (0 of 18 088). On the sim path `snapshot.active` is false, so
+    `onDeath` is untouched there by construction.
+
+    **10c is now closed.** A client draws its models, their poses, their bars, their rings, its
+    minimap dots, its selection panel, its picking and its deaths from the payload.
 
 11a. ~~**Reconnect, the relay side: a rejoin token holds the slot.**~~ **Done.** A dropped
     connection is no longer a departure. `RelayCore.disconnect` (the socket-closed path, distinct

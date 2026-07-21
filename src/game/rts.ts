@@ -196,6 +196,10 @@ interface Entry {
   insideBuild: boolean; // Orc peon inside the structure it is building (also deselects)
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (also deselects)
   devoured: boolean; // unit swallowed by a Kodo (also deselects)
+  /** This building DIED while this client could not see it, so the authority is still sending
+   *  us its last-seen image (item 6d). The model stays standing and the entry stays alive —
+   *  it is now drawn from the ghost record, not from a unit. Only ever set on a client. */
+  ghosted: boolean;
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   // Art - Animation - Walk/Run Speed (unitUI): the movement speeds the model's "Walk"/"Walk
   // Fast" clips were authored for. The walk cycle is re-rated by speed/gait — see walkAnim().
@@ -1674,6 +1678,7 @@ export class RtsController {
         insideBuild: false,
         inBurrow: false,
         devoured: false,
+      ghosted: false,
         curSeq: -1,
         animWalkSpeed: def?.animWalkSpeed ?? 0,
         animRunSpeed: def?.animRunSpeed ?? 0,
@@ -1768,6 +1773,7 @@ export class RtsController {
       insideBuild: false,
       inBurrow: false,
       devoured: false,
+      ghosted: false,
       curSeq: -1,
       animWalkSpeed: def?.animWalkSpeed ?? 0,
       animRunSpeed: def?.animRunSpeed ?? 0,
@@ -1948,6 +1954,7 @@ export class RtsController {
       insideBuild: false,
       inBurrow: false,
       devoured: false,
+      ghosted: false,
       curSeq: -1,
       animWalkSpeed: def?.animWalkSpeed ?? 0,
       animRunSpeed: def?.animRunSpeed ?? 0,
@@ -2154,6 +2161,14 @@ export class RtsController {
       // both want the same handling: hide the model and leave everything else alone.
       const u = this.frameUnit(e.simId);
       if (u === undefined) {
+        // The ghost was FORGOTTEN — this client re-scouted the spot and found empty ground, so
+        // the host dropped the image (`forgetSeen`, 6b). The entry outlived its unit only to
+        // carry that image, so it goes now. WC3 shows rubble, not a replayed collapse: the
+        // player walks back and the building is simply not there.
+        if (e.ghosted) {
+          this.forgotten.push(e); // retired after the loop — see `forgotten`
+          continue;
+        }
         if (!e.hidden) {
           e.hidden = true;
           e.unit.instance.hide();
@@ -2335,6 +2350,10 @@ export class RtsController {
         }
       }
     }
+    if (this.forgotten.length) {
+      for (const e of this.forgotten) this.dropEntry(e);
+      this.forgotten.length = 0;
+    }
     this.updateHealthBars();
     this.overlays.syncHoverTip(this.computeHoverTip());
   }
@@ -2344,6 +2363,22 @@ export class RtsController {
   private onDeath(simId: number): void {
     const e = this.byId.get(simId);
     if (!e) return;
+    // **A death you did not witness is not a death you may animate** (item 6d). The authority
+    // decides that, and it says so by continuing to send the building: `GhostMemory` mints an
+    // image only for a viewer who was NOT watching when it fell (6b), so a `remembered` record
+    // still in our payload IS the host telling us "you have no way to know this happened".
+    // Collapsing the model here would be the client volunteering intelligence its own sim
+    // happens to hold — the same class of mistake as re-deriving fog, arriving through the
+    // death event instead of through the grid.
+    //
+    // The local sim's death is still the TRIGGER, and deliberately: sequencing B means the
+    // client simulates the same match, so it learns of the death at the right moment. What it
+    // must not do is act on it. The payload is only consulted for permission.
+    const image = this.snapshot.active ? this.snapshot.unit(simId) : undefined;
+    if (image?.remembered) {
+      e.ghosted = true; // stands frozen, dimmed by `drawnFromMemory`, until the ghost is forgotten
+      return;
+    }
     // Death cry (all units, friend or foe — you hear the battlefield). Buildings
     // have no Death sound-set → resolves to nothing.
     const def = this.registry.get(e.typeId);
@@ -2376,12 +2411,25 @@ export class RtsController {
   private onRemove(simId: number): void {
     const e = this.byId.get(simId);
     if (!e) return;
-    this.byId.delete(simId);
-    this.entries.splice(this.entries.indexOf(e), 1);
-    this.deselect(simId);
-    if (this.hovered === simId) this.hovered = null;
+    this.dropEntry(e);
+  }
+
+  /** Retire one render entry: off the roster, out of the selection and the hover, model
+   *  hidden. No death clip and no corpse — this is the path for a model that simply stops
+   *  existing (a cancelled build, a forgotten ghost), not for one that dies on screen. */
+  private dropEntry(e: Entry): void {
+    this.byId.delete(e.simId);
+    const i = this.entries.indexOf(e);
+    if (i >= 0) this.entries.splice(i, 1);
+    this.deselect(e.simId);
+    if (this.hovered === e.simId) this.hovered = null;
     e.unit.instance.hide();
   }
+
+  /** Ghost entries whose image the host has just dropped, collected during the entry sync and
+   *  retired after it. Deferred because `dropEntry` splices `this.entries`, and splicing the
+   *  array a `for…of` is walking silently skips the next element. */
+  private readonly forgotten: Entry[] = [];
 
   private tickCorpses(dt: number): void {
     for (let i = this.corpses.length - 1; i >= 0; i--) {
