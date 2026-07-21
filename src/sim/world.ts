@@ -1314,7 +1314,7 @@ export class SimWorld {
    *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
   private attackReveals = new Map<string, AttackReveal>();
   // Trained units ready to spawn: the renderer creates the model + sim unit.
-  private trainCompletions: Array<{ buildingId: number; unitId: string; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
+  private trainCompletions: Array<{ buildingId: number; unitId: string; owner: number; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   // Finished research (renderer plays the "upgrade complete" sound + refreshes the card).
   private researchCompletions: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> = [];
   // Buildings that changed type this tick (Town Hall → Keep): the renderer swaps the model.
@@ -2597,7 +2597,11 @@ export class SimWorld {
           } else if (job.kind === "upgrade") {
             this.morphUnit(u, job.unitId);
           } else {
-            this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
+            // `owner` is captured HERE, at completion, not re-read at the drain: the trained
+            // unit belongs to whoever owned the building when the job finished, and on a LAN
+            // host that is a REMOTE player as often as the local one (docs/multiplayer.md
+            // Phase G item 5 — the drain used to spawn every training as `localPlayer`).
+            this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, owner: u.owner, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
           }
         }
       }

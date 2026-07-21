@@ -5765,9 +5765,14 @@ export class MapViewerScene {
       if (!d) continue;
       const [sx, sy] = this.trainSpawnSpot(t.buildingId, t.x, t.y, t.rallyX, t.rallyY, d.collision || 16, claimed);
       const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
-      this.sounds?.play(d.soundSet, "Ready"); // "unit ready" voice on completion
+      // "unit ready" voice on completion — YOUR unit, like the research chime below: on a
+      // LAN host this drain completes other players' trainings too (Phase G item 5).
+      if (t.owner === this.localPlayer) this.sounds?.play(d.soundSet, "Ready");
       const buildingId = t.buildingId;
-      void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
+      // The unit belongs to whoever owned the TRAINER, never to this machine's player —
+      // `localPlayer` here was playtest bug 4: every peon a client trained came out
+      // host-owned, ate the host's food, and leaked the host vision in the client's base.
+      void this.spawnUnit(d, sx, sy, t.owner, this.teamOf(t.owner)).then((simId) => {
         if (simId === null) return;
         this.applyRally(simId, rally);
         // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the

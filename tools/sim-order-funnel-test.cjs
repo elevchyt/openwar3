@@ -116,5 +116,25 @@ console.log("hold still dispatches out of the shift-queue");
   check("unit is holding", u.order, "hold");
 }
 
+console.log("a finished training names its OWNER (playtest bug 4)");
+{
+  // The renderer's drain used to spawn every completed training as the MACHINE's localPlayer
+  // — right in single-player, wrong on a LAN host completing a remote player's training
+  // (docs/multiplayer.md Phase G item 5). The event must carry the trainer's owner.
+  const hall = unit({
+    owner: 3, team: 1,
+    building: {
+      queue: [], constructionLeft: 0, buildTimeTotal: 60, builderIds: [],
+      rallyX: 300, rallyY: 300, rallyKind: "point", rallyTargetId: 0,
+      goldCost: 0, lumberCost: 0,
+    },
+  });
+  check("training queued", world.enqueueTrain(hall.id, "opeo", 1), true);
+  world.tickBuildings(1.5); // private in TS, a plain method at runtime — drives only the queues
+  const done = world.drainTrained();
+  check("one completion", done.length, 1);
+  check("the completion carries the TRAINER's owner, not a machine default", done[0]?.owner, 3);
+}
+
 console.log(failed === 0 ? "\norder funnel: all checks passed" : `\norder funnel: ${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);
