@@ -95,7 +95,7 @@ state.
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
 | F — the LAN punch list | **done** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). and a client leaving no longer crashes the relay (8). **All eight items are closed and the stop condition is met**: menu → Local Area Network → Create Game → join → Start → play → a natural end, with no dead room, no stuck lobby and no desync — driven clean end to end on the fixed build (see [the closing run](#the-closing-run)). Next phase: the client's local sim stops stepping and becomes a record store the snapshot writes (Open questions — decided, option 2). |
-| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1); verified on Lost Temple with four seats, where one player's defeat leaves the room up and the wire feeding. `?maps=` takes map NAMES so the harness can be pointed at a specific map (2). The six playtest bugs are reproduced and their mechanisms pinned in code (3): trained units spawn as `localPlayer` in the drain (bug 4, NOT fixed by option 2 alone), snapshot-id vs local-entry-id divergence (bugs 1/5/6, option 2's target), the rAF-pumped host sim (bug 2, unreproducible headless — needs real windows), and a healthy 10 Hz wire rendering verbatim (bug 3). Bug 2 is FIXED (4): a dedicated-Worker pump keeps a networked match's sim + spawn drains running while rAF is stopped; A/B-verified against a rAF-kill emulation (pre-fix wire froze at `received 90`; fixed build held 10 Hz and completed a training with the host's render loop dead). Bug 4 is FIXED (5): the train-completion event carries the trainer's owner and the drain spawns with it (`sim:test` 499, named red/green check); browser-verified — the client's peon is green with a full card, the host's food untouched. |
+| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1); verified on Lost Temple with four seats, where one player's defeat leaves the room up and the wire feeding. `?maps=` takes map NAMES so the harness can be pointed at a specific map (2). The six playtest bugs are reproduced and their mechanisms pinned in code (3): trained units spawn as `localPlayer` in the drain (bug 4, NOT fixed by option 2 alone), snapshot-id vs local-entry-id divergence (bugs 1/5/6, option 2's target), the rAF-pumped host sim (bug 2, unreproducible headless — needs real windows), and a healthy 10 Hz wire rendering verbatim (bug 3). Bug 2 is FIXED (4): a dedicated-Worker pump keeps a networked match's sim + spawn drains running while rAF is stopped; A/B-verified against a rAF-kill emulation (pre-fix wire froze at `received 90`; fixed build held 10 Hz and completed a training with the host's render loop dead). Bug 4 is FIXED (5): the train-completion event carries the trainer's owner and the drain spawns with it (`sim:test` 499, named red/green check); browser-verified — the client's peon is green with a full card, the host's food untouched. Option 2's sizing pass is DONE (6): `UnitSnapshot` already carries what every reader reads; the wire gaps are the recipient's stash (2d), its tech state, and shop stock — all per-recipient world lanes, all `PROTOCOL_VERSION` bumps. |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2851,6 +2851,51 @@ rather than an expedition.
    (both allocate the next id for the same unit), so the client's drawn peon is whole — the
    id-divergence family (bugs 1/5/6) still needs option 2 for anything the two machines
    create in different orders.
+
+6. **Option 2's sizing pass (2a), read-only.** Every `sim.units.get` site in `rts.ts` (55), both
+   `sim.units` iterations, all eleven `frameUnit()` consumers, every unit-record read off
+   `simWorld`/`simView` in `mapViewer.ts`, and `simView`'s own surface were inventoried for
+   WHICH `SimUnit` fields they read, then held against `UnitSnapshot`. The half-populated-record
+   risk turns out to be small on the UNIT side and real on the WORLD side.
+
+   **Unit fields: the snapshot already carries what the readers read.** The dominant reads —
+   `x`/`y` (~45 sites), `owner` (~28), `building.*` (~25), `hp` (~13), `worker.*`, `inventory`,
+   `abilities`, `buffs`, the whole `infoFor` panel block, the hero block, `garrison`,
+   `radius`, `order`/`moving`/`swingSeq`/`chopSeq`/`spawning` (entry-sync animation) — are all
+   on `UnitSnapshot` field-for-field, which is unsurprising: the type was built by reading
+   these same consumers (its own header says so). Existence-only sites (~14, e.g. `pruneSelection`,
+   `livingGroup`) keep working under 2b's create/remove semantics — "exists" becomes "was sent",
+   which is the intended meaning. The stragglers, none load-bearing:
+   - `pathStamp.fp` (building footprint corners, `mapViewer` ~2211) — re-derivable from the
+     unit DEF's `pathTex` via the registry; the record need not carry it.
+   - `path`/`waypoint` (`debugUnitPaths`) — the Show Pathing debug overlay; on a frozen client
+     sim it simply draws nothing. Accepted loss.
+   - `paused` (`simView.isUnitPaused`) and the waygate pair (`waygateIsActive`/`waygateDestination`)
+     — script/simView surfaces; moot on a client once 2e settles what happens to its script.
+   - `unsummonArt`/summon-triple WRITES from the summon drain — authority-side only; a client
+     under option 2 never drains summons.
+   - `prevX`/`prevY` did NOT show up in any reader — the Phase E note about the renderer
+     leaning on it should be re-checked once during 2b, then dropped.
+
+   **World state: three real gaps, all per-recipient, all wire changes (bump PROTOCOL_VERSION):**
+   1. **The recipient's stash** — gold, lumber, food used/cap (item 2d, already on the plan):
+      `stashFor`/`foodFor` read the LOCAL sim, so a frozen client's HUD freezes or lies.
+   2. **The recipient's TECH state** (researched upgrade levels): `techMeets` gates every
+      command-card button's requirements, and research completes in the HOST's
+      `tickBuildings` — a frozen client never learns its own Forged Swords finished, so
+      buttons stay greyed and upgrade chains stick at level 0. Needs the recipient's
+      researched-levels map in the snapshot (unit STATS already arrive correct — the host's
+      `recomputeStats` bakes upgrades into the record).
+   3. **Shop stock**: `BuildingSnapshot` deliberately withholds `stock` (it reaches the client
+      through `shopStock` on the read window — the LOCAL sim again), and stock replenishes on
+      the host's game clock. A client's shop card would freeze. Carry stock for shops the
+      recipient can see, or accept a stale card in v1 and say so.
+
+   The highest-volume readers (entry sync, `pickAt`, `updateHealthBars`, rings, hover, and
+   `mapViewer`'s `units.values()` sweeps — `updateShadowBatch`, `updateAuraEffects`,
+   `tickPendingBuild`, Blood Mage spheres) all read fields the snapshot carries, so 2b can
+   proceed: records written from `UnitSnapshot` satisfy every reader, and the three world-side
+   lanes above are the whole of what must be ADDED to the wire.
 
 ### The closing run
 
