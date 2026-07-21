@@ -77,6 +77,10 @@ function meleeConfigFor(info: MapInfo, player: number, seed: number, fog: FogMod
   return { slots, fog, seed, localPlayer: player };
 }
 
+/** Ceiling on `?maps=N`. Each map is a fetch and a mount; twenty is plenty to fill a list and
+ *  still boots in seconds, where the install's full Maps\ folder would take minutes. */
+const MAX_DEV_MAPS = 20;
+
 export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const params = new URLSearchParams(location.search);
   const want = params.get("map") ?? params.get("dev");
@@ -102,10 +106,31 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     : undefined;
   if (wantMap && !mapPath) throw new Error(`no map matching "${wantMap}" in the install`);
 
-  log(`fetching ${archives.length} archives${mapPath ? ` + ${mapPath}` : ""}…`);
+  // `?maps=N` — mount a HANDFUL of maps so the lobby has a list to choose FROM.
+  //
+  // Without this the dev boot could only ever mount a map you had already named, which meant
+  // the one screen it could never exercise was the screen where you pick one: Create Game's
+  // map list came up empty and its button stayed greyed, and there was no way to tell that
+  // apart from the feature being broken. That is not a hypothetical — it is exactly how this
+  // was found, while checking whether a LAN game could be created at all.
+  //
+  // A COUNT rather than "all" on purpose: the install holds hundreds of maps and fetching them
+  // is minutes, which would make the boot useless for the thing it exists for. The default is
+  // still zero, so every committed harness URL boots exactly as fast as it did.
+  const mapCount = Math.max(0, Math.min(MAX_DEV_MAPS, Number(params.get("maps") ?? 0) || 0));
+  // Melee maps first — they are what a LAN game is played on, and they are the ones whose
+  // player counts and previews the lobby actually renders.
+  const listed = manifest.maps
+    .filter((m) => m !== mapPath)
+    .sort((a, b) => Number(b.includes("FrozenThrone")) - Number(a.includes("FrozenThrone")))
+    .slice(0, mapCount);
+
+  const extra = listed.length ? ` + ${listed.length} map(s) for the lobby list` : "";
+  log(`fetching ${archives.length} archives${mapPath ? ` + ${mapPath}` : ""}${extra}…`);
   const files: InstallFiles = new Map();
   for (const name of archives) files.set(name.toLowerCase(), await fetchFile(name));
   if (mapPath) files.set(mapPath, await fetchFile(mapPath));
+  for (const name of listed) files.set(name, await fetchFile(name));
 
   const load = await loadProfile(files, DEFAULT_PROFILE);
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);

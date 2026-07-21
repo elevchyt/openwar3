@@ -609,6 +609,17 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    seed with different `player` values are two clients in one world, which is how the rest of this
    phase gets verified.
 
+   **`?maps=N` — added later, and the reason is a lesson about harnesses.** The boot could mount
+   a map only if you had already NAMED it, so `?dev` alone mounted none. That was right for speed
+   (the install holds hundreds; fetching them is minutes) and it left one screen permanently
+   invisible: **the screen where you choose a map.** Create Game came up with an empty list and a
+   greyed button, and there was no way to tell that apart from the feature being broken — which
+   is exactly how it was found, while checking whether a LAN game could be created at all. It
+   could: `?dev&maps=8` fills the list (Bandit Ridge, Echo Isles, Emerald Gardens, …) with player
+   counts, and Create Game is fine. Capped at 20, defaulting to 0, so every committed harness URL
+   boots exactly as fast as before. **A harness that cannot reach a screen reports that screen as
+   broken, and the report is indistinguishable from the truth.**
+
    **Gating — two independent structural gates, neither a runtime flag.** The plugin carries
    `apply: "serve"`, so Vite never loads it for `pnpm build`; `main.ts` branches on
    `import.meta.env.DEV`, a compile-time constant Vite folds to `false`, taking the dynamic
