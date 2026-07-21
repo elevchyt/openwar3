@@ -19,6 +19,10 @@ export interface HeadlessOptions {
    *  `GetLocalPlayer` block (item 7b). Empty by default: a headless run with no engine has no
    *  world to protect. */
   worldWritingHooks?: Iterable<string>;
+  /** Which of `hooks`' entries write THIS MACHINE'S SCREEN — also refused during that re-run,
+   *  because an extra pass is by definition not for the person sitting here (see
+   *  `Runtime.localViewHooks`). Empty by default: a headless run has no screen either. */
+  localViewHooks?: Iterable<string>;
   seed?: number;
   /** Raw war3map.wts text — the map's trigger-string table (resolves TRIGSTR_nnn). */
   wts?: string;
@@ -31,6 +35,7 @@ export function buildInterpreter(sources: string[], opts: HeadlessOptions = {}):
   rt.gameType = opts.gameType ?? 4;
   rt.hooks = opts.hooks ?? null;
   if (opts.worldWritingHooks) rt.worldWritingHooks = new Set(opts.worldWritingHooks);
+  if (opts.localViewHooks) rt.localViewHooks = new Set(opts.localViewHooks);
   if (opts.wts) for (const [id, text] of parseWts(opts.wts)) rt.trigStrings.set(id, text);
   registerNatives(rt);
   const interp = new Interpreter(rt);

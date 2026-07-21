@@ -94,7 +94,7 @@ state.
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
-| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. Relay liveness done (1) — a peer that dies without closing is pinged out and its room delisted, so dead rooms stop haunting the game list. Next: drive the whole real two-window flow (2). |
+| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. Relay liveness done (1); the whole real two-window flow driven end to end, menu → lobby → match (2); the opening camera no longer opens on the last seat's base (3). Open: a client in a real lobby match receives no snapshots (4). |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2361,9 +2361,69 @@ each break is its own item, not a bigger commit.
    produce on one machine (killing the process closes its sockets at the OS layer) is exactly the
    case `_socket.pause()` covers. A tab reload still reaps instantly, as it always did.
 
-2. **Drive the whole real flow, two windows.** Create Game → pick map → the other window sees the
-   room → Join → both in the lobby → Start → both in the match → play. Not yet driven end to end
-   even once. Each break becomes its own item below.
+2. ~~**Drive the whole real flow, two windows.**~~ **Driven, and it works as far as the match.**
+   Main menu → Local Area Network → Create Game → the map list → Echo Isles → Create → the second
+   window sees `Player's Game 1/2` → select → the summary pane fills from ITS OWN install → Join →
+   both rosters read `Player (host)` / `Player`, 2/2 → Start → **both windows in the same match**.
+   Two breaks fell out, each its own item: the opening camera (3, fixed) and the snapshot pipe
+   (4, open).
+
+   One thing that is NOT a product bug, recorded because it cost twenty minutes: the games list
+   showed a full, unjoinable `dev-lan 2/2`. It was real, and it was *mine* — leftover
+   `agent-browser` daemons from an earlier session, still holding two live pages that reconnected
+   to the relay and re-hosted. Their sockets answered pings, so item 1's heartbeat correctly left
+   the room alone. **A live room from a browser you forgot you had open is indistinguishable, in
+   the lobby, from a dead one.** Kill the stale daemons before reading the games list.
+
+3. ~~**Both players' cameras opened on the LAST seat's base.**~~ **Fixed.** The host started every
+   match looking at an empty enemy island while its own town hall stood off-camera; the client got
+   the right view by luck, being the last seat. Also reproduced in single player, which is what
+   proved it was not a LAN bug at all.
+
+   **The cause is item 7b's own mechanism, used for something it does not fit.** blizzard.j calls
+   `SetCameraPositionForPlayer(p, x, y)` once per player at every melee start, and that BJ is a
+   `GetLocalPlayer` gate. Since 7b such a gate is re-evaluated once per recipient — correct, and
+   the whole point — and the extra passes are muzzled for WORLD writes. A camera move is not a
+   world write, so it went through: one pass per seat, each moving the one camera that is actually
+   here, last one wins. Probed live rather than reasoned about: `SetCameraPosition -5448,3322
+   viewer=0 local=0` then `SetCameraPosition 4936,3322 viewer=1 local=0`, on a single-player boot.
+
+   **`Runtime.localViewHooks` is the fix, and it is the world-write muzzle's twin.** Hooks that
+   write THE VIEW IN FRONT OF THE PERSON AT THIS MACHINE — the camera family, the cinematic filter,
+   the letterbox, user control, a ping — are refused in an extra pass too, and for a sharper
+   reason: that pass is being evaluated *as somebody who is not sitting here*, and there is only
+   one screen. Refused **silently**, unlike a world write: a world write inside the gate is a map
+   breaking Blizzard's contract and earns the console line, while a camera move inside it is the
+   contract being honoured — presentation is exactly what that gate is for — and the only thing
+   wrong with it is the address on the envelope.
+
+   **Named by the renderer, computed not transcribed**, exactly as `worldWritingHookNames` is:
+   `MapViewerScene.localViewHooks()` is now its own factory spread into `textHooks`, and
+   `Object.keys` of it IS the refusal list, so it cannot drift from the table it describes. Only
+   WRITERS moved. The camera READERS (`cameraField`, `cameraTarget`, `cameraEye`, `cameraBounds`)
+   stayed behind deliberately: a muzzled reader would take a different BRANCH in a per-recipient
+   pass rather than skip a picture, and where this machine's camera is pointing is the same fact
+   whoever is being evaluated.
+
+   **Tests: `jass:test` audience 20 → 23.** A gate naming another seat now moves nothing here; the
+   host's own pass still moves the camera (seat the host AS the named player — without this half
+   the fix could be "never move the camera" and pass); and an UNGATED move still lands, so
+   "classified" cannot quietly come to mean "disabled". The injection — the muzzle passing the
+   hook through instead of stubbing it — turns the first of those red and leaves the other two
+   green, which is the bug exactly.
+
+   **Verified in the browser, both paths, with the before shot in hand.** Single player on Echo
+   Isles as slot 0: before, an empty island; after, the town hall and five peasants. Then the real
+   two-window LAN flow end to end: the host on its own base, the client on its own base, in the
+   same match. The renderer's half of this (that it declares the set at all) is browser-verified
+   only — `mapViewer` cannot be loaded headlessly — and that is stated rather than papered over.
+
+4. **A client in a real lobby match receives NO snapshots.** Found immediately after 3, in the same
+   run: host `sent 685`, client `received 0` across 94 heartbeats, both windows otherwise fine and
+   both simulating. The scripted `lan=host`/`lan=join` boot was proved end to end in Phase E, so
+   something the REAL lobby assembles differs from what `devBoot` assembles — `matchLinkFrom` is
+   shared, which narrows it to what is passed in (`lobby.isHost`, the slot table, `me`, `hostPeer`)
+   or to when `attachMatchLink` runs relative to `startGame`. Next item.
 
 ### JASS
 

@@ -1417,6 +1417,80 @@ export class MapViewerScene {
     return Object.keys(this.rts?.worldHooks((p) => this.teamOf(p)) ?? {});
   }
 
+  /**
+   * The hooks that write THE VIEW IN FRONT OF THE PERSON AT THIS MACHINE.
+   *
+   * A set of their own because the interpreter has to be able to refuse them. A
+   * `GetLocalPlayer` gate is re-run once per recipient (item 7b), and every hook below acts on
+   * the one screen that is actually here — so letting them through in a pass evaluated as
+   * somebody else means the LAST recipient silently wins. That is not hypothetical: blizzard.j
+   * calls `SetCameraPositionForPlayer` once per player at every melee start, so a two-player
+   * match opened both machines on the last seat's base and the host spent the opening seconds
+   * looking at an empty enemy island (docs/multiplayer.md Phase F item 3).
+   *
+   * Only WRITERS. The camera readers stay in `textHooks` — see the note there.
+   *
+   * `localViewHookNames()` is `Object.keys` of this, so the refusal list is computed from the
+   * table it describes and cannot drift from it — the same discipline `worldWritingHookNames`
+   * follows.
+   */
+  private localViewHooks(): Partial<EngineHooks> {
+    return {
+      // --- cameras + cinematics (7.24) ---
+      // Every camera MOVE is one call: the script names fields and (maybe) a destination,
+      // and ScriptCamera blends the live camera there. It used to say here that the …ForPlayer
+      // BJs had already gated on GetLocalPlayer so anything arriving was for the human at this
+      // machine — that stopped being true the day a gate began re-running per recipient, and
+      // the refusal above is what makes it true again.
+      // read → mutate → WRITE BACK. A zero-duration move lands NOW (see ScriptCamera.apply),
+      // and the very next line of Monolith's trigger reads the camera straight back through
+      // ResetToGameCamera — it must see the shot the line before it just applied.
+      applyCamera: (move) => {
+        const cam = this.readCamera();
+        this.scriptCam.apply(move, cam);
+        this.writeCamera(cam);
+      },
+      setCameraTargetUnit: (id, xOff, yOff) => {
+        this.cameraLock = false; // the script's controller replaces the portrait's follow-lock
+        this.scriptCam.setTargetUnit(id, xOff, yOff);
+      },
+      resetToGameCamera: (duration) => this.scriptCam.resetToGameCamera(duration, this.readCamera()),
+      stopCamera: () => this.scriptCam.stop(),
+      cameraRotateMode: (x, y, radians, duration) => this.scriptCam.setRotateMode(x, y, radians, duration, this.readCamera()),
+      setCameraNoise: (source, mag, vel, vertOnly) => this.scriptCam.setNoise(source, mag, vel, vertOnly),
+      // ShowInterface(false) is the letterbox: the console goes, the bars come in.
+      showInterface: (show, fade) => {
+        this.interfaceShown = show;
+        this.cinematic?.setLetterbox(!show, fade);
+        this.syncHudVisible();
+      },
+      enableUserControl: (enable) => {
+        this.userControl = enable;
+        if (!enable) {
+          this.rts?.clearSelection(); // a cinematic runs with nothing selected, as in WC3
+          this.hud?.clearOrderMode();
+        }
+      },
+      displayCineFilter: (filter) => this.cinematic?.setFilter(filter),
+      setCinematicScene: (scene) => {
+        if (this.cinematic?.setScene(scene) && scene) void this.loadCinematicPortrait(scene.portraitUnitId);
+      },
+      pingMinimap: (ping) => this.hud?.ping(ping),
+      // --- melee from the script (7.3) ---
+      // MeleeStartingUnits* frames the view on the starting WORKERS, not the hall.
+      setCameraPosition: (x, y) => {
+        this.target[0] = x;
+        this.target[1] = y;
+      },
+    };
+  }
+
+  /** The names of the hook entries that write THIS MACHINE'S SCREEN — `Object.keys` of the
+   *  table itself, so it cannot drift (see `localViewHooks`). */
+  private localViewHookNames(): string[] {
+    return Object.keys(this.localViewHooks());
+  }
+
   private textHooks(): EngineHooks {
     // The world/authority half, built once so the two DUAL-WRITER natives below can call back
     // into it. `SetUnitOwner` and `SetUnitFlyHeight` each write the world AND the model, and the
@@ -1557,17 +1631,12 @@ export class MapViewerScene {
       addSpecialEffectTarget: (path, unitId, attach) => this.addSpecialEffectTarget(path, unitId, attach),
       destroyEffect: (id) => this.destroySpecialFx(id),
       // --- cameras + cinematics (7.24) ---
-      // Every camera MOVE is one call: the script names fields and (maybe) a destination,
-      // and ScriptCamera blends the live camera there. The …ForPlayer BJs already gated on
-      // GetLocalPlayer, so anything arriving here is for the human at this machine.
-      // read → mutate → WRITE BACK. A zero-duration move lands NOW (see ScriptCamera.apply),
-      // and the very next line of Monolith's trigger reads the camera straight back through
-      // ResetToGameCamera — it must see the shot the line before it just applied.
-      applyCamera: (move) => {
-        const cam = this.readCamera();
-        this.scriptCam.apply(move, cam);
-        this.writeCamera(cam);
-      },
+      // The WRITERS live in `localViewHooks` — see there for why they are a set of their own.
+      ...this.localViewHooks(),
+      // The camera READERS stay here: they answer a question rather than change a picture, and
+      // a muzzled reader would take a different BRANCH in a per-recipient pass, not just skip
+      // a move. `GetCameraTargetPositionX` must answer the same thing whoever is being
+      // evaluated — it is a fact about this machine's camera either way.
       cameraField: (field) => {
         const cam = this.readCamera();
         return [cam.distance, cam.farZ, cam.aoaDeg, cam.fovDeg, cam.rollDeg, cam.rotationDeg, cam.zOffset][field] ?? 0;
@@ -1585,27 +1654,6 @@ export class MapViewerScene {
         const b = this.mapBounds ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
         return { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY };
       },
-      setCameraTargetUnit: (id, xOff, yOff) => {
-        this.cameraLock = false; // the script's controller replaces the portrait's follow-lock
-        this.scriptCam.setTargetUnit(id, xOff, yOff);
-      },
-      resetToGameCamera: (duration) => this.scriptCam.resetToGameCamera(duration, this.readCamera()),
-      stopCamera: () => this.scriptCam.stop(),
-      cameraRotateMode: (x, y, radians, duration) => this.scriptCam.setRotateMode(x, y, radians, duration, this.readCamera()),
-      setCameraNoise: (source, mag, vel, vertOnly) => this.scriptCam.setNoise(source, mag, vel, vertOnly),
-      // ShowInterface(false) is the letterbox: the console goes, the bars come in.
-      showInterface: (show, fade) => {
-        this.interfaceShown = show;
-        this.cinematic?.setLetterbox(!show, fade);
-        this.syncHudVisible();
-      },
-      enableUserControl: (enable) => {
-        this.userControl = enable;
-        if (!enable) {
-          this.rts?.clearSelection(); // a cinematic runs with nothing selected, as in WC3
-          this.hud?.clearOrderMode();
-        }
-      },
       // SetGameSpeed is RECORDED, not applied: WC3's five speeds are engine constants that
       // live in no data file we have, and guessing a multiplier would be exactly the kind of
       // invented number CLAUDE.md forbids. Recording it is still load-bearing — cinematic
@@ -1615,17 +1663,6 @@ export class MapViewerScene {
         this.gameSpeed = speed;
       },
       getGameSpeed: () => this.gameSpeed,
-      displayCineFilter: (filter) => this.cinematic?.setFilter(filter),
-      setCinematicScene: (scene) => {
-        if (this.cinematic?.setScene(scene) && scene) void this.loadCinematicPortrait(scene.portraitUnitId);
-      },
-      pingMinimap: (ping) => this.hud?.ping(ping),
-      // --- melee from the script (7.3) ---
-      // MeleeStartingUnits* frames the view on the starting WORKERS, not the hall.
-      setCameraPosition: (x, y) => {
-        this.target[0] = x;
-        this.target[1] = y;
-      },
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
       // --- items (7.18) ---
@@ -1722,6 +1759,7 @@ export class MapViewerScene {
         runMain: true,
         hooks: this.textHooks(),
         worldWritingHooks: this.worldWritingHookNames(),
+        localViewHooks: this.localViewHookNames(),
         lobby,
         // Publish the engine BEFORE config()/main() run: a hook fired during init may need
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).

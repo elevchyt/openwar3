@@ -70,8 +70,10 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "GetTimeOfDayScale", (c) => jReal(c.rt.timeOfDayScale));
 
   // --- the camera (MeleeStartingUnits* frames the starting workers, not the hall) ---
-  // The …ForPlayer BJs already gate on GetLocalPlayer, so a call reaching here is for the
-  // human at this machine.
+  // The …ForPlayer BJs gate on GetLocalPlayer — and since item 7b that gate is re-run once per
+  // recipient, so a call reaching here is for whoever `localViewer` currently says. Which one
+  // of those passes is allowed to move the real camera is settled at the HOOK, by
+  // `Runtime.localViewHooks`: the extra passes get a stub.
   def(rt, "SetCameraPosition", (c, a) => (c.rt.hooks?.setCameraPosition?.(asNum(a[0]), asNum(a[1])), JNULL));
   def(rt, "SetCameraQuickPosition", (c, a) => (c.rt.hooks?.setCameraPosition?.(asNum(a[0]), asNum(a[1])), JNULL));
 

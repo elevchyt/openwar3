@@ -1146,6 +1146,30 @@ export class Runtime {
    */
   worldWritingHooks: ReadonlySet<string> = new Set();
 
+  /**
+   * Hook names that WRITE THE VIEW IN FRONT OF THE PERSON AT THIS MACHINE — the camera, the
+   * cinematic filter, the letterbox, a minimap ping.
+   *
+   * These are refused in an extra pass for the same reason world writes are, and the reason is
+   * sharper: an extra pass is being evaluated as somebody who is NOT sitting here, and every
+   * one of these hooks acts on the one screen that is. Letting them through means the last
+   * recipient in `viewers()` order silently wins the local camera — which is exactly what
+   * happened: on every melee start blizzard.j calls `SetCameraPositionForPlayer` once per
+   * player, so a two-player match opened BOTH machines on the LAST seat's base. The host, seat
+   * 0, sat looking at seat 1's island with an empty screen while its own town hall stood
+   * off-camera (docs/multiplayer.md Phase F item 3).
+   *
+   * Refused SILENTLY, unlike a world write. A world write inside a `GetLocalPlayer` gate is a
+   * map breaking Blizzard's own contract and deserves the console line; a camera move inside
+   * one is the contract being HONOURED — presentation is exactly what that gate is for — and
+   * the only thing wrong with it is the address on the envelope. Warning about it would print
+   * on every melee start of every map.
+   *
+   * Named by the owner rather than derived here, for the same reason `worldWritingHooks` is:
+   * the interpreter must not learn which of its natives reach a renderer.
+   */
+  localViewHooks: ReadonlySet<string> = new Set();
+
   private engineHooks: EngineHooks | null = null;
   private muzzled: EngineHooks | null = null;
 
@@ -1168,6 +1192,12 @@ export class Runtime {
     if (!h) return null;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(h)) {
+      // A local-view write is dropped without a word — see localViewHooks for why it is not a
+      // map's fault. Checked first so a hook that is somehow in both sets stays quiet.
+      if (this.localViewHooks.has(k)) {
+        out[k] = () => undefined;
+        continue;
+      }
       if (!this.worldWritingHooks.has(k)) {
         out[k] = v;
         continue;

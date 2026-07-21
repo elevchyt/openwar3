@@ -72,6 +72,11 @@ export function loadMapScript(
      *  not learn which natives touch a sim, and the caller already has the answer as the key set
      *  of the table it just composed — computed, so it cannot drift from the table. */
     worldWritingHooks?: Iterable<string>;
+    /** Which of `hooks`' entries write THE VIEW IN FRONT OF THIS MACHINE'S PLAYER — the camera,
+     *  the cinematic filter, the letterbox, a ping. Refused in the same re-run, and for a
+     *  sharper reason: that pass is being evaluated as somebody who is not sitting here. Same
+     *  computed-key-set discipline as `worldWritingHooks`. */
+    localViewHooks?: Iterable<string>;
     runMain?: boolean;
     lobby?: { slots: ReadonlyArray<LobbySlot>; localPlayer: number };
     /** Called with the booted engine BEFORE config()/main() run, so the host can publish
@@ -90,7 +95,10 @@ export function loadMapScript(
   // works — better than nothing).
   const wts = readUtf8(map, "war3map.wts", "scripts\\war3map.wts") ?? undefined;
   const sources = [common, blizzard, mapJ].filter((s): s is string => s !== null);
-  const interp = buildInterpreter(sources, { gameType: opts.melee ? 1 : 4, hooks: opts.hooks, worldWritingHooks: opts.worldWritingHooks, wts });
+  const interp = buildInterpreter(sources, {
+    gameType: opts.melee ? 1 : 4, hooks: opts.hooks,
+    worldWritingHooks: opts.worldWritingHooks, localViewHooks: opts.localViewHooks, wts,
+  });
   const engine: MapScriptEngine = { interp, setup: interp.rt.setup };
   opts.onBoot?.(engine);
   interp.run("config", []);

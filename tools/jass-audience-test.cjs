@@ -249,5 +249,55 @@ console.log("\nalready inside a forAudience, the gate does not fan out again");
   check("one pass, for the audience already set", JSON.stringify(cam), '["1000,2000/5"]');
 }
 
+// ---------------------------------------------------------------------------------------
+// Phase F item 3: a hook that writes THE SCREEN IN FRONT OF THIS MACHINE is refused in an
+// extra pass, exactly as a world write is — and for a sharper reason. The extra pass is being
+// evaluated as somebody who is NOT sitting here, and there is only one camera.
+//
+// Found by driving a real two-window LAN game: blizzard.j calls SetCameraPositionForPlayer
+// once per player at every melee start, the gate re-ran per recipient, and the LAST seat won.
+// Both machines opened on seat 1's base — which the client got away with and the host did not.
+// ---------------------------------------------------------------------------------------
+
+console.log("\na camera move for somebody else's screen does not move MINE (item F3)");
+{
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const cam = [];
+  rt.hooks = { setCameraPosition: (x, y) => cam.push(`${x},${y}/${rt.localViewer}`) };
+  rt.localViewHooks = new Set(["setCameraPosition"]);
+  interp.callFunction("GatedCamera", []);
+  // The gate names player 5; the human here is player 0. Before this, 5's pass reached the
+  // hook and moved the camera on player 0's monitor.
+  check("the gate is true for 5, so nothing happens here", JSON.stringify(cam), "[]");
+  rt.localViewHooks = new Set();
+}
+
+console.log("\n…and the host's OWN pass still moves it");
+{
+  // The other half, and the half that stops the fix from being "never move the camera".
+  // The gate has to be true for the person at the keyboard: seat the host AS player 5.
+  rt.applyLobby([seat(0), seat(5), seat(9)], 5);
+  const cam = [];
+  rt.hooks = { setCameraPosition: (x, y) => cam.push(`${x},${y}/${rt.localViewer}`) };
+  rt.localViewHooks = new Set(["setCameraPosition"]);
+  interp.callFunction("GatedCamera", []);
+  // Once, from the unmuzzled host pass — a melee start must still frame your own base.
+  check("it fires once, for the human at this machine", JSON.stringify(cam), '["1000,2000/5"]');
+  rt.localViewHooks = new Set();
+}
+
+console.log("\nthe refusal is scoped to the extra passes, not to the hook");
+{
+  // An UNGATED camera move never fans out, so it is never in a muzzled pass and must land
+  // even while the hook is classified. Otherwise "classified" would quietly mean "disabled".
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const cam = [];
+  rt.hooks = { setCameraPosition: (x, y) => cam.push(`${x},${y}`) };
+  rt.localViewHooks = new Set(["setCameraPosition"]);
+  interp.callFunction("Ungated", []);
+  check("an ungated move still lands", JSON.stringify(cam), '["7,7"]');
+  rt.localViewHooks = new Set();
+}
+
 console.log(failed ? `\naudience: ${failed} FAILED` : "\naudience: all checks passed");
 process.exit(failed ? 1 : 0);
