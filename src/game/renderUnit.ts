@@ -30,6 +30,36 @@ export interface RenderWeapon {
   readonly backswing: number;
   readonly baseDamagePoint: number;
   readonly baseBackswing: number;
+  /** The selection panel's damage line: `damage + dice` to `damage + dice*sides`, with the
+   *  buff/aura portion split out against the unit's `bonusDamage` (item 10c-2c-3). */
+  readonly damage: number;
+  readonly dice: number;
+  readonly sides: number;
+}
+
+/**
+ * One production-queue slot, as the HUD reads it.
+ *
+ * `BuildJob` is a discriminated union of three shapes (unit / research / upgrade) and the panel
+ * only ever asks four things of a slot: what kind it is, what it names, which LEVEL (research
+ * has its own art per level), and how far along it is. Flattened to one shape with `level`
+ * optional, because narrowing a union across the sim/wire boundary would make the panel care
+ * which side it was reading from — which is the whole thing this type exists to prevent.
+ */
+export interface RenderBuildJob {
+  readonly kind: string;
+  readonly unitId: string;
+  readonly level?: number;
+  readonly timeLeft: number;
+  readonly buildTime: number;
+}
+
+/** What the HUD's status row reads off one buff — its non-stacking key and what kind of thing
+ *  it is. The magnitudes, the timers and the attached-model list are the sim's and the effect
+ *  layer's; neither is a row of icons. */
+export interface RenderBuff {
+  readonly kind: string;
+  readonly group: string;
 }
 
 /** The unit, as the render path reads it. */
@@ -82,6 +112,30 @@ export interface RenderUnit {
   readonly ethereal: boolean;
   readonly invisible: boolean;
 
+  // --- the selection panel's readout (item 10c-2c-3) --------------------------
+  // The numbers the HUD prints when you click a unit. They arrived a slice later than the
+  // frame's because a panel is drawn at a FIXED place in the HUD: it shares no position with
+  // the model, so it is not frame-atomic with it and could wait.
+  readonly armor: number;
+  readonly bonusArmor: number;
+  readonly bonusDamage: number;
+  readonly invulnerable: boolean;
+  readonly xp: number;
+  readonly skillPoints: number;
+  readonly str: number;
+  readonly agi: number;
+  readonly int: number;
+  readonly bonusStr: number;
+  readonly bonusAgi: number;
+  readonly bonusInt: number;
+  /** Summon timer. Masked with the illusion tell on the wire — an enemy clicking a Mirror
+   *  Image must see an ordinary hero, and a ticking expiry bar is itself the answer. */
+  readonly isSummon: boolean;
+  readonly summonLeft: number;
+  readonly summonMax: number;
+  /** The status row's icons. `SimBuff` is a plain data record and crosses whole. */
+  readonly buffs: readonly RenderBuff[];
+
   // --- animation -------------------------------------------------------------
   readonly spawning: number;
   readonly moving: boolean;
@@ -107,7 +161,7 @@ export interface RenderUnit {
    *  whether it is non-empty (the "Stand Work" clip); the construction pair scrubs the Birth
    *  clip to the build timer. */
   readonly building: {
-    readonly queue: readonly unknown[];
+    readonly queue: readonly RenderBuildJob[];
     readonly constructionLeft: number;
     readonly buildTimeTotal: number;
   } | null;

@@ -54,6 +54,8 @@ export function hiddenFromSnapshot(u: UnitSnapshot | undefined): boolean {
  * keep the sim path: single-player (no link), the host (it never receives) and a client that
  * has connected but not yet been sent a frame.
  */
+const EMPTY: readonly UnitSnapshot[] = [];
+
 export class SnapshotIndex {
   private snap: WorldSnapshot | null = null;
   private readonly byId = new Map<number, UnitSnapshot>();
@@ -73,6 +75,13 @@ export class SnapshotIndex {
 
   unit(id: number): UnitSnapshot | undefined {
     return this.byId.get(id);
+  }
+
+  /** Every unit in the payload, for the consumers that walk it rather than look one up — the
+   *  minimap dots. Empty when no snapshot has arrived, so a caller can switch on `active`
+   *  alone and never ask the transport a second time. */
+  get units(): readonly UnitSnapshot[] {
+    return this.snap ? this.snap.units : EMPTY;
   }
 
   /** @see hiddenFromSnapshot — the authority's answer, not a second derivation of the grid. */

@@ -3225,7 +3225,12 @@ export class RtsController {
   }
 
   private infoFor(id: number): SelectionInfo | null {
-    const u = this.sim.units.get(id);
+    // The authority's numbers, not our own prediction of them (item 10c-2c-3). A panel is
+    // drawn at a fixed place in the HUD rather than over the terrain, so this could wait for
+    // its own slice — but "how much health does my hero actually have" is exactly the question
+    // a client must not answer for itself, and now it does not. The panel steps at the
+    // snapshot's 10 Hz rather than the frame's 60; that IS the rate at which the host knows.
+    const u = this.frameUnit(id);
     const e = this.byId.get(id);
     if (!u || !e) return null;
     const w = u.weapon;
@@ -3282,7 +3287,10 @@ export class RtsController {
       // from the registry that owns it. Research uses the icon of the LEVEL being researched
       // (Steel Forged Swords has its own art), which is why the level rides on the job.
       queue: q.map((j) => ({
-        icon: (j.kind === "research" ? this.upgrades.icon(j.unitId, j.level) : this.registry.get(j.unitId)?.icon) ?? "",
+        // `level` is optional on `RenderBuildJob` because only a research slot carries one;
+        // the `?? 0` is unreachable for `kind === "research"` and is here so the flattened
+        // shape needs no cast back to the union it came from.
+        icon: (j.kind === "research" ? this.upgrades.icon(j.unitId, j.level ?? 0) : this.registry.get(j.unitId)?.icon) ?? "",
       })),
       icon: this.registry.get(e.typeId)?.icon ?? "",
       carryGold: u.worker?.carryGold ?? 0,
@@ -3295,8 +3303,12 @@ export class RtsController {
       // but only to the side that owns it and their allies. Click an enemy's image and it
       // must look like an ordinary Blademaster: a timer bar over one of four identical
       // heroes would hand the opponent the answer the ability exists to hide.
-      isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.seesFor(u.owner)),
-      isIllusion: u.isIllusion && this.seesFor(u.owner), // same viewpoint rule as the tint
+      // Already viewpoint-resolved on the wire — item 5 masks the illusion bit AND the whole
+      // summon triple with it, so an enemy's payload reports an ordinary hero with no expiry.
+      // A client re-applying `seesFor` here would be a client deciding for itself which units
+      // are illusions; on the sim path the local viewpoint is still what knows.
+      isSummon: u.isSummon && u.summonLeft > 0 && (!u.isIllusion || this.snapshot.active || this.seesFor(u.owner)),
+      isIllusion: u.isIllusion && (this.snapshot.active || this.seesFor(u.owner)), // same viewpoint rule as the tint
 
       summonSecondsLeft: Math.max(0, Math.ceil(u.summonLeft)),
       summonFrac: u.summonMax > 0 ? Math.max(0, Math.min(1, u.summonLeft / u.summonMax)) : 0,
@@ -3306,7 +3318,7 @@ export class RtsController {
 
   /** Active buffs/auras/debuffs on a unit, de-duped by source, resolved to an icon
    *  + name for the HUD status row. Aura buffs carry their base code in `group`. */
-  private statusBuffsFor(u: SimUnit): Array<{ icon: string; name: string; harmful: boolean }> {
+  private statusBuffsFor(u: RenderUnit): Array<{ icon: string; name: string; harmful: boolean }> {
     if (!u.buffs.length) return [];
     const out: Array<{ icon: string; name: string; harmful: boolean }> = [];
     const seen = new Set<string>();
@@ -3794,10 +3806,10 @@ export class RtsController {
   dots(vp: Viewpoint = this.local): Array<{ x: number; y: number; owner: number }> {
     // On a CLIENT, draw the authority's answer, not our own prediction (item 10c). A received
     // snapshot is already AoI-filtered for this seat, so `dotsFromSnapshot` re-applies no fog —
-    // it draws what it was sent. `latest()` is non-null only on a client that has received one:
-    // the host never receives, single-player has no link, and both keep the sim path below.
-    const snap = this.matchLink?.latest();
-    if (snap) return dotsFromSnapshot(snap.units);
+    // it draws what it was sent. Through the SAME `SnapshotIndex` the frame reads (item
+    // 10c-2c-3): two independent readers of "have I been sent a world?" is how the minimap and
+    // the models end up disagreeing about which tick they are drawing.
+    if (this.snapshot.active) return dotsFromSnapshot(this.snapshot.units);
     return minimapDots(this.sim, vp);
   }
 

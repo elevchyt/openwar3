@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2). Open: 10c-2c-3 (the panel readouts, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) and its selection panel too (10c-2c-3). Open: 10c-2c-4 (the input/order sites, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1993,13 +1993,54 @@ enumerated by body rather than by name.
     the no-regression half for the sim path this touches everywhere. The agent-browser daemon
     wedged once and needed a PID kill; known fragility, not a finding.
 
-10c-2c-3. **The panel readouts: `infoFor`, the command card, the selection panel.** What is left
-    of `sim.units.get` in `rts.ts` (60 sites, most of them input handling and order issuing
-    rather than drawing). These are drawn at a fixed place in the HUD, so they are NOT
-    frame-atomic with the above and can go one at a time. Watch for the ones that are really
-    INPUT (what may I click, where may I build) rather than output — those ask a different
-    question and may not want `frameUnit` at all. `6d` (a razed building's ghost) rides in the
-    slice that reworks `onDeath`.
+10c-2c-3. ~~**The selection panel reads the authority's numbers.**~~ **Done.** `infoFor` — the
+    HUD's whole readout, ~24 fields — goes through `frameUnit` now, so on a client "how much
+    health does my hero actually have" is answered by the host rather than by the client's own
+    prediction of it. The panel steps at the snapshot's 10 Hz rather than the frame's 60, and
+    that is not a compromise: it is the rate at which the authority knows.
+
+    **The illusion gate came off, in two more places.** `isSummon` and `isIllusion` on the panel
+    were both `&& this.seesFor(u.owner)`. Item 5 already masks the illusion bit AND the whole
+    summon triple per recipient, so on the snapshot path an enemy's payload reports an ordinary
+    hero with no expiry and the reader needs no viewpoint. Same correction as `applyFogTint`'s
+    in the previous slice — that makes three reader-side filters retired in favour of the mask
+    at the source, which is what `docs/illusions.md` asks for.
+
+    **`RenderUnit` needed two new SHAPES, not just fields, and both are flattenings.**
+    `RenderWeapon` grew `damage`/`dice`/`sides` for the damage line (the animation half never
+    reads them). And `RenderBuildJob` flattens `BuildJob`'s three-way union to one shape with
+    `level` optional — narrowing a discriminated union across the sim/wire boundary would make
+    the panel care which side it was reading from, which is precisely what this type exists to
+    prevent. `RenderBuff` is narrower still: the status row is a list of icons, so it takes
+    `kind` and the non-stacking `group` and leaves the magnitudes, timers and attached-model
+    list behind.
+
+    **The tidy owed by 10c-2c-2 is paid.** `dots()` asked `matchLink?.latest()` on its own; it
+    now reads the same `SnapshotIndex` the frame does (`units` accessor). `matchLink?.latest()`
+    appears **once** in `rts.ts` — two independent readers of "have I been sent a world?" is how
+    the minimap and the models end up drawing different ticks.
+
+    **Tests: `sim:test` 478 → 484**, and the shape is a FIELD LIST rather than an equality.
+    Twenty-four panel scalars compared name by name against the sim record the snapshot was
+    built from, plus the damage line's three weapon numbers, the buff row, the carry readout,
+    and a three-slot production queue checked in order and whole. That list is the point: adding
+    a field to the panel means adding it here, and a producer that silently stops carrying one
+    prints a zero on a client while every other check stays green. Two injections — `bonusStr`
+    stops crossing (named exactly, `["bonusStr"]`), and the queue arrives empty (three checks
+    red across two files, because the Birth-clip scrub reads the same pair).
+
+    **Verified with two clients: the panel on the CLIENT is drawn from the payload** — Peon,
+    250/250, Damage 7-8, Armor 0, command card populated — which are the real 1.27a numbers, off
+    the wire. Single-player minimap byte-identical to the parent (0 of 18 088).
+
+10c-2c-4. **What is left of `sim.units.get` in `rts.ts` — 59 sites, and most of them are not
+    reads at all.** They are INPUT and ORDER ISSUING: what may I click, where may I build, which
+    unit did this order name. Those ask a different question from "what do I draw", and the
+    answer is probably NOT `frameUnit` — an order is aimed with the local sim's ids and judged
+    by the host, so a client asking the payload "may I click this" would be asking the wrong
+    oracle. **Classify before converting**; the doc's own rule (what do the consumers actually
+    read) has been right every time here. `6d` (a razed building's ghost) rides in the slice that
+    reworks `onDeath`.
 
 11a. ~~**Reconnect, the relay side: a rejoin token holds the slot.**~~ **Done.** A dropped
     connection is no longer a departure. `RelayCore.disconnect` (the socket-closed path, distinct

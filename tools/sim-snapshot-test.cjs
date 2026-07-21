@@ -613,5 +613,65 @@ console.log("the animation picker answers the same off the payload as off the si
   check("the states reach distinct branches", clips.size >= 7, true);
 }
 
+console.log("every number the selection panel prints survives the trip (item 10c-2c-3)");
+{
+  // The panel reads about two dozen fields off a unit, and on a client it now reads them off
+  // the PAYLOAD. If item 5's producer ever stops carrying one, the panel silently prints a
+  // zero -- a hero with 0 strength, an empty damage line, a missing armour bonus -- and no
+  // other check in this suite notices, because the snapshot is still a valid snapshot and the
+  // renderer still renders. This is the list, compared field by field against the sim record
+  // it was built from. Adding a field to the panel means adding it here, which is the point.
+  const sim = unit({
+    id: 1, owner: 0, isHero: true, properName: "Jaina", level: 5,
+    hp: 550, maxHp: 700, mana: 210, maxMana: 400,
+    armor: 7, bonusArmor: 2, bonusDamage: 6, invulnerable: false,
+    xp: 1340, skillPoints: 2,
+    str: 21, agi: 17, int: 33, bonusStr: 3, bonusAgi: 0, bonusInt: 6,
+    isSummon: false, summonLeft: 0, summonMax: 0,
+    weapon: { damage: 29, dice: 1, sides: 3, range: 600, cooldown: 1.35,
+              damagePoint: 0.4, backswing: 0.6, baseDamagePoint: 0.4, baseBackswing: 0.6 },
+    worker: { gold: false, lumber: false, carryGold: 0, carryLumber: 0 },
+    buffs: [{ kind: "slow", group: "Aasl", timeLeft: 4, sourceId: 9, value: 25, value2: 0, art: "", fx: [] }],
+  });
+  const snap = snapshotFor(worldOf([sim]), viewer(0, { 0: 0 }), 0, 1).units[0];
+
+  const PANEL = ["hp", "maxHp", "mana", "maxMana", "armor", "bonusArmor", "bonusDamage",
+    "invulnerable", "isHero", "properName", "level", "xp", "skillPoints",
+    "str", "agi", "int", "bonusStr", "bonusAgi", "bonusInt", "owner",
+    "isSummon", "summonLeft", "summonMax", "isIllusion"];
+  const same = (f) => JSON.stringify(snap[f]) === JSON.stringify(sim[f]);
+  check("every scalar the panel prints matches the sim's", PANEL.filter((f) => !same(f)), []);
+  // The damage LINE is computed from three weapon numbers the animation half never reads, so
+  // widening `RenderWeapon` for the panel is only safe if they actually cross.
+  check("the damage line's three numbers cross", [snap.weapon.damage, snap.weapon.dice, snap.weapon.sides], [29, 1, 3]);
+  // The status row keys off `kind` and the non-stacking `group`; a buff list that arrived
+  // empty would silently drop every icon.
+  check("the status row's buffs cross", snap.buffs.map((b) => [b.kind, b.group]), [["slow", "Aasl"]]);
+  check("and the carry readout", [snap.worker.carryGold, snap.worker.carryLumber], [0, 0]);
+}
+
+console.log("a production queue reaches the panel with what each slot needs");
+{
+  // Three slot shapes (unit / research / upgrade) flattened into one on the render side. The
+  // panel asks each for its kind, what it names, its level (research has per-level art) and
+  // its progress -- so those four have to survive, per slot, in order.
+  const q = [
+    { kind: "unit", unitId: "hfoo", timeLeft: 9, buildTime: 20 },
+    { kind: "research", unitId: "Rhme", level: 2, timeLeft: 30, buildTime: 60 },
+    { kind: "upgrade", unitId: "hkee", timeLeft: 4, buildTime: 140 },
+  ];
+  const barracks = unit({
+    id: 1, owner: 0,
+    building: { constructionLeft: 0, buildTimeTotal: 60, queue: q, producesUnits: true,
+                rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 },
+  });
+  const snap = snapshotFor(worldOf([barracks]), viewer(0, { 0: 0 }), 0, 1).units[0];
+  check("the queue crosses in order, whole", snap.building.queue.map((j) => [j.kind, j.unitId, j.level ?? null, j.timeLeft, j.buildTime]),
+    [["unit", "hfoo", null, 9, 20], ["research", "Rhme", 2, 30, 60], ["upgrade", "hkee", null, 4, 140]]);
+  // The construction pair drives the build progress bar AND the Birth-clip scrub on the model,
+  // so it is read by both halves of the render switch.
+  check("and the construction pair with it", [snap.building.constructionLeft, snap.building.buildTimeTotal], [0, 60]);
+}
+
 console.log(failed === 0 ? "\nsnapshot: all checks passed" : `\nsnapshot: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
