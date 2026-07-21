@@ -35,6 +35,16 @@ export interface MatchChannel {
   send(data: unknown, to?: number): void;
   /** Non-`start` game traffic, stamped by the relay with who really sent it. */
   onPeerData: (from: number, data: unknown) => void;
+  /**
+   * A dropped peer reclaimed its slot (`peer-rejoin`, protocol 3 — item 11a).
+   *
+   * This is the one piece of ROSTER news the match needs, and it is required rather than
+   * optional on purpose: a channel that quietly lacked it would leave a reconnected player
+   * staring at a world frozen at the moment their wifi blinked, and nothing would say so.
+   * The relay reclaims the SAME peer id (that is why 11a minted it that way), so the seating
+   * the match was handed at `StartMatch` still resolves — no re-seating, no new id to learn.
+   */
+  onPeerRejoin: (peer: number) => void;
 }
 
 /** The `GameMessage` member carrying one recipient's view of the world. */
@@ -162,7 +172,25 @@ export class MatchLink {
       else if (isCommandMessage(data)) this.onCommand(from, data);
       else previous(from, data);
     };
+    // A returning peer is owed the world it missed, and owed it NOW rather than whenever the
+    // cadence next comes round (item 11b). Subscribed here, the same way as `onPeerData`, so
+    // the catch-up cannot be forgotten by whoever assembles the link.
+    const previousRejoin = channel.onPeerRejoin;
+    channel.onPeerRejoin = (peer) => {
+      this.owed.add(peer);
+      previousRejoin(peer);
+    };
   }
+
+  /**
+   * Peers that came back and have not yet been caught up.
+   *
+   * A set rather than a flag: two players can reconnect in the same tick, and serving only the
+   * last one to arrive is the kind of bug that shows up once in fifty matches. Only the host
+   * ever drains it (`tickHost`); on a client it stays empty in practice — a client is told
+   * about a rejoin too, but it is bounded by the room size and nothing reads it.
+   */
+  private readonly owed = new Set<number>();
 
   /**
    * Client side: send one of the local player's commands to the host's authoritative sim.
@@ -183,26 +211,44 @@ export class MatchLink {
   }
 
   /**
-   * Host side: emit one snapshot per remote recipient, at most every `SNAPSHOT_INTERVAL`.
+   * Host side: emit one snapshot per remote recipient, at most every `SNAPSHOT_INTERVAL` —
+   * plus, off that cadence, an immediate one to anybody who has just reconnected (item 11b).
    *
    * The host's OWN seat is skipped: it is already looking at the authoritative world, and
    * sending it to itself through the relay would be a round trip to learn what it already
    * knows. A computer slot is skipped too — it has no peer and nothing to render.
+   *
+   * **The cadence gate belongs to the BROADCAST, not to the catch-up**, which is the whole of
+   * this method's shape. A reconnected player is holding a world that stopped when their
+   * connection did; making them wait out a tick they have no stake in is the same delay the
+   * relay just worked to avoid. So `due` gates the everyone-loop and `owed` cuts across it,
+   * and a catch-up neither resets the cadence clock nor postpones the next broadcast.
+   *
+   * **"A FULL snapshot" costs nothing extra today, and the wording is a promise for later.**
+   * `snapshotFor` builds the whole recipient-visible world every time — there are no deltas —
+   * so the catch-up is the same call the broadcast makes. The day a delta encoding arrives
+   * (Open questions: "JSON first, binary when it hurts"), this is the one send site that must
+   * stay whole, because a delta against a world the recipient never received is noise.
    */
   tickHost(dt: number, world: SnapshotWorld, sources: HostSources, time: number): number {
     this.accum += dt;
-    if (this.accum < SNAPSHOT_INTERVAL) return 0;
-    this.accum = 0;
+    const due = this.accum >= SNAPSHOT_INTERVAL;
+    if (due) this.accum = 0;
+    if (!due && this.owed.size === 0) return 0;
     let sent = 0;
     for (const { player, viewer } of sources.viewers()) {
       if (player === this.localPlayer) continue;
       const peer = this.peerFor(player);
       if (peer === undefined) continue; // a computer slot: nobody is watching
+      if (!due && !this.owed.has(peer)) continue; // off-cadence: only the returning peers
       const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player));
       this.channel.send({ k: "snap", snap } satisfies SnapshotMessage, peer);
       sent++;
       this.emitted++;
     }
+    // Cleared whether or not a seat was found for them: an unseated peer is a routing bug to
+    // notice elsewhere, not a debt to keep re-paying every tick for the rest of the match.
+    this.owed.clear();
     return sent;
   }
 

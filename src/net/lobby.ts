@@ -55,6 +55,10 @@ export class LanLobby {
   /** The host said go. Fires on every client in the room EXCEPT the host, which acts on its
    *  own `startMatch` call directly (the relay never echoes a sender its own message). */
   onStart: (msg: GameMessage & { k: "start" }) => void = () => {};
+  /** A dropped peer reclaimed its slot. The ROSTER heals itself below either way; this hook is
+   *  for the MATCH, whose host owes that seat the world it missed (item 11b). Separate from
+   *  `onPeerData` because it is relay news about who is in the room, not game traffic. */
+  onPeerRejoin: (peer: number) => void = () => {};
 
   constructor(
     /** How to make a transport. Injected so the lobby carries no value dependency on
@@ -185,9 +189,13 @@ export class LanLobby {
       case "peer-rejoin":
         // The dropped peer reclaimed its slot; ensure it is present (it never left our roster on
         // a drop, so this is a no-op unless we missed the drop, in which case it heals).
-        return this.set({
+        this.set({
           peers: this.state.peers.some((p) => p.id === m.peer.id) ? this.state.peers : [...this.state.peers, m.peer],
         });
+        // Then tell the match. On the host this is what triggers the catch-up snapshot; on
+        // another client it is ignored. Fired AFTER the roster heals, so anything that reads
+        // the roster in response sees the peer already in it.
+        return this.onPeerRejoin(m.peer.id);
       case "room-closed":
         this.store.save(null); // the game is gone; nothing to rejoin
         this.reconnecting = false;

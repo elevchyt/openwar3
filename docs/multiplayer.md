@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). Open: 11b, then 10c-2c-2 (the rest of the render switch, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b). Open: 10c-2c-2 (the rest of the render switch, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1941,9 +1941,8 @@ enumerated by body rather than by name.
     a units accessor — two readers of the same fact is how they drift.
 
 10c-2c-2. **The rest of the switch: pose, health bars, selection, the command card.**
-    **Ordered AFTER item 11b by the developer**, against this list's own sequence: 11b is the last
-    piece of the reconnect story and the thing item 12's stop condition cannot be tested without,
-    while this one splits into several iterations. Do 11b first.
+    **Ordered AFTER item 11b by the developer**, against this list's own sequence — and 11b is
+    now done, so this is next.
  `u` itself
     becomes the snapshot record on a client, not just the visibility answer. This is the big
     one — `rts.ts` has **73** `sim.units.get` sites — so it splits again by consumer, but the
@@ -2022,11 +2021,50 @@ enumerated by body rather than by name.
     the browser that the refactored lobby still boots a two-client LAN match; the drop/rejoin
     round trip itself is the deferred two-client capture.
 
-11b. **Reconnect, the authority side: answer a rejoin with a FULL snapshot.** The relay puts the
-    player back in the room; the host must then hand it the state it missed. `MatchLink` already
-    sends per-recipient snapshots each tick, so this is "on a `peer-rejoin`, send that seat a full
-    snapshot immediately" rather than waiting for the next cadence tick. Its pinned checks
-    ("nothing replays what they missed") are the ones still standing in `loopback-test`.
+11b. ~~**Reconnect, the authority side: answer a rejoin with a FULL snapshot.**~~ **Done**, and
+    the entry's own prediction ("this is a small one") held — but only because 11a had already
+    made the returning peer reclaim its **same id**, so the seating handed over at `StartMatch`
+    still resolves and there is no re-seating to do.
+
+    **The cadence gate belongs to the BROADCAST, not to the catch-up.** That sentence is the
+    whole change. `tickHost` used to return early below `SNAPSHOT_INTERVAL`, so a reconnected
+    player waited out a tick they had no stake in — up to 100 ms holding a world that stopped
+    when their connection did. Now `due` gates the everyone-loop and an `owed` set cuts across
+    it: a catch-up neither resets the cadence clock nor postpones the next broadcast, and it is
+    **addressed** to the returning peer rather than fanned out (a broadcast wearing another name
+    would be a burst to the whole room every time one player's wifi hiccups).
+
+    **`MatchChannel` grew a third member, and it is required rather than optional.**
+    `onPeerRejoin(peer)` is the one piece of ROSTER news the match needs; a channel that quietly
+    lacked it would leave a reconnected player staring at a frozen world with nothing to say so.
+    `MatchLink` subscribes in its constructor, exactly as it already does for `onPeerData`, so
+    the catch-up cannot be forgotten by whoever assembles the link. `LanLobby` fires it from its
+    `peer-rejoin` case, AFTER the roster heals.
+
+    **"A FULL snapshot" costs nothing today and the word is a promise for later.**
+    `snapshotFor` builds the whole recipient-visible world every time — there are no deltas — so
+    the catch-up is the same call the broadcast makes. When a delta encoding arrives (Open
+    questions: "JSON first, binary when it hurts") this is the one send site that must stay
+    whole, because a delta against a world the recipient never received is noise. The check
+    exists now so that day is a failing test rather than a silent regression.
+
+    **Tests: `loopback` 65 → 71, `sim:test` 470 → 472**, and the loopback block runs over the
+    REAL `RelayCore` — a held slot, a token, the same peer id back — because `channelFor` now
+    routes `peer-rejoin` instead of the test faking the call. Three injections: the old
+    early-return gate (four checks red — the catch-up never leaves), never clearing `owed` (the
+    host re-sends to that peer every tick for the rest of the match), and a lobby that heals its
+    roster without telling the match (two checks red in `lobby-test`). The "no game state is
+    replayed by the relay itself" check from 11a still stands and still passes — the relay must
+    never replay; the HOST sends.
+
+    **Verified in the browser, and this is the first item where the whole round trip was
+    driven.** Two clients through the real relay, then the joining client forced offline
+    (`agent-browser set offline on`) and back. The heartbeat tells the story: `received` climbing
+    (34…142), then **frozen at 142 for three heartbeats** while the wire was dead, then resuming
+    and climbing to 428 — **`stale 0, drift 0` throughout, including after the reconnect**. Drift
+    0 on the far side is the part that matters: the client's own sim kept running while
+    disconnected, and once caught up the authority's view and its own agree. The daemon wedged
+    once mid-run and needed a PID kill; that is the known fragility, not a finding.
 
 12. **Flip the phase table**, once the authority takes commands and emits AoI-filtered snapshots over
     a transport it does not name, two clients play a match through the relay, and a dropped client

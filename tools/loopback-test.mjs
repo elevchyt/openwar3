@@ -327,8 +327,14 @@ console.log("rubbish on the game channel is refused, not thrown");
 
 /** A `MatchChannel` over one loopback endpoint — what `LanLobby` provides in the real app. */
 function channelFor(t) {
-  const ch = { send: (data, to) => t.send({ t: "relay", to, data }), onPeerData: () => {} };
-  t.onMessage = (m) => { if (m.t === "deliver") ch.onPeerData(m.from, m.data); };
+  const ch = { send: (data, to) => t.send({ t: "relay", to, data }), onPeerData: () => {}, onPeerRejoin: () => {} };
+  // Both halves of `MatchChannel`: game traffic, and the one piece of roster news the match
+  // needs. Routing `peer-rejoin` here rather than faking a call is what makes the 11b check
+  // below run over the REAL relay core -- a held slot, a token, the same peer id back.
+  t.onMessage = (m) => {
+    if (m.t === "deliver") ch.onPeerData(m.from, m.data);
+    else if (m.t === "peer-rejoin") ch.onPeerRejoin(m.peer.id);
+  };
   return ch;
 }
 
@@ -520,6 +526,54 @@ console.log("\na client's command crosses the wire to the host, and the host lea
   host.send({ t: "relay", to: hostPeer, data: commandMessage({ c: "order", unitId: 9, order: { kind: "move", x: 1, y: 2 }, queued: false }) });
   await tick();
   check("a command addressed to the host from the host is still just judged by stamp", applied, [[0, 9]]);
+}
+
+console.log("\na reconnected player is handed the world it missed, off the cadence (item 11b)");
+{
+  const { relay, host, peer, roomId } = await room();
+  const token = peer.last("joined").token;
+  // Spy on the SEND side. The inbox records what a connection received, and "was this
+  // addressed or broadcast" is a fact about the call, not about any one inbox -- with a single
+  // remote peer in the room the two are indistinguishable from the receiving end.
+  const outbox = [];
+  const hostChannel = channelFor(host);
+  const realSend = hostChannel.send;
+  hostChannel.send = (data, to) => { outbox.push({ k: data.k, to }); realSend(data, to); };
+  const hostLink = new MatchLink(hostChannel, 0, SEATS);
+  // Settle the cadence first: one ordinary broadcast leaves `accum` at zero, so anything that
+  // goes out later on a tiny dt can only be a catch-up and not a broadcast that came due.
+  hostLink.tickHost(1, worldAt(420), sources, 1);
+  await tick();
+  outbox.length = 0;
+
+  peer.drop();
+  await tick();
+  const back = relay.connect("peer-again");
+  await tick();
+  back.send({ t: "join", roomId, playerName: "Joiner", token });
+  await tick();
+  const backLink = new MatchLink(channelFor(back), 1, SEATS);
+  back.clear();
+
+  // A tick far below SNAPSHOT_INTERVAL. Under the old gate this returned 0 and the player
+  // waited out the rest of the cadence holding a world that stopped when their wifi did.
+  const sent = hostLink.tickHost(0.001, worldAt(77), sources, 9);
+  await tick();
+  check("the host sent one, without waiting for the cadence", sent, 1);
+  check("to the returning seat, carrying the world as it is NOW", [backLink.latest()?.recipient, backLink.latest()?.units[0].hp], [1, 77]);
+  // "FULL" is free today (there are no deltas) and the check is the promise for when there are.
+  check("and it is a whole world, not a delta", backLink.latest()?.units.length, 1);
+  // ADDRESSED, not broadcast. A catch-up that fanned out to the room would be an off-cadence
+  // broadcast wearing another name -- a burst of traffic to everyone every time one player's
+  // connection hiccups, and on a twelve-slot map that is the expensive way to be wrong.
+  check("aimed at the returning peer alone", outbox, [{ k: "snap", to: 2 }]);
+
+  // The debt is paid exactly once -- otherwise every tick for the rest of the match sends an
+  // extra snapshot to whoever once reconnected.
+  check("nothing further goes out off cadence", hostLink.tickHost(0.001, worldAt(77), sources, 10), 0);
+  // And the catch-up did not disturb the cadence it cut across: the broadcast still comes round
+  // on its own clock rather than having been reset by the interruption.
+  check("the broadcast still comes round on time", hostLink.tickHost(0.1, worldAt(77), sources, 11), 1);
 }
 
 console.log(failed === 0 ? "\nloopback: all checks passed" : `\nloopback: ${failed} FAILED`);

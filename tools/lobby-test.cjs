@@ -159,8 +159,17 @@ const ME = { id: 2, name: "Joiner", host: false };
     t.onMessage({ t: "peer-drop", peerId: 3 });
     check("a dropped peer stays in the roster (it may be back)", lobby.snapshot.peers.some((p) => p.id === 3), true);
 
+    let rejoined = [];
+    lobby.onPeerRejoin = (id) => rejoined.push(id);
     t.onMessage({ t: "peer-rejoin", peer: other });
     check("a rejoin keeps it present without duplicating", lobby.snapshot.peers.filter((p) => p.id === 3).length, 1);
+    // ...and the MATCH is told, which is what makes the host owe that seat a catch-up snapshot
+    // (item 11b). Without this the roster would heal and the returning player would sit looking
+    // at a world frozen at the moment their connection blinked, with nothing to say so.
+    check("the match is told who came back", rejoined, [3]);
+    // A plain join is not a rejoin: nobody is owed anything.
+    t.onMessage({ t: "peer-join", peer: { id: 4, name: "New", host: false } });
+    check("an ordinary join owes nobody a catch-up", rejoined, [3]);
 
     t.onMessage({ t: "peer-leave", peerId: 3 });
     check("a chosen leave removes it", lobby.snapshot.peers.some((p) => p.id === 3), false);
