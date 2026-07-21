@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). Open: 7b, 10c-2c-2 (the rest of the render switch, with 6d), 11b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). Open: 11b, then 10c-2c-2 (the rest of the render switch, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1494,16 +1494,24 @@ enumerated by body rather than by name.
    `MeleeVictoryDialogBJ` needs the game to actually end, and melee runs no cinematic. The
    fan-out is covered by the headless checks only. `jass:test` audience 9 → **13**.
 
-7b. **Per-recipient evaluation of a `GetLocalPlayer`-gated block.** The other half of item 7,
-   split off because it is a different and much deeper change. A MAP script (not blizzard.j)
-   writing `if GetLocalPlayer() == Player(0) then … endif` evaluates ONCE on the host today, as
-   the host. Correct behaviour is to evaluate the block once per recipient — which means the
-   interpreter re-running it N times, and that is only safe because of Blizzard's own contract
-   that such a block carries no net traffic. Our interpreter does not enforce that contract: a
-   map author who put world mutation inside the gate would get it applied N times. So this needs
-   either a way to run a block for effect-on-presentation-only, or an accepted risk stated out
-   loud. **Do not fold it into a native's fan-out** — it is an interpreter change, not a
-   delivery one.
+7b. **Per-recipient evaluation of a `GetLocalPlayer`-gated block.** ~~Gated on a developer
+   decision.~~ **DECIDED by the developer: evaluate the block once per recipient** — the
+   correct behaviour, taken over the safer-looking alternative of leaving it host-only. The other
+   half of item 7, split off because it is a different and much deeper change. A MAP script (not
+   blizzard.j) writing `if GetLocalPlayer() == Player(0) then … endif` evaluates ONCE on the
+   host today, as the host; it must evaluate once per seat, which means the interpreter re-running
+   the block N times.
+
+   **What the decision does NOT settle, and what it costs.** Re-running is safe only because of
+   Blizzard's own contract that a `GetLocalPlayer` block carries no net traffic, and our
+   interpreter does not enforce that contract — a map author who put world mutation inside the
+   gate gets it applied N times, which is worse than the desync real WC3 would give them: it
+   corrupts the authority's world rather than one client's copy. So the implementation still has
+   to choose between running the block for presentation-effect-only (detect a world write during a
+   per-recipient re-run and refuse it, loudly, in dev) and accepting the risk in writing. That is
+   a follow-on choice to make WITH a concrete proposal in front of it, when 7b is actually built
+   — not now, and not silently. **Do not fold it into a native's fan-out** — it is an
+   interpreter change, not a delivery one.
 
 8. ~~**An in-process transport adapter, and the reconnect test that rides on it.**~~ **Done, and
    it turned into an extraction rather than a new implementation.** The entry assumed writing an
@@ -1932,7 +1940,11 @@ enumerated by body rather than by name.
     independently. One of them should read through `SnapshotIndex` once the next slice gives it
     a units accessor — two readers of the same fact is how they drift.
 
-10c-2c-2. **The rest of the switch: pose, health bars, selection, the command card.** `u` itself
+10c-2c-2. **The rest of the switch: pose, health bars, selection, the command card.**
+    **Ordered AFTER item 11b by the developer**, against this list's own sequence: 11b is the last
+    piece of the reconnect story and the thing item 12's stop condition cannot be tested without,
+    while this one splits into several iterations. Do 11b first.
+ `u` itself
     becomes the snapshot record on a client, not just the visibility answer. This is the big
     one — `rts.ts` has **73** `sim.units.get` sites — so it splits again by consumer, but the
     ones that land on the same FRAME must land together (a model at the snapshot's position with
@@ -2064,6 +2076,11 @@ refactor can pass every suite while showing an enemy base through the fog.
   The lazy alternative would have saved ten grids on a twelve-slot two-player match and paid for it
   with an unpredictable mid-match cost spike and a fog hole left open. Unblocks
   [item 2](#remaining-work-in-order-2).
+- ~~**Item 7b: enforce Blizzard's no-net-traffic contract, or accept the risk?**~~ **Decided —
+  evaluate a `GetLocalPlayer`-gated block once per recipient, because that is the correct
+  behaviour.** The developer's call. What remains is not whether to do it but how to keep a
+  map author's mistake from reaching the authority's world; see [item 7b](#remaining-work-in-order-2)
+  for the two shapes that choice can take, to be made when 7b is built.
 - **Cold start.** A free instance sleeping after 15 min means the first player waits ~30–60 s for the
   *relay* to wake. Survivable with an honest "waking server" screen — and note this only ever delays
   lobby join, never an in-progress match, since the match itself does not run there.
