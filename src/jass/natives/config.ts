@@ -77,7 +77,12 @@ export function registerConfigNatives(rt: Runtime): void {
   // is null and this is localPlayer); the difference appears when one authority evaluates for
   // N recipients. Blizzard's own contract is that a GetLocalPlayer gate guards presentation
   // only ("no net traffic within this block"), which is what makes that safe to do per viewer.
-  def(rt, "GetLocalPlayer", (c) => c.rt.playerHandle(c.rt.localViewer));
+  def(rt, "GetLocalPlayer", (c) => {
+    // Bump the probe BEFORE answering: the interpreter watches this counter around an `if`'s
+    // conditions to learn that the branch depends on who is watching (item 7b).
+    c.rt.localViewerReads++;
+    return c.rt.playerHandle(c.rt.localViewer);
+  });
   // GetPlayersByMapControl(MAP_CONTROL_USER) — "for each human player" — is one of the most
   // common shapes in the whole corpus, and it is only as good as this answer.
   def(rt, "GetPlayerController", (c, a) =>

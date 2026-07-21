@@ -42,6 +42,30 @@ endfunction
 function Broadcast takes nothing returns nothing
     call DisplayTimedTextFromPlayer(Player(0), 0, 0, 5, "%s wins")
 endfunction
+
+// ---- item 7b: a MAP script's own GetLocalPlayer gate --------------------------------------
+
+// The canonical shape, straight out of countless maps: a presentation call behind the gate.
+function GatedCamera takes nothing returns nothing
+    if GetLocalPlayer() == Player(5) then
+        call SetCameraPosition(1000, 2000)
+    endif
+endfunction
+
+// The gate that is TRUE for more than one recipient, with a WORLD write inside it. This is the
+// shape the developer's decision is about: run it N times and the write lands N times.
+function GatedWorldWrite takes nothing returns nothing
+    if GetLocalPlayer() != Player(99) then
+        call SetPlayerState(Player(0), PLAYER_STATE_RESOURCE_GOLD, 500)
+    endif
+endfunction
+
+// No GetLocalPlayer anywhere in the condition: must not fan out at all.
+function Ungated takes nothing returns nothing
+    if 1 == 1 then
+        call SetCameraPosition(7, 7)
+    endif
+endfunction
 `;
 
 const interp = buildInterpreter([SRC]);
@@ -147,6 +171,82 @@ console.log("\nwith nobody seated the message still lands on the host");
   // `viewers()` is legitimately empty here, and a broadcast that reached nobody would make
   // every single-player boot silently lose its victory message.
   check("falls back to this machine's own seat", JSON.stringify(got), "[4]");
+}
+
+
+// ---------------------------------------------------------------------------------------
+// Item 7b: a MAP script's own GetLocalPlayer gate is evaluated ONCE PER RECIPIENT.
+//
+// Everything above is about the natives we intercept at the wrapper (the …ForPlayer BJs).
+// This is the exposure that remained: a map writing `if GetLocalPlayer() == Player(N)` itself.
+// The interpreter probes whether an `if`'s CONDITIONS consulted GetLocalPlayer and, if they
+// did, re-runs the statement for every other viewer.
+//
+// The developer's decision on world writes: the HOST's pass runs exactly as it always has,
+// and only the extra passes are muzzled. So a write inside a gate happens exactly ONCE --
+// never N times (which would corrupt the authority's world) and never zero times (which would
+// change behaviour for maps that work today).
+// ---------------------------------------------------------------------------------------
+
+console.log("\na map's own GetLocalPlayer gate is evaluated once per recipient (item 7b)");
+{
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const cam = [];
+  rt.hooks = { setCameraPosition: (x, y) => cam.push(`${x},${y}/${rt.localViewer}`) };
+  interp.callFunction("GatedCamera", []);
+  // Only player 5 is inside the gate -- but the host is player 0, so under the old
+  // evaluate-once behaviour NOBODY got the camera move. Now player 5 does, and only 5.
+  check("the gated call fires for the recipient it names", JSON.stringify(cam), '["1000,2000/5"]');
+  check("and the audience is clear afterwards", rt.audience, null);
+  check("and the write guard is off again", rt.presentationOnly, false);
+}
+
+console.log("\na world write inside the gate happens exactly ONCE, not once per recipient");
+{
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  // The condition is true for all three seats. Unmuzzled, this would set gold three times.
+  const writes = [];
+  rt.hooks = { setPlayerState: (p, st, v) => writes.push(`${p}:${v}/${rt.localViewer}`) };
+  rt.worldWritingHooks = new Set(["setPlayerState"]);
+  interp.callFunction("GatedWorldWrite", []);
+  // THE check the decision is about. One write, and it is the HOST's own pass -- identical to
+  // the behaviour before this item existed.
+  check("exactly one world write, from the host's own pass", JSON.stringify(writes), '["0:500/0"]');
+  rt.worldWritingHooks = new Set();
+}
+
+console.log("\nwithout the guard the same block would write once per recipient");
+{
+  // The counter-check, and it is what makes the one above mean something: with nothing
+  // classified as world-writing, the muzzle has nothing to refuse and the write lands 3 times.
+  // That is the corruption the developer's decision prevents, demonstrated rather than argued.
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const writes = [];
+  rt.hooks = { setPlayerState: (p, st, v) => writes.push(`${p}:${v}/${rt.localViewer}`) };
+  rt.worldWritingHooks = new Set(); // nothing declared -> nothing muzzled
+  interp.callFunction("GatedWorldWrite", []);
+  check("unguarded, it lands once per viewer", JSON.stringify(writes), '["0:500/0","0:500/5","0:500/9"]');
+}
+
+console.log("\nan if that never asks who is watching does not fan out");
+{
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const cam = [];
+  rt.hooks = { setCameraPosition: (x, y) => cam.push(`${x},${y}`) };
+  interp.callFunction("Ungated", []);
+  // The probe is what keeps this from becoming "every if runs N times".
+  check("it runs exactly once", JSON.stringify(cam), '["7,7"]');
+}
+
+console.log("\nalready inside a forAudience, the gate does not fan out again");
+{
+  rt.applyLobby([seat(0), seat(5), seat(9)], 0);
+  const cam = [];
+  rt.hooks = { setCameraPosition: (x, y) => cam.push(`${x},${y}/${rt.localViewer}`) };
+  // A broadcast already resolves who is watching, so GetLocalPlayer inside it is answering
+  // correctly. Fanning out again would be N passes of the same block for the same person.
+  rt.forAudience(5, () => interp.callFunction("GatedCamera", []));
+  check("one pass, for the audience already set", JSON.stringify(cam), '["1000,2000/5"]');
 }
 
 console.log(failed ? `\naudience: ${failed} FAILED` : "\naudience: all checks passed");

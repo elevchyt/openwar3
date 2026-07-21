@@ -392,13 +392,45 @@ export class Interpreter {
       case "return":
         throw new ReturnSignal(s.value ? this.eval(s.value, frame) : JNULL);
       case "if": {
-        for (const b of s.branches) {
-          if (truthy(this.eval(b.cond, frame))) {
-            yield* this.execBlockG(b.body, frame);
-            return JNULL;
+        // The HOST's own pass, unchanged and unmuzzled — this is the statement exactly as it
+        // has always run (docs/multiplayer.md Phase E item 7b).
+        const before = this.rt.localViewerReads;
+        let taken = -1;
+        for (let i = 0; i < s.branches.length; i++) {
+          if (truthy(this.eval(s.branches[i].cond, frame))) { taken = i; break; }
+        }
+        // Did the branch we chose depend on WHO IS WATCHING? The probe answers that without
+        // the parser having to recognise a shape: any route to `GetLocalPlayer` counts, direct
+        // or through a BJ wrapper. It sees only the CONDITIONS — reads inside the body are the
+        // body's business, and a later branch's condition that was never reached is genuinely
+        // unknown rather than assumed (stated because it is the honest limit of the probe).
+        const audienceDependent = this.rt.localViewerReads !== before;
+        if (taken >= 0) yield* this.execBlockG(s.branches[taken].body, frame);
+        else if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
+        // Only the OUTERMOST such statement fans out. Inside a `forAudience` the runtime has
+        // already resolved who is watching, so `GetLocalPlayer` is answering correctly and a
+        // second fan-out would be N² passes of the same block for the same person.
+        if (!audienceDependent || this.rt.audience !== null) return JNULL;
+        for (const p of this.rt.viewers()) {
+          if (p === this.rt.localPlayer) continue; // already ran, as itself, with writes allowed
+          const prevAudience: number | null = this.rt.audience;
+          const prevGuard = this.rt.presentationOnly;
+          this.rt.audience = p;
+          this.rt.presentationOnly = true; // world writes refused for the extra passes only
+          try {
+            let t = -1;
+            for (let i = 0; i < s.branches.length; i++) {
+              if (truthy(this.eval(s.branches[i].cond, frame))) { t = i; break; }
+            }
+            if (t >= 0) yield* this.execBlockG(s.branches[t].body, frame);
+            else if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
+          } finally {
+            // Restored even if the block throws, or the runtime answers `GetLocalPlayer` as
+            // somebody else for the rest of the match — the same care `forAudience` takes.
+            this.rt.audience = prevAudience;
+            this.rt.presentationOnly = prevGuard;
           }
         }
-        if (s.elseBody) yield* this.execBlockG(s.elseBody, frame);
         return JNULL;
       }
       case "loop": {

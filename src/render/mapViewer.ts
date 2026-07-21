@@ -1404,6 +1404,19 @@ export class MapViewerScene {
    *  every other CreateUnit spawns for real. Only the LOCAL player's messages reach the
    *  HUD — the BJ force helpers already gate on GetLocalPlayer, so a per-player loop won't
    *  spam duplicates. */
+  /**
+   * The names of the hook entries that WRITE THE WORLD (docs/multiplayer.md item 7b).
+   *
+   * Computed from the same factories `textHooks` spreads, not transcribed — so it cannot drift
+   * from the table it describes, and a native moved into `simHooks` tomorrow is refused inside
+   * a `GetLocalPlayer` gate without anyone remembering to add it here. The two DUAL-WRITERS
+   * (`setUnitOwner`, `setUnitFlyHeight`) are in this set and belong in it: their world half is
+   * exactly what must not run N times.
+   */
+  private worldWritingHookNames(): string[] {
+    return Object.keys(this.rts?.worldHooks((p) => this.teamOf(p)) ?? {});
+  }
+
   private textHooks(): EngineHooks {
     // The world/authority half, built once so the two DUAL-WRITER natives below can call back
     // into it. `SetUnitOwner` and `SetUnitFlyHeight` each write the world AND the model, and the
@@ -1708,6 +1721,7 @@ export class MapViewerScene {
         melee: opts.melee,
         runMain: true,
         hooks: this.textHooks(),
+        worldWritingHooks: this.worldWritingHookNames(),
         lobby,
         // Publish the engine BEFORE config()/main() run: a hook fired during init may need
         // the interpreter itself (ChooseRandomItem draws from its seeded RNG — 7.18).

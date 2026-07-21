@@ -66,6 +66,12 @@ export function loadMapScript(
   opts: {
     melee?: boolean;
     hooks?: EngineHooks;
+    /** Which of `hooks`' entries WRITE THE WORLD (docs/multiplayer.md item 7b). The interpreter
+     *  refuses these while re-running a `GetLocalPlayer`-gated block for a recipient other than
+     *  this machine. Passed in rather than derived: the interpreter is engine-agnostic and must
+     *  not learn which natives touch a sim, and the caller already has the answer as the key set
+     *  of the table it just composed — computed, so it cannot drift from the table. */
+    worldWritingHooks?: Iterable<string>;
     runMain?: boolean;
     lobby?: { slots: ReadonlyArray<LobbySlot>; localPlayer: number };
     /** Called with the booted engine BEFORE config()/main() run, so the host can publish
@@ -84,7 +90,7 @@ export function loadMapScript(
   // works — better than nothing).
   const wts = readUtf8(map, "war3map.wts", "scripts\\war3map.wts") ?? undefined;
   const sources = [common, blizzard, mapJ].filter((s): s is string => s !== null);
-  const interp = buildInterpreter(sources, { gameType: opts.melee ? 1 : 4, hooks: opts.hooks, wts });
+  const interp = buildInterpreter(sources, { gameType: opts.melee ? 1 : 4, hooks: opts.hooks, worldWritingHooks: opts.worldWritingHooks, wts });
   const engine: MapScriptEngine = { interp, setup: interp.rt.setup };
   opts.onBoot?.(engine);
   interp.run("config", []);

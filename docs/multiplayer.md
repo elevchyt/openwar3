@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) its selection panel too (10c-2c-3), every screen-position question with them (10c-2c-4), and a razed building's ghost survives on its screen (10c-2c-5 / 6d — **10c closed**). Open: 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2) its selection panel too (10c-2c-3), every screen-position question with them (10c-2c-4), and a razed building's ghost survives on its screen (10c-2c-5 / 6d — **10c closed**). Open: 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1496,24 +1496,56 @@ enumerated by body rather than by name.
    `MeleeVictoryDialogBJ` needs the game to actually end, and melee runs no cinematic. The
    fan-out is covered by the headless checks only. `jass:test` audience 9 → **13**.
 
-7b. **Per-recipient evaluation of a `GetLocalPlayer`-gated block.** ~~Gated on a developer
-   decision.~~ **DECIDED by the developer: evaluate the block once per recipient** — the
-   correct behaviour, taken over the safer-looking alternative of leaving it host-only. The other
-   half of item 7, split off because it is a different and much deeper change. A MAP script (not
-   blizzard.j) writing `if GetLocalPlayer() == Player(0) then … endif` evaluates ONCE on the
-   host today, as the host; it must evaluate once per seat, which means the interpreter re-running
-   the block N times.
+7b. ~~**Per-recipient evaluation of a `GetLocalPlayer`-gated block.**~~ **Done.** A MAP script
+   (not blizzard.j) writing `if GetLocalPlayer() == Player(5) then … endif` used to evaluate ONCE
+   on the host, as the host — so the block ran for the wrong person or, more often, for nobody.
+   It is now evaluated once per seat.
 
-   **What the decision does NOT settle, and what it costs.** Re-running is safe only because of
-   Blizzard's own contract that a `GetLocalPlayer` block carries no net traffic, and our
-   interpreter does not enforce that contract — a map author who put world mutation inside the
-   gate gets it applied N times, which is worse than the desync real WC3 would give them: it
-   corrupts the authority's world rather than one client's copy. So the implementation still has
-   to choose between running the block for presentation-effect-only (detect a world write during a
-   per-recipient re-run and refuse it, loudly, in dev) and accepting the risk in writing. That is
-   a follow-on choice to make WITH a concrete proposal in front of it, when 7b is actually built
-   — not now, and not silently. **Do not fold it into a native's fan-out** — it is an
-   interpreter change, not a delivery one.
+   **Detection is a PROBE, not a parse.** `Runtime.localViewerReads` counts how many times
+   `GetLocalPlayer` has been answered; the interpreter snapshots it around an `if`'s CONDITIONS
+   and compares. Any route to the native counts — direct, or through a BJ wrapper — so no shape
+   has to be recognised. A counter rather than a flag because probes nest. **Its honest limit,
+   stated because it is real:** only the conditions are watched, and a later branch's condition
+   that was never reached is unknown rather than assumed.
+
+   **The developer's decision on world writes, and it was a third option neither side of the
+   original question had.** The entry framed it as enforce-the-contract vs accept-the-risk.
+   Sizing the work turned up a better answer: **the HOST's own pass runs exactly as it always
+   has, and only the EXTRA passes are muzzled.** So a world write inside a gate happens exactly
+   once — never N times (which corrupts the authority's world silently, worse than the desync
+   real WC3 gives such a map) and never zero times (which would change behaviour for maps that
+   work today). World behaviour is therefore *identical* to before this item; only presentation
+   became per-recipient, which is all 7b was ever for.
+
+   **The muzzle cost nothing to classify, which is why the third option was available at all.**
+   Every world write goes through `rt.hooks.<name>`, and that key set is already named in one
+   place: `RtsController.worldHooks()` composes `simHooks` + `authorityHooks` (items 1–1d), so
+   `Object.keys` of it IS the answer — computed, never transcribed, and it cannot drift from the
+   table it describes. The interpreter is TOLD the set (`worldWritingHooks`) rather than deriving
+   it: it stays engine-agnostic and never learns which of its natives touch a `SimWorld`.
+   Refusal costs nothing at the call site either — every native already writes
+   `hooks?.x?.(…) ?? fallback`, so a muzzled entry takes the same path as one the host never
+   implemented, and says so once in the console.
+
+   **Two guards that are not obvious and are each pinned by an injection.** The fan-out is
+   skipped when `rt.audience !== null` — inside a `forAudience` the runtime has already resolved
+   who is watching, and fanning out again is N passes of the same block for the same person. And
+   the host's seat is skipped in the re-run loop, because it already ran, as itself, unmuzzled.
+
+   **Tests: `jass:test` audience 13 → 20.** The gated call fires for the recipient it names (it
+   fired for nobody before); a world write inside a gate true for all three seats lands exactly
+   once, from the host's pass; **the same block unguarded lands three times** — the corruption
+   the decision prevents, demonstrated rather than argued; an `if` that never asks who is
+   watching runs once; and a gate inside a `forAudience` does not fan out again. Three
+   injections: a probe that never fires, extra passes left unmuzzled, and the re-entrancy guard
+   removed — each turns its own checks red.
+
+   **Not visible in the browser, and that is checkable rather than an excuse.** Echo Isles is a
+   melee map: blizzard.j's own `GetLocalPlayer` sites are already intercepted at the `…ForPlayer`
+   wrappers (item 7), and its war3map.j has no direct gate. A real melee boot logged **zero**
+   refusals and the single-player minimap is byte-identical to the parent (0 of 18 088) — which
+   is what "world behaviour is identical" should look like from outside. The per-recipient
+   behaviour itself is covered headlessly, where a three-seat lobby can be built in a line.
 
 8. ~~**An in-process transport adapter, and the reconnect test that rides on it.**~~ **Done, and
    it turned into an extraction rather than a new implementation.** The entry assumed writing an
@@ -2283,11 +2315,14 @@ refactor can pass every suite while showing an enemy base through the fog.
   The lazy alternative would have saved ten grids on a twelve-slot two-player match and paid for it
   with an unpredictable mid-match cost spike and a fog hole left open. Unblocks
   [item 2](#remaining-work-in-order-2).
-- ~~**Item 7b: enforce Blizzard's no-net-traffic contract, or accept the risk?**~~ **Decided —
-  evaluate a `GetLocalPlayer`-gated block once per recipient, because that is the correct
-  behaviour.** The developer's call. What remains is not whether to do it but how to keep a
-  map author's mistake from reaching the authority's world; see [item 7b](#remaining-work-in-order-2)
-  for the two shapes that choice can take, to be made when 7b is built.
+- ~~**Item 7b: enforce Blizzard's no-net-traffic contract, or accept the risk?**~~ **Decided,
+  twice, and the second answer was not on the original menu.** First: evaluate a
+  `GetLocalPlayer`-gated block **once per recipient**, because that is the correct behaviour.
+  Then, when the work was sized: neither enforce-everywhere nor accept-the-risk, but **the
+  host's own pass runs unchanged and only the extra passes are muzzled** — so a world write
+  inside a gate happens exactly once, never N times and never zero times. World behaviour is
+  identical to before the item; only presentation became per-recipient. Both the developer's
+  calls; see [item 7b](#remaining-work-in-order-2).
 - **Cold start.** A free instance sleeping after 15 min means the first player waits ~30–60 s for the
   *relay* to wake. Survivable with an honest "waking server" screen — and note this only ever delays
   lobby join, never an in-progress match, since the match itself does not run there.

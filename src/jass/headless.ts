@@ -15,6 +15,10 @@ export interface HeadlessOptions {
   /** common.j ConvertGameType index: 1 = melee, 4 = use-map-settings (default). */
   gameType?: number;
   hooks?: EngineHooks;
+  /** Which of `hooks`' entries write the world — refused during a per-recipient re-run of a
+   *  `GetLocalPlayer` block (item 7b). Empty by default: a headless run with no engine has no
+   *  world to protect. */
+  worldWritingHooks?: Iterable<string>;
   seed?: number;
   /** Raw war3map.wts text — the map's trigger-string table (resolves TRIGSTR_nnn). */
   wts?: string;
@@ -26,6 +30,7 @@ export function buildInterpreter(sources: string[], opts: HeadlessOptions = {}):
   const rt = new Runtime(opts.seed);
   rt.gameType = opts.gameType ?? 4;
   rt.hooks = opts.hooks ?? null;
+  if (opts.worldWritingHooks) rt.worldWritingHooks = new Set(opts.worldWritingHooks);
   if (opts.wts) for (const [id, text] of parseWts(opts.wts)) rt.trigStrings.set(id, text);
   registerNatives(rt);
   const interp = new Interpreter(rt);

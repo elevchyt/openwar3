@@ -1110,7 +1110,78 @@ export class Runtime {
    *  important to [place the random shards] after we turn it off"). */
   private rng: () => number;
   readonly random = (): number => this.rng();
-  hooks: EngineHooks | null = null;
+  /**
+   * How many times `GetLocalPlayer` has been answered. Not a statistic — a PROBE. The
+   * interpreter snapshots it around an `if`'s conditions and compares; a change means that
+   * statement's branch depends on who is watching, and must therefore be evaluated once per
+   * recipient (docs/multiplayer.md Phase E item 7b).
+   *
+   * A counter rather than a flag because probes nest: an `if` inside an `if` takes its own
+   * before/after pair, and a flag one of them cleared would blind the other.
+   */
+  localViewerReads = 0;
+
+  /**
+   * We are re-running a `GetLocalPlayer`-gated block for a recipient who is NOT this machine,
+   * and world writes are refused for the duration (item 7b).
+   *
+   * **The developer chose this shape over the two obvious ones.** Refusing writes in EVERY pass
+   * would change behaviour for maps that work today; allowing them in every pass would apply a
+   * write N times and corrupt the authority's world silently — worse than the desync real WC3
+   * gives such a map, because it is one-sided and quiet. Instead the HOST's own pass runs
+   * exactly as it always has, and only the extra passes are muzzled. World behaviour is
+   * therefore identical to before this item: a write inside a gate happens exactly once, never
+   * N times, and never zero times where it happens today.
+   */
+  presentationOnly = false;
+
+  /**
+   * Hook names that WRITE THE WORLD, told to us by whoever built the table.
+   *
+   * Not derived here, and not a list kept in this file: the interpreter is engine-agnostic by
+   * construction (it imports neither renderer nor VFS), so it must not learn which of its
+   * natives touch a `SimWorld`. The owner already knows — `RtsController.worldHooks()` composes
+   * `simHooks` + `authorityHooks` and its key set IS the answer, computed rather than
+   * transcribed, so it cannot drift from the table it describes.
+   */
+  worldWritingHooks: ReadonlySet<string> = new Set();
+
+  private engineHooks: EngineHooks | null = null;
+  private muzzled: EngineHooks | null = null;
+
+  /** The engine bridge. Under `presentationOnly` this is a twin with every world-writing entry
+   *  replaced by a stub, so a refusal costs nothing at the call site: every native already
+   *  writes `hooks?.x?.(…) ?? fallback`, and an entry that answers `undefined` takes the same
+   *  path as one the host never implemented. */
+  get hooks(): EngineHooks | null {
+    if (!this.presentationOnly) return this.engineHooks;
+    if (!this.muzzled) this.muzzled = this.buildMuzzled();
+    return this.muzzled;
+  }
+  set hooks(h: EngineHooks | null) {
+    this.engineHooks = h;
+    this.muzzled = null; // rebuilt on demand against the new table
+  }
+
+  private buildMuzzled(): EngineHooks | null {
+    const h = this.engineHooks;
+    if (!h) return null;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(h)) {
+      if (!this.worldWritingHooks.has(k)) {
+        out[k] = v;
+        continue;
+      }
+      // Refused, and SAID so once. A map with world mutation inside a GetLocalPlayer gate is
+      // broken by Blizzard's own contract; it should find that out from a line in the console
+      // rather than from a world that quietly disagrees with itself.
+      out[k] = () => {
+        this.warnOnce(`localplayer:${k}`, `refused inside a GetLocalPlayer block (item 7b) — that gate is presentation-only by contract`);
+        return undefined;
+      };
+    }
+    return out as EngineHooks;
+  }
 
   constructor(seed = 0x9e3779b9) {
     this.rng = mulberry32(seed);
