@@ -5748,10 +5748,19 @@ export class MapViewerScene {
    *  sounds, item art) stay in the frame: they dress a window nobody is looking at, and
    *  flushing them late on refocus is harmless where a missing UNIT is not. */
   private drainWorldSpawns(world: SimWorld): void {
-    // A frozen client CREATES nothing locally (option 2): its trained/summon queues never
-    // fill because the sim never steps, and a script spawn drained here would mint a local
-    // id — the collision family this phase removes. New units arrive as snapshot records
-    // and grow models in the entry sync (item 2c), never through these drains.
+    // Script spawns are drained FIRST and for EVERYONE, frozen client included: the sim
+    // record already exists (JASS CreateUnit is synchronous, under ids the same script
+    // allocates identically on every machine — the melee STARTING BASES arrive this way),
+    // and this drain only gives it a body. Gating it off a frozen client was the bug that
+    // made a client's own base invisible: records, vision, no models.
+    for (const sp of this.rts?.drainScriptSpawns() ?? []) {
+      const d = this.registry.get(sp.typeId);
+      if (d) void this.spawnUnit(d, sp.x, sp.y, sp.player, sp.team, 0, sp.facing, sp.simId);
+    }
+    // Everything below CREATES sim records with freshly-minted LOCAL ids — the collision
+    // family option 2 removes — so a frozen client refuses it. Its trained/summon queues
+    // never fill anyway (the sim does not step); new units arrive as snapshot records and
+    // grow models in the entry sync (item 2c).
     if (this.rts?.frozenClient) return;
     const map = this.viewer.map;
     if (map) {
@@ -5785,13 +5794,6 @@ export class MapViewerScene {
         // GetTrainedUnit must hand the script the real unit.
         world.noteTrainFinish(buildingId, simId);
       });
-    }
-    // Bodies owed to units a TRIGGER created. The sim unit already exists at a resolved
-    // position (RtsController.createScriptUnit ran synchronously inside the native); this
-    // only loads its model and attaches it. A headless host never drains this queue.
-    for (const sp of this.rts?.drainScriptSpawns() ?? []) {
-      const d = this.registry.get(sp.typeId);
-      if (d) void this.spawnUnit(d, sp.x, sp.y, sp.player, sp.team, 0, sp.facing, sp.simId);
     }
     const summonClaimed = new Set<string>(); // cells handed out this call (see summonSpot)
     for (const s of world.drainSummonRequests()) {
@@ -5856,7 +5858,13 @@ export class MapViewerScene {
       // collision family this whole phase removes.
       if (!this.rts?.frozenClient) this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
       this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
-      this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
+      // A frozen client runs the script INIT (config/main — the melee starting bases are
+      // born there, under ids every machine allocates identically) but never PUMPS it:
+      // its world is an AoI subset the authority wrote, and a victory check read against
+      // it sees an opponent with no units and ends the match on the spot (the 2e fork,
+      // decided by that live failure). What the script would have shown arrives over the
+      // wire instead — dialogs and the verdict are already relayed (items F7/G1).
+      if (!this.rts?.frozenClient) this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
       this.simTick++;
       this.simAccum -= SIM_DT;
       steps++;

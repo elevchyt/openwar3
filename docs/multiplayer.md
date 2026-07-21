@@ -2939,6 +2939,41 @@ rather than an expedition.
    re-scouted enemy building's entry was dropped with its record, so it will not redraw
    until entries grow from `ApplyResult.created` (2c's whole job).
 
+8. **The developer's first 2b playtest found two real breaks, both now fixed and driven
+   live.** The report: "the client couldn't see any of their units and lost instantly" —
+   its start area explored but empty of models.
+
+   - **The client's own base was records without bodies.** Melee starting units are born
+     by the MAP SCRIPT (`startMelee` → `runMapScript`), and their models arrive through the
+     script-spawn drain — which item 7's gate had turned off for frozen clients wholesale.
+     That gate confused two different things: the queue drains genuinely CREATE sim records
+     under fresh local ids (must stay off), while the script-spawn drain only gives a body
+     to a record that already exists under ids every machine allocates identically. The
+     drain is now split: script spawns attach for everyone, first; the creating drains
+     still refuse a frozen client.
+   - **The instant defeat was the client's own script judging an AoI world — the 2e fork,
+     decided by a live failure.** The client's melee victory check, still being pumped,
+     read a world from which the applier had (correctly) removed every host unit it cannot
+     see, concluded the opponent had nothing, and ended the match on the spot. A script
+     read against an AoI subset can never judge a match, so the fork closes on the side
+     the doc suspected was honest: **a frozen client runs the script INIT (config/main —
+     the starting bases and their agreed ids are born there) but never PUMPS it.** Timers,
+     region triggers and victory checks run only on the authority; what they produce
+     reaches a client over the wire, which items F7/G1 already built (dialogs and the
+     `over`-stamped verdict). Melee loses nothing; a custom map's local presentation now
+     plainly waits on 2e's relay rather than half-running against a wrong world.
+
+   **Verified live, two windows through the relay:** the client draws its full base, its
+   readout says **6 units** — the record store holding exactly its own hall and five
+   peons, the maphack closure visible in the corner where 103 used to sit — no verdict
+   fires over a minute of play, a client move order crosses and its peon walks in the
+   snapshot-drawn view, and the host runs untouched at 103. Suites unchanged:
+   `sim:test` 512, `relay:test` 114, typecheck clean. **Still owed to close item 7's
+   verification debt:** a natural end (host razes the client's hall → both real screens
+   over the F7/G1 relay) has not been re-driven on THIS build, and the 2c regressions
+   (mid-match units are dots without bodies on a client) stand until entries grow from
+   `ApplyResult.created`.
+
 ### The closing run
 
 One clean pass on a build carrying all eight fixes, because the previous end-to-end drive had
