@@ -222,7 +222,23 @@ export class RelayCore {
         const out = { t: "deliver", from: conn.peerId, data: msg.data };
         if (typeof msg.to === "number") {
           const target = room.peers.get(msg.to);
-          if (target) target.conn.send(out);
+          // `target.conn` is NULL for a peer whose slot is being HELD — item 11a keeps a
+          // dropped player in the room table so its token can reclaim the seat, and clears
+          // the connection because there is no longer one. Every other send site in this file
+          // already guards for that; this one did not, and it predates the held slot entirely.
+          //
+          // The cost of the miss was not a dropped message, it was the SERVER: the host goes
+          // on addressing snapshots to that peer at 10 Hz, and the first one threw
+          // `Cannot read properties of null (reading 'send')` out of the connection handler
+          // and killed the process — taking every other room on the relay with it. One player
+          // choosing Quit Game ended everybody's game (docs/multiplayer.md Phase F item 8).
+          //
+          // Silence is the right answer, not a queue. What that peer misses while it is away
+          // is a stream of snapshots that are stale the moment the next one is built, and a
+          // rejoin is already answered with a FULL one off the cadence (item 11b) — so the
+          // gap heals itself the instant they are back, and buffering would only make the
+          // relay hold match state, which is the one thing it must never do.
+          if (target?.conn) target.conn.send(out);
         } else {
           this.inRoom(room, out, conn.peerId);
         }

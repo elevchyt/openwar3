@@ -170,6 +170,44 @@ try {
   check("room is gone from the list", after.rooms.length === 0);
   joiner.ws.close();
 
+  console.log("addressing a peer whose slot is HELD does not kill the relay");
+  // The failure this covers took the whole SERVER down, so it is checked over real sockets and
+  // the check is "is the relay still there afterwards" rather than anything about the message.
+  // A player choosing Quit Game leaves their slot held (item 11a: peer stays, `conn` goes
+  // null); the host keeps addressing snapshots to it at 10 Hz; the first one threw out of the
+  // connection handler and ended the process, taking every other room with it.
+  {
+    const h = client("holder");
+    await h.open();
+    await h.next("hello");
+    h.send({
+      t: "create", name: "Held Slot", playerName: "Host",
+      mapName: "Echo Isles", mapPath: MAP_PATH, maxPlayers: 2,
+    });
+    await h.next("created");
+
+    const leaver = client("leaver");
+    await leaver.open();
+    await leaver.next("hello");
+    leaver.send({ t: "join", roomId: (await roomsNow(h)).rooms[0].id, playerName: "Leaver" });
+    await leaver.next("joined");
+    await h.next("peer-join");
+
+    leaver.ws.close();
+    const dropped = await h.next("peer-drop");
+    check("the room holds the departed player's slot", dropped.peerId, 2);
+
+    // The exact message the host's snapshot cadence sends, to the exact peer that is not there.
+    h.send({ t: "relay", to: 2, data: { k: "snap", snap: { recipient: 1 } } });
+    // …and THE check: the relay is still serving. Before the guard, this timed out because the
+    // process was gone — along with every other game it was hosting.
+    const alive = await roomsNow(h).catch(() => null);
+    check("the relay survives it and is still answering", alive?.rooms?.length, 1);
+    check("…and the room is still there, with the slot still held", alive?.rooms?.[0]?.name, "Held Slot");
+    h.ws.close();
+    await delay(HEARTBEAT_MS * 2);
+  }
+
   console.log("a socket that dies WITHOUT closing is reaped");
   // The failure this covers was seen live: the games list advertised a room whose both tabs
   // had been shut minutes earlier. `ws.on("close")` never fired for them, because a tab that

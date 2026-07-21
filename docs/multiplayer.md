@@ -94,7 +94,7 @@ state.
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
-| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). Open: a client LEAVING crashes the relay (8), and **when the client's local sim comes out** — the developer's call. |
+| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). and a client leaving no longer crashes the relay (8). **All eight items are closed.** Next: the client's local sim stops stepping and becomes a record store the snapshot writes (Open questions — decided, option 2). |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2567,15 +2567,35 @@ each break is its own item, not a bigger commit.
    Same scenario both times: host razes the client's hall. Now the client gets "You failed to
    achieve victory." in the game's own chrome, and its Quit Game button leaves the match.
 
-8. **A client leaving a match CRASHES the relay — the whole process, for every room on it.**
-   Found in the same run, seconds after the fix above was confirmed: the client clicked Quit Game,
-   and `server/rooms.mjs`:225 threw `Cannot read properties of null (reading 'send')`.
+8. ~~**A client leaving a match CRASHED the relay — the whole process, for every room on it.**~~
+   **Fixed.** Found seconds after item 7 was confirmed: the client clicked Quit Game, and
+   `server/rooms.mjs` threw `Cannot read properties of null (reading 'send')` out of the
+   connection handler and ended the process.
 
-   `case "relay"` does `if (target) target.conn.send(out)` — but a peer whose slot is HELD after a
-   drop has `peer.conn = null` by design (item 11a keeps the peer in the room table so its token
-   can reclaim the seat). The host goes on addressing snapshots to that peer at 10 Hz, and the
-   first one kills the server. It is a one-line dereference and a total outage: every other game
-   on that relay dies with it. Next item, with a real-socket test.
+   `case "relay"` did `if (target) target.conn.send(out)`. A peer whose slot is HELD after a drop
+   has `peer.conn = null` by design — item 11a keeps it in the room table so its token can
+   reclaim the seat — and the host goes on addressing snapshots to that peer at 10 Hz. **Every
+   other send site in the file already guards `p.conn`;** this one is older than the held slot and
+   nobody came back to it. One player choosing Quit Game ended everybody's game, on every room the
+   relay was hosting.
+
+   **Silence is the fix, not a queue.** What that peer misses while away is a stream of snapshots
+   that are stale the moment the next one is built, and a rejoin is already answered with a FULL
+   one off the cadence (item 11b) — so the gap heals itself the instant they are back. Buffering
+   would make the relay hold match state, which is the one thing it must never do.
+
+   **Tests: `relay:test` 107 → 110, over real sockets**, because the failure was a dead SERVER and
+   nothing in-process can show that. The check is not about the message: it is that the relay is
+   still answering afterwards, and that the room and its held slot are still there. The injection
+   — the original unguarded dereference — turns both of those red rather than aborting the run,
+   because the poll that asks is guarded (see the trap list).
+
+**A harness note worth more than it looks:** to reach a natural end, **spawn heroes from the
+dev panel** rather than marching starting workers. The developer pointed this out after I spent
+two runs watching five peasants get distracted by peons — a worker rush takes minutes, keeps
+losing its attack order to retaliation, and twice failed to raze the hall at all. Heroes are one
+click each, hit hard enough to end it quickly, and make victory/defeat a cheap thing to test
+rather than an expedition.
 
 ### JASS
 
@@ -2603,6 +2623,35 @@ refactor can pass every suite while showing an enemy base through the fog.
 ## Open questions
 
 - ~~**9/10 sequencing.**~~ **Decided — B: the client renders snapshots and keeps simulating**, so the two can be diffed and the divergence logged (item 10a is that detector). A deliberate temporary state: the local sim comes out once the log is quiet.
+- ~~**When does the client's local sim come out?**~~ **Decided — option 2: stop STEPPING it, keep
+  it as a record store the snapshot writes.** Four options were put to the developer and this is
+  the one taken; the other three, and why they lose, are worth keeping:
+
+  1. *Leave it.* Free, and keeps both costs below.
+  2. **Chosen.** `sim.tick` is skipped on a client; arriving snapshots create, update and remove
+     records. The ~55 identity-and-permission sites in `rts.ts` keep working unchanged, because
+     the records still exist and carry the fields they read — `owner`, `x`, `y`, `building`,
+     `hp`, `inventory` are all already on `UnitSnapshot`.
+  3. *Keep stepping, reconcile each snapshot.* Rejected: you can only reconcile what you were
+     SENT, so fogged units keep their locally-simulated positions and the maphack below survives
+     as a mirror nobody can check.
+  4. *Delete the `SimWorld` on clients entirely.* The endgame, and this is a staged step toward
+     it rather than a detour — 2 first shows which fields the wire is actually missing.
+
+  **What decided it was not CPU, it was a maphack.** A client's process holds the WHOLE map
+  today: it runs the same melee init for every slot, so the enemy's base is in its `SimWorld`.
+  Measured rather than assumed — both windows' debug readout says `103 units`, identical, in a
+  match where AoI filtering is working. The filtering keeps the enemy off the SCREEN, not out of
+  MEMORY, and devtools is all it takes. That is a bigger hole than the client-side fog
+  re-derivation this document warns about in its own traps.
+
+  **Known cost, and it is a phase rather than a commit:** a client also runs the map script.
+  `runMapScript` executes on every machine — that is why `GetLocalPlayer` had to be made
+  per-recipient (item 7b). A client that stops simulating has a JASS interpreter still mutating a
+  world that no longer exists, so the script's world-writing half must be muzzled on clients, and
+  anything it drives locally then has to arrive over the wire instead. Item F7 is the first
+  instance of exactly that, done for the victory/defeat dialog. The half-populated-record risk in
+  option 2 is bounded and testable, and sizing it is the first move.
 - **Host input delay.** Handicap the host to the room's median RTT, or accept the advantage in v1?
 - **NAT traversal.** Pure relay (simple, all traffic through the free box, bandwidth-bound) vs. WebRTC
   data channels with the cloud box as signaling only (cheaper to host, much more moving parts).
