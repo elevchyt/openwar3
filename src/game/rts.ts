@@ -3684,6 +3684,13 @@ export class RtsController {
   }
   private matchLinkIsHost = false;
 
+  /** Is a LAN match's wire attached? The renderer's background pump keys on this: a
+   *  networked match must keep simulating when its window is hidden (the authority owes
+   *  the room snapshots), where single-player keeps the browser's natural pause. */
+  get networked(): boolean {
+    return this.matchLink !== null;
+  }
+
   /**
    * Host: hand a remote player the dialog its own script will never raise (item F7).
    *

@@ -95,7 +95,7 @@ state.
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
 | F — the LAN punch list | **done** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). and a client leaving no longer crashes the relay (8). **All eight items are closed and the stop condition is met**: menu → Local Area Network → Create Game → join → Start → play → a natural end, with no dead room, no stuck lobby and no desync — driven clean end to end on the fixed build (see [the closing run](#the-closing-run)). Next phase: the client's local sim stops stepping and becomes a record store the snapshot writes (Open questions — decided, option 2). |
-| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1); verified on Lost Temple with four seats, where one player's defeat leaves the room up and the wire feeding. `?maps=` takes map NAMES so the harness can be pointed at a specific map (2). The six playtest bugs are reproduced and their mechanisms pinned in code (3): trained units spawn as `localPlayer` in the drain (bug 4, NOT fixed by option 2 alone), snapshot-id vs local-entry-id divergence (bugs 1/5/6, option 2's target), the rAF-pumped host sim (bug 2, unreproducible headless — needs real windows), and a healthy 10 Hz wire rendering verbatim (bug 3). |
+| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1); verified on Lost Temple with four seats, where one player's defeat leaves the room up and the wire feeding. `?maps=` takes map NAMES so the harness can be pointed at a specific map (2). The six playtest bugs are reproduced and their mechanisms pinned in code (3): trained units spawn as `localPlayer` in the drain (bug 4, NOT fixed by option 2 alone), snapshot-id vs local-entry-id divergence (bugs 1/5/6, option 2's target), the rAF-pumped host sim (bug 2, unreproducible headless — needs real windows), and a healthy 10 Hz wire rendering verbatim (bug 3). Bug 2 is FIXED (4): a dedicated-Worker pump keeps a networked match's sim + spawn drains running while rAF is stopped; A/B-verified against a rAF-kill emulation (pre-fix wire froze at `received 90`; fixed build held 10 Hz and completed a training with the host's render loop dead). |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2783,6 +2783,48 @@ rather than an expedition.
    deaths move its food/unit counters (its first peon died to a creep camp on both sims and the
    client's HUD read the local copy). Both freeze or lie the moment the client stops stepping —
    the snapshot must carry the recipient's stash.
+
+4. **The authority no longer stops when Chrome stops its render loop (playtest bug 2).** The
+   whole game advanced only inside the rAF frame (`advanceSim`'s block used to live inline in
+   `mapViewer.start()`), and Chrome stops rAF outright for a hidden or occluded window. Two
+   windows on ONE machine means the host is usually the covered one — so the authority froze,
+   every client stopped receiving, and `MAX_STEPS_PER_FRAME` dropped the backlog on refocus, so
+   the lost time was lost for good. The developer's observed "client movement only registers
+   while the HOST window is focused" is exactly this, and the moving shadows were the client's
+   own `updateShadowBatch` reading its LOCAL sim while the models waited on snapshots.
+
+   **The fix is a dedicated-Worker clock.** Page timers are clamped in background tabs (~1 Hz,
+   worse under intensive throttling); a dedicated Worker's are not. `startBackgroundPump` spins
+   one up the first frame a match is `networked` (single-player keeps the browser's natural
+   "hidden tab = paused game"), posting every 50 ms; the handler stands down while rAF is alive
+   (`lastFrameAt` within 200 ms) and otherwise drives two things:
+
+   - **`advanceSim(now)`** — the fixed-timestep block, extracted, now owning its own clock
+     (`simLast`) SHARED between both drivers, so whichever runs next advances only by the time
+     the other has not already spent. Sim, commands, vision, snapshot emit — all of `rts.tick`.
+   - **`drainWorldSpawns(world)`** — the drains that CREATE world state (trained units, summons,
+     script spawns, felled trees' line-of-sight), split out of the render loop, because the sim
+     owns no models: the renderer's `spawnUnit` is what makes a trained unit's record, and
+     until it runs no snapshot can carry the unit. Cosmetic drains (effects, spell sounds, item
+     art) stay frame-only — they dress a window nobody is looking at, and flushing them late on
+     refocus is harmless where a missing UNIT is not. Every queue is drain-once, so the frame
+     and the pump can both call the same code and whichever runs first finds the work.
+
+   **Verified A/B in the browser, with a true red baseline.** The harness cannot occlude a
+   headless window, so occlusion was emulated by evaluating
+   `window.requestAnimationFrame = () => 0` on the host mid-match — the frame loop schedules
+   its successor through that call, so this stops it exactly as occlusion does. On the PRE-fix
+   build (`git stash`, fresh windows): the client's `[sync] received` froze at 90 and stayed
+   frozen across three samples over 30 s. On the fixed build (stash popped, fresh windows):
+   received climbed 110 → 357 at the full 10 Hz with the host's render loop dead — and a peon
+   the CLIENT trained during that state completed AND spawned (103 → 104 units in the client's
+   snapshot-drawn view), which only the pump's `drainWorldSpawns` could have done. Honest
+   limits: the emulation kills rAF, which is the dominant effect of occlusion but not all of it
+   (real backgrounding also clamps page timers — which is why the clock is in a Worker, the
+   standard exemption); the true two-visible-windows-on-a-desktop case still needs the
+   developer's eyes. Counter moved and declared: `grep -c simWorld src/render/mapViewer.ts`
+   32 → 33 — the one new use is the pump handing the world to the same drain code the frame
+   uses, a driver rather than a new draw surface.
 
 ### The closing run
 

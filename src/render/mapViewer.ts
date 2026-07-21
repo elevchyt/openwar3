@@ -617,6 +617,15 @@ export class MapViewerScene {
   /** Ticks elapsed since the match began. THE match clock — the number a multiplayer
    *  command is stamped with and a snapshot is taken at (docs/multiplayer.md). */
   private simTick = 0;
+  /** When the sim last advanced (performance.now() ms). Owned by `advanceSim` and SHARED
+   *  between the rAF frame and the background pump: whichever driver runs next advances
+   *  only by the time the other has not already spent, so time is never counted twice. */
+  private simLast = 0;
+  /** When the last rAF frame ran — how the background pump tells "the render loop is
+   *  alive, stand down" from "the window is hidden/occluded and rAF has stopped". */
+  private lastFrameAt = 0;
+  /** The LAN authority's clock when Chrome stops the render loop — see startBackgroundPump. */
+  private bgPump: Worker | null = null;
   /** Called when the player picks "End Game" — host tears the match down. */
   onExit: (() => void) | null = null;
   // --- the trigger's on-screen output (7.19) ---
@@ -5728,11 +5737,158 @@ export class MapViewerScene {
     return fp;
   }
 
+  /** The drains that CREATE OR CHANGE world state, split from the render loop's cosmetic
+   *  drains (docs/multiplayer.md Phase G item 4): the background pump must run these while
+   *  the window is hidden, because a training that completes on a hidden host must still
+   *  become a real unit — the sim owns no models, so the renderer's `spawnUnit` is what
+   *  creates the record, and until it runs no snapshot can carry the unit. Likewise a
+   *  felled tree must stop blocking line of sight, and a summon must exist to be seen.
+   *  Every queue here is drain-once, so the frame and the pump can both call this and
+   *  whichever runs first simply finds the work. Cosmetic drains (effect models, spell
+   *  sounds, item art) stay in the frame: they dress a window nobody is looking at, and
+   *  flushing them late on refocus is harmless where a missing UNIT is not. */
+  private drainWorldSpawns(world: SimWorld): void {
+    const map = this.viewer.map;
+    if (map) {
+      for (const tree of world.drainFelledTrees()) {
+        this.fellTreeVisual(tree.id, tree.x, tree.y, map.doodads); // "death" fall + leave the stump
+        this.rts?.onTreeFelled(tree.x, tree.y, tree.blockRadius); // stop blocking fog line-of-sight
+      }
+    }
+    // Finished training: the unit exits from the building corner nearest its
+    // rally point and rotates counterclockwise to the next clear spot if that
+    // corner is crowded (WC3), then walks to the rally point. `claimed` holds
+    // the spots handed out this call so a batch trained at once can't stack.
+    const claimed: Array<[number, number]> = [];
+    for (const t of world.drainTrained()) {
+      const d = this.registry.get(t.unitId);
+      if (!d) continue;
+      const [sx, sy] = this.trainSpawnSpot(t.buildingId, t.x, t.y, t.rallyX, t.rallyY, d.collision || 16, claimed);
+      const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
+      this.sounds?.play(d.soundSet, "Ready"); // "unit ready" voice on completion
+      const buildingId = t.buildingId;
+      void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
+        if (simId === null) return;
+        this.applyRally(simId, rally);
+        // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the
+        // trained unit is born in the renderer (the sim owns no models), and
+        // GetTrainedUnit must hand the script the real unit.
+        world.noteTrainFinish(buildingId, simId);
+      });
+    }
+    // Bodies owed to units a TRIGGER created. The sim unit already exists at a resolved
+    // position (RtsController.createScriptUnit ran synchronously inside the native); this
+    // only loads its model and attaches it. A headless host never drains this queue.
+    for (const sp of this.rts?.drainScriptSpawns() ?? []) {
+      const d = this.registry.get(sp.typeId);
+      if (d) void this.spawnUnit(d, sp.x, sp.y, sp.player, sp.team, 0, sp.facing, sp.simId);
+    }
+    const summonClaimed = new Set<string>(); // cells handed out this call (see summonSpot)
+    for (const s of world.drainSummonRequests()) {
+      const d = this.registry.get(s.unitId);
+      if (!d) continue;
+      const summonLeft = s.summonLeft;
+      const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16, s.atPoint, summonClaimed);
+      // The summon burst belongs on the SPOT the unit lands on, not on the caster —
+      // three wolves fan out around the Far Seer, and each arrives in its own.
+      if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy, true); // the model carries its own SND event
+      void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
+        if (simId === null) return;
+        const su = world.units.get(simId);
+        if (su) su.unsummonArt = s.unsummonArt; // how it leaves when its time is up
+        if (su && summonLeft > 0) {
+          su.summonLeft = summonLeft;
+          su.summonMax = summonLeft;
+          su.isSummon = true; // temporary summon — expires, leaves no corpse, ×0.5 XP
+        }
+        // Turn the fresh copy into an illusion of its original. The sim owns this: the
+        // level has to be applied and the stats rebuilt off it before hp/mana can be set
+        // (see initIllusion), which is not something the renderer should be sequencing.
+        if (su && s.illusion) world.initIllusion(su, s.sourceId, s.illusion);
+        this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
+      });
+    }
+  }
+
+  /** Advance the simulation by however much real time has passed since it LAST advanced —
+   *  from whichever driver is asking, the rAF frame or the background pump. The F10 game
+   *  menu freezes it (units hold; rendering continues); paused time is not owed to the sim.
+   *
+   *  FIXED TIMESTEP. The sim advances in whole SIM_DT steps and never in a raw frame
+   *  delta, so a match is a COUNT OF TICKS rather than a history of one machine's
+   *  frame rate. Two things need that: replays, and multiplayer — the host's
+   *  authoritative tick number is what a command attaches to and what a snapshot is
+   *  stamped with (docs/multiplayer.md). src/sim/world.ts always claimed to be
+   *  fixed-timestep; until now the claim was aspirational.
+   *
+   *  It also subsumes the old Math.min(dt, 50) clamp (issue #24: at low frame rates a
+   *  single huge step made melee units overshoot and "shuffle"). Every step is now
+   *  SIM_DT no matter how bad the frame was; a slow frame just runs more of them, and
+   *  MAX_STEPS_PER_FRAME caps that so a long stall can't spiral into an ever-growing
+   *  catch-up. Dropping the remainder there loses game time, which is the right thing
+   *  to lose: the alternative is a death spiral. (With the background pump running, no
+   *  hidden-window backlog builds in the first place — 50 ms of debt is at most 3 steps.) */
+  private advanceSim(now: number): void {
+    if (this.paused) {
+      this.simLast = now;
+      return;
+    }
+    // rAF timestamps and performance.now() share a clock, but a frame's vsync stamp can
+    // land a hair BEFORE a pump step that already ran — clamp, never rewind.
+    const dt = this.simLast ? Math.max(0, now - this.simLast) : 1000 / 60;
+    this.simLast = now;
+    this.simAccum += dt / 1000;
+    let steps = 0;
+    while (this.simAccum >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
+      this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
+      this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
+      this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
+      this.simTick++;
+      this.simAccum -= SIM_DT;
+      steps++;
+    }
+    if (steps === MAX_STEPS_PER_FRAME) this.simAccum = 0;
+  }
+
+  /** Keep a LAN match simulating when Chrome stops the render loop (docs/multiplayer.md
+   *  Phase G item 4 — playtest bug 2). Two windows on one machine means the HOST is
+   *  usually the hidden/occluded one, and rAF stops entirely there: the authority
+   *  freezes, every client stops receiving snapshots, and MAX_STEPS_PER_FRAME then drops
+   *  the backlog on refocus, so the lost time is lost for good.
+   *
+   *  Page timers are clamped in background tabs (~1 Hz, worse under intensive
+   *  throttling); a DEDICATED WORKER's timers are not, so the clock lives there and
+   *  posts every 50 ms. The handler runs on the main thread like any message, so there
+   *  is no concurrency with the frame — and it stands down while rAF is actually alive.
+   *  `advanceSim`'s shared clock makes a stray overlap harmless anyway; the gate just
+   *  keeps the steady state single-driver. `drainWorldSpawns` must ride along: a
+   *  training that completes on a hidden host has to become a real unit (the sim owns no
+   *  models — the renderer's spawnUnit is what creates the record) or no snapshot will
+   *  ever carry it. */
+  private startBackgroundPump(): void {
+    if (this.bgPump) return;
+    const src = "setInterval(() => postMessage(0), 50);";
+    this.bgPump = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+    this.bgPump.onmessage = () => {
+      const now = performance.now();
+      if (now - this.lastFrameAt < 200) return; // rAF is alive — it is the driver
+      this.advanceSim(now);
+      const world = this.rts?.simWorld;
+      if (world) this.drainWorldSpawns(world);
+    };
+  }
+
   start(): void {
     if (this.raf) return;
     const frame = (t: number) => {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
+      this.lastFrameAt = t;
+      // A LAN match must keep simulating when this window is hidden or occluded — rAF
+      // stops there, and on ONE machine with two windows the host is usually the covered
+      // one (docs/multiplayer.md Phase G item 4). Single-player keeps the browser's
+      // natural "hidden tab = paused game".
+      if (!this.bgPump && this.rts?.networked) this.startBackgroundPump();
       this.updateCamera(dt);
       this.metrics.frame(dt, this.rts?.unitCount() ?? 0);
       this.hud?.frame(dt);
@@ -5749,33 +5905,7 @@ export class MapViewerScene {
         this.portraitWarmAccum = 0;
         this.warmPortraits();
       }
-      // The F10 game menu freezes the simulation (units hold; rendering continues).
-      if (!this.paused) {
-        // FIXED TIMESTEP. The sim advances in whole SIM_DT steps and never in a raw frame
-        // delta, so a match is a COUNT OF TICKS rather than a history of one machine's
-        // frame rate. Two things need that: replays, and multiplayer — the host's
-        // authoritative tick number is what a command attaches to and what a snapshot is
-        // stamped with (docs/multiplayer.md). src/sim/world.ts always claimed to be
-        // fixed-timestep; until now the claim was aspirational.
-        //
-        // It also subsumes the old Math.min(dt, 50) clamp (issue #24: at low frame rates a
-        // single huge step made melee units overshoot and "shuffle"). Every step is now
-        // SIM_DT no matter how bad the frame was; a slow frame just runs more of them, and
-        // MAX_STEPS_PER_FRAME caps that so a long stall can't spiral into an ever-growing
-        // catch-up. Dropping the remainder there loses game time, which is the right thing
-        // to lose: the alternative is a death spiral.
-        this.simAccum += dt / 1000;
-        let steps = 0;
-        while (this.simAccum >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
-          this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
-          this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
-          this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
-          this.simTick++;
-          this.simAccum -= SIM_DT;
-          steps++;
-        }
-        if (steps === MAX_STEPS_PER_FRAME) this.simAccum = 0;
-      }
+      this.advanceSim(t);
       // Map units load async — hide the start-location props as they stream in.
       // Re-scan whenever the unit count grows so `sloc` markers that finish
       // loading a frame or two after `unitsReady` are still hidden (see the
@@ -5807,34 +5937,13 @@ export class MapViewerScene {
       const world = this.rts?.simWorld;
       const map = this.viewer.map;
       if (world && map) {
-        for (const tree of world.drainFelledTrees()) {
-          this.fellTreeVisual(tree.id, tree.x, tree.y, map.doodads); // "death" fall + leave the stump
-          this.rts?.onTreeFelled(tree.x, tree.y, tree.blockRadius); // stop blocking fog line-of-sight
-        }
+        // The drains that CREATE OR CHANGE world state (trained units, summons, felled
+        // trees) live in drainWorldSpawns so the background pump can run them while this
+        // window is hidden; every queue is drain-once, so both callers are safe.
+        this.drainWorldSpawns(world);
         for (const mine of world.drainDepletedMines()) {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
           this.splats?.remove(`m${mine.id}`); // drop the mine's ground texture
-        }
-        // Finished training: the unit exits from the building corner nearest its
-        // rally point and rotates counterclockwise to the next clear spot if that
-        // corner is crowded (WC3), then walks to the rally point. `claimed` holds
-        // the spots handed out this frame so a batch trained at once can't stack.
-        const claimed: Array<[number, number]> = [];
-        for (const t of world.drainTrained()) {
-          const d = this.registry.get(t.unitId);
-          if (!d) continue;
-          const [sx, sy] = this.trainSpawnSpot(t.buildingId, t.x, t.y, t.rallyX, t.rallyY, d.collision || 16, claimed);
-          const rally = { kind: t.rallyKind, targetId: t.rallyTargetId, x: t.rallyX, y: t.rallyY };
-          this.sounds?.play(d.soundSet, "Ready"); // "unit ready" voice on completion
-          const buildingId = t.buildingId;
-          void this.spawnUnit(d, sx, sy, this.localPlayer, this.teamOf(this.localPlayer)).then((simId) => {
-            if (simId === null) return;
-            this.applyRally(simId, rally);
-            // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the
-            // trained unit is born in the renderer (the sim owns no models), and
-            // GetTrainedUnit must hand the script the real unit.
-            world.noteTrainFinish(buildingId, simId);
-          });
         }
         // --- research + structure upgrades (issue #57) ---
         // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an
@@ -5906,38 +6015,6 @@ export class MapViewerScene {
         // of the caster, or ON the targeted point for a ward — see summonSpot), play their
         // birth clip, then flag temporary summons (Water Elemental) so the sim expires them.
         for (const m of world.drainMirrorMissiles()) void this.spawnMirrorMissile(m);
-        // Bodies owed to units a TRIGGER created. The sim unit already exists at a resolved
-        // position (RtsController.createScriptUnit ran synchronously inside the native); this
-        // only loads its model and attaches it. A headless host never drains this queue.
-        for (const sp of this.rts?.drainScriptSpawns() ?? []) {
-          const d = this.registry.get(sp.typeId);
-          if (d) void this.spawnUnit(d, sp.x, sp.y, sp.player, sp.team, 0, sp.facing, sp.simId);
-        }
-        const summonClaimed = new Set<string>(); // cells handed out this frame (see summonSpot)
-        for (const s of world.drainSummonRequests()) {
-          const d = this.registry.get(s.unitId);
-          if (!d) continue;
-          const summonLeft = s.summonLeft;
-          const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16, s.atPoint, summonClaimed);
-          // The summon burst belongs on the SPOT the unit lands on, not on the caster —
-          // three wolves fan out around the Far Seer, and each arrives in its own.
-          if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy, true); // the model carries its own SND event
-          void this.spawnUnit(d, sx, sy, s.owner, s.team).then((simId) => {
-            if (simId === null) return;
-            const su = world.units.get(simId);
-            if (su) su.unsummonArt = s.unsummonArt; // how it leaves when its time is up
-            if (su && summonLeft > 0) {
-              su.summonLeft = summonLeft;
-              su.summonMax = summonLeft;
-              su.isSummon = true; // temporary summon — expires, leaves no corpse, ×0.5 XP
-            }
-            // Turn the fresh copy into an illusion of its original. The sim owns this: the
-            // level has to be applied and the stats rebuilt off it before hp/mana can be set
-            // (see initIllusion), which is not something the renderer should be sequencing.
-            if (su && s.illusion) world.initIllusion(su, s.sourceId, s.illusion);
-            this.rts!.beginSummonBirth(simId); // materialize (birth clip + spawn lock)
-          });
-        }
         // --- items on the ground (dropped / creep-dropped) ---
         for (const it of world.drainItemSpawns()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
         for (const r of world.drainItemRemovals()) this.removeItemModel(r.id, r.died);
@@ -6097,6 +6174,8 @@ export class MapViewerScene {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.last = 0;
+    this.bgPump?.terminate();
+    this.bgPump = null;
     this.rts?.pause();
     this.metrics.hide();
     this.hud?.hide();
