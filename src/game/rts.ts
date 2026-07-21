@@ -3696,6 +3696,11 @@ export class RtsController {
     return this.matchLink.sendDialog(player, msg);
   }
 
+  /** The match is over on this machine — end the wire (Phase G item 1). Safe to call twice. */
+  endMatchWire(): void {
+    this.matchLink?.endMatch();
+  }
+
   /** Client: the authority raised a dialog for us. Set by whoever owns the dialog UI. */
   set onRemoteDialog(fn: (msg: DialogMessage) => void) {
     this.remoteDialog = fn;

@@ -327,7 +327,14 @@ console.log("rubbish on the game channel is refused, not thrown");
 
 /** A `MatchChannel` over one loopback endpoint — what `LanLobby` provides in the real app. */
 function channelFor(t) {
-  const ch = { send: (data, to) => t.send({ t: "relay", to, data }), onPeerData: () => {}, onPeerRejoin: () => {} };
+  // `close` is the fourth member (Phase F4/G1): the match owns the wire once the lobby hands it
+  // over, so it is the match that ends it. Counted rather than acted on, so a test can ask
+  // whether the wire was hung up without needing a real socket to hang up.
+  const ch = {
+    send: (data, to) => t.send({ t: "relay", to, data }),
+    onPeerData: () => {}, onPeerRejoin: () => {}, onRoomClosed: () => {},
+    closed: 0, close: () => { ch.closed++; },
+  };
   // Both halves of `MatchChannel`: game traffic, and the one piece of roster news the match
   // needs. Routing `peer-rejoin` here rather than faking a call is what makes the 11b check
   // below run over the REAL relay core -- a held slot, a token, the same peer id back.
@@ -471,6 +478,41 @@ console.log("the authority's verdict reaches the player it is about, and nobody 
   await tick();
   check("a third player in the room is not handed the loser's screen", bystander, []);
   check("…while the loser got this one too", seen.length, 2);
+}
+
+// Phase G item 1: once the victory/defeat screen is up the match is officially decided, so the
+// wire is dropped and every machine keeps its own private idea of the world from there — the
+// developer's rule, and how WC3 behaves. What matters on the wire is that the AUTHORITY says
+// which dialog is final: a client that hung up because any old dialog arrived would drop off
+// mid-match the first time a map raised a quest popup for it.
+console.log("the authority stamps which screen is the END of a player's game");
+{
+  const { host, peer } = await room();
+  const hostCh = channelFor(host);
+  const peerCh = channelFor(peer);
+  const hostLink = new MatchLink(hostCh, 0, SEATS);
+  const peerLink = new MatchLink(peerCh, 1, SEATS);
+  const seen = [];
+  peerLink.onDialog = (d) => seen.push(d);
+
+  // A quest popup for that player is NOT the end of anything.
+  hostLink.sendDialog(1, { k: "dlg", message: "A quest is complete.", buttons: [] });
+  await tick();
+  check("an ordinary dialog carries no ending", seen.map((d) => d.over ?? false), [false]);
+
+  hostLink.sendDialog(1, { k: "dlg", message: "You failed to achieve victory.", buttons: [], over: true });
+  await tick();
+  check("the verdict does", seen.map((d) => d.over ?? false), [false, true]);
+}
+
+console.log("…and ending the match hangs up that end of the wire");
+{
+  const { host } = await room();
+  const ch = channelFor(host);
+  const link = new MatchLink(ch, 0, SEATS);
+  check("the wire is open while the match runs", ch.closed, 0);
+  link.endMatch();
+  check("the match ending closes it", ch.closed, 1);
 }
 
 console.log("a verdict for a seat nobody is sitting in goes nowhere, and says so");

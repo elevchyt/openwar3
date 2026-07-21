@@ -622,6 +622,21 @@ export interface EngineHooks {
    *  (GetLocalizedString("GAMEOVER_VICTORY_MSG") → "Victory!"), so without this the
    *  dialog would render the key. Undefined → the caller keeps the key (identity). */
   localizedString?(key: string): string | undefined;
+  /**
+   * RemovePlayer(player, PLAYER_GAME_RESULT_*) — THIS PLAYER'S GAME IS OVER.
+   *
+   * Blizzard's own signal, read out of the real `Scripts\Blizzard.j`: `CustomVictoryBJ` and
+   * `CustomDefeatBJ` both call it before they show anything, and `MeleeDoDefeat` reaches it
+   * through `RemovePlayerPreserveUnitsBJ`. So it fires exactly once per player per match, at
+   * the moment the outcome is decided and BEFORE the dialog is raised.
+   *
+   * The result argument is deliberately not passed on. Victory, defeat, tie and neutral all
+   * mean the same thing to a caller that only wants to know the game has ended — and decoding
+   * the enum would mean transcribing a constant order this codebase has already been bitten by
+   * once (`mapcontrol`, off by one, in applyLobby). Which outcome it was is already in the
+   * dialog the script raises next.
+   */
+  playerGameOver?(player: number): void;
   /** EndGame(doScoreScreen) — leave the match. The Quit button of the victory/defeat
    *  dialog is a DialogAddQuitButton, and this is what it does. */
   endGame?(doScoreScreen: boolean): void;

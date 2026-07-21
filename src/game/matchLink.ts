@@ -87,6 +87,15 @@ export interface DialogMessage {
   k: "dlg";
   message: string;
   buttons: { text: string; quit: boolean }[];
+  /**
+   * This dialog is the END of that player's game, not just something their script wants shown.
+   *
+   * The recipient closes its own wire on it (Phase G item 1), so it has to be the AUTHORITY
+   * that says so rather than the client guessing from the fact that a dialog arrived — a map
+   * raising a quest popup for a remote player would otherwise drop that player off the wire
+   * mid-match. The host knows because it saw `RemovePlayer` for that seat.
+   */
+  over?: boolean;
 }
 
 export function isDialogMessage(data: unknown): data is DialogMessage {
@@ -409,6 +418,18 @@ export class MatchLink {
     return this.inputsParted;
   }
   private inputsParted = false;
+
+  /**
+   * The match is over: end the wire (docs/multiplayer.md Phase G item 1).
+   *
+   * The developer's rule, and it matches WC3: once the victory/defeat screen is up the game is
+   * officially decided, so every machine keeping its own private idea of the world from then on
+   * costs nothing. What it BUYS is that a finished match stops paying — no snapshots for a game
+   * nobody is playing, and the room frees up instead of lingering until somebody clicks away.
+   */
+  endMatch(): void {
+    this.channel.close?.();
+  }
 
   /** The last comparison's findings, already formatted. For a console line or an overlay. */
   describe(): string[] {

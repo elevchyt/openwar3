@@ -122,7 +122,10 @@ export function registerMeleeNatives(rt: Runtime): void {
   // GetPlayerAlliance — the native PlayersAreCoAllied (the BJ every ally count rides on)
   // reads both ways — moved to natives/vision.ts (7.22), where it reads the real per-pair
   // alliance matrix instead of collapsing to a team comparison that ignored the setting.
-  def(rt, "RemovePlayer", () => JNULL); // a defeated/victorious player is dropped — we keep them in the world
+  // A defeated/victorious player is "removed" — we keep them in the world (their units stay,
+  // as MeleeDoDefeat's own RemovePlayerPreserveUnitsBJ name promises), but the FACT that their
+  // game just ended is load-bearing: it is what closes the match's wire (Phase G item 1).
+  def(rt, "RemovePlayer", (c, a) => (c.rt.hooks?.playerGameOver?.(playerIndex(c, a[0])), JNULL));
 
   // --- gold mines (MeleeFindNearestMine → MeleeStartingUnits*) ---
   // In WC3 a gold mine IS a unit ('ngol', Neutral Passive), and that's how the melee

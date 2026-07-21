@@ -596,6 +596,13 @@ export class MapViewerScene {
   private readonly relayedDialogs = new Map<number, string>();
   /** A dialog the AUTHORITY raised for us, when we are a client. Null on the host. */
   private remoteDialog: DialogObj | null = null;
+  /** Seats whose game has ENDED — `RemovePlayer` from blizzard.j's victory/defeat path. Read
+   *  by the dialog relay, which stamps the outgoing screen as final (Phase G item 1). */
+  private readonly gameOverFor = new Set<number>();
+  /** The match is decided for the player at THIS machine, so the wire has been (or is about to
+   *  be) closed. Also what stops a `room-closed` arriving afterwards from putting "You were
+   *  disconnected." over the top of a perfectly good Victory screen. */
+  private matchEnded = false;
   /** Shown when the match ends out from under the player — v1's only cause is the host
    *  leaving, since there is no migration (docs/multiplayer.md Phase F item 6). */
   private matchOver: MatchOverDialog | null = null;
@@ -1213,6 +1220,13 @@ export class MapViewerScene {
     // two engine button behaviours (any click closes; a quit button leaves) work unchanged.
     if (this.rts) {
       this.rts.onRemoteDialog = (msg) => {
+        // A CLIENT never sees `RemovePlayer` for itself — its own script never runs the defeat
+        // check (that is the whole of item F7) — so the authority's stamp is the only way it can
+        // know its game is over, and it is what hangs up this end of the wire.
+        if (msg.over && !this.matchEnded) {
+          this.matchEnded = true;
+          this.rts?.endMatchWire();
+        }
         this.remoteDialog = {
           handleId: -1, // not the script's; nothing looks it up
           message: msg.message,
@@ -1561,6 +1575,13 @@ export class MapViewerScene {
         this.dialog?.update(null);
         this.paused = false;
         this.onExit?.();
+      },
+      // RemovePlayer(p, PLAYER_GAME_RESULT_*) — blizzard.j's own "this player's game is over",
+      // called by CustomVictoryBJ/CustomDefeatBJ before either of them shows anything. Recorded
+      // rather than acted on HERE: the wire must not close until the dialog relay below has run,
+      // or the loser would never be handed the screen that says why (Phase G item 1).
+      playerGameOver: (player) => {
+        this.gameOverFor.add(player);
       },
       pauseGame: (flag) => (this.paused = flag),
       // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
@@ -2031,6 +2052,10 @@ export class MapViewerScene {
           k: "dlg",
           message: d.message,
           buttons: d.buttons.map((b) => ({ text: b.text, quit: b.quit })),
+          // Whether this screen is the END of their game, decided by the AUTHORITY rather than
+          // guessed by the recipient — a map raising a quest popup for a remote player must not
+          // drop that player off the wire mid-match.
+          ...(this.gameOverFor.has(p) ? { over: true } : {}),
         });
         // Remembered only when it actually went somewhere, so a player who has not been
         // seated yet is retried rather than silently written off.
@@ -2040,6 +2065,17 @@ export class MapViewerScene {
     // A dialog the authority sent US wins over our own script's, which on a client is empty
     // anyway — and on the host `remoteDialog` is never set, so this reads as it always did.
     this.dialog?.update(this.remoteDialog ?? rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
+
+    // THE WIRE CLOSES HERE, AND THE PLACE IS THE POINT (Phase G item 1). The match is decided,
+    // so every machine keeping its own private idea of the world from now on costs nothing —
+    // that is the developer's rule and it is how WC3 behaves. But it has to happen AFTER the
+    // relay loop above: the host learns the outcome from `RemovePlayer` DURING the script call,
+    // and closing there would tear the socket down in the same frame that owes the loser the
+    // screen explaining why. Relay first, then hang up.
+    if (this.gameOverFor.has(this.localPlayer) && !this.matchEnded) {
+      this.matchEnded = true;
+      this.rts?.endMatchWire();
+    }
   }
 
   /** The world→screen bridge the floating-text pass runs on. */
@@ -4187,6 +4223,11 @@ export class MapViewerScene {
    * install says what it says; the literals are the fallback for a table that never loaded.
    */
   showMatchOver(): void {
+    // A match that ENDED does not also get disconnected. Once the victory/defeat screen is up
+    // this machine hangs up on purpose (Phase G item 1), and on the host that closes the room —
+    // so every client is about to be told `room-closed` for a game that finished properly. That
+    // is news about a wire nobody needs any more, not about the match.
+    if (this.matchEnded) return;
     if (this.matchOver) return; // already said; a second `room-closed` is not a second dialog
     this.paused = true;
     const s = (key: string, fallback: string): string => this.globalStrings?.strings.get(key) ?? fallback;
