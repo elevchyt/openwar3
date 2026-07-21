@@ -18,6 +18,10 @@ import WebSocket from "ws";
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 8799; // not the default, so a relay you already have running is left alone
 const URL = `ws://localhost:${PORT}`;
+/** The relay's ping interval, wound right down so a reaping is watchable inside a test run.
+ *  A live client answers a ping under the WebSocket protocol itself, so a fast beat is
+ *  harmless to every other section here — which is the point of running them all under it. */
+const HEARTBEAT_MS = 250;
 /** The map a hosted game advertises. A path into the install, never the file itself. */
 const MAP_PATH = "Maps\\\\FrozenThrone\\\\(2)EchoIsles.w3x";
 
@@ -66,8 +70,18 @@ function client(name) {
   };
 }
 
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Ask the relay for the game list and read the answer. Every `rooms` already received is
+ *  claimed FIRST, so this cannot hand back a stale broadcast from an earlier room change. */
+async function roomsNow(c) {
+  for (const m of c.seen) if (m.t === "rooms") m.__claimed = true;
+  c.send({ t: "list" });
+  return await c.next("rooms", 3000);
+}
+
 const relay = spawn(process.execPath, [join(REPO, "server", "relay.mjs")], {
-  env: { ...process.env, PORT: String(PORT) },
+  env: { ...process.env, PORT: String(PORT), RELAY_HEARTBEAT_MS: String(HEARTBEAT_MS) },
   stdio: ["ignore", "pipe", "inherit"],
 });
 await new Promise((resolve, reject) => {
@@ -155,6 +169,54 @@ try {
   const after = await joiner.next("rooms");
   check("room is gone from the list", after.rooms.length === 0);
   joiner.ws.close();
+
+  console.log("a socket that dies WITHOUT closing is reaped");
+  // The failure this covers was seen live: the games list advertised a room whose both tabs
+  // had been shut minutes earlier. `ws.on("close")` never fired for them, because a tab that
+  // is force-killed (or a laptop lid, or wifi pulled) sends no FIN — the socket just stops.
+  const zombie = client("zombie");
+  await zombie.open();
+  await zombie.next("hello");
+  zombie.send({
+    t: "create", name: "Ghost Game", playerName: "Zombie",
+    mapName: "Echo Isles", mapPath: MAP_PATH, maxPlayers: 2,
+  });
+  await zombie.next("created");
+
+  const watcher = client("watcher");
+  await watcher.open();
+  await watcher.next("hello");
+  const listedAlive = await roomsNow(watcher);
+  check(
+    "the room is listed while its host is answering",
+    listedAlive.rooms.length === 1 && listedAlive.rooms[0].name === "Ghost Game",
+  );
+
+  // Pull the plug at the physical layer: stop READING bytes off the socket, so the relay's
+  // ping frame is never parsed and so never answered. No FIN, no close event, no error —
+  // from Node's side the connection is still perfectly open. This is the only way to make
+  // the bug appear, which is why the check is worth its weight.
+  zombie.ws._socket.pause();
+
+  // An unanswered poll is reported as "still listed" rather than thrown: a sweep that reaps
+  // the WATCHER too would otherwise abort the section on a timeout, and the three claims below
+  // would never be judged — the loudest failure would name the wrong thing.
+  const askOrNothing = () => roomsNow(watcher).catch(() => null);
+
+  let listedDead = listedAlive;
+  const deadline = Date.now() + HEARTBEAT_MS * 12;
+  while (Date.now() < deadline && (listedDead?.rooms?.length ?? 1) > 0) {
+    await delay(HEARTBEAT_MS);
+    listedDead = await askOrNothing();
+  }
+  check("a host that stops answering pings is reaped and its room delisted", listedDead?.rooms?.length === 0);
+  // The other half of the claim, and the half a "terminate everything each beat" relay would
+  // fail: a client that DID answer, across a dozen beats, is still connected and still served.
+  check("a live client is not terminated by the heartbeat", watcher.ws.readyState === WebSocket.OPEN);
+  const stillServed = await askOrNothing();
+  check("the live client is still answered after those beats", Array.isArray(stillServed?.rooms));
+  watcher.ws.close();
+  zombie.ws.terminate();
 } catch (err) {
   console.error(`\n  FAIL ${err.message}`);
   failures++;

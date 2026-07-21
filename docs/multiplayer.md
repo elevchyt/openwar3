@@ -94,6 +94,7 @@ state.
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
+| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. Relay liveness done (1) — a peer that dies without closing is pinged out and its room delisted, so dead rooms stop haunting the game list. Next: drive the whole real two-window flow (2). |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2314,6 +2315,55 @@ enumerated by body rather than by name.
     work — the path is covered end to end by `loopback-test` over the real `RelayCore` — and the
     phase does not depend on it. The v1 design questions in [Open questions](#open-questions)
     (host input delay, NAT traversal, cold start) are the next phase's, not this one's.
+
+### Phase F — the LAN punch list
+
+Phase E closed the architecture. What is left is **product-shaped**: the things that only go wrong
+when a real person does something a script would not. The list grows as the real flow is driven —
+each break is its own item, not a bigger commit.
+
+1. ~~**The relay had no liveness detection, so dead rooms haunted the game list.**~~ **Done.**
+   `relay.mjs` relied entirely on `ws.on("close")`, which is the *easy* case. A peer that stops
+   EXISTING without closing — force-killed tab, closed laptop lid, wifi pulled at the physical
+   layer — sends no FIN, so TCP sits on the socket for many minutes and for all of them the relay
+   believes the peer is present: **its room stays listed, full, and unjoinable.** Observed live in
+   the games list (see `f092b75`).
+
+   **The reaping logic was never the problem and was not touched.** `rooms.mjs` already does the
+   right thing with a departure — a dropped non-host holds its slot under its token, a dropped
+   host closes the room. The heartbeat's whole job is to make that path *fire*: ping every socket
+   on an interval, `terminate()` any that has not answered the previous ping, and let the
+   resulting `close` run the existing `disconnect`. `RELAY_HEARTBEAT_MS` (default 15 s, two beats
+   to notice) exists so a test can watch a reaping happen in under a second. This also turns
+   [item 11a](#remaining-work-in-order-2)'s held slots from permanently-held into reclaimable.
+
+   **It stays in `relay.mjs`, and the file's own split says why.** Liveness is a fact about a
+   wire, and `rooms.mjs` is socket-free on purpose — it knows only "this connection went away".
+   The browser needs no code at all: answering a ping with a pong is the WebSocket protocol's own
+   job (RFC 6455 §5.5.3), handled under the client API, so it reaches even a page whose JS thread
+   is wedged — which is the distinction being drawn, since what it cannot reach is a page that is
+   gone.
+
+   **Tests: `relay:test` 88 → 92, over REAL sockets** — the bug does not exist in-process. The
+   dead peer is simulated by `ws._socket.pause()`: the client stops *reading bytes*, so the ping
+   frame is never parsed and never answered, and from Node's side the connection is still
+   perfectly open. No FIN, no close, no error — the only way to make the failure appear. Two
+   injections: a sweep with an empty body (the original bug — "reaped and delisted" goes red) and
+   one that terminates every socket each beat (three red, including "a live client is not
+   terminated"), which is why the live-watcher half of the section is there at all.
+
+   **Driven in a real browser, and it corrected an assumption worth writing down.** A Chrome
+   socket held a room across **ten beats** and was still open and still served — a real browser
+   does pong, unprompted. But **`agent-browser set offline on` is NOT a wire cut**: with it on,
+   the page's `readyState` is still `1`, the socket still answers pings, and the room correctly
+   stays listed. It suppresses data, not the connection. So the reconnect work in item 11b
+   exercised a *quiet* pipe, not a severed one, and the no-FIN case a browser genuinely cannot
+   produce on one machine (killing the process closes its sockets at the OS layer) is exactly the
+   case `_socket.pause()` covers. A tab reload still reaps instantly, as it always did.
+
+2. **Drive the whole real flow, two windows.** Create Game → pick map → the other window sees the
+   room → Join → both in the lobby → Start → both in the match → play. Not yet driven end to end
+   even once. Each break becomes its own item below.
 
 ### JASS
 
