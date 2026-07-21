@@ -5748,6 +5748,11 @@ export class MapViewerScene {
    *  sounds, item art) stay in the frame: they dress a window nobody is looking at, and
    *  flushing them late on refocus is harmless where a missing UNIT is not. */
   private drainWorldSpawns(world: SimWorld): void {
+    // A frozen client CREATES nothing locally (option 2): its trained/summon queues never
+    // fill because the sim never steps, and a script spawn drained here would mint a local
+    // id — the collision family this phase removes. New units arrive as snapshot records
+    // and grow models in the entry sync (item 2c), never through these drains.
+    if (this.rts?.frozenClient) return;
     const map = this.viewer.map;
     if (map) {
       for (const tree of world.drainFelledTrees()) {
@@ -5845,7 +5850,11 @@ export class MapViewerScene {
     this.simAccum += dt / 1000;
     let steps = 0;
     while (this.simAccum >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
-      this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
+      // A frozen client must not start builds off its own records (option 2): the worker's
+      // position is the HOST's answer arriving at 10 Hz, and the host runs the real
+      // tickPendingBuild — a local start here would mint a local id, which is the
+      // collision family this whole phase removes.
+      if (!this.rts?.frozenClient) this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
       this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
       this.pumpMapScript(SIM_DT); // Phase 7: the map's timers + enter/leave-region triggers
       this.simTick++;

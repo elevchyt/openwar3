@@ -26,6 +26,8 @@ import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
 import { MatchLink, type DialogMessage, type MatchLinkSetup } from "./matchLink";
+import { applyWorldSnapshot } from "./snapshotApply";
+import type { WorldSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
 import type { RenderUnit } from "./renderUnit";
@@ -2126,7 +2128,21 @@ export class RtsController {
 
   tick(dt: number): void {
     this.trySeed();
-    this.sim.tick(dt);
+    if (this.frozenClient) {
+      // Option 2 (docs/multiplayer.md, decided): a client's sim never steps. The record
+      // store is written by the payload instead — create, update, and REMOVE, absence
+      // being "you cannot see it", which is what finally takes the enemy's base out of
+      // this process's memory rather than merely off its screen. Everything below the
+      // step — the event drains, corpse bookkeeping, vision, the entry sync — runs
+      // unchanged against the written records; the drains simply find empty queues.
+      const latest = this.matchLink?.latest();
+      if (latest && latest !== this.lastApplied) {
+        this.lastApplied = latest;
+        this.applySnapshot(latest);
+      }
+    } else {
+      this.sim.tick(dt);
+    }
     this.playImpacts(); // BEFORE deaths — a killed target's entry is still around to read its armour
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
     for (const id of this.sim.drainRemovals()) this.onRemove(id);
@@ -3689,6 +3705,31 @@ export class RtsController {
    *  the room snapshots), where single-player keeps the browser's natural pause. */
   get networked(): boolean {
     return this.matchLink !== null;
+  }
+
+  /** Option 2 (docs/multiplayer.md): is this machine a client whose `SimWorld` is a record
+   *  store the snapshot writes? True from the moment the wire attaches — the local sim
+   *  never steps again; until the first payload lands the records simply hold what the
+   *  map-script init seeded, which the first application then corrects. */
+  get frozenClient(): boolean {
+    return this.matchLink !== null && !this.matchLinkIsHost;
+  }
+
+  /** The payload object last written into the records, so a payload is applied exactly once
+   *  (`MatchLink.latest()` hands back the same object until a new one lands). */
+  private lastApplied: WorldSnapshot | null = null;
+
+  /** Write one payload into the record store (see `snapshotApply.ts` for the semantics).
+   *  Creation goes through `addSimUnit` under the HOST's id — the def seeds the ~90
+   *  sim-internal fields the wire does not carry, and the reserved id is the whole point:
+   *  a client allocates no ids of its own, so none can collide (playtest bugs 5/6). */
+  private applySnapshot(snap: WorldSnapshot): void {
+    applyWorldSnapshot(this.sim, snap, (s) => {
+      const def = this.registry.get(s.typeId);
+      if (!def) return null;
+      this.addSimUnit(def, s.x, s.y, s.facing, s.owner, s.team, 0, s.id);
+      return this.sim.units.get(s.id) ?? null;
+    });
   }
 
   /**
