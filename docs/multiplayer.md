@@ -95,7 +95,7 @@ state.
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
 | F — the LAN punch list | **done** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). and a client leaving no longer crashes the relay (8). **All eight items are closed and the stop condition is met**: menu → Local Area Network → Create Game → join → Start → play → a natural end, with no dead room, no stuck lobby and no desync — driven clean end to end on the fixed build (see [the closing run](#the-closing-run)). Next phase: the client's local sim stops stepping and becomes a record store the snapshot writes (Open questions — decided, option 2). |
-| G — the wire after the whistle | **in progress** | The relay is dropped the moment the victory/defeat screen comes up, on `RemovePlayer` — blizzard.j's own end-of-game signal (1). Each side keeps its own state from there, which is what WC3 does and what makes a finished match stop paying. |
+| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1). A knocked-out player keeps their wire and goes on watching; each side keeps its own state once it is over, which is what WC3 does and what makes a finished match stop paying. |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2613,11 +2613,26 @@ rather than an expedition.
    exactly once per player per match, at the moment the outcome is decided. It was a stub
    returning null; it is now the hook `playerGameOver`.
 
-   **The result argument is deliberately dropped on the floor.** Victory, defeat, tie and neutral
-   all mean the same thing to a caller that only wants to know the game has ended, and decoding
-   the enum would mean transcribing a constant order this codebase has already been bitten by
-   once (`mapcontrol`, off by one, in `applyLobby`). Which outcome it was is in the dialog the
-   script raises next.
+   **A DEFEAT ends one player's game; anything else ends the MATCH — and only the second kind
+   drops the wire.** That is the developer's correction to the first cut of this item, and it is
+   the whole rule: a defeated player in a three-way is still watching somebody else's game, and
+   hanging up on them would be taking it away. They keep their wire, and their "Continue Game"
+   keeps meaning something.
+
+   So the result argument IS read, which puts this squarely in the path of the miscount that
+   broke `mapcontrol`. It was taken from the file rather than from memory —
+   `Scripts\common.j`, checked in **both** War3.mpq and War3x.mpq, which agree:
+
+   ```
+   constant playergameresult PLAYER_GAME_RESULT_VICTORY = ConvertPlayerGameResult(0)
+   constant playergameresult PLAYER_GAME_RESULT_DEFEAT  = ConvertPlayerGameResult(1)
+   constant playergameresult PLAYER_GAME_RESULT_TIE     = ConvertPlayerGameResult(2)
+   constant playergameresult PLAYER_GAME_RESULT_NEUTRAL = ConvertPlayerGameResult(3)
+   ```
+
+   The test is written as **"anything but defeat"** rather than "equals victory", and that is not
+   pedantry: a TIE or a neutral game-over ends the match just as finally, and matching only on
+   victory would leave the wire up forever after one.
 
    **Two things had to be got right, and neither is obvious from the instruction:**
 
@@ -2638,22 +2653,40 @@ rather than an expedition.
    game it just saw end — and the client hangs up on that rather than on the mere arrival of a
    dialog.
 
-   **Known and accepted, stated rather than discovered:** in a game with more than two humans, a
-   defeated HOST hanging up ends the match for everyone still playing. That is not a new class of
-   failure — v1 has no host migration, so a host leaving already does exactly this — but it is
-   reachable one step earlier now. The target is two browsers on one machine; revisit with host
-   migration, not before.
+   **The "defeated host ends everyone's match" hazard the first cut carried is gone**, and it is
+   gone as a consequence rather than by a second patch: a defeated host is a DEFEAT, so it no
+   longer decides anything and the host keeps hosting for whoever is still playing.
 
-   **Tests: `relay:test` 110 → 114.** An ordinary dialog carries no ending and the verdict does
-   (so the stamp is the stamp, not "every relayed dialog"); ending the match closes the channel.
-   The injection — `endMatch` that does not close — turns the named check red.
+   **What remains, in a game with more than two humans:** a player knocked out early keeps their
+   wire and goes on watching, which is right — but when the match finally ends they get
+   `room-closed` rather than a screen, so they see "Game over. / You were disconnected." instead
+   of a result. Honest, since their wire genuinely did just go, and the title is at least the
+   right one. Worth a real ending when there is a third seat to test it with.
 
-   **Verified in the browser, the whole flow.** Host razes the client's hall: host gets Victory!,
-   **the loser still gets "You failed to achieve victory."** (so the relay-before-close ordering
-   held), the room is **gone from the relay** the moment the screens appear, there is no
-   "You were disconnected." stacked on the defeat screen, and the client's `[sync]` counter
-   **freezes at `received 1500`** and stays there — the wire is genuinely down and each side is
-   running its own state, which is the whole point.
+   **Tests: `relay:test` 110 → 114, `jass:test` audience 23 → 25.** An ordinary dialog carries no
+   ending and the verdict does (so the stamp is the stamp, not "every relayed dialog"); ending
+   the match closes the channel; and `RemovePlayer` reports **both** the player and the raw
+   result index, which is the check that stops the enum silently rotting. Two injections —
+   `endMatch` that does not close, and a native that reports every result as victory — each turn
+   their own named check red, and the second one is precisely the `mapcontrol` failure mode.
+
+   **Verified in the browser, the whole flow, and re-run after the defeat/victory split.** Host
+   razes the client's hall: host gets Victory!, **the loser still gets "You failed to achieve
+   victory."** — so the relay-before-hang-up ordering held — the room is **gone from the relay**
+   the moment the screens appear, there is no "You were disconnected." stacked on the defeat
+   screen, and the client's `[sync]` counter **freezes at `received 1519`** and stays there.
+
+   That last run answered a question the split raised and the code alone could not: blizzard.j
+   declares the defeat and the victory **in the same script pass**, so `matchDecided` is already
+   true when the frame's relay loop runs and the loser's screen goes out stamped as final. Had
+   victory landed a tick later, the loser would have been left holding an unstamped dialog and
+   then handed a disconnect notice on top of it. It does not, and now that is measured rather
+   than assumed.
+
+   **NOT driven in a browser:** the case the split exists for — a defeat that does *not* end the
+   match — because producing one needs a third seat. It is pinned headlessly (the enum reaches
+   the hook intact) and follows from the one line that reads it. Said plainly rather than
+   implied.
 
 ### The closing run
 

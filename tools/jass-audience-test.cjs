@@ -66,6 +66,18 @@ function Ungated takes nothing returns nothing
         call SetCameraPosition(7, 7)
     endif
 endfunction
+
+// ---- Phase G item 1: blizzard.j's own end-of-game signal ------------------------------------
+// CustomVictoryBJ and CustomDefeatBJ both call RemovePlayer(p, PLAYER_GAME_RESULT_*) before they
+// show anything. common.j numbers them VICTORY 0, DEFEAT 1, TIE 2, NEUTRAL 3 -- verified in the
+// real War3.mpq and War3x.mpq, which agree.
+function EndVictory takes nothing returns nothing
+    call RemovePlayer(Player(0), ConvertPlayerGameResult(0))
+endfunction
+
+function EndDefeat takes nothing returns nothing
+    call RemovePlayer(Player(3), ConvertPlayerGameResult(1))
+endfunction
 `;
 
 const interp = buildInterpreter([SRC]);
@@ -297,6 +309,27 @@ console.log("\nthe refusal is scoped to the extra passes, not to the hook");
   interp.callFunction("Ungated", []);
   check("an ungated move still lands", JSON.stringify(cam), '["7,7"]');
   rt.localViewHooks = new Set();
+}
+
+// ---------------------------------------------------------------------------------------
+// Phase G item 1: RemovePlayer is how the engine learns a game ended, and WHICH way.
+//
+// A defeat ends one player's game; anything else ends the MATCH, and only the second kind drops
+// the wire -- a defeated player in a three-way is still watching somebody else's game. That
+// decision reads the raw enum index, so the index has to survive the native intact. This is the
+// check that stops a silent miscount of the kind that broke `mapcontrol`.
+// ---------------------------------------------------------------------------------------
+
+console.log("\nRemovePlayer reports who ended and how (item G1)");
+{
+  const got = [];
+  rt.hooks = { playerGameOver: (p, result) => got.push(`${p}:${result}`) };
+  interp.callFunction("EndVictory", []);
+  // Both halves pinned: a hook that ignored its arguments and pushed a constant would pass an
+  // equality against only one of them.
+  check("a victory reports the player and result 0", JSON.stringify(got), '["0:0"]');
+  interp.callFunction("EndDefeat", []);
+  check("a defeat reports result 1, for the player it names", JSON.stringify(got), '["0:0","3:1"]');
 }
 
 console.log(failed ? `\naudience: ${failed} FAILED` : "\naudience: all checks passed");

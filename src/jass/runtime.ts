@@ -630,13 +630,13 @@ export interface EngineHooks {
    * through `RemovePlayerPreserveUnitsBJ`. So it fires exactly once per player per match, at
    * the moment the outcome is decided and BEFORE the dialog is raised.
    *
-   * The result argument is deliberately not passed on. Victory, defeat, tie and neutral all
-   * mean the same thing to a caller that only wants to know the game has ended — and decoding
-   * the enum would mean transcribing a constant order this codebase has already been bitten by
-   * once (`mapcontrol`, off by one, in applyLobby). Which outcome it was is already in the
-   * dialog the script raises next.
+   * `result` is the raw `playergameresult` index, and it matters: **a DEFEAT ends one player's
+   * game, everything else ends the MATCH.** A defeated player in a three-way is still watching
+   * somebody else's game, and hanging up on them would be taking it away. The caller compares
+   * against `PLAYER_GAME_RESULT_DEFEAT`; the constant is named at the one site that reads it,
+   * with its source, because a miscount here is exactly what went wrong with `mapcontrol`.
    */
-  playerGameOver?(player: number): void;
+  playerGameOver?(player: number, result: number): void;
   /** EndGame(doScoreScreen) — leave the match. The Quit button of the victory/defeat
    *  dialog is a DialogAddQuitButton, and this is what it does. */
   endGame?(doScoreScreen: boolean): void;

@@ -125,7 +125,7 @@ export function registerMeleeNatives(rt: Runtime): void {
   // A defeated/victorious player is "removed" — we keep them in the world (their units stay,
   // as MeleeDoDefeat's own RemovePlayerPreserveUnitsBJ name promises), but the FACT that their
   // game just ended is load-bearing: it is what closes the match's wire (Phase G item 1).
-  def(rt, "RemovePlayer", (c, a) => (c.rt.hooks?.playerGameOver?.(playerIndex(c, a[0])), JNULL));
+  def(rt, "RemovePlayer", (c, a) => (c.rt.hooks?.playerGameOver?.(playerIndex(c, a[0]), c.rt.enumIndex(a[1])), JNULL));
 
   // --- gold mines (MeleeFindNearestMine → MeleeStartingUnits*) ---
   // In WC3 a gold mine IS a unit ('ngol', Neutral Passive), and that's how the melee

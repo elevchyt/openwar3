@@ -596,12 +596,18 @@ export class MapViewerScene {
   private readonly relayedDialogs = new Map<number, string>();
   /** A dialog the AUTHORITY raised for us, when we are a client. Null on the host. */
   private remoteDialog: DialogObj | null = null;
-  /** Seats whose game has ENDED — `RemovePlayer` from blizzard.j's victory/defeat path. Read
-   *  by the dialog relay, which stamps the outgoing screen as final (Phase G item 1). */
-  private readonly gameOverFor = new Set<number>();
-  /** The match is decided for the player at THIS machine, so the wire has been (or is about to
-   *  be) closed. Also what stops a `room-closed` arriving afterwards from putting "You were
-   *  disconnected." over the top of a perfectly good Victory screen. */
+  /**
+   * The MATCH is decided — somebody won, or it was a tie — as opposed to one player being
+   * knocked out (Phase G item 1).
+   *
+   * The distinction is the whole rule. A defeat ends one player's game; a defeated player in a
+   * three-way is still watching somebody else's, and hanging up on them would be taking it
+   * away. So `RemovePlayer` sets this only for a result that ends the match for everyone, and
+   * the wire lives until then.
+   */
+  private matchDecided = false;
+  /** This machine has hung up (or is about to). Also what stops a `room-closed` arriving
+   *  afterwards from putting "You were disconnected." over a perfectly good Victory screen. */
   private matchEnded = false;
   /** Shown when the match ends out from under the player — v1's only cause is the host
    *  leaving, since there is no migration (docs/multiplayer.md Phase F item 6). */
@@ -1580,8 +1586,15 @@ export class MapViewerScene {
       // called by CustomVictoryBJ/CustomDefeatBJ before either of them shows anything. Recorded
       // rather than acted on HERE: the wire must not close until the dialog relay below has run,
       // or the loser would never be handed the screen that says why (Phase G item 1).
-      playerGameOver: (player) => {
-        this.gameOverFor.add(player);
+      playerGameOver: (_player, result) => {
+        // `Scripts\common.j`, verified in War3.mpq AND War3x.mpq (identical):
+        //   PLAYER_GAME_RESULT_VICTORY = 0, _DEFEAT = 1, _TIE = 2, _NEUTRAL = 3
+        // DEFEAT is the ONLY one that leaves the match running — victory is declared in melee
+        // only when every opponent is out, and a tie or a neutral game-over ends it outright.
+        // So the test is written as "anything but defeat", not as "equals victory": a tie that
+        // left the wire up would leave it up forever.
+        const PLAYER_GAME_RESULT_DEFEAT = 1;
+        if (result !== PLAYER_GAME_RESULT_DEFEAT) this.matchDecided = true;
       },
       pauseGame: (flag) => (this.paused = flag),
       // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
@@ -2052,10 +2065,11 @@ export class MapViewerScene {
           k: "dlg",
           message: d.message,
           buttons: d.buttons.map((b) => ({ text: b.text, quit: b.quit })),
-          // Whether this screen is the END of their game, decided by the AUTHORITY rather than
+          // Whether this screen is the end of the MATCH, decided by the AUTHORITY rather than
           // guessed by the recipient — a map raising a quest popup for a remote player must not
-          // drop that player off the wire mid-match.
-          ...(this.gameOverFor.has(p) ? { over: true } : {}),
+          // drop that player off the wire mid-match, and neither must their own defeat while
+          // somebody else is still playing.
+          ...(this.matchDecided ? { over: true } : {}),
         });
         // Remembered only when it actually went somewhere, so a player who has not been
         // seated yet is retried rather than silently written off.
@@ -2072,7 +2086,7 @@ export class MapViewerScene {
     // relay loop above: the host learns the outcome from `RemovePlayer` DURING the script call,
     // and closing there would tear the socket down in the same frame that owes the loser the
     // screen explaining why. Relay first, then hang up.
-    if (this.gameOverFor.has(this.localPlayer) && !this.matchEnded) {
+    if (this.matchDecided && !this.matchEnded) {
       this.matchEnded = true;
       this.rts?.endMatchWire();
     }
