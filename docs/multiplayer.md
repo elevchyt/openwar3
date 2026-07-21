@@ -94,7 +94,7 @@ state.
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
-| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. Relay liveness done (1); the whole real two-window flow driven end to end, menu → lobby → match (2); the opening camera no longer opens on the last seat's base (3). Open: a client in a real lobby match receives no snapshots (4). |
+| F — the LAN punch list | **in progress** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. Open: local-sim drift after a move order (5), and what a client shows when the host ends the game (6). |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2418,12 +2418,56 @@ each break is its own item, not a bigger commit.
    same match. The renderer's half of this (that it declares the set at all) is browser-verified
    only — `mapViewer` cannot be loaded headlessly — and that is stated rather than papered over.
 
-4. **A client in a real lobby match receives NO snapshots.** Found immediately after 3, in the same
-   run: host `sent 685`, client `received 0` across 94 heartbeats, both windows otherwise fine and
-   both simulating. The scripted `lan=host`/`lan=join` boot was proved end to end in Phase E, so
-   something the REAL lobby assembles differs from what `devBoot` assembles — `matchLinkFrom` is
-   shared, which narrows it to what is passed in (`lobby.isHost`, the slot table, `me`, `hostPeer`)
-   or to when `attachMatchLink` runs relative to `startGame`. Next item.
+4. ~~**A client in a real lobby match received NO snapshots.**~~ **Fixed.** Host `sent 685`, client
+   `received 0` across 94 heartbeats, both windows otherwise fine and both simulating happily.
+
+   **The menu was closing the game's socket.** `startGame` ([`main.ts`](../src/main.ts)) disposes
+   the glue on its way in, the LAN screen's own `dispose` closed the `LanLobby` it made — and
+   `LanLobby` **is** the match's `MatchChannel`. So the wire was torn down a beat before
+   `attachMatchLink` wired the link onto it. The host's counter still climbed, because
+   `MatchLink.tickHost` counts what it hands to the channel and `LanLobby.send` drops a message on
+   a null transport without a word. **Two silent counters agreeing on a lie**: `sent 685` and
+   `received 0` are the same fact seen from both ends.
+
+   Why the harness never caught it: `devBoot`'s LAN boot mounts no glue screen, so `glue.dispose()`
+   had nothing to dispose and its lobby survived. The one thing the committed two-client boot does
+   NOT share with production is the very thing that broke.
+
+   **It is a question of OWNERSHIP, not of ordering.** No re-ordering would have been safe —
+   `attachMatchLink` must come after the world it snapshots exists, which is after the menus are
+   gone. So `LanLobby` now has two lives and says which one it is in: `handOff()` moves ownership
+   to the match, `dispose()` (the screen's call) becomes a no-op after it, and `close()` is what
+   actually ends the wire. `fdfLan` calls `handOff()` at the instant it hands the link over — and
+   drops its own `onChange`/`onStart` in the same breath, since a roster change arriving after the
+   unmount would render into a dead screen. `MatchChannel` gained an optional `close?()`, which
+   `LanLobby` satisfies structurally, so the hand-off still costs an assignment and no new API.
+   `main.ts` holds the live link and closes it in `exitToMenu` — the match owned the wire, so
+   leaving the match is what ends it.
+
+   **Tests: `sim:test` 489 → 494** ([`lobby-test.cjs`](../tools/lobby-test.cjs)). After a hand-off
+   the screen's `dispose` leaves the transport connected AND still sending; `close()` ends it; and
+   — the counter-check that stops the fix being "dispose never closes anything" — a screen that
+   never handed off still closes its own wire. One injection, the ownership guard inverted, turns
+   all three red.
+
+   **Verified in the browser, the full two-window flow.** Host `sent 1731` / client `received 1731`,
+   `stale 0` — an exact match, not merely a rising number. Then a real order: the client drag-selected
+   its five peons and right-clicked a destination, and they walked there **in the client's own view,
+   which is drawn from the payload** — so the command crossed to the host, the host applied it, and
+   the result came back down the pipe. Finally End Game: the room vanished from the relay, which is
+   the other half of the change (`close()`) doing its job.
+
+5. **After a move order the local sim settles ~32 world units from the authority on one unit**
+   (`unit 107.x: local 5216 vs authority 5184`, steady, drift 13–14 while units move). This is the
+   sequencing-B diagnostic doing exactly what it was built for. It does not affect what is drawn —
+   the client renders the authority's position — but it is a real disagreement between two sims
+   stepping the same movement, and the divergence log is a bad shipping state left knowingly
+   (item 10b). Worth chasing before the local sim comes out.
+
+6. **What a client shows when the host ends the game is unverified.** The host's End Game closes the
+   room correctly; the client was mid-check when the browser daemon wedged. v1 has no host
+   migration, so "the host left" must end the match on the client with a message rather than leave
+   it simulating alone against a dead wire.
 
 ### JASS
 

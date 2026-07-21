@@ -45,6 +45,16 @@ export interface MatchChannel {
    * the match was handed at `StartMatch` still resolves — no re-seating, no new id to learn.
    */
   onPeerRejoin: (peer: number) => void;
+  /**
+   * End the wire — the match is over.
+   *
+   * Optional because a channel that outlives nothing (a test fake, a loopback pair) has nothing
+   * to close. It exists because the match, not the menu, owns the transport once the link is
+   * assembled: the LAN screen is disposed the moment `startGame` runs, and a screen tearing
+   * down its own socket used to take the game's wire with it (item F4). `LanLobby.close()`
+   * matches this member already, so the hand-off still costs an assignment and no new API.
+   */
+  close?(): void;
 }
 
 /** The `GameMessage` member carrying one recipient's view of the world. */

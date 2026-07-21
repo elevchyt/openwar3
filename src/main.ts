@@ -55,6 +55,9 @@ let menuDebug: { dispose(): void } | null = null;
 let sounds: SoundBoard | null = null;
 let glueAudio: GlueAudio | null = null;
 let meleeConfig: MeleeConfig | null = null; // consumed by the melee initializer (next)
+// The LIVE match's end of the wire, held here because the match outlives the screen that
+// assembled it and something has to close it when the match ends (docs/multiplayer.md F4).
+let matchLink: MatchLinkSetup | null = null;
 let installMaps: Map<string, File> = new Map(); // the install's Maps\ folder (Custom Game)
 
 // The glue-screen stack (issue #61): main menu → Single Player → Custom Game, each
@@ -206,7 +209,9 @@ function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; moun
 /** Leave the menus and play: load the map, then melee or custom setup as the map asks. */
 async function startGame(file: File, info: MapInfo, config: MeleeConfig, link?: MatchLinkSetup): Promise<void> {
   meleeConfig = config;
-  glue.dispose(); // the menus are done; the match owns the screen now
+  matchLink = link ?? null;
+  glue.dispose(); // the menus are done; the match owns the screen now — including its wire,
+                  // which the LAN screen handed over before calling us (LanLobby.handOff)
   glueAudio?.stop(); // …and the music channel: the map's own script cues its music from here
   const bytes = new Uint8Array(await file.arrayBuffer());
   await enterMap(bytes, info.name);
@@ -251,6 +256,11 @@ function exitToMenu(): void {
   mapScene?.dispose();
   mapScene = null;
   meleeConfig = null;
+  // The match owned the relay connection from the moment the LAN screen handed it over, so
+  // leaving the match is what closes it. Skipping this would leave the room listed and the
+  // socket open behind a player who is back at the main menu.
+  matchLink?.channel.close?.();
+  matchLink = null;
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
   const vfs = resolver.installSource;
   void showMenuBackground(vfs).then(() => {

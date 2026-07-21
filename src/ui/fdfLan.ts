@@ -167,6 +167,14 @@ export async function mountLanScreen(
       // dev-LAN boot so the harness proves this exact assembly, not a lookalike.
       const hostPeer = lobby.snapshot.peers.find((p) => p.host)?.id ?? 1;
       const link = matchLinkFrom(lobby, lobby.isHost, msg.slots, me, hostPeer);
+      // The wire changes hands HERE, and it has to happen before `onStart` returns to us:
+      // `startGame` disposes the glue on its way in, and this screen's dispose used to close
+      // the lobby — the match's own transport — a beat before the link was attached to it
+      // (docs/multiplayer.md Phase F item 4). The screen also stops listening: it is about to
+      // be unmounted, and a roster change arriving afterwards would render into a dead screen.
+      lobby.handOff();
+      lobby.onChange = () => {};
+      lobby.onStart = () => {};
       h.onStart(msg.mapPath, info, toConfig(msg, me), link);
     })();
   };

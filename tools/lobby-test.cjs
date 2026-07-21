@@ -175,6 +175,42 @@ const ME = { id: 2, name: "Joiner", host: false };
     check("a chosen leave removes it", lobby.snapshot.peers.some((p) => p.id === 3), false);
   }
 
+  // -------------------------------------------------------------------------------------
+  // Phase F item 4: the wire changes hands at match start, and the menu must not close it.
+  //
+  // `startGame` disposes the glue BEFORE it attaches the match link — it has to, the world the
+  // link snapshots does not exist until after the map loads. So the LAN screen's own teardown
+  // was closing the socket a beat before the match was wired onto it. The symptom was silent
+  // on both ends: the host counted 685 snapshots "sent" into a closed transport, and the
+  // client received 0 while both windows sat happily simulating.
+  // -------------------------------------------------------------------------------------
+
+  console.log("\nthe match's wire survives the screen that made it (item F4)");
+  {
+    const { lobby, t } = await joinedLobby();
+    check("connected while in the lobby", t().connected, true);
+
+    lobby.handOff(); // the LAN screen hands the link to the match…
+    lobby.dispose(); // …and is then disposed by startGame, an instant later
+    check("the screen's dispose does NOT close the match's wire", t().connected, true);
+    // And it is still a working wire, not merely an unclosed one: the match sends through it.
+    const before = t().sent.length;
+    lobby.send({ k: "snap" }, 2);
+    check("the match can still send", t().sent.length, before + 1);
+
+    lobby.close(); // End Game
+    check("leaving the match closes it", t().connected, false);
+  }
+
+  console.log("\n…and without a hand-off the screen still closes it");
+  {
+    // The counter-check, and it is what stops the fix from being "dispose never closes
+    // anything". Cancel out of the LAN screen and the socket must go.
+    const { lobby, t } = await joinedLobby();
+    lobby.dispose();
+    check("a screen that never handed off still closes its own wire", t().connected, false);
+  }
+
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);
   process.exit(failed === 0 ? 0 : 1);
 })();

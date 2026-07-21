@@ -48,6 +48,24 @@ export class LanLobby {
   /** True while a dropped connection is being recovered — a rejoin is in flight and the
    *  incoming game list is about to be consulted for our room (item 11a-client). */
   private reconnecting = false;
+  /**
+   * The MATCH owns this wire now, so the screen that made it must not close it.
+   *
+   * A LAN lobby has two lives. In the first it belongs to the LAN screen, which creates it,
+   * connects it, and closes it on the way out. In the second it is the MATCH'S TRANSPORT —
+   * `MatchChannel` is satisfied by this class structurally, and `fdfLan` hands it straight
+   * over. The two lives overlap for exactly one moment, and that moment used to eat the game:
+   * `startGame` disposes the glue (`main.ts`) BEFORE it attaches the match link, so the screen's
+   * teardown pulled the socket out and the link was then wired onto a closed transport. The
+   * host counted 685 snapshots sent into nothing and the client received 0
+   * (docs/multiplayer.md Phase F item 4).
+   *
+   * So the close is a question of OWNERSHIP, not of timing, and no ordering fix would have been
+   * safe — `attachMatchLink` has to come after the world exists, which is after the menus are
+   * gone. `handOff()` moves the ownership and `dispose()` becomes the screen's no-op; `close()`
+   * is what actually ends the wire, and after a hand-off only the match's own teardown calls it.
+   */
+  private handedToMatch = false;
   /** Fired on every state change; the screen re-renders from the snapshot it receives. */
   onChange: (state: LobbyState) => void = () => {};
   /** Opaque in-room traffic from a peer — the seam the command stream will arrive through. */
@@ -154,11 +172,29 @@ export class LanLobby {
     this.send(msg);
   }
 
+  /**
+   * The match takes the wire (see `handedToMatch`). Called by the LAN screen at the instant it
+   * hands the link over — before `startGame`, because `startGame` is what disposes the screen.
+   */
+  handOff(): void {
+    this.handedToMatch = true;
+  }
+
+  /** The SCREEN is done with the lobby. Refused once the match owns the wire: a menu going away
+   *  must not disconnect a game in progress. */
   dispose(): void {
+    if (this.handedToMatch) return;
+    this.close();
+  }
+
+  /** End the wire, whoever owns it. The match's teardown (`exitToMenu`) calls this; before a
+   *  hand-off, `dispose()` does. */
+  close(): void {
     this.store.save(null); // the match is over on our end; a fresh game starts a fresh session
     this.transport?.close();
     this.transport = null;
     this.reconnecting = false;
+    this.handedToMatch = false;
     this.state = { ...EMPTY };
   }
 
