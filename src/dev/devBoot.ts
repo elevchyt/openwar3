@@ -77,8 +77,9 @@ function meleeConfigFor(info: MapInfo, player: number, seed: number, fog: FogMod
   return { slots, fog, seed, localPlayer: player };
 }
 
-/** Ceiling on `?maps=N`. Each map is a fetch and a mount; twenty is plenty to fill a list and
- *  still boots in seconds, where the install's full Maps\ folder would take minutes. */
+/** Ceiling on `?maps=`. Each map is a fetch and a mount; twenty is plenty to fill a list and
+ *  still boots in seconds, where the install's full Maps\ folder would take minutes. Applies to
+ *  the named form too — twenty deliberate choices is already more than a test needs. */
 const MAX_DEV_MAPS = 20;
 
 export async function devBoot(hooks: DevBootHooks): Promise<void> {
@@ -117,13 +118,33 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // A COUNT rather than "all" on purpose: the install holds hundreds of maps and fetching them
   // is minutes, which would make the boot useless for the thing it exists for. The default is
   // still zero, so every committed harness URL boots exactly as fast as it did.
-  const mapCount = Math.max(0, Math.min(MAX_DEV_MAPS, Number(params.get("maps") ?? 0) || 0));
-  // Melee maps first — they are what a LAN game is played on, and they are the ones whose
+  //
+  // `?maps=` takes EITHER a count or a comma-separated list of names, and the second form is
+  // there for the same reason the first one is. A count can only ever reach the first N maps of
+  // an install that holds hundreds — so "test it on Lost Temple" was unreachable, and a harness
+  // that cannot reach the map it was asked for reports the wrong thing about it. `?maps=8` is a
+  // sample of the list; `?maps=LostTemple,EchoIsles` is a choice from it. Names match the same
+  // way `?map=` does (case-insensitive substring), Frozen Throne first where both editions ship
+  // one, and the count is still capped because fetching is the slow part either way.
+  const mapsArg = (params.get("maps") ?? "").trim();
+  const asCount = Number(mapsArg);
+  // Frozen Throne first — they are what a LAN game is played on, and they are the ones whose
   // player counts and previews the lobby actually renders.
-  const listed = manifest.maps
+  const pool = manifest.maps
     .filter((m) => m !== mapPath)
-    .sort((a, b) => Number(b.includes("FrozenThrone")) - Number(a.includes("FrozenThrone")))
-    .slice(0, mapCount);
+    .sort((a, b) => Number(b.includes("FrozenThrone")) - Number(a.includes("FrozenThrone")));
+  const listed = mapsArg && Number.isNaN(asCount)
+    ? mapsArg
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean)
+        .map((name) => {
+          const hit = pool.find((m) => m.toLowerCase().includes(name.toLowerCase()));
+          if (!hit) throw new Error(`no map matching "${name}" in the install`);
+          return hit;
+        })
+        .slice(0, MAX_DEV_MAPS)
+    : pool.slice(0, Math.max(0, Math.min(MAX_DEV_MAPS, asCount || 0)));
 
   const extra = listed.length ? ` + ${listed.length} map(s) for the lobby list` : "";
   log(`fetching ${archives.length} archives${mapPath ? ` + ${mapPath}` : ""}${extra}…`);

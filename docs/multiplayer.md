@@ -95,7 +95,7 @@ state.
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
 | E — snapshots & reconnect | **done** | **The host is the authority and a client renders what it is sent.** The 149-entry [JASS hook table](#the-jass-hook-table) is split so a headless host can build one (1–1h); viewpoints are seated at match start (2) and the minimap answers for a viewpoint that rendered nothing (3–4, 3c). A snapshot type and producer exist (5), AoI-filtered per recipient (6) with a per-recipient ghost memory for razed buildings (6b/6c); script broadcasts reach every seat (7) and a map's own `GetLocalPlayer` gate is evaluated once per recipient, the host's pass writing and the extra passes muzzled (7b). The relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9) and cross from a client to the host (9b). Snapshots cross a real relay and are diffed against the client's own sim (10a/10b), wired into every LAN match (10b-note) and driven by a committed two-client boot (10b-harness). **A client draws from the payload** — minimap dots (10c-1), model visibility (10c-2c-1), the whole frame of poses, bars, rings and hover (10c-2c-2), the selection panel (10c-2c-3), every screen-position question including picking (10c-2c-4), and deaths, so a building razed while it was not watching keeps its image (10c-2c-5/6d) — through one `RenderUnit` surface both structs satisfy (10c-2a/10c-2b). A dropped client's slot is held under a token (11a), reclaimed from localStorage (11a-client), and answered with a full snapshot off the cadence (11b). Closed by an audit against HEAD (12): two clients played through the relay and a dropped one rejoined to `drift 0`. Outstanding: `9b-cmd-shot`, a browser capture only — the path itself is covered by `loopback-test`. |
 | F — the LAN punch list | **done** | Product-shaped, not architecture-shaped. **Two windows now play a real LAN match through the menus**: relay liveness (1), the whole flow driven end to end (2), the opening camera fixed (3), and the match's wire no longer closed by the menu that made it (4) — host `sent 1731` / client `received 1731`, `stale 0`, and an order issued on the client walks its peons in the client's snapshot-drawn view. The drift log after a move order was the detector comparing two worlds running different inputs, and now says so instead (5), a host ending the game ends it on the client too (6), and **a match now plays to a natural end**: the host razes the loser's hall and both players get the real Victory/Defeat screen (7). and a client leaving no longer crashes the relay (8). **All eight items are closed and the stop condition is met**: menu → Local Area Network → Create Game → join → Start → play → a natural end, with no dead room, no stuck lobby and no desync — driven clean end to end on the fixed build (see [the closing run](#the-closing-run)). Next phase: the client's local sim stops stepping and becomes a record store the snapshot writes (Open questions — decided, option 2). |
-| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1). A knocked-out player keeps their wire and goes on watching; each side keeps its own state once it is over, which is what WC3 does and what makes a finished match stop paying. |
+| G — the wire after the whistle | **in progress** | The relay is dropped when the MATCH is decided — on `RemovePlayer`, blizzard.j's own end-of-game signal, for any result but a defeat (1); verified on Lost Temple with four seats, where one player's defeat leaves the room up and the wire feeding. `?maps=` takes map NAMES so the harness can be pointed at a specific map (2). |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -2683,10 +2683,44 @@ rather than an expedition.
    then handed a disconnect notice on top of it. It does not, and now that is measured rather
    than assumed.
 
-   **NOT driven in a browser:** the case the split exists for — a defeat that does *not* end the
-   match — because producing one needs a third seat. It is pinned headlessly (the enum reaches
-   the hook intact) and follows from the one line that reads it. Said plainly rather than
-   implied.
+   **And then driven in a browser too — the case the split exists for.** Four seats on **Lost
+   Temple**: two humans and two computers, the host marches three heroes into the client's base
+   and razes it. The host's log reads **"Player 2 was defeated." and nothing else** — no victory,
+   because two computers are still standing — and the three things that had to be true were:
+
+   - the **room is still listed** on the relay: nobody hung up;
+   - the client's `[sync]` counter is still **climbing** (`received 2692 → 2701 → 2709`): its wire
+     is alive and it is still being handed the world;
+   - the client shows **"You failed to achieve victory."** and no disconnect notice.
+
+   Before the split, all three would have been false: any `RemovePlayer` decided the match, so
+   one player's defeat would have torn the room down under two computers that were still playing.
+
+   **A detail checked against Blizzard rather than assumed.** The defeated player's dialog offers
+   only *Quit Game*, with no "Continue Observing" — and that is faithful, not missing:
+   `MeleeDefeatDialogBJ` adds that button only `if (not bj_meleeGameOver and
+   IsMapFlagSet(MAP_OBSERVERS_ON_DEATH))`, and observers-on-death is off in a default melee game.
+   So under the default rules the wire staying up after a defeat matters for the OTHER players —
+   the host must keep hosting — rather than for the loser's spectating. It becomes directly
+   useful for them the day that lobby option exists.
+
+   **Still not driven:** what a player defeated early sees when the match *finally* ends. They
+   would get `room-closed` rather than a result screen (see above). The 1v1 ending is verified;
+   this one needs the two computers killed as well.
+
+2. **`?maps=` takes names, not just a count — because the harness could not reach the map it was
+   asked for.** `?maps=8` samples the first N of an install holding hundreds, so "test it on Lost
+   Temple" was unreachable: Lost Temple sorts past the twenty-map cap. That is the same gap
+   `?maps=N` itself was invented to close, one level in — a harness that cannot reach the MAP it
+   was asked for reports the wrong thing about it, just as one that cannot reach a screen does.
+
+   `?dev&maps=LostTemple,EchoIsles` now mounts exactly those two and shows the menu, matching
+   names the way `?map=` already does (case-insensitive substring, Frozen Throne first where both
+   editions ship one). A count still means a count; the cap still applies to both, because
+   fetching is the slow part either way. `import.meta.env.DEV`-only, like the rest of the boot.
+
+   Found the hard way: two runs were spent on Adrenaline instead, a heavily forested 4-player map
+   where the heroes took minutes to path anywhere and the base hunt never finished.
 
 ### The closing run
 
