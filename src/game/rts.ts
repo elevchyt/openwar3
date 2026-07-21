@@ -830,6 +830,27 @@ export class RtsController {
     if (hm && this.fogBlocksMine(hm)) this.hoveredMine = null;
   }
 
+  /**
+   * The record the FRAME is drawn from (docs/multiplayer.md item 10c-2c-2).
+   *
+   * On the host and in single-player this is the live sim unit. On a client that has been sent
+   * a snapshot it is the payload's record — the authority's answer rather than the client's own
+   * prediction of it. Every position-anchored draw goes through here and nothing else, which is
+   * what makes the switch ATOMIC: the model, its health bar, its selection ring and its hover
+   * slab cannot end up reading different worlds, because there is only one place to read from.
+   *
+   * `undefined` means "no record" and has two different causes that want the same handling: the
+   * unit is gone from the sim (a race between a death and this frame), or the client was not
+   * SENT it. Both mean "do not draw", and `modelHidden` already says so.
+   *
+   * Panel readouts (`infoFor`, the command card) deliberately do NOT come through here yet.
+   * They are drawn at a fixed place in the HUD rather than over the terrain, so a frame's
+   * disagreement there is invisible rather than a Frankenstein — see item 10c-2c-3.
+   */
+  private frameUnit(id: number): RenderUnit | undefined {
+    return this.snapshot.active ? this.snapshot.unit(id) : this.sim.units.get(id);
+  }
+
   /** Should this unit's model be on screen at all?
    *
    *  Two answers to one question, and which one is asked is the whole of item 10c-2c. The host
@@ -839,8 +860,27 @@ export class RtsController {
    *  already made, and a client that re-derives it is a client that can decide differently
    *  (the maphack `dotsFromSnapshot` refuses to ship). Pinned equal to `hiddenFor` in
    *  `tools/sim-minimap-test.cjs`, so the switch cannot change what is drawn. */
-  private modelHidden(e: Entry, u: SimUnit): boolean {
-    return this.snapshot.active ? this.snapshot.hidden(e.simId) : this.hiddenFor(this.local, u);
+  private modelHidden(id: number): boolean {
+    if (this.snapshot.active) return this.snapshot.hidden(id);
+    const u = this.sim.units.get(id);
+    return u === undefined || this.hiddenFor(this.local, u);
+  }
+
+  /**
+   * Is this unit's live state something the viewer actually KNOWS right now — or is it an
+   * image left standing in the fog?
+   *
+   * The health bar and the hover slab both hang on this: WC3 leaves a scouted building's model
+   * on the terrain but takes its health bar away, because a bar is a live reading and a memory
+   * is not (issue #62). On a client the payload has already answered — a `remembered` record
+   * arrives with its hp, its queue and its construction timer redacted to zero, so reading the
+   * bit is reading the authority's decision rather than re-deriving it from a grid the client
+   * should not be consulting.
+   */
+  private drawnFromMemory(id: number, u: RenderUnit): boolean {
+    if (this.snapshot.active) return u.remembered === true;
+    const su = this.sim.units.get(id);
+    return su !== undefined && this.fogBlocksClick(su);
   }
 
   /** Apply the combined visibility decision (gold-mine + fog) to one render entry,
@@ -848,7 +888,7 @@ export class RtsController {
    *
    *  `hide` is decided by the caller (`modelHidden`) rather than here: on a client it is the
    *  payload's answer, and this method has no business knowing which of the two it got. */
-  private applyVisibility(e: Entry, u: SimUnit, hide: boolean): void {
+  private applyVisibility(e: Entry, u: RenderUnit, hide: boolean): void {
     if (u.inMine !== e.inMine) {
       e.inMine = u.inMine;
       if (u.inMine) {
@@ -931,11 +971,13 @@ export class RtsController {
    *  structures. Own units and anything currently in sight stay full colour; mobile
    *  enemy units never reach here (fogHides already hides them out of sight). Tint
    *  multiplies the model's own base colour so a unit's team/UnitData tint survives. */
-  private applyFogTint(e: Entry, u: SimUnit): void {
+  private applyFogTint(e: Entry, u: RenderUnit): void {
     const inst = e.unit.instance;
     if (!inst.setVertexColor) return;
     let b = 1;
-    if (this.local.showsFromMemory(u)) {
+    // On a client this is `u.remembered` — the SAME fact, decided by the authority and carried
+    // in the payload, rather than the client re-running a fog rule of its own (item 10c-2c-2).
+    if (this.drawnFromMemory(e.simId, u)) {
       b = FOG_EXPLORED_BRIGHT; // remembered-but-not-seen → half-bright grey
     }
     // Green whole-mesh tint while this unit is a valid target of an armed AoE spell.
@@ -944,7 +986,11 @@ export class RtsController {
     // it. That asymmetry is the ability: you must be able to pick your images apart from
     // your hero, while the enemy sees N identical Blademasters and has to guess. So it
     // keys off the LOCAL viewpoint (seesFor), not off the unit itself.
-    const illus = u.isIllusion && this.seesFor(u.owner);
+    // On the wire the bit is ALREADY viewpoint-resolved: item 5 masks it at the source, so an
+    // enemy's snapshot simply says `false` and no `seesFor` is needed (nor available — a client
+    // rendering someone else's answer has no business re-deciding it). On the sim path the
+    // local viewpoint is still what knows.
+    const illus = u.isIllusion && (this.snapshot.active || this.seesFor(u.owner));
     // Half-fade the ghosted states (issue #66). This has to compose with the tint here
     // rather than be written straight to the instance: baseColor caches the model's own
     // colour and this method re-emits from it every time the fog brightness changes, so
@@ -2102,7 +2148,19 @@ export class RtsController {
     // being a question we answer and becomes one we were answered (`modelHidden`).
     this.snapshot.update(this.matchLink?.latest() ?? null);
     for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId)!;
+      // The FRAME's record: the local sim on the host and in single-player, the received
+      // snapshot on a client (item 10c-2c-2). `undefined` means there is nothing to draw —
+      // either the sim dropped the unit between ticks, or this client was never sent it — and
+      // both want the same handling: hide the model and leave everything else alone.
+      const u = this.frameUnit(e.simId);
+      if (u === undefined) {
+        if (!e.hidden) {
+          e.hidden = true;
+          e.unit.instance.hide();
+          if (this.hovered === e.simId) this.hovered = null;
+        }
+        continue;
+      }
       // How far this unit moved SINCE IT WAS LAST DRAWN — a render fact the walk/stand picker
       // needs (see `prevDrawnX`). Captured before anything can `continue`, then advanced to the
       // position about to be drawn, so every entry's previous stays current whatever branch it
@@ -2113,7 +2171,7 @@ export class RtsController {
       e.prevDrawnX = u.x;
       e.prevDrawnY = u.y;
       if (u.neutralPassive) {
-        this.applyVisibility(e, u, this.modelHidden(e, u)); // static & viewer-rendered, but fog still hides/reveals it
+        this.applyVisibility(e, u, this.modelHidden(e.simId)); // static & viewer-rendered, but fog still hides/reveals it
         continue;
       }
       this.loc[0] = u.x;
@@ -2126,7 +2184,7 @@ export class RtsController {
       setZQuat(this.quat, u.facing);
       e.unit.instance.setRotation(this.quat);
       // Workers inside a gold mine vanish; enemy units vanish in the fog of war.
-      this.applyVisibility(e, u, this.modelHidden(e, u));
+      this.applyVisibility(e, u, this.modelHidden(e.simId));
       // A unit that has changed FORM wears the other half of its model — a rooted Ancient, a
       // burrowed Crypt Fiend. Skipped entirely for the vast majority, which have only one.
       if (u.altModel || e.altModel !== undefined) this.applyFormAnims(e, u, this.registry.get(e.typeId));
@@ -3339,7 +3397,7 @@ export class RtsController {
   selectionRings(): RingInfo[] {
     const out: RingInfo[] = [];
     for (const id of this.selected) {
-      const u = this.sim.units.get(id);
+      const u = this.frameUnit(id); // the ring sits under the MODEL, so it reads the model's record
       const e = this.byId.get(id);
       // Buildings get a ring sized to their footprint (a constant tiny ring is
       // hidden under the model); units keep the constant ring. Neutral Passive
@@ -3366,7 +3424,7 @@ export class RtsController {
   previewRings(): RingInfo[] {
     const out: RingInfo[] = [];
     for (const id of this.previewIds) {
-      const u = this.sim.units.get(id);
+      const u = this.frameUnit(id);
       const e = this.byId.get(id);
       if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building });
     }
@@ -3378,7 +3436,7 @@ export class RtsController {
    *  selected one. */
   hoverRing(): RingInfo | null {
     if (this.hovered !== null && !this.selected.has(this.hovered)) {
-      const u = this.sim.units.get(this.hovered);
+      const u = this.frameUnit(this.hovered);
       const e = this.byId.get(this.hovered);
       if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building };
     }
@@ -4182,14 +4240,19 @@ export class RtsController {
     this.pruneSelection();
     const specs: BarSpec[] = [];
     for (const e of this.entries) {
-      const u = this.sim.units.get(e.simId);
+      // Same source as the model this bar floats over — that is the whole of item 10c-2c-2's
+      // atomicity requirement. A bar drawn at the sim's position over a model drawn at the
+      // snapshot's would track a unit it is not attached to.
+      const u = this.frameUnit(e.simId);
       if (!u || e.hidden) continue; // no model on screen (worker in a mine, unexplored fog)
       if (u.neutralPassive && !u.building) continue; // critters and other neutral-passive props: no bar
       // A bar is a LIVE reading, so it needs live eyes: a structure the fog has swallowed keeps
       // its image (fogHides leaves the last thing you saw standing there) but loses its bar,
       // exactly as WC3 does — otherwise you could watch an enemy tower's health from across the
-      // map without ever scouting it. Same test the cursor uses (issue #62).
-      if (this.fogBlocksClick(u)) continue;
+      // map without ever scouting it. Same test the cursor uses (issue #62). On a client the
+      // payload already said so — `remembered` — and its hp is redacted to 0 anyway, so drawing
+      // one would show a full-empty bar over every scouted building.
+      if (this.drawnFromMemory(e.simId, u)) continue;
       specs.push({
         x: u.x,
         y: u.y,
@@ -4219,9 +4282,10 @@ export class RtsController {
    *    • a gold mine → "Gold Mine" + "Gold: N"; a ground item → its name. */
   private computeHoverTip(): { x: number; y: number; z: number; radius: number; lines: HoverLine[] } | null {
     if (this.hovered !== null) {
-      const u = this.sim.units.get(this.hovered);
+      // The slab floats over the unit, so it reads the same record the model does.
+      const u = this.frameUnit(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (!u || !e || e.hidden || this.fogBlocksClick(u)) return null;
+      if (!u || !e || e.hidden || this.drawnFromMemory(this.hovered, u)) return null;
       const lines: HoverLine[] = [];
       if (u.owner < 0) {
         // Neutral. A passive prop is name only; a hostile creep also shows its level.

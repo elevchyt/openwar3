@@ -93,7 +93,7 @@ state.
 | B — bisect `rts.ts` | **done** | authority split into `authority`/`formations`/`placement`/`simView`, all compiling standalone; `rts.ts` 5 382 → 4 227 |
 | C — command funnel | **done** | 15 player actions through `execute(player, cmd)`; `Command` is the wire type |
 | D — N vision maps | **done** | `Viewpoint` + `VisionSet`; every viewpoint-dependent system takes one; `GetLocalPlayer` resolves against an audience; ~0.75 ms per viewpoint per rebuild |
-| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b). Open: 10c-2c-2 (the rest of the render switch, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
+| E — snapshots & reconnect | **in progress** | the 149-entry [JASS hook table](#the-jass-hook-table) is fully split (items 1–1h); viewpoints seated at match start (2); minimap answers for a viewpoint that rendered nothing (3–4); the snapshot type + producer exist (5) and are AoI-filtered per recipient (6); script broadcasts reach every seat (7); off-field units draw no minimap dot (3c); destroyed buildings leave a per-recipient ghost (6b); the relay core runs in-process for tests (8); commands have a wire format and a forgery-proof host door (9); the ghost memory is fed and cleared each tick (6c); the divergence detector exists (10a); snapshots cross a real relay and are diffed (10b), and the app wires a MatchLink into every LAN match (10b-note); a scripted two-client LAN boot drives it over a real relay (10b-harness); a client's commands cross the wire to the host authority (9b); a client's minimap dots render from the AoI snapshot (10c-1); the entry sync is decoupled from the one sim-only field it read (10c-2a); a dropped client's slot is held and reclaimed on a token (11a); the client stashes that token in localStorage and auto-rejoins (11a-client); the renderer's read surface is a `RenderUnit` both structs satisfy (10c-2b); a client decides whether to DRAW a model from the payload, not from its own fog grid (10c-2c-1). a reconnected player is handed a full snapshot off the cadence (11b); a client draws its whole FRAME — models, bars, rings, hover — from the payload (10c-2c-2). Open: 10c-2c-3 (the panel readouts, with 6d), 7b, 12; 9b-cmd-shot browser-capture-only — **the host sends; the client diffs and logs; nothing renders from it yet** — **nothing crosses the wire yet** |
 
 **Shipped so far** (newest first — `git log` for detail):
 
@@ -1940,16 +1940,65 @@ enumerated by body rather than by name.
     independently. One of them should read through `SnapshotIndex` once the next slice gives it
     a units accessor — two readers of the same fact is how they drift.
 
-10c-2c-2. **The rest of the switch: pose, health bars, selection, the command card.**
-    **Ordered AFTER item 11b by the developer**, against this list's own sequence — and 11b is
-    now done, so this is next.
- `u` itself
-    becomes the snapshot record on a client, not just the visibility answer. This is the big
-    one — `rts.ts` has **73** `sim.units.get` sites — so it splits again by consumer, but the
-    ones that land on the same FRAME must land together (a model at the snapshot's position with
-    a health bar at the sim's would be a Frankenstein). `applyFogTint`'s `showsFromMemory` is
-    next: on a snapshot it is simply `u.remembered`, and `isIllusion` needs no `seesFor` at all
-    because item 5 already masked it per recipient. `6d` (a razed building's ghost) rides in the
+10c-2c-2. ~~**The FRAME is drawn from the payload on a client.**~~ **Done**, and the cut that
+    made it one diff rather than five was **position-anchored draws vs panel readouts**, not
+    "one consumer at a time". Everything drawn OVER THE TERRAIN at a unit's position shares a
+    frame and had to switch together — the model's pose, the health bar above it, the selection
+    /preview/hover rings under it, the hover slab beside it. A bar at the sim's position over a
+    model at the snapshot's is the Frankenstein the item was warning about, and it is exactly
+    what shipping these separately would have produced. The command card and the selection panel
+    are drawn at a FIXED place in the HUD, so a frame's disagreement there is invisible; they are
+    10c-2c-3 and they lose nothing by waiting.
+
+    **One accessor, `frameUnit(id)`, and that is what makes the switch atomic.** Sim on the host
+    and in single-player, the received record on a client. Six consumers go through it and
+    nothing else does, so they cannot end up reading different worlds — there is one place to
+    read from. `sim.units.get` in `rts.ts` **73 → 60**.
+
+    **`undefined` now has two causes that want one answer.** The sync used to non-null assert
+    (`this.sim.units.get(e.simId)!`). Now a missing record means either the sim dropped the unit
+    between ticks or **this client was never sent it**, and both mean "hide the model and touch
+    nothing else". Worth stating why that is safe for the deselect side-effects `applyVisibility`
+    carries: an absent record is always somebody else's unit, because the payload sends a
+    player's own off-field units to them (a Burrow must list its garrison) — so a mining
+    peasant's owner never loses the mine-entry deselect.
+
+    **The conformance file earned its keep the moment `remembered` was added.** Widening
+    `RenderUnit` with it as a required member broke `SimUnit` on the spot, which is the drift
+    the file exists to catch — and the break was correct rather than an obstacle. "Remembered" is
+    a fact about a PAYLOAD addressed to somebody, not about the world; the host holding the world
+    is never remembering it. So it is the ONE optional member: the sim path leaves it `undefined`
+    (falsy, and correct there) and only a `UnitSnapshot` sets it.
+
+    **Two fog rules left the client, and both became data.** `drawnFromMemory` replaces
+    `fogBlocksClick` for the health bar and the hover slab, and `applyFogTint`'s
+    `showsFromMemory` for the grey wash — on a client both are `u.remembered`. And the illusion
+    wash no longer asks `seesFor` on the snapshot path: item 5 already resolved the bit per
+    recipient, so an enemy's payload simply says `false` and a client re-deciding it would be a
+    client deciding which units are illusions.
+
+    **Tests: `sim:test` 472 → 478.** Two more equalities in the same shape as 10c-2c-1's: for
+    every unit the client actually DRAWS, the payload's `remembered` equals the host's
+    `fogBlocksClick` (scoped to drawn ones deliberately — an off-field unit is sent with
+    `remembered: false` while `fogBlocksClick` may say anything, and the frame never reaches the
+    question because the model is hidden); and the illusion bit is already viewpoint-resolved on
+    the wire, with the enemy still DRAWING the image rather than missing it. Two injections: a
+    payload that never sets `remembered` (the client stops dimming and starts drawing empty bars
+    over every scouted building), and an unmasked illusion tell (which also lights up two checks
+    in `sim-snapshot-test` — the illusion mask has coverage from both ends now).
+
+    **Verified with two clients through the real relay: the client's ENTIRE frame is now drawn
+    from the wire** — models, health bars, minimap dots — 103 units, `stale 0, drift 0`. And the
+    single-player minimap is byte-identical to the parent commit's (0 of 18 088 pixels), which is
+    the no-regression half for the sim path this touches everywhere. The agent-browser daemon
+    wedged once and needed a PID kill; known fragility, not a finding.
+
+10c-2c-3. **The panel readouts: `infoFor`, the command card, the selection panel.** What is left
+    of `sim.units.get` in `rts.ts` (60 sites, most of them input handling and order issuing
+    rather than drawing). These are drawn at a fixed place in the HUD, so they are NOT
+    frame-atomic with the above and can go one at a time. Watch for the ones that are really
+    INPUT (what may I click, where may I build) rather than output — those ask a different
+    question and may not want `frameUnit` at all. `6d` (a razed building's ghost) rides in the
     slice that reworks `onDeath`.
 
 11a. ~~**Reconnect, the relay side: a rejoin token holds the slot.**~~ **Done.** A dropped

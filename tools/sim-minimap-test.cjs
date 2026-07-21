@@ -315,5 +315,68 @@ console.log("a building you have SEEN keeps its image on the client too");
   check("...and so does the client, off a redacted record", [idx.hidden(2), idx.unit(2).remembered, idx.unit(2).hp], [false, true, 0]);
 }
 
+console.log("the client dims and de-bars exactly what the host's fog does (item 10c-2c-2)");
+{
+  // `hidden` is only half the frame. The other half is "does the viewer KNOW this unit's live
+  // state, or is it an image left in the fog" -- the bit WC3 uses to grey a scouted building
+  // and take its health bar away (issue #62). On the host that is `fogBlocksClick`; on a client
+  // it is the payload's `remembered`, and the renderer must be able to swap one for the other.
+  const scout = unit({ id: 1, owner: 0, team: 0, x: 200, y: 200 });
+  const hall = unit({ id: 2, owner: 1, team: 1, x: 300, y: 300, building: { constructionLeft: 0 } });
+  const grunt = unit({ id: 3, owner: 1, team: 1, x: 320, y: 320 }); // a mobile enemy, in sight
+  const units = [scout, hall, grunt];
+  const set = new VisionSet(worldOf(units), noAlliances, () => [], 0, 0, 8192, 8192);
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
+  const vp = set.viewpointFor(0);
+  vp.rebuild([]);
+
+  /** For every unit the client actually DRAWS, does the payload's `remembered` agree with the
+   *  host's `fogBlocksClick`? Scoped to the drawn ones on purpose: an off-field unit is sent to
+   *  its owner with `remembered: false` while `fogBlocksClick` may say anything, and the frame
+   *  never reaches the question because the model is hidden. */
+  const agree = (idx) =>
+    units
+      .filter((u) => !idx.hidden(u.id))
+      .map((u) => [u.id, idx.unit(u.id).remembered === true, vp.fogBlocksClick(u)]);
+
+  const watching = new SnapshotIndex();
+  watching.update(snapshotFor(snapWorld(units), vp, 0, 1));
+  check("watched: nothing is a memory on either side", agree(watching), [[1, false, false], [2, false, false], [3, false, false]]);
+
+  scout.x = 7000; // walk away: the building stays as an image, the grunt vanishes entirely
+  scout.y = 7000;
+  vp.rebuild([]);
+  const away = new SnapshotIndex();
+  away.update(snapshotFor(snapWorld(units), vp, 0, 1));
+  // The scout is our own and always live; the hall is drawn but remembered on BOTH sides; the
+  // grunt was never sent, so it is not drawn and not asked about.
+  check("fogged: the building is a memory on both sides, and only it", agree(away), [[1, false, false], [2, true, true]]);
+  // The redaction is what makes taking the bar away the right call rather than a nicety: a
+  // remembered record's hp is zeroed, so a client that drew a bar would draw an empty one over
+  // every building it had ever scouted.
+  check("and its live numbers came across redacted", [away.unit(2).hp, away.unit(2).maxHp], [0, 0]);
+}
+
+console.log("the illusion wash is already resolved on the wire, so the client needs no viewpoint");
+{
+  // `applyFogTint` used to ask `seesFor(owner)` before painting the blue wash. On a client that
+  // question is already answered -- item 5 masks the bit per recipient -- and asking it again
+  // would mean a client deciding for itself which units are illusions, which is the tell the
+  // whole design withholds from the enemy.
+  const hero = unit({ id: 1, owner: 0, team: 0, x: 100, y: 100 });
+  const image = unit({ id: 2, owner: 0, team: 0, x: 140, y: 140, isIllusion: true, illusionOf: 1 });
+  const units = [hero, image];
+  const set = new VisionSet(worldOf(units), noAlliances, () => [], 0, 0, 8192, 8192);
+  set.seat([{ player: 0, team: 0 }, { player: 1, team: 1 }]);
+  set.setStartFog("revealall"); // both players can see both units; only the TELL differs
+  const mine = new SnapshotIndex();
+  mine.update(snapshotFor(snapWorld(units), set.viewpointFor(0), 0, 1));
+  const foe = new SnapshotIndex();
+  foe.update(snapshotFor(snapWorld(units), set.viewpointFor(1), 1, 1));
+  check("the owner's payload marks the image, so it washes blue", mine.unit(2).isIllusion, true);
+  check("the enemy's payload says it is an ordinary unit", foe.unit(2).isIllusion, false);
+  check("and the enemy is drawing it, not missing it", foe.hidden(2), false);
+}
+
 console.log(failed ? `\nminimap: ${failed} FAILED` : "\nminimap: all checks passed");
 process.exit(failed ? 1 : 0);
