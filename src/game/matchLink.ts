@@ -466,6 +466,44 @@ export class MatchLink {
     }
     this.newest = snap;
     this.received++;
+    // EVENTS are accumulated from every ACCEPTED payload, not read off `latest()` by the
+    // consumer — because `latest()` keeps only the newest and the consumer applies once
+    // per frame. At 60 Hz every broadcast is due, so each fx burst and each death rides
+    // exactly ONE payload; a client rendering slower than the wire supersedes payloads it
+    // never applied, and reading events off the applied one silently dropped the rest —
+    // a spell with no burst, a death with no collapse, the exact bugs items 16/17 fixed.
+    // STATE needs no such care: the newest payload is the whole of it.
+    const fx = snap.fx;
+    if (fx) {
+      this.pendingFx.effects.push(...fx.effects);
+      this.pendingFx.splats.push(...fx.splats);
+      this.pendingFx.castStarts.push(...fx.castStarts);
+      this.pendingFx.castFires.push(...fx.castFires);
+      // Same cap as the host's send buffer: a wedged consumer must not grow this forever.
+      if (this.pendingFx.effects.length > 512) this.pendingFx.effects.splice(0, this.pendingFx.effects.length - 512);
+    }
+    // A Map, because a death may legitimately ride twice (an off-cadence expedited send
+    // plus the due broadcast that follows) and the collapse must play once.
+    for (const d of snap.deaths ?? []) this.pendingDeaths.set(d.id, d);
+  }
+
+  private pendingFx: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+  private readonly pendingDeaths = new Map<number, { id: number; x: number; y: number }>();
+
+  /** Client side: every fx event received since the last take, across ALL payloads —
+   *  the applier consumes this alongside applying `latest()`. */
+  takeFx(): FxSnapshot {
+    const out = this.pendingFx;
+    this.pendingFx = { effects: [], splats: [], castStarts: [], castFires: [] };
+    return out;
+  }
+
+  /** Client side: every death received since the last take, deduped by id. */
+  takeDeaths(): Array<{ id: number; x: number; y: number }> {
+    if (!this.pendingDeaths.size) return [];
+    const out = [...this.pendingDeaths.values()];
+    this.pendingDeaths.clear();
+    return out;
   }
 
   /** The newest snapshot the authority sent this client, or null. */

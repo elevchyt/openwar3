@@ -1,4 +1,4 @@
-import type { SimWorld, QueuedOrder } from "../sim/world";
+import { isOffField, type SimWorld, type QueuedOrder } from "../sim/world";
 import type { UnitRegistry } from "../data/units";
 import type { AbilityRegistry } from "../data/abilities";
 import { ORDER_IDS, orderIdToString } from "../jass/orders";
@@ -605,6 +605,16 @@ export class Authority {
    */
   private applyOrder(player: number, id: number, o: QueuedOrder, queued: boolean): boolean {
     if (!this.ownedBy(player, id)) return false;
+    // No WC3 UI can address an OFF-FIELD unit — a worker inside a mine or its own build,
+    // a garrisoned peon, a devoured sheep — because the game deselects it the moment it
+    // leaves the field. But a LAN client's deselect is one payload-interval STALE (it
+    // fires when the snapshot lands, not when the sim swallowed the unit), so a client's
+    // selection CAN still name one for a beat. Refused here, same door as a forged
+    // unitId: mid-mine state is not order-shaped — a re-targeted `resId` made the emerge
+    // branch clear the WRONG mine's one-worker `busy` latch, and every later peon parked
+    // at the wedged mine's entrance forever (the "stuck outside the gold mine" playtest).
+    const u = this.sim.units.get(id);
+    if (!u || isOffField(u)) return false;
     this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
     if (queued) {
       this.sim.queueOrder(id, o);

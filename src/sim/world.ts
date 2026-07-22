@@ -756,6 +756,11 @@ export interface SimUnit {
   resId: number; // mine/tree id being harvested
   workT: number; // chop/mine timer
   inMine: boolean; // inside the gold mine (renderer hides the unit)
+  /** WHICH mine holds it while `inMine`. The emerge branch clears THAT mine's one-worker
+   *  `busy` latch — never `resId`'s, because an order can re-target `resId` while the
+   *  worker is still inside (a re-clicked expansion), and clearing the wrong mine leaves
+   *  the real one latched shut with every later worker parked outside forever. */
+  inMineId?: number;
   insideBuild: boolean; // Orc peon hidden INSIDE the structure it is building (renderer hides it)
   inBurrow: boolean; // peon garrisoned inside an Orc Burrow (renderer hides it)
   garrisonHost: number; // Orc Burrow id this peon is garrisoned in (0 = none)
@@ -3945,8 +3950,26 @@ export class SimWorld {
     // being refused by the lock would make it the one order that can't do its own job.
     // Everything else is ignored mid-wind-up, and ignored without dropping the queue.
     if (u && order.kind !== "stop" && this.castLocked(u)) return false;
+    // A worker INSIDE a mine is put back on the field before any order replaces its
+    // harvest — an order landing mid-mine (only a script can; the authority refuses
+    // players' — see Authority.applyOrder) used to leave `inMine` set with nothing ever
+    // clearing it, and the mine's one-worker `busy` latch wedged shut with it.
+    if (u) this.popFromMine(u);
     this.clearQueue(id);
     return this.dispatch(id, order);
+  }
+
+  /** The emerge branch minus the gold: put a mid-mine worker back on the field, empty-
+   *  handed, on the hall-facing side, and free the mine's `busy` latch it was holding. */
+  private popFromMine(u: SimUnit): void {
+    if (!u.inMine) return;
+    u.inMine = false;
+    const mine = this.mines.get(u.inMineId ?? u.resId);
+    u.inMineId = undefined;
+    if (mine) {
+      mine.busy = false;
+      [u.x, u.y] = this.mineApproach(u, mine);
+    }
   }
 
   /** Route a QueuedOrder to the matching issue* method. Shared by immediate
@@ -7534,7 +7557,9 @@ export class SimWorld {
       u.workT -= dt;
       if (u.workT <= 0) {
         u.inMine = false;
-        const mine = this.mines.get(u.resId);
+        // The mine it is IN, not the one its order names — see `inMineId`.
+        const mine = this.mines.get(u.inMineId ?? u.resId);
+        u.inMineId = undefined;
         if (mine) {
           mine.busy = false;
           w.carryGold = Math.min(GOLD_PER_TRIP, mine.gold);
@@ -7576,6 +7601,7 @@ export class SimWorld {
       if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
       u.inMine = true;
+      u.inMineId = mine.id;
       u.workT = MINE_TIME;
       u.atNode = false;
       this.unsettle(u); // don't block cells while invisible inside

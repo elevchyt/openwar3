@@ -136,5 +136,62 @@ console.log("a finished training names its OWNER (playtest bug 4)");
   check("the completion carries the TRAINER's owner, not a machine default", done[0]?.owner, 3);
 }
 
+// ---------------------------------------------------------------------------------------
+// The gold mine's one-worker `busy` latch (the "stuck outside the gold mine" playtest).
+// A LAN client's deselect is one payload-interval stale, so its selection could still name
+// a peon that had just ducked INSIDE a mine — and an order landing mid-mine corrupted the
+// latch two ways: re-targeting `resId` made the emerge branch free the WRONG mine, and a
+// move order took the unit off `harvest` so nothing ever emerged at all. Either way the
+// mine stayed `busy` forever and every later worker parked at its entrance for good.
+// ---------------------------------------------------------------------------------------
+
+const miner = (over = {}) =>
+  unit({
+    radius: 16, atNode: false, working: false, moving: false,
+    worker: { gold: true, lumber: false, carryGold: 0, carryLumber: 0, lumberCapacity: 0 },
+    ...over,
+  });
+
+console.log("\nthe emerge frees the mine the worker is IN, not the one its order names");
+{
+  const A = world.addMine(600, 600, 5000);
+  const B = world.addMine(1200, 1200, 5000);
+  A.busy = true;
+  // Mid-mine in A with the order re-targeted to B — the re-clicked-expansion shape.
+  const u = miner({ order: "harvest", resKind: "gold", resId: B.id, inMine: true, inMineId: A.id, workT: 0.01 });
+  world.tickHarvest(u, 0.05); // private in TS, a plain method at runtime — drives only this worker
+  check("the worker emerged", u.inMine, false);
+  check("mine A's latch is FREE — the wedge that stranded every later peon", A.busy, false);
+  check("mine B's latch was never touched", B.busy, false);
+  check("and the load came out of the mine it was IN", [u.worker.carryGold, 5000 - A.gold, B.gold], [10, 10, 5000]);
+}
+
+console.log("an order reaching a mid-mine worker pops it back onto the field first");
+{
+  const A = world.addMine(2000, 600, 5000);
+  A.busy = true;
+  const u = miner({ order: "harvest", resKind: "gold", resId: A.id, inMine: true, inMineId: A.id, workT: 99 });
+  check("the order took", world.issueOrder(u.id, { kind: "move", x: 500, y: 500 }), true);
+  check("the worker is back on the field", u.inMine, false);
+  check("the latch it held is free", A.busy, false);
+  check("and it is walking its new order", u.order, "move");
+}
+
+console.log("the AUTHORITY refuses an order naming an off-field unit (a client's stale selection)");
+{
+  const { Authority } = require(join(REPO, ".sim-build", "src", "game", "authority.js"));
+  const stub = { get: () => undefined };
+  const auth = new Authority(world, stub, stub, stub, stub);
+  const u = miner({ order: "harvest", inMine: true, inMineId: 0 });
+  const move = { c: "order", unitId: u.id, order: { kind: "move", x: 500, y: 500 }, queued: false };
+  // No WC3 UI can address an off-field unit — the game deselects it synchronously. Only a
+  // LAN client's beat-late selection can, so the gate is the wire's, same door as a forged
+  // unitId (docs/multiplayer.md Phase C).
+  check("a command for a mid-mine worker is refused", auth.execute(0, move), false);
+  check("…and left the worker inside, untouched", [u.inMine, u.order], [true, "harvest"]);
+  u.inMine = false;
+  check("back on the field the same command is accepted", auth.execute(0, move), true);
+}
+
 console.log(failed === 0 ? "\norder funnel: all checks passed" : `\norder funnel: ${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

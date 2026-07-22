@@ -3930,6 +3930,13 @@ export class MapViewerScene {
       if (im) this.impactProjectile(id, im.x, im.y, im.z);
       else this.detachProjectile(id);
     }
+    // A frozen client's removals come from the APPLIER, not the sim's drains — and they
+    // must be consumed HERE, before the record-gone sweep below. This drain used to live
+    // in drainWorldSpawns, which runs AFTER this method in the frame: the sweep saw the
+    // applier-deleted record first, detached the instance silently, and impactProjectile
+    // then found nothing to play — every hit on a client vanished burstless (the water
+    // elemental's splash, an arrow's shatter) while the host played them all.
+    for (const im of this.rts?.drainSnapshotProjImpacts() ?? []) this.impactProjectile(im.id, im.x, im.y, im.z);
     for (const [id, inst] of this.projectileInsts) {
       const p = world.projectiles.get(id);
       if (!p) {
@@ -5817,7 +5824,15 @@ export class MapViewerScene {
     // Empty everywhere but on a client, since only a frozen client ever applies.
     for (const s of this.rts?.drainSnapshotSpawns() ?? []) {
       const d = this.registry.get(s.typeId);
-      if (d) void this.spawnUnit(d, s.x, s.y, s.owner, s.team, 0, s.facing, s.id);
+      if (!d) continue;
+      void this.spawnUnit(d, s.x, s.y, s.owner, s.team, 0, s.facing, s.id).then(() => {
+        // Mid-materialise on the authority (`spawning` is the host's birth lock, still
+        // running): play the same birth clip the host's own summon path starts, or a
+        // client's Water Elemental simply POPS into the world fully formed. The record's
+        // own `spawning` keeps crossing with every payload, so the clip ends on the
+        // host's clock like everything else.
+        if (s.spawning > 0) this.rts?.beginSummonBirth(s.id);
+      });
     }
     for (const it of this.rts?.drainSnapshotItemSpawns() ?? []) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
     // died=false: the applier removing an item means "no longer sent" (picked up, or eyes
@@ -5834,7 +5849,8 @@ export class MapViewerScene {
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
-    for (const im of this.rts?.drainSnapshotProjImpacts() ?? []) this.impactProjectile(im.id, im.x, im.y, im.z);
+    // A vanished missile's impact burst is NOT drained here: it must beat updateProjectiles'
+    // record-gone sweep to the instance, so it is consumed there, before that sweep.
     // A record the payload MORPHED in place (Scout Tower → Arcane Tower) is owed the other
     // model — the same swap the host's own drainMorphs runs, minus the upgrade chime (that
     // is the owner's, and remodelUnit's own localPlayer check keeps it so).

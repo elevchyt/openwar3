@@ -784,6 +784,41 @@ console.log("deaths ride EVERY send — the expedited payload that carries the a
   check("…and then it is spent", peerLink.latest()?.deaths, []);
 }
 
+// At 60 Hz every broadcast is due, so each fx burst and each death rides exactly ONE
+// payload — and `latest()` keeps only the newest. A client rendering slower than the wire
+// supersedes payloads it never applied; reading events off the applied payload alone
+// silently dropped the rest (a spell with no burst, a death with no collapse — the exact
+// bugs items 16/17 fixed, resurrected by the cadence). So the link ACCUMULATES events from
+// every accepted payload, and the applier takes them from the accumulator.
+console.log("a client slower than the wire still gets every burst and every collapse");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const fxQ = [
+    { effects: [{ art: "A.mdx", x: 1, y: 2, targetId: 0, z: 0 }], splats: [], castStarts: [], castFires: [] },
+    { effects: [{ art: "B.mdx", x: 3, y: 4, targetId: 0, z: 0 }], splats: [], castStarts: [], castFires: [] },
+  ];
+  const dQ = [[{ id: 7, x: 0, y: 0 }], [{ id: 8, x: 1, y: 1 }]];
+  const src = {
+    ...sources,
+    drainFx: () => fxQ.shift() ?? { effects: [], splats: [], castStarts: [], castFires: [] },
+    drainDeaths: () => dQ.shift() ?? [],
+  };
+  // Two due broadcasts back to back, BEFORE the client consumes anything — the second
+  // supersedes the first exactly the way a slow frame loop experiences the 60 Hz wire.
+  hostLink.tickHost(1 / 60, worldAt(420), src, 1);
+  hostLink.tickHost(1 / 60, worldAt(420), src, 2);
+  await tick();
+  check("only the newest payload is held", peerLink.latest()?.time, 2);
+  check("…carrying only its own burst", peerLink.latest()?.fx.effects.map((e) => e.art), ["B.mdx"]);
+  const took = peerLink.takeFx();
+  check("the accumulator kept BOTH bursts", took.effects.map((e) => e.art), ["A.mdx", "B.mdx"]);
+  check("taking them spends them", peerLink.takeFx().effects, []);
+  check("both deaths survived the skipped payload", peerLink.takeDeaths().map((d) => d.id), [7, 8]);
+  check("and deaths are spent too", peerLink.takeDeaths(), []);
+}
+
 console.log("a command's consequences are expedited off-cadence, without fx and without disturbing the clock");
 {
   const { host, peer } = await room();

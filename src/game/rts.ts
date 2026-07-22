@@ -3870,6 +3870,9 @@ export class RtsController {
     this.snapshotItemRemovals.push(...res.removedItems);
     this.snapshotProjSpawns.push(...res.createdProjectiles);
     this.snapshotProjImpacts.push(...res.removedProjectiles);
+    // Impacts are drained by the FRAME only (updateProjectiles — a hidden window plays no
+    // bursts), so cap what a long-hidden client can accumulate before refocus flushes it.
+    if (this.snapshotProjImpacts.length > 256) this.snapshotProjImpacts.splice(0, this.snapshotProjImpacts.length - 256);
     // Each missile's aim fallback: the target's position when the payload was built, for
     // flights whose target is not in OUR payload (ducked into fog, died). Rebuilt per apply —
     // the set is tiny and the previous aims are stale by definition.
@@ -3881,20 +3884,24 @@ export class RtsController {
     for (const p of snap.projectiles ?? []) this.projAim.set(p.id, { x: p.tx, y: p.ty });
     // The interval's spell/ability presentation, into the SAME renderer queues the sim's
     // drains fill where the sim steps — the renderer never learns which world it is in.
-    // Guarded: a hand-fed harness payload may omit the field.
-    const fx = snap.fx;
+    // Taken from the LINK's accumulator rather than off `snap`: events ride exactly one
+    // payload each, and a client frame slower than the 60 Hz wire skips payloads — the
+    // accumulator collected from every payload RECEIVED, this applied one included.
+    const fx = this.matchLink?.takeFx();
     if (fx) {
       this.fxEffects.push(...fx.effects);
       this.fxSplats.push(...fx.splats);
       this.fxCastStarts.push(...fx.castStarts);
       this.fxCastFires.push(...fx.castFires);
     }
-    // Which of this payload's absences are DEATHS: consumed by the removal drain this same
-    // tick (`tick`), which routes them through `onDeath` — collapse animation, death cry,
-    // corpse — instead of the silent fog retire. Repeats across payloads are harmless: an
-    // id whose entry is already gone falls out of the drain unconsumed and is cleared here.
+    // Which absences are DEATHS: consumed by the removal drain this same tick (`tick`),
+    // which routes them through `onDeath` — collapse animation, death cry, corpse —
+    // instead of the silent fog retire. Accumulated like fx (a skipped payload's death
+    // must still collapse), and the clear() stays safe: a dead unit is absent from every
+    // LATER payload too, so an accumulated death's removal lands with this very apply and
+    // the drain consumes the id before the next one could clear it.
     this.pendingWireDeaths.clear();
-    for (const d of snap.deaths ?? []) this.pendingWireDeaths.add(d.id);
+    for (const d of this.matchLink?.takeDeaths() ?? []) this.pendingWireDeaths.add(d.id);
     // Records whose type changed in place (Scout Tower → Arcane Tower): the renderer owes
     // each the other model, exactly the host's own morph drain shape.
     this.snapshotMorphs.push(...res.morphed);
