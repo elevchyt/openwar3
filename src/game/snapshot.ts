@@ -70,14 +70,18 @@ import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, ty
  * already spans three states rather than two.
  */
 
-/** The slice of the world a snapshot is built from. `SimView` satisfies it structurally, so
- *  the authority hands over the read-only window it already has rather than the world. */
+/** The slice of the world a snapshot is built from. `SimWorld` satisfies it structurally —
+ *  both send sites pass the real sim, and `stashOf` is why the narrower `SimView` cannot:
+ *  the recipient's own gold/lumber ride in its snapshot (Phase G item 6 — a client's local
+ *  stash is otherwise a stale fork: income accrues only on the host, so the two drift and
+ *  every affordability question gets two different answers). */
 export interface SnapshotWorld {
   readonly units: ReadonlyMap<number, SimUnit>;
   readonly mines: ReadonlyMap<number, SimMine>;
   readonly items: ReadonlyMap<number, SimItem>;
   readonly timeOfDay: number;
   readonly dawnDusk: boolean;
+  stashOf(owner: number): { gold: number; lumber: number };
 }
 
 /** The per-recipient half. `Viewpoint` satisfies it; a test can pass a five-line stub.
@@ -302,6 +306,15 @@ export interface WorldSnapshot {
   time: number;
   timeOfDay: number;
   dawnDusk: boolean;
+  /** The RECIPIENT's own gold and lumber — the authority's figures, which are the only real
+   *  ones: income (mining, pawning) happens only where the sim steps, so a client that kept
+   *  its own ledger watched it drift from the truth with every trip a peon made. The drift
+   *  was not cosmetic: the client's authority pre-judges every purchase against its local
+   *  stash, so a figure lower than the host's refused trains the player could afford, and a
+   *  figure higher let a train charge locally, be refused by the host, and look "instantly
+   *  canceled" when the next snapshot wiped the queue (the July playtest bug). Nobody else's
+   *  stash is ever sent — an opponent's bank balance is scouting information. */
+  stash: { gold: number; lumber: number };
   units: UnitSnapshot[];
   mines: MineSnapshot[];
   items: GroundItemSnapshot[];
@@ -605,5 +618,8 @@ export function snapshotFor(
     items.push({ id: it.id, itemId: it.itemId, x: it.x, y: it.y });
   }
 
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, units, mines, items, commands };
+  // Copied, not referenced: the payload must be a frozen reading, not a live handle the
+  // sim keeps mutating while the message waits to serialize.
+  const stash = world.stashOf(recipient);
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, units, mines, items, commands };
 }

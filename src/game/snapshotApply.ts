@@ -32,6 +32,9 @@ export interface ApplyWorld {
   readonly items: Map<number, SimItem>;
   timeOfDay: number;
   dawnDusk: boolean;
+  /** The recipient's LIVE stash object, so the payload's figures overwrite the client's
+   *  drifted local ledger in place — every reader already holds this object. */
+  stashOf(owner: number): { gold: number; lumber: number };
   /** The sim's own clean removal (unstamps footprints, frees cells, queues the render-side
    *  drop) — NOT a bare `units.delete`, or a removed building would leave its collision
    *  stamped on the client's grid forever. */
@@ -182,10 +185,13 @@ function mergeWeapon(base: SimUnit["weapon"], s: UnitSnapshot["weapon"]): SimUni
 }
 
 /** What one application did — the renderer (item 2c) grows models over `created` and lets
- *  the existing removal drain retire `removed`'s entries. */
+ *  the existing removal drain retire `removed`'s entries; ground items get the same pair,
+ *  because an item has a model and no entry-sync of its own. */
 export interface ApplyResult {
   created: UnitSnapshot[];
   removed: number[];
+  createdItems: WorldSnapshot["items"];
+  removedItems: number[];
 }
 
 /**
@@ -222,6 +228,7 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
   }
   // Ground items follow the units' create/remove rule (an item in the dark is ABSENT, not
   // remembered — snapshot.ts). `charges` does not cross: pickup and pawn are host-judged.
+  const createdItems: WorldSnapshot["items"] = [];
   const sentItems = new Set<number>();
   for (const it of snap.items) {
     sentItems.add(it.id);
@@ -231,11 +238,24 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
       rec.y = it.y;
     } else {
       world.items.set(it.id, { id: it.id, itemId: it.itemId, x: it.x, y: it.y, charges: 0 });
+      createdItems.push(it);
     }
   }
-  for (const id of [...world.items.keys()]) if (!sentItems.has(id)) world.items.delete(id);
+  const removedItems: number[] = [];
+  for (const id of [...world.items.keys()]) {
+    if (sentItems.has(id)) continue;
+    world.items.delete(id);
+    removedItems.push(id);
+  }
 
   world.timeOfDay = snap.timeOfDay;
   world.dawnDusk = snap.dawnDusk;
-  return { created, removed };
+  // The recipient's gold and lumber are the AUTHORITY's figures, written wholesale. This is
+  // what reconciles the client's optimistic local charge: an accepted purchase comes back as
+  // the host's own deduction, a refused one comes back undone — the charge that used to leak
+  // when a train was refused host-side simply stops existing (the train-cancel playtest bug).
+  const stash = world.stashOf(snap.recipient);
+  stash.gold = snap.stash.gold;
+  stash.lumber = snap.stash.lumber;
+  return { created, removed, createdItems, removedItems };
 }

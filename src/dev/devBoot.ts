@@ -223,14 +223,23 @@ async function devLanBoot(
     lobby.host("dev-lan", "Host", info.name, mapPath, info.slots.length);
     await waitForLobby(lobby, (s) => s.phase === "hosting" && s.you !== null);
     log("LAN host: waiting for a joiner…");
-    await waitForLobby(lobby, (s) => s.peers.length >= 2);
+    // Generous on purpose: the joiner may be a second browser cold-booting the whole
+    // install fetch, which takes well past the default 15 s on the harness machine.
+    await waitForLobby(lobby, (s) => s.peers.length >= 2, 180000);
     start = buildStart(mapPath, info.name, info, lobby.snapshot, seed);
     lobby.startMatch(start); // tell the joiner
     log(`LAN host: started, seed ${seed}`);
   } else {
-    await waitForLobby(lobby, (s) => s.rooms.length > 0);
-    lobby.join(lobby.snapshot.rooms[0].id, "Joiner");
-    await waitForLobby(lobby, (s) => s.phase === "joined" && s.you !== null);
+    // Wait for a JOINABLE room, not merely a listed one: the relay holds a dropped match's
+    // room open for reconnect (item 11a), so after a harness restart `rooms[0]` can be a
+    // full zombie whose join is refused — which read as "the lobby is broken" three times
+    // before the filter said otherwise.
+    const joinable = (s: LobbyState) => s.rooms.find((r) => r.players < r.maxPlayers);
+    await waitForLobby(lobby, (s) => joinable(s) !== undefined, 60000);
+    lobby.join(joinable(lobby.snapshot)!.id, "Joiner");
+    // 60 s, not the 15 s default: two game tabs booting at once saturate the harness
+    // machine, and a timer that fires before the ack's onChange has run reads as a dead lobby.
+    await waitForLobby(lobby, (s) => s.phase === "joined" && s.you !== null, 60000);
     log("LAN join: in the room, waiting for start…");
     start = await new Promise<StartMatchMsg>((resolve) => (lobby.onStart = resolve));
     log("LAN join: start received");

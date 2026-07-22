@@ -65,7 +65,14 @@ function worldOf(units, mines = [], items = []) {
   const um = new Map(); for (const u of units) um.set(u.id, u);
   const mm = new Map(); for (const m of mines) mm.set(m.id, m);
   const im = new Map(); for (const i of items) im.set(i.id, i);
-  return { units: um, mines: mm, items: im, timeOfDay: 12, dawnDusk: true };
+  // A per-player ledger like the sim's: `snapshotFor` reads the RECIPIENT's own stash.
+  const stashes = new Map();
+  const stashOf = (owner) => {
+    let s = stashes.get(owner);
+    if (!s) { s = { gold: 500 + owner, lumber: 150 }; stashes.set(owner, s); }
+    return s;
+  };
+  return { units: um, mines: mm, items: im, timeOfDay: 12, dawnDusk: true, stashOf };
 }
 
 /** A stand-in for `Viewpoint`: the five questions `SnapshotViewer` asks. Defaults are
@@ -91,6 +98,11 @@ console.log("the snapshot is a subset of the sim unit, not a serialisation of it
 
   check("one unit, echoed recipient and time", [snap.units.length, snap.recipient, snap.time], [1, 0, 5.5]);
   check("world clock rides along", [snap.timeOfDay, snap.dawnDusk], [12, true]);
+  // The RECIPIENT's stash rides in the payload (Phase G item 6 — the client's local ledger
+  // drifts, and the July playtest's "instantly canceled" trains were the drift judging).
+  check("the recipient's own stash rides along", snap.stash, { gold: 500, lumber: 150 });
+  check("…as a copy, not the live ledger", snap.stash === world.stashOf(0), false);
+  check("…and it is the recipient's, nobody else's", snapshotFor(world, viewer(0, { 0: 0, 3: 0 }), 3, 0).stash.gold, 503);
   check("the fields a client draws with are present", [u.x, u.y, u.hp, u.maxHp, u.typeId, u.owner], [10, 20, 420, 420, "hfoo", 0]);
 
   // THE check. A spread-based `snapshotFor` passes everything above and fails only here.

@@ -1230,6 +1230,12 @@ export class MapViewerScene {
    *  owns the setup; neither should reach across the other. */
   attachMatchLink(setup: MatchLinkSetup): void {
     this.rts?.attachMatchLink(setup);
+    // Arm the background pump HERE, not from the frame loop: rAF is stopped in a hidden
+    // window, so a host whose tab is already covered when the match starts would otherwise
+    // never run the frame that starts the pump — the authority sits dead until refocused
+    // (exactly how the two-tab harness kills it). The pump stands down while rAF is alive,
+    // so arming it early costs nothing on a visible window.
+    this.startBackgroundPump();
     // A client turns the authority's payload back into the same `DialogObj` its own script
     // would have built, so `GameDialog` renders the real screen off the game's own FDF and the
     // two engine button behaviours (any click closes; a quit button leaves) work unchanged.
@@ -2410,7 +2416,12 @@ export class MapViewerScene {
     const world = this.rts.simWorld;
     for (const w of world.units.values()) {
       const pb = w.buildPending;
-      if (!pb || w.owner !== this.localPlayer || this.buildSpawning.has(w.id)) continue;
+      // No owner filter: on a LAN host EVERY player's pending builds are this machine's to
+      // start — the client's worker walked here on the host's own sim, and skipping it left
+      // the foundation never rising (playtest bug 6's true root, the localPlayer disease
+      // bug 4 had). Single-player is unchanged: only the local player ever has one. A
+      // frozen client never runs this at all (advanceSim's gate).
+      if (!pb || this.buildSpawning.has(w.id)) continue;
       if (Math.hypot(w.x - pb.x, w.y - pb.y) >= 160 || w.moving) { this.buildWait.delete(w.id); continue; } // not there yet
       const def = this.registry.get(pb.defId);
       if (!def) { world.cancelPendingBuild(w.id); this.buildWait.delete(w.id); continue; }
@@ -2421,7 +2432,9 @@ export class MapViewerScene {
         this.buildWait.delete(w.id);
         const workerId = w.id;
         this.buildSpawning.add(workerId);
-        void this.spawnUnit(def, pb.x, pb.y, this.localPlayer, this.teamOf(this.localPlayer), def.buildTime || 60).then((simId) => {
+        // The foundation belongs to the WORKER's owner, never to this machine's player —
+        // the second half of the localPlayer disease (see the gate above, and bug 4).
+        void this.spawnUnit(def, pb.x, pb.y, w.owner, this.teamOf(w.owner), def.buildTime || 60).then((simId) => {
           this.buildSpawning.delete(workerId);
           if (simId !== null) world.assignBuilder(workerId, simId); // clears buildPending
           else world.cancelPendingBuild(workerId); // model failed to load → refund
@@ -5757,10 +5770,22 @@ export class MapViewerScene {
       const d = this.registry.get(sp.typeId);
       if (d) void this.spawnUnit(d, sp.x, sp.y, sp.player, sp.team, 0, sp.facing, sp.simId);
     }
+    // Bodies owed to records the APPLIER created (item 2c — a client's trained peon, a
+    // scouted enemy building coming back into view): the record already exists under the
+    // HOST's id, so this is the script-spawn shape exactly — attach a model, mint nothing.
+    // Empty everywhere but on a client, since only a frozen client ever applies.
+    for (const s of this.rts?.drainSnapshotSpawns() ?? []) {
+      const d = this.registry.get(s.typeId);
+      if (d) void this.spawnUnit(d, s.x, s.y, s.owner, s.team, 0, s.facing, s.id);
+    }
+    for (const it of this.rts?.drainSnapshotItemSpawns() ?? []) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
+    // died=false: the applier removing an item means "no longer sent" (picked up, or eyes
+    // left it) — there is no death burst to play.
+    for (const id of this.rts?.drainSnapshotItemRemovals() ?? []) this.removeItemModel(id, false);
     // Everything below CREATES sim records with freshly-minted LOCAL ids — the collision
     // family option 2 removes — so a frozen client refuses it. Its trained/summon queues
     // never fill anyway (the sim does not step); new units arrive as snapshot records and
-    // grow models in the entry sync (item 2c).
+    // grow models through the drains just above.
     if (this.rts?.frozenClient) return;
     const map = this.viewer.map;
     if (map) {

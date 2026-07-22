@@ -58,6 +58,7 @@ function payloadUnit(over = {}) {
 
 /** A stub ApplyWorld whose removeUnit mirrors the real one's observable half. */
 function world(units) {
+  const stashes = new Map();
   const w = {
     units: new Map(units.map((u) => [u.id, u])),
     mines: new Map(),
@@ -65,6 +66,11 @@ function world(units) {
     timeOfDay: 8,
     dawnDusk: true,
     removedVia: [],
+    stashOf(owner) {
+      let s = stashes.get(owner);
+      if (!s) { s = { gold: 0, lumber: 0 }; stashes.set(owner, s); }
+      return s;
+    },
     removeUnit(id) {
       if (!w.units.has(id)) return false;
       w.units.delete(id);
@@ -82,6 +88,7 @@ console.log("the maphack invariant: records mirror the payload's id set");
   const w = world([own, enemyBase]);
   const snap = {
     recipient: 2, time: 1, timeOfDay: 11, dawnDusk: true, commands: 0,
+    stash: { gold: 731, lumber: 240 },
     units: [payloadUnit({ id: 1, owner: 2, hp: 77, x: 999, y: 888 }), payloadUnit({ id: 3, owner: 1, typeId: "hfoo" })],
     mines: [], items: [],
   };
@@ -97,6 +104,10 @@ console.log("the maphack invariant: records mirror the payload's id set");
   check("sent fields land on the surviving record", [w.units.get(1).hp, w.units.get(1).x, w.units.get(1).y], [77, 999, 888]);
   check("the record rolls its own prev position forward", [w.units.get(1).prevX, w.units.get(1).prevY], [100, 100]);
   check("the world clock is the payload's", w.timeOfDay, 11);
+  // The recipient's stash is the AUTHORITY's figure, written wholesale — this is what undoes
+  // a client's optimistic local charge when the host refuses (the "instantly canceled"
+  // train of the July playtest: local gold leaked on every refusal, and income never came).
+  check("the recipient's stash is overwritten with the payload's", w.stashOf(2), { gold: 731, lumber: 240 });
 }
 
 console.log("field semantics the readers depend on");
@@ -118,15 +129,19 @@ console.log("mines keep their last reading; items follow the units' rule");
   w.items.set(6, { id: 6, itemId: "tdex", x: 1, y: 1, charges: 0 });
   const snap = {
     recipient: 2, time: 1, timeOfDay: 8, dawnDusk: true, commands: 0, units: [],
+    stash: { gold: 0, lumber: 0 },
     mines: [{ id: 4, x: 0, y: 0, radius: 96, gold: -1 }],
     items: [{ id: 8, itemId: "ratc", x: 5, y: 5 }],
   };
-  applyWorldSnapshot(w, snap, () => null);
+  const res = applyWorldSnapshot(w, snap, () => null);
   check("no eyes on the mine (-1) keeps the last reading", w.mines.get(4).gold, 12500);
   check("an unsent item is gone; a sent one exists", [...w.items.keys()], [8]);
+  check("the new item is reported for a model (2c)", res.createdItems.map((i) => i.id), [8]);
+  check("…and the vanished one for removal", res.removedItems, [6]);
   const snap2 = { ...snap, mines: [{ id: 4, x: 0, y: 0, radius: 96, gold: 900 }] };
-  applyWorldSnapshot(w, snap2, () => null);
+  const res2 = applyWorldSnapshot(w, snap2, () => null);
   check("eyes back on the mine writes the reading", w.mines.get(4).gold, 900);
+  check("an item already modelled is not re-reported", res2.createdItems, []);
 }
 
 console.log(failed === 0 ? "\nsnapshot applier: all checks passed" : `\nsnapshot applier: ${failed} check(s) failed`);

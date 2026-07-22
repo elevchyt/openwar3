@@ -203,7 +203,7 @@ console.log("\nminimap glyphs are NOT fog-gated (verified against the real 1.27a
 const snapWorld = (units) => {
   const m = new Map();
   for (const u of units) m.set(u.id, u);
-  return { units: m, mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true };
+  return { units: m, mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true, stashOf: () => ({ gold: 0, lumber: 0 }) };
 };
 
 console.log("\nthe client's snapshot dots equal the host's sim+fog dots — revealed");

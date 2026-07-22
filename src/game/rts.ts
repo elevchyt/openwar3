@@ -25,9 +25,9 @@ import { groupTargets, ringTargets, followOffsets } from "./formations";
 import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
-import { MatchLink, type DialogMessage, type MatchLinkSetup } from "./matchLink";
+import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup } from "./matchLink";
 import { applyWorldSnapshot } from "./snapshotApply";
-import type { WorldSnapshot } from "./snapshot";
+import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
 import type { RenderUnit } from "./renderUnit";
@@ -276,6 +276,12 @@ export type { FogArea, FogModifier } from "./fog";
 // smoothed to avoid flicker), fall back to the stand pose instead.
 const MOVE_ANIM_MIN_RATIO = 0.2;
 const MOVE_EMA_ALPHA = 0.25; // per-tick blend toward the current ratio
+
+/** A payload-to-payload jump longer than this snaps instead of gliding (poseLerp). The
+ *  fastest ground speed the game data allows is 522 (MiscData MaxUnitSpeed), so even a
+ *  quad-length 0.4 s segment covers ~209 world units — anything past this is a teleport
+ *  (Blink, a Zeppelin unload, a Town Portal), and a glide would smear it across the map. */
+const POSE_SNAP_DIST = 400;
 // Corpse lifecycle (WC3): a dead unit plays Death, then — if the model has them —
 // Decay Flesh and Decay Bone, and the bones linger until the sim corpse fully
 // decays (88s after death; see world.ts CORPSE_TOTAL_TIME). Units that leave no
@@ -2137,9 +2143,12 @@ export class RtsController {
       // unchanged against the written records; the drains simply find empty queues.
       const latest = this.matchLink?.latest();
       if (latest && latest !== this.lastApplied) {
+        this.applySnapshot(latest); // reads lastApplied for the segment duration — order matters
         this.lastApplied = latest;
-        this.applySnapshot(latest);
       }
+      // Glide the records between payloads (see poseLerp) — the payload wrote where every
+      // unit IS, this writes where the frame should DRAW it, one interval behind.
+      this.tickPoseLerp(dt);
     } else {
       this.sim.tick(dt);
     }
@@ -3694,7 +3703,15 @@ export class RtsController {
       const router = new CommandRouter(setup.seats);
       link.onCommand = (from, msg) => {
         const judged = router.receive(from, msg);
-        if (accepted(judged)) this.authority.execute(judged.player, judged.cmd);
+        if (!accepted(judged)) {
+          if (import.meta.env.DEV) console.info(`[sync] host dropped a command from peer ${from}: ${judged}`);
+          return;
+        }
+        const ok = this.authority.execute(judged.player, judged.cmd);
+        // A refused remote command is invisible from the client's chair — its local charge is
+        // undone by the next snapshot and the queued job never echoes back, which reads as a
+        // silent cancel. Name it on the host so a playtest report comes with its reason.
+        if (!ok && import.meta.env.DEV) console.info(`[sync] host REFUSED p${judged.player} ${JSON.stringify(judged.cmd)}`);
       };
     }
   }
@@ -3724,12 +3741,116 @@ export class RtsController {
    *  sim-internal fields the wire does not carry, and the reserved id is the whole point:
    *  a client allocates no ids of its own, so none can collide (playtest bugs 5/6). */
   private applySnapshot(snap: WorldSnapshot): void {
-    applyWorldSnapshot(this.sim, snap, (s) => {
+    // Interpolation start poses are captured BEFORE the applier overwrites the records: a
+    // record's pose right now is the pose the last frame DREW (tickPoseLerp wrote it), which
+    // is exactly where this segment must depart from or every arrival visibly snaps.
+    this.poseLerp.clear();
+    const starts = this.poseStarts;
+    starts.clear();
+    for (const s of snap.units) {
+      const u = this.sim.units.get(s.id);
+      if (u && !s.remembered) starts.set(s.id, { x: u.x, y: u.y, f: u.facing, h: u.flyHeight });
+    }
+    const res = applyWorldSnapshot(this.sim, snap, (s) => {
       const def = this.registry.get(s.typeId);
       if (!def) return null;
       this.addSimUnit(def, s.x, s.y, s.facing, s.owner, s.team, 0, s.id);
       return this.sim.units.get(s.id) ?? null;
     });
+    // Build this interval's pose segments: from the drawn pose to the payload's. A unit the
+    // payload CREATED has no start and simply appears at its position; one that jumped a
+    // teleport's distance snaps rather than glides (a Blink must not smear across the map).
+    for (const s of snap.units) {
+      if (s.remembered) continue;
+      const from = starts.get(s.id);
+      if (!from) continue;
+      const dx = s.x - from.x;
+      const dy = s.y - from.y;
+      const df = s.facing - from.f;
+      const dh = s.flyHeight - from.h;
+      if (dx === 0 && dy === 0 && df === 0 && dh === 0) continue; // parked — nothing to glide
+      if (Math.hypot(dx, dy) > POSE_SNAP_DIST) continue;
+      this.poseLerp.set(s.id, { x0: from.x, y0: from.y, f0: from.f, h0: from.h, x1: s.x, y1: s.y, f1: s.facing, h1: s.flyHeight });
+    }
+    // The segment plays out over the HOST-TIME gap between this payload and the last one, so
+    // a dropped snapshot yields one double-length segment at the unit's true speed instead of
+    // a half-speed crawl followed by a jump. Clamped: the first payload has no predecessor,
+    // and a rejoin's catch-up gap is minutes nobody should spend gliding.
+    const prevTime = this.lastApplied?.time ?? snap.time;
+    this.poseLerpDur = Math.min(Math.max(snap.time - prevTime, SNAPSHOT_INTERVAL), 4 * SNAPSHOT_INTERVAL);
+    this.poseLerpT = 0;
+    // Bodies owed (item 2c): entries for `removed` retire through the ordinary removal
+    // drain (`removeUnit` queued them); entries for `created` are owed to the renderer,
+    // which grows a model over the existing record exactly like a script spawn.
+    this.snapshotSpawns.push(...res.created);
+    this.snapshotItemSpawns.push(...res.createdItems);
+    this.snapshotItemRemovals.push(...res.removedItems);
+  }
+
+  /** This interval's pose segments (docs/multiplayer.md item 2c-interp): what the applier
+   *  wrote is the unit's pose AT THE SNAPSHOT, and drawing it verbatim renders the match at
+   *  10 Hz — every unit hops a tenth-second of travel each payload, and the walk-clip gate
+   *  (which smooths drawn displacement against `speed * dt`) reads the hops as standing.
+   *  So on a frozen client the RECORD pose is re-written every frame, gliding from where the
+   *  last frame drew to where the payload said, one snapshot interval behind the authority —
+   *  and every consumer (models, bars, minimap dots, picking, the walk gate) inherits the
+   *  60 fps motion because they all read the same records. */
+  private poseLerp = new Map<number, { x0: number; y0: number; f0: number; h0: number; x1: number; y1: number; f1: number; h1: number }>();
+  private poseStarts = new Map<number, { x: number; y: number; f: number; h: number }>();
+  private poseLerpT = 0;
+  private poseLerpDur = SNAPSHOT_INTERVAL;
+
+  /** Advance the glide and write the interpolated pose into the records. Runs only on a
+   *  frozen client, from `tick`, after any fresh payload has (re)built the segments. */
+  private tickPoseLerp(dt: number): void {
+    if (!this.poseLerp.size) return;
+    this.poseLerpT += dt;
+    const f = Math.min(1, this.poseLerpT / this.poseLerpDur);
+    for (const [id, p] of this.poseLerp) {
+      const u = this.sim.units.get(id);
+      if (!u) {
+        this.poseLerp.delete(id);
+        continue;
+      }
+      u.x = p.x0 + (p.x1 - p.x0) * f;
+      u.y = p.y0 + (p.y1 - p.y0) * f;
+      u.flyHeight = p.h0 + (p.h1 - p.h0) * f;
+      // Shortest arc, so a unit crossing the ±π seam turns a few degrees rather than a lap.
+      let df = (p.f1 - p.f0) % (2 * Math.PI);
+      if (df > Math.PI) df -= 2 * Math.PI;
+      else if (df < -Math.PI) df += 2 * Math.PI;
+      u.facing = p.f0 + df * f;
+    }
+    // Hold at the payload's pose once the segment is spent (a late snapshot pauses units
+    // where the authority last put them — never extrapolate past what the host said).
+    if (f >= 1) this.poseLerp.clear();
+  }
+
+  /** Records the applier created since the last drain — a client's trained peon, a
+   *  scouted enemy building coming back into view. The renderer gives each a body
+   *  (item 2c); the record already exists under the HOST's id. */
+  private snapshotSpawns: UnitSnapshot[] = [];
+  drainSnapshotSpawns(): UnitSnapshot[] {
+    if (!this.snapshotSpawns.length) return this.snapshotSpawns;
+    const out = this.snapshotSpawns;
+    this.snapshotSpawns = [];
+    return out;
+  }
+
+  /** Ground items the applier created/removed — same 2c contract, for item models. */
+  private snapshotItemSpawns: GroundItemSnapshot[] = [];
+  private snapshotItemRemovals: number[] = [];
+  drainSnapshotItemSpawns(): GroundItemSnapshot[] {
+    if (!this.snapshotItemSpawns.length) return this.snapshotItemSpawns;
+    const out = this.snapshotItemSpawns;
+    this.snapshotItemSpawns = [];
+    return out;
+  }
+  drainSnapshotItemRemovals(): number[] {
+    if (!this.snapshotItemRemovals.length) return this.snapshotItemRemovals;
+    const out = this.snapshotItemRemovals;
+    this.snapshotItemRemovals = [];
+    return out;
   }
 
   /**

@@ -125,7 +125,7 @@ export type GameMessage = StartMatch | import("./commandLink").CommandMessage;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4; // 4: WorldSnapshot carries the recipient's stash
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;

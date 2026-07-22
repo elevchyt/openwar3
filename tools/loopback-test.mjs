@@ -54,7 +54,7 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 3);
+  check("and it speaks our protocol", c.last("hello").protocol, 4);
 }
 
 console.log("the room forms exactly as it does over a socket");
@@ -363,7 +363,7 @@ function worldAt(hp) {
     garrisonCap: 0, isSummon: false, summonLeft: 0, summonMax: 0, isIllusion: false,
     illusionOf: 0, guardX: 0, guardY: 0, buildPending: null, orderQueue: [], pendingCast: null,
   };
-  return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true };
+  return { units: new Map([[1, u]]), mines: new Map(), items: new Map(), timeOfDay: 12, dawnDusk: true, stashOf: () => ({ gold: 500, lumber: 150 }) };
 }
 const seer = { seesFor: () => true, fogHides: () => false, fogBlocksClick: () => false, invisHides: () => false, fogBlocksAt: () => false };
 // `commandsApplied` is the input-parity stamp every snapshot carries (item F5). 0 here: these

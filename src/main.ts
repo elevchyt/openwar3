@@ -372,4 +372,5 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
   meleeConfig: () => meleeConfig,
   mainMenu: () => glue.screen,
   menuScene: () => menuScene,
+  mapScene: () => mapScene, // the live match, for the two-client LAN harness's eval probes
 };
