@@ -5823,6 +5823,18 @@ export class MapViewerScene {
     // died=false: the applier removing an item means "no longer sent" (picked up, or eyes
     // left it) — there is no death burst to play.
     for (const id of this.rts?.drainSnapshotItemRemovals() ?? []) this.removeItemModel(id, false);
+    // Missiles the payload carries (a frozen client's sim launches none of its own): a new
+    // one gets its launch sound and streams its model in, exactly like the sim drain below;
+    // a vanished one plays its impact burst where it last was — the payload does not say
+    // impact from fizzle apart, and a burst on a fizzle is a smaller lie than silence on
+    // every real hit.
+    for (const p of this.rts?.drainSnapshotProjSpawns() ?? []) {
+      if (!p.art) continue;
+      this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z });
+      this.projectileLoading.add(p.id);
+      void this.loadProjectile(p.id, p.art);
+    }
+    for (const im of this.rts?.drainSnapshotProjImpacts() ?? []) this.impactProjectile(im.id, im.x, im.y, im.z);
     // Everything below CREATES sim records with freshly-minted LOCAL ids — the collision
     // family option 2 removes — so a frozen client refuses it. Its trained/summon queues
     // never fill anyway (the sim does not step); new units arrive as snapshot records and

@@ -1,4 +1,4 @@
-import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem } from "../sim/world";
+import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -79,6 +79,9 @@ export interface SnapshotWorld {
   readonly units: ReadonlyMap<number, SimUnit>;
   readonly mines: ReadonlyMap<number, SimMine>;
   readonly items: ReadonlyMap<number, SimItem>;
+  /** In-flight missiles. Optional because hand-built test worlds have none; the real
+   *  `SimWorld` always does. */
+  readonly projectiles?: ReadonlyMap<number, SimProjectile>;
   readonly timeOfDay: number;
   readonly dawnDusk: boolean;
   stashOf(owner: number): { gold: number; lumber: number };
@@ -336,6 +339,27 @@ export interface GroundItemSnapshot {
   y: number;
 }
 
+/** One in-flight missile, as a client that did not simulate it draws one: where it is, what
+ *  model it wears, and enough of the flight (target, speed, the launch→impact height lerp)
+ *  to ADVANCE it smoothly between payloads with the sim's own homing step. `tx`/`ty` is the
+ *  target's position when the payload was built — the aim fallback for a client whose payload
+ *  does not carry the target itself. Damage, spill and the spell to run on impact stay
+ *  behind: the client's copy hits nothing, the host's does. */
+export interface ProjectileSnapshot {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  targetId: number;
+  tx: number;
+  ty: number;
+  speed: number;
+  art: string;
+  startZ: number;
+  impactZ: number;
+  startDist: number;
+}
+
 /** One frame of world, addressed to one player. */
 export interface WorldSnapshot {
   /** Who this was built for. Carried in the payload rather than inferred from the connection,
@@ -372,6 +396,10 @@ export interface WorldSnapshot {
   units: UnitSnapshot[];
   mines: MineSnapshot[];
   items: GroundItemSnapshot[];
+  /** In-flight missiles under this recipient's eyes. Same rule as ground items — a missile
+   *  in the dark is absent, not remembered — and the client both draws AND advances these
+   *  (`ProjectileSnapshot`), so an arrow does not stutter at the wire's cadence. */
+  projectiles: ProjectileSnapshot[];
   /**
    * How many commands the world this was built from has applied (docs/multiplayer.md F5).
    *
@@ -681,9 +709,23 @@ export function snapshotFor(
     items.push({ id: it.id, itemId: it.itemId, x: it.x, y: it.y });
   }
 
+  // In-flight missiles follow the items' rule: under your eyes or absent. `tx`/`ty` is the
+  // TARGET's position now — the client's aim fallback when the target itself was not sent
+  // (an arrow chasing something that just ducked into fog still has to fly somewhere).
+  const projectiles: ProjectileSnapshot[] = [];
+  for (const p of world.projectiles?.values() ?? []) {
+    if (viewer.fogBlocksAt(p)) continue;
+    const t = world.units.get(p.targetId);
+    projectiles.push({
+      id: p.id, x: p.x, y: p.y, z: p.z, targetId: p.targetId,
+      tx: t?.x ?? p.x, ty: t?.y ?? p.y,
+      speed: p.speed, art: p.art, startZ: p.startZ, impactZ: p.impactZ, startDist: p.startDist,
+    });
+  }
+
   // Copied, not referenced: the payload must be a frozen reading, not a live handle the
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
   const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, commands };
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, commands };
 }

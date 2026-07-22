@@ -140,6 +140,22 @@ console.log("neutral-passive structures are map furniture: fog demotes them to r
   check("and a fogged PLAYER building still hides entirely", snap.units.some((u) => u.id === 3), false);
 }
 
+console.log("in-flight missiles cross under your eyes, with the target's position as aim fallback");
+{
+  const world = worldOf([unit({ id: 4, owner: 0, x: 400, y: 200 })]);
+  world.projectiles = new Map([
+    [3, { id: 3, x: 100, y: 50, z: 33, sourceId: 9, targetId: 4, speed: 900, damage: 55, art: "m.mdx", startZ: 30, impactZ: 40, startDist: 500, spill: { dist: 1 }, spell: { code: "AHtb" } }],
+    [8, { id: 8, x: -900, y: -900, z: 10, sourceId: 9, targetId: 77, speed: 700, damage: 10, art: "n.mdx", startZ: 10, impactZ: 10, startDist: 100 }],
+  ]);
+  const eyesOnFirst = viewer(0, { 0: 0 }, { fogBlocksAt: (p) => p.x < 0 });
+  const snap = snapshotFor(world, eyesOnFirst, 0, 0);
+  check("the watched missile crosses; the one in the dark is absent", snap.projectiles.map((p) => p.id), [3]);
+  check("aim fallback is the TARGET's position now", [snap.projectiles[0].tx, snap.projectiles[0].ty], [400, 200]);
+  check("damage, spill and the impact spell stay behind", ["damage", "spill", "spell", "sourceId"].filter((k) => k in snap.projectiles[0]), []);
+  const gone = snapshotFor(worldOf([]), viewer(0, { 0: 0 }), 0, 0);
+  check("a world with no projectile map reads as none, not a crash", gone.projectiles, []);
+}
+
 console.log("creep-camp markers ride per recipient, and default to none");
 {
   const world = worldOf([unit({ id: 1, owner: 0 })]);

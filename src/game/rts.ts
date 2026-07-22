@@ -27,7 +27,7 @@ import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
 import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup } from "./matchLink";
 import { applyWorldSnapshot } from "./snapshotApply";
-import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot } from "./snapshot";
+import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
 import type { RenderUnit } from "./renderUnit";
@@ -2172,6 +2172,7 @@ export class RtsController {
       // Glide the records between payloads (see poseLerp) — the payload wrote where every
       // unit IS, this writes where the frame should DRAW it, one interval behind.
       this.tickPoseLerp(dt);
+      this.tickClientProjectiles(dt);
     } else {
       this.sim.tick(dt);
     }
@@ -3817,6 +3818,13 @@ export class RtsController {
     this.snapshotSpawns.push(...res.created);
     this.snapshotItemSpawns.push(...res.createdItems);
     this.snapshotItemRemovals.push(...res.removedItems);
+    this.snapshotProjSpawns.push(...res.createdProjectiles);
+    this.snapshotProjImpacts.push(...res.removedProjectiles);
+    // Each missile's aim fallback: the target's position when the payload was built, for
+    // flights whose target is not in OUR payload (ducked into fog, died). Rebuilt per apply —
+    // the set is tiny and the previous aims are stale by definition.
+    this.projAim.clear();
+    for (const p of snap.projectiles) this.projAim.set(p.id, { x: p.tx, y: p.ty });
   }
 
   /** This interval's pose segments (docs/multiplayer.md item 2c-interp): what the applier
@@ -3883,6 +3891,47 @@ export class RtsController {
     const out = this.snapshotItemRemovals;
     this.snapshotItemRemovals = [];
     return out;
+  }
+
+  /** Missiles the applier created/removed — the renderer plays the launch sound and streams
+   *  the model for a spawn, and plays the impact burst where a vanished one last was. */
+  private snapshotProjSpawns: ProjectileSnapshot[] = [];
+  private snapshotProjImpacts: Array<{ id: number; x: number; y: number; z: number }> = [];
+  private readonly projAim = new Map<number, { x: number; y: number }>();
+  drainSnapshotProjSpawns(): ProjectileSnapshot[] {
+    if (!this.snapshotProjSpawns.length) return this.snapshotProjSpawns;
+    const out = this.snapshotProjSpawns;
+    this.snapshotProjSpawns = [];
+    return out;
+  }
+  drainSnapshotProjImpacts(): Array<{ id: number; x: number; y: number; z: number }> {
+    if (!this.snapshotProjImpacts.length) return this.snapshotProjImpacts;
+    const out = this.snapshotProjImpacts;
+    this.snapshotProjImpacts = [];
+    return out;
+  }
+
+  /** Advance a frozen client's missiles between payloads with the sim's own homing step
+   *  (`tickProjectiles`, minus everything that deals damage): straight at the target's
+   *  record — or the payload's aim fallback when the target was not sent — height lerping
+   *  launch→impact by horizontal progress. The next payload overwrites with the host's
+   *  truth, so this is display, not simulation: it exists so an arrow flies at the frame
+   *  rate instead of hopping at the wire's cadence. Holds at the aim point when it gets
+   *  there early — the payload, never the client, says when a missile is done. */
+  private tickClientProjectiles(dt: number): void {
+    for (const p of this.sim.projectiles.values()) {
+      const t = this.sim.units.get(p.targetId) ?? this.projAim.get(p.id);
+      if (!t) continue;
+      const dx = t.x - p.x;
+      const dy = t.y - p.y;
+      const dist = Math.hypot(dx, dy);
+      const step = p.speed * dt;
+      if (dist <= step) continue; // arrived (as far as we know) — hold for the payload's verdict
+      p.x += (dx / dist) * step;
+      p.y += (dy / dist) * step;
+      const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
+      p.z = p.startZ + (p.impactZ - p.startZ) * prog;
+    }
   }
 
   /**

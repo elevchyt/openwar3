@@ -117,6 +117,29 @@ console.log("the maphack invariant: records mirror the payload's id set");
   check("the recipient's research lands in the tech ledger", w.researchWrites, [[2, "Rhme", 2], [2, "Rhar", 1]]);
 }
 
+console.log("in-flight missiles follow the items' rule, with the flight fields the client advances");
+{
+  const w = world([]);
+  w.projectiles = new Map([[3, { id: 3, x: 0, y: 0, z: 30, sourceId: 9, targetId: 4, speed: 900, damage: 55, art: "old.mdx", startZ: 30, impactZ: 40, startDist: 500 }]]);
+  const snap = {
+    recipient: 2, time: 1, timeOfDay: 8, dawnDusk: true, commands: 0, units: [],
+    stash: { gold: 0, lumber: 0 }, research: {}, mines: [], items: [],
+    projectiles: [
+      { id: 3, x: 100, y: 50, z: 33, targetId: 4, tx: 400, ty: 200, speed: 900, art: "old.mdx", startZ: 30, impactZ: 40, startDist: 500 },
+      { id: 7, x: 10, y: 20, z: 60, targetId: 5, tx: 300, ty: 300, speed: 1100, art: "FarseerMissile.mdx", startZ: 60, impactZ: 45, startDist: 350 },
+    ],
+  };
+  const res = applyWorldSnapshot(w, snap, () => null);
+  check("a known missile takes the payload's pose", [w.projectiles.get(3).x, w.projectiles.get(3).z], [100, 33]);
+  check("…and keeps carrying no damage of its own", w.projectiles.get(3).damage, 55);
+  check("a new missile gets a record and is reported for a model + launch sound", res.createdProjectiles.map((p) => p.id), [7]);
+  check("…seated with the homing fields the client advances", [w.projectiles.get(7).speed, w.projectiles.get(7).startDist], [1100, 350]);
+  const snap2 = { ...snap, projectiles: [snap.projectiles[1]] };
+  const res2 = applyWorldSnapshot(w, snap2, () => null);
+  check("a vanished missile is gone, reported with its last pose for the burst", res2.removedProjectiles, [{ id: 3, x: 100, y: 50, z: 33 }]);
+  check("the record store dropped it", [...w.projectiles.keys()], [7]);
+}
+
 console.log("a shop's shelf is seated as the Map the card reads");
 {
   const u = record({ id: 5, typeId: "ngme", building: { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false, stock: new Map() } });

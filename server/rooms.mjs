@@ -19,7 +19,7 @@
 // data, no match state beyond this table. Keep it that way — it is what makes a free tier
 // viable and what keeps us clear of hosting Blizzard content.
 
-export const PROTOCOL_VERSION = 6; // 6: creep-camp markers + always-remembered neutral buildings, 20 Hz — src/net/protocol.ts
+export const PROTOCOL_VERSION = 7; // 7: in-flight projectiles — src/net/protocol.ts
 
 /** The game list entry, as LocalMultiplayerJoin.fdf wants it. */
 const roomInfo = (r) => ({

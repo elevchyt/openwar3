@@ -1,4 +1,4 @@
-import type { SimItem, SimUnit, ShopStock } from "../sim/world";
+import type { SimItem, SimUnit, ShopStock, SimProjectile } from "../sim/world";
 import { decodeStockTime, type BuildingSnapshot, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
 
 /**
@@ -30,6 +30,9 @@ export interface ApplyWorld {
    *  reading is written, and only when the recipient has eyes on it (-1 = "no eyes"). */
   readonly mines: ReadonlyMap<number, { gold: number }>;
   readonly items: Map<number, SimItem>;
+  /** In-flight missiles, upserted like items: present = written, absent = gone. Optional so
+   *  the stub worlds tests pass keep compiling; the real `SimWorld` always has it. */
+  readonly projectiles?: Map<number, SimProjectile>;
   timeOfDay: number;
   dawnDusk: boolean;
   /** The recipient's LIVE stash object, so the payload's figures overwrite the client's
@@ -215,6 +218,11 @@ export interface ApplyResult {
   removed: number[];
   createdItems: WorldSnapshot["items"];
   removedItems: number[];
+  /** Missiles that appeared this payload — the renderer plays the launch sound and streams
+   *  the model in — and ones that vanished, each with its last drawn position so the impact
+   *  burst plays where the arrow died. */
+  createdProjectiles: WorldSnapshot["projectiles"];
+  removedProjectiles: Array<{ id: number; x: number; y: number; z: number }>;
 }
 
 /**
@@ -271,6 +279,41 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
     removedItems.push(id);
   }
 
+  // In-flight missiles, the items' rule again — with the flight fields the client needs to
+  // ADVANCE them between payloads (rts.tickClientProjectiles). The record's damage/spill/
+  // spell stay zeroed: this copy hits nothing, the host's does.
+  const createdProjectiles: WorldSnapshot["projectiles"] = [];
+  const removedProjectiles: ApplyResult["removedProjectiles"] = [];
+  if (world.projectiles && snap.projectiles) {
+    const sent = new Set<number>();
+    for (const p of snap.projectiles) {
+      sent.add(p.id);
+      const rec = world.projectiles.get(p.id);
+      if (rec) {
+        rec.x = p.x;
+        rec.y = p.y;
+        rec.z = p.z;
+        rec.targetId = p.targetId;
+        rec.speed = p.speed;
+        rec.startZ = p.startZ;
+        rec.impactZ = p.impactZ;
+        rec.startDist = p.startDist;
+      } else {
+        world.projectiles.set(p.id, {
+          id: p.id, x: p.x, y: p.y, z: p.z, sourceId: 0, targetId: p.targetId,
+          speed: p.speed, damage: 0, art: p.art,
+          startZ: p.startZ, impactZ: p.impactZ, startDist: p.startDist,
+        });
+        createdProjectiles.push(p);
+      }
+    }
+    for (const [id, p] of [...world.projectiles]) {
+      if (sent.has(id)) continue;
+      removedProjectiles.push({ id, x: p.x, y: p.y, z: p.z });
+      world.projectiles.delete(id);
+    }
+  }
+
   world.timeOfDay = snap.timeOfDay;
   world.dawnDusk = snap.dawnDusk;
   // The recipient's gold and lumber are the AUTHORITY's figures, written wholesale. This is
@@ -285,5 +328,5 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
   if (world.tech) {
     for (const [id, level] of Object.entries(snap.research)) world.tech.setResearchLevel(snap.recipient, id, level);
   }
-  return { created, removed, createdItems, removedItems };
+  return { created, removed, createdItems, removedItems, createdProjectiles, removedProjectiles };
 }
