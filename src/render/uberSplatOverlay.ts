@@ -85,6 +85,11 @@ interface SplatEntry {
   mask: boolean; // draw a PROCEDURAL `tint` ring from UV, ignoring the texture (selection rings)
   half: number; // the splat half-width in world units (ring outer radius, for `mask`)
   alpha: number; // whole-splat opacity (1 = as-authored); driven by setAlpha for fading splats
+  /** Withheld from the frame without forgetting the geometry — a building's splat is part of
+   *  its IMAGE, so it shows exactly when the building's model does (live or remembered) and
+   *  hides with it. Distinct from `remove`: a fogged building still exists; a dead one does
+   *  not. Default false; driven per frame by the splat-visibility sync in mapViewer. */
+  hidden: boolean;
 }
 
 /** Per-splat options. `tint` recolours the texture (default white), or is the ring
@@ -151,7 +156,7 @@ export class UberSplatOverlay {
     const gl = this.gl;
     const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
     const uvBuf = createBuffer(gl, gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
-    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false, half: scale, alpha: opts?.alpha ?? 1 });
+    this.entries.set(key, { posBuf, uvBuf, count, texture, tint: opts?.tint ?? [1, 1, 1], additive: opts?.additive ?? false, mask: opts?.mask ?? false, half: scale, alpha: opts?.alpha ?? 1, hidden: false });
     // Decode the BLP once (synchronous); the GL texture is uploaded lazily in render().
     if (!this.textures.has(texture)) {
       this.textures.set(texture, { canvas: this.loader(texture), tex: null });
@@ -163,6 +168,14 @@ export class UberSplatOverlay {
   setAlpha(id: string | number, alpha: number): void {
     const e = this.entries.get(String(id));
     if (e) e.alpha = alpha;
+  }
+
+  /** Show or withhold a splat without forgetting it (see `SplatEntry.hidden`). Idempotent
+   *  and cheap — a flag flip, no geometry work — so a per-frame visibility sync may call it
+   *  for every building splat every frame. */
+  setVisible(id: string | number, visible: boolean): void {
+    const e = this.entries.get(String(id));
+    if (e) e.hidden = !visible;
   }
 
   remove(id: string | number): void {
@@ -272,7 +285,7 @@ export class UberSplatOverlay {
     gl.enableVertexAttribArray(this.aUv);
 
     for (const e of this.entries.values()) {
-      if (e.alpha <= 0) continue; // fully faded out (a spell splat mid-envelope)
+      if (e.hidden || e.alpha <= 0) continue; // fog-withheld, or fully faded out
       const tex = this.resolveTexture(e.texture);
       if (!tex) continue; // texture missing/undecodable — skip
       // Per-entry blend: additive for glowing selection rings, alpha for foundation

@@ -536,8 +536,12 @@ export class MapViewerScene {
   // at its spot, its later disappearance (the neutral shop/fountain was destroyed) removes
   // the decal. `seen` guards the progressive seed — the neutral unit loads a couple frames
   // after the splat is painted, so we must not remove it before it ever exists.
-  private mapBuildingSplats = new Map<string, { x: number; y: number; seen: boolean }>();
-  private mapSplatAccum = 0; // throttles the position reconcile (a few times/sec is plenty)
+  /** Pre-placed buildings' ground splats, keyed `p<i>` by .doo index. `simId` is the id the
+   *  placement registry reserves for that same index (`i + 1` — setPlacedOrder's rule), known
+   *  statically, so the splat can follow its building's record and image without the old
+   *  position-matching pass. `seen` latches once the record has EXISTED, so a record that is
+   *  merely still streaming in at boot is not mistaken for a destroyed building. */
+  private mapBuildingSplats = new Map<string, { simId: number; seen: boolean }>();
   private debug: DebugColliders | null = null; // debug collider overlay (lazy)
   private showColliders = false; // debug overlay toggle (bottom-right cheat button)
   private heightSampler: HeightSampler | null = null; // terrain height for the overlay
@@ -1114,8 +1118,10 @@ export class MapViewerScene {
         const def = this.registry.get(u.typeId);
         if (def?.isBuilding && def.uberSplat) {
           this.addBuildingSplat(`p${i}`, def, u.x, u.y);
-          // Track it so the decal is pruned by position if the building is destroyed (issue #40).
-          this.mapBuildingSplats.set(`p${i}`, { x: u.x, y: u.y, seen: false });
+          // Track it against the sim id the placement registry reserves for this same .doo
+          // index, so the decal follows the building's record — pruned when it is destroyed
+          // (issue #40), withheld while its image is out of sight (the splat-visibility sync).
+          this.mapBuildingSplats.set(`p${i}`, { simId: i + 1, seen: false });
         }
       }
       if (u.typeId === GOLD_MINE_ID) {
@@ -2356,6 +2362,16 @@ export class MapViewerScene {
       instance.hide();
       return null;
     }
+    // Seat the body NOW. Owned units are re-seated by the entry sync every frame, but a
+    // NEUTRAL PASSIVE entry is skipped there (map furniture is placed by the map loader) —
+    // so a drain-spawned neutral building (a frozen client re-scouting a merchant, item 2c)
+    // otherwise renders at the map origin forever. Everything else just gets its first
+    // frame's pose a frame early.
+    const fpHalfW = fp ? (fp.w * PATHING_CELL) / 2 : 0;
+    const z = fp && this.footMaxHeight ? this.footMaxHeight(x, y, fpHalfW, fp ? (fp.h * PATHING_CELL) / 2 : 0) : (this.heightSampler ? this.heightSampler(x, y) : 0);
+    instance.setLocation([x, y, z]);
+    const halfFacing = facing / 2;
+    instance.setRotation(new Float32Array([0, 0, Math.sin(halfFacing), Math.cos(halfFacing)]));
 
     // Buildings block pathing: stamp their footprint so units route around them.
     if (fp && this.grid) {
@@ -2369,10 +2385,21 @@ export class MapViewerScene {
       this.rts.setBuildingFootprint(simId, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2);
     }
     // Paint the building's ground texture (ubersplat) on the terrain under it. Tracked
-    // so it's removed when the building is destroyed (reconcile) or cancelled.
+    // so it's removed when the building is destroyed (reconcile) or cancelled. A frozen
+    // client re-creating a MAP-PLACED building it scouted (the snapshot drain) skips the
+    // paint — that building's `p<i>` decal already exists and would double-blend darker.
     if (def.isBuilding && def.uberSplat) {
-      this.simBuildingSplats.add(simId);
-      this.addBuildingSplat(simId, def, x, y);
+      let placedHasIt = false;
+      for (const s of this.mapBuildingSplats.values()) {
+        if (s.simId === simId) {
+          placedHasIt = true;
+          break;
+        }
+      }
+      if (!placedHasIt) {
+        this.simBuildingSplats.add(simId);
+        this.addBuildingSplat(simId, def, x, y);
+      }
     }
     return simId;
   }
@@ -6133,33 +6160,38 @@ export class MapViewerScene {
       this.viewer.startFrame();
       const fogScene = map?.worldScene;
       if (fogScene) this.applyDayNight(fogScene);
-      // Prune ubersplats whose building has died before we draw them this frame.
-      if (this.splats && fogScene) {
-        const world = this.rts?.simWorld;
-        if (world) {
-          this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
-          // Pre-placed map buildings (p<i>) are keyed by index, not sim id, so prune them
-          // by POSITION: a neutral shop/fountain the player destroys must lose its ground
-          // decal too (issue #40). A splat is removed only once a live building has been
-          // SEEN at its spot (the neutral unit seeds a few frames after the splat is
-          // painted) — after that, its absence means the building was destroyed.
-          this.mapSplatAccum += dt;
-          if (this.mapBuildingSplats.size && this.mapSplatAccum >= 250) {
-            this.mapSplatAccum = 0;
-            const liveBuildings: Array<{ x: number; y: number }> = [];
-            for (const u of world.units.values()) if (u.building) liveBuildings.push({ x: u.x, y: u.y });
-            // 48u matches rts.isNeutralPassiveAt — the proven tolerance for matching a
-            // war3mapUnits.doo position (what the splat is keyed to) against the seeded
-            // sim unit's localLocation; buildings sit far enough apart not to cross-match.
-            const TOL2 = 48 * 48;
-            for (const [key, s] of this.mapBuildingSplats) {
-              const present = liveBuildings.some((b) => (b.x - s.x) ** 2 + (b.y - s.y) ** 2 <= TOL2);
-              if (present) s.seen = true;
-              else if (s.seen) { this.splats.remove(key); this.mapBuildingSplats.delete(key); }
-            }
+      // Reconcile and fog-gate ubersplats before we draw them this frame. A building's ground
+      // splat is part of its IMAGE: it shows exactly when the building's model does — live or
+      // remembered — and is withheld with it. Splats used to answer to nothing but the fog
+      // VEIL, which leaked a never-scouted building's foundation through explored fog (the
+      // host reading a client's base off the ground) and left orphaned foundations on a
+      // frozen client wherever the applier had removed a neutral building's record.
+      if (this.splats && fogScene && this.rts) {
+        const world = this.rts.simWorld;
+        // Dynamic buildings (keyed by sim id): a record gone on the HOST is a destroyed
+        // building — drop the decal. On a CLIENT the applier removes records for "you cannot
+        // see it" too, but an unseen dynamic building's splat SHOULD be gone there as well:
+        // its image never earned a memory (a remembered one keeps its record, so it stays).
+        this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
+        for (const id of [...this.simBuildingSplats]) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
+        for (const id of this.simBuildingSplats) this.splats.setVisible(id, this.rts.buildingImageShown(id));
+        // Pre-placed buildings (p<i>): their reserved sim id is known statically, so the old
+        // 250 ms position-matching prune collapses into an exact per-frame id check.
+        const frozen = this.rts.frozenClient;
+        for (const [key, s] of this.mapBuildingSplats) {
+          if (world.units.has(s.simId)) {
+            s.seen = true;
+            this.splats.setVisible(key, this.rts.buildingImageShown(s.simId));
+          } else if (frozen) {
+            // Absent on a client means "not sent" — out of sight, not destroyed. Withhold the
+            // decal; scouting the spot re-creates the record and shows it again.
+            this.splats.setVisible(key, false);
+          } else if (s.seen) {
+            // The host's records are the truth: existed once, gone now = destroyed (issue #40).
+            this.splats.remove(key);
+            this.mapBuildingSplats.delete(key);
           }
         }
-        for (const id of [...this.simBuildingSplats]) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
       }
       // We replay the w3x map's own render sequence (ground → cliffs → opaque → water →
       // translucent) so the building ubersplat pass can slot in AFTER the opaque world

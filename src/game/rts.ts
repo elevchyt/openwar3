@@ -860,7 +860,13 @@ export class RtsController {
    * disagreement there is invisible rather than a Frankenstein — see item 10c-2c-3.
    */
   private frameUnit(id: number): RenderUnit | undefined {
-    return this.snapshot.active ? this.snapshot.unit(id) : this.sim.units.get(id);
+    // ONE source now, even on a client — the record store. Under option 2 the applier makes
+    // the records ≡ the payload (create/update/REMOVE, so "absent → undefined → hide" is the
+    // same maphack-safe answer the SnapshotIndex gave), and the records are what `poseLerp`
+    // glides between payloads. Drawing the raw payload here was the July playtest's
+    // "incredibly choppy" client: the interpolation wrote smooth poses into records nobody's
+    // frame ever read, while every model jumped at the wire's 10 Hz.
+    return this.sim.units.get(id);
   }
 
   /** Should this unit's model be on screen at all?
@@ -878,6 +884,16 @@ export class RtsController {
     return u === undefined || this.hiddenFor(this.local, u);
   }
 
+  /** `modelHidden`, inverted, for the renderer's ubersplat pass: a building's ground splat is
+   *  part of its IMAGE, so it shows exactly when the model does — live or remembered — and is
+   *  withheld with it. Splats used to bypass this entirely and answer to nothing but the fog
+   *  VEIL, which leaked a never-scouted building's foundation through explored fog (the host
+   *  reading a client's base off the ground), and left orphaned foundations where a frozen
+   *  client's applier had removed the building's record. */
+  buildingImageShown(id: number): boolean {
+    return !this.modelHidden(id);
+  }
+
   /**
    * Is this unit's live state something the viewer actually KNOWS right now — or is it an
    * image left standing in the fog?
@@ -889,8 +905,11 @@ export class RtsController {
    * bit is reading the authority's decision rather than re-deriving it from a grid the client
    * should not be consulting.
    */
-  private drawnFromMemory(id: number, u: RenderUnit): boolean {
-    if (this.snapshot.active) return u.remembered === true;
+  private drawnFromMemory(id: number): boolean {
+    // `u` is the RECORD now (frameUnit), and a SimUnit must not grow a `remembered` field
+    // (renderUnit.ts says why) — so the memory bit is read off the payload INDEX, which still
+    // tracks the newest snapshot for exactly these per-recipient facts.
+    if (this.snapshot.active) return this.snapshot.unit(id)?.remembered === true;
     const su = this.sim.units.get(id);
     return su !== undefined && this.fogBlocksClick(su);
   }
@@ -989,7 +1008,7 @@ export class RtsController {
     let b = 1;
     // On a client this is `u.remembered` — the SAME fact, decided by the authority and carried
     // in the payload, rather than the client re-running a fog rule of its own (item 10c-2c-2).
-    if (this.drawnFromMemory(e.simId, u)) {
+    if (this.drawnFromMemory(e.simId)) {
       b = FOG_EXPLORED_BRIGHT; // remembered-but-not-seen → half-bright grey
     }
     // Green whole-mesh tint while this unit is a valid target of an armed AoE spell.
@@ -4437,7 +4456,7 @@ export class RtsController {
       // enemy BUILDING is drawn but unseen, so the second one is what keeps the cursor from
       // grabbing a shop across the map (issue #62). Every click, hover, order and spell target
       // comes through here, so gating the pick gates all of them at once.
-      if (e.hidden || this.drawnFromMemory(e.simId, u)) continue;
+      if (e.hidden || this.drawnFromMemory(e.simId)) continue;
       if (ground && Math.hypot(u.x - ground[0], u.y - ground[1]) > PICK_WORLD_MAX) continue;
       const baseZ = this.heightAt(u.x, u.y) + e.moveHeight;
       // Project the unit's mid-body (base + ~half its height) to screen. Buildings
@@ -4533,7 +4552,7 @@ export class RtsController {
       // map without ever scouting it. Same test the cursor uses (issue #62). On a client the
       // payload already said so — `remembered` — and its hp is redacted to 0 anyway, so drawing
       // one would show a full-empty bar over every scouted building.
-      if (this.drawnFromMemory(e.simId, u)) continue;
+      if (this.drawnFromMemory(e.simId)) continue;
       specs.push({
         x: u.x,
         y: u.y,
@@ -4566,7 +4585,7 @@ export class RtsController {
       // The slab floats over the unit, so it reads the same record the model does.
       const u = this.frameUnit(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (!u || !e || e.hidden || this.drawnFromMemory(this.hovered, u)) return null;
+      if (!u || !e || e.hidden || this.drawnFromMemory(this.hovered)) return null;
       const lines: HoverLine[] = [];
       if (u.owner < 0) {
         // Neutral. A passive prop is name only; a hostile creep also shows its level.
