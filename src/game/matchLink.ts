@@ -1,4 +1,5 @@
 import { snapshotFor, type FxSnapshot, type SnapshotViewer, type SnapshotWorld, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
+import { decodeSnapshot, encodeSnapshot, type WireSnapshot } from "./snapshotWire";
 import { divergence, describeDivergence, type Divergence } from "./divergence";
 import { commandMessage, isCommandMessage, type CommandMessage } from "../net/commandLink";
 import type { Command } from "./commands";
@@ -102,7 +103,10 @@ export function isDialogMessage(data: unknown): data is DialogMessage {
   return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "dlg";
 }
 
-/** The `GameMessage` member carrying one recipient's view of the world. */
+/** The `GameMessage` member carrying one recipient's view of the world — plain JSON.
+ *  The host no longer emits this (see `WireSnapshotMessage`), but the receive path keeps
+ *  accepting it: the single-tab harness and the loopback test both hand-feed plain
+ *  payloads, and a decode they do not need is a decode they should not have to fake. */
 export interface SnapshotMessage {
   k: "snap";
   snap: WorldSnapshot;
@@ -110,6 +114,18 @@ export interface SnapshotMessage {
 
 export function isSnapshotMessage(data: unknown): data is SnapshotMessage {
   return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "snap";
+}
+
+/** What the host actually emits (PROTOCOL_VERSION 10): the same payload with the two hot
+ *  arrays — units and projectiles, the per-payload bulk — packed into a base64 binary
+ *  record (`snapshotWire.ts`). The envelope stays JSON so the relay stays dumb. */
+export interface WireSnapshotMessage {
+  k: "snapw";
+  snap: WireSnapshot;
+}
+
+export function isWireSnapshotMessage(data: unknown): data is WireSnapshotMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "snapw";
 }
 
 /**
@@ -165,15 +181,17 @@ export interface HostSources {
   drainDeaths?(): Array<{ id: number; x: number; y: number }>;
 }
 
-/** How often the host emits. 30 Hz — half the 60 Hz sim, three times the 10 Hz fog rebuild:
- *  what a client SEES changes at the fog's rate, but where things ARE changes every sim
- *  tick, and the cadence is half of a client's order-to-motion latency (the other half
- *  being the one payload gap the pose interpolation trails by — so ~33 ms each here).
- *  The march 10 → 20 → 30 tracked the playtests calling the client sluggish; what caps it
- *  is not the LAN but the INTERNET deployment the same relay serves: payloads are JSON
- *  (~tens of KB with a real army), and 30 Hz × recipients is already megabits upstream.
- *  Going higher wants the deferred delta/binary encoding (Open questions), not a constant. */
-export const SNAPSHOT_INTERVAL = 1 / 30;
+/** How often the host emits. 60 Hz — the sim's own rate, so a client's world moves every
+ *  tick the authority's does and the cadence half of order-to-motion latency is one sim
+ *  tick. The march 10 → 20 → 30 → 60 tracked the playtests calling the client sluggish;
+ *  what held it at 30 was never the sim (it always ran 60) but the WIRE — JSON payloads ×
+ *  recipients were megabits upstream on the internet relay path. The binary hot lane
+ *  (`snapshotWire.ts`, PROTOCOL_VERSION 10) shrank the payload 7–9x measured (teamfight
+ *  synthetic and the live Echo Isles world alike) and halved the per-send encode cost, so
+ *  60 Hz binary costs LESS wire than 30 Hz JSON did. Going
+ *  further (more recipients, bigger maps) wants the deferred DELTA encoding — per-client
+ *  ack tracking and keyframe recovery, still its own future item — not a constant. */
+export const SNAPSHOT_INTERVAL = 1 / 60;
 
 /**
  * Everything the match needs to join the wire, assembled where the lobby still exists.
@@ -295,7 +313,8 @@ export class MatchLink {
     // through, so a future message type does not have to touch this seam.
     const previous = channel.onPeerData;
     channel.onPeerData = (from, data) => {
-      if (isSnapshotMessage(data)) this.receive(data.snap);
+      if (isWireSnapshotMessage(data)) this.receive(decodeSnapshot(data.snap));
+      else if (isSnapshotMessage(data)) this.receive(data.snap);
       else if (isCommandMessage(data)) this.onCommand(from, data);
       else if (isDialogMessage(data)) this.onDialog(data);
       else if (isRefusalMessage(data)) this.onRefusal(data);
@@ -399,7 +418,10 @@ export class MatchLink {
       // arrive after the silent retire it exists to prevent. Idempotent on the client, so
       // the repeat between an expedited send and the due broadcast costs nothing.
       snap.deaths = this.deathBuf.filter((d) => !viewer.fogBlocksAt(d));
-      this.channel.send({ k: "snap", snap } satisfies SnapshotMessage, peer);
+      // The hot lanes go binary HERE, after fx/deaths are seated — the encoder reads the
+      // finished payload once. Encoding per recipient is the cost of AoI: no two payloads
+      // share a byte, because no two recipients are entitled to the same world.
+      this.channel.send({ k: "snapw", snap: encodeSnapshot(snap) } satisfies WireSnapshotMessage, peer);
       sent++;
       this.emitted++;
     }

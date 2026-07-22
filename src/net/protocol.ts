@@ -125,7 +125,7 @@ export type GameMessage = StartMatch | import("./commandLink").CommandMessage;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 9; // 9: deaths + corpses + morphs, 30 Hz (8: fx events + expedited echo)
+export const PROTOCOL_VERSION = 10; // 10: binary hot lane (`snapw`), 60 Hz (9: deaths + corpses + morphs)
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;

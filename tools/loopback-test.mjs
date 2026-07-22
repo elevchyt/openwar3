@@ -54,7 +54,7 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 9);
+  check("and it speaks our protocol", c.last("hello").protocol, 10);
 }
 
 console.log("the room forms exactly as it does over a socket");
@@ -714,7 +714,7 @@ console.log("\na reconnected player is handed the world it missed, off the caden
   // ADDRESSED, not broadcast. A catch-up that fanned out to the room would be an off-cadence
   // broadcast wearing another name -- a burst of traffic to everyone every time one player's
   // connection hiccups, and on a twelve-slot map that is the expensive way to be wrong.
-  check("aimed at the returning peer alone", outbox, [{ k: "snap", to: 2 }]);
+  check("aimed at the returning peer alone", outbox, [{ k: "snapw", to: 2 }]);
 
   // The debt is paid exactly once -- otherwise every tick for the rest of the match sends an
   // extra snapshot to whoever once reconnected.
@@ -743,8 +743,8 @@ console.log("\nspell fx ride due broadcasts, filtered per recipient, and never r
     { effects: [{ art: "HolyBolt.mdx", x: 100, y: 100, targetId: 7, z: 0 }], splats: [], castStarts: [], castFires: [] },
     { effects: [{ art: "FarBurst.mdx", x: 900, y: 900, targetId: 0, z: 0 }], splats: [{ splatId: "THND", x: 50, y: 60 }], castStarts: [], castFires: [] },
   ];
-  hostLink.tickHost(0.01, worldAt(420), fxSources, 1); // buffers, not due (interval 0.05)
-  hostLink.tickHost(0.01, worldAt(420), fxSources, 2); // buffers the second tick's too
+  hostLink.tickHost(0.005, worldAt(420), fxSources, 1); // buffers, not due (interval 1/60)
+  hostLink.tickHost(0.005, worldAt(420), fxSources, 2); // buffers the second tick's too
   hostLink.tickHost(0.05, worldAt(420), fxSources, 3); // due — flushes
   await tick();
   check("both ticks' events arrive in the one due payload", peerLink.latest()?.fx.effects.map((e) => e.art), ["HolyBolt.mdx"]);
