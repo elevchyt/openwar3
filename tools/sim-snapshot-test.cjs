@@ -156,6 +156,20 @@ console.log("in-flight missiles cross under your eyes, with the target's positio
   check("a world with no projectile map reads as none, not a crash", gone.projectiles, []);
 }
 
+console.log("corpses cross under your eyes, whole; deaths default empty (MatchLink fills them)");
+{
+  const world = worldOf([unit({ id: 1, owner: 0 })]);
+  world.corpses = new Map([
+    [5, { id: 5, deadId: 40, unitId: "hfoo", x: 100, y: 100, facing: 0, owner: 0, isHero: false, mechanical: false, decayLeft: 80, raised: false }],
+    [6, { id: 6, deadId: 41, unitId: "ogru", x: -900, y: -900, facing: 0, owner: 1, isHero: false, mechanical: false, decayLeft: 80, raised: false }],
+  ]);
+  const eyesNearOnly = viewer(0, { 0: 0 }, { fogBlocksAt: (p) => p.x < 0 });
+  const snap = snapshotFor(world, eyesNearOnly, 0, 0);
+  check("the watched corpse crosses; the one in the dark is absent", snap.corpses.map((c) => c.id), [5]);
+  check("…carried whole (decay clock and raise latch included)", [snap.corpses[0].decayLeft, snap.corpses[0].raised], [80, false]);
+  check("deaths are MatchLink's to fill — the builder emits none", snap.deaths, []);
+}
+
 console.log("creep-camp markers ride per recipient, and default to none");
 {
   const world = worldOf([unit({ id: 1, owner: 0 })]);

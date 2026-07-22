@@ -159,15 +159,21 @@ export interface HostSources {
    *  and buffered here until the next due broadcast flushes them per recipient. Optional
    *  for the same stub reason; absent reads as a match with no spells. */
   drainFx?(): FxSnapshot;
+  /** Units that died since the last ask, with where they fell. Unlike `drainFx` these flush
+   *  on EVERY send (see `WorldSnapshot.deaths` for why); the client's handling is idempotent
+   *  so the repeat a later due broadcast may carry is ignored. */
+  drainDeaths?(): Array<{ id: number; x: number; y: number }>;
 }
 
-/** How often the host emits. 20 Hz — twice the 10 Hz fog rebuild, deliberately: what a
- *  client SEES changes at the fog's rate, but where things ARE changes every sim tick, and
- *  the cadence is half of a client's order-to-motion latency (the other half being the one
- *  payload gap the pose interpolation trails by). At 10 Hz an order answered in up to
- *  100 ms of cadence plus a 100 ms glide read as lag in the July playtest; 20 Hz halves
- *  both. Every other payload just carries fresher poses over the same visibility. */
-export const SNAPSHOT_INTERVAL = 0.05;
+/** How often the host emits. 30 Hz — half the 60 Hz sim, three times the 10 Hz fog rebuild:
+ *  what a client SEES changes at the fog's rate, but where things ARE changes every sim
+ *  tick, and the cadence is half of a client's order-to-motion latency (the other half
+ *  being the one payload gap the pose interpolation trails by — so ~33 ms each here).
+ *  The march 10 → 20 → 30 tracked the playtests calling the client sluggish; what caps it
+ *  is not the LAN but the INTERNET deployment the same relay serves: payloads are JSON
+ *  (~tens of KB with a real army), and 30 Hz × recipients is already megabits upstream.
+ *  Going higher wants the deferred delta/binary encoding (Open questions), not a constant. */
+export const SNAPSHOT_INTERVAL = 1 / 30;
 
 /**
  * Everything the match needs to join the wire, assembled where the lobby still exists.
@@ -365,6 +371,8 @@ export class MatchLink {
       this.fxBuf.castFires.push(...fx.castFires);
       if (this.fxBuf.effects.length > 512) this.fxBuf.effects.splice(0, this.fxBuf.effects.length - 512);
     }
+    const deaths = sources.drainDeaths?.();
+    if (deaths?.length) this.deathBuf.push(...deaths);
     this.accum += dt;
     const due = this.accum >= SNAPSHOT_INTERVAL;
     if (due) this.accum = 0;
@@ -387,11 +395,18 @@ export class MatchLink {
           castFires: this.fxBuf.castFires.filter((e) => !viewer.fogBlocksAt(e)),
         };
       }
+      // Deaths ride EVERY send — the record's absence does too, and the death must never
+      // arrive after the silent retire it exists to prevent. Idempotent on the client, so
+      // the repeat between an expedited send and the due broadcast costs nothing.
+      snap.deaths = this.deathBuf.filter((d) => !viewer.fogBlocksAt(d));
       this.channel.send({ k: "snap", snap } satisfies SnapshotMessage, peer);
       sent++;
       this.emitted++;
     }
-    if (due) this.fxBuf = { effects: [], splats: [], castStarts: [], castFires: [] };
+    if (due) {
+      this.fxBuf = { effects: [], splats: [], castStarts: [], castFires: [] };
+      this.deathBuf = [];
+    }
     // Cleared whether or not a seat was found for them: an unseated peer is a routing bug to
     // notice elsewhere, not a debt to keep re-paying every tick for the rest of the match.
     this.owed.clear();
@@ -399,6 +414,7 @@ export class MatchLink {
   }
 
   private fxBuf: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+  private deathBuf: Array<{ id: number; x: number; y: number }> = [];
 
   /**
    * A command from this peer was just applied — owe it a snapshot NOW rather than at the

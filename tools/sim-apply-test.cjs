@@ -140,6 +140,32 @@ console.log("in-flight missiles follow the items' rule, with the flight fields t
   check("the record store dropped it", [...w.projectiles.keys()], [7]);
 }
 
+console.log("corpses reconcile as state; an in-place type swap is reported for the model");
+{
+  const own = record({ id: 1, owner: 2, typeId: "hwtw" }); // a Scout Tower...
+  const w = world([own]);
+  w.corpses = new Map([[5, { id: 5, deadId: 40, unitId: "hfoo", x: 1, y: 2, facing: 0, owner: 0, isHero: false, mechanical: false, decayLeft: 80, raised: false }]]);
+  const snap = {
+    recipient: 2, time: 1, timeOfDay: 8, dawnDusk: true, commands: 0,
+    stash: { gold: 0, lumber: 0 }, research: {},
+    units: [payloadUnit({ id: 1, owner: 2, typeId: "hatw" })], // ...that the payload says is an Arcane Tower now
+    mines: [], items: [],
+    corpses: [
+      { id: 5, deadId: 40, unitId: "hfoo", x: 1, y: 2, facing: 0, owner: 0, isHero: false, mechanical: false, decayLeft: 72, raised: true },
+      { id: 9, deadId: 41, unitId: "ogru", x: 7, y: 8, facing: 1, owner: 1, isHero: false, mechanical: false, decayLeft: 88, raised: false },
+    ],
+  };
+  const res = applyWorldSnapshot(w, snap, () => null);
+  check("the type swap is reported for remodelling", res.morphed, [{ id: 1, to: "hatw" }]);
+  check("…and the record already carries the new type", w.units.get(1).typeId, "hatw");
+  check("a known corpse takes the host's decay clock and raise latch", [w.corpses.get(5).decayLeft, w.corpses.get(5).raised], [72, true]);
+  check("a new corpse gets a record", w.corpses.get(9).unitId, "ogru");
+  const snap2 = { ...snap, units: [payloadUnit({ id: 1, owner: 2, typeId: "hatw" })], corpses: [snap.corpses[1]] };
+  const res2 = applyWorldSnapshot(w, snap2, () => null);
+  check("an unchanged type reports no morph", res2.morphed, []);
+  check("a decayed-away corpse is gone", [...w.corpses.keys()], [9]);
+}
+
 console.log("a shop's shelf is seated as the Map the card reads");
 {
   const u = record({ id: 5, typeId: "ngme", building: { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false, stock: new Map() } });

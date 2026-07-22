@@ -1,4 +1,4 @@
-import type { SimItem, SimUnit, ShopStock, SimProjectile } from "../sim/world";
+import type { SimItem, SimUnit, ShopStock, SimProjectile, SimCorpse } from "../sim/world";
 import { decodeStockTime, type BuildingSnapshot, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
 
 /**
@@ -33,6 +33,10 @@ export interface ApplyWorld {
   /** In-flight missiles, upserted like items: present = written, absent = gone. Optional so
    *  the stub worlds tests pass keep compiling; the real `SimWorld` always has it. */
   readonly projectiles?: Map<number, SimProjectile>;
+  /** Corpses, the same present/absent reconcile — the render corpse polls this map for its
+   *  decay clock and the `raised` latch (`tickCorpses`), so writing it is what makes a
+   *  client's bodies rot on the host's schedule and vanish when a spell consumes one. */
+  readonly corpses?: Map<number, SimCorpse>;
   timeOfDay: number;
   dawnDusk: boolean;
   /** The recipient's LIVE stash object, so the payload's figures overwrite the client's
@@ -223,6 +227,11 @@ export interface ApplyResult {
    *  burst plays where the arrow died. */
   createdProjectiles: WorldSnapshot["projectiles"];
   removedProjectiles: Array<{ id: number; x: number; y: number; z: number }>;
+  /** Records whose TYPE changed in place — a Scout Tower that became an Arcane Tower, a Town
+   *  Hall now a Keep. The sim morphs the entity and keeps the id, so the applier's update
+   *  writes the new `typeId` silently; the renderer still owes it the other model. Remembered
+   *  images are deliberately excluded: WC3 keeps showing what you SAW, and so do we. */
+  morphed: Array<{ id: number; to: string }>;
 }
 
 /**
@@ -238,6 +247,7 @@ export interface ApplyResult {
  */
 export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, create: (s: UnitSnapshot) => SimUnit | null): ApplyResult {
   const created: UnitSnapshot[] = [];
+  const morphed: ApplyResult["morphed"] = [];
   const sent = new Set<number>();
   for (const s of snap.units) {
     sent.add(s.id);
@@ -246,6 +256,11 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
       u = create(s) ?? undefined;
       if (!u) continue;
       created.push(s);
+    } else if (u.typeId !== s.typeId && !s.remembered) {
+      // The entity MORPHED in place (Scout Tower → Arcane Tower): the write below carries the
+      // new type, but the model is the renderer's and it is owed the swap. Not for a
+      // remembered image — its whole point is showing what was last SEEN.
+      morphed.push({ id: s.id, to: s.typeId });
     }
     writeUnitSnapshot(u, s);
   }
@@ -314,6 +329,24 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
     }
   }
 
+  // Corpses: the same present/absent reconcile, written whole. The render corpse the death
+  // event minted polls this map (`tickCorpses`) — so the body rots on the HOST's clock and
+  // hides the frame a raise spell consumes it, all without a lane of its own.
+  if (world.corpses && snap.corpses) {
+    const sentCorpses = new Set<number>();
+    for (const c of snap.corpses) {
+      sentCorpses.add(c.id);
+      const rec = world.corpses.get(c.id);
+      if (rec) {
+        rec.decayLeft = c.decayLeft;
+        rec.raised = c.raised;
+      } else {
+        world.corpses.set(c.id, { ...c });
+      }
+    }
+    for (const id of [...world.corpses.keys()]) if (!sentCorpses.has(id)) world.corpses.delete(id);
+  }
+
   world.timeOfDay = snap.timeOfDay;
   world.dawnDusk = snap.dawnDusk;
   // The recipient's gold and lumber are the AUTHORITY's figures, written wholesale. This is
@@ -328,5 +361,5 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
   if (world.tech) {
     for (const [id, level] of Object.entries(snap.research)) world.tech.setResearchLevel(snap.recipient, id, level);
   }
-  return { created, removed, createdItems, removedItems, createdProjectiles, removedProjectiles };
+  return { created, removed, morphed, createdItems, removedItems, createdProjectiles, removedProjectiles };
 }

@@ -5835,6 +5835,10 @@ export class MapViewerScene {
       void this.loadProjectile(p.id, p.art);
     }
     for (const im of this.rts?.drainSnapshotProjImpacts() ?? []) this.impactProjectile(im.id, im.x, im.y, im.z);
+    // A record the payload MORPHED in place (Scout Tower → Arcane Tower) is owed the other
+    // model — the same swap the host's own drainMorphs runs, minus the upgrade chime (that
+    // is the owner's, and remodelUnit's own localPlayer check keeps it so).
+    for (const m of this.rts?.drainSnapshotMorphs() ?? []) void this.remodelUnit(m.id, m.to);
     // Everything below CREATES sim records with freshly-minted LOCAL ids — the collision
     // family option 2 removes — so a frozen client refuses it. Its trained/summon queues
     // never fill anyway (the sim does not step); new units arrive as snapshot records and

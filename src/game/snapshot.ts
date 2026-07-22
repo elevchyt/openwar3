@@ -1,4 +1,4 @@
-import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile } from "../sim/world";
+import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -82,6 +82,8 @@ export interface SnapshotWorld {
   /** In-flight missiles. Optional because hand-built test worlds have none; the real
    *  `SimWorld` always does. */
   readonly projectiles?: ReadonlyMap<number, SimProjectile>;
+  /** Corpses, same deal. */
+  readonly corpses?: ReadonlyMap<number, SimCorpse>;
   readonly timeOfDay: number;
   readonly dawnDusk: boolean;
   stashOf(owner: number): { gold: number; lumber: number };
@@ -364,6 +366,24 @@ export interface FxSnapshot {
 
 export const EMPTY_FX: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
 
+/** A corpse, whole — `SimCorpse` is already the client-safe subset (identity, pose, the
+ *  decay clock, the raised latch a render corpse hides on). Crossing it as STATE is what
+ *  lets a client's bodies linger and rot on the host's 88-second clock and vanish the
+ *  moment a Necromancer consumes one, all through the ordinary present/absent reconcile. */
+export interface CorpseSnapshot {
+  id: number;
+  deadId: number;
+  unitId: string;
+  x: number;
+  y: number;
+  facing: number;
+  owner: number;
+  isHero: boolean;
+  mechanical: boolean;
+  decayLeft: number;
+  raised: boolean;
+}
+
 /** One in-flight missile, as a client that did not simulate it draws one: where it is, what
  *  model it wears, and enough of the flight (target, speed, the launch→impact height lerp)
  *  to ADVANCE it smoothly between payloads with the sim's own homing step. `tx`/`ty` is the
@@ -429,6 +449,15 @@ export interface WorldSnapshot {
    *  EMPTY — events live on no world object to serialize; `MatchLink.tickHost` buffers the
    *  host's per-tick drains and fills this on each due broadcast, per recipient. */
   fx: FxSnapshot;
+  /** Units that DIED this interval, with where they fell. Absence alone cannot say it: a
+   *  record leaves the payload for fog and for death alike, and only one of those plays a
+   *  collapse. Like `fx` this is filled by `MatchLink` — but flushed on EVERY send, expedited
+   *  ones included, because the ABSENCE that pairs with a death rides every payload too and
+   *  a silent retire cannot be un-retired; the client's handling is idempotent, so the
+   *  repeat a due broadcast may carry is ignored. */
+  deaths: Array<{ id: number; x: number; y: number }>;
+  /** Corpses under this recipient's eyes (the items' rule — nothing remembered). */
+  corpses: CorpseSnapshot[];
   /**
    * How many commands the world this was built from has applied (docs/multiplayer.md F5).
    *
@@ -752,9 +781,17 @@ export function snapshotFor(
     });
   }
 
+  // Corpses follow the items' rule — under your eyes or absent — carried whole (the struct
+  // is already the client-safe subset; see CorpseSnapshot).
+  const corpses: CorpseSnapshot[] = [];
+  for (const c of world.corpses?.values() ?? []) {
+    if (viewer.fogBlocksAt(c)) continue;
+    corpses.push({ id: c.id, deadId: c.deadId, unitId: c.unitId, x: c.x, y: c.y, facing: c.facing, owner: c.owner, isHero: c.isHero, mechanical: c.mechanical, decayLeft: c.decayLeft, raised: c.raised });
+  }
+
   // Copied, not referenced: the payload must be a frozen reading, not a live handle the
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
   const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, fx: { effects: [], splats: [], castStarts: [], castFires: [] }, commands };
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], castStarts: [], castFires: [] }, deaths: [], commands };
 }

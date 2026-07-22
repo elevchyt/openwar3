@@ -2204,8 +2204,26 @@ export class RtsController {
       }
     }
     this.playImpacts(); // BEFORE deaths — a killed target's entry is still around to read its armour
-    for (const id of this.sim.drainDeaths()) this.onDeath(id);
-    for (const id of this.sim.drainRemovals()) this.onRemove(id);
+    for (const id of this.sim.drainDeaths()) {
+      // Hosting a wire: the recipients must be TOLD a unit died — its absence from the next
+      // payload alone reads exactly like fog, and fog plays no collapse. Position from the
+      // entry's drawn spot (the corpse falls where the model stood); each recipient's filter
+      // needs it for the eyes-on-the-spot test.
+      if (this.matchLinkIsHost && this.matchLink) {
+        const loc = this.byId.get(id)?.unit.instance.localLocation;
+        const su = this.sim.units.get(id);
+        this.wireDeaths.push({ id, x: loc?.[0] ?? su?.x ?? 0, y: loc?.[1] ?? su?.y ?? 0 });
+      }
+      this.onDeath(id);
+    }
+    for (const id of this.sim.drainRemovals()) {
+      // A frozen client's applier removes records for two different reasons and says which:
+      // a payload-declared DEATH plays the collapse and leaves the corpse; plain absence is
+      // fog and retires the model silently. The set is per-payload and idempotent — an id
+      // the drain never surfaces (a death in fog we never had a record for) just expires.
+      if (this.pendingWireDeaths.delete(id)) this.onDeath(id);
+      else this.onRemove(id);
+    }
     // Offer every dead structure to the ghost memory BEFORE the fog rebuilds below, so each
     // viewpoint is judged on the sight it had when the building fell rather than on sight it
     // gains this tick. A viewpoint that was watching keeps no image — it saw the collapse.
@@ -3871,6 +3889,35 @@ export class RtsController {
       this.fxCastStarts.push(...fx.castStarts);
       this.fxCastFires.push(...fx.castFires);
     }
+    // Which of this payload's absences are DEATHS: consumed by the removal drain this same
+    // tick (`tick`), which routes them through `onDeath` — collapse animation, death cry,
+    // corpse — instead of the silent fog retire. Repeats across payloads are harmless: an
+    // id whose entry is already gone falls out of the drain unconsumed and is cleared here.
+    this.pendingWireDeaths.clear();
+    for (const d of snap.deaths ?? []) this.pendingWireDeaths.add(d.id);
+    // Records whose type changed in place (Scout Tower → Arcane Tower): the renderer owes
+    // each the other model, exactly the host's own morph drain shape.
+    this.snapshotMorphs.push(...res.morphed);
+  }
+
+  /** Payload-declared deaths awaiting this tick's removal drain (client), and the death
+   *  positions the wire owes recipients (host). */
+  private readonly pendingWireDeaths = new Set<number>();
+  private wireDeaths: Array<{ id: number; x: number; y: number }> = [];
+  private takeWireDeaths(): Array<{ id: number; x: number; y: number }> {
+    if (!this.wireDeaths.length) return this.wireDeaths;
+    const out = this.wireDeaths;
+    this.wireDeaths = [];
+    return out;
+  }
+
+  /** Applier-detected in-place type swaps, for the renderer's `remodelUnit`. */
+  private snapshotMorphs: Array<{ id: number; to: string }> = [];
+  drainSnapshotMorphs(): Array<{ id: number; to: string }> {
+    if (!this.snapshotMorphs.length) return this.snapshotMorphs;
+    const out = this.snapshotMorphs;
+    this.snapshotMorphs = [];
+    return out;
   }
 
   /** This interval's pose segments (docs/multiplayer.md item 2c-interp): what the applier
@@ -4100,6 +4147,7 @@ export class RtsController {
         commandsApplied: () => this.authority.applied,
         creepCampsFor: (p) => this.creepCamps(this.viewpoints.viewpointFor(p)),
         drainFx: () => this.takeWireFx(),
+        drainDeaths: () => this.takeWireDeaths(),
       }, this.matchTime);
     } else if (link.latest()) {
       // Client: compare the authority's newest view against our own, for OUR seat — while that

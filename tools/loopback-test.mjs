@@ -54,7 +54,7 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 8);
+  check("and it speaks our protocol", c.last("hello").protocol, 9);
 }
 
 console.log("the room forms exactly as it does over a socket");
@@ -755,6 +755,33 @@ console.log("\nspell fx ride due broadcasts, filtered per recipient, and never r
   hostLink.tickHost(0.05, worldAt(420), fxSources, 4);
   await tick();
   check("a flushed burst never plays twice", peerLink.latest()?.fx.effects, []);
+}
+
+console.log("deaths ride EVERY send — the expedited payload that carries the absence carries the collapse");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  const deathsThisTick = [[{ id: 42, x: 10, y: 20 }]];
+  const dSources = { ...sources, drainDeaths: () => deathsThisTick.shift() ?? [] };
+  hostLink.tickHost(0.05, worldAt(420), dSources, 1); // settle the cadence + consume the death
+  await tick();
+  check("the due broadcast names the death", peerLink.latest()?.deaths, [{ id: 42, x: 10, y: 20 }]);
+
+  // Between cadences: a second death lands, then an EXPEDITED send goes out. The death must
+  // be on it — its record's absence is — and the next due broadcast may repeat it (the
+  // client's routing is idempotent), but must not carry it a third time after that.
+  deathsThisTick.push([{ id: 43, x: 1, y: 2 }]);
+  hostLink.expedite(2);
+  hostLink.tickHost(0.001, worldAt(300), dSources, 2);
+  await tick();
+  check("the expedited send carries the pending death", peerLink.latest()?.deaths, [{ id: 43, x: 1, y: 2 }]);
+  hostLink.tickHost(0.05, worldAt(300), dSources, 3);
+  await tick();
+  check("the due broadcast repeats it once (idempotent client)", peerLink.latest()?.deaths, [{ id: 43, x: 1, y: 2 }]);
+  hostLink.tickHost(0.05, worldAt(300), dSources, 4);
+  await tick();
+  check("…and then it is spent", peerLink.latest()?.deaths, []);
 }
 
 console.log("a command's consequences are expedited off-cadence, without fx and without disturbing the clock");
