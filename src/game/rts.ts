@@ -27,7 +27,7 @@ import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
 import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup } from "./matchLink";
 import { applyWorldSnapshot } from "./snapshotApply";
-import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot } from "./snapshot";
+import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
 import type { RenderUnit } from "./renderUnit";
@@ -2175,6 +2175,33 @@ export class RtsController {
       this.tickClientProjectiles(dt);
     } else {
       this.sim.tick(dt);
+      // The spell/ability PRESENTATION drains — ONE consumer of the sim's queues (this),
+      // two audiences: this machine's own renderer (via the drainFx* methods the renderer
+      // now reads instead of the sim's), and, when hosting a wire, the recipients' payloads
+      // (`takeWireFx` → MatchLink's buffer). Splitting here is what lets both see each event
+      // exactly once; a frozen client fills the same renderer queues from its payload.
+      const fxE = this.sim.drainSpellEffects();
+      const fxS = this.sim.drainSpellSplats();
+      const fxCs = this.sim.drainCastStarts();
+      const fxCf = this.sim.drainCastFires();
+      if (fxE.length) this.fxEffects.push(...fxE);
+      if (fxS.length) this.fxSplats.push(...fxS);
+      if (fxCs.length) this.fxCastStarts.push(...fxCs);
+      if (fxCf.length) this.fxCastFires.push(...fxCf);
+      if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxCs.length || fxCf.length)) {
+        this.wireFx.effects.push(...fxE);
+        this.wireFx.splats.push(...fxS);
+        // The wire copy of a cast carries the CASTER's position — the AoI test each
+        // recipient's filter runs; the sim's event names only the caster.
+        for (const c of fxCs) {
+          const u = this.sim.units.get(c.casterId);
+          this.wireFx.castStarts.push({ ...c, x: u?.x ?? c.tx, y: u?.y ?? c.ty });
+        }
+        for (const c of fxCf) {
+          const u = this.sim.units.get(c.casterId);
+          this.wireFx.castFires.push({ ...c, x: u?.x ?? 0, y: u?.y ?? 0 });
+        }
+      }
     }
     this.playImpacts(); // BEFORE deaths — a killed target's entry is still around to read its armour
     for (const id of this.sim.drainDeaths()) this.onDeath(id);
@@ -3740,6 +3767,11 @@ export class RtsController {
         if (!ok) {
           link.sendRefusal(from, this.refusalReason(judged.player, judged.cmd));
           if (import.meta.env.DEV) console.info(`[sync] host REFUSED p${judged.player} ${JSON.stringify(judged.cmd)}`);
+        } else {
+          // Owe the commanding client a snapshot NOW (item 9d): the cadence wait is half of
+          // its order-to-motion latency, and the payload that carries the command's first
+          // consequences is the one worth not sitting on.
+          link.expedite(from);
         }
       };
     } else {
@@ -3824,7 +3856,21 @@ export class RtsController {
     // flights whose target is not in OUR payload (ducked into fog, died). Rebuilt per apply —
     // the set is tiny and the previous aims are stale by definition.
     this.projAim.clear();
-    for (const p of snap.projectiles) this.projAim.set(p.id, { x: p.tx, y: p.ty });
+    // Guarded like `fx` below: a payload without the field (an older host, a hand-fed
+    // harness snapshot) must degrade to "no missiles", not wedge every tick from here on —
+    // applySnapshot throwing before `lastApplied` is set re-throws on the SAME payload
+    // forever, and the client freezes with a live wire.
+    for (const p of snap.projectiles ?? []) this.projAim.set(p.id, { x: p.tx, y: p.ty });
+    // The interval's spell/ability presentation, into the SAME renderer queues the sim's
+    // drains fill where the sim steps — the renderer never learns which world it is in.
+    // Guarded: a hand-fed harness payload may omit the field.
+    const fx = snap.fx;
+    if (fx) {
+      this.fxEffects.push(...fx.effects);
+      this.fxSplats.push(...fx.splats);
+      this.fxCastStarts.push(...fx.castStarts);
+      this.fxCastFires.push(...fx.castFires);
+    }
   }
 
   /** This interval's pose segments (docs/multiplayer.md item 2c-interp): what the applier
@@ -3908,6 +3954,49 @@ export class RtsController {
     if (!this.snapshotProjImpacts.length) return this.snapshotProjImpacts;
     const out = this.snapshotProjImpacts;
     this.snapshotProjImpacts = [];
+    return out;
+  }
+
+  /** The renderer-facing spell/ability presentation queues (see the fork in `tick`): filled
+   *  from the sim's drains where the sim steps, from the payload's `fx` on a frozen client.
+   *  Capped so a hidden window (rAF stopped, pump stepping the sim) cannot grow them without
+   *  bound — flushing stale bursts on refocus would be worse than dropping them. */
+  private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> = [];
+  private fxSplats: Array<{ splatId: string; x: number; y: number }> = [];
+  private fxCastStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> = [];
+  private fxCastFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
+  private wireFx: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+  drainFxEffects(): typeof this.fxEffects {
+    if (this.fxEffects.length > 400) this.fxEffects.splice(0, this.fxEffects.length - 400);
+    if (!this.fxEffects.length) return this.fxEffects;
+    const out = this.fxEffects;
+    this.fxEffects = [];
+    return out;
+  }
+  drainFxSplats(): typeof this.fxSplats {
+    if (!this.fxSplats.length) return this.fxSplats;
+    const out = this.fxSplats;
+    this.fxSplats = [];
+    return out;
+  }
+  drainFxCastStarts(): typeof this.fxCastStarts {
+    if (!this.fxCastStarts.length) return this.fxCastStarts;
+    const out = this.fxCastStarts;
+    this.fxCastStarts = [];
+    return out;
+  }
+  drainFxCastFires(): typeof this.fxCastFires {
+    if (!this.fxCastFires.length) return this.fxCastFires;
+    const out = this.fxCastFires;
+    this.fxCastFires = [];
+    return out;
+  }
+  /** Hand the wire its buffered presentation events (`HostSources.drainFx`). Swap-and-return
+   *  so the ~60 Hz caller allocates only when something actually happened. */
+  private takeWireFx(): FxSnapshot {
+    const out = this.wireFx;
+    if (!out.effects.length && !out.splats.length && !out.castStarts.length && !out.castFires.length) return out;
+    this.wireFx = { effects: [], splats: [], castStarts: [], castFires: [] };
     return out;
   }
 
@@ -4010,6 +4099,7 @@ export class RtsController {
         ghostsFor: (p) => this.ghosts.ghostsFor(p),
         commandsApplied: () => this.authority.applied,
         creepCampsFor: (p) => this.creepCamps(this.viewpoints.viewpointFor(p)),
+        drainFx: () => this.takeWireFx(),
       }, this.matchTime);
     } else if (link.latest()) {
       // Client: compare the authority's newest view against our own, for OUR seat — while that

@@ -54,7 +54,7 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 7);
+  check("and it speaks our protocol", c.last("hello").protocol, 8);
 }
 
 console.log("the room forms exactly as it does over a socket");
@@ -722,6 +722,55 @@ console.log("\na reconnected player is handed the world it missed, off the caden
   // And the catch-up did not disturb the cadence it cut across: the broadcast still comes round
   // on its own clock rather than having been reset by the interruption.
   check("the broadcast still comes round on time", hostLink.tickHost(0.1, worldAt(77), sources, 11), 1);
+}
+
+console.log("\nspell fx ride due broadcasts, filtered per recipient, and never replay (item 9c-fx)");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+
+  // A viewer whose eyes end at x=500 — the far burst must not cross to it.
+  const halfBlind = { ...seer, fogBlocksAt: (p) => p.x > 500 };
+  const fxSources = {
+    viewers: () => [{ player: 0, viewer: seer }, { player: 1, viewer: halfBlind }, { player: 2, viewer: seer }],
+    ghostsFor: () => [],
+    commandsApplied: () => 0,
+    drainFx: () => fxThisTick.shift() ?? { effects: [], splats: [], castStarts: [], castFires: [] },
+  };
+  // Two ticks of events land BETWEEN sends: both must arrive in the one due broadcast.
+  const fxThisTick = [
+    { effects: [{ art: "HolyBolt.mdx", x: 100, y: 100, targetId: 7, z: 0 }], splats: [], castStarts: [], castFires: [] },
+    { effects: [{ art: "FarBurst.mdx", x: 900, y: 900, targetId: 0, z: 0 }], splats: [{ splatId: "THND", x: 50, y: 60 }], castStarts: [], castFires: [] },
+  ];
+  hostLink.tickHost(0.01, worldAt(420), fxSources, 1); // buffers, not due (interval 0.05)
+  hostLink.tickHost(0.01, worldAt(420), fxSources, 2); // buffers the second tick's too
+  hostLink.tickHost(0.05, worldAt(420), fxSources, 3); // due — flushes
+  await tick();
+  check("both ticks' events arrive in the one due payload", peerLink.latest()?.fx.effects.map((e) => e.art), ["HolyBolt.mdx"]);
+  check("…the burst beyond this recipient's eyes withheld", peerLink.latest()?.fx.effects.length, 1);
+  check("…and the scorch decal rides along", peerLink.latest()?.fx.splats, [{ splatId: "THND", x: 50, y: 60 }]);
+
+  // The next due broadcast must NOT replay them.
+  hostLink.tickHost(0.05, worldAt(420), fxSources, 4);
+  await tick();
+  check("a flushed burst never plays twice", peerLink.latest()?.fx.effects, []);
+}
+
+console.log("a command's consequences are expedited off-cadence, without fx and without disturbing the clock");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS);
+  hostLink.tickHost(0.05, worldAt(420), sources, 1); // settle the cadence
+  await tick();
+
+  hostLink.expedite(2); // the joiner's peer id — a command of theirs just applied
+  const sent = hostLink.tickHost(0.001, worldAt(300), sources, 2);
+  await tick();
+  check("the very next tick carries the answer", sent, 1);
+  check("…with the world as it now is", peerLink.latest()?.units[0].hp, 300);
+  check("and the broadcast still comes round on its own clock", hostLink.tickHost(0.05, worldAt(300), sources, 3), 1);
 }
 
 console.log(failed === 0 ? "\nloopback: all checks passed" : `\nloopback: ${failed} FAILED`);

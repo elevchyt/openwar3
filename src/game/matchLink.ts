@@ -1,4 +1,4 @@
-import { snapshotFor, type SnapshotViewer, type SnapshotWorld, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
+import { snapshotFor, type FxSnapshot, type SnapshotViewer, type SnapshotWorld, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
 import { divergence, describeDivergence, type Divergence } from "./divergence";
 import { commandMessage, isCommandMessage, type CommandMessage } from "../net/commandLink";
 import type { Command } from "./commands";
@@ -154,6 +154,11 @@ export interface HostSources {
   /** This recipient's creep-camp minimap markers (`RtsController.creepCamps(viewpoint)`).
    *  Optional so a test's two-closure stub keeps compiling; absent reads as no camps. */
   creepCampsFor?(player: number): Array<{ x: number; y: number; level: number }>;
+  /** The spell/ability presentation events the host's sim queued since the last ask —
+   *  drained EVERY tick (they are gone from the sim's queues once its own renderer runs)
+   *  and buffered here until the next due broadcast flushes them per recipient. Optional
+   *  for the same stub reason; absent reads as a match with no spells. */
+  drainFx?(): FxSnapshot;
 }
 
 /** How often the host emits. 20 Hz — twice the 10 Hz fog rebuild, deliberately: what a
@@ -349,6 +354,17 @@ export class MatchLink {
    * stay whole, because a delta against a world the recipient never received is noise.
    */
   tickHost(dt: number, world: SnapshotWorld, sources: HostSources, time: number): number {
+    // Presentation events are drained EVERY tick — the sim's own queues empty when the
+    // host's renderer runs — and buffered until a due broadcast flushes them. Capped so a
+    // spell-storm during a long between-sends stall cannot grow the buffer without bound.
+    const fx = sources.drainFx?.();
+    if (fx) {
+      this.fxBuf.effects.push(...fx.effects);
+      this.fxBuf.splats.push(...fx.splats);
+      this.fxBuf.castStarts.push(...fx.castStarts);
+      this.fxBuf.castFires.push(...fx.castFires);
+      if (this.fxBuf.effects.length > 512) this.fxBuf.effects.splice(0, this.fxBuf.effects.length - 512);
+    }
     this.accum += dt;
     const due = this.accum >= SNAPSHOT_INTERVAL;
     if (due) this.accum = 0;
@@ -360,14 +376,39 @@ export class MatchLink {
       if (peer === undefined) continue; // a computer slot: nobody is watching
       if (!due && !this.owed.has(peer)) continue; // off-cadence: only the returning peers
       const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player), sources.commandsApplied(), sources.creepCampsFor?.(player) ?? []);
+      // Fx ride DUE broadcasts only: an expedited or rejoin catch-up send would otherwise
+      // replay the same burst again at the next cadence. Filtered per recipient by
+      // eyes-on-the-spot — the same "in your eyes or absent" rule items and missiles use.
+      if (due) {
+        snap.fx = {
+          effects: this.fxBuf.effects.filter((e) => !viewer.fogBlocksAt(e)),
+          splats: this.fxBuf.splats.filter((e) => !viewer.fogBlocksAt(e)),
+          castStarts: this.fxBuf.castStarts.filter((e) => !viewer.fogBlocksAt(e)),
+          castFires: this.fxBuf.castFires.filter((e) => !viewer.fogBlocksAt(e)),
+        };
+      }
       this.channel.send({ k: "snap", snap } satisfies SnapshotMessage, peer);
       sent++;
       this.emitted++;
     }
+    if (due) this.fxBuf = { effects: [], splats: [], castStarts: [], castFires: [] };
     // Cleared whether or not a seat was found for them: an unseated peer is a routing bug to
     // notice elsewhere, not a debt to keep re-paying every tick for the rest of the match.
     this.owed.clear();
     return sent;
+  }
+
+  private fxBuf: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+
+  /**
+   * A command from this peer was just applied — owe it a snapshot NOW rather than at the
+   * cadence (docs/multiplayer.md item 9d). The cadence is half of a client's order-to-motion
+   * latency; expediting the one payload that carries the command's first consequences cuts
+   * that half to a single sim tick. Reuses the rejoin catch-up mechanism (`owed`), and pays
+   * the same way: once, off-cadence, without disturbing the broadcast clock.
+   */
+  expedite(peer: number): void {
+    this.owed.add(peer);
   }
 
   /**

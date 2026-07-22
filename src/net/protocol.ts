@@ -125,7 +125,7 @@ export type GameMessage = StartMatch | import("./commandLink").CommandMessage;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */
-export const PROTOCOL_VERSION = 7; // 7: in-flight projectiles (6: camps/neutral-memory/20 Hz, 5: research/shelves, 4: stash)
+export const PROTOCOL_VERSION = 8; // 8: fx events + expedited command echo (7: projectiles, 6: camps/neutral-memory/20 Hz)
 
 /** Default relay port. Overridable via PORT (the env var Railway/Render both inject). */
 export const DEFAULT_RELAY_PORT = 8787;

@@ -339,6 +339,31 @@ export interface GroundItemSnapshot {
   y: number;
 }
 
+/**
+ * The transient spell/ability PRESENTATION of one payload interval — events, not state.
+ *
+ * Everything here is a one-shot the sim queues for its renderer to play (a Holy Light burst
+ * over the target, a Thunder Clap scorch, the cast gesture and its sound); a frozen client's
+ * sim queues none, so abilities landed invisibly on a client. The host buffers each tick's
+ * events (`MatchLink`) and flushes them into the next DUE broadcast, filtered per recipient
+ * by eyes-on-the-spot — an expedited or catch-up send carries none, because replaying a
+ * burst twice is worse than it arriving a payload late. Damage and every other CONSEQUENCE
+ * still crosses as state; this is only what it looked and sounded like.
+ */
+export interface FxSnapshot {
+  /** One-shot effect models (`drainSpellEffects`): follow `targetId`'s record when > 0. */
+  effects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }>;
+  /** Spell ground decals (`drainSpellSplats`) — Thunder Clap's scorch and kin. */
+  splats: Array<{ splatId: string; x: number; y: number }>;
+  /** Cast wind-ups (`drainCastStarts`): the caster's gesture, and a delayed spell's "beware"
+   *  art/sound at the target point. `x`/`y` is the caster's position (the AoI test). */
+  castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; x: number; y: number }>;
+  /** Casts whose effect fired (`drainCastFires`): the ability's cast sound. */
+  castFires: Array<{ casterId: number; code: string; abilityId: string; x: number; y: number }>;
+}
+
+export const EMPTY_FX: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+
 /** One in-flight missile, as a client that did not simulate it draws one: where it is, what
  *  model it wears, and enough of the flight (target, speed, the launch→impact height lerp)
  *  to ADVANCE it smoothly between payloads with the sim's own homing step. `tx`/`ty` is the
@@ -400,6 +425,10 @@ export interface WorldSnapshot {
    *  in the dark is absent, not remembered — and the client both draws AND advances these
    *  (`ProjectileSnapshot`), so an arrow does not stutter at the wire's cadence. */
   projectiles: ProjectileSnapshot[];
+  /** This interval's spell/ability presentation (see `FxSnapshot`). `snapshotFor` emits it
+   *  EMPTY — events live on no world object to serialize; `MatchLink.tickHost` buffers the
+   *  host's per-tick drains and fills this on each due broadcast, per recipient. */
+  fx: FxSnapshot;
   /**
    * How many commands the world this was built from has applied (docs/multiplayer.md F5).
    *
@@ -727,5 +756,5 @@ export function snapshotFor(
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
   const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, commands };
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, fx: { effects: [], splats: [], castStarts: [], castFires: [] }, commands };
 }

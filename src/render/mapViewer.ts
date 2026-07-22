@@ -6065,8 +6065,10 @@ export class MapViewerScene {
         }
         // --- spells / abilities ---
         // Effect models (Holy Light burst, Heal glow, Thunder Clap ring, …): follow
-        // the target unit if one is given, else play at the point.
-        for (const fx of world.drainSpellEffects()) {
+        // the target unit if one is given, else play at the point. These four drains read
+        // the CONTROLLER's queues, not the sim's — same events where the sim steps, the
+        // payload's events on a frozen client, one renderer path either way (item 9c-fx).
+        for (const fx of this.rts!.drainFxEffects()) {
           const t = fx.targetId ? world.units.get(fx.targetId) : null;
           const x = t ? t.x : fx.x;
           const y = t ? t.y : fx.y;
@@ -6077,13 +6079,13 @@ export class MapViewerScene {
           if (fx.sound) this.sounds?.playSpellSound([fx.art], undefined, { x, y, z });
         }
         // Ground decals a spell painted this frame (Thunder Clap's scorch, THND).
-        for (const s of world.drainSpellSplats()) this.addSpellSplat(s.splatId, s.x, s.y);
+        for (const s of this.rts!.drainFxSplats()) this.addSpellSplat(s.splatId, s.x, s.y);
         // Sustain the looping bed under each running channelled field, and drop it the
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).
         this.updateFieldLoops(world.activeSpellFields());
         // Cast animations (throw/slam/spell) begin at the wind-up.
-        for (const c of world.drainCastStarts()) {
+        for (const c of this.rts!.drainFxCastStarts()) {
           this.rts!.playCastAnim(c.casterId, c.code, c.hold, c.loop);
           // A delayed-strike spell drops its "beware" art as the wind-up STARTS, and the
           // sound rides that model: FlameStrikeTarget.mdx fires its SND…AHFT event at frame
@@ -6098,7 +6100,7 @@ export class MapViewerScene {
         // ...but the cast/effect SOUND fires with the effect at the cast point (issue #23):
         // it lands with the visible clap/bolt, not 0.4s early at the wind-up, and an
         // interrupted wind-up (no fire) correctly stays silent.
-        for (const c of world.drainCastFires()) {
+        for (const c of this.rts!.drainFxCastFires()) {
           const def = this.abilities.get(c.abilityId);
           if (!def) continue;
           const caster = world.units.get(c.casterId);

@@ -148,6 +148,14 @@ export class Viewpoint {
     if (u.team === this.team && !u.neutralPassive) return false;
     if (this.isExposed(u)) return false;
     if (u.building != null) {
+      // A NEUTRAL PASSIVE structure — a shop, a tavern, a fountain — is map furniture every
+      // player knows from the loading screen (its minimap glyph paints over pitch-black
+      // ground in the real client), so its image never needs SCOUTING: it draws from match
+      // start, dimmed as a memory, under whatever veil covers the ground. This is the same
+      // rule the snapshot send already applies (`visibilityFor` demotes them to remembered,
+      // never absent) — a client had it and the host did not, and the two must agree.
+      // `fogBlocksClick` still stands: known is not watched, and you cannot shop through fog.
+      if (u.neutralPassive) return false;
       const [cx, cy] = this.vision.worldToCell(u.x, u.y);
       return !this.vision.hasSeen(cx, cy);
     }
