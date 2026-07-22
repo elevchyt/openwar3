@@ -577,6 +577,16 @@ export class Authority {
         return this.ownedBy(player, cmd.buildingId) && this.sim.battleStations(cmd.buildingId);
       case "standdown":
         return this.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId);
+      case "buyitem": {
+        // No ownership gate ON PURPOSE — a Goblin Merchant is Neutral Passive and an ally's
+        // Vault is shoppable (Aall). Who may buy is `purchaseItem`'s own judgement: it checks
+        // the shop's tech gate, the shelf, the patron's range and that the patron is the
+        // BUYER's unit — and the patron is nominated here, by the same `shopBuyer` rule the
+        // card's overhead arrow uses, never named by the wire.
+        const buyer = this.sim.shopBuyer(cmd.shopId, player);
+        if (!buyer) return false;
+        return this.sim.purchaseItem(cmd.shopId, buyer.id, cmd.itemId, player) === "ok";
+      }
     }
   }
 

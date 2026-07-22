@@ -66,6 +66,9 @@ function world(units) {
     timeOfDay: 8,
     dawnDusk: true,
     removedVia: [],
+    // The tech ledger the payload's `research` lands in — recorded flat for the checks.
+    researchWrites: [],
+    tech: { setResearchLevel: (p, id, lvl) => w.researchWrites.push([p, id, lvl]) },
     stashOf(owner) {
       let s = stashes.get(owner);
       if (!s) { s = { gold: 0, lumber: 0 }; stashes.set(owner, s); }
@@ -89,6 +92,7 @@ console.log("the maphack invariant: records mirror the payload's id set");
   const snap = {
     recipient: 2, time: 1, timeOfDay: 11, dawnDusk: true, commands: 0,
     stash: { gold: 731, lumber: 240 },
+    research: { Rhme: 2, Rhar: 1 },
     units: [payloadUnit({ id: 1, owner: 2, hp: 77, x: 999, y: 888 }), payloadUnit({ id: 3, owner: 1, typeId: "hfoo" })],
     mines: [], items: [],
   };
@@ -108,6 +112,27 @@ console.log("the maphack invariant: records mirror the payload's id set");
   // a client's optimistic local charge when the host refuses (the "instantly canceled"
   // train of the July playtest: local gold leaked on every refusal, and income never came).
   check("the recipient's stash is overwritten with the payload's", w.stashOf(2), { gold: 731, lumber: 240 });
+  // Research lands in the tech ledger, billed to the RECIPIENT — the client's card levels,
+  // rtma unit swaps and requirement gates all read this and sat at zero forever without it.
+  check("the recipient's research lands in the tech ledger", w.researchWrites, [[2, "Rhme", 2], [2, "Rhar", 1]]);
+}
+
+console.log("a shop's shelf is seated as the Map the card reads");
+{
+  const u = record({ id: 5, typeId: "ngme", building: { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false, stock: new Map() } });
+  writeUnitSnapshot(u, payloadUnit({
+    id: 5, typeId: "ngme",
+    building: {
+      constructionLeft: 0, buildTimeTotal: 1, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0,
+      // timer -1 is the wire's spelling of Infinity — JSON has no way to say "never".
+      stock: [{ id: "pinv", count: 2, max: 3, timer: 14.5, period: 30, kind: "item" }, { id: "stel", count: 0, max: 1, timer: -1, period: -1, kind: "item" }],
+    },
+  }));
+  check("counts and the restock sweep land", [u.building.stock.get("pinv").count, u.building.stock.get("pinv").timer, u.building.stock.get("pinv").period], [2, 14.5, 30]);
+  check("-1 decodes back to 'never restocks'", [u.building.stock.get("stel").timer, u.building.stock.get("stel").period], [Infinity, Infinity]);
+  // A null shelf is "not entitled" (an enemy's shop) — it must not delete what the record has.
+  writeUnitSnapshot(u, payloadUnit({ id: 5, typeId: "ngme", building: { constructionLeft: 0, buildTimeTotal: 1, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null } }));
+  check("a withheld shelf leaves the record's shelf alone", u.building.stock.size, 2);
 }
 
 console.log("field semantics the readers depend on");
@@ -130,6 +155,7 @@ console.log("mines keep their last reading; items follow the units' rule");
   const snap = {
     recipient: 2, time: 1, timeOfDay: 8, dawnDusk: true, commands: 0, units: [],
     stash: { gold: 0, lumber: 0 },
+    research: {},
     mines: [{ id: 4, x: 0, y: 0, radius: 96, gold: -1 }],
     items: [{ id: 8, itemId: "ratc", x: 5, y: 5 }],
   };

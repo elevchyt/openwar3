@@ -2145,6 +2145,10 @@ export class RtsController {
       if (latest && latest !== this.lastApplied) {
         this.applySnapshot(latest); // reads lastApplied for the segment duration — order matters
         this.lastApplied = latest;
+        // Derived state the sim would have ticked into existence: shop patrons. Without
+        // this the local authority refused every buyitem (no patron was ever adopted) and
+        // the shop's overhead arrow never appeared on a client.
+        this.sim.adoptShopBuyers();
       }
       // Glide the records between payloads (see poseLerp) — the payload wrote where every
       // unit IS, this writes where the frame should DRAW it, one interval behind.

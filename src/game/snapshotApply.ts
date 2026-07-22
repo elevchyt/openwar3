@@ -1,5 +1,5 @@
-import type { SimItem, SimUnit } from "../sim/world";
-import type { UnitSnapshot, WorldSnapshot } from "./snapshot";
+import type { SimItem, SimUnit, ShopStock } from "../sim/world";
+import { decodeStockTime, type BuildingSnapshot, type UnitSnapshot, type WorldSnapshot } from "./snapshot";
 
 /**
  * Option 2's applier (docs/multiplayer.md — Open questions, decided): a CLIENT's `SimWorld`
@@ -35,6 +35,11 @@ export interface ApplyWorld {
   /** The recipient's LIVE stash object, so the payload's figures overwrite the client's
    *  drifted local ledger in place — every reader already holds this object. */
   stashOf(owner: number): { gold: number; lumber: number };
+  /** The tech ledger the payload's `research` is written into. Optional and nullable
+   *  because it is `SimWorld.tech`'s own shape (null before registries load, absent on the
+   *  stub worlds tests pass); `setResearchLevel` is pure bookkeeping — upgrade EFFECTS never
+   *  re-derive on a client, its unit stats arrive already-upgraded in each unit's payload. */
+  readonly tech?: { setResearchLevel(player: number, id: string, level: number): void } | null;
   /** The sim's own clean removal (unstamps footprints, frees cells, queues the render-side
    *  drop) — NOT a bare `units.delete`, or a removed building would leave its collision
    *  stamped on the client's grid forever. */
@@ -139,8 +144,10 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
     u.building.rallyY = s.building.rallyY;
     u.building.rallyKind = s.building.rallyKind as NonNullable<SimUnit["building"]>["rallyKind"];
     u.building.rallyTargetId = s.building.rallyTargetId;
+    writeStock(u, s.building.stock);
   } else if (s.building) {
-    u.building = { ...s.building, builderIds: [], goldCost: 0, lumberCost: 0 } as unknown as SimUnit["building"];
+    u.building = { ...s.building, stock: undefined, builderIds: [], goldCost: 0, lumberCost: 0 } as unknown as SimUnit["building"];
+    writeStock(u, s.building.stock);
   } else {
     u.building = null;
   }
@@ -165,6 +172,22 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.buildPending = s.buildPending ? ({ ...s.buildPending } as unknown as SimUnit["buildPending"]) : null;
   u.orderQueue = (s.orderQueue as SimUnit["orderQueue"] | null) ?? [];
   u.pendingCast = s.pendingCastCode ? ({ code: s.pendingCastCode, started: true, fired: false } as unknown as SimUnit["pendingCast"]) : null;
+}
+
+/** Seat a payload's shelf onto the record as the `Map` every reader (`shopStock`,
+ *  `shopStockInfo`, `shopWaresOf`) expects. Rebuilt wholesale — the shelf is small and the
+ *  host's reading is the whole truth: another player's purchase or a restock tick must land
+ *  even though this sim never runs `tickShops`. `regen` does not cross (the client winds no
+ *  timers); a null payload shelf (not a shop, or an ENEMY's — its wares are withheld like
+ *  the rest of its intel) leaves the record's shelf alone rather than deleting knowledge
+ *  the recipient never had. */
+function writeStock(u: SimUnit, stock: BuildingSnapshot["stock"]): void {
+  if (!u.building || !stock) return;
+  const m = new Map<string, ShopStock>();
+  for (const st of stock) {
+    m.set(st.id, { count: st.count, max: st.max, regen: 0, timer: decodeStockTime(st.timer), period: decodeStockTime(st.period), kind: st.kind });
+  }
+  u.building.stock = m;
 }
 
 function mergeWeapon(base: SimUnit["weapon"], s: UnitSnapshot["weapon"]): SimUnit["weapon"] {
@@ -257,5 +280,10 @@ export function applyWorldSnapshot(world: ApplyWorld, snap: WorldSnapshot, creat
   const stash = world.stashOf(snap.recipient);
   stash.gold = snap.stash.gold;
   stash.lumber = snap.stash.lumber;
+  // The recipient's researched levels, written like the stash: the host's ledger is the only
+  // real one. Levels only ever rise, so writing what was sent needs no removal pass.
+  if (world.tech) {
+    for (const [id, level] of Object.entries(snap.research)) world.tech.setResearchLevel(snap.recipient, id, level);
+  }
   return { created, removed, createdItems, removedItems };
 }

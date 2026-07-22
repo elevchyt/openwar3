@@ -19,7 +19,7 @@
 // data, no match state beyond this table. Keep it that way — it is what makes a free tier
 // viable and what keeps us clear of hosting Blizzard content.
 
-export const PROTOCOL_VERSION = 4; // 4: WorldSnapshot carries the recipient's stash (src/net/protocol.ts)
+export const PROTOCOL_VERSION = 5; // 5: + the recipient's research and shop shelves (4: its stash) — src/net/protocol.ts
 
 /** The game list entry, as LocalMultiplayerJoin.fdf wants it. */
 const roomInfo = (r) => ({

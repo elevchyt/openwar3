@@ -1672,6 +1672,16 @@ export class SimWorld {
     return null;
   }
 
+  /** Run the shop-buyer adoption pass by hand. For a FROZEN CLIENT (docs/multiplayer.md
+   *  option 2): its sim never ticks, so nothing would ever adopt a patron — the local
+   *  authority refused every `buyitem` before it could reach the host, and the overhead
+   *  arrow never showed. The applier's caller runs this against the freshly-written records
+   *  instead; it derives only the local nomination map, and the HOST's own adoption is
+   *  still what decides the actual delivery. */
+  adoptShopBuyers(): void {
+    this.tickShopBuyers();
+  }
+
   /** Give every shop a purchaser for every player who has one standing there and hasn't
    *  got one already — the first eligible unit to arrive becomes the buyer, and from then
    *  on only the player's own Select User pick moves it (see shopBuyer).

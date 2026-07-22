@@ -146,4 +146,18 @@ export type Command =
    * Stand Down — eject every peon from a burrow, back to work. Ownership only, same as
    * `battlestations`: an ungated version emptied an enemy's burrow of its defenders.
    */
-  | { c: "standdown"; buildingId: number };
+  | { c: "standdown"; buildingId: number }
+  /**
+   * Buy an ITEM from a shop. Intent only: which shop, which ware.
+   *
+   * The last purchase left outside the funnel — the card called `world.purchaseItem`
+   * straight into the sim, which single-player never noticed and a frozen client turned
+   * into theater: the item landed in a local record the next snapshot re-wrote, the local
+   * stash and shelf were charged and reverted, and the host never heard a purchase had
+   * been attempted at all. The RECEIVING unit is not on the wire either: the authority
+   * nominates the patron with the same `shopBuyer` rule the card's overhead arrow uses, so
+   * the arrow and the delivery agree — and a client cannot name somebody else's hero as
+   * the recipient. `purchaseItem` itself re-judges everything (stock, tech, range, patron,
+   * cost) and charges, exactly as it always did.
+   */
+  | { c: "buyitem"; shopId: number; itemId: string };

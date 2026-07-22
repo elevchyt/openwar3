@@ -103,6 +103,8 @@ console.log("the snapshot is a subset of the sim unit, not a serialisation of it
   check("the recipient's own stash rides along", snap.stash, { gold: 500, lumber: 150 });
   check("…as a copy, not the live ledger", snap.stash === world.stashOf(0), false);
   check("…and it is the recipient's, nobody else's", snapshotFor(world, viewer(0, { 0: 0, 3: 0 }), 3, 0).stash.gold, 503);
+  // A hand-built world with no tech ledger still snapshots — research is just empty.
+  check("no tech ledger reads as no research, not a crash", snap.research, {});
   check("the fields a client draws with are present", [u.x, u.y, u.hp, u.maxHp, u.typeId, u.owner], [10, 20, 420, 420, "hfoo", 0]);
 
   // THE check. A spread-based `snapshotFor` passes everything above and fails only here.
@@ -114,6 +116,34 @@ console.log("the snapshot is a subset of the sim unit, not a serialisation of it
   // Vision ranges specifically: a client that knows enemy sight radii can compute where it is
   // safe to walk. `viewpoint.ts` reads these on the AUTHORITY and must keep doing so.
   check("enemy sight radii are not derivable client-side", ["sightDay" in u, "sightNight" in u], [false, false]);
+}
+
+console.log("the recipient's research rides along — its own, nobody else's");
+{
+  const world = worldOf([unit({ id: 1, owner: 0 })]);
+  world.tech = {
+    researchedBy: (p) => (p === 0 ? new Map([["Rome", 2], ["Roar", 1]]) : new Map([["Rhme", 3]])),
+  };
+  check("player 0 gets its own ledger", snapshotFor(world, viewer(0, { 0: 0 }), 0, 0).research, { Rome: 2, Roar: 1 });
+  check("player 1 gets its own, never player 0's", snapshotFor(world, viewer(1, { 1: 1 }), 1, 0).research, { Rhme: 3 });
+}
+
+console.log("a shop's shelf crosses only to those who may shop at it");
+{
+  const stock = new Map([
+    ["pinv", { count: 2, max: 3, regen: 120, timer: 14.5, period: 30, kind: "item" }],
+    ["stel", { count: 0, max: 1, regen: 0, timer: Infinity, period: Infinity, kind: "item" }],
+  ]);
+  const shopOf = (owner, neutral) => unit({ id: 9, owner, neutralPassive: neutral, typeId: neutral ? "ngme" : "hvlt", building: { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false, stock } });
+  const seating = { 0: 0, 1: 1, 2: 0 }; // 0 and 2 allied, 1 the enemy
+  const sent = (owner, neutral, asPlayer) => snapshotFor(worldOf([shopOf(owner, neutral)]), viewer(seating[asPlayer], seating), asPlayer, 0).units[0].building.stock;
+
+  const own = sent(0, false, 0);
+  check("the owner sees the shelf, times encoded for JSON", own.map((s) => [s.id, s.count, s.timer, s.period]), [["pinv", 2, 14.5, 30], ["stel", 0, -1, -1]]);
+  check("…and JSON round-trips it intact (Infinity would be null)", JSON.parse(JSON.stringify(own)), own);
+  check("an ally sees it too — Aall shop sharing", sent(0, false, 2)?.length, 2);
+  check("an ENEMY's shelf is withheld", sent(0, false, 1), null);
+  check("a neutral shop's shelf crosses to anyone", sent(5, true, 1)?.length, 2);
 }
 
 console.log("an enemy cannot tell an illusion from the unit it copies");
@@ -200,13 +230,15 @@ console.log("the payload is JSON, by decision");
   const world = worldOf([unit({ id: 1, owner: 0, building: {
     constructionLeft: 0, buildTimeTotal: 60, queue: [], producesUnits: true,
     rallyX: 1, rallyY: 2, rallyKind: "point", rallyTargetId: 0,
-    stock: new Map([["ratf", { count: 1 }]]), builderIds: [9], goldCost: 160, lumberCost: 50,
+    stock: new Map([["ratf", { count: 1, max: 3, regen: 30, timer: 5, period: 30, kind: "item" }]]), builderIds: [9], goldCost: 160, lumberCost: 50,
   } })]);
   const snap = snapshotFor(world, viewer(0, { 0: 0 }), 0, 0);
   const round = JSON.parse(JSON.stringify(snap));
   check("survives a JSON round trip unchanged", round, snap);
-  // The shop `stock` Map is the concrete thing that would have gone through as `{}`.
-  check("the building's stock Map did not come along", "stock" in snap.units[0].building, false);
+  // The shop shelf CROSSES now (protocol 5) — but re-encoded as a plain array, never as the
+  // sim's Map, which is the concrete thing that would have gone through as `{}`.
+  check("the shelf crosses as plain data, not the sim's Map", Array.isArray(snap.units[0].building.stock), true);
+  check("…carrying the card's fields", snap.units[0].building.stock[0], { id: "ratf", count: 1, max: 3, timer: 5, period: 30, kind: "item" });
   check("nor the speed-build accounting", ["builderIds", "goldCost", "lumberCost"].filter((k) => k in snap.units[0].building), []);
 }
 

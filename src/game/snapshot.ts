@@ -82,6 +82,11 @@ export interface SnapshotWorld {
   readonly timeOfDay: number;
   readonly dawnDusk: boolean;
   stashOf(owner: number): { gold: number; lumber: number };
+  /** The recipient's researched-upgrade ledger (`TechState.researchedBy`). Optional and
+   *  nullable because it is exactly `SimWorld.tech`'s shape: null before registries load,
+   *  absent on the hand-built worlds tests pass. The CENSUS half of tech state needs no
+   *  lane of its own — it is derived live from the unit records, which already cross. */
+  readonly tech?: { researchedBy(player: number): ReadonlyMap<string, number> } | null;
 }
 
 /** The per-recipient half. `Viewpoint` satisfies it; a test can pass a five-line stub.
@@ -156,9 +161,28 @@ export interface WorkerSnapshot {
   carryLumber: number;
 }
 
-/** Construction progress and the production queue. `builderIds`, the speed-build costs and
- *  the shop `stock` map stay behind: stock reaches the client through `shopStock` on the
- *  read window, and the rest is how the sim charges for a build. */
+/** One shop ware's shelf state, as the card draws it: `count` greys the button, `timer`/
+ *  `period` drive the restock cooldown sweep, `kind` files the ware on the right half of the
+ *  card (`shopWaresOf`), and `max` is the shelf ceiling. `regen` stays behind — it is how the
+ *  host winds the timer, not something the client draws.
+ *
+ *  `timer`/`period` are `Infinity` in the sim for a ware that never restocks — but this
+ *  payload is JSON, and `JSON.stringify(Infinity)` is `null`. They cross as **-1** and the
+ *  applier decodes back; encode/decode live beside the two types so they cannot drift. */
+export interface StockSnapshot {
+  id: string;
+  count: number;
+  max: number;
+  timer: number;
+  period: number;
+  kind: "item" | "unit";
+}
+
+export const encodeStockTime = (t: number): number => (Number.isFinite(t) ? t : -1);
+export const decodeStockTime = (t: number): number => (t < 0 ? Infinity : t);
+
+/** Construction progress and the production queue. `builderIds` and the speed-build costs
+ *  stay behind — they are how the sim charges for a build. */
 export interface BuildingSnapshot {
   constructionLeft: number;
   buildTimeTotal: number;
@@ -168,6 +192,13 @@ export interface BuildingSnapshot {
   rallyY: number;
   rallyKind: string;
   rallyTargetId: number;
+  /** The shop shelf, for buildings this recipient may SHOP AT — a neutral shop, its own or
+   *  an ally's (WC3 never shows an enemy shop's wares; you cannot even open its card, so an
+   *  enemy Vault's shelf crossing the wire would be intel the game itself withholds). Null
+   *  for everything else. This used to "stay behind" on the theory that `shopStock` answered
+   *  from the read window — true only where the sim steps; a frozen client's shelves never
+   *  restocked and never felt anybody else's purchases. */
+  stock: StockSnapshot[] | null;
 }
 
 /** One unit, as a client that did not simulate it needs it. */
@@ -315,6 +346,14 @@ export interface WorldSnapshot {
    *  canceled" when the next snapshot wiped the queue (the July playtest bug). Nobody else's
    *  stash is ever sent — an opponent's bank balance is scouting information. */
   stash: { gold: number; lumber: number };
+  /** The RECIPIENT's researched upgrades (`upgradeId → level`). Same lane and same reasoning
+   *  as `stash`: research completes only where the sim steps, so a client's own `TechState`
+   *  ledger sat at zero forever — its card offered Iron Forged Swords after Steel was in, a
+   *  `rtma` swap (Berserker) never swapped, and every requirement gate answered from a stale
+   *  world. Only the recipient's own — an enemy's research is scouting information. The
+   *  census half (which buildings satisfy what) is derived from unit records and needs no
+   *  lane. */
+  research: Record<string, number>;
   units: UnitSnapshot[];
   mines: MineSnapshot[];
   items: GroundItemSnapshot[];
@@ -432,7 +471,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     bonusInt: 0,
 
     worker: null,
-    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0 },
+    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null },
     abilities: [],
     buffs: [],
     inventory: [],
@@ -574,6 +613,12 @@ export function snapshotFor(
             rallyY: u.building.rallyY,
             rallyKind: u.building.rallyKind,
             rallyTargetId: u.building.rallyTargetId,
+            // The shelf crosses only for shops this recipient may shop at (see the field):
+            // `seesFor` is the ally gate — the same one Aall "Shop Sharing" draws in game.
+            stock:
+              u.building.stock && (u.neutralPassive || viewer.seesFor(u.owner))
+                ? [...u.building.stock].map(([id, st]) => ({ id, count: st.count, max: st.max, timer: encodeStockTime(st.timer), period: encodeStockTime(st.period), kind: st.kind }))
+                : null,
           }
         : null,
       abilities: u.abilities,
@@ -621,5 +666,6 @@ export function snapshotFor(
   // Copied, not referenced: the payload must be a frozen reading, not a live handle the
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, units, mines, items, commands };
+  const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, units, mines, items, commands };
 }

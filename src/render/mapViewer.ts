@@ -5397,7 +5397,12 @@ export class MapViewerScene {
 
   /** Buy an item from a shop. WC3 hands it to a "valid patron" — a nearby unit with an
    *  inventory — so pick the player's SELECTED hero when it happens to be in range (that's
-   *  the one they mean), else the closest patron the shop can reach. */
+   *  the one they mean), else the closest patron the shop can reach.
+   *
+   *  Everything that decides whether this HAPPENS lives in `execute` (the last purchase to
+   *  join the funnel — called straight into the sim, a frozen client's shopping never
+   *  reached the host). What stays here is feedback: the same pre-checks `purchaseItem`
+   *  makes, re-asked of local state purely so a refusal speaks in the game's own voice. */
   private buyItem(shopId: number, itemId: string): void {
     if (!this.rts) return;
     const world = this.rts.simWorld;
@@ -5410,8 +5415,17 @@ export class MapViewerScene {
       this.refuse(SHOP_ERROR.nopatron);
       return;
     }
-    const result = world.purchaseItem(shopId, buyer.id, itemId, this.localPlayer);
-    if (result !== "ok" && SHOP_ERROR[result]) this.refuse(SHOP_ERROR[result]);
+    if (world.shopStock(shopId, itemId) === 0) {
+      this.refuse(SHOP_ERROR.nostock);
+      return;
+    }
+    if (buyer.inventory.indexOf(null) < 0) {
+      this.refuse(SHOP_ERROR.full);
+      return;
+    }
+    const def = this.items.get(itemId);
+    if (def && !this.canAfford(def.gold, def.lumber)) return; // refuses with the resource's own line
+    this.rts.execute(this.localPlayer, { c: "buyitem", shopId, itemId });
   }
 
   /** Cancel an under-construction building: refund **75%** of its cost (WC3

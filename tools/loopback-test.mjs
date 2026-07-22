@@ -54,7 +54,7 @@ console.log("a client connects and is handshaked before anything else");
   check("nothing has arrived yet", c.inbox.length, 0);
   await tick();
   check("hello first, then the game list", c.seen().map((m) => m.t), ["hello", "rooms"]);
-  check("and it speaks our protocol", c.last("hello").protocol, 4);
+  check("and it speaks our protocol", c.last("hello").protocol, 5);
 }
 
 console.log("the room forms exactly as it does over a socket");

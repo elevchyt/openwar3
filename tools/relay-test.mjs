@@ -96,7 +96,7 @@ try {
   const host = client("host");
   await host.open();
   const hello = await host.next("hello");
-  check("sends hello with a protocol version", hello.protocol === 4);
+  check("sends hello with a protocol version", hello.protocol === 5);
   const empty = await host.next("rooms");
   check("game list starts empty", Array.isArray(empty.rooms) && empty.rooms.length === 0);
 
