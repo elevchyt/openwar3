@@ -128,6 +128,26 @@ console.log("the recipient's research rides along — its own, nobody else's");
   check("player 1 gets its own, never player 0's", snapshotFor(world, viewer(1, { 1: 1 }), 1, 0).research, { Rhme: 3 });
 }
 
+console.log("neutral-passive structures are map furniture: fog demotes them to remembered, never to absent");
+{
+  const fogged = { fogHides: () => true, fogBlocksClick: () => true };
+  const shop = unit({ id: 1, owner: 15, neutralPassive: true, typeId: "ngme", building: { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false } });
+  const critter = unit({ id: 2, owner: 15, neutralPassive: true, typeId: "npig" });
+  const mine = unit({ id: 3, owner: 0, typeId: "htow", building: shop.building });
+  const snap = snapshotFor(worldOf([shop, critter, mine]), viewer(1, { 0: 0, 1: 1 }, fogged), 1, 0);
+  check("the fogged shop is SENT, as a remembered image", snap.units.map((u) => [u.id, u.remembered]), [[1, true]]);
+  check("a fogged critter is still absent — furniture is buildings only", snap.units.some((u) => u.id === 2), false);
+  check("and a fogged PLAYER building still hides entirely", snap.units.some((u) => u.id === 3), false);
+}
+
+console.log("creep-camp markers ride per recipient, and default to none");
+{
+  const world = worldOf([unit({ id: 1, owner: 0 })]);
+  const camps = [{ x: 100, y: 200, level: 12 }];
+  check("the markers the host computed are carried", snapshotFor(world, viewer(0, { 0: 0 }), 0, 0, [], 0, camps).creepCamps, camps);
+  check("a hand-built world defaults to no camps", snapshotFor(world, viewer(0, { 0: 0 }), 0, 0).creepCamps, []);
+}
+
 console.log("a shop's shelf crosses only to those who may shop at it");
 {
   const stock = new Map([

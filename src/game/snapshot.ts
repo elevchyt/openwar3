@@ -134,7 +134,16 @@ export type Visibility = "live" | "remembered" | "omit";
 export function visibilityFor(viewer: SnapshotViewer, u: SimUnit): Visibility {
   if (isOffField(u)) return viewer.seesFor(u.owner) ? "live" : "omit";
   if (viewer.invisHides(u)) return "omit";
-  if (viewer.fogHides(u)) return "omit";
+  // A NEUTRAL PASSIVE structure — a shop, a tavern, a fountain — is map furniture every
+  // player knows from the loading screen: its minimap glyph paints over pitch-black
+  // unexplored ground in the real 1.27a client (minimapView.minimapIcons), so the identity
+  // and pose a remembered image carries were never secrets. It is therefore sent as
+  // REMEMBERED even where fog would omit a player's building — which is also what keeps a
+  // frozen client's copy of the map furniture standing instead of letting the applier
+  // delete it (records, models, glyphs and splats all hang off the record). Its DESTRUCTION
+  // is still learned by discovery: the ghost path keeps the image for every viewer that was
+  // not watching, and only re-scouting the spot clears it (GhostMemory.forgetSeen).
+  if (viewer.fogHides(u)) return u.neutralPassive && u.building != null ? "remembered" : "omit";
   return viewer.fogBlocksClick(u) ? "remembered" : "live";
 }
 
@@ -354,6 +363,12 @@ export interface WorldSnapshot {
    *  census half (which buildings satisfy what) is derived from unit records and needs no
    *  lane. */
   research: Record<string, number>;
+  /** Creep-camp difficulty markers, as THIS recipient's minimap should paint them — computed
+   *  on the authority with the same `CreepCamps.markers(viewpoint)` rule the host's own map
+   *  uses (map-public at match start, yields to a visible member, gone once cleared). Carried
+   *  rather than re-derived because the client's record store holds only what it was sent:
+   *  the creeps behind the markers are exactly the units the payload omits. */
+  creepCamps: Array<{ x: number; y: number; level: number }>;
   units: UnitSnapshot[];
   mines: MineSnapshot[];
   items: GroundItemSnapshot[];
@@ -517,6 +532,9 @@ export function snapshotFor(
   /** `Authority.applied` for the world being snapshotted. Defaults to 0, which is the honest
    *  answer for a synthetic world nobody has commanded — every test builds one of those. */
   commands = 0,
+  /** This recipient's creep-camp markers (`CreepCamps.markers(viewpoint)` on the host).
+   *  Defaults empty — a hand-built test world has no camps to mark. */
+  creepCamps: Array<{ x: number; y: number; level: number }> = [],
 ): WorldSnapshot {
   const units: UnitSnapshot[] = [...ghosts];
   for (const u of world.units.values()) {
@@ -667,5 +685,5 @@ export function snapshotFor(
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
   const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, units, mines, items, commands };
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, commands };
 }

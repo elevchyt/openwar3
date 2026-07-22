@@ -3731,11 +3731,20 @@ export class RtsController {
           return;
         }
         const ok = this.authority.execute(judged.player, judged.cmd);
-        // A refused remote command is invisible from the client's chair — its local charge is
-        // undone by the next snapshot and the queued job never echoes back, which reads as a
-        // silent cancel. Name it on the host so a playtest report comes with its reason.
-        if (!ok && import.meta.env.DEV) console.info(`[sync] host REFUSED p${judged.player} ${JSON.stringify(judged.cmd)}`);
+        // A refused remote command used to be invisible from the client's chair — its local
+        // charge undone by the next snapshot, the queued job never echoing back: a silent
+        // cancel with no voice ("training instantly canceled", twice reported). The client is
+        // now TOLD, with the coarse cause the host can re-derive, and its HUD refuses in the
+        // game's own words. The dev console still names the exact command for a bug report.
+        if (!ok) {
+          link.sendRefusal(from, this.refusalReason(judged.player, judged.cmd));
+          if (import.meta.env.DEV) console.info(`[sync] host REFUSED p${judged.player} ${JSON.stringify(judged.cmd)}`);
+        }
       };
+    } else {
+      // Client: the authority refused one of our commands — surface it through the same
+      // refuse pathway a local refusal uses (the gold line + error sound).
+      link.onRefusal = (msg) => this.onRefuse?.(msg.key);
     }
   }
   private matchLinkIsHost = false;
@@ -3888,6 +3897,42 @@ export class RtsController {
     return this.matchLink.sendDialog(player, msg);
   }
 
+  /**
+   * The coarse `commandstrings.txt [Errors]` voice for a purchase the authority just refused —
+   * what a remote player is TOLD (item 9c). Re-derived rather than threaded out of
+   * `Authority.execute` (which answers only yes/no) because the three causes a player can act
+   * on — gold, lumber, food — are cheap reads, and everything subtler ("does this building
+   * even train that?") is a modified client's problem, not a message. Empty string = the
+   * interface error beep alone, which is still an answer.
+   */
+  private refusalReason(player: number, cmd: Command): string {
+    let def: UnitDef | undefined;
+    let food = false;
+    switch (cmd.c) {
+      case "train":
+        def = this.registry.get(cmd.unitId);
+        food = true;
+        break;
+      case "build":
+        def = this.registry.get(cmd.defId);
+        break;
+      case "upgradebuilding":
+        def = this.registry.get(cmd.toTypeId);
+        break;
+      default:
+        return "";
+    }
+    if (!def) return "";
+    const stash = this.authority.stashFor(player);
+    if (stash.gold < def.goldCost) return "Nogold";
+    if (stash.lumber < def.lumberCost) return "Nolumber";
+    if (food) {
+      const f = this.authority.foodFor(player);
+      if (f.used + def.foodUsed > f.made) return "Nofood";
+    }
+    return "";
+  }
+
   /** The match is over on this machine — end the wire (Phase G item 1). Safe to call twice. */
   endMatchWire(): void {
     this.matchLink?.endMatch();
@@ -3915,6 +3960,7 @@ export class RtsController {
         viewers: () => this.viewpoints.viewerSeats(),
         ghostsFor: (p) => this.ghosts.ghostsFor(p),
         commandsApplied: () => this.authority.applied,
+        creepCampsFor: (p) => this.creepCamps(this.viewpoints.viewpointFor(p)),
       }, this.matchTime);
     } else if (link.latest()) {
       // Client: compare the authority's newest view against our own, for OUR seat — while that
@@ -4108,6 +4154,10 @@ export class RtsController {
    *  starts drawing that creep, and the two must never show at once. Gone for good
    *  once every creep in the camp is dead. */
   creepCamps(vp: Viewpoint = this.local): Array<{ x: number; y: number; level: number }> {
+    // A frozen client paints the AUTHORITY's markers: its record store holds only the creeps
+    // it was sent, so clustering it would report every unscouted camp as cleared — which is
+    // exactly what the July playtest saw (no camp dots but the gold mines).
+    if (this.frozenClient) return this.lastApplied?.creepCamps ?? [];
     if (!this.seeded) return []; // seeding is the client's; nothing to cluster yet
     return this.creepCampView.markers(vp);
   }

@@ -112,6 +112,25 @@ export function isSnapshotMessage(data: unknown): data is SnapshotMessage {
   return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "snap";
 }
 
+/**
+ * The authority REFUSED one of this client's commands (docs/multiplayer.md item 9c).
+ *
+ * Without this a host-side refusal was silent theater on the client: its optimistic local
+ * apply showed the action starting, the next payload erased it, and nothing ever said why —
+ * "training instantly canceled" with no voice. `key` is a `commandstrings.txt [Errors]` key
+ * (the host re-derives the coarse cause — gold, lumber, food); an empty key still elicits the
+ * interface error beep, because the feedback that the click was seen and rejected must not
+ * depend on the host knowing a sentence for it.
+ */
+export interface RefusalMessage {
+  k: "ref";
+  key: string;
+}
+
+export function isRefusalMessage(data: unknown): data is RefusalMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "ref";
+}
+
 /** One seated slot: the player number and, for a human, the relay peer sitting in it. Same
  *  shape `CommandRouter` takes, and for the same reason — it comes straight off `StartMatch`. */
 export interface LinkSeat {
@@ -132,11 +151,18 @@ export interface HostSources {
    *  (docs/multiplayer.md Phase F item 5). Injected like the rest, so this module still needs
    *  neither `Authority` nor a `SimWorld` in its import closure. */
   commandsApplied(): number;
+  /** This recipient's creep-camp minimap markers (`RtsController.creepCamps(viewpoint)`).
+   *  Optional so a test's two-closure stub keeps compiling; absent reads as no camps. */
+  creepCampsFor?(player: number): Array<{ x: number; y: number; level: number }>;
 }
 
-/** How often the host emits. 10 Hz, matching the fog rebuild — there is no point sending a
- *  view of the world more often than the fog that shapes it is recomputed. */
-export const SNAPSHOT_INTERVAL = 0.1;
+/** How often the host emits. 20 Hz — twice the 10 Hz fog rebuild, deliberately: what a
+ *  client SEES changes at the fog's rate, but where things ARE changes every sim tick, and
+ *  the cadence is half of a client's order-to-motion latency (the other half being the one
+ *  payload gap the pose interpolation trails by). At 10 Hz an order answered in up to
+ *  100 ms of cadence plus a 100 ms glide read as lag in the July playtest; 20 Hz halves
+ *  both. Every other payload just carries fresher poses over the same visibility. */
+export const SNAPSHOT_INTERVAL = 0.05;
 
 /**
  * Everything the match needs to join the wire, assembled where the lobby still exists.
@@ -220,6 +246,14 @@ export class MatchLink {
    */
   onDialog: (msg: DialogMessage) => void = () => {};
 
+  /** The authority refused one of our commands (client side only). Default no-op. */
+  onRefusal: (msg: RefusalMessage) => void = () => {};
+
+  /** Host side: tell a peer its command was refused, and with which `[Errors]` voice. */
+  sendRefusal(peer: number, key: string): void {
+    this.channel.send({ k: "ref", key } satisfies RefusalMessage, peer);
+  }
+
   /**
    * Host side: hand a recipient a dialog its own script will never raise.
    *
@@ -253,6 +287,7 @@ export class MatchLink {
       if (isSnapshotMessage(data)) this.receive(data.snap);
       else if (isCommandMessage(data)) this.onCommand(from, data);
       else if (isDialogMessage(data)) this.onDialog(data);
+      else if (isRefusalMessage(data)) this.onRefusal(data);
       else previous(from, data);
     };
     // A returning peer is owed the world it missed, and owed it NOW rather than whenever the
@@ -324,7 +359,7 @@ export class MatchLink {
       const peer = this.peerFor(player);
       if (peer === undefined) continue; // a computer slot: nobody is watching
       if (!due && !this.owed.has(peer)) continue; // off-cadence: only the returning peers
-      const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player), sources.commandsApplied());
+      const snap = snapshotFor(world, viewer, player, time, sources.ghostsFor(player), sources.commandsApplied(), sources.creepCampsFor?.(player) ?? []);
       this.channel.send({ k: "snap", snap } satisfies SnapshotMessage, peer);
       sent++;
       this.emitted++;
