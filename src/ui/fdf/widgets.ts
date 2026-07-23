@@ -1,5 +1,5 @@
 import type { FdfFrame } from "./parser";
-import { firstProp, strProp } from "./library";
+import { firstProp, hasFlag, strProp } from "./library";
 import { wc3ToHtml } from "../wc3Text";
 
 // The interactive FDF widgets beyond the button family (issue #61): EDITBOX (text
@@ -65,6 +65,13 @@ export interface CheckBoxControl extends Control {
   get checked(): boolean;
   set checked(v: boolean);
   onChange?: (checked: boolean) => void;
+}
+
+export interface SliderControl extends Control {
+  /** The value on the slider's own scale (SliderMinValue…SliderMaxValue). */
+  get value(): number;
+  set value(v: number);
+  onChange?: (value: number) => void;
 }
 
 export interface TextAreaControl extends Control {
@@ -147,6 +154,100 @@ export function buildCheckBox(el: HTMLElement): CheckBoxControl {
     control.checked = !checked;
     control.onChange?.(checked);
   });
+  return control;
+}
+
+// --- SLIDER ------------------------------------------------------------------------
+
+/**
+ * A horizontal slider (the Options screen's volume / gamma / scroll-speed bars). The FDF
+ * gives it a track (`ControlBackdrop`, already drawn by the renderer) and a knob
+ * (`SliderThumbButtonFrame`, passed in as `thumb`), plus its range on the frame itself —
+ * `SliderMinValue` / `SliderMaxValue` / `SliderStepSize` / `SliderInitialValue`.
+ *
+ * The engine parks the un-anchored knob and slides it along the track; we do the same, taking
+ * over the thumb's horizontal position entirely (position:absolute, left = value·track). Drag,
+ * a track click, and the arrow keys all move it, snapping to the step. Only the horizontal
+ * layout is handled — every SLIDER on the Options screen is `SliderLayoutHorizontal`, and the
+ * vertical ones are SCROLLBARs, which the list/textarea widgets scroll natively instead.
+ */
+export function buildSlider(el: HTMLElement, f: FdfFrame, thumb: HTMLElement | null): SliderControl {
+  el.classList.add("fdf-slider");
+  const min = firstProp(f, "SliderMinValue")?.args[0]?.n ?? 0;
+  const max = firstProp(f, "SliderMaxValue")?.args[0]?.n ?? 100;
+  const step = firstProp(f, "SliderStepSize")?.args[0]?.n ?? 1;
+  const initial = firstProp(f, "SliderInitialValue")?.args[0]?.n ?? min;
+  const span = max - min || 1;
+
+  let value = initial;
+  let enabled = true;
+
+  // The knob is positioned by fraction of the track, centred on its own width — so at 0 it
+  // sits flush-left and at max flush-right rather than overhanging either end.
+  if (thumb) {
+    thumb.classList.add("fdf-slider-thumb");
+    thumb.style.left = "0"; // overrides the layout's default corner placement
+    thumb.style.top = "50%";
+  }
+  const place = (): void => {
+    if (!thumb) return;
+    const frac = (value - min) / span;
+    thumb.style.left = `${frac * 100}%`;
+  };
+
+  const snap = (v: number): number => {
+    const clamped = Math.max(min, Math.min(max, v));
+    const stepped = step > 0 ? Math.round((clamped - min) / step) * step + min : clamped;
+    return Math.max(min, Math.min(max, stepped));
+  };
+
+  const set = (v: number, fire: boolean): void => {
+    const next = snap(v);
+    if (next === value) { place(); return; }
+    value = next;
+    place();
+    if (fire) control.onChange?.(value);
+  };
+
+  const control: SliderControl = {
+    get value(): number { return value; },
+    set value(v: number) { set(v, false); },
+    setEnabled(on: boolean): void {
+      enabled = on;
+      el.classList.toggle("fdf-disabled", !on);
+    },
+  };
+
+  // A pointer anywhere on the track sets the value to that x; dragging keeps setting it.
+  const fromPointer = (clientX: number): void => {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0) return;
+    const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    set(min + frac * span, true);
+  };
+  let dragging = false;
+  const onMove = (e: PointerEvent): void => { if (dragging) fromPointer(e.clientX); };
+  const onUp = (): void => {
+    dragging = false;
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  el.addEventListener("pointerdown", (e) => {
+    if (!enabled) return;
+    dragging = true;
+    fromPointer(e.clientX);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    e.preventDefault(); // don't start a text selection / native drag
+  });
+  el.tabIndex = 0;
+  el.addEventListener("keydown", (e) => {
+    if (!enabled) return;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") { set(value - (step || 1), true); e.preventDefault(); }
+    else if (e.key === "ArrowRight" || e.key === "ArrowUp") { set(value + (step || 1), true); e.preventDefault(); }
+  });
+
+  place();
   return control;
 }
 
@@ -640,6 +741,9 @@ export function widgetKind(f: FdfFrame): WidgetKind | null {
   // Check boxes and radio buttons are the SAME frame type — a GLUECHECKBOX — differing only
   // in the art their template hands them (EscMenuCheckBoxTemplate vs EscMenuRadioButtonTemplate).
   if (f.type === "GLUECHECKBOX" || f.type === "CHECKBOX" || f.type === "SIMPLECHECKBOX") return "check";
+  // A horizontal SLIDER is a value control; a vertical one is a SCROLLBAR, which the list/
+  // textarea widgets scroll natively — so only the horizontal form becomes a widget here.
+  if (f.type === "SLIDER" && !hasFlag(f, "SliderLayoutVertical")) return "slider";
   if (f.type === "TEXTAREA") return "textarea";
   // The map/profile lists are CONTROL frames carrying a backdrop and a scrollbar
   // (MapListBox.fdf, ListBoxWar3.fdf); LISTBOX is the older, self-contained form.
@@ -648,4 +752,4 @@ export function widgetKind(f: FdfFrame): WidgetKind | null {
   return null;
 }
 
-export type WidgetKind = "edit" | "popup" | "list" | "check" | "textarea";
+export type WidgetKind = "edit" | "popup" | "list" | "check" | "textarea" | "slider";

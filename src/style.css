@@ -1402,6 +1402,11 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-button:active .fdf-pushed { opacity: 1; }
 .fdf-button:active .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
 
+/* A latched button stays pressed even when not held — the Options screen's active category
+   tab (Gameplay / Video / Sound), which WC3 keeps depressed to show which panel is open. */
+.fdf-button.fdf-latched .fdf-pushed { opacity: 1; }
+.fdf-button.fdf-latched .fdf-btn-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
+
 /* --- disabled state (issue #61) — the FDF's own ControlDisabledBackdrop, revealed over
    the normal face. Disabled controls stop reacting entirely: no click, no press, no
    glow, and the label greys to the FDF's FontDisabledColor. */
@@ -1417,6 +1422,22 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-disabled .fdf-popup-title span { color: var(--fdf-disabled-color, #808080) !important; }
 .fdf-disabled .fdf-button-glow { opacity: 0 !important; }
 
+/* --- FDF SLIDER (issue #81 — the Options screen's volume / gamma / scroll-speed bars).
+   The track is the frame's own ControlBackdrop (drawn by the renderer); this only makes the
+   frame take pointer input and centres the knob on its value. The knob is the FDF's own
+   SliderThumbButtonFrame art — positioned by buildSlider (left = value%, translated to centre
+   on itself so it never overhangs either end of the track). */
+.fdf-slider {
+  pointer-events: auto;
+  touch-action: none; /* the drag is ours — don't let the browser pan/scroll on it */
+}
+.fdf-slider:focus-visible { outline: none; }
+.fdf-slider-thumb {
+  pointer-events: none; /* the whole track is draggable; the knob is just the visual */
+  transform: translate(-50%, -50%); /* centre on (left%, 50%) */
+}
+.fdf-disabled.fdf-slider { pointer-events: none; }
+
 /* Two screen-wide gates during a transition, both a single class on the overlay so neither
    touches the per-control state above (a deliberately greyed "Advanced Options" is still
    greyed when the gate lifts).
@@ -1431,11 +1452,13 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-screen-inert .fdf-list,
 .fdf-screen-inert .fdf-checkbox,
 .fdf-screen-inert .fdf-editbox-input,
+.fdf-screen-inert .fdf-slider,
 .fdf-screen-disabled .fdf-button,
 .fdf-screen-disabled .fdf-popup,
 .fdf-screen-disabled .fdf-list,
 .fdf-screen-disabled .fdf-checkbox,
-.fdf-screen-disabled .fdf-editbox-input { pointer-events: none; }
+.fdf-screen-disabled .fdf-editbox-input,
+.fdf-screen-disabled .fdf-slider { pointer-events: none; }
 
 .fdf-screen-disabled .fdf-disabled-face { opacity: 1; }
 .fdf-screen-disabled .fdf-btn-text span { color: var(--fdf-disabled-color, #808080) !important; }

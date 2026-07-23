@@ -7,9 +7,9 @@ import { FdfLibrary, firstProp, hasFlag, numProp, propagateDecorate, strProp } f
 import { fitBox, fontSizeOf, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import {
-  buildCheckBox, buildEditBox, buildList, buildPopup, buildTextArea, widgetKind,
+  buildCheckBox, buildEditBox, buildList, buildPopup, buildSlider, buildTextArea, widgetKind,
   type CheckBoxControl, type EditBoxControl, type ListControl, type PopupControl,
-  type PopupMenuStyle, type ScrollBarStyle, type TextAreaControl, type WidgetKind,
+  type PopupMenuStyle, type ScrollBarStyle, type SliderControl, type TextAreaControl, type WidgetKind,
 } from "./widgets";
 
 // FDF → DOM renderer (issue #54). Builds the game's frames as absolutely-positioned
@@ -42,7 +42,7 @@ export function setFdfClickSound(play: (() => void) | null): void {
 }
 
 /** Any of the behaviour controllers a widget frame gets (ui/fdf/widgets.ts). */
-type FdfControl = EditBoxControl | PopupControl | ListControl | CheckBoxControl | TextAreaControl;
+type FdfControl = EditBoxControl | PopupControl | ListControl | CheckBoxControl | TextAreaControl | SliderControl;
 
 export interface FdfScreenHandlers {
   /** frameName → click handler. Also fired by the frame's ControlShortcutKey. Most frames
@@ -131,6 +131,7 @@ export interface FdfScreen {
   list(name: string): ListControl | null;
   checkBox(name: string): CheckBoxControl | null;
   textArea(name: string): TextAreaControl | null;
+  slider(name: string): SliderControl | null;
   /** Fade this screen's panel contents out or in across the chrome clip's window (ui/fdf/anim.ts).
    *  The panel itself is moved by the 3D chrome; only its contents live here. */
   animatePanels(dir: PanelDirection, durationMs: number): Promise<void>;
@@ -263,6 +264,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     list: (name) => (controls.get(name) as ListControl | undefined) ?? null,
     checkBox: (name) => (controls.get(name) as CheckBoxControl | undefined) ?? null,
     textArea: (name) => (controls.get(name) as TextAreaControl | undefined) ?? null,
+    slider: (name) => (controls.get(name) as SliderControl | undefined) ?? null,
     animatePanels: (dir, durationMs) => animate(dir, durationMs),
     dispose(): void {
       window.removeEventListener("resize", onResize);
@@ -489,7 +491,13 @@ function renderWidget(
   }
 
   const scale = ctx.fit.scale;
-  if (kind === "edit") {
+  if (kind === "slider") {
+    // The knob is the frame named by SliderThumbButtonFrame — one of the `parts` just rendered.
+    // buildSlider takes over its position and makes it drag along the track (el).
+    const thumbName = strProp(f, "SliderThumbButtonFrame");
+    const thumbEl = thumbName ? parts.get(thumbName) ?? null : null;
+    ctx.controls.set(f.name, buildSlider(el, f, thumbEl));
+  } else if (kind === "edit") {
     ctx.controls.set(f.name, buildEditBox(el, f, scale));
   } else if (kind === "textarea") {
     ctx.controls.set(f.name, buildTextArea(el, f, scale, scrollBarStyle(node, ctx)));

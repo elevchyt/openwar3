@@ -7,6 +7,8 @@ import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountLanScreen } from "./ui/fdfLan";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
+import { mountOptions } from "./ui/fdfOptions";
+import { applyAudioOptions, loadOptions } from "./data/options";
 import { GlueManager } from "./ui/glue";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
 import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
@@ -137,7 +139,21 @@ function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Pro
     mount: () => mountFdfMainMenu(ui, vfs, {
       onSinglePlayer: () => void glue.goTo(singlePlayerScreen(vfs)),
       onLan: () => void glue.goTo(lanScreen(vfs)),
+      onOptions: () => void glue.goTo(optionsScreen(vfs)),
       onQuit: () => window.close(),
+    }),
+  };
+}
+
+/** The Options screen (issue #81), built from the game's own OptionsMenu.fdf. Its chrome is
+ *  the panel model's own "Options" sequence triple. OK/Cancel both return to the main menu;
+ *  the live SoundBoard is handed in so the Sound panel is audible as it's dragged. */
+function optionsScreen(vfs: DataSource): { chrome: "Options"; mount: () => Promise<FdfScreen> } {
+  return {
+    chrome: "Options",
+    mount: () => mountOptions(ui, vfs, {
+      sounds,
+      onClose: () => void glue.goTo(mainMenuScreen(vfs)),
     }),
   };
 }
@@ -314,6 +330,9 @@ function mountInstall(load: GateLoad): void {
   // The gate button the player just pressed is also the gesture that opens the browser's
   // autoplay gate, so the theme can start with the menu.
   sounds = new SoundBoard(load.vfs);
+  // Honour the volumes/toggles the player saved last time (issue #81) from the very first
+  // sound — before the menu theme starts below, so it comes up at the chosen music volume.
+  applyAudioOptions(sounds, loadOptions());
   glueAudio = new GlueAudio(sounds, load.vfs);
   setFdfClickSound(() => glueAudio?.click()); // every FDF button, menu and in-game alike
   // Open the audio context NOW, on the gesture that got us here, and not at the first sound.

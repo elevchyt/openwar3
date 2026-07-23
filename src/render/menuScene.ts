@@ -38,7 +38,7 @@ const LEFT_ROC = "UI\\Glues\\SpriteLayers\\TopLeftPanel.mdx";
 // /lan|local|network/. The LAN screens wear the Battle.net custom-game chrome, and the FDF
 // TOC confirms the pairing: LocalMultiplayerJoin/Create/Load.fdf parallel
 // BattleNetCustomJoin/Create/LoadPanel.fdf — the same three panels, one set per transport.
-export type GlueChrome = "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish" | "BattlenetCustom";
+export type GlueChrome = "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish" | "BattlenetCustom" | "Options";
 
 /** How long a screen's chrome takes to leave / arrive, in ms — read from the model's
  *  own sequence intervals, so the DOM panels can be animated over the same window. */

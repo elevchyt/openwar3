@@ -120,12 +120,24 @@ export interface ScriptSoundSpec {
  *  doesn't route through one either. UNITMOVEMENT (footsteps) and FIRE (doodad fire
  *  loops) have no pool here yet — their gains are recorded and simply have nothing to
  *  scale. */
-const VG_UNITSOUNDS = 1;
-const VG_COMBAT = 2;
-const VG_SPELLS = 3;
-const VG_UI = 4;
-const VG_MUSIC = 5;
-const VG_AMBIENT = 6;
+// common.j's SOUND_VOLUMEGROUP_* indices (VolumeGroupSetVolume). Exported so the Options
+// screen can scale the SFX groups off the sound sliders without re-typing the magic numbers.
+export const SOUND_GROUP = {
+  UNITMOVEMENT: 0,
+  UNITSOUNDS: 1,
+  COMBAT: 2,
+  SPELLS: 3,
+  UI: 4,
+  MUSIC: 5,
+  AMBIENT: 6,
+  FIRE: 7,
+} as const;
+const VG_UNITSOUNDS = SOUND_GROUP.UNITSOUNDS;
+const VG_COMBAT = SOUND_GROUP.COMBAT;
+const VG_SPELLS = SOUND_GROUP.SPELLS;
+const VG_UI = SOUND_GROUP.UI;
+const VG_MUSIC = SOUND_GROUP.MUSIC;
+const VG_AMBIENT = SOUND_GROUP.AMBIENT;
 const VOLUME_GROUPS = 8;
 
 /** Which volume group each one-shot pool answers to by default. A death cry is a unit
