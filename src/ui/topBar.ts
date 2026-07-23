@@ -44,6 +44,17 @@ const STRIP_ART = 0.032 * (49 / 64);
  *  Both bars are ~0.022 tall. */
 const BAR_TOP = -(STRIP_ART - 0.022) / 2;
 
+/** One screen pixel, in world units, at the height the UI is laid out for (0.6 world = the
+ *  viewport's height; ~1042 px/world at 625 px tall). Nudges below are expressed through it
+ *  so they stay the same visual size at any resolution instead of drifting. */
+const PX = 0.6 / 625;
+
+/** The button bar reads a hair right and low against the console art it sits in — the plates
+ *  are drawn with their own shadow, so geometric centring is not visual centring. Trimmed by
+ *  eye against the chrome: one pixel left, two up. */
+const BUTTON_NUDGE_X = -1 * PX;
+const BUTTON_NUDGE_Y = 2 * PX;
+
 const s = (v: string): Arg => ({ s: v, n: null, str: true });
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
 const num = (v: number): Arg => ({ s: String(v), n: v, str: false });
@@ -115,8 +126,9 @@ export class TopBar {
     this.paint();
   }
 
-  private paint(): void {
-    const screen = this.screen;
+  /** `screen` is passed in rather than read off `this`, because the build hook fires from
+   *  inside `mountFdfScreen` — before the field it would read has been assigned. */
+  private paint(screen: FdfScreen | null = this.screen): void {
     const r = this.last;
     if (!screen || !r) return;
     screen.setText("ResourceBarGoldText", r.gold);
@@ -139,26 +151,39 @@ export class TopBar {
    *
    * Rebuilt with the strip, so a resize re-places it.
    */
-  private mountClock(): void {
-    const overlay = this.screen?.element;
-    const filler = this.gapFiller;
+  private mountClock(screen: FdfScreen | null = this.screen): void {
+    const overlay = screen?.element;
+    const filler = this.gapFiller(screen);
     if (!overlay || !filler) return;
     const gap = filler.getBoundingClientRect();
     const host = overlay.getBoundingClientRect();
 
-    const slot = document.createElement("div");
-    slot.className = "hud-clock hud-clock-skinned";
-    slot.title = "Day/night cycle";
+    // Re-use the slot across rebuilds. Emptying the overlay DETACHES it but does not destroy
+    // it, so appending the same element back moves it — and the medallion's canvas, and the
+    // live WebGL context and loaded model with it. Building a fresh one instead would make the
+    // host re-read the MDX on every resize, which blanks the indicator for as long as that
+    // takes and thrashes badly while a window edge is being dragged.
+    const reused = this.clockSlot !== null;
+    const slot = this.clockSlot ?? document.createElement("div");
+    if (!reused) {
+      slot.className = "hud-clock hud-clock-skinned";
+      slot.title = "Day/night cycle";
+    }
     slot.style.left = `${gap.left - host.left}px`;
     slot.style.top = `${gap.top - host.top}px`;
     slot.style.width = `${gap.width}px`;
     overlay.appendChild(slot);
-    if (!this.actions.mountClock(slot)) slot.remove();
+    if (reused) return;
+    if (this.actions.mountClock(slot)) this.clockSlot = slot;
+    else slot.remove();
   }
 
+  /** The medallion's slot, kept across rebuilds so its model is loaded once. */
+  private clockSlot: HTMLElement | null = null;
+
   /** The frame that spans the hole — the same rect the medallion wants. */
-  private get gapFiller(): HTMLElement | null {
-    const el = this.screen?.element;
+  private gapFiller(screen: FdfScreen | null = this.screen): HTMLElement | null {
+    const el = screen?.element;
     if (!el) return null;
     // The bridge is the only unnamed TEXTURE placed by two opposing SetPoints, so it is the
     // one strip child whose left edge is not the screen's and whose right edge is not either.
@@ -176,6 +201,10 @@ export class TopBar {
   dispose(): void {
     this.screen?.dispose();
     this.screen = null;
+    // The host owns the clock object itself and tears it down with the match; this only
+    // drops our hold on its slot, so a new bar builds a new one.
+    this.clockSlot?.remove();
+    this.clockSlot = null;
   }
 
   private async build(): Promise<void> {
@@ -198,12 +227,20 @@ export class TopBar {
         centerRoot: true,
         buildRoot: (lib) => this.rootFrame(lib),
         handlers,
-        onBuild: () => this.paint(), // a resize rebuilds the DOM; put the numbers back
+        // A resize REBUILDS the whole screen — the overlay is emptied and every frame is made
+        // again — so anything the strip put there by hand has to go back. That is the numbers,
+        // and the medallion: left out, the clock's canvas was thrown away on the first resize
+        // while the renderer kept drawing into the detached one, and the indicator simply went
+        // blank. Both are restored here rather than after the mount, because this is the hook
+        // that runs on EVERY build instead of only the first.
+        onBuild: (built) => {
+          this.paint(built);
+          this.mountClock(built);
+        },
       });
       prev?.dispose();
       this.screen = screen;
       this.setVisible(this.shown);
-      this.mountClock();
     } catch (err) {
       console.warn("[topbar] could not mount the FDF strip:", err);
       this.screen = null;
@@ -253,19 +290,19 @@ export class TopBar {
       children: [],
     });
 
-    const bar = (name: string, point: "TOPLEFT" | "TOPRIGHT", dx: number): void => {
+    const bar = (name: string, point: "TOPLEFT" | "TOPRIGHT", dx: number, dy: number): void => {
       const frame = lib.resolveRoot(name);
       if (!frame) return;
       children.push({
         ...frame,
         props: [
           ...frame.props.filter((p) => p.key !== "SetPoint"),
-          prop("SetPoint", word(point), s("ConsoleUI"), word(point), num(dx), num(BAR_TOP)),
+          prop("SetPoint", word(point), s("ConsoleUI"), word(point), num(dx), num(dy)),
         ],
       });
     };
-    bar("UpperButtonBarFrame", "TOPLEFT", 0);
-    bar("ResourceBarFrame", "TOPRIGHT", 0);
+    bar("UpperButtonBarFrame", "TOPLEFT", BUTTON_NUDGE_X, BAR_TOP + BUTTON_NUDGE_Y);
+    bar("ResourceBarFrame", "TOPRIGHT", 0, BAR_TOP);
 
     // Give the strip the 4:3 box the file was authored for, CENTRED, rather than letting it
     // fill the viewport. The rest of the FDF layer deliberately stretches to the screen's
