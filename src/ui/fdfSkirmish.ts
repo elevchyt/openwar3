@@ -1,16 +1,18 @@
 import type { DataSource } from "../vfs/types";
 import { RACES, RACE_LABEL, type Race } from "../data/races";
-import { MELEE } from "../data/gameplayConstants";
 import type { MapInfo } from "../world/mapInfo";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import type { Option } from "./fdf/widgets";
 import type { Controller, MeleeConfig, SlotConfig } from "./lobby";
 import {
-  MapBrowser, adopt, arg, findFrame, layoutInfoPane, nudgeX, nudgeY, num, setProp, size, str,
+  MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num, setProp, size, str,
 } from "./mapBrowser";
+import {
+  CONTROLLERS, HANDICAPS, PLAYER_SLOT_FDF, buildSlotRows, dropdownButtonNames, fillForceLabels,
+  forceGroups, labelOf, teamOptions, type Group,
+} from "./playerSlots";
 
 // The Custom Game screen (issue #61), built from UI\FrameDef\Glue\Skirmish.fdf: the map
 // list, the player-slot rows, the map-info pane, and Start Game / Cancel.
@@ -27,17 +29,6 @@ import {
 
 const MAP_LIST_FDF = "UI\\FrameDef\\Glue\\MapListBox.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
-const PLAYER_SLOT_FDF = "UI\\FrameDef\\Glue\\PlayerSlot.fdf";
-
-/** The controllers a slot can take. WC3 also offers three AI difficulties; we have one AI,
- *  so the menu says what it actually is rather than offering a choice that does nothing. */
-const CONTROLLERS: Array<[Controller, string]> = [
-  ["open", "Open"],
-  ["closed", "Closed"],
-  ["computer", "Computer (Normal)"],
-];
-
-const HANDICAPS = [100, 90, 80, 70, 60, 50];
 
 export interface SkirmishHandlers {
   onStart: (map: File, info: MapInfo, config: MeleeConfig) => void;
@@ -53,29 +44,6 @@ interface Slot {
   /** The MAP declared this slot a computer (w3i player type 2), so it is not the lobby's to
    *  re-seat: the slot menu is greyed at "Computer (Normal)". See MapInfo's PlayerSlot. */
   locked: boolean;
-}
-
-/** A run of player rows under one heading. A melee map has a single, unnamed group (its rows
- *  just stack from the top of the panel); a custom map has one per FORCE it declares, and the
- *  lobby prints the map's own name for it over that force's rows. */
-interface Group {
-  name: string;
-  rows: number[]; // indices into `slots` — which is also each row's widget suffix
-}
-
-/** Split the player rows into the map's forces, in the order the map declares them. */
-function forceGroups(info: MapInfo, slots: Slot[]): Group[] {
-  const groups: Group[] = [];
-  for (const force of info.forces) {
-    const rows = slots.map((s, i) => (force.players.includes(s.id) ? i : -1)).filter((i) => i >= 0);
-    if (rows.length) groups.push({ name: force.name, rows });
-  }
-  // A map with no forces of its own (every melee map) — or one whose forces hold nobody we
-  // can seat — is one plain run of rows.
-  const seated = new Set(groups.flatMap((g) => g.rows));
-  const rest = slots.map((_, i) => i).filter((i) => !seated.has(i));
-  if (rest.length) groups.push({ name: "", rows: rest });
-  return groups;
 }
 
 /** Mount the Custom Game screen over `maps` — the install's own `Maps\` folder. */
@@ -116,7 +84,7 @@ export async function mountSkirmish(
         handicap: 100,
         locked: s.controller === "computer",
       }));
-      groups = forceGroups(info, slots);
+      groups = forceGroups(info, slots.map((s) => s.id));
     }
     // The whole screen is rebuilt: the rows and their headings are frames, and there are now
     // a different number of them. (MapBrowser saves the list's scroll across this.)
@@ -135,10 +103,7 @@ export async function mountSkirmish(
     // "Advanced Options" is one of two mutually exclusive panels in the FDF (the other
     // shows the map info); the map info is the one on screen, so its twin stays hidden.
     hidden: ["AdvancedOptionsPanel"],
-    // The dropdowns the FDF declares as plain BUTTONs (see PlayerSlot.fdf). Named for
-    // every slot a map could have (bj_MAX_PLAYERS) — this list is read once at mount,
-    // before a map (and so a slot count) is known.
-    dropdownButtons: dropdownButtonNames(MELEE.MAX_PLAYERS),
+    dropdownButtons: dropdownButtonNames(),
     panels: ["GameSettingsLabel", "GameSettingsPanel", "TeamSetupPanel", "MapInfoPanel", "PlayGameBackdrop", "CancelBackdrop"],
     // The two panels that hold what the screen is FOR — the map list, and the details of the
     // map picked out of it — are not part of the furniture the screen arrives with. They come
@@ -181,7 +146,7 @@ export async function mountSkirmish(
 
     // The map names its own forces ("Forest Task Force", "Monolithic Creeps"); the frames are
     // there, this puts the names in them.
-    groups.forEach((g, i) => { if (g.name) s.setText(forceLabelName(i), g.name); });
+    fillForceLabels(s, groups);
 
     const teams = teamOptions(maxSlots);
     const fixed = picked.info.fixedPlayerSettings;
@@ -244,23 +209,7 @@ export async function mountSkirmish(
   }
 }
 
-/** The menu label a controller shows ("Computer (Normal)"). */
-function labelOf(c: Controller): string {
-  return CONTROLLERS.find(([v]) => v === c)?.[1] ?? c;
-}
-
 // --- composing the screen out of the game's templates ------------------------------
-
-/** Frame names of the dropdowns PlayerSlot declares as BUTTONs, for every row. */
-function dropdownButtonNames(rows: number): string[] {
-  const names: string[] = [];
-  for (let i = 0; i < rows; i++) names.push(`TeamButton${i}`, `ColorButton${i}`);
-  return names;
-}
-
-function teamOptions(rows: number): Option[] {
-  return Array.from({ length: Math.max(rows, 2) }, (_, i) => ({ value: String(i), label: `Team ${i + 1}` }));
-}
 
 /** Skirmish + the map list, the player rows and the info pane dropped into its containers. */
 function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
@@ -279,36 +228,9 @@ function buildSkirmishRoot(lib: FdfLibrary, groups: Group[]): FdfFrame {
   // want it; the button still sits clear underneath).
   if (pane) adopt(root, "MapInfoPaneContainer", [layoutInfoPane(pane, { w: 0.234375, h: 0.2875, descOverhang: 0.014 })]);
 
-  const slot = lib.resolveRoot("PlayerSlot");
-  if (slot) {
-    // Stack the rows down the top of the team-setup frame, group by group: a force's heading
-    // (the map's own name for it), then its rows. PlayerSlot declares its own Height (0.025)
-    // and chains its widgets left-to-right off its own LEFT edge, so only the y is ours.
-    const built: FdfFrame[] = [];
-    let y = 0;
-    groups.forEach((group, g) => {
-      if (group.name) {
-        const label = lib.resolveRoot("StandardLabelTextTemplate");
-        if (label) {
-          label.name = forceLabelName(g);
-          size(label, 0.3, FORCE_PITCH);
-          // A heading, not a title: it sits a size under the label type the template carries.
-          setProp(label, "FrameFont", [str("MasterFont"), num(FORCE_FONT), str("")]);
-          setProp(label, "SetPoint", [arg("TOPLEFT"), str("TeamSetupContainer"), arg("TOPLEFT"), num(FORCE_INDENT), num(-y)]);
-          built.push(label);
-          y += FORCE_PITCH;
-        }
-      }
-      const x = group.name ? ROW_INDENT : 0; // only a group under a heading is indented under it
-      for (const i of group.rows) {
-        const row = suffixed(slot, String(i));
-        setProp(row, "SetPoint", [arg("TOPLEFT"), str("TeamSetupContainer"), arg("TOPLEFT"), num(x), num(-y)]);
-        built.push(row);
-        y += ROW_PITCH;
-      }
-    });
-    adopt(root, "TeamSetupContainer", built);
-  }
+  // The player rows, stacked down the team-setup frame under the map's own force headings
+  // (ui/playerSlots.ts — the LAN game lobby builds the same rows out of the same file).
+  adopt(root, "TeamSetupContainer", buildSlotRows(lib, groups, "TeamSetupContainer"));
 
   // The right-hand chrome is a 3D model (render/menuScene.ts) stretched to frame a 16:9
   // screen, so its two panels sit a little left of where Skirmish.fdf's 4:3 anchors put
@@ -358,24 +280,6 @@ const BUTTON_TO_BASE = 0.168 / 0.24;
 /** How far up the map list moves to centre between the panel's two rails. */
 const MAP_LIST_NUDGE = 0.006;
 
-/** One line of the team-setup panel: a player row (PlayerSlot is 0.025 tall) or a force's
- *  heading. The rows sit shoulder to shoulder in the reference, so the pitch is barely more
- *  than the row itself. */
-const ROW_PITCH = 0.026;
-/** The rows are indented under their heading, and the heading itself sits in a little from
- *  the panel's left edge. */
-const ROW_INDENT = 0.012;
-const FORCE_INDENT = 0.006;
-
-/** The force heading's type size (StandardLabelTextTemplate's own 0.013 sets too loud here). */
-const FORCE_FONT = 0.0095;
-/** The line a heading takes up: its own type and no more — it should crowd the rows it names,
- *  not float between them. */
-const FORCE_PITCH = 0.0155;
-
-/** The frame name of group `g`'s heading. */
-const forceLabelName = (g: number): string => `ForceLabel${g}`;
-
 /** Rename a frame in place (and every reference to it in the tree). */
 function renameFrame(root: FdfFrame, from: string, to: string): void {
   (function walk(f: FdfFrame): void {
@@ -387,35 +291,6 @@ function renameFrame(root: FdfFrame, from: string, to: string): void {
     }
     f.children.forEach(walk);
   })(root);
-}
-
-/**
- * A copy of `frame` with EVERY name in its subtree suffixed — "RaceMenu" → "RaceMenu3" —
- * and every reference to those names rewritten to match. Ten PlayerSlot rows are ten
- * copies of one template, and the layout solver resolves a `SetPoint … "NameMenu"` by
- * NAME across the whole screen: without this, every row's widgets would chain off the
- * last row's, and the rows would collapse on top of each other.
- */
-function suffixed(frame: FdfFrame, suffix: string): FdfFrame {
-  const names = new Set<string>();
-  (function collect(f: FdfFrame): void {
-    if (f.name) names.add(f.name);
-    f.children.forEach(collect);
-  })(frame);
-
-  return (function rewrite(f: FdfFrame): FdfFrame {
-    return {
-      type: f.type,
-      name: f.name ? f.name + suffix : "",
-      inherits: null, // `frame` is already resolved, so nothing is left to inherit
-      withChildren: false,
-      props: f.props.map((p) => ({
-        key: p.key,
-        args: p.args.map((a) => (a.str && names.has(a.s) ? str(a.s + suffix) : a)),
-      })),
-      children: f.children.map(rewrite),
-    };
-  })(frame);
 }
 
 /** The lobby config the melee initializer consumes (ui/lobby.ts). Start locations come

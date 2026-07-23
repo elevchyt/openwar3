@@ -121,7 +121,16 @@ export interface StartMatch {
  */
 export type { CommandMessage } from "./commandLink";
 
-export type GameMessage = StartMatch | import("./commandLink").CommandMessage;
+/** The game LOBBY's traffic (issue #77): the host's seating broadcast, a client's request to
+ *  change its own row, and lobby chat. Shapes and rules in [`lobbySetup.ts`](./lobbySetup.ts). */
+export type { LobbySetup, LobbyRequest, LobbyChat } from "./lobbySetup";
+
+export type GameMessage =
+  | StartMatch
+  | import("./commandLink").CommandMessage
+  | import("./lobbySetup").LobbySetup
+  | import("./lobbySetup").LobbyRequest
+  | import("./lobbySetup").LobbyChat;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
  *  rather than failing in a confusing way three messages later. */

@@ -38,7 +38,13 @@ const LEFT_ROC = "UI\\Glues\\SpriteLayers\\TopLeftPanel.mdx";
 // /lan|local|network/. The LAN screens wear the Battle.net custom-game chrome, and the FDF
 // TOC confirms the pairing: LocalMultiplayerJoin/Create/Load.fdf parallel
 // BattleNetCustomJoin/Create/LoadPanel.fdf — the same three panels, one set per transport.
-export type GlueChrome = "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish" | "BattlenetCustom" | "Options";
+// The game LOBBY has its own triple in that table — "MultiplayerPreGameChat" — and it is the
+// only one whose name says what it is: the chat-room-shaped screen you sit in BEFORE the game
+// (UI\FrameDef\Glue\GameChatroom.fdf, ui/fdfLanLobby.ts). Dumped from the real
+// TopRightPanel-Expansion.mdx alongside the rest.
+export type GlueChrome =
+  | "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish" | "BattlenetCustom"
+  | "MultiplayerPreGameChat" | "Options";
 
 /** How long a screen's chrome takes to leave / arrive, in ms — read from the model's
  *  own sequence intervals, so the DOM panels can be animated over the same window. */

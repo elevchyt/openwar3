@@ -7,7 +7,8 @@ import { parseMapInfo, type MapInfo } from "../world/mapInfo";
 import { LanLobby, type LobbyState } from "../net/lobby";
 import { WebSocketTransport } from "../net/transport";
 import type { StartMatch as StartMatchMsg } from "../net/protocol";
-import { buildStart, toConfig } from "../ui/fdfLan";
+import { toConfig } from "../ui/fdfLan";
+import { buildStart, newSetup, seatPeers } from "../net/lobbySetup";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 
 /**
@@ -226,7 +227,13 @@ async function devLanBoot(
     // Generous on purpose: the joiner may be a second browser cold-booting the whole
     // install fetch, which takes well past the default 15 s on the harness machine.
     await waitForLobby(lobby, (s) => s.peers.length >= 2, 180000);
-    start = buildStart(mapPath, info.name, info, lobby.snapshot, seed);
+    // The seating the GAME LOBBY would have produced, without the lobby screen: every peer
+    // auto-seated in join order (src/net/lobbySetup.ts, the same call fdfLanLobby makes), and
+    // every seat nobody took filled with a computer — the harness wants a full map, where a
+    // human host would have picked Open or Computer per row.
+    const seated = seatPeers(newSetup(mapPath, info.name, "dev-lan", info), lobby.snapshot.peers).setup;
+    for (const slot of seated.slots) if (slot.kind === "open") slot.kind = "computer";
+    start = buildStart(seated, seed);
     lobby.startMatch(start); // tell the joiner
     log(`LAN host: started, seed ${seed}`);
   } else {

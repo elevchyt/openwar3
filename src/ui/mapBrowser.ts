@@ -71,6 +71,31 @@ export async function readMapInfo(maps: Map<string, File>, path: string): Promis
 }
 
 /**
+ * A map's preview MARKERS — its gold mines, its shops and its start locations, for stamping
+ * onto the minimap picture (`fillMapInfo`). Reading them unpacks the map's terrain header and
+ * its placed units, so it happens for the ONE map being shown and is cached across screens.
+ *
+ * Module-level because the game LOBBY (ui/fdfLanLobby.ts) shows a map it did not browse to:
+ * the host picked it on the create screen and a joiner never saw it at all, so neither has a
+ * `MapBrowser` to have read it for them.
+ */
+export async function readMapPreviewFor(
+  vfs: DataSource,
+  maps: Map<string, File>,
+  path: string,
+): Promise<MapPreview | null> {
+  const cached = previewCache.get(path);
+  if (cached !== undefined) return cached;
+  const file = maps.get(path);
+  if (!file) return null;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  registry ??= loadUnitRegistry(vfs);
+  const read = readMapPreview(bytes, (id) => registry?.get(id)?.minimapIcon ?? false);
+  previewCache.set(path, read);
+  return read;
+}
+
+/**
  * The folder-browsing map list and the summary pane beside it, as one piece of state.
  *
  * A screen owns one of these, points `onChange` at its own re-fill, and calls `fill(screen)`

@@ -12,6 +12,9 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { LanLobby } = require(join(REPO, ".sim-build", "src", "net", "lobby.js"));
 const { reconnectPlan, memoryStore } = require(join(REPO, ".sim-build", "src", "net", "reconnect.js"));
+const {
+  allSeated, applyRequest, buildStart, newSetup, seatPeers,
+} = require(join(REPO, ".sim-build", "src", "net", "lobbySetup.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -231,6 +234,104 @@ const ME = { id: 2, name: "Joiner", host: false };
     check("the match is told, with the reason, after the room is gone",
       told, ["The host left the game. | inRoom=false"]);
     check("and the rejoin token is forgotten — there is nothing to come back to", store.load(), null);
+  }
+
+  // -------------------------------------------------------------------------------------
+  // Issue #77: the GAME LOBBY's seating.
+  //
+  // Creating a LAN game drops the host into a lobby (UI\FrameDef\Glue\GameChatroom.fdf) and
+  // everyone who joins afterwards lands in it too, auto-seated in the first Open slot. The
+  // host owns that seating; these are the rules it runs, with no screen and no relay.
+  // -------------------------------------------------------------------------------------
+
+  console.log("\ngame lobby: auto-seating (issue #77)");
+  {
+    /** A 4-slot melee map, plus a custom one whose last slot the MAP owns. */
+    const melee = { slots: [0, 1, 2, 3].map((id) => ({ id, defaultRace: "human", startX: id, startY: 0, controller: "user", team: id })) };
+    const custom = {
+      slots: [
+        { id: 0, defaultRace: "human", startX: 0, startY: 0, controller: "user", team: 0 },
+        { id: 1, defaultRace: "orc", startX: 1, startY: 0, controller: "user", team: 0 },
+        { id: 11, defaultRace: "undead", startX: 2, startY: 0, controller: "computer", team: 1 },
+      ],
+    };
+    const HOST = { id: 1, name: "Alice", host: true };
+    const GUEST = { id: 2, name: "Bob", host: false };
+    const kinds = (s) => s.slots.map((x) => x.kind);
+    const names = (s) => s.slots.map((x) => x.name ?? null);
+
+    const fresh = newSetup("m", "Echo Isles", "Local Game (Alice)", melee);
+    check("a fresh lobby is all Open", kinds(fresh), ["open", "open", "open", "open"]);
+    check("…and a slot the MAP owns is its computer", kinds(newSetup("m", "M", "G", custom)),
+      ["open", "open", "computer"]);
+
+    const withHost = seatPeers(fresh, [HOST]);
+    check("the host takes the first slot", kinds(withHost.setup), ["player", "open", "open", "open"]);
+    check("…under its own name", names(withHost.setup), ["Alice", null, null, null]);
+
+    const withGuest = seatPeers(withHost.setup, [HOST, GUEST]);
+    check("a joiner drops into the first OPEN slot", kinds(withGuest.setup),
+      ["player", "player", "open", "open"]);
+    check("…and is reported as having joined", withGuest.joined.map((p) => p.name), ["Bob"]);
+    check("the host is not re-seated", names(withGuest.setup), ["Alice", "Bob", null, null]);
+
+    // A slot the host CLOSED is not a seat a joiner may be dropped into…
+    const closed = { ...withHost.setup, slots: withHost.setup.slots.map((s, i) => (i === 1 ? { ...s, kind: "closed" } : s)) };
+    check("a closed slot is skipped for the next open one",
+      kinds(seatPeers(closed, [HOST, GUEST]).setup), ["player", "closed", "player", "open"]);
+
+    // …but a person already in the room outranks a parked seat when there is nothing else.
+    const allClosed = { ...withHost.setup, slots: withHost.setup.slots.map((s, i) => (i ? { ...s, kind: "closed" } : s)) };
+    check("with no open seat left, a joiner takes a closed one rather than standing",
+      kinds(seatPeers(allClosed, [HOST, GUEST]).setup), ["player", "player", "closed", "closed"]);
+
+    // The map's own computer is never a seat, however full the lobby gets.
+    const locked = seatPeers(newSetup("m", "M", "G", custom), [HOST, GUEST, { id: 3, name: "Cara", host: false }]);
+    check("the map's own computer is never seated over", kinds(locked.setup), ["player", "player", "computer"]);
+    check("…and the peer with nowhere to go is left standing", locked.joined.map((p) => p.name), ["Alice", "Bob"]);
+    check("which Start Game refuses", allSeated(locked.setup, [HOST, GUEST, { id: 3, name: "Cara", host: false }]), false);
+    check("…where a fully-seated room does not", allSeated(withGuest.setup, [HOST, GUEST]), true);
+
+    // A peer that leaves frees its seat — back to Open, or back to the map's computer.
+    const afterLeave = seatPeers(withGuest.setup, [HOST]);
+    check("a departing player frees its slot", kinds(afterLeave.setup), ["player", "open", "open", "open"]);
+    check("…and is named as having left", afterLeave.left, ["Bob"]);
+  }
+
+  console.log("\ngame lobby: a client may only ever change its OWN row");
+  {
+    const melee = { slots: [0, 1].map((id) => ({ id, defaultRace: "human", startX: 0, startY: 0, controller: "user", team: id })) };
+    const seated = seatPeers(newSetup("m", "M", "G", melee), [
+      { id: 1, name: "Alice", host: true }, { id: 2, name: "Bob", host: false },
+    ]).setup;
+
+    const changed = applyRequest(seated, 2, { k: "lobbyreq", race: "orc", team: 0 });
+    check("the requester's own row moves", [changed.slots[1].race, changed.slots[1].team], ["orc", 0]);
+    check("…and nobody else's does", [changed.slots[0].race, changed.slots[0].team], ["human", 0]);
+    // The identity is the relay's `from` stamp, so a peer with no seat has no row to change —
+    // which is the whole of the forgery rule: there is nothing in the payload to lie with.
+    check("a peer with no seat changes nothing", applyRequest(seated, 9, { k: "lobbyreq", race: "orc" }), null);
+  }
+
+  console.log("\ngame lobby: an Open slot is an empty chair, not a free AI");
+  {
+    const melee = { slots: [0, 1, 2].map((id) => ({ id, defaultRace: "human", startX: id * 10, startY: 0, controller: "user", team: id })) };
+    let setup = seatPeers(newSetup("m", "Echo Isles", "G", melee), [
+      { id: 1, name: "Alice", host: true }, { id: 2, name: "Bob", host: false },
+    ]).setup;
+    let start = buildStart(setup, 7);
+    check("only the seats that are FILLED cross the wire", start.slots.map((s) => s.controller), ["user", "user"]);
+    check("…each carrying the peer that sits in it", start.slots.map((s) => s.peer), [1, 2]);
+    check("…the map's start location", start.slots.map((s) => s.startX), [0, 10]);
+    check("…and the host's one seed", start.seed, 7);
+
+    // The host turning the spare seat into a Computer is what puts an AI in the game — the
+    // lobby is where that choice is made, which is why it is no longer made for the host.
+    setup = { ...setup, slots: setup.slots.map((s, i) => (i === 2 ? { ...s, kind: "computer" } : s)) };
+    start = buildStart(setup, 7);
+    check("a slot the host set to Computer plays as one", start.slots.map((s) => s.controller),
+      ["user", "user", "computer"]);
+    check("…with no peer of its own", start.slots[2].peer, undefined);
   }
 
   console.log(failed === 0 ? "\nlobby: all checks passed" : `\nlobby: ${failed} FAILED`);

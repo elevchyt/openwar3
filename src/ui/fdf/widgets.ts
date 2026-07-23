@@ -736,7 +736,10 @@ function buildScrollBar(
 
 /** True when a frame type is one of the widgets above (drawn as chrome + a controller). */
 export function widgetKind(f: FdfFrame): WidgetKind | null {
-  if (f.type === "EDITBOX") return "edit";
+  // A SLASHCHATBOX is an EDITBOX that also reads "/" commands — the chat line on the game
+  // lobby (GameChatroom.fdf) and in the Battle.net chat rooms. We have no slash commands to
+  // read, so what is left of it is exactly an edit box.
+  if (f.type === "EDITBOX" || f.type === "SLASHCHATBOX") return "edit";
   if (f.type === "POPUPMENU" || f.type === "GLUEPOPUPMENU") return "popup";
   // Check boxes and radio buttons are the SAME frame type — a GLUECHECKBOX — differing only
   // in the art their template hands them (EscMenuCheckBoxTemplate vs EscMenuRadioButtonTemplate).

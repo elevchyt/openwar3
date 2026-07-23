@@ -5,8 +5,11 @@ import { mountMainMenu } from "./ui/mainMenu";
 import { mountFdfMainMenu } from "./ui/fdfMainMenu";
 import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
-import { mountLanScreen } from "./ui/fdfLan";
+import { mountLanScreen, savedPlayerName } from "./ui/fdfLan";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
+import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
+import { LanLobby } from "./net/lobby";
+import { WebSocketTransport } from "./net/transport";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { GlueManager } from "./ui/glue";
@@ -158,39 +161,88 @@ function optionsScreen(vfs: DataSource): { chrome: "Options"; mount: () => Promi
   };
 }
 
+// --- the LAN screens (issue #77) ---------------------------------------------------
+//
+// Three screens over ONE relay connection: the game list (LocalMultiplayerJoin.fdf), the
+// create screen that picks a map (LocalMultiplayerCreate.fdf), and the game LOBBY every
+// player ends up in (GameChatroom.fdf). The connection is held HERE rather than by any of
+// them, because it has to survive the transitions between them — and because at Start it is
+// handed to the match, which outlives all three (LanLobby.handOff).
+
+/** The live relay connection, and the promise that says whether it came up. Null while we
+ *  are nowhere near the LAN screens. */
+let lan: { lobby: LanLobby; connected: Promise<void> } | null = null;
+
+function lanSession(): { lobby: LanLobby; connected: Promise<void> } {
+  if (!lan) {
+    const lobby = new LanLobby(() => new WebSocketTransport());
+    // Swallowed here so an unhandled rejection is never logged twice; each screen attaches
+    // its own `catch` to put the reason on screen.
+    const connected = lobby.connect();
+    connected.catch(() => {});
+    lan = { lobby, connected };
+  }
+  return lan;
+}
+
+/** Leaving the LAN flow entirely (Cancel back to the main menu). A hand-off to a match has
+ *  already made `dispose` a no-op, which is the point — see LanLobby.handedToMatch. */
+function endLanSession(): void {
+  lan?.lobby.dispose();
+  lan = null;
+}
+
 /** Local Area Network: the relay-backed game list (src/net/, docs/multiplayer.md).
  *
  *  Chrome `BattlenetCustom` — read out of the panel model's own sequence table. The game
  *  has no LAN-specific chrome: LocalMultiplayerJoin.fdf is the transport-swapped twin of
  *  BattleNetCustomJoinPanel.fdf and they share this triple (see menuScene.ts). */
-function lanScreen(
-  vfs: DataSource,
-  /** A map the create screen just picked: announce the room the moment the screen is up. */
-  hostMap?: { path: string; info: MapInfo },
-): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
+function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "BattlenetCustom",
-    mount: async () => {
-      const screen = await mountLanScreen(ui, vfs, installMaps, {
-        onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
+    mount: () => {
+      const { lobby, connected } = lanSession();
+      return mountLanScreen(ui, vfs, installMaps, lobby, connected, {
+        onCancel: () => { endLanSession(); void glue.goTo(mainMenuScreen(vfs)); },
         onCreateGame: () => void glue.goTo(lanCreateScreen(vfs)),
-        onStart: (_path, info, config, link) => void startGame(mapFileFor(_path), info, config, link),
+        // The relay confirmed a join: everyone in a room sits in the lobby, host or not.
+        onJoined: (path, info) => void glue.goTo(lanLobbyScreen(vfs, { path, info })),
       });
-      // Coming back from the create screen: the room is announced here rather than there,
-      // because the LAN screen is the one holding the lobby connection.
-      if (hostMap) screen.hostWith(hostMap.path, hostMap.info);
-      return screen;
     },
   };
 }
 
-/** "Create Game" on the LAN screen: pick the map to host, then come back and announce it. */
+/** "Create Game" on the LAN screen: pick the map to host, then announce the room and drop
+ *  into the lobby — which is where the real client puts the host too. */
 function lanCreateScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
   return {
     chrome: "BattlenetCustom",
     mount: () => mountLanCreateScreen(ui, vfs, installMaps, {
-      onCreate: (path, info) => void glue.goTo(lanScreen(vfs, { path, info })),
+      onCreate: (path, info, gameName) => {
+        const { lobby, connected } = lanSession();
+        // WAIT for the socket: a `LanLobby` with no transport yet drops a send on the floor
+        // without a word, and this runs well before `connect()` has resolved.
+        void connected.then(() => {
+          lobby.host(gameName, savedPlayerName(), info.name, path, info.slots.length);
+        }).catch(() => {}); // the failure is already on screen, on the list we came from
+        void glue.goTo(lanLobbyScreen(vfs, { path, info }));
+      },
       onCancel: () => void glue.goTo(lanScreen(vfs)),
+    }),
+  };
+}
+
+/** The game lobby — UI\FrameDef\Glue\GameChatroom.fdf, one row per player slot, with the
+ *  chat area under it. Its chrome is the panel model's own "MultiplayerPreGameChat" triple. */
+function lanLobbyScreen(
+  vfs: DataSource,
+  map: { path: string; info: MapInfo },
+): { chrome: "MultiplayerPreGameChat"; mount: () => Promise<FdfScreen> } {
+  return {
+    chrome: "MultiplayerPreGameChat",
+    mount: () => mountLanLobbyScreen(ui, vfs, installMaps, lanSession().lobby, map, {
+      onCancel: () => void glue.goTo(lanScreen(vfs)),
+      onStart: (path, info, config, link) => void startGame(mapFileFor(path), info, config, link),
     }),
   };
 }
@@ -284,6 +336,7 @@ function exitToMenu(): void {
   // socket open behind a player who is back at the main menu.
   matchLink?.channel.close?.();
   matchLink = null;
+  lan = null; // the wire the match owned is closed; a fresh LAN session opens a fresh one
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
   const vfs = resolver.installSource;
   void showMenuBackground(vfs).then(() => {

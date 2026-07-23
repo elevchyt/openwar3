@@ -611,12 +611,15 @@ console.log("the link demuxes the two kinds of game traffic and passes anything 
   host.send({ t: "relay", to: 2, data: commandMessage({ c: "order", unitId: 4, order: { kind: "move", x: 0, y: 0 }, queued: false }) });
   await tick();
   // Something else entirely: passed through untouched, so a future message type needs no change
-  // to this seam.
-  host.send({ t: "relay", to: 2, data: { k: "chat", text: "gg" } });
+  // to this seam. The probe has to name a kind the LINK does not own, and it stopped doing so
+  // when in-game chat landed — `k: "chat"` became a MatchLink message and was quite correctly
+  // swallowed, which is the seam working, not failing. `k: "lobby"` (issue #77) is the live
+  // proof of the claim: the game lobby's own traffic rides this passthrough untouched.
+  host.send({ t: "relay", to: 2, data: { k: "lobby", slots: [] } });
   await tick();
 
   check("the command reached onCommand, stamped with the relay's from", cmds, [[1, "order"]]);
-  check("and did not fall through to the passthrough", other, ["chat"]);
+  check("and did not fall through to the passthrough", other, ["lobby"]);
   check("the snapshot went to neither callback", link.received, 1);
 }
 

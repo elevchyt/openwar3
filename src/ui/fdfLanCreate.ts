@@ -4,6 +4,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { MapBrowser, adopt, arg, findFrame, layoutInfoPane, nudgeX, num, setProp, str } from "./mapBrowser";
+import { savedPlayerName } from "./fdfLan";
 
 // "Create Game" on the LAN screen, built from UI\FrameDef\Glue\LocalMultiplayerCreate.fdf:
 // pick the map you are going to host, then Create Game.
@@ -25,8 +26,9 @@ const MAP_LIST_FDF = "UI\\FrameDef\\Glue\\MapListBox.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
 
 export interface LanCreateHandlers {
-  /** The host settled on a map: announce the room and go back to the game list. */
-  onCreate: (path: string, info: MapInfo) => void;
+  /** The host settled on a map: announce the room and drop into the game lobby (issue #77).
+   *  `gameName` is the game's own default — GlobalStrings' GAMENAME, "Local Game (%s)". */
+  onCreate: (path: string, info: MapInfo, gameName: string) => void;
   onCancel: () => void;
 }
 
@@ -37,10 +39,13 @@ export async function mountLanCreateScreen(
   h: LanCreateHandlers,
 ): Promise<FdfScreen> {
   const browser = new MapBrowser(vfs, maps);
+  /** GlobalStrings' own GAMENAME format — "Local Game (%s)", the name the real client gives a
+   *  local game it creates. Filled in from the library the screen is built with. */
+  let gameName = `Local Game (${savedPlayerName()})`;
 
   const create = (): void => {
     const picked = browser.selected;
-    if (picked) h.onCreate(picked.path, picked.info);
+    if (picked) h.onCreate(picked.path, picked.info, gameName);
   };
 
   browser.onChange = () => screen.relayout();
@@ -52,7 +57,11 @@ export async function mountLanCreateScreen(
     fdfPath: "UI\\FrameDef\\Glue\\LocalMultiplayerCreate.fdf",
     rootFrame: "LocalMultiplayerCreate",
     includeFdf: [MAP_LIST_FDF, MAP_INFO_FDF],
-    buildRoot: (lib) => { browser.useStrings(lib); return buildCreateRoot(lib); },
+    buildRoot: (lib) => {
+      browser.useStrings(lib);
+      gameName = lib.string("GAMENAME").replace("%s", savedPlayerName());
+      return buildCreateRoot(lib);
+    },
     // Two mutually exclusive panels in the FDF, as on Skirmish: the map info is the one on
     // screen, so its Advanced Options twin stays hidden.
     hidden: ["AdvancedOptionsPanel", "GameSpeedLabel", "GameSpeedSliderBackdrop", "GameSpeedValue"],
