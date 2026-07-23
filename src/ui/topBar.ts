@@ -51,9 +51,9 @@ const PX = 0.6 / 625;
 
 /** The button bar reads a hair right and low against the console art it sits in — the plates
  *  are drawn with their own shadow, so geometric centring is not visual centring. Trimmed by
- *  eye against the chrome: one pixel left, two up. */
+ *  eye against the chrome: one pixel left, one up. */
 const BUTTON_NUDGE_X = -1 * PX;
-const BUTTON_NUDGE_Y = 2 * PX;
+const BUTTON_NUDGE_Y = 1 * PX;
 
 const s = (v: string): Arg => ({ s: v, n: null, str: true });
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
