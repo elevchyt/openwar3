@@ -8,7 +8,7 @@ import { MAPS_PREFIX } from "../assets/opfs";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
-import { UI_FONT, type FdfScreen } from "./fdf/render";
+import { uiFont, type FdfScreen } from "./fdf/render";
 import type { ListItem } from "./fdf/widgets";
 
 // The map browser: the folder-browsing map list (MapListBox.fdf) and the map summary pane
@@ -497,7 +497,7 @@ function countBadge(art: HTMLCanvasElement, players: number): HTMLCanvasElement 
   if (!g) return canvas;
   g.drawImage(art, 0, 0);
   if (players > 0) {
-    g.font = `bold ${Math.round(canvas.height * 0.5)}px ${UI_FONT}`;
+    g.font = `bold ${Math.round(canvas.height * 0.5)}px ${uiFont()}`;
     g.textAlign = "center";
     g.textBaseline = "middle";
     g.lineWidth = 4;

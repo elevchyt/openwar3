@@ -24,6 +24,7 @@ import { MapViewerScene } from "./render/mapViewer";
 import type { MatchLinkSetup } from "./game/matchLink";
 import { MenuScene } from "./render/menuScene";
 import { applyMenuCursor } from "./ui/cursor";
+import { applyGameFont } from "./ui/gameFont";
 
 // Entry point (plan §6). WebGL scenes, one visible at a time:
 //   #menubg — the animated main-menu glue scene (issue #54), behind the FDF menu
@@ -308,6 +309,7 @@ function mountInstall(load: GateLoad): void {
   gate?.dispose();
   gate = null;
   applyMenuCursor(load.vfs); // WC3 human hand cursor in the menus
+  applyGameFont(load.vfs); // Friz Quadrata TT, out of the install's own Fonts\ (issue #72)
   // Audio: every sound comes out of the archives, so this is the first moment it can exist.
   // The gate button the player just pressed is also the gesture that opens the browser's
   // autoplay gate, so the theme can start with the menu.

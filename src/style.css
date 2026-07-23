@@ -1,7 +1,9 @@
-/* Game font: Nowar Sans (nowar-fonts/Nowar-Sans-War3, OFL 1.1) — the
-   multi-language replacement for WC3's Friz Quadrata TT. If the user has
-   Friz Quadrata installed locally it wins for the authentic latin look;
-   Nowar Sans covers everything else (CJK/Cyrillic/Greek/…). */
+/* Game font: Warcraft III's own Friz Quadrata TT, loaded out of the mounted
+   install's `Fonts\FRIZQT__.TTF` at runtime (src/ui/gameFont.ts) — this file only
+   declares the FALLBACK chain, which is also what shows before an install is
+   mounted. Friz Quadrata is latin-only (252 glyphs), so anything it can't draw
+   falls through per glyph to the archives' Nimrod MT (Greek/Cyrillic) and then to
+   Nowar Sans (nowar-fonts/Nowar-Sans-War3, OFL 1.1) for CJK and the rest. */
 @font-face {
   font-family: "Nowar Sans";
   src: url("/fonts/NowarSans.ttf") format("truetype");
@@ -13,10 +15,11 @@
   --gold: #d8b45a;
   --panel: rgba(10, 14, 22, 0.72);
   --border: rgba(216, 180, 90, 0.4);
-  --game-font: "Friz Quadrata TT", "Nowar Sans", "Trebuchet MS", system-ui, sans-serif;
-  /* The glue-menu face. Kept in step with UI_FONT in ui/fdf/render.ts, which the
-     FDF-driven frames set inline; the widgets (ui/fdf/widgets.ts) read it from here. */
-  --ui-font: "Trajan Pro", "Cinzel", "Palatino Linotype", "Book Antiqua", Palatino, "Times New Roman", serif;
+  --game-font: "Friz Quadrata TT", "Nimrod MT", "Nowar Sans", "Trebuchet MS", system-ui, sans-serif;
+  /* The glue-menu face — the same one, as in the real game. Both vars are replaced
+     wholesale by applyGameFont() once the archives are mounted; the FDF frames set
+     the stack inline (uiFont() in ui/fdf/render.ts), the widgets read it from here. */
+  --ui-font: var(--game-font);
 }
 
 * { box-sizing: border-box; }

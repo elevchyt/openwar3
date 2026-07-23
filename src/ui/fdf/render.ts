@@ -1,6 +1,7 @@
 import type { DataSource } from "../../vfs/types";
 import { blpToCanvas } from "../../render/blputil";
 import { wc3ToHtml } from "../wc3Text";
+import { gameFontStack } from "../gameFont";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, strProp } from "./library";
 import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
@@ -21,8 +22,11 @@ import {
 // strips, 4–7 are the corners. These indices are tuned against the live render.
 const EDGE_TILE = { L: 0, R: 1, T: 2, B: 3, UL: 4, UR: 5, LL: 6, LR: 7 };
 
-/** Font stack for menu text — our own choice (we don't ship or require WC3's font). */
-export const UI_FONT = '"Trajan Pro", "Cinzel", "Palatino Linotype", "Book Antiqua", Palatino, "Times New Roman", serif';
+/** Font stack for menu text: Warcraft III's own Friz Quadrata TT, read out of the
+ *  player's archives at runtime (ui/gameFont.ts) — the glue screens use the same
+ *  face as the rest of the game. Call it, don't cache it: the stack is only the
+ *  fallback chain until an install is mounted. */
+export const uiFont = gameFontStack;
 
 // The click a button makes belongs to the UI, not to any one screen: every FDF button in
 // the game answers with the same sound (UISounds.slk's `GlueScreenClick` in the menus,
@@ -695,7 +699,7 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
 
   const font = firstProp(f, "FrameFont");
   const sizeWorld = font?.args[1]?.n ?? 0.013;
-  el.style.fontFamily = UI_FONT;
+  el.style.fontFamily = uiFont();
   el.style.fontSize = `${Math.max(8, sizeWorld * ctx.fit.scale)}px`;
   // The line box must hold the whole glyph, descenders and all. At 1.05 it did not: a text
   // frame clips its overflow, and the FDF's own JUSTIFYBOTTOM labels ("Suggested Players:",
