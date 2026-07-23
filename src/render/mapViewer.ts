@@ -336,6 +336,9 @@ interface W3xViewer {
   loadedBaseFiles: boolean;
   gl: WebGLRenderingContext; // the viewer's GL context, shared by the fog overlay pass
   map: W3xMap | null;
+  /** UnitData + UnitUI + ItemData, merged — and the map's war3map.w3u/.w3t declarations
+   *  folded in on top of it by the map handler. See repairCustomRowIds. */
+  unitsData: MappedData;
   /** OpenWar3 patch hook: lets the map handler check which cliff-ramp
    *  (CliffTrans) models exist in the VFS before placing them. */
   terrainModelExists?: (path: string) => boolean;
@@ -926,6 +929,7 @@ export class MapViewerScene {
     this.queueFlags = [];
 
     this.viewer.loadMap(bytes);
+    this.repairCustomRowIds(); // …before anything asks a placed unit which type it is
     const map = this.viewer.map;
     if (!map) return;
 
@@ -2203,6 +2207,34 @@ export class MapViewerScene {
         return { x: sx, y: sy };
       },
     };
+  }
+
+  /** Make every CUSTOM unit/item row the viewer built name ITSELF.
+   *
+   *  mdx-m3-viewer declares a map's war3map.w3u/.w3t objects by CLONING the base type's row
+   *  (`row.map = {...base.map}`) and then writing only the fields the modification file lists.
+   *  `unitid`/`itemid` are not modification fields — no .w3u carries them — so a custom type's
+   *  row goes on reporting the BASE type's rawcode: WarChasers' Shandris-based hero `EC12`
+   *  answers `unitid = "Emoo"`.
+   *
+   *  That column is the only thing identifying a pre-placed unit when we adopt it (rts.trySeed
+   *  reads `row.string("unitid")`), so every custom unit a map PLACES was seeded from the base
+   *  UnitDef — base name, base portrait model, base stats — and off the .doo's reserved id
+   *  block, since PlacedIndex.reserveIdAt matches on the rawcode. Units the map's SCRIPT made
+   *  were fine, because CreateUnit carries the rawcode itself; that split is exactly the
+   *  "the hero pedestals show the original hero, but the hero you pick is correct" report.
+   *
+   *  The repair is "the key is the truth": every table the viewer merges into `unitsData` is
+   *  keyed BY its identity column (UnitData/UnitUI by `unitid`, ItemData by `itemid`) — checked
+   *  across all 1110 stock rows, zero disagree — so a row that contradicts its own key is a
+   *  clone and nothing else is touched. Runs for every map, melee or custom, before a single
+   *  unit has been adopted. */
+  private repairCustomRowIds(): void {
+    for (const [id, row] of Object.entries(this.viewer.unitsData.map)) {
+      for (const col of ["unitid", "itemid"]) {
+        if (row.string(col) !== undefined && row.string(col) !== id) row.set(col, id);
+      }
+    }
   }
 
   /** Hide the map's start-location marker props (the `sloc` StartLocation.mdx

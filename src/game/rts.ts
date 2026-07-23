@@ -1586,8 +1586,14 @@ export class RtsController {
       // and a decorative one at that (it can't be picked up). Verified over the whole
       // bundled corpus: every map with .doo item entries also ships CreateAllItems(), so
       // deferring to the script never loses an item.
-      const itemId = unit.row?.string("itemid");
-      if (itemId && this.items.has(itemId)) {
+      //
+      // The COLUMN, not the registry, is what makes this an item: the two identity columns are
+      // mutually exclusive across every stock row, so carrying `itemid` at all settles it. Asking
+      // the ItemRegistry instead used to work only because a map's custom item reported its BASE
+      // item's id (see mapViewer.repairCustomRowIds) — now that a custom row names itself, a
+      // registry that hadn't been handed this map's .w3t overlay would call it "not an item" and
+      // fall through to the unit path.
+      if (unit.row?.string("itemid") !== undefined) {
         this.clearExcessInstance(unit.instance);
         continue;
       }

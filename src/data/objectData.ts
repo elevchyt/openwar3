@@ -120,6 +120,13 @@ function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigSt
   let dmgOverride: number | undefined;
   for (const m of mods) {
     if (m.id === "unam") { def.name = trigStr(s(m.value)); continue; }
+    // Proper Names (`upro` → the Profile's `Propernames`, a stringList): the pool a HERO draws
+    // its given name from, which is the name the HUD and the hover label actually print for one
+    // (hud.ts prefers properName over the type name). A custom hero that ships its own name —
+    // WarChasers' "Snake Aes" on a Priestess of the Moon — otherwise inherits the base hero's
+    // pool and rolls a Priestess name at spawn. Resolved BEFORE splitting: the whole list is one
+    // TRIGSTR_ reference, so splitting first would hand the .wts a key it can't find.
+    if (m.id === "upro") { def.properNames = trigStr(s(m.value)).split(",").map((x) => x.trim()).filter(Boolean); continue; }
     if (m.id === "utip") { def.tip = trigStr(s(m.value)); continue; }
     if (m.id === "utub") { def.description = trigStr(s(m.value)); continue; }
     if (m.id === "uhot") { def.hotkey = (s(m.value).trim()[0] ?? "").toUpperCase(); continue; }
