@@ -1,7 +1,7 @@
 import type { DataSource } from "../../vfs/types";
 import { blpToCanvas } from "../../render/blputil";
 import { wc3ToHtml, wc3ToPlain } from "../wc3Text";
-import { gameFontStack } from "../gameFont";
+import { gameFontStack, gameFontsReady, onGameFontsReady } from "../gameFont";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, propagateDecorate, strProp } from "./library";
 import { fitBox, fontSizeOf, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
@@ -267,6 +267,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     dispose(): void {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKey);
+      offFontReady();
       for (const off of disposers) off();
       disposers = [];
       overlay.remove();
@@ -277,6 +278,17 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   // that isn't in the document yet measures 0.
   opts.container.appendChild(overlay);
   build();
+
+  // The layout measures every TEXT frame's width off a canvas in the game font (measureTextFrame
+  // → uiFont()). When this screen is built while the archives' faces are still decoding — the
+  // main menu, mounted the instant applyGameFont() fires — those widths are the FALLBACK's, and
+  // the DOM glyphs then swap to Friz Quadrata (font-family is live) inside frames still sized for
+  // the wrong face. Relayout once the real faces land so the measurements match what's drawn
+  // (issue #82). Only when they WEREN'T ready at mount — a screen built after the faces loaded
+  // (every in-game panel) already measured them, so it needs no second build. Off on dispose.
+  const offFontReady = gameFontsReady()
+    ? () => {}
+    : onGameFontsReady(() => { if (overlay.isConnected) build(); });
 
   const onResize = (): void => build();
   window.addEventListener("resize", onResize);

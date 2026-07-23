@@ -9,6 +9,7 @@ import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { uiFont, type FdfScreen } from "./fdf/render";
+import { gameFontsReady, onGameFontsReady } from "./gameFont";
 import type { ListItem } from "./fdf/widgets";
 
 // The map browser: the folder-browsing map list (MapListBox.fdf) and the map summary pane
@@ -88,6 +89,7 @@ export class MapBrowser {
   private listScroll = 0; // where the list stands, kept across the screen's rebuilds
   private alive = true; // cleared on dispose, so background reads stop
   private strings: FdfLibrary | null = null; // for "(up one level)" — GlobalStrings
+  private offFontReady: () => void = () => {}; // unsubscribe from the font-ready relayout (issue #82)
 
   /** A map was picked, or a folder finished reading: the screen should re-fill itself.
    *  A screen whose frames DEPEND on the map (the Custom Game screen's player rows) relayouts
@@ -106,6 +108,17 @@ export class MapBrowser {
     // WC3 opens on the expansion's own maps folder — that is where a Frozen Throne
     // install's melee maps live.
     this.cwd = this.entries.some((e) => e.folder.toLowerCase() === "frozenthrone") ? "FrozenThrone" : "";
+    // A count badge is canvas-baked in the game font; if the browser is built before the
+    // archives' face lands, its digits are the fallback's and won't self-heal. Redraw them
+    // (and re-fill the list that shows them) when the real face arrives (issue #82). Only when
+    // it isn't loaded yet — a browser built afterwards draws its badges in Friz to begin with.
+    if (!gameFontsReady()) {
+      this.offFontReady = onGameFontsReady(() => {
+        if (!this.alive) return;
+        this.icons.invalidateText();
+        this.onChange();
+      });
+    }
   }
 
   /** Hand over the screen's FDF library, for the strings the list shows. */
@@ -224,6 +237,7 @@ export class MapBrowser {
 
   dispose(): void {
     this.alive = false;
+    this.offFontReady();
   }
 }
 
@@ -461,6 +475,10 @@ interface Icons {
    *  does — the same art, the same number over it). Melee maps wear the crossed-swords icon
    *  and custom ones the cog, but BOTH carry the count: a custom map takes players too. */
   map(melee: boolean, players: number): HTMLCanvasElement | null;
+  /** Drop the badges baked so far. Their count is drawn to a CANVAS in the game font, so a
+   *  badge minted before the archives' face loaded carries the fallback digits forever (issue
+   *  #82) — clear them on font-ready so the next `map()` redraws in Friz Quadrata. */
+  invalidateText(): void;
 }
 
 function loadIcons(vfs: DataSource): Icons {
@@ -480,6 +498,9 @@ function loadIcons(vfs: DataSource): Icons {
         badges.set(key, base ? countBadge(base, players) : null);
       }
       return badges.get(key) ?? null;
+    },
+    invalidateText(): void {
+      badges.clear();
     },
   };
 }
