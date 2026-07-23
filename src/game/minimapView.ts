@@ -103,11 +103,18 @@ export const ICON_NEUTRAL_BUILDING = "UI\\MiniMap\\MiniMap-NeutralBuilding.blp";
 /**
  * Persistent minimap glyphs: each world position and the BLP to stamp there.
  *
- * **These are deliberately NOT fog-gated, and that is verified rather than assumed** — the real
- * 1.27a client paints both over pitch-black unexplored ground in a fresh melee game, which is how
- * you pick an expansion before scouting. Phase D left this as an open question ("nobody has
- * checked"); somebody then checked against the running game, and the answer is no gate. Do not
- * "fix" it from a reference or from memory.
+ * **A glyph is EXPLORED-gated: it appears the moment the black mask lifts off its tile, and stays
+ * for good after** (issue #71). Phase D left "should these be fog-gated?" open, Phase E item 4
+ * closed it as "no gate, measured against the real 1.27a client", and that close was wrong — the
+ * session it was measured in ran the dev default `?dev&fog=explored`, where the whole map is
+ * explored from tick 0 and every gate is invisible. The developer re-checked under normal fog:
+ * a gold mine, a tavern, a fountain is NOT on the minimap until something of yours has been
+ * there. Scouting expansions is the point of scouting.
+ *
+ * `explored`, not `visible`, is the gate, and the difference is the whole behaviour: you walk
+ * past a mine once and its glyph stays on your minimap forever, the same way the terrain image
+ * behind it does. So this asks `Viewpoint.hasExplored` — the very state the minimap's own fog
+ * veil is painted from, which is what guarantees a glyph is never stamped onto a black tile.
  *
  *  · Gold mines wear `MiniMap-Goldmine.mdx`'s texture. (The client swaps in
  *    `minimap-gold-haunted`/`-entangled` once a mine is claimed; we do not model the claimed-mine
@@ -118,16 +125,26 @@ export const ICON_NEUTRAL_BUILDING = "UI\\MiniMap\\MiniMap-NeutralBuilding.blp";
  *
  * Takes `u.typeId` from the sim rather than the render record's copy, for the same reason as
  * `minimapDots`: a machine that drew nothing still has to be able to answer.
+ *
+ * This is a PRESENTATION gate, not a secrecy one, and on a client it is asked of that client's
+ * own fog grid — the same one it veils its minimap with. Mine positions and neutral-building
+ * records still ride every payload (`snapshotFor`: a mine is map-placement furniture, and a
+ * frozen client that deleted its shops would lose their models and splats too), so hiding an
+ * unexplored mine on the WIRE is a separate job; see docs/multiplayer.md item 4.
  */
 export function minimapIcons(
   world: MinimapWorld & { readonly mines: ReadonlyMap<number, { x: number; y: number }> },
   registry: { get(typeId: string): { minimapIcon?: boolean } | undefined },
+  vp: Viewpoint,
 ): Array<{ x: number; y: number; icon: string }> {
   const out: Array<{ x: number; y: number; icon: string }> = [];
-  for (const m of world.mines.values()) out.push({ x: m.x, y: m.y, icon: ICON_GOLD_MINE });
+  for (const m of world.mines.values()) {
+    if (vp.hasExplored(m)) out.push({ x: m.x, y: m.y, icon: ICON_GOLD_MINE });
+  }
   for (const u of world.units.values()) {
     if (!u.neutralPassive || u.building == null) continue;
     if (!registry.get(u.typeId)?.minimapIcon) continue;
+    if (!vp.hasExplored(u)) continue;
     out.push({ x: u.x, y: u.y, icon: ICON_NEUTRAL_BUILDING });
   }
   return out;
@@ -211,11 +228,20 @@ export class CreepCamps {
   /**
    * The camps `vp` should be shown a marker for.
    *
-   * A camp whose creeps are all dead is gone. A camp with a creep this viewpoint can currently
-   * SEE gets no marker — the creep speaks for itself, and the marker stands in for camps you know
-   * are there but cannot presently see.
+   * **Only a viewpoint that was given the whole map gets any** (issue #71). A camp marker is not
+   * a memory of a camp you found — it is a difficulty rating for a camp you have not fought,
+   * which is map-public knowledge of the same kind as the loading-screen preview. Under normal
+   * WC3 fog the map is not public, so there are no markers at all: an unscouted camp is black
+   * ground, and a scouted-then-abandoned one is black ground again. Discovering a camp does not
+   * earn its dot — that was the bug. `knowsWholeMap` is true for the lobby's `explored` and
+   * `revealall` modes (and `iseedeadpeople`), which is where the markers came from all along.
+   *
+   * Past that gate: a camp whose creeps are all dead is gone, and a camp with a creep this
+   * viewpoint can currently SEE gets no marker — the creep speaks for itself through `dots()`,
+   * and the marker stands in for camps you know are there but cannot presently see.
    */
   markers(vp: Viewpoint): Array<{ x: number; y: number; level: number }> {
+    if (!vp.knowsWholeMap) return [];
     this.camps ??= this.build();
     const out: Array<{ x: number; y: number; level: number }> = [];
     for (const camp of this.camps) {

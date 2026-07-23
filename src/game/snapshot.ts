@@ -139,13 +139,14 @@ export type Visibility = "live" | "remembered" | "omit";
 export function visibilityFor(viewer: SnapshotViewer, u: SimUnit): Visibility {
   if (isOffField(u)) return viewer.seesFor(u.owner) ? "live" : "omit";
   if (viewer.invisHides(u)) return "omit";
-  // A NEUTRAL PASSIVE structure — a shop, a tavern, a fountain — is map furniture every
-  // player knows from the loading screen: its minimap glyph paints over pitch-black
-  // unexplored ground in the real 1.27a client (minimapView.minimapIcons), so the identity
-  // and pose a remembered image carries were never secrets. It is therefore sent as
-  // REMEMBERED even where fog would omit a player's building — which is also what keeps a
-  // frozen client's copy of the map furniture standing instead of letting the applier
-  // delete it (records, models, glyphs and splats all hang off the record). Its DESTRUCTION
+  // A NEUTRAL PASSIVE structure — a shop, a tavern, a fountain — is sent as REMEMBERED even
+  // where fog would omit a player's building. The justification used to be "its minimap glyph
+  // paints over pitch-black unexplored ground in the real client anyway, so its identity and
+  // pose were never secrets"; issue #71 retired that half — the glyph IS explored-gated now
+  // (minimapView.minimapIcons) — and what remains is the structural reason, which was always
+  // the load-bearing one: this is what keeps a frozen client's copy of the map furniture
+  // standing instead of letting the applier delete it (records, models, glyphs and splats all
+  // hang off the record). What the client then DRAWS is still `fogHides`'s call. Its DESTRUCTION
   // is still learned by discovery: the ghost path keeps the image for every viewer that was
   // not watching, and only re-scouting the spot clears it (GhostMemory.forgetSeen).
   if (viewer.fogHides(u)) return u.neutralPassive && u.building != null ? "remembered" : "omit";
@@ -746,10 +747,13 @@ export function snapshotFor(
     });
   }
 
-  // Mines are always SENT and their gold is not. A gold mine is map-placement furniture: its
-  // position is public knowledge from tick 0 — `minimapIcons` paints its glyph over unexplored
-  // ground deliberately, measured against the real 1.27a client (item 4) — so omitting it would
-  // put a hole in the minimap the real game does not have. How much gold is LEFT in it is the
+  // Mines are always SENT and their gold is not. A gold mine is map-placement furniture whose
+  // existence the terrain itself gives away, and a client needs the record to draw the mine at
+  // all once it walks up to one — issue #71 gated the minimap GLYPH on the recipient's own
+  // explored layer (`minimapIcons`) rather than on the wire, so an unexplored mine is on the
+  // payload and off the minimap. Redacting it from the payload as well is a separate job (it
+  // means minting the record on discovery); see docs/multiplayer.md item 4. How much gold is
+  // LEFT in it is the
   // opposite: it is the single most valuable scouting fact on the map, and a player with no
   // eyes on a mine does not know whether it is full or nearly dry.
   const mines: MineSnapshot[] = [];

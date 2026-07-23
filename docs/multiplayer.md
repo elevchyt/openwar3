@@ -738,11 +738,12 @@ creeps currently aggro through fog and will stop), so it is last and gets its ow
    the iteration source now would alter what the local player sees (units without render
    records would start showing dots), so it is deliberately not part of this item.
 
-   **Open, and needs the real client:** `minimapIcons()` has no fog gate at all — gold-mine and
-   neutral-building glyphs draw on pitch-black unexplored ground. It therefore takes no
-   viewpoint, because it does not currently depend on one. Whether that is *correct* is
-   unresolved; WC3's melee minimap may well show some neutral furniture from the start. Per
-   CLAUDE.md the running game decides, and nobody has looked yet. Do not "fix" it from memory.
+   ~~**Open, and needs the real client:** `minimapIcons()` has no fog gate at all — gold-mine
+   and neutral-building glyphs draw on pitch-black unexplored ground.~~ **Answered by
+   [issue #71](https://github.com/elevchyt/openwar3/issues/71): the gate is EXPLORED, and
+   `minimapIcons` takes a `Viewpoint` now.** The Phase E item 4 close that said "no gate" was
+   measured under the dev default `?dev&fog=explored`, where every fog gate is invisible; see
+   that item for the settled rule and for the half of it that is still open.
 
 
 6. ~~**`GetLocalPlayer` resolves per recipient.**~~ **Done — the seam, not the consumer.**
@@ -1244,12 +1245,36 @@ enumerated by body rather than by name.
    win over the own-team clause); what is missing is the ground truth that says it is a fix.
    Take it when the machine is free.
 
-4. ~~**Decide whether `minimapIcons()` should have a fog gate.**~~ **Closed: no gate, and it was
-   already answered in the code.** The comment above `minimapIcons` records the measurement —
-   both glyph types "were plainly visible over unexplored ground in a fresh 1.27a melee game" —
-   so somebody drove the running client, which is what Phase D asked for and what CLAUDE.md
-   requires. No behaviour change. The absence of a gate is now **asserted** in the test rather
-   than merely described, so adding one later goes red and has to be justified against the game.
+4. ~~**Decide whether `minimapIcons()` should have a fog gate.**~~ ~~**Closed: no gate.**~~
+   **Reopened and settled the other way by [issue #71](https://github.com/elevchyt/openwar3/issues/71):
+   the gate is EXPLORED.** The close above recorded a measurement — both glyph types "were
+   plainly visible over unexplored ground in a fresh 1.27a melee game" — and the measurement was
+   taken in a session booted with the dev default `?dev&fog=explored`, where the whole map is
+   explored from tick 0 and every fog gate is invisible by construction. Under normal fog the
+   real client shows no gold mine, tavern or fountain until you have been there; once you have,
+   the glyph stays, because `explored` is sticky. So `minimapIcons` now takes a `Viewpoint` and
+   asks `hasExplored` — the same layer the minimap paints its own veil from, which is what
+   makes it impossible for a glyph to sit on a black tile. The test asserts the appear-on-
+   discovery and stay-after-you-leave halves separately.
+
+   **Creep-camp markers went the other way in the same issue and for a different reason.** A
+   camp marker is a difficulty rating for a camp you have *not* fought — map-public knowledge,
+   not a memory of a scouting trip — so it is gated on `Viewpoint.knowsWholeMap` (the lobby's
+   `explored`/`revealall`, or `iseedeadpeople`) and not on the fog at all. Under normal fog
+   there are no camp markers, discovered or not: the creeps' own dots are the only thing that
+   shows, which is what the marker was always standing in for.
+
+   **The wire was left alone, and that is a scoped decision rather than an oversight.** Mine
+   records and neutral-passive building records still ride every payload (`snapshotFor`), so
+   the new gate is asked of the RECIPIENT's own fog grid — the same grid that client already
+   veils its minimap with, so the two cannot disagree. Redacting an unexplored mine from the
+   payload as well means minting its record on discovery; it is a separate job and nothing
+   depends on it yet. **Still open, and visible in a screenshot:** `Viewpoint.fogHides` exempts
+   neutral-passive STRUCTURES from fog entirely — a Mercenary Camp's model is drawn, dimmed,
+   over pitch-black unexplored ground — and the justification it cites is the very measurement
+   #71 retired. Dropping the exemption makes `visibilityFor`'s neutral-passive special case
+   redundant (never-seen → `omit`, seen-and-fogged → `remembered` falls out of the ordinary
+   building rule), which is the shape of the fix; it needs the two-client harness to land.
 
    It was not a pure doc close, though: `minimapIcons` still walked `this.entries` and read
    `Entry.typeId`, the same defect item 3 fixed in its neighbours. It moved to `minimapView.ts`
@@ -1339,9 +1364,12 @@ enumerated by body rather than by name.
      payload. There is a check for exactly that, and it goes red on exactly that edit.
    - **A mine is always sent and its gold is not** (`-1`, not `0` — an empty mine and an
      unscouted one are different facts, and conflating them would route workers away from a full
-     expansion). Omitting the mine was the tempting symmetry and it is wrong: `minimapIcons`
-     paints the glyph over unexplored ground *deliberately*, measured against the real client in
-     item 4, so dropping it would put a hole in the minimap the real game does not have.
+     expansion). The reason given here was "`minimapIcons` paints the glyph over unexplored
+     ground deliberately, so dropping the record would put a hole in the minimap"; issue #71
+     retired that — the glyph is explored-gated now, on the recipient's own grid — and what
+     remains is that a client needs the record to draw the mine at all once it walks up to one.
+     Redacting an unexplored mine from the payload means minting its record on discovery, which
+     is a separate job (item 4).
    - **A ground item gets no memory at all.** `fogBlocksAt`'s own comment says why: an item is a
      live widget that vanishes with the eyes on it, not a building whose image persists.
 

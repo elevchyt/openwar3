@@ -147,6 +147,9 @@ console.log("\ncreep camps cluster by guard post and step aside when seen");
   set.seat([{ player: 0, team: 0 }]);
   const vp = set.viewpointFor(0);
   const camps = new CreepCamps(world);
+  // The lobby's "explored" start is what makes a camp marker public in the first place (see the
+  // unexplored block below). The clustering is what is under test here.
+  set.setStartFog("explored");
 
   const m = camps.markers(vp).sort((a, b) => a.x - b.x);
   check("two camps, not three creeps", m.length, 2);
@@ -159,19 +162,51 @@ console.log("\ncreep camps cluster by guard post and step aside when seen");
   set.setStartFog("revealall");
   check("a visible camp shows no marker", camps.markers(vp).length, 0);
 
-  // Killing the whole camp removes it for good.
+  // Killing the whole camp removes it for good. (revealall goes off; start-explored is sticky,
+  // so the viewpoint still knows the map and the surviving camp still rates a marker.)
   set.setStartFog(null);
   world.units.delete(1);
   world.units.delete(2);
   check("a cleared camp is gone", camps.markers(vp).map((c) => c.level), [9]);
 }
 
-// Minimap GLYPHS (item 4). The open question Phase D left was whether these should be fog-gated
-// at all. Somebody checked the running 1.27a client: they are not — both draw over pitch-black
-// unexplored ground in a fresh melee game, which is how you pick an expansion before scouting.
-// So the check below asserts the ABSENCE of a gate deliberately. If a future change adds one,
-// this goes red and whoever added it has to justify it against the real game rather than intuition.
-console.log("\nminimap glyphs are NOT fog-gated (verified against the real 1.27a client)");
+// ISSUE #71. A camp marker is a difficulty rating for a camp you have NOT fought — map-public
+// knowledge of the same kind as the loading-screen preview, not a memory of something you
+// scouted. Under normal WC3 fog the map is not public, so there are no markers at all, and
+// walking into a camp does not earn its dot: the creeps themselves are the only thing that shows.
+console.log("\nunder normal fog a creep camp never rates a marker, discovered or not (#71)");
+{
+  const creeps = [
+    unit({ id: 1, isCreep: true, level: 3, x: 100, y: 100, guardX: 100, guardY: 100, owner: 12, team: -1 }),
+    unit({ id: 2, isCreep: true, level: 4, x: 300, y: 100, guardX: 300, guardY: 100, owner: 12, team: -1 }),
+  ];
+  const scout = unit({ id: 3, owner: 0, team: 0, x: 200, y: 100, sightDay: 1400 });
+  const world = worldOf([...creeps, scout]);
+  const set = new VisionSet(world, noAlliances, () => [], 0, 0, 8192, 8192);
+  set.seat([{ player: 0, team: 0 }]);
+  const vp = set.viewpointFor(0);
+  const camps = new CreepCamps(world);
+
+  check("black ground: no marker", camps.markers(vp).length, 0);
+  vp.rebuild([]); // the scout is standing in the camp — it is now explored, and seen
+  check("standing in it: still no marker (the creeps are the dots)", camps.markers(vp).length, 0);
+  scout.x = 7000; // walk away: explored, no longer visible — the old rule painted a dot here
+  scout.y = 7000;
+  vp.rebuild([]);
+  check("walked away again: STILL no marker", camps.markers(vp).length, 0);
+  // …and the gate is the match setting, not the fog: hand the same viewpoint the map and the
+  // markers come back. That is where they were always meant to come from.
+  set.setStartFog("explored");
+  check("a match played start-explored keeps its markers", camps.markers(vp).length, 1);
+}
+
+// Minimap GLYPHS. Phase D asked "should these be fog-gated?", Phase E item 4 closed it as "no
+// gate, measured against the real client", and ISSUE #71 reopened and settled it the other way:
+// that measurement was taken under the dev default `?dev&fog=explored`, where the whole map is
+// explored from tick 0 and any gate is invisible. Under normal fog the real 1.27a client shows
+// no mine, no tavern and no fountain until you have been there — and once you have, the glyph
+// stays put, because `explored` is sticky. So the gate is EXPLORED, not VISIBLE.
+console.log("\nminimap glyphs appear on discovery and stay (#71)");
 {
   const world = {
     ...worldOf([
@@ -184,12 +219,36 @@ console.log("\nminimap glyphs are NOT fog-gated (verified against the real 1.27a
   const registry = { get: (id) => ({ ntav: { minimapIcon: true }, nhut: { minimapIcon: false }, hkee: { minimapIcon: true } })[id] };
   const set = new VisionSet(world, noAlliances, () => [], 0, 0, 1024, 1024);
   set.seat([{ player: 0, team: 0 }]);
+  const vp = set.viewpointFor(0);
+
   // Nothing explored, nothing revealed, no rebuild — the fog is as black as it gets.
-  const icons = minimapIcons(world, registry);
-  check("the gold mine draws on unexplored ground", icons.filter((i) => i.icon === ICON_GOLD_MINE).length, 1);
-  check("the tavern draws too (nbmmIcon set)", icons.filter((i) => i.icon === ICON_NEUTRAL_BUILDING).length, 1);
-  check("the murloc hut does not (no nbmmIcon)", icons.some((i) => i.x === 800), false);
-  check("an ENEMY building is not a neutral glyph", icons.some((i) => i.x === 900), false);
+  check("nothing is on the minimap over black ground", minimapIcons(world, registry, vp).length, 0);
+
+  // A scout with a short leash. Only what its sight has actually covered appears.
+  const scout = unit({ id: 9, owner: 0, team: 0, x: 20, y: 1000, sightDay: 200 });
+  world.units.set(9, scout);
+  vp.rebuild([]);
+  check("a scout in the far corner reveals none of them", minimapIcons(world, registry, vp).length, 0);
+  scout.x = 300;
+  scout.y = 300; // standing on the mine (the tavern at 700,700 is 565 away — outside 200)
+  vp.rebuild([]);
+  const found = minimapIcons(world, registry, vp);
+  check("the gold mine appears once explored", found.filter((i) => i.icon === ICON_GOLD_MINE).length, 1);
+  check("…and only it — the tavern is still black ground", found.length, 1);
+
+  // Sticky: walk away and the glyph stays. This is the half that makes it a MAP MEMORY rather
+  // than a live sighting, and the reason the gate is `explored` and not `visible`.
+  scout.x = 20;
+  scout.y = 1000;
+  vp.rebuild([]);
+  check("walking away does not take the mine glyph back", minimapIcons(world, registry, vp).filter((i) => i.icon === ICON_GOLD_MINE).length, 1);
+
+  // Now hand the viewpoint the whole map, which is what the other two rules are about.
+  set.setStartFog("explored");
+  const all = minimapIcons(world, registry, vp);
+  check("the tavern draws too (nbmmIcon set)", all.filter((i) => i.icon === ICON_NEUTRAL_BUILDING).length, 1);
+  check("the murloc hut does not (no nbmmIcon)", all.some((i) => i.x === 800), false);
+  check("an ENEMY building is not a neutral glyph", all.some((i) => i.x === 900), false);
 }
 
 // ---------------------------------------------------------------------------------------

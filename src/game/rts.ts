@@ -4341,12 +4341,12 @@ export class RtsController {
   private readonly creepCampView: CreepCamps;
 
   /** Creep-camp difficulty markers for the minimap: camp centre + fixed combined
-   *  level. Fog does NOT gate them — a fresh melee game in the real 1.27a client
-   *  paints every camp's dot before a single tile has been explored (that is how
-   *  you scout expansions from the lobby). The marker is a stand-in for creeps you
-   *  cannot see, so it yields the moment any of them is: exactly then `dots()`
-   *  starts drawing that creep, and the two must never show at once. Gone for good
-   *  once every creep in the camp is dead. */
+   *  level. Only a viewpoint the MATCH handed the whole map to gets any (issue #71 —
+   *  the lobby's `explored`/`revealall` modes); under normal fog a camp is worth no
+   *  dot, discovered or not. The marker is a stand-in for creeps you cannot see, so
+   *  it yields the moment any of them is: exactly then `dots()` starts drawing that
+   *  creep, and the two must never show at once. Gone for good once every creep in
+   *  the camp is dead. @see minimapView.CreepCamps.markers */
   creepCamps(vp: Viewpoint = this.local): Array<{ x: number; y: number; level: number }> {
     // A frozen client paints the AUTHORITY's markers: its record store holds only the creeps
     // it was sent, so clustering it would report every unscouted camp as cleared — which is
@@ -4356,10 +4356,12 @@ export class RtsController {
     return this.creepCampView.markers(vp);
   }
 
-  /** Persistent minimap glyphs (gold mines, icon-bearing neutral buildings). Deliberately NOT
-   *  fog-gated — verified against the real 1.27a client. @see minimapView.minimapIcons. */
-  minimapIcons(): Array<{ x: number; y: number; icon: string }> {
-    return minimapIcons(this.sim, this.registry);
+  /** Persistent minimap glyphs (gold mines, icon-bearing neutral buildings). EXPLORED-gated:
+   *  a glyph appears when the black mask lifts off its tile and stays for good after (issue
+   *  #71), off the same grid the minimap veils itself with — on a client, that client's own.
+   *  @see minimapView.minimapIcons. */
+  minimapIcons(vp: Viewpoint = this.local): Array<{ x: number; y: number; icon: string }> {
+    return minimapIcons(this.sim, this.registry, vp);
   }
 
   /** True if this unit belongs to the local player (the only units they may

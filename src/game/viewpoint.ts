@@ -175,6 +175,19 @@ export class Viewpoint {
     return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
   }
 
+  /**
+   * Has this viewpoint EXPLORED this spot — has the black mask ever lifted here?
+   *
+   * Not "can it see it now": `explored` is sticky, which is exactly what a persistent minimap
+   * glyph needs (issue #71 — a gold mine you have walked past stays on the minimap when you walk
+   * away again). Asked through the same `stateAt` the minimap paints its own veil from, so a
+   * glyph can never end up sitting on a black tile: reveal-all and `FogMaskEnable(false)` lift
+   * both at once.
+   */
+  hasExplored(p: { x: number; y: number }): boolean {
+    return this.vision.stateAt(p.x, p.y) !== FogState.Unexplored;
+  }
+
   /** No eyes on this spot right now. The test for things that are NOT sim units and so have
    *  their own pick paths — a gold mine (found from the ground point) and a ground item.
    *  Neither is remembered under fog the way a building is: a building you have seen keeps
@@ -285,7 +298,25 @@ export class Viewpoint {
     return this.vision.revealed;
   }
   exploreAll(): void {
+    this.mapGiven = true;
     this.vision.exploreAll();
+  }
+
+  /** Set by `exploreAll`, which only the lobby's start-fog does (`VisionSet.setStartFog`) —
+   *  so this is "the MATCH handed me the map", not "I have walked the map". */
+  private mapGiven = false;
+
+  /**
+   * Was this viewpoint given the whole map up front — the lobby's `explored` or `revealall`
+   * fog mode, or `iseedeadpeople` since?
+   *
+   * The creep-camp markers key off this and nothing else (issue #71). A camp marker is not a
+   * memory of something you scouted; it is map-public knowledge, of the same kind as the
+   * loading-screen preview, and a match played under normal WC3 fog never makes the map public.
+   * See `minimapView.CreepCamps.markers`.
+   */
+  get knowsWholeMap(): boolean {
+    return this.mapGiven || this.vision.revealed;
   }
 }
 

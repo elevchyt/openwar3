@@ -409,9 +409,9 @@ console.log("a mine's position is public; how much gold is left in it is not");
   const watching = snapshotFor(world, viewer(0, seating), 0, 0);
   check("with eyes on it, the gold is real", watching.mines[0].gold, 12500);
 
-  // minimapIcons paints a mine glyph over UNEXPLORED ground deliberately — measured against
-  // the real 1.27a client (item 4) — so omitting the mine would put a hole in the minimap the
-  // real game does not have. Its contents are the opposite: the best scouting fact on the map.
+  // The mine RECORD rides every payload; issue #71 moved the minimap gate onto the recipient's
+  // own explored layer (`minimapIcons`), so an unexplored mine is on the wire and off the
+  // minimap. Its contents are the opposite: the best scouting fact on the map, and redacted.
   const dark = snapshotFor(world, viewer(0, seating, { fogBlocksAt: () => true }), 0, 0);
   check("unscouted, the mine is still on the map", [dark.mines.length, dark.mines[0].x], [1, 1]);
   check("but its gold reads unknown, not empty", dark.mines[0].gold, -1);
