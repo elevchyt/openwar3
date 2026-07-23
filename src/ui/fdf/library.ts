@@ -160,3 +160,55 @@ export function strProp(frame: FdfFrame, key: string): string | undefined {
 export function findChild(frame: FdfFrame, name: string): FdfFrame | undefined {
   return frame.children.find((c) => c.name === name);
 }
+
+/** Props whose first argument NAMES another frame, and so must follow a rename. */
+const NAME_REFS = new Set([
+  "ButtonText", "ControlBackdrop", "ControlPushedBackdrop", "ControlDisabledBackdrop",
+  "ControlDisabledPushedBackdrop", "ControlMouseOverHighlight", "ControlFocusHighlight",
+  "CheckBoxCheckHighlight", "CheckBoxDisabledCheckHighlight",
+  "PopupTitleFrame", "PopupArrowFrame", "PopupMenuFrame",
+  "TextAreaScrollBar", "SliderThumbButtonFrame",
+  "ScrollBarIncButtonFrame", "ScrollBarDecButtonFrame", "DialogBackdrop",
+]);
+
+/**
+ * Clone a template subtree under a per-instance suffix — what the engine does every time it
+ * stamps a repeated row out of one definition (an `AllianceSlot` per player, a
+ * `ScriptDialogButton` per DialogAddButton, a `QuestListItem` per quest).
+ *
+ * Renaming is not cosmetic: the layout solver indexes frames by name across the WHOLE
+ * screen, so two rows sharing a child called "AllyCheckBox" collide and which one a name
+ * resolves to comes down to render order. Both kinds of reference travel with the rename:
+ *
+ *   • the `Control*`/`CheckBox*`/… props above, which name a sibling outright, and
+ *   • **`SetPoint`'s relative-frame argument** — the one a per-button cloner can skip and a
+ *     ROW cloner cannot, because a row is a chain of siblings anchored off each other
+ *     ("SetPoint LEFT, \"AllyCheckBox\", RIGHT, …"). Left alone, every row's boxes anchor to
+ *     row zero's and the whole grid collapses onto one line.
+ *
+ * Only names DEFINED INSIDE the subtree are rewritten, so a SetPoint that reaches out to the
+ * enclosing dialog still finds it.
+ */
+export function cloneNamespaced(frame: FdfFrame, suffix: string): FdfFrame {
+  const owned = new Set<string>();
+  (function collect(f: FdfFrame): void {
+    if (f.name) owned.add(f.name);
+    f.children.forEach(collect);
+  })(frame);
+
+  const rename = (name: string): string => (owned.has(name) ? `${name}${suffix}` : name);
+  const walk = (src: FdfFrame): FdfFrame => ({
+    type: src.type,
+    name: src.name ? `${src.name}${suffix}` : "",
+    inherits: null,
+    withChildren: false,
+    props: src.props.map((pr) => {
+      const args = pr.args.slice();
+      if (NAME_REFS.has(pr.key) && args[0]?.str) args[0] = { ...args[0], s: rename(args[0].s) };
+      else if (pr.key === "SetPoint" && args[1]?.str) args[1] = { ...args[1], s: rename(args[1].s) };
+      return { key: pr.key, args };
+    }),
+    children: src.children.map(walk),
+  });
+  return walk(frame);
+}

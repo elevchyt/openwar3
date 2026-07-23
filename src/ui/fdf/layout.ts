@@ -20,6 +20,25 @@ export interface LaidOutFrame {
   h: number;
   children: LaidOutFrame[];
   placed: boolean;
+  /** We invented this frame's WIDTH (the FDF declared none) — see `autoJustifyH`. */
+  fabricatedWidth?: boolean;
+  /**
+   * The horizontal justification a shrink-wrapped TEXT frame effectively has.
+   *
+   * In WC3 a TEXT frame AUTO-SIZES to its string, so a caption anchored `SetPoint TOP, …,
+   * TOP` is centred *by construction* and its FontJustificationH never enters into it —
+   * which is why the shipped files cheerfully leave those captions JUSTIFYLEFT (every
+   * EscMenu panel title inherits `EscMenuTitleTextTemplate`, and that template is
+   * JUSTIFYLEFT). We can't shrink-wrap — the text is measured by the browser after layout —
+   * so we hand such a frame its parent's width instead, and then JUSTIFYLEFT is suddenly
+   * load-bearing and dumps "Game Menu" against the panel's left edge.
+   *
+   * The anchor is what actually decides it: a box that hugs its content and hangs off its own
+   * TOP point is centred on that point, off its TOPLEFT is left of it, off its TOPRIGHT is
+   * right of it. So when the width is ours rather than the file's, the anchor's horizontal
+   * fraction gives the justification, and this carries that to the renderer.
+   */
+  autoJustifyH?: "JUSTIFYLEFT" | "JUSTIFYCENTER" | "JUSTIFYRIGHT";
 }
 
 const FRAME_POINTS = new Set([
@@ -149,10 +168,26 @@ function applyWidgetDefaults(root: FdfFrame): void {
   })(root);
 }
 
+/**
+ * Measure a TEXT frame's string, in world units — the engine's auto-size, which the FDF
+ * leans on far more heavily than a "nice to have" would suggest. `AllianceDialog.fdf` chains
+ * its column headers off ONE ANOTHER's edges:
+ *
+ *     Frame "TEXT" "PlayersHeader" { SetPoint TOPLEFT, "AllianceDialog", TOPLEFT, …, Text "PLAYERS" }
+ *     Frame "TEXT" "AllyHeader"    { SetPoint BOTTOMLEFT, "PlayersHeader", BOTTOMRIGHT, 0.196, 0 }
+ *
+ * so `PlayersHeader`'s width is the position of every column to its right. Fall back to the
+ * parent's width there and "Ally" lands 0.576 off the dialog's left edge — off the screen.
+ * Returns undefined when the frame isn't measurable (no text, or no measurer supplied), and
+ * the parent-width fallback stands.
+ */
+export type MeasureText = (frame: FdfFrame) => number | undefined;
+
 export function layout(
   root: FdfFrame,
   box: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: UI_WIDTH, h: UI_HEIGHT },
   buttonWidthScale = 1,
+  measure?: MeasureText,
 ): { tree: LaidOutFrame; byName: Map<string, LaidOutFrame> } {
   applyWidgetDefaults(root);
   const tree = buildTree(root, null);
@@ -207,9 +242,28 @@ export function layout(
         // JUSTIFYCENTER/JUSTIFYMIDDLE), and it is those justifications, applied across the
         // whole button, that centre the caption. Give it one line instead and every button
         // in the game wears its text jammed against the top edge.
-        if (Number.isNaN(n.h) && n.frame.type === "TEXT" && points.length) n.h = textLineHeight(n.frame);
+        // An ANCHORED TEXT frame is auto-sized by the engine in whichever axis the file
+        // leaves out, so measure its string and supply them. The guard is that it must be
+        // ANCHORED: an unanchored TEXT frame is the one the ENGINE positions (a button's
+        // caption, which declares neither size nor SetPoint) and must keep filling its
+        // parent, or every button in the game wears a shrink-wrapped label jammed into its
+        // top-left corner.
+        if (n.frame.type === "TEXT" && points.length) {
+          const measured = measure?.(n.frame);
+          if (Number.isNaN(n.w) && measured !== undefined) n.w = measured;
+          if (Number.isNaN(n.h)) {
+            // A frame that declares a Width but no Height WRAPS to it, and its height is
+            // however many lines that takes. AllianceDialog's column headers are the case:
+            // "Share Vision" over a 0.0375-wide box is two lines, and one line tall clips
+            // the second — which is exactly how the game draws that header, stacked.
+            const lines = measured !== undefined && n.w > 0
+              ? Math.max(1, Math.ceil(measured / n.w - 0.01)) // ε: a self-measured box is 1
+              : 1;
+            n.h = lines * textLineHeight(n.frame);
+          }
+        }
         if (n.parent?.placed) {
-          if (Number.isNaN(n.w)) n.w = n.parent.w;
+          if (Number.isNaN(n.w)) { n.w = n.parent.w; n.fabricatedWidth = true; }
           if (Number.isNaN(n.h)) n.h = n.parent.h;
         } else continue;
       }
@@ -230,6 +284,12 @@ export function layout(
       const ly = rel.y + fy(pt.relPoint) * rel.h + pt.dy;
       n.x = lx - fx(pt.myPoint) * n.w;
       n.y = ly - fy(pt.myPoint) * n.h;
+      // A TEXT frame whose width we invented is standing in for one the engine would have
+      // shrink-wrapped; the anchor, not the file's justification, is what centres it.
+      if (n.fabricatedWidth && n.frame.type === "TEXT") {
+        const f = fx(pt.myPoint);
+        n.autoJustifyH = f === 0 ? "JUSTIFYLEFT" : f === 1 ? "JUSTIFYRIGHT" : "JUSTIFYCENTER";
+      }
       n.placed = true; progressed = true;
     }
     if (!progressed) break;

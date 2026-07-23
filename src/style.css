@@ -659,8 +659,6 @@ body.in-game .menu-panel { display: none; }
   margin-bottom: 6px;
   text-shadow: 0 1px 2px #000;
 }
-.game-menu-row { display: flex; gap: 11px; }
-.game-menu-row .game-menu-btn { flex: 1; }
 .game-menu-btn {
   padding: 10px 12px;
   background: linear-gradient(#1a2a44, #0e1a2e);
@@ -672,8 +670,6 @@ body.in-game .menu-panel { display: none; }
   text-shadow: 0 1px 2px #000;
 }
 .game-menu-btn:hover:not(:disabled) { background: linear-gradient(#24365a, #14243e); border-color: #ffe08a; color: #ffe08a; }
-.game-menu-btn:disabled { color: #6b6552; border-color: #4a4433; cursor: default; }
-.game-menu-btn.return { margin-top: 10px; }
 .game-menu-btn.danger:hover:not(:disabled) { border-color: #e06a5a; color: #ffb0a0; }
 .hud-idle-count {
   position: absolute;
@@ -1487,15 +1483,82 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-screen-inert .fdf-button,
 .fdf-screen-inert .fdf-popup,
 .fdf-screen-inert .fdf-list,
+.fdf-screen-inert .fdf-checkbox,
 .fdf-screen-inert .fdf-editbox-input,
 .fdf-screen-disabled .fdf-button,
 .fdf-screen-disabled .fdf-popup,
 .fdf-screen-disabled .fdf-list,
+.fdf-screen-disabled .fdf-checkbox,
 .fdf-screen-disabled .fdf-editbox-input { pointer-events: none; }
 
 .fdf-screen-disabled .fdf-disabled-face { opacity: 1; }
 .fdf-screen-disabled .fdf-btn-text span { color: var(--fdf-disabled-color, #808080) !important; }
 .fdf-screen-disabled .fdf-button-glow { opacity: 0 !important; }
+
+/* --- FDF check box / radio button. Both are a GLUECHECKBOX; only the art differs, and
+   all of it is the FDF's (EscMenuCheckBoxTemplate / EscMenuRadioButtonTemplate). The tick
+   is a composited overlay that appears with the checked state — the same normal-face-plus-
+   revealed-state-layer split the pushed and disabled faces use, because drawing every layer
+   at once would just stack them into one block. */
+.fdf-checkbox { pointer-events: auto; }
+.fdf-check-face,
+.fdf-check-disabled-face {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.fdf-checkbox:active .fdf-pushed { opacity: 1; }
+.fdf-checked > .fdf-check-face { opacity: 1; }
+/* A checked box that is also DEAD wears the greyed tick instead of the live one — the state
+   every row of an observer's Allies dialog is in. */
+.fdf-checked.fdf-disabled > .fdf-check-face { opacity: 0; }
+.fdf-checked.fdf-disabled > .fdf-check-disabled-face { opacity: 1; }
+
+/* The Allies dialog's gold / lumber gift fields. The FDF declares them as TEXT frames over
+   the AllianceGold / AllianceLumber textures and leaves the editing to the engine, so the
+   input wears the frame's own font and sits inside the art the file drew. Right-aligned,
+   because that is the justification AllianceSlot.fdf gives GoldText and LumberText. */
+.fdf-gift-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding-right: 0.5em;
+  background: transparent;
+  border: 0;
+  outline: none;
+  pointer-events: auto;
+  text-align: right;
+  font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+}
+.fdf-gift-input:disabled { color: #808080; }
+
+/* --- FDF text area: the message log, the chat history, a quest's description. The chrome
+   is the FDF's backdrop; this is only the scrolling column of lines inside it, whose pitch,
+   gap and inset all come from the frame's own TextArea* properties (ui/fdf/widgets.ts). */
+.fdf-textarea { pointer-events: auto; }
+.fdf-textarea-lines {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+  scrollbar-width: none; /* the FDF's own bar is drawn beside it */
+}
+.fdf-textarea-lines::-webkit-scrollbar { display: none; }
+.fdf-textarea-line {
+  flex: 0 0 auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.15;
+}
 
 /* --- FDF widgets (issue #61): edit box, dropdown, list box. Each sits inside the frame
    the FDF drew, so all the chrome around them is the game's own art — these rules only

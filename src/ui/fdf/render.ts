@@ -1,14 +1,15 @@
 import type { DataSource } from "../../vfs/types";
 import { blpToCanvas } from "../../render/blputil";
-import { wc3ToHtml } from "../wc3Text";
+import { wc3ToHtml, wc3ToPlain } from "../wc3Text";
 import { gameFontStack } from "../gameFont";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, strProp } from "./library";
 import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import {
-  buildEditBox, buildList, buildPopup, widgetKind,
-  type EditBoxControl, type ListControl, type PopupControl, type PopupMenuStyle, type ScrollBarStyle,
+  buildCheckBox, buildEditBox, buildList, buildPopup, buildTextArea, widgetKind,
+  type CheckBoxControl, type EditBoxControl, type ListControl, type PopupControl,
+  type PopupMenuStyle, type ScrollBarStyle, type TextAreaControl, type WidgetKind,
 } from "./widgets";
 
 // FDF → DOM renderer (issue #54). Builds the game's frames as absolutely-positioned
@@ -39,6 +40,9 @@ let clickSound: (() => void) | null = null;
 export function setFdfClickSound(play: (() => void) | null): void {
   clickSound = play;
 }
+
+/** Any of the behaviour controllers a widget frame gets (ui/fdf/widgets.ts). */
+type FdfControl = EditBoxControl | PopupControl | ListControl | CheckBoxControl | TextAreaControl;
 
 export interface FdfScreenHandlers {
   /** frameName → click handler. Also fired by the frame's ControlShortcutKey. Most frames
@@ -125,6 +129,8 @@ export interface FdfScreen {
   editBox(name: string): EditBoxControl | null;
   popup(name: string): PopupControl | null;
   list(name: string): ListControl | null;
+  checkBox(name: string): CheckBoxControl | null;
+  textArea(name: string): TextAreaControl | null;
   /** Fade this screen's panel contents out or in across the chrome clip's window (ui/fdf/anim.ts).
    *  The panel itself is moved by the 3D chrome; only its contents live here. */
   animatePanels(dir: PanelDirection, durationMs: number): Promise<void>;
@@ -184,7 +190,8 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     const box = opts.centerRoot
       ? centreBox(numProp(root, "Width") ?? fit.worldW, numProp(root, "Height") ?? UI_HEIGHT, fit.worldW)
       : { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT };
-    const { tree } = layout(root, box, opts.buttonWidthScale ?? 1);
+    const { tree } = layout(root, box, opts.buttonWidthScale ?? 1, (f) =>
+      measureTextFrame(f, lib, opts.textOverrides ?? {}, fit.scale));
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas, overlay,
       handlers: opts.handlers ?? {},
@@ -250,6 +257,8 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     editBox: (name) => (controls.get(name) as EditBoxControl | undefined) ?? null,
     popup: (name) => (controls.get(name) as PopupControl | undefined) ?? null,
     list: (name) => (controls.get(name) as ListControl | undefined) ?? null,
+    checkBox: (name) => (controls.get(name) as CheckBoxControl | undefined) ?? null,
+    textArea: (name) => (controls.get(name) as TextAreaControl | undefined) ?? null,
     animatePanels: (dir, durationMs) => animate(dir, durationMs),
     dispose(): void {
       window.removeEventListener("resize", onResize);
@@ -301,7 +310,7 @@ interface RenderCtx {
   overlay: HTMLElement;
   shortcuts: Map<string, () => void>;
   elements: Map<string, HTMLElement>;
-  controls: Map<string, EditBoxControl | PopupControl | ListControl>;
+  controls: Map<string, FdfControl>;
   disposers: Array<() => void>;
 }
 
@@ -335,7 +344,7 @@ function renderFrame(
   if (f.type === "BACKDROP") {
     paintBackdrop(el, f, px, ctx);
   } else if (f.type === "TEXT") {
-    paintText(el, f, ctx);
+    paintText(el, f, ctx, node.autoJustifyH);
   } else if (isButton) {
     wireButton(el, f, ctx);
   } else if ((f.type === "SPRITE" || f.type === "MODEL") && ctx.sprites[f.name]) {
@@ -361,7 +370,7 @@ function renderFrame(
  *  behaviour. Only the normal-state backdrop is drawn as a layer; the disabled backdrop
  *  is composited on top and revealed by `.fdf-disabled`, mirroring the button states. */
 function renderWidget(
-  kind: "edit" | "popup" | "list",
+  kind: WidgetKind,
   el: HTMLElement,
   node: LaidOutFrame,
   f: FdfFrame,
@@ -369,6 +378,7 @@ function renderWidget(
   ctx: RenderCtx,
   abs: { left: number; top: number },
 ): void {
+  if (kind === "check") { renderCheckBox(el, node, f, px, ctx, abs); return; }
   const stateNames = stateLayerNames(f);
   const baseName = strProp(f, "ControlBackdrop");
   const baseChild = baseName ? node.children.find((c) => c.frame.name === baseName) : undefined;
@@ -396,6 +406,8 @@ function renderWidget(
   const scale = ctx.fit.scale;
   if (kind === "edit") {
     ctx.controls.set(f.name, buildEditBox(el, f, scale));
+  } else if (kind === "textarea") {
+    ctx.controls.set(f.name, buildTextArea(el, f, scale, scrollBarStyle(node, ctx)));
   } else if (kind === "popup") {
     // A POPUPMENU names its label frame outright (PopupTitleFrame). A BUTTON pressed into
     // service as a dropdown (PlayerSlot's TeamButton / ColorButton) doesn't, and names its
@@ -439,6 +451,72 @@ function renderWidget(
 }
 
 /**
+ * A GLUECHECKBOX: the button's state faces plus the one layer a button has no use for —
+ * the TICK. `CheckBoxCheckHighlight` names a HIGHLIGHT frame whose `HighlightAlphaFile` is
+ * the check mark (or, for a radio button, the dot), and it is drawn ONLY while the box is
+ * checked. It is not a sibling that always draws: composite it and let `.fdf-checked` reveal
+ * it, the same split the pushed and disabled faces already use.
+ */
+function renderCheckBox(
+  el: HTMLElement,
+  node: LaidOutFrame,
+  f: FdfFrame,
+  px: { width: number; height: number },
+  ctx: RenderCtx,
+  abs: { left: number; top: number },
+): void {
+  const stateNames = stateLayerNames(f);
+  const baseName = strProp(f, "ControlBackdrop");
+  const baseChild = baseName ? node.children.find((c) => c.frame.name === baseName) : undefined;
+  if (baseChild) renderFrame(baseChild, el, ctx, abs);
+
+  // Pushed face (:active), then the greyed face (.fdf-disabled) — as on a button.
+  const pushedName = strProp(f, "ControlPushedBackdrop");
+  const pushedChild = pushedName ? node.children.find((c) => c.frame.name === pushedName) : undefined;
+  if (pushedChild) {
+    const canvas = compositeBackdrop(pushedChild.frame, Math.round(px.width), Math.round(px.height), ctx);
+    if (canvas) el.appendChild(stretched(canvas, "fdf-pushed"));
+  }
+  appendDisabledFace(el, node, f, px, ctx);
+
+  // The tick, revealed by .fdf-checked. Its twin (CheckBoxDisabledCheckHighlight) is the
+  // greyed tick a dead-but-ticked box wears — a state the Allies dialog is full of, since
+  // an observer's row shows its alliances without letting you change them.
+  appendCheck(el, f, strProp(f, "CheckBoxCheckHighlight"), "fdf-check-face", ctx);
+  appendCheck(el, f, strProp(f, "CheckBoxDisabledCheckHighlight"), "fdf-check-disabled-face", ctx);
+
+  // Anything else the FDF hangs off the box still draws (a label, a colour swatch); the
+  // state layers above do not, or they would stack into one opaque block.
+  for (const child of node.children) {
+    if (child === baseChild) continue;
+    if (child.frame.name && stateNames.has(child.frame.name)) continue;
+    renderFrame(child, el, ctx, abs);
+  }
+  ctx.controls.set(f.name, buildCheckBox(el));
+}
+
+/** Composite a named HIGHLIGHT frame's alpha file as a full-box overlay layer. */
+function appendCheck(el: HTMLElement, f: FdfFrame, name: string | undefined, cls: string, ctx: RenderCtx): void {
+  const highlight = name ? findByName(f, name) : undefined;
+  const art = highlight ? texture(highlight, "HighlightAlphaFile", ctx) : null;
+  if (!art) return;
+  const layer = document.createElement("div");
+  layer.className = cls;
+  layer.style.background = `url(${art.toDataURL()}) center/100% 100% no-repeat`;
+  el.appendChild(layer);
+}
+
+/** An overlay canvas stretched over its parent, hidden until its state class says otherwise. */
+function stretched(canvas: HTMLCanvasElement, cls: string): HTMLCanvasElement {
+  canvas.className = cls;
+  canvas.style.position = "absolute";
+  canvas.style.inset = "0";
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  return canvas;
+}
+
+/**
  * The list's scrollbar, from the SCROLLBAR frame the FDF hangs off it (MapListBox.fdf's
  * MapListScrollBar, a StandardScrollBarTemplate). Its four pieces — the tiled track, the
  * two arrow buttons and the knob — are the game's own art; the behaviour is ours, as the
@@ -457,21 +535,25 @@ function scrollBarStyle(node: LaidOutFrame, ctx: RenderCtx): ScrollBarStyle | nu
       backdrop ? compositeBackdrop(backdrop, Math.round(w), Math.round(h), ctx) : null;
   };
   const inc = strProp(bar, "ScrollBarIncButtonFrame");
+  const dec = strProp(bar, "ScrollBarDecButtonFrame");
   const thumb = strProp(bar, "SliderThumbButtonFrame");
   /** A sub-frame's own declared height, in pixels. */
   const heightOf = (name: string | undefined, fallback: number): number =>
     (numProp((name && findByName(bar, name)) || bar, "Height") ?? fallback) * scale;
   return {
     width: (numProp(bar, "Width") ?? 0.0165) * scale,
-    arrow: heightOf(inc, 0.015),
+    // No stepper frames ⇒ no steppers, and the knob then has the WHOLE track to travel.
+    // EscMenuScrollBarTemplate (every in-game bar) is that case: its two button blocks are
+    // commented out in the shipped .fdf.
+    arrow: inc || dec ? heightOf(inc, 0.015) : 0,
     // The knob is a fixed bead (StandardThumbButton: 0.01 × 0.01), not a bar that grows
     // and shrinks with the list — it slides the same size however long the list is.
     knob: heightOf(thumb, 0.01),
     track: face(undefined),
     // The FDF's INC button carries the UP arrow and the DEC button the DOWN one — the
     // scrollbar's "increment" is towards the top of the list, not the bottom of the screen.
-    up: face(inc),
-    down: face(strProp(bar, "ScrollBarDecButtonFrame")),
+    up: inc ? face(inc) : undefined,
+    down: dec ? face(dec) : undefined,
     thumb: face(thumb),
   };
 }
@@ -584,7 +666,12 @@ function renderButtonLayers(
 /** Names of a button's non-default state backdrops/highlights (rendered only on state). */
 function stateLayerNames(f: FdfFrame): Set<string> {
   const names = new Set<string>();
-  for (const key of ["ControlPushedBackdrop", "ControlDisabledBackdrop", "ControlDisabledPushedBackdrop", "ControlFocusHighlight", "ControlMouseOverHighlight"]) {
+  for (const key of [
+    "ControlPushedBackdrop", "ControlDisabledBackdrop", "ControlDisabledPushedBackdrop",
+    "ControlFocusHighlight", "ControlMouseOverHighlight",
+    // A check box's tick and its greyed twin — drawn only while checked (renderCheckBox).
+    "CheckBoxCheckHighlight", "CheckBoxDisabledCheckHighlight",
+  ]) {
     const nm = strProp(f, key);
     if (nm) names.add(nm);
   }
@@ -687,8 +774,10 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   return canvas;
 }
 
-/** Paint a TEXT frame: markup → html, font/colour/justification from the FDF. */
-function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
+/** Paint a TEXT frame: markup → html, font/colour/justification from the FDF. `autoJustifyH`
+ *  overrides the file's when the frame is one the ENGINE would have shrink-wrapped and we
+ *  gave a fabricated width to instead (see LaidOutFrame.autoJustifyH). */
+function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx, autoJustifyH?: string): void {
   const raw = ctx.textOverrides[f.name] ?? ctx.lib.string(strProp(f, "Text") ?? "");
   el.style.display = "flex";
   el.style.overflow = "hidden";
@@ -725,7 +814,7 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
     span.style.textShadow = `${ox}px ${oy}px 0 ${rgba(shadow)}`;
   }
 
-  const jh = strProp(f, "FontJustificationH") ?? firstProp(f, "FontJustificationH")?.args[0]?.s;
+  const jh = autoJustifyH ?? strProp(f, "FontJustificationH") ?? firstProp(f, "FontJustificationH")?.args[0]?.s;
   const jv = strProp(f, "FontJustificationV") ?? firstProp(f, "FontJustificationV")?.args[0]?.s;
   el.style.justifyContent = jh === "JUSTIFYRIGHT" ? "flex-end" : jh === "JUSTIFYCENTER" ? "center" : "flex-start";
   el.style.alignItems = jv === "JUSTIFYTOP" ? "flex-start" : jv === "JUSTIFYBOTTOM" ? "flex-end" : "center";
@@ -776,6 +865,41 @@ function appendGlow(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   glow.className = "fdf-button-glow";
   glow.style.background = `url(${highCanvas.toDataURL()}) center/100% 100% no-repeat`;
   el.appendChild(glow);
+}
+
+// --- text measurement (the engine's TEXT auto-size) -------------------------------
+
+/** One 2D context, reused: creating a canvas per frame per build is pure waste. */
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+/**
+ * A TEXT frame's natural width in world units — what the engine shrink-wraps it to, and
+ * what any frame anchored off its edge depends on (see layout.ts's MeasureText).
+ *
+ * Measured with the FONT WE WILL ACTUALLY DRAW IT IN, at the size the FDF declares and the
+ * scale the screen is laid out at, then divided back into world units. Measuring in our own
+ * font rather than the game's is the point: our face sets wider than Friz Quadrata, so a
+ * column placed off a width measured in WC3's metrics would be right for a screen we are not
+ * drawing. The markup is stripped first — `|cffffffff` is styling, not glyphs.
+ */
+function measureTextFrame(
+  f: FdfFrame,
+  lib: FdfLibrary,
+  overrides: Record<string, string>,
+  scale: number,
+): number | undefined {
+  const raw = overrides[f.name] ?? lib.string(strProp(f, "Text") ?? "");
+  if (!raw) return undefined;
+  const text = wc3ToPlain(raw);
+  if (!text) return undefined;
+  measureCtx ??= document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return undefined;
+  const sizeWorld = firstProp(f, "FrameFont")?.args[1]?.n ?? 0.013;
+  const px = Math.max(8, sizeWorld * scale);
+  measureCtx.font = `${px}px ${uiFont()}`;
+  // A hair of slack: a box measured to the exact advance width clips the last glyph's
+  // right side bearing on some faces, and `overflow: hidden` on a TEXT frame is unforgiving.
+  return (measureCtx.measureText(text).width * 1.04) / scale;
 }
 
 // --- small helpers ---------------------------------------------------------------

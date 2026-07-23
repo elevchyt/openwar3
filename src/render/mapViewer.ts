@@ -48,10 +48,12 @@ import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_C
 import { ModelViewerScene } from "./modelViewer";
 import type { MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
-import { GameHud, type HudDriver, type CommandButton } from "../ui/hud";
+import { GameHud, isTyping, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, worldLayer } from "../ui/stage";
 import { UI_HEIGHT } from "../ui/fdf/layout";
-import { GameMenu, MatchOverDialog } from "../ui/gameMenu";
+import { MatchOverDialog } from "../ui/gameMenu";
+import { EscMenu } from "../ui/escMenu";
+import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
@@ -594,7 +596,8 @@ export class MapViewerScene {
   /** Does the script watch a unit-state threshold (EVENT_UNIT_STATE_LIMIT)? That event is
    *  polled per tick rather than raised by the sim, so it needs its own gate (7.17). */
   private scriptWatchesUnitState = false;
-  private gameMenu: GameMenu | null = null;
+  private gameMenu: EscMenu | null = null; // F10 — the game's own EscMenuMainPanel.fdf
+  private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
   /** Dialogs already relayed to a remote player, by `handleId:revision` — so a screen that is
    *  shown for the rest of the match is sent once rather than sixty times a second (item F7). */
   private readonly relayedDialogs = new Map<number, string>();
@@ -702,6 +705,8 @@ export class MapViewerScene {
   // Workers waiting for their build site to clear of units → seconds waited so far.
   private buildWait = new Map<number, number>();
   private meleeTeams = new Map<number, number>(); // owner slot → team
+  /** Lobby labels by slot — the owner line, and the Allies dialog's player rows. */
+  private playerNames = new Map<number, string>();
   // Custom maps only: the map's pre-placed player units (from war3mapUnits.doo) and
   // its own archive (to read war3map.j). startCustom seeds the units OWNED so the
   // local player has vision/control (issue #33) and runs the map's config() (Phase 7).
@@ -1175,9 +1180,10 @@ export class MapViewerScene {
     // (the one difficulty we model, matching the Custom Game screen's label); a human
     // slot falls back to a generic "Player N" — the local player never shows an owner
     // line, so its own label is never seen.
-    this.rts!.setPlayerNames(
-      new Map(config.slots.map((s) => [s.id, s.controller === "computer" ? "Computer (Normal)" : `Player ${s.id + 1}`])),
+    this.playerNames = new Map(
+      config.slots.map((s) => [s.id, s.controller === "computer" ? "Computer (Normal)" : `Player ${s.id + 1}`]),
     );
+    this.rts!.setPlayerNames(this.playerNames);
     // Open on the local player's base at gameplay zoom.
     const home = config.slots.find((s) => s.id === this.localPlayer);
     if (home) {
@@ -4270,7 +4276,7 @@ export class MapViewerScene {
     this.hud = new GameHud(ui, driver);
     this.mountScriptUi(ui);
     this.gameMenu?.dispose();
-    this.gameMenu = new GameMenu(ui, {
+    this.gameMenu = new EscMenu(ui, this.vfs, SKIN_SECTION[this.localRace], {
       onReturn: () => {
         this.gameMenu?.hide();
         this.paused = false;
@@ -4280,7 +4286,49 @@ export class MapViewerScene {
         this.paused = false;
         this.onExit?.();
       },
+      // "Pause Game" closes the menu and leaves the world stopped — the one button on the
+      // panel that does NOT resume, which is the whole difference from Return to Game.
+      onPause: () => {
+        this.gameMenu?.hide();
+        this.paused = true;
+      },
     });
+    this.allies?.dispose();
+    this.allies = new AllianceDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+      localPlayer: this.localPlayer,
+      // Everyone but yourself, and only seated slots — the matrix has 16 rows (12 players
+      // plus the two neutrals), and the dialog is about the ones in the game.
+      peers: () => [...this.meleeTeams.keys()]
+        .filter((id) => id !== this.localPlayer)
+        .sort((a, b) => a - b)
+        .map((id) => ({ id, name: this.playerNames.get(id) ?? `Player ${id + 1}` })),
+      get: (other, type) => this.rts?.getPlayerAlliance(this.localPlayer, other, type) ?? false,
+      set: (other, type, value) => this.rts?.setPlayerAlliance(this.localPlayer, other, type, value),
+      stash: () => this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 },
+      trade: (other, gold, lumber) => this.giveResources(other, gold, lumber),
+      // A LAN client cannot write: see AllianceModel.writable.
+      writable: !(this.rts?.frozenClient ?? false),
+    });
+  }
+
+  /**
+   * Hand gold and lumber to an ally — the Allies dialog's two gift fields on Accept.
+   *
+   * Straight onto the sim's stashes, because this machine is the authority whenever the
+   * dialog can be written at all (AllianceModel.writable gates a LAN client out entirely).
+   * The amounts have already been clamped to what the treasury holds, so this can't overdraw.
+   */
+  private giveResources(other: number, gold: number, lumber: number): void {
+    const sim = this.rts?.simWorld;
+    if (!sim) return;
+    const from = sim.stashOf(this.localPlayer);
+    const to = sim.stashOf(other);
+    const sentGold = Math.min(gold, from.gold);
+    const sentLumber = Math.min(lumber, from.lumber);
+    from.gold -= sentGold;
+    from.lumber -= sentLumber;
+    to.gold += sentGold;
+    to.lumber += sentLumber;
   }
 
   /**
@@ -6366,6 +6414,8 @@ export class MapViewerScene {
     this.items.clearCustom();
     this.gameMenu?.dispose();
     this.gameMenu = null;
+    this.allies?.dispose();
+    this.allies = null;
     this.matchOver?.dispose();
     this.matchOver = null;
     this.paused = false;
@@ -7278,6 +7328,18 @@ export class MapViewerScene {
         this.paused = this.gameMenu?.toggle() ?? false;
         return;
       }
+      // F11 is the Allies dialog (UI\HelpStrings.txt: "F11 - Toggle the Allies menu on/off").
+      // Unlike F10 it does NOT pause: WC3 keeps the match running behind it.
+      if (e.key === "F11") {
+        e.preventDefault(); // and not the browser's full-screen toggle
+        this.allies?.toggle();
+        return;
+      }
+      // Same rule as the HUD's own hotkeys (ui/hud.ts isTyping): a keystroke aimed at a text
+      // field is not a camera pan and not a cheat code. Without this, typing a gift amount
+      // into the Allies dialog leaves the letters stuck in `keys` (the field swallows the
+      // keyup) and the camera scrolls off on its own afterwards.
+      if (isTyping(e.target)) return;
       this.keys.add(e.key.toLowerCase());
       this.checkCheatCode(e.key);
     });

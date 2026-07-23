@@ -219,6 +219,12 @@ const ZONES = {
   command: [76.4, 19.0, 22.4, 79.0],
 } as const;
 
+/** Is the keystroke going into a text field rather than at the game? */
+export function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+}
+
 function place(el: HTMLElement, zone: readonly [number, number, number, number]): void {
   el.classList.add("hud-zone");
   // Inline position so it wins over any component rule (e.g. .hud-command's
@@ -611,6 +617,11 @@ export class GameHud {
   private onKey = (e: KeyboardEvent): void => {
     if (this.root.hidden) return;
     if (document.body.classList.contains("game-menu-open")) return; // F10 menu is modal
+    // Typing into an in-game field is TYPING, not commanding. The Allies dialog's gift
+    // boxes are the first of these (F11 does not pause, unlike F10), and without this every
+    // digit of "200" also recalls a control group and every letter fires a command-card
+    // hotkey. The FDF screens' own accelerators already stand down the same way.
+    if (isTyping(e.target)) return;
     // Held keys auto-repeat ~30×/s. None of the hotkeys below are hold-to-repeat
     // commands (camera panning reads its own key set), and letting them repeat
     // both spams selection voice lines and makes every held key look like a

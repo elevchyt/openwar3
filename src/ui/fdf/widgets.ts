@@ -4,7 +4,10 @@ import { wc3ToHtml } from "../wc3Text";
 
 // The interactive FDF widgets beyond the button family (issue #61): EDITBOX (text
 // input), POPUPMENU (the race / team / colour / handicap dropdowns) and the LISTBOX-
-// style CONTROL frames (the skirmish map list, the profile list).
+// style CONTROL frames (the skirmish map list, the profile list). Plus the two the
+// IN-GAME dialogs live on and the glue screens never used: GLUECHECKBOX (the Allies
+// dialog's ally/vision/units grid, the Chat dialog's send-to radio buttons) and
+// TEXTAREA (the message log, the chat history, a quest's description).
 //
 // WC3's own FDF only declares each widget's CHROME — its backdrops, its title frame,
 // its arrow, its scrollbar. The engine supplies the behaviour and the contents at
@@ -58,6 +61,22 @@ export interface ListControl extends Control {
   onActivate?: (value: string) => void;
 }
 
+export interface CheckBoxControl extends Control {
+  get checked(): boolean;
+  set checked(v: boolean);
+  onChange?: (checked: boolean) => void;
+}
+
+export interface TextAreaControl extends Control {
+  /** Replace the whole contents. Each line is WC3 markup, not plain text. */
+  setLines(lines: string[]): void;
+  /** Append one line, trimming to the frame's own `TextAreaMaxLines`. */
+  addLine(line: string): void;
+  clear(): void;
+  /** Stick to the newest line — what a log does as it fills. */
+  scrollToBottom(): void;
+}
+
 /** Font size (world units) declared on a frame, defaulting to the FDF's own 0.011. */
 function fontSize(f: FdfFrame, scale: number, fallback = 0.011): string {
   const size = firstProp(f, "FrameFont")?.args[1]?.n ?? fallback;
@@ -90,6 +109,43 @@ export function buildEditBox(el: HTMLElement, f: FdfFrame, scale: number): EditB
   input.addEventListener("input", () => control.onChange?.(input.value));
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") control.onSubmit?.(input.value);
+  });
+  return control;
+}
+
+// --- GLUECHECKBOX (check box / radio button) ---------------------------------------
+
+/**
+ * A check box. The FDF gives it the same state backdrops a button has, plus one more the
+ * button family has no use for: `CheckBoxCheckHighlight` names a HIGHLIGHT frame whose
+ * `HighlightAlphaFile` is the TICK — drawn over the box only while it is checked. The
+ * renderer composites that face and leaves it to CSS; all this holds is the state.
+ *
+ * A RADIO button is the same widget with different art (`EscMenuRadioButtonTemplate` — a
+ * round box and a dot for the tick). The engine gives it no grouping of its own either, so
+ * the screen that owns a set is what clears the siblings; see `radioGroup` in ui/chatDialog.ts.
+ */
+export function buildCheckBox(el: HTMLElement): CheckBoxControl {
+  el.classList.add("fdf-checkbox");
+  let checked = false;
+  let enabled = true;
+
+  const control: CheckBoxControl = {
+    get checked(): boolean { return checked; },
+    set checked(v: boolean) {
+      checked = v;
+      el.classList.toggle("fdf-checked", v);
+    },
+    setEnabled(on: boolean): void {
+      enabled = on;
+      el.classList.toggle("fdf-disabled", !on);
+    },
+  };
+
+  el.addEventListener("click", () => {
+    if (!enabled) return;
+    control.checked = !checked;
+    control.onChange?.(checked);
   });
   return control;
 }
@@ -292,11 +348,18 @@ export function buildPopup(
  */
 export interface ScrollBarStyle {
   width: number; // px — the SCROLLBAR frame's Width
-  arrow: number; // px — the inc/dec buttons (square)
+  /** px — the inc/dec buttons (square). ZERO when the bar has none; see `up`/`down`. */
+  arrow: number;
   knob: number; // px — the thumb's height
   track(w: number, h: number): HTMLCanvasElement | null;
-  up(w: number, h: number): HTMLCanvasElement | null;
-  down(w: number, h: number): HTMLCanvasElement | null;
+  /** The stepper buttons — ABSENT on a bar that has none. `EscMenuScrollBarTemplate` is
+   *  exactly that: its `ScrollBarIncButtonFrame`/`DecButtonFrame` blocks are commented out
+   *  in the shipped .fdf, so every in-game bar (the message log, the chat history, a quest's
+   *  description) is a bare track and knob. Falling back to the bar's own ControlBackdrop
+   *  for a missing arrow — which is what a non-optional accessor forces — stamps the TRACK's
+   *  art into both ends and gives it two stepper buttons the game never draws. */
+  up?(w: number, h: number): HTMLCanvasElement | null;
+  down?(w: number, h: number): HTMLCanvasElement | null;
   thumb(w: number, h: number): HTMLCanvasElement | null;
 }
 
@@ -382,6 +445,90 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
   return control;
 }
 
+// --- TEXTAREA ----------------------------------------------------------------------
+
+/**
+ * A scrolling block of lines — WC3's message log, the chat history, a quest's description,
+ * the Help and Tips pages. Everything about its metrics is the FDF's: `TextAreaLineHeight`
+ * is the pitch of one line, `TextAreaLineGap` the space between two, `TextAreaInset` the
+ * margin off the frame's edge, `TextAreaMaxLines` how many it keeps.
+ *
+ * The lines are WC3 markup (a player's chat is prefixed with their colour), so they go
+ * through `wc3ToHtml` exactly as a list row's label does — not as textContent.
+ *
+ * Note the FONT: a TEXTAREA's own `FrameFont` is what draws its lines, and it is not the
+ * frame's height — `EscMenuTextAreaTemplate` declares no font at all (both its FrameFont
+ * lines are commented out in the shipped file) and leaves it to whoever inherits, which is
+ * why the fallback here is the 0.011 every in-game text area that DOES declare one uses.
+ */
+export function buildTextArea(el: HTMLElement, f: FdfFrame, scale: number, bar?: ScrollBarStyle | null): TextAreaControl {
+  el.classList.add("fdf-textarea");
+
+  const inset = (firstProp(f, "TextAreaInset")?.args[0]?.n ?? 0.005) * scale;
+  const lineH = (firstProp(f, "TextAreaLineHeight")?.args[0]?.n ?? 0.011) * scale;
+  const gap = (firstProp(f, "TextAreaLineGap")?.args[0]?.n ?? 0) * scale;
+  // `TextAreaMaxLines` is a ROLLING cap, and only the areas that stream declare one:
+  // LogArea and ChatHistoryDisplay say 128 because lines arrive forever, while HelpTextArea
+  // and TipsTextArea say nothing because they are handed a finished document. So an absent
+  // cap means NO cap — inventing a default here trimmed the first ten lines off the Help
+  // page (a 136-line file against a fabricated 128) and opened it mid-sentence.
+  const maxLines = firstProp(f, "TextAreaMaxLines")?.args[0]?.n ?? Infinity;
+
+  const rows = document.createElement("div");
+  rows.className = "fdf-textarea-lines";
+  rows.style.inset = `${inset}px`;
+  rows.style.fontSize = fontSize(f, scale);
+  rows.style.gap = `${gap}px`;
+  // The rows stop where the scrollbar starts — it sits beside them, as in the game.
+  if (bar) rows.style.right = `${inset + bar.width}px`;
+  el.appendChild(rows);
+  const scrollbar = bar ? buildScrollBar(el, rows, bar, inset) : null;
+
+  let lines: string[] = [];
+
+  const paint = (): void => {
+    rows.textContent = "";
+    for (const text of lines) {
+      const line = document.createElement("div");
+      line.className = "fdf-textarea-line";
+      // A line box at least as tall as the FDF's pitch, but free to GROW: a long chat message
+      // wraps, and pinning the height would slice the wrapped half off.
+      line.style.minHeight = `${lineH}px`;
+      line.innerHTML = wc3ToHtml(text);
+      rows.appendChild(line);
+    }
+    scrollbar?.sync();
+  };
+
+  const control: TextAreaControl = {
+    // A wholesale replacement is a DOCUMENT, not a stream: it is not trimmed. Only the
+    // append path below rolls, which is what the cap is for.
+    setLines(next: string[]): void {
+      lines = next.slice();
+      paint();
+      rows.scrollTop = 0;
+      scrollbar?.sync();
+    },
+    addLine(line: string): void {
+      lines.push(line);
+      if (lines.length > maxLines) lines = lines.slice(-maxLines);
+      paint();
+    },
+    clear(): void {
+      lines = [];
+      paint();
+    },
+    scrollToBottom(): void {
+      rows.scrollTop = rows.scrollHeight;
+      scrollbar?.sync();
+    },
+    setEnabled(on: boolean): void {
+      el.classList.toggle("fdf-disabled", !on);
+    },
+  };
+  return control;
+}
+
 /** Draw the FDF's scrollbar down the right of `rows` and drive it: the arrows step, the
  *  knob drags, and scrolling the rows any other way (wheel, keyboard) moves the knob back. */
 function buildScrollBar(
@@ -422,13 +569,15 @@ function buildScrollBar(
   const height = el.clientHeight - 2 * border;
   const back = piece(bar.track, "fdf-scrollbar-track", bar.width, height);
   back.style.top = "0";
-  const up = piece(bar.up, "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
-  up.style.top = "0";
-  const down = piece(bar.down, "fdf-scrollbar-arrow", bar.arrow, bar.arrow);
-  down.style.bottom = "0";
+  // Steppers only if the FDF declares them — the in-game bars don't (ScrollBarStyle.up).
+  const up = bar.up ? piece(bar.up, "fdf-scrollbar-arrow", bar.arrow, bar.arrow) : null;
+  if (up) up.style.top = "0";
+  const down = bar.down ? piece(bar.down, "fdf-scrollbar-arrow", bar.arrow, bar.arrow) : null;
+  if (down) down.style.bottom = "0";
   const knob = piece(bar.thumb, "fdf-scrollbar-knob", bar.knob, bar.knob);
 
-  /** The stretch of track the knob may travel: between the two arrows. */
+  /** The stretch of track the knob may travel: between the two arrows (the whole
+   *  track when there are none). */
   const span = (): number => track.clientHeight - 2 * bar.arrow - bar.knob;
 
   const sync = (): void => {
@@ -439,8 +588,8 @@ function buildScrollBar(
   };
 
   const step = (): number => (rows.firstElementChild as HTMLElement | null)?.offsetHeight ?? 16;
-  up.addEventListener("click", () => { rows.scrollTop -= step(); });
-  down.addEventListener("click", () => { rows.scrollTop += step(); });
+  up?.addEventListener("click", () => { rows.scrollTop -= step(); });
+  down?.addEventListener("click", () => { rows.scrollTop += step(); });
   rows.addEventListener("scroll", sync);
 
   knob.addEventListener("pointerdown", (e) => {
@@ -465,12 +614,18 @@ function buildScrollBar(
 }
 
 /** True when a frame type is one of the widgets above (drawn as chrome + a controller). */
-export function widgetKind(f: FdfFrame): "edit" | "popup" | "list" | null {
+export function widgetKind(f: FdfFrame): WidgetKind | null {
   if (f.type === "EDITBOX") return "edit";
   if (f.type === "POPUPMENU" || f.type === "GLUEPOPUPMENU") return "popup";
+  // Check boxes and radio buttons are the SAME frame type — a GLUECHECKBOX — differing only
+  // in the art their template hands them (EscMenuCheckBoxTemplate vs EscMenuRadioButtonTemplate).
+  if (f.type === "GLUECHECKBOX" || f.type === "CHECKBOX" || f.type === "SIMPLECHECKBOX") return "check";
+  if (f.type === "TEXTAREA") return "textarea";
   // The map/profile lists are CONTROL frames carrying a backdrop and a scrollbar
   // (MapListBox.fdf, ListBoxWar3.fdf); LISTBOX is the older, self-contained form.
   if (f.type === "LISTBOX") return "list";
   if (f.type === "CONTROL" && strProp(f, "ControlBackdrop")) return "list";
   return null;
 }
+
+export type WidgetKind = "edit" | "popup" | "list" | "check" | "textarea";
