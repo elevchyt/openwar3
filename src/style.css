@@ -1577,6 +1577,17 @@ body.in-game .fdf-screen.fdf-ingame {
   pointer-events: none;
 }
 .quest-row-selected .fdf-button-glow { opacity: 1; }
+/* The requirement list: padded off the backdrop's border and clipped to the room the file
+   gave it, so a quest with more requirements than fit scrolls instead of spilling over the
+   description below (ui/questDialog.ts derives the padding from the frames themselves). */
+.quest-reqs {
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+.quest-reqs::-webkit-scrollbar { display: none; }
 .quest-req {
   display: flex;
   align-items: center;

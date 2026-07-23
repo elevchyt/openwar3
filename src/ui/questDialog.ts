@@ -28,6 +28,7 @@ import { blpToCanvas } from "../render/blputil";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { cloneNamespaced, strProp, type FdfLibrary } from "./fdf/library";
+import { UI_HEIGHT } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
 import { wc3ToHtml } from "./wc3Text";
@@ -40,6 +41,24 @@ const QUEST_FDF = "UI\\FrameDef\\UI\\QuestDialog.fdf";
 // down the container, at the row's height plus a hair.
 const ROW_PITCH = 0.036;
 const ROW_WIDTH = 0.21; // the containers' own width (QuestMainContainer declares 0.21)
+/** The row title's type size — see the FrameFont override in `rootFrame`. */
+const ROW_TITLE_FONT = 0.0115;
+/** `QuestItemListItemTitle`'s own `FrameFont "MasterFont", 0.013` — the size the file sets
+ *  a requirement line in. Without it the injected lines inherit the page's 16px default. */
+const REQ_FONT = 0.013;
+/**
+ * `QuestDisplayBackdrop`'s own `BackdropCornerSize` — the thickness of its ornate border.
+ *
+ * The file drops `QuestItemListContainer` only 0.014 below that backdrop's top edge, so at
+ * the file's own numbers the first requirement line lands ON the border with ~1px to spare.
+ * That works in the engine, whose text is shrink-wrapped and inset by its own metrics; ours
+ * needs the clearance spelled out. Used to pad the injected list, never to move the frame.
+ */
+const DETAILS_BORDER = 0.0125;
+/** The same backdrop's `BackdropBackgroundInsets` — the file's own "how far in does content
+ *  sit" number, and the one `QuestDisplay` re-states as its `TextAreaInset`. Clearing the
+ *  border alone leaves the list sitting ON the frame; this is the breathing room. */
+const DETAILS_INSET = 0.005;
 
 const s = (v: string): Arg => ({ s: v, n: null, str: true });
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
@@ -236,18 +255,27 @@ export class QuestDialogOverlay {
             prop("Height", num(height)),
           ];
         };
-        oneLine("QuestListItemTitle", 0.16, 0.016);
+        oneLine("QuestListItemTitle", 0.16, 0.014);
         oneLine("QuestListItemComplete", 0.09, 0.011);
         // The FDF anchors the title `LEFT` — vertically centred — which assumes the engine's
         // shrink-wrapped text. At a full line of OUR height it collides with the caption
-        // anchored to the row's bottom, so pin it to the top instead: title over status is
+        // anchored to the row's bottom, so pin it to the TOP instead: title over status is
         // how the real log draws a row.
+        //
+        // The X stays the FILE'S 0.002, and that is the whole trick to the two lines lining
+        // up: the title carries `FontJustificationOffset 0.01` and the caption carries none,
+        // so 0.002 + 0.01 is exactly the caption's own 0.012 anchor. Nudging this to 0.004
+        // (as it briefly was) reads as a 2px stagger, because it is one.
         const title = row.children.find((ch) => ch.name.startsWith("QuestListItemTitle"));
         const btn = row.children.find((ch) => ch.name.startsWith("QuestListItemButton"));
         if (title && btn) {
           title.props = [
-            ...title.props.filter((p) => p.key !== "SetPoint"),
-            prop("SetPoint", word("TOPLEFT"), s(btn.name), word("TOPLEFT"), num(0.004), num(-0.003)),
+            ...title.props.filter((p) => p.key !== "SetPoint" && p.key !== "FrameFont"),
+            prop("SetPoint", word("TOPLEFT"), s(btn.name), word("TOPLEFT"), num(0.002), num(-0.0025)),
+            // A notch below the 0.013 EscMenuButtonTextTemplate hands it. That size is meant
+            // for a BUTTON's caption filling its whole face; here it shares a 0.033 row with
+            // a status line, and our face sets wider than the game's besides.
+            prop("FrameFont", s("MasterFont"), num(ROW_TITLE_FONT), s("")),
           ];
         }
         children.push(row);
@@ -301,7 +329,11 @@ export class QuestDialogOverlay {
     const host = screen.frame("QuestItemListContainer");
     if (host) {
       host.textContent = "";
-      if (sel?.discovered) this.paintRequirements(host, sel);
+      // Clear only the padding a previous paint derived — NOT the whole style attribute,
+      // which is where the renderer keeps this frame's position/size. Wiping it dropped the
+      // container out of absolute layout, and it collapsed onto its own content.
+      host.style.padding = "";
+      if (sel?.discovered) this.paintRequirements(screen, host, sel);
     }
     screen.textArea("QuestDisplay")?.setLines(
       sel ? [sel.discovered ? sel.description : this.string("QUESTNEEDTODISCOVER")] : [],
@@ -330,13 +362,37 @@ export class QuestDialogOverlay {
   /** The requirement lines: "- Slay the bandit lord", each greyed once done. The dash is
    *  ours-by-necessity — the shipped campaign maps put it in the item text itself, but the
    *  string a script sets is bare, and the log always lists items dashed. */
-  private paintRequirements(host: HTMLElement, q: QuestObj): void {
+  private paintRequirements(screen: FdfScreen, host: HTMLElement, q: QuestObj): void {
+    host.classList.add("quest-reqs");
     const box = host.getBoundingClientRect();
-    const line = Math.max(12, Math.round(box.height / 4)); // the container holds ~4 lines
+
+    // Keep the list off the backdrop's ornate border (DETAILS_BORDER), and start it at the
+    // same X as the description below — that TEXTAREA's own `TextAreaInset` has already
+    // solved "how far in does text sit in this box", so borrowing its answer is what makes
+    // the two blocks read as one column instead of two.
+    const backdrop = screen.frame("QuestDisplayBackdrop")?.getBoundingClientRect();
+    const desc = screen.element.querySelector<HTMLElement>('[data-frame="QuestDisplay"] .fdf-textarea-lines');
+    const scale = (screen.element.clientHeight || box.height) / UI_HEIGHT;
+    const inset = DETAILS_INSET * scale;
+    const padTop = backdrop
+      ? Math.max(inset, backdrop.top + (DETAILS_BORDER + DETAILS_INSET) * scale - box.top)
+      : inset;
+    const padLeft = desc ? Math.max(0, desc.getBoundingClientRect().left - box.left) : 0;
+    host.style.paddingTop = `${padTop}px`;
+    host.style.paddingLeft = `${padLeft}px`;
+    // The list has the room the file gave it and no more; a quest with more requirements
+    // than fit scrolls rather than spilling over the description below it.
+    host.style.paddingRight = `${padLeft}px`;
+
+    // The file sizes these lines itself: `QuestItemListItem`'s own title declares
+    // MasterFont 0.013 (see REQ_FONT). The line BOX is a touch taller than the type so
+    // descenders clear — the template's 0.012 height would slice them in our face.
+    const font = Math.max(9, REQ_FONT * scale);
     for (const it of q.items) {
       const el = document.createElement("div");
       el.className = it.completed ? "quest-req quest-req-done" : "quest-req";
-      el.style.height = `${line}px`;
+      el.style.fontSize = `${font}px`;
+      el.style.height = `${Math.round(font * 1.3)}px`;
       el.innerHTML = `-&nbsp;${wc3ToHtml(it.description)}`;
       host.appendChild(el);
     }
