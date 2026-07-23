@@ -43,6 +43,10 @@ const ROW_PITCH = 0.036;
 const ROW_WIDTH = 0.21; // the containers' own width (QuestMainContainer declares 0.21)
 /** The row title's type size — see the FrameFont override in `rootFrame`. */
 const ROW_TITLE_FONT = 0.0115;
+/** `QuestButtonBaseTemplate`'s own `BackdropBackgroundInsets` — the file's answer to "how far
+ *  inside this button does content sit". It is already where the status caption's 0.005
+ *  bottom anchor comes from; the title takes it from the top for the same reason. */
+const ROW_CONTENT_INSET = 0.005;
 /** `QuestItemListItemTitle`'s own `FrameFont "MasterFont", 0.013` — the size the file sets
  *  a requirement line in. Without it the injected lines inherit the page's 16px default. */
 const REQ_FONT = 0.013;
@@ -255,8 +259,11 @@ export class QuestDialogOverlay {
             prop("Height", num(height)),
           ];
         };
-        oneLine("QuestListItemTitle", 0.16, 0.014);
-        oneLine("QuestListItemComplete", 0.09, 0.011);
+        // Heights: the row is 0.033 and holds TWO lines plus an inset at each end, so the
+        // budget is tight enough that the caption's spare leading (0.009 of type in a 0.011
+        // box) is the difference between the two lines touching and not.
+        oneLine("QuestListItemTitle", 0.16, 0.0125);
+        oneLine("QuestListItemComplete", 0.09, 0.0105);
         // The FDF anchors the title `LEFT` — vertically centred — which assumes the engine's
         // shrink-wrapped text. At a full line of OUR height it collides with the caption
         // anchored to the row's bottom, so pin it to the TOP instead: title over status is
@@ -266,12 +273,17 @@ export class QuestDialogOverlay {
         // up: the title carries `FontJustificationOffset 0.01` and the caption carries none,
         // so 0.002 + 0.01 is exactly the caption's own 0.012 anchor. Nudging this to 0.004
         // (as it briefly was) reads as a 2px stagger, because it is one.
+        //
+        // The Y is `ROW_CONTENT_INSET` — the button backdrop's own BackdropBackgroundInsets,
+        // which is also where the caption's 0.005 bottom anchor comes from. So the two lines
+        // are inset from their own edges by the same number the file uses for "how far in
+        // does content sit inside this button", and the title stops riding its top border.
         const title = row.children.find((ch) => ch.name.startsWith("QuestListItemTitle"));
         const btn = row.children.find((ch) => ch.name.startsWith("QuestListItemButton"));
         if (title && btn) {
           title.props = [
             ...title.props.filter((p) => p.key !== "SetPoint" && p.key !== "FrameFont"),
-            prop("SetPoint", word("TOPLEFT"), s(btn.name), word("TOPLEFT"), num(0.002), num(-0.0025)),
+            prop("SetPoint", word("TOPLEFT"), s(btn.name), word("TOPLEFT"), num(0.002), num(-ROW_CONTENT_INSET)),
             // A notch below the 0.013 EscMenuButtonTextTemplate hands it. That size is meant
             // for a BUTTON's caption filling its whole face; here it shares a 0.033 row with
             // a status line, and our face sets wider than the game's besides.
