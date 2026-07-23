@@ -23,3 +23,5 @@ pnpm build         # typecheck + build to dist/
 ## Legal
 
 OpenWar3 is original code with zero copyrighted assets. Assets read from your local install, client-side, never uploaded or hosted. Engine fully open.
+
+Licensed under the [MIT License](LICENSE).
