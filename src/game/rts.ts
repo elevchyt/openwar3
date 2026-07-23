@@ -3667,9 +3667,11 @@ export class RtsController {
 
   /** Rally point of the primary selected UNIT-PRODUCING building (for the rally
    *  flag), or null. Towers/farms/etc. don't produce units, so no rally. */
-  selectedRally(): { x: number; y: number; z: number } | null {
+  selectedRally(): { x: number; y: number; z: number; owner: number } | null {
     if (this.primary === null) return null;
-    const b = this.sim.units.get(this.primary)?.building;
+    const bu = this.sim.units.get(this.primary);
+    if (!bu) return null;
+    const b = bu.building;
     if (!b || !b.producesUnits) return null;
     // For a mine/tree/unit rally, put the flag on the live target (a followed
     // unit may have moved); fall back to the stored point if it's gone.
@@ -3685,20 +3687,25 @@ export class RtsController {
       const m = this.sim.mines.get(b.rallyTargetId);
       if (m) { x = m.x; y = m.y; }
     }
-    return { x, y, z: this.heightAt(x, y) };
+    // The flag carries a team-colour slot (RallyPoint.mdx texture replaceableId 1),
+    // so it must be tinted with the OWNING player's colour — not left on the default
+    // slot 0, which is red (issue #86).
+    return { x, y, z: this.heightAt(x, y), owner: bu.owner };
   }
 
   /** World positions of every SELECTED unit's shift-queued orders, for the small
    *  queue flags (rendered only while the owner is selected). A queued lumber
    *  harvest flags the tree top; other orders flag the ground point/target. */
-  queueMarkers(): Array<{ x: number; y: number; z: number }> {
-    const out: Array<{ x: number; y: number; z: number }> = [];
+  queueMarkers(): Array<{ x: number; y: number; z: number; owner: number }> {
+    const out: Array<{ x: number; y: number; z: number; owner: number }> = [];
     for (const id of this.selected) {
       const u = this.sim.units.get(id);
       if (!u) continue;
       for (const o of u.orderQueue) {
         const m = this.markerFor(o);
-        if (m) out.push(m);
+        // Same flag model as the rally point, so the same team-colour rule applies:
+        // it belongs to the unit that queued the order (issue #86).
+        if (m) out.push({ ...m, owner: u.owner });
       }
     }
     return out;

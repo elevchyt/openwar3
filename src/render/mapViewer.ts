@@ -4009,6 +4009,7 @@ export class MapViewerScene {
         this.loc3[1] = rally.y;
         this.loc3[2] = rally.z;
         this.rallyFlag.setLocation(this.loc3);
+        this.rallyFlag.setTeamColor(rally.owner); // the flag is team-coloured (issue #86)
         this.rallyFlag.show();
       } else {
         this.rallyFlag.hide();
@@ -4023,6 +4024,7 @@ export class MapViewerScene {
       this.loc3[1] = markers[i].y;
       this.loc3[2] = markers[i].z;
       inst.setLocation(this.loc3);
+      inst.setTeamColor(markers[i].owner); // pooled instances are reused across owners
       inst.show();
     }
     for (let i = markers.length; i < this.queueFlags.length; i++) this.queueFlags[i].hide();
