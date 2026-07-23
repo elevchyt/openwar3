@@ -1555,6 +1555,41 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-checked.fdf-disabled > .fdf-check-face { opacity: 0; }
 .fdf-checked.fdf-disabled > .fdf-check-disabled-face { opacity: 1; }
 
+/* FlashQuestDialogButton: the Quests button pulses gold until the log is opened. */
+.hud-menu-btn.hud-quests-flash {
+  animation: hud-quests-flash 0.9s ease-in-out infinite alternate;
+}
+@keyframes hud-quests-flash {
+  from { color: inherit; box-shadow: none; }
+  to { color: #ffcc00; box-shadow: 0 0 7px 1px rgba(255, 204, 0, 0.55) inset, 0 0 6px rgba(255, 204, 0, 0.4); }
+}
+
+/* --- F9 Quest Log (QuestDialog.fdf). The chrome is all the file's; these style only what
+   the engine supplies: the icon inside its plate, the requirement lines, and the selected
+   row's held glow (QuestListItemSelectedHighlight is the same art as the hover highlight,
+   so selection = the glow staying on). */
+.quest-row-icon {
+  position: absolute;
+  inset: 12%;
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.quest-row-selected .fdf-button-glow { opacity: 1; }
+.quest-req {
+  display: flex;
+  align-items: center;
+  font-family: var(--ui-font, "Trajan Pro", "Cinzel", "Palatino Linotype", serif);
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* A requirement already met reads as done — greyed, as the log marks off progress. */
+.quest-req-done { color: #808080; }
+
 /* The Allies dialog's gold / lumber gift fields. The FDF declares them as TEXT frames over
    the AllianceGold / AllianceLumber textures and leaves the editing to the engine, so the
    input wears the frame's own font and sits inside the art the file drew. Right-aligned,

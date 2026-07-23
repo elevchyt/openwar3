@@ -222,13 +222,26 @@ export function layout(
         n.placed = true; progressed = true; continue;
       }
 
+      // TWO opposing SetPoints pin both edges, and in WC3 that WINS over a declared (or
+      // inherited) Width/Height — the points are constraints, the size is a default. The
+      // quest log is where this stops being theoretical: QuestListItemButton inherits
+      // 0.18×0.06 from QuestButtonTemplate and then pins TOPLEFT to the icon and
+      // BOTTOMRIGHT to its 0.033-tall row — honour the size and the button overhangs its
+      // row by nearly its own height again, every caption anchored to its bottom landing
+      // in the next row. An axis whose points DON'T oppose keeps the declared size
+      // (placeByTwoPoints falls back per axis).
+      if (points.length >= 2 && points.every((pt) => relOf(n, pt.relName)?.placed)) {
+        const opposedX = new Set(points.map((pt) => fx(pt.myPoint))).size > 1;
+        const opposedY = new Set(points.map((pt) => fy(pt.myPoint))).size > 1;
+        if (opposedX || opposedY || Number.isNaN(n.w) || Number.isNaN(n.h)) {
+          placeByTwoPoints(n, points, relOf);
+          progressed = true;
+          continue;
+        }
+      }
+
       // Need a size before a single anchor can place us. Inherit parent's if unset.
       if (Number.isNaN(n.w) || Number.isNaN(n.h)) {
-        // Two opposing points can derive the size (rare in the menu, common elsewhere).
-        if (points.length >= 2) {
-          const ok = points.every((pt) => relOf(n, pt.relName)?.placed);
-          if (ok) { placeByTwoPoints(n, points, relOf); progressed = true; continue; }
-        }
         // An ANCHORED TEXT frame with no Height is one LINE tall, not as tall as whatever
         // contains it — the engine auto-sizes TEXT to its string, so the FDF omits the size.
         // Inheriting the parent's height instead is invisible on a centred label (the box

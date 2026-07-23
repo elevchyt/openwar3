@@ -21,6 +21,7 @@ import { registerGroupNatives } from "./groups";
 import { registerItemNatives } from "./items";
 import { registerMeleeNatives } from "./melee";
 import { registerMultiboardNatives } from "./multiboard";
+import { registerQuestNatives } from "./quests";
 import { registerRegionNatives } from "./region";
 import { registerSoundNatives } from "./sound";
 import { registerStockNatives } from "./stock";
@@ -135,6 +136,7 @@ export function registerNatives(rt: Runtime): void {
   registerItemNatives(rt); // items + the item events (7.18)
   registerMeleeNatives(rt); // what blizzard.j's Melee* library stands on (7.3)
   registerMultiboardNatives(rt); // the grid scoreboard — what DotA puts on screen (7.22)
+  registerQuestNatives(rt); // the F9 quest log's script side (issue #33)
   registerRegionNatives(rt);
   registerSoundNatives(rt); // the sound handle family + music (7.20)
   registerStockNatives(rt); // neutral-building stock — the Marketplace (issue #57)

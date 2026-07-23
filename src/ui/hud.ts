@@ -186,6 +186,9 @@ export interface HudDriver {
   /** A line the local player typed and sent. */
   sendChat(text: string, target: ChatTarget): void;
 
+  /** The top bar's four buttons — each opens what its function key opens (F9…F12). */
+  openPanel(kind: "quests" | "menu" | "allies" | "chat"): void;
+
   dayNight(): { hour: number; isDay: boolean };
   /** Take over the top-bar clock slot with the race's real TimeIndicator model, sizing
    *  and driving it from the host's own render loop. False → use the atlas fallback. */
@@ -471,6 +474,7 @@ export class GameHud {
   private chatPromptEl!: HTMLSpanElement;
   private chatInput!: HTMLInputElement;
   private chatTarget: ChatTarget = { scope: "all" };
+  private questsBtn?: HTMLButtonElement; // glows on FlashQuestDialogButton until pressed
   /** Who plain Enter talks to. "All" until the F12 dialog says otherwise — that dialog's
    *  whole job is choosing this (ui/chatDialog.ts). Ctrl+Enter always overrides it. */
   private chatDefault: ChatTarget = { scope: "all" };
@@ -722,13 +726,19 @@ export class GameHud {
     const bar = document.createElement("div");
     bar.className = "hud-top";
 
+    // The UpperButtonBar's four: each just presses its function key's panel (UpperButtonBar.fdf
+    // captions them "Quests (F9)" … via KEY_QUESTS etc. — same label, same deed).
     const menus = document.createElement("div");
     menus.className = "hud-menus";
-    for (const [label, key] of [["Quests", "F9"], ["Menu", "F10"], ["Allies", "F11"], ["Chat", "F12"]]) {
+    const panels: Array<[string, string, "quests" | "menu" | "allies" | "chat"]> = [
+      ["Quests", "F9", "quests"], ["Menu", "F10", "menu"], ["Allies", "F11", "allies"], ["Chat", "F12", "chat"],
+    ];
+    for (const [label, key, kind] of panels) {
       const b = document.createElement("button");
       b.className = "hud-menu-btn";
       b.textContent = `${label} (${key})`;
-      b.disabled = true; // placeholders until those screens exist
+      b.onclick = () => this.driver.openPanel(kind);
+      if (kind === "quests") this.questsBtn = b;
       menus.appendChild(b);
     }
 
@@ -1017,6 +1027,12 @@ export class GameHud {
 
   get chatOpen(): boolean {
     return !this.chatBar.hidden;
+  }
+
+  /** The Quests button's flash (FlashQuestDialogButton): on when the script announced
+   *  something, off the moment the log is opened — as in the game. */
+  flashQuests(on: boolean): void {
+    this.questsBtn?.classList.toggle("hud-quests-flash", on);
   }
 
   /** Point plain Enter at a different audience — what the F12 dialog's OK commits. */

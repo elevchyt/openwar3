@@ -89,6 +89,52 @@ export interface DialogObj {
   revision: number; // bumped on every mutation, so the UI knows to rebuild
 }
 
+/** One requirement line of a quest (QuestCreateItem) — "- Slay the ogres", ticked off
+ *  by QuestItemSetCompleted as the map's script sees it happen. */
+export interface QuestItemObj {
+  handleId: number;
+  questId: number;
+  description: string;
+  completed: boolean;
+}
+
+/**
+ * A JASS `quest` (CreateQuest) — one entry in the F9 quest log.
+ *
+ * The whole GUI family (CreateQuestBJ, QuestSetCompletedBJ, QuestMessageBJ with its stings
+ * and its FlashQuestDialogButton) is blizzard.j code riding on the natives, so this record
+ * is all the engine must hold. Defaults per CreateQuestBJ's own behaviour: it SETS
+ * required/discovered/completed explicitly on every quest it makes, so only `enabled`
+ * (true — a disabled quest is one a script chose to retire) and `failed` (false) carry
+ * engine defaults a map could observe.
+ */
+export interface QuestObj {
+  handleId: number;
+  title: string;
+  description: string;
+  /** BLP path for the row's icon (QuestSetIconPath) — a real archive path, rendered as-is. */
+  iconPath: string;
+  /** Main quest (left column) vs optional (right) — bj_QUESTTYPE_REQ_* vs OPT_*. */
+  required: boolean;
+  completed: boolean;
+  /** An undiscovered quest still shows, as the greyed "Quest Not Yet Discovered" row —
+   *  that is what GlobalStrings' QUESTNOTDISCOVERED and the disabled backdrop art are for. */
+  discovered: boolean;
+  failed: boolean;
+  /** QuestSetEnabled(false) removes the quest from the log without destroying it. */
+  enabled: boolean;
+  items: QuestItemObj[];
+}
+
+/** A JASS `defeatcondition` (CreateDefeatCondition) — held so the handles behave and a
+ *  script can round-trip its description, but not rendered: 1.27's own F9 dialog has no
+ *  visible slot for them (the FDF's QuestConditionListScrollBar anchors to a container no
+ *  file declares), and inventing one would be guessing. */
+export interface DefeatConditionObj {
+  handleId: number;
+  description: string;
+}
+
 /** One row of a leaderboard (LeaderboardAddItem: a label, a value and the player it
  *  belongs to — the player is what gives the row its colour and its icon). */
 export interface LeaderboardItem {
@@ -955,6 +1001,15 @@ export class Runtime {
    *  (message, then buttons, then DialogDisplay), so there is no single moment to push. */
   readonly dialogs: DialogObj[] = [];
   readonly leaderboards: LeaderboardObj[] = [];
+  /** Live quests (CreateQuest) — the F9 log's contents, in creation order, which is the
+   *  order the log lists them in. Polled by the UI via `questsRevision`. */
+  readonly quests: QuestObj[] = [];
+  /** Bumped by EVERY quest/quest-item mutation (and by ForceQuestDialogUpdate, whose whole
+   *  job is to bump it with nothing else changed), so an open F9 dialog knows to rebuild. */
+  questsRevision = 0;
+  /** Bumped by FlashQuestDialogButton — the HUD's Quests button glows until it is pressed.
+   *  A counter rather than a flag so the UI can tell a NEW flash from one it already saw. */
+  questFlashes = 0;
   /** Live `multiboard`s (CreateMultiboard) — the grid scoreboard (7.22). */
   readonly multiboards: MultiboardObj[] = [];
   /** MultiboardSuppressDisplay(true) — hides EVERY multiboard, present and future,

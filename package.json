@@ -15,7 +15,7 @@
     "data:browse": "node tools/build-data-browser.mjs --open",
     "data:verify": "node tools/verify-gameplay-constants.mjs",
     "jass:coverage": "node tools/native-coverage.mjs",
-    "jass:test": "tsc -p tools/tsconfig.jass.json && node tools/jass-audience-test.cjs && node tools/jass-chat-test.cjs && node tools/jass-corpus-test.cjs",
+    "jass:test": "tsc -p tools/tsconfig.jass.json && node tools/jass-audience-test.cjs && node tools/jass-chat-test.cjs && node tools/jass-quest-test.cjs && node tools/jass-corpus-test.cjs",
     "sim:test": "tsc -p tools/tsconfig.sim.json && node tools/sim-targeting-test.cjs && node tools/sim-item-regen-test.cjs && node tools/sim-spells-test.cjs && node tools/sim-death-blast-test.cjs && node tools/sim-detection-test.cjs && node tools/sim-vision-test.cjs && node tools/sim-shadowmeld-test.cjs && node tools/sim-root-test.cjs && node tools/sim-morph-test.cjs && node tools/sim-aura-test.cjs && node tools/sim-order-funnel-test.cjs && node tools/sim-jass-hooks-test.cjs && node tools/sim-minimap-test.cjs && node tools/sim-snapshot-test.cjs && node tools/sim-apply-test.cjs && node tools/sim-wire-test.cjs && node tools/lobby-test.cjs && node tools/sim-determinism-test.cjs",
     "data:audit": "node tools/audit-abilities.mjs",
     "relay": "node server/relay.mjs",

@@ -179,12 +179,16 @@ export interface PopupOptions {
 }
 
 /**
- * Shrink a dropdown's label until it fits the box the FDF gave it. WC3's own font sets
- * narrower than any we can ship, so a label the game fits at its declared size ("Night Elf"
- * in a 0.08-wide race menu, "Computer (Normal)" in a name menu) would otherwise run out of
- * the widget. The type gets smaller; nothing ever spills.
+ * Shrink a label until it fits the box the FDF gave it. WC3's own font sets narrower than
+ * any we can ship, so a label the game fits at its declared size ("Night Elf" in a
+ * 0.08-wide race menu, "Computer (Normal)" in a name menu) would otherwise run out of the
+ * widget. The type gets smaller; nothing ever spills. Below MIN_LABEL_PX it stops shrinking
+ * and the ellipsis (style.css / `fitLine`) takes over instead.
+ *
+ * Exported for the panels that stamp one-line rows out of templates (the quest log's
+ * titles): same policy, same floor — shrink first, ellipsis last, never wrap.
  */
-function fitLabel(span: HTMLElement): void {
+export function fitLabel(span: HTMLElement): void {
   const box = span.parentElement;
   if (!box) return;
   // The frame's declared size, kept aside: every call starts from it, or a long label would
@@ -203,6 +207,22 @@ function fitLabel(span: HTMLElement): void {
 /** The floor `fitLabel` will not shrink past — below this the label stops being readable,
  *  and the ellipsis (style.css) takes over instead. */
 const MIN_LABEL_PX = 8;
+
+/**
+ * Pin a TEXT frame's element to ONE line: no wrapping ever — shrink to fit down to the
+ * floor, ellipsis beyond it. The renderer's default TEXT is `pre-wrap` (a description
+ * wants its line breaks), so a row label that must never wrap opts in here.
+ */
+export function fitLine(el: HTMLElement): void {
+  const span = el.querySelector("span");
+  if (!span) return;
+  el.style.whiteSpace = "nowrap"; // inline, because paintText set pre-wrap inline
+  span.style.display = "block";
+  span.style.overflow = "hidden";
+  span.style.textOverflow = "ellipsis";
+  span.style.maxWidth = "100%";
+  fitLabel(span);
+}
 
 /** The dropdown that is currently open, if any. Only ever one, as in the game: opening a
  *  second closes the first. A per-popup `document` click listener can't do that on its own

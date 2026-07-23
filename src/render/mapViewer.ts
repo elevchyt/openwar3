@@ -55,6 +55,8 @@ import { MatchOverDialog } from "../ui/gameMenu";
 import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { ChatDialogOverlay } from "../ui/chatDialog";
+import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
+import { parseMapInfo } from "../world/mapInfo";
 import {
   chatPrompt, chatRecipients, formatChatLine,
   type ChatLine, type ChatTarget, type ChatWorld,
@@ -605,6 +607,11 @@ export class MapViewerScene {
   private gameMenu: EscMenu | null = null; // F10 — the game's own EscMenuMainPanel.fdf
   private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
   private chatDialog: ChatDialogOverlay | null = null; // F12 — ChatDialog.fdf
+  private questLog: QuestDialogOverlay | null = null; // F9 — QuestDialog.fdf
+  /** war3map.w3i's name — the Quest Log's subtitle. May be a TRIGSTR_ until the script loads. */
+  private mapDisplayName = "";
+  /** The last FlashQuestDialogButton count the HUD was shown, so a new flash glows once. */
+  private questFlashesSeen = 0;
   /** Dialogs already relayed to a remote player, by `handleId:revision` — so a screen that is
    *  shown for the rest of the match is sent once rather than sixty times a second (item F7). */
   private readonly relayedDialogs = new Map<number, string>();
@@ -934,6 +941,15 @@ export class MapViewerScene {
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
     this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
+    // The map's own display name (war3map.w3i) — the Quest Log's white subtitle line.
+    // parseMapInfo takes the whole MAP ARCHIVE (it opens the MPQ itself and resolves the
+    // name's TRIGSTR_ through war3map.wts), not the w3i bytes — feeding it the w3i was a
+    // "No MPQ header" throw that killed the entire map load.
+    try {
+      this.mapDisplayName = parseMapInfo(bytes, "").name;
+    } catch {
+      this.mapDisplayName = ""; // a nameless log is a poorer log, not a failed boot
+    }
     const minimapBytes = archive.rawBytes("war3mapMap.blp");
     this.minimap = minimapBytes ? blpToCanvas(minimapBytes) : null;
     const w3e = archive.rawBytes("war3map.w3e");
@@ -2071,7 +2087,10 @@ export class MapViewerScene {
       const lib = new FdfLibrary(this.vfs);
       // GlobalStrings.fdf is what FdfLibrary.load() pulls in first for any screen, so
       // loading the leaderboard's file gives us the string table as a side effect.
-      void lib.load("UI\\FrameDef\\UI\\LeaderBoard.fdf").then(() => (this.globalStrings = lib));
+      void lib.load("UI\\FrameDef\\UI\\LeaderBoard.fdf").then(() => {
+        this.globalStrings = lib;
+        primeQuestStrings(lib.strings); // the log's status captions, from the player's own table
+      });
     }
   }
 
@@ -2088,6 +2107,15 @@ export class MapViewerScene {
       if (rt.textTags.length) this.textTags.update(rt.textTags, this.textTagContext());
       else this.textTags.clear();
     }
+    // An open Quest Log repaints when the script changes a quest under it; and a
+    // FlashQuestDialogButton since last frame lights the HUD's Quests button, which
+    // opening the log is what clears — as in the game.
+    this.questLog?.update();
+    if (rt.questFlashes !== this.questFlashesSeen) {
+      this.questFlashesSeen = rt.questFlashes;
+      this.hud?.flashQuests(true);
+    }
+    if (this.questLog?.visible) this.hud?.flashQuests(false);
     this.leaderboard?.update(rt.leaderboardFor(this.localPlayer));
     // The three top-right panels stack, in the order WC3 stacks them: leaderboard, then
     // multiboard, then the countdown windows — each hangs below whatever the ones above it
@@ -4238,6 +4266,12 @@ export class MapViewerScene {
       chatPrompt: (target) =>
         chatPrompt(target, this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
       sendChat: (text, target) => this.sendChat(text, target),
+      openPanel: (kind) => {
+        if (kind === "quests") this.questLog?.toggle();
+        else if (kind === "menu") this.paused = this.gameMenu?.toggle() ?? false; // F10 pauses
+        else if (kind === "allies") this.allies?.toggle();
+        else this.chatDialog?.toggle();
+      },
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
@@ -4333,6 +4367,14 @@ export class MapViewerScene {
       trade: (other, gold, lumber) => this.giveResources(other, gold, lumber),
       // A LAN client cannot write: see AllianceModel.writable.
       writable: !(this.rts?.frozenClient ?? false),
+    });
+    this.questLog?.dispose();
+    this.questLog = new QuestDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+      quests: () => this.mapScript?.interp.rt.quests ?? [],
+      // The w3i name is routinely a TRIGSTR_ placeholder; the script's runtime holds the
+      // table that resolves it (empty until a script loads one, which resolves to itself).
+      mapName: () => this.mapScript?.interp.rt.resolveTrigStr(this.mapDisplayName) ?? this.mapDisplayName,
+      revision: () => this.mapScript?.interp.rt.questsRevision ?? 0,
     });
     this.chatDialog?.dispose();
     this.chatDialog = new ChatDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
@@ -6553,6 +6595,8 @@ export class MapViewerScene {
     this.allies = null;
     this.chatDialog?.dispose();
     this.chatDialog = null;
+    this.questLog?.dispose();
+    this.questLog = null;
     this.matchOver?.dispose();
     this.matchOver = null;
     this.paused = false;
@@ -7463,6 +7507,12 @@ export class MapViewerScene {
       if (e.key === "F10") {
         e.preventDefault(); // F10 opens WC3's game menu, not the browser's
         this.paused = this.gameMenu?.toggle() ?? false;
+        return;
+      }
+      // F9 is the Quest Log ("F9 - Toggle the Quest Log on/off"). No pause, as in the game.
+      if (e.key === "F9") {
+        e.preventDefault();
+        this.questLog?.toggle();
         return;
       }
       // F11 is the Allies dialog (UI\HelpStrings.txt: "F11 - Toggle the Allies menu on/off").
