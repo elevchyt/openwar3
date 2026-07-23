@@ -39,6 +39,13 @@ import type { DataSource } from "../vfs/types";
 //          A global MAX_VOICES cap bounds a pathological burst.
 //   Death / Impact / UI — overlapping one-shot pools (deaths & impacts capped).
 //   Loops  — named looping sounds (building construction).
+//
+// Across ALL of them one rule holds: the same WAV is never in the air twice at once on a
+// client (issue #84) — identical copies phase into a doubled smear rather than sounding
+// louder. A clip's other variants are taken first, and when they're all up the copy that
+// keeps the file is the one the player can actually HEAR: audibility is (re)measured from
+// the current camera, so a clang out past its DistanceCutoff counts as not playing and
+// yields to the same clang landing next to the listener. See pickVariant().
 
 export type SoundCategory = "What" | "Yes" | "YesAttack" | "Pissed" | "Warcry" | "Ready" | "Death";
 
@@ -173,11 +180,6 @@ interface Clip {
   refDist: number; // MinDistance — full volume within this radius (world units)
   maxDist: number; // MaxDistance — attenuated to silence at this radius
   cutoff: number; // DistanceCutoff — WC3 doesn't play the sound at all beyond this
-  // Flags contains NODUPLICATES: the engine refuses to start the sound while a copy of it
-  // is already playing. UISounds.slk says why in its own comment column, on the very row
-  // this matters for: GlueScreenClick, "Use NODUPLICATES flag to prevent douple playing of
-  // this sound by cancel buttons." Absent on the clips we synthesize for folder WAVs.
-  noDup?: boolean;
   // Flags contains CHANNELFULLPREEMPT (or CHANNELFULLPREEMPTOLDEST): when the sound's
   // channel is full the engine TAKES a slot from a voice already playing rather than
   // refusing the new one. 490 of AnimSounds' 592 rows carry it — a unit's attack sound is
@@ -186,6 +188,15 @@ interface Clip {
   // channel's longest-running voice. UnitCombatSounds carries NEITHER flag on any of its 60
   // rows, so a full combat channel really does refuse the clang — that part is authentic.
   preempt?: boolean;
+}
+
+/** One copy of a WAV that is currently in the air — what the never-stack rule (below)
+ *  arbitrates over. `at` is where it is playing (null = a 2D sound, always at full
+ *  audibility); `kill` cuts it short when a nearer source wins the file off it. */
+interface ActiveFile {
+  clip: Clip;
+  at: SoundPos | null;
+  kill: () => void;
 }
 
 /** Weapon/spell sounds embedded in a unit/missile/effect MODEL as SND event objects,
@@ -275,8 +286,15 @@ export class SoundBoard {
    *  the queue a CHANNELFULLPREEMPT clip steals its slot from (see playPool). */
   private channelVoices = new Map<number, PoolVoice[]>();
   private loops = new Map<string, AudioBufferSourceNode>(); // active looping sounds by name
-  /** Files a NODUPLICATES clip currently has in the air (see playPool). */
-  private playing = new Set<string>();
+  /** setPathLoop's side of the never-stack rule: which loop key OWNS each looping WAV,
+   *  the keys queued behind it, and what file each key is on (an owner or a waiter) —
+   *  the stop call is given only the key. */
+  private loopOwner = new Map<string, string>();
+  private loopQueue = new Map<string, Array<{ key: string; at?: SoundPos }>>();
+  private loopFile = new Map<string, string>();
+  /** Every WAV currently in the air, at most one copy each — the never-stack rule
+   *  (see pickVariant). Keyed by file path, since that is what "the same sound" means. */
+  private playing = new Map<string, ActiveFile>();
   /** Named loops asked for while the AudioContext was still gated (see startPendingLoops). */
   private pendingLoops = new Map<string, { tag: string; group?: number }>();
   private muted = false;
@@ -740,16 +758,32 @@ export class SoundBoard {
   /** Start/stop a looping WAV given straight by PATH, positioned in the world — the
    *  sustained bed under a channelled spell (Blizzard's BlizzardLoop1.wav). Distinct
    *  from `setLoop`, which resolves a named row out of UISounds.slk; these effect-folder
-   *  WAVs have no SLK row at all. Idempotent, and keyed so each caster loops separately.
-   *  The panner is placed once at `at` — a channelled field never moves. */
+   *  WAVs have no SLK row at all. Idempotent, and keyed per caster.
+   *  The panner is placed once at `at` — a channelled field never moves.
+   *
+   *  The never-stack rule reaches a sustained bed too, and it is where WC3 states it
+   *  outright: the looping construction/movement rows of AmbienceSounds.slk are exactly
+   *  the ones flagged NODUPLICATES (see pickVariant). So two Blizzards cast at once are
+   *  two fields but ONE howl — the second caster queues behind the first instead of
+   *  laying an identical loop over it, and inherits the bed if its own field outlives
+   *  the owner's. */
   setPathLoop(key: string, path: string, on: boolean, at?: SoundPos): void {
     if (on) {
-      if (this.loops.has(key)) return;
+      if (this.loops.has(key) || this.loopFile.get(key) === path) return;
       if (!path || !this.vfs.exists(path)) return;
+      const owner = this.loopOwner.get(path);
+      if (owner !== undefined && owner !== key) {
+        const queue = this.loopQueue.get(path) ?? this.loopQueue.set(path, []).get(path)!;
+        queue.push({ key, at });
+        this.loopFile.set(key, path);
+        return;
+      }
       this.unlock();
       if (!this.ctx || !this.master || this.ctx.state !== "running") return;
       const placeholder = {} as AudioBufferSourceNode;
       this.loops.set(key, placeholder); // reserve synchronously so we don't double-start
+      this.loopOwner.set(path, key);
+      this.loopFile.set(key, path);
       const clip: Clip = { paths: [path], gain: 0.6, pitch: 1, pitchVar: 0, threeD: true, refDist: 800, maxDist: 10000, cutoff: 0 };
       void this.buffer(path).then((buf) => {
         // Bail if the loop was stopped (or restarted) while the WAV was decoding —
@@ -764,10 +798,29 @@ export class SoundBoard {
         src.start();
       });
     } else {
+      // `path` is empty on the stop call (the caller only kept the key), so the file this
+      // key was playing — or waiting for — is looked up rather than passed in.
+      const file = this.loopFile.get(key);
+      this.loopFile.delete(key);
       const src = this.loops.get(key);
-      if (!src) return;
-      this.loops.delete(key);
-      try { src.stop(); } catch { /* not started yet / already stopped */ }
+      if (src) {
+        this.loops.delete(key);
+        try { src.stop(); } catch { /* not started yet / already stopped */ }
+      }
+      if (!file) return;
+      const queue = this.loopQueue.get(file);
+      if (this.loopOwner.get(file) !== key) {
+        // A field that ended while still queued behind another caster's bed.
+        const i = queue?.findIndex((w) => w.key === key) ?? -1;
+        if (i >= 0) queue!.splice(i, 1);
+        return;
+      }
+      this.loopOwner.delete(file);
+      const next = queue?.shift();
+      if (next) {
+        this.loopFile.delete(next.key); // it's no longer waiting — let the start path run
+        this.setPathLoop(next.key, file, true, next.at); // the bed carries on at their spot
+      }
     }
   }
 
@@ -1120,12 +1173,37 @@ export class SoundBoard {
     this.unlock();
     if (!this.ctx || !this.master || this.ctx.state !== "running") return false;
     if (this.voices.size >= MAX_VOICES) return false; // bound a pathological overlap burst
+    // Never stack the same clip (pickVariant): a line still in the air isn't said a second
+    // time even by a DIFFERENT unit — two Footmen answering with the same WAV on the same
+    // frame is the doubling the rule exists to stop. A sound-set ships several variants, so
+    // the second unit normally just takes another one; only when they're all up is it
+    // dropped. Voices play 2D, so every copy ties on audibility and none is ever cut short.
+    const choice = this.pickVariant(clip, null);
+    if (!choice) return false;
+    const path = choice.path;
+    choice.taken?.kill();
     const placeholder = {} as AudioBufferSourceNode; // reserve the key synchronously
     this.voices.set(key, placeholder);
-    const path = clip.paths[(Math.random() * clip.paths.length) | 0];
+    const release = () => {
+      if (this.playing.get(path) === active) this.playing.delete(path);
+    };
+    const active: ActiveFile = {
+      clip,
+      at: null,
+      kill: () => {
+        const cur = this.voices.get(key);
+        if (cur) {
+          this.voices.delete(key); // === placeholder: still decoding, and this cancels it
+          if (cur !== placeholder) try { cur.stop(); } catch { /* already ended */ }
+        }
+        release();
+      },
+    };
+    this.playing.set(path, active);
     void this.buffer(path).then((buf) => {
       if (!buf || !this.ctx || !this.master || this.voices.get(key) !== placeholder) {
         if (this.voices.get(key) === placeholder) this.voices.delete(key);
+        release();
         return;
       }
       const src = this.source(buf, clip);
@@ -1133,6 +1211,7 @@ export class SoundBoard {
       this.voices.set(key, src);
       src.onended = () => {
         if (this.voices.get(key) === src) this.voices.delete(key);
+        release();
       };
       src.start();
       this.onVoiceStart?.(label, buf.duration);
@@ -1155,40 +1234,60 @@ export class SoundBoard {
     // WC3 DistanceCutoff: a positional sound past its cutoff isn't played at all —
     // drop it before reserving a pool slot so far-off battles don't starve the cap.
     if (positional && clip.cutoff > 0 && this.distanceTo(at!) > clip.cutoff) return;
-    const path = clip.paths[(Math.random() * clip.paths.length) | 0];
-    // NODUPLICATES: a second copy of a sound already playing is refused, not stacked —
-    // what keeps a double-clicked menu button from playing BigButtonClick twice over
-    // itself. Keyed by FILE, since that is what "the same sound" means to the engine.
-    if (clip.noDup && this.playing.has(path)) return;
+    const where = positional ? at! : null;
+    // Never stack the same clip: take a variant nobody is playing, or win one off the
+    // least audible copy of it — and if we're the quiet one, stay silent (see pickVariant).
+    const choice = this.pickVariant(clip, where);
+    if (!choice) return;
+    const path = choice.path;
     // Concurrency is budgeted per SOUND CHANNEL (see CHANNEL_VOICES). Reserve the slot
     // synchronously — the buffer loads async, so an AoE burst would otherwise slip the cap.
     let voices: PoolVoice[] | null = null;
     if (kind === "impact" || kind === "death") {
       const channel = clip.channel ?? 0;
       voices = this.channelVoices.get(channel) ?? this.channelVoices.set(channel, []).get(channel)!;
-      if (voices.length >= CHANNEL_VOICES) {
-        if (!clip.preempt) return; // no preempt flag (UnitCombatSounds) — the engine refuses it
-        const victim = voices.shift(); // …otherwise steal the channel's longest-running voice
-        if (victim) {
-          victim.dead = true;
-          try {
-            victim.src?.stop();
-          } catch {
-            /* already ended */
-          }
+      // No preempt flag (UnitCombatSounds) — a full channel refuses the sound. Checked
+      // BEFORE anything is cut, so a refusal here never costs a copy we were going to
+      // take over: the channel is full either way and we'd have silenced one for nothing.
+      if (voices.length >= CHANNEL_VOICES && !clip.preempt) return;
+    }
+    choice.taken?.kill(); // the copy this one wins the file off (null if the variant was free)
+    const voice: PoolVoice = { src: null, dead: false };
+    if (voices && voices.length >= CHANNEL_VOICES) {
+      const victim = voices.shift(); // …CHANNELFULLPREEMPT: steal the channel's longest-running voice
+      if (victim) {
+        victim.dead = true;
+        try {
+          victim.src?.stop();
+        } catch {
+          /* already ended */
         }
       }
     }
-    if (clip.noDup) this.playing.add(path);
-    const voice: PoolVoice = { src: null, dead: false };
     voices?.push(voice);
     const release = () => {
       if (voices) {
         const i = voices.indexOf(voice); // -1 once preempted: already shifted off
         if (i >= 0) voices.splice(i, 1);
       }
-      if (clip.noDup) this.playing.delete(path);
+      // Identity-checked: a nearer copy may already own the file (it killed us and put
+      // ITSELF in the map), and our late onended must not evict the live one.
+      if (this.playing.get(path) === active) this.playing.delete(path);
     };
+    const active: ActiveFile = {
+      clip,
+      at: where,
+      kill: () => {
+        voice.dead = true;
+        try {
+          voice.src?.stop();
+        } catch {
+          /* not started yet / already ended */
+        }
+        release();
+      },
+    };
+    this.playing.set(path, active);
     void this.buffer(path).then((buf) => {
       // `voice.dead`: preempted while its buffer was still decoding — don't start it.
       if (!buf || !this.ctx || !this.master || voice.dead) {
@@ -1210,6 +1309,60 @@ export class SoundBoard {
     const f = this.listener;
     if (!f) return 0;
     return Math.hypot(at.x - f.px, at.y - f.py, (at.z ?? 0) - f.pz);
+  }
+
+  /** How loudly a copy of a clip lands at the listener RIGHT NOW, 0..1: its own gain
+   *  times the same linear MinDistance→MaxDistance falloff the PannerNode applies, and
+   *  0 once past the row's DistanceCutoff — out there WC3 doesn't play the sound at all,
+   *  so a copy that far away is, to this client, not playing. A 2D clip (no WANT3D, or
+   *  no listener frame yet) is always at full audibility. */
+  private audibility(clip: Clip, at: SoundPos | null): number {
+    if (!at || !clip.threeD || !this.listener) return clip.gain;
+    const d = this.distanceTo(at);
+    if (clip.cutoff > 0 && d > clip.cutoff) return 0;
+    const ref = Math.max(1, clip.refDist);
+    const max = Math.max(ref + 1, clip.maxDist || ref + 1);
+    return clip.gain * (1 - Math.max(0, Math.min(d, max) - ref) / (max - ref));
+  }
+
+  /** The never-stack rule (issue #84): a given WAV is only ever in the air ONCE per
+   *  client — two sources landing the same clip at the same instant phase against each
+   *  other into a doubled, metallic smear instead of one clean sound.
+   *
+   *  WC3 spells the policy out itself on the rows where this bites hardest: every
+   *  unit-movement and building-construction row of AmbienceSounds.slk (89 of them)
+   *  carries `NODUPLICATES,SCALEPRIORITY` — one copy only, and *which* source owns it is
+   *  decided by DISTANCE. (UISounds.slk says the same thing in plain English on
+   *  GlueScreenClick: "Use NODUPLICATES flag to prevent douple playing of this sound by
+   *  cancel buttons.") So the rule here is that pair, applied to every one-shot:
+   *
+   *    1. Prefer a variant nobody is playing. A weapon clang ships 3–4 WAVs precisely so
+   *       a melee can sound like a melee; two units landing blows should take different
+   *       ones rather than one of them falling silent.
+   *    2. Only when every variant is up, challenge the LEAST AUDIBLE copy. Audibility is
+   *       recomputed at the moment of the challenge, not remembered from when the copy
+   *       started — the camera moves, so a clang that began in earshot may be well out of
+   *       it by now. An out-of-earshot copy scores 0 and therefore never blocks a sound
+   *       the player can actually hear; a nearer source takes the file off it, a further
+   *       one is refused (it would have been the quieter of the two anyway).
+   *
+   *  @returns the path to play plus the copy to cut for it, or null to refuse outright. */
+  private pickVariant(clip: Clip, at: SoundPos | null): { path: string; taken: ActiveFile | null } | null {
+    const free = clip.paths.filter((p) => !this.playing.has(p));
+    if (free.length) return { path: free[(Math.random() * free.length) | 0], taken: null };
+    let path = clip.paths[0];
+    let taken = this.playing.get(path)!;
+    let quietest = this.audibility(taken.clip, taken.at);
+    for (const p of clip.paths) {
+      const live = this.playing.get(p)!;
+      const a = this.audibility(live.clip, live.at);
+      if (a < quietest) {
+        quietest = a;
+        taken = live;
+        path = p;
+      }
+    }
+    return this.audibility(clip, at) > quietest ? { path, taken } : null;
   }
 
   /** Build a positional node for a WANT3D clip: equalpower stereo pan (WC3 isn't
@@ -1306,7 +1459,8 @@ export class SoundBoard {
           refDist: num("mindistance"),
           maxDist: num("maxdistance"),
           cutoff: num("distancecutoff"),
-          noDup: /NODUPLICATES/i.test(flags),
+          // (NODUPLICATES isn't read: never-stacking is now the rule for EVERY clip, not
+          // the 160 rows that ask for it — see pickVariant.)
           preempt: /CHANNELFULLPREEMPT/i.test(flags), // also matches …PREEMPTOLDEST
         };
       }
