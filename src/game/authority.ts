@@ -125,9 +125,11 @@ export class Authority {
     } else if (kind === "target") {
       const u = this.sim.units.get(unitId);
       const t = this.sim.units.get(targetId);
-      if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true);
+      // `ordered`: a trigger order is as deliberate as a player's click — the unit commits to
+      // this target and won't wander off onto whatever it passes (issue #83).
+      if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true, true);
       // smart on a unit: attack a hostile (incl. team -1 creeps), else follow (ally/neutral).
-      else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false) : this.sim.issueFollow(unitId, targetId);
+      else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false, true) : this.sim.issueFollow(unitId, targetId);
     } else {
       if (s === "stop") (this.sim.stop(unitId), (ok = true));
       else if (s === "holdposition") ok = this.sim.issueHold(unitId);

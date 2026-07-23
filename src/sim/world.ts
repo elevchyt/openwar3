@@ -732,6 +732,12 @@ export interface SimUnit {
   gaveUp: boolean; // holding: gave up reaching an unreachable attack target, standing put (issue #24)
   gaveUpGap: number; // gap to the target when the hold began — re-evaluate if it moves
   attackStalls: number; // consecutive combat-approach windows with no headway (forces a hold when high)
+  // This attack was ORDERED (a player right-click / Attack command, or a trigger order) rather
+  // than picked up automatically. An ordered attack is a commitment: the unit marches to THAT
+  // target and doesn't get distracted by whatever it walks past or gets shot by, and only falls
+  // back to another target once the pathfinder says the ordered one is genuinely unreachable
+  // (issue #83). Cleared by every automatic re-target, so the commitment doesn't outlive the order.
+  attackOrdered: boolean;
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
@@ -1028,6 +1034,15 @@ const ATTACK_GIVEUP_COOLDOWN = 1.5;
 // of jittering at the range edge every tick. It leaves the hold the instant it gets into
 // range or the target moves (so it's responsive when the fight actually shifts).
 const ATTACK_HOLD_MAX = 4.0;
+// How long an EXPLICITLY ordered attacker (player right-click / Attack command / trigger
+// order) keeps shoving toward its commanded target before it will even consider another
+// one (issue #83). A unit squeezing out of its own army, or round a building, routinely
+// makes no headway for a second or two — that is not "unreachable", and giving up on the
+// order there is what made units peel off onto whatever stood closer. After this long on
+// the same spot we ask the PATHFINDER: still reachable → jammed by bodies, keep the target
+// and hold facing it; genuinely unreachable → release the commitment and fall back to the
+// nearest enemy we can reach. Automatic (non-ordered) targeting is unchanged.
+const ORDERED_COMMIT_TIME = 2.0;
 const CHASE_REPATH = 128; // repath when the target strays this far from the path goal
 const FOLLOW_GAP = 64; // edge-to-edge distance a follower keeps behind its leader
 // Hysteresis for follow (mirrors ATTACK_LEASH): once caught up and parked, the
@@ -2865,6 +2880,7 @@ export class SimWorld {
       | "gaveUp"
       | "gaveUpGap"
       | "attackStalls"
+      | "attackOrdered"
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
@@ -3040,6 +3056,7 @@ export class SimWorld {
       gaveUp: false,
       gaveUpGap: 0,
       attackStalls: 0,
+      attackOrdered: false,
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
@@ -3709,8 +3726,11 @@ export class SimWorld {
   }
 
   /** Order a unit to attack another. Normally requires the target to be hostile;
-   *  `force` (the deliberate Attack command) lets you attack allies/own units too. */
-  issueAttack(id: number, targetId: number, force = false): boolean {
+   *  `force` (the deliberate Attack command) lets you attack allies/own units too.
+   *  `ordered` marks the attack as EXPLICITLY commanded (player right-click / Attack
+   *  command / trigger order) rather than picked up by the unit itself — see
+   *  `attackOrdered`. Every internal re-target leaves it false on purpose. */
+  issueAttack(id: number, targetId: number, force = false, ordered = false): boolean {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || !u.weapon || u.ethereal || (!force && !this.hostile(u, t))) return false; // ethereal (Banished) → weapon disabled (issue #49)
@@ -3731,6 +3751,7 @@ export class SimWorld {
     u.stallT = 0; // fresh target — reset the unreachable-target watchdog (issue #24)
     u.gaveUp = false; // no longer holding — a new target may well be reachable
     u.attackStalls = 0;
+    u.attackOrdered = ordered; // an automatic re-target ends the previous order's commitment
     u.repathT = 0; // clear any lingering hold/repath cooldown so we chase the new target
     // NOW — otherwise a freshly re-acquired enemy (e.g. after the first kill) inherited
     // the previous target's multi-second hold cooldown and the unit just stood there.
@@ -3981,7 +4002,7 @@ export class SimWorld {
       case "patrol": return this.issuePatrol(id, o.x, o.y);
       case "hold": return this.issueHold(id);
       case "stop": this.stop(id); return true;
-      case "attack": return this.issueAttack(id, o.targetId, o.force);
+      case "attack": return this.issueAttack(id, o.targetId, o.force, true); // a QueuedOrder is always a commanded attack (issue #83)
       case "follow": return this.issueFollow(id, o.targetId, o.offX, o.offY);
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
       case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
@@ -6791,8 +6812,11 @@ export class SimWorld {
     // engaged and our current target isn't itself in reach. Cheap distance scan, filtered
     // like auto-acquire (visible, no idle creep camp); the switch resets the watchdog so
     // the rest of this tick runs against the new, in-range target. A worker keeps the
-    // target it was ordered onto — it never picks up a fight of its own (issue #41).
-    if (!u.inCombat && !u.isPeon) {
+    // target it was ordered onto — it never picks up a fight of its own (issue #41), and
+    // so does a unit whose attack was ORDERED: "attack THAT one" means walking past the
+    // ones in between, exactly as it does in WC3 (issue #83). This switch exists for
+    // targets the unit picked up itself.
+    if (!u.inCombat && !u.isPeon && !u.attackOrdered) {
       u.acquireT -= dt; // throttle the scan to ~5x/sec (not every tick — it's an O(units) scan)
       if (u.acquireT <= 0) {
         u.acquireT = 0.2;
@@ -6849,6 +6873,25 @@ export class SimWorld {
     // reachable; but if we keep stalling anyway (A* threads the surround's gaps, collision
     // blocks the last stretch — the outer-ring jitter), stop trusting it and HOLD.
     u.attackStalls++;
+    if (u.attackOrdered) {
+      // A commanded attack is a commitment (issue #83). Spend ORDERED_COMMIT_TIME just
+      // trying to get there — fresh surround slot, fresh path around whatever blocked us —
+      // before the reachability question is even asked.
+      if (u.attackStalls * ATTACK_STALL_TIME < ORDERED_COMMIT_TIME) {
+        this.repathAttack(u, t);
+        return;
+      }
+      // Standing on the same spot for two seconds. Now the pathfinder decides: a target
+      // it can still path to means we're jammed by bodies, not walled off — hold facing
+      // the target we were TOLD to kill rather than wander onto someone else. Only a
+      // genuinely unreachable one releases the order, and then the ordinary fallback
+      // below hands us the nearest enemy we can actually reach.
+      if (this.canReachToAttack(u, t)) {
+        if (!this.repathAttack(u, t)) this.holdAttack(u, t);
+        return;
+      }
+      u.attackOrdered = false;
+    }
     if (u.attackStalls >= 2) {
       // Before standing down, make sure there isn't ANOTHER enemy we can actually reach
       // and fight instead — a unit must never stand idle beside an enemy it could attack
@@ -6917,16 +6960,7 @@ export class SimWorld {
     // wobbling toward a walled-off slot would "succeed" here every time and never let
     // go. Only when we can genuinely close do we claim a fresh slot and repath around
     // whatever blocked our old one.
-    if (this.canReachToAttack(u, t)) {
-      this.assignAttackSlot(u, t);
-      const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
-      const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
-      u.repathT = 0;
-      if (this.pathTo(u, ax, ay, COMBAT_EXPANSIONS)) {
-        u.gaveUp = false; // moving again — not holding
-        return; // found a way around — resume the chase
-      }
-    }
+    if (this.canReachToAttack(u, t) && this.repathAttack(u, t)) return; // found a way around — resume the chase
     // (2) Target unreachable — hand off to a reachable one within our normal
     // acquisition range (creeps use their aggro range and camp threat order).
     const range = this.acquireRange(u);
@@ -6943,6 +6977,19 @@ export class SimWorld {
     u.gaveUpGap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     u.repathT = ATTACK_GIVEUP_COOLDOWN;
+  }
+
+  /** Claim a fresh surround slot on `t` and path in to it — the "try another way round"
+   *  step, shared by redecideAttack and the ordered-attack commitment. Clears the hold
+   *  cooldown first so the repath isn't refused. False = no path at all from here. */
+  private repathAttack(u: SimUnit, t: SimUnit): boolean {
+    this.assignAttackSlot(u, t);
+    const ax = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.x + u.atkOffX : t.x;
+    const ay = u.atkOffX !== 0 || u.atkOffY !== 0 ? t.y + u.atkOffY : t.y;
+    u.repathT = 0;
+    if (!this.pathTo(u, ax, ay, COMBAT_EXPANSIONS)) return false;
+    u.gaveUp = false; // moving again — not holding
+    return true;
   }
 
   /** Nearest hostile within `range` (excluding `excludeId`) this unit can actually
@@ -8052,8 +8099,12 @@ export class SimWorld {
     // on a lumber trip keeps chopping through the blows (issue #41). The harvest check is
     // belt-and-braces: a harvesting unit isn't "notFighting" today, but the rule belongs
     // next to the one it mirrors in acquireRange.
+    // ...but NOT while it is walking to a target a player ORDERED it onto (issue #83): being
+    // shot on the way is not a reason to abandon the order and turn on the shooter. That is
+    // the whole point of "attack THAT one" — it holds until the player says otherwise (or the
+    // ordered target turns out to be unreachable, which clears attackOrdered).
     const attacker = this.units.get(attackerId);
-    const notFighting = target.order === "idle" || (target.order === "attack" && !target.inCombat);
+    const notFighting = target.order === "idle" || (target.order === "attack" && !target.inCombat && !target.attackOrdered);
     // A unit under an invisibility effect never returns fire either — the same reason it
     // never picks its own fights in acquireRange. Retaliation reaches issueAttack directly,
     // so it would otherwise be the one automatic path that could give a wind-walking hero
