@@ -241,7 +241,9 @@ body.in-game .menu-panel { display: none; }
 
 /* On-screen message log — the "Game - Display text" trigger action target.
    WC3 shows these in the upper-left, below the resource bar, oldest on top. */
-.hud-msglog {
+/* The upper-left message column: the lines the game has shown, and under them the chat entry
+   line — so the prompt appears where the next message will, rather than off on its own. */
+.hud-msgcol {
   position: absolute;
   top: 60px;
   left: 16px;
@@ -251,6 +253,44 @@ body.in-game .menu-panel { display: none; }
   gap: 2px;
   pointer-events: none;
   z-index: 4;
+}
+.hud-msglog {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The chat entry line. WC3 draws this in engine code, not FDF (there is no frame for it),
+   so the look is ours; the PROMPT is the game's own COLON_MESSAGE_* string. It takes the
+   pointer back from the column so the field can actually be clicked and typed into. */
+.hud-chatbar {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+  pointer-events: auto;
+  font-family: var(--game-font);
+  font-size: 13px;
+  line-height: 1.35;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+.hud-chat-prompt {
+  flex: 0 0 auto;
+  color: #ffcc00; /* the game's warning gold, as the prompt wears */
+}
+.hud-chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none; /* or the UA paints a field box around it over the map */
+  background: transparent;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  padding: 0;
+  color: #f4f0e0;
+  font: inherit;
+  text-shadow: inherit;
+  caret-color: #f4f0e0;
 }
 .hud-msgline {
   font-family: var(--game-font);

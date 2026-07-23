@@ -54,6 +54,12 @@ import { UI_HEIGHT } from "../ui/fdf/layout";
 import { MatchOverDialog } from "../ui/gameMenu";
 import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
+import { ChatDialogOverlay } from "../ui/chatDialog";
+import {
+  chatPrompt, chatRecipients, formatChatLine,
+  type ChatLine, type ChatTarget, type ChatWorld,
+} from "../game/chat";
+import { teamColorHex } from "./teamColor";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
@@ -598,6 +604,7 @@ export class MapViewerScene {
   private scriptWatchesUnitState = false;
   private gameMenu: EscMenu | null = null; // F10 — the game's own EscMenuMainPanel.fdf
   private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
+  private chatDialog: ChatDialogOverlay | null = null; // F12 — ChatDialog.fdf
   /** Dialogs already relayed to a remote player, by `handleId:revision` — so a screen that is
    *  shown for the rest of the match is sent once rather than sixty times a second (item F7). */
   private readonly relayedDialogs = new Map<number, string>();
@@ -707,6 +714,12 @@ export class MapViewerScene {
   private meleeTeams = new Map<number, number>(); // owner slot → team
   /** Lobby labels by slot — the owner line, and the Allies dialog's player rows. */
   private playerNames = new Map<number, string>();
+  /** Every chat line this player has heard, rendered — the F12 dialog's Chat History and the
+   *  Message Log both read it. Kept here rather than in the HUD because it must outlive the
+   *  on-screen lines, which expire. */
+  private chatHistory: string[] = [];
+  /** How many seats a person is sitting in — what makes a match "multiplayer" for chat. */
+  private humanPlayers = 1;
   // Custom maps only: the map's pre-placed player units (from war3mapUnits.doo) and
   // its own archive (to read war3map.j). startCustom seeds the units OWNED so the
   // local player has vision/control (issue #33) and runs the map's config() (Phase 7).
@@ -1183,6 +1196,7 @@ export class MapViewerScene {
     this.playerNames = new Map(
       config.slots.map((s) => [s.id, s.controller === "computer" ? "Computer (Normal)" : `Player ${s.id + 1}`]),
     );
+    this.humanPlayers = config.slots.filter((s) => s.controller === "user").length;
     this.rts!.setPlayerNames(this.playerNames);
     // Open on the local player's base at gameplay zoom.
     const home = config.slots.find((s) => s.id === this.localPlayer);
@@ -2006,6 +2020,14 @@ export class MapViewerScene {
     this.userControl = true;
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
     this.cinePortraitFor = "";
+    this.chatHistory = []; // last match's conversation is not this one's
+    // Chat arriving over the wire lands in the same place a locally typed line does.
+    if (this.rts) {
+      this.rts.onChatSaid = (line) =>
+        // On the HOST this is a client asking to be heard, so it goes through the full
+        // routing. On a CLIENT it is the host's ruling, already routed — just show it.
+        this.rts?.frozenClient ? this.showChat(line) : this.deliverChat(line);
+    }
     // WC3 skins the in-game panels with the LOCAL player's race (an Orc player's dialog is
     // Orc-bordered) — that's what the war3skins.txt section names are (see fdf/library.ts).
     // The same sections hold the MUSIC playlists, which is how melee gives an Orc player
@@ -4213,6 +4235,9 @@ export class MapViewerScene {
         const bytes = this.vfs.rawBytes(path);
         return bytes ? blpToCanvas(bytes) : null;
       },
+      chatPrompt: (target) =>
+        chatPrompt(target, this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
+      sendChat: (text, target) => this.sendChat(text, target),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
@@ -4309,6 +4334,116 @@ export class MapViewerScene {
       // A LAN client cannot write: see AllianceModel.writable.
       writable: !(this.rts?.frozenClient ?? false),
     });
+    this.chatDialog?.dispose();
+    this.chatDialog = new ChatDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+      history: () => this.chatHistory,
+      peers: () => [...this.meleeTeams.keys()]
+        .filter((id) => id !== this.localPlayer)
+        .sort((a, b) => a - b)
+        .map((id) => ({ id, name: this.playerLabel(id) })),
+      target: () => this.hud?.chatTargetNow() ?? { scope: "all" },
+      setTarget: (target) => this.hud?.setChatTarget(target),
+      hasObservers: () => false, // the lobby seats players only
+    });
+  }
+
+  /** How long a chat line sits in the on-screen message area. The same span an untimed
+   *  DisplayTextToPlayer line gets (ui/hud.ts MSG_DEFAULT_SECS) — chat is not more urgent
+   *  than the map's own text, and the F12 history keeps it after it fades. */
+  private static readonly CHAT_MESSAGE_SECS = 12;
+  /** Lines kept in the chat history the F12 dialog and the Message Log read. Matches the
+   *  `TextAreaMaxLines 128` those two frames declare in ChatDialog.fdf / LogDialog.fdf —
+   *  keeping more than the panel can show would be bookkeeping nobody reads. */
+  private static readonly CHAT_HISTORY_MAX = 128;
+
+  /**
+   * Is there anybody to talk TO? Counted in HUMAN seats, not seats: a skirmish against a
+   * computer is a single-player game however many slots it fills, and the game has a separate
+   * prompt for exactly that case — `COLON_MESSAGE_SINGLEPLAYER` is the flat "Message:", with
+   * no "To" and nobody to name, because an AI is not going to read it.
+   */
+  private get multiplayerMatch(): boolean {
+    return this.humanPlayers > 1;
+  }
+
+  /** A player's display label — the lobby name, as the owner line and the Allies rows use. */
+  private playerLabel(player: number): string {
+    return this.playerNames.get(player) ?? `Player ${player + 1}`;
+  }
+
+  /** The world the chat model routes against (src/game/chat.ts). */
+  private chatWorld(): ChatWorld {
+    return {
+      players: () => [...this.meleeTeams.keys()],
+      coAllied: (a, b) => this.rts?.playersAreCoAllied(a, b) ?? a === b,
+      // No observer slots yet — the lobby seats players only, so nobody is watching.
+      isObserver: () => false,
+    };
+  }
+
+  /**
+   * A line the local player typed. Route it, then show it to whoever hears it — which on this
+   * machine means the local player, if they are among the recipients (you always see your own
+   * chat: it is the only confirmation the message went anywhere).
+   */
+  private sendChat(text: string, target: ChatTarget): void {
+    const link = this.rts?.matchLinkHandle ?? null;
+    // On a CLIENT nothing is shown yet: the host decides who hears this, ourselves included,
+    // and its ruling comes straight back. Showing it optimistically would mean a message that
+    // was routed to nobody still appeared to have been sent.
+    if (link && this.rts?.frozenClient) {
+      link.askToSay(text, target);
+      return;
+    }
+    this.deliverChat({ from: this.localPlayer, text, target });
+  }
+
+  /**
+   * Raise the line to the map's script — `TriggerRegisterPlayerChatEvent`, which is how every
+   * map that takes typed commands takes them ("-ap", "-random", "-kick 3").
+   *
+   * Fired for what the player SAID, regardless of who heard it: a chat command is aimed at
+   * the map, not at the other players, and typing "-ap" to your allies still starts All Pick.
+   * It is also raised for the raw text rather than the rendered line — a script matching "-ap"
+   * must not have to see through a colour code and a name.
+   */
+  private fireChatTriggers(line: ChatLine): void {
+    this.mapScript?.interp.firePlayerChat(line.from, line.text);
+  }
+
+  /** Show a chat line if the local player is one of its recipients, and remember it for the
+   *  message log. The routing is the model's; this is only the local end of it. */
+  /**
+   * The AUTHORITY's path: decide who hears a line, tell them, and raise it to the map script.
+   *
+   * All three are the authority's alone. Only it holds the alliance matrix everyone agreed on,
+   * so only it can say who counts as an ally; and only it runs the authoritative script, so a
+   * chat trigger firing here and again on each client would execute the map's own logic once
+   * per machine. A client takes `showChat` instead and decides nothing.
+   */
+  private deliverChat(line: ChatLine): void {
+    this.fireChatTriggers(line);
+    const heard = chatRecipients(line, this.chatWorld());
+    const link = this.rts?.matchLinkHandle ?? null;
+    if (link) for (const player of heard) link.relaySaid(player, line);
+    if (heard.includes(this.localPlayer)) this.showChat(line);
+  }
+
+  /** Put a line on screen and in the history. No routing, no triggers — either this machine
+   *  is the authority and has already done both, or the authority has done them for us. */
+  private showChat(line: ChatLine): void {
+    const rendered = formatChatLine(
+      line,
+      this.multiplayerMatch,
+      (p) => this.playerLabel(p),
+      (p) => teamColorHex(this.vfs, p),
+      (k) => this.globalStrings?.strings.get(k),
+    );
+    this.chatHistory.push(rendered);
+    if (this.chatHistory.length > MapViewerScene.CHAT_HISTORY_MAX) this.chatHistory.shift();
+    // Chat rides the same on-screen message area the trigger text does, and expires the same
+    // way — WC3 keeps it there for a while and then lets it go.
+    this.hud?.showMessage(rendered, MapViewerScene.CHAT_MESSAGE_SECS);
   }
 
   /**
@@ -6416,6 +6551,8 @@ export class MapViewerScene {
     this.gameMenu = null;
     this.allies?.dispose();
     this.allies = null;
+    this.chatDialog?.dispose();
+    this.chatDialog = null;
     this.matchOver?.dispose();
     this.matchOver = null;
     this.paused = false;
@@ -7333,6 +7470,13 @@ export class MapViewerScene {
       if (e.key === "F11") {
         e.preventDefault(); // and not the browser's full-screen toggle
         this.allies?.toggle();
+        return;
+      }
+      // F12 is the Messaging dialog ("F12 - Toggle the Chat menu on/off"). It picks who the
+      // entry line talks to and shows the history; it does not pause either.
+      if (e.key === "F12") {
+        e.preventDefault(); // and not the browser's devtools
+        this.chatDialog?.toggle();
         return;
       }
       // Same rule as the HUD's own hotkeys (ui/hud.ts isTyping): a keystroke aimed at a text

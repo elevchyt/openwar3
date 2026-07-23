@@ -26,6 +26,7 @@ import { VisionMap, FogState, fogStateOf } from "../sim/vision";
 import { Viewpoint, VisionSet } from "./viewpoint";
 import { GhostMemory } from "./ghosts";
 import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup } from "./matchLink";
+import type { ChatLine } from "./chat";
 import { applyWorldSnapshot } from "./snapshotApply";
 import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
@@ -3764,6 +3765,10 @@ export class RtsController {
     this.matchLink = link;
     this.matchLinkIsHost = setup.isHost;
     link.onDialog = this.remoteDialog; // set before the link existed, in either order
+    // Chat, both directions: on the host a client's request, already stamped with a real
+    // sender; on a client the host's ruling that we were meant to hear this. Both end up at
+    // the same renderer callback, which routes (host) or just shows it (client).
+    link.onChatSaid = (line) => this.onChatSaid?.(line);
     if (setup.isHost) {
       // The host is the only party that judges an arriving command. `CommandRouter` resolves
       // the relay's `from` stamp — which no client can forge — to a slot, and a command whose
@@ -3800,11 +3805,21 @@ export class RtsController {
   }
   private matchLinkIsHost = false;
 
+  /** A chat line arrived over the wire. The renderer fills this in; see mapViewer.deliverChat. */
+  onChatSaid: ((line: ChatLine) => void) | null = null;
+
   /** Is a LAN match's wire attached? The renderer's background pump keys on this: a
    *  networked match must keep simulating when its window is hidden (the authority owes
    *  the room snapshots), where single-player keeps the browser's natural pause. */
   get networked(): boolean {
     return this.matchLink !== null;
+  }
+
+  /** The wire itself, for traffic that is neither a command nor a snapshot — chat is the
+   *  first of those (`askToSay`/`relaySaid`). Null in a single-player match, which is why
+   *  every caller has to cope with there being no wire at all. */
+  get matchLinkHandle(): MatchLink | null {
+    return this.matchLink;
   }
 
   /** Option 2 (docs/multiplayer.md): is this machine a client whose `SimWorld` is a record

@@ -3,6 +3,7 @@ import { decodeSnapshot, encodeSnapshot, type WireSnapshot } from "./snapshotWir
 import { divergence, describeDivergence, type Divergence } from "./divergence";
 import { commandMessage, isCommandMessage, type CommandMessage } from "../net/commandLink";
 import type { Command } from "./commands";
+import type { ChatLine, ChatTarget } from "./chat";
 
 /**
  * The match's end of the wire (docs/multiplayer.md Phase E item 10b).
@@ -147,6 +148,43 @@ export function isRefusalMessage(data: unknown): data is RefusalMessage {
   return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "ref";
 }
 
+/**
+ * A player typed something (src/game/chat.ts). TWO messages, and the split is the point.
+ *
+ * `chat` goes client → host and says only WHAT was said and TO WHOM. It carries no sender,
+ * for the same reason `CommandMessage` carries no player: **a client controls every byte it
+ * sends**, so a `from` field in the payload would let anybody speak as anybody — and chat is a
+ * more attractive thing to forge than a command, because the whole point of it is that people
+ * believe it. The host stamps the sender from the relay's `deliver.from`, which a client never
+ * gets to write, exactly as `CommandRouter` does.
+ *
+ * `chats` goes host → each recipient and DOES carry the sender, because by then the host has
+ * decided it. The host also decides WHO gets one: allied chat is routed by the authority's own
+ * alliance matrix, so a client cannot read a conversation it was not part of by lying about
+ * its alliances — the message is never sent to it at all.
+ */
+export interface ChatMessage {
+  k: "chat";
+  text: string;
+  target: ChatTarget;
+}
+
+export function isChatMessage(data: unknown): data is ChatMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "chat";
+}
+
+/** The host's ruling: this player said this, to this audience, and you are hearing it. */
+export interface ChatSaidMessage {
+  k: "chats";
+  from: number;
+  text: string;
+  target: ChatTarget;
+}
+
+export function isChatSaidMessage(data: unknown): data is ChatSaidMessage {
+  return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "chats";
+}
+
 /** One seated slot: the player number and, for a human, the relay peer sitting in it. Same
  *  shape `CommandRouter` takes, and for the same reason — it comes straight off `StartMatch`. */
 export interface LinkSeat {
@@ -278,6 +316,10 @@ export class MatchLink {
   /** The authority refused one of our commands (client side only). Default no-op. */
   onRefusal: (msg: RefusalMessage) => void = () => {};
 
+  /** A chat line to act on. On the HOST that means "route and show it"; on a client, "show it"
+   *  — the host has already decided this machine was meant to hear it. */
+  onChatSaid: (line: ChatLine) => void = () => {};
+
   /** Host side: tell a peer its command was refused, and with which `[Errors]` voice. */
   sendRefusal(peer: number, key: string): void {
     this.channel.send({ k: "ref", key } satisfies RefusalMessage, peer);
@@ -318,6 +360,14 @@ export class MatchLink {
       else if (isCommandMessage(data)) this.onCommand(from, data);
       else if (isDialogMessage(data)) this.onDialog(data);
       else if (isRefusalMessage(data)) this.onRefusal(data);
+      // Host side: a client asking to say something. The sender is the RELAY's stamp, never
+      // the payload's — see ChatMessage. A peer holding no seat is simply not heard.
+      else if (isChatMessage(data)) {
+        const player = this.seats.find((s) => s.peer === from)?.id;
+        if (player !== undefined) this.onChatSaid({ from: player, text: data.text, target: data.target });
+      }
+      // Client side: the host's ruling on something somebody said.
+      else if (isChatSaidMessage(data)) this.onChatSaid({ from: data.from, text: data.text, target: data.target });
       else previous(from, data);
     };
     // A returning peer is owed the world it missed, and owed it NOW rather than whenever the
@@ -350,6 +400,21 @@ export class MatchLink {
    */
   sendCommand(cmd: Command): void {
     this.channel.send(commandMessage(cmd), this.hostPeer);
+  }
+
+  /** Client side: ask the host to say this for us. We do not show it yet — the host decides
+   *  who hears it, ourselves included, and its ruling comes back as `chats`. */
+  askToSay(text: string, target: ChatTarget): void {
+    this.channel.send({ k: "chat", text, target } satisfies ChatMessage, this.hostPeer);
+  }
+
+  /** Host side: tell one player what was said. Skips the host's own seat and computer slots —
+   *  the host shows its own copy directly, and nobody is reading an AI's chat. */
+  relaySaid(player: number, line: ChatLine): void {
+    if (player === this.localPlayer) return;
+    const peer = this.peerFor(player);
+    if (peer === undefined) return;
+    this.channel.send({ k: "chats", from: line.from, text: line.text, target: line.target } satisfies ChatSaidMessage, peer);
   }
 
   /** The peer sitting behind a player slot — the reverse of `CommandRouter`'s lookup, because

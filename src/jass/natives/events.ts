@@ -86,6 +86,11 @@ export function registerEventNatives(rt: Runtime): void {
     TriggerRegisterGameEvent: "gameEvent",
     TriggerRegisterGameStateEvent: "gameStateEvent",
     TriggerRegisterDialogEvent: "dialogEvent",
+    // TriggerRegisterPlayerChatEvent(trigger, player, chatString, exactMatchOnly) — how every
+    // map that takes typed commands takes them ("-ap", "-random", "-ii"). The params are kept
+    // raw and judged at dispatch (Interpreter.firePlayerChat), because the match depends on
+    // what was actually said and `exactMatchOnly` decides whether it is equality or a prefix.
+    TriggerRegisterPlayerChatEvent: "playerChat",
   };
   for (const [name, kind] of Object.entries(REG_KINDS)) def(rt, name, (c, a) => register(c, kind, a));
   // TriggerRegisterUnitStateEvent needs one extra step: EVENT_UNIT_STATE_LIMIT is the one
@@ -128,6 +133,11 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetTriggerWidget", (c) => resp(c, "TriggerWidget"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
   def(rt, "GetEventDamageSource", (c) => resp(c, "EventDamageSource")); // EVENT_UNIT_DAMAGED
+  // The whole line that was typed, and the part of it the registration asked for. A map that
+  // registers "-kick " and reads both is how "-kick 3" gets its argument: the matched half is
+  // sliced off the front and the rest is the parameter.
+  def(rt, "GetEventPlayerChatString", (c) => resp(c, "EventPlayerChatString"));
+  def(rt, "GetEventPlayerChatStringMatched", (c) => resp(c, "EventPlayerChatStringMatched"));
   def(rt, "GetEventDamage", (c) => {
     const v = resp(c, "EventDamage");
     return v.k === "real" ? v : jReal(0);

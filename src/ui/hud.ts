@@ -9,6 +9,8 @@ import { campMarker, NEUTRAL_DOT_COLOR } from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3ToHtml } from "./wc3Text";
 
+import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
+
 export type OrderMode = "move" | "attack" | null;
 
 /** One command-card button (order, build, or train). */
@@ -177,6 +179,13 @@ export interface HudDriver {
    *  file isn't in the mounted archives. */
   blpCanvas(path: string): HTMLCanvasElement | null;
   /** Current game time for the clock (hour 0–24, day/night flag). */
+  /** The chat entry line's prompt for a target — the game's own `COLON_MESSAGE_*` string
+   *  ("To All:", "To Allies:", or plain "Message:" in a single-player match). */
+  chatPrompt(target: ChatTarget): string;
+
+  /** A line the local player typed and sent. */
+  sendChat(text: string, target: ChatTarget): void;
+
   dayNight(): { hour: number; isDay: boolean };
   /** Take over the top-bar clock slot with the race's real TimeIndicator model, sizing
    *  and driving it from the host's own render loop. False → use the atlas fallback. */
@@ -457,6 +466,14 @@ export class GameHud {
   // On-screen message area (the "Game - Display text" trigger action target) — a
   // stack of chat/quest lines in the upper-left, oldest scrolling off the top.
   private msgLog!: HTMLDivElement;
+  // The chat entry line under the message column (WC3 draws this one in engine code, not FDF).
+  private chatBar!: HTMLDivElement;
+  private chatPromptEl!: HTMLSpanElement;
+  private chatInput!: HTMLInputElement;
+  private chatTarget: ChatTarget = { scope: "all" };
+  /** Who plain Enter talks to. "All" until the F12 dialog says otherwise — that dialog's
+   *  whole job is choosing this (ui/chatDialog.ts). Ctrl+Enter always overrides it. */
+  private chatDefault: ChatTarget = { scope: "all" };
   private msgTimers = new Set<number>(); // pending auto-remove timeouts, cleared on dispose
   // The gold error line just above the console (WC3's SimpleMessage frame).
   private errLine!: HTMLDivElement;
@@ -617,6 +634,11 @@ export class GameHud {
   private onKey = (e: KeyboardEvent): void => {
     if (this.root.hidden) return;
     if (document.body.classList.contains("game-menu-open")) return; // F10 menu is modal
+    // So is every other in-game dialog — the Allies and Messaging panels, and a script's own.
+    // None of them PAUSE (only F10 does), so the flag above does not cover them; what they all
+    // put up is the modal scrim, and that is the thing to ask about. Without this, Enter over
+    // an open Messaging panel opens a chat line behind it.
+    if (document.querySelector(".fdf-dialog-scrim")) return;
     // Typing into an in-game field is TYPING, not commanding. The Allies dialog's gift
     // boxes are the first of these (F11 does not pause, unlike F10), and without this every
     // digit of "200" also recalls a control group and every letter fires a command-card
@@ -627,6 +649,14 @@ export class GameHud {
     // both spams selection voice lines and makes every held key look like a
     // double-tap, snapping the camera to the group.
     if (e.repeat) return;
+    // Enter opens the chat entry line to everyone, Ctrl+Enter to your allies — the game's
+    // own two send keys. Ctrl is read here rather than left to a modal picker because that
+    // is the binding: there is no "switch target" step in the middle.
+    if (e.key === "Enter") {
+      e.preventDefault();
+      this.openChat(e.ctrlKey ? { scope: "allies" } : this.chatDefault);
+      return;
+    }
     if (e.key === "Tab") {
       e.preventDefault(); // Tab cycles the focused sub-group; Shift+Tab reverses
       this.driver.cycleFocus(e.shiftKey);
@@ -926,10 +956,93 @@ export class GameHud {
 
   /** The upper-left message stack that the map's "Game - Display text" trigger
    *  actions write into (via the JASS text natives → the engine `displayText` hook). */
+  /**
+   * The upper-left message column: the lines the game has shown, and under them the chat
+   * entry line the player types into. One column so the prompt arrives where the next message
+   * will, rather than floating somewhere of its own.
+   *
+   * The entry line is NOT in any .fdf — WC3 draws it from `Game.dll` (CGameUI) like the command
+   * card and the minimap, so there is no frame to mount. Its WORDS are the game's, though:
+   * `chatPrompt` resolves the `COLON_MESSAGE_*` GlobalStrings for whichever target is armed.
+   */
   private buildMessageLog(): HTMLDivElement {
+    const column = document.createElement("div");
+    column.className = "hud-msgcol";
+
     this.msgLog = document.createElement("div");
     this.msgLog.className = "hud-msglog";
-    return this.msgLog;
+
+    this.chatBar = document.createElement("div");
+    this.chatBar.className = "hud-chatbar";
+    this.chatBar.hidden = true;
+    this.chatPromptEl = document.createElement("span");
+    this.chatPromptEl.className = "hud-chat-prompt";
+    this.chatInput = document.createElement("input");
+    this.chatInput.type = "text";
+    this.chatInput.className = "hud-chat-input";
+    this.chatInput.maxLength = CHAT_MAX_LENGTH;
+    this.chatInput.autocomplete = "off";
+    this.chatInput.spellcheck = false;
+    this.chatBar.append(this.chatPromptEl, this.chatInput);
+
+    // The entry line answers its own keys. It has to: the HUD's hotkeys stand down while a
+    // field has focus (isTyping), which is the whole point — otherwise every letter typed
+    // would also fire a command-card hotkey.
+    this.chatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        this.sendChat();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        this.closeChat();
+      }
+    });
+    // Clicking away abandons the line, as it does in the game.
+    this.chatInput.addEventListener("blur", () => this.closeChat());
+
+    column.append(this.msgLog, this.chatBar);
+    return column;
+  }
+
+  /** Open the chat entry line addressed at `target` (Enter → all, Ctrl+Enter → allies). */
+  openChat(target: ChatTarget): void {
+    this.chatTarget = target;
+    this.chatPromptEl.textContent = this.driver.chatPrompt(target);
+    this.chatBar.hidden = false;
+    this.chatInput.value = "";
+    this.chatInput.focus();
+  }
+
+  get chatOpen(): boolean {
+    return !this.chatBar.hidden;
+  }
+
+  /** Point plain Enter at a different audience — what the F12 dialog's OK commits. */
+  setChatTarget(target: ChatTarget): void {
+    this.chatDefault = target;
+  }
+
+  /** Who plain Enter currently talks to, so the F12 dialog can open showing it. */
+  chatTargetNow(): ChatTarget {
+    return this.chatDefault;
+  }
+
+  private closeChat(): void {
+    if (this.chatBar.hidden) return;
+    this.chatBar.hidden = true;
+    this.chatInput.value = "";
+    this.chatInput.blur();
+  }
+
+  /** Send what was typed and close. An empty line is not a message — it just closes, which
+   *  is how the game treats Enter-Enter with nothing in between. */
+  private sendChat(): void {
+    const text = sanitizeChat(this.chatInput.value);
+    const target = this.chatTarget;
+    this.closeChat();
+    if (text) this.driver.sendChat(text, target);
   }
 
   /** Show one on-screen message line (DisplayTextToPlayer & the timed variant).

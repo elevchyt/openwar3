@@ -27,7 +27,7 @@
 // That colour is the row LABEL's, as in WC3: a board a script never colours still shows each
 // player's name in their own colour. An explicit LeaderboardSetItemLabelColor still wins.
 
-import { blpToCanvas } from "../render/blputil";
+import { teamColorCss } from "../render/teamColor";
 import type { LeaderboardObj } from "../jass/runtime";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame } from "./fdf/parser";
@@ -37,7 +37,6 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { wc3ToHtml } from "./wc3Text";
 
 const LEADERBOARD_FDF = "UI\\FrameDef\\UI\\LeaderBoard.fdf";
-const TEAM_COLOR = (i: number) => `ReplaceableTextures\\TeamColor\\TeamColor${String(i).padStart(2, "0")}.blp`;
 
 // All in the FDF's 0.8×0.6 world units. The title/backdrop geometry is the file's; these
 // are the numbers the engine owns (row pitch, title band, and where the board hangs).
@@ -226,26 +225,13 @@ export class LeaderboardOverlay {
 
   /** The player's colour, read from the game's own flat TeamColorNN.blp swatch. */
   private teamColor(player: number): string | null {
-    const cached = teamColorCache.get(player);
-    if (cached !== undefined) return cached;
-    let out: string | null = null;
-    const bytes = this.vfs.rawBytes(TEAM_COLOR(player));
-    if (bytes) {
-      const canvas = blpToCanvas(bytes);
-      const px = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
-      if (px) out = `rgb(${px[0]}, ${px[1]}, ${px[2]})`;
-    }
-    teamColorCache.set(player, out);
-    return out;
+    return teamColorCss(this.vfs, player);
   }
 
   dispose(): void {
     this.teardown();
   }
 }
-
-/** Player index → CSS colour. The swatches never change, so one decode per colour. */
-const teamColorCache = new Map<number, string | null>();
 
 /** 0xAARRGGBB → CSS rgba. */
 function css(argb: number): string {

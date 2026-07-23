@@ -26,7 +26,7 @@
 // it says — and is also why a click can't half-apply an alliance.
 
 import { AllianceType } from "../sim/alliances";
-import { blpToCanvas } from "../render/blputil";
+import { teamColorCss } from "../render/teamColor";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { cloneNamespaced, type FdfLibrary } from "./fdf/library";
@@ -34,7 +34,6 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 
 const ALLIANCE_FDF = "UI\\FrameDef\\UI\\AllianceDialog.fdf";
 const ALLIANCE_SLOT_FDF = "UI\\FrameDef\\UI\\AllianceSlot.fdf";
-const TEAM_COLOR = (i: number) => `ReplaceableTextures\\TeamColor\\TeamColor${String(i).padStart(2, "0")}.blp`;
 
 // In the FDF's 0.8×0.6 world units. The row's own geometry is the file's (0.528 × 0.024);
 // these are the numbers the ENGINE owns — where the stack of rows begins and its pitch.
@@ -245,7 +244,7 @@ export class AllianceDialogOverlay {
   /** The row's colour chip: the player's own colour, from the game's flat team-colour swatch. */
   private paintSwatch(screen: FdfScreen, player: number): void {
     const el = screen.frame(`ColorBackdrop${player}`);
-    const color = this.teamColor(player);
+    const color = teamColorCss(this.vfs, player);
     if (el && color) el.style.background = color;
   }
 
@@ -294,22 +293,6 @@ export class AllianceDialogOverlay {
     this.hide();
   }
 
-  /** The player's colour, read from the game's own flat TeamColorNN.blp swatch. */
-  private teamColor(player: number): string | null {
-    const cached = teamColorCache.get(player);
-    if (cached !== undefined) return cached;
-    let out: string | null = null;
-    const bytes = this.vfs.rawBytes(TEAM_COLOR(player));
-    if (bytes) {
-      const px = blpToCanvas(bytes)?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
-      if (px) out = `rgb(${px[0]}, ${px[1]}, ${px[2]})`;
-    }
-    teamColorCache.set(player, out);
-    return out;
-  }
 }
 
 const key = (player: number, type: AllianceType): string => `${player}:${type}`;
-
-/** Player index → CSS colour. The swatches never change, so one decode per colour. */
-const teamColorCache = new Map<number, string | null>();

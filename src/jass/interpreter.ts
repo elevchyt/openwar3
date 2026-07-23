@@ -1096,6 +1096,49 @@ export class Interpreter {
       (reg.kind === "dialogEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === dialogHandleId));
   }
 
+  /**
+   * A player said something — fire every `TriggerRegisterPlayerChatEvent` that wanted it.
+   *
+   * This is how a custom map takes typed commands, and the match rule is the whole of it.
+   * `TriggerRegisterPlayerChatEvent(t, p, chatString, exactMatchOnly)`:
+   *
+   *   • `exactMatchOnly` true  → the message must EQUAL `chatString`. "-ap" and nothing else.
+   *   • `exactMatchOnly` false → `chatString` is a PREFIX. This is the form that carries an
+   *     argument: a map registers "-kick " and reads the rest off the end, which is why
+   *     `GetEventPlayerChatStringMatched` exists at all — it hands back the registered
+   *     prefix so the action can slice it off and keep the parameter.
+   *
+   * An EMPTY `chatString` with exactMatchOnly false is a prefix every message starts with, so
+   * it catches everything the player says. That is not an accident of this implementation —
+   * it is the documented idiom for "give me all of this player's chat".
+   *
+   * The comparison is case-SENSITIVE, as WC3's is: a map registering "-ap" is not answered by
+   * "-AP", and maps that want both register both.
+   */
+  firePlayerChat(player: number, message: string): void {
+    const responses = new Map<string, JassValue>([
+      ["TriggerPlayer", this.rt.playerHandle(player)],
+      ["EventPlayerChatString", { k: "string", s: message }],
+    ]);
+    for (const reg of [...this.rt.triggerRegs]) {
+      if (reg.kind !== "playerChat") continue;
+      // params: [player, chatString, exactMatchOnly] — everything after the trigger itself.
+      // A registration names WHICH player it listens to. A map that wants everybody's chat
+      // registers one trigger per player (blizzard.j's own ForForce loop does exactly that).
+      const who = reg.params[0];
+      if (who?.k === "handle" && (this.rt.data<JassPlayer>(who)?.index ?? -1) !== player) continue;
+      const pattern = reg.params[1]?.k === "string" ? reg.params[1].s : "";
+      const exact = reg.params[2]?.k === "bool" && reg.params[2].b;
+      if (exact ? message !== pattern : !message.startsWith(pattern)) continue;
+      const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+      if (!trig) continue;
+      // The MATCHED string is per-registration, so it is added here rather than above.
+      const own = new Map(responses);
+      own.set("EventPlayerChatStringMatched", { k: "string", s: pattern });
+      this.fireTrigger(trig, this.withTrigger(own, trig));
+    }
+  }
+
   /** Fire every registration matching `pred` with the given responses. Snapshots the
    *  reg list first — an action may register/destroy triggers mid-dispatch. */
   private dispatchToRegs(responses: Map<string, JassValue>, pred: (reg: TriggerReg) => boolean): void {
