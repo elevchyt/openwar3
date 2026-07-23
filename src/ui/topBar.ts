@@ -35,9 +35,14 @@ const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
 const UPPER_BAR_FDF = "UI\\FrameDef\\UI\\UpperButtonBar.fdf";
 const RESOURCE_BAR_FDF = "UI\\FrameDef\\UI\\ResourceBar.fdf";
 
-/** How far down the 0.032-tall strip the two bars sit. They are ~0.022 tall, so this centres
- *  them in the chrome rather than hanging them off its top edge. */
-const BAR_TOP = -0.005;
+/** The strip's frames are 0.032 tall, but the ART only fills the top 77% of that — measured
+ *  off the decoded slice, whose last opaque row is 48 of 64. The remaining quarter is
+ *  transparent, so centring the bars in the FRAME hangs them below the chrome you can see. */
+const STRIP_ART = 0.032 * (49 / 64);
+
+/** How far down the visible chrome the two bars sit: centred in the ART, not in the frame.
+ *  Both bars are ~0.022 tall. */
+const BAR_TOP = -(STRIP_ART - 0.022) / 2;
 
 const s = (v: string): Arg => ({ s: v, n: null, str: true });
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
@@ -56,6 +61,9 @@ const BUTTONS: Array<{ frame: string; panel: TopBarPanel }> = [
 
 export interface TopBarActions {
   openPanel(panel: TopBarPanel): void;
+  /** Put the day/night medallion in the slot the strip leaves for it (render/timeIndicator.ts).
+   *  Returns false when there is no install to render the model from. */
+  mountClock(slot: HTMLElement): boolean;
 }
 
 /** What the resource readout shows. Formatted by the caller — the bar only places it. */
@@ -119,6 +127,52 @@ export class TopBar {
     if (upkeep) upkeep.style.color = r.upkeepColor;
   }
 
+  /**
+   * Hang the day/night medallion in the hole the strip leaves for it.
+   *
+   * The indicator is a MODEL rather than a frame, so it is not in the FrameDef and something
+   * has to place it — and only the strip knows where the hole is. It lives INSIDE this
+   * overlay rather than in the HUD for one reason: the game stage is a TRANSFORMED element,
+   * so viewport coordinates mean nothing to an absolutely-positioned child of the HUD, and
+   * neither `absolute` nor `fixed` there lands on a rect measured out here. Sharing the
+   * overlay makes the two the same coordinate space and the question disappears.
+   *
+   * Rebuilt with the strip, so a resize re-places it.
+   */
+  private mountClock(): void {
+    const overlay = this.screen?.element;
+    const filler = this.gapFiller;
+    if (!overlay || !filler) return;
+    const gap = filler.getBoundingClientRect();
+    const host = overlay.getBoundingClientRect();
+
+    const slot = document.createElement("div");
+    slot.className = "hud-clock hud-clock-skinned";
+    slot.title = "Day/night cycle";
+    slot.style.left = `${gap.left - host.left}px`;
+    slot.style.top = `${gap.top - host.top}px`;
+    slot.style.width = `${gap.width}px`;
+    overlay.appendChild(slot);
+    if (!this.actions.mountClock(slot)) slot.remove();
+  }
+
+  /** The frame that spans the hole — the same rect the medallion wants. */
+  private get gapFiller(): HTMLElement | null {
+    const el = this.screen?.element;
+    if (!el) return null;
+    // The bridge is the only unnamed TEXTURE placed by two opposing SetPoints, so it is the
+    // one strip child whose left edge is not the screen's and whose right edge is not either.
+    const bars = el.querySelectorAll<HTMLElement>('[data-frame="UpperButtonBarFrame"], [data-frame="ResourceBarFrame"]');
+    if (bars.length < 2) return null;
+    const leftEnd = bars[0].getBoundingClientRect().right;
+    const rightStart = bars[1].getBoundingClientRect().left;
+    for (const f of el.querySelectorAll<HTMLElement>(".fdf-frame")) {
+      const r = f.getBoundingClientRect();
+      if (Math.abs(r.left - leftEnd) < 12 && Math.abs(r.right - rightStart) < 12 && r.width > 8) return f;
+    }
+    return null;
+  }
+
   dispose(): void {
     this.screen?.dispose();
     this.screen = null;
@@ -149,6 +203,7 @@ export class TopBar {
       prev?.dispose();
       this.screen = screen;
       this.setVisible(this.shown);
+      this.mountClock();
     } catch (err) {
       console.warn("[topbar] could not mount the FDF strip:", err);
       this.screen = null;
@@ -171,6 +226,31 @@ export class TopBar {
     const children = console.children.filter((c) => {
       const anchor = c.props.find((p) => p.key === "Anchor")?.args[0]?.s ?? "";
       return anchor === "TOPLEFT" || anchor === "TOPRIGHT";
+    });
+
+    // Close the seam behind the medallion. The two runs stop either side of a 0.116-wide
+    // hole, and the TimeIndicator model that hangs there does NOT square it off — its frame
+    // is an arch, narrower at the top and inset from the canvas it renders into, so bare map
+    // showed in two slivers beside it. The file has the piece: `ConsoleTexture02` appears
+    // TWICE, once as its left end (TexCoord 0 … 0.34) and once as its right (0.793 … 1), and
+    // the middle those two are the ends OF is what belongs between them. It is 0.116 wide and
+    // sits entirely UNDER the medallion, so nothing about it reads as stretched.
+    children.push({
+      type: "TEXTURE",
+      name: "",
+      inherits: null,
+      withChildren: false,
+      props: [
+        prop("File", s("ConsoleTexture02")),
+        prop("TexCoord", num(0.33984375), num(0.79296875), num(0), num(0.125)),
+        prop("AlphaMode", s("ALPHAKEY")),
+        prop("Height", num(0.032)),
+        // Opposing points, so it solves to exactly the hole: the left run ends at
+        // 0.256 + 0.087, the right one starts 0.288 + 0.053 in from the right edge.
+        prop("SetPoint", word("TOPLEFT"), s("ConsoleUI"), word("TOPLEFT"), num(0.343), num(0)),
+        prop("SetPoint", word("TOPRIGHT"), s("ConsoleUI"), word("TOPRIGHT"), num(-0.341), num(0)),
+      ],
+      children: [],
     });
 
     const bar = (name: string, point: "TOPLEFT" | "TOPRIGHT", dx: number): void => {

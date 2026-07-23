@@ -413,72 +413,13 @@ body.in-game .menu-panel { display: none; }
   flex: none;
 }
 
-/* The strip's CHROME is the game's own console art now (ui/topBar.ts, from ConsoleUI.fdf).
-   What is left here is a transparent holder for the day/night medallion, which is a MODEL
-   rather than a frame and hangs in the gap the console art leaves between the two bars. */
-.hud-top {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  overflow: visible; /* let the clock medallion dip below the bar */
-}
-/* The clock is absolutely centred in the bar; keep it out of the flex flow. */
-.hud-clock-skinned { z-index: 1; }
-
-.hud-menus {
-  display: flex;
-  gap: 4px;
-}
-
-/* Beveled dark button with a thin tan border and gold-tinted label, close to
-   WC3's upper menu buttons. */
-.hud-menu-btn {
-  font: inherit;
-  font-size: 12px;
-  color: #d8c48a;
-  background: linear-gradient(#2b2617, #1a160d 55%, #100d07);
-  border: 1px solid #52471f;
-  border-radius: 4px;
-  padding: 3px 16px;
-  cursor: pointer;
-  box-shadow: inset 0 1px 0 rgba(216, 180, 90, 0.28), inset 0 -2px 3px rgba(0, 0, 0, 0.55);
-  text-shadow: 0 1px 1px #000;
-  letter-spacing: 0.3px;
-}
-.hud-menu-btn:not(:disabled):hover {
-  color: #ffe89a;
-  border-color: #8a7332;
-}
-.hud-menu-btn:not(:disabled):active {
-  background: linear-gradient(#100d07, #1a160d);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.7);
-}
-.hud-menu-btn:disabled { color: #8f8362; cursor: default; }
-
-.hud-clock {
-  width: 22px;
-  height: 22px;
-  margin: 0 auto;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #cfe4ff, #274a86 65%, #101d38);
-  border: 1px solid var(--border);
-}
-
-/* Real day/night medallion: hangs from the top bar, centred, drawn at its
-   natural aspect (never cropped). Height exceeds the bar so it dips below. */
+/* The day/night medallion. It fills the hole the console strip leaves between its two runs,
+   and ui/topBar.ts is what sizes and places it — only the strip knows where that hole is,
+   and it changes with the viewport. Anything else either leaves the seam showing or covers
+   the gold icon at the resource bar's very left edge. */
 .hud-clock-skinned {
   position: absolute;
-  left: 50%;
-  top: -2px;
-  transform: translateX(-50%);
-  height: 300%; /* larger day/night medallion that dips well below the bar */
-  width: auto;
+  height: auto;
   margin: 0;
   border: none;
   border-radius: 0;
@@ -515,39 +456,6 @@ body.in-game .menu-panel { display: none; }
   width: 100%;
   height: 100%;
 }
-
-.hud-resources {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  margin-left: auto; /* push gold/lumber/food/upkeep to the far right */
-  padding-right: 8px;
-  font-size: 13px;
-  color: #f4e8c8;
-}
-
-.hud-res { display: flex; align-items: center; gap: 6px; }
-.hud-res-icon { width: 18px; height: 18px; image-rendering: auto; }
-.hud-res-value { min-width: 38px; text-align: left; text-shadow: 0 1px 1px #000; }
-
-.hud-res-tag {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-  color: #111;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
-}
-.hud-res-gold { background: radial-gradient(circle at 35% 30%, #ffe98a, #d99b1e); }
-.hud-res-lumber { background: radial-gradient(circle at 35% 30%, #7fd66a, #2f7a26); border-radius: 3px; }
-.hud-res-supply { background: radial-gradient(circle at 35% 30%, #e3b98a, #9c6a3a); }
-
-.hud-upkeep { font-size: 13px; color: #5be05a; text-shadow: 0 1px 1px #000; }
-.hud-upkeep[data-level="L"] { color: #e0c146; }
-.hud-upkeep[data-level="H"] { color: #e05046; }
 
 .hud-console {
   position: absolute;

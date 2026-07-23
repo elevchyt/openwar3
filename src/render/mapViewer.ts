@@ -4340,6 +4340,7 @@ export class MapViewerScene {
         else if (panel === "allies") this.allies?.toggle();
         else this.chatDialog?.toggle();
       },
+      mountClock: (slot) => this.mountClock(slot),
     });
     this.hud = new GameHud(ui, driver);
     this.mountScriptUi(ui);

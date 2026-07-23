@@ -462,7 +462,6 @@ export class GameHud {
   private invCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
   private invCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private invKey = "";
-  private clockFace?: HTMLDivElement;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
   private lastSelId: number | null = null; // force a text refresh when selection changes
@@ -488,7 +487,6 @@ export class GameHud {
     this.root.className = "hud";
     const skin = driver.consoleSkin();
     this.root.append(
-      this.buildTopBar(skin),
       this.buildConsole(skin),
       this.buildCheatPanel(),
       this.buildMessageLog(),
@@ -578,7 +576,6 @@ export class GameHud {
       this.dotsT = 0;
       this.drawDots();
     }
-    this.updateClock();
     this.refreshCommandCard();
     this.refreshInventory();
     this.updateIdleWorkers();
@@ -613,14 +610,6 @@ export class GameHud {
         this.idleIconSet = true;
       }
     }
-  }
-
-  /** Sun/moon disc: the indicator texture is sun–moon–sun across its width, so
-   *  showing its left edge reveals the sun (day) and its centre the moon
-   *  (night); a CSS transition eases the dawn/dusk swap. */
-  private updateClock(): void {
-    if (!this.clockFace) return;
-    this.clockFace.style.backgroundPositionX = this.driver.dayNight().isDay ? "0%" : "50%";
   }
 
   private lastTapKey = ""; // for double-tap detection (control-group / hero camera jump)
@@ -722,42 +711,10 @@ export class GameHud {
 
   // --- construction ---------------------------------------------------------
 
-  private buildTopBar(skin: { clockUrl: string; clockAspect: number; timeUrl: string | null } | null): HTMLDivElement {
-    // The strip's CHROME, its four buttons and its resource readout are all the game's own
-    // frames now (ui/topBar.ts, from ConsoleUI/UpperButtonBar/ResourceBar.fdf). What is left
-    // here is the day/night medallion, which is a MODEL rather than a frame and hangs in the
-    // gap the console art leaves between the two bars.
-    const bar = document.createElement("div");
-    bar.className = "hud-top";
-
-    // Day/night clock. WC3's real widget is a per-race MDX scene (war3skins.txt
-    // `TimeOfDayIndicator`): a rotating sun/moon orb inside a frame ring, ringed by
-    // eight dots that light one by one as the half-cycle runs down. The host mounts
-    // and drives it (render/timeIndicator.ts). Without an install to render it from,
-    // fall back to the console atlas' medallion crop and its sun/moon strip.
-    const clock = document.createElement("div");
-    clock.className = "hud-clock";
-    clock.title = "Day/night cycle";
-    if (this.driver.mountClock(clock)) {
-      clock.classList.add("hud-clock-skinned");
-    } else if (skin) {
-      clock.classList.add("hud-clock-skinned");
-      clock.style.aspectRatio = String(skin.clockAspect);
-      if (skin.timeUrl) {
-        this.clockFace = document.createElement("div");
-        this.clockFace.className = "hud-clock-face";
-        this.clockFace.style.backgroundImage = `url(${skin.timeUrl})`;
-        clock.appendChild(this.clockFace);
-      }
-      const frame = document.createElement("div");
-      frame.className = "hud-clock-frame";
-      frame.style.backgroundImage = `url(${skin.clockUrl})`;
-      clock.appendChild(frame);
-    }
-
-    bar.append(clock);
-    return bar;
-  }
+  // The top bar used to be built here. All of it is the game's own frames now — the console
+  // strip's chrome, the Quests/Menu/Allies/Chat buttons and the resource readout come from
+  // ConsoleUI/UpperButtonBar/ResourceBar.fdf, and the day/night medallion hangs in the gap
+  // between them. See ui/topBar.ts.
 
   /** The canvas inside the portrait frame — the host renders the selected
    *  unit's animated portrait model into it. */

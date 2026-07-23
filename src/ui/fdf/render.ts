@@ -865,8 +865,13 @@ function decorated(tmpl: FdfFrame | undefined, referrer: FdfFrame): FdfFrame | u
 function textureImage(f: FdfFrame, ctx: RenderCtx): string | null {
   const src = texture(f, "File", ctx);
   if (!src) return null;
+  // ADD means the texel's BRIGHTNESS is what it contributes, and these atlas rows ship no
+  // alpha — so an additive slice has to earn its transparency the same way the mouse-over
+  // glow does, or it draws as the black rectangle it literally is. (That is exactly what a
+  // SIMPLEBUTTON's `UseHighlight` row did under the cursor.)
+  const additive = strProp(f, "AlphaMode") === "ADD";
   const uv = firstProp(f, "TexCoord")?.args;
-  if (!uv || uv.length < 4) return src.toDataURL();
+  if (!uv || uv.length < 4) return (additive ? intensityAsAlpha(src) : src).toDataURL();
   const [l, r, t, b] = [uv[0].n ?? 0, uv[1].n ?? 1, uv[2].n ?? 0, uv[3].n ?? 1];
   const sx = Math.round(l * src.width);
   const sy = Math.round(t * src.height);
@@ -876,7 +881,7 @@ function textureImage(f: FdfFrame, ctx: RenderCtx): string | null {
   out.width = sw;
   out.height = sh;
   out.getContext("2d")?.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
-  return out.toDataURL();
+  return (additive ? intensityAsAlpha(out) : out).toDataURL();
 }
 
 /** Paint a `Texture` frame — an image element in its own right (the console's tiles, the
