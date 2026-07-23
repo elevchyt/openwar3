@@ -863,8 +863,41 @@ function appendGlow(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
   if (!highCanvas) return;
   const glow = document.createElement("div");
   glow.className = "fdf-button-glow";
-  glow.style.background = `url(${highCanvas.toDataURL()}) center/100% 100% no-repeat`;
+  glow.style.background = `url(${intensityAsAlpha(highCanvas).toDataURL()}) center/100% 100% no-repeat`;
   el.appendChild(glow);
+}
+
+/**
+ * Give an ADD-mode highlight the alpha its brightness implies.
+ *
+ * These files carry their intensity in the COLOUR and ship with no alpha channel at all:
+ * `EscMenuButtonMouseOverHighlight` decodes fully opaque — black around the rim, blue in the
+ * middle — and `HighlightAlphaMode "ADD"` is the instruction to add that. Left opaque, the
+ * layer does not merely fail to glow at the rim, it DARKENS there: CSS resolves a blend over
+ * a partially transparent backdrop as `(1-αb)·Cs + αb·B(Cb, Cs)`, so a black source over an
+ * in-game panel (whose own art is ~75% opaque) comes out as `αb·Cb` — the button's face and
+ * border knocked down by a quarter the moment the mouse touches it. That is the "dark
+ * background on hover", and it never showed up on the glue screens because nothing there is
+ * translucent enough for the missing quarter to read.
+ *
+ * Carrying the intensity as alpha instead makes the rim genuinely absent rather than
+ * genuinely black, which is what ADD meant in the first place. A file that DOES ship an alpha
+ * channel is left exactly as it is.
+ */
+function intensityAsAlpha(src: HTMLCanvasElement): HTMLCanvasElement {
+  const g = src.getContext("2d");
+  if (!g) return src;
+  const img = g.getImageData(0, 0, src.width, src.height);
+  const d = img.data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] !== 255) return src; // already has real alpha
+  // Brightest channel, not a luminance weighting: this is "how much light does this texel
+  // add", and a pure-blue glow must not be dimmed for having no red in it.
+  for (let i = 0; i < d.length; i += 4) d[i + 3] = Math.max(d[i], d[i + 1], d[i + 2]);
+  const out = document.createElement("canvas");
+  out.width = src.width;
+  out.height = src.height;
+  out.getContext("2d")?.putImageData(img, 0, 0);
+  return out;
 }
 
 // --- text measurement (the engine's TEXT auto-size) -------------------------------
