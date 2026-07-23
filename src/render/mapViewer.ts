@@ -56,6 +56,7 @@ import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { ChatDialogOverlay } from "../ui/chatDialog";
 import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
+import { TopBar } from "../ui/topBar";
 import { parseMapInfo } from "../world/mapInfo";
 import {
   chatPrompt, chatRecipients, formatChatLine,
@@ -608,6 +609,8 @@ export class MapViewerScene {
   private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
   private chatDialog: ChatDialogOverlay | null = null; // F12 — ChatDialog.fdf
   private questLog: QuestDialogOverlay | null = null; // F9 — QuestDialog.fdf
+  /** The console's upper strip — ConsoleUI + UpperButtonBar + ResourceBar, all from the FDF. */
+  private topBar: TopBar | null = null;
   /** war3map.w3i's name — the Quest Log's subtitle. May be a TRIGSTR_ until the script loads. */
   private mapDisplayName = "";
   /** The last FlashQuestDialogButton count the HUD was shown, so a new flash glows once. */
@@ -4266,12 +4269,7 @@ export class MapViewerScene {
       chatPrompt: (target) =>
         chatPrompt(target, this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
       sendChat: (text, target) => this.sendChat(text, target),
-      openPanel: (kind) => {
-        if (kind === "quests") this.questLog?.toggle();
-        else if (kind === "menu") this.paused = this.gameMenu?.toggle() ?? false; // F10 pauses
-        else if (kind === "allies") this.allies?.toggle();
-        else this.chatDialog?.toggle();
-      },
+      setResources: (next) => this.topBar?.update(next),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
@@ -4332,6 +4330,17 @@ export class MapViewerScene {
           .sort((a, b) => a.race.localeCompare(b.race) || a.name.localeCompare(b.name)),
       spawnTestHero: (typeId) => void this.spawnTestHero(typeId),
     };
+    this.topBar?.dispose();
+    // Built BEFORE the HUD so the HUD's own layers (the day/night medallion that hangs in the
+    // strip's gap, the message column) stack over the console chrome rather than under it.
+    this.topBar = new TopBar(ui, this.vfs, SKIN_SECTION[this.localRace], {
+      openPanel: (panel) => {
+        if (panel === "quests") this.questLog?.toggle();
+        else if (panel === "menu") this.paused = this.gameMenu?.toggle() ?? false; // F10 pauses
+        else if (panel === "allies") this.allies?.toggle();
+        else this.chatDialog?.toggle();
+      },
+    });
     this.hud = new GameHud(ui, driver);
     this.mountScriptUi(ui);
     this.gameMenu?.dispose();
@@ -6597,6 +6606,8 @@ export class MapViewerScene {
     this.chatDialog = null;
     this.questLog?.dispose();
     this.questLog = null;
+    this.topBar?.dispose();
+    this.topBar = null;
     this.matchOver?.dispose();
     this.matchOver = null;
     this.paused = false;

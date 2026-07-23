@@ -413,6 +413,9 @@ body.in-game .menu-panel { display: none; }
   flex: none;
 }
 
+/* The strip's CHROME is the game's own console art now (ui/topBar.ts, from ConsoleUI.fdf).
+   What is left here is a transparent holder for the day/night medallion, which is a MODEL
+   rather than a frame and hangs in the gap the console art leaves between the two bars. */
 .hud-top {
   position: absolute;
   top: 0;
@@ -421,13 +424,8 @@ body.in-game .menu-panel { display: none; }
   height: 32px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  /* Dark stone bar like the WC3 top console strip. */
-  background: linear-gradient(#26241c, #14120c 60%, #0a0906);
-  border-bottom: 2px solid #000;
-  box-shadow: inset 0 -1px 0 rgba(216, 180, 90, 0.28), 0 2px 4px rgba(0, 0, 0, 0.5);
-  pointer-events: auto;
+  justify-content: center;
+  pointer-events: none;
   overflow: visible; /* let the clock medallion dip below the bar */
 }
 /* The clock is absolutely centred in the bar; keep it out of the flex flow. */
@@ -1534,6 +1532,42 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-screen-disabled .fdf-disabled-face { opacity: 1; }
 .fdf-screen-disabled .fdf-btn-text span { color: var(--fdf-disabled-color, #808080) !important; }
 .fdf-screen-disabled .fdf-button-glow { opacity: 0 !important; }
+
+/* The console's upper strip sits under the HUD's own layers (the clock medallion hangs in
+   its gap and must draw over it) but above the world. Its chrome takes no clicks; the
+   buttons inside it turn pointer events back on (.fdf-button). */
+.fdf-screen.fdf-topbar {
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* --- FDF SIMPLEBUTTON (the console's own buttons — the upper Quests/Menu/Allies/Chat bar).
+   Its four faces are rows of one atlas and its three captions are the same words in three
+   colours, all stacked; the state picks which of each is visible. */
+.fdf-simple-face,
+.fdf-simple-text {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.fdf-simple-face { z-index: 0; }
+.fdf-simple-text {
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  line-height: 1;
+}
+.fdf-simple-text-high,
+.fdf-simple-text-dis { opacity: 0; }
+.fdf-button:hover > .fdf-simple-text-normal { opacity: 0; }
+.fdf-button:hover > .fdf-simple-text-high { opacity: 1; }
+.fdf-button:active > .fdf-simple-text { transform: translate(var(--push-x, 0), var(--push-y, 0)); }
+/* Disabled wins over hover: a dead button neither lights up nor answers. */
+.fdf-button.fdf-disabled > .fdf-simple-text-normal,
+.fdf-button.fdf-disabled > .fdf-simple-text-high { opacity: 0; }
+.fdf-button.fdf-disabled > .fdf-simple-text-dis { opacity: 1; }
 
 /* --- FDF check box / radio button. Both are a GLUECHECKBOX; only the art differs, and
    all of it is the FDF's (EscMenuCheckBoxTemplate / EscMenuRadioButtonTemplate). The tick

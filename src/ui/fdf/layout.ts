@@ -95,7 +95,18 @@ function readPoints(frame: FdfFrame): { setAllPoints: boolean; points: PointSpec
  *  uses (ui/fdf/render.ts — it must clear descenders), and 0.013 its FrameFont default, so
  *  an unsized TEXT frame ends up exactly as tall as the line it draws. */
 function textLineHeight(frame: FdfFrame): number {
-  return (firstProp(frame, "FrameFont")?.args[1]?.n ?? 0.013) * 1.2;
+  return (fontSizeOf(frame) ?? 0.013) * 1.2;
+}
+
+/** A text frame's declared type size. `Frame "TEXT"` spells it `FrameFont`; a `String` block
+ *  spells it `Font` — same thing, and the resource bar's readouts are the latter. */
+export function fontSizeOf(frame: FdfFrame): number | undefined {
+  return firstProp(frame, "FrameFont")?.args[1]?.n ?? firstProp(frame, "Font")?.args[1]?.n ?? undefined;
+}
+
+/** Frames that hold TEXT and are auto-sized to it by the engine. */
+export function isTextFrame(frame: FdfFrame): boolean {
+  return frame.type === "TEXT" || frame.type === "STRING";
 }
 
 /** Build the LaidOutFrame tree (unsolved), reading explicit Width/Height. */
@@ -261,7 +272,7 @@ export function layout(
         // caption, which declares neither size nor SetPoint) and must keep filling its
         // parent, or every button in the game wears a shrink-wrapped label jammed into its
         // top-left corner.
-        if (n.frame.type === "TEXT" && points.length) {
+        if (isTextFrame(n.frame) && points.length) {
           const measured = measure?.(n.frame);
           if (Number.isNaN(n.w) && measured !== undefined) n.w = measured;
           if (Number.isNaN(n.h)) {
@@ -299,7 +310,7 @@ export function layout(
       n.y = ly - fy(pt.myPoint) * n.h;
       // A TEXT frame whose width we invented is standing in for one the engine would have
       // shrink-wrapped; the anchor, not the file's justification, is what centres it.
-      if (n.fabricatedWidth && n.frame.type === "TEXT") {
+      if (n.fabricatedWidth && isTextFrame(n.frame)) {
         const f = fx(pt.myPoint);
         n.autoJustifyH = f === 0 ? "JUSTIFYLEFT" : f === 1 ? "JUSTIFYRIGHT" : "JUSTIFYCENTER";
       }

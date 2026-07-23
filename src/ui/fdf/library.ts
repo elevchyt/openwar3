@@ -104,7 +104,13 @@ export class FdfLibrary {
     }
     const out: FdfFrame = {
       type: frame.type || base?.type || "FRAME",
-      name: frame.name || base?.name || "",
+      // A frame's NAME is its own. INHERITS copies props and children, never identity — and
+      // letting an ANONYMOUS block fall back to its template's name is not merely untidy, it
+      // makes same-template siblings collide: the merge below replaces a same-named child, so
+      // the resource bar's three `Texture INHERITS "ResourceBarIconTemplate"` icons all
+      // resolved to that one name and only the last of them survived. Gold and lumber simply
+      // had no icon.
+      name: frame.name,
       inherits: null,
       withChildren: false,
       props: mergeProps(base?.props ?? [], frame.props),
@@ -159,6 +165,28 @@ export function strProp(frame: FdfFrame, key: string): string | undefined {
 }
 export function findChild(frame: FdfFrame, name: string): FdfFrame | undefined {
   return frame.children.find((c) => c.name === name);
+}
+
+/**
+ * `DecorateFileNames` is INHERITED by everything under the frame that declares it.
+ *
+ * The glue screens always put it on the frame that also names the texture, so it read like a
+ * per-frame flag. The console's frames do not: `ConsoleUI` and `ResourceBarFrame` declare it
+ * once and then hang a dozen anonymous `Texture` children off it, each naming a skin KEY
+ * ("ConsoleTexture01", "GoldIcon"). Checked only on the frame itself, every one of those
+ * resolves to a path that does not exist and the whole strip renders as bare text.
+ *
+ * Push it down the tree once, after INHERITS is flattened and before anything is drawn, so
+ * nothing downstream has to carry an ancestor flag around.
+ */
+export function propagateDecorate(frame: FdfFrame, inherited = false): void {
+  const own = inherited || frame.props.some((p) => p.key === "DecorateFileNames");
+  if (own && !inherited) {
+    // already declared here; nothing to add
+  } else if (own) {
+    frame.props.push({ key: "DecorateFileNames", args: [] });
+  }
+  for (const child of frame.children) propagateDecorate(child, own);
 }
 
 /** Props whose first argument NAMES another frame, and so must follow a rename. */

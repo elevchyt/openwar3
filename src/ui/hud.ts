@@ -10,6 +10,10 @@ import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3ToHtml } from "./wc3Text";
 
 import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
+import type { TopBarResources } from "./topBar";
+
+/** WC3's upkeep bands, as the resource bar colours them. */
+const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
 
 export type OrderMode = "move" | "attack" | null;
 
@@ -186,8 +190,8 @@ export interface HudDriver {
   /** A line the local player typed and sent. */
   sendChat(text: string, target: ChatTarget): void;
 
-  /** The top bar's four buttons — each opens what its function key opens (F9…F12). */
-  openPanel(kind: "quests" | "menu" | "allies" | "chat"): void;
+  /** Push the resource readout to the FDF top bar (ui/topBar.ts), which owns that text now. */
+  setResources(next: TopBarResources): void;
 
   dayNight(): { hour: number; isDay: boolean };
   /** Take over the top-bar clock slot with the race's real TimeIndicator model, sizing
@@ -401,10 +405,6 @@ const TEXT_PERIOD = 250; // ms between resource/info text refreshes
 
 export class GameHud {
   private root: HTMLDivElement;
-  private gold!: HTMLSpanElement;
-  private lumber!: HTMLSpanElement;
-  private food!: HTMLSpanElement;
-  private upkeep!: HTMLSpanElement;
   private selName!: HTMLDivElement;
   private selSub!: HTMLDivElement; // "Level N" (heroes)
   private xpBar!: HTMLDivElement; // hero XP / summon-timer track
@@ -723,24 +723,12 @@ export class GameHud {
   // --- construction ---------------------------------------------------------
 
   private buildTopBar(skin: { clockUrl: string; clockAspect: number; timeUrl: string | null } | null): HTMLDivElement {
+    // The strip's CHROME, its four buttons and its resource readout are all the game's own
+    // frames now (ui/topBar.ts, from ConsoleUI/UpperButtonBar/ResourceBar.fdf). What is left
+    // here is the day/night medallion, which is a MODEL rather than a frame and hangs in the
+    // gap the console art leaves between the two bars.
     const bar = document.createElement("div");
     bar.className = "hud-top";
-
-    // The UpperButtonBar's four: each just presses its function key's panel (UpperButtonBar.fdf
-    // captions them "Quests (F9)" … via KEY_QUESTS etc. — same label, same deed).
-    const menus = document.createElement("div");
-    menus.className = "hud-menus";
-    const panels: Array<[string, string, "quests" | "menu" | "allies" | "chat"]> = [
-      ["Quests", "F9", "quests"], ["Menu", "F10", "menu"], ["Allies", "F11", "allies"], ["Chat", "F12", "chat"],
-    ];
-    for (const [label, key, kind] of panels) {
-      const b = document.createElement("button");
-      b.className = "hud-menu-btn";
-      b.textContent = `${label} (${key})`;
-      b.onclick = () => this.driver.openPanel(kind);
-      if (kind === "quests") this.questsBtn = b;
-      menus.appendChild(b);
-    }
 
     // Day/night clock. WC3's real widget is a per-race MDX scene (war3skins.txt
     // `TimeOfDayIndicator`): a rotating sun/moon orb inside a frame ring, ringed by
@@ -767,40 +755,8 @@ export class GameHud {
       clock.appendChild(frame);
     }
 
-    const res = document.createElement("div");
-    res.className = "hud-resources";
-    this.gold = this.resourceEntry(res, "gold", "G");
-    this.lumber = this.resourceEntry(res, "lumber", "L");
-    this.food = this.resourceEntry(res, "supply", "F");
-    this.upkeep = document.createElement("span");
-    this.upkeep.className = "hud-upkeep";
-    res.appendChild(this.upkeep);
-
-    bar.append(menus, clock, res);
+    bar.append(clock);
     return bar;
-  }
-
-  private resourceEntry(parent: HTMLElement, kind: "gold" | "lumber" | "supply", fallback: string): HTMLSpanElement {
-    const wrap = document.createElement("span");
-    wrap.className = "hud-res";
-    const url = this.driver.icon(kind);
-    if (url) {
-      const img = document.createElement("img");
-      img.className = "hud-res-icon";
-      img.src = url;
-      img.alt = kind;
-      wrap.appendChild(img);
-    } else {
-      const tag = document.createElement("span");
-      tag.className = `hud-res-tag hud-res-${kind}`;
-      tag.textContent = fallback;
-      wrap.appendChild(tag);
-    }
-    const value = document.createElement("span");
-    value.className = "hud-res-value";
-    wrap.appendChild(value);
-    parent.appendChild(wrap);
-    return value;
   }
 
   /** The canvas inside the portrait frame — the host renders the selected
@@ -1597,13 +1553,15 @@ export class GameHud {
 
   private updateTexts(): void {
     const r = this.driver.resources();
-    this.gold.textContent = String(Math.floor(r.gold));
-    this.lumber.textContent = String(Math.floor(r.lumber));
-    this.food.textContent = `${r.foodUsed}/${r.foodMax}`;
     // WC3 upkeep brackets: 0–50 none, 51–80 low, 81+ high.
     const upkeep = r.foodUsed <= 50 ? "No Upkeep" : r.foodUsed <= 80 ? "Low Upkeep" : "High Upkeep";
-    this.upkeep.textContent = upkeep;
-    this.upkeep.dataset.level = upkeep[0];
+    this.driver.setResources({
+      gold: String(Math.floor(r.gold)),
+      lumber: String(Math.floor(r.lumber)),
+      supply: `${r.foodUsed}/${r.foodMax}`,
+      upkeep,
+      upkeepColor: upkeep[0] === "N" ? UPKEEP_COLORS.none : upkeep[0] === "L" ? UPKEEP_COLORS.low : UPKEEP_COLORS.high,
+    });
 
     const sel = this.driver.selection();
     this.portrait.classList.toggle("empty", !sel);

@@ -3,8 +3,8 @@ import { blpToCanvas } from "../../render/blputil";
 import { wc3ToHtml, wc3ToPlain } from "../wc3Text";
 import { gameFontStack } from "../gameFont";
 import type { FdfFrame } from "./parser";
-import { FdfLibrary, firstProp, hasFlag, numProp, strProp } from "./library";
-import { fitBox, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
+import { FdfLibrary, firstProp, hasFlag, numProp, propagateDecorate, strProp } from "./library";
+import { fitBox, fontSizeOf, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import {
   buildCheckBox, buildEditBox, buildList, buildPopup, buildTextArea, widgetKind,
@@ -147,6 +147,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   const makeRoot = (): FdfFrame => {
     const r = opts.buildRoot ? opts.buildRoot(lib) : lib.resolveRoot(opts.rootFrame);
     if (!r) throw new Error(`FDF: frame "${opts.rootFrame}" not found in ${opts.fdfPath}`);
+    propagateDecorate(r); // an ancestor's DecorateFileNames covers everything beneath it
     return r;
   };
   let root = makeRoot();
@@ -155,7 +156,10 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   const blpCanvas = (path: string): HTMLCanvasElement | null => {
     if (!path) return null;
     if (blpCache.has(path)) return blpCache.get(path)!;
-    const bytes = opts.vfs.rawBytes(path);
+    // The skin table is inconsistent about the extension — `GoldIcon` ends in `.blp` and
+    // `ConsoleTexture01` does not (`UI\Console\Human\HumanUITile01`). The engine does not
+    // care; neither should we, or the entire console strip resolves to nothing.
+    const bytes = opts.vfs.rawBytes(path) ?? (/\.\w{3,4}$/.test(path) ? null : opts.vfs.rawBytes(`${path}.blp`));
     const canvas = bytes ? blpToCanvas(bytes) : null;
     blpCache.set(path, canvas);
     return canvas;
@@ -343,8 +347,15 @@ function renderFrame(
   const isButton = !kind && BUTTON_TYPES.has(f.type);
   if (f.type === "BACKDROP") {
     paintBackdrop(el, f, px, ctx);
-  } else if (f.type === "TEXT") {
+  } else if (f.type === "TEXTURE") {
+    paintTexture(el, f, ctx);
+  } else if (f.type === "TEXT" || f.type === "STRING") {
+    // A STRING *is* a text element — the glue screens only ever used them as templates
+    // (`String "StandardButtonTextTemplate"`), so nothing drew one until the resource bar,
+    // whose gold/lumber/supply readouts are String frames sitting in the frame directly.
     paintText(el, f, ctx, node.autoJustifyH);
+  } else if (f.type === "SIMPLEBUTTON") {
+    wireButton(el, f, ctx);
   } else if (isButton) {
     wireButton(el, f, ctx);
   } else if ((f.type === "SPRITE" || f.type === "MODEL") && ctx.sprites[f.name]) {
@@ -358,12 +369,74 @@ function renderFrame(
 
   if (kind) {
     renderWidget(kind, el, node, f, px, ctx, abs);
+  } else if (f.type === "SIMPLEBUTTON") {
+    renderSimpleButtonLayers(el, f, ctx);
   } else if (isButton) {
     renderButtonLayers(el, node, f, px, ctx, abs);
   } else {
     for (const child of node.children) renderFrame(child, el, ctx, abs);
   }
   return el;
+}
+
+/**
+ * A SIMPLEBUTTON's faces and label — the console's own button, and a different animal from
+ * the glue screens' BACKDROP-per-state buttons.
+ *
+ * It names four TOP-LEVEL `Texture` blocks rather than carrying child frames, and all four
+ * are sub-rects of ONE atlas: `UpperButtonBar.fdf` slices `UpperMenuButtonTexture` (the
+ * per-race `*-console-buttonstates2.blp`) into normal / pushed / disabled / highlight rows by
+ * `TexCoord`. Its label is likewise a named `String` TEMPLATE plus a string key —
+ * `NormalText "UpperButtonBarButtonTextTemplate" "KEY_QUESTS"` — with a separate template for
+ * the moused-over and disabled colours, which is how the caption goes gold under the cursor
+ * without the screen touching it.
+ */
+function renderSimpleButtonLayers(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
+  const face = (key: string, cls: string): void => {
+    const name = strProp(f, key);
+    // The four faces are TOP-LEVEL Texture blocks, so they sit outside the tree
+    // `propagateDecorate` walked — it is the BUTTON that carries DecorateFileNames, and its
+    // flag is what says the atlas is named by skin key rather than by path.
+    const tex = name ? decorated(ctx.lib.template(name), f) : undefined;
+    const art = tex ? textureImage(tex, ctx) : null;
+    if (!art) return;
+    const layer = document.createElement("div");
+    layer.className = cls;
+    layer.style.background = `url(${art}) center/100% 100% no-repeat`;
+    el.appendChild(layer);
+  };
+  face("NormalTexture", "fdf-simple-face");
+  face("PushedTexture", "fdf-pushed");
+  face("DisabledTexture", "fdf-disabled-face");
+  face("UseHighlight", "fdf-button-glow");
+
+  // The three captions are the same words in three colours; stack them and let the button's
+  // state decide which is visible, so a hover costs a class rather than a re-render.
+  const caption = (key: string, cls: string): void => {
+    const pr = firstProp(f, key);
+    const tmpl = pr?.args[0]?.s ? ctx.lib.template(pr.args[0].s) : undefined;
+    if (!pr) return;
+    const label = document.createElement("div");
+    label.className = `fdf-simple-text ${cls}`;
+    const span = document.createElement("span");
+    span.innerHTML = wc3ToHtml(ctx.lib.string(pr.args[1]?.s ?? ""));
+    label.appendChild(span);
+    const font = tmpl ? firstProp(tmpl, "Font") ?? firstProp(tmpl, "FrameFont") : undefined;
+    label.style.fontFamily = uiFont();
+    label.style.fontSize = `${Math.max(8, (font?.args[1]?.n ?? 0.01) * ctx.fit.scale)}px`;
+    const colour = tmpl ? firstProp(tmpl, "FontColor")?.args : undefined;
+    if (colour && colour.length >= 3) span.style.color = rgba(colour);
+    el.appendChild(label);
+  };
+  caption("NormalText", "fdf-simple-text-normal");
+  caption("HighlightText", "fdf-simple-text-high");
+  caption("DisabledText", "fdf-simple-text-dis");
+
+  const push = firstProp(f, "ButtonPushedTextOffset")?.args;
+  if (push && push.length >= 2) {
+    el.style.setProperty("--push-x", `${(push[0].n ?? 0) * ctx.fit.scale}px`);
+    el.style.setProperty("--push-y", `${-(push[1].n ?? 0) * ctx.fit.scale}px`);
+  }
 }
 
 /** Draw a widget's chrome from its FDF frames, then attach the controller that gives it
@@ -774,6 +847,49 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   return canvas;
 }
 
+/** A referenced template, wearing the referrer's `DecorateFileNames` if it has one of its
+ *  own to inherit. Returns the template untouched when there is nothing to add. */
+function decorated(tmpl: FdfFrame | undefined, referrer: FdfFrame): FdfFrame | undefined {
+  if (!tmpl || !hasFlag(referrer, "DecorateFileNames") || hasFlag(tmpl, "DecorateFileNames")) return tmpl;
+  return { ...tmpl, props: [...tmpl.props, { key: "DecorateFileNames", args: [] }] };
+}
+
+/**
+ * A `Texture` frame's own image, as a data URL — honouring `TexCoord`.
+ *
+ * `TexCoord left, right, top, bottom` is a UV sub-rect of `File`, and the console leans on it
+ * hard: every state of every upper-bar button is one row of a single atlas, and the top strip
+ * is four slices of the console tiles. Cut the rect out here rather than trying to express it
+ * as a CSS background-position, because the frame it lands in is stretched to its own size.
+ */
+function textureImage(f: FdfFrame, ctx: RenderCtx): string | null {
+  const src = texture(f, "File", ctx);
+  if (!src) return null;
+  const uv = firstProp(f, "TexCoord")?.args;
+  if (!uv || uv.length < 4) return src.toDataURL();
+  const [l, r, t, b] = [uv[0].n ?? 0, uv[1].n ?? 1, uv[2].n ?? 0, uv[3].n ?? 1];
+  const sx = Math.round(l * src.width);
+  const sy = Math.round(t * src.height);
+  const sw = Math.max(1, Math.round((r - l) * src.width));
+  const sh = Math.max(1, Math.round((b - t) * src.height));
+  const out = document.createElement("canvas");
+  out.width = sw;
+  out.height = sh;
+  out.getContext("2d")?.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  return out.toDataURL();
+}
+
+/** Paint a `Texture` frame — an image element in its own right (the console's tiles, the
+ *  resource bar's gold/lumber/supply icons), not a backdrop behind something else. */
+function paintTexture(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
+  const art = textureImage(f, ctx);
+  if (!art) return;
+  el.style.background = `url(${art}) center/100% 100% no-repeat`;
+  // ALPHAKEY is a colour-key/straight-alpha blit — ordinary compositing. ADD is additive,
+  // and takes the same treatment the mouse-over glow does (see intensityAsAlpha).
+  if (strProp(f, "AlphaMode") === "ADD") el.style.mixBlendMode = "screen";
+}
+
 /** Paint a TEXT frame: markup → html, font/colour/justification from the FDF. `autoJustifyH`
  *  overrides the file's when the frame is one the ENGINE would have shrink-wrapped and we
  *  gave a fabricated width to instead (see LaidOutFrame.autoJustifyH). */
@@ -786,8 +902,8 @@ function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx, autoJustifyH?: 
   span.innerHTML = wc3ToHtml(raw);
   el.appendChild(span);
 
-  const font = firstProp(f, "FrameFont");
-  const sizeWorld = font?.args[1]?.n ?? 0.013;
+  // `FrameFont` on a TEXT frame, `Font` on a String block — fontSizeOf takes either.
+  const sizeWorld = fontSizeOf(f) ?? 0.013;
   el.style.fontFamily = uiFont();
   el.style.fontSize = `${Math.max(8, sizeWorld * ctx.fit.scale)}px`;
   // The line box must hold the whole glyph, descenders and all. At 1.05 it did not: a text
@@ -922,12 +1038,15 @@ function measureTextFrame(
   scale: number,
 ): number | undefined {
   const raw = overrides[f.name] ?? lib.string(strProp(f, "Text") ?? "");
-  if (!raw) return undefined;
-  const text = wc3ToPlain(raw);
+  // A frame the ENGINE fills has no text to measure yet — and the file says so with
+  // `TextLength`, which is there for exactly this: the resource readouts declare 8 because
+  // that is the widest number they will ever hold. Reserve that many digits.
+  const reserve = numProp(f, "TextLength");
+  const text = raw ? wc3ToPlain(raw) : reserve ? "0".repeat(reserve) : "";
   if (!text) return undefined;
   measureCtx ??= document.createElement("canvas").getContext("2d");
   if (!measureCtx) return undefined;
-  const sizeWorld = firstProp(f, "FrameFont")?.args[1]?.n ?? 0.013;
+  const sizeWorld = fontSizeOf(f) ?? 0.013;
   const px = Math.max(8, sizeWorld * scale);
   measureCtx.font = `${px}px ${uiFont()}`;
   // A hair of slack: a box measured to the exact advance width clips the last glyph's
