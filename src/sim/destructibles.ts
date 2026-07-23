@@ -20,6 +20,13 @@ export interface Placement {
   id: string;
   x: number;
   y: number;
+  /** Facing in radians — a doodad's pathing texture turns with it (see `quarterTurns`).
+   *  Omitted for buildings: they always sit axis-aligned on the build grid, and every
+   *  building's pathTex is square anyway. */
+  angle?: number;
+  /** Stamp THIS texture instead of the one `id` would look up — how a destructible placed
+   *  dead in the editor takes its `pathTexDeath` (an already-open gate blocks its posts only). */
+  pathTex?: string;
 }
 
 export interface Footprint {
@@ -47,16 +54,24 @@ export function stampFootprints(
   pathTexOf: PathTexLookup,
   readBytes: ByteReader,
 ): number {
-  const cache = new Map<string, Footprint | null>();
+  const decoded = new Map<string, Footprint | null>(); // texPath → the texture as authored
+  const turned = new Map<string, Footprint | null>(); // texPath|turns → rotated to a facing
   let stamped = 0;
   for (const p of placements) {
-    const texPath = pathTexOf(p.id);
+    const texPath = p.pathTex || pathTexOf(p.id);
     if (!texPath) continue;
-    let fp = cache.get(texPath);
+    const turns = p.angle === undefined ? 0 : quarterTurns(p.angle);
+    const key = `${texPath}|${turns}`;
+    let fp = turned.get(key);
     if (fp === undefined) {
-      const bytes = readBytes(texPath);
-      fp = bytes ? decodePathTex(bytes) : null;
-      cache.set(texPath, fp);
+      let base = decoded.get(texPath);
+      if (base === undefined) {
+        const bytes = readBytes(texPath);
+        base = bytes ? decodePathTex(bytes) : null;
+        decoded.set(texPath, base);
+      }
+      fp = base ? rotateFootprint(base, turns) : null;
+      turned.set(key, fp);
     }
     if (fp) {
       stampFootprint(grid, fp, p.x, p.y);
@@ -64,6 +79,51 @@ export function stampFootprints(
     }
   }
   return stamped;
+}
+
+/**
+ * How many 90° turns a pathing texture takes when its doodad faces `angle` (radians).
+ *
+ * WC3's pathing textures are authored in the World Editor's DEFAULT doodad facing, **270°** —
+ * so the turn count is the facing measured off that rest pose, not off 0. That is why every
+ * stock destructible named "…_HORIZONTAL" has `fixedRot` 270 and a WIDE texture
+ * (`StoneWall1Path.tga`, 10×2) while its "…_VERTICAL" twin is either a tall texture at the
+ * same 270 (`StoneWall3Path.tga`, 2×10) or the SAME texture at `fixedRot` 0 — both gates read
+ * `Gate1Path.tga` (20×4), and only the facing tells them apart.
+ *
+ * Verified against the real 1.27a `Units\DestructableData.slk`: applied to every destructible
+ * whose name declares HORIZONTAL or VERTICAL it yields the matching shape in **all 76 cases,
+ * 0 mismatches** — gates, doors, stone walls, and all four bridge/cliff sizes. It also lands
+ * WarChasers' gates across the corridors `war3map.wpm` actually leaves open (a vertical gate
+ * at facing 0 seals an east-west corridor 16 cells tall, which needs the 4×20 turn).
+ */
+export function quarterTurns(angle: number): number {
+  const q = Math.round((angle - (3 * Math.PI) / 2) / (Math.PI / 2));
+  return ((q % 4) + 4) % 4;
+}
+
+/** Rotate a decoded footprint counter-clockwise by `turns` quarter turns (WC3 facings are
+ *  CCW from +X). Not a no-op for square textures — `4x4Diag1.tga` and friends are chiral. */
+export function rotateFootprint(fp: Footprint, turns: number): Footprint {
+  const t = ((turns % 4) + 4) % 4;
+  if (t === 0) return fp;
+  const swap = t === 1 || t === 3;
+  const w = swap ? fp.h : fp.w;
+  const h = swap ? fp.w : fp.h;
+  const blocked: boolean[] = new Array(w * h);
+  const buildBlocked: boolean[] = new Array(w * h);
+  for (let y = 0; y < fp.h; y++) {
+    for (let x = 0; x < fp.w; x++) {
+      // CCW: 90° sends (x,y) → (h−1−y, x); 180° → (w−1−x, h−1−y); 270° → (y, w−1−x).
+      const dx = t === 1 ? fp.h - 1 - y : t === 2 ? fp.w - 1 - x : y;
+      const dy = t === 1 ? x : t === 2 ? fp.h - 1 - y : fp.w - 1 - x;
+      const src = y * fp.w + x;
+      const dst = dy * w + dx;
+      blocked[dst] = fp.blocked[src];
+      buildBlocked[dst] = fp.buildBlocked[src];
+    }
+  }
+  return { w, h, blocked, buildBlocked };
 }
 
 /** Stamp one decoded footprint centred on a world position. */

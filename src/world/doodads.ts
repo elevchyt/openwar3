@@ -10,12 +10,23 @@ export interface DoodadInstance {
   z: number; // editor-placed world height
   angle: number; // radians
   scale: [number, number, number];
-  /** The .doo flags byte, decoded. WC3 stores a base state (0 = invisible & non-solid,
-   *  1 = visible & non-solid, 2 = visible & solid) plus +4 for "fixed Z". Only a *solid*
-   *  doodad blocks pathing — a mapmaker who unticks "Solid" on a gate/prop wants units to
-   *  walk through it, so its pathTex must NOT be stamped (verified format: base value 2 is
-   *  the only solid one; WC3MapTranslator DoodadFlag). */
-  solid: boolean;
+  /** Life as a PERCENT of the type's HP (the .doo stores it that way). 100 for everything the
+   *  editor places normally; 0 for one placed DEAD — the stock dungeon gates that start open. */
+  life: number;
+  /** The .doo flags byte's 0x2 bit is CLEAR — the World Editor moved this doodad into
+   *  `war3map.j` and the live one is made by `CreateDestructable`/`CreateDestructableZ`
+   *  (that is exactly what a `gg_dest_*` trigger variable is). The record left behind is
+   *  the editor's placeholder, which is why the byte reads as the "invisible & non-solid"
+   *  state the format docs describe.
+   *
+   *  Measured against the real 1.27a maps: on WarChasers all 31 records without the bit
+   *  are created by its script, position for position, and all 800 with it are not — and
+   *  those 31 are the ONLY records missing the bit in the whole stock map set. So a clear
+   *  bit never means "the mapmaker wanted units to walk through here": the doodad is still
+   *  standing at runtime, solid, with its collider. We keep drawing (and now colliding) the
+   *  record itself rather than hiding it and waiting on the script, so a gate is a gate
+   *  even on a map whose triggers we don't run. */
+  scriptCreated: boolean;
 }
 
 /**
@@ -32,9 +43,10 @@ export function parseDoo(bytes: Uint8Array, buildVersion: number): DoodadInstanc
     z: d.location[2],
     angle: d.angle,
     scale: [d.scale[0], d.scale[1], d.scale[2]],
-    // Base state lives in the low bits (fixed-Z is +4); "visible & solid" is base 2, so a
-    // set 0x2 bit is exactly the solid ones. Every tree/rock a melee map places has it;
-    // the gates & Force Walls WarChasers leaves open do not.
-    solid: (d.flags & 0x2) !== 0,
+    life: d.life,
+    // The byte is a bitfield, not the 0/1/2 enum the format docs imply: stock maps carry
+    // 0, 2, 3, 4, 6 and 7, with 0x2 set on 99.96% of records (every tree, rock and wall).
+    // 0x1 and 0x4 vary freely on ordinary trees, so 0x2 alone is the meaningful bit.
+    scriptCreated: (d.flags & 0x2) === 0,
   }));
 }

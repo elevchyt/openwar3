@@ -459,6 +459,19 @@ export interface ItemSnapshot {
   owner: number; // GetItemPlayer — the holder's slot, or 15 (Neutral Passive) on the ground
 }
 
+/** A map destructible's live state (src/world/mapDestructibles.ts). `id` is its war3map.doo
+ *  index, the only stable identity a destructible has, and what a `destructable` handle
+ *  carries. `life` 0 is what an OPEN gate looks like — see natives/destructables.ts. */
+export interface DestructableSnapshot {
+  id: number;
+  typeId: string;
+  name: string;
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+}
+
 /** An item TYPE's data (our ItemRegistry) — what GetItemLevel / GetItemType /
  *  IsItemPowerup / IsItemSellable ask about the item's *class*, not the instance. */
 export interface ItemTypeInfo {
@@ -567,6 +580,29 @@ export interface EngineHooks {
   /** GetHeroSkillPoints / UnitModifySkillPoints — unspent skill points. */
   getHeroSkillPoints?(unitId: number): number;
   modifySkillPoints?(unitId: number, delta: number): boolean;
+  // --- destructibles (issue #85): gates, doors, the walls a lever drops ---
+  //
+  // A gate has no "open" state of its own — it opens by DYING, and its collider drops to the
+  // `pathTexDeath` that blocks only the posts (natives/destructables.ts). So the whole set is
+  // life plus a clip name.
+  /** The .doo record standing at these coordinates — how `CreateDestructable` ADOPTS the
+   *  placeholder the World Editor left behind instead of stacking a second gate on it.
+   *  0 when nothing matches. */
+  findDestructable?(typeId: string, x: number, y: number): number;
+  /** Live state of one record (null once it is removed). */
+  destructableInfo?(id: number): DestructableSnapshot | null;
+  /** KillDestructable — life to 0, collider to the death footprint, `clip` held on the model
+   *  ("death" shatters it, "death alternate" is a gate swinging open). */
+  killDestructable?(id: number, clip: string): void;
+  /** DestructableRestoreLife — back up, full collider, birth clip if `birth`. */
+  restoreDestructable?(id: number, life: number, birth: boolean): void;
+  setDestructableLife?(id: number, life: number): void;
+  setDestructableAnimation?(id: number, name: string): void;
+  removeDestructable?(id: number): void;
+  showDestructable?(id: number, show: boolean): void;
+  /** EnumDestructablesInRect — every record inside the rect. */
+  enumDestructables?(minX: number, minY: number, maxX: number, maxY: number): ReadonlyArray<DestructableSnapshot>;
+
   // --- items (7.18): the trigger surface for items + the item events ---
   /** CreateItem — a new item of type `typeId` on the ground; returns its entity id (-1
    *  if the rawcode isn't a known item). Its model appears through the sim's normal

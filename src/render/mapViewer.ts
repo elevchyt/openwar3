@@ -6,12 +6,13 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
+import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
-import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, type Footprint, type PlacedFootprint } from "../sim/destructibles";
+import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
-import { MAP_CONTROL, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
+import { MAP_CONTROL, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
@@ -687,6 +688,11 @@ export class MapViewerScene {
   private localRace: PlayableRace = "human";
   // Footprints of registered resource nodes, for unstamping on removal.
   private nodeFootprints = new Map<number, { fp: Footprint; x: number; y: number }>();
+  // The map's destructibles (war3map.doo ∩ DestructableData) in .doo order — what a script's
+  // `destructable` handle points at, and what `ModifyGateBJ` opens and closes. See
+  // src/world/mapDestructibles.ts; the live half (which collider is stamped right now, and the
+  // scene-animated stand-in playing its clips) is tracked here.
+  private destructibles: MapDestructible[] = [];
   // Fog footprint half-extent of each tree, keyed by its rounded world position — the
   // doodad widgets stream in async, so we can't hold instance refs here. Lets fogWidgets
   // light a tree from ANY cell it covers rather than one self-shadowed origin cell (#43).
@@ -1018,7 +1024,7 @@ export class MapViewerScene {
 
   /** Feed harvestable trees and gold mines into the headless sim, remembering
    *  each node's stamped footprint so it can be unstamped on removal. */
-  private registerResourceNodes(nodes: { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }> }): void {
+  private registerResourceNodes(nodes: { trees: Array<{ x: number; y: number; angle: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }> }): void {
     const world = this.rts?.simWorld;
     if (!world) return;
     this.nodeFootprints.clear();
@@ -1026,7 +1032,7 @@ export class MapViewerScene {
     for (const t of nodes.trees) {
       // The tree's blocked extent doubles as its fog line-of-sight blocker, so a
       // 4x4Default tree shadows all four 64-unit vision cells it stands on (#43).
-      const fp = this.footprintFor(t.pathTex);
+      const fp = this.footprintFor(t.pathTex, t.angle);
       const blockRadius = fp ? footprintRadius(fp) || 64 : 64;
       const tree = world.addTree(t.x, t.y, undefined, blockRadius);
       this.treeFogRadius.set(fogKey(t.x, t.y), blockRadius);
@@ -1079,9 +1085,9 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[]; placedOrder: PlacedRef[] } {
+  ): { trees: Array<{ x: number; y: number; angle: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[]; placedOrder: PlacedRef[] } {
     const placedFootprints: PlacedFootprint[] = []; // each map building's stamp, handed to its unit at seed time
-    const trees: Array<{ x: number; y: number; pathTex: string }> = [];
+    const trees: Array<{ x: number; y: number; angle: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
     const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
     const creeps: CreepSeed[] = []; // Neutral Hostile (player 12+) guard + drop data
@@ -1113,20 +1119,31 @@ export class MapViewerScene {
       const doodads = parseDoo(dooBytes, buildVersion);
       const destr = new MappedData(this.slkText("Units\\DestructableData.slk"));
       const dood = new MappedData(this.slkText("Doodads\\Doodads.slk"));
+      // The destructibles get their own registry: they have life, and a script can end it —
+      // a gate OPENS by dying (see mapDestructibles.ts), which swaps its collider for the
+      // `pathTexDeath` one that blocks only the posts.
+      this.destructibles = collectMapDestructibles(doodads, (id) => destr.getRow(id) ?? undefined);
+      // A record the editor placed DEAD (life 0 — the stock dungeon gates that start open, and
+      // the pre-felled trees a few maps scatter) stamps its `pathTexDeath` instead, or nothing
+      // at all when its type leaves no wreckage.
+      const dead = new Map<number, string>(); // .doo index (1-based) → the texture that replaces pathTex
+      for (const d of this.destructibles) if (d.life <= 0) dead.set(d.id, d.pathTexDeath);
       const pathTexOf = (id: string): string | undefined =>
         destr.getRow(id)?.string("pathTex") || dood.getRow(id)?.string("pathTex") || undefined;
-      // Only SOLID doodads block: a mapmaker who unticks "Solid" (or places an open,
-      // non-solid gate) means for units to walk through it, so its pathTex is not stamped.
-      // WarChasers' gates and half its Force Walls are non-solid — stamping them anyway was
-      // the phantom collider that isn't there in the World Editor.
-      stampFootprints(grid, doodads.filter((d) => d.solid), pathTexOf, readBytes);
-      for (const d of doodads) {
-        const row = destr.getRow(d.id);
-        // A harvestable tree still has to be solid to be a real tree — an invisible,
-        // non-solid tree prop is deleted scenery, not something a wisp can chop.
-        if (d.solid && row?.string("targType") === "tree") {
-          trees.push({ x: d.x, y: d.y, pathTex: row.string("pathTex") || "" });
-        }
+      // EVERY doodad the map draws also blocks — including the `scriptCreated` ones, whose
+      // .doo record only looks non-solid because the editor handed the live copy to
+      // war3map.j (see DoodadInstance). Skipping those was issue #85: WarChasers' gates
+      // rendered as gates and let units stroll through them. And the footprint TURNS with
+      // the doodad — the two gates share one 20×4 texture and are told apart by facing
+      // alone, so an unrotated stamp laid a vertical gate's wall across the corridor
+      // instead of through it.
+      const placements = doodads
+        .map((d, i) => ({ id: d.id, x: d.x, y: d.y, angle: d.angle, pathTex: dead.get(i + 1), isDead: dead.has(i + 1) }))
+        .filter((p) => !p.isDead || p.pathTex); // dead with no wreckage → no collider at all
+      stampFootprints(grid, placements, pathTexOf, readBytes);
+      // A tree placed dead is a stump: scenery, not something a wisp can chop.
+      for (const d of this.destructibles) {
+        if (d.isTree && d.life > 0) trees.push({ x: d.x, y: d.y, angle: d.angle, pathTex: d.pathTex });
       }
     }
 
@@ -1633,6 +1650,21 @@ export class MapViewerScene {
       // or an item, so try each registry: "Paladin cast Holy Light on Peasant" needs all
       // three (the custom overlays are checked first inside each `get`).
       objectName: (typeId) => this.registry.get(typeId)?.name ?? this.abilities.get(typeId)?.name ?? this.items.get(typeId)?.name,
+      // --- destructibles (issue #85): a gate opens by dying ---
+      // Presentation-side because the map's destructibles ARE renderer state: the .doo records
+      // it drew, the footprints it stamped, and the stand-in instances that play their clips.
+      findDestructable: (typeId, x, y) => findDestructibleAt(this.destructibles, typeId, x, y)?.id ?? 0,
+      destructableInfo: (id) => this.destructibleSnapshot(id),
+      killDestructable: (id, clip) => this.killDestructible(id, clipRe(clip)),
+      restoreDestructable: (id, life, birth) => this.restoreDestructible(id, life, birth),
+      setDestructableLife: (id, life) => this.setDestructibleLife(id, life),
+      setDestructableAnimation: (id, name) => this.setDestructibleAnimation(id, name),
+      removeDestructable: (id) => this.removeDestructible(id),
+      showDestructable: (id, show) => this.showDestructible(id, show),
+      enumDestructables: (minX, minY, maxX, maxY) =>
+        this.destructibles
+          .filter((d) => d.x >= minX && d.x <= maxX && d.y >= minY && d.y <= maxY)
+          .map((d) => this.snapshotOf(d)),
       // --- the trigger's on-screen output (7.19) ---
       // GetLocalizedString → the game's own GlobalStrings.fdf table. Not cosmetic: the
       // melee victory/defeat dialog is written entirely in its keys, so without this the
@@ -3698,19 +3730,19 @@ export class MapViewerScene {
     return (seqs ?? []).findIndex((s) => re.test(s.name));
   }
 
-  // A tree that is being chopped or has been felled is drawn by a spawned, scene-animated
-  // stand-in instance keyed by its (static) placed doodad — because War3MapViewer never
-  // advances a placed doodad's animation and Widget.update resets any sequence we set on it,
-  // so its "stand hit"/"death" clips can't play in place. The stand-in hides the static
-  // doodad and plays the clips; a felled tree's stand-in holds the final "death" frame — the
-  // cut stump WC3 leaves behind. `revertEnd` (>0) is the wobble's end frame, when we drop it
-  // back to the looping "stand"; `dead` stumps are held forever.
-  private treeActors = new Map<HideableWidget, { inst: SpawnInstance; dead: boolean; revertEnd: number }>();
+  // A doodad that has to MOVE — a tree being chopped or felled, a gate swinging open — is
+  // drawn by a spawned, scene-animated stand-in instance keyed by its (static) placed doodad,
+  // because War3MapViewer never advances a placed doodad's animation and Widget.update resets
+  // any sequence we set on it, so its "stand hit"/"death"/"death alternate" clips can't play in
+  // place. The stand-in hides the static doodad and plays the clips, holding the final frame:
+  // the cut stump WC3 leaves behind, or the open gate. `revertEnd` (>0) is a one-shot clip's
+  // end frame, when we drop back to the looping "stand"; `dead` poses are held forever.
+  private doodadActors = new Map<HideableWidget, { inst: SpawnInstance; dead: boolean; revertEnd: number }>();
 
-  /** The scene-animated stand-in for a tree doodad, spawned (and the static doodad hidden)
+  /** The scene-animated stand-in for a placed doodad, spawned (and the static doodad hidden)
    *  on first use. null if the doodad has no spawnable model. */
-  private treeActor(widget: HideableWidget): { inst: SpawnInstance; dead: boolean; revertEnd: number } | null {
-    let a = this.treeActors.get(widget);
+  private doodadActor(widget: HideableWidget): { inst: SpawnInstance; dead: boolean; revertEnd: number } | null {
+    let a = this.doodadActors.get(widget);
     if (a) return a;
     const map = this.viewer.map;
     const src = widget.instance;
@@ -3729,7 +3761,7 @@ export class MapViewerScene {
     src.hide(); // the static doodad is replaced by this animated stand-in
     this.removedWidgets.add(widget); // and the fog pass never re-shows it
     a = { inst, dead: false, revertEnd: 0 };
-    this.treeActors.set(widget, a);
+    this.doodadActors.set(widget, a);
     return a;
   }
 
@@ -3742,7 +3774,7 @@ export class MapViewerScene {
     for (const h of world.drainTreeHits()) {
       const w = this.nearestDoodadWidget(h.x, h.y, map.doodads);
       if (!w) continue;
-      const a = this.treeActor(w);
+      const a = this.doodadActor(w);
       if (!a || a.dead) continue;
       const hit = this.seqByName(a.inst.model.sequences, /stand hit/i);
       if (hit < 0) continue;
@@ -3750,7 +3782,7 @@ export class MapViewerScene {
       a.inst.setSequenceLoopMode(0); // play the wobble once
       a.revertEnd = a.inst.model.sequences[hit].interval?.[1] ?? 0;
     }
-    for (const a of this.treeActors.values()) {
+    for (const a of this.doodadActors.values()) {
       if (a.dead || a.revertEnd <= 0 || a.inst.frame < a.revertEnd) continue; // wobble still playing
       const stand = this.seqByName(a.inst.model.sequences, /^stand$/i);
       if (stand >= 0) {
@@ -3772,7 +3804,7 @@ export class MapViewerScene {
     }
     const w = this.nearestDoodadWidget(x, y, doodads);
     if (!w) return;
-    const a = this.treeActor(w);
+    const a = this.doodadActor(w);
     if (!a) {
       w.instance.hide(); // no spawnable model — just remove the tree
       this.removedWidgets.add(w);
@@ -3785,8 +3817,163 @@ export class MapViewerScene {
     }
     a.dead = true;
     a.revertEnd = 0;
+    // A tree is a destructible too, and the SIM felled this one. Mark its record dead so a
+    // later script KillDestructable on the same tree can't unstamp a footprint that is
+    // already off the grid (the stamps are counted — a double release would punch a hole).
+    const rec = this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === x && r.y === y);
+    if (rec) rec.life = 0;
   }
 
+  // --- destructibles: a gate opens by dying (7.x; see src/world/mapDestructibles.ts) --------
+
+  private destructibleById(id: number): MapDestructible | undefined {
+    return this.destructibles[id - 1]?.id === id ? this.destructibles[id - 1] : this.destructibles.find((d) => d.id === id);
+  }
+
+  private snapshotOf(d: MapDestructible): DestructableSnapshot {
+    return { id: d.id, typeId: d.typeId, name: this.westring(d.name), x: d.x, y: d.y, life: d.life, maxLife: d.maxLife };
+  }
+
+  private destructibleSnapshot(id: number): DestructableSnapshot | null {
+    const d = this.destructibleById(id);
+    return d ? this.snapshotOf(d) : null;
+  }
+
+  // `UI\WorldEditStrings.txt` — where DestructableData's `Name` column points ("Gate", "Crates").
+  // Parsed on first use only: GetDestructableName is the sole reader, and the file is big.
+  private worldEditStrings: Map<string, string> | null = null;
+
+  /** Resolve a `WESTRING_*` key to its display text; anything else is already the text. */
+  private westring(key: string): string {
+    if (!key.startsWith("WESTRING")) return key;
+    if (!this.worldEditStrings) {
+      this.worldEditStrings = new Map();
+      const bytes = this.vfs.rawBytes("UI\\WorldEditStrings.txt");
+      if (bytes) {
+        for (const line of new TextDecoder("windows-1252").decode(bytes).split(/\r?\n/)) {
+          const eq = line.indexOf("=");
+          if (eq > 0 && line.startsWith("WESTRING")) {
+            this.worldEditStrings.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim().replace(/^"|"$/g, ""));
+          }
+        }
+      }
+    }
+    return this.worldEditStrings.get(key) || key;
+  }
+
+  /** The collider a destructible wears at the life it has now: its `pathTex` while it stands,
+   *  its `pathTexDeath` once it is dead (a gate's posts), nothing when its type leaves no
+   *  wreckage. Turned to the doodad's facing, like every other footprint. */
+  private destructibleFootprint(d: MapDestructible, alive: boolean): Footprint | null {
+    const tex = alive ? d.pathTex : d.pathTexDeath;
+    return tex ? this.footprintFor(tex, d.angle) : null;
+  }
+
+  /** Move a destructible's collider from the `wasAlive` footprint to the one its current life
+   *  calls for. Counted stamps, so this is exact: the cells the old footprint took come back
+   *  and only the new one's are held. */
+  private restampDestructible(d: MapDestructible, wasAlive: boolean): void {
+    const nowAlive = d.life > 0;
+    if (!this.grid || nowAlive === wasAlive) return;
+    const from = this.destructibleFootprint(d, wasAlive);
+    const to = this.destructibleFootprint(d, nowAlive);
+    if (from) unstampFootprint(this.grid, from, d.x, d.y);
+    if (to) stampFootprint(this.grid, to, d.x, d.y);
+  }
+
+  /** Play one of a destructible's own clips on its scene-animated stand-in. `hold` keeps the
+   *  final frame (an open gate stays open); otherwise it settles back into "stand". */
+  private playDestructibleClip(d: MapDestructible, re: RegExp, hold: boolean): void {
+    const map = this.viewer.map;
+    if (!map) return;
+    const w = this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]);
+    if (!w) return;
+    const a = this.doodadActor(w);
+    if (!a) {
+      if (hold) {
+        w.instance.hide(); // no spawnable model — the best "open" we can draw is gone
+        this.removedWidgets.add(w);
+      }
+      return;
+    }
+    const seq = this.seqByName(a.inst.model.sequences, re);
+    if (seq < 0) return;
+    a.inst.setSequence(seq);
+    a.inst.setSequenceLoopMode(hold ? 0 : 2);
+    a.dead = hold;
+    a.revertEnd = 0;
+  }
+
+  /** `KillDestructable` — and, through `ModifyGateBJ`, "open gate". The gate does not vanish:
+   *  it plays its death clip and holds the last frame (swung open), and its collider drops to
+   *  the two posts `pathTexDeath` keeps. Idempotent, so a script that opens an open gate is a
+   *  no-op rather than a double-unstamp. */
+  killDestructible(id: number, clip: RegExp = /^death$/i): void {
+    const d = this.destructibleById(id);
+    if (!d || d.life <= 0) return;
+    d.life = 0;
+    this.restampDestructible(d, true);
+    this.playDestructibleClip(d, clip, true);
+  }
+
+  /** `DestructableRestoreLife` — "close gate". Puts the full collider back and stands the
+   *  model up again (`birth` plays the birth clip, as the native's flag asks). */
+  restoreDestructible(id: number, life: number, birth: boolean): void {
+    const d = this.destructibleById(id);
+    if (!d) return;
+    const wasAlive = d.life > 0;
+    d.life = Math.max(0, Math.min(life, d.maxLife || life));
+    this.restampDestructible(d, wasAlive);
+    if (d.life > 0) this.playDestructibleClip(d, birth ? /^birth$/i : /^stand$/i, false);
+  }
+
+  /** `SetDestructableLife` — the collider follows life across zero in either direction. */
+  setDestructibleLife(id: number, life: number): void {
+    const d = this.destructibleById(id);
+    if (!d) return;
+    const wasAlive = d.life > 0;
+    d.life = Math.max(0, life);
+    this.restampDestructible(d, wasAlive);
+  }
+
+  /** `SetDestructableAnimation` — the clip name the script asked for ("stand", "death",
+   *  "death alternate": the three `ModifyGateBJ` uses). Purely cosmetic; life is what moves
+   *  the collider. */
+  setDestructibleAnimation(id: number, name: string): void {
+    const d = this.destructibleById(id);
+    if (!d || !name) return;
+    this.playDestructibleClip(d, clipRe(name), /death/i.test(name));
+  }
+
+  /** `RemoveDestructable` — gone outright: no wreckage, no collider, no model. */
+  removeDestructible(id: number): void {
+    const d = this.destructibleById(id);
+    if (!d) return;
+    const fp = this.destructibleFootprint(d, d.life > 0);
+    if (fp && this.grid) unstampFootprint(this.grid, fp, d.x, d.y);
+    d.life = 0;
+    d.pathTexDeath = ""; // nothing left to walk around
+    this.hideDestructibleWidget(d);
+  }
+
+  /** `ShowDestructable(d, false)` — hidden, and (as in WC3) still solid: hiding a doodad is a
+   *  render call, not a pathing one. */
+  showDestructible(id: number, show: boolean): void {
+    const d = this.destructibleById(id);
+    if (!d || show) return;
+    this.hideDestructibleWidget(d);
+  }
+
+  private hideDestructibleWidget(d: MapDestructible): void {
+    const map = this.viewer.map;
+    if (!map) return;
+    const w = this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]);
+    if (!w) return;
+    const a = this.doodadActors.get(w);
+    if (a) a.inst.hide();
+    w.instance.hide();
+    this.removedWidgets.add(w); // and the fog pass never re-shows it
+  }
 
   /** Position/scale/colour the flat selection + hover rings each frame, plus
    *  the transient yellow harvest-order flashes. */
@@ -6055,12 +6242,22 @@ export class MapViewerScene {
     schedule();
   }
 
-  private footprintFor(texPath: string): Footprint | null {
-    let fp = this.footprints.get(texPath);
+  /** The decoded pathing footprint for `texPath`, turned to `angle` if one is given (a
+   *  doodad's footprint rotates with it — see `quarterTurns`). Cached per turn count so
+   *  the unstamp of a felled tree hands back exactly the cells its stamp took. */
+  private footprintFor(texPath: string, angle?: number): Footprint | null {
+    const turns = angle === undefined ? 0 : quarterTurns(angle);
+    const key = turns === 0 ? texPath : `${texPath}|${turns}`;
+    let fp = this.footprints.get(key);
     if (fp === undefined) {
-      const bytes = this.vfs.rawBytes(texPath);
-      fp = bytes ? decodePathTex(bytes) : null;
-      this.footprints.set(texPath, fp);
+      const base = turns === 0 ? null : this.footprintFor(texPath);
+      if (turns === 0) {
+        const bytes = this.vfs.rawBytes(texPath);
+        fp = bytes ? decodePathTex(bytes) : null;
+      } else {
+        fp = base ? rotateFootprint(base, turns) : null;
+      }
+      this.footprints.set(key, fp);
     }
     return fp;
   }
@@ -7814,6 +8011,13 @@ const REGION_COLORS = { outline: [0.2, 0.95, 1.0, 0.9] as const, fill: [0.2, 0.8
 /** Project a world point through a column-major view-projection matrix to canvas
  *  pixels (origin top-left), or null if it's behind the camera. Used to anchor the
  *  region-name DOM labels over the 3D scene. */
+/** An MDX sequence-name matcher for a clip a script asked for by name ("death alternate").
+ *  Anchored so "death" can't select "death alternate" — a gate that shatters instead of
+ *  swinging open is a different animation. */
+function clipRe(name: string): RegExp {
+  return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+}
+
 function projectToScreen(m: Float32Array, x: number, y: number, z: number, w: number, h: number): [number, number] | null {
   const cx = m[0] * x + m[4] * y + m[8] * z + m[12];
   const cy = m[1] * x + m[5] * y + m[9] * z + m[13];

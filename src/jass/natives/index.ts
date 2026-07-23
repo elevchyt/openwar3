@@ -12,6 +12,7 @@ import { registerAbilityNatives } from "./abilities";
 import { registerCameraNatives } from "./camera";
 import { registerCinematicNatives } from "./cinematic";
 import { registerConfigNatives } from "./config";
+import { registerDestructableNatives } from "./destructables";
 import { registerDialogNatives } from "./dialogs";
 import { registerEffectNatives } from "./effects";
 import { registerEventNatives } from "./events";
@@ -134,6 +135,7 @@ export function registerNatives(rt: Runtime): void {
   registerForceNatives(rt);
   registerGroupNatives(rt);
   registerItemNatives(rt); // items + the item events (7.18)
+  registerDestructableNatives(rt); // destructibles: gates open by dying (issue #85)
   registerMeleeNatives(rt); // what blizzard.j's Melee* library stands on (7.3)
   registerMultiboardNatives(rt); // the grid scoreboard — what DotA puts on screen (7.22)
   registerQuestNatives(rt); // the F9 quest log's script side (issue #33)
