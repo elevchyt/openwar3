@@ -49,10 +49,22 @@ export interface OverlayHost {
 
 const MIN_RING_PX = 12; // don't let rings vanish when zoomed far out
 
+// The bar's shape, measured off the real 1.27a client (Warcraft III/Screenshots, 1424×720).
+//
+// Its HEIGHT is fixed: a peasant's bar and a Town Hall's are both ~7px of frame there, only
+// four times apart in width. Its WIDTH grows with how big the thing is on screen — 64px of
+// fill for a peasant, 298px for a Town Hall — with the peasant's as the floor.
+const STATBAR_H_FRAC = 7 / 720; // outer height, as a fraction of the viewport's
+const STATBAR_MIN_H = 7; // …never below the client's own 5 rows of fill plus its frame
+const STATBAR_W_FRAC = 64 / 1424; // the smallest bar's fill, as a fraction of the viewport's width
+const STATBAR_MAX_W = 5; // × that, so a Town Hall's bar can reach the width the game gives it
+
 // A floating status bar drawn above a unit: a hero level badge (left), an HP bar,
 // and a mana bar below it (for units with mana). Pooled, one per visible unit, so
-// bars are always on screen (WC3's "always show health bars"). The bars are single
-// solid fills — WC3's floating bars read as one continuous bar, not visible slices.
+// bars are always on screen (WC3's "always show health bars").
+//
+// One bar is a black frame (the track) with the game's tinted fill slab clipped inside it
+// to the fraction — see ui/hud.ts applyStatBarSkin for where the art comes from.
 interface HpBar {
   root: HTMLDivElement;
   bars: HTMLDivElement;
@@ -78,7 +90,7 @@ function makeHpBar(layer: HTMLElement): HpBar {
   const manaTrack = document.createElement("div");
   manaTrack.className = "unit-hpbar-track unit-hpbar-manatrack";
   const mana = document.createElement("div");
-  mana.className = "unit-hpbar-mana";
+  mana.className = "unit-hpbar-fill unit-hpbar-mana";
   manaTrack.appendChild(mana);
   bars.append(hpTrack, manaTrack);
   root.append(level, bars);
@@ -154,9 +166,13 @@ export class WorldOverlays {
       n++;
       bar.hp.style.width = `${s.hpFrac * 100}%`;
       // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy
-      // alike — the floating bars aren't team-coloured). CSS adds the vertical sheen.
-      bar.hp.style.backgroundColor = s.hpFrac > 0.6 ? "#3fbf46" : s.hpFrac > 0.3 ? "#d6b93b" : "#c8402f";
-      // Mana bar (units/heroes with a mana pool).
+      // alike — the floating bars aren't team-coloured). The tint is baked into the
+      // fill art, so the state picks an image rather than a colour.
+      bar.hp.dataset.state = s.hpFrac > 0.6 ? "green" : s.hpFrac > 0.3 ? "yellow" : "red";
+      // Mana bar (units/heroes with a mana pool). 1.27a floats no mana bar of its own,
+      // so it has no mana art either — the game builds one out of the SAME textures under
+      // a blue geoset colour (war3skins.txt points SimpleManaBarConsole at the health
+      // fill, and ManaBarConsoleSmall.mdx is HPBarConsoleSmall.mdx in blue), and so do we.
       if (s.manaFrac !== null) {
         bar.manaTrack.hidden = false;
         bar.mana.style.width = `${s.manaFrac * 100}%`;
@@ -171,13 +187,19 @@ export class WorldOverlays {
         bar.level.hidden = true;
       }
       bar.root.hidden = false;
-      // Bar width tracks the unit/building on-screen size (≈ its footprint).
-      // Heroes get a wider bar (and a higher floor/ceiling) so their HP + mana
-      // read clearly and stand out from regular units.
+      // Bar width tracks the unit/building on-screen size (≈ its footprint), floored at the
+      // width the game gives its smallest units. Heroes get a wider one so their HP + mana
+      // stand out (1.27a floats neither, so there is nothing to match here).
+      const minW = this.host.canvas.clientWidth * STATBAR_W_FRAC;
       const barW = s.isHero
-        ? Math.max(46, Math.min(210, p.ry * 3))
-        : Math.max(30, Math.min(170, p.ry * 2.4));
+        ? Math.max(minW * 1.25, Math.min(minW * STATBAR_MAX_W, p.ry * 3))
+        : Math.max(minW, Math.min(minW * STATBAR_MAX_W, p.ry * 2.4));
+      const barH = Math.max(STATBAR_MIN_H, Math.round(this.host.canvas.clientHeight * STATBAR_H_FRAC));
       bar.bars.style.width = `${barW}px`;
+      // The fill art is stretched across the WHOLE bar and clipped by the fraction, so its
+      // shading stays put as the bar drains instead of squashing along with it.
+      bar.bars.style.setProperty("--statbar-w", `${barW}px`);
+      bar.bars.style.setProperty("--statbar-h", `${barH}px`);
       bar.root.style.left = `${p.sx / p.dpr}px`;
       bar.root.style.top = `${(p.h - p.sy) / p.dpr - (p.ry + 24)}px`; // gl y-up → css y-down (floats above the unit)
     }

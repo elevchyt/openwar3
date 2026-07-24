@@ -291,6 +291,31 @@ const TOOLTIP_COST_ICON = {
   mana: "UI\\Widgets\\ToolTips\\Human\\ToolTipManaIcon.blp",
 } as const;
 
+// The floating status bar over a unit (issue #79). It is NOT the HPBarConsoleSmall model
+// its folder name suggests — that pill-shaped thing is never drawn over a unit. The bar is
+// a SIMPLESTATUSBAR frame, and war3skins.txt names its one texture: `SimpleHpBarConsole` (and
+// `SimpleManaBarConsole`, same file) = UI\Feedback\HpBarConsole\human-healthbar-fill.blp.
+//
+// That texture is a 128×16 grey slab — a bright top row over a flat body over a darker
+// bottom, with a faint barrel shade across its width. The engine multiplies it by the bar's
+// colour and drops it inside a plain black frame; everything else is that frame showing
+// through. Measured off the real 1.27a client (Warcraft III/Screenshots, 1424×720): a
+// peasant's bar is 5 rows of fill inside a 1px top/bottom, 2px left/right black border, and
+// its pixels come back 0,255,0 / 0,151,0 / … — the texture's own 255 / 151 / … rows times a
+// PURE green. Hence the tints below.
+const STATBAR_FILL = "UI\\Feedback\\HPBarConsole\\human-healthbar-fill.blp";
+
+/** The colour each bar multiplies the fill texture by. Green is measured (see above), so
+ *  yellow and red are the engine's matching primaries. 1.27a floats no mana bar at all, so
+ *  its blue has no measurement to match — this is the value the game's own mana art carries,
+ *  ManaBarConsoleSmall.mdx's geoset colour (0.0627, 0, 0.9020). */
+const STATBAR_TINT = {
+  green: [0, 255, 0],
+  yellow: [255, 255, 0],
+  red: [255, 0, 0],
+  mana: [16, 0, 230],
+} as const;
+
 // The tooltip border strip is 8 square tiles laid out left-to-right, in the order
 // the engine's BACKDROP frames name them (UI\FrameDef\Glue\BattleNetChatActionMenu.fdf
 // draws the identical bnet-tooltip-border with BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R"):
@@ -364,6 +389,31 @@ function sliceTooltipBorder(strip: HTMLCanvasElement): string | null {
  *  and the last tick reads "1" (never "0.4"). One rule for every sweep on the HUD. */
 function cdSeconds(secondsLeft: number): string {
   return String(Math.ceil(secondsLeft));
+}
+
+/** How many rows of fill the client shows inside the frame, and so how many the slab is
+ *  point-sampled down to here. Its 16 rows are two of white over twelve of flat grey over
+ *  two dark ones; squeezed into a 5px bar by a smooth resize, the white pair averages away
+ *  and the bar loses the lit top edge the client has. Sampling instead of blending keeps it
+ *  — 255 / 151 / 151 / 152 / 91, against the client's measured 255 / 151 / 151 / 151 / 142. */
+const STATBAR_ROWS = 5;
+
+/** Multiply the grey status-bar slab by one bar colour — the whole of what the engine does
+ *  to it — and hand back a data URL the stylesheet can stretch across a bar. */
+function bakeStatBarFill(fill: HTMLCanvasElement, tint: readonly number[]): string {
+  const w = fill.width;
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = STATBAR_ROWS;
+  const ctx = out.getContext("2d")!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(fill, 0, 0, w, STATBAR_ROWS);
+  const img = ctx.getImageData(0, 0, w, STATBAR_ROWS);
+  for (let i = 0; i < img.data.length; i += 4) {
+    for (let k = 0; k < 3; k++) img.data[i + k] = (img.data[i + k] * tint[k]) / 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return out.toDataURL();
 }
 
 /** The tooltip fill is a flat colour stored as a 64×64 texture — read its one pixel
@@ -520,6 +570,21 @@ export class GameHud {
       document.body.classList.add("hud-tooltip-skinned");
       this.cmdTooltip.classList.add("skinned");
     }
+    this.applyStatBarSkin();
+  }
+
+  /** Tint the status-bar slab once per bar colour and hand the four to the stylesheet.
+   *  Lifted to `:root` for the same reason the tooltip's art is: the bars live in the world
+   *  layer (ui/stage.ts), a DOM subtree the HUD does not own, and render/worldOverlays.ts
+   *  should not have to know about art. */
+  private applyStatBarSkin(): void {
+    const fill = this.driver.blpCanvas(STATBAR_FILL);
+    if (!fill) return; // no install mounted: the CSS placeholder bar stands
+    const root = document.documentElement.style;
+    for (const [state, tint] of Object.entries(STATBAR_TINT)) {
+      root.setProperty(`--statbar-${state}`, `url(${bakeStatBarFill(fill, tint)})`);
+    }
+    document.body.classList.add("hud-statbar-skinned");
   }
 
   /** One cost-row entry: the game's own tooltip icon plus the amount, turning red

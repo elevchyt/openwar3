@@ -146,34 +146,42 @@ body.in-game {
   min-width: 17px;
   text-align: center;
 }
-.unit-hpbar-bars { display: flex; flex-direction: column; gap: 2px; }
+.unit-hpbar-bars { display: flex; flex-direction: column; gap: 1px; }
+/* The frame. WC3 draws it solid black, 1px above and below the fill and 2px at each end
+   (measured off the real client) — the empty stretch of a bar IS this frame showing. */
 .unit-hpbar-track {
   position: relative; /* fill is absolutely positioned inside */
-  height: 9px;
-  background: rgba(0, 0, 0, 0.72);
-  border: 1px solid rgba(0, 0, 0, 0.9);
+  height: var(--statbar-h, 7px);
+  background: #000;
+  border: solid #000;
+  border-width: 1px 2px;
   overflow: hidden;
 }
-.unit-hpbar-manatrack { height: 7px; }
-/* Single solid fill (colour set inline from the HP fraction) — WC3's floating bars
-   read as one continuous bar, not visible slices. The vertical gradient is the WC3
-   sheen: lit at the top, shaded at the bottom, over the flat colour. */
+/* Placeholder fill, for a session with no install mounted: a flat colour with the bar's
+   shading faked as a vertical gradient. `data-state` carries the green→yellow→red the HP
+   fraction picked (render/worldOverlays.ts); mana is always blue. */
 .unit-hpbar-fill {
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 100%;
-  background-color: #3fbf46;
+  background-color: #00c800;
   background-image: linear-gradient(to bottom,
-    rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.05) 45%, rgba(0, 0, 0, 0.22) 100%);
+    rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 22%, rgba(0, 0, 0, 0.3) 100%);
 }
-.unit-hpbar-mana {
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 100%;
-  background-color: #2f6df0;
-  background-image: linear-gradient(to bottom,
-    rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.05) 45%, rgba(0, 0, 0, 0.22) 100%);
+.unit-hpbar-fill[data-state="yellow"] { background-color: #c8c800; }
+.unit-hpbar-fill[data-state="red"] { background-color: #c80000; }
+.unit-hpbar-mana { background-color: #0f0080; }
+
+/* The real thing (issue #79): the game's own bar slab, tinted per state by ui/hud.ts
+   applyStatBarSkin. It is stretched across the WHOLE bar — the track's width less its two
+   2px end borders — and clipped by this element's width, so the slab's shading stays put
+   as the bar drains rather than squashing along with it. */
+body.hud-statbar-skinned .unit-hpbar-fill {
+  background: var(--statbar-green) 0 0 / calc(var(--statbar-w) - 4px) 100% no-repeat;
 }
+body.hud-statbar-skinned .unit-hpbar-fill[data-state="yellow"] { background-image: var(--statbar-yellow); }
+body.hud-statbar-skinned .unit-hpbar-fill[data-state="red"] { background-image: var(--statbar-red); }
+body.hud-statbar-skinned .unit-hpbar-mana { background-image: var(--statbar-mana); }
 
 /* The floating name/owner slab WC3 shows above the unit (or gold mine / ground item)
    under the cursor — see rts.ts updateHoverTooltip. Anchored by its bottom-centre a
