@@ -358,12 +358,14 @@ export const MELEE = {
 } as const;
 
 /** `Scripts\Blizzard.j` `bj_CAMERA_DEFAULT_*` — the shape of the camera a game opens on,
- *  and the one `ResetToGameCamera` comes home to. FIELD_OF_VIEW is the angle we actually
- *  render with; see docs/camera.md before touching any of these. */
+ *  and the one `ResetToGameCamera` comes home to. DEFAULT_FOV is the FIELD, which is NOT the
+ *  angle the client renders with (that is ~32°, measured); see docs/camera.md before touching
+ *  any of these. */
 export const CAMERA = {
   /** bj_CAMERA_DEFAULT_DISTANCE — eye-to-focus distance. */
   DEFAULT_DISTANCE: 1650,
-  /** bj_CAMERA_DEFAULT_FOV — vertical field of view, in degrees. */
+  /** bj_CAMERA_DEFAULT_FOV — the CAMERA_FIELD_FIELD_OF_VIEW value, in degrees. The lens it
+   *  renders as lives in mapViewer's `fovFromWc3`. */
   DEFAULT_FOV: 70,
   /** bj_CAMERA_DEFAULT_AOA — angle of attack, 304 = -56° (the view tilts down). */
   DEFAULT_AOA: 304,

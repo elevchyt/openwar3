@@ -458,26 +458,44 @@ export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
   // (7.24).
   //
-  // The LENS is the FOV field: 70° vertical (Scripts\Blizzard.j bj_CAMERA_DEFAULT_FOV), and a
-  // camera setup's CAMERA_FIELD_FIELD_OF_VIEW is that same angle, applied literally.
+  // The FOV *field* (Blizzard.j bj_CAMERA_DEFAULT_FOV = 70) is NOT the angle the client renders
+  // with. The rendered lens is **32° vertical**, measured off the real 1.27a client (issue #73):
   //
-  // An earlier pass claimed the field (70) and the rendered lens (45°) were different quantities.
-  // They aren't, and rendering at 45° is what made the game feel welded to the ground. Measured
-  // against a real-client melee opening frame at 1920x1080 (the reference screenshot "human hud
-  // and workers starting position"), where the camera is WC3's own default (distance 1650, AOA
-  // -56°) and nothing is in doubt: the town hall's wall ring spans 320 px there. Through a 45°
-  // lens it would span 480 — half again too big. The solve's own minimum is ~67°, and 70° puts
-  // it at 308: within the error of picking a model's edges by eye. See docs/camera.md.
+  //   Blizzard.j's MeleeStartingUnits places the five starting workers at EXACT offsets around
+  //   the point it then centres the camera on (`unitSpacing = 64`, so the two side workers sit
+  //   ±64 in world X — 128 apart, at the focus). That is a ruler no model size or asset scale
+  //   can corrupt. In a 1424x720 melee opening frame (camera untouched, so distance is
+  //   bj_CAMERA_DEFAULT_DISTANCE = 1650) their selection circles measure 128 world units across
+  //   as ~102 px, i.e. k = (H/2)/tan(fov/2) ≈ 1269 ⇒ fov ≈ 31.7°.
+  //
+  // Two earlier passes got this wrong in both directions. The 45° pass fitted two landmarks but
+  // had to guess the camera's focus; the 70° pass measured a town hall's wall ring at 320 px in
+  // a frame it believed was 1080 tall — it was 720, and the same numbers on the true height say
+  // 45°, not 70°. Both calibrated against a MODEL, so both inherited whatever our own render got
+  // wrong about its size. (Sanity check on 70°: it would make the hall's wall ring ~690 units
+  // wide while its own ubersplat — Splats\UberSplatData.slk HTOW, scale 230 = half-width — is
+  // only 460 across. The walls cannot spill that far outside their own dirt patch.)
   //
   // A wrong lens does not announce itself as a wrong lens. Framing is distance × tan(fov/2), so
   // it announces itself as every distance in the game meaning the wrong thing — and as an urge
-  // to keep "fixing" the zoom constants to compensate. Don't; fix the lens.
-  private static readonly WC3_FOV_DEG = CAMERA.DEFAULT_FOV; // the field AND the lens
-  private static readonly GAME_FOV = (MapViewerScene.WC3_FOV_DEG * Math.PI) / 180;
-  private static readonly GAME_PITCH = 0.95; // ≈ 54.4° above the focus; WC3's AOA 304 is -56°
+  // to keep "fixing" the zoom constants to compensate. Don't; fix the lens. See docs/camera.md.
+  private static readonly WC3_FOV_DEG = CAMERA.DEFAULT_FOV; // the FIELD a script speaks (70)
+  private static readonly LENS_FOV_DEG = 32; // …and the lens we render it with, measured above
+  private static readonly GAME_FOV = (MapViewerScene.LENS_FOV_DEG * Math.PI) / 180;
+  // WC3's AOA 304 is -56°: the view tilts 56° down, so the eye sits 56° above the focus.
+  private static readonly GAME_PITCH = ((360 - CAMERA.DEFAULT_AOA) * Math.PI) / 180;
 
-  // Orbit camera state.
+  // Orbit camera state. target[2] is NOT free state: it is the GROUND under the focus plus
+  // `zOffset`, recomputed every frame by followGround (issue #73) — write the offset, not it.
   private target = new Float32Array([0, 0, 0]);
+  // CAMERA_FIELD_ZOFFSET: how far the focus floats ABOVE the terrain. 0 unless a script says
+  // otherwise, which is what makes the camera ride the ground rather than the z = 0 plane.
+  private zOffset = 0;
+  // The ground height the focus is currently sitting on. Eased toward the terrain each frame
+  // (see followGround) so cresting a cliff glides instead of snapping; `groundSnap` skips the
+  // ease for the frame after a teleport (map load, minimap jump, a script camera apply).
+  private groundZ = 0;
+  private groundSnap = true;
   // Terrain extent the camera focus is kept inside so it can't scroll off into the
   // black void (issue #5). Set on map load from centerOffset + mapSize; null = no map.
   private mapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
@@ -488,8 +506,8 @@ export class MapViewerScene {
   private pitch = MapViewerScene.GAME_PITCH;
   // The rest of WC3's camera fields (7.24). They only move when a SCRIPT moves them —
   // CAMERA_FIELD_FIELD_OF_VIEW / ROLL / FARZ have no player-facing control — so the game
-  // camera keeps our own defaults (45° FOV, no roll, far plane derived from the distance)
-  // until a camera setup says otherwise, and ResetToGameCamera brings them back here.
+  // camera keeps WC3's own defaults (the 70 field on our 32° lens, no roll, far plane derived
+  // from the distance) until a camera setup says otherwise, and ResetToGameCamera comes here.
   private fov = MapViewerScene.GAME_FOV;
   private roll = 0;
   private farZ = 0; // 0 = derive from the distance (the game camera's own rule)
@@ -499,7 +517,7 @@ export class MapViewerScene {
     distance: MapViewerScene.MELEE_START,
     farZ: 0,
     aoaDeg: (-MapViewerScene.GAME_PITCH * 180) / Math.PI,
-    // Degrees, the units a script speaks — and the units we render in (the field IS the lens).
+    // Degrees, and on the scale a SCRIPT speaks — fovFromWc3 puts it on our lens.
     fovDeg: MapViewerScene.WC3_FOV_DEG,
     rollDeg: 0,
     rotationDeg: CAMERA.DEFAULT_ROTATION,
@@ -947,6 +965,10 @@ export class MapViewerScene {
     const CELL = 128;
     this.mapBounds = { minX: ox, maxX: ox + (cols - 1) * CELL, minY: oy, maxY: oy + (rows - 1) * CELL };
     this.target = new Float32Array([ox + (cols - 1) * 64, oy + (rows - 1) * 64, 0]);
+    // A new map is a teleport: no previous ground to ease away from, and no script offset yet.
+    this.zOffset = 0;
+    this.lastFocus = null;
+    this.groundSnap = true;
     // Start near gameplay zoom rather than a whole-map overview — far better
     // draw performance and closer to WC3's default camera.
     this.distance = MapViewerScene.MELEE_START;
@@ -4173,9 +4195,9 @@ export class MapViewerScene {
   // thin out to a faint hairline.
   private static readonly HOVER_RING_DIM = 0.78;
   // Camera zoom limits (world units of camera distance). A distance means what it means in the
-  // real game only because the lens does too (GAME_FOV = the 70° field) — the two are one knob:
-  // what you see is distance × tan(fov/2). A match opens on WC3's own default distance, 1650
-  // (bj_CAMERA_DEFAULT_DISTANCE), which through the 70° lens IS the real client's opening view;
+  // real game only because the lens does too (GAME_FOV, measured) — the two are one knob: what
+  // you see is distance × tan(fov/2). A match opens on WC3's own default distance, 1650
+  // (bj_CAMERA_DEFAULT_DISTANCE), which through the 32° lens IS the real client's opening view;
   // the wheel then runs from a close 1250 out to 2400. (WC3's own wheel stops are not documented
   // anywhere we trust, so the range is ours; the DEFAULT it opens on is not.)
   private static readonly ZOOM_MIN = 1250;
@@ -7405,6 +7427,7 @@ export class MapViewerScene {
     }
 
     this.clampTarget(); // keep the focus on the map, whatever moved it (pan/edge-scroll/minimap/follow)
+    this.followGround(dtMs); // …and on the GROUND, so the view keeps its distance to the terrain
     const cp = Math.cos(this.pitch);
     const eye = new Float32Array([
       this.target[0] - Math.cos(this.yaw) * cp * this.distance,
@@ -7446,20 +7469,29 @@ export class MapViewerScene {
     return this.upTmp;
   }
 
-  /** A CAMERA_FIELD_FIELD_OF_VIEW value in our lens: the field IS the lens, in degrees.
+  /** A CAMERA_FIELD_FIELD_OF_VIEW value translated onto the lens we render with.
    *
-   *  This used to translate 70 onto a narrower rendered angle, on the theory that the field and
-   *  the lens were different quantities. They are not — see GAME_FOV, where the reference frame
-   *  of the real client says so. So a script's 70 is 70, and a map that narrows to a telephoto
-   *  gets exactly the angle it asked for. */
+   *  The field and the lens are different quantities (see GAME_FOV): WC3's default camera SAYS
+   *  70 and RENDERS ~32. Every camera object the World Editor writes carries the full field set,
+   *  so a map camera that means "an ordinary view" still says 70 — WarChasers' gg_cam_CamStart1
+   *  is exactly bj_CAMERA_DEFAULT with the distance nudged, re-applied every 2 s. Honour the 70
+   *  literally and that map is stuck zoomed miles out with no escape (the wheel moves the
+   *  distance, not the lens).
+   *
+   *  The translation preserves the FRAMING RATIO — what a field of `f` frames at a given
+   *  distance in WC3, ours frames too — so it is done in tan-space, not on the angle:
+   *  tan(lens/2) = tan(f/2) · tan(32°/2)/tan(70°/2). The default (70) lands exactly on 32°, and
+   *  a map that narrows to a telephoto narrows by the same factor it does in the real game. */
+  private static readonly FOV_SCALE =
+    Math.tan((MapViewerScene.LENS_FOV_DEG * Math.PI) / 360) / Math.tan((MapViewerScene.WC3_FOV_DEG * Math.PI) / 360);
   private static fovFromWc3(deg: number): number {
-    return clamp(deg, 1, 170) * (Math.PI / 180);
+    return 2 * Math.atan(Math.tan((clamp(deg, 1, 170) * Math.PI) / 360) * MapViewerScene.FOV_SCALE);
   }
 
   /** The inverse: the lens reported back on the scale a script speaks, so GetCameraField reads
    *  70 on the default camera exactly as WC3 does, and a tween starts from the right place. */
   private static fovToWc3(rad: number): number {
-    return (rad * 180) / Math.PI;
+    return (2 * Math.atan(Math.tan(rad / 2) / MapViewerScene.FOV_SCALE) * 180) / Math.PI;
   }
 
   /** The live camera in the units the JASS setters speak (degrees for the angles). This and
@@ -7469,7 +7501,9 @@ export class MapViewerScene {
     return {
       targetX: this.target[0],
       targetY: this.target[1],
-      zOffset: this.target[2],
+      // The FIELD, not the focus's world z — the focus rides the terrain (followGround), and
+      // WC3's ZOFFSET is how far above it the camera looks.
+      zOffset: this.zOffset,
       distance: this.distance,
       rotationDeg: this.yaw * DEG,
       // WC3's ANGLE_OF_ATTACK is the VIEW direction's tilt (negative = looking down); our
@@ -7485,7 +7519,7 @@ export class MapViewerScene {
     const RAD = Math.PI / 180;
     this.target[0] = c.targetX;
     this.target[1] = c.targetY;
-    this.target[2] = c.zOffset;
+    this.zOffset = c.zOffset; // followGround adds the terrain under the focus back on
     this.distance = c.distance;
     this.yaw = c.rotationDeg * RAD;
     this.pitch = -c.aoaDeg * RAD;
@@ -7599,6 +7633,48 @@ export class MapViewerScene {
     if (!b) return;
     this.target[0] = clamp(this.target[0], b.minX, b.maxX);
     this.target[1] = clamp(this.target[1], b.minY, b.maxY);
+  }
+
+  /** Sit the camera's focus ON THE TERRAIN — WC3's camera keeps its distance to the GROUND
+   *  under the middle of the screen, not to the z = 0 plane (issue #73).
+   *
+   *  The focus used to be pinned at z = 0, so every map paid for its own terrain: a start
+   *  location perched two cliff levels up (layerHeight 4 ⇒ +256) put the ground 256 units
+   *  nearer the eye than the camera thought, and one down pushed it away — the same 1650 framing
+   *  a fifth tighter here and a fifth looser there. Melee maps mostly start on a flat, mid-height
+   *  plateau and custom maps go wherever their author put them, which is exactly the "custom maps
+   *  look different from melee maps" in the issue. Riding the terrain makes 1650 mean 1650
+   *  everywhere.
+   *
+   *  Eased, not snapped: cresting a cliff would otherwise jolt the whole view by a full 128-unit
+   *  layer in one frame. `groundSnap` is the escape hatch for a real teleport (map load, minimap
+   *  jump, a script's camera apply), where there is no continuity to preserve. */
+  // Seconds to close ~63% of the gap. The ease costs a steady-state lag of τ × dz/dt, so it is
+  // kept short. Measured by walking the focus down Tirisfal Glades' steepest slope at full
+  // edge-scroll speed: the follow trails the terrain by ~190 units crossing the cliff face itself
+  // and by <10 once the ground levels, and is back on it a few frames after you stop — while the
+  // rise still arrives over ~0.15 s rather than as a jolt.
+  private static readonly GROUND_EASE = 0.05;
+  private static readonly GROUND_TELEPORT = 512; // focus jumped ≥ 4 cells in a frame ⇒ no ease
+  private lastFocus: [number, number] | null = null;
+  private followGround(dtMs: number): void {
+    const ground = this.rts?.groundHeightAt(this.target[0], this.target[1]) ?? 0;
+    // Any jump — minimap click, panTo, focus-selection, a script's camera apply — lands on new
+    // ground with nothing to ease from. Detected here, once, rather than at every call site.
+    const moved = this.lastFocus
+      ? Math.hypot(this.target[0] - this.lastFocus[0], this.target[1] - this.lastFocus[1])
+      : Infinity;
+    this.lastFocus = [this.target[0], this.target[1]];
+    if (moved >= MapViewerScene.GROUND_TELEPORT) this.groundSnap = true;
+    if (this.groundSnap) {
+      this.groundZ = ground;
+      this.groundSnap = false;
+    } else {
+      // Frame-rate independent exponential ease (1 - e^(-dt/τ)), so a slow frame catches up.
+      const k = 1 - Math.exp(-Math.min(dtMs, 250) / 1000 / MapViewerScene.GROUND_EASE);
+      this.groundZ += (ground - this.groundZ) * k;
+    }
+    this.target[2] = this.groundZ + this.zOffset;
   }
 
   /** Draw the drag-selection rectangle. `x`/`y` are CANVAS coords (offsetX/offsetY), so the
@@ -7953,7 +8029,7 @@ export class MapViewerScene {
 }
 
 // The game renders at a fixed 1080p, 16:9 (ui/stage.ts) — the frame Warcraft III itself
-// draws, and the frame the 70° lens is framed for. The CSS stage scales this buffer into the
+// draws, and the frame the lens is framed for. The CSS stage scales this buffer into the
 // largest 16:9 box the window allows and letterboxes the rest, so the aspect can never drift
 // with the window: 1:1 fullscreen on a 1080p display, cleanly scaled everywhere else. Sizing
 // the buffer off the window instead is what let a tall window widen the view — the lens is

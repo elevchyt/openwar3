@@ -119,7 +119,7 @@ export class ScriptCamera {
 
   /** The default gameplay camera — what ResetToGameCamera blends back to. Handed in by the
    *  renderer, because it is the renderer's own camera that defines "normal" — its shape is
-   *  WC3's (70° / AOA 304 / rotation 90) but the distance it comes home to is the one the
+   *  WC3's (the 70 FOV field / AOA 304 / rotation 90) but the distance it comes home to is the one the
    *  player's zoom range opens at, not bj_CAMERA_DEFAULT_DISTANCE. */
   constructor(private readonly gameCamera: () => Omit<CameraState, "targetX" | "targetY">) {}
 
