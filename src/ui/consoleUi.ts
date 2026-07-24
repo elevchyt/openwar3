@@ -1,29 +1,37 @@
-// The in-game top bar, built from the game's own FrameDef: the console's upper strip
-// (`ConsoleUI.fdf`), the Quests/Menu/Allies/Chat buttons (`UpperButtonBar.fdf`) and the
-// gold/lumber/supply/upkeep readout (`ResourceBar.fdf`).
+// The in-game console — ALL of it — built from the game's own FrameDef: `ConsoleUI.fdf` for
+// the chrome, `UpperButtonBar.fdf` for the Quests/Menu/Allies/Chat buttons and
+// `ResourceBar.fdf` for the gold/lumber/supply/upkeep readout.
 //
-// **Where the two bars go is not in any of those files** — each declares a size and no
-// SetPoint, because `CGameUI` places them, exactly as it places the leaderboard. The console
-// strip is what gives the answer away. `ConsoleUI.fdf` lays its top edge out as five slices:
+// `ConsoleUI.fdf` is ONE frame carrying two runs of `Texture`, told apart only by their own
+// anchors. The top edge is five slices:
 //
 //     ConsoleTexture01  0.256 wide  Anchor TOPLEFT  0,      0     →  0.000 … 0.256
 //     ConsoleTexture02  0.087 wide  Anchor TOPLEFT  0.256,  0     →  0.256 … 0.343
-//     ConsoleTexture02  0.053 wide  Anchor TOPRIGHT -0.288, 0     →  0.459 … 0.512   (at 4:3)
+//     ConsoleTexture02  0.053 wide  Anchor TOPRIGHT -0.288, 0     →  0.459 … 0.512
 //     ConsoleTexture03  0.256 wide  Anchor TOPRIGHT -0.032, 0     →  0.512 … 0.768
 //     ConsoleTexture04  0.032 wide  Anchor TOPRIGHT  0,      0     →  0.768 … 0.800
 //
-// — two runs of chrome with a deliberate GAP between them (0.343 … 0.459). And the two bars
-// are 0.34 and 0.338 wide: one console section each, with the gap left for the time-of-day
-// indicator that hangs there. So the buttons sit hard left, the resources hard right, and the
-// clock in the hole between them, which is where the HUD already keeps it.
+// — two runs of chrome with a deliberate GAP between them (0.343 … 0.459). And the bottom is
+// four more (`BOTTOMLEFT`/`BOTTOMRIGHT`, `TexCoord` v 0.3125 … 1), which tile the full 0.8
+// with no gap: that band is the console proper — the minimap frame, the portrait arch, the
+// inventory and the command card, all drawn as one piece of art with the sockets punched
+// through it as transparency. The HUD hangs its widgets in those holes (`CONSOLE_ZONES` in
+// ui/hud.ts); the art itself is entirely this file's business.
 //
-// The strip is held at that 4:3 box rather than stretched to the viewport, which is the
-// opposite of what the rest of the FDF layer does (fdf/layout.ts fitBox spreads a menu to the
-// screen's edges). A menu can stretch because its chrome is anchored panels; this art cannot,
-// because the five slices are a fixed run with a hole in the middle — pull them to a wide
-// screen's corners and the hole opens wider than anything in the file is meant to cover. Held
-// at its own proportions the strip sits centred, the leftover width falls away either side,
-// and the gap comes out exactly the width of the medallion that hangs in it.
+// **Where the two bars go is not in any of those files** — each declares a size and no
+// SetPoint, because `CGameUI` places them, exactly as it places the leaderboard. The strip is
+// what gives the answer away: the bars are 0.34 and 0.338 wide, one console section each,
+// with the gap left for the time-of-day indicator that hangs there. So the buttons sit hard
+// left, the resources hard right, and the clock in the hole between them.
+//
+// **The whole console is held at the 4:3 box it was authored for, centred**, rather than
+// stretched to the viewport the way the rest of the FDF layer spreads a menu (fdf/layout.ts
+// fitBox). 1.27a itself did stretch — measured off the real client at 1424×720, its command
+// cells come out 78 × 52.5 px, a 1.49× horizontal smear — and the game stopped doing it: at
+// 1.30.4 the console is exactly `height × 4/3` centred (cells 78 × 78, square) with filler
+// panels either side. That is the version we follow, and it is also what the art wants, since
+// the top strip's five slices are a fixed run with a hole that only stays medallion-sized at
+// the proportions they were drawn at. `SIDE_FILLER` below is the leftover width.
 
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
@@ -34,6 +42,41 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
 const UPPER_BAR_FDF = "UI\\FrameDef\\UI\\UpperButtonBar.fdf";
 const RESOURCE_BAR_FDF = "UI\\FrameDef\\UI\\ResourceBar.fdf";
+
+/** The bottom band's height, from `ConsoleUI.fdf`'s own `Height 0.176` — the tallest of its
+ *  four bottom slices, which is the one that sets the band. Exported because the HUD sizes the
+ *  box it hangs the minimap/portrait/command card in off exactly this (ui/hud.ts). */
+export const CONSOLE_BAND_H = 0.176;
+
+/**
+ * Where we knowingly do NOT do what `ConsoleUI.fdf` says, in one place so it can be seen and
+ * argued with. Everything else about the console is the file's and `war3skins.txt`'s.
+ */
+const CONSOLE_OVERRIDES = {
+  /**
+   * Hold the console at the 4:3 box it was drawn for instead of stretching it to the
+   * viewport, and fill the leftover width either side.
+   *
+   * The FDF has no opinion here — it is written in a 0.8 × 0.6 space and something else
+   * decides what that maps to. 1.27a maps 0.8 to the whole screen, which on 16:9 smears every
+   * command icon 1.49× wide (measured: 78 × 52.5 px cells). 1.30.4 stopped, and draws filler
+   * panels in the gap instead. We follow 1.30.4.
+   */
+  holdAspect: true,
+} as const;
+
+/**
+ * How far up the band the console ART reaches — the LOWEST top edge it has anywhere across
+ * its width, measured off the decoded tiles (the two ends reach 0.1633, the middle section
+ * with the arch and the info panel only 0.1317).
+ *
+ * It is the height of the flat black the game paints behind the whole console. The art is
+ * full of holes — the minimap, the portrait arch, the info panel, the inventory and the
+ * command card are all cut out of it as transparency — and no world ever shows through any of
+ * them: they read as pure black behind the frame. Taking the lowest edge is what keeps that
+ * backing from poking out ABOVE the art at the ends, where the world does show.
+ */
+const CONSOLE_ART_TOP = 0.1317;
 
 /** The strip's frames are 0.032 tall, but the ART only fills the top 77% of that — measured
  *  off the decoded slice, whose last opaque row is 48 of 64. The remaining quarter is
@@ -61,24 +104,24 @@ const num = (v: number): Arg => ({ s: String(v), n: v, str: false });
 const prop = (key: string, ...args: Arg[]): FdfProp => ({ key, args });
 
 /** The four panels the button bar opens — the same ones F9…F12 open. */
-export type TopBarPanel = "quests" | "menu" | "allies" | "chat";
+export type ConsolePanel = "quests" | "menu" | "allies" | "chat";
 
-const BUTTONS: Array<{ frame: string; panel: TopBarPanel }> = [
+const BUTTONS: Array<{ frame: string; panel: ConsolePanel }> = [
   { frame: "UpperButtonBarQuestsButton", panel: "quests" },
   { frame: "UpperButtonBarMenuButton", panel: "menu" },
   { frame: "UpperButtonBarAlliesButton", panel: "allies" },
   { frame: "UpperButtonBarChatButton", panel: "chat" },
 ];
 
-export interface TopBarActions {
-  openPanel(panel: TopBarPanel): void;
+export interface ConsoleUiActions {
+  openPanel(panel: ConsolePanel): void;
   /** Put the day/night medallion in the slot the strip leaves for it (render/timeIndicator.ts).
    *  Returns false when there is no install to render the model from. */
   mountClock(slot: HTMLElement): boolean;
 }
 
 /** What the resource readout shows. Formatted by the caller — the bar only places it. */
-export interface TopBarResources {
+export interface ConsoleResources {
   gold: string;
   lumber: string;
   supply: string;
@@ -87,11 +130,11 @@ export interface TopBarResources {
   upkeepColor: string;
 }
 
-export class TopBar {
+export class ConsoleUi {
   private screen: FdfScreen | null = null;
   private mounting = false;
   private shown = true;
-  private last: TopBarResources | null = null;
+  private last: ConsoleResources | null = null;
 
   /** `skin` is the war3skins.txt section the chrome is decorated from — the console art and
    *  the button atlas are per-RACE (`orc-console-buttonstates2.blp`, `OrcUITile01`). */
@@ -99,7 +142,7 @@ export class TopBar {
     private container: HTMLElement,
     private vfs: DataSource,
     private skin: string,
-    private actions: TopBarActions,
+    private actions: ConsoleUiActions,
   ) {
     void this.build();
   }
@@ -117,7 +160,7 @@ export class TopBar {
 
   /** Push the current resource figures. Cheap to call every frame: it only writes the four
    *  strings when one of them actually changed. */
-  update(next: TopBarResources): void {
+  update(next: ConsoleResources): void {
     const prev = this.last;
     if (prev && prev.gold === next.gold && prev.lumber === next.lumber
       && prev.supply === next.supply && prev.upkeep === next.upkeep
@@ -222,9 +265,9 @@ export class TopBar {
         rootFrame: "ConsoleUI",
         overlayClass: "fdf-ingame fdf-topbar",
         skin: this.skin,
-        // Centred at the root's own 0.8×0.6, so the strip keeps the proportions it was drawn
-        // at and the leftover width falls away either side (see rootFrame).
-        centerRoot: true,
+        // Centred at the root's own 0.8×0.6, so the console keeps the proportions it was drawn
+        // at and the fillers take the leftover width (see rootFrame + CONSOLE_OVERRIDES).
+        centerRoot: CONSOLE_OVERRIDES.holdAspect,
         buildRoot: (lib) => this.rootFrame(lib),
         handlers,
         // A resize REBUILDS the whole screen — the overlay is emptied and every frame is made
@@ -234,6 +277,7 @@ export class TopBar {
         // blank. Both are restored here rather than after the mount, because this is the hook
         // that runs on EVERY build instead of only the first.
         onBuild: (built) => {
+          this.backing(built);
           this.paint(built);
           this.mountClock(built);
         },
@@ -250,20 +294,14 @@ export class TopBar {
   }
 
   /**
-   * The strip: `ConsoleUI`'s TOP textures only, plus the two bars anchored to the screen's
-   * corners.
-   *
-   * Only the top ones — the same frame carries the console's BOTTOM edge, and the HUD already
-   * draws that (its minimap and command card are positioned against it). They are told apart
-   * by their own anchors, which is the file's own distinction rather than a guess about order.
+   * The whole console: every `Texture` `ConsoleUI` declares — the top strip AND the bottom
+   * band — plus the medallion bridge, the two bars anchored to the strip's ends, and the side
+   * fillers that carry both bands out to a 16:9 screen's edges.
    */
   private rootFrame(lib: FdfLibrary): FdfFrame {
     const console = lib.resolveRoot("ConsoleUI");
     if (!console) throw new Error('FDF: frame "ConsoleUI" not found');
-    const children = console.children.filter((c) => {
-      const anchor = c.props.find((p) => p.key === "Anchor")?.args[0]?.s ?? "";
-      return anchor === "TOPLEFT" || anchor === "TOPRIGHT";
-    });
+    const children = console.children.slice();
 
     // Close the seam behind the medallion. The two runs stop either side of a 0.116-wide
     // hole, and the TimeIndicator model that hangs there does NOT square it off — its frame
@@ -304,13 +342,16 @@ export class TopBar {
     bar("UpperButtonBarFrame", "TOPLEFT", BUTTON_NUDGE_X, BAR_TOP + BUTTON_NUDGE_Y);
     bar("ResourceBarFrame", "TOPRIGHT", 0, BAR_TOP);
 
-    // Give the strip the 4:3 box the file was authored for, CENTRED, rather than letting it
+
+    // Give the console the 4:3 box the file was authored for, CENTRED, rather than letting it
     // fill the viewport. The rest of the FDF layer deliberately stretches to the screen's
     // edges (fdf/layout.ts fitBox), and that is right for a menu; it is wrong here, because
     // this art does not tile — pulling the two runs apart to the screen's corners opens a
-    // hole in the middle that nothing in the file is meant to cover. Held at its own
-    // proportions it simply sits centred, with empty space either side, and the gap between
-    // the runs comes out exactly the width of the medallion that hangs in it.
+    // hole in the middle that nothing in the file is meant to cover, and it smears every
+    // command icon sideways. Held at its own proportions it sits centred with the fillers
+    // either side, the gap between the runs comes out exactly the width of the medallion that
+    // hangs in it, and the command card's cells stay square (they are 0.0438 × 0.0437 in the
+    // file — square in WORLD units, so only an isotropic fit keeps them square on screen).
     return {
       ...console,
       props: [
@@ -320,5 +361,30 @@ export class TopBar {
       ],
       children,
     };
+  }
+
+  /**
+   * Lay the flat black in behind the console — and, either side of it, in place of the
+   * console.
+   *
+   * Both bands run the FULL width of the game frame, which does two jobs at once. Behind the
+   * 4:3 box it is what every socket the art punches through reads as: no world ever shows
+   * through the minimap, the portrait arch, the info panel or the command card. Outside the
+   * box it is the panel the later game fills the widescreen gap with — 1.30.4 has a texture
+   * for that and 1.27a has none, so rather than smear the console's own edge sideways (which
+   * looks like exactly what it is) these are simply left blank, at the console's own height.
+   *
+   * They belong to THIS overlay rather than to the HUD, and that is not a preference: the HUD
+   * is built after the console and stacks over it (render/mapViewer.ts says so), so a black
+   * rect put there would cover the stone instead of backing it.
+   */
+  private backing(screen: FdfScreen): void {
+    const overlay = screen.element;
+    for (const [cls, h] of [["console-backing", CONSOLE_ART_TOP], ["console-backing-top", STRIP_ART]] as const) {
+      const el = document.createElement("div");
+      el.className = cls;
+      el.style.height = `${(h / UI_HEIGHT) * 100}%`;
+      overlay.prepend(el);
+    }
   }
 }

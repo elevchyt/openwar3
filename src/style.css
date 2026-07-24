@@ -240,12 +240,11 @@ body.in-game .menu-panel { display: none; }
      overrides it with the real art's resolution-dependent height. */
   --console-h: 172px;
 }
-/* The real console art is sized off the STAGE, so it grows with the window: at 1080p it
-   is ~281px tall, not 172. Anything anchored to a fixed pixel offset instead of this
-   ends up UNDER the console on a big monitor and floating on a small one. */
-.hud.hud-skinned-console {
-  --console-h: min(calc(var(--stage-h) * 0.26), calc(var(--stage-w) / var(--console-aspect)));
-}
+/* The real console is sized off the STAGE, so it grows with the window: at 1080p it is
+   ~317px tall, not 172. Anything anchored to a fixed pixel offset instead of this ends up
+   UNDER the console on a big monitor and floating on a small one. Both figures come from
+   ConsoleUI.fdf via ui/hud.ts, which writes them here — 0.176 and 0.8 of the file's 0.6-tall
+   UI space — so nothing about the console's size is stated twice. */
 
 /* On-screen message log — the "Game - Display text" trigger action target.
    WC3 shows these in the upper-left, below the resource bar, oldest on top. */
@@ -500,24 +499,22 @@ body.in-game .menu-panel { display: none; }
   pointer-events: auto;
 }
 
-/* Skinned mode: the atlas art IS the chrome; zones are absolutely positioned
-   over its sockets, and transparent art regions pass clicks to the map. The
-   console keeps its natural aspect ratio, is centred, and letterboxes on
-   widescreen — it is NEVER stretched (height capped so it stays a HUD strip). */
-.hud-console-skinned {
+/* Skinned mode: this element carries NO art of its own. It is exactly the box
+   ConsoleUI.fdf's bottom band occupies — 0.8 × 0.176 of the file's 0.6-tall UI space, held
+   at 4:3 and centred, the same box ui/consoleUi.ts's FDF screen holds — so the zones
+   absolutely positioned inside it land in the sockets that art punches through. It takes no
+   clicks; each zone turns them back on. */
+.hud-console.hud-console-skinned {
   display: block;
   left: 50%;
   right: auto;
   transform: translateX(-50%);
-  aspect-ratio: var(--console-aspect);
   /* Sized off the STAGE, not the window — the console belongs to the game frame. */
   height: var(--console-h);
-  width: auto;
+  width: var(--console-w);
   padding: 0;
   gap: 0;
   background: none;
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
   border-top: none;
   pointer-events: none;
 }
@@ -539,7 +536,7 @@ body.in-game .menu-panel { display: none; }
   overflow: visible; /* let the idle-worker button sit ABOVE the minimap */
   cursor: crosshair;
 }
-.hud-console-skinned .hud-minimap {
+.hud-console.hud-console-skinned .hud-minimap {
   width: auto;
   height: auto;
 }
@@ -642,8 +639,8 @@ body.in-game .menu-panel { display: none; }
   flex-direction: column;
   gap: 4px;
 }
-.hud-console-skinned .hud-portrait-wrap { gap: 2px; }
-.hud-console-skinned .hud-portrait {
+.hud-console.hud-console-skinned .hud-portrait-wrap { gap: 2px; }
+.hud-console.hud-console-skinned .hud-portrait {
   flex: 1;
   width: auto;
   height: auto;
@@ -652,15 +649,15 @@ body.in-game .menu-panel { display: none; }
   /* tuck under the golden arch */
   border-radius: 45% 45% 0 0 / 28% 28% 0 0;
 }
-.hud-console-skinned .hud-portrait-values { width: auto; }
-.hud-console-skinned .hud-inventory {
+.hud-console.hud-console-skinned .hud-portrait-values { width: auto; }
+.hud-console.hud-console-skinned .hud-inventory {
   background: none;
   border: none;
   padding: 2px;
 }
 /* Command card: a solid dark backing so no terrain shows through the slot gaps
    (the console art's command window is see-through). */
-.hud-console-skinned .hud-command {
+.hud-console.hud-console-skinned .hud-command {
   background: #08090c;
   border: 1px solid rgba(216, 180, 90, 0.25);
   border-radius: 3px;
@@ -668,14 +665,14 @@ body.in-game .menu-panel { display: none; }
   gap: 3px;
 }
 /* Slots: dark inset squares holding an icon (like WC3's command grid). */
-.hud-console-skinned .hud-slot {
+.hud-console.hud-console-skinned .hud-slot {
   background: #050608;
   border: 1px solid rgba(216, 180, 90, 0.18);
   border-radius: 2px;
   aspect-ratio: 1;
 }
-.hud-console-skinned .hud-inventory .hud-slot { background: none; border: none; }
-.hud-console-skinned .hud-cmd { font-size: 11px; }
+.hud-console.hud-console-skinned .hud-inventory .hud-slot { background: none; border: none; }
+.hud-console.hud-console-skinned .hud-cmd { font-size: 11px; }
 
 /* hidden must always win, even over flex/grid display rules below. */
 [hidden] { display: none !important; }
@@ -949,6 +946,35 @@ body.in-game .menu-panel { display: none; }
   color: #f4ecff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.9);
 }
+/* The real hero XP bar, and the timed-life bar a summon counts down on — the same widget
+   in the FDF (SimpleHeroLevelBar / SimpleProgressIndicator, both SIMPLESTATUSBAR, both
+   Height 0.015625 anchored under the unit's name) and the same art in war3skins:
+   human-xpbar-border.blp over human-bigbar-fill.blp. The fill ships grey for the engine to
+   multiply, which ui/hud.ts does with the colours the 3D versions of these bars carry —
+   XpBarConsole.mdx's rgb(139,0,131) and TimerBar.mdx's rgb(65,130,210). */
+body.hud-widget-skinned .hud-xpbar {
+  height: 13.6%;
+  min-height: 12px;
+  margin: 2px 0 4px;
+  background: var(--hud-bigbar-border) 0 0 / 100% 100% no-repeat;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+body.hud-widget-skinned .hud-xpbar-fill,
+body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill {
+  /* Inset to the frame's inner rect — the border art's gold runs ~2 of its 32 rows each
+     way. The fill's WIDTH is the bar's fraction, written inline, so it is a percentage of
+     the whole bar rather than of the inner rect; capping it at the inner rect's width is
+     what keeps a full bar from painting over the gold end cap. The ~1.6% that costs a
+     part-full bar is a third of a pixel at this size. */
+  inset: 6% auto 6% 1.6%;
+  max-width: 96.8%;
+  background: var(--hud-bigbar-xp) 0 0 / 100% 100% no-repeat;
+  box-shadow: none;
+}
+body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: var(--hud-bigbar-timer); }
+
 .hud-sel-stats { font-size: 12px; color: #cfc7ab; line-height: 1.5; }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
 /* Item description shown when a ground item is selected (in place of the stat block). */
@@ -1069,6 +1095,112 @@ body.in-game .menu-panel { display: none; }
 }
 .hud-queue-slot.filled { border-color: rgba(216, 180, 90, 0.75); }
 
+/* --- The real console widget art (issue #87) -------------------------------------------
+   Every rect below is a percentage of one texture, measured off the decoded BLP, so the
+   art and the boxes we lay over it can never drift apart.
+
+   human-unitqueue-border.blp (256×128) is the WHOLE training-queue widget in one image: a
+   big slot at the top left for the unit in progress and six numbered ones under it for the
+   queue. Its gold dividers sit at x = 45, 85, 125, 165, 205, which is a pitch of exactly 40
+   from x = 5 — six slots — and its two rows of border are at y = 21/67 (big slot) and
+   y = 74/106 (the queue row). The FDF hangs the whole thing across the bottom of the info
+   panel: SimpleInfoPanelBuildingDetail's SimpleBuildQueueBackdrop is BOTTOMLEFT→BOTTOMRIGHT
+   with Height 0.1 of that panel's 0.115 — 87%. The texture is 2:1 and that box is
+   0.2017 : 0.1, which is 2.017:1, so it lands almost exactly unstretched. */
+body.hud-widget-skinned .hud-progress-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 87%;
+  display: block;
+  margin: 0;
+  background: var(--hud-queue-border) 0 0 / 100% 100% no-repeat;
+}
+/* The status line is only a wrapper here: it spans the whole backdrop so that BOTH of its
+   children can be placed against the texture, rather than the label being placed against
+   the icon it happens to sit next to in the DOM. */
+body.hud-widget-skinned .hud-status-line {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+/* The in-progress unit, in the big slot: texture x 8…59, y 18…68 of 256×128. */
+body.hud-widget-skinned .hud-status-icon {
+  position: absolute;
+  left: 3.13%;
+  top: 14.06%;
+  width: 20.31%;
+  height: 39.84%;
+  border: none;
+  border-radius: 0;
+}
+/* The status label sits where SimpleBuildingActionLabel does — CENTER of the info panel's
+   TOPLEFT + (0.11375, −0.029875), which inside this backdrop is 56.4% across. */
+body.hud-widget-skinned .hud-status-label {
+  position: absolute;
+  left: 26.6%;
+  right: 2%;
+  top: 4%;
+  text-align: center;
+  font-size: 12px;
+}
+/* The build/train bar, at SimpleBuildTimeIndicator's TOPLEFT + (0.06125, −0.038125) — 30.4%
+   across the panel, just clear of the big slot. Its own art, which ships gold. */
+body.hud-widget-skinned .hud-progress {
+  position: absolute;
+  left: 30.4%;
+  right: 3%;
+  top: 30%;
+  width: auto;
+  height: 15%;
+  background: var(--hud-buildbar-border) 0 0 / 100% 100% no-repeat;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* Inset to the frame's inner rect, and by TOP/BOTTOM rather than a margin: a percentage
+   margin resolves against the containing block's WIDTH, so on a bar this wide it pushed the
+   fill clean out of the frame's `overflow: hidden` and nothing drew at all. */
+body.hud-widget-skinned .hud-progress-fill {
+  position: absolute;
+  left: 1.6%;
+  top: 14%;
+  bottom: 14%;
+  height: auto;
+  max-width: 96.8%;
+  border-radius: 0;
+  background: var(--hud-buildbar-fill) 0 0 / 100% 100% no-repeat;
+  box-shadow: none;
+}
+/* The six queue slots, in the texture's own row: y 71…110, pitch 40 from x 5. */
+body.hud-widget-skinned .hud-queue {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 55.47%;
+  height: 30.47%;
+  display: block;
+  gap: 0;
+}
+body.hud-widget-skinned .hud-queue-slot {
+  position: absolute;
+  top: 8%;
+  width: 14.1%;
+  height: 84%;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+}
+body.hud-widget-skinned .hud-queue-slot:nth-child(1) { left: 2.7%; }
+body.hud-widget-skinned .hud-queue-slot:nth-child(2) { left: 18.4%; }
+body.hud-widget-skinned .hud-queue-slot:nth-child(3) { left: 34.0%; }
+body.hud-widget-skinned .hud-queue-slot:nth-child(4) { left: 49.6%; }
+body.hud-widget-skinned .hud-queue-slot:nth-child(5) { left: 65.2%; }
+body.hud-widget-skinned .hud-queue-slot:nth-child(6) { left: 80.9%; }
+/* The slot numbers are painted into the border art, so ours would double them up. */
+body.hud-widget-skinned .hud-queue-slot { color: transparent; }
+
 
 .hud-inventory {
   padding: 6px 10px;
@@ -1119,7 +1251,7 @@ body.in-game .menu-panel { display: none; }
 .hud-inv-slot.empty { cursor: default; }
 .hud-inv-slot:not(.empty):hover,
 body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
-.hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }
+.hud-console.hud-console-skinned .hud-inventory .hud-inv-slot { background-color: transparent; }
 
 .hud-cmd {
   font: inherit;
@@ -1472,13 +1604,32 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-screen-disabled .fdf-btn-text span { color: var(--fdf-disabled-color, #808080) !important; }
 .fdf-screen-disabled .fdf-button-glow { opacity: 0 !important; }
 
-/* The console's upper strip sits under the HUD's own layers (the clock medallion hangs in
-   its gap and must draw over it) but above the world. Its chrome takes no clicks; the
-   buttons inside it turn pointer events back on (.fdf-button). */
+/* The console sits under the HUD's own layers (the clock medallion hangs in the strip's gap
+   and must draw over it, and the minimap/portrait/command card go in the bottom band's
+   sockets) but above the world. Its chrome takes no clicks; the buttons inside it turn
+   pointer events back on (.fdf-button). */
 .fdf-screen.fdf-topbar {
   z-index: 2;
   pointer-events: none;
+  /* Clip to the game frame. The side fillers are deliberately drawn WIDER than the gap they
+     have to cover (ui/consoleUi.ts SIDE_FILLER), so that no arithmetic about the stage's
+     aspect can leave a sliver of world showing at the edges — this is what stops the overhang
+     spilling out over the letterbox. */
+  overflow: hidden;
 }
+
+/* Flat black behind the console art, and beside it — see ui/consoleUi.ts backing(). Heights
+   are set inline from the file's own measurements; the width is the whole game frame. */
+.console-backing,
+.console-backing-top {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: #000;
+  pointer-events: none;
+}
+.console-backing { bottom: 0; }
+.console-backing-top { top: 0; }
 
 /* --- FDF SIMPLEBUTTON (the console's own buttons — the upper Quests/Menu/Allies/Chat bar).
    Its four faces are rows of one atlas and its three captions are the same words in three
@@ -1911,3 +2062,11 @@ body.in-game .load-gate { display: none; }
   cursor: pointer;
 }
 .menu-debug-btn:hover { filter: brightness(1.08); }
+
+/* The inventory cover — the crest the console wears when the selection has no pockets.
+   Drawn at its own aspect over that corner of the band (CONSOLE_INVENTORY_COVER in
+   ui/hud.ts), so the texture is never stretched. */
+.hud-inventory-cover {
+  background: var(--hud-inventory-cover) 0 0 / 100% 100% no-repeat;
+  pointer-events: none;
+}

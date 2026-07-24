@@ -10,7 +10,8 @@ import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3ToHtml } from "./wc3Text";
 
 import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
-import type { TopBarResources } from "./topBar";
+import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
+import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 
 /** WC3's upkeep bands, as the resource bar colours them. */
 const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
@@ -190,8 +191,8 @@ export interface HudDriver {
   /** A line the local player typed and sent. */
   sendChat(text: string, target: ChatTarget): void;
 
-  /** Push the resource readout to the FDF top bar (ui/topBar.ts), which owns that text now. */
-  setResources(next: TopBarResources): void;
+  /** Push the resource readout to the FDF top bar (ui/consoleUi.ts), which owns that text now. */
+  setResources(next: ConsoleResources): void;
 
   dayNight(): { hour: number; isDay: boolean };
   /** Take over the top-bar clock slot with the race's real TimeIndicator model, sizing
@@ -199,8 +200,16 @@ export interface HudDriver {
   mountClock(slot: HTMLElement): boolean;
   /** The map's own minimap image (war3mapMap.blp), if decodable. */
   minimapImage(): HTMLCanvasElement | null;
-  /** Race console atlas crops (UI\Console\<Race>UITile01–04) or null. */
-  consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null } | null;
+  /** Is the console's real chrome on screen? True once an install is mounted, in which case
+   *  ui/consoleUi.ts is drawing `ConsoleUI.fdf` and the HUD's widgets go in its sockets;
+   *  false with no install, and the HUD draws its own placeholder strip instead. */
+  consoleSkinned(): boolean;
+  /** Resolve a `UI\war3skins.txt` skin KEY to its texture path, against the local player's
+   *  race — the same lookup the FDF's `DecorateFileNames` does (ui/fdf/library.ts). The HUD
+   *  names the console's widget art by key so that the four races' consoles differ where the
+   *  game says they differ (the inventory cover) and share where it says they share (the
+   *  queue border and the bars, which every race takes from `[Default]`). */
+  skinPath(key: string): string;
   /** Debug cheat: top up gold/lumber/food, or toggle fast build/train. Returns
    *  the resulting on/off state (only meaningful for "fastbuild"). */
   cheat(kind: "gold" | "lumber" | "food" | "fastbuild"): boolean;
@@ -224,16 +233,50 @@ export interface HudDriver {
   spawnTestHero(typeId: string): void;
 }
 
-// Zone rectangles measured from the rendered console atlas (fractions of the
-// cropped console art, 1600×352): minimap frame, portrait arch, info area,
-// inventory, command card. FDF parsing will make this exact later.
-const ZONES = {
-  minimap: [1.1, 16.5, 17.4, 82.0],
-  portrait: [26.9, 30.5, 9.9, 68.0],
-  info: [38.4, 34.0, 24.5, 60.0],
-  inventory: [64.1, 29.0, 9.9, 69.0],
-  command: [76.4, 19.0, 22.4, 79.0],
+/**
+ * Where each widget goes in the console — the sockets the art leaves for it.
+ *
+ * These are the FDF's own coordinates, in the 0.8 × 0.6 space `ConsoleUI.fdf` is written in:
+ * `x`/`w` measured from the console's left edge, `y`/`h` measured UP from the bottom of the
+ * screen, the way every SetPoint in the file is. They are not guesses and not tuned by eye —
+ * the console art punches its sockets through as TRANSPARENCY (`AlphaMode "ALPHAKEY"`), so
+ * each rect is read straight off the decoded tiles by scanning for the transparent runs, and
+ * they come out the same for all four races because the four tile sets are drawn to one
+ * template. The command card falls out as four columns of 0.0399 and three rows of 0.0392 —
+ * square cells, which is the whole reason the console is held at 4:3 (ui/consoleUi.ts).
+ *
+ * The one thing the art cannot tell us is the inventory, whose six slots are painted dark
+ * rather than cut out; its rows were measured from those dark centres instead (pitch 0.0384,
+ * matching the command card's).
+ *
+ * The `info` socket is the one place we are on our own: it is a single wide hole with no
+ * internal divisions, so what goes IN it — the name, the XP bar, the stat lines, the build
+ * queue — is laid out from `SimpleInfoPanel.fdf`'s relative anchors rather than from any
+ * rect the art could give us. (The other deviation, holding the whole console at 4:3, is
+ * `CONSOLE_OVERRIDES` in ui/consoleUi.ts.)
+ */
+const CONSOLE_ZONES = {
+  minimap: { x: 0.0101, y: 0.0075, w: 0.1382, h: 0.1100 },
+  portrait: { x: 0.2157, y: 0.0317, w: 0.0747, h: 0.0800 },
+  info: { x: 0.3022, y: 0.0000, w: 0.2017, h: 0.1150 },
+  inventory: { x: 0.5146, y: 0.0011, w: 0.0725, h: 0.1125 },
+  command: { x: 0.6163, y: 0.0067, w: 0.1708, h: 0.1108 },
 } as const;
+
+/**
+ * Where the inventory COVER goes — the crest the console wears in place of the six slots
+ * when the selection has no inventory at all.
+ *
+ * Not a socket, so it is not one of the zones above: the cover is a whole texture, most of it
+ * transparent, laid over that corner of the console. Its rect was solved by matching the blue
+ * emblem inside the texture (u 0.3633…0.8438, v 0.5723…0.9160 of `<Race>UITile-InventoryCover`)
+ * against the same emblem in a real 1.27a frame (x 0.5191…0.5798, y 0.0217…0.1092). The solve
+ * lands on 0.1263 × 0.2545 — a ratio of 0.496 against the texture's own 256 × 512 — so the
+ * game draws it UNSTRETCHED, which is the check that the fit is a real one and not two
+ * measurements that happened to meet. It stands taller than the band; the overhang is the
+ * texture's transparent top third.
+ */
+const CONSOLE_INVENTORY_COVER = { x: 0.4732, y: 0, w: 0.1263, h: 0.2545 } as const;
 
 /** Is the keystroke going into a text field rather than at the game? */
 export function isTyping(target: EventTarget | null): boolean {
@@ -241,15 +284,18 @@ export function isTyping(target: EventTarget | null): boolean {
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 }
 
-function place(el: HTMLElement, zone: readonly [number, number, number, number]): void {
+/** An FDF console rect → a percentage box of the console element, which is itself exactly the
+ *  file's 0.8 × `CONSOLE_BAND_H`. The y flip is the FDF's bottom-up axis becoming CSS's
+ *  top-down one; nothing else changes, so a percentage here IS an FDF coordinate. */
+function place(el: HTMLElement, zone: { x: number; y: number; w: number; h: number }): void {
   el.classList.add("hud-zone");
   // Inline position so it wins over any component rule (e.g. .hud-command's
   // position:relative, which otherwise knocked the command card out of its zone).
   el.style.position = "absolute";
-  el.style.left = `${zone[0]}%`;
-  el.style.top = `${zone[1]}%`;
-  el.style.width = `${zone[2]}%`;
-  el.style.height = `${zone[3]}%`;
+  el.style.left = `${(zone.x / UI_WIDTH) * 100}%`;
+  el.style.top = `${((CONSOLE_BAND_H - (zone.y + zone.h)) / CONSOLE_BAND_H) * 100}%`;
+  el.style.width = `${(zone.w / UI_WIDTH) * 100}%`;
+  el.style.height = `${(zone.h / CONSOLE_BAND_H) * 100}%`;
 }
 
 // WC3 player colors by slot. Exported: a cinematic's speaker name is drawn in the colour of
@@ -304,6 +350,41 @@ const TOOLTIP_COST_ICON = {
 // its pixels come back 0,255,0 / 0,151,0 / … — the texture's own 255 / 151 / … rows times a
 // PURE green. Hence the tints below.
 const STATBAR_FILL = "UI\\Feedback\\HPBarConsole\\human-healthbar-fill.blp";
+
+// The console's own widget art, named by `UI\war3skins.txt` KEY rather than by path so the
+// per-race entries take effect (the inventory cover is the one the four races differ on).
+// These are the keys the engine's SIMPLESTATUSBAR / backdrop frames use, out of the same
+// table `DecorateFileNames` reads:
+//
+//   BuildQueueBackdrop            human-unitqueue-border.blp    the whole training-queue
+//                                                               widget: one big slot for the
+//                                                               unit in progress and six
+//                                                               numbered ones for the queue
+//   SimpleXpBarBorder / …Console  human-xpbar-border.blp        the hero XP bar — a gold
+//                                 human-bigbar-fill.blp         frame over a grey fill the
+//                                                               engine tints
+//   SimpleProgressBar*            the SAME two files            the timed-life / summon bar
+//   SimpleBuildTimeIndicator(Border)                            the build/train progress bar;
+//                                 human-buildprogressbar-*.blp  its fill ships already gold
+//   ConsoleInventoryCoverTexture  <Race>UITile-InventoryCover   the crest over the 2×3 when
+//                                                               the selection has no inventory
+const CONSOLE_ART = {
+  queueBorder: "BuildQueueBackdrop",
+  bigBarBorder: "SimpleXpBarBorder",
+  bigBarFill: "SimpleXpBarConsole",
+  buildBarBorder: "SimpleBuildTimeIndicatorBorder",
+  buildBarFill: "SimpleBuildTimeIndicator",
+  inventoryCover: "ConsoleInventoryCoverTexture",
+} as const;
+
+/** What the engine tints `human-bigbar-fill.blp` with, read off the models that draw the
+ *  same bars in 3D: `XpBarConsole.mdx`'s geoset colour for the hero XP bar, `TimerBar.mdx`'s
+ *  for the timed-life one a summon counts down on. (The build bar needs no entry — its own
+ *  fill texture ships gold rather than grey.) */
+const BIGBAR_TINT = {
+  xp: [139, 0, 131],
+  timer: [65, 130, 210],
+} as const;
 
 /** The colour each bar multiplies the fill texture by. Green is measured (see above), so
  *  yellow and red are the engine's matching primaries. 1.27a floats no mana bar at all, so
@@ -398,17 +479,23 @@ function cdSeconds(secondsLeft: number): string {
  *  — 255 / 151 / 151 / 152 / 91, against the client's measured 255 / 151 / 151 / 151 / 142. */
 const STATBAR_ROWS = 5;
 
-/** Multiply the grey status-bar slab by one bar colour — the whole of what the engine does
- *  to it — and hand back a data URL the stylesheet can stretch across a bar. */
-function bakeStatBarFill(fill: HTMLCanvasElement, tint: readonly number[]): string {
+/**
+ * Multiply a grey bar-fill texture by one bar colour — the whole of what the engine does to
+ * every bar it draws, from the slabs floating over units to the hero's XP bar.
+ *
+ * `rows` is how tall to bake it. Only the floating status bar needs it: its slab is squeezed
+ * into five screen pixels, and a smooth resize there averages the white top pair away (see
+ * STATBAR_ROWS). Everything else keeps the texture's own height.
+ */
+function bakeStatBarFill(fill: HTMLCanvasElement, tint: readonly number[], rows = fill.height): string {
   const w = fill.width;
   const out = document.createElement("canvas");
   out.width = w;
-  out.height = STATBAR_ROWS;
+  out.height = rows;
   const ctx = out.getContext("2d")!;
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(fill, 0, 0, w, STATBAR_ROWS);
-  const img = ctx.getImageData(0, 0, w, STATBAR_ROWS);
+  ctx.drawImage(fill, 0, 0, w, rows);
+  const img = ctx.getImageData(0, 0, w, rows);
   for (let i = 0; i < img.data.length; i += 4) {
     for (let k = 0; k < 3; k++) img.data[i + k] = (img.data[i + k] * tint[k]) / 255;
   }
@@ -512,6 +599,8 @@ export class GameHud {
   private invCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
   private invCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
   private invKey = "";
+  /** The crest drawn over the six slots when the selection has no inventory. */
+  private invCover!: HTMLDivElement;
   private dotsT = 0;
   private textT = TEXT_PERIOD; // render immediately on first frame
   private lastSelId: number | null = null; // force a text refresh when selection changes
@@ -535,7 +624,7 @@ export class GameHud {
   constructor(parent: HTMLElement, private driver: HudDriver) {
     this.root = document.createElement("div");
     this.root.className = "hud";
-    const skin = driver.consoleSkin();
+    const skin = driver.consoleSkinned();
     this.root.append(
       this.buildConsole(skin),
       this.buildCheatPanel(),
@@ -571,6 +660,35 @@ export class GameHud {
       this.cmdTooltip.classList.add("skinned");
     }
     this.applyStatBarSkin();
+    this.applyConsoleWidgetSkin();
+  }
+
+  /** Hand the console's widget art to the stylesheet: the training-queue border, the two
+   *  progress-bar frames, the tinted big-bar fills and the inventory cover. All of it is
+   *  named by war3skins KEY (`CONSOLE_ART`) so the race sections apply. */
+  private applyConsoleWidgetSkin(): void {
+    const url = (key: string): string | null => this.driver.blpUrl(this.driver.skinPath(key));
+    const queue = url(CONSOLE_ART.queueBorder);
+    const barBorder = url(CONSOLE_ART.bigBarBorder);
+    const barFill = this.driver.blpCanvas(this.driver.skinPath(CONSOLE_ART.bigBarFill));
+    if (!queue || !barBorder || !barFill) return; // no install: the CSS placeholders stand
+    const root = document.documentElement.style;
+    root.setProperty("--hud-queue-border", `url(${queue})`);
+    root.setProperty("--hud-bigbar-border", `url(${barBorder})`);
+    // The big-bar fill ships grey, for the engine to multiply by whichever bar is using it —
+    // the same trick the floating status bars use, so it bakes the same way.
+    for (const [name, tint] of Object.entries(BIGBAR_TINT)) {
+      root.setProperty(`--hud-bigbar-${name}`, `url(${bakeStatBarFill(barFill, tint)})`);
+    }
+    const buildBorder = url(CONSOLE_ART.buildBarBorder);
+    const buildFill = url(CONSOLE_ART.buildBarFill);
+    if (buildBorder && buildFill) {
+      root.setProperty("--hud-buildbar-border", `url(${buildBorder})`);
+      root.setProperty("--hud-buildbar-fill", `url(${buildFill})`);
+    }
+    const cover = url(CONSOLE_ART.inventoryCover);
+    if (cover) root.setProperty("--hud-inventory-cover", `url(${cover})`);
+    document.body.classList.add("hud-widget-skinned");
   }
 
   /** Tint the status-bar slab once per bar colour and hand the four to the stylesheet.
@@ -582,7 +700,7 @@ export class GameHud {
     if (!fill) return; // no install mounted: the CSS placeholder bar stands
     const root = document.documentElement.style;
     for (const [state, tint] of Object.entries(STATBAR_TINT)) {
-      root.setProperty(`--statbar-${state}`, `url(${bakeStatBarFill(fill, tint)})`);
+      root.setProperty(`--statbar-${state}`, `url(${bakeStatBarFill(fill, tint, STATBAR_ROWS)})`);
     }
     document.body.classList.add("hud-statbar-skinned");
   }
@@ -776,10 +894,10 @@ export class GameHud {
 
   // --- construction ---------------------------------------------------------
 
-  // The top bar used to be built here. All of it is the game's own frames now — the console
-  // strip's chrome, the Quests/Menu/Allies/Chat buttons and the resource readout come from
-  // ConsoleUI/UpperButtonBar/ResourceBar.fdf, and the day/night medallion hangs in the gap
-  // between them. See ui/topBar.ts.
+  // The console's CHROME used to be built here. All of it is the game's own frames now — both
+  // bands of the console art, the Quests/Menu/Allies/Chat buttons and the resource readout come
+  // from ConsoleUI/UpperButtonBar/ResourceBar.fdf, and the day/night medallion hangs in the gap
+  // between them. See ui/consoleUi.ts. What stays here is what goes IN the console's sockets.
 
   /** The canvas inside the portrait frame — the host renders the selected
    *  unit's animated portrait model into it. */
@@ -787,9 +905,11 @@ export class GameHud {
     return this.portraitCanvasEl;
   }
 
-  private buildConsole(skin: { consoleUrl: string; consoleAspect: number } | null): HTMLDivElement {
-    // Visual background rectangle that matches the console dimensions but
-    // without the skinned art. It sits behind the real console element.
+  private buildConsole(skinned: boolean): HTMLDivElement {
+    // Visual background rectangle for the PLACEHOLDER console — the strip the HUD draws for
+    // itself when there is no install. With one mounted, the black behind the console's
+    // cut-outs is laid in under the art by ui/consoleUi.ts, which is the only place it can
+    // go: the HUD stacks over that art and a rect here would cover it.
     const bg = document.createElement("div");
     bg.className = "hud-console-background";
 
@@ -797,35 +917,43 @@ export class GameHud {
     console_.className = "hud-console";
     const minimap = this.buildMinimap();
     const { portraitWrap, infoText } = this.buildInfoPanel();
-    const inventory = this.buildInventory(!!skin);
+    const inventory = this.buildInventory(skinned);
     const command = this.buildCommandCard();
     console_.append(minimap, portraitWrap, infoText, inventory, command);
-    if (skin) {
-      // The visible console uses the skinned art.
-      console_.classList.add("hud-console-skinned");
-      console_.style.backgroundImage = `url(${skin.consoleUrl})`;
-      // Keep the console at its NATURAL aspect ratio, centred, and let the sides
-      // letterbox on widescreen — never stretch it. Height is capped so a wide
-      // monitor doesn't blow it up; width follows from the aspect.
+    // The crest that replaces the six slots when the selection carries nothing. LAST, so it
+    // paints over them; only the console art's own version of this corner is under it.
+    this.invCover = document.createElement("div");
+    this.invCover.className = "hud-inventory-cover";
+    this.invCover.hidden = true;
+    if (skinned) console_.append(this.invCover);
+    if (skinned) {
+      // The chrome itself is ui/consoleUi.ts's FDF screen, drawn UNDER this element; all this
+      // one does is give the widgets the same box to be a percentage of. That box is the
+      // file's own: 0.8 wide × CONSOLE_BAND_H tall of the 0.6-tall UI space, held at 4:3 and
+      // centred exactly as the FDF screen holds it (fdf/render.ts centreBox).
       //
-      // The aspect goes on the HUD ROOT, not on the console: --console-h is derived from
-      // it (see the stylesheet) and anything that has to sit clear of the console — the
-      // error line — needs to read that height too. Set it here and only the console
-      // could see it.
-      this.root.style.setProperty("--console-aspect", String(skin.consoleAspect));
+      // The two sizes go on the HUD ROOT, not on the console: --console-h is what anything
+      // that must sit clear of the console — the error line, the chat column — reads to know
+      // where the console's top edge is. Set it here and only the console could see it.
+      console_.classList.add("hud-console-skinned");
+      this.root.style.setProperty("--console-h", `calc(var(--stage-h) * ${CONSOLE_BAND_H / UI_HEIGHT})`);
+      this.root.style.setProperty("--console-w", `calc(var(--stage-h) * ${UI_WIDTH / UI_HEIGHT})`);
       this.root.classList.add("hud-skinned-console");
 
-      place(minimap, ZONES.minimap);
-      place(portraitWrap, ZONES.portrait);
-      place(infoText, ZONES.info);
-      place(inventory, ZONES.inventory);
-      place(command, ZONES.command);
+      place(minimap, CONSOLE_ZONES.minimap);
+      place(portraitWrap, CONSOLE_ZONES.portrait);
+      place(infoText, CONSOLE_ZONES.info);
+      place(inventory, CONSOLE_ZONES.inventory);
+      place(command, CONSOLE_ZONES.command);
+      place(this.invCover, CONSOLE_INVENTORY_COVER);
+      this.invCover.classList.remove("hud-zone"); // decoration: it must not eat the clicks
+      this.invCover.style.pointerEvents = "none";
     }
 
     // Wrapper holds the background and the real console; DOM order ensures the
     // background sits behind the console element.
     const wrapper = document.createElement("div");
-    wrapper.append(bg, console_);
+    wrapper.append(...(skinned ? [console_] : [bg, console_]));
     return wrapper as unknown as HTMLDivElement;
   }
 
@@ -1407,6 +1535,10 @@ export class GameHud {
    *  enough to run each frame; only touches the DOM when a slot changed. */
   private refreshInventory(): void {
     const inv = this.driver.inventory();
+    // No inventory at all (rts.inventorySlots() returns nothing for a unit that has no
+    // pockets, which in melee means everything but a hero) — the console wears its crest
+    // instead, exactly as the real client does.
+    this.invCover.hidden = inv.length > 0;
     // Cooldown sweep every frame (cheap; the diff key ignores cooldown).
     for (let i = 0; i < this.invSlots.length; i++) {
       const s = inv[i] ?? null;

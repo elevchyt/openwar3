@@ -57,7 +57,7 @@ import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { ChatDialogOverlay } from "../ui/chatDialog";
 import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
-import { TopBar } from "../ui/topBar";
+import { ConsoleUi } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
 import {
   chatPrompt, chatRecipients, formatChatLine,
@@ -75,6 +75,7 @@ import { FdfLibrary } from "../ui/fdf/library";
 import { blpToCanvas, blpToDataUrl } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
 import { loadUpgradeRegistry, type UpgradeRegistry } from "../data/upgrades";
+import { parseWar3Skins, skinValue, WAR3SKINS } from "../data/war3skins";
 
 // Our race ids → the section names in the game's own skin table (UI\war3skins.txt), which
 // is what decorates a `DecorateFileNames` frame's textures. WC3 skins the in-game panels
@@ -631,8 +632,8 @@ export class MapViewerScene {
   private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
   private chatDialog: ChatDialogOverlay | null = null; // F12 — ChatDialog.fdf
   private questLog: QuestDialogOverlay | null = null; // F9 — QuestDialog.fdf
-  /** The console's upper strip — ConsoleUI + UpperButtonBar + ResourceBar, all from the FDF. */
-  private topBar: TopBar | null = null;
+  /** The console — both bands of ConsoleUI + UpperButtonBar + ResourceBar, all from the FDF. */
+  private consoleUi: ConsoleUi | null = null;
   /** war3map.w3i's name — the Quest Log's subtitle. May be a TRIGSTR_ until the script loads. */
   private mapDisplayName = "";
   /** The last FlashQuestDialogButton count the HUD was shown, so a new flash glows once. */
@@ -822,10 +823,9 @@ export class MapViewerScene {
   private bloodMageSpheresLoading = new Set<number>();
   private mq = new Float32Array(4);
   private loc3 = new Float32Array(3);
-  private consoleSkinCache:
-    | { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null }
-    | null
-    | undefined;
+  private consoleSkinCache: boolean | undefined;
+  /** UI\war3skins.txt, parsed once — see skinPath(). */
+  private skins: Map<string, Map<string, string>> | undefined;
   private strings!: CommandStrings; // Units\commandstrings.txt [Errors] — every refusal line
 
   private constructor(
@@ -4512,7 +4512,7 @@ export class MapViewerScene {
       chatPrompt: (target) =>
         chatPrompt(target, this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
       sendChat: (text, target) => this.sendChat(text, target),
-      setResources: (next) => this.topBar?.update(next),
+      setResources: (next) => this.consoleUi?.update(next),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
@@ -4555,7 +4555,8 @@ export class MapViewerScene {
         this.hud?.setArmed(!!this.rts?.orderMode); // enter "target to move" mode
       },
       minimapImage: () => this.minimap,
-      consoleSkin: () => this.consoleSkin(),
+      consoleSkinned: () => this.consoleSkinned(),
+      skinPath: (key) => this.skinPath(key),
       cheat: (kind) => this.rts?.cheat(kind) ?? false,
       cheatSelected: (kind) => this.rts?.cheatSelected(kind),
       toggleColliders: () => (this.showColliders = !this.showColliders),
@@ -4573,10 +4574,10 @@ export class MapViewerScene {
           .sort((a, b) => a.race.localeCompare(b.race) || a.name.localeCompare(b.name)),
       spawnTestHero: (typeId) => void this.spawnTestHero(typeId),
     };
-    this.topBar?.dispose();
+    this.consoleUi?.dispose();
     // Built BEFORE the HUD so the HUD's own layers (the day/night medallion that hangs in the
     // strip's gap, the message column) stack over the console chrome rather than under it.
-    this.topBar = new TopBar(ui, this.vfs, SKIN_SECTION[this.localRace], {
+    this.consoleUi = new ConsoleUi(ui, this.vfs, SKIN_SECTION[this.localRace], {
       openPanel: (panel) => {
         if (panel === "quests") this.questLog?.toggle();
         else if (panel === "menu") this.paused = this.gameMenu?.toggle() ?? false; // F10 pauses
@@ -4855,64 +4856,39 @@ export class MapViewerScene {
     scene.dncEnabled = 1;
   }
 
-  /** The console tiles are a texture ATLAS (verified by rendering it out): the
-   *  bottom band (y≈180–512) is the console proper (minimap frame, portrait
-   *  arch, inventory, command card), and the day/night clock is a round
-   *  medallion at the top-centre. Crop the console band (kept at its natural
-   *  aspect — never stretched; letterboxed on widescreen) and the clock
-   *  separately so the clock isn't cut off by the thin top bar. */
-  private consoleSkin(): { consoleUrl: string; consoleAspect: number; clockUrl: string; clockAspect: number; timeUrl: string | null } | null {
+  /**
+   * Is the console's real chrome on screen?
+   *
+   * The art itself is not this object's business any more — `ConsoleUi` mounts it straight
+   * out of `ConsoleUI.fdf` (ui/consoleUi.ts). The HUD only needs the yes/no, because the two
+   * layouts it can use are different: over the real console its widgets sit in the sockets
+   * punched through that art, and with no install mounted it falls back to its own CSS strip.
+   *
+   * This used to hand the HUD a hand-cropped ATLAS — the four tiles concatenated, then cut at
+   * a guessed row (`height * 0.352`) and drawn as a background. The file says where every one
+   * of those slices goes and which part of it to use; guessing put the band at the wrong
+   * height and the wrong aspect, and every widget rect was then fitted by eye to that guess.
+   */
+  private consoleSkinned(): boolean {
     if (this.consoleSkinCache !== undefined) return this.consoleSkinCache;
-    const dirs: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
-    const dir = dirs[this.localRace];
-    const tiles: HTMLCanvasElement[] = [];
-    for (let i = 1; i <= 4; i++) {
-      const bytes = this.vfs.rawBytes(`UI\\Console\\${dir}\\${dir}UITile0${i}.blp`);
-      const tile = bytes ? blpToCanvas(bytes) : null;
-      if (!tile) {
-        this.consoleSkinCache = null; // fall back to the CSS skin
-        return null;
-      }
-      tiles.push(tile);
-    }
-    const width = tiles.reduce((sum, t) => sum + t.width, 0);
-    const height = tiles[0].height;
-    const atlas = document.createElement("canvas");
-    atlas.width = width;
-    atlas.height = height;
-    const ctx = atlas.getContext("2d")!;
-    let x = 0;
-    for (const tile of tiles) {
-      ctx.drawImage(tile, x, 0);
-      x += tile.width;
-    }
-    // Crop a sub-rect of the atlas to its own data URL.
-    const crop = (sx: number, sy: number, sw: number, sh: number): string => {
-      const c = document.createElement("canvas");
-      c.width = sw;
-      c.height = sh;
-      c.getContext("2d")!.drawImage(atlas, -sx, -sy);
-      return c.toDataURL();
-    };
-    const consoleY = Math.round(height * 0.352); // ~180/512 — top of the console chrome
-    const consoleH = height - consoleY;
-    // Clock medallion: a SQUARE crop centred on the socket so the round frame
-    // isn't distorted (the medallion is circular; a wide crop squished it).
-    const clockSize = Math.round(height * 0.24);
-    const clockX = Math.round(width * 0.5 - clockSize / 2);
-    const clockW = clockSize;
-    const clockH = clockSize;
-    // The rotating sun/moon disc that sits inside the clock ring (Blizzard kept
-    // the "Human" filename inside every race folder).
-    const timeUrl = this.blpIcon(`UI\\Console\\${dir}\\HumanUITile-TimeIndicator.blp`);
-    this.consoleSkinCache = {
-      consoleUrl: crop(0, consoleY, width, consoleH),
-      consoleAspect: width / consoleH,
-      clockUrl: crop(clockX, 0, clockW, clockH),
-      clockAspect: clockW / clockH,
-      timeUrl,
-    };
+    // The same four files ConsoleUI.fdf's ConsoleTexture01…04 decorate to (war3skins.txt).
+    // Present ⇒ the FDF screen will have chrome to draw; absent ⇒ it will not.
+    this.consoleSkinCache = [1, 2, 3, 4].every((i) => this.vfs.exists(this.skinPath(`ConsoleTexture0${i}`)));
     return this.consoleSkinCache;
+  }
+
+  /** Resolve a `UI\war3skins.txt` skin key against the LOCAL player's race — the same lookup
+   *  the FDF's `DecorateFileNames` does, but synchronous and without a whole `FdfLibrary`,
+   *  because the HUD asks for these one at a time while it is being built. A key the table
+   *  doesn't have passes through, exactly as `FdfLibrary.decorate` lets a literal path do; a
+   *  value with no extension (the console tiles are stored that way) gets `.blp`. */
+  private skinPath(key: string): string {
+    if (!this.skins) {
+      const bytes = this.vfs.rawBytes(WAR3SKINS);
+      this.skins = bytes ? parseWar3Skins(new TextDecoder("latin1").decode(bytes)) : new Map();
+    }
+    const value = skinValue(this.skins, SKIN_SECTION[this.localRace], key) ?? key;
+    return /\.[a-z]{3,4}$/i.test(value) ? value : `${value}.blp`;
   }
 
   /** Keep the portrait canvas showing the selected unit's animated bust. */
@@ -6860,8 +6836,8 @@ export class MapViewerScene {
     this.chatDialog = null;
     this.questLog?.dispose();
     this.questLog = null;
-    this.topBar?.dispose();
-    this.topBar = null;
+    this.consoleUi?.dispose();
+    this.consoleUi = null;
     this.matchOver?.dispose();
     this.matchOver = null;
     this.paused = false;
