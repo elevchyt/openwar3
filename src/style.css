@@ -952,24 +952,31 @@ body.in-game .menu-panel { display: none; }
    human-xpbar-border.blp over human-bigbar-fill.blp. The fill ships grey for the engine to
    multiply, which ui/hud.ts does with the colours the 3D versions of these bars carry —
    XpBarConsole.mdx's rgb(139,0,131) and TimerBar.mdx's rgb(65,130,210). */
+/* The two textures are authored to overlay each other EXACTLY — the border's transparent
+   interior is rows 4…27, cols 4…251 of its 256×32 and the fill's lit capsule is rows 4…27,
+   cols 4…251 of its own — so the fill takes the frame's whole box with no inset at all. What
+   keeps the fill's own opaque black margin off the gold is stacking, not padding: the engine
+   draws the fill quad and then the border quad over it, so the border goes on a ::after here
+   rather than on the bar's background. The label's `z-index: 1` still puts it over both. */
 body.hud-widget-skinned .hud-xpbar {
   height: 13.6%;
   min-height: 12px;
   margin: 2px 0 4px;
-  background: var(--hud-bigbar-border) 0 0 / 100% 100% no-repeat;
+  background: none;
   border: none;
   border-radius: 0;
   box-shadow: none;
 }
+body.hud-widget-skinned .hud-xpbar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hud-bigbar-border) 0 0 / 100% 100% no-repeat;
+  pointer-events: none;
+}
 body.hud-widget-skinned .hud-xpbar-fill,
 body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill {
-  /* Inset to the frame's inner rect — the border art's gold runs ~2 of its 32 rows each
-     way. The fill's WIDTH is the bar's fraction, written inline, so it is a percentage of
-     the whole bar rather than of the inner rect; capping it at the inner rect's width is
-     what keeps a full bar from painting over the gold end cap. The ~1.6% that costs a
-     part-full bar is a third of a pixel at this size. */
-  inset: 6% auto 6% 1.6%;
-  max-width: 96.8%;
+  inset: 0;
   background: var(--hud-bigbar-xp) 0 0 / 100% 100% no-repeat;
   box-shadow: none;
 }
@@ -1154,21 +1161,24 @@ body.hud-widget-skinned .hud-progress {
   top: 30%;
   width: auto;
   height: 15%;
-  background: var(--hud-buildbar-border) 0 0 / 100% 100% no-repeat;
+  background: none;
   border: none;
   border-radius: 0;
   box-shadow: none;
 }
-/* Inset to the frame's inner rect, and by TOP/BOTTOM rather than a margin: a percentage
-   margin resolves against the containing block's WIDTH, so on a bar this wide it pushed the
-   fill clean out of the frame's `overflow: hidden` and nothing drew at all. */
+/* Same pair, same relationship: border transparent rows 4…11 / cols 4…123 of its 128×16,
+   fill lit rows 4…11 / cols 4…123 of its own. Frame over fill, no inset. */
+body.hud-widget-skinned .hud-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hud-buildbar-border) 0 0 / 100% 100% no-repeat;
+  pointer-events: none;
+}
 body.hud-widget-skinned .hud-progress-fill {
   position: absolute;
-  left: 1.6%;
-  top: 14%;
-  bottom: 14%;
+  inset: 0;
   height: auto;
-  max-width: 96.8%;
   border-radius: 0;
   background: var(--hud-buildbar-fill) 0 0 / 100% 100% no-repeat;
   box-shadow: none;
