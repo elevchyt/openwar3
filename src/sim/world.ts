@@ -760,6 +760,10 @@ export interface SimUnit {
   hasReservation: boolean;
   resKind: "gold" | "lumber" | null; // active harvest target kind
   resId: number; // mine/tree id being harvested
+  /** Consecutive re-paths a gatherer has spent trying to actually REACH its node/depot
+   *  after stopping short of it. Bounded so a boxed-in gatherer still parks and works
+   *  its node, rather than re-flooding A* every tick (see arriveAtNode, issue #89). */
+  nodeRetries: number;
   workT: number; // chop/mine timer
   inMine: boolean; // inside the gold mine (renderer hides the unit)
   /** WHICH mine holds it while `inMine`. The emerge branch clears THAT mine's one-worker
@@ -1101,7 +1105,15 @@ const REPATH_POLL = 0.25;
 const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
 // Resource gathering (community-documented WC3 values; docs/REFERENCES.md).
 const GOLD_PER_TRIP = 10;
-const MINE_TIME = 1.0; // seconds a worker spends inside the mine
+// Gold Mine ability `Agld` in AbilityData.slk — its unlabelled Data columns are named by
+// AbilityMetaData.slk + UI\WorldEditStrings.txt: DataA "Max Gold" 12500, DataB "Mining
+// Duration" 1, DataC "Mining Capacity" 1. Capacity 1 is the `SimMine.busy` latch: a classic
+// gold mine holds exactly ONE worker at a time and the rest queue at the rim.
+const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB)
+/** How many times a gatherer that came to rest SHORT of its node re-issues the approach
+ *  before parking where it stands (arriveAtNode). Small: two honest A* attempts per leg
+ *  of the round trip beat both a fake arrival and a per-tick re-flood. */
+const NODE_REPATH_TRIES = 2;
 const TREE_LUMBER = 50; // lumber a standard tree yields before falling
 // Tree hit points, separate from lumber: harvesting drains `lumber`, but area
 // spells that list `tree` in Targets Allowed (Flame Strike) burn a tree down by
@@ -2897,6 +2909,7 @@ export class SimWorld {
       | "hasReservation"
       | "resKind"
       | "resId"
+      | "nodeRetries"
       | "workT"
       | "inMine"
       | "insideBuild"
@@ -3074,6 +3087,7 @@ export class SimWorld {
       hasReservation: false,
       resKind: null,
       resId: 0,
+      nodeRetries: 0,
       workT: 0,
       inMine: false,
       insideBuild: false,
@@ -4058,10 +4072,8 @@ export class SimWorld {
       // inside the mine's own footprint, so the pathfinder snapped the goal to the first
       // walkable cell of its scan (always the same corner) and the worker walked around
       // the mine to enter from behind (issue #63). The near rim is the shortest path in.
-      const dx = u.x - mine.x;
-      const dy = u.y - mine.y;
-      const d = Math.hypot(dx, dy) || 1;
-      this.pathTo(u, mine.x + (dx / d) * (mine.radius + u.radius), mine.y + (dy / d) * (mine.radius + u.radius));
+      const [tx, ty] = this.mineStandSpot(u, mine, u.x - mine.x, u.y - mine.y);
+      this.pathTo(u, tx, ty);
       return;
     }
     const tree = this.trees.get(u.resId);
@@ -4073,11 +4085,47 @@ export class SimWorld {
    *  toward the nearest hall and form the mine→hall line (WC3). */
   private mineApproach(u: SimUnit, mine: SimMine): [number, number] {
     const depot = this.nearestGoldDepot(u);
-    if (!depot) return [mine.x, mine.y];
-    const dx = depot.x - mine.x;
-    const dy = depot.y - mine.y;
-    const d = Math.hypot(dx, dy) || 1;
-    return [mine.x + (dx / d) * (mine.radius + u.radius), mine.y + (dy / d) * (mine.radius + u.radius)];
+    if (!depot) return this.mineStandSpot(u, mine, u.x - mine.x, u.y - mine.y);
+    return this.mineStandSpot(u, mine, depot.x - mine.x, depot.y - mine.y);
+  }
+
+  /** How far from a mine's CENTRE a worker has to stand for its own reservation block to
+   *  clear the mine's footprint, along an axis. `mine.radius` is the half-width of that
+   *  footprint (mapViewer sizes it off the blocked extent of `16x16Goldmine.tga`), and a
+   *  stopped unit occupies an n×n block of its own — so the two half-widths add, plus half
+   *  a cell so the blocks never merely touch. */
+  private mineStandDist(u: SimUnit, mine: SimMine): number {
+    const half = Math.max(u.radius, (Math.max(u.footprint, 1) * PATHING_CELL) / 2);
+    return mine.radius + half + PATHING_CELL / 2;
+  }
+
+  /** A spot beside the mine, in direction (dirX, dirY), that the worker can actually STAND
+   *  on and path off of.
+   *
+   *  The mine's pathing footprint is a SQUARE of half-extent `radius`, so projecting onto a
+   *  CIRCLE of that radius lands INSIDE the square on every diagonal — unwalkable ground.
+   *  Even on an axis it lands flush against the rim, where the worker's own 2×2 clearance
+   *  can't fit and A* therefore finds no route at all. A worker that emerged there was stuck
+   *  for good: every pathTo failed, so it never walked again (issue #89 — and because
+   *  arriveAtNode counted "not moving" as "arrived", it kept banking gold from the rim,
+   *  which is why the income hid the frozen workers).
+   *
+   *  So: project onto the SQUARE (Chebyshev — scale the direction until its dominant axis
+   *  clears the rim), then snap onto a reservation block that is genuinely free, spiralling
+   *  out past whoever is already parked there. */
+  private mineStandSpot(u: SimUnit, mine: SimMine, dirX: number, dirY: number): [number, number] {
+    const m = Math.max(Math.abs(dirX), Math.abs(dirY)) || 1;
+    const reach = this.mineStandDist(u, mine);
+    const x = mine.x + (dirX / m) * reach;
+    const y = mine.y + (dirY / m) * reach;
+    const n = u.footprint;
+    if (n <= 0) return [x, y];
+    const [sx, sy] = this.grid.snapForFootprint(x, y, n);
+    const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+    if (this.blockFree(cx0, cy0, n)) return [sx, sy];
+    // Terrain-only reachability line: the workers already queued at the rim are exactly
+    // what we're spiralling past, so letting THEIR tiles veto the hop would defeat it.
+    return this.nearestFreeBlock(sx, sy, n, 8, false) ?? [sx, sy];
   }
 
   /** Nearest gold drop-off (town hall) of the worker's owner — the anchor for the
@@ -7640,11 +7688,11 @@ export class SimWorld {
         this.stop(u.id);
         return;
       }
-      // Walk up to the mine and duck inside from WHATEVER side we reached — the
-      // reach hugs the footprint edge (radius + own body) with a hair of slack so
-      // the worker visibly touches the mine before it vanishes. (It re-emerges on
-      // the hall-facing side; see the emerge branch above.)
-      if (!this.arriveAtNode(u, mine.x, mine.y, mine.radius + u.radius + 8)) return;
+      // Walk up to the mine and duck inside from WHATEVER side we reached — the reach
+      // is the stand-off a worker's own cell block needs beside the footprint (see
+      // mineStandDist), plus a cell of slack for whoever had to shuffle a tile over.
+      // (It re-emerges on the hall-facing side; see the emerge branch above.)
+      if (!this.arriveAtNode(u, mine.x, mine.y, this.mineStandDist(u, mine) + PATHING_CELL, () => this.pathToNode(u))) return;
       if (mine.busy) return; // parked at the entrance, waiting our turn (no re-path)
       mine.busy = true;
       u.inMine = true;
@@ -7727,12 +7775,27 @@ export class SimWorld {
   /** Latch a worker as "parked at the node". The approach path was issued once
    *  at order time (pathToNode), so here we only need to wait for arrival: still
    *  moving → keep walking; within `reach` or arrived (best-effort path ended)
-   *  → park in place (no snap, no re-path — this is what killed the jitter). */
-  private arriveAtNode(u: SimUnit, x: number, y: number, reach: number): boolean {
+   *  → park in place (no snap, no re-path — this is what killed the jitter).
+   *
+   *  `repath` re-issues the approach when the worker came to rest SHORT of the node.
+   *  Without it, "stopped" alone counted as "arrived", so a worker whose path failed
+   *  banked its load — or ducked into the mine — from wherever it happened to stand:
+   *  the frozen-worker-with-rising-gold of issue #89. Bounded by `nodeRetries`, so a
+   *  genuinely boxed-in gatherer still parks and works its node instead of standing
+   *  idle or re-flooding A* every tick. The budget resets on every latch, so each
+   *  round trip gets a fresh pair of attempts. */
+  private arriveAtNode(u: SimUnit, x: number, y: number, reach: number, repath?: () => void): boolean {
     if (u.atNode) return true;
-    if (u.moving && Math.hypot(x - u.x, y - u.y) > reach) return false;
+    const short = Math.hypot(x - u.x, y - u.y) > reach;
+    if (u.moving && short) return false;
+    if (short && repath && u.nodeRetries < NODE_REPATH_TRIES) {
+      u.nodeRetries++;
+      repath();
+      if (u.moving) return false; // walking again — not there yet
+    }
     this.settle(u, false);
     u.atNode = true;
+    u.nodeRetries = 0;
     return true;
   }
 
@@ -7754,7 +7817,7 @@ export class SimWorld {
     // one back corner, and the arrive-then-deposit contract stops them circling
     // a town hall they can't quite touch.
     const [ax, ay] = this.depotApproach(u, depot);
-    if (!this.arriveAtNode(u, ax, ay, u.radius + DEPOSIT_RANGE)) return;
+    if (!this.arriveAtNode(u, ax, ay, u.radius + DEPOSIT_RANGE, () => this.pathTo(u, ax, ay))) return;
     const stash = this.stashOf(u.owner);
     stash.gold += w.carryGold;
     stash.lumber += w.carryLumber;
