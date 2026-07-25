@@ -10,6 +10,7 @@ import type { MinimapPing } from "../jass/runtime";
 import { escapeHtml, wc3ToHtml } from "./wc3Text";
 
 import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
+import type { HeroBarEntry } from "../game/rts";
 import { CONSOLE_BAND_H, type ConsoleResources } from "./consoleUi";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 
@@ -163,6 +164,9 @@ export interface HudDriver {
   recallControlGroup(key: string, jump: boolean): void;
   /** F1/F2/F3 — select hero `index`; `jump` (double-tap) also centres the camera. */
   selectHero(index: number, jump: boolean): void;
+  /** The hero bar's buttons: the local player's living heroes in hire order, the order
+   *  F1/F2/F3 also count in. */
+  heroBar(): HeroBarEntry[];
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
   /** Run a command-card button by id. */
@@ -381,6 +385,49 @@ const TOOLTIP_COST_ICON = {
 // its pixels come back 0,255,0 / 0,151,0 / … — the texture's own 255 / 151 / … rows times a
 // PURE green. Hence the tints below.
 const STATBAR_FILL = "UI\\Feedback\\HPBarConsole\\human-healthbar-fill.blp";
+
+/**
+ * The hero bar in the screen's top-left corner (issue #95) — one button per hero you own,
+ * stacked downward in hire order, each with an HP and a mana bar under it.
+ *
+ * **It has no FDF.** `CGameUI` builds and places it in code: there is no HeroBar frame in any
+ * `UI\FrameDef\` file, which is also what the community finds when it tries to move the
+ * buttons (hiveworkshop "How to move top left hero buttons (ORIGIN_FRAME_HERO_BUTTON)" —
+ * they stick to the left of the bar and distribute down it, and 7 is the most it holds).
+ * So the geometry below is measured off a screenshot of the real client rather than read
+ * out of a file: the reference image on issue #95, whose one button comes out
+ *
+ *     button   69 × 68 px, 3 px in from the screen's left edge
+ *     bars     72 × 17 px starting 1 px under it — 1 px black frame, a 6 px HP bar,
+ *              a 2 px gap, a 6 px mana bar
+ *
+ * Those are pixels at **1080p**, which is what the shot has to be: the vertical pitch they
+ * imply (85 px) has to fit the bar's seven slots between the top strip and the middle of the
+ * screen, and only a 1080-tall capture does (595 px = 55% of the height; at 720 the seventh
+ * hero would be down in the console). Expressed here as a fraction of the 0.6-tall UI space
+ * so the bar scales with the window like the rest of the console.
+ *
+ * The one number NOT in that shot is the gap between two buttons — it holds a single hero.
+ * `HERO_BAR.gap` is eyeballed to keep the stack reading as separate buttons.
+ */
+const HERO_PX = UI_HEIGHT / 1080; // one screen pixel of the reference capture, in world units
+const HERO_BAR = {
+  left: 3 * HERO_PX,
+  top: 0.032 + 2 * HERO_PX, // clear of the upper button bar's strip (ConsoleUI.fdf: 0.032 tall)
+  button: 68 * HERO_PX, // the icon + its frame (square)
+  bars: 17 * HERO_PX, // the HP/mana block under it
+  barsWidth: 72 * HERO_PX,
+  barGap: 1 * HERO_PX, // button bottom → bars top
+  gap: 8 * HERO_PX, // between two buttons: NOT measured (see above)
+  max: 7, // the most buttons the real bar holds
+} as const;
+
+/** The glow that lights a hero's button while it has unspent skill points — `war3skins.txt`
+ *  `HeroBarPointModel` = `UI\Buttons\HeroLevel\HeroLevel.mdx`, whose one texture this is: a
+ *  soft white rounded-square outline the model pulses (the engine calls the frame it drives
+ *  ORIGIN_FRAME_HERO_BUTTON_INDICATOR). We pulse the texture in CSS instead of running the
+ *  model — same tell, no scene. The count itself rides the corner, as issue #95 asks. */
+const HERO_GLOW = "UI\\Buttons\\HeroLevel\\HeroLevel-Border.blp";
 
 // The console's own widget art, named by `UI\war3skins.txt` KEY rather than by path so the
 // per-race entries take effect (the inventory cover is the one the four races differ on).
@@ -615,6 +662,16 @@ export class GameHud {
   private mmH = MINIMAP_SIZE;
   private idleWorkerBadge!: HTMLButtonElement;
   private idleWorkerCount!: HTMLSpanElement;
+  /** The hero bar's seven slots (issue #95), built once and shown per living hero. */
+  private heroSlots: Array<{
+    slot: HTMLDivElement;
+    btn: HTMLButtonElement;
+    glow: HTMLDivElement;
+    points: HTMLDivElement;
+    mana: HTMLDivElement;
+    hpFill: HTMLDivElement;
+    manaFill: HTMLDivElement;
+  }> = [];
   private idleIconSet = false; // worker icon lazily applied once
   private cmdTooltip!: HTMLDivElement; // the ONE tooltip slab, above the command card
   private invHover = -1; // inventory slot under the cursor (-1 = none), so its tooltip can refresh
@@ -658,6 +715,7 @@ export class GameHud {
     const skin = driver.consoleSkinned();
     this.root.append(
       this.buildConsole(skin),
+      this.buildHeroBar(),
       this.buildCheatPanel(),
       this.buildMessageLog(),
       this.buildErrorLine(),
@@ -689,6 +747,12 @@ export class GameHud {
       document.documentElement.style.setProperty("--hud-tooltip-fill", fill);
       document.body.classList.add("hud-tooltip-skinned");
       this.cmdTooltip.classList.add("skinned");
+    }
+    // The hero bar's skill-point glow, straight off HeroLevel.mdx's own texture.
+    const glow = this.driver.blpUrl(HERO_GLOW);
+    if (glow) {
+      this.root.style.setProperty("--hud-hero-glow", `url(${glow})`);
+      this.root.classList.add("hud-heroglow-skinned");
     }
     this.applyStatBarSkin();
     this.applyConsoleWidgetSkin();
@@ -792,6 +856,7 @@ export class GameHud {
     }
     this.refreshCommandCard();
     this.refreshInventory();
+    this.refreshHeroBar();
     this.updateIdleWorkers();
   }
 
@@ -807,6 +872,7 @@ export class GameHud {
     this.updateTexts();
     this.refreshCommandCard();
     this.refreshInventory();
+    this.refreshHeroBar(); // a hero picked by hotkey shows its bars in the same tick as the card
   }
 
   /** Show/hide the idle-worker button and update its count; apply the race worker
@@ -1322,6 +1388,91 @@ export class GameHud {
     });
     box.appendChild(this.idleWorkerBadge);
     return box;
+  }
+
+  /**
+   * The hero bar: up to seven buttons hanging down the screen's top-left corner.
+   *
+   * Built once, at full count, and shown/hidden per hero — the bar is a fixed ladder of slots
+   * in the real game (the buttons distribute down it and never re-arrange), so nothing here
+   * is re-created as heroes are hired or die.
+   */
+  private buildHeroBar(): HTMLDivElement {
+    const bar = document.createElement("div");
+    bar.className = "hud-herobar";
+    // Every size the bar uses, handed to the stylesheet as a length so the whole thing scales
+    // with the game's box (the 0.6-tall UI space maps to --stage-h) instead of the window.
+    const px = (v: number): string => `calc(var(--stage-h) * ${v / UI_HEIGHT})`;
+    bar.style.setProperty("--hero-left", px(HERO_BAR.left));
+    bar.style.setProperty("--hero-top", px(HERO_BAR.top));
+    bar.style.setProperty("--hero-btn", px(HERO_BAR.button));
+    bar.style.setProperty("--hero-bars", px(HERO_BAR.bars));
+    bar.style.setProperty("--hero-bars-w", px(HERO_BAR.barsWidth));
+    bar.style.setProperty("--hero-bar-gap", px(HERO_BAR.barGap));
+    bar.style.setProperty("--hero-gap", px(HERO_BAR.gap));
+    for (let i = 0; i < HERO_BAR.max; i++) {
+      const slot = document.createElement("div");
+      slot.className = "hud-hero-slot";
+      slot.hidden = true;
+      const btn = document.createElement("button");
+      btn.className = "hud-hero-btn";
+      const glow = document.createElement("div"); // skill-point pulse (HeroLevel.mdx's texture)
+      glow.className = "hud-hero-glow";
+      const points = document.createElement("div"); // unspent skill points, bottom-left
+      points.className = "hud-hero-points";
+      btn.append(glow, points);
+      const bars = document.createElement("div");
+      bars.className = "hud-hero-bars";
+      const hp = document.createElement("div");
+      hp.className = "hud-hero-bar";
+      const hpFill = document.createElement("div");
+      hpFill.className = "hud-hero-fill";
+      hp.appendChild(hpFill);
+      const mana = document.createElement("div");
+      mana.className = "hud-hero-bar";
+      const manaFill = document.createElement("div");
+      manaFill.className = "hud-hero-fill mana";
+      mana.appendChild(manaFill);
+      bars.append(hp, mana);
+      slot.append(btn, bars);
+      bar.appendChild(slot);
+      this.heroSlots.push({ slot, btn, glow, points, mana, hpFill, manaFill });
+      // A click selects that hero, a double-click also jumps the camera to it — the mouse
+      // half of F1/F2/F3, which count in this same order. Bound through `onPress` so the
+      // button sinks under the press exactly as a command-card button does.
+      onPress(btn, () => {
+        this.driver.selectHero(i, false);
+        this.refreshSelectionNow();
+      });
+      btn.addEventListener("dblclick", () => this.driver.selectHero(i, true));
+    }
+    return bar;
+  }
+
+  /** Push the current heroes onto the bar's slots. Called every frame: seven slots of
+   *  bar widths is cheaper than working out whether anything moved. */
+  private refreshHeroBar(): void {
+    const heroes = this.driver.heroBar();
+    for (let i = 0; i < this.heroSlots.length; i++) {
+      const s = this.heroSlots[i];
+      const h: HeroBarEntry | undefined = heroes[i];
+      if (!h) {
+        s.slot.hidden = true;
+        continue;
+      }
+      s.slot.hidden = false;
+      const url = h.icon ? this.driver.blpUrl(h.icon) : null;
+      s.btn.style.backgroundImage = url ? `url(${url})` : "";
+      const hpFrac = Math.max(0, Math.min(1, h.hpFrac));
+      s.hpFill.style.width = `${hpFrac * 100}%`;
+      // WC3 tints every status bar green→yellow→red by fraction, the hero bar's included.
+      s.hpFill.dataset.state = hpFrac > 0.6 ? "green" : hpFrac > 0.3 ? "yellow" : "red";
+      s.mana.hidden = h.manaFrac < 0; // a hero with no pool shows no mana bar
+      s.manaFill.style.width = `${Math.max(0, Math.min(1, h.manaFrac)) * 100}%`;
+      s.glow.hidden = h.skillPoints <= 0;
+      s.points.hidden = h.skillPoints <= 0;
+      if (h.skillPoints > 0) s.points.textContent = String(h.skillPoints);
+    }
   }
 
   /** Contain-fit the map picture inside the minimap frame and centre it: scale it up

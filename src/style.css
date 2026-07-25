@@ -573,6 +573,124 @@ body.in-game .menu-panel { display: none; }
 }
 .hud-idle-worker:hover { border-color: #ffe08a; filter: brightness(1.15); }
 
+/* --- Hero bar (issue #95): your heroes stacked down the top-left corner, each an icon
+   with an HP and a mana bar under it. Every length comes from ui/hud.ts HERO_BAR, which
+   measured them off the real client; nothing here picks a size of its own.
+
+   The offsets are the HUD's own corner, which IS the game's frame: in a match #ui is the
+   16:9 stage box and carries a transform, so .hud's `position: fixed` resolves against that
+   box rather than the window. The bar therefore sits in the picture's corner and never
+   drifts out into the letterbox. */
+.hud-herobar {
+  position: absolute;
+  left: var(--hero-left);
+  top: var(--hero-top);
+  display: flex;
+  flex-direction: column;
+  gap: var(--hero-gap);
+  pointer-events: none; /* only the buttons take the mouse */
+  z-index: 4;
+}
+.hud-hero-slot { width: var(--hero-bars-w); }
+/* The frame around the icon. `war3skins.txt` names one (HeroBarBorder =
+   human-hero-border.blp) that is NOT in the 1.27a archives at all, so the real client
+   falls back to its built-in grey bevel — a dark hairline, a light inner ring — which is
+   what the reference screenshot shows and what these two inset rings reproduce. */
+.hud-hero-btn {
+  box-sizing: border-box;
+  display: block;
+  width: var(--hero-btn);
+  height: var(--hero-btn);
+  position: relative;
+  /* 1 dark + 1 mid + 2 light rows of frame around a 68px button, kept as fractions of the
+     button so the bevel scales with the window instead of fattening at small sizes. */
+  padding: calc(var(--hero-btn) * 4 / 68);
+  border: 1px solid #08080a;
+  background-color: #000;
+  background-clip: content-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  box-shadow:
+    inset 0 0 0 calc(var(--hero-btn) / 68) #6d6c69,
+    inset 0 0 0 calc(var(--hero-btn) * 3 / 68) #b3b4b6;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.hud-hero-btn:hover { filter: brightness(1.12); }
+/* Sink under the press, exactly as a command-card button does. */
+.hud-hero-btn.pressed { transform: scale(0.98); }
+/* Unspent skill points: the pulsing glow the game drives with HeroLevel.mdx (its texture
+   is white-on-black additive art, so it goes on with `screen`), plus the count itself in
+   the bottom-left corner, which is what issue #95 asks for. */
+.hud-hero-glow {
+  position: absolute;
+  inset: calc(var(--hero-btn) * -2 / 68);
+  pointer-events: none;
+  background: var(--hud-hero-glow, none) 0 0 / 100% 100% no-repeat;
+  mix-blend-mode: screen;
+  animation: hero-glow-pulse 1.1s ease-in-out infinite alternate;
+}
+/* With no install mounted there is no texture to pulse — fall back to a soft ring so the
+   "you have a skill point" tell still reads. */
+.hud:not(.hud-heroglow-skinned) .hud-hero-glow {
+  box-shadow: inset 0 0 6px 2px rgba(255, 255, 255, 0.85);
+}
+@keyframes hero-glow-pulse {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+.hud-hero-points {
+  position: absolute;
+  left: calc(var(--hero-btn) * 4 / 68);
+  bottom: calc(var(--hero-btn) * 2 / 68);
+  /* Scales with the button (14px against the reference's 68px one), with a floor so the
+     count stays readable in a small window. */
+  font: 700 max(9px, calc(var(--hero-btn) * 14 / 68)) / 1 var(--game-font);
+  color: #f5e7b8;
+  text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
+  pointer-events: none;
+}
+/* The two bars: one black block under the button, a 6/17 tall track each with a 2/17 gap,
+   exactly as measured. The empty stretch of a bar IS the block showing through. */
+.hud-hero-bars {
+  width: var(--hero-bars-w);
+  height: var(--hero-bars);
+  margin-top: var(--hero-bar-gap);
+  padding: calc(var(--hero-bars) / 17) calc(var(--hero-bars-w) / 72);
+  box-sizing: border-box;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--hero-bars) * 2 / 17);
+}
+.hud-hero-bar {
+  position: relative;
+  height: calc(var(--hero-bars) * 6 / 17);
+  overflow: hidden;
+}
+/* Placeholder fill (no install): flat colour with the bar's shading faked, same as the
+   floating unit bars. */
+.hud-hero-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 100%;
+  background-color: #00c800;
+  background-image: linear-gradient(to bottom,
+    rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 22%, rgba(0, 0, 0, 0.3) 100%);
+}
+.hud-hero-fill[data-state="yellow"] { background-color: #c8c800; }
+.hud-hero-fill[data-state="red"] { background-color: #c80000; }
+.hud-hero-fill.mana { background-color: #0f0080; }
+/* The real slab, tinted per state by ui/hud.ts applyStatBarSkin — stretched across the
+   whole track and clipped by the fill's width, so its shading stays put as the bar drains
+   (the same rule the floating bars follow). */
+body.hud-statbar-skinned .hud-hero-fill {
+  background: var(--statbar-green) 0 0 / calc(var(--hero-bars-w) * 70 / 72) 100% no-repeat;
+}
+body.hud-statbar-skinned .hud-hero-fill[data-state="yellow"] { background-image: var(--statbar-yellow); }
+body.hud-statbar-skinned .hud-hero-fill[data-state="red"] { background-image: var(--statbar-red); }
+body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-mana); }
+
 /* F10 Game Menu — centred modal that dims the paused battlefield. */
 .game-menu-overlay {
   position: fixed;

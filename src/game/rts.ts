@@ -362,6 +362,15 @@ export interface SelIcon {
   owner: number;
 }
 
+/** One button of the hero bar in the screen's top-left corner (issue #95). */
+export interface HeroBarEntry {
+  simId: number;
+  icon: string; // BLP command icon path
+  hpFrac: number;
+  manaFrac: number; // -1 when the hero has no mana pool (no bar drawn)
+  skillPoints: number; // unspent skill points — >0 lights the button's glow
+}
+
 // The floating name slab WC3 draws above the unit under the cursor. Colours
 // measured off the real 1.27a client's mouseover shots: the owner (player) line
 // is red for an enemy, gold for an ally; the unit's own name and its level are
@@ -1507,17 +1516,47 @@ export class RtsController {
     return true;
   }
 
-  /** F1/F2/F3: select the (index+1)-th of the local player's heroes (stable order),
-   *  independent of the numbered control groups. Returns false if there's none. */
-  selectHero(index: number): boolean {
+  /**
+   * The local player's living heroes, in the order the hero bar (and F1/F2/F3) uses.
+   *
+   * WC3 locks that order to the sequence the heroes were hired/spawned in and never lets the
+   * player re-arrange it, so sim id — which only ever counts up as units are created — IS the
+   * order. Illusions are excluded: a Mirror Image is a hero by unit type, but it is a copy on
+   * a timer, not one of your heroes (see docs/illusions.md).
+   */
+  private localHeroes(): number[] {
     const heroes: number[] = [];
     for (const e of this.entries) {
       if (!e.isHero) continue;
       const u = this.sim.units.get(e.simId);
-      if (u && u.owner === this.localPlayer) heroes.push(e.simId);
+      if (u && u.owner === this.localPlayer && !u.isIllusion) heroes.push(e.simId);
     }
-    heroes.sort((a, b) => a - b);
-    const id = heroes[index];
+    return heroes.sort((a, b) => a - b);
+  }
+
+  /** The hero-bar buttons (issue #95): one per living local hero, in hire order, with the
+   *  two bars the button carries and the unspent skill points its glow is gated on. */
+  heroBar(): HeroBarEntry[] {
+    const out: HeroBarEntry[] = [];
+    for (const id of this.localHeroes()) {
+      const u = this.sim.units.get(id);
+      const e = this.byId.get(id);
+      if (!u || !e) continue;
+      out.push({
+        simId: id,
+        icon: this.registry.get(e.typeId)?.icon ?? "",
+        hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1,
+        manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : -1, // -1: no pool, so no mana bar
+        skillPoints: u.skillPoints,
+      });
+    }
+    return out;
+  }
+
+  /** F1/F2/F3: select the (index+1)-th of the local player's heroes (stable order),
+   *  independent of the numbered control groups. Returns false if there's none. */
+  selectHero(index: number): boolean {
+    const id = this.localHeroes()[index];
     if (id === undefined) return false;
     this.selected.clear();
     this.selected.add(id);

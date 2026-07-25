@@ -4540,6 +4540,7 @@ export class MapViewerScene {
       selectHero: (index, jump) => {
         if (this.rts?.selectHero(index) && jump) this.jumpToSelection();
       },
+      heroBar: () => this.rts?.heroBar() ?? [],
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
       inventory: () =>
