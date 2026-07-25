@@ -77,7 +77,14 @@ export interface SpellApi {
    *  fade duration; `delay` staggers a chain's bounces. Ends attach at each unit's own
    *  missile launch/impact height, so a bolt leaves the caster's hands and lands on the
    *  target's body rather than at their feet. */
-  emitLightning(id: string, from: SimUnit, to: SimUnit, life?: number, delay?: number): void;
+  emitLightning(id: string, from: SimUnit, to: SimUnit, life?: number, delay?: number, tag?: string): void;
+  /** Cut every live bolt carrying `tag` (see SimLightning.tag) — an interrupted channel
+   *  taking its tether down with it. */
+  stopLightning(tag: string): void;
+  /** The persistent models a given BUFF row hangs on its holder. An ability that lists
+   *  several buffs picks between them off its own numbers, and the role matters as much as
+   *  the flavour: the Drain's nine are caster/target/icon × life/mana/both. */
+  buffFxOf(buffId: string): BuffFx[];
   /** Paint a temporary ground decal at a point — an `Splats\UberSplatData.slk` row id
    *  (Thunder Clap's `THND`). The row carries the texture, its half-width `Scale`, and
    *  the BirthTime/PauseTime/Decay fade the renderer plays it through. Which ability
@@ -333,6 +340,26 @@ function bolts(def: AbilityDef): [string, string] {
   const primary = def.lightning[0] ?? "";
   return [primary, def.lightning[1] ?? primary];
 }
+
+/** The Drain's buff rows, by ROLE then by flavour (both, life, mana) — the order its
+ *  `BuffID1` list is written in (`Bdcb,Bdcl,Bdcm,Bdtb,Bdtl,Bdtm,Bdbb,Bdbl,Bdbm`, 1.27a
+ *  Units\AbilityData.slk). The `icon` trio carries no model at all: those rows exist only to
+ *  put BTNLifeDrain / BTNManaDrain on the info card, which is why they are named apart from
+ *  the two that do have art. See src/sim/spells.ts AHdr and docs/spell-fx.md. */
+const DRAIN_BUFFS = {
+  caster: ["Bdcb", "Bdcl", "Bdcm"],
+  target: ["Bdtb", "Bdtl", "Bdtm"],
+  icon: ["Bdbb", "Bdbl", "Bdbm"],
+} as const;
+
+/** The lightning tag a caster's drain tether carries, so an interrupted channel can cut it. */
+export function drainTag(casterId: number): string {
+  return `drain:${casterId}`;
+}
+
+/** The buff group every drain effect shares — the handle world.ts uses to strip a broken
+ *  channel's damage-over-time, heal-over-time and buff art off both ends at once. */
+export const DRAIN_GROUP = "drain";
 
 /** Seconds between a chain's bounces. Chain Lightning and Healing Wave visibly WALK down
  *  their chain rather than lighting every link at once, but — unlike Finger of Death
@@ -1440,20 +1467,47 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    const rate = d(lvl, 1, 15) || 15;
     const d0 = lvl.duration || 6;
-    api.applyBuff(t, { kind: "dot", group: "drain", timeLeft: d0, sourceId: caster.id, value: rate, ...fx(def) });
-    api.applyBuff(caster, { kind: "hot", group: "drain", timeLeft: d0, sourceId: caster.id, value: rate });
-    // The tether: the beam holds between caster and victim for the whole drain, its texture
-    // crawling BACK toward the caster (TexCoordScale is negative on all three drain rows).
-    // Which of `LightningEffect=DRAB,DRAL,DRAM` is which is decided by what the ability
-    // actually takes — dataA "Life Transferred Per Second", dataB "Mana Transferred Per
-    // Second": the Dark Ranger's Drain is life (DRAL), the Blood Mage's Siphon Mana is mana
-    // (DRAM), and an ability that takes both gets the combined beam (DRAB).
+    // What the drain TAKES decides everything it looks like. dataA is "Life Transferred Per
+    // Second" and dataB "Mana Transferred Per Second" (AbilityMetaData Ndr4/Ndr5), so the
+    // Dark Ranger's Drain is a life drain, the Blood Mage's Siphon Mana a mana one, and an
+    // ability that sets both is the combined drain. `flavour` indexes all three of the
+    // ability's art lists in that same order.
     const lifeRate = d(lvl, 0, 0);
     const manaRate = d(lvl, 1, 0);
-    const which = lifeRate > 0 && manaRate > 0 ? 0 : manaRate > 0 ? 2 : 1;
-    api.emitLightning(def.lightning[which] ?? def.lightning[0] ?? "", caster, t, d0);
+    const flavour = lifeRate > 0 && manaRate > 0 ? 0 : manaRate > 0 ? 2 : 1; // both | life | mana
+    // Nine buffs, and the FIRST one is the wrong one for everybody: `BuffID1 =
+    // Bdcb,Bdcl,Bdcm, Bdtb,Bdtl,Bdtm, Bdbb,Bdbl,Bdbm` is caster-trio, target-trio, then the
+    // info-card icons — each trio ordered both/life/mana. So the role picks the trio and the
+    // flavour picks within it: the victim of a Siphon Mana wears ManaDrainTarget, its caster
+    // ManaDrainCaster, and neither wears the green DrainCaster art that buffid1 alone gives
+    // (which is what put a life drain's swirl on a mana drain's victim).
+    const casterFx = api.buffFxOf(DRAIN_BUFFS.caster[flavour]);
+    const targetFx = api.buffFxOf(DRAIN_BUFFS.target[flavour]);
+    // A drain TRANSFERS: what leaves the victim arrives in the caster, at the same rate, for
+    // the same seconds. Life is a damage-over-time paired with a heal-over-time; mana is the
+    // same shape with the mana-regen buff, negative on the victim. A row that names neither
+    // (a custom ability with no data) falls back to a small life drain rather than doing
+    // nothing at all, which is what the old single-rate reading effectively did for everyone.
+    const life = lifeRate || (manaRate > 0 ? 0 : 15);
+    if (life > 0) {
+      api.applyBuff(t, { kind: "dot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: life, art: targetFx[0]?.path ?? "", fx: targetFx });
+      api.applyBuff(caster, { kind: "hot", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: life, art: casterFx[0]?.path ?? "", fx: casterFx });
+    }
+    if (manaRate > 0) {
+      // One set of models, not two: when a drain takes both, the life half above is already
+      // wearing the art.
+      const artT = life > 0 ? [] : targetFx;
+      const artC = life > 0 ? [] : casterFx;
+      api.applyBuff(t, { kind: "manaRegen", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: -manaRate, art: artT[0]?.path ?? "", fx: artT });
+      api.applyBuff(caster, { kind: "manaRegen", group: DRAIN_GROUP, timeLeft: d0, sourceId: caster.id, value: manaRate, art: artC[0]?.path ?? "", fx: artC });
+    }
+    // The tether: the beam holds between caster and victim for the whole drain, its texture
+    // crawling BACK toward the caster (TexCoordScale is negative on all three drain rows).
+    // `LightningEffect=DRAB,DRAL,DRAM` is the same both/life/mana order. Tagged with the
+    // caster, because a drain is CHANNELLED and an interrupted channel must cut its beam
+    // (world.ts tickDrains) rather than leave it hanging for the rest of the duration.
+    api.emitLightning(def.lightning[flavour] ?? def.lightning[0] ?? "", caster, t, d0, 0, drainTag(caster.id));
   },
 
   // Death Pact (Death Knight) — sacrifice a friendly non-hero unit to heal the

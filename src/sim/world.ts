@@ -21,7 +21,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, fx, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, fx, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -132,6 +132,11 @@ export interface SimLightning {
   /** Seconds before it appears — Finger of Death's "Graphic Delay", and what staggers a
    *  Chain Lightning's bounces so the bolt visibly walks down the chain. */
   delay: number;
+  /** An owner key, for a bolt that can end EARLY. A Drain's tether is strung for the
+   *  channel's full duration, but the channel can break — so the drain tags its bolt
+   *  `drain:<casterId>` and the sim asks the renderer to cut it (`drainLightningStops`).
+   *  A bolt with no tag simply lives out its `life`. */
+  tag?: string;
 }
 
 /** A unit type's weapon slots as the sim wants them (see WeaponSlotDef for the data behind
@@ -1192,7 +1197,12 @@ const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Fire, Starfall, Tranquility, Death and Decay, Stampede, Earthquake. NOT channelled
 // (fire-and-forget, caster free right after the cast): Flame Strike, Volcano, Locust
 // Swarm, Bladestorm (the Blademaster keeps moving), Immolation, Cluster Rockets.
-const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq"]);
+// Life Drain / Siphon Mana (AHdr) is a channel too, and the one whose channel is the WHOLE
+// spell: Liquipedia is explicit that the Dark Ranger's Drain "is a channeling spell" that
+// ends the moment she moves, attacks, casts again or is stunned, and that the life stops
+// transferring with it. Its channel length is the plain `Dur1` (6s Siphon Mana, 8s Drain) —
+// it schedules no wave field, so the teardown is tickDrains rather than tickSpellFields.
+const CHANNELED = new Set(["AHbz", "ANrf", "AEsf", "AEtq", "AUdd", "ANst", "AOeq", "AHdr"]);
 // Delayed-strike abilities that drop their Effectart (a ground "beware" warning) the
 // moment the cast WIND-UP begins — not when it lands — so it charges up in place and
 // REMAINS visible even if the cast is interrupted before ignition. Flame Strike's
@@ -1421,6 +1431,10 @@ export class SimWorld {
   // Drains, Finger of Death… Unlike an effect model these link TWO points and hold, so
   // each carries both ends and how long it lives. See SimLightning.
   private spellLightnings: SimLightning[] = [];
+  // Bolts asked to STOP early this frame, by tag (see SimLightning.tag) — an interrupted
+  // Drain cutting its tether. A separate queue rather than a flag on the bolt because the
+  // renderer holds the live bolt, not the sim.
+  private spellLightningStops: string[] = [];
   // A unit began casting: renderer plays the cast animation (spell/throw/slam) and
   // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
@@ -2685,7 +2699,16 @@ export class SimWorld {
             // unit belongs to whoever owned the building when the job finished, and on a LAN
             // host that is a REMOTE player as often as the local one (docs/multiplayer.md
             // Phase G item 5 — the drain used to spawn every training as `localPlayer`).
-            this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, owner: u.owner, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
+            //
+            // …except at a SHOP, where the building's owner is the wrong answer entirely: a
+            // Tavern is Neutral Passive, so a hero hired there was born neutral — hostile to
+            // the player who just paid 425 gold for her, and wearing the neutral team colour.
+            // The job already records its `buyer` (a Tavern's queue belongs to nobody, so the
+            // requirement tier needed it too); hiring is buying, and what you buy is yours.
+            // Gated on the shop rather than applied always so that a building which changes
+            // hands mid-training still hands its unit to whoever owns it NOW.
+            const owner = u.neutralPassive && job.buyer !== undefined ? job.buyer : u.owner;
+            this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, owner, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
           }
         }
       }
@@ -4954,7 +4977,12 @@ export class SimWorld {
   }
 
   private tickRegen(u: SimUnit, dt: number): void {
-    if (u.maxMana > 0 && u.mana < u.maxMana) u.mana = Math.min(u.maxMana, u.mana + u.manaRegen * dt);
+    // Clamped at BOTH ends, and not gated on "below full": a manaRegen buff may be NEGATIVE
+    // (Siphon Mana hangs one on its victim), and a full-mana target that never ticked could
+    // not be drained at all.
+    if (u.maxMana > 0 && (u.mana < u.maxMana || u.manaRegen < 0)) {
+      u.mana = Math.max(0, Math.min(u.maxMana, u.mana + u.manaRegen * dt));
+    }
     if (u.hp <= 0) return;
     if (u.hpRegen > 0) {
       if (u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.hpRegen * dt);
@@ -5668,6 +5696,58 @@ export class SimWorld {
     const d = def ?? (this.abilities ? this.abilityByCode(code) : undefined);
     if (!handler || !d) return;
     handler(this.spellApi, caster, d, Math.max(1, rank), ctx);
+    // A drain is a channel whose effect is a pair of buffs rather than a field, so it is
+    // recorded here — the one place that knows the caster AND the victim — for tickDrains to
+    // tear down if the channel breaks. Re-casting replaces the caster's own entry: WC3 lets
+    // one drain per caster, and the old buffs are re-applied over rather than stacked.
+    if (code === "AHdr" && ctx.targetId > 0) {
+      this.drains = this.drains.filter((x) => x.casterId !== caster.id);
+      this.drains.push({ casterId: caster.id, targetId: ctx.targetId });
+    }
+  }
+
+  /** Live Drain channels (Life Drain / Siphon Mana): caster → victim.
+   *
+   *  The drain's damage-over-time and the caster's matching heal are ordinary timed buffs,
+   *  which is right while the channel runs and wrong the moment it breaks — a buff does not
+   *  know its caster walked away. This is the same interrupt test tickSpellFields makes for
+   *  Blizzard and friends, applied to a channel whose effect lives on two units instead of in
+   *  a field: re-tasked away from "cast" with channel time left, stunned, dead, or started
+   *  another spell → strip the drain buffs off BOTH ends and cut the beam.
+   *
+   *  A channel that simply ran out is not an interrupt: `channelLeft` has reached 0 and the
+   *  buffs expire on their own clock the same tick, so they are left alone. */
+  private drains: Array<{ casterId: number; targetId: number }> = [];
+
+  private tickDrains(): void {
+    if (!this.drains.length) return;
+    let w = 0;
+    for (const dr of this.drains) {
+      const caster = this.units.get(dr.casterId);
+      const target = this.units.get(dr.targetId);
+      const pc = caster?.pendingCast;
+      const channelling = !!caster && caster.hp > 0 && !!pc && pc.code === "AHdr" && pc.channelLeft > 0 && caster.order === "cast";
+      if (channelling && target && target.hp > 0) {
+        this.drains[w++] = dr; // still draining
+        continue;
+      }
+      // Over, one way or another — and the two cases need no telling apart. An INTERRUPT has
+      // to strip buffs that would otherwise keep draining for a caster who walked away; a
+      // channel that ran its course reaches here on the very tick its buffs expire and its
+      // beam finishes fading, so the same cleanup costs it nothing.
+      this.stripDrain(caster);
+      this.stripDrain(target);
+      this.spellLightningStops.push(drainTag(dr.casterId));
+    }
+    this.drains.length = w;
+  }
+
+  /** Take the drain buffs (and their art) off one end of a broken channel. */
+  private stripDrain(u: SimUnit | undefined): void {
+    if (!u || !u.buffs.length) return;
+    const before = u.buffs.length;
+    u.buffs = u.buffs.filter((b) => b.group !== DRAIN_GROUP);
+    if (u.buffs.length !== before) this.recomputeStats(u);
   }
 
   private abilityByCode(code: string): AbilityDef | undefined {
@@ -6446,7 +6526,7 @@ export class SimWorld {
     emitSplat: (splatId, x, y) => {
       if (splatId) this.spellSplats.push({ splatId, x, y });
     },
-    emitLightning: (id, from, to, life, delay) => {
+    emitLightning: (id, from, to, life, delay, tag) => {
       if (!id) return;
       this.spellLightnings.push({
         id,
@@ -6460,8 +6540,13 @@ export class SimWorld {
         tz: boltZ(to, "impact"),
         life: life ?? 0,
         delay: delay ?? 0,
+        tag,
       });
     },
+    stopLightning: (tag) => {
+      if (tag) this.spellLightningStops.push(tag);
+    },
+    buffFxOf: (buffId) => (buffId ? (this.abilities?.buffFx(buffId) ?? []) : []),
     addSpellField: (f) => this.addSpellFieldInternal(f),
     burnMana: (t, amount) => {
       const burned = Math.min(t.mana, Math.max(0, amount));
@@ -6715,6 +6800,13 @@ export class SimWorld {
     this.spellLightnings = [];
     return out;
   }
+  /** Bolts cut short this frame, by tag (an interrupted Drain's tether). */
+  drainLightningStops(): string[] {
+    if (!this.spellLightningStops.length) return this.spellLightningStops;
+    const out = this.spellLightningStops;
+    this.spellLightningStops = [];
+    return out;
+  }
   /** Ground decals a spell asked for this frame (UberSplatData row id + centre). */
   drainSpellSplats(): Array<{ splatId: string; x: number; y: number }> {
     if (!this.spellSplats.length) return this.spellSplats;
@@ -6878,6 +6970,7 @@ export class SimWorld {
     this.resolveAirSeparation(dt);
     this.tickProjectiles(dt);
     this.tickSpellFields(dt); // Blizzard-style repeating area effects
+    this.tickDrains(); // a broken Drain channel takes its buffs and its beam down with it
     this.tickMirrorImage(dt); // Mirror Image's caster effect -> missiles -> illusions
     this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
     this.tickWards(dt); // Witch Doctor Healing Ward heal + Stasis Trap proximity stun

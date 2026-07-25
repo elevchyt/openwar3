@@ -5126,7 +5126,7 @@ export class MapViewerScene {
   /** Units this building trains (`Trains`) or SELLS (`Sellunits` — a Tavern's heroes, a
    *  Mercenary Camp's creeps). Both end up in the same production queue; the difference is
    *  that a sold unit comes off the shop's stock and shouts to the creeps around it. */
-  private pushTrainButtons(sel: SelectionInfo, out: CommandButton[]): void {
+  private pushTrainButtons(sel: SelectionInfo, out: CommandButton[], reserved: string[] = []): void {
     const world = this.rts!.simWorld;
     const t = this.tech.get(sel.typeId);
     const sold = new Set(t.sellunits);
@@ -5140,10 +5140,17 @@ export class MapViewerScene {
     const atHeroCap = heroesInProduction.size >= MAX_HEROES;
     // Some races share a buttonpos between two VISIBLE trainees (Orc's Grunt & Demolisher are
     // both 0,0; Shaman & Spirit Walker collide too), so when a slot is already taken the button
-    // flows to the next free cell (WC3 packs them left-to-right). The bottom-right corner is
-    // kept clear for Rally (3,1) and Cancel (3,2). rtma-replaced units (Headhunter↔Berserker)
-    // never both show, so those don't count as collisions.
-    const used = new Set<string>(["3,1", "3,2"]);
+    // flows to the next free cell (WC3 packs them left-to-right). rtma-replaced units
+    // (Headhunter↔Berserker) never both show, so those don't count as collisions.
+    //
+    // `reserved` is the cells the CALLER will occupy this frame — Rally (3,1) and Cancel
+    // (3,2), which the game itself pins there (CommandFunc.txt [CmdRally] Buttonpos=3,1,
+    // [CmdCancelTrain] 3,2). Reserving them unconditionally, as this used to, wrecked the
+    // Tavern: its eight heroes fill rows 1 and 2 exactly (`[Nfir] Buttonpos=3,1`,
+    // `[Nalc] Buttonpos=3,2`), so the Firelord and the Alchemist were shoved up into the
+    // empty top row and the card came out in the wrong order — for a neutral shop that is
+    // yours to neither rally nor, until you queue something, cancel.
+    const used = new Set<string>(reserved);
     const place = (bx: number, by: number): [number, number] => {
       if (!used.has(`${bx},${by}`)) return [bx, by];
       for (let ry = 0; ry < 3; ry++) for (let rx = 0; rx < 4; rx++) if (!used.has(`${rx},${ry}`)) return [rx, ry];
@@ -5162,7 +5169,13 @@ export class MapViewerScene {
       const freeHero = d.isHero && this.rts!.hasFreeHero(this.localPlayer); // first hero is free
       const gold = freeHero ? 0 : d.goldCost;
       const lumber = freeHero ? 0 : d.lumberCost;
-      const stock = sold.has(uid) ? world.shopStock(sel.id, uid) : -1;
+      // A SOLD unit is on a shelf, and an empty shelf is a COOLDOWN, not a "no": a Tavern's
+      // heroes are only stocked 135 seconds into the game (`stockStart`, UnitBalance.slk), and
+      // the button has to say so with the clockwise sweep and the countdown an ability wears
+      // — same as the item wares in pushShopButtons, which is where this was already right.
+      const st = sold.has(uid) ? world.shopStockInfo(sel.id, uid) : null;
+      const stock = st?.count ?? -1;
+      const restocking = !!st && st.count <= 0 && Number.isFinite(st.timer) && st.period > 0;
       const metTech = world.canMake(this.localPlayer, uid, owned);
       const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
       const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
@@ -5174,6 +5187,8 @@ export class MapViewerScene {
         desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned),
         gold, lumber, food: d.foodUsed,
         count: stock > 0 ? stock : undefined, // the shop's stock badge
+        cooldownLeft: restocking ? st.timer : 0,
+        cooldownFrac: restocking ? Math.max(0, Math.min(1, st.timer / st.period)) : 0,
         col, row,
         disabled: !afford || !metTech || !inStock || (d.isHero && atHeroCap),
       }));
@@ -5463,8 +5478,14 @@ export class MapViewerScene {
       return out;
     }
     if (sel.isBuilding) {
+      // Which of the two pinned corners are actually spoken for THIS frame — the trainee grid
+      // flows around them, and a Tavern (no rally, nothing queued) has both cells free for
+      // the Firelord and the Alchemist the data puts there. Kept in step with the two pushes
+      // at the bottom of this branch.
+      const wantsRally = !foreignShop && !!world.units.get(sel.id)?.building?.producesUnits;
+      const reserved = [...(wantsRally ? ["3,1"] : []), ...(sel.queueLength ? ["3,2"] : [])];
       this.pushShopButtons(sel, out); // items a shop sells (Arcane Vault, Goblin Merchant)
-      this.pushTrainButtons(sel, out); // units it trains / sells (Barracks, Tavern, Merc Camp)
+      this.pushTrainButtons(sel, out, reserved); // units it trains / sells (Barracks, Tavern, Merc Camp)
       this.pushResearchButtons(sel, out); // upgrades it researches (Blacksmith, Lumber Mill…)
       this.pushBuildingUpgradeButtons(sel, out); // what it can become (Town Hall → Keep)
 
@@ -5481,7 +5502,7 @@ export class MapViewerScene {
       // Cancel always owns the bottom-right slot (3,2) — the canonical WC3 spot. Set Rally
       // Point sits one above it at (3,1), so it never shares the cancel slot. A neutral shop
       // isn't yours to rally.
-      if (!foreignShop && world.units.get(sel.id)?.building?.producesUnits) {
+      if (wantsRally) {
         const rallyIcon = { human: "BTNRallyPoint", orc: "BTNOrcRallyPoint", undead: "BTNRallyPointUndead", nightelf: "BTNRallyPointNightElf" }[this.localRace];
         // No active state: placing a rally point is an aim, not an order in flight,
         // and a building has no "current command" to keep it lit afterwards.
@@ -6614,8 +6635,10 @@ export class MapViewerScene {
         // both ends are re-read from the units every frame in the render pass below, so a
         // bolt stays attached to a target that walks out from under it.
         for (const l of this.rts!.drainFxLightnings()) {
-          this.lightning?.add({ type: l.id, srcId: l.sourceId, dstId: l.targetId, sx: l.sx, sy: l.sy, sz: l.sz, tx: l.tx, ty: l.ty, tz: l.tz, life: l.life, delay: l.delay });
+          this.lightning?.add({ type: l.id, srcId: l.sourceId, dstId: l.targetId, sx: l.sx, sy: l.sy, sz: l.sz, tx: l.tx, ty: l.ty, tz: l.tz, life: l.life, delay: l.delay, tag: l.tag });
         }
+        // …and bolts the sim cut short (an interrupted Drain's tether).
+        for (const tag of this.rts!.drainFxLightningStops()) this.lightning?.stop(tag);
         // Sustain the looping bed under each running channelled field, and drop it the
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).

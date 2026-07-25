@@ -71,6 +71,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Camera:** read [`docs/camera.md`](docs/camera.md) before touching `GAME_FOV`, the zoom constants, or a map's
   camera. The FOV *field* the data carries (70) is **not** the angle the game renders with (**45°**, measured off
   the real client) — conflate them and every distance changes meaning and every map camera breaks.
+- **Spell FX:** read [`docs/spell-fx.md`](docs/spell-fx.md) before adding or debugging a spell's art. WC3 has
+  FIVE presentation mechanisms (effect models, buff art, **lightning ribbons**, ubersplats, sound), and two of
+  them play no model at all — a Chain Lightning or a Drain has no `Targetart` to find, and a buff's art lives on
+  the BUFF row rather than on the ability. Reaching for the wrong one is the standard "this spell has no art" bug.
 - **Illusions:** read [`docs/illusions.md`](docs/illusions.md) before touching Mirror Image (`AOmi`), the Wand of
   Illusion (`AIil`), or anything that copies a unit. An illusion's whole point is that the ENEMY can't tell it from
   the original, so every tell (blue wash, summon timer, portrait) is gated on the LOCAL viewpoint, and its

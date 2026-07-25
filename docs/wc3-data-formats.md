@@ -72,6 +72,12 @@ logic. All keyed by ability id.
 | Numbers (per level) | `Units\AbilityData.slk` | `cost1..`, `cool1..` (cooldown), `dur1../herodur1..`, `rng1..` (cast range), `area1..`, `cast1..`, `dataa1..datai1` (per-ability payload), `buffid1..`, `unitid1..` (summon), **`targs1`** (Targets Allowed — see below), `hero` (learnable), `levels`, `reqLevel`/`levelSkip` |
 | **Name, per-level tooltips, hotkey** | per-race `Units\<Race>AbilityStrings.txt` | `Name`, `Tip`/`Ubertip` (per rank), `Hotkey` |
 | **Icon, effect art, cast anim, grid pos** | per-race `Units\<Race>AbilityFunc.txt` | `Art` (icon), `Missileart`/`Targetart`/`Casterart`/`Specialart`/`Areaart` (effect models), `animnames` (caster anim tags), `buttonpos`, `researchbuttonpos` |
+| **Lightning effects** | per-race `Units\<Race>AbilityFunc.txt` → `Splats\LightningData.slk` | `LightningEffect=CLPB,CLSB` — the bolt ids an ability strings between caster and target. These are **not models**; see [`spell-fx.md`](./spell-fx.md) |
+
+A spell's art comes in five separate flavours — effect models, buff art, lightning ribbons,
+ubersplats and sound — each with its own table and its own lifetime.
+**[`spell-fx.md`](./spell-fx.md) is the map of which is which**; read it before hunting for a
+missing effect, because two of the five have no model to hunt for.
 
 ### `targs1` — Targets Allowed (the target-flag field)
 

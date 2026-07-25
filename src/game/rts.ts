@@ -2236,17 +2236,20 @@ export class RtsController {
       const fxE = this.sim.drainSpellEffects();
       const fxS = this.sim.drainSpellSplats();
       const fxL = this.sim.drainSpellLightnings();
+      const fxLs = this.sim.drainLightningStops();
       const fxCs = this.sim.drainCastStarts();
       const fxCf = this.sim.drainCastFires();
       if (fxE.length) this.fxEffects.push(...fxE);
       if (fxS.length) this.fxSplats.push(...fxS);
       if (fxL.length) this.fxLightnings.push(...fxL);
+      if (fxLs.length) this.fxLightningStops.push(...fxLs);
       if (fxCs.length) this.fxCastStarts.push(...fxCs);
       if (fxCf.length) this.fxCastFires.push(...fxCf);
-      if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxL.length || fxCs.length || fxCf.length)) {
+      if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxL.length || fxLs.length || fxCs.length || fxCf.length)) {
         this.wireFx.effects.push(...fxE);
         this.wireFx.splats.push(...fxS);
         this.wireFx.lightnings.push(...fxL);
+        this.wireFx.lightningStops.push(...fxLs);
         // The wire copy of a cast carries the CASTER's position — the AoI test each
         // recipient's filter runs; the sim's event names only the caster.
         for (const c of fxCs) {
@@ -3969,6 +3972,7 @@ export class RtsController {
       this.fxEffects.push(...fx.effects);
       this.fxSplats.push(...fx.splats);
       this.fxLightnings.push(...(fx.lightnings ?? []));
+      this.fxLightningStops.push(...(fx.lightningStops ?? []));
       this.fxCastStarts.push(...fx.castStarts);
       this.fxCastFires.push(...fx.castFires);
     }
@@ -4096,9 +4100,10 @@ export class RtsController {
   private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> = [];
   private fxSplats: Array<{ splatId: string; x: number; y: number }> = [];
   private fxLightnings: SimLightning[] = [];
+  private fxLightningStops: string[] = [];
   private fxCastStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> = [];
   private fxCastFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
-  private wireFx: FxSnapshot = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
+  private wireFx: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
   drainFxEffects(): typeof this.fxEffects {
     if (this.fxEffects.length > 400) this.fxEffects.splice(0, this.fxEffects.length - 400);
     if (!this.fxEffects.length) return this.fxEffects;
@@ -4119,6 +4124,12 @@ export class RtsController {
     this.fxLightnings = [];
     return out;
   }
+  drainFxLightningStops(): string[] {
+    if (!this.fxLightningStops.length) return this.fxLightningStops;
+    const out = this.fxLightningStops;
+    this.fxLightningStops = [];
+    return out;
+  }
   drainFxCastStarts(): typeof this.fxCastStarts {
     if (!this.fxCastStarts.length) return this.fxCastStarts;
     const out = this.fxCastStarts;
@@ -4135,8 +4146,8 @@ export class RtsController {
    *  so the ~60 Hz caller allocates only when something actually happened. */
   private takeWireFx(): FxSnapshot {
     const out = this.wireFx;
-    if (!out.effects.length && !out.splats.length && !out.lightnings.length && !out.castStarts.length && !out.castFires.length) return out;
-    this.wireFx = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
+    if (!out.effects.length && !out.splats.length && !out.lightnings.length && !out.lightningStops.length && !out.castStarts.length && !out.castFires.length) return out;
+    this.wireFx = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [] };
     return out;
   }
 

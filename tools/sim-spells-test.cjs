@@ -28,7 +28,7 @@ function unit(over = {}) {
 
 /** Records what the handler did instead of touching a world. */
 function harness(units) {
-  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [] };
+  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [], boltStops: [] };
   const api = {
     rng: () => 0.5,
     getUnit: (id) => units.find((u) => u.id === id),
@@ -37,9 +37,14 @@ function harness(units) {
     ally: (a, b) => a.team === b.team,
     spellDamage: (t, amount) => log.damage.push({ id: t.id, amount }),
     spellHeal: (t, amount) => log.heals.push({ id: t.id, amount }),
-    applyBuff: (t, b) => log.buffs.push({ id: t.id, kind: b.kind, group: b.group, value: b.value, value2: b.value2, timeLeft: b.timeLeft }),
+    applyBuff: (t, b) => log.buffs.push({ id: t.id, kind: b.kind, group: b.group, value: b.value, value2: b.value2, timeLeft: b.timeLeft, art: b.art }),
     emitEffect: (art) => log.effects.push(art),
-    emitLightning: (id, from, to, life = 0, delay = 0) => log.bolts.push({ id, from: from.id, to: to.id, life: round(life), delay: round(delay) }),
+    emitLightning: (id, from, to, life = 0, delay = 0, tag) => log.bolts.push({ id, from: from.id, to: to.id, life: round(life), delay: round(delay), ...(tag ? { tag } : {}) }),
+    stopLightning: (tag) => log.boltStops.push(tag),
+    // The buff-model lookup a handler makes when its ability lists several buff rows and
+    // picks between them (the Drain's caster/target x life/mana grid). The stub returns the
+    // id itself as the "path" so a test can assert WHICH row was chosen.
+    buffFxOf: (buffId) => (buffId ? [{ path: buffId, attach: [] }] : []),
     dispel: () => {}, emitSplat: () => {}, summon: () => {}, killUnit: () => {},
   };
   return { api, log };
@@ -116,21 +121,31 @@ const round = (n) => Math.round(n * 1000) / 1000;
   {
     // Drain: `LightningEffect=DRAB,DRAL,DRAM` and dataA/dataB (life/mana per second) pick
     // which — the Dark Ranger's Drain takes life, so DRAL, for the drain's whole duration.
+    // The tether is tagged with its caster so an interrupted channel can cut it.
     const { api, log } = harness([caster, a]);
     SPELL_HANDLERS.AHdr(api, caster, def({ data: [25, 0], duration: 8, lightning: ["DRAB", "DRAL", "DRAM"] }), 1, { targetId: 2, x: 0, y: 0 });
-    check("a life Drain tethers with DRAL for the duration", log.bolts, [{ id: "DRAL", from: 1, to: 2, life: 8, delay: 0 }]);
+    check("a life Drain tethers with DRAL for the duration", log.bolts, [{ id: "DRAL", from: 1, to: 2, life: 8, delay: 0, tag: "drain:1" }]);
+    // …and the buff ART follows the same two axes: the VICTIM wears the target row, the
+    // caster the caster row, each in the life flavour (Bdtl / Bdcl).
+    check("…the victim wears Bdtl and the caster Bdcl", log.buffs.map((b) => `${b.id}:${b.kind}:${b.art}`), ["2:dot:Bdtl", "1:hot:Bdcl"]);
   }
   {
-    // …and the Blood Mage's Siphon Mana takes mana, so DRAM.
+    // …and the Blood Mage's Siphon Mana takes mana, so DRAM — and the MANA buff rows, which
+    // is the bug the green life-drain swirl on a mana drain's victim came from.
     const { api, log } = harness([caster, a]);
     SPELL_HANDLERS.AHdr(api, caster, def({ data: [0, 15], duration: 6, lightning: ["DRAB", "DRAL", "DRAM"] }), 1, { targetId: 2, x: 0, y: 0 });
-    check("…a mana Drain with DRAM", log.bolts, [{ id: "DRAM", from: 1, to: 2, life: 6, delay: 0 }]);
+    check("…a mana Drain with DRAM", log.bolts, [{ id: "DRAM", from: 1, to: 2, life: 6, delay: 0, tag: "drain:1" }]);
+    check("…and the mana buff rows Bdtm / Bdcm", log.buffs.map((b) => b.art), ["Bdtm", "Bdcm"]);
+    check("…moving mana rather than health", log.buffs.map((b) => `${b.id}:${b.kind}:${b.value}`), ["2:manaRegen:-15", "1:manaRegen:15"]);
   }
   {
-    // An ability that takes both gets the combined beam.
+    // An ability that takes both drains BOTH — a life pair and a mana pair — and gets the
+    // combined beam. Only the life pair wears the art: one set of models, not two.
     const { api, log } = harness([caster, a]);
     SPELL_HANDLERS.AHdr(api, caster, def({ data: [10, 10], duration: 6, lightning: ["DRAB", "DRAL", "DRAM"] }), 1, { targetId: 2, x: 0, y: 0 });
-    check("…and one that takes both with DRAB", log.bolts, [{ id: "DRAB", from: 1, to: 2, life: 6, delay: 0 }]);
+    check("…and one that takes both with DRAB", log.bolts, [{ id: "DRAB", from: 1, to: 2, life: 6, delay: 0, tag: "drain:1" }]);
+    check("…draining life and mana at once", log.buffs.map((b) => `${b.id}:${b.kind}:${b.value}`), ["2:dot:10", "1:hot:10", "2:manaRegen:-10", "1:manaRegen:10"]);
+    check("…wearing Bdtb / Bdcb, once", log.buffs.map((b) => b.art).filter(Boolean), ["Bdtb", "Bdcb"]);
   }
 }
 

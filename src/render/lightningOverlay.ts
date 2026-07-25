@@ -93,6 +93,8 @@ export interface BoltRequest {
   tz: number;
   life: number; // 0 = use the row's own fade duration
   delay: number;
+  /** Owner key for a bolt that can be cut short (a Drain's tether). See `stop`. */
+  tag?: string;
 }
 
 interface Bolt {
@@ -173,6 +175,13 @@ export class LightningOverlay {
       if (b.t - b.req.delay <= b.life) this.bolts[w++] = b;
     }
     this.bolts.length = w;
+  }
+
+  /** Cut every live bolt carrying `tag` — a Drain whose channel broke. The bolt ends where
+   *  it is rather than fading: the beam is the channel, and the channel stopped. */
+  stop(tag: string): void {
+    if (!tag) return;
+    this.bolts = this.bolts.filter((b) => b.req.tag !== tag);
   }
 
   /** Drop every live bolt (map teardown, a fresh match). */
