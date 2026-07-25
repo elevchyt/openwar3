@@ -239,11 +239,33 @@ export interface HudDriver {
  * These are the FDF's own coordinates, in the 0.8 × 0.6 space `ConsoleUI.fdf` is written in:
  * `x`/`w` measured from the console's left edge, `y`/`h` measured UP from the bottom of the
  * screen, the way every SetPoint in the file is. They are not guesses and not tuned by eye —
- * the console art punches its sockets through as TRANSPARENCY (`AlphaMode "ALPHAKEY"`), so
- * each rect is read straight off the decoded tiles by scanning for the transparent runs, and
- * they come out the same for all four races because the four tile sets are drawn to one
- * template. The command card falls out as four columns of 0.0399 and three rows of 0.0392 —
- * square cells, which is the whole reason the console is held at 4:3 (ui/consoleUi.ts).
+ * each rect is read straight off the decoded `<Race>UITile0*.blp` tiles, and they come out the
+ * same for all four races because the four tile sets are drawn to one template.
+ *
+ * The tiles map to the band at exactly **1 texel = 0.0005 world** (tile 01/03/04 draw v
+ * 0.3125…1 — texel rows 160…511 — into 0.176; tile 02 draws v 0.4140625…1 into 0.15; both are
+ * 2000 texels per world unit, and the widths are 512 texels into 0.256). So a socket's rect
+ * is `texel × 0.0005`, with y counted up from row 512.
+ *
+ * **A socket's window is NOT its transparent run.** The art punches its holes through as
+ * `ALPHAKEY` transparency, but the TOP of several of them is painted opaque BLACK instead —
+ * the minimap's window is transparent only from row 276 while the black it sits in starts at
+ * row 220, and the command card's first cell row is black from row 245 and only turns
+ * transparent at 276. Both read as one unbroken black window on screen, because the flat
+ * black laid in behind the console (ui/consoleUi.ts `backing`) is the same colour as the
+ * paint. Scanning for alpha alone undershoots the minimap by a third of its height and eats
+ * the command card's whole first row (issues #90, #91); the scan that gives these numbers is
+ * "transparent OR near-black", which is what actually reads as a hole.
+ *
+ *   minimap    texels x 19…296, rows 220…497 — a SQUARE window (0.139 × 0.139). A map whose
+ *              playable area is not square letterboxes inside it, exactly as Blizzard's own
+ *              `war3mapMap.blp` is a 256 × 256 square with the map letterboxed into it.
+ *   portrait   the arch, x 431(tile01)…68(tile02), rows 289…448 — and BELOW it two more
+ *              sections of the same socket, cut off by the art's own gold dividers at rows
+ *              449…455 and 479…484. Those two are the HP and mana readouts (issue #92).
+ *   command    texels x 209…549 (running on into tile 04), rows 245…499: four columns of 80
+ *              and three rows of 81, on a pitch of 87 × 87 — square cells, which is the whole
+ *              reason the console is held at 4:3 (ui/consoleUi.ts).
  *
  * The one thing the art cannot tell us is the inventory, whose six slots are painted dark
  * rather than cut out; its rows were measured from those dark centres instead (pitch 0.0384,
@@ -256,12 +278,21 @@ export interface HudDriver {
  * `CONSOLE_OVERRIDES` in ui/consoleUi.ts.)
  */
 const CONSOLE_ZONES = {
-  minimap: { x: 0.0101, y: 0.0075, w: 0.1382, h: 0.1100 },
-  portrait: { x: 0.2157, y: 0.0317, w: 0.0747, h: 0.0800 },
+  minimap: { x: 0.0095, y: 0.0070, w: 0.1390, h: 0.1390 },
+  portrait: { x: 0.2157, y: 0.0320, w: 0.0747, h: 0.0795 },
+  /** The first strip under the arch — the unit's hit points. */
+  portraitHp: { x: 0.2157, y: 0.0165, w: 0.0747, h: 0.0115 },
+  /** The second strip — mana. Left empty by the art when the unit has none. */
+  portraitMana: { x: 0.2157, y: 0.0020, w: 0.0747, h: 0.0115 },
   info: { x: 0.3022, y: 0.0000, w: 0.2017, h: 0.1150 },
   inventory: { x: 0.5146, y: 0.0011, w: 0.0725, h: 0.1125 },
-  command: { x: 0.6163, y: 0.0067, w: 0.1708, h: 0.1108 },
+  command: { x: 0.6165, y: 0.0060, w: 0.1705, h: 0.1275 },
 } as const;
+
+/** The command card's gaps, as fractions of the card — the art's own 8-texel column gutters
+ *  in 341 and 6-texel row gutters in 255. Expressed here rather than in CSS so the grid and
+ *  the rect it fills come from one measurement. */
+const COMMAND_GAP = { col: 8 / 341, row: 6 / 255 } as const;
 
 /**
  * Where the inventory COVER goes — the crest the console wears in place of the six slots
@@ -916,10 +947,11 @@ export class GameHud {
     const console_ = document.createElement("div");
     console_.className = "hud-console";
     const minimap = this.buildMinimap();
-    const { portraitWrap, infoText } = this.buildInfoPanel();
+    const { portraitWrap, infoText } = this.buildInfoPanel(skinned);
     const inventory = this.buildInventory(skinned);
     const command = this.buildCommandCard();
     console_.append(minimap, portraitWrap, infoText, inventory, command);
+    if (skinned) console_.append(this.selHpText, this.selMpText);
     // The crest that replaces the six slots when the selection carries nothing. LAST, so it
     // paints over them; only the console art's own version of this corner is under it.
     this.invCover = document.createElement("div");
@@ -942,9 +974,16 @@ export class GameHud {
 
       place(minimap, CONSOLE_ZONES.minimap);
       place(portraitWrap, CONSOLE_ZONES.portrait);
+      place(this.selHpText, CONSOLE_ZONES.portraitHp);
+      place(this.selMpText, CONSOLE_ZONES.portraitMana);
       place(infoText, CONSOLE_ZONES.info);
       place(inventory, CONSOLE_ZONES.inventory);
       place(command, CONSOLE_ZONES.command);
+      // The card's cells are the art's own: four columns and three rows on a 87 × 87-texel
+      // pitch, so the grid is 1fr each with the gutters the art leaves between them. In
+      // percentages, so they hold at any window size.
+      command.style.columnGap = `${COMMAND_GAP.col * 100}%`;
+      command.style.rowGap = `${COMMAND_GAP.row * 100}%`;
       place(this.invCover, CONSOLE_INVENTORY_COVER);
       this.invCover.classList.remove("hud-zone"); // decoration: it must not eat the clicks
       this.invCover.style.pointerEvents = "none";
@@ -1300,7 +1339,7 @@ export class GameHud {
     view.style.height = `${h}px`;
   }
 
-  private buildInfoPanel(): { portraitWrap: HTMLDivElement; infoText: HTMLDivElement } {
+  private buildInfoPanel(skinned: boolean): { portraitWrap: HTMLDivElement; infoText: HTMLDivElement } {
     // Portrait: an animated 3D bust (the _portrait.mdx model) with the HP and
     // mana values as plain coloured numbers beneath it — exactly like the
     // original console (no bars under the portrait).
@@ -1316,17 +1355,25 @@ export class GameHud {
     });
     this.portrait.addEventListener("pointerup", () => this.driver.focusSelected(false));
 
-    const values = document.createElement("div");
-    values.className = "hud-portrait-values";
     this.selHpText = document.createElement("div");
     this.selHpText.className = "hud-hp-value";
     this.selMpText = document.createElement("div");
     this.selMpText.className = "hud-mp-value";
-    values.append(this.selHpText, this.selMpText);
 
     const portraitWrap = document.createElement("div");
     portraitWrap.className = "hud-portrait-wrap";
-    portraitWrap.append(this.portrait, values);
+    portraitWrap.append(this.portrait);
+    // With the console art up, the two numbers are NOT the portrait's neighbours — they are
+    // the two strips the art cuts out of the SAME socket, under the arch and under each
+    // other, each behind its own gold divider (issue #92). They get their own zones, placed
+    // by buildConsole. Without an install there is no art to line up with, so the placeholder
+    // console keeps them stacked on a plate under the bust.
+    if (!skinned) {
+      const values = document.createElement("div");
+      values.className = "hud-portrait-values";
+      values.append(this.selHpText, this.selMpText);
+      portraitWrap.append(values);
+    }
 
     // Info panel: dark rounded backdrop with the unit's name and its
     // damage / armor stats, like the original console detail area.
