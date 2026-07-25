@@ -18,7 +18,12 @@
 const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
-const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
+const { SimWorld, weaponsFromDef } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
+// A unit's live weapon slots come from the SAME builder the morph uses, so a stub can't
+// disagree with what morphUnit will hand the unit on the other side. (Hand-rolled slots used
+// the SIM-side field names — `baseDamage`/`baseRange` — which weaponsFromDef does not read, so
+// every morphed unit in this file silently came out unarmed and nothing asserted otherwise.)
+const simWeapons = (d) => weaponsFromDef(d);
 // Build ranks from the real blank rather than a literal — a stub that spells the shape out
 // by hand drifts from AbilityLevel the moment a field is added (see jass-corpus-test 7.8).
 const { emptyAbilityLevel } = require(join(REPO, ".sim-build", "src", "data", "abilities.js"));
@@ -32,12 +37,18 @@ function check(what, got, want) {
   if (!ok) console.log(`        want ${JSON.stringify(want)}\n        got  ${JSON.stringify(got)}`);
 }
 
-/** The two Crypt Fiend forms, with the fields morphUnit actually reads off a UnitDef. */
+/** The two Crypt Fiend forms, with the fields morphUnit actually reads off a UnitDef.
+ *  edoc/edcm are the Druid of the Claw and his bear — the pair that proves the type's WHOLE
+ *  sheet has to follow the morph, not just the visible stats: hp 430→810, def 1→3,
+ *  dmgplus 18→26, castpt 0.5→0.3, castbsw 1.17→0.51, and a mana pool of 200 on BOTH sides
+ *  (Units\UnitBalance.slk + UnitWeapons.slk, 1.27a). */
 const UNITS = {
-  hpea: { id: "hpea", hitPoints: 220, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 190, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, baseDamage: 4, baseRange: 90 }] },
-  hmil: { id: "hmil", hitPoints: 220, armor: 4, armorType: "large", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, baseDamage: 11, baseRange: 90 }] },
-  ucry: { id: "ucry", hitPoints: 550, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Aweb", "Aspa", "Abur"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, baseDamage: 26, baseRange: 550 }] },
-  ucrm: { id: "ucrm", hitPoints: 550, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 0, abilities: ["Aspa", "Abur"], heroAbilities: [], autoAbility: "", weapons: [] },
+  hpea: { id: "hpea", acquireRange: 500, hitPoints: 220, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 190, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 4, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  hmil: { id: "hmil", acquireRange: 500, hitPoints: 220, armor: 4, armorType: "large", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Ahar", "Amil"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 11, dice: 1, sides: 2, cooldown: 2.0, damagePoint: 0.3, backswing: 0.51, range: 90, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  ucry: { id: "ucry", acquireRange: 500, hitPoints: 550, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 270, abilities: ["Aweb", "Aspa", "Abur"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 26, dice: 1, sides: 4, cooldown: 1.9, damagePoint: 0.3, backswing: 0.51, range: 550, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  ucrm: { id: "ucrm", acquireRange: 500, hitPoints: 550, armor: 0, armorType: "medium", sightDay: 1800, sightNight: 800, speed: 0, abilities: ["Aspa", "Abur"], heroAbilities: [], autoAbility: "", weapons: [] },
+  edoc: { id: "edoc", acquireRange: 500, hitPoints: 430, mana: 200, armor: 1, armorType: "large", sightDay: 1400, sightNight: 800, speed: 270, castPoint: 0.5, castBackswing: 1.17, abilities: ["Abrf", "Arej"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 18, dice: 1, sides: 4, cooldown: 1.5, damagePoint: 0.33, backswing: 0.53, range: 100, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
+  edcm: { id: "edcm", acquireRange: 500, hitPoints: 810, mana: 200, armor: 3, armorType: "large", sightDay: 1400, sightNight: 800, speed: 270, castPoint: 0.3, castBackswing: 0.51, abilities: ["Abrf", "Arej"], heroAbilities: [], autoAbility: "", weapons: [{ enabled: true, targets: ["ground", "structure"], damage: 26, dice: 1, sides: 6, cooldown: 1.5, damagePoint: 0.5, backswing: 0.83, range: 100, weaponType: "normal", attackType: "normal", missileArt: "", missileSpeed: 0, spillDist: 0, spillRadius: 0, damageLoss: 0 }] },
 };
 const unitReg = { get: (id) => UNITS[id] };
 
@@ -48,6 +59,8 @@ const ABILS = {
   // Call to Arms puts its alternate form in DataB and carries a 45s duration — the two ways
   // it differs from Burrow, and the two things altFormOf/tickAltForm exist for.
   Amil: { id: "Amil", code: "Amil", levelData: [lvl({ dataStr: ["hpea", "hmil"], duration: 45 })] },
+  // Bear Form — the same two columns again, on a pair that carries mana.
+  Abrf: { id: "Abrf", code: "Abrf", levelData: [lvl({ dataStr: ["edoc"], summon: "edcm" })] },
 };
 const abilReg = { get: (id) => ABILS[id] };
 
@@ -56,11 +69,11 @@ const world = new SimWorld({ width: 8, height: 8, cell: 128, blocked: new Uint8A
 function fiend(typeId = "ucry") {
   const d = UNITS[typeId];
   const u = {
-    id: 1, owner: 0, team: 0, hp: 400, maxHp: 550, x: 0, y: 0, prevX: 0, prevY: 0, typeId,
+    id: 1, owner: 0, team: 0, hp: 400, maxHp: 550, mana: 0, maxMana: 0, x: 0, y: 0, prevX: 0, prevY: 0, typeId,
     detectRadius: 0, invisible: false, cloaked: false, uprooted: false, rootedFootprint: 0, altModel: false,
     inventory: [], buffs: [], footprint: 0, hasReservation: false, etherealForm: false,
     abilities: [{ id: "Abur", code: "Abur", level: 1, cooldownLeft: 0, autocastOn: false }],
-    weapons: d.weapons.map((w) => ({ ...w, damage: 0, baseDice: 1, dice: 0, range: 0, baseDamagePoint: 0.3, damagePoint: 0, baseBackswing: 0.3, backswing: 0, baseCooldown: 2, cooldown: 0, baseSpillDist: 0, spillDist: 0, baseSpillRadius: 0, spillRadius: 0 })),
+    weapons: simWeapons(d),
     weapon: null, order: "idle", targetId: null, path: [], moving: false,
     baseArmor: 0, baseMaxHp: 550, baseMaxMana: 0, baseSpeed: d.speed, baseSight: 1800,
     baseSightDay: 1800, baseSightNight: 800, armorType: "medium",
@@ -94,7 +107,10 @@ function fiend(typeId = "ucry") {
   world.recomputeStats(u);
   check("…back to the walking Fiend", u.typeId, "ucry");
   check("…mobile once more", u.speed, 270);
-  check("…and armed again", !!u.weapon, true);
+  // Armed with a REAL slot, not merely a non-null one: the numbers have to be ucry's own
+  // (dmgplus 26, rangeN1 550). `!!u.weapon` alone passed for years against a slot whose every
+  // field was undefined, which is exactly how the stub drift went unnoticed.
+  check("…and armed again", [u.weapon.baseDamage, u.weapon.baseRange], [26, 550]);
   check("…back on the plain half of the model", u.altModel, false);
 }
 
@@ -134,12 +150,12 @@ function fiend(typeId = "ucry") {
 function peasant(id, typeId = "hpea") {
   const d = UNITS[typeId];
   const u = {
-    id, owner: 0, team: 0, hp: 220, maxHp: 220, x: 0, y: 0, prevX: 0, prevY: 0, typeId,
+    id, owner: 0, team: 0, hp: 220, maxHp: 220, mana: 0, maxMana: 0, x: 0, y: 0, prevX: 0, prevY: 0, typeId,
     detectRadius: 0, invisible: false, cloaked: false, uprooted: false, rootedFootprint: 0,
     altModel: false, altFormLeft: 0, altFormAbil: "",
     inventory: [], buffs: [], footprint: 0, hasReservation: false, etherealForm: false,
     abilities: [{ id: "Amil", code: "Amil", level: 1, cooldownLeft: 0, autocastOn: false }],
-    weapons: d.weapons.map((w) => ({ ...w, damage: 0, baseDice: 1, dice: 0, range: 0, baseDamagePoint: 0.3, damagePoint: 0, baseBackswing: 0.3, backswing: 0, baseCooldown: 2, cooldown: 0, baseSpillDist: 0, spillDist: 0, baseSpillRadius: 0, spillRadius: 0 })),
+    weapons: simWeapons(d),
     weapon: null, order: "idle", targetId: null, path: [], moving: false,
     baseArmor: d.armor, baseMaxHp: 220, baseMaxMana: 0, baseSpeed: d.speed, baseSight: 1800,
     baseSightDay: 1800, baseSightNight: 800, armorType: d.armorType,
@@ -174,6 +190,73 @@ function peasant(id, typeId = "hpea") {
   check("past 45s he reverts himself", u.typeId, "hpea");
   check("…and the clock is cleared", u.altFormLeft, 0);
   check("…back to Peasant speed", (world.recomputeStats(u), u.speed), 190);
+}
+
+// --- Bear Form: the whole sheet follows the type, mana pool and cast clock included -------
+
+function druid(id, typeId = "edoc") {
+  const d = UNITS[typeId];
+  const u = {
+    id, owner: 0, team: 0, hp: d.hitPoints, maxHp: d.hitPoints, mana: 200, maxMana: 200,
+    x: 0, y: 0, prevX: 0, prevY: 0, typeId,
+    detectRadius: 0, invisible: false, cloaked: false, uprooted: false, rootedFootprint: 0,
+    altModel: false, altFormLeft: 0, altFormAbil: "",
+    inventory: [], buffs: [], footprint: 0, hasReservation: false, etherealForm: false,
+    abilities: [{ id: "Abrf", code: "Abrf", level: 1, cooldownLeft: 0, autocastOn: false }],
+    weapons: simWeapons(d),
+    weapon: null, order: "idle", targetId: null, path: [], moving: false,
+    baseArmor: d.armor, baseMaxHp: d.hitPoints, baseMaxMana: d.mana, baseSpeed: d.speed,
+    baseDamage: d.weapons[0].baseDamage, baseSight: 1400,
+    baseSightDay: d.sightDay, baseSightNight: d.sightNight, armorType: d.armorType,
+    castPoint: d.castPoint, castBackswing: d.castBackswing,
+  };
+  u.weapon = u.weapons.find((w) => w.enabled) ?? null;
+  world.units.set(u.id, u);
+  return u;
+}
+
+{
+  const u = druid(20);
+  world.recomputeStats(u);
+  check("a Druid of the Claw starts in caster form", u.typeId, "edoc");
+  check("…with edoc's mana pool", [u.maxMana, u.mana], [200, 200]);
+  check("…and edoc's cast clock", [u.castPoint, u.castBackswing], [0.5, 1.17]);
+  u.mana = 50; // spent most of it on a Rejuvenation
+  check("he shifts", world.morphToggle(u, ABILS.Abrf), true);
+  check("…into the bear", u.typeId, "edcm");
+  // THE BUG: without baseMaxMana following the type this read 0/0 and the bear could never
+  // shift back, let alone cast — and nothing else in the sheet was wrong enough to notice.
+  check("…keeping a mana pool at all", u.maxMana > 0, true);
+  check("…which is the bear's own 200 (edcm manaN)", u.maxMana, 200);
+  check("…and the mana he had left, untouched (the pools match, so the ratio is 1)", u.mana, 50);
+  check("…on the bear's faster cast clock (edcm castpt/castbsw)", [u.castPoint, u.castBackswing], [0.3, 0.51]);
+  check("…with the bear's damage baseline for Inner Fire to size (dmgplus 26)", u.baseDamage, 26);
+  check("…the bear's hit points (edcm hp 810)", u.maxHp, 810);
+  check("…and the bear's armour (edcm def 3)", u.baseArmor, 3);
+}
+
+// A wounded Druid comes back wounded: the pools move, the SHARE of them does not.
+{
+  const u = druid(21);
+  world.recomputeStats(u);
+  u.hp = 215; // half of edoc's 430
+  u.mana = 100; // half of the 200 pool
+  world.morphToggle(u, ABILS.Abrf);
+  check("half a Druid becomes half a bear (215/430 → 405/810)", Math.round(u.hp), 405);
+  check("…and half his mana is still half his mana", u.mana, 100);
+  world.morphToggle(u, ABILS.Abrf);
+  check("…and shifting back leaves him where he started", [Math.round(u.hp), u.mana, u.maxHp], [215, 100, 430]);
+  check("…on the caster form's clock again", [u.castPoint, u.castBackswing], [0.5, 1.17]);
+}
+
+// A form with no pool at all: nothing to take a share of, so the new pool opens empty.
+{
+  const u = peasant(22);
+  world.recomputeStats(u);
+  check("a Peasant has no mana", [u.maxMana, u.mana], [0, 0]);
+  world.morphUnit(u, "edoc");
+  check("morphed into something that does, he gains the pool", u.maxMana, 200);
+  check("…but starts it empty — a share of nothing is nothing", u.mana, 0);
 }
 
 // Ringing the bell again sends them back early — same path, so the clock clears too.

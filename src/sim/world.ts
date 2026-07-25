@@ -2676,16 +2676,35 @@ export class SimWorld {
     const from = u.typeId;
     u.typeId = toTypeId;
     u.baseMaxHp = def.hitPoints;
+    // The MANA pool is the new type's too. Every stock morph pair happens to share one —
+    // Druid of the Claw 200/200, Druid of the Talon 200/200, Spirit Walker 300/300
+    // (UnitBalance.slk `manaN`), which is why nothing in a normal game ever showed this
+    // missing — but the pool has to follow the type all the same, or a unit morphed into a
+    // caster stands there with 0/0 and can never cast. (What DOES differ across a stock pair
+    // is `regenMana`: the bear's 0.333 against the caster form's 0.666 is Bear Form's whole
+    // downside, and that already follows the type through recomputeStats.)
+    u.baseMaxMana = def.mana;
     u.baseArmor = def.armor;
     u.armorType = def.armorType;
     u.baseSightDay = def.sightDay;
     u.baseSightNight = def.sightNight;
     u.baseSpeed = def.speed;
+    // Cast point / backswing are the unit's half of every spell's timeline (see tickCast:
+    // wind-up = u.castPoint + the ability's own Casting Time), and they are NOT the same in
+    // both forms — UnitWeapons.slk gives the Druid of the Claw 0.5/1.17 and his bear 0.3/0.51,
+    // the Druid of the Talon 0.7/1.97 against the storm crow's 0.3/0.51. Leaving them behind
+    // makes a morphed caster wind up on the wrong form's clock.
+    u.castPoint = def.castPoint;
+    u.castBackswing = def.castBackswing;
     // Rebuild the type-derived combat kit: a Headhunter→Berserker gains the Berserk ability
     // and the Berserker's stronger throw; a building keeps its (usually empty) kit. Preserve
     // any current cast/order by leaving order state alone — only the type's innate loadout swaps.
     u.weapons = weaponsFromDef(def);
     u.weapon = u.weapons.find((w) => w.enabled) ?? null;
+    // The unit-level damage baseline rides along with the slot it came from: Inner Fire reads
+    // `baseDamage` off its target (spells.ts) to size its bonus, so a bear buffed while still
+    // wearing the caster form's 18 would get a Druid's Inner Fire, not a bear's.
+    u.baseDamage = u.weapon?.baseDamage ?? 0;
     u.abilities = this.buildAbilitiesFor(def);
     // What it produces is a property of the TYPE, so re-derive it: a structure that only gains
     // a training list on upgrade would otherwise never get a rally point.
@@ -2693,7 +2712,14 @@ export class SimWorld {
       const t = this.techReg.get(toTypeId);
       u.building.producesUnits = t.trains.length > 0 || t.sellunits.length > 0;
     }
-    this.recomputeStats(u); // maxHp now reflects the new type (+ any research already in)
+    // maxHp/maxMana now reflect the new type (+ any research already in). Both POOLS moving is
+    // an ordinary ceiling move, so the current values ride it by RATIO — the one rule stated in
+    // recomputeStats and cited there to Liquipedia (Hit_Points): a bear at half life comes back
+    // a Druid at half life, and a Spirit Walker keeps its share of mana through the swap. No
+    // stock pair actually differs in `manaN`, so that ratio is the identity for every real
+    // morph; a pair that gains a pool from nothing (0 → N) starts the new one empty, because a
+    // share of nothing is nothing.
+    this.recomputeStats(u);
     u.hp = Math.max(1, u.maxHp * frac);
     this.tech?.invalidate(); // a Keep satisfies requirements a Town Hall does not
     this.morphs.push({ unitId: u.id, from, to: toTypeId });
