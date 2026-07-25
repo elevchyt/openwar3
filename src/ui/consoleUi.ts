@@ -83,9 +83,33 @@ const CONSOLE_ART_TOP = 0.1317;
  *  transparent, so centring the bars in the FRAME hangs them below the chrome you can see. */
 const STRIP_ART = 0.032 * (49 / 64);
 
-/** How far down the visible chrome the two bars sit: centred in the ART, not in the frame.
- *  Both bars are ~0.022 tall. */
+/** How far down the visible chrome the BUTTON bar sits: centred in the ART, not in the frame.
+ *  Its plates are 0.022 tall and are raised chrome of their own — they span the strip rather
+ *  than sit in one of its slots, so the art is what they line up against. */
 const BAR_TOP = -(STRIP_ART - 0.022) / 2;
+
+/**
+ * The row of black slots the strip punches for the readout — the pills the icons and numbers
+ * sit IN.
+ *
+ * Measured off the decoded strip tiles, which draw at the same 1 texel = 0.0005 world as the
+ * rest of the console art (ui/hud.ts CONSOLE_ZONES): pure black from texel row 4 through 37,
+ * with the stone rim on rows 3 and 38.
+ */
+const STRIP_SLOT_TOP = 4 * 0.0005;
+const STRIP_SLOT_H = 34 * 0.0005;
+
+/** `ResourceBar.fdf` gives every child of the bar the same box — `Anchor …, -0.003125` and
+ *  the two templates' `Height 0.01640625` — so the whole readout is one row 0.0164 tall
+ *  hanging 0.0031 below the frame's top, inside a frame (0.0218) taller than it. */
+const RESOURCE_ROW_TOP = 0.003125;
+const RESOURCE_ROW_H = 0.01640625;
+
+/** Where the resource bar hangs: high enough that its ROW lands centred in the strip's slots.
+ *  Centring the FRAME the way the button bar is centred is not the same thing — the frame is
+ *  0.0054 taller than the row it carries, and hanging it that way left every icon and number
+ *  riding 3px low in its slot, with the lumber tree's trunk drawn over the stone below its. */
+const RESOURCE_TOP = -(STRIP_SLOT_TOP + (STRIP_SLOT_H - RESOURCE_ROW_H) / 2 - RESOURCE_ROW_TOP);
 
 /** One screen pixel, in world units, at the height the UI is laid out for (0.6 world = the
  *  viewport's height; ~1042 px/world at 625 px tall). Nudges below are expressed through it
@@ -340,7 +364,7 @@ export class ConsoleUi {
       });
     };
     bar("UpperButtonBarFrame", "TOPLEFT", BUTTON_NUDGE_X, BAR_TOP + BUTTON_NUDGE_Y);
-    bar("ResourceBarFrame", "TOPRIGHT", 0, BAR_TOP);
+    bar("ResourceBarFrame", "TOPRIGHT", 0, RESOURCE_TOP);
 
 
     // Give the console the 4:3 box the file was authored for, CENTRED, rather than letting it
