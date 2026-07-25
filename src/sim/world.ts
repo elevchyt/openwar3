@@ -248,6 +248,13 @@ export interface PendingCast {
   // stale pendingCast left behind by a resumed order can't raise a second ENDCAST
   // when the unit is later stopped (see clearCast — 7.17).
   ended: boolean;
+  // Started by AUTOCAST rather than by a player/trigger order. An autocast reaches past its
+  // cast range (see autocastSearchRange), so the caster may spend a second or two walking —
+  // and in that time somebody else may heal the ally it set out for. The approach re-checks
+  // `autocastWants` each tick for these, so the caster gives up instead of arriving to spend
+  // mana on a target it would no longer have chosen. An ORDERED cast never gives up: the
+  // player asked for it.
+  auto: boolean;
   // The order to resume after the cast (so an autocast/manual cast mid attack-move
   // or follow continues afterward instead of falling idle).
   resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | null;
@@ -5171,7 +5178,7 @@ export class SimWorld {
   /** Order a unit to cast an ability. `code` is the ability's base code; targetId
    *  (unit) / x,y (point) depend on the ability's target type. Returns false if
    *  the cast can't be started (unknown/unlearned ability, wrong target, dead). */
-  issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0): boolean {
+  issueCast(unitId: number, code: string, targetId = 0, x = 0, y = 0, auto = false): boolean {
     const u = this.units.get(unitId);
     if (!u || u.stunned || u.silenced || !this.abilities) return false;
     // An illusion is a picture of a caster, not a caster: it has the abilities on its sheet
@@ -5215,6 +5222,7 @@ export class SimWorld {
       channelLeft: 0,
       backLeft: 0,
       ended: false,
+      auto,
       resume,
     };
     return true;
@@ -5239,6 +5247,7 @@ export class SimWorld {
       y: u.y,
       range: 0,
       castLeft: 0,
+      auto: false, // never stored on the unit, so nothing ever re-checks it
       started: true,
       committed: true,
       fired: true,
@@ -5317,6 +5326,13 @@ export class SimWorld {
         const t = pc.targetId ? this.units.get(pc.targetId) : null;
         const gap = Math.hypot(tx - u.x, ty - u.y) - u.radius - (t?.radius ?? 0);
         if (gap > pc.range) {
+          // An autocast walking to a target it would no longer choose gives up here rather
+          // than at the end of the walk (see PendingCast.auto). The next idle/attack-move
+          // tick re-runs the search and picks whoever needs it now.
+          if (pc.auto && t && !this.autocastStillWanted(u, t, def)) {
+            this.stop(u.id);
+            return;
+          }
           this.chasePoint(u, tx, ty);
           return;
         }
@@ -5471,37 +5487,43 @@ export class SimWorld {
       // (Heal/Inner Fire/Frost Armor all carry it — verified in the 1.27 MPQ).
       const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
       const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
-      const target = this.autocastTarget(u, lvl.castRange, friendly, def.code, F.has("self"), def.targetFlags);
-      if (target) return this.issueCast(u.id, def.code, target.id);
+      const range = this.autocastSearchRange(u, lvl.castRange);
+      const target = this.autocastTarget(u, range, friendly, def.code, F.has("self"), def.targetFlags);
+      if (target) return this.issueCast(u.id, def.code, target.id, 0, 0, true);
     }
     return false;
+  }
+
+  /** How far an autocast LOOKS for work — the caster's own acquisition range, not the
+   *  spell's cast range.
+   *
+   *  This is the difference between a Priest that waits for a wounded Footman to limp into
+   *  Heal's 250 and one that trots over to it: "Any friendly unit within acquisition range
+   *  of the Priest will be automatically healed" (Warcraft Wiki, Priest), and Liquipedia's
+   *  Autocast page puts the same rule generally — autocast "can cause it to move in order to
+   *  cast their spell". The number is the unit's own `acquire` in Units\UnitWeapons.slk, the
+   *  same field that decides who it picks a fight with: Priest 600, Sorceress 700, Druid of
+   *  the Talon 800. The walk itself is free — issueCast's order already closes to cast range.
+   *
+   *  Never SHORTER than the cast range: Slow reaches 700 out of a Sorceress who only looks
+   *  700, but a spell that out-ranged its caster's eyes would otherwise lose the difference. */
+  private autocastSearchRange(u: SimUnit, castRange: number): number {
+    return Math.max(castRange, u.weapon?.acquire ?? 0);
   }
 
   private autocastTarget(u: SimUnit, range: number, friendly: boolean, code: string, selfOk: boolean, flags: string[] = []): SimUnit | null {
     let best: SimUnit | null = null;
     let bestScore = friendly ? 0.999 : Infinity;
     for (const t of this.units.values()) {
-      if (t.building || t.hp <= 0) continue;
-      // The pick must satisfy the same Targets Allowed gate the cast itself will run.
-      // Without this the search happily returns a target issueCast then refuses — and a
-      // Shaman standing between a Gryphon and a Grunt would keep choosing the Gryphon for
-      // his ground-only Lightning Shield and never shield anything at all.
-      if (this.targetError(u, t, flags, code) !== null) continue;
-      // Skip the caster unless the spell's flags permit self-targeting (a `self`
-      // autocast like Priest Heal can pick itself when it's the most-hurt ally).
-      if (t === u && !(friendly && selfOk)) continue;
       if (Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range) continue;
+      if (!this.autocastWants(u, t, friendly, code, selfOk, flags)) continue;
       if (friendly) {
-        if (!this.allied(u, t) || t.mechanical) continue;
-        if (code === "Ahea" && t.hp >= t.maxHp) continue; // only wounded
         const frac = t.hp / t.maxHp; // heal the most-hurt ally
         if (frac < bestScore) {
           bestScore = frac;
           best = t;
         }
       } else {
-        if (!this.hostile(u, t) || t.invulnerable) continue;
-        if (u.buffs.length && this.findBuffFrom(t, u.id)) continue;
         const d = Math.hypot(t.x - u.x, t.y - u.y);
         if (d < bestScore) {
           bestScore = d;
@@ -5510,6 +5532,38 @@ export class SimWorld {
       }
     }
     return best;
+  }
+
+  /** Everything except the distance that makes `t` a target this autocast wants. Split out of
+   *  the search so the APPROACH can re-ask it (see PendingCast.auto): a Priest halfway to a
+   *  wounded ally that someone else just healed turns around instead of arriving to spend
+   *  mana on a full-health unit. */
+  private autocastWants(u: SimUnit, t: SimUnit, friendly: boolean, code: string, selfOk: boolean, flags: string[]): boolean {
+    if (t.building || t.hp <= 0) return false;
+    // The pick must satisfy the same Targets Allowed gate the cast itself will run.
+    // Without this the search happily returns a target issueCast then refuses — and a
+    // Shaman standing between a Gryphon and a Grunt would keep choosing the Gryphon for
+    // his ground-only Lightning Shield and never shield anything at all.
+    if (this.targetError(u, t, flags, code) !== null) return false;
+    // Skip the caster unless the spell's flags permit self-targeting (a `self`
+    // autocast like Priest Heal can pick itself when it's the most-hurt ally).
+    if (t === u && !(friendly && selfOk)) return false;
+    if (friendly) {
+      if (!this.allied(u, t) || t.mechanical) return false;
+      if (code === "Ahea" && t.hp >= t.maxHp) return false; // only wounded
+      return true;
+    }
+    if (!this.hostile(u, t) || t.invulnerable) return false;
+    if (u.buffs.length && this.findBuffFrom(t, u.id)) return false;
+    return true;
+  }
+
+  /** Re-ask autocastWants for a cast the unit is still walking to. Rebuilds the same
+   *  friendly/self flags tickAutocast derived from the ability's Targets Allowed. */
+  private autocastStillWanted(u: SimUnit, t: SimUnit, def: AbilityDef): boolean {
+    const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
+    const friendly = !F.has("enemy") && (F.has("friend") || F.has("self") || F.has("player"));
+    return this.autocastWants(u, t, friendly, def.code, F.has("self"), def.targetFlags);
   }
 
   private findBuffFrom(t: SimUnit, sourceId: number): SimBuff | undefined {
@@ -6725,7 +6779,9 @@ export class SimWorld {
           break;
         case "patrol":
           if (!u.moving && u.waypoint < u.path.length) u.moving = true; // resume after a stun
-          this.tickAcquire(u, dt); // engage enemies encountered en route
+          // Autocast first here too — patrol is one of the orders Liquipedia lists as leaving
+          // autocast active, so a patrolling Priest heals what it passes (issue #94).
+          if (!this.tickAutocast(u)) this.tickAcquire(u, dt); // else engage enemies en route
           break;
         case "hold":
           this.tickHold(u, dt); // attack enemies in range, but never chase
@@ -6886,6 +6942,15 @@ export class SimWorld {
       this.stop(u.id);
       return;
     }
+    // An attack the unit picked up ITSELF never outranks an autocast (issue #94). This is
+    // where a Priest's Heal was being lost: idle auto-acquisition and attack-move both hand
+    // the fight over as a plain "attack" order, and from then on nothing looked at the
+    // autocast again — so one enemy wandering past turned a healer into a very bad archer,
+    // permanently. `attackOrdered` is exactly the distinction the game draws: an EXPLICIT
+    // Attack command on a single target is the player overriding the autocast and is left
+    // alone, everything else is the unit's own idea and yields. A committed swing still
+    // lands first — the strike is already in flight.
+    if (!u.attackOrdered && u.swingLeft < 0 && this.tickAutocast(u)) return;
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     // No target, no weapon, or nothing in hand that can strike THIS target (a Flying Machine
     // whose Bombs were never researched, ordered onto a Footman): don't just stand down — a
@@ -7285,6 +7350,13 @@ export class SimWorld {
       if (st) u.desiredFacing = Math.atan2(st.y - u.y, st.x - u.x);
       return;
     }
+    // Autocast outranks the auto-attack, and does so BEFORE the enemy scan (issue #94). An
+    // A-moved army's Priests heal and its Sorceresses Slow instead of plinking with their
+    // sticks: Liquipedia's Autocast page is explicit that an ORDER suppresses autocast but
+    // that "autocast remains active during attack-move, patrol, stop, and hold position
+    // orders" — attack-move is not the player picking a victim, it is the player pointing.
+    // (Only a single-target Attack order suppresses it; see tickAttack.)
+    if (this.tickAutocast(u)) return;
     if (acq > 0) {
       const hadTarget = u.targetId !== null;
       let t = hadTarget ? this.units.get(u.targetId!) : undefined;
@@ -7307,11 +7379,10 @@ export class SimWorld {
         return; // an enemy is in range — stand and fight, don't advance
       }
     }
-    // Nothing to fight nearby: autocast (Heal/Slow/…) if the caster has one, then
-    // resume toward the attack-move destination (WC3 casters heal on the march).
+    // Nothing to fight nearby (and nothing to cast on — that was tried first): resume toward
+    // the attack-move destination.
     u.targetId = null;
     u.inCombat = false;
-    if (this.tickAutocast(u)) return; // a cast started — hold and cast
     if (Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= ARRIVE_EPS) {
       this.stop(u.id); // arrived
       return;
