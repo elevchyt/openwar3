@@ -16,7 +16,7 @@ function def(over = {}) {
   const { data = [], duration = 0, area = 0, ...rest } = over;
   return {
     id: "TEST", code: "TEST", missileArt: "", targetArt: "", casterArt: "", specialArt: "",
-    effectArt: "", areaArt: "", buffArt: "", buffFx: [], buffEffectArt: "", buffSpecialArt: "",
+    effectArt: "", areaArt: "", buffArt: "", buffFx: [], buffEffectArt: "", buffSpecialArt: "", lightning: [],
     levelData: [{ cost: 0, cooldown: 0, duration, heroDuration: duration, castRange: 0, area, castTime: 0, data, buffs: [], summon: "" }],
     ...rest,
   };
@@ -28,7 +28,7 @@ function unit(over = {}) {
 
 /** Records what the handler did instead of touching a world. */
 function harness(units) {
-  const log = { buffs: [], damage: [], heals: [], effects: [] };
+  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [] };
   const api = {
     rng: () => 0.5,
     getUnit: (id) => units.find((u) => u.id === id),
@@ -39,6 +39,7 @@ function harness(units) {
     spellHeal: (t, amount) => log.heals.push({ id: t.id, amount }),
     applyBuff: (t, b) => log.buffs.push({ id: t.id, kind: b.kind, group: b.group, value: b.value, value2: b.value2, timeLeft: b.timeLeft }),
     emitEffect: (art) => log.effects.push(art),
+    emitLightning: (id, from, to, life = 0, delay = 0) => log.bolts.push({ id, from: from.id, to: to.id, life: round(life), delay: round(delay) }),
     dispel: () => {}, emitSplat: () => {}, summon: () => {}, killUnit: () => {},
   };
   return { api, log };
@@ -82,6 +83,55 @@ const round = (n) => Math.round(n * 1000) / 1000;
   SPELL_HANDLERS.ANfd(api, caster, def({ data: [0.25, 1, 500] }), 1, { targetId: 2, x: 0, y: 0 });
   check("Finger of Death reads dataC for damage, not dataA", log.damage, [{ id: 2, amount: 500 }]);
   check("…and applies no buff", log.buffs, []);
+  // …while dataA/dataB ARE read — as what they are named, the AFOD bolt's "Graphic Delay"
+  // and "Graphic Duration" (issue #97).
+  const { api: api2, log: log2 } = harness([caster, foe]);
+  SPELL_HANDLERS.ANfd(api2, caster, def({ data: [0.25, 1, 500], lightning: ["AFOD"] }), 1, { targetId: 2, x: 0, y: 0 });
+  check("…and strikes with its AFOD bolt on dataA/dataB's timing", log2.bolts, [{ id: "AFOD", from: 1, to: 2, life: 1, delay: 0.25 }]);
+}
+
+// Lightning effects (issue #97) — the bolt art these abilities use INSTEAD of an effect
+// model, taken off the ability's own `LightningEffect` list.
+{
+  const caster = unit({ id: 1, team: 0 });
+  const a = unit({ id: 2, team: 1 });
+  const b = unit({ id: 3, team: 1 });
+  const c = unit({ id: 4, team: 1 });
+  {
+    // Chain Lightning: CLPB caster→first, CLSB down the rest, one bounce apart.
+    const { api, log } = harness([caster, a, b, c]);
+    SPELL_HANDLERS.AOcl(api, caster, def({ data: [85, 3, 0.15], area: 500, lightning: ["CLPB", "CLSB"] }), 1, { targetId: 2, x: 0, y: 0 });
+    check("Chain Lightning strings CLPB then CLSB, staggered by bounce", log.bolts, [
+      { id: "CLPB", from: 1, to: 2, life: 0, delay: 0 },
+      { id: "CLSB", from: 2, to: 3, life: 0, delay: 0.15 },
+      { id: "CLSB", from: 3, to: 4, life: 0, delay: 0.3 },
+    ]);
+  }
+  {
+    // Forked Lightning: one FORK bolt per target, all at once.
+    const { api, log } = harness([caster, a, b, c]);
+    SPELL_HANDLERS.ANfl(api, caster, def({ data: [85, 3], lightning: ["FORK"] }), 1, { targetId: 0, x: 600, y: 0 });
+    check("Forked Lightning forks one FORK bolt to each target", log.bolts.map((l) => `${l.id}:${l.to}`), ["FORK:2", "FORK:3", "FORK:4"]);
+  }
+  {
+    // Drain: `LightningEffect=DRAB,DRAL,DRAM` and dataA/dataB (life/mana per second) pick
+    // which — the Dark Ranger's Drain takes life, so DRAL, for the drain's whole duration.
+    const { api, log } = harness([caster, a]);
+    SPELL_HANDLERS.AHdr(api, caster, def({ data: [25, 0], duration: 8, lightning: ["DRAB", "DRAL", "DRAM"] }), 1, { targetId: 2, x: 0, y: 0 });
+    check("a life Drain tethers with DRAL for the duration", log.bolts, [{ id: "DRAL", from: 1, to: 2, life: 8, delay: 0 }]);
+  }
+  {
+    // …and the Blood Mage's Siphon Mana takes mana, so DRAM.
+    const { api, log } = harness([caster, a]);
+    SPELL_HANDLERS.AHdr(api, caster, def({ data: [0, 15], duration: 6, lightning: ["DRAB", "DRAL", "DRAM"] }), 1, { targetId: 2, x: 0, y: 0 });
+    check("…a mana Drain with DRAM", log.bolts, [{ id: "DRAM", from: 1, to: 2, life: 6, delay: 0 }]);
+  }
+  {
+    // An ability that takes both gets the combined beam.
+    const { api, log } = harness([caster, a]);
+    SPELL_HANDLERS.AHdr(api, caster, def({ data: [10, 10], duration: 6, lightning: ["DRAB", "DRAL", "DRAM"] }), 1, { targetId: 2, x: 0, y: 0 });
+    check("…and one that takes both with DRAB", log.bolts, [{ id: "DRAB", from: 1, to: 2, life: 6, delay: 0 }]);
+  }
 }
 
 // Heal (creep) — dataA "Hit Points Gained" = 15, allies only, never a mechanical unit.

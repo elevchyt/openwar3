@@ -223,6 +223,7 @@ function cloneAbility(base: AbilityDef, id: string): AbilityDef {
     ...base, id,
     levelData: base.levelData.map(cloneLevel),
     tips: [...base.tips], uberTips: [...base.uberTips], targetFlags: [...base.targetFlags], animNames: [...base.animNames],
+    lightning: [...base.lightning],
     buffFx: base.buffFx.map((f) => ({ ...f, attach: [...f.attach] })),
   };
 }

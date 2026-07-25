@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit } from "../sim/world";
+import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -901,6 +901,13 @@ export class RtsController {
    *  reading a client's base off the ground), and left orphaned foundations where a frozen
    *  client's applier had removed the building's record. */
   buildingImageShown(id: number): boolean {
+    return !this.modelHidden(id);
+  }
+
+  /** Same answer for any unit, for the lightning pass (issue #97): a bolt is drawn while
+   *  either of the units it links is on screen, and withheld when both are in the dark —
+   *  otherwise a Chain Lightning cast out of sight lights up the fog it was cast into. */
+  unitImageShown(id: number): boolean {
     return !this.modelHidden(id);
   }
 
@@ -2228,15 +2235,18 @@ export class RtsController {
       // exactly once; a frozen client fills the same renderer queues from its payload.
       const fxE = this.sim.drainSpellEffects();
       const fxS = this.sim.drainSpellSplats();
+      const fxL = this.sim.drainSpellLightnings();
       const fxCs = this.sim.drainCastStarts();
       const fxCf = this.sim.drainCastFires();
       if (fxE.length) this.fxEffects.push(...fxE);
       if (fxS.length) this.fxSplats.push(...fxS);
+      if (fxL.length) this.fxLightnings.push(...fxL);
       if (fxCs.length) this.fxCastStarts.push(...fxCs);
       if (fxCf.length) this.fxCastFires.push(...fxCf);
-      if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxCs.length || fxCf.length)) {
+      if (this.matchLinkIsHost && this.matchLink && (fxE.length || fxS.length || fxL.length || fxCs.length || fxCf.length)) {
         this.wireFx.effects.push(...fxE);
         this.wireFx.splats.push(...fxS);
+        this.wireFx.lightnings.push(...fxL);
         // The wire copy of a cast carries the CASTER's position — the AoI test each
         // recipient's filter runs; the sim's event names only the caster.
         for (const c of fxCs) {
@@ -3958,6 +3968,7 @@ export class RtsController {
     if (fx) {
       this.fxEffects.push(...fx.effects);
       this.fxSplats.push(...fx.splats);
+      this.fxLightnings.push(...(fx.lightnings ?? []));
       this.fxCastStarts.push(...fx.castStarts);
       this.fxCastFires.push(...fx.castFires);
     }
@@ -4084,9 +4095,10 @@ export class RtsController {
    *  bound — flushing stale bursts on refocus would be worse than dropping them. */
   private fxEffects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }> = [];
   private fxSplats: Array<{ splatId: string; x: number; y: number }> = [];
+  private fxLightnings: SimLightning[] = [];
   private fxCastStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> = [];
   private fxCastFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
-  private wireFx: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+  private wireFx: FxSnapshot = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
   drainFxEffects(): typeof this.fxEffects {
     if (this.fxEffects.length > 400) this.fxEffects.splice(0, this.fxEffects.length - 400);
     if (!this.fxEffects.length) return this.fxEffects;
@@ -4098,6 +4110,13 @@ export class RtsController {
     if (!this.fxSplats.length) return this.fxSplats;
     const out = this.fxSplats;
     this.fxSplats = [];
+    return out;
+  }
+  drainFxLightnings(): SimLightning[] {
+    if (this.fxLightnings.length > 400) this.fxLightnings.splice(0, this.fxLightnings.length - 400);
+    if (!this.fxLightnings.length) return this.fxLightnings;
+    const out = this.fxLightnings;
+    this.fxLightnings = [];
     return out;
   }
   drainFxCastStarts(): typeof this.fxCastStarts {
@@ -4116,8 +4135,8 @@ export class RtsController {
    *  so the ~60 Hz caller allocates only when something actually happened. */
   private takeWireFx(): FxSnapshot {
     const out = this.wireFx;
-    if (!out.effects.length && !out.splats.length && !out.castStarts.length && !out.castFires.length) return out;
-    this.wireFx = { effects: [], splats: [], castStarts: [], castFires: [] };
+    if (!out.effects.length && !out.splats.length && !out.lightnings.length && !out.castStarts.length && !out.castFires.length) return out;
+    this.wireFx = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
     return out;
   }
 

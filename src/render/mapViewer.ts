@@ -17,6 +17,7 @@ import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
+import { LightningOverlay } from "./lightningOverlay";
 import { WeatherOverlay } from "./weather";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
@@ -28,6 +29,7 @@ import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
+import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
 import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
 import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
@@ -783,6 +785,10 @@ export class MapViewerScene {
   // buildings after the foundation decals — see the render loop).
   private shadows: ShadowOverlay | null = null;
   private buildingShadows: ShadowOverlay | null = null;
+  // Lightning ribbons (issue #97) — Chain Lightning, Healing Wave, the Drains and kin.
+  // Its own GL pass, drawn after the world's translucent instances and before the fog; the
+  // bolts are strung by the sim's `drainFxLightnings` events and follow their units.
+  private lightning: LightningOverlay | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
   private rallyFlagModel: SpawnModel | null = null; // reused for the smaller queue flags
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
@@ -1018,6 +1024,9 @@ export class MapViewerScene {
       // `height` above the GROUND, so it needs the same terrain sampler the sim uses.
       this.weatherSampler = makeHeightSampler(terrain);
       this.weather = new WeatherOverlay(this.viewer.gl, splatLoader, (x, y) => this.weatherSampler!(x, y));
+      // Lightning (issue #97): the same BLP loader, plus Splats\LightningData.slk — the
+      // table that holds every bolt's texture, width, tint, fray and scroll speed.
+      this.lightning = new LightningOverlay(this.viewer.gl, splatLoader, loadLightningRegistry(this.vfs));
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -2944,6 +2953,41 @@ export class MapViewerScene {
         this.itemBirthing.splice(i, 1);
       }
     }
+  }
+
+  /** Draw the live lightning bolts (issue #97).
+   *
+   *  The overlay owns the geometry; this owns the ANSWER to "where are this bolt's two ends
+   *  right now", which only the scene can give: a unit's live position out of the world (the
+   *  sim's where it steps, the payload's records on a frozen client), the terrain height
+   *  under it, and whether the local viewpoint may see it at all. A unit that has left the
+   *  world entirely doesn't kill the bolt — it stays anchored where that end last was, which
+   *  is what a Finger of Death striking a unit it kills has to look like. */
+  private renderLightning(camera: { viewProjectionMatrix: Float32Array; location: Float32Array }): void {
+    const overlay = this.lightning;
+    const rts = this.rts;
+    if (!overlay || !rts || overlay.count === 0) return;
+    const units = rts.simView.units;
+    overlay.render(camera.viewProjectionMatrix, camera.location, (b) => {
+      const src = b.srcId ? units.get(b.srcId) : undefined;
+      const dst = b.dstId ? units.get(b.dstId) : undefined;
+      const sx = src ? src.x : b.sx;
+      const sy = src ? src.y : b.sy;
+      const tx = dst ? dst.x : b.tx;
+      const ty = dst ? dst.y : b.ty;
+      // Seen if EITHER end is: a bolt reaching out of the fog into your army is a bolt you
+      // watch land, and that is how WC3 shows it too.
+      const visible = (b.srcId !== 0 && rts.unitImageShown(b.srcId)) || (b.dstId !== 0 && rts.unitImageShown(b.dstId)) || (b.srcId === 0 && b.dstId === 0);
+      return {
+        sx,
+        sy,
+        sz: rts.groundHeightAt(sx, sy) + b.sz + (src?.flyHeight ?? 0),
+        tx,
+        ty,
+        tz: rts.groundHeightAt(tx, ty) + b.tz + (dst?.flyHeight ?? 0),
+        visible,
+      };
+    });
   }
 
   private updateEffects(dt: number): void {
@@ -6506,6 +6550,7 @@ export class MapViewerScene {
       this.updateOrderArrows(dt / 1000);
       this.updateEffects(dt / 1000);
       this.updateSpellSplats(dt / 1000); // Thunder Clap's scorch fading in/out on the ground
+      this.lightning?.update(dt / 1000); // age the live bolts; expired ones retire themselves
       this.updateMirrorMissiles(dt / 1000);
       this.updateAuraEffects();
       this.updateSpecialFx(dt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
@@ -6565,6 +6610,12 @@ export class MapViewerScene {
         }
         // Ground decals a spell painted this frame (Thunder Clap's scorch, THND).
         for (const s of this.rts!.drainFxSplats()) this.addSpellSplat(s.splatId, s.x, s.y);
+        // Lightning bolts strung this frame (issue #97). Only the request crosses here —
+        // both ends are re-read from the units every frame in the render pass below, so a
+        // bolt stays attached to a target that walks out from under it.
+        for (const l of this.rts!.drainFxLightnings()) {
+          this.lightning?.add({ type: l.id, srcId: l.sourceId, dstId: l.targetId, sx: l.sx, sy: l.sy, sz: l.sz, tx: l.tx, ty: l.ty, tz: l.tz, life: l.life, delay: l.delay });
+        }
         // Sustain the looping bed under each running channelled field, and drop it the
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).
@@ -6719,6 +6770,10 @@ export class MapViewerScene {
         // draws over its own ring, which reads as sitting under it).
         if (this.ringSplats) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderTranslucent();
+        // Lightning LAST of the world's own passes: a bolt is additive and depth-TESTS
+        // (a cliff in front of it hides it) but writes no depth, so it must come after the
+        // units it arcs between rather than punching a hole in them.
+        this.renderLightning(fogScene.camera);
       } else {
         // Map not fully ready — fall back to the stock all-in-one path. Depth-test (depthMask
         // off) keeps units in front of both shadow passes even when drawn late.
@@ -6727,6 +6782,7 @@ export class MapViewerScene {
         if (this.splats && fogScene) this.splats.render(fogScene.camera.viewProjectionMatrix);
         if (this.buildingShadows && fogScene) this.buildingShadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.ringSplats && fogScene) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
+        if (fogScene) this.renderLightning(fogScene.camera);
       }
       if (this.fog && fogScene) this.fog.render(fogScene.camera.viewProjectionMatrix);
       // Weather LAST of the world passes — after the fog-of-war veil, because rain and snow
@@ -6861,6 +6917,7 @@ export class MapViewerScene {
     for (const e of this.effects) e.inst.detach();
     this.effects = [];
     this.effectModels.clear();
+    this.lightning?.clear(); // bolts hold unit ids the next match will reuse
     for (const inst of this.projectileInsts.values()) inst.detach();
     this.projectileInsts.clear();
     this.projectileLoading.clear();

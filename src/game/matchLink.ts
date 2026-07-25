@@ -451,6 +451,7 @@ export class MatchLink {
     if (fx) {
       this.fxBuf.effects.push(...fx.effects);
       this.fxBuf.splats.push(...fx.splats);
+      this.fxBuf.lightnings.push(...fx.lightnings);
       this.fxBuf.castStarts.push(...fx.castStarts);
       this.fxBuf.castFires.push(...fx.castFires);
       if (this.fxBuf.effects.length > 512) this.fxBuf.effects.splice(0, this.fxBuf.effects.length - 512);
@@ -475,6 +476,9 @@ export class MatchLink {
         snap.fx = {
           effects: this.fxBuf.effects.filter((e) => !viewer.fogBlocksAt(e)),
           splats: this.fxBuf.splats.filter((e) => !viewer.fogBlocksAt(e)),
+          // A bolt is AoI-tested at its caster's end (`sx`/`sy`) — the same eyes-on-the-spot
+          // rule as everything else here, applied to the end the spell was cast from.
+          lightnings: this.fxBuf.lightnings.filter((e) => !viewer.fogBlocksAt({ x: e.sx, y: e.sy })),
           castStarts: this.fxBuf.castStarts.filter((e) => !viewer.fogBlocksAt(e)),
           castFires: this.fxBuf.castFires.filter((e) => !viewer.fogBlocksAt(e)),
         };
@@ -491,7 +495,7 @@ export class MatchLink {
       this.emitted++;
     }
     if (due) {
-      this.fxBuf = { effects: [], splats: [], castStarts: [], castFires: [] };
+      this.fxBuf = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
       this.deathBuf = [];
     }
     // Cleared whether or not a seat was found for them: an unseated peer is a routing bug to
@@ -500,7 +504,7 @@ export class MatchLink {
     return sent;
   }
 
-  private fxBuf: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+  private fxBuf: FxSnapshot = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
   private deathBuf: Array<{ id: number; x: number; y: number }> = [];
 
   /**
@@ -542,6 +546,7 @@ export class MatchLink {
     if (fx) {
       this.pendingFx.effects.push(...fx.effects);
       this.pendingFx.splats.push(...fx.splats);
+      this.pendingFx.lightnings.push(...(fx.lightnings ?? []));
       this.pendingFx.castStarts.push(...fx.castStarts);
       this.pendingFx.castFires.push(...fx.castFires);
       // Same cap as the host's send buffer: a wedged consumer must not grow this forever.
@@ -552,14 +557,14 @@ export class MatchLink {
     for (const d of snap.deaths ?? []) this.pendingDeaths.set(d.id, d);
   }
 
-  private pendingFx: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+  private pendingFx: FxSnapshot = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
   private readonly pendingDeaths = new Map<number, { id: number; x: number; y: number }>();
 
   /** Client side: every fx event received since the last take, across ALL payloads —
    *  the applier consumes this alongside applying `latest()`. */
   takeFx(): FxSnapshot {
     const out = this.pendingFx;
-    this.pendingFx = { effects: [], splats: [], castStarts: [], castFires: [] };
+    this.pendingFx = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
     return out;
   }
 

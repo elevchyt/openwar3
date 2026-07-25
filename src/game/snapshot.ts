@@ -1,4 +1,4 @@
-import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse } from "../sim/world";
+import { isOffField, type SimUnit, type SimMine, type SimItem, type BuildJob, type SimBuff, type SimAbility, type HeldItem, type SimProjectile, type SimCorpse, type SimLightning } from "../sim/world";
 
 /**
  * What one client is TOLD about the world (docs/multiplayer.md Phase E item 5).
@@ -358,6 +358,11 @@ export interface FxSnapshot {
   effects: Array<{ art: string; x: number; y: number; targetId: number; z: number; life?: number; sound?: boolean }>;
   /** Spell ground decals (`drainSpellSplats`) — Thunder Clap's scorch and kin. */
   splats: Array<{ splatId: string; x: number; y: number }>;
+  /** Lightning bolts (`drainSpellLightnings`) — Chain Lightning, Healing Wave, the Drains
+   *  (issue #97). Each end carries a unit id AND a position: a recipient re-attaches the
+   *  bolt to its own records where it can see them, and falls back to the position where it
+   *  cannot. The AoI test uses `sx`/`sy` (the caster's end). */
+  lightnings: SimLightning[];
   /** Cast wind-ups (`drainCastStarts`): the caster's gesture, and a delayed spell's "beware"
    *  art/sound at the target point. `x`/`y` is the caster's position (the AoI test). */
   castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; x: number; y: number }>;
@@ -365,7 +370,7 @@ export interface FxSnapshot {
   castFires: Array<{ casterId: number; code: string; abilityId: string; x: number; y: number }>;
 }
 
-export const EMPTY_FX: FxSnapshot = { effects: [], splats: [], castStarts: [], castFires: [] };
+export const EMPTY_FX: FxSnapshot = { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] };
 
 /** A corpse, whole — `SimCorpse` is already the client-safe subset (identity, pose, the
  *  decay clock, the raised latch a render corpse hides on). Crossing it as STATE is what
@@ -797,5 +802,5 @@ export function snapshotFor(
   // sim keeps mutating while the message waits to serialize.
   const stash = world.stashOf(recipient);
   const research = Object.fromEntries(world.tech?.researchedBy(recipient) ?? []);
-  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], castStarts: [], castFires: [] }, deaths: [], commands };
+  return { recipient, time, timeOfDay: world.timeOfDay, dawnDusk: world.dawnDusk, stash: { gold: stash.gold, lumber: stash.lumber }, research, creepCamps, units, mines, items, projectiles, corpses, fx: { effects: [], splats: [], lightnings: [], castStarts: [], castFires: [] }, deaths: [], commands };
 }

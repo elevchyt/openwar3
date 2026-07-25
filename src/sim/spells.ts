@@ -70,6 +70,14 @@ export interface SpellApi {
    *  long (s) the model instance is held before detaching (default ~2s); pass a longer
    *  value for a sustained effect like Flame Strike's 7s fire pillar. */
   emitEffect(art: string, x: number, y: number, targetId: number, life?: number): void;
+  /** String a lightning bolt between two units (issue #97) — the ribbon art Chain Lightning,
+   *  Healing Wave, the Drains, Mana Burn and Finger of Death use INSTEAD of an effect model.
+   *  `id` is a LightningData row, normally taken straight off the ability
+   *  (`def.lightning[0]` = the primary bolt, `[1]` = the secondary). `life` 0 = the row's own
+   *  fade duration; `delay` staggers a chain's bounces. Ends attach at each unit's own
+   *  missile launch/impact height, so a bolt leaves the caster's hands and lands on the
+   *  target's body rather than at their feet. */
+  emitLightning(id: string, from: SimUnit, to: SimUnit, life?: number, delay?: number): void;
   /** Paint a temporary ground decal at a point — an `Splats\UberSplatData.slk` row id
    *  (Thunder Clap's `THND`). The row carries the texture, its half-width `Scale`, and
    *  the BirthTime/PauseTime/Decay fade the renderer plays it through. Which ability
@@ -316,6 +324,32 @@ function chainFrom(api: SpellApi, caster: SimUnit, first: SimUnit, count: number
     cur = best;
   }
   return chain;
+}
+
+/** The bolt ids an ability strings (issue #97): `[primary, secondary]` — the caster→first
+ *  bolt and the target→target one. The profile lists them in that order
+ *  (`LightningEffect=CLPB,CLSB`); an ability that names only one uses it for both. */
+function bolts(def: AbilityDef): [string, string] {
+  const primary = def.lightning[0] ?? "";
+  return [primary, def.lightning[1] ?? primary];
+}
+
+/** Seconds between a chain's bounces. Chain Lightning and Healing Wave visibly WALK down
+ *  their chain rather than lighting every link at once, but — unlike Finger of Death
+ *  ("Graphic Delay") and Mana Burn ("Bolt Delay") — their ability rows name no interval, so
+ *  the engine hardcodes one and so do we. Presentation only: the damage/heal is applied to
+ *  the whole chain on cast, as it already was. */
+const CHAIN_BOUNCE_DELAY = 0.15;
+
+/** String a chain's lightning: the primary from the caster to the first link, a secondary
+ *  between each pair after it, each one bounce later. */
+function chainBolts(api: SpellApi, caster: SimUnit, def: AbilityDef, chain: SimUnit[]): void {
+  const [primary, secondary] = bolts(def);
+  let prev = caster;
+  chain.forEach((u, i) => {
+    api.emitLightning(i === 0 ? primary : secondary, prev, u, 0, i * CHAIN_BOUNCE_DELAY);
+    prev = u;
+  });
 }
 
 /** Summon `count` copies of a unit for the caster, fanned around a point (each
@@ -568,9 +602,17 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       .slice(0, cap);
     if (group.length < 2) return;
     const ids = group.map((u) => u.id);
+    const linkTime = dur(lvl, group[0]) || 75;
     for (const u of group) {
       api.linkSpirits(u, ids, dur(lvl, u) || 75, share);
       if (def.targetArt) api.emitEffect(def.targetArt, u.x, u.y, u.id);
+    }
+    // The link made visible: an SPLK bolt from each member to the next, closing the ring, and
+    // held for the whole link — the bolts follow the units as they walk, which is what tells
+    // the player at a glance which four are sharing the damage.
+    const links = group.length > 2 ? group.length : 1; // a pair needs one bolt, not two on top of each other
+    for (let i = 0; i < links; i++) {
+      api.emitLightning(bolts(def)[0], group[i], group[(i + 1) % group.length], linkTime);
     }
   },
 
@@ -627,7 +669,11 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANfd: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
-    api.spellDamage(t, d(def.levelData[rank - 1], 2, 500), caster.id);
+    const lvl = def.levelData[rank - 1];
+    api.spellDamage(t, d(lvl, 2, 500), caster.id);
+    // …and dataA/dataB, the presentation pair, are exactly the AFOD bolt's timing: it
+    // strikes 0.25s after the cast and burns for 1s.
+    api.emitLightning(bolts(def)[0], caster, t, d(lvl, 1, 1), d(lvl, 0, 0.25));
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
@@ -859,7 +905,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANfl: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     const targets = coneTargets(api, caster, ctx.x, ctx.y, lvl.castRange || 600, 0.5).filter((t) => api.hostile(caster, t));
-    for (const t of targets.slice(0, d(lvl, 1, 3))) api.spellDamage(t, d(lvl, 0, 85), caster.id);
+    // Forked: every target gets its OWN bolt from the caster, all at once — that fan of
+    // bolts is the whole look of the spell.
+    for (const t of targets.slice(0, d(lvl, 1, 3))) {
+      api.spellDamage(t, d(lvl, 0, 85), caster.id);
+      api.emitLightning(bolts(def)[0], caster, t);
+    }
   },
 
   // Fan of Knives (Warden) — PBAoE: dataA damage to all enemies within `area`.
@@ -905,6 +956,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const chain = chainFrom(api, caster, t, d(lvl, 1, 4), lvl.area || 500, true);
     const falloff = d(lvl, 2, 0.15);
+    // The bolt IS the spell's art (CLPB caster→first, CLSB between the rest) — Chain
+    // Lightning ships no TargetArt at all, which is why it used to land in silence.
+    chainBolts(api, caster, def, chain);
     chain.forEach((u, i) => {
       api.spellDamage(u, d(lvl, 0, 85) * Math.pow(1 - falloff, i), caster.id);
       if (def.targetArt) api.emitEffect(def.targetArt, u.x, u.y, u.id);
@@ -921,6 +975,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const chain = chainFrom(api, caster, t, d(lvl, 1, 3), lvl.area || 500, false);
     const falloff = d(lvl, 2, 0.25);
+    chainBolts(api, caster, def, chain); // HWPB then HWSB — the healing arc between allies
     chain.forEach((u, i) => {
       if (!u.mechanical) api.spellHeal(u, d(lvl, 0, 130) * Math.pow(1 - falloff, i));
       if (def.targetArt) api.emitEffect(def.targetArt, u.x, u.y, u.id);
@@ -1028,6 +1083,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const burned = api.burnMana(t, d(lvl, 0, 50));
     if (burned > 0) api.spellDamage(t, burned, caster.id);
+    // dataB/dataC are named "Bolt Delay" and "Bolt Lifetime" — the MBUR beam's own timing.
+    api.emitLightning(bolts(def)[0], caster, t, d(lvl, 2, 1), d(lvl, 1, 0.25));
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
 
@@ -1387,6 +1444,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const d0 = lvl.duration || 6;
     api.applyBuff(t, { kind: "dot", group: "drain", timeLeft: d0, sourceId: caster.id, value: rate, ...fx(def) });
     api.applyBuff(caster, { kind: "hot", group: "drain", timeLeft: d0, sourceId: caster.id, value: rate });
+    // The tether: the beam holds between caster and victim for the whole drain, its texture
+    // crawling BACK toward the caster (TexCoordScale is negative on all three drain rows).
+    // Which of `LightningEffect=DRAB,DRAL,DRAM` is which is decided by what the ability
+    // actually takes — dataA "Life Transferred Per Second", dataB "Mana Transferred Per
+    // Second": the Dark Ranger's Drain is life (DRAL), the Blood Mage's Siphon Mana is mana
+    // (DRAM), and an ability that takes both gets the combined beam (DRAB).
+    const lifeRate = d(lvl, 0, 0);
+    const manaRate = d(lvl, 1, 0);
+    const which = lifeRate > 0 && manaRate > 0 ? 0 : manaRate > 0 ? 2 : 1;
+    api.emitLightning(def.lightning[which] ?? def.lightning[0] ?? "", caster, t, d0);
   },
 
   // Death Pact (Death Knight) — sacrifice a friendly non-hero unit to heal the

@@ -125,6 +125,13 @@ export interface AbilityDef {
    *  This — NOT the ability's own TargetArt — is where a buff's art lives; most
    *  buff-applying abilities have no TargetArt at all. */
   buffFx: BuffFx[];
+  /** AbilityFunc `LightningEffect` — the LightningData row ids this ability strings between
+   *  its caster and its targets (`CLPB,CLSB` for Chain Lightning, `DRAB,DRAL,DRAM` for the
+   *  Drains). These are NOT models: a lightning is a ribbon linking two moving points, drawn
+   *  by src/render/lightningOverlay.ts off `Splats\LightningData.slk` (src/data/lightning.ts).
+   *  Order matters — the primary bolt (caster → first target) comes first, the secondary
+   *  (target → target) second; the Drain's three are life+mana, life, mana in that order. */
+  lightning: string[];
   animNames: string[]; // caster animation tags (AbilityFunc "animnames": spell,throw,slam…)
   // The ability's ORDER STRING (AbilityFunc `Order=holybolt`, and `Orderon`/`Orderoff`
   // for an autocast toggle). This is the name a script casts it by: the GUI's "Unit -
@@ -500,6 +507,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       buffArt: buffFx[0]?.path ?? "",
       buffEffectArt: mdlPath(buffField(func, str(r, "buffid1"), "Effectart")),
       buffSpecialArt: mdlPath(buffField(func, str(r, "buffid1"), "Specialart")),
+      lightning: (f ? str(f, "LightningEffect") : "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
       animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
       // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it.
       order: (f ? str(f, "Order") : "").trim().toLowerCase(),
@@ -574,6 +582,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     buffArt: "",
     buffEffectArt: "",
     buffSpecialArt: "",
+    lightning: [],
     animNames: [],
     order: "",
     orderOn: "",

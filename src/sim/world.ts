@@ -107,6 +107,33 @@ export interface SimProjectile {
   spell?: { code: string; rank: number; abilityId: string };
 }
 
+/** One lightning bolt the renderer should string up (issue #97).
+ *
+ *  A lightning is NOT a model: it is a ribbon between two points that follows them for as
+ *  long as it lives (src/data/lightning.ts, src/render/lightningOverlay.ts). Both ends are
+ *  given as a unit id AND a position: the id wins while that unit lives (so the bolt tracks
+ *  a target that walks away, exactly as WC3's does), and the position is where it stays
+ *  anchored once the unit is gone — an end that just vanished mid-bolt looks like a bug.
+ *  `sz`/`tz` are heights ABOVE GROUND; the renderer adds the terrain under each end. */
+export interface SimLightning {
+  id: string; // LightningData row ("CLPB", "AFOD", …)
+  sourceId: number; // 0 = a fixed point
+  targetId: number;
+  sx: number;
+  sy: number;
+  sz: number;
+  tx: number;
+  ty: number;
+  tz: number;
+  /** How long the bolt is visible, seconds. From the ability where the data says so
+   *  (Finger of Death's "Graphic Duration", Mana Burn's "Bolt Lifetime"); 0 = use the
+   *  LightningData row's own fade `Duration`. */
+  life: number;
+  /** Seconds before it appears — Finger of Death's "Graphic Delay", and what staggers a
+   *  Chain Lightning's bounces so the bolt visibly walks down the chain. */
+  delay: number;
+}
+
 /** A unit type's weapon slots as the sim wants them (see WeaponSlotDef for the data behind
  *  each one). A slot carrying no damage at all is dropped — that is how a Town Hall, which has
  *  a UnitWeapons row like everything else, ends up unarmed. A DISABLED slot is KEPT: the Flying
@@ -1390,6 +1417,10 @@ export class SimWorld {
   // Temporary ground decals a spell paints (Thunder Clap's scorch): an UberSplatData
   // row id + where. The row carries the texture, half-width and fade timings.
   private spellSplats: Array<{ splatId: string; x: number; y: number }> = [];
+  // Lightning bolts strung this frame (issue #97) — Chain Lightning, Healing Wave, the
+  // Drains, Finger of Death… Unlike an effect model these link TWO points and hold, so
+  // each carries both ends and how long it lives. See SimLightning.
+  private spellLightnings: SimLightning[] = [];
   // A unit began casting: renderer plays the cast animation (spell/throw/slam) and
   // holds it for `hold` seconds — the whole cast (wind-up + backswing, or wind-up +
   // channel). `loop` = a channelled spell (loop the clip for the channel) vs a
@@ -6415,6 +6446,22 @@ export class SimWorld {
     emitSplat: (splatId, x, y) => {
       if (splatId) this.spellSplats.push({ splatId, x, y });
     },
+    emitLightning: (id, from, to, life, delay) => {
+      if (!id) return;
+      this.spellLightnings.push({
+        id,
+        sourceId: from.id,
+        targetId: to.id,
+        sx: from.x,
+        sy: from.y,
+        sz: boltZ(from, "launch"),
+        tx: to.x,
+        ty: to.y,
+        tz: boltZ(to, "impact"),
+        life: life ?? 0,
+        delay: delay ?? 0,
+      });
+    },
     addSpellField: (f) => this.addSpellFieldInternal(f),
     burnMana: (t, amount) => {
       const burned = Math.min(t.mana, Math.max(0, amount));
@@ -6659,6 +6706,13 @@ export class SimWorld {
     if (!this.spellEffects.length) return this.spellEffects;
     const out = this.spellEffects;
     this.spellEffects = [];
+    return out;
+  }
+  /** Lightning bolts strung this frame (LightningData row id + both ends). */
+  drainSpellLightnings(): SimLightning[] {
+    if (!this.spellLightnings.length) return this.spellLightnings;
+    const out = this.spellLightnings;
+    this.spellLightnings = [];
     return out;
   }
   /** Ground decals a spell asked for this frame (UberSplatData row id + centre). */
@@ -10062,6 +10116,21 @@ export class SimWorld {
 // Fallback launch/impact height (units above ground) for missiles whose weapon has
 // no launch data — every real ranged unit's impactz is ~60, so this matches the game.
 const DEFAULT_MISSILE_HEIGHT = 60;
+
+/** Where a lightning bolt attaches to a unit: height above ground, not a world z.
+ *
+ *  The game already states, per unit, where a bolt leaves it and where one lands on it —
+ *  UnitWeapons.slk `launchz` (the Archmage's rod at 66) and `impactz` (~60 on every real
+ *  ranged unit). Reusing them keeps a Chain Lightning arriving at chest height on a
+ *  footman and up on the body of a chimaera instead of at everyone's feet, without
+ *  inventing a per-unit table. A flyer's ALTITUDE is deliberately not folded in here: the
+ *  renderer adds each end's live `flyHeight` every frame, so a bolt strung to a gryphon
+ *  rides it up rather than staying where it was when the spell went off. */
+function boltZ(u: SimUnit, end: "launch" | "impact"): number {
+  const w = u.weapon;
+  const local = end === "launch" ? (w && w.launchZ > 0 ? w.launchZ : 0) : w && w.impactZ > 0 ? w.impactZ : 0;
+  return local || DEFAULT_MISSILE_HEIGHT;
+}
 
 // World-space launch point for a missile: the unit origin plus the weapon's LOCAL
 // (launchX forward, launchY left, launchZ up) offset, rotated by facing. WC3
