@@ -5,11 +5,13 @@ import {
   AttackType,
   MoveType,
   PrimaryAttribute,
+  RegenType,
   WeaponType,
   toArmorType,
   toAttackType,
   toMoveType,
   toPrimaryAttribute,
+  toRegenType,
   toWeaponType,
 } from "./enums";
 
@@ -156,9 +158,14 @@ export interface UnitDef {
   sightNight: number;
   hitPoints: number;
   /** UnitBalance.slk `regenHP` — the unit type's own hit-point regeneration (hp/sec). The sim
-   *  builds a unit's live regen from its attributes and buffs (world.ts), so this is the DATA
-   *  value, quoted by the tooltips that promise it ("<ucrm,regenHP> hit points per second"). */
+   *  adds the attribute/buff/item regen on top of this (world.ts recomputeStats), so this is
+   *  the DATA value, quoted by the tooltips that promise it ("<ucrm,regenHP> hit points per
+   *  second"). Only the Phoenix (`hphx`) ships a NEGATIVE one: -25, i.e. it burns down. */
   hpRegen: number;
+  /** UnitBalance.slk `regenType` — WHEN `hpRegen` applies (always / night / blight / none).
+   *  See RegenType: this column, not the race field, is what makes night elves heal after
+   *  dark and the Undead heal only on blight. */
+  regenType: RegenType;
   mana: number;
   armor: number;
   // UnitBalance.slk `defUp` — how much ONE level of an armour upgrade is worth to this
@@ -427,6 +434,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       sightNight: b ? num(b, "nsight", 0) : 0,
       hitPoints: isHero && realhp > 0 ? realhp : b ? num(b, "hp", 0) : 0,
       hpRegen: b ? num(b, "regenHP", 0) : 0,
+      regenType: toRegenType(b ? str(b, "regenType") : ""),
       mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
       armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
       defUp: b ? num(b, "defUp", 0) : 0,

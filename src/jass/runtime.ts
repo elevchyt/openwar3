@@ -680,6 +680,10 @@ export interface EngineHooks {
    *  haunted one (BlightGoldMineForPlayerBJ removes the mine, then creates this at the
    *  same spot). Returns the sim id of the mine that now stands there. */
   createBlightedGoldMine?(player: number, x: number, y: number, facing: number): number;
+  /** IsPointBlighted — whether that spot is on blight. The sim keeps blight as the union of
+   *  the Undead structures' Blight Growth discs (SimWorld.isBlighted), which is enough for
+   *  the question a script actually asks even though we paint no purple ground. */
+  isPointBlighted?(x: number, y: number): boolean;
   /** GetPlayerStructureCount / GetPlayerUnitCount — melee defeat is "my team owns no
    *  structures", so these decide who has lost (MeleeCheckForLosersAndVictors). */
   playerStructureCount?(player: number, includeIncomplete: boolean): number;

@@ -125,6 +125,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
       }
       return best ? MINE_ID_BASE + best.id : -1;
     },
+    isPointBlighted: (x, y) => sim.isBlighted(x, y),
     // Unit state: SetUnitState/GetUnitState → sim HP/mana. state: 0=life 1=maxlife 2=mana 3=maxmana.
     setUnitState: (id, state, value) => {
       const u = sim.units.get(id);

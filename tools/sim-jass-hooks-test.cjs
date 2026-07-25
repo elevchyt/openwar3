@@ -39,7 +39,7 @@ const EXPECTED = [
   "getHeroSkillPoints", "getHeroXp", "getResourceAmount", "killUnit", "removeUnit",
   "getTimeOfDay", "getUnitAbilityLevel", "getUnitFacing", "getUnitFlyHeight", "getUnitLevel",
   "getUnitMoveSpeed", "getUnitState", "getUnitX", "getUnitY",
-  "isDawnDuskEnabled", "isUnitPaused", "itemInfo",
+  "isDawnDuskEnabled", "isPointBlighted", "isUnitPaused", "itemInfo",
   "modifySkillPoints", "pauseUnit", "playerTechCount", "removeFromStock", "removeItem",
   "resetUnitCooldown", "selectHeroSkill", "setAllTypeSlots", "setDawnDusk", "setHeroLevel",
   "setResourceAmount",

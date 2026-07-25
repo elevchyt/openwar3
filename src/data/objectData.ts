@@ -18,7 +18,7 @@
 import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
-import { PrimaryAttribute, toArmorType, toAttackType, toMoveType } from "./enums";
+import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toRegenType } from "./enums";
 import type { UnitDef, UnitRegistry, WeaponSlotDef } from "./units";
 import { mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
@@ -72,6 +72,11 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   usin: (d, v) => { d.sightNight = n(v); },
   // Combat / vitals.
   uhpm: (d, v) => { d.hitPoints = n(v); },
+  // Passive regeneration — the rate and the rule that says when it runs (UnitMetaData.slk
+  // `uhpr` → regenHP, `uhrt` → regenType). A custom unit that heals in daylight is a map
+  // rewriting the second of these, not the first.
+  uhpr: (d, v) => { d.hpRegen = n(v); },
+  uhrt: (d, v) => { d.regenType = toRegenType(s(v)); },
   umpm: (d, v) => { d.mana = n(v); },
   udef: (d, v) => { d.armor = Math.round(n(v)); },
   udty: (d, v) => { d.armorType = toArmorType(s(v)); },

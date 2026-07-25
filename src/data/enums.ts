@@ -64,6 +64,23 @@ export enum MoveType {
   Amphibious = "amph",
 }
 
+/** UnitBalance.slk `regenType` — WHEN the unit's own `regenHP` applies. This one
+ *  column is the whole of WC3's racial hit-point-regeneration rule, and every stock
+ *  row uses exactly one of these four tokens (verified against the 1.27a
+ *  Units\UnitBalance.slk: 502 `always`, 242 `none`, 51 `night`, 41 `blight`):
+ *
+ *    always  Human and Orc units, all creeps, and the heroes of those races.
+ *    night   Night elf — they heal after dark and not at all in the sun.
+ *    blight  Undead — only while standing on the blight their buildings spread.
+ *    none    Every non-elf building (which is why they need a worker to repair).
+ */
+export enum RegenType {
+  None = "none",
+  Always = "always",
+  Night = "night",
+  Blight = "blight",
+}
+
 /** UnitBalance.slk `primary` — a hero's primary attribute ("" = not a hero). */
 export enum PrimaryAttribute {
   None = "",
@@ -96,6 +113,7 @@ const attackTypes = new Set<string>(Object.values(AttackType));
 const armorTypes = new Set<string>(Object.values(ArmorType));
 const weaponTypes = new Set<string>(Object.values(WeaponType));
 const moveTypes = new Set<string>(Object.values(MoveType));
+const regenTypes = new Set<string>(Object.values(RegenType));
 
 export function toAttackType(v: string): AttackType {
   const s = v.toLowerCase();
@@ -115,6 +133,11 @@ export function toWeaponType(v: string): WeaponType {
 export function toMoveType(v: string): MoveType {
   const s = v.toLowerCase();
   return moveTypes.has(s) ? (s as MoveType) : MoveType.None;
+}
+
+export function toRegenType(v: string): RegenType {
+  const s = v.toLowerCase();
+  return regenTypes.has(s) ? (s as RegenType) : RegenType.None;
 }
 
 export function toPrimaryAttribute(v: string): PrimaryAttribute {

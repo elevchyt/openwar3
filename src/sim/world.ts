@@ -7,7 +7,7 @@ import { type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
-import { AttackType, ArmorType, PrimaryAttribute, isRangedWeapon } from "../data/enums";
+import { AttackType, ArmorType, PrimaryAttribute, RegenType, isRangedWeapon } from "../data/enums";
 import {
   MISC_DATA,
   MISC_GAME,
@@ -1279,6 +1279,10 @@ export class SimWorld {
   private deaths: number[] = [];
   /** Dead STRUCTURES, kept whole for the ghost path — see drainDeadStructures. */
   private deadStructures: SimUnit[] = [];
+  /** The blighted discs this tick — one per living Undead structure (see rebuildBlight). */
+  private blight: { x: number; y: number; r2: number }[] = [];
+  /** typeId → blight radius, resolved once per type from its ability list. */
+  private blightRadii = new Map<string, number>();
   /** Whether to record death/damage/attack events for the trigger engine (the host
    *  sets each only when the loaded script actually registers that event kind — off
    *  for melee and for maps that don't listen, so nothing accumulates unread). */
@@ -4212,6 +4216,79 @@ export class SimWorld {
     return this.timeOfDay >= DAY_START && this.timeOfDay < DAY_END;
   }
 
+  /** The blight radius an Undead structure spreads, or 0 for everything else.
+   *
+   *  Blight is not a property of the building's own row — it is an ability the building
+   *  carries in Units\UnitAbilities.slk, and AbilityData.slk gives that ability the radius:
+   *  `Abgs` "Blight Growth (Small)" Area1 **768** on the Ziggurat and the Crypt, `Abgl`
+   *  "(Large)" Area1 **960** on the Necropolis/Halls/Black Citadel, the Altar, the Graveyard,
+   *  the Slaughterhouse and the haunted gold mine. (Their sibling rows `Abds`/`Abdl` share the
+   *  same base code `Abli` but are blight DISPEL, carried by non-Undead builders — so match
+   *  the ability id, not the code.) Cached per type: an ability list never changes under us. */
+  private blightRadiusOf(typeId: string): number {
+    let r = this.blightRadii.get(typeId);
+    if (r === undefined) {
+      r = 0;
+      const def = this.unitReg?.get(typeId);
+      for (const id of def?.abilities ?? []) {
+        if (id !== "Abgs" && id !== "Abgl") continue;
+        r = Math.max(r, this.abilities?.get(id)?.levelData[0]?.area ?? 0);
+      }
+      this.blightRadii.set(typeId, r);
+    }
+    return r;
+  }
+
+  /** Recompute the blighted region: the union of every living Undead structure's disc.
+   *
+   *  We model blight only as far as the sim needs it — as the ground most Undead units must
+   *  stand on to regenerate at all (UnitBalance.slk `regenType` = blight). Deliberately NOT
+   *  modelled: the purple ground texture, and the way real blight OUTLIVES its building and
+   *  decays back to grass (the `BuildingUnblightRadius` 350 in Units\MiscData.txt is a
+   *  different thing again — the hole a non-Undead structure punches in it). Cheap enough to
+   *  redo each tick: a player owns a few dozen structures at most. */
+  private rebuildBlight(): void {
+    this.blight.length = 0;
+    for (const u of this.units.values()) {
+      if (u.hp <= 0 || !u.building) continue;
+      const r = this.blightRadiusOf(u.typeId);
+      if (r > 0) this.blight.push({ x: u.x, y: u.y, r2: r * r });
+    }
+  }
+
+  /** Is this point on blight? */
+  isBlighted(x: number, y: number): boolean {
+    for (const b of this.blight) {
+      const dx = x - b.x, dy = y - b.y;
+      if (dx * dx + dy * dy <= b.r2) return true;
+    }
+    return false;
+  }
+
+  /** The unit TYPE's own hit-point regeneration (UnitBalance.slk `regenHP`), gated by the
+   *  `regenType` column that says when it may run. That single column is the whole of WC3's
+   *  racial regeneration rule, and it is why a Grunt heals up after a fight and a Ghoul does
+   *  not once it has walked off the blight:
+   *
+   *    Footman / Grunt / Peasant   always  0.25 hp/sec
+   *    Archer / Huntress / Tree    night   0.5   (nothing at all in daylight)
+   *    Ghoul / Acolyte / Abomination  blight  2  (only while standing on blight)
+   *    Barracks, Ziggurat, …       none    — (which is why they need a worker to repair)
+   *
+   *  Heroes carry a row of their own too (Paladin 0.25 always, Death Knight 2 blight, Demon
+   *  Hunter 0.5 night) and it ADDS to the Strength regen — so a night elf hero really does
+   *  heal noticeably slower in the sun, which is the behaviour players know. */
+  private typeHpRegen(u: SimUnit): number {
+    const def = this.unitReg?.get(u.typeId);
+    if (!def || !def.hpRegen) return 0;
+    switch (def.regenType) {
+      case RegenType.Always: return def.hpRegen;
+      case RegenType.Night: return this.isDay ? 0 : def.hpRegen;
+      case RegenType.Blight: return this.isBlighted(u.x, u.y) ? def.hpRegen : 0;
+      default: return 0; // RegenType.None
+    }
+  }
+
   /** Same team = allied (friendly), unless the alliance matrix says otherwise (7.22).
    *  Neutral-passive shops count as nobody's ally. */
   allied(a: SimUnit, b: SimUnit): boolean {
@@ -4554,7 +4631,7 @@ export class SimWorld {
     if (root && !u.uprooted) u.speed = 0;
     if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
     u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen + upg.manaRegen;
-    u.hpRegen = (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
+    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
     u.lifesteal = Math.max(lifesteal, item.lifesteal);
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
@@ -4814,7 +4891,20 @@ export class SimWorld {
 
   private tickRegen(u: SimUnit, dt: number): void {
     if (u.maxMana > 0 && u.mana < u.maxMana) u.mana = Math.min(u.maxMana, u.mana + u.manaRegen * dt);
-    if (u.hpRegen > 0 && u.hp > 0 && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.hpRegen * dt);
+    if (u.hp <= 0) return;
+    if (u.hpRegen > 0) {
+      if (u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.hpRegen * dt);
+    } else if (u.hpRegen < 0) {
+      // A negative regen is a real value, not a guard to skip: the Phoenix (`hphx`) is the one
+      // unit in the game that ships one — UnitBalance.slk regenHP **-25**, regenType always —
+      // and burning itself down is exactly how it is meant to expire. It dies as if slain, so
+      // the Blood Mage's egg/rebirth chain sees a normal death.
+      u.hp += u.hpRegen * dt;
+      if (u.hp <= 0) {
+        u.hp = 0;
+        this.kill(u);
+      }
+    }
   }
 
   /** Re-apply every active aura's buff to allies in range (short-TTL, so it fades
@@ -6560,6 +6650,7 @@ export class SimWorld {
     this.tickShops(dt);
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
+    this.rebuildBlight(); // where the Undead may regenerate at all (before recompute)
     for (const u of this.units.values()) {
       if (this.tickBuffs(u, dt)) continue; // decay timed effects (a DoT may kill)
       this.tickMeld(u); // Shadow Meld holds only while the unit is still and the sun is down

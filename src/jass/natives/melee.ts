@@ -149,9 +149,10 @@ export function registerMeleeNatives(rt: Runtime): void {
     return c.rt.unitForSim({ id: simId, typeId: "ngol", owner: PLAYER_NEUTRAL_PASSIVE, x, y, facing });
   });
 
-  // --- blight (Undead) — we don't model blight; the ground under a necropolis stays green ---
+  // --- blight (Undead) — the sim tracks WHERE blight is (the Undead regenerate only on it),
+  // but we paint no purple ground, so the SetBlight* painters stay no-ops.
   for (const name of ["SetBlight", "SetBlightRect", "SetBlightPoint", "SetBlightLoc"]) def(rt, name, () => JNULL);
-  def(rt, "IsPointBlighted", () => jBool(false));
+  def(rt, "IsPointBlighted", (c, a) => jBool(c.rt.hooks?.isPointBlighted?.(asNum(a[0]), asNum(a[1])) ?? false));
 
   // --- melee AI (MeleeStartingAI) — no AI scripts yet, so a computer slot just sits there ---
   for (const name of [
