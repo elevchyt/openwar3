@@ -336,14 +336,16 @@ console.log('\n[7.8] Custom ability data (war3map.w3a → custom abilities)');
   const candy = join(WC3, 'Maps', 'FrozenThrone', 'Scenario', "(10)ExtremeCandyWar2004.w3x");
   const abMetaPath = join(WC3, 'ExtractedData', 'merged', 'Units', 'AbilityMetaData.slk');
   if (existsSync(candy) && existsSync(abMetaPath)) {
-    const { AbilityRegistry } = require(join(BUILD, '..', 'data', 'abilities.js'));
+    const { AbilityRegistry, emptyAbilityLevel } = require(join(BUILD, '..', 'data', 'abilities.js'));
     const { applyMapAbilityData } = require(join(BUILD, '..', 'data', 'objectData.js'));
     const wc = openArchive(candy);
     const w3a = readBytes(wc, 'war3map.w3a');
     const wts = readBytes(wc, 'war3map.wts');
     const abMeta = readFileSync(abMetaPath);
     // Minimal base ability (Aoar) for A000 to clone; applyMapAbilityData layers overrides on.
-    const lvl = () => ({ cost: 0, cooldown: 0, duration: 0, heroDuration: 0, castRange: 0, area: 0, castTime: 0, data: new Array(9).fill(NaN), buffs: [], summon: '' });
+    // The rank comes from the real builder, not a literal spelled out here — a hand-rolled one
+    // silently lost `dataStr` and crashed cloneLevel's spread of it.
+    const lvl = emptyAbilityLevel;
     const baseAb = {
       id: 'Aoar', code: 'Aoar', isHero: false, isItem: false, levels: 1, reqLevel: 0, levelSkip: 0, target: 'passive',
       targetFlags: [], autocast: false, name: 'Base', icon: '', hotkey: '', buttonX: 0, buttonY: 0, learnX: 0, learnY: 0,

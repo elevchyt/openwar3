@@ -19,6 +19,10 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
+// Build ranks from the real blank rather than a literal — a stub that spells the shape out
+// by hand drifts from AbilityLevel the moment a field is added (see jass-corpus-test 7.8).
+const { emptyAbilityLevel } = require(join(REPO, ".sim-build", "src", "data", "abilities.js"));
+const lvl = (over) => ({ ...emptyAbilityLevel(), ...over });
 
 let failed = 0;
 function check(what, got, want) {
@@ -40,10 +44,10 @@ const unitReg = { get: (id) => UNITS[id] };
 // Only the two columns the toggle reads. `summon` is UnitID1 — that is where the parser puts
 // it (str(r, `unitid${L}`)), which is why the alternate form arrives under that name.
 const ABILS = {
-  Abur: { id: "Abur", code: "Abur", levelData: [{ data: [NaN], dataStr: ["ucry"], summon: "ucrm", castRange: 0, area: 0, duration: 0, buffs: [] }] },
+  Abur: { id: "Abur", code: "Abur", levelData: [lvl({ dataStr: ["ucry"], summon: "ucrm" })] },
   // Call to Arms puts its alternate form in DataB and carries a 45s duration — the two ways
   // it differs from Burrow, and the two things altFormOf/tickAltForm exist for.
-  Amil: { id: "Amil", code: "Amil", levelData: [{ data: [NaN, NaN], dataStr: ["hpea", "hmil"], summon: "", castRange: 0, area: 0, duration: 45, buffs: [] }] },
+  Amil: { id: "Amil", code: "Amil", levelData: [lvl({ dataStr: ["hpea", "hmil"], duration: 45 })] },
 };
 const abilReg = { get: (id) => ABILS[id] };
 
@@ -114,7 +118,7 @@ function fiend(typeId = "ucry") {
 // A row naming a form this install doesn't ship is refused rather than half-applied.
 {
   const u = fiend();
-  const broken = { id: "Abur", code: "Abur", levelData: [{ data: [NaN], dataStr: ["ucry"], summon: "nope", castRange: 0, area: 0, buffs: [] }] };
+  const broken = { id: "Abur", code: "Abur", levelData: [lvl({ dataStr: ["ucry"], summon: "nope" })] };
   check("an unknown alternate form is refused", world.morphToggle(u, broken), false);
   check("…leaving the unit exactly as it was", u.typeId, "ucry");
 }
@@ -122,7 +126,7 @@ function fiend(typeId = "ucry") {
 // A row missing the columns entirely (a non-morph ability handed to the toggle) does nothing.
 {
   const u = fiend();
-  const empty = { id: "X", code: "X", levelData: [{ data: [NaN], dataStr: [""], summon: "", castRange: 0, area: 0, buffs: [] }] };
+  const empty = { id: "X", code: "X", levelData: [lvl()] };
   check("a row naming no forms is refused", world.morphToggle(u, empty), false);
 }
 // --- Call to Arms: the alternate form in DataB, and a form on a clock -------------------

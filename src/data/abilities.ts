@@ -46,6 +46,17 @@ export interface AbilityLevel {
   summon: string; // unitid1.. — unit summoned (Water Elemental etc.)
 }
 
+/** A blank rank — every field present, nothing set. Lives beside the interface so the one
+ *  place that knows the shape is the only place that has to spell it out: the custom-object
+ *  overlay pads its level array with these, and the headless tests build their stub abilities
+ *  from one. Hand-rolled level literals drift (a `.cjs` test stub with no `dataStr` is what
+ *  sent cloneLevel's `[...l.dataStr]` through an undefined and crashed the whole JASS suite);
+ *  spreading this can't. Nine slots because DataA..DataI is nine. */
+export const emptyAbilityLevel = (): AbilityLevel => ({
+  cost: 0, cooldown: 0, duration: 0, heroDuration: 0, castRange: 0, area: 0, castTime: 0,
+  data: new Array(9).fill(NaN), dataStr: new Array(9).fill(""), buffs: [], summon: "",
+});
+
 export interface AbilityDef {
   id: string; // alias (row id, e.g. "AHhb" or a custom "A000")
   code: string; // base ability code — the dispatch key

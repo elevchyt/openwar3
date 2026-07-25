@@ -20,7 +20,7 @@ import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toRegenType } from "./enums";
 import type { UnitDef, UnitRegistry, WeaponSlotDef } from "./units";
-import { mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
+import { emptyAbilityLevel, mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
 import { parseWts } from "../jass/wts";
@@ -215,10 +215,7 @@ export function applyMapUnitData(registry: UnitRegistry, w3uBytes: Uint8Array, w
 
 interface AbilMod { id: string; levelOrVariation: number; value: Val }
 
-const emptyLevel = (): AbilityLevel => ({
-  cost: 0, cooldown: 0, duration: 0, heroDuration: 0, castRange: 0, area: 0, castTime: 0,
-  data: new Array(9).fill(NaN), dataStr: new Array(9).fill(""), buffs: [], summon: "",
-});
+const emptyLevel = emptyAbilityLevel; // the canonical blank rank — see src/data/abilities.ts
 const cloneLevel = (l: AbilityLevel): AbilityLevel => ({ ...l, data: [...l.data], dataStr: [...l.dataStr], buffs: [...l.buffs] });
 
 function cloneAbility(base: AbilityDef, id: string): AbilityDef {
