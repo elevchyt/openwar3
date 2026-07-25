@@ -195,6 +195,10 @@ const FIXED_CARD_ICONS = [
 const DAWN_SOUND = "RoosterSound";
 const DUSK_SOUND = "WolfSound";
 const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
+/** A unit walks out of its factory facing south, like a placed building (spawnUnit's own
+ *  default). Named here because the sim unit and its model are now made in two steps and
+ *  both have to be told the same thing. */
+const TRAINED_FACING = (3 * Math.PI) / 2;
 
 // Our race ids → the suffix WC3's UISounds.slk uses on its per-race cues
 // (ResearchCompleteHuman, UpgradeCompleteNightElf, …).
@@ -5113,10 +5117,14 @@ export class MapViewerScene {
     if (!world) return set;
     for (const u of world.units.values()) {
       if (u.owner === player && this.registry.get(u.typeId)?.isHero) set.add(u.typeId);
-      // Altars the player owns + neutral shops (taverns) they hire from.
+      // Altars the player owns + neutral shops (taverns) they hire from — and at a shop,
+      // only the jobs they are PAYING for (see Authority.heroTypesInProduction, which
+      // gates the training itself on the same rule).
       if (u.building && (u.owner === player || u.neutralPassive)) {
         for (const job of u.building.queue) {
-          if (job.kind === "unit" && this.registry.get(job.unitId)?.isHero) set.add(job.unitId);
+          if (job.kind !== "unit" || !this.registry.get(job.unitId)?.isHero) continue;
+          if (u.neutralPassive && u.owner !== player && job.buyer !== player) continue;
+          set.add(job.unitId);
         }
       }
     }
@@ -6414,14 +6422,22 @@ export class MapViewerScene {
       // The unit belongs to whoever owned the TRAINER, never to this machine's player —
       // `localPlayer` here was playtest bug 4: every peon a client trained came out
       // host-owned, ate the host's food, and leaked the host vision in the client's base.
-      void this.spawnUnit(d, sx, sy, t.owner, this.teamOf(t.owner)).then((simId) => {
-        if (simId === null) return;
-        this.applyRally(simId, rally);
-        // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the
-        // trained unit is born in the renderer (the sim owns no models), and
-        // GetTrainedUnit must hand the script the real unit.
-        world.noteTrainFinish(buildingId, simId);
-      });
+      const team = this.teamOf(t.owner);
+      // It EXISTS NOW — the same two-step the script-spawn path uses (createScriptUnit:
+      // sim unit first, body when the model has streamed). Awaiting the model here left a
+      // window of one model-load (~100 ms, longer on a cold MPQ read) in which the unit was
+      // off the building's queue and not yet in the sim, i.e. nowhere at all: "what am I
+      // producing" answered as if it had never been trained. A hero hired at a Tavern is
+      // hired INSTANTLY, so that window IS the whole hire — the fresh hero counted for
+      // neither the hero bar nor the hero limit, and the Altar happily offered a second
+      // "first" hero at tier 1. Food and the requirement tier had the same hole.
+      const simId = this.rts!.addSimUnit(d, sx, sy, TRAINED_FACING, t.owner, team, 0, this.rts!.reserveUnitId());
+      this.applyRally(simId, rally);
+      // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the trained
+      // unit is born in the renderer (the sim owns no models), and GetTrainedUnit must hand
+      // the script the real unit. It fires on completion now, not a model-load later.
+      world.noteTrainFinish(buildingId, simId);
+      void this.spawnUnit(d, sx, sy, t.owner, team, 0, TRAINED_FACING, simId);
     }
     const summonClaimed = new Set<string>(); // cells handed out this call (see summonSpot)
     for (const s of world.drainSummonRequests()) {

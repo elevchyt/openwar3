@@ -223,7 +223,13 @@ export class Authority {
       if (u.owner === player && this.registry.get(u.typeId)?.isHero) set.add(u.typeId);
       if (u.building && (u.owner === player || u.neutralPassive)) {
         for (const job of u.building.queue) {
-          if (job.kind === "unit" && this.registry.get(job.unitId)?.isHero) set.add(job.unitId);
+          if (job.kind !== "unit" || !this.registry.get(job.unitId)?.isHero) continue;
+          // A Tavern's queue belongs to NOBODY, so at a neutral shop the job's own `buyer`
+          // is the only thing that says whose hero this is. Counting every shop job for
+          // every player made the hero an enemy hired count against you — and struck it
+          // off your own card while somebody else's gold was paying for it.
+          if (u.neutralPassive && u.owner !== player && job.buyer !== player) continue;
+          set.add(job.unitId);
         }
       }
     }

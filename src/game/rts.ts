@@ -1530,13 +1530,17 @@ export class RtsController {
    * player re-arrange it, so sim id — which only ever counts up as units are created — IS the
    * order. Illusions are excluded: a Mirror Image is a hero by unit type, but it is a copy on
    * a timer, not one of your heroes (see docs/illusions.md).
+   *
+   * Read off the SIM, not off the render entries: "which heroes are mine" is a question about
+   * the world, and a hero is yours from the instant it is trained — not from the instant its
+   * model finishes streaming. Walking `entries` meant a freshly hired Tavern hero (hiring is
+   * instant) was missing from the bar and from F1/F2/F3 for as long as its MDX took to load.
    */
   private localHeroes(): number[] {
     const heroes: number[] = [];
-    for (const e of this.entries) {
-      if (!e.isHero) continue;
-      const u = this.sim.units.get(e.simId);
-      if (u && u.owner === this.localPlayer && !u.isIllusion) heroes.push(e.simId);
+    for (const u of this.sim.units.values()) {
+      if (u.owner !== this.localPlayer || u.isIllusion || u.hp <= 0) continue;
+      if (this.registry.get(u.typeId)?.isHero) heroes.push(u.id);
     }
     return heroes.sort((a, b) => a - b);
   }
@@ -1547,11 +1551,10 @@ export class RtsController {
     const out: HeroBarEntry[] = [];
     for (const id of this.localHeroes()) {
       const u = this.sim.units.get(id);
-      const e = this.byId.get(id);
-      if (!u || !e) continue;
+      if (!u) continue;
       out.push({
         simId: id,
-        icon: this.registry.get(e.typeId)?.icon ?? "",
+        icon: this.registry.get(u.typeId)?.icon ?? "",
         hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1,
         manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : -1, // -1: no pool, so no mana bar
         skillPoints: u.skillPoints,
@@ -4888,7 +4891,11 @@ export class RtsController {
       // snapshot's would track a unit it is not attached to.
       const u = this.frameUnit(e.simId);
       if (!u || e.hidden) continue; // no model on screen (worker in a mine, unexplored fog)
-      if (u.neutralPassive && !u.building) continue; // critters and other neutral-passive props: no bar
+      // Critters (Sheep, Pig, Raccoon, Rabbit — 15 hp of neutral-passive wildlife) DO carry a
+      // bar in WC3, like every other unit on the field (issue #100). Skipping everything
+      // neutral-passive-and-not-a-building was a guess, and nothing in the unit tables backs
+      // it: UnitMetaData's only "hide a bar" field is `uhhb` hideHeroBar, which is about the
+      // HERO interface icon, not the floating status bar. So no unit type opts out here.
       // A bar is a LIVE reading, so it needs live eyes: a structure the fog has swallowed keeps
       // its image (fogHides leaves the last thing you saw standing there) but loses its bar,
       // exactly as WC3 does — otherwise you could watch an enemy tower's health from across the
