@@ -364,27 +364,33 @@ export class ConsoleUi {
   }
 
   /**
-   * Lay the flat black in behind the console — and, either side of it, in place of the
-   * console.
+   * Lay the flat black in behind the console.
    *
-   * Both bands run the FULL width of the game frame, which does two jobs at once. Behind the
-   * 4:3 box it is what every socket the art punches through reads as: no world ever shows
-   * through the minimap, the portrait arch, the info panel or the command card. Outside the
-   * box it is the panel the later game fills the widescreen gap with — 1.30.4 has a texture
-   * for that and 1.27a has none, so rather than smear the console's own edge sideways (which
-   * looks like exactly what it is) these are simply left blank, at the console's own height.
+   * It is what every socket the art punches through reads as: no world ever shows through the
+   * minimap, the portrait arch, the info panel or the command card, all of which are cut out
+   * of the stone as transparency.
    *
-   * They belong to THIS overlay rather than to the HUD, and that is not a preference: the HUD
-   * is built after the console and stacks over it (render/mapViewer.ts says so), so a black
-   * rect put there would cover the stone instead of backing it.
+   * It stops at the console's own edges. Both bands used to run the full width of the game
+   * frame, standing in for the filler panels 1.30.4 draws in the widescreen gap (1.27a has no
+   * texture for them, so they were left blank) — but a blank black slab either side of the
+   * console is not a filler panel, it is a black slab, and it read as one (issue #96). With
+   * nothing to put there, the battlefield is the better answer; the console keeps its backing
+   * and the gap goes back to being the game.
+   *
+   * These are children of the ROOT FRAME rather than of the overlay, which is what makes them
+   * stop at the console: the root is the 4:3 box `rootFrame` builds and `centerRoot` centres,
+   * so `left/right: 0` inside it is exactly the console's span. And they belong to THIS
+   * overlay rather than to the HUD, which is not a preference: the HUD is built after the
+   * console and stacks over it (render/mapViewer.ts says so), so a black rect put there would
+   * cover the stone instead of backing it.
    */
   private backing(screen: FdfScreen): void {
-    const overlay = screen.element;
+    const root = screen.frame("ConsoleUI") ?? screen.element;
     for (const [cls, h] of [["console-backing", CONSOLE_ART_TOP], ["console-backing-top", STRIP_ART]] as const) {
       const el = document.createElement("div");
       el.className = cls;
       el.style.height = `${(h / UI_HEIGHT) * 100}%`;
-      overlay.prepend(el);
+      root.prepend(el);
     }
   }
 }
