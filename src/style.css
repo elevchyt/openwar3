@@ -621,7 +621,7 @@ body.in-game .menu-panel { display: none; }
 .hud-hero-btn.pressed { transform: scale(0.98); }
 /* Unspent skill points: the pulsing glow the game drives with HeroLevel.mdx (its texture
    is white-on-black additive art, so it goes on with `screen`), plus the count itself in
-   the bottom-left corner, which is what issue #95 asks for. */
+   the bottom-right corner, which is what issue #95 asks for. */
 .hud-hero-glow {
   position: absolute;
   inset: calc(var(--hero-btn) * -2 / 68);
@@ -641,7 +641,7 @@ body.in-game .menu-panel { display: none; }
 }
 .hud-hero-points {
   position: absolute;
-  left: calc(var(--hero-btn) * 4 / 68);
+  right: calc(var(--hero-btn) * 4 / 68);
   bottom: calc(var(--hero-btn) * 2 / 68);
   /* Scales with the button (14px against the reference's 68px one), with a floor so the
      count stays readable in a small window. */

@@ -1418,7 +1418,7 @@ export class GameHud {
       btn.className = "hud-hero-btn";
       const glow = document.createElement("div"); // skill-point pulse (HeroLevel.mdx's texture)
       glow.className = "hud-hero-glow";
-      const points = document.createElement("div"); // unspent skill points, bottom-left
+      const points = document.createElement("div"); // unspent skill points, bottom-right
       points.className = "hud-hero-points";
       btn.append(glow, points);
       const bars = document.createElement("div");
