@@ -5880,6 +5880,12 @@ export class MapViewerScene {
       const def = this.registry.get(id.slice(6));
       const workerId = this.rts.selectedId;
       if (def && workerId !== null) {
+        // The price is answered HERE, at the button, not when the ghost is put down: WC3
+        // never hands you a structure you can't pay for, so a greyed Town Hall says "Not
+        // enough gold." and the build page stays where it is rather than arming an order
+        // that is going to be refused anyway. placeBuilding checks again — the stash can
+        // drain into a Peasant while the ghost is riding the cursor.
+        if (!this.canAfford(def.goldCost, def.lumberCost)) return;
         this.buildGhost?.hide(); // switching buildings: drop the previously-armed ghost
         this.buildGhost = null;
         this.placement = { def, fp: def.pathTex ? this.footprintFor(def.pathTex) : null, workerId };
