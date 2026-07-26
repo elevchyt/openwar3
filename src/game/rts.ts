@@ -3229,8 +3229,19 @@ export class RtsController {
     return false;
   }
 
-  /** Cast a no-target ability (Thunder Clap, Divine Shield, Avatar) immediately. */
+  /** Cast a no-target ability (Thunder Clap, Divine Shield, Avatar) immediately.
+   *
+   *  There is no target click coming, so THIS click is the cast and the refusal belongs
+   *  here — the armed path already asks `castRefusal` before it spends the click, and this
+   *  one never did: a Chemical Rage with no mana was silently eaten. The command card
+   *  greys such a button rather than disabling it precisely because WC3 answers the press
+   *  with "Not enough mana." (issue #98), so the answer has to actually arrive. */
   castNoTarget(code: string): void {
+    const err = this.castRefusal(code, 0);
+    if (err !== null) {
+      this.refuseOrder(err);
+      return;
+    }
     this.castFromSelection(code, 0, 0, 0);
   }
 

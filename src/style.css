@@ -1418,6 +1418,11 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 /* A passive ability is an indicator, not an order: full colour (it IS working)
    but nothing to press, so it doesn't take the hand cursor either. */
 .hud-cmd.passive { cursor: default; }
+/* Unavailable (a prerequisite is missing): WC3 greys it and it stops being a
+   button. The greying is `.cant-afford` above; this is the half that says so to
+   the hand — no pointer, no press sink (issue #98). One you merely can't afford
+   keeps both, because that click is what earns "Not enough gold." */
+.hud-cmd.unavailable { cursor: default; }
 .hud-cmd.armed {
   border-color: #6fe06a;
   box-shadow: 0 0 6px rgba(70, 224, 90, 0.5) inset;

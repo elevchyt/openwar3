@@ -2590,6 +2590,10 @@ export class MapViewerScene {
       this.refuse("Cantplace"); // "Unable to build there." — the worker says so out loud
       return;
     }
+    // Feedback only, and deliberately duplicated (same contract as trainUnit): `execute`
+    // decides, but it can't SAY anything, and a placement that fails on price is otherwise
+    // a click that does nothing at all. The ghost stays on the cursor either way.
+    if (!this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
     // Affordability, the charge and the order are all the authority's now — the renderer
     // used to charge the stash itself and post the price into the order (docs/multiplayer.md).
     if (!this.rts.execute(this.localPlayer, {
@@ -5146,7 +5150,7 @@ export class MapViewerScene {
    *  rank resolve first (with that rank); this is the backstop for everything else, and for
    *  whatever button gets added next. Resolving twice is free: the second pass sees no `<`. */
   private cmd(over: Partial<CommandButton>): CommandButton {
-    const b: CommandButton = { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, mana: 0, col: 0, row: 0, disabled: false, active: false, ...over };
+    const b: CommandButton = { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, mana: 0, col: 0, row: 0, disabled: false, cantAfford: false, active: false, ...over };
     b.desc = this.tipText(b.desc);
     if (b.tip) b.tip = this.tipText(b.tip);
     return b;
@@ -5243,7 +5247,12 @@ export class MapViewerScene {
         cooldownLeft: restocking ? st.timer : 0,
         cooldownFrac: restocking ? Math.max(0, Math.min(1, st.timer / st.period)) : 0,
         col, row,
-        disabled: !afford || !metTech || !inStock || (d.isHero && atHeroCap),
+        // Unavailable vs unaffordable, and the split matters (issue #98): a missing
+        // requirement (or a fourth Hero) is a hard NO with no line to say it, so the
+        // button goes inert; a price or an empty shelf keeps the button live so
+        // trainUnit can answer the click with "Not enough gold." / "Out of stock".
+        disabled: !metTech || (d.isHero && atHeroCap),
+        cantAfford: !afford || !inStock,
       }));
     }
   }
@@ -5278,7 +5287,8 @@ export class MapViewerScene {
         desc: this.tipText(this.upgrades.uberTip(upId, next)) + this.requirementLine(upId, tier),
         gold: cost.gold, lumber: cost.lumber, food: 0,
         ...this.researchSlot(upId, d),
-        disabled: !afford || !metTech,
+        disabled: !metTech, // no Keep yet → inert, the way WC3 greys it out
+        cantAfford: !afford, // affordable-later → still clickable, still answered
       }));
     }
   }
@@ -5318,7 +5328,8 @@ export class MapViewerScene {
         desc: this.tipText(d.description || `Upgrades to a ${d.name}.`) + this.requirementLine(toId),
         gold, lumber, food: 0,
         col: d.buttonX, row: d.buttonY,
-        disabled: !afford || !metTech,
+        disabled: !metTech,
+        cantAfford: !afford,
       }));
     }
   }
@@ -5433,7 +5444,11 @@ export class MapViewerScene {
         cooldownFrac: restocking ? Math.max(0, Math.min(1, st.timer / st.period)) : 0,
         col: slot % 4,
         row: Math.floor(slot / 4),
-        disabled: !afford || missing.length > 0 || stock <= 0 || !hasPatron,
+        // Only the tech gate makes the ware inert. Everything else here has an
+        // [Errors] line of its own — "Out of stock", "A valid patron must be nearby."
+        // — and buyItem speaks it when the click arrives.
+        disabled: missing.length > 0,
+        cantAfford: !afford || stock <= 0 || !hasPatron,
       }));
     }
   }
@@ -5582,7 +5597,12 @@ export class MapViewerScene {
           tip: d.tip, // "Build |cffffcc00F|rarm" — the verb is already in the game's Tip
           desc: this.tipText(d.description || `Builds ${d.name}.`) + this.requirementLine(bid),
           gold: d.goldCost, lumber: d.lumberCost, food: 0,
-          col: d.buttonX, row: d.buttonY, disabled: !afford || !metTech,
+          col: d.buttonX, row: d.buttonY,
+          // The issue-#98 case itself: a Guard Tower with no Lumber Mill is greyed AND
+          // inert — clicking it must not hand the worker a ghost to place. Being short
+          // of gold doesn't stop you picking the building up; placing it says why.
+          disabled: !metTech,
+          cantAfford: !afford,
         }));
       }
       out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Return to orders.", col: 3, row: 2 }));
@@ -5756,7 +5776,9 @@ export class MapViewerScene {
         // now, and WC3 draws it in full colour off its own PASBTN art ([AOcr]
         // Art=…\PassiveButtons\PASBTNCriticalStrike.blp). It just isn't a button
         // you press (see `passive` below), so only the mana check may grey it.
-        disabled: noMana,
+        // Grey, but NOT inert: the click is how you hear "Not enough mana." (the
+        // sim's own [Errors] key for it, SimWorld.castRefusal).
+        cantAfford: noMana,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and

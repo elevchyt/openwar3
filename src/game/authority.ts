@@ -387,9 +387,17 @@ export class Authority {
         // afford it. Placement validity stays client-side for now — it needs the footprint
         // grid the renderer owns (docs/multiplayer.md).
         if (!this.ownedBy(player, cmd.unitId)) return false;
-        if (!this.sim.units.get(cmd.unitId)?.worker) return false;
+        const worker = this.sim.units.get(cmd.unitId);
+        if (!worker?.worker) return false;
         const def = this.registry.get(cmd.defId);
         if (!def) return false;
+        // "Does this worker even build that, and is it unlocked yet?" — the two gates
+        // `train`/`research`/`upgradebuilding` already had and this one didn't, so a
+        // Barracks could be raised with no Great Hall behind it (issue #98). The card
+        // greys those buttons, but a card is not a check: it doesn't come over the
+        // wire, and until now nothing downstream asked.
+        if (!this.tech.builds(worker.typeId).includes(cmd.defId)) return false;
+        if (!this.sim.canMake(player, cmd.defId, 0)) return false;
         const stash = this.sim.stashOf(player);
         if (stash.gold < def.goldCost || stash.lumber < def.lumberCost) return false;
         stash.gold -= def.goldCost;

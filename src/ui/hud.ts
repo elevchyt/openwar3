@@ -36,7 +36,21 @@ export interface CommandButton {
   mana?: number; // spell mana cost — shown on the cost row with the game's mana icon
   col: number; // 0–3
   row: number; // 0–2
+  /** UNAVAILABLE the way WC3 means it: a prerequisite isn't there (no Barracks yet,
+   *  three Heroes already, the Hero level the next rank wants), so the engine swaps
+   *  in the icon's desaturated `DISBTN*` art and the button stops being a button —
+   *  no click, no hotkey, no click sound. Nothing is said out loud either, because
+   *  Units\commandstrings.txt [Errors] has no line for "requirements not met": the
+   *  red "Requires: …" in the tooltip is the whole explanation.
+   *
+   *  A PRICE is deliberately NOT this — see `cantAfford`. */
   disabled: boolean;
+  /** Greyed, but still a button: the thing is unlocked and you just can't pay for it
+   *  this second (gold, lumber, food, mana, an empty shelf, no patron in range). WC3
+   *  takes that click and answers it with the refusal every player knows — "Not enough
+   *  gold." in the worker's own voice, which is an [Errors] line precisely BECAUSE the
+   *  button stays live. So this greys and nothing more; it must never eat the press. */
+  cantAfford?: boolean;
   /** A passive ability (Critical Strike, an aura): an INDICATOR that the unit has
    *  the thing, not an order. It shows in full colour — it is working right now —
    *  but it takes no press at all: no sink, no click sound, no hotkey. Learning one
@@ -1003,6 +1017,8 @@ export class GameHud {
     }
     // Trigger the command whose hotkey matches the pressed key. A passive isn't a
     // command, so its letter isn't taken — it can't shadow a real order sharing it.
+    // Neither is an unavailable one (a greyed DISBTN button has no hotkey in WC3
+    // either). One you merely can't afford DOES answer its key — and gets told why.
     const key = e.key.toUpperCase();
     const cmd = this.driver.commandCard().find((c) => c.hotkey === key && !c.disabled && !c.passive);
     if (cmd) this.driver.runCommand(cmd.id);
@@ -1847,7 +1863,7 @@ export class GameHud {
     // TEXT — a tavern hero stays greyed while its red "Requires:" line goes from "Altar of
     // Storms, Stronghold" to "Stronghold" the moment the altar goes up. Leave it out and the
     // tooltip keeps showing the requirement the player has just met.
-    const key = cmds.map((c) => `${c.id}:${c.disabled}:${c.active}:${c.autocast}:${c.count ?? 0}:${c.desc}`).join("|");
+    const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${c.active}:${c.autocast}:${c.count ?? 0}:${c.desc}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
     // The card changed (e.g. a building was cancelled and its buttons vanished):
@@ -1859,7 +1875,7 @@ export class GameHud {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed", "autocast", "cant-afford", "passive");
+      btn.classList.remove("armed", "autocast", "cant-afford", "unavailable", "passive");
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
       onPress(btn, null);
@@ -1873,15 +1889,22 @@ export class GameHud {
       btn.disabled = false;
       btn.classList.toggle("armed", c.active);
       btn.classList.toggle("autocast", !!c.autocast);
-      btn.classList.toggle("cant-afford", c.disabled);
+      // Both unavailable states wear the same greyed-out look; only `disabled` also
+      // takes the button out of service.
+      btn.classList.toggle("cant-afford", c.disabled || !!c.cantAfford);
+      btn.classList.toggle("unavailable", c.disabled);
       btn.classList.toggle("passive", !!c.passive);
       if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
       else this.cmdLabels[idx].textContent = c.name.slice(0, 4);
       if (c.count && c.count > 0) this.cmdCount[idx].textContent = String(c.count);
       // A passive takes no press — it's an indicator, so it never sinks and never
-      // fires. It keeps its tooltip: reading what Critical Strike does is the whole
-      // reason the button is on the card.
-      onPress(btn, c.passive ? null : () => this.driver.runCommand(c.id));
+      // fires. Nor does an UNAVAILABLE button: WC3's greyed DISBTN state is inert,
+      // and letting the click through is how a Barracks you have no Great Hall for
+      // still got built (issue #98). Both keep their tooltip: reading what Critical
+      // Strike does, or which building the Guard Tower is waiting on, is the whole
+      // reason the button is on the card at all. A `cantAfford` button is NOT inert —
+      // its click is what earns the "Not enough gold." line.
+      onPress(btn, c.passive || c.disabled ? null : () => this.driver.runCommand(c.id));
       btn.onpointerenter = () => this.showTooltip(c);
       btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
     }
