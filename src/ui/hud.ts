@@ -550,6 +550,30 @@ function cdSeconds(secondsLeft: number): string {
   return String(Math.ceil(secondsLeft));
 }
 
+/** Past this, a pool prints as the CURRENT value alone. See `poolReadout`. */
+const POOL_PAIR_MAX = 9999;
+
+/**
+ * One of the two numbers under the portrait — hit points, or mana.
+ *
+ * The strips the console art cuts out below the arch (issue #92) are only as wide as the arch
+ * itself, which is about seven glyphs at the size the game draws them in. "current / max" fits
+ * every melee pool there is (the deepest in the game is the Castle's 2200 HP), so that is the
+ * form the readout wears. A custom map's 1500000-HP boss does not fit: the pair wrapped onto a
+ * second line and spilled down over the mana strip (issue #99). Past four digits we drop the
+ * "/ max" half and print the current value alone — the half that moves, and the half a player
+ * is reading. Gated on `max`, not on `cur`, so a unit at full and the same unit at a sliver
+ * read the same way instead of the label changing shape as it takes damage.
+ *
+ * `cur` comes in already rounded, because the two pools round opposite ways: HP ceils (a unit
+ * with anything left alive never reads "0") and mana floors (a spell you cannot afford yet
+ * never reads as affordable).
+ */
+function poolReadout(cur: number, max: number): string {
+  if (max <= 0) return "";
+  return max > POOL_PAIR_MAX ? String(cur) : `${cur} / ${max}`;
+}
+
 /** How many rows of fill the client shows inside the frame, and so how many the slab is
  *  point-sampled down to here. Its 16 rows are two of white over twelve of flat grey over
  *  two dark ones; squeezed into a 5px bar by a smooth resize, the white pair averages away
@@ -1922,8 +1946,8 @@ export class GameHud {
       // A hero is titled by its GIVEN name ("Painkiller"); its class ("Demon Hunter")
       // is what the XP bar spells out below, as "Level 1 Demon Hunter".
       this.selName.textContent = sel.isHero && sel.properName ? sel.properName : sel.name;
-      this.selHpText.textContent = sel.maxHp > 0 ? `${Math.ceil(sel.hp)} / ${sel.maxHp}` : "";
-      this.selMpText.textContent = sel.maxMana > 0 ? `${Math.floor(sel.mana)} / ${sel.maxMana}` : "";
+      this.selHpText.textContent = poolReadout(Math.ceil(sel.hp), sel.maxHp);
+      this.selMpText.textContent = poolReadout(Math.floor(sel.mana), sel.maxMana);
       const icons = this.driver.selectionIcons();
       if (icons.length > 0) {
         this.showSelectionGrid(icons);

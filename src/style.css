@@ -770,7 +770,12 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
    (issue #92). The stacked `.hud-portrait-values` plate further down is the PLACEHOLDER
    console's — with the art up it is never built, so the bust keeps the whole arch. The size
    is a fraction of the console band rather than a pixel count, so the numbers scale with the
-   console at any window size. */
+   console at any window size.
+
+   `nowrap` is what holds the number ON its own strip: a custom map's seven-digit pool used to
+   wrap onto a second line and spill down over the mana strip below (issue #99). The strip is
+   one line, always, and the number is centred in it on both axes — the flex centring does
+   that, and stays true whichever form `poolReadout` picks. */
 .hud-console.hud-console-skinned .hud-hp-value,
 .hud-console.hud-console-skinned .hud-mp-value {
   display: flex;
@@ -778,6 +783,7 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
   justify-content: center;
   font-size: calc(var(--console-h) * 0.052);
   line-height: 1;
+  white-space: nowrap;
   pointer-events: none;
 }
 .hud-console.hud-console-skinned .hud-inventory {
@@ -1026,8 +1032,8 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
   padding: 1px 4px;
   min-height: 1.3em;
 }
-.hud-hp-value { font-size: 13px; color: #46e05a; }
-.hud-mp-value { font-size: 13px; color: #4a7cff; }
+.hud-hp-value { font-size: 13px; color: #46e05a; white-space: nowrap; }
+.hud-mp-value { font-size: 13px; color: #4a7cff; white-space: nowrap; }
 .hud-mp-value:empty { display: none; }
 
 /* Detail panel: the unit's name + damage/armor, always
