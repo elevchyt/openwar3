@@ -401,6 +401,16 @@ interface SpawnModel {
   addInstance(): SpawnInstance;
 }
 
+/** A placed doodad's scene-animated stand-in — the only way a map doodad can move
+ *  (see doodadActors). `clipT` is seconds into the one-shot clip it is playing, or -1
+ *  when it is just idling and has nothing to finish. */
+interface DoodadActor {
+  inst: SpawnInstance;
+  dead: boolean;
+  revertEnd: number;
+  clipT: number;
+}
+
 /** One live script `effect` (7.26 — issue #68): the model AddSpecialEffect* put in the
  *  world, held until the script's DestroyEffect. See MapViewerScene.specialFx. */
 interface SpecialFx {
@@ -3807,11 +3817,13 @@ export class MapViewerScene {
   // place. The stand-in hides the static doodad and plays the clips, holding the final frame:
   // the cut stump WC3 leaves behind, or the open gate. `revertEnd` (>0) is a one-shot clip's
   // end frame, when we drop back to the looping "stand"; `dead` poses are held forever.
-  private doodadActors = new Map<HideableWidget, { inst: SpawnInstance; dead: boolean; revertEnd: number }>();
+  // `clipT` is seconds into the running one-shot clip, and -1 while the actor just idles —
+  // see the catch-up pass in updateTreeActors for why we keep that clock ourselves.
+  private doodadActors = new Map<HideableWidget, DoodadActor>();
 
   /** The scene-animated stand-in for a placed doodad, spawned (and the static doodad hidden)
    *  on first use. null if the doodad has no spawnable model. */
-  private doodadActor(widget: HideableWidget): { inst: SpawnInstance; dead: boolean; revertEnd: number } | null {
+  private doodadActor(widget: HideableWidget): DoodadActor | null {
     let a = this.doodadActors.get(widget);
     if (a) return a;
     const map = this.viewer.map;
@@ -3830,14 +3842,16 @@ export class MapViewerScene {
     }
     src.hide(); // the static doodad is replaced by this animated stand-in
     this.removedWidgets.add(widget); // and the fog pass never re-shows it
-    a = { inst, dead: false, revertEnd: 0 };
+    a = { inst, dead: false, revertEnd: 0, clipT: -1 };
     this.doodadActors.set(widget, a);
     return a;
   }
 
   /** Play each chopped tree's "stand hit" wobble once per chop (SimWorld.drainTreeHits),
-   *  then settle it back to "stand". WC3 trees visibly shudder at every axe blow. */
-  private updateTreeActors(): void {
+   *  then settle it back to "stand". WC3 trees visibly shudder at every axe blow. Also
+   *  keeps every stand-in's one-shot clip running while it is off-camera (see below).
+   *  `dt` is SECONDS. */
+  private updateTreeActors(dt: number): void {
     const map = this.viewer.map;
     const world = this.rts?.simWorld;
     if (!map || !world) return;
@@ -3851,7 +3865,9 @@ export class MapViewerScene {
       a.inst.setSequence(hit);
       a.inst.setSequenceLoopMode(0); // play the wobble once
       a.revertEnd = a.inst.model.sequences[hit].interval?.[1] ?? 0;
+      a.clipT = 0; // start this actor's own clip clock
     }
+    this.advanceDoodadClips(dt);
     for (const a of this.doodadActors.values()) {
       if (a.dead || a.revertEnd <= 0 || a.inst.frame < a.revertEnd) continue; // wobble still playing
       const stand = this.seqByName(a.inst.model.sequences, /^stand$/i);
@@ -3860,6 +3876,33 @@ export class MapViewerScene {
         a.inst.setSequenceLoopMode(2); // settle into the looping idle
       }
       a.revertEnd = 0;
+      a.clipT = -1; // a looping idle needs no clock
+    }
+  }
+
+  /** Drive every stand-in's one-shot clip (a tree's fall, a gate swinging open) off our own
+   *  clock instead of the viewer's.
+   *
+   *  mdx-m3-viewer advances an instance's animation ONLY while it is inside the camera
+   *  frustum (`ModelInstance.update` calls `updateAnimations` behind `isVisible(camera)`), so
+   *  a tree felled off-camera sat frozen at the first frame of "death" and only started
+   *  toppling when the player finally panned over — a tree that died minutes ago falling in
+   *  front of you (issue #88). WC3 fells it where and when it dies, so the frame we write here
+   *  is authoritative on- and off-screen: it clamps at the clip's end (the stump WC3 leaves,
+   *  held forever) and `forced` re-poses the nodes for the frame it comes back into view. */
+  private advanceDoodadClips(dt: number): void {
+    for (const a of this.doodadActors.values()) {
+      if (a.clipT < 0) continue; // idling — nothing to finish
+      a.clipT += dt;
+      const iv = a.inst.model.sequences[a.inst.sequence]?.interval;
+      if (!iv) {
+        a.clipT = -1;
+        continue;
+      }
+      const frame = Math.min(iv[0] + a.clipT * 1000, iv[1]);
+      if (frame === a.inst.frame) continue; // already there (a finished, held pose)
+      a.inst.frame = frame;
+      a.inst.forced = true; // we wrote `frame` ourselves, so make the pose follow
     }
   }
 
@@ -3884,6 +3927,7 @@ export class MapViewerScene {
     if (death >= 0) {
       a.inst.setSequence(death);
       a.inst.setSequenceLoopMode(0); // play once; the last frame is the stump, held forever
+      a.clipT = 0; // and it falls on our clock, so it plays out off-camera too (issue #88)
     }
     a.dead = true;
     a.revertEnd = 0;
@@ -3972,6 +4016,7 @@ export class MapViewerScene {
     a.inst.setSequenceLoopMode(hold ? 0 : 2);
     a.dead = hold;
     a.revertEnd = 0;
+    a.clipT = hold ? 0 : -1; // a held clip (the gate swinging open) runs off-camera too
   }
 
   /** `KillDestructable` — and, through `ModifyGateBJ`, "open gate". The gate does not vanish:
@@ -6593,7 +6638,7 @@ export class MapViewerScene {
       this.updateSpecialFx(dt / 1000); // script effects: age them, settle Birth→Stand, fog-gate
       this.updateDyingFx(dt / 1000); // buff art + script effects playing out their Death clip
       this.updateTreePulses(dt / 1000);
-      this.updateTreeActors(); // per-chop "stand hit" wobble on felled/chopped trees' stand-ins
+      this.updateTreeActors(dt / 1000); // per-chop "stand hit" wobble + off-camera clip catch-up
       this.updateProjectiles();
       this.updateBloodMageSpheres(dt / 1000); // Blood Mage orbiting spheres + thrown balls
       this.updatePendingBuildGhosts(); // dark-blue ghosts of queued-but-not-started builds
