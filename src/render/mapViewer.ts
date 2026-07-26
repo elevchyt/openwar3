@@ -5511,8 +5511,61 @@ export class MapViewerScene {
     return !(mode === "item" && this.rts?.armedItem?.mode === "move");
   }
 
-  /** Build the command card for the current selection. */
+  /** The command card for the current selection, with every button's grid slot resolved
+   *  (see `layoutCard` — two buttons may WANT the same cell). */
   private commandCard(): CommandButton[] {
+    return this.layoutCard(this.buildCommandCard());
+  }
+
+  /**
+   * Seat every button in the 4×3 grid, honouring `col`/`row` as a PREFERENCE rather than an
+   * address. Two abilities on one unit routinely want the same cell: `buttonpos` is authored
+   * per RACE, so each hero's four skills are laid out 0,2 / 1,2 / 2,2 / 3,2 independently and
+   * a custom map that mixes skill sets collides immediately. WarChasers' Skeletorus takes the
+   * Far Seer's Chain Lightning (`AOcl`, `Researchbuttonpos=0,0`) and the Demon Hunter's Mana
+   * Burn (`AEmb`, also `0,0`); Blizzard's own melee data collides 45 times over (the Destroyer
+   * asks for `0,2` twice, for Devour Magic and Absorb Mana). The HUD writes buttons into
+   * `row * 4 + col`, so the loser used to be silently overwritten — the reported bug.
+   *
+   * MEASURED off the real 1.27a client (WarChasers, Skeletorus' learn page): the engine shows
+   * FOUR buttons — Chain Lightning keeps slot 0, Brilliance Aura and Death And Decay keep the
+   * 2 and 3 their data asks for, and Mana Burn is pushed to the free slot 1. So a collision
+   * falls FORWARD into the next free cell; nothing is ever dropped.
+   *
+   * Two passes, because the fall-forward must not evict a button that legitimately owns the
+   * cell it lands on: everyone who CAN have their preference gets it first, then the displaced
+   * are seated in emission order, each scanning forward (wrapping) from the cell it asked for
+   * — which is what keeps a bumped hero spell in the bottom row next to its siblings instead
+   * of stranding it up among the orders.
+   */
+  private layoutCard(cards: CommandButton[]): CommandButton[] {
+    const SLOTS = 12;
+    const taken: (CommandButton | undefined)[] = new Array(SLOTS).fill(undefined);
+    const wanted = (c: CommandButton) => c.row * 4 + c.col;
+    const displaced: CommandButton[] = [];
+    for (const c of cards) {
+      const i = wanted(c);
+      if (i >= 0 && i < SLOTS && !taken[i]) taken[i] = c;
+      else displaced.push(c);
+    }
+    for (const c of displaced) {
+      const start = Math.max(0, Math.min(SLOTS - 1, wanted(c)));
+      for (let n = 1; n <= SLOTS; n++) {
+        const i = (start + n) % SLOTS;
+        if (taken[i]) continue;
+        taken[i] = c;
+        c.col = i % 4;
+        c.row = Math.floor(i / 4);
+        break;
+      }
+    }
+    // A card with more than twelve buttons has nowhere left to put the rest; they stay out
+    // rather than overwriting a seated one (only reachable on absurd custom data).
+    return taken.filter((c): c is CommandButton => !!c);
+  }
+
+  /** Build the command card for the current selection. */
+  private buildCommandCard(): CommandButton[] {
     const sel = this.rts?.selectedInfo();
     if (!sel) return [];
     const world = this.rts!.simWorld;
