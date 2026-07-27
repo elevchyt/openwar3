@@ -691,6 +691,10 @@ export class MapViewerScene {
   private bgPump: Worker | null = null;
   /** Called when the player picks "End Game" — host tears the match down. */
   onExit: (() => void) | null = null;
+  /** The LOCAL player's game ended in a win — `RemovePlayer(p, PLAYER_GAME_RESULT_VICTORY)`,
+   *  which `CustomVictoryBJ` calls before it shows anything. A campaign uses it to open the
+   *  next chapter (src/data/campaignProgress.ts); a skirmish has nobody listening. */
+  onLocalVictory: (() => void) | null = null;
   // --- the trigger's on-screen output (7.19) ---
   private textTags: TextTagOverlay | null = null; // CreateTextTag, drawn in the world
   private leaderboard: LeaderboardOverlay | null = null; // CreateLeaderboard, top-right
@@ -707,6 +711,8 @@ export class MapViewerScene {
   private userControl = true;
   /** SetGameSpeed / GetGameSpeed — the common.j gamespeed index. 2 = MAP_SPEED_NORMAL. */
   private gameSpeed = 2;
+  /** common.j gamedifficulty index — MAP_DIFFICULTY_NORMAL until a campaign says otherwise. */
+  private gameDifficulty = 1;
   // The speaker's animated bust during a transmission — its own bust viewer, on the FDF
   // panel's canvas, exactly like the HUD's portrait (which it must not steal).
   private cinePortraitViewer: ModelViewerScene | null = null;
@@ -1267,6 +1273,10 @@ export class MapViewerScene {
     // seeding, the map script and the first tick, which is the last moment it is safe.
     // Until this existed every match ran off a hardcoded 1 and rolled identically.
     this.rts!.setSeed(config.seed ?? randomSeed());
+    // The campaign difficulty the player picked, before a line of the map's script runs —
+    // its chapters branch on GetGameDifficulty from map init onwards. A skirmish sends none
+    // and the match runs at MAP_DIFFICULTY_NORMAL, which is what the reference calls it.
+    this.gameDifficulty = config.difficulty ?? 1;
     // Who WE are. A LAN client is told (every human slot in a shared config says "user", so
     // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
     this.localPlayer = config.localPlayer
@@ -1727,15 +1737,19 @@ export class MapViewerScene {
       // called by CustomVictoryBJ/CustomDefeatBJ before either of them shows anything. Recorded
       // rather than acted on HERE: the wire must not close until the dialog relay below has run,
       // or the loser would never be handed the screen that says why (Phase G item 1).
-      playerGameOver: (_player, result) => {
+      playerGameOver: (player, result) => {
         // `Scripts\common.j`, verified in War3.mpq AND War3x.mpq (identical):
         //   PLAYER_GAME_RESULT_VICTORY = 0, _DEFEAT = 1, _TIE = 2, _NEUTRAL = 3
         // DEFEAT is the ONLY one that leaves the match running — victory is declared in melee
         // only when every opponent is out, and a tie or a neutral game-over ends it outright.
         // So the test is written as "anything but defeat", not as "equals victory": a tie that
         // left the wire up would leave it up forever.
+        const PLAYER_GAME_RESULT_VICTORY = 0;
         const PLAYER_GAME_RESULT_DEFEAT = 1;
         if (result !== PLAYER_GAME_RESULT_DEFEAT) this.matchDecided = true;
+        // A campaign chapter is "completed" exactly when its own script declares the local
+        // player the winner — the same signal, read for a different reason.
+        if (result === PLAYER_GAME_RESULT_VICTORY && player === this.localPlayer) this.onLocalVictory?.();
       },
       pauseGame: (flag) => (this.paused = flag),
       // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
@@ -1862,6 +1876,12 @@ export class MapViewerScene {
         this.gameSpeed = speed;
       },
       getGameSpeed: () => this.gameSpeed,
+      // The campaign difficulty is the LOBBY's (the campaign screen's dropdown), so it is set
+      // at match start and read back here; blizzard.j's "Reduce Difficulty" writes it too.
+      setGameDifficulty: (difficulty) => {
+        this.gameDifficulty = difficulty;
+      },
+      getGameDifficulty: () => this.gameDifficulty,
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
       // --- items (7.18) ---

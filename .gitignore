@@ -17,3 +17,6 @@ Warcraft III/
 
 # Sim throwaway build (tools/tsconfig.sim.json → CJS for headless targeting tests)
 .sim-build/
+
+# Campaign index throwaway build (tools/tsconfig.campaign.json → CJS for the headless check)
+.campaign-build/

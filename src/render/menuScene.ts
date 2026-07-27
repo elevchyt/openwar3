@@ -104,6 +104,16 @@ export class MenuScene {
   private sceneLeft: Scene; // …and the left-edge one, in its own left-anchored viewport
   private solver: Solver;
   private bgModel: MdxModel | null = null;
+  /** The main menu's own background instance, kept so a campaign backdrop can take its place
+   *  in the scene and hand it back afterwards. */
+  private menuInstance: MdxInstance | null = null;
+  /** Campaign backdrops, cached by path — four models the player switches between. */
+  private backdrops = new Map<string, MdxModel>();
+  private backdropModel: MdxModel | null = null;
+  private backdropInstance: MdxInstance | null = null;
+  private backdropTimer = 0;
+  /** True while a campaign backdrop is up: the screen-edge sprite layers draw nothing. */
+  private panelsHidden = false;
   private instances: MdxInstance[] = [];
   /** The sprite-layer panels, kept with their model so we can look sequences up by name. */
   private panels: Array<{ model: MdxModel; instance: MdxInstance }> = [];
@@ -196,7 +206,7 @@ export class MenuScene {
     const bg = (await this.viewer.load(bytes, this.solver)) as MdxModel | undefined;
     if (!bg) throw new Error(`failed to load menu scene: ${bgPath}`);
     this.bgModel = bg;
-    this.addInstance(bg, this.scene3d, /^stand$/i);
+    this.menuInstance = this.addInstance(bg, this.scene3d, /^stand$/i);
 
     // The screen-edge sprite layers: metal border, gears, the button frames and chains.
     await this.loadPanel(tft ? RIGHT_TFT : RIGHT_ROC, this.scenePanel);
@@ -205,6 +215,74 @@ export class MenuScene {
     this.frameCameras();
     this.updateFog();
     await this.viewer.whenAllLoaded();
+  }
+
+  /**
+   * Swap the 3D background for a CAMPAIGN backdrop (issue #101) — the model a campaign names
+   * in `Background` (UI\Glues\SinglePlayer\NightElf_Exp\NightElf_Exp.mdl and friends), under
+   * that campaign's own fog.
+   *
+   * The campaign screen is the one glue screen with NO chrome: the panel models carry a
+   * Birth/Stand/Death triple for every other screen in the game (MainMenu, SinglePlayer,
+   * SinglePlayerSkirmish, Options, the Battle.net set…) and none for this one, because the
+   * reference hides the metal edges entirely and lets the 3D scene fill the screen. So the
+   * two sprite layers are switched off while a backdrop is up, and the FDF text sits
+   * straight on the scene.
+   *
+   * The backdrop model brings its own two clips — "Birth" then a looping "Stand" — and its
+   * own camera, which is used AS AUTHORED: the main menu's zoom/pan tuning frames the
+   * Icecrown scene against the button panel, and there is no panel here to frame against.
+   */
+  async showBackdrop(path: string, fog: { r: number; g: number; b: number; start: number; end: number }): Promise<void> {
+    if (!this.vfs.exists(path)) return;
+    let model = this.backdrops.get(path);
+    if (!model) {
+      model = (await this.viewer.load(await this.vfs.read(path), this.solver)) as MdxModel | undefined;
+      if (!model) return;
+      this.backdrops.set(path, model);
+    }
+    this.clearBackdrop();
+    this.backdropModel = model;
+    // Birth once, then settle into the looping Stand — the same two-step every glue model
+    // arrives with (playChromeBirth does it for the panel chrome).
+    const instance = this.addInstance(model, this.scene3d, /^birth$/i);
+    instance.setSequenceLoopMode(0);
+    this.backdropInstance = instance;
+    const birth = seqLengthOf(model, "Birth");
+    clearTimeout(this.backdropTimer);
+    this.backdropTimer = window.setTimeout(() => {
+      const stand = model.sequences.findIndex((s) => /^stand$/i.test(s.name));
+      if (stand >= 0 && this.backdropInstance === instance) {
+        instance.setSequenceLoopMode(2);
+        instance.setSequence(stand);
+      }
+    }, birth);
+    // The menu's own scene stops drawing behind it, as do the screen-edge sprite layers.
+    if (this.menuInstance) this.scene3d.removeInstance(this.menuInstance);
+    this.panelsHidden = true;
+    this.scene3d.distFog = makeFog(fog.start, fog.end, fog.r, fog.g, fog.b);
+    this.frameCameras();
+  }
+
+  /** Back to the menu's own background and its screen-edge chrome (leaving the campaign
+   *  screen). The backdrop model stays loaded — the player usually comes right back. */
+  restoreMenuBackground(): void {
+    if (!this.backdropInstance) return;
+    this.clearBackdrop();
+    if (this.menuInstance) this.menuInstance.setScene(this.scene3d);
+    this.panelsHidden = false;
+    this.updateFog();
+    this.frameCameras();
+  }
+
+  private clearBackdrop(): void {
+    clearTimeout(this.backdropTimer);
+    if (this.backdropInstance) {
+      this.scene3d.removeInstance(this.backdropInstance);
+      this.instances = this.instances.filter((i) => i !== this.backdropInstance);
+    }
+    this.backdropInstance = null;
+    this.backdropModel = null;
   }
 
   private async loadPanel(path: string, scene: Scene): Promise<void> {
@@ -228,8 +306,7 @@ export class MenuScene {
   /** Duration (ms) of a named sequence on the panel model, or 0 if it has none. */
   private seqLength(name: string): number {
     const model = this.panels[0]?.model;
-    const seq = model?.sequences.find((s) => s.name.toLowerCase() === name.toLowerCase());
-    return seq ? seq.interval[1] - seq.interval[0] : 0;
+    return model ? seqLengthOf(model, name) : 0;
   }
 
   /** How long `screen`'s chrome takes to leave and to arrive — the model's own timings. */
@@ -324,6 +401,7 @@ export class MenuScene {
   dispose(): void {
     this.stop();
     clearTimeout(this.chromeTimer);
+    clearTimeout(this.backdropTimer);
     this.clearSoundTimers();
     for (const inst of this.instances) {
       for (const scene of [this.scene3d, this.scenePanel, this.sceneLeft]) {
@@ -333,6 +411,10 @@ export class MenuScene {
     this.instances = [];
     this.panels = [];
     this.bgModel = null;
+    this.menuInstance = null;
+    this.backdropInstance = null;
+    this.backdropModel = null;
+    this.backdrops.clear();
   }
 
   /** Frame the background with its own camera and the panels with an ortho projection
@@ -345,21 +427,37 @@ export class MenuScene {
     const t = this.tuning;
 
     // Background: the model's authored camera, dollied in and panned to frame the scene.
-    const cam = this.bgModel?.cameras?.[0];
+    // A CAMPAIGN backdrop is framed by its own camera untouched (zoom 1, no pan, no FOV
+    // multiplier): the tuning below exists to sit the Icecrown scene behind the main menu's
+    // button panel, and a campaign screen has no panel to sit behind.
+    const backdrop = this.backdropModel !== null;
+    const cam = (this.backdropModel ?? this.bgModel)?.cameras?.[0];
     if (cam) {
-      this.scene3d.camera.perspective(cam.fieldOfView * t.camFov, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
+      const zoom = backdrop ? 1 : t.camZoom;
+      const [panX, panY] = backdrop ? [0, 0] : [t.camPanX, t.camPanY];
+      // A backdrop's camera is authored for the 4:3 screen WC3 shipped on, and it frames the
+      // scene exactly — Maiev's ruins have nothing painted past their edges. Feed that vertical
+      // FOV to a 16:9 viewport and the extra width is scene that was never built: a black void
+      // down one side. So a WIDER screen keeps the authored HORIZONTAL extent and gives up
+      // height for it (tan(v/2)·aspect held at the 4:3 value), which is the only crop that
+      // cannot reveal a hole. The main menu needs none of this — its scene is an open seascape,
+      // and its framing is the tuning above.
+      const fov = backdrop
+        ? 2 * Math.atan(Math.tan(cam.fieldOfView / 2) * Math.min(1, (4 / 3) / (w / h)))
+        : cam.fieldOfView * t.camFov;
+      this.scene3d.camera.perspective(fov, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
       const tgt = [cam.targetPosition[0], cam.targetPosition[1], cam.targetPosition[2]];
       const eye = [
-        tgt[0] + (cam.position[0] - tgt[0]) * t.camZoom,
-        tgt[1] + (cam.position[1] - tgt[1]) * t.camZoom,
-        tgt[2] + (cam.position[2] - tgt[2]) * t.camZoom,
+        tgt[0] + (cam.position[0] - tgt[0]) * zoom,
+        tgt[1] + (cam.position[1] - tgt[1]) * zoom,
+        tgt[2] + (cam.position[2] - tgt[2]) * zoom,
       ];
       // Pan eye+target along the camera's screen axes (right, up) with Z as world up.
       const fwd = norm([tgt[0] - eye[0], tgt[1] - eye[1], tgt[2] - eye[2]]);
       const right = norm(cross(fwd, [0, 0, 1]));
       const up = cross(right, fwd);
       for (let i = 0; i < 3; i++) {
-        const d = right[i] * t.camPanX + up[i] * t.camPanY;
+        const d = right[i] * panX + up[i] * panY;
         eye[i] += d; tgt[i] += d;
       }
       this.scene3d.camera.moveToAndFace(new Float32Array(eye), new Float32Array(tgt), new Float32Array([0, 0, 1]));
@@ -374,6 +472,14 @@ export class MenuScene {
     // its proportions; panelCx/Cy place the content within it.
     // width = natural (un-stretched) height-based width × an explicit horizontal
     // stretch, so the container can be widened without changing its height.
+    // With a campaign backdrop up there is no chrome at all: both sprite layers get an empty
+    // viewport, which is how a screen the panel models have no sequence for is rendered.
+    if (this.panelsHidden) {
+      this.scenePanel.viewport.set([0, 0, 0, 0]);
+      this.sceneLeft.viewport.set([0, 0, 0, 0]);
+      return;
+    }
+
     const pVw = h * (t.panelHalfX / t.panelHalfY) * t.panelStretchX;
     this.scenePanel.camera.ortho(t.panelCx - t.panelHalfX, t.panelCx + t.panelHalfX, t.panelCy - t.panelHalfY, t.panelCy + t.panelHalfY, 1, 2000);
     this.scenePanel.camera.moveToAndFace(
@@ -403,6 +509,12 @@ export class MenuScene {
       this.frameCameras(); // viewports + aspect follow the new size (fixes F11 black margins)
     }
   }
+}
+
+/** Duration (ms) of a named sequence on `model`, or 0 if it has none. */
+function seqLengthOf(model: MdxModel, name: string): number {
+  const seq = model.sequences.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  return seq ? seq.interval[1] - seq.interval[0] : 0;
 }
 
 type V3 = [number, number, number];

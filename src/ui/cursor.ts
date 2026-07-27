@@ -10,9 +10,11 @@ import type { DataSource } from "../vfs/types";
 
 let styleEl: HTMLStyleElement | null = null;
 
-/** Apply the human hand cursor across the (non-in-game) menu screens. */
-export function applyMenuCursor(vfs: DataSource): void {
-  const bytes = vfs.rawBytes("UI\\Cursor\\HumanCursor.blp");
+/** Apply a race's hand cursor across the (non-in-game) menu screens. Human everywhere except
+ *  the Campaign screen, which wears the cursor its campaign names (`Cursor=3` → Night Elf —
+ *  see data/campaigns.ts); the four sheets are the same 8-cell grid. */
+export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead" | "NightElf" = "Human"): void {
+  const bytes = vfs.rawBytes(`UI\\Cursor\\${race}Cursor.blp`) ?? vfs.rawBytes("UI\\Cursor\\HumanCursor.blp");
   const sheet = bytes ? blpToCanvas(bytes) : null;
   if (!sheet) return;
   const cell = Math.round(sheet.width / 8); // 8 cells wide; top-left = idle pointer

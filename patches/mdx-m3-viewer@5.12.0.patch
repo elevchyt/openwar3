@@ -324,6 +324,84 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
          }
      }
      return offset;
+diff --git a/dist/cjs/parsers/w3x/w3d/file.d.ts b/dist/cjs/parsers/w3x/w3d/file.d.ts
+index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..08e499edc59573c8d2a2652aa4590da775202d34 100644
+--- a/dist/cjs/parsers/w3x/w3d/file.d.ts
++++ b/dist/cjs/parsers/w3x/w3d/file.d.ts
+@@ -9,6 +9,8 @@ export default class War3MapW3d {
+     version: number;
+     originalTable: ModificationTable;
+     customTable: ModificationTable;
++    /** OpenWar3: whether this file carries the optional level/data-pointer pair (detected on load). */
++    useOptionalInts: boolean;
+     load(bufferOrStream: ArrayBuffer | Uint8Array | BinaryStream): void;
+     save(): Uint8Array;
+     getByteLength(): number;
+diff --git a/dist/cjs/parsers/w3x/w3d/file.js b/dist/cjs/parsers/w3x/w3d/file.js
+index 5c2629bdcf279decae84d9fddfc523d5548192e8..07db70d7c51c53b2d5555e7df31c5e2aed0de369 100644
+--- a/dist/cjs/parsers/w3x/w3d/file.js
++++ b/dist/cjs/parsers/w3x/w3d/file.js
+@@ -12,6 +12,8 @@ class War3MapW3d {
+         this.version = 0;
+         this.originalTable = new modificationtable_1.default();
+         this.customTable = new modificationtable_1.default();
++        // OpenWar3: which of the two layouts `load` found (see there); `save` writes it back.
++        this.useOptionalInts = true;
+     }
+     load(bufferOrStream) {
+         let stream;
+@@ -22,18 +24,46 @@ class War3MapW3d {
+             stream = new binarystream_1.default(bufferOrStream);
+         }
+         this.version = stream.readInt32();
+-        this.originalTable.load(stream, true);
+-        this.customTable.load(stream, true);
++        // OpenWar3 fix: the optional level/data-pointer pair is NOT fixed per file type.
++        // This class is used for w3a (abilities), w3q (upgrades) AND w3d (doodads), and the
++        // caller hardcodes `true` for all three. That holds for w3a and w3q, but NOT for w3d:
++        // across all 100 maps bundled with 1.27a, every w3a (43/43) and every w3q (15/15)
++        // carries the pair, while of the 44 w3d files only 12 do — the Bonus campaign's
++        // (OrcX02*, OrcX03a/b, the last maps Blizzard authored). The other 32, every earlier
++        // campaign chapter included, write the compact form and blew up here with
++        // "unknown variable type", taking the whole map load with them: Terror of the Tides
++        // could not start at all.
++        // So the layout is DETECTED, not assumed — parse with the pair, and if that throws or
++        // fails to consume the file exactly, re-parse without it. Exactly one of the two
++        // consumes each of the 44 files (never both, never neither), so the test is decisive.
++        const start = stream.index;
++        try {
++            this.originalTable.load(stream, true);
++            this.customTable.load(stream, true);
++            if (stream.remaining === 0) {
++                this.useOptionalInts = true;
++                return;
++            }
++        }
++        catch (e) {
++            // fall through to the compact layout
++        }
++        stream.seek(start);
++        this.originalTable = new modificationtable_1.default();
++        this.customTable = new modificationtable_1.default();
++        this.originalTable.load(stream, false);
++        this.customTable.load(stream, false);
++        this.useOptionalInts = false;
+     }
+     save() {
+         const stream = new binarystream_1.default(new ArrayBuffer(this.getByteLength()));
+         stream.writeInt32(this.version);
+-        this.originalTable.save(stream, true);
+-        this.customTable.save(stream, true);
++        this.originalTable.save(stream, this.useOptionalInts);
++        this.customTable.save(stream, this.useOptionalInts);
+         return stream.uint8array;
+     }
+     getByteLength() {
+-        return 4 + this.originalTable.getByteLength(true) + this.customTable.getByteLength(true);
++        return 4 + this.originalTable.getByteLength(this.useOptionalInts) + this.customTable.getByteLength(this.useOptionalInts);
+     }
+ }
+ exports.default = War3MapW3d;
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
 index 7fe06bd7314e83b578dc8987e819b08cea287dfb..2c0fe916a43253124b9feff9b5755c429060d390 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js

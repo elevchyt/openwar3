@@ -246,11 +246,11 @@ export class Interpreter {
    *
    *  Resolution order: native impl → user function → declared-but-unimplemented native
    *  (typed default) → unknown (null). Never throws for a missing target. */
-  callFunction(name: string, args: JassValue[]): JassValue {
+  callFunction(name: string, args: JassValue[], adoptWaits = false): JassValue {
     const nat = this.rt.natives.get(name);
     if (nat) return this.callNative(name, nat, args); // natives are synchronous — no generator needed
     const fn = this.rt.functions.get(name);
-    if (fn) return this.runSync(this.callUserG(fn, args), name);
+    if (fn) return this.runSync(this.callUserG(fn, args), name, adoptWaits);
     return this.missing(name);
   }
 
@@ -288,26 +288,61 @@ export class Interpreter {
     return JNULL;
   }
 
-  /** Drive a generator to completion on the caller's stack (no suspension possible).
-   *  A wait inside throws ThreadAbort, which we catch here: that callback is abandoned
-   *  (logged once) rather than left to spin — blizzard.j's `PolledWait` loops until its
-   *  timer drains, so a no-op wait would busy-loop to the iteration cap. */
-  private runSync(gen: ThreadGen, label: string): JassValue {
+  /**
+   * Drive a generator on the caller's stack, where JavaScript cannot suspend: a condition,
+   * a boolexpr filter, a `ForGroup`/`ForForce` callback, or a function reached from an
+   * EXPRESSION (`if TriggerExecuteBJ(...) then`).
+   *
+   * If it runs to completion — the normal case — its value is the call's value. If it hits a
+   * `TriggerSleepAction`, what happens next depends on WHERE the call came from:
+   *
+   *   • from an EXPRESSION (`adoptWaits`), the rest of it is adopted by the scheduler as a
+   *     thread of its own and the caller carries on with a null result. WC3 would suspend the
+   *     caller's whole thread right there; we cannot suspend a JS expression, so the choice is
+   *     between running the rest late and not running it at all. It used to be the latter, and
+   *     blizzard.j is exactly where that hurt: `QueuedTriggerAttemptExec` runs the whole trigger
+   *     QUEUE from inside an `if`, so every queued trigger died at its first wait. Campaign
+   *     cinematics are queued triggers — Terror of the Tides opens faded to black and waits, and
+   *     the map sat black forever with the fade-in abandoned mid-cinematic.
+   *   • from a CONDITION, a boolexpr filter or an enum callback, it is abandoned (logged once).
+   *     WC3 does not allow a wait there either, and resuming one would fire trigger actions out
+   *     of a context that no longer exists.
+   */
+  private runSync(gen: ThreadGen, label: string, adoptWaits = false): JassValue {
     this.syncDepth++;
     try {
       const r = gen.next();
       if (r.done) return r.value;
-      this.rt.warnOnce(label, "wait outside a trigger thread — ignored");
+      if (adoptWaits) this.adoptSuspended(label, gen, typeof r.value === "number" ? r.value : 0);
+      else this.rt.warnOnce(label, "wait outside a trigger thread — callback abandoned");
       return JNULL;
     } catch (err) {
-      if (err instanceof ThreadAbort) {
-        this.rt.warnOnce(label, "TriggerSleepAction outside a trigger thread — callback abandoned");
-        return JNULL;
-      }
+      if (err instanceof ThreadAbort) return JNULL; // a wait that could not even be adopted
       throw err;
     } finally {
       this.syncDepth--;
     }
+  }
+
+  /** Hand an already-suspended generator to the scheduler, waking `secs` of game time from
+   *  now. It starts with an EMPTY event-response stack: the frames on the shared stack belong
+   *  to the thread that called into us, and are not this one's to carry off. */
+  private adoptSuspended(label: string, gen: ThreadGen, secs: number): void {
+    if (this.threads.length >= MAX_THREADS) {
+      this.rt.warnOnce("<threads>", `thread cap (${MAX_THREADS}) hit — trigger thread dropped`);
+      return;
+    }
+    this.threads.push({
+      id: this.nextThreadId++,
+      label,
+      gen,
+      stack: [],
+      depth: 0,
+      wakeAt: this.rt.gameTime + Math.max(0, secs),
+      lastTick: this.pumpTick,
+      done: false,
+      result: JNULL,
+    });
   }
 
   private *callUserG(fn: FunctionDecl, args: JassValue[]): ThreadGen {
@@ -465,12 +500,14 @@ export class Interpreter {
     if (name === "TriggerSleepAction") {
       // THE suspension point. `TriggerSleepAction(n)` parks this thread for n seconds of
       // GAME time (blizzard.j's PolledWait loops on it, so "Wait" in the GUI lands here).
+      // Yield whether or not there is a thread to park. On a trigger thread that parks it,
+      // which is the whole point; driven from a SYNC context (a condition, a filter, or a
+      // function called from an expression) the yield surfaces at that context's `runSync`,
+      // which adopts the rest of the callback as a thread rather than dropping it on the
+      // floor. See runSync — the campaign trigger queue is why.
       const secs = Math.max(0, asNum(args[0] ?? jReal(0)));
-      if (this.currentThread && this.syncDepth === 0) {
-        yield secs;
-        return JNULL;
-      }
-      throw new ThreadAbort(); // no thread to park (a condition/filter/enum callback)
+      yield secs;
+      return JNULL;
     }
     // ExecuteFunc takes a function NAME, not a trigger — run it on this thread.
     if (name === "ExecuteFunc") return args[0]?.k === "string" ? yield* this.callFunctionG(args[0].s, []) : JNULL;
@@ -543,7 +580,11 @@ export class Interpreter {
         return this.arrayFor(e.name, frame).get(idx);
       }
       case "call":
-        return this.callFunction(e.name, e.args.map((a) => this.eval(a, frame)));
+        // A function called from an EXPRESSION may legitimately wait in WC3 — the whole
+        // thread blocks there — so if it does, the rest of it is adopted rather than dropped
+        // (runSync). A condition, a filter or an enum callback is a different matter: WC3
+        // forbids a wait in those, and they keep the strict behaviour.
+        return this.callFunction(e.name, e.args.map((a) => this.eval(a, frame)), true);
       case "unary":
         return this.evalUnary(e.op, this.eval(e.expr, frame));
       case "binary":

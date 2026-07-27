@@ -48,6 +48,12 @@ export class GlueAudio {
     this.sounds.setAmbienceLoop(this.ambience, true);
   }
 
+  /** The wind alone, without touching the theme. The Campaign screen runs its campaign's own
+   *  `AmbientSound` loop instead of the main screen's (data/campaigns.ts), and hands this one
+   *  back on the way out — the music plays under both. */
+  stopAmbience(): void { this.sounds.setAmbienceLoop(this.ambience, false); }
+  startAmbience(): void { this.sounds.setAmbienceLoop(this.ambience, true); }
+
   /** The menu is gone (a match is starting): the theme fades, the wind stops dead. From
    *  here the map's own script owns the music channel (SetMapMusic in its main()). */
   stop(): void {

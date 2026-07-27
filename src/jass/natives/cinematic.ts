@@ -47,6 +47,15 @@ export function registerCinematicNatives(rt: Runtime): void {
   def(rt, "IsDawnDuskEnabled", (c) => jBool(c.rt.hooks?.isDawnDuskEnabled?.() ?? true));
   def(rt, "SetGameSpeed", (c, a) => (c.rt.hooks?.setGameSpeed?.(c.rt.enumIndex(a[0])), JNULL));
   def(rt, "GetGameSpeed", (c) => c.rt.enumHandle("GameSpeed", c.rt.hooks?.getGameSpeed?.() ?? 2));
+  // The campaign difficulty (issue #101). Not a cinematic native as such, but it belongs with
+  // the pair above: it is the other engine-level "what did the player choose before the map
+  // started" the script can read, and campaign chapters branch on it in earnest —
+  // NightElfX01 gates three of its waves on `GetGameDifficulty() == MAP_DIFFICULTY_*`, and
+  // blizzard.j's own `ReduceDifficultyBJ` (the defeat dialog's "Reduce Difficulty") steps it
+  // down through SetGameDifficulty. MAP_DIFFICULTY_NORMAL (1) is the default, matching the
+  // campaign screen's own.
+  def(rt, "GetGameDifficulty", (c) => c.rt.enumHandle("GameDifficulty", c.rt.hooks?.getGameDifficulty?.() ?? 1));
+  def(rt, "SetGameDifficulty", (c, a) => (c.rt.hooks?.setGameDifficulty?.(c.rt.enumIndex(a[0])), JNULL));
   def(rt, "SetRandomSeed", (c, a) => (c.rt.setRandomSeed(asInt(a[0])), JNULL));
   // EnableOcclusion draws the "unit behind a cliff" x-ray silhouettes and EnableWorldFogBoundary
   // the black wall at the map edge — two things we don't render at all. Explicit no-ops: the

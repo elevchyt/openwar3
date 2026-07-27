@@ -884,6 +884,41 @@ endfunction`;
   else fail(`post-wait spawn: ${JSON.stringify(spawned)}`);
   if (initFlag && initFlag.n === 1) ok(`main() resumed and finished after the trigger's wait`);
   else fail(`afterInit: ${initFlag && initFlag.n} (want 1)`);
+
+  // Part F: the TRIGGER QUEUE — blizzard.j's own "Run Trigger (queued)", and the shape every
+  // campaign cinematic arrives in. `QueuedTriggerAddBJ` runs the queue through
+  // `QueuedTriggerAttemptExec`, which calls `TriggerExecuteBJ(...)` from inside an `if` — an
+  // EXPRESSION. A wait in the queued trigger therefore lands in a context JavaScript cannot
+  // suspend, and used to be dropped on the floor: Terror of the Tides' opening cinematic faded
+  // to black, queued its own continuation, and the fade-in never ran. The rest of such a
+  // callback is now adopted as its own thread instead.
+  const queued = [];
+  const hooksF = { createUnit: (player, typeId, x, y) => (queued.push({ player, typeId, x, y }), 400 + queued.length) };
+  const SRC_F = `
+globals
+    trigger gg_trg_Cine = null
+    integer udg_cineStep = 0
+endglobals
+function CineActions takes nothing returns nothing
+    set udg_cineStep = 1
+    call TriggerSleepAction( 3.0 )
+    set udg_cineStep = 2
+    call CreateUnit( Player(0), 'hfoo', 64.0, 64.0, 270.0 )
+endfunction
+function InitF takes nothing returns nothing
+    set gg_trg_Cine = CreateTrigger()
+    call TriggerAddAction( gg_trg_Cine, function CineActions )
+    call QueuedTriggerAddBJ( gg_trg_Cine, false )
+endfunction`;
+  const iF = buildInterpreter([COMMON_J, BLIZZARD_J, SRC_F], { hooks: hooksF });
+  iF.run('InitF', []);
+  const fStep0 = iF.rt.globals.get('udg_cineStep');
+  if (fStep0 && fStep0.n === 1 && queued.length === 0) ok(`a queued trigger starts at once and parks on its wait`);
+  else fail(`queued start: step ${fStep0 && fStep0.n} spawned ${queued.length} (want 1/0)`);
+  for (let i = 0; i < 100 && queued.length === 0; i++) iF.advanceTime(0.05); // up to 5s
+  const fStep = iF.rt.globals.get('udg_cineStep');
+  if (fStep && fStep.n === 2 && queued.length === 1) ok(`…and RESUMES after the wait — the rest of the queued trigger runs (this is the campaign cinematic)`);
+  else fail(`queued resume: step ${fStep && fStep.n} spawned ${queued.length} (want 2/1)`);
 }
 
 // --- 7.16: unit groups — the GUI's "Pick every unit in <region> matching <cond>" ---

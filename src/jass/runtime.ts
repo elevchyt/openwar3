@@ -868,6 +868,12 @@ export interface EngineHooks {
   /** SetGameSpeed / GetGameSpeed — the common.j gamespeed index (2 = MAP_SPEED_NORMAL). */
   setGameSpeed?(speed: number): void;
   getGameSpeed?(): number;
+  /** SetGameDifficulty / GetGameDifficulty — the common.j gamedifficulty index
+   *  (MAP_DIFFICULTY_EASY 0 / NORMAL 1 / HARD 2 / INSANE 3). The campaign screen's own
+   *  dropdown picks it, and campaign maps branch on it directly: Terror of the Tides asks
+   *  `GetGameDifficulty() == MAP_DIFFICULTY_HARD` before it decides what to send at you. */
+  setGameDifficulty?(difficulty: number): void;
+  getGameDifficulty?(): number;
   /** IsFogEnabled / IsFogMaskEnabled — the LIVE state of the two fog-of-war switches, which
    *  CinematicModeExBJ saves before turning both off and restores when the cinematic ends. */
   isFogEnabled?(): boolean;

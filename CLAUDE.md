@@ -79,6 +79,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   Illusion (`AIil`), or anything that copies a unit. An illusion's whole point is that the ENEMY can't tell it from
   the original, so every tell (blue wash, summon timer, portrait) is gated on the LOCAL viewpoint, and its
   no-damage rule is enforced at the blow — not by editing what it shows.
+- **Campaigns:** read [`docs/campaigns.md`](docs/campaigns.md) before touching the campaign screen, its data, or the
+  chapter-start path. The whole campaign is ONE text file (`UI\CampaignStrings_exp.txt`) that documents itself, and
+  three of its rows break the obvious parse (a comma inside quotes, a fourth field, a "mission" that is a `.mdl`).
+  The screen is also the one glue screen with **no panel chrome** — the campaign's 3D backdrop is the screen.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

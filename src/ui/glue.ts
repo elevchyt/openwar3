@@ -22,14 +22,32 @@ const GAP_MS = 120;
 
 /** A screen that can be built on demand — the manager mounts it only when navigated to. */
 export interface GlueScreenDef {
-  /** Which of the panel model's chrome sets this screen wears. */
+  /** Which of the panel model's chrome sets this screen wears. Ignored when `backdrop` is
+   *  set: such a screen has none (see below). */
   chrome: GlueChrome;
+  /**
+   * A CAMPAIGN screen (issue #101): a full-screen 3D backdrop instead of panel chrome.
+   *
+   * The panel models carry a Birth/Stand/Death triple for every glue screen in the game
+   * except this one — the reference hides the screen edges entirely and lets the campaign's
+   * own scene fill the frame. So a screen with a backdrop skips the chrome clips: the model
+   * named here plays its own Birth/Stand instead, under its own fog (render/menuScene.ts).
+   */
+  backdrop?: { path: string; fog: { r: number; g: number; b: number; start: number; end: number } };
   /** Build the FDF screen. Fading it in is the manager's job, not the screen's. */
   mount(): Promise<FdfScreen>;
 }
 
+/** How long a screen with no chrome takes to leave / arrive. The chrome's own clips time
+ *  every other transition; a backdrop screen has none, so its contents cross-fade on the
+ *  same beat the panel clips run to (≈0.7 s in, ≈0.5 s out — see the fallbacks below). */
+const NO_CHROME_OUT_MS = 500;
+const NO_CHROME_IN_MS = 700;
+
 export class GlueManager {
   private current: FdfScreen | null = null;
+  /** Whether the screen on screen is a backdrop one — it decides what leaving it does. */
+  private backdropUp = false;
   private busy = false;
 
   constructor(private scene: MenuScene | null) {}
@@ -48,9 +66,23 @@ export class GlueManager {
     this.current?.dispose();
     const next = await def.mount();
     this.current = next;
-    const birth = this.scene?.playChromeBirth(def.chrome) ?? 0;
-    await next.animatePanels("in", birth || 700);
+    const birth = await this.arrive(def);
+    await next.animatePanels("in", birth || NO_CHROME_IN_MS);
     return next;
+  }
+
+  /** Bring `def`'s background in — a campaign backdrop, or the panel chrome's Birth — and
+   *  say how long it takes. Restoring the menu's own background when a backdrop screen is
+   *  what we are LEAVING happens here too, so the two can never get out of step. */
+  private async arrive(def: GlueScreenDef): Promise<number> {
+    if (def.backdrop) {
+      await this.scene?.showBackdrop(def.backdrop.path, def.backdrop.fog);
+      this.backdropUp = true;
+      return 0; // the backdrop's own Birth runs behind the screen; the DOM doesn't wait on it
+    }
+    if (this.backdropUp) this.scene?.restoreMenuBackground();
+    this.backdropUp = false;
+    return this.scene?.playChromeBirth(def.chrome) ?? 0;
   }
 
   /**
@@ -77,19 +109,20 @@ export class GlueManager {
       next.element.style.visibility = "hidden"; // …and unseen until the old screen has left
 
       if (leaving) {
-        // The chrome leaves at the same moment, and tells us how long it takes.
-        const death = this.scene?.playChromeDeath() ?? 0;
-        await leaving.animatePanels("out", death || 500);
+        // The chrome leaves at the same moment, and tells us how long it takes. A backdrop
+        // screen has no chrome to send away — only its contents fade.
+        const death = this.backdropUp ? 0 : this.scene?.playChromeDeath() ?? 0;
+        await leaving.animatePanels("out", death || NO_CHROME_OUT_MS);
         leaving.dispose();
         await wait(GAP_MS);
       }
 
       this.current = next;
       next.element.style.visibility = "";
-      const birth = this.scene?.playChromeBirth(def.chrome) ?? 0;
+      const birth = await this.arrive(def);
       // animatePanels("in") drops the contents to transparent in this same task, so they
       // never paint at full opacity for a frame before the panel that carries them arrives.
-      await next.animatePanels("in", birth || 700);
+      await next.animatePanels("in", birth || NO_CHROME_IN_MS);
       next.setInteractive(true);
       return next;
     } catch (err) {

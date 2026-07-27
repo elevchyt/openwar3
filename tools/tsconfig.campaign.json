@@ -1,0 +1,17 @@
+{
+  "//": "Throwaway config: compile the campaign index parser to CommonJS so tools/campaign-index-test.cjs can run it headlessly against the real archives. Strict typechecking is done by the main `pnpm typecheck`. See tools/tsconfig.sim.json for the same pattern.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "types": [],
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "..",
+    "outDir": "../.campaign-build",
+    "noEmit": false
+  },
+  "files": ["../src/data/campaigns.ts"]
+}

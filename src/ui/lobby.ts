@@ -48,4 +48,11 @@ export interface MeleeConfig {
    * from the slot holding its own peer id instead. See docs/multiplayer.md.
    */
   localPlayer?: number;
+  /**
+   * The CAMPAIGN difficulty the player chose on the campaign screen, as the common.j
+   * `gamedifficulty` index (MAP_DIFFICULTY_EASY 0 / NORMAL 1 / HARD 2 / INSANE 3). Omitted
+   * outside a campaign, where the reference offers no such choice — a skirmish's difficulty
+   * is the AI's, not the game's. Campaign chapters read it through `GetGameDifficulty`.
+   */
+  difficulty?: number;
 }

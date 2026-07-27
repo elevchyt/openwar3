@@ -5,6 +5,11 @@ import { mountMainMenu } from "./ui/mainMenu";
 import { mountFdfMainMenu } from "./ui/fdfMainMenu";
 import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
+import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
+import { loadCampaigns, type Campaign } from "./data/campaigns";
+import {
+  loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
+} from "./data/campaignProgress";
 import { mountLanScreen, savedPlayerName } from "./ui/fdfLan";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
@@ -12,14 +17,14 @@ import { LanLobby } from "./net/lobby";
 import { WebSocketTransport } from "./net/transport";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
-import { GlueManager } from "./ui/glue";
+import { GlueManager, type GlueScreenDef } from "./ui/glue";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
 import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
 import { GlueAudio } from "./ui/glueAudio";
 import { SoundBoard } from "./audio/sounds";
 import type { DataSource } from "./vfs/types";
-import type { MeleeConfig } from "./ui/lobby";
-import type { MapInfo } from "./world/mapInfo";
+import type { MeleeConfig, SlotConfig } from "./ui/lobby";
+import { parseMapInfo, type MapInfo } from "./world/mapInfo";
 import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
@@ -117,6 +122,11 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
     show("map");
     if (!mapScene) mapScene = await MapViewerScene.create(mapCanvas, vfs, sounds);
     mapScene.onExit = () => exitToMenu(); // F10 → End Game leaves the match
+    // A campaign chapter is completed when its script declares the local player the winner —
+    // that, and only that, opens the next one.
+    mapScene.onLocalVictory = () => {
+      if (pendingCampaign) markMissionComplete(pendingCampaign.key, pendingCampaign.index);
+    };
     mapScene.loadMap(bytes);
     mapScene.start();
     return `${name} — authentic render (textures & models stream in)`;
@@ -259,11 +269,139 @@ function singlePlayerScreen(vfs: DataSource): { chrome: "SinglePlayer"; mount: (
   return {
     chrome: "SinglePlayer",
     mount: () => mountSinglePlayerMenu(ui, vfs, {
+      onCampaign: () => void openCampaignScreen(vfs),
       onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
       onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
     }),
   };
 }
+
+// --- the Campaign screens (issue #101) ---------------------------------------------
+//
+// One screen in two modes — pick a campaign, then pick a chapter of it — over a full-screen
+// 3D backdrop instead of the panel chrome every other glue screen wears (ui/fdfCampaign.ts,
+// and MenuScene.showBackdrop for the scene half). The campaign index is read once and kept:
+// it is one small text file, and both modes and every backdrop swap are views of it.
+
+let campaigns: Campaign[] = [];
+/** Which campaign the Campaign screen is on, and which of its two modes. Survives the trips
+ *  into a mission and back, so returning lands on the chapter list you left. */
+let campaignState: CampaignScreenState | null = null;
+
+/** Open the Campaign screen — on the chapter list of the campaign the player last touched,
+ *  else on the campaign list. */
+async function openCampaignScreen(vfs: DataSource): Promise<void> {
+  if (!campaigns.length) campaigns = await loadCampaigns(vfs);
+  if (!campaigns.length) {
+    // A Reign-of-Chaos-only install: UI\CampaignStrings_exp.txt is a TFT file, and RoC's
+    // same-named predecessor is a different format we don't read yet (data/campaigns.ts).
+    console.warn("[OpenWar3] no TFT campaign index in this install — Campaign unavailable");
+    return;
+  }
+  campaignState ??= { campaign: campaigns[0], chapters: false, difficulty: loadDifficulty() };
+  await glue.goTo(campaignScreen(vfs));
+}
+
+function campaignScreen(vfs: DataSource): GlueScreenDef {
+  const state = campaignState!;
+  return {
+    // No chrome: the panel models carry no Campaign sequence triple, because the reference
+    // hides the screen edges here entirely. `chrome` is unread while `backdrop` is set.
+    chrome: "SinglePlayer",
+    backdrop: state.campaign.background
+      ? { path: state.campaign.background, fog: state.campaign.fog }
+      : undefined,
+    mount: () => {
+      applyMenuCursor(vfs, state.campaign.cursor); // the campaign's own racial cursor
+      setCampaignAmbience(state.campaign);
+      return mountCampaignScreen(ui, vfs, campaigns, state, {
+        onSelectCampaign: (c) => {
+          state.campaign = c;
+          state.chapters = true;
+          void glue.goTo(campaignScreen(vfs)); // the backdrop changes with the campaign
+        },
+        onPlayMission: (c, index) => void startCampaignMission(vfs, c, index, state.difficulty),
+        onBack: () => {
+          if (state.chapters) { state.chapters = false; void glue.goTo(campaignScreen(vfs)); return; }
+          leaveCampaignScreen(vfs);
+          void glue.goTo(singlePlayerScreen(vfs));
+        },
+        onDifficulty: (d) => saveDifficulty(d),
+      });
+    },
+  };
+}
+
+/** The loop under the campaign screen: the campaign's own `AmbientSound` row, in place of the
+ *  main menu's wind. Both are AmbienceSounds.slk keys, so this is a swap, not a new channel. */
+function setCampaignAmbience(c: Campaign): void {
+  if (campaignAmbience && campaignAmbience !== c.ambientSound) sounds?.setAmbienceLoop(campaignAmbience, false);
+  if (c.ambientSound) {
+    glueAudio?.stopAmbience(); // the main screen's wind gives way to the campaign's
+    sounds?.setAmbienceLoop(c.ambientSound, true);
+  }
+  campaignAmbience = c.ambientSound;
+}
+let campaignAmbience: string | null = null;
+
+/** Leaving the Campaign screen for another menu: the main menu's cursor and wind come back. */
+function leaveCampaignScreen(vfs: DataSource): void {
+  applyMenuCursor(vfs);
+  if (campaignAmbience) sounds?.setAmbienceLoop(campaignAmbience, false);
+  campaignAmbience = null;
+  glueAudio?.startAmbience();
+}
+
+/** Play a chapter. Campaign maps live INSIDE the archives (Maps\FrozenThrone\Campaign\*.w3x in
+ *  War3x/War3xLocal), not in the install's `Maps\` folder the Custom Game screen browses, so
+ *  the bytes come from the VFS. Everything after that is the ordinary custom-map path: the map
+ *  is not melee-flagged, so its own triggers set the mission up — which is the point of the
+ *  campaign as a test bed, since these maps are where WC3's cinematics actually live. */
+async function startCampaignMission(vfs: DataSource, c: Campaign, index: number, difficulty: Difficulty): Promise<void> {
+  const mission = c.missions[index];
+  if (!mission || !vfs.exists(mission.file)) {
+    console.warn(`[OpenWar3] campaign map missing from this install: ${mission?.file}`);
+    return;
+  }
+  leaveCampaignScreen(vfs);
+  const bytes = await vfs.read(mission.file);
+  const info = parseMapInfo(bytes, mission.name);
+  // The mission is finished the moment its own script declares victory — that is what opens
+  // the next chapter (data/campaignProgress.ts).
+  pendingCampaign = { key: c.key, index };
+  await startGame(bytes, info, campaignConfig(info, difficulty));
+}
+
+/** The chapter the player is IN, so a victory can be credited to it. */
+let pendingCampaign: { key: string; index: number } | null = null;
+
+/** A campaign map's lobby config. A campaign is single-player: the local player takes the
+ *  first slot the map declares a human, and every other slot stays what the MAP made it —
+ *  these maps seat their own AI (and their own neutral-hostile), and the start locations are
+ *  the map's. Nothing here is a choice the player was offered EXCEPT the difficulty, because
+ *  that is the only one the reference's campaign screen offers — and the map reads it:
+ *  Terror of the Tides gates waves on `GetGameDifficulty()`. */
+function campaignConfig(info: MapInfo, difficulty: Difficulty): MeleeConfig {
+  const local = Math.max(0, info.slots.findIndex((s) => s.controller === "user"));
+  const slots: SlotConfig[] = info.slots.map((s, i) => ({
+    id: s.id,
+    controller: i === local ? "user" : "computer",
+    race: s.defaultRace,
+    team: s.team,
+    startX: s.startX,
+    startY: s.startY,
+  }));
+  return {
+    slots,
+    fog: "explored",
+    seed: 1 + Math.floor(Math.random() * 2147483645),
+    difficulty: DIFFICULTY_INDEX[difficulty],
+  };
+}
+
+/** The campaign screen's choice as common.j's `gamedifficulty` index — MAP_DIFFICULTY_EASY 0 /
+ *  NORMAL 1 / HARD 2 (INSANE 3 exists in common.j but no screen offers it). */
+const DIFFICULTY_INDEX: Record<Difficulty, number> = { easy: 0, normal: 1, hard: 2 };
 
 function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; mount: () => Promise<FdfScreen> } {
   return {
@@ -275,14 +413,23 @@ function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; moun
   };
 }
 
-/** Leave the menus and play: load the map, then melee or custom setup as the map asks. */
-async function startGame(file: File, info: MapInfo, config: MeleeConfig, link?: MatchLinkSetup): Promise<void> {
+/** Leave the menus and play: load the map, then melee or custom setup as the map asks.
+ *
+ *  The map arrives either as a FILE the player browsed to (the install's `Maps\` folder, which
+ *  is what the Custom Game and LAN screens pick from) or as BYTES already read out of the
+ *  archives — a campaign chapter lives inside War3x/War3xLocal and never touches the disk. */
+async function startGame(
+  map: File | Uint8Array,
+  info: MapInfo,
+  config: MeleeConfig,
+  link?: MatchLinkSetup,
+): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
   glue.dispose(); // the menus are done; the match owns the screen now — including its wire,
                   // which the LAN screen handed over before calling us (LanLobby.handOff)
   glueAudio?.stop(); // …and the music channel: the map's own script cues its music from here
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  const bytes = map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer());
   await enterMap(bytes, info.name);
   // Melee maps get the standard setup (town hall + workers, melee rules);
   // custom/scenario maps run their own triggers instead (see mapKind.ts).
@@ -339,9 +486,15 @@ function exitToMenu(): void {
   lan = null; // the wire the match owned is closed; a fresh LAN session opens a fresh one
   document.body.classList.remove("in-game"); // reveal the main-menu panel again
   const vfs = resolver.installSource;
+  // A campaign chapter returns to the chapter LIST it was started from — the reference drops
+  // you back on the campaign screen, with the chapter you just finished now behind you.
+  const campaign = pendingCampaign;
+  pendingCampaign = null;
   void showMenuBackground(vfs).then(() => {
+    if (!vfs) return;
     // glue.show() plays the chrome's Birth itself, so the DOM and the panel arrive together.
-    if (vfs) void glue.show(mainMenuScreen(vfs));
+    if (campaign && campaignState) void glue.show(campaignScreen(vfs));
+    else void glue.show(mainMenuScreen(vfs));
   });
 }
 
