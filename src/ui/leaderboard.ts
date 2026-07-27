@@ -74,7 +74,8 @@ export class LeaderboardOverlay {
 
   /** `skin` is the war3skins.txt section the panel's chrome is decorated from — WC3 gives
    *  the in-game panels the local player's RACE ("Orc", "NightElf", …). */
-  constructor(private container: HTMLElement, private vfs: DataSource, private skin: string) {}
+  /** `colorOf` maps a slot to its COLOUR index — SetPlayerColor can move it (Rts.playerColor). */
+  constructor(private container: HTMLElement, private vfs: DataSource, private skin: string, private colorOf: (p: number) => number = (p) => p) {}
 
   /** Poll: show/refresh the local player's board, or take it down. Called every frame —
    *  it does nothing at all unless the board actually changed (revision). */
@@ -225,7 +226,7 @@ export class LeaderboardOverlay {
 
   /** The player's colour, read from the game's own flat TeamColorNN.blp swatch. */
   private teamColor(player: number): string | null {
-    return teamColorCss(this.vfs, player);
+    return teamColorCss(this.vfs, this.colorOf(player));
   }
 
   dispose(): void {

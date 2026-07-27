@@ -1653,7 +1653,9 @@ export class MapViewerScene {
         this.userControl = enable;
         if (!enable) {
           this.rts?.clearSelection(); // a cinematic runs with nothing selected, as in WC3
+          this.rts?.clearHover(); // …and with nothing lit up under the cursor either
           this.hud?.clearOrderMode();
+          this.keys.clear(); // a key held when control was taken must not pan on resume
         }
       },
       displayCineFilter: (filter) => this.cinematic?.setFilter(filter),
@@ -1815,6 +1817,7 @@ export class MapViewerScene {
         if (changeColor) this.rts?.setUnitTeamColor(id, player);
       },
       setUnitColor: (id, color) => this.rts?.setUnitTeamColor(id, color),
+      setPlayerColor: (p, color) => this.rts?.setPlayerColor(p, color),
       setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
@@ -2167,7 +2170,7 @@ export class MapViewerScene {
     // belongs in the world layer — the leaderboard/multiboard/timers below are SCREEN-anchored
     // UI and belong in #ui, which CSS has already fitted to the same stage.
     this.textTags = new TextTagOverlay(worldLayer());
-    this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin);
+    this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin, (p) => this.rts?.playerColor(p) ?? p);
     this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
     this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
     this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
@@ -2521,7 +2524,7 @@ export class MapViewerScene {
     if (!model) return;
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
-    instance.setTeamColor(su.owner);
+    instance.setTeamColor(this.rts.playerColor(su.owner)); // the owner's COLOUR, not its slot
     if (!this.rts.remodel(simId, instance, def)) {
       instance.hide(); // the unit went away while we were loading
       return;
@@ -2551,7 +2554,7 @@ export class MapViewerScene {
     if (!model) return null;
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
-    instance.setTeamColor(owner); // player slot doubles as team color for now
+    instance.setTeamColor(this.rts.playerColor(owner)); // a slot's colour is not its index
     const simId = this.rts.addUnit(instance, def, x, y, facing, owner, team, constructionTime, reservedId); // default: face south
     // -1: the sim unit this model was loading for is already gone (a trigger created and
     // then removed it while the model streamed). Drop the model rather than leave a ghost.
@@ -4157,7 +4160,7 @@ export class MapViewerScene {
         this.loc3[1] = rally.y;
         this.loc3[2] = rally.z;
         this.rallyFlag.setLocation(this.loc3);
-        this.rallyFlag.setTeamColor(rally.owner); // the flag is team-coloured (issue #86)
+        this.rallyFlag.setTeamColor(this.rts?.playerColor(rally.owner) ?? rally.owner); // team-coloured (issue #86)
         this.rallyFlag.show();
       } else {
         this.rallyFlag.hide();
@@ -4172,7 +4175,7 @@ export class MapViewerScene {
       this.loc3[1] = markers[i].y;
       this.loc3[2] = markers[i].z;
       inst.setLocation(this.loc3);
-      inst.setTeamColor(markers[i].owner); // pooled instances are reused across owners
+      inst.setTeamColor(this.rts?.playerColor(markers[i].owner) ?? markers[i].owner); // pooled across owners
       inst.show();
     }
     for (let i = markers.length; i < this.queueFlags.length; i++) this.queueFlags[i].hide();
@@ -4641,6 +4644,7 @@ export class MapViewerScene {
       setResources: (next) => this.consoleUi?.update(next),
       dayNight: () => this.rts?.timeOfDay() ?? { hour: MELEE.MELEE_STARTING_TOD, isDay: true },
       mountClock: (slot) => this.mountClock(slot),
+      controlEnabled: () => this.userControl,
       selectionIcons: () => this.rts?.selectionIcons() ?? [],
       selectGridUnit: (simId) => this.rts?.selectGridUnit(simId),
       deselectUnit: (simId) => this.rts?.deselectUnit(simId),
@@ -4736,6 +4740,7 @@ export class MapViewerScene {
     this.allies?.dispose();
     this.allies = new AllianceDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
       localPlayer: this.localPlayer,
+      colorOf: (p) => this.rts?.playerColor(p) ?? p,
       // Everyone but yourself, and only seated slots — the matrix has 16 rows (12 players
       // plus the two neutrals), and the dialog is about the ones in the game.
       peers: () => [...this.meleeTeams.keys()]
@@ -4859,7 +4864,7 @@ export class MapViewerScene {
       line,
       this.multiplayerMatch,
       (p) => this.playerLabel(p),
-      (p) => teamColorHex(this.vfs, p),
+      (p) => teamColorHex(this.vfs, this.rts?.playerColor(p) ?? p),
       (k) => this.globalStrings?.strings.get(k),
     );
     this.chatHistory.push(rendered);
@@ -8245,7 +8250,10 @@ export class MapViewerScene {
           if (this.moved) this.updateSelectBox(e.offsetX, e.offsetY);
         }
       }
-      if (!this.dragging) this.rts?.hoverAt(e.offsetX, e.offsetY);
+      // EnableUserControl(false) — a cinematic owns the mouse (7.24). It already owned the
+      // CLICK; the hover is just as much an interaction, and leaving it live let the player
+      // light units up and read their tooltips right through a cinematic.
+      if (!this.dragging && this.userControl) this.rts?.hoverAt(e.offsetX, e.offsetY);
     });
     // Where the pointer is, in VIEWPORT coords, ALWAYS — over the map, over the HUD, out in
     // the letterbox. Everything drawn AT the cursor (the reticle, the carried item, the

@@ -126,6 +126,10 @@ export interface HudSelection {
 }
 
 export interface HudDriver {
+  /** `EnableUserControl` — false while a cinematic owns the input (7.24). The console's own
+   *  keys stand down with it: a control group recalled or a hero selected mid-cinematic is
+   *  the same interaction as clicking one, and the script is composing the shot. */
+  controlEnabled(): boolean;
   resources(): { gold: number; lumber: number; foodUsed: number; foodMax: number };
   selection(): HudSelection | null;
   /** Minimap dots: world positions + owning player (for color). */
@@ -944,6 +948,11 @@ export class GameHud {
 
   private onKey = (e: KeyboardEvent): void => {
     if (this.root.hidden) return;
+    // A cinematic owns the keyboard too. The letterbox usually hides the console (so the line
+    // above already caught it), but EnableUserControl(false) and ShowInterface(false) are
+    // different natives — a transmission during ordinary play leaves the console up while the
+    // script still holds control.
+    if (!this.driver.controlEnabled()) return;
     if (document.body.classList.contains("game-menu-open")) return; // F10 menu is modal
     // So is every other in-game dialog — the Allies and Messaging panels, and a script's own.
     // None of them PAUSE (only F10 does), so the flag above does not cover them; what they all

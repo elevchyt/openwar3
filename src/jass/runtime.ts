@@ -510,6 +510,10 @@ export interface EngineHooks {
   setUnitState?(unitId: number, whichState: number, value: number): void;
   getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
   setUnitColor?(unitId: number, color: number): void; // SetUnitColor — team-colour tint
+  /** `SetPlayerColor` — the colour every unit this player spawns from now on wears (and its
+   *  minimap dots and name). NOT retroactive: recolouring what is already on the field is
+   *  `SetPlayerColorBJ`'s `changeExisting` loop, which comes back through `setUnitColor`. */
+  setPlayerColor?(player: number, color: number): void;
   removeUnit?(unitId: number): void; // RemoveUnit — no death/corpse
   killUnit?(unitId: number): void; // KillUnit — death animation + corpse
   hideUnit?(unitId: number, hidden: boolean): void;

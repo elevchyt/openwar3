@@ -32,7 +32,12 @@ export function registerConfigNatives(rt: Runtime): void {
   // --- per-player setup (SetPlayer*) ---
   def(rt, "SetPlayerColor", (c, a) => {
     const p = player(c, a[0]);
-    if (p) p.color = c.rt.enumIndex(a[1]);
+    if (!p) return JNULL;
+    p.color = c.rt.enumIndex(a[1]);
+    // …and tell the engine, or the change is invisible: the colour a unit is drawn in is
+    // chosen when it SPAWNS. A campaign map that recolours a slot after config() (Rise of
+    // the Naga makes Maiev's slot blue) would otherwise keep minting red units.
+    c.rt.hooks?.setPlayerColor?.(p.index, p.color);
     return JNULL;
   });
   def(rt, "SetPlayerRacePreference", (c, a) => {

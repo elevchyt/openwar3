@@ -64,6 +64,8 @@ export interface AlliancePeer {
 
 export interface AllianceModel {
   localPlayer: number;
+  /** A slot's COLOUR index — not its slot, which SetPlayerColor can move (see Rts.playerColor). */
+  colorOf(player: number): number;
   peers(): AlliancePeer[];
   /** GetPlayerAlliance(local, other, type). */
   get(other: number, type: AllianceType): boolean;
@@ -244,7 +246,7 @@ export class AllianceDialogOverlay {
   /** The row's colour chip: the player's own colour, from the game's flat team-colour swatch. */
   private paintSwatch(screen: FdfScreen, player: number): void {
     const el = screen.frame(`ColorBackdrop${player}`);
-    const color = teamColorCss(this.vfs, player);
+    const color = teamColorCss(this.vfs, this.model.colorOf(player));
     if (el && color) el.style.background = color;
   }
 

@@ -589,6 +589,36 @@ export class RtsController {
     return this.playerNames.get(owner) ?? `Player ${owner + 1}`;
   }
 
+  /** `SetPlayerColor` — slot → the colour index its units, dots and name wear.
+   *  Empty means "the slot's own index", which is WC3's default and what every melee map
+   *  keeps; only an override lives here. */
+  private playerColors = new Map<number, number>();
+
+  /**
+   * A player slot's COLOUR, which is not the same thing as the slot.
+   *
+   * The renderer used to hand `owner` straight to `setTeamColor` ("player slot doubles as
+   * team color for now"), which holds for melee — every slot keeps its default colour — and
+   * fails on any map that says otherwise. Rise of the Naga is the plain case: its config()
+   * assigns the twelve defaults, then a trigger runs
+   *
+   *     call SetPlayerColorBJ( udg_AP1_Player, PLAYER_COLOR_BLUE, true )
+   *
+   * so Maiev's slot 0 is BLUE, not red. `changeExisting` recoloured the units standing there
+   * at the time (that is a `ForGroup` of `SetUnitColor`, which we did honour), and everything
+   * spawned afterwards came out red — half the player's army one colour, half the other.
+   */
+  playerColor(owner: number): number {
+    return this.playerColors.get(owner) ?? owner;
+  }
+
+  /** `SetPlayerColor` — the player's colour from here on. Deliberately does NOT recolour the
+   *  units already on the field: WC3 leaves that to `SetPlayerColorBJ`'s `changeExisting`
+   *  loop over `SetUnitColor`, which is why that parameter exists at all. */
+  setPlayerColor(owner: number, color: number): void {
+    this.playerColors.set(owner, color);
+  }
+
   /** Which team's combined sight lifts the fog of war (allies share vision). */
   setLocalTeam(team: number): void {
     this.localTeam = team;
@@ -4443,8 +4473,11 @@ export class RtsController {
     // it draws what it was sent. Through the SAME `SnapshotIndex` the frame reads (item
     // 10c-2c-3): two independent readers of "have I been sent a world?" is how the minimap and
     // the models end up disagreeing about which tick they are drawing.
-    if (this.snapshot.active) return dotsFromSnapshot(this.snapshot.units);
-    return minimapDots(this.sim, vp);
+    // `owner` on a dot is read for one thing only — what COLOUR to paint it — so it carries
+    // the player's colour rather than its slot (see playerColor).
+    const dots = this.snapshot.active ? dotsFromSnapshot(this.snapshot.units) : minimapDots(this.sim, vp);
+    if (this.playerColors.size) for (const d of dots) d.owner = this.playerColor(d.owner);
+    return dots;
   }
 
   /** The creep-camp clustering + markers, cached. @see minimapView.CreepCamps — it reads
