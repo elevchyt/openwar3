@@ -55,7 +55,7 @@ import { WorldOverlays, type HoverLine, type BarSpec } from "../render/worldOver
 
 
 // Minimal shapes for the mdx-m3-viewer bits we drive.
-interface Instance {
+export interface Instance {
   localLocation: Float32Array;
   localRotation: Float32Array;
   frame: number;
@@ -2027,6 +2027,52 @@ export class RtsController {
     return simId;
   }
 
+  /**
+ * Make an attackable DESTRUCTIBLE a real sim unit — the gate you have to break to get on
+ * with the mission.
+ *
+ * Everything a destructible needs in a fight, a unit already has: a body to stand next to,
+ * life to spend, a damage point, a backswing, a death. WC3 agrees at the class level (a
+ * destructable and a unit are both CWidgets — docs/reverse-engineering/tinkerworx-repos.md),
+ * so this reuses the unit path rather than growing a second combat loop beside it. Three
+ * lines are what make it a destructible and not a unit:
+ *
+ *   • **neutralPassive**, which is exactly WC3's own rule. hostile() is false for a
+ *     neutral-passive unit in BOTH directions, so nothing ever AUTO-acquires a gate — units
+ *     walk past crates and barricades until you point at one, which is the behaviour — and
+ *     it keeps destructibles off the minimap for free.
+ *   • **targetKey**, its targType, so a weapon matches it as debris/wall and not as a
+ *     structure. Every melee unit in the game already lists debris in Targets Allowed.
+ *   • **no body of our own.** The doodad pass already drew it, so the instance handed in is
+ *     that same widget, reused exactly as a pre-placed unit's is (see seedPlayerUnit) —
+ *     the entry the HUD selects through points at what the viewer is really drawing.
+ *
+ * The map loader has already stamped its footprint and nothing is stamped here, because the
+ * footprint OUTLIVES the sim unit: a dead gate keeps its posts (pathTexDeath). Swapping it
+ * is the renderer's job, through the killDestructible path it already had.
+ */
+  addDestructible(def: UnitDef, x: number, y: number, facing: number, life: number): number {
+    const simId = this.addSimUnit(def, x, y, facing, NEUTRAL_PASSIVE_OWNER, NEUTRAL_PASSIVE_TEAM);
+    const u = this.sim.units.get(simId);
+    if (u) {
+      u.neutralPassive = true;
+      u.targetKey = destructibleTargetKey(def);
+      // A record the editor placed part-damaged keeps the life it was placed with.
+      u.hp = Math.max(1, Math.min(life || u.maxHp, u.maxHp));
+    }
+    return simId;
+  }
+
+  /** Give a destructible its body once the doodad pass has actually built one.
+   *
+   *  Same late-attach a script-spawned unit gets, and for the same reason: the sim unit has
+   *  to exist before the model does. Without a body there is no Entry, and without an Entry
+   *  the cursor cannot find it — a gate you can order units onto but cannot CLICK. Ignored
+   *  if it already has one. */
+  attachDestructibleBody(simId: number, def: UnitDef, instance: Instance): void {
+    if (this.byId.has(simId) || !this.sim.units.has(simId)) return;
+    this.attachInstance(simId, instance, def);
+  }
   /** Give a sim unit its rendered body: the model instance + everything derived from it
    *  (animation set, birth clip, scale). Called the moment the model is ready — the same
    *  frame for the melee/placement paths, a few frames later for a script-spawned unit
@@ -4588,6 +4634,17 @@ export class RtsController {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
           }
+        } else if (target.targetKey) {
+          // A DESTRUCTIBLE: right-clicking a gate or a crate attacks it. It is never hostile
+          // (neutral-passive is what keeps anything from auto-acquiring it), so the order is
+          // FORCED — the same "attack that anyway" a force-attack command issues. Red flash,
+          // because breaking it is what the click means.
+          let any = false;
+          for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
+          if (any) {
+            this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
+            return;
+          }
         } else if (target.building) {
           // ANY building: flash its footprint circle instead of a ground arrow —
           // red for hostile, green for own, yellow for allied/neutral — and issue
@@ -5054,4 +5111,12 @@ function setZQuat(out: Float32Array, angle: number): void {
 // Extract the Z-rotation angle from a (near-Z) quaternion.
 function quatToZ(q: Float32Array): number {
   return 2 * Math.atan2(q[2], q[3]);
+}
+
+/** The weapon-target class a destructible def carries (see destructibleUnitDef): the
+ *  `targ:<targType>` marker it stores in `classification`, which is the one field a UnitDef has
+ *  spare for something no unit SLK column describes. "" for an ordinary unit. */
+function destructibleTargetKey(def: UnitDef): string {
+  const tag = def.classification.find((c) => c.startsWith("targ:"));
+  return tag ? tag.slice(5) : "";
 }

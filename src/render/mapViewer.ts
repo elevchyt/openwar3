@@ -7,6 +7,7 @@ import { MpqDataSource } from "../vfs/mpq";
 import { parseW3E, type TerrainData } from "../world/terrain";
 import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
+import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
@@ -24,6 +25,7 @@ import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
+import type { Instance as RtsInstance } from "../game/rts";
 import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
@@ -1074,10 +1076,160 @@ export class MapViewerScene {
       this.rts.setPlacedFootprints(nodes.placedFootprints); // each map building's stamp → freed when it dies
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
       this.rts.setPlacedOrder(nodes.placedOrder); // sim ids from .doo order, not model-load order
+      // AFTER setPlacedOrder, never before: that call reserves ids 1..N for the .doo's own
+      // units and resets the counter above them. Seeding destructibles first handed them ids
+      // 1..14 and the placed units then took those same ids back — a gate quietly became a
+      // Watcher. Above the reserved block they are ordinal and identical on every machine,
+      // because this walks the .doo in its own order.
+      this.seedDestructibles();
       this.mapPlayerUnits = nodes.players; // pre-placed player units → seeded owned in startCustom (issue #33)
     }
   }
 
+  /** `targType`s a weapon can actually name. The stock Targets Allowed lists carry `debris`
+   *  and `wall`; `bridge` and `decoration` appear in none of them, and `tree` is the harvest
+   *  path (SimWorld.trees), not this one. */
+  private static readonly ATTACKABLE_TARG = new Set(["debris", "wall"]);
+
+  /** simId → the .doo id of the destructible it stands for, and back again. Both, because
+   *  life crosses this bridge in BOTH directions: an axe drives the sim unit's hp down and
+   *  the script's own SetDestructableLife drives the record's. */
+  private destSimIds = new Map<number, number>();
+  private destSimByDoo = new Map<number, number>();
+  /** One def per destructible TYPE (a map lays down 11 identical crates). */
+  private destDefs = new Map<string, UnitDef>();
+
+  /**
+   * Give every attackable destructible a sim unit, so it can be clicked, ordered onto and
+   * broken (the Elven Gate that shuts Rise of the Naga's first path).
+   *
+   * Which ones: `selectable` (the flag that decides whether a click can pick it up at all —
+   * 0 on the invisible platforms a map lays down by the hundred) and a `targType` a weapon
+   * can name. That is ~18 of this map's 2698 destructibles; the other 2502 are trees, which
+   * have their own path, and the rest is scenery.
+   *
+   * A record placed DEAD stays dead — the stock dungeon gates that start open are exactly
+   * that, and giving one a body would put a solid gate back across an open doorway.
+   */
+  private seedDestructibles(): void {
+    const rts = this.rts;
+    const map = this.viewer.map;
+    if (!rts || !map) return;
+    this.destSimIds.clear();
+    this.destSimByDoo.clear();
+    this.destAwaitingBody.clear();
+    for (const d of this.destructibles) {
+      if (d.isTree || !d.selectable || d.life <= 0) continue;
+      if (!MapViewerScene.ATTACKABLE_TARG.has(d.targType)) continue;
+      let def = this.destDefs.get(d.typeId);
+      if (!def) {
+        def = destructibleUnitDef({
+          typeId: d.typeId,
+          name: this.westring(d.name),
+          maxLife: d.maxLife,
+          radius: d.radius,
+          armorSound: d.armorSound,
+          targType: d.targType,
+          portraitModel: this.destructiblePortrait(d),
+        });
+        this.destDefs.set(d.typeId, def);
+      }
+      const simId = rts.addDestructible(def, d.x, d.y, d.angle, d.life);
+      this.destSimIds.set(simId, d.id);
+      this.destSimByDoo.set(d.id, simId);
+      this.destAwaitingBody.add(simId);
+    }
+  }
+
+  /** The bust the selection panel shows. The data ships one (`portraitmodel`) because the
+   *  doodad's own model is a piece of terrain; `.mdl` as the editor spells it, `.mdx` as the
+   *  archives ship it. Falls back to the doodad model when a type has no bust. */
+  private destructiblePortrait(d: MapDestructible): string {
+    const mdx = d.portraitModel.replace(/\.mdl$/i, ".mdx");
+    if (mdx && this.vfs.exists(mdx)) return mdx;
+    return ""; // no bust for this type — the panel shows an empty pane, as it does for a unit with none
+  }
+
+  /** Destructibles still waiting for the doodad pass to build their model. */
+  private destAwaitingBody = new Set<number>();
+
+  /**
+   * Hand each destructible the doodad widget the viewer drew for it.
+   *
+   * Not at seed time, because there is nothing to hand over yet: the sim units are created
+   * the moment the map's pathing is known, and mdx-m3-viewer builds the 3905 doodad
+   * instances after that. Seeding with a null body left every gate orderable but
+   * unCLICKABLE — picking walks the Entry list, and an Entry is exactly what a body buys.
+   * So it is retried each frame until the widget appears, the same late-attach a
+   * script-spawned unit gets while its model streams in.
+   */
+  private bodyDestructibles(): void {
+    if (!this.destAwaitingBody.size || !this.rts) return;
+    const map = this.viewer.map;
+    if (!map) return;
+    const doodads = map.doodads as unknown as HideableWidget[];
+    if (!doodads.length) return;
+    for (const simId of this.destAwaitingBody) {
+      const destId = this.destSimIds.get(simId);
+      const d = destId !== undefined ? this.destructibleById(destId) : null;
+      const def = d ? this.destDefs.get(d.typeId) : undefined;
+      if (!d || !def) {
+        this.destAwaitingBody.delete(simId);
+        continue;
+      }
+      const w = this.nearestDoodadWidget(d.x, d.y, doodads);
+      if (!w?.instance?.model) continue; // the pass has not reached this one yet
+      this.rts.attachDestructibleBody(simId, def, w.instance as unknown as RtsInstance);
+      this.destAwaitingBody.delete(simId);
+    }
+  }
+  /**
+   * A destructible that died in the SIM is a destructible that died, full stop: hand it to
+   * the same killDestructible the script's own KillDestructable goes through, so a gate
+   * broken by an axe opens exactly as one opened by a trigger — death clip held on its last
+   * frame, collider down to the posts its `pathTexDeath` keeps.
+   *
+   * Polled rather than pushed because the sim's death queue is drained inside the RTS tick
+   * and this is the one caller that needs to know a NEUTRAL-passive widget went; ~18 map
+   * entries is nothing to sweep, and the entry is removed as it goes.
+   */
+  private reapDestructibles(): void {
+    if (!this.destSimIds.size || !this.rts) return;
+    this.bodyDestructibles();
+    for (const [simId, destId] of this.destSimIds) {
+      const u = this.rts.simWorld.units.get(simId);
+      if (u && u.hp > 0) {
+        // The record is what GetDestructableLife reads and what the .doo/`w3d` world calls
+        // life, so damage dealt in the sim has to land there too.
+        const d = this.destructibleById(destId);
+        if (d) d.life = u.hp;
+        continue;
+      }
+      this.destSimIds.delete(simId);
+      this.destSimByDoo.delete(destId);
+      this.killDestructible(destId);
+    }
+  }
+
+  /** The other direction: a script wrote this destructible's life, so the widget standing in
+   *  the fight has to agree. `SetDestructableLife`, `DestructableRestoreLife` and
+   *  `KillDestructable` all pass through here — Rise of the Naga opens by knocking its gate
+   *  down to a fifth of its life (`SetDestructableLife(gg_dest_LTe1_1140, 0.20 * life)`), and
+   *  without this the gate on screen would still have taken all 500. */
+  private syncDestructibleToSim(d: MapDestructible): void {
+    const simId = this.destSimByDoo.get(d.id);
+    const u = simId !== undefined ? this.rts?.simWorld.units.get(simId) : undefined;
+    if (!u) return;
+    if (d.life <= 0) {
+      // Killed by the script: retire the widget, and do NOT let the reaper kill it again
+      // (killDestructible is idempotent, but the death clip is not worth replaying).
+      this.destSimIds.delete(simId!);
+      this.destSimByDoo.delete(d.id);
+      this.rts?.simWorld.removeUnit(simId!);
+      return;
+    }
+    u.hp = Math.min(d.life, u.maxHp);
+  }
   /** Feed harvestable trees and gold mines into the headless sim, remembering
    *  each node's stamped footprint so it can be unstamped on removal. */
   private registerResourceNodes(nodes: { trees: Array<{ x: number; y: number; angle: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }> }): void {
@@ -3989,8 +4141,11 @@ export class MapViewerScene {
     return d ? this.snapshotOf(d) : null;
   }
 
-  // `UI\WorldEditStrings.txt` — where DestructableData's `Name` column points ("Gate", "Crates").
-  // Parsed on first use only: GetDestructableName is the sole reader, and the file is big.
+  // Where DestructableData's `Name` column points ("Gate", "Crates") — and it is TWO files,
+  // with the destructibles in the second: `UI\WorldEditStrings.txt` is the editor's own
+  // chrome, while every `WESTRING_DEST_*` the game DATA references lives in
+  // `UI\WorldEditGameStrings.txt`. Reading only the first left a gate's name as the raw key,
+  // which is what a selected gate showed. Parsed on first use only — they are big.
   private worldEditStrings: Map<string, string> | null = null;
 
   /** Resolve a `WESTRING_*` key to its display text; anything else is already the text. */
@@ -3998,8 +4153,9 @@ export class MapViewerScene {
     if (!key.startsWith("WESTRING")) return key;
     if (!this.worldEditStrings) {
       this.worldEditStrings = new Map();
-      const bytes = this.vfs.rawBytes("UI\\WorldEditStrings.txt");
-      if (bytes) {
+      for (const file of ["UI\\WorldEditStrings.txt", "UI\\WorldEditGameStrings.txt"]) {
+        const bytes = this.vfs.rawBytes(file);
+        if (!bytes) continue;
         for (const line of new TextDecoder("windows-1252").decode(bytes).split(/\r?\n/)) {
           const eq = line.indexOf("=");
           if (eq > 0 && line.startsWith("WESTRING")) {
@@ -4063,6 +4219,7 @@ export class MapViewerScene {
     const d = this.destructibleById(id);
     if (!d || d.life <= 0) return;
     d.life = 0;
+    this.syncDestructibleToSim(d);
     this.restampDestructible(d, true);
     this.playDestructibleClip(d, clip, true);
   }
@@ -4074,6 +4231,7 @@ export class MapViewerScene {
     if (!d) return;
     const wasAlive = d.life > 0;
     d.life = Math.max(0, Math.min(life, d.maxLife || life));
+    this.syncDestructibleToSim(d);
     this.restampDestructible(d, wasAlive);
     if (d.life > 0) this.playDestructibleClip(d, birth ? /^birth$/i : /^stand$/i, false);
   }
@@ -4084,6 +4242,7 @@ export class MapViewerScene {
     if (!d) return;
     const wasAlive = d.life > 0;
     d.life = Math.max(0, life);
+    this.syncDestructibleToSim(d);
     this.restampDestructible(d, wasAlive);
   }
 
@@ -6683,6 +6842,7 @@ export class MapViewerScene {
       // collision family this whole phase removes.
       if (!this.rts?.frozenClient) this.tickPendingBuild(SIM_DT); // seconds, matching the sim's clock
       this.rts?.tick(SIM_DT); // sim runs in seconds; advance + sync before render
+      this.reapDestructibles(); // a gate the sim just broke opens the way a script-killed one does
       // A frozen client runs the script INIT (config/main — the melee starting bases are
       // born there, under ids every machine allocates identically) but never PUMPS it:
       // its world is an AoI subset the authority wrote, and a victory check read against

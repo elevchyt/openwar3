@@ -672,6 +672,11 @@ export interface SimUnit {
   race: string; // human|orc|undead|nightelf|… — for spell polarity (Holy Light vs undead)
   typeId: string; // unit-def id (for corpses/Resurrection to re-create the unit)
   neutralPassive: boolean; // Neutral Passive (shops, critters): never hostile, yellow ring
+  /** The weapon-target class this unit answers to, when it is not one of the three a unit
+   *  derives (see weaponVs). Set for DESTRUCTIBLES, which carry their own: `debris` for the
+   *  gates and crates, `wall` for barricades — the very words every melee unit's Targets
+   *  Allowed already lists.  for everything else. */
+  targetKey: string;
   x: number;
   y: number;
   facing: number; // radians
@@ -2961,6 +2966,7 @@ export class SimWorld {
       | "chopSeq"
       | "inCombat"
       | "neutralPassive"
+      | "targetKey"
       | "chaseX"
       | "chaseY"
       | "followOffX"
@@ -3135,6 +3141,7 @@ export class SimWorld {
       chopSeq: 0,
       inCombat: false,
       neutralPassive: false,
+      targetKey: "",
       path: [],
       waypoint: 0,
       moving: false,
@@ -4525,7 +4532,9 @@ export class SimWorld {
       // No Targets Allowed data at all (a summon or custom unit with no weapons row) → treat
       // the weapon as unrestricted rather than silently disarming the unit.
       if (!w.targets.length) return w;
-      const key = t.building ? "structure" : t.flying ? "air" : "ground";
+      // A destructible answers to its OWN class (targType) rather than to one of the three
+      // a unit derives — a gate is `debris`, not a "structure".
+      const key = t.targetKey || (t.building ? "structure" : t.flying ? "air" : "ground");
       if (w.targets.includes(key)) return w;
     }
     return null;

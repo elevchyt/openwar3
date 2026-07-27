@@ -587,3 +587,145 @@ function num(row: Row, key: string, fallback: number): number {
   const n = parseFloat(v);
   return Number.isNaN(n) ? fallback : n;
 }
+
+/**
+ * A destructible's unit def — how a gate, a crate or a barricade becomes something the sim
+ * can hold, hit and kill (issue: "the gate cannot be targeted").
+ *
+ * WC3's own class tree has a destructable and a unit meeting one level up: both are
+ * `CWidget`s, which is where life, the collider and "can this be attacked" live
+ * (docs/reverse-engineering/tinkerworx-repos.md). Our sim only ever had units, so a
+ * destructible existed as map geometry and a JASS handle and nothing else — no life to
+ * spend, no body to stand next to, no identity a weapon could match. Rather than grow a
+ * second combat path beside the unit one, an attackable destructible becomes a real sim
+ * unit built from THIS def, and every existing rule — approach, fan-out, damage point,
+ * backswing, death — applies to it unchanged.
+ *
+ * What the destructible data actually says (`Units\DestructableData.slk`):
+ *   • `targType` is the weapon-target class, and weapons really do name it: every melee
+ *     unit carries `ground,structure,debris,item,ward`, so `debris` (the gates and crates)
+ *     is attackable by anyone and `bridge`/`decoration` are attackable by no one.
+ *   • `armor` is the MATERIAL struck (Wood/Stone/Flesh) — the same thing a unit's UnitUI
+ *     `armor` column is, i.e. the impact SOUND. It is not a damage-table class, and there
+ *     is no destructable row in the table (`DamageBonus*` carries exactly the eight unit
+ *     armour classes), so a blow lands undivided: `ArmorType.Unknown`, which the damage
+ *     table already resolves to a 1.0 multiplier.
+ *   • `radius` is the collider; `selectable` decides whether a click can pick it up at all.
+ *
+ * Everything a unit is and a destructible is not is zeroed here rather than left to a
+ * default: no speed, no sight (it reveals nothing for anybody), no food, no weapons, no
+ * bounty and no XP (`level` 0 — killing a gate levels nobody).
+ */
+export function destructibleUnitDef(d: {
+  typeId: string;
+  name: string;
+  maxLife: number;
+  radius: number;
+  armorSound: string;
+  targType: string;
+  /** Bust for the portrait pane, already resolved to a real `.mdx` (or "" for none). */
+  portraitModel: string;
+}): UnitDef {
+  return {
+    // Prefixed so it can never collide with a real unit id in the registry — a
+    // destructible type code (`LTe1`) and a unit type code are the same four characters
+    // drawn from different tables.
+    id: `dest:${d.typeId}`,
+    name: d.name || "Destructible",
+    typeName: "destructible",
+    race: "other",
+    // The renderer never spawns a body for one of these (the doodad batch already drew it),
+    // so `model` is read for exactly one thing: the selection portrait. The data ships a
+    // dedicated bust for that — the doodad's own model is a piece of terrain.
+    model: d.portraitModel,
+    modelScale: 1,
+    selScale: Math.max(1, d.radius / 32),
+    animWalkSpeed: 0,
+    animRunSpeed: 0,
+    animBlend: 0.15,
+    animProps: [],
+    soundSet: "",
+    weaponSound: "",
+    lumberSound: "",
+    armorSound: d.armorSound,
+    icon: "",
+    description: "",
+    tip: "",
+    hotkey: "",
+    buttonX: 0,
+    buttonY: 0,
+    isHero: false,
+    properNames: [],
+    priority: 0,
+    moveType: MoveType.None,
+    // Not a BUILDING: `isBuilding` carries a tail of building behaviour with it (rally
+    // points, a production queue, repair, the "structure" weapon-target key). Immobility
+    // comes from MoveType.None and speed 0 instead, and the target key from `targType`.
+    isBuilding: false,
+    pathTex: "", // the map loader already stamped the destructible's own footprint
+    uberSplat: "",
+    minimapIcon: false,
+    unitShadow: "",
+    buildingShadow: "",
+    shadowW: 0,
+    shadowH: 0,
+    shadowX: 0,
+    shadowY: 0,
+    speed: 0,
+    turnRate: 0,
+    moveHeight: 0,
+    collision: d.radius,
+    sightDay: 0,
+    sightNight: 0,
+    hitPoints: d.maxLife,
+    hpRegen: 0,
+    regenType: RegenType.None,
+    mana: 0,
+    armor: 0,
+    defUp: 0,
+    stockMax: 0,
+    stockRegen: 0,
+    stockStart: 0,
+    upgradesUsed: [],
+    foodUsed: 0,
+    foodMade: 0,
+    goldCost: 0,
+    lumberCost: 0,
+    buildTime: 0,
+    weapons: [],
+    attackDamage: 0,
+    attackDice: 0,
+    attackSides: 0,
+    attackCooldown: 0,
+    attackDamagePoint: 0,
+    attackBackswing: 0,
+    castPoint: 0,
+    castBackswing: 0,
+    attackRange: 0,
+    acquireRange: 0,
+    canSleep: false,
+    weaponType: WeaponType.None,
+    attackType: AttackType.None,
+    // See the header: no destructable row in the damage table → no multiplier.
+    armorType: ArmorType.Unknown,
+    missileArt: "",
+    missileSpeed: 0,
+    launchX: 0,
+    launchY: 0,
+    launchZ: 0,
+    impactZ: 0,
+    strength: 0,
+    agility: 0,
+    intelligence: 0,
+    strPerLevel: 0,
+    agiPerLevel: 0,
+    intPerLevel: 0,
+    primaryAttr: PrimaryAttribute.None,
+    level: 0,
+    abilities: [],
+    heroAbilities: [],
+    autoAbility: "",
+    // The weapon-target class, verbatim from `targType`. SimUnit.targetKey reads it.
+    classification: [`targ:${d.targType}`],
+  };
+}

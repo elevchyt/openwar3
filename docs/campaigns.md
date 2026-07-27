@@ -124,6 +124,49 @@ a map look broken rather than throw:
    callback as its own thread (`runSync`); conditions and filters keep the strict behaviour,
    because WC3 forbids a wait there too.
 
+## Destructibles are widgets, not scenery
+
+The first chapter shuts its opening path with an Elven Gate, and there was no way to attack
+it — a destructible was map geometry, a pathing footprint and a JASS handle, with no life to
+spend, no body to stand beside and no identity a weapon could match. It is a sim UNIT now
+(`RtsController.addDestructible`), which is how WC3 has it too: a destructable and a unit meet
+one class up, at `CWidget`. Three things make it a destructible rather than a unit —
+`neutralPassive` (so nothing ever AUTO-acquires a crate), `targetKey` (its `targType`, matched
+against a weapon's Targets Allowed), and no body of its own (the doodad pass already drew it).
+
+The data decides which ones, and it is unambiguous:
+
+| `DestructableData` | what it means here |
+| --- | --- |
+| `selectable` | can a click pick it up at all — 0 on the invisible platforms a map lays down by the hundred |
+| `targType` | the weapon-target class. `debris` (77 types) and `wall` (15) are attackable; **every** melee unit's Targets Allowed reads `ground,structure,debris,item,ward`. `bridge` (100) and `decoration` (28) are in nobody's list |
+| `HP` / `radius` | life and the collider a unit stands off from |
+| `armor` | the MATERIAL struck (Wood/Stone/Flesh) — the impact SOUND, not a damage class. There is no destructable row in the damage table, so a blow lands undivided |
+| `portraitmodel` | the bust the selection panel shows; the doodad's own model is a piece of terrain |
+
+Rise of the Naga seeds 17 of its 2698 destructibles this way (the rest are 2502 trees, which
+have their own harvest path, and scenery).
+
+**Life crosses the bridge in both directions.** The sim drives the record's `life` down as the
+gate is hit, and the script's own `SetDestructableLife` / `DestructableRestoreLife` /
+`KillDestructable` drive the sim unit's hp — this chapter opens by knocking its gate to a fifth
+(`SetDestructableLife(gg_dest_LTe1_1140, 0.20 * life)`), and without that the player would face
+all 500. Death routes back out through the same `killDestructible` a trigger goes through, so a
+gate broken by an axe opens exactly as one opened by `ModifyGateBJ`: death clip held on its last
+frame, collider down to the posts `pathTexDeath` keeps.
+
+Two traps, both found by doing it:
+
+1. **Seed AFTER `setPlacedOrder`.** That call reserves sim ids 1..N for the `.doo`'s own units
+   and resets the counter above them. Seeding first handed the destructibles ids 1–14 and the
+   placed units then took those same ids back — a gate quietly became a Watcher.
+2. **Attach the body LATE.** The sim units are created as soon as the pathing is known; the
+   viewer builds its 3905 doodad instances after that. Seeding with a null body left every gate
+   orderable but un-*clickable*, because picking walks the Entry list and an Entry is exactly
+   what a body buys. It is retried per frame, the same late-attach a script-spawned unit gets.
+
+`pnpm sim:test` pins the rules (`tools/sim-destructible-test.cjs`).
+
 ## Not done yet
 
 - The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed and greyed. WC3 ships

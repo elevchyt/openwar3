@@ -34,6 +34,24 @@ export interface MapDestructible {
   pathTexDeath: string;
   /** `targType == "tree"` — harvestable, and felled by the SIM rather than by a script. */
   isTree: boolean;
+  /** `targType` verbatim — the weapon-target class this destructible presents. The stock data
+   *  uses five: `tree` (27 types), `debris` (77), `wall` (15), `bridge` (100), `decoration` (28).
+   *  It is matched against a weapon's own Targets Allowed, and that list really does name them:
+   *  every melee unit in the game carries `ground,structure,debris,item,ward`. So a gate
+   *  (`debris`) is attackable by anyone and a bridge is not, straight out of the data. */
+  targType: string;
+  /** `selectable` — whether a click can pick it up at all. 1 for the gates, crates and barrels;
+   *  0 for the invisible platforms a map lays down by the hundred. */
+  selectable: boolean;
+  /** `radius` — the collider a unit stands off from, in world units (the gate's is 50). */
+  radius: number;
+  /** `armor` — the MATERIAL struck, not a damage-table armour class: the stock values are
+   *  Wood / Stone / Flesh, which is the same thing a unit's UnitUI `armor` column carries
+   *  (UnitDef.armorSound). It picks the impact sound; it multiplies nothing. */
+  armorSound: string;
+  /** `portraitmodel` — a dedicated bust (the gate has one), since the doodad's own model is
+   *  a piece of terrain and makes a poor talking head. `.mdl` as the editor spells it. */
+  portraitModel: string;
   /** The SLK's `Name` — usually a `WESTRING_*` key into `UI\WorldEditStrings.txt`, resolved
    *  by the caller (GetDestructableName is the only thing that reads it). */
   name: string;
@@ -51,6 +69,7 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
     const maxLife = Number(row.string("HP")) || 0;
     const pathTex = tex(row.string("pathTex"));
     const pathTexDeath = tex(row.string("pathTexDeath"));
+    const targType = row.string("targType") || "";
     out.push({
       id: i + 1,
       typeId: d.id,
@@ -64,7 +83,12 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
       life: (maxLife * d.life) / 100,
       pathTex,
       pathTexDeath,
-      isTree: row.string("targType") === "tree",
+      isTree: targType === "tree",
+      targType,
+      selectable: row.string("selectable") === "1",
+      radius: Number(row.string("radius")) || 0,
+      armorSound: tex(row.string("armor")),
+      portraitModel: tex(row.string("portraitmodel")),
       name: row.string("Name") || "",
     });
   }
