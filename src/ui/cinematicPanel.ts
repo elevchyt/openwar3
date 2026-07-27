@@ -41,7 +41,6 @@ import type { Arg, FdfFrame } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { UI_HEIGHT } from "./fdf/layout";
-import { PLAYER_COLORS } from "./hud";
 
 const CINEMATIC_FDF = "UI\\FrameDef\\UI\\CinematicPanel.fdf";
 
@@ -226,7 +225,16 @@ export class CinematicPanelOverlay {
     }
   }
 
-  /** Put our portrait canvas inside the SPRITE frame and colour the speaker's name. */
+  /** Put our portrait canvas inside the SPRITE frame.
+   *
+   *  **The speaker's name is NOT the player's colour.** It used to be painted with
+   *  `PLAYER_COLORS[scene.playerColor]`, which made Maiev's every line come up blue; the FDF
+   *  says otherwise and the FDF is the game. `CinematicSpeakerText` INHERITS
+   *  `EscMenuTitleTextTemplate` and overrides no `FontColor`, so it wears the template's
+   *  `FontColor 0.99 0.827 0.0705` — the gold every WC3 transmission titles its speaker in.
+   *  (`CinematicDialogueText` inherits the same template and DOES override it, to white.)
+   *  `SetCinematicScene`'s `playercolor` parameter is kept on the scene because the native
+   *  takes it, but it is not what tints this line. */
   private mountPortrait(screen: FdfScreen, scene: CinematicScene): void {
     const slot = screen.element.querySelector<HTMLElement>('[data-frame="CinematicPortrait"]');
     if (slot) {
@@ -235,8 +243,6 @@ export class CinematicPanelOverlay {
       // passes unit type 0), the frame stays an empty pane rather than a stale face.
       this.portraitCanvasEl.hidden = !scene.portraitUnitId;
     }
-    const speaker = screen.element.querySelector<HTMLElement>('[data-frame="CinematicSpeakerText"] span');
-    if (speaker) speaker.style.color = PLAYER_COLORS[scene.playerColor] ?? PLAYER_COLORS[0];
   }
 
   /** The FDF root, adapted: full-width bars, a sized speaker/subtitle, and the two halves
@@ -308,7 +314,14 @@ function sizeSceneText(panel: FdfFrame): FdfFrame {
       return {
         ...c,
         props: [
-          ...c.props.filter((p) => p.key !== "Height"),
+          // The inherited FontJustificationV has to be FILTERED, not merely followed by ours.
+          // `firstProp` takes the FIRST match, and INHERITS has already merged
+          // EscMenuTitleTextTemplate's `FontJustificationV JUSTIFYMIDDLE` into this frame's
+          // props — so an appended JUSTIFYTOP was never read, and the subtitle sat centred in
+          // the three-line box we give it. A one-line message therefore floated a whole line
+          // below the speaker's name instead of sitting under it, which is exactly what the
+          // real game's panel does NOT do.
+          ...c.props.filter((p) => p.key !== "Height" && p.key !== "FontJustificationV"),
           { key: "Height", args: [num(LINE * 3)] },
           // A TEXT frame is anchored by its TOP-left here, so it has to grow DOWNWARD from
           // the speaker's line — hence a top-anchored box rather than the solver's default.

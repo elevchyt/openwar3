@@ -94,6 +94,11 @@ export interface ItemEvent {
   seller?: UnitSnapshot;
 }
 
+/** common.j `constant playerevent EVENT_PLAYER_END_CINEMATIC = ConvertPlayerEvent(17)` — ESC
+ *  pressed while a cinematic is playing. Exported because the RAISER is the engine side
+ *  (render/mapViewer.ts owns the keyboard); see `Interpreter.firePlayerEvent`. */
+export const EVENT_PLAYER_END_CINEMATIC = 17;
+
 // common.j event enum indices (ConvertUnitEvent/ConvertPlayerUnitEvent values).
 const EVENT_UNIT_DEATH = 53;
 const EVENT_PLAYER_UNIT_DEATH = 20;
@@ -1135,6 +1140,34 @@ export class Interpreter {
     this.dispatchToRegs(responses, (reg) =>
       (reg.kind === "dialogButton" && reg.params[0]?.k === "handle" && reg.params[0].h === buttonHandleId) ||
       (reg.kind === "dialogEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === dialogHandleId));
+  }
+
+  /**
+   * A `playerevent` happened to `player` — fire every `TriggerRegisterPlayerEvent` that named
+   * both that player and that event.
+   *
+   * The one this exists for is **EVENT_PLAYER_END_CINEMATIC**, i.e. ESC pressed during a
+   * cinematic. The engine's whole job there is to raise the event; what "skip" MEANS is the
+   * map's, and every campaign chapter writes it out longhand. NightElfX01 (Rise of the Naga):
+   *
+   *     call DisableTrigger( gg_trg_Intro_Skipped )
+   *     call TriggerRegisterPlayerEventEndCinematic( gg_trg_Intro_Skipped, Player(0) )
+   *
+   * — created DISABLED, enabled by the intro trigger and disabled again by its cleanup, so the
+   * map itself decides when a cinematic is skippable. Its action then fades out, runs the
+   * cleanup trigger, leaves cinematic mode and starts the gameplay trigger. So a registration
+   * that is off must not fire, which `fireTrigger` already honours (`trig.enabled`).
+   *
+   * `TriggerRegisterPlayerEventEndCinematic` is blizzard.j's one-liner over
+   * `TriggerRegisterPlayerEvent(trig, whichPlayer, EVENT_PLAYER_END_CINEMATIC)`, so nothing
+   * has to know about the BJ — matching the registration's player and event enum is enough.
+   */
+  firePlayerEvent(player: number, eventIndex: number): void {
+    const responses = new Map<string, JassValue>([["TriggerPlayer", this.rt.playerHandle(player)]]);
+    this.dispatchToRegs(responses, (reg) =>
+      reg.kind === "playerEvent"
+      && this.rt.data<JassPlayer>(reg.params[0])?.index === player
+      && this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex);
   }
 
   /**

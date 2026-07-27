@@ -12,6 +12,7 @@ import { type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "..
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
+import { EVENT_PLAYER_END_CINEMATIC } from "../jass/interpreter";
 import { MAP_CONTROL, type DestructableSnapshot, type DialogObj, type EngineHooks, type RectObj, type Runtime } from "../jass/runtime";
 import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type HeightSampler, type FootprintMaxSampler } from "../game/heightmap";
 import { FogOverlay } from "./fogOverlay";
@@ -8042,6 +8043,24 @@ export class MapViewerScene {
   private attachControls(): void {
     const c = this.canvas;
     window.addEventListener("keydown", (e) => {
+      // ESC during a cinematic SKIPS it — WC3 raises EVENT_PLAYER_END_CINEMATIC for the
+      // local player and the map's own skip trigger takes it from there (see
+      // Interpreter.firePlayerEvent for the NightElfX01 trigger this exists for).
+      //
+      // The gate is `ShowInterface(false)`, which is what CinematicModeBJ turns off and what
+      // the letterbox is. Outside cinematic mode ESC keeps its ordinary job (the HUD's
+      // "cancel" command) — and it still does here, because the HUD's own key handler stands
+      // down while the console is hidden (`if (this.root.hidden) return`), so the two never
+      // both answer the same press.
+      //
+      // Whether the press does anything is the MAP's call: chapter one creates its skip
+      // trigger disabled and enables it only for the length of the intro, so an ESC before or
+      // after that finds nothing registered and is silently dropped, exactly as in the game.
+      if (e.key === "Escape" && !this.interfaceShown) {
+        e.preventDefault();
+        this.mapScript?.interp.firePlayerEvent(this.localPlayer, EVENT_PLAYER_END_CINEMATIC);
+        return;
+      }
       if (e.key === "F10") {
         e.preventDefault(); // F10 opens WC3's game menu, not the browser's
         this.paused = this.gameMenu?.toggle() ?? false;

@@ -99,6 +99,12 @@ ordinary custom-map path: the map is not melee-flagged, so its own triggers set 
 **not** implemented — the stock campaigns ship as loose maps inside the MPQs, and the only
 `.w3n` in a 1.27a install is War3x's `DemoCampaign.w3n`.
 
+**ESC skips the opening cinematic**, as it does in the game — the engine raises
+`EVENT_PLAYER_END_CINEMATIC` for the local player while the interface is hidden, and the chapter's
+own `Intro Skipped` trigger does the rest. It is the map that decides when a cinematic is
+skippable at all (`gg_trg_Intro_Skipped` is created disabled), so this is one line of engine and
+a lot of map. See [`docs/triggers.md`](triggers.md) §7.24.
+
 ### Two engine bugs the first chapter found
 
 Both were invisible until a campaign map was actually started, and both are the kind that make
