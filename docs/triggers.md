@@ -1560,6 +1560,42 @@ right beside the unit TYPE. We were passing a hardcoded 12 — the neutral BLACK
 visible in a screenshot as a black backdrop behind the bust where the real client shows the
 player's blue. Passing the scene's colour reproduces it.
 
+### Hostility is DIRECTED, and the world must not move before the map has set itself up
+
+Two bugs with one symptom: Rise of the Naga lost its own mission in the opening seconds. Its
+Naga stand over the fishing village's ships for the entire chapter and are held off them by one
+line of init —
+
+```
+call SetPlayerAllianceStateBJ( udg_AP4_Naga, udg_AP3_FishingVillage, bj_ALLIANCE_NEUTRAL )
+```
+
+— and two ship deaths is a scripted defeat (`Defeat_Check`, `udg_ShipsRemainingCount < 2`).
+
+**The alliance matrix is directed and we read it mutually.** `hostile()` asked blizzard.j's
+`PlayersAreCoAllied` question — ALLIANCE_PASSIVE in BOTH directions — and treated anything less
+as a fight. That is the right predicate for *are we allies* (shared XP, ally colours) and the
+wrong one for *will this unit attack that one*, which is the **attacker's own** passive grant and
+nobody else's. The map proves it: it writes that line for its Naga, its Satyrs, its Wildkin and
+Neutral Hostile, always one way, and the village never grants anything back. When it wants a
+mutual relationship it says so twice — the Furbolgs get UNALLIED in both directions, two lines
+apart. And `bj_ALLIANCE_NEUTRAL` is PASSIVE *alone*: blizzard.j clears the five ally settings and
+then puts PASSIVE back on by itself, which is exactly the distinction being drawn.
+
+**And the sim was stepping before the script had run.** WC3 finishes `main()` — CreateAllUnits,
+InitCustomTriggers, RunInitializationTriggers — before one frame of play. Ours cannot run the
+script until every pre-placed unit's model has streamed in (`startCustom` awaits it), and the sim
+ticked throughout, so for a second or two the map ran with none of its own initialisation
+applied. `RtsController.holdWorld` holds the STEP across that window now; seeding still runs,
+because adoption is what the wait is for.
+
+Either bug alone loses the mission, so both are fixed, and a third rule falls out of the first:
+an **auto-acquired** attack is dropped the moment its target stops being hostile (ally someone
+mid-battle in WC3 and the shooting stops). An ORDERED attack is never dropped — "attack THAT one"
+is the player overriding alliance, and it is also how the harbour sequence sends those same
+neutral Naga at those same ships when the script finally wants it. `pnpm sim:test` pins all of it
+(`tools/sim-alliance-test.cjs`).
+
 ### ESC skips a cinematic, and the map decides what that means
 
 `EVENT_PLAYER_END_CINEMATIC` (`ConvertPlayerEvent(17)`). The engine raises it for the local

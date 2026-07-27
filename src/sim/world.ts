@@ -1395,6 +1395,15 @@ export class SimWorld {
    *  is what creeps (owner < 0) and a headless sim with no matrix both get, so allegiance
    *  stays the plain team comparison it was before. */
   alliedPlayers: (ownerA: number, ownerB: number) => boolean | null = () => null;
+  /**
+   * Does `ownerA` hold its fire toward `ownerB`? (ALLIANCE_PASSIVE, granted BY A.)
+   *
+   * Separate from `alliedPlayers` because the two answer different questions, and WC3
+   * draws the line exactly here. Being ALLIES is mutual — blizzard.j's PlayersAreCoAllied
+   * reads PASSIVE in both directions before it will say yes. But whether a unit will
+   * ATTACK is the ATTACKER'S OWN grant and nobody else's, because the matrix is directed.
+   */
+  passivePlayers: (ownerA: number, ownerB: number) => boolean | null = () => null;
   /** Live fogged-attacker reveals, keyed `attackerId:victimTeam` so a unit shooting two
    *  sides at once gives itself away to each, and each fresh blow re-stamps the entry. */
   private attackReveals = new Map<string, AttackReveal>();
@@ -4293,8 +4302,21 @@ export class SimWorld {
   // X treat Y as an Ally" is exactly a pair of players who stop fighting.
   hostile(a: SimUnit, b: SimUnit): boolean {
     if (a.neutralPassive || b.neutralPassive) return false;
-    const allied = this.playerAllegiance(a, b);
-    return allied !== null ? !allied : a.team !== b.team;
+    // DIRECTED, and it has to be. This asked whether the two were co-ALLIED — PASSIVE in
+    // both directions — and treated anything less as a fight. But a map that wants one side
+    // to hold its fire writes one line, not two, and every campaign does:
+    //
+    //     call SetPlayerAllianceStateBJ( udg_AP4_Naga, udg_AP3_FishingVillage, bj_ALLIANCE_NEUTRAL )
+    //
+    // Rise of the Naga sets exactly that (and the same for its Satyrs, its Wildkin and
+    // Neutral Hostile) and never the reverse, then relies on the Naga standing over the
+    // fishing village's ships for the whole mission without touching them — until a trigger
+    // ORDERS them to, at the harbour. Read mutually, the village never granted anything back,
+    // so the Naga auto-acquired the ships in the first seconds and the mission was lost
+    // before the player reached it. (When the map wants a mutual relationship it says so
+    // twice — the Furbolgs get UNALLIED written in both directions, two lines apart.)
+    const passive = this.playerPassive(a, b);
+    return passive !== null ? !passive : a.team !== b.team;
   }
 
   /** The alliance matrix's verdict on two units' owners, or null when it has none
@@ -4303,6 +4325,13 @@ export class SimWorld {
   private playerAllegiance(a: SimUnit, b: SimUnit): boolean | null {
     if (a.owner < 0 || b.owner < 0) return null;
     return this.alliedPlayers(a.owner, b.owner);
+  }
+
+  /** The same guard for the DIRECTED question `hostile` asks: does a's owner grant b's
+   *  owner ALLIANCE_PASSIVE? Null for a creep/neutral, where the team rule still decides. */
+  private playerPassive(a: SimUnit, b: SimUnit): boolean | null {
+    if (a.owner < 0 || b.owner < 0) return null;
+    return this.passivePlayers(a.owner, b.owner);
   }
 
   /** True during daylight (06:00–18:00 game time). */
@@ -7133,6 +7162,18 @@ export class SimWorld {
     // alone, everything else is the unit's own idea and yields. A committed swing still
     // lands first — the strike is already in flight.
     if (!u.attackOrdered && u.swingLeft < 0 && this.tickAutocast(u)) return;
+    // An AUTO-acquired fight ends the moment the target stops being an enemy — ally a player
+    // mid-battle in WC3 and the shooting stops. Only the unit's OWN idea of a fight, never an
+    // ORDERED attack: "attack THAT one" is the player overriding alliance, which is what a
+    // force-attack is (issueAttack takes `force` for exactly this), and it is also how a
+    // campaign's triggers send neutral Naga at the ships they are otherwise passive toward.
+    if (!u.attackOrdered && u.targetId !== null) {
+      const cur = this.units.get(u.targetId);
+      if (cur && !this.hostile(u, cur)) {
+        this.reacquireOrStop(u);
+        return;
+      }
+    }
     let t = u.targetId !== null ? this.units.get(u.targetId) : undefined;
     // No target, no weapon, or nothing in hand that can strike THIS target (a Flying Machine
     // whose Bombs were never researched, ordered onto a Footman): don't just stand down — a

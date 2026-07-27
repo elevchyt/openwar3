@@ -1725,6 +1725,9 @@ export class MapViewerScene {
     //     statue, both Neutral Passive, and the Robo-X pedestal's trigger carries no
     //     "is it a wisp?" condition — so the two of them each spawned a hero for player 15
     //     on the players' shared hero spawn.
+    // Hold the world still until the script has initialised: the wait below is real time, and
+    // a map whose init has not run yet must not be simulated through it (see holdWorld).
+    this.rts.holdWorld(true);
     this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
     await this.waitForMapUnits(); // …and every one of them must be adopted before the script runs
 
@@ -1732,6 +1735,7 @@ export class MapViewerScene {
     // main() fires the map's initialization triggers, so its welcome text / quest
     // messages appear in the HUD message log.
     this.runMapScript({ melee: false, slots: config.slots });
+    this.rts.holdWorld(false); // the map has had its say — let the world run
     console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33).`);
   }
 

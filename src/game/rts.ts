@@ -34,7 +34,7 @@ import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } fr
 import type { RenderUnit } from "./renderUnit";
 import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
-import { AllianceTable } from "../sim/alliances";
+import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
 import { ArmorType, AttackType, MoveType, PrimaryAttribute } from "../data/enums";
@@ -550,6 +550,10 @@ export class RtsController {
     // (7.22) — so a script that allies two players actually stops them fighting. Creeps
     // (owner < 0) are excluded by SimWorld.playerAllegiance and keep the team rule.
     this.sim.alliedPlayers = (a, b) => this.alliances.coAllied(a, b);
+    // …and whether one will SHOOT the other is the attacker's own PASSIVE grant, which is a
+    // different question with a different answer: the matrix is directed, and a campaign that
+    // wants one side to hold its fire writes one direction only. See SimWorld.hostile.
+    this.sim.passivePlayers = (a, b) => this.alliances.get(a, b, AllianceType.Passive);
     this.authority = new Authority(this.sim, registry, abilities, tech, upgrades);
     this.overlays = new WorldOverlays(host);
   }
@@ -2283,8 +2287,33 @@ export class RtsController {
     return out;
   }
 
+  /**
+   * The world does not MOVE until the map has finished setting itself up.
+   *
+   * WC3 runs `main()` — CreateAllUnits, InitCustomTriggers, RunInitializationTriggers —
+   * to completion before a single frame of play. Ours could not: a custom map has to wait
+   * for every pre-placed unit's model to stream in before the script may run (see
+   * startCustom), and the sim was stepping the whole time. So for a second or two the map
+   * ran with none of its own initialisation applied, and Rise of the Naga lost its mission
+   * in that window: its Naga stand over the fishing village's ships all mission and are
+   * held off them by one line of init
+   *
+   *     call SetPlayerAllianceStateBJ( udg_AP4_Naga, udg_AP3_FishingVillage, bj_ALLIANCE_NEUTRAL )
+   *
+   * which had not run yet. They auto-acquired the ships in the opening ticks, and two ship
+   * deaths is a scripted defeat — so the chapter was unwinnable before the player had
+   * moved. Seeding still runs (that is what the wait is FOR); only the step is held.
+   */
+  private worldHeld = false;
+
+  /** Hold the world still (match setup), and let it go once the script has initialised. */
+  holdWorld(held: boolean): void {
+    this.worldHeld = held;
+  }
+
   tick(dt: number): void {
     this.trySeed();
+    if (this.worldHeld) return; // adoption yes, simulation no — see holdWorld
     if (this.frozenClient) {
       // Option 2 (docs/multiplayer.md, decided): a client's sim never steps. The record
       // store is written by the payload instead — create, update, and REMOVE, absence
