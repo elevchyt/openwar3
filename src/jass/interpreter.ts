@@ -17,7 +17,7 @@
 
 import type { Expr, FunctionDecl, JassProgram, Stmt, VarDecl } from "./ast";
 import { rawcodeToInt } from "./lexer";
-import { Runtime, JassArray, ThreadAbort, unitStateHolds, type BoolExpr, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
+import { Runtime, JassArray, ThreadAbort, unitStateHolds, type BoolExpr, type JassPlayer, type JassUnit, type NativeCtx, type RectObj, type RegionObj, type SoundObj, type TimerObj, type TriggerObj, type TriggerReg, type UnitSnapshot } from "./runtime";
 import {
   asInt, asNum, asStr, defaultForType, jassEquals, jBool, jHandle, jInt, jReal, jStr, JNULL, truthy, type JassValue,
 } from "./values";
@@ -172,7 +172,7 @@ type ThreadGen = Generator<number, JassValue, void>;
 /** Natives the thread layer must handle itself, because each one either suspends the
  *  calling thread or runs more JASS on it — neither of which a plain (synchronous) native
  *  impl can do. Intercepted at statement-call sites; see Interpreter.execThreadNative. */
-const THREAD_NATIVES = new Set(["TriggerSleepAction", "TriggerExecute", "ConditionalTriggerExecute", "ExecuteFunc"]);
+const THREAD_NATIVES = new Set(["TriggerSleepAction", "TriggerWaitForSound", "TriggerExecute", "ConditionalTriggerExecute", "ExecuteFunc"]);
 
 /** A **trigger thread** (7.15). WC3 runs a trigger's actions — and `main()`, and timer
  *  handlers — on a thread that `TriggerSleepAction` can suspend mid-way; the engine
@@ -512,6 +512,36 @@ export class Interpreter {
       // floor. See runSync — the campaign trigger queue is why.
       const secs = Math.max(0, asNum(args[0] ?? jReal(0)));
       yield secs;
+      return JNULL;
+    }
+    if (name === "TriggerWaitForSound") {
+      // `TriggerWaitForSound(snd, offset)` — park until the line has played out, less
+      // `offset` seconds. It is a SECOND suspension point, and it was missing: unimplemented,
+      // it fell through to the safe default and returned instantly.
+      //
+      // That is not a small silence. blizzard.j's `WaitForSoundBJ` is its only caller, and
+      // every campaign cinematic paces itself with it — NightElfX01's intro is
+      //
+      //     call TransmissionFromUnitWithNameBJ( …, udg_Huntress02, …, gg_snd_S01WatcherOne03, … )
+      //     call WaitForSoundBJ( gg_snd_S01WatcherOne03, 0.00 )
+      //     call TransmissionFromUnitWithNameBJ( …, udg_Maiev, … )
+      //
+      // — so with the wait gone, Maiev's line arrived in the SAME MILLISECOND as the
+      // Watcher's, and the two transmissions raced each other through the panel (that race
+      // is what left the wrong bust under the wrong name). `WaitTransmissionDuration` also
+      // routes its bj_TIMETYPE_SUB case here.
+      //
+      // The length is the sound's own baked `SetSoundDuration` (ms — the World Editor writes
+      // the file's real length into the script), measured from the last `StartSound`, so a
+      // line already half spoken waits only the half that is left. A sound that never
+      // started, or that carries no duration, waits not at all — there is nothing to wait for.
+      const snd = this.rt.data<SoundObj>(args[0] ?? JNULL);
+      const offset = asNum(args[1] ?? jReal(0));
+      // Never started (or no handle) → nothing is playing, so there is nothing to wait OUT.
+      // Deliberately not "wait the clip's length anyway": a map that forgot to start its
+      // sound would then hang its cinematic on a line nobody can hear.
+      const left = snd && snd.startedAt >= 0 ? snd.duration / 1000 - offset - (this.rt.gameTime - snd.startedAt) : 0;
+      yield Math.max(0, left);
       return JNULL;
     }
     // ExecuteFunc takes a function NAME, not a trigger — run it on this thread.

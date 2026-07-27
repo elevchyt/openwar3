@@ -717,7 +717,11 @@ export class MapViewerScene {
   // The speaker's animated bust during a transmission — its own bust viewer, on the FDF
   // panel's canvas, exactly like the HUD's portrait (which it must not steal).
   private cinePortraitViewer: ModelViewerScene | null = null;
+  /** `<unit type>|<player colour>` of the bust ON the canvas, and the one last asked for.
+   *  Two fields, for the same reason the panel has two — see `loadCinematicPortrait`. */
   private cinePortraitFor = "";
+  private cinePortraitWant = "";
+  private cinePortraitLoading = false;
   private dialog: GameDialogOverlay | null = null; // DialogCreate — and the melee end screen
   /** The game's own string table (UI\FrameDef\GlobalStrings.fdf) behind GetLocalizedString:
    *  blizzard.j writes the whole victory/defeat screen in its keys. Loaded once, lazily. */
@@ -1654,7 +1658,10 @@ export class MapViewerScene {
       },
       displayCineFilter: (filter) => this.cinematic?.setFilter(filter),
       setCinematicScene: (scene) => {
-        if (this.cinematic?.setScene(scene) && scene) void this.loadCinematicPortrait(scene.portraitUnitId);
+        this.cinematic?.setScene(scene);
+        // Ask for the bust the CURRENT scene wants, every time — never on a "did it change?"
+        // answer from the panel. See loadCinematicPortrait and CinematicPanelOverlay.setScene.
+        void this.loadCinematicPortrait(scene?.portraitUnitId ?? "", scene?.playerColor ?? 0);
       },
       pingMinimap: (ping) => this.hud?.ping(ping),
       // --- melee from the script (7.3) ---
@@ -2141,6 +2148,7 @@ export class MapViewerScene {
     this.userControl = true;
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
     this.cinePortraitFor = "";
+    this.cinePortraitWant = "";
     this.chatHistory = []; // last match's conversation is not this one's
     // Chat arriving over the wire lands in the same place a locally typed line does.
     if (this.rts) {
@@ -5084,26 +5092,47 @@ export class MapViewerScene {
    *
    *  `typeId` is a unit TYPE, not a unit: a transmission shows the portrait of whatever the
    *  speaker IS (SetCinematicScene takes a unit-type rawcode), so a Footman speaking always
-   *  shows the Footman bust. */
-  private async loadCinematicPortrait(typeId: string): Promise<void> {
+   *  shows the Footman bust. `color` is that native's `playercolor` — the bust is the one
+   *  team-colourable thing on the panel (the FDF paints the text itself), which is what the
+   *  parameter is for; it used to be hardcoded to 12, the neutral BLACK slot, so every
+   *  speaker's armour came up the wrong colour.
+   *
+   *  **Loading is async and transmissions are not spaced out**, so this is written as a pump
+   *  rather than a fire-and-forget: `want` is the last portrait asked for, and the loop keeps
+   *  going until what is on the canvas is what is wanted. Without it a stale load simply won
+   *  by finishing last — two transmissions in one tick left the second speaker wearing the
+   *  first one's face, and every transmission after that inherited the mismatch. */
+  private async loadCinematicPortrait(typeId: string, color: number): Promise<void> {
+    // Key on type AND colour: the same unit type speaking for two different players is two
+    // different busts. Re-loading is cheap — ModelViewerScene caches the parsed model.
+    this.cinePortraitWant = typeId ? `${typeId}|${color}` : "";
     const panel = this.cinematic;
     if (!panel || !typeId) return;
-    const def = this.registry.get(typeId);
-    if (!def?.model) return;
     const canvas = panel.portraitCanvas();
     this.cinePortraitViewer ??= new ModelViewerScene(canvas, this.vfs);
-    if (this.cinePortraitFor === typeId) {
-      this.cinePortraitViewer.start(); // same speaker again — just wake the bust
-      return;
-    }
-    const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
-    const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+    if (this.cinePortraitLoading) return; // the running pump will pick the newer want up
+    this.cinePortraitLoading = true;
     try {
-      await this.cinePortraitViewer.load(path, 12, true, 0);
-      this.cinePortraitFor = typeId;
-      this.cinePortraitViewer.start();
-    } catch {
-      /* no bust for this type — the panel just shows an empty pane */
+      while (this.cinePortraitWant && this.cinePortraitWant !== this.cinePortraitFor) {
+        const want = this.cinePortraitWant;
+        const [wantType, wantColor] = want.split("|");
+        const def = this.registry.get(wantType);
+        if (!def?.model) {
+          this.cinePortraitFor = want; // nothing to show for this type; stop asking
+          continue;
+        }
+        const portraitPath = def.model.replace(/\.mdx$/i, "_Portrait.mdx");
+        const path = this.vfs.exists(portraitPath) ? portraitPath : def.model;
+        try {
+          await this.cinePortraitViewer.load(path, Number(wantColor), true, 0);
+          this.cinePortraitFor = want;
+          this.cinePortraitViewer.start();
+        } catch {
+          this.cinePortraitFor = want; // no bust for this type — an empty pane, but stop retrying
+        }
+      }
+    } finally {
+      this.cinePortraitLoading = false;
     }
   }
 

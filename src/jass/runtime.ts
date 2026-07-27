@@ -239,6 +239,10 @@ export interface SoundObj {
   attachUnit: number; // AttachSoundToUnit — sim id it follows, or -1
   killWhenDone: boolean; // KillSoundWhenDone — destroy the handle once playback ends
   started: boolean; // StartSound has been called at least once (for the kill-when-done sweep)
+  /** Game time (seconds) of the last `StartSound`, or -1 if it has never played. What
+   *  `TriggerWaitForSound` measures its wait from — "wait for THIS line to finish" only
+   *  means anything relative to when the line began. */
+  startedAt: number;
 }
 
 /** What a sound LABEL resolves to in the UI\SoundInfo tables — the row's playback

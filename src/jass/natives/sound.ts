@@ -33,7 +33,7 @@
 //    "QuestCompleted" (blizzard.j's victory sting) is UISounds. SoundBoard.labelParams
 //    searches them all.
 
-import type { JassUnit, NativeCtx, Runtime, SoundObj } from "../runtime";
+import { ThreadAbort, type JassUnit, type NativeCtx, type Runtime, type SoundObj } from "../runtime";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
@@ -70,6 +70,7 @@ function newSound(rt: Runtime, file: string): SoundObj {
     attachUnit: -1,
     killWhenDone: false,
     started: false,
+    startedAt: -1,
   };
   s.handleId = rt.handles.alloc(s);
   rt.sounds.push(s);
@@ -256,6 +257,7 @@ export function registerSoundNatives(rt: Runtime): void {
       s.z = at.z;
     }
     s.started = true;
+    s.startedAt = c.rt.gameTime; // TriggerWaitForSound waits out the REMAINDER of this line
     c.rt.hooks?.playSound?.(s);
     return JNULL;
   });
@@ -282,6 +284,14 @@ export function registerSoundNatives(rt: Runtime): void {
     return jBool(!!s && (c.rt.hooks?.soundIsPlaying?.(s.handleId) ?? false));
   });
   def(rt, "GetSoundIsLoading", () => jBool(false));
+  // TriggerWaitForSound SUSPENDS the calling thread until the line has played out, so like
+  // TriggerSleepAction it is intercepted at the statement call site
+  // (Interpreter.execThreadNative) and this impl is only reached where WC3 could not wait
+  // either — a condition, a filter, an enum callback. Same answer as TriggerSleepAction's:
+  // abandon that callback rather than pretend the wait happened.
+  def(rt, "TriggerWaitForSound", () => {
+    throw new ThreadAbort();
+  });
   def(rt, "GetSoundDuration", (c, a) => jInt(sound(c, a[0])?.duration ?? 0));
   def(rt, "GetSoundFileDuration", (c, a) => jInt(c.rt.hooks?.soundFileDuration?.(asStr(a[0])) ?? 0));
   // A "stacked" sound is WC3's de-duplication of many identical world sounds (a forest of

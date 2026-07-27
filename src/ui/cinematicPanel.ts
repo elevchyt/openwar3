@@ -74,7 +74,10 @@ export class CinematicPanelOverlay {
   private barsUp = false; // what the LAST build put on screen (drives the slide-in, once)
   private scene: CinematicScene | null = null;
   private sceneAge = 0;
-  private builtFor = "";
+  /** The panel's wanted-vs-on-screen pair (see `sync`). Never collapse them back into one
+   *  field: the whole point is that a scene arriving mid-mount is remembered, not dropped. */
+  private wantKey = "";
+  private haveKey = "";
 
   /** The fade quad — our own element, not an FDF frame: WC3's cine filter is a full-screen
    *  quad drawn over the WORLD and under the UI, which is precisely why blizzard.j calls
@@ -108,14 +111,20 @@ export class CinematicPanelOverlay {
     this.sync();
   }
 
-  /** SetCinematicScene / EndCinematicScene. Returns true if this is a NEW speaker (so the
-   *  host knows to load a different portrait model). */
-  setScene(scene: CinematicScene | null): boolean {
-    const changed = (this.scene?.portraitUnitId ?? "") !== (scene?.portraitUnitId ?? "");
+  /** SetCinematicScene / EndCinematicScene.
+   *
+   *  This used to return "is the portrait DIFFERENT from the one I just replaced?", and the
+   *  host loaded a bust only when it said yes. That is the wrong question twice over: it
+   *  compares against a scene that may never have reached the screen, and it makes the answer
+   *  a one-shot event rather than a fact about what is on the canvas. Two transmissions in the
+   *  same tick — which is ordinary, see the trigger queue — desynchronised it permanently:
+   *  A, then B, then A again reported "unchanged" on the last step and the bust stayed B's.
+   *  The host now simply asks for the portrait the CURRENT scene wants, every time, and
+   *  `loadCinematicPortrait` decides whether that means work. */
+  setScene(scene: CinematicScene | null): void {
     this.scene = scene;
     this.sceneAge = 0;
     this.sync();
-    return changed;
   }
 
   /** DisplayCineFilter(flag) — commit a configured filter, or take the current one down. */
@@ -164,17 +173,44 @@ export class CinematicPanelOverlay {
     this.filterEl.style.mixBlendMode = BLEND_CSS[filter.blendMode] ?? "normal";
   }
 
-  /** Rebuild the FDF panel when what's on screen changes (the bars, or the speaker's lines).
-   *  The rest — the fade, the portrait model — is animated on the elements we already have. */
+  /** What the panel should be showing right now — the bars plus this line of subtitle. */
+  private sceneKey(): string {
+    const s = this.scene;
+    return `${this.letterbox}|${s ? `${s.speaker} ${s.text}` : ""}`;
+  }
+
+  /** Note that what's on screen is out of date, and get the pump going.
+   *
+   *  Mounting the FDF panel is ASYNC, and this used to give up while one was in flight
+   *  (`if (key === this.builtFor || this.mounting) return`) — which dropped that scene
+   *  **permanently**, because `builtFor` was left behind with it and nothing re-checked once
+   *  the mount landed. Two transmissions in the same tick is all it took, and that is ordinary
+   *  (see the trigger queue): the first speaker's name then sat over the second one's line.
+   *  Wanting and having are separate now, and `pump` closes the gap however many times it has
+   *  to. */
   private sync(): void {
-    const key = `${this.letterbox}|${this.scene ? `${this.scene.speaker} ${this.scene.text} ${this.scene.playerColor}` : ""}`;
-    if (key === this.builtFor || this.mounting) return;
-    this.builtFor = key;
-    if (!this.letterbox && !this.scene) {
-      this.teardown();
-      return;
+    this.wantKey = this.sceneKey();
+    if (this.wantKey !== this.haveKey) void this.pump();
+  }
+
+  /** Rebuild until what's on screen is what's wanted. Re-reads the live state each time round,
+   *  so a burst of scenes costs one extra mount and lands on the LAST of them — which is what
+   *  the player should see — rather than replaying the queue one panel at a time. */
+  private async pump(): Promise<void> {
+    if (this.mounting) return; // a pump is already running; it will see the newer wantKey
+    this.mounting = true;
+    try {
+      while (this.wantKey !== this.haveKey) {
+        const key = this.wantKey;
+        const letterbox = this.letterbox;
+        const scene = this.scene;
+        if (!letterbox && !scene) this.teardown();
+        else await this.build(letterbox, scene);
+        this.haveKey = key;
+      }
+    } finally {
+      this.mounting = false;
     }
-    void this.build();
   }
 
   private teardown(): void {
@@ -183,10 +219,7 @@ export class CinematicPanelOverlay {
     this.portraitCanvasEl.remove();
   }
 
-  private async build(): Promise<void> {
-    this.mounting = true;
-    const letterbox = this.letterbox;
-    const scene = this.scene;
+  private async build(letterbox: boolean, scene: CinematicScene | null): Promise<void> {
     // Slide the bars in only when the letterbox is APPEARING. The panel is rebuilt on every
     // new line of subtitle, and without this the bars would re-slide each time someone speaks.
     const slideIn = letterbox && !this.barsUp;
@@ -206,6 +239,10 @@ export class CinematicPanelOverlay {
           CinematicDialogueText: scene?.text ?? "",
         },
       });
+      // The portrait canvas moves to the NEW panel BEFORE the old one is disposed. The other
+      // way round it spends a frame parented to nothing, where its client size reads 0 and the
+      // bust's own render loop dutifully resizes it to nothing.
+      if (scene) this.mountPortrait(screen, scene);
       prev?.dispose(); // swap only once the new panel is up, so the bars never blink
       this.screen = screen;
       if (slideIn) {
@@ -216,12 +253,9 @@ export class CinematicPanelOverlay {
           el.style.animationDuration = `${this.letterboxFade}s`;
         }
       }
-      if (scene) this.mountPortrait(screen, scene);
     } catch (err) {
       console.warn("[cinematic] could not mount the FDF panel:", err);
       this.screen = null;
-    } finally {
-      this.mounting = false;
     }
   }
 

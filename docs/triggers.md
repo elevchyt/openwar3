@@ -1526,6 +1526,40 @@ overriding the file instead of reading it.
   centred in a box sized for three. **Filter the key, then append.** Anywhere this codebase
   re-props a resolved frame, the same trap is set.
 
+### The bust under the name: three ways one panel gets out of step with itself
+
+The symptom was that the wrong speaker's face sat under the right speaker's name, from the
+third transmission of a cinematic onwards. The unit type reaching the panel was right every
+time (`Ewrd`→`Maiev_Portrait.mdx`, `esen`→`Huntress_Portrait.mdx` — the Watchers are Huntresses),
+which is what made it worth chasing rather than guessing. Three separate faults, and the first
+one is what exposed the other two:
+
+1. **`TriggerWaitForSound` was not implemented**, so it returned instantly instead of
+   suspending. blizzard.j's `WaitForSoundBJ` is its only caller and every cinematic paces
+   itself with it — so the Watcher's line and Maiev's reply arrived in the SAME millisecond
+   instead of 1.332 s apart. It is a second suspension point beside `TriggerSleepAction`,
+   intercepted the same way (`Interpreter.execThreadNative`); the length is the sound's own
+   baked `SetSoundDuration`, measured from its last `StartSound`, so a line already half
+   spoken waits only the half that is left.
+2. **The panel dropped a scene that arrived mid-mount.** `sync()` bailed out on
+   `this.mounting` *without* recording that it owed a rebuild, and nothing re-checked when the
+   mount landed — so that line never reached the screen at all. Now `wantKey`/`haveKey` are
+   separate and a pump closes the gap, re-reading the live state each round so a burst lands
+   on the LAST scene rather than replaying the queue.
+3. **The bust was loaded on an event, not on a fact.** `setScene` returned "is this portrait
+   different from the one I just replaced?" and the host loaded a model only when it said yes
+   — a question about a scene that may never have been shown. A/B/A therefore reported
+   "unchanged" on the last step and left B's face up. The host now asks for what the current
+   scene wants every time, and the loader is a pump keyed on what is actually on the canvas,
+   so a stale in-flight load can no longer win by finishing last.
+
+**And `SetCinematicScene`'s `playercolor` is the BUST's team colour** — that is what the
+parameter is for. The panel has exactly one team-colourable thing on it (the portrait is a
+SPRITE, a live model; the FDF paints both text frames itself), and the native takes the colour
+right beside the unit TYPE. We were passing a hardcoded 12 — the neutral BLACK slot — which is
+visible in a screenshot as a black backdrop behind the bust where the real client shows the
+player's blue. Passing the scene's colour reproduces it.
+
 ### ESC skips a cinematic, and the map decides what that means
 
 `EVENT_PLAYER_END_CINEMATIC` (`ConvertPlayerEvent(17)`). The engine raises it for the local
@@ -1548,7 +1582,7 @@ The raiser is `render/mapViewer.ts`, gated on **`ShowInterface(false)`** — cin
 `CinematicModeBJ` turns off, and the letterbox is what it looks like. Outside it ESC keeps its
 ordinary job (the HUD's `cancel`), and the two never both answer one press because the HUD's key
 handler stands down while the console is hidden. `pnpm jass:test` pins the match rule
-(`tools/jass-cinematic-skip-test.cjs`).
+(`tools/jass-cinematic-test.cjs`, which also pins the sound wait above).
 
 ### Three bugs, and only the live run could find two of them
 
