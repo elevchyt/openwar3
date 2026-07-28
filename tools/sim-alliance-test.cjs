@@ -180,5 +180,46 @@ console.log("\na force says what it grants, and a team is not a licence to see")
   check("a force that grants nothing allies nobody", !grouped.coAllied(0, 2));
 }
 
+console.log("\na neutral CONTROLLER is an alliance the map can overrule, not a shield");
+{
+  // What SetPlayerController(p, MAP_CONTROL_NEUTRAL) grants, as Blizzard.j grants it:
+  // bj_ALLIANCE_NEUTRAL is "clear the ally settings, then set ALLIANCE_PASSIVE", mutually.
+  const grantNeutral = (m, p) => {
+    for (const other of [...Array(12).keys(), 12, 15]) {
+      if (other === p) continue;
+      m.set(p, other, AllianceType.Passive, true);
+      m.set(other, p, AllianceType.Passive, true);
+    }
+  };
+  const w = new SimWorld(grid(), 1);
+  const m = withMatrix(w);
+  grantNeutral(m, 1); // the Watchers' Trackers — config() marks them neutral
+  grantNeutral(m, 2); // …and the Fishing Village
+
+  // Illidan (8) is named in no alliance line anywhere in the chapter, and still must not
+  // touch the village's ships: the controller is the only thing holding him.
+  const illidan = addUnit(w, 1, 8, 1, 900, 500);
+  const ship = addUnit(w, 2, 2, 2, 1200, 500, { weapons: [], speed: 0 });
+  check("Illidan holds his fire toward the village", !w.hostile(illidan, ship));
+  run(w, 6);
+  check(`…and the ship is untouched (hp ${ship.hp})`, ship.hp === ship.maxHp);
+
+  // The Wildkin cinematic then sets ITS pair at each other — both ways, on purpose.
+  const wildkin = addUnit(w, 3, 5, 1, 1500, 1500);
+  const archer = addUnit(w, 4, 1, 0, 1620, 1500, { weapons: [], speed: 0 });
+  check("before the scene they are at peace", !w.hostile(wildkin, archer));
+  m.set(1, 5, AllianceType.Passive, false); // SetPlayerAllianceStateBJ(Trackers, Wildkin, UNALLIED)
+  m.set(5, 1, AllianceType.Passive, false); // …and the same line the other way round
+  check("the scene's own UNALLIED lines start the fight", w.hostile(wildkin, archer));
+  run(w, 6);
+  check(`…and the Archer is being mauled (hp ${Math.round(archer.hp)})`, archer.hp < archer.maxHp);
+
+  // …and bj_ALLIANCE_NEUTRAL stops it again, which is how the scene ends.
+  m.set(1, 5, AllianceType.Passive, true);
+  m.set(5, 1, AllianceType.Passive, true);
+  run(w, 1);
+  check("writing NEUTRAL back calls it off", !w.hostile(wildkin, archer) && wildkin.targetId === null);
+}
+
 console.log(failures ? `\n${failures} FAILED` : "\nalliances: all checks passed");
 process.exit(failures ? 1 : 0);

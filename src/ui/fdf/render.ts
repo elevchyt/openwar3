@@ -806,10 +806,16 @@ function texture(f: FdfFrame, key: string, ctx: RenderCtx): HTMLCanvasElement | 
  * translucent slate the reference screenshots show — so the channel is read where it says
  * anything. This is only the case where it says nothing at all.)
  *
- * Scoped to the background of a BACKDROP on purpose. The other two dead-alpha files are meant
- * to be invisible and are used elsewhere: `ShadowBuildingNull.blp` is a null shadow, and
- * `blank-background.blp` is what `QuestDialogCompletedMouseOverHighlight` names to say "this
- * row does not highlight".
+ * **A blank is not art, and this must not touch one.** The other two dead-alpha files exist to
+ * be invisible — `ShadowBuildingNull.blp` is a null shadow, `blank-background.blp` is what
+ * `QuestDialogCompletedMouseOverHighlight` names to say "this row does not highlight" — and
+ * `blank-background` IS used as a backdrop background, twice, including by the cinematic
+ * panel's `CinematicPortraitCover`. Forced opaque there it becomes a black plate over the 3D
+ * bust, and every transmission in every cinematic plays to an empty portrait.
+ *
+ * What tells them apart is the picture: the four button faces are painted (32–50+ distinct
+ * colours over 256×256), a blank is ONE flat colour end to end. So a single-colour texture is
+ * left exactly as it is.
  */
 const opaqueFaces = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
 function opaqueIfBlankAlpha(bg: HTMLCanvasElement): HTMLCanvasElement {
@@ -817,8 +823,13 @@ function opaqueIfBlankAlpha(bg: HTMLCanvasElement): HTMLCanvasElement {
   if (cached) return cached;
   const src = bg.getContext("2d")?.getImageData(0, 0, bg.width, bg.height);
   if (!src) return bg;
-  for (let i = 3; i < src.data.length; i += 4) if (src.data[i] !== 0) return keep(bg, bg);
-  for (let i = 3; i < src.data.length; i += 4) src.data[i] = 255;
+  const d = src.data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) return keep(bg, bg); // a live alpha: honour it
+  // …and a texture of ONE flat colour is a blank, not a picture: leave it invisible.
+  let painted = false;
+  for (let i = 4; i < d.length && !painted; i += 4) painted = d[i] !== d[0] || d[i + 1] !== d[1] || d[i + 2] !== d[2];
+  if (!painted) return keep(bg, bg);
+  for (let i = 3; i < d.length; i += 4) d[i] = 255;
   const out = document.createElement("canvas");
   out.width = bg.width;
   out.height = bg.height;

@@ -598,11 +598,40 @@ export class RtsController {
    *  (see SimUnit.guarding); a human's do not. */
   private aiPlayers = new Set<number>();
 
-  /** `SetPlayerController(p, MAP_CONTROL_NEUTRAL)` — this slot is PLAYED as a neutral (see
-   *  the native). Passed straight through to the sim, where `hostile()` reads it. */
+  /**
+   * `SetPlayerController(p, MAP_CONTROL_NEUTRAL | _RESCUABLE)` — this slot is PLAYED as a
+   * neutral, and **that is an alliance, not a shield**.
+   *
+   * It was a permanent flag: while a player was neutral-controlled, `hostile()` answered false
+   * for every pair it was in and nothing could ever fight it. That stops Illidan attacking the
+   * Fishing Village, which is what it was written for — and it also makes a scene the same map
+   * stages impossible. The Wildkin cinematic sets the Trackers (a neutral-controlled player)
+   * and the Wildkin at each other on purpose:
+   *
+   *     call SetPlayerAllianceStateBJ( udg_AP2_Trackers, udg_AP6_Wildkin, bj_ALLIANCE_UNALLIED )
+   *     call SetPlayerAllianceStateBJ( udg_AP6_Wildkin, udg_AP2_Trackers, bj_ALLIANCE_UNALLIED )
+   *
+   * — both ways, deliberately, so a Berserk Wildkin can maul an Archer on camera; the scene
+   * then writes bj_ALLIANCE_NEUTRAL back to stop it. Against a flag those lines are inert and
+   * the fight the shot is OF never happens.
+   *
+   * So it is granted the way the game grants it: `bj_ALLIANCE_NEUTRAL` is exactly "clear the
+   * ally settings, then set ALLIANCE_PASSIVE" (Blizzard.j's SetPlayerAllianceStateBJ), and a
+   * neutral controller is that, mutually, with every other slot. Illidan still ignores the
+   * village — he is passive toward it from config() onward — and the map's own later alliance
+   * calls override it for the pairs they name, because they write the same setting.
+   */
   setPlayerNeutral(player: number, neutral: boolean): void {
     if (neutral) this.sim.neutralPlayers.add(player);
     else this.sim.neutralPlayers.delete(player);
+    if (!neutral) return;
+    // Slots 0–11 and the two engine players a map talks to by name: 12 Neutral Hostile (whose
+    // creeps would otherwise maul the village) and 15 Neutral Passive.
+    for (const other of [...Array(12).keys(), 12, 15]) {
+      if (other === player) continue;
+      this.alliances.set(player, other, AllianceType.Passive, true);
+      this.alliances.set(other, player, AllianceType.Passive, true);
+    }
   }
 
   setAiPlayers(players: Iterable<number>): void {

@@ -545,8 +545,25 @@ export class MapViewerScene {
   private farZ = 0; // 0 = derive from the distance (the game camera's own rule)
   // The camera the map's SCRIPT drives: CameraSetupApply / PanCameraTo / SetCameraField all
   // blend the ONE camera above, over time (src/render/scriptCamera.ts).
+  /**
+   * The zoom the PLAYER chose — the one thing about the game camera that is theirs.
+   *
+   * `ResetToGameCamera` is how a map hands the camera back at the end of a cinematic, and
+   * every chapter's cleanup calls it. Answering it with the constant start distance threw the
+   * player's zoom away each time: you set your view, a scene played, and the game gave you
+   * back a camera you had not asked for. This is read instead — it is written only by the
+   * wheel (and by the match's own opening framing), never by the script's tweens, so a
+   * cinematic that spends 40 seconds dollying through six camera setups still returns to
+   * exactly the zoom the player was on.
+   *
+   * The camera's other fields have no player-facing control (see the block above), so for
+   * those "the game camera" really is WC3's own defaults.
+   */
+  private playerDistance: number = CAMERA.DEFAULT_DISTANCE;
+  /** Game seconds stepped since the last frame drained it — the clock the cinematic runs on. */
+  private simAdvanced = 0;
   private scriptCam = new ScriptCamera(() => ({
-    distance: MapViewerScene.MELEE_START,
+    distance: this.playerDistance,
     farZ: 0,
     aoaDeg: (-MapViewerScene.GAME_PITCH * 180) / Math.PI,
     // Degrees, and on the scale a SCRIPT speaks — fovFromWc3 puts it on our lens.
@@ -1016,7 +1033,7 @@ export class MapViewerScene {
     this.groundSnap = true;
     // Start near gameplay zoom rather than a whole-map overview — far better
     // draw performance and closer to WC3's default camera.
-    this.distance = MapViewerScene.MELEE_START;
+    this.distance = this.playerDistance = MapViewerScene.MELEE_START;
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
@@ -1490,7 +1507,7 @@ export class MapViewerScene {
     if (home) {
       this.target[0] = home.startX;
       this.target[1] = home.startY;
-      this.distance = MapViewerScene.MELEE_START;
+      this.distance = this.playerDistance = MapViewerScene.MELEE_START;
     }
     // Resolve "random" once per slot: roster and console skin must agree.
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
@@ -5349,6 +5366,12 @@ export class MapViewerScene {
     // level badge, which are drawn over the terrain but belong to the UI (see
     // RtsController.updateHealthBars).
     this.rts?.setInterfaceShown(on);
+    // The MOUSE is part of the interface too. `ShowInterface(false)` is the letterbox, and
+    // WC3 draws no cursor at all under one: the console is gone and the pointer goes with it,
+    // because there is nothing left on screen to point AT. (Keyed on the letterbox alone —
+    // `EnableUserUI(false)`, which blizzard.j flicks around each cinematic fade, is a
+    // momentary blackout of the same screen and must not make the cursor blink back.)
+    document.body.classList.toggle("cine-on", !this.interfaceShown);
   }
 
   /** The speaker's animated bust, on the cinematic panel's own canvas. Same machinery as the
@@ -6658,10 +6681,13 @@ export class MapViewerScene {
     //  - `armed-on` (an armed order's target reticle) is body-wide: in WC3 the reticle
     //    IS the cursor while an order is armed, over the console too. Scoping this one
     //    to #map was the bug — hovering the HUD showed the reticle AND the hand.
+    //  - `cine-on` is the letterbox: WC3 draws no cursor at all while a cinematic is running,
+    //    and it is the whole screen's rule — the console is gone, and the mouse with it.
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
       `body.in-game.reticle-on #map { cursor: none !important; }\n` +
-      `body.in-game.armed-on, body.in-game.armed-on * { cursor: none !important; }`;
+      `body.in-game.armed-on, body.in-game.armed-on * { cursor: none !important; }\n` +
+      `body.in-game.cine-on, body.in-game.cine-on * { cursor: none !important; }`;
   }
 
   /** The real WC3 target reticle (row 2 of the race cursor sheet: a circle with
@@ -6971,6 +6997,10 @@ export class MapViewerScene {
       steps++;
     }
     if (steps === MAX_STEPS_PER_FRAME) this.simAccum = 0;
+    // How much GAME time this pass actually bought. The two clocks are not the same clock —
+    // a slow frame steps at most MAX_STEPS_PER_FRAME and drops the rest — and anything the
+    // SCRIPT timed has to be aged by this one (see the cinematic panel's update).
+    this.simAdvanced += steps * SIM_DT;
   }
 
   /** Keep a LAN match simulating when Chrome stops the render loop (docs/multiplayer.md
@@ -7017,10 +7047,7 @@ export class MapViewerScene {
       this.hud?.frame(dt);
       this.updateClock(dt);
       this.updatePortrait();
-      // The cinematic panel runs on the RENDER clock, not the sim's: a fade must keep fading
-      // and a subtitle must keep counting down while the game is paused under a dialog — and
-      // `dt` here is MILLISECONDS, which is the mistake this subsystem is most prone to.
-      this.cinematic?.update(dt / 1000);
+
       // Re-scan for new on-map unit types (trained units, scouted enemies) a couple
       // times a second and warm their portraits before they're clicked.
       this.portraitWarmAccum += dt;
@@ -7029,6 +7056,21 @@ export class MapViewerScene {
         this.warmPortraits();
       }
       this.advanceSim(t);
+      // The cinematic panel runs on the SIM's clock, not the render one.
+      //
+      // Everything it counts down was written by the map in the same seconds its
+      // `TriggerSleepAction`s are written in: a scene's `sceneDuration` decides when a line of
+      // subtitle comes off, and the script's own sleep decides when the next one arrives. Those
+      // two clocks have to be the same clock, and the render one is not it — a frame that runs
+      // long steps the sim at most MAX_STEPS_PER_FRAME and DROPS the remainder, so game time
+      // falls behind wall time and never catches up. Aged on wall time, every subtitle then
+      // expired early: at 3 fps (the swiftshader harness) a 9-second line of Maiev's was gone
+      // in two, and even a brief dip mid-scene reads as lines being cut off.
+      //
+      // (`simAdvanced` is drained here, right after the sim was stepped, so a frame that
+      // stepped nothing ages nothing — which is also what a paused game should do.)
+      this.cinematic?.update(this.simAdvanced);
+      this.simAdvanced = 0;
       // Map units load async — hide the start-location props as they stream in.
       // Re-scan whenever the unit count grows so `sloc` markers that finish
       // loading a frame or two after `unitsReady` are still hidden (see the
@@ -8573,6 +8615,8 @@ export class MapViewerScene {
         e.preventDefault();
         if (!this.userControl) return; // a cinematic owns the zoom too (7.24)
         this.distance = clamp(this.distance * (1 + Math.sign(e.deltaY) * 0.1), MapViewerScene.ZOOM_MIN, MapViewerScene.ZOOM_MAX);
+        this.playerDistance = this.distance; // …and this is the zoom a cinematic gives back
+
       },
       { passive: false },
     );

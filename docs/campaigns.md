@@ -371,6 +371,16 @@ the sasquatches, the furbolgs and the jungle bear — each from `Attack Spell Sl
 is a spell (a Priest's `"Spell Attack"`, 12 models) still falls through to it, because there it
 IS the attack. `pnpm sim:test` pins all three cases against the models' own sequence lists.
 
+## …and a blank is not one of them
+
+The rule below has one exception it must respect, and the cinematic panel is where it bites.
+`CinematicPortraitCover` — the frame drawn OVER the 3D bust — names `EscMenuBlankBackground` as
+its background, which resolves to that same `blank-background.blp`: an all-zero alpha, and (this
+is what separates it) a single flat colour end to end. Forced opaque it becomes a black plate over
+the portrait, and every transmission in every cinematic plays to an empty frame. So the rule reads
+the picture as well as the alpha: painted art (the button faces are 32–50+ distinct colours) is
+drawn opaque, a texture of one flat colour is left exactly as it is — nothing.
+
 ## Four button faces with a dead alpha channel
 
 Under the night elf (and undead) skin, every in-game button — the F10 menu's, the quest log's

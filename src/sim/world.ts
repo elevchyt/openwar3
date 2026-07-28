@@ -1432,8 +1432,10 @@ export class SimWorld {
    *  and un-ally two it put on the same one. `null` = "no opinion, use the teams", which
    *  is what creeps (owner < 0) and a headless sim with no matrix both get, so allegiance
    *  stays the plain team comparison it was before. */
-  /** Slots the map set to MAP_CONTROL_NEUTRAL / _RESCUABLE — played as neutrals; see hostile().
-   *  Written by the config() native through the engine bridge, empty in melee. */
+  /** Slots the map set to MAP_CONTROL_NEUTRAL / _RESCUABLE. Written by the config() native
+   *  through the engine bridge, empty in melee. The COMBAT half of that lives in the alliance
+   *  matrix (RtsController.setPlayerNeutral); this set is what the presentation reads — a
+   *  neutral player's units ring neutral-yellow like a shop's (RtsController.ringAllegiance). */
   readonly neutralPlayers = new Set<number>();
   alliedPlayers: (ownerA: number, ownerB: number) => boolean | null = () => null;
   /**
@@ -4428,14 +4430,9 @@ export class SimWorld {
   // X treat Y as an Ally" is exactly a pair of players who stop fighting.
   hostile(a: SimUnit, b: SimUnit): boolean {
     if (a.neutralPassive || b.neutralPassive) return false;
-    // A slot the map set to MAP_CONTROL_NEUTRAL is PLAYED as a neutral: its units are nobody's
-    // enemy and start nobody's fight, exactly as Neutral Passive's are. It is a gameplay rule
-    // rather than a lobby setting, and a campaign leans on it hard — Rise of the Naga's Fishing
-    // Village, its Trackers and its Prisoners are all neutral-controlled, which is the only
-    // reason a village can be parked next to the army that is going to burn it and still be
-    // standing when the player arrives. An ORDERED attack still lands (the harbour sequence
-    // points its Naga at those very ships), the same way a force-attack takes a shop down.
-    if (this.neutralPlayers.has(a.owner) || this.neutralPlayers.has(b.owner)) return false;
+    // (A slot the map set to MAP_CONTROL_NEUTRAL is not tested here. It is not a shield — it
+    // is an ALLIANCE, granted at config() time and overridable by the map's own later calls.
+    // See RtsController.setPlayerNeutral for why that distinction is load-bearing.)
     // DIRECTED, and it has to be. This asked whether the two were co-ALLIED — PASSIVE in
     // both directions — and treated anything less as a fight. But a map that wants one side
     // to hold its fire writes one line, not two, and every campaign does:

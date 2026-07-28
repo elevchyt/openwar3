@@ -1681,22 +1681,40 @@ And the speaker's bust TALKS. `SetCinematicScene`'s last parameter is the voiceo
 the model's "Portrait Talk" clip. The HUD's portrait had done this since the selection sounds
 landed; the cinematic panel's, the one the player actually watches, never did.
 
-### MAP_CONTROL_NEUTRAL is a gameplay rule
+### MAP_CONTROL_NEUTRAL is an ALLIANCE, not a shield
 
 `SetPlayerController(p, mapcontrol)` looks like a lobby setting, and five of its six values are.
 The sixth is not: common.j's **NEUTRAL (3)** — and RESCUABLE (2), which is neutral-until-rescued —
-means the slot is *played as a neutral*. Its units are nobody's enemy and start nobody's fight,
-exactly as Neutral Passive's are.
+means the slot is *played as a neutral*.
 
 That is how a campaign parks a village next to the army about to burn it. Rise of the Naga sets it
 on three slots — the Fishing Village (2), the Watchers' Trackers (1) and the Prisoners (9) — every
 one of them a side the mission needs to find ALIVE. Ignoring it, Illidan (a real computer slot,
 standing 573 units from the village's transport ship and carrying a 650 acquisition range) simply
 attacked it in the opening seconds, and the ships the quest is named after started dying before
-the player had moved. The map's one-way `bj_ALLIANCE_NEUTRAL` lines are the belt to this braces:
-they stop the Naga RETALIATING, and this stops anyone starting. The harbour sequence still burns
-those ships when it is time — it ORDERS its Naga onto them, and an ordered attack overrides
-neutrality exactly as a force-attack on a shop does. `SimWorld.neutralPlayers`.
+the player had moved. He is named in no alliance line anywhere in the chapter, so the controller
+is the only thing holding him.
+
+**But it is not a flag that makes a player unattackable**, and the same map proves it. Its Wildkin
+cinematic sets a neutral-controlled player at a computer one on purpose:
+
+```
+call SetPlayerAllianceStateBJ( udg_AP2_Trackers, udg_AP6_Wildkin, bj_ALLIANCE_UNALLIED )
+call SetPlayerAllianceStateBJ( udg_AP6_Wildkin, udg_AP2_Trackers, bj_ALLIANCE_UNALLIED )
+```
+
+— both directions, deliberately, so a Berserk Wildkin can maul one of the Watchers' Archers on
+camera; the scene writes `bj_ALLIANCE_NEUTRAL` back afterwards to call it off. Against a flag
+those four lines are inert and the fight the shot is OF never happens.
+
+So it is granted the way the game grants it. `bj_ALLIANCE_NEUTRAL` is precisely "clear the ally
+settings, then set `ALLIANCE_PASSIVE`" (Blizzard.j's `SetPlayerAllianceStateBJ`), and a neutral
+controller is that, MUTUALLY, with every other slot — the twelve players plus 12 (Neutral Hostile,
+whose creeps would otherwise sink the same ships) and 15. Illidan still ignores the village from
+config() onward, the map's own later alliance calls override it for the pairs they name, and an
+ORDERED attack lands regardless (the harbour sequence points its Naga at those very ships).
+`RtsController.setPlayerNeutral`; `SimWorld.neutralPlayers` survives as what the SELECTION CIRCLE
+reads, since a neutral player's units ring yellow.
 
 ### RemoveUnit takes a unit out of every group
 
@@ -1730,6 +1748,43 @@ re-stamps `startedAt` when it gets there (`playScript`'s `onStart`). The wait po
 time until the line has begun, then waits out the remainder — capped, and skipped entirely when
 nothing is going to play at all (no engine, no file, audio muted), because a poll for a clip nobody
 is loading would hang the cinematic rather than pace it.
+
+### A cinematic runs on the SIM's clock, not the renderer's
+
+Everything the panel counts down was written by the map in the same seconds its
+`TriggerSleepAction`s are written in. `SetCinematicScene`'s `sceneDuration` decides when a line of
+subtitle comes off; the script's own sleep decides when the next one arrives. Those two clocks
+have to be the same clock — and the render clock is not it.
+
+`advanceSim` steps at most `MAX_STEPS_PER_FRAME` (5 × 1/60 s) per frame and **drops the
+remainder**, so on any frame that runs long game time falls behind wall time and never catches up.
+Aged on wall time, every subtitle expired early: on the swiftshader harness (3 fps, where game
+time runs ~4× slow) a nine-second line of Maiev's was gone in two, and even a brief dip mid-scene
+reads as lines being cut off mid-sentence. The panel is now handed the game seconds the sim
+actually stepped that frame (`MapViewerScene.simAdvanced`), which also means a paused game pauses
+the cinematic, as WC3's does.
+
+Measured over the chapter's intro, every line now arrives on the script's own arithmetic — 0.5 +
+6.0 + 0.5 s between Maiev's first line and the Watcher's, 1.33 s from the Watcher's to the next
+(that one is a `WaitForSoundBJ`, and 1.33 s is the clip), 7.1 s of camera work after it — and the
+last scene comes down at exactly its `sceneDuration`.
+
+### The cursor goes with the interface
+
+WC3 draws no mouse cursor under a letterbox. `ShowInterface(false)` takes the console, the status
+bars and the pointer together — there is nothing left on screen to point at. Keyed on the letterbox
+alone, not on `EnableUserUI`, which blizzard.j flicks off and on around each cinematic fade and
+which would otherwise make the cursor blink back mid-scene.
+
+### `ResetToGameCamera` gives back the player's OWN zoom
+
+`CinematicModeExBJ(false)` does not touch the camera — a map hands it back itself, and every
+chapter's cleanup does it with `ResetToGameCamera` after restoring the position it saved. "The
+game camera" is not a constant: its distance is whatever the player last zoomed to. Ours answered
+with the melee start distance, so every cinematic in the game quietly took the player's zoom away.
+`MapViewerScene.playerDistance` is written only by the wheel (and the match's opening framing),
+never by the script's tweens, so a scene that spends forty seconds dollying through six camera
+setups still returns to the zoom the player was on.
 
 ### ESC skips a cinematic, and the map decides what that means
 
