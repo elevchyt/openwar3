@@ -1128,6 +1128,7 @@ export class MapViewerScene {
           name: this.westring(d.name),
           maxLife: d.maxLife,
           radius: d.radius,
+          selCircle: d.selCircle,
           armorSound: d.armorSound,
           targType: d.targType,
           portraitModel: this.destructiblePortrait(d),
@@ -1441,15 +1442,29 @@ export class MapViewerScene {
       ?? config.slots[0]?.id
       ?? 0;
     this.rts!.setLocalPlayer(this.localPlayer); // drag-box selects this player's units
-    // Owner-line names for the hover tooltip: an AI slot reads "Computer (Normal)"
-    // (the one difficulty we model, matching the Custom Game screen's label); a human
-    // slot falls back to a generic "Player N" — the local player never shows an owner
-    // line, so its own label is never seen.
+    // Owner-line names for the hover tooltip.
+    //
+    // **The MAP's name for the slot wins.** A campaign map names every side it fields in its
+    // w3i player records — "Illidan's Naga", "Wild Mur'guls", "Ferocious Beasts", "Night Elf
+    // Villagers" — and that is what WC3 prints under a hovered enemy. Reading "Computer
+    // (Normal)" over every one of them is a melee lobby's answer given to a mission, and it
+    // erases the one thing the line is there to tell you: WHOSE that unit is.
+    //
+    // Only a slot the map left unnamed falls back — an AI slot to "Computer (Normal)" (the
+    // one difficulty we model, matching the Custom Game screen's label), a human slot to a
+    // generic "Player N". The local player never shows an owner line, so its own label is
+    // never seen.
     this.playerNames = new Map(
-      config.slots.map((s) => [s.id, s.controller === "computer" ? "Computer (Normal)" : `Player ${s.id + 1}`]),
+      config.slots.map((s) => [
+        s.id,
+        s.name?.trim() || (s.controller === "computer" ? "Computer (Normal)" : `Player ${s.id + 1}`),
+      ]),
     );
     this.humanPlayers = config.slots.filter((s) => s.controller === "user").length;
     this.rts!.setPlayerNames(this.playerNames);
+    // Whose placed units hold their ground (see SimUnit.guarding). Set before seeding, since
+    // that is when a unit is told whether it has a post.
+    this.rts!.setAiPlayers(config.slots.filter((s) => s.controller === "computer").map((s) => s.id));
     // Open on the local player's base at gameplay zoom.
     const home = config.slots.find((s) => s.id === this.localPlayer);
     if (home) {
@@ -1819,7 +1834,7 @@ export class MapViewerScene {
         this.cinematic?.setScene(scene);
         // Ask for the bust the CURRENT scene wants, every time — never on a "did it change?"
         // answer from the panel. See loadCinematicPortrait and CinematicPanelOverlay.setScene.
-        void this.loadCinematicPortrait(scene?.portraitUnitId ?? "", scene?.playerColor ?? 0);
+        void this.loadCinematicPortrait(scene?.portraitUnitId ?? "", scene?.playerColor ?? 0, scene?.voiceoverDuration ?? 0);
       },
       pingMinimap: (ping) => this.hud?.ping(ping),
       // --- melee from the script (7.3) ---
@@ -1970,7 +1985,13 @@ export class MapViewerScene {
       // this entry adds the re-tint, which needs a model.
       setUnitOwner: (id, player, changeColor) => {
         world.setUnitOwner?.(id, player, changeColor);
-        if (changeColor) this.rts?.setUnitTeamColor(id, player);
+        // …to the new owner's COLOUR, which is not the new owner's SLOT. Every campaign map
+        // reassigns both: Rise of the Naga paints slot 0 blue (`SetPlayerColorBJ`) in its
+        // init and then hands the player its rescued prisoners with
+        // `SetUnitOwner(u, udg_AP1_Player, true)` — passing the slot re-tinted each of them
+        // RED, the default colour of a slot nobody had recoloured, so a freed Huntress came
+        // out a colour no unit on the field wore. Same lookup the spawner uses (playerColor).
+        if (changeColor) this.rts?.setUnitTeamColor(id, this.rts.playerColor(player));
       },
       setUnitColor: (id, color) => this.rts?.setUnitTeamColor(id, color),
       setPlayerColor: (p, color) => this.rts?.setPlayerColor(p, color),
@@ -2231,6 +2252,12 @@ export class MapViewerScene {
       const sw = this.rts.simWorld;
       const deaths = sw.drainDeathEvents();
       if (deaths.length) engine.interp.pumpUnitDeaths(deaths);
+      // A gate that broke this tick is a death too — the widget kind (see killDestructible).
+      if (this.destructibleDeaths.length) {
+        const dead = this.destructibleDeaths;
+        this.destructibleDeaths = [];
+        engine.interp.pumpDestructableDeaths(dead);
+      }
       const damage = sw.drainDamageEvents();
       if (damage.length) engine.interp.pumpDamageEvents(damage);
       const attacks = sw.drainAttackEvents();
@@ -2308,6 +2335,7 @@ export class MapViewerScene {
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
     this.cinePortraitFor = "";
     this.cinePortraitWant = "";
+    this.destructibleDeaths = []; // …and out of any gate the last one broke
     this.chatHistory = []; // last match's conversation is not this one's
     // Chat arriving over the wire lands in the same place a locally typed line does.
     if (this.rts) {
@@ -4226,7 +4254,16 @@ export class MapViewerScene {
     this.syncDestructibleToSim(d);
     this.restampDestructible(d, true);
     this.playDestructibleClip(d, clip, true);
+    // …and the map is told. A destructable is a WIDGET, and `TriggerRegisterDeathEvent` takes
+    // widgets — three of Rise of the Naga's triggers hang off exactly this (the harbour
+    // sequence off its demon gate, two lines off the village's elven gate). Queued rather
+    // than fired here because this is called from inside the sim's own reaper as well as
+    // from a script's KillDestructable, and a trigger must not run inside a sim tick.
+    this.destructibleDeaths.push(id);
   }
+
+  /** Destructibles that died since the last script pump (see killDestructible). */
+  private destructibleDeaths: number[] = [];
 
   /** `DestructableRestoreLife` — "close gate". Puts the full collider back and stands the
    *  model up again (`birth` plays the birth clip, as the native's flag asks). */
@@ -4240,12 +4277,19 @@ export class MapViewerScene {
     if (d.life > 0) this.playDestructibleClip(d, birth ? /^birth$/i : /^stand$/i, false);
   }
 
-  /** `SetDestructableLife` — the collider follows life across zero in either direction. */
+  /** `SetDestructableLife` — the collider follows life across zero in either direction.
+   *  Life driven to zero IS a death, not merely an empty bar: it plays the death clip and
+   *  raises the widget's death event, so `SetDestructableLife(d, 0)` and `KillDestructable(d)`
+   *  end at the same place (which is how WC3 has it). */
   setDestructibleLife(id: number, life: number): void {
     const d = this.destructibleById(id);
     if (!d) return;
     const wasAlive = d.life > 0;
-    d.life = Math.max(0, life);
+    if (life <= 0) {
+      if (wasAlive) this.killDestructible(id);
+      return;
+    }
+    d.life = life;
     this.syncDestructibleToSim(d);
     this.restampDestructible(d, wasAlive);
   }
@@ -5249,8 +5293,20 @@ export class MapViewerScene {
    *  are both on. Two natives, two different jobs — the letterbox hides the console for the
    *  duration of a cinematic; EnableUserUI hides everything for the duration of a fade. */
   private syncHudVisible(): void {
-    if (this.interfaceShown && this.userUi) this.hud?.show();
+    const on = this.interfaceShown && this.userUi;
+    if (on) this.hud?.show();
     else this.hud?.hide();
+    // **And the console CHROME, which is a different element.** `GameHud` owns what sits IN
+    // the console's sockets — the minimap picture, the portrait, the command card, the
+    // hero bar; the console art itself (the bottom band AND the top strip carrying the
+    // resource readout and the Quests/Menu/Allies/Chat buttons) is `ConsoleUI.fdf`, drawn
+    // under it by ui/consoleUi.ts. Hiding only the HUD left every cinematic playing behind
+    // the full frame with empty holes in it, which is the opposite of a letterbox.
+    this.consoleUi?.setVisible(on);
+    // …and the WORLD-layer half of the interface: the floating health/mana bars and the hero
+    // level badge, which are drawn over the terrain but belong to the UI (see
+    // RtsController.updateHealthBars).
+    this.rts?.setInterfaceShown(on);
   }
 
   /** The speaker's animated bust, on the cinematic panel's own canvas. Same machinery as the
@@ -5270,10 +5326,17 @@ export class MapViewerScene {
    *  going until what is on the canvas is what is wanted. Without it a stale load simply won
    *  by finishing last — two transmissions in one tick left the second speaker wearing the
    *  first one's face, and every transmission after that inherited the mismatch. */
-  private async loadCinematicPortrait(typeId: string, color: number): Promise<void> {
+  private async loadCinematicPortrait(typeId: string, color: number, talkSeconds = 0): Promise<void> {
     // Key on type AND colour: the same unit type speaking for two different players is two
     // different busts. Re-loading is cheap — ModelViewerScene caches the parsed model.
     this.cinePortraitWant = typeId ? `${typeId}|${color}` : "";
+    // **And the mouth moves.** A transmission's whole point is a talking head, and every
+    // WC3 portrait model carries a "Portrait Talk" clip beside its resting "Portrait" one.
+    // `SetCinematicScene`'s LAST parameter is how long the voice line runs
+    // (`DoTransmissionBasicsXYBJ` passes the sound's own duration), so it is exactly the
+    // window to hold that clip for. The HUD's bust has done this since the selection sounds
+    // landed; the cinematic panel's — the one the player actually watches — never did.
+    this.cinePortraitTalk = Math.max(0, talkSeconds);
     const panel = this.cinematic;
     if (!panel || !typeId) return;
     const canvas = panel.portraitCanvas();
@@ -5299,10 +5362,17 @@ export class MapViewerScene {
           this.cinePortraitFor = want; // no bust for this type — an empty pane, but stop retrying
         }
       }
+      // Started AFTER the load, because `load` resets the talk clock (it rebuilds the
+      // instance and re-resolves the sequence indices). Asking before the bust exists is
+      // the same no-op the HUD's portrait has to work around.
+      if (this.cinePortraitTalk > 0) this.cinePortraitViewer.playTalk(this.cinePortraitTalk);
     } finally {
       this.cinePortraitLoading = false;
     }
   }
+
+  /** Seconds of "Portrait Talk" the current transmission asked for (see above). */
+  private cinePortraitTalk = 0;
 
   /** Portrait busts are loaded lazily on the first selection of each unit type:
    *  the MDX parse + texture upload stalls a frame (measured 100–280ms), and the

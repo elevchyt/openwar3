@@ -129,6 +129,14 @@ export class Authority {
       // this target and won't wander off onto whatever it passes (issue #83).
       if (s === "attack") ok = this.sim.issueAttack(unitId, targetId, true, true);
       // smart on a unit: attack a hostile (incl. team -1 creeps), else follow (ally/neutral).
+      // A DESTRUCTIBLE is the exception that isn't hostile and isn't followable: right-click
+      // a gate or a crate and you attack it, which is how WC3 has it (the cursor even turns
+      // red over one). It is never hostile — neutral-passive is exactly what keeps anything
+      // from auto-acquiring it — so the order has to be FORCED. `targetKey` is the marker
+      // that says "this widget is a destructable" (RtsController.addDestructible); the local
+      // player's own right-click already routes this way, and this is the same rule for a
+      // trigger's `IssueTargetOrder(u, "smart", …)` and for a networked command.
+      else if (u && t?.targetKey) ok = this.sim.issueAttack(unitId, targetId, true, true);
       else if (u && t) ok = this.sim.hostile(u, t) ? this.sim.issueAttack(unitId, targetId, false, true) : this.sim.issueFollow(unitId, targetId);
     } else {
       if (s === "stop") (this.sim.stop(unitId), (ok = true));

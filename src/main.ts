@@ -390,10 +390,17 @@ function campaignConfig(info: MapInfo, difficulty: Difficulty): MeleeConfig {
     team: s.team,
     startX: s.startX,
     startY: s.startY,
+    name: s.name, // the map's own name for the side ("Illidan's Naga"), for the hover tooltip
   }));
   return {
     slots,
-    fog: "explored",
+    // A campaign chapter starts BLACK. "explored" is the Custom Game screen's convenience
+    // default and was inherited here by accident; no campaign map has ever begun with its
+    // terrain handed to you. It matters beyond looks — a chapter's own script is what parts
+    // the mask (`CreateFogModifierRect`, `FogMaskEnable`, the cinematic reveals), and Rise of
+    // the Naga's intro even wipes the map back to MASKED when the cinematic is skipped, which
+    // only makes sense against a map that was never explored to begin with.
+    fog: "unexplored",
     seed: 1 + Math.floor(Math.random() * 2147483645),
     difficulty: DIFFICULTY_INDEX[difficulty],
   };

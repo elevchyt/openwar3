@@ -587,6 +587,14 @@ export class RtsController {
     this.playerNames = names;
   }
 
+  /** Which slots the lobby seated as COMPUTERS. Their map-placed units hold their ground
+   *  (see SimUnit.guarding); a human's do not. */
+  private aiPlayers = new Set<number>();
+
+  setAiPlayers(players: Iterable<number>): void {
+    this.aiPlayers = new Set(players);
+  }
+
   /** The owner-line label for a player slot — the lobby name, or a generic
    *  "Player N" fallback so an un-seeded slot still reads sensibly. */
   private playerLabel(owner: number): string {
@@ -621,6 +629,16 @@ export class RtsController {
    *  loop over `SetUnitColor`, which is why that parameter exists at all. */
   setPlayerColor(owner: number, color: number): void {
     this.playerColors.set(owner, color);
+  }
+
+  /** Is the player's interface on screen — `ShowInterface` AND `EnableUserUI` (see
+   *  MapViewerScene.syncHudVisible, which owns the pair and pushes their AND here). Read by
+   *  the world-layer overlays, which belong to the interface even though they are drawn over
+   *  the terrain: a cinematic shows no health bars. */
+  private interfaceShown = true;
+
+  setInterfaceShown(on: boolean): void {
+    this.interfaceShown = on;
   }
 
   /** Which team's combined sight lifts the fog of war (allies share vision). */
@@ -1860,9 +1878,19 @@ export class RtsController {
         depotLumber: false,
       },
       building,
-      // Neutral shops/labs/merchants/taverns carry "Invulnerable (Neutral)" (Avul) in
-      // their abilList — permanently immune + untargetable (issue #26).
-      { baseInvulnerable: !!def?.abilities.includes("Avul") },
+      {
+        // Neutral shops/labs/merchants/taverns carry "Invulnerable (Neutral)" (Avul) in
+        // their abilList — permanently immune + untargetable (issue #26).
+        baseInvulnerable: !!def?.abilities.includes("Avul"),
+        // …and the rest of that abilList is what a fountain IS. `Avul` was the only entry
+        // ever read here, so a Fountain of Health arrived with an empty ability list and
+        // stood there as scenery: its `ACnr` (and the Fountain of Mana's `ANre`) are plain
+        // regeneration auras — `Units\UnitAbilities.slk` gives it `Avul,ACnr` and nothing
+        // else — and an aura a unit does not carry is an aura nothing applies. Same builder
+        // every other unit's abilities come from, so a neutral building is no longer the one
+        // seeding path that silently drops them.
+        abilities: def ? this.buildInitialAbilities(def) : [],
+      },
     );
     u.neutralPassive = true;
     if (isBuilding) this.adoptPlacedFootprint(simId, loc[0], loc[1]); // its collision dies with it
@@ -1967,6 +1995,13 @@ export class RtsController {
    *  render loop syncs its position from the sim, so it simply appears where it has got to. */
   addSimUnit(def: UnitDef, x: number, y: number, facing: number, owner = 0, team = 0, constructionTime = 0, reservedId?: number): number {
     const simId = reservedId ?? this.placed.nextUnitId();
+    // A COMPUTER player's unit holds the ground it is put on until something commands it —
+    // the leash half of the guard behaviour (SimUnit.guarding). Applied HERE rather than at
+    // the .doo adoption, because a campaign map does not place its cast in war3mapUnits.doo:
+    // it writes `CreateUnit` calls into `CreateAllUnits()`, so Illidan and every one of his
+    // Naga arrive through the script path. A human's units never get it — yours go where you
+    // send them and stay there — and the flag is cleared the moment anything orders the unit.
+    const guarding = this.aiPlayers.has(owner) && !def.isBuilding;
     const profile = WORKERS[def.id];
     // baseLumberCapacity is the pre-upgrade load; Improved Lumber Harvesting raises the live
     // `lumberCapacity` off it each tick (recomputeStats), so the profile stays the baseline.
@@ -2028,6 +2063,10 @@ export class RtsController {
     // moment EVENT_(PLAYER_)UNIT_CONSTRUCT_START fires (7.17). A pre-placed/instant
     // building (constructionTime 0) was never "constructed", so it raises nothing.
     if (constructionTime > 0) this.sim.noteConstruct(simId, "start");
+    if (guarding) {
+      const su = this.sim.units.get(simId);
+      if (su) su.guarding = true;
+    }
     return simId;
   }
 
@@ -2306,9 +2345,32 @@ export class RtsController {
    */
   private worldHeld = false;
 
-  /** Hold the world still (match setup), and let it go once the script has initialised. */
+  /** Hold the world still (match setup), and let it go once the script has initialised.
+   *
+   *  Releasing it is also the moment every AI unit's POST is fixed: wherever the map left it
+   *  standing, unordered, is the ground it holds (see SimUnit.guarding). Done as one sweep
+   *  here rather than per-spawn, because a map has several ways to put a unit down — the
+   *  `.doo` adoption, a `CreateUnit` in `CreateAllUnits`, a `CreateNUnitsAtLoc` in its init —
+   *  and "standing still with no orders when the map finished setting up" is the one
+   *  description that covers all of them.
+   *
+   *  A unit the init already ORDERED is armed too, and that is deliberate rather than sloppy:
+   *  the leash only ever acts on an attack the unit picked out for ITSELF (`tickGuardLeash`),
+   *  so a commanded move, a scripted attack wave and a patrol are all untouched by it — and
+   *  the first thing any of those does when it lands is clear the post anyway. Requiring
+   *  "idle" here instead meant the one unit that mattered — Illidan, who the map has doing
+   *  something the instant the world starts — was the one unit left off the leash. */
   holdWorld(held: boolean): void {
     this.worldHeld = held;
+    if (held) return;
+    for (const u of this.sim.units.values()) {
+      if (u.guarding || u.isCreep || u.building || u.neutralPassive || u.owner < 0) continue;
+      if (!this.aiPlayers.has(u.owner)) continue;
+      u.guarding = true;
+      u.guardX = u.x;
+      u.guardY = u.y;
+      u.guardFacing = u.facing;
+    }
   }
 
   tick(dt: number): void {
@@ -5015,6 +5077,16 @@ export class RtsController {
   private updateHealthBars(): void {
     this.pruneSelection();
     const specs: BarSpec[] = [];
+    // A cinematic takes the WHOLE interface, not just the console. `ShowInterface(false)` is
+    // the letterbox, and what it hides is everything the player normally reads off the
+    // screen — the floating health and mana bars and the hero level badge included. They are
+    // drawn in the world layer rather than in the HUD, so hiding the HUD left them stranded
+    // over a scene that is meant to look like a film: bars over every Watcher through
+    // Maiev's opening lines. Same switch, honoured in the one place that builds them.
+    if (!this.interfaceShown) {
+      this.overlays.syncBars(specs);
+      return;
+    }
     for (const e of this.entries) {
       // Same source as the model this bar floats over — that is the whole of item 10c-2c-2's
       // atomicity requirement. A bar drawn at the sim's position over a model drawn at the

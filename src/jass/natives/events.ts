@@ -131,6 +131,9 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetChangingUnitPrevOwner", (c) => resp(c, "ChangingUnitPrevOwner"));
   def(rt, "GetExpiredTimer", (c) => resp(c, "ExpiredTimer"));
   def(rt, "GetTriggerWidget", (c) => resp(c, "TriggerWidget"));
+  // A destructible's own death response. `TriggerRegisterDeathEvent` takes a WIDGET, so a
+  // gate raises this pair where a unit raises GetDyingUnit (see pumpDestructableDeaths).
+  def(rt, "GetDyingDestructable", (c) => resp(c, "DyingDestructable"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
   def(rt, "GetEventDamageSource", (c) => resp(c, "EventDamageSource")); // EVENT_UNIT_DAMAGED
   // The whole line that was typed, and the part of it the registration asked for. A map that
@@ -231,6 +234,41 @@ export function registerEventNatives(rt: Runtime): void {
   });
 
   // --- run a trigger from script (used by RunInitializationTriggers etc.) ---
+  //
+  // **A trigger run from script is still "the triggering trigger".** `GetTriggeringTrigger`
+  // answers for a TriggerExecute/TriggerEvaluate the same way it answers for an event —
+  // that is precisely what lets a trigger refer to itself without a global — and the World
+  // Editor generates code that depends on it in every map it writes:
+  //
+  //     function Trig_Quest_Main_Illidan_Create_Conditions takes nothing returns boolean
+  //         if ( not ( IsTriggerEnabled(GetTriggeringTrigger()) == true ) ) then
+  //             return false
+  //         endif
+  //         return true
+  //     endfunction
+  //     function Trig_Quest_Main_Illidan_Create_Actions takes nothing returns nothing
+  //         call DisableTrigger( GetTriggeringTrigger() )
+  //         …
+  //
+  // That pair — "run me only once, and mark myself spent" — is the editor's own run-once
+  // idiom, and it is on the Create trigger of every quest in the campaign. Running the
+  // callbacks with no `TriggeringTrigger` on the stack made `GetTriggeringTrigger()` null,
+  // so `IsTriggerEnabled(null)` was false and the condition refused: Rise of the Naga's four
+  // quests were never created and its log came up empty. The same idiom guards cinematics,
+  // ambushes and one-shot spawns, and each of them was failing the same way — where it was
+  // only the DisableTrigger half, the trigger silently stopped being one-shot instead.
+  //
+  // Pushed as its OWN stack frame rather than merged, because `eventResponse` searches the
+  // stack downwards: the executed trigger overrides who "the trigger" is and inherits every
+  // other response from the event that called it, which is exactly WC3's rule.
+  const asTrigger = <T,>(c: NativeCtx, t: TriggerObj, run: () => T): T => {
+    c.rt.eventStack.push(new Map([["TriggeringTrigger", jHandle(t.handleId, "trigger")]]));
+    try {
+      return run();
+    } finally {
+      c.rt.eventStack.pop();
+    }
+  };
   const conditionsPass = (c: NativeCtx, t: TriggerObj): boolean =>
     t.conditions.every((fn) => {
       const r = c.call(fn, []);
@@ -247,17 +285,17 @@ export function registerEventNatives(rt: Runtime): void {
   };
   def(rt, "ConditionalTriggerExecute", (c, a) => {
     const t = trig(c, a[0]);
-    if (t && t.enabled && conditionsPass(c, t)) runActions(c, t);
+    if (t && t.enabled) asTrigger(c, t, () => conditionsPass(c, t) && (runActions(c, t), true));
     return JNULL;
   });
   def(rt, "TriggerExecute", (c, a) => {
     const t = trig(c, a[0]);
-    if (t) runActions(c, t);
+    if (t) asTrigger(c, t, () => runActions(c, t));
     return JNULL;
   });
   def(rt, "TriggerEvaluate", (c, a) => {
     const t = trig(c, a[0]);
-    return jBool(t ? conditionsPass(c, t) : false);
+    return jBool(t ? asTrigger(c, t, () => conditionsPass(c, t)) : false);
   });
   def(rt, "ExecuteFunc", (c, a) => (a[0].k === "string" ? c.call(a[0].s, []) : JNULL));
   def(rt, "DoNothing", () => JNULL);

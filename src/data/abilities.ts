@@ -352,6 +352,15 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // between the two units the ability names; Abu2/Abu3/Abu5 alias it for the scarabs and the
   // Barbed Arachnathid. See the handler for why its sibling morphs are not listed here yet.
   Abur: { target: "none" },
+  // The three REGENERATION auras — and the two Fountains, which are nothing else. A Fountain
+  // of Health's whole ability list is `Avul,ACnr` and a Fountain of Mana's `Avul,ANre`
+  // (Units\UnitAbilities.slk); those rows' base codes are `Aoar` and `Aarm`, which are also
+  // the Witch Doctor's Healing Ward and the Marketplace statue's aura. Listed here because
+  // `buildInitialAbilities` keeps only what this table names, and an aura a unit does not
+  // carry is an aura nothing applies — which is exactly why the fountains did nothing.
+  Aoar: { target: "passive" }, // Regeneration aura, life (Fountain of Health `ACnr`, Healing Ward)
+  Aabr: { target: "passive" }, // Regeneration aura, life (the Marketplace statue) — 0.4% / 700
+  Aarm: { target: "passive" }, // Regeneration aura, mana (Fountain of Mana `ANre`)
   Atru: { target: "passive" }, // True Sight — the Shade (`ushd`), Rng1 900
   Adts: { target: "passive" }, // Magic Sentry — the four Human towers, Rng1 900, gated on `Rhse`
   Amim: { target: "passive" }, // Magic Immunity — Dryad, Faerie Dragon, Spirit Walker, nbel

@@ -621,6 +621,8 @@ export function destructibleUnitDef(d: {
   name: string;
   maxLife: number;
   radius: number;
+  /** `selcircsize` — the DIAMETER of the game's selection circle, in world units. */
+  selCircle: number;
   armorSound: string;
   targType: string;
   /** Bust for the portrait pane, already resolved to a real `.mdx` (or "" for none). */
@@ -639,7 +641,14 @@ export function destructibleUnitDef(d: {
     // dedicated bust for that — the doodad's own model is a piece of terrain.
     model: d.portraitModel,
     modelScale: 1,
-    selScale: Math.max(1, d.radius / 32),
+    // The selection circle, which is the field the CLICK is measured against, and it is
+    // NOT `radius`. `radius` is the "Elevation Sample Radius" — 50 on every gate in the
+    // game, so a 640-unit-long Elven Gate could only be picked within a stride of its
+    // centre, and the far half of it read as terrain. `selcircsize` ("Selection Size -
+    // Game") is what the data sizes a selection by, and it says 512 for those same gates,
+    // 128 for a tree, 60 for a crate. `selScale` is a MULTIPLE of the 72-unit circle a
+    // unit at scale 1 wears (SEL_RADIUS_PER_SCALE), so the diameter converts by 72.
+    selScale: (d.selCircle || d.radius * 2 || 72) / 72,
     animWalkSpeed: 0,
     animRunSpeed: 0,
     animBlend: 0.15,

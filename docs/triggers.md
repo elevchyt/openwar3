@@ -1596,6 +1596,91 @@ is the player overriding alliance, and it is also how the harbour sequence sends
 neutral Naga at those same ships when the script finally wants it. `pnpm sim:test` pins all of it
 (`tools/sim-alliance-test.cjs`).
 
+### A trigger the SCRIPT ran is still "the triggering trigger"
+
+`GetTriggeringTrigger()` answers for a `TriggerExecute` / `ConditionalTriggerExecute` /
+`TriggerEvaluate` the same way it answers for an event, and the World Editor emits code that
+cannot work otherwise. Its run-once idiom is a matched pair, on the Create trigger of every
+quest in the campaign:
+
+```
+function Trig_Quest_Main_Illidan_Create_Conditions takes nothing returns boolean
+    if ( not ( IsTriggerEnabled(GetTriggeringTrigger()) == true ) ) then
+        return false
+    endif
+    return true
+endfunction
+function Trig_Quest_Main_Illidan_Create_Actions takes nothing returns nothing
+    call DisableTrigger( GetTriggeringTrigger() )
+```
+
+With no response on the stack the condition asked `IsTriggerEnabled(null)` — false — and
+refused: **Rise of the Naga's quest log came up empty**, all four of them. Where only the
+`DisableTrigger` half was involved the trigger quietly stopped being run-once instead, which is
+worse, because nothing looks broken until it fires twice.
+
+Both routes are fixed: `natives/events.ts` for the off-thread call and
+`Interpreter.execThreadNative` for the on-thread one (these three are THREAD_NATIVES — they run
+the executed trigger on the CALLING thread so a wait inside blocks the caller). The frame is
+pushed on the shared stack, so `resumeThread` carries it across a wait for free. `adoptSuspended`
+now also copies the visible responses into the thread it adopts, because the editor reads them
+right after one — `TriggerSleepAction` then `QueuedTriggerRemoveBJ(GetTriggeringTrigger())`, and
+a queued trigger that never removes itself stalls blizzard.j's strictly-serial queue behind it.
+`pnpm jass:test` pins it (`tools/jass-triggering-trigger-test.cjs`).
+
+### A destructable is a widget, and widgets die
+
+`TriggerRegisterDeathEvent` takes a **widget**, not a unit (`common.j`:
+`native TriggerRegisterDeathEvent takes trigger whichTrigger, widget whichWidget`), so a gate
+raises it exactly as a Footman does. We only pumped unit deaths, so every registration whose
+subject was a destructible sat there for the whole match. Rise of the Naga hangs three on it:
+
+```
+call TriggerRegisterDeathEvent( gg_trg_Harbor_Cinematic,   gg_dest_ATg4_0111 )
+call TriggerRegisterDeathEvent( gg_trg_Village_Razed_Line, gg_dest_LTe1_1140 )
+call TriggerRegisterDeathEvent( gg_trg_Shared_Vision,      gg_dest_LTe1_1140 )
+```
+
+The first is the chapter's second act — breaking the demon gate is what starts the harbour
+sequence. `Interpreter.pumpDestructableDeaths` fires them, matched by the record's map id
+(handles are interned per record, so identity would work too), with `GetDyingDestructable` and
+the generic `GetTriggerWidget` as responses. `MapViewerScene.killDestructible` queues them —
+every route in goes through it, including the sim's own reaper when a gate is broken by an axe —
+and the pump drains them beside the unit deaths. `SetDestructableLife(d, 0)` routes through the
+same door: life driven to zero IS a death, clip and event included.
+
+### Hostility, for players 12 and 15
+
+The alliance matrix is where a map talks to **Neutral Hostile**, which is player 12, an ordinary
+row. Our sim files every neutral under owner −1 and the two allegiance lookups bailed on that, so
+creeps kept the plain team rule and no `SetPlayerAlliance` could reach them. Rise of the Naga's
+init writes the same line for its Naga, its Satyrs, its Wildkin **and** Neutral Hostile:
+
+```
+call SetPlayerAllianceStateBJ( Player(PLAYER_NEUTRAL_AGGRESSIVE), udg_AP3_FishingVillage, bj_ALLIANCE_NEUTRAL )
+```
+
+The four player-owned sides obeyed it and the creeps did not, so the creeps alone went on sinking
+the fishing village's ships — and two ship deaths is a scripted defeat. Both lookups go through
+`jassOwnerOf` now, the same translation every other sim→script boundary uses. A creep pair lands
+on 12/12, which `AllianceTable.get` answers true for, so "creeps don't fight each other" is
+unchanged. `seedFromTeams` skips slots 12–15 outright: they are in no lobby force, and a map with
+twelve forces would otherwise ally Neutral Hostile to a real side.
+
+### A cinematic takes the whole interface
+
+`ShowInterface(false)` is not just the letterbox. Three surfaces answer to it, and only the first
+did: the HUD's widget layer (`GameHud`), the console CHROME (`ui/consoleUi.ts` — the bottom band
+AND the top strip with the resource readout and the Quests/Menu/Allies/Chat buttons), and the
+world-layer status bars (floating health, mana, and the hero level badge, built in
+`RtsController.updateHealthBars`). All three are driven off the same `interfaceShown && userUi`
+pair in `MapViewerScene.syncHudVisible`.
+
+And the speaker's bust TALKS. `SetCinematicScene`'s last parameter is the voiceover's length —
+`DoTransmissionBasicsXYBJ` passes the sound's own duration — which is exactly how long to hold
+the model's "Portrait Talk" clip. The HUD's portrait had done this since the selection sounds
+landed; the cinematic panel's, the one the player actually watches, never did.
+
 ### ESC skips a cinematic, and the map decides what that means
 
 `EVENT_PLAYER_END_CINEMATIC` (`ConvertPlayerEvent(17)`). The engine raises it for the local

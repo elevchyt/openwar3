@@ -17,6 +17,11 @@ export interface SlotConfig {
   team: number;
   startX: number;
   startY: number;
+  /** The MAP's own name for this slot (w3i player record), when it has one. A campaign map
+   *  names every side it fields — "Illidan's Naga", "Wild Mur'guls", "Night Elf Villagers" —
+   *  and that name is what the owner line of a hover tooltip reads, exactly as in WC3. Absent
+   *  on a melee map, where a slot is named after whoever sits in it. */
+  name?: string;
   /** In a LAN game, the relay peer sitting in this slot (src/net/protocol.ts). Absent in a
    *  single-player match, and absent on a computer slot in any match. */
   peer?: number;

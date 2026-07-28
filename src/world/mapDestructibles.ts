@@ -43,8 +43,19 @@ export interface MapDestructible {
   /** `selectable` — whether a click can pick it up at all. 1 for the gates, crates and barrels;
    *  0 for the invisible platforms a map lays down by the hundred. */
   selectable: boolean;
-  /** `radius` — the collider a unit stands off from, in world units (the gate's is 50). */
+  /** `radius` — "Elevation Sample Radius" (WorldEditStrings WESTRING_BEVAL_BRAD), which is
+   *  how far out the doodad samples the terrain to seat itself. A gate's is 50. It doubles
+   *  as the stand-off a unit attacking one keeps, because it is the only per-type size in
+   *  the table that is anywhere near a body — but it is NOT the selection circle, and using
+   *  it as one is what made a 640-unit gate unclickable except dead centre. See selCircle. */
   radius: number;
+  /** `selcircsize` — "Selection Size - Game" (WESTRING_BEVAL_BGSC): the DIAMETER, in world
+   *  units, of the circle a click has to land inside. It is the field the game itself sizes
+   *  a destructible's selection by, and it is sized like a body rather than like a sample
+   *  point: 60 for a crate, 128 for a tree, **512 for every one of the game's 45 gates**.
+   *  (`selSize` beside it is the WORLD EDITOR's circle — WESTRING_BEVAL_BSEL — and is 0 on
+   *  nearly everything.) */
+  selCircle: number;
   /** `armor` — the MATERIAL struck, not a damage-table armour class: the stock values are
    *  Wood / Stone / Flesh, which is the same thing a unit's UnitUI `armor` column carries
    *  (UnitDef.armorSound). It picks the impact sound; it multiplies nothing. */
@@ -87,6 +98,7 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
       targType,
       selectable: row.string("selectable") === "1",
       radius: Number(row.string("radius")) || 0,
+      selCircle: Number(row.string("selcircsize")) || 0,
       armorSound: tex(row.string("armor")),
       portraitModel: tex(row.string("portraitmodel")),
       name: row.string("Name") || "",

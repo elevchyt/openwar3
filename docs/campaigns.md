@@ -167,6 +167,42 @@ Two traps, both found by doing it:
 
 `pnpm sim:test` pins the rules (`tools/sim-destructible-test.cjs`).
 
+## A chapter is not a skirmish
+
+Four things the campaign path had inherited from the Custom Game screen and should not have,
+all in `campaignConfig` / `beginMatch`:
+
+**It starts BLACK.** `fog: "explored"` is the lobby's convenience default; no campaign map has
+ever handed you its terrain. It matters beyond looks — the chapter's own script is what parts
+the mask, and Rise of the Naga's intro even wipes the map back to `FOG_OF_WAR_MASKED` when the
+cinematic is skipped, which only makes sense against a map that was never explored.
+
+**The sides have NAMES.** A campaign map names every player it fields in its w3i player records
+— "Watchers", "Illidan's Naga", "Illidan's Servitors", "Ferocious Beasts", "Wild Mur'guls",
+"Night Elf Villagers", "Prisoners", "Illidan" — and that is what WC3 prints under a hovered
+enemy. They are TRIGSTR keys into the map's own `war3map.wts`, resolved in `parseMapInfo` and
+carried on `PlayerSlot.name` → `SlotConfig.name` → the hover tooltip. Only a slot the map left
+unnamed falls back to "Computer (Normal)".
+
+**A placed AI unit holds its ground.** `Units\MiscGame.txt` states the rule for a *unit*, not
+for a creep: "After a unit has strayed 'GuardDistance' from where it started, that unit begins
+thinking about heading back to its start position" (600, with `MaxGuardDistance` 1000 and
+`GuardReturnTime` 5 s). Without it an auto-acquired chase RATCHETS — kill something 600 out,
+re-acquire from the new spot, repeat — and a placed unit walks off across the map. So a computer
+player's units carry the LEASH half of the guard behaviour (`SimUnit.guarding`) and nothing else:
+no sleep, no camp cohesion, no bounty — those are Neutral Hostile's own. The post is fixed in one
+sweep when `holdWorld(false)` releases the world, because a map has several ways to put a unit
+down (the `.doo` adoption, `CreateUnit` inside `CreateAllUnits`, a `CreateNUnitsAtLoc` in its
+init) and "where it was standing when the map finished setting up" covers all of them. Anything
+that COMMANDS the unit clears the post, and an ORDERED attack is never leashed — a scripted
+attack wave means it.
+
+**A gate is clicked by its `selcircsize`.** `radius` is the "Elevation Sample Radius"
+(WorldEditStrings `WESTRING_BEVAL_BRAD`), 50 on every gate in the game; `selcircsize` is
+"Selection Size - Game" (`WESTRING_BEVAL_BGSC`) and reads **512** for all 45 of them, 128 for a
+tree, 60 for a crate. Sizing the selection off `radius` made a 640-unit Elven Gate clickable only
+within a stride of its centre.
+
 ## Not done yet
 
 - The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed and greyed. WC3 ships

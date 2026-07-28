@@ -109,6 +109,14 @@ export class AllianceTable {
     this.grants.fill(0);
     for (let a = 0; a < SLOTS; a++) {
       for (let b = 0; b < SLOTS; b++) {
+        // Slots 12–15 are the ENGINE's own players (12 Neutral Hostile, 15 Neutral Passive),
+        // and they are in no lobby force: seeding them off `teamOf` would ask a lookup built
+        // for slots 0–11 about a slot it has never heard of, and any map whose forces happen
+        // to number up to twelve would come out with Neutral Hostile allied to a real side.
+        // They start granting nothing and being granted nothing, which is what the game has:
+        // Neutral Hostile fights everyone until a script says otherwise, and Neutral Passive
+        // is held out of the fight by `neutralPassive` rather than by this matrix.
+        if (a >= 12 || b >= 12) continue;
         if (a === b || teamOf(a) !== teamOf(b)) continue;
         for (const t of [
           AllianceType.Passive,

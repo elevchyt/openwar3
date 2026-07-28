@@ -19,6 +19,15 @@ export interface PlayerSlot {
    *  slot menu greyed at "Computer (Normal)" while the four user slots still offer Open/Closed.
    *  A melee map declares every slot as a user slot, so nothing is locked there. */
   controller: "user" | "computer";
+  /**
+   * The slot's NAME, as the map wrote it in the w3i player record (a TRIGSTR key into
+   * war3map.wts, resolved here). This is what WC3 shows on the owner line of a hover
+   * tooltip, and on a campaign map it is the whole point of the field: Rise of the Naga's
+   * nine slots are "Watchers", "Illidan's Naga", "Illidan's Servitors", "Ferocious Beasts",
+   * "Wild Mur'guls", "Night Elf Villagers", "Prisoners" and "Illidan" — the sides the
+   * mission is about. Empty on a melee map, whose slots are named by whoever sits in them.
+   */
+  name: string;
   /** The slot's TEAM, and on a custom map it is the map's to decide, not the lobby's.
    *  A w3i carries FORCE definitions (a name + a bitmask of member players), and the
    *  "use custom forces" flag (0x0040) says they are authoritative — which is exactly what
@@ -105,6 +114,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
       startX: p.startLocation[0],
       startY: p.startLocation[1],
       controller: p.type === 2 ? "computer" : "user",
+      name: resolveName(p.name, "", strings), // see PlayerSlot.name
       team: customForces ? forceOf(info, p.id) : p.id, // see PlayerSlot.team
     }));
 

@@ -227,7 +227,13 @@ export class QuestDialogOverlay {
    * — required quests under "Main Quests", optional under "Optional Quests" — and each
    * row's backdrop swapped for the template its STATE names (see ROW_BACKDROP).
    */
+  /** `UI\war3skins.txt`'s `UndiscoveredQuestIcon` — the "?" plate (see paintIcon). Resolved
+   *  from the library while the screen is being built, which is the one moment the skin
+   *  table is in scope. */
+  private undiscoveredIcon = "";
+
   private rootFrame(lib: FdfLibrary): FdfFrame {
+    this.undiscoveredIcon = lib.decorate("UndiscoveredQuestIcon");
     const dialog = lib.resolveRoot("QuestDialog");
     const rowTemplate = lib.resolveRoot("QuestListItem");
     if (!dialog) throw new Error('FDF: frame "QuestDialog" not found');
@@ -358,11 +364,27 @@ export class QuestDialogOverlay {
     }
   }
 
-  /** The row's icon — the real BLP the script named (QuestSetIconPath), inset in its plate. */
+  /**
+   * The row's icon, inset in its plate.
+   *
+   * Two things the plate needs and did not have:
+   *
+   * 1. **`.tga` → `.blp`.** `QuestSetIconPath` is handed the path the World Editor writes,
+   *    and the editor writes TARGA — `"ReplaceableTextures\CommandButtons\BTNMetamorphosis.tga"`
+   *    is the literal in Rise of the Naga's script, and there is no such file in the archives.
+   *    The game ships the compiled `.blp`, exactly as it ships `.mdx` where the data spells
+   *    `.mdl`. Every campaign quest icon came up blank on the raw string.
+   * 2. **An undiscovered quest still has an icon** — the "?" plate, which is not the quest's
+   *    own art but the skin's `UndiscoveredQuestIcon` (`UI\war3skins.txt` →
+   *    `UI\Widgets\EscMenu\Human\quest-unknown.blp`). It is the same fact the row's grey
+   *    "Quest Not Yet Discovered" caption states, said in the icon column.
+   */
   private paintIcon(screen: FdfScreen, q: QuestObj): void {
     const plate = screen.frame(`QuestListItemIconContainer${q.handleId}`);
-    if (!plate || !q.iconPath || !q.discovered) return;
-    const bytes = this.vfs.rawBytes(q.iconPath);
+    if (!plate) return;
+    const path = q.discovered ? q.iconPath.replace(/\.tga$/i, ".blp") : this.undiscoveredIcon;
+    if (!path) return;
+    const bytes = this.vfs.rawBytes(path);
     const canvas = bytes ? blpToCanvas(bytes) : null;
     if (!canvas) return;
     const img = document.createElement("img");

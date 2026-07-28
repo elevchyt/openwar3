@@ -969,6 +969,24 @@ export interface SimUnit {
   pendingCast: PendingCast | null; // in-progress cast (order === "cast")
   // --- neutral-hostile creep guard AI (see the CREEP_* constants) -----------
   isCreep: boolean; // a map-placed Neutral Hostile creep with guard/leash behaviour
+  /**
+   * A map-placed unit of a COMPUTER player, standing where the map put it — so it keeps the
+   * LEASH half of the guard behaviour without any of the rest (no sleep, no camp, no bounty).
+   *
+   * `Units\MiscGame.txt` states the rule for a *unit*, not for a creep: "After a unit has
+   * strayed 'GuardDistance' from where it started, that unit begins thinking about heading
+   * back to its start position." Only its `MaxGuardDistance` sentence says "creep". Without
+   * it an auto-acquired chase RATCHETS — kill something 600 out, re-acquire from the new
+   * spot, and repeat — and a placed unit walks off across the map. Rise of the Naga is the
+   * case: Illidan waits at the harbour a thousand units from the fishing village's ships,
+   * and two ship deaths is a scripted defeat, so a drifting Illidan lost the chapter before
+   * the player got anywhere near him.
+   *
+   * Cleared the moment anything COMMANDS the unit (see clearGuardPost): a trigger that sends
+   * it somewhere has given it a new job, and the harbour sequence sends exactly these units
+   * at exactly those ships when it is time.
+   */
+  guarding: boolean;
   guardX: number; // guard ("home") position — where it was placed; it leashes back here
   guardY: number;
   guardFacing: number; // facing to restore once it has returned home
@@ -3099,6 +3117,7 @@ export class SimWorld {
       | "illusionDamageTaken"
       | "pendingCast"
       | "isCreep"
+      | "guarding"
       | "guardX"
       | "guardY"
       | "guardFacing"
@@ -3280,6 +3299,7 @@ export class SimWorld {
       // Creep guard AI is off by default; the map seeder flips isCreep on and sets
       // the guard point / aggro range / sleep flag for Neutral Hostile units.
       isCreep: false,
+      guarding: false,
       guardX: unit.x,
       guardY: unit.y,
       guardFacing: unit.facing,
@@ -3762,6 +3782,7 @@ export class SimWorld {
   issueMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
+    this.clearGuardPost(u);
     u.order = "move";
     u.targetId = null;
     u.inCombat = false;
@@ -3790,6 +3811,7 @@ export class SimWorld {
   issueAttackMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
+    this.clearGuardPost(u);
     u.order = "attackmove";
     u.targetId = null;
     u.inCombat = false;
@@ -3810,6 +3832,7 @@ export class SimWorld {
   issuePatrol(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
+    this.clearGuardPost(u);
     u.order = "patrol";
     u.targetId = null;
     u.inCombat = false;
@@ -3861,6 +3884,9 @@ export class SimWorld {
     if (!this.canAttack(u, t)) return false;
     if (this.castLocked(u)) return false; // mid-wind-up: only Stop breaks a cast
     if (t.invulnerable) return false; // invulnerable units can't be attacked at all — not even with a forced Attack order (issue #26)
+    // An ORDERED attack is a command: this unit has a job now, not a post (see clearGuardPost).
+    // An AUTO-acquired one is not, which is the whole point of the leash.
+    if (ordered) this.clearGuardPost(u);
     // A FRESH attack (from any non-attack state — a player command, idle auto-acquire,
     // a follower peeling off to fight) drops any pending resume-to-follow. Re-targeting
     // WITHIN an ongoing fight (reacquire after a kill, switching to a reachable enemy)
@@ -3983,6 +4009,7 @@ export class SimWorld {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || u === t || u.speed <= 0 || this.castLocked(u)) return false;
+    this.clearGuardPost(u);
     u.order = "follow";
     u.targetId = targetId;
     u.followOffX = offX;
@@ -4097,6 +4124,10 @@ export class SimWorld {
     // players' — see Authority.applyOrder) used to leave `inMine` set with nothing ever
     // clearing it, and the mine's one-worker `busy` latch wedged shut with it.
     if (u) this.popFromMine(u);
+    // Commanded: this unit is no longer merely holding the ground the map put it on. Placed
+    // here because `issueOrder` is the funnel every fresh, non-shift order comes through —
+    // a player's click, a network command, and a trigger's IssueXOrder alike.
+    if (u) this.clearGuardPost(u);
     this.clearQueue(id);
     return this.dispatch(id, order);
   }
@@ -4319,19 +4350,37 @@ export class SimWorld {
     return passive !== null ? !passive : a.team !== b.team;
   }
 
-  /** The alliance matrix's verdict on two units' owners, or null when it has none
-   *  (either side is a creep / neutral, or no matrix is installed) and the caller
-   *  should fall back to comparing teams. */
+  /**
+   * The alliance matrix's verdict on two units' owners, or null when no matrix is installed
+   * and the caller should fall back to comparing teams.
+   *
+   * **Neutral Hostile is a PLAYER, and the matrix is where a map talks to it.** Our sim files
+   * every neutral under owner -1, and these two guards used to bail on that — creeps kept the
+   * plain team rule and no `SetPlayerAlliance` could reach them. WC3 has no such hole: Neutral
+   * Hostile is player 12 (common.j PLAYER_NEUTRAL_AGGRESSIVE), an ordinary row of the matrix,
+   * and campaign maps write to it by name. Rise of the Naga's init is the case that found this:
+   *
+   *     call SetPlayerAllianceStateBJ( Player(PLAYER_NEUTRAL_AGGRESSIVE), udg_AP3_FishingVillage, bj_ALLIANCE_NEUTRAL )
+   *
+   * — the same line it writes for its Naga, its Satyrs and its Wildkin, and the reason none of
+   * them touch the fishing village's ships until the harbour sequence orders them to. The four
+   * player-owned sides obeyed it and the creeps did not, so the creeps alone went on sinking
+   * ships, and two ship deaths is a scripted defeat.
+   *
+   * So the lookup goes through `jassOwnerOf` — the same translation every other sim→script
+   * boundary uses. A creep pair lands on 12/12, which `AllianceTable.get` answers true for
+   * (a player is allied with itself), keeping "creeps don't fight each other" exactly as the
+   * team rule had it.
+   */
   private playerAllegiance(a: SimUnit, b: SimUnit): boolean | null {
-    if (a.owner < 0 || b.owner < 0) return null;
-    return this.alliedPlayers(a.owner, b.owner);
+    return this.alliedPlayers(jassOwnerOf(a), jassOwnerOf(b));
   }
 
-  /** The same guard for the DIRECTED question `hostile` asks: does a's owner grant b's
-   *  owner ALLIANCE_PASSIVE? Null for a creep/neutral, where the team rule still decides. */
+  /** The same lookup for the DIRECTED question `hostile` asks: does a's owner grant b's
+   *  owner ALLIANCE_PASSIVE? Null only when no matrix is installed (a headless sim), where
+   *  the team rule still decides. */
   private playerPassive(a: SimUnit, b: SimUnit): boolean | null {
-    if (a.owner < 0 || b.owner < 0) return null;
-    return this.passivePlayers(a.owner, b.owner);
+    return this.passivePlayers(jassOwnerOf(a), jassOwnerOf(b));
   }
 
   /** True during daylight (06:00–18:00 game time). */
@@ -4935,25 +4984,21 @@ export class SimWorld {
     }
   }
 
-  /** Witch Doctor wards, ticked off their own data: the Healing Ward (`Aoar`) heals nearby
-   *  friendly non-mechanical units by a % of max HP/sec; the Stasis Trap (`otot`) detonates
-   *  when an enemy land unit enters its trigger radius, stunning enemies around it, then is
-   *  consumed. Sentry Ward needs nothing — an owned unit reveals fog on its own. */
-  private tickWards(dt: number): void {
+  /** Witch Doctor wards, ticked off their own data. Only the Stasis Trap (`otot`) needs a
+   *  tick of its own: it detonates when an enemy land unit enters its trigger radius,
+   *  stunning enemies around it, then is consumed.
+   *
+   *  The Healing Ward used to be here too, as a hand-rolled "heal allied non-mechanical
+   *  units in range by a % of max HP/sec". That is a description of an AURA, and `Aoar` IS
+   *  one — the same row the Fountain of Health carries (`ACnr`). It moved into AURA_BUFFS
+   *  with the fountains, which is where the radius, the percentage and the `organic` rule
+   *  now all come from the data instead of from a copy of it. Sentry Ward needs nothing at
+   *  all — an owned unit reveals fog on its own. */
+  private tickWards(): void {
     for (const u of this.units.values()) {
       if (!u.isSummon || u.hp <= 0) continue;
       const def = this.unitReg?.get(u.typeId);
       if (!def) continue;
-      // Healing Ward — ability Aoar on the ward: heal allied non-mechanical units in range.
-      if (def.abilities.includes("Aoar")) {
-        const aoar = this.abilities?.get("Aoar")?.levelData[0];
-        const pct = aoar ? this.dataOf(aoar, 0, 0.02) : 0.02;
-        const area = aoar?.area || 500;
-        for (const t of this.unitsInAreaInternal(u.x, u.y, area)) {
-          if (t === u || t.hp <= 0 || t.mechanical || t.building || t.team !== u.team) continue;
-          if (t.hp < t.maxHp) t.hp = Math.min(t.maxHp, t.hp + t.maxHp * pct * dt);
-        }
-      }
       // Stasis Trap — otot: arm until an enemy land unit steps into the trigger radius, then
       // stun every enemy land unit in the (larger) blast radius and consume the trap.
       if (u.typeId === "otot") {
@@ -5052,26 +5097,48 @@ export class SimWorld {
         const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
         const radius = lvl.area || 900;
         const effects = make(lvl);
-        // Which side an aura lands on is the ability's own business, read off `targs1`:
-        // almost all of them are `friend,self` and help the owner's army, but Disease Cloud
-        // is `ground,enemy,organic,neutral` and afflicts the other side. A hostile aura also
-        // has to respect the rest of its flags — the plague takes neither a flyer nor a
-        // mechanical unit — so it runs the same targetError gate a cast would.
+        // Which side an aura lands on is the ability's own business, read off `targs1`, and
+        // there are THREE answers, not two:
+        //   • `friend` and not `enemy` — the hero auras (`air,ground,friend,self,vuln,invu`).
+        //     The owner's army, which is what an aura usually means.
+        //   • `enemy` and not `friend` — Disease Cloud (`ground,enemy,organic,neutral`),
+        //     which afflicts the other side.
+        //   • NEITHER — the fountains (`ground,air,organic,vuln,invu`). A Fountain of Health
+        //     names no side because it takes none: it heals whoever stands in it, your army
+        //     and the enemy's alike, which is the whole tactical point of the thing. Read as
+        //     "friendly by default" it healed the neutral-passive player who owns it and
+        //     nobody else, so the building sat there doing visibly nothing.
+        // Whatever the side, the REST of the flags still apply — the plague takes neither a
+        // flyer nor a mechanical unit, a Healing Ward mends no Siege Engine, and a fountain
+        // restores nothing to one either (all three say `organic`). That is `targetAllowed`,
+        // the flag list itself, and every aura runs it. The hostile case keeps the FULL
+        // targetError on top, unchanged: magic immunity really does turn Disease Cloud
+        // aside. The friendly and sideless cases do not, because the extra gates targetError
+        // adds are all about a CAST — a corpse, invulnerability, "already at full health" —
+        // and none of them is a question a fountain asks of the ground it wets.
         const F = new Set(def.targetFlags.map((f) => f.toLowerCase()));
         const hostileAura = F.has("enemy") && !F.has("friend");
+        const alliedAura = F.has("friend") && !F.has("enemy");
         for (const t of this.units.values()) {
           if (t.building || t.hp <= 0) continue;
           if (hostileAura) {
             if (!this.hostile(src, t) || this.targetError(src, t, def.targetFlags, ab.code) !== null) continue;
-          } else if (t.team !== src.team) continue;
+          } else {
+            if (alliedAura && t.team !== src.team) continue;
+            if (this.targetAllowed(src, t, def.targetFlags) !== null) continue;
+          }
           if (Math.hypot(t.x - src.x, t.y - src.y) > radius) continue;
           const ranged = !!t.weapon?.ranged;
           for (const e of effects) {
             if (e.rangedOnly && !ranged) continue; // Trueshot only helps ranged units
             if (e.meleeOnly && (ranged || !t.weapon)) continue; // Vampiric only helps melee units
+            // A percentage aura's amount is the TARGET's — 1% of a Peasant's 220 life is not
+            // 1% of a Mountain Giant's 1300 (see AuraEffect.pctOfMax).
+            const value = e.pctOfMax ? e.value * (e.kind === "manaRegen" ? t.maxMana : t.maxHp) : e.value;
+            if (e.pctOfMax && value <= 0) continue; // a unit with no mana pool gains nothing
             // An ordinary aura re-applies on a short TTL so it fades as its holder walks
             // away; one with its own `duration` (Disease Cloud) leaves something behind.
-            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value: e.value, value2: e.value2 });
+            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value, value2: e.value2 });
           }
         }
       }
@@ -6954,6 +7021,10 @@ export class SimWorld {
       // this tick (asleep at its post, or leashing home) — skip the order switch;
       // movement still runs in tickMovement so a returning creep keeps walking home.
       if (u.isCreep && this.tickCreep(u, dt)) continue;
+      // …and a map-placed AI unit keeps the LEASH half of that behaviour (see
+      // SimUnit.guarding): it holds the ground the map put it on instead of ratcheting
+      // across the world one auto-acquired kill at a time.
+      if (u.guarding && this.tickGuardLeash(u, dt)) continue;
       switch (u.order) {
         case "move":
           // Movement itself is driven by tickMovement while u.moving stays true;
@@ -7011,7 +7082,7 @@ export class SimWorld {
     this.tickDrains(); // a broken Drain channel takes its buffs and its beam down with it
     this.tickMirrorImage(dt); // Mirror Image's caster effect -> missiles -> illusions
     this.tickLightningShields(dt); // Lightning Shield: damage units around each shielded unit
-    this.tickWards(dt); // Witch Doctor Healing Ward heal + Stasis Trap proximity stun
+    this.tickWards(); // Stasis Trap proximity stun (the Healing Ward is an aura — see AURA_BUFFS)
     this.tickDevour(dt); // Kodo digests any swallowed unit
     this.tickCorpses(dt); // decay flesh→bone→gone
     for (const u of this.units.values()) {
@@ -8533,6 +8604,8 @@ export class SimWorld {
       target.asleep = false;
       target.strayT = 0;
       target.campHelper = false; // being hit makes it an originator: it may now call for help
+    } else if (target.guarding) {
+      target.strayT = 0; // …and so does a placed AI unit on the same leash (tickGuardLeash)
     }
     // Retaliate: an armed victim turns on its attacker (WC3 return fire), unless the
     // attacker died mid-flight or the victim is a creep leashing home (it prioritises
@@ -9236,6 +9309,19 @@ export class SimWorld {
     }
   }
 
+  /** Who a powerup actually lands on. An ability with no `Area1` is the picker's alone (a
+   *  tome, a chest of gold); one with a radius reaches every unit inside it that its own
+   *  `targs1` admits — which for the runes is the friendly, organic army standing around
+   *  the hero who stepped on it. The picker is always in the list: `self` is in those flags,
+   *  and a zero-area ability short-circuits to it. */
+  private powerupTargets(u: SimUnit, ad: AbilityDef): SimUnit[] {
+    const area = ad.levelData[0]?.area ?? 0;
+    if (area <= 0) return [u];
+    const out = this.unitsInAreaInternal(u.x, u.y, area)
+      .filter((t) => t.hp > 0 && !t.building && this.targetAllowed(u, t, ad.targetFlags) === null);
+    return out.includes(u) ? out : [u, ...out];
+  }
+
   /** Apply a powerup consumed on pickup (tomes, manuals, runes, gold/lumber),
    *  dispatched on its granted ability's base `code`. */
   private applyPowerup(u: SimUnit, def: ItemDef): void {
@@ -9256,9 +9342,27 @@ export class SimWorld {
         }
         case "AImi": u.baseMaxHp += dv(0); break; // Manual of Health (+max HP)
         case "AIem": if (u.isHero) this.gainXp(u, dv(0)); break; // Tome of Experience (+XP)
-        case "AIha": u.hp = Math.min(u.maxHp, u.hp + dv(0)); break; // Rune of Healing
-        case "AImr": u.mana = Math.min(u.maxMana, u.mana + dv(0)); break; // Rune of Mana
-        case "AIra": u.hp = Math.min(u.maxHp, u.hp + dv(0)); u.mana = Math.min(u.maxMana, u.mana + dv(1)); break; // Rune of Restoration
+        // The three RUNES, and the thing they all have that the tomes do not: an `Area1`.
+        //
+        // A tome is one hero's. A rune is the SQUAD's — that is what the whole family is
+        // for, and the data says so twice over. `Units\AbilityData.slk` gives each of them
+        // `Area1 = 600` and a `targs1` of `ground,air,friend,self,organic,vuln,invu` (the
+        // tomes carry neither), and their own `comments` column spells the names out:
+        // "ItemHealAoe", "ItemManaRestoreAoe", "ItemRestoreAoe". Applying only to the unit
+        // that walked over it turned a Rune of Restoration — 300 life and 150 mana across a
+        // whole army after a fight — into a single potion.
+        //
+        // `self` is in the list, so the picker is simply one of the units in range rather
+        // than a special case; `organic` keeps it off the Siege Engines, and `friend` off
+        // the enemy that was chasing you to it.
+        case "AIha": for (const t of this.powerupTargets(u, ad)) t.hp = Math.min(t.maxHp, t.hp + dv(0)); break; // Rune of Healing
+        case "AImr": for (const t of this.powerupTargets(u, ad)) t.mana = Math.min(t.maxMana, t.mana + dv(0)); break; // Rune of Mana
+        case "AIra": // Rune of Restoration — life AND mana
+          for (const t of this.powerupTargets(u, ad)) {
+            t.hp = Math.min(t.maxHp, t.hp + dv(0));
+            t.mana = Math.min(t.maxMana, t.mana + dv(1));
+          }
+          break;
         case "AIgo": this.stashOf(u.owner).gold += dv(0); break; // Gold Coins
         case "AIlu": this.stashOf(u.owner).lumber += dv(0); break; // Bundle of Lumber
       }
@@ -9268,8 +9372,15 @@ export class SimWorld {
       // the Tome of Experience, Manual of Health and Chest of Gold use `Casterart` for the
       // very same job — so take whichever is set. Every powerup attaches at `origin`, which
       // is where a unit-targeted effect already plays. (1.27a Units\ItemAbilityFunc.txt.)
+      //
+      // An AoE rune plays it on EVERY unit it restored, not just the one that stepped on it:
+      // the flash over each of them is how the player can see who was in range.
       const art = ad.targetArt || ad.casterArt;
-      if (art || ad.effectSound) this.powerupPickups.push({ unitId: u.id, art, soundLabel: ad.effectSound });
+      if (art || ad.effectSound) {
+        for (const t of this.powerupTargets(u, ad)) {
+          this.powerupPickups.push({ unitId: t.id, art, soundLabel: t === u ? ad.effectSound : "" });
+        }
+      }
     }
     this.recomputeStats(u);
   }
@@ -9691,6 +9802,57 @@ export class SimWorld {
       return true;
     }
     return false;
+  }
+
+  /**
+   * The LEASH, for a map-placed AI unit that is not a creep (see SimUnit.guarding).
+   *
+   * Deliberately only the leash: no sleep, no camp cohesion, no threat re-pick — those are
+   * Neutral Hostile's own behaviours and a campaign's Naga are not a creep camp. What it
+   * shares with a creep is the one rule `MiscGame.txt` writes for units in general —
+   * `GuardDistance` (600) starts the clock, `GuardReturnTime` (5 s) unattacked ends the
+   * chase, `MaxGuardDistance` (1000) ends it outright.
+   *
+   * An ORDERED attack is never leashed. `attackOrdered` is the same distinction the rest of
+   * the sim draws between "the unit's own idea" and "someone said to": a trigger pointing
+   * these units at a target means it, and the harbour sequence does exactly that.
+   *
+   * Returns true when it has taken the unit over for this tick.
+   */
+  private tickGuardLeash(u: SimUnit, dt: number): boolean {
+    if (u.returning) {
+      this.tickCreepReturn(u, dt);
+      return true;
+    }
+    if (u.order !== "attack" || u.attackOrdered || u.targetId === null || !this.units.has(u.targetId)) {
+      u.strayT = 0;
+      return false;
+    }
+    const dist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
+    if (dist >= MAX_GUARD_DISTANCE) {
+      this.beginCreepReturn(u);
+      return true;
+    }
+    if (dist >= GUARD_DISTANCE) {
+      u.strayT += dt; // landDamage resets this — being shot at keeps it in the fight
+      if (u.strayT >= GUARD_RETURN_TIME) {
+        this.beginCreepReturn(u);
+        return true;
+      }
+    } else {
+      u.strayT = 0;
+    }
+    return false;
+  }
+
+  /** Something COMMANDED this unit: it is no longer holding the ground the map put it on
+   *  (see SimUnit.guarding). One call at the order funnel rather than a flag per order type,
+   *  so nothing that reaches a unit deliberately can be leashed away from it. */
+  private clearGuardPost(u: SimUnit): void {
+    if (!u.guarding) return;
+    u.guarding = false;
+    u.returning = false;
+    u.strayT = 0;
   }
 
   /** Begin leashing a creep back to its guard point. */

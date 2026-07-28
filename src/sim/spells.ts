@@ -1653,6 +1653,13 @@ export interface AuraEffect {
    *  field exists for: catching the plague is not "standing in the cloud", and its own
    *  column says so — dataA is named "Aura Duration" and reads 120 seconds. */
   duration?: number;
+  /** `value` is a FRACTION OF THE TARGET'S MAXIMUM, not a flat amount — so it can only be
+   *  resolved once the target is known (the world multiplies it out). The regeneration
+   *  auras say so in the data: their second Data column is literally named "Percentage"
+   *  (AbilityMetaData → WESTRING_AEVAL_OAR2 / _NRE2) and reads 1, while the first holds
+   *  0.01. A Fountain of Health restores 1% of a unit's max life per second, which is a
+   *  very different thing for a Peasant than for a Mountain Giant. */
+  pctOfMax?: boolean;
 }
 
 /** Passive auras, applied each tick by the world to the caster + nearby allies.
@@ -1677,4 +1684,25 @@ export const AURA_BUFFS: Record<string, (lvl: AbilityLevel) => AuraEffect[]> = {
   // "Damage per Second" (1) and dataA "Aura Duration" (120), the latter being why the
   // plague follows a unit that walks out of the cloud instead of ending at its edge.
   Aapl: (lvl) => [{ kind: "dot", value: d(lvl, 1, 1), duration: d(lvl, 0, 120) }],
+  // --- the two REGENERATION auras, and what a Fountain actually is -------------------
+  //
+  // A Fountain of Health (`nfoh`) and a Fountain of Mana (`nmoo`) carry no special code:
+  // `Units\UnitAbilities.slk` gives them `Avul,ACnr` and `Avul,ANre`, and those two rows are
+  // ordinary auras whose base codes are `Aoar` and `Aarm`. So a fountain is a building
+  // standing inside its own aura, and implementing the aura is implementing the fountain.
+  //
+  // Both read the same pair of columns (`AbilityMetaData` useSpecific `Aoar,ACnr,Aabr` and
+  // `ANre,Aarm`): DataA "Amount Regenerated" = 0.01 and DataB "Percentage" = 1 — one percent
+  // of the target's MAXIMUM per second, inside 500. The same code is the Healing Ward's
+  // (`Aoar` itself, at 2%) and the Marketplace statue's (`Aabr`, 0.4% over 700), so all three
+  // land here together.
+  //
+  // Note what the flags do NOT say: `ground,air,organic,vuln,invu` names neither `friend` nor
+  // `enemy`, and a fountain really does heal whoever stands in it — including the enemy army
+  // camped on top of it. `organic` is the one restriction, which is the description's own
+  // wording ("Regenerates the health of all non-mechanical units nearby"). The world reads
+  // both off `targs1` rather than assuming an aura is friendly (see applyAuras).
+  Aoar: (lvl) => [{ kind: "hpRegen", value: d(lvl, 0, 0.01), pctOfMax: d(lvl, 1, 1) !== 0 }],
+  Aabr: (lvl) => [{ kind: "hpRegen", value: d(lvl, 0, 0.004), pctOfMax: d(lvl, 1, 1) !== 0 }],
+  Aarm: (lvl) => [{ kind: "manaRegen", value: d(lvl, 0, 0.01), pctOfMax: d(lvl, 1, 1) !== 0 }],
 };

@@ -329,19 +329,35 @@ export class Interpreter {
     }
   }
 
-  /** Hand an already-suspended generator to the scheduler, waking `secs` of game time from
-   *  now. It starts with an EMPTY event-response stack: the frames on the shared stack belong
-   *  to the thread that called into us, and are not this one's to carry off. */
+  /**
+   * Hand an already-suspended generator to the scheduler, waking `secs` of game time from now.
+   *
+   * It does not carry the shared stack's FRAMES off — those belong to the thread that called
+   * into us and will be popped by it — but it does take a flat COPY of what they currently
+   * say. WC3's event responses survive a wait inside the same trigger, and the editor's own
+   * generated code leans on it right after one:
+   *
+   *     call TriggerSleepAction( bj_QUEUE_DELAY_QUEST )
+   *     call QueuedTriggerRemoveBJ( GetTriggeringTrigger() )
+   *
+   * Starting empty made that `GetTriggeringTrigger()` null, so a queued trigger never took
+   * itself back OUT of blizzard.j's queue — and the queue is strictly serial, so everything
+   * behind it (the campaign's voice lines, its cinematics, its quest banners) waited on a
+   * trigger that had already finished. A copy rather than the frames themselves, so nothing
+   * this thread writes later can reach back into the caller's context.
+   */
   private adoptSuspended(label: string, gen: ThreadGen, secs: number): void {
     if (this.threads.length >= MAX_THREADS) {
       this.rt.warnOnce("<threads>", `thread cap (${MAX_THREADS}) hit — trigger thread dropped`);
       return;
     }
+    const inherited = new Map<string, JassValue>();
+    for (const frame of this.rt.eventStack) for (const [k, v] of frame) inherited.set(k, v);
     this.threads.push({
       id: this.nextThreadId++,
       label,
       gen,
-      stack: [],
+      stack: inherited.size ? [inherited] : [],
       depth: 0,
       wakeAt: this.rt.gameTime + Math.max(0, secs),
       lastTick: this.pumpTick,
@@ -550,10 +566,37 @@ export class Interpreter {
     // TriggerExecute runs the trigger's actions on the CALLING thread (so a wait inside
     // blocks the caller — this is how a map-init trigger's Wait delays the init after it);
     // ConditionalTriggerExecute gates that on the trigger's conditions first.
+    //
+    // **And the trigger it runs becomes "the triggering trigger" for the duration.** That is
+    // WC3's rule for an executed trigger as much as for an evented one, and the World Editor
+    // writes code that cannot work without it — its run-once idiom is a matched pair,
+    //
+    //     if ( not ( IsTriggerEnabled(GetTriggeringTrigger()) == true ) ) then   // condition
+    //     call DisableTrigger( GetTriggeringTrigger() )                          // first action
+    //
+    // and both halves read the same response. Without the frame the condition asked
+    // `IsTriggerEnabled(null)` and refused: every quest in Rise of the Naga is created by
+    // exactly that pair, and the chapter's log came up empty. Where only the DisableTrigger
+    // half was involved, the trigger quietly stopped being run-once instead — worse, because
+    // nothing looks broken until it fires twice.
+    //
+    // The frame is pushed on the SHARED stack rather than handed to a new thread, because
+    // these two natives deliberately run on the CALLING thread: a wait inside must block the
+    // caller. That also makes the response survive the wait for free — `resumeThread` lifts
+    // whatever frames the thread left behind and re-pushes them on resume.
     const t = this.rt.data<TriggerObj>(args[0] ?? JNULL);
     if (!t) return JNULL;
-    if (name === "ConditionalTriggerExecute" && !(t.enabled && this.conditionsPass(t))) return JNULL;
-    yield* this.runActionsG(t);
+    this.rt.eventStack.push(new Map([["TriggeringTrigger", jHandle(t.handleId, "trigger")]]));
+    try {
+      if (name === "ConditionalTriggerExecute" && !(t.enabled && this.conditionsPass(t))) return JNULL;
+      yield* this.runActionsG(t);
+    } finally {
+      // Pop OUR frame specifically. A suspension inside the actions is resumed by
+      // `resumeThread`, which restores the same frames in the same order, so the top of the
+      // stack is ours again by the time this runs.
+      const top = this.rt.eventStack[this.rt.eventStack.length - 1];
+      if (top && top.size === 1 && top.has("TriggeringTrigger")) this.rt.eventStack.pop();
+    }
     return JNULL;
   }
 
@@ -958,6 +1001,42 @@ export class Interpreter {
         (reg.kind === "unitDeath" && this.paramUnitIs(reg, victim)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_DEATH) && this.paramUnitIs(reg, victim)) ||
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_DEATH, d.victim.owner, victim)));
+    }
+  }
+
+  /**
+   * Pump DESTRUCTIBLE deaths — a gate broken, a crate smashed, a barricade felled.
+   *
+   * `TriggerRegisterDeathEvent` takes a **widget**, not a unit (`Scripts\common.j`:
+   * `native TriggerRegisterDeathEvent takes trigger whichTrigger, widget whichWidget`), and a
+   * destructable is a widget exactly as a unit is. We only ever pumped units, so every
+   * registration whose subject was a gate sat there forever — and a campaign map hangs whole
+   * sequences off exactly that. Rise of the Naga has three:
+   *
+   *     call TriggerRegisterDeathEvent( gg_trg_Harbor_Cinematic,   gg_dest_ATg4_0111 )
+   *     call TriggerRegisterDeathEvent( gg_trg_Village_Razed_Line, gg_dest_LTe1_1140 )
+   *     call TriggerRegisterDeathEvent( gg_trg_Shared_Vision,      gg_dest_LTe1_1140 )
+   *
+   * The first of those is the harbour: breaking the demon gate is what starts the sequence
+   * that gives the burning ships their attackers, opens the Save the Ships quest and clears
+   * the harbour. Without the event the chapter simply never got to its second act.
+   *
+   * Matched by the record's MAP id rather than by handle identity, because the handle is
+   * interned per map record (natives/destructables.ts) and every route to one — a `gg_dest_*`
+   * set in main(), an `EnumDestructablesInRect` hand-out — resolves to the same object anyway.
+   * Responses are WC3's: `GetDyingDestructable` and the generic `GetTriggerWidget`.
+   */
+  pumpDestructableDeaths(mapIds: ReadonlyArray<number>): void {
+    for (const mapId of mapIds) {
+      for (const reg of [...this.rt.triggerRegs]) {
+        if (reg.kind !== "unitDeath") continue;
+        const subject = reg.params[0];
+        if (!subject || this.rt.data<{ mapId?: number }>(subject)?.mapId !== mapId) continue;
+        const trig = this.rt.handles.get(reg.trigId) as TriggerObj | undefined;
+        if (!trig) continue;
+        const responses = new Map<string, JassValue>([["DyingDestructable", subject], ["TriggerWidget", subject]]);
+        this.fireTrigger(trig, this.withTrigger(responses, trig));
+      }
     }
   }
 
