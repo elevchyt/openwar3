@@ -178,7 +178,31 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   const PLAIN_STAND = /^stand(\s*-?\s*\d+)?\s*$/i;
   const PLAIN_ATTACK = /^attack(\s*-?\s*\d+)?\s*$/i;
   const standVariants = indices(PLAIN_STAND);
-  const attackVariants = indices(PLAIN_ATTACK);
+  /**
+   * The SWING clips, for a model that authors no plain "Attack" at all.
+   *
+   * 102 of the 835 unit models in 1.27a are in that position, and picking "the first sequence
+   * whose name contains attack" is wrong for the biggest group of them: the Owlbear
+   * (nowb/nowe/nowk — the Wildkin, the Enraged and the Berserk), the sasquatches and the
+   * furbolgs all author
+   *
+   *     "Attack Spell Slam" | "Attack Slam" | "Attack Slam -2"
+   *
+   * in that order, so the melee swing resolved to the WAR STOMP — a two-armed ground pound the
+   * unit played at every blow, while its two real slams never ran. Rise of the Naga puts a
+   * Berserk Wildkin in a cinematic swinging at a Watcher, which is where it shows.
+   *
+   * A `spell` clip is a CAST, and casts are chosen by the cast-tag matcher off `seqNames`, not
+   * here. The other exclusions are the ones the carry-attack list already makes for the same
+   * reason: a stance ("defend"), a state we never enter ("swim"), a carry pose ("gold"/
+   * "lumber"), or another form's clip ("alternate" — already renamed or blanked by
+   * applyAnimProps when the props are on, so this only catches the case where they are off).
+   */
+  const MELEE_ATTACK = /attack/i;
+  const NOT_A_SWING = /spell|defend|swim|gold|lumber|alternate/i;
+  const attackVariants = indices(PLAIN_ATTACK).length
+    ? indices(PLAIN_ATTACK)
+    : indices(MELEE_ATTACK).filter((i) => !NOT_A_SWING.test(seqs[i].name));
   const stand = standVariants.length
     ? standVariants[0]
     : find(/^stand(\s|$|-)/i) >= 0
@@ -188,11 +212,10 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   // the anchored test first, with the loose one only as a last-resort fallback.
   const walk = find(/^walk(\s*-?\s*\d+)?\s*$/i) >= 0 ? find(/^walk(\s*-?\s*\d+)?\s*$/i) : find(/^walk(?! fast)/i);
   const walkFast = find(/^walk fast/i);
-  const attack = attackVariants.length
-    ? attackVariants[0]
-    : find(/^attack\s*$/i) >= 0
-      ? find(/^attack\s*$/i)
-      : find(/attack/i);
+  // …and if a model authors nothing but cast clips, that IS its attack: a Priest's only
+  // "attack" is its "Spell Attack" (12 models, all of them casters), so the loose match stays
+  // as the last resort rather than leaving them with no swing at all.
+  const attack = attackVariants.length ? attackVariants[0] : find(/attack/i);
   // Carry-attack swings, chosen by the worker's carried resource (issue #35). "* Swim"
   // is excluded here too so a laden worker never swings a swim clip.
   const carryAttack = seqs

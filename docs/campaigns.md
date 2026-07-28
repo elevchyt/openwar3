@@ -347,6 +347,48 @@ that is what the map's own registration settles, since it registers on Illidan a
 boat — and answers `GetLoadedUnit` / `GetTransportUnit`. `pnpm sim:test` pins the whole path
 (`tools/sim-transport-test.cjs`).
 
+## A creep with no "Attack" was swinging its War Stomp
+
+`Owlbear.mdx` — the Wildkin, the Enraged Wildkin and the **Berserk Wildkin** (`nowb`/`nowe`/
+`nowk`), which chapter one stages swinging at a Watcher in its own side-quest cinematic —
+authors its attack clips in this order:
+
+```
+"Attack Spell Slam" | "Attack Slam" | "Attack Slam -2"
+```
+
+There is no plain `"Attack"`, and the picker's last-resort rule was "the first sequence whose
+name CONTAINS attack" — the War Stomp. So the Berserk Wildkin played a two-armed ground pound
+at every blow and never once used either of its two real slams.
+
+102 of the 835 unit models in 1.27a author no plain attack clip, and the fix is scoped by what
+the tokens MEAN: a `spell` clip is a cast, and casts are picked by the cast-tag matcher off
+`seqNames`, not by the swing picker — the same reason `defend` (a stance), `swim` (a state we
+never enter) and `gold`/`lumber` (carry poses) are already excluded from the carry-attack list.
+Run over every unit model, that changes the swing for exactly six model families — the Owlbear,
+the sasquatches, the furbolgs and the jungle bear — each from `Attack Spell Slam` to
+`Attack Slam`, and leaves every other unit's choice untouched. A caster whose ONLY attack clip
+is a spell (a Priest's `"Spell Attack"`, 12 models) still falls through to it, because there it
+IS the attack. `pnpm sim:test` pins all three cases against the models' own sequence lists.
+
+## Four button faces with a dead alpha channel
+
+Under the night elf (and undead) skin, every in-game button — the F10 menu's, the quest log's
+"Done" — came up as a bare gold border with the world showing through it.
+
+The art is there and the skin table points at it: `[NightElf] EscMenuButtonBackground =
+UI\Widgets\EscMenu\NightElf\nightelf-options-button-background.blp`, a painted 256×256 with 50+
+distinct colours. Its **alpha channel is all zeros**. Six BLPs in the whole install decode that
+way, and four of them are these button faces (night elf + undead, normal and pushed); the other
+two are `ShadowBuildingNull.blp` and `blank-background.blp`, both of which are *meant* to be
+invisible and are used as a shadow and as a "this row does not highlight" marker respectively.
+
+Human and orc point the same key at art with a live alpha (191 flat — the translucent slate the
+reference screenshot shows), so the channel is honoured wherever it says anything. This is the
+case where it says nothing at all, and the game plainly draws it. So a **BACKDROP's background**
+whose alpha is entirely zero is drawn opaque (`opaqueIfBlankAlpha`, one WeakMap-cached copy per
+texture). Scoped to that one draw so the null shadow and the blank highlight are untouched.
+
 ## Not done yet
 
 - The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed and greyed. WC3 ships

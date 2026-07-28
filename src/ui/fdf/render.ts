@@ -793,6 +793,43 @@ function texture(f: FdfFrame, key: string, ctx: RenderCtx): HTMLCanvasElement | 
   return ctx.blpCanvas(hasFlag(f, "DecorateFileNames") ? ctx.lib.decorate(name) : name);
 }
 
+/**
+ * A backdrop BACKGROUND whose alpha channel is entirely zero, redrawn opaque.
+ *
+ * Six BLPs in the whole 1.27a install decode to nothing but transparent pixels, and four of
+ * them are the button faces the night elf and undead menus are made of —
+ * `nightelf-options-button-background.blp` and its `-down` twin, and the undead pair. They are
+ * fully PAINTED 256×256 images (50+ distinct colours) that happen to carry a dead alpha
+ * channel, and the game plainly draws them: an EscMenu button under the night elf skin is a
+ * carved leaf-and-stone face, not the bare gold border honouring that alpha leaves behind.
+ * (The human and orc sections point the same key at art with a live alpha — 191 flat, the
+ * translucent slate the reference screenshots show — so the channel is read where it says
+ * anything. This is only the case where it says nothing at all.)
+ *
+ * Scoped to the background of a BACKDROP on purpose. The other two dead-alpha files are meant
+ * to be invisible and are used elsewhere: `ShadowBuildingNull.blp` is a null shadow, and
+ * `blank-background.blp` is what `QuestDialogCompletedMouseOverHighlight` names to say "this
+ * row does not highlight".
+ */
+const opaqueFaces = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
+function opaqueIfBlankAlpha(bg: HTMLCanvasElement): HTMLCanvasElement {
+  const cached = opaqueFaces.get(bg);
+  if (cached) return cached;
+  const src = bg.getContext("2d")?.getImageData(0, 0, bg.width, bg.height);
+  if (!src) return bg;
+  for (let i = 3; i < src.data.length; i += 4) if (src.data[i] !== 0) return keep(bg, bg);
+  for (let i = 3; i < src.data.length; i += 4) src.data[i] = 255;
+  const out = document.createElement("canvas");
+  out.width = bg.width;
+  out.height = bg.height;
+  out.getContext("2d")?.putImageData(src, 0, 0);
+  return keep(bg, out);
+}
+function keep(key: HTMLCanvasElement, value: HTMLCanvasElement): HTMLCanvasElement {
+  opaqueFaces.set(key, value);
+  return value;
+}
+
 /** Compose a WC3 backdrop (BlendAll single-stretch, or 9-slice edge/corner) to a canvas. */
 function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): HTMLCanvasElement | null {
   if (w < 1 || h < 1) return null;
@@ -820,6 +857,7 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
     // (the dark button face); without it the background is a single image stretched
     // to fill (an icon like the search-region magnifying glass), so it fits its
     // container instead of tiling/cropping at native pixels.
+    const face = opaqueIfBlankAlpha(bg);
     const ix = inset, iy = inset, iw = Math.max(0, w - inset * 2), ih = Math.max(0, h - inset * 2);
     if (f.props.some((p) => p.key === "BackdropTileBackground")) {
       const bgSizeWorld = prop(f, "BackdropBackgroundSize");
@@ -827,10 +865,10 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
       const tileH = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.height;
       g.save();
       g.beginPath(); g.rect(ix, iy, iw, ih); g.clip();
-      for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
+      for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(face, x, y, tileW, tileH);
       g.restore();
     } else {
-      g.drawImage(bg, ix, iy, iw, ih);
+      g.drawImage(face, ix, iy, iw, ih);
     }
   }
 
