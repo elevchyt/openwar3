@@ -318,5 +318,12 @@ function toConfig(slots: Slot[], info: MapInfo): MeleeConfig {
   }
   // A fresh seed per match, so two games on the same map don't roll the same crits and
   // drops. Math.random picks it; the sim never touches Math.random itself (world.ts).
-  return { slots: playing, fog: "explored", seed: 1 + Math.floor(Math.random() * 2147483645) };
+  // `forces` carries what the MAP says its forces grant each other — a melee map declares
+  // none and the seeding falls back to the lobby's own promise (MapInfo.ForceGrants).
+  return {
+    slots: playing,
+    fog: "explored",
+    forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })),
+    seed: 1 + Math.floor(Math.random() * 2147483645),
+  };
 }

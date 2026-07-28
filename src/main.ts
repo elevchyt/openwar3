@@ -369,7 +369,7 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
   // The mission is finished the moment its own script declares victory — that is what opens
   // the next chapter (data/campaignProgress.ts).
   pendingCampaign = { key: c.key, index };
-  await startGame(bytes, info, campaignConfig(info, difficulty));
+  await startGame(bytes, info, campaignConfig(info, difficulty, mission.name));
 }
 
 /** The chapter the player is IN, so a victory can be credited to it. */
@@ -398,7 +398,7 @@ async function startChapter(name: string, difficulty: string): Promise<void> {
  *  the map's. Nothing here is a choice the player was offered EXCEPT the difficulty, because
  *  that is the only one the reference's campaign screen offers — and the map reads it:
  *  Terror of the Tides gates waves on `GetGameDifficulty()`. */
-function campaignConfig(info: MapInfo, difficulty: Difficulty): MeleeConfig {
+function campaignConfig(info: MapInfo, difficulty: Difficulty, title: string): MeleeConfig {
   const local = Math.max(0, info.slots.findIndex((s) => s.controller === "user"));
   const seat = (s: PlayerSlot | NeutralPlayer, i: number): SlotConfig => ({
     id: s.id,
@@ -425,6 +425,12 @@ function campaignConfig(info: MapInfo, difficulty: Difficulty): MeleeConfig {
     // the Naga's intro even wipes the map back to MASKED when the cinematic is skipped, which
     // only makes sense against a map that was never explored to begin with.
     fog: "unexplored",
+    // What each force grants — and chapter one's grant "allied, no shared vision" is the whole
+    // reason this travels: without it the Watchers, the Villagers and the Prisoners lit their
+    // half of the map from the first frame (see MapInfo.ForceGrants).
+    forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })),
+    // The chapter's title, because the map's own w3i name is the file's ("NightElfX01").
+    mapName: title,
     seed: 1 + Math.floor(Math.random() * 2147483645),
     difficulty: DIFFICULTY_INDEX[difficulty],
   };

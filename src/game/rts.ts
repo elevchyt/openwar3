@@ -165,7 +165,14 @@ export interface RingInfo {
   owner: number;
   team: number;
   sizeToRadius?: boolean; // scale the ring to `radius` (buildings/mines) vs constant
-  neutral?: boolean; // neutral-passive (yellow) ring, e.g. a gold mine
+  /**
+   * Which of the THREE colours `UI\MiscData.txt`'s `[SelectionCircle]` block defines this ring
+   * wears — `ColorFriend=255,0,255,0`, `ColorNeutral=255,255,255,0`, `ColorEnemy=255,255,0,0`,
+   * i.e. green / yellow / red, and there is no fourth. Green is what YOU own; an ally is not
+   * you, and rings the neutral yellow along with the shops, the critters, the gold mines and
+   * every player the map plays as neutral. Resolved here, where the alliance table is.
+   */
+  allegiance: "own" | "neutral" | "enemy";
   isBuilding?: boolean; // draw the square bracket ring (SelectionCircleBuilding) vs the round one
 }
 
@@ -674,9 +681,10 @@ export class RtsController {
 
   /** Seed the alliance matrix from the lobby's teams (7.22). Called once start setup
    *  knows who is on which team, BEFORE the map script runs — so the script's own
-   *  `SetPlayerAlliance` calls land on top of it rather than under it. */
-  seedAlliances(teamOf: (player: number) => number): void {
-    this.alliances.seedFromTeams(teamOf);
+   *  `SetPlayerAlliance` calls land on top of it rather than under it. `grantsOf` carries a
+   *  custom map's own force flags (see SimWorld's `seedFromTeams`). */
+  seedAlliances(teamOf: (player: number) => number, grantsOf?: (team: number) => { allied: boolean; sharedVision: boolean } | undefined): void {
+    this.alliances.seedFromTeams(teamOf, grantsOf);
   }
 
   /** JASS SetPlayerAlliance / GetPlayerAlliance. */
@@ -3801,6 +3809,25 @@ export class RtsController {
     return out;
   }
 
+  /**
+   * Which of the three selection-circle colours a unit wears, from the LOCAL player's seat —
+   * see RingInfo.allegiance for the data. Green is what you OWN and nothing else: an ally's
+   * unit is somebody else's, and WC3 rings it the same neutral yellow it rings a shop, a
+   * critter or a gold mine with. (Everything hostile, creeps included, is red.)
+   *
+   * This was `owner === local || team === teamOf(local)` — green for the whole team, which is
+   * indistinguishable from correct in a melee game you are playing alone and wrong the moment
+   * anyone is allied to you. A campaign is the plain case: Terror of the Tides' chapter one
+   * puts the Watchers, the Villagers and the Prisoners on your force, and every one of them
+   * lit up green as though you had built it.
+   */
+  private ringAllegiance(u: { owner: number; neutralPassive: boolean }): RingInfo["allegiance"] {
+    if (u.owner === this.localPlayer) return "own";
+    if (u.neutralPassive || this.sim.neutralPlayers.has(u.owner)) return "neutral";
+    if (u.owner >= 0 && this.alliances.coAllied(u.owner, this.localPlayer)) return "neutral";
+    return "enemy";
+  }
+
   /** Ground-circle info for every selected unit (the renderer draws each ring as
    *  a flat model on the terrain so geometry occludes it). */
   selectionRings(): RingInfo[] {
@@ -3813,17 +3840,17 @@ export class RtsController {
       // entities ring yellow.
       // Air units' ring floats at their flight altitude (e.moveHeight matches the
       // model's drawn base), so it hugs the unit instead of sitting on the ground.
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
     }
     if (this.selectedMine !== null) {
       const m = this.sim.mines.get(this.selectedMine);
       // A gold mine is Neutral PASSIVE (yellow ring), not hostile (red).
-      if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true });
+      if (m) out.push({ x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" });
     }
     if (this.selectedItem !== null) {
       const it = this.sim.items.get(this.selectedItem);
       // A ground item rings yellow (neutral), like a mine — sized to the item.
-      if (it) out.push({ x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, neutral: true });
+      if (it) out.push({ x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" });
     }
     return out;
   }
@@ -3835,7 +3862,7 @@ export class RtsController {
     for (const id of this.previewIds) {
       const u = this.frameUnit(id);
       const e = this.byId.get(id);
-      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building });
+      if (u && e) out.push({ x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building });
     }
     return out;
   }
@@ -3847,15 +3874,15 @@ export class RtsController {
     if (this.hovered !== null && !this.selected.has(this.hovered)) {
       const u = this.frameUnit(this.hovered);
       const e = this.byId.get(this.hovered);
-      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, neutral: u.neutralPassive, isBuilding: !!u.building };
+      if (u && e) return { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) + e.moveHeight, radius: e.selRadius, owner: u.owner, team: u.team, sizeToRadius: !!u.building, allegiance: this.ringAllegiance(u), isBuilding: !!u.building };
     }
     if (this.hoveredMine !== null && this.hoveredMine !== this.selectedMine) {
       const m = this.sim.mines.get(this.hoveredMine);
-      if (m) return { x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, neutral: true };
+      if (m) return { x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: m.radius * MINE_RING_SCALE, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" };
     }
     if (this.hoveredItem !== null && this.hoveredItem !== this.selectedItem) {
       const it = this.sim.items.get(this.hoveredItem);
-      if (it) return { x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, neutral: true };
+      if (it) return { x: it.x, y: it.y, z: this.heightAt(it.x, it.y), radius: ITEM_RING_RADIUS, owner: -1, team: -2, sizeToRadius: true, allegiance: "neutral" };
     }
     return null;
   }

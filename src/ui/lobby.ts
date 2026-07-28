@@ -39,6 +39,22 @@ export type FogMode = "explored" | "unexplored" | "revealall";
 export interface MeleeConfig {
   slots: SlotConfig[];
   fog: FogMode; // fog-of-war start mode; default "explored"
+  /**
+   * What each TEAM's members grant one another, indexed by team — which on a custom map is
+   * the map's own force list, flags and all (`MapInfo.forces`). Omitted (every melee game)
+   * means the lobby's promise: allies are allied and share vision.
+   *
+   * It is here and not on the slots because it is a property of the force, and because the
+   * one thing it must reach is the alliance seeding, which happens once for the whole match.
+   */
+  forces?: ReadonlyArray<{ allied: boolean; sharedVision: boolean }>;
+  /**
+   * What to CALL this match — the quest log's header, and nothing else. A map names itself in
+   * its w3i and that is normally the answer, but a campaign chapter does not: Rise of the
+   * Naga's own w3i name is the literal string "NightElfX01", and the title WC3 shows is the
+   * campaign index's ("Chapter One — Rise of the Naga"). So the campaign start states it.
+   */
+  mapName?: string;
   /** The match's RNG seed. Everything the sim rolls — damage dice, crits, evasion, item
    *  drops, summon scatter — comes off this one number, so it is part of the match's
    *  identity rather than of any one machine's: a replay needs it to replay, and in a LAN

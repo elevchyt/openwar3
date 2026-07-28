@@ -36,8 +36,12 @@ export function hiddenFor(vp: Viewpoint, u: SimUnit): boolean {
 /**
  * The coloured unit dots, for one viewpoint.
  *
- * Your own team's dots survive the FOG test (`u.team === vp.team`): WC3 always shows you your own
+ * Your own dots survive the FOG test (`u.owner === vp.player`): WC3 always shows you your own
  * army on the minimap, including units standing in a corner nobody has looked at for a minute.
+ * Your own, not your team's — an ALLY's units are on the minimap because you can see them (they
+ * share their sight with you, or yours reaches them), and where a map allies you without sharing
+ * vision they are not on it at all. Chapter one of Terror of the Tides grants exactly that, and
+ * the team form painted its villagers and prisoners across a map you had not walked.
  *
  * What that clause must NOT survive is `isOffField` — and it used to (Phase E item 3c). The
  * clause looks like it is about fog, but `Viewpoint.fogHides` already returns false for your own
@@ -55,7 +59,7 @@ export function minimapDots(world: MinimapWorld, vp: Viewpoint): Array<{ x: numb
   for (const u of world.units.values()) {
     if (u.neutralPassive) continue;
     if (isOffField(u)) continue;
-    if (!hiddenFor(vp, u) || u.team === vp.team) out.push({ x: u.x, y: u.y, owner: u.owner });
+    if (!hiddenFor(vp, u) || u.owner === vp.player) out.push({ x: u.x, y: u.y, owner: u.owner });
   }
   return out;
 }

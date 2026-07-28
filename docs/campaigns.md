@@ -206,6 +206,54 @@ the MAP gave them, which also keeps `applyLobby` from writing MAP_CONTROL_USER o
 showed a red bust over blue units. Everything that tints team-coloured art asks
 `RtsController.playerColor(owner)` — the units did, the bust and the build ghosts did not.
 
+**It is titled by the CAMPAIGN, not by the map.** The quest log's header read `NightElfX01`,
+and that is not a bug in the resolution: the map's own w3i name is `TRIGSTR_003`, and string 3
+of its `war3map.wts` is the literal text "NightElfX01". A chapter is named by the campaign index
+("Chapter One" / "Rise of the Naga"), so the campaign start states it (`MeleeConfig.mapName`).
+
+## A team is not an alliance, and an alliance is not shared sight
+
+Every side allied to you lit its own corner of the first chapter from the opening frame: the
+Watchers' trackers, the Night Elf Villagers and the Prisoners each sat in a pool of explored
+ground with their dots on the minimap, across a map the player had not walked. Two separate
+causes, and the same mistaken step in both — treating a TEAM as a vision-sharing group.
+
+**A force's flags say what it grants**, and the World Editor proves the mapping by compiling
+them into `InitCustomTeams`. Read per force across the campaign maps: flags `1` emits
+`SetPlayerAllianceStateAllyBJ` alone (NightElfX01, OrcX01, NightElfX05); `8` emits
+`SetPlayerAllianceStateVisionBJ` alone (NightElfX07's third force); `9` emits both; `57`/`59`
+add `…ControlBJ` and allied victory; `0` emits nothing at all (NightElfX06's first force — five
+members and no pact between them). So `0x01` allied, `0x02` allied victory, `0x08` shared vision,
+`0x10`/`0x20` shared (advanced) control. Chapter one's two forces are **1**: allied, and you
+still have to go and look. The seeding takes those grants now (`MapInfo.ForceGrants` →
+`MeleeConfig.forces` → `AllianceTable.seedFromTeams`); a melee lobby declares no forces and keeps
+its own promise, allies allied and sharing sight.
+
+**And a viewpoint's own units are the ones it OWNS.** `revealsFor` short-circuited on
+`u.team === this.team`, which is indistinguishable from correct in a melee game — allies there
+share vision anyway — and wrong the moment a map allies you without it. Same for `fogHides`,
+`fogBlocksClick` and the minimap's dots. Your own units always reveal, are always drawn, and are
+always on the minimap; anybody else's need `ALLIANCE_SHARED_VISION` or a pair of your own eyes.
+(A team-ONLY viewpoint — `player: -1`, minted for the creep team — still means team, because it
+has no slot to own anything.)
+
+## Green is what you own
+
+`UI\MiscData.txt`'s `[SelectionCircle]` block defines exactly three colours and there is no
+fourth:
+
+```
+ColorFriend=255,0,255,0     // green
+ColorNeutral=255,255,255,0  // yellow
+ColorEnemy=255,255,0,0      // red
+```
+
+An ally is not you: their units and buildings ring the neutral **yellow**, the same as a shop, a
+critter or a gold mine, and the same as every player the map plays as neutral. Ours read
+`owner === local || team === teamOf(local)` and painted a whole allied force green — which in
+this chapter is most of what is on screen. The colour is picked where the alliance table is
+(`RtsController.ringAllegiance`) and the renderer just spends it.
+
 **A placed AI unit holds its ground.** `Units\MiscGame.txt` states the rule for a *unit*, not
 for a creep: "After a unit has strayed 'GuardDistance' from where it started, that unit begins
 thinking about heading back to its start position" (600, with `MaxGuardDistance` 1000 and

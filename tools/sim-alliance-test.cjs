@@ -148,5 +148,37 @@ console.log("\nbut an ORDERED attack is the player's call, alliance or not");
   check(`and it is carried out (hp ${Math.round(b.hp)})`, b.hp < b.maxHp);
 }
 
+console.log("\na force says what it grants, and a team is not a licence to see");
+{
+  // Chapter one of Terror of the Tides: both its forces are w3i flags **1** — allied, and NOT
+  // sharing vision. Seeding sight off the team number alone lit the Watchers', the villagers'
+  // and the prisoners' half of the map from the first frame. (Force flags → grants: see
+  // MapInfo.ForceGrants, pinned per force against the InitCustomTeams the editor generates.)
+  const chapter = new AllianceTable();
+  const teamOf = (p) => (p === 0 || p === 1 || p === 2 || p === 9 ? 0 : 1);
+  chapter.seedFromTeams(teamOf, () => ({ allied: true, sharedVision: false }));
+  check("the villagers are your allies", chapter.coAllied(0, 2) && chapter.coAllied(2, 0));
+  check("…and lend you no sight at all", !chapter.sharesVisionWith(2, 0) && !chapter.sharesVisionWith(0, 2));
+  check("the prisoners likewise", chapter.coAllied(0, 9) && !chapter.sharesVisionWith(9, 0));
+  check("and the Naga are neither", !chapter.coAllied(0, 3) && !chapter.sharesVisionWith(3, 0));
+
+  // A force that DOES grant it (flags 9 — NightElfX06/07, UndeadX01) gets it.
+  const shared = new AllianceTable();
+  shared.seedFromTeams(teamOf, () => ({ allied: true, sharedVision: true }));
+  check("a force with the vision bit shares sight", shared.sharesVisionWith(2, 0) && shared.sharesVisionWith(0, 2));
+
+  // A melee lobby states no forces at all, and its Team column promises both.
+  const melee = new AllianceTable();
+  melee.seedFromTeams((p) => (p < 2 ? 0 : 1));
+  check("a melee team is allied", melee.coAllied(0, 1) && melee.coAllied(1, 0));
+  check("…and shares vision, as it always did", melee.sharesVisionWith(0, 1) && melee.sharesVisionWith(1, 0));
+  check("across teams, nothing", !melee.coAllied(0, 2) && !melee.sharesVisionWith(0, 2));
+
+  // A force with flags 0 (NightElfX06's first) allies nobody: a heading, not a pact.
+  const grouped = new AllianceTable();
+  grouped.seedFromTeams(teamOf, () => ({ allied: false, sharedVision: false }));
+  check("a force that grants nothing allies nobody", !grouped.coAllied(0, 2));
+}
+
 console.log(failures ? `\n${failures} FAILED` : "\nalliances: all checks passed");
 process.exit(failures ? 1 : 0);

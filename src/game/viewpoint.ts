@@ -119,13 +119,32 @@ export class Viewpoint {
     return player;
   }
 
-  /** Does this unit's sight lift OUR fog? Your own team always does. Beyond that, a player
-   *  who grants us ALLIANCE_SHARED_VISION lends us their units' eyes — which is the whole
-   *  point of the setting, and what the GUI's "Player - Make X treat Y as an Ally (with
-   *  shared vision)" turns on. */
+  /**
+   * Does this unit's sight lift OUR fog? Your OWN units always do. Anyone else's — a team-mate
+   * included — only if that player grants us ALLIANCE_SHARED_VISION, which is the whole point
+   * of the setting and what the GUI's "Player - Make X treat Y as an Ally (with shared vision)"
+   * turns on.
+   *
+   * It used to be "your own TEAM always does", which is right for a melee lobby (allies there
+   * share vision, and the seeding says so) and wrong everywhere the two come apart. Terror of
+   * the Tides' chapter one is the case: its force flags grant allied WITHOUT shared vision, so
+   * the Watchers' trackers, the villagers and the caged prisoners — your allies, scattered
+   * across the map — handed you their sight from the first frame and the chapter opened with
+   * half of itself already lit.
+   *
+   * A team-only viewpoint (`player: -1`, minted for the creep team by `viewpointForTeam`) has
+   * no slot to own anything, so team membership is what "ours" means there — and only there.
+   */
   revealsFor(u: SimUnit): boolean {
-    if (u.team === this.team) return true;
+    if (this.player < 0) return u.team === this.team;
+    if (u.owner === this.player) return true;
     return u.owner >= 0 && this.alliances.sharesVisionWith(u.owner, this.player);
+  }
+
+  /** Is this unit OURS — the one relationship that never needs an alliance or a sight line?
+   *  Same split as `revealsFor`: a slot owns units, a team-only viewpoint owns a team. */
+  private isOurs(u: SimUnit): boolean {
+    return this.player < 0 ? u.team === this.team : u.owner === this.player;
   }
 
   /** CripplePlayer: reveal (or stop revealing) every unit `player` owns to these eyes. */
@@ -145,7 +164,7 @@ export class Viewpoint {
    *  "concealing enemy movements". "Seen", not "explored": see VisionMap.hasSeen. */
   fogHides(u: SimUnit): boolean {
     if (this.vision.revealed) return false;
-    if (u.team === this.team && !u.neutralPassive) return false;
+    if (this.isOurs(u) && !u.neutralPassive) return false;
     if (this.isExposed(u)) return false;
     if (u.building != null) {
       // A NEUTRAL PASSIVE structure — a shop, a tavern, a fountain — is map furniture every
@@ -170,7 +189,7 @@ export class Viewpoint {
    *  of yours is actually looking. */
   fogBlocksClick(u: SimUnit): boolean {
     if (this.vision.revealed) return false;
-    if (u.team === this.team && !u.neutralPassive) return false;
+    if (this.isOurs(u) && !u.neutralPassive) return false;
     if (this.isExposed(u)) return false;
     return this.vision.stateAt(u.x, u.y) !== FogState.Visible;
   }

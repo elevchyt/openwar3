@@ -44,6 +44,38 @@ export interface PlayerSlot {
  *  the one thing it isn't: a slot. See `MapInfo.neutralPlayers`. */
 export type NeutralPlayer = Omit<PlayerSlot, "controller"> & { controller: "neutral" | "rescuable" };
 
+/**
+ * What the members of a force grant one another, out of the w3i force's own flag word.
+ *
+ * **Being on a team is not being allied, and being allied is not sharing sight.** The World
+ * Editor compiles these flags into the map's `InitCustomTeams`, which is what makes the mapping
+ * checkable rather than guessed — each force's block in that function says exactly what its
+ * flags meant. Read per force across the campaign maps:
+ *
+ * | flags | InitCustomTeams emits                          | maps                          |
+ * |-------|------------------------------------------------|-------------------------------|
+ * | 0     | nothing                                        | NightElfX06 force 0           |
+ * | 1     | `SetPlayerAllianceStateAllyBJ` only            | NightElfX01, OrcX01, X05      |
+ * | 8     | `SetPlayerAllianceStateVisionBJ` only          | NightElfX07 force 2           |
+ * | 9     | ally + vision                                  | NightElfX06/07, UndeadX01     |
+ * | 57/59 | ally + vision + `…ControlBJ` (+allied victory) | HumanX02, UndeadX01 force 0   |
+ *
+ * So `0x01` = allied, `0x02` = allied victory, `0x08` = shared vision, `0x10`/`0x20` = shared
+ * (advanced) unit control. Terror of the Tides' first chapter is the case that matters: its two
+ * forces are flags **1**, allied and NOT sharing vision — so the Watchers' trackers, the Night
+ * Elf Villagers and the Prisoners are your allies and you still have to go and LOOK at them.
+ */
+export interface ForceGrants {
+  /** 0x01 — mutually passive (the five settings `SetPlayerAllianceStateAllyBJ` sets). */
+  allied: boolean;
+  /** 0x08 — ALLIANCE_SHARED_VISION, i.e. their units' sight lifts your fog. */
+  sharedVision: boolean;
+}
+
+/** The force flag bits we act on — see `ForceGrants` for how each was pinned down. */
+const FORCE_ALLIED = 0x01;
+const FORCE_SHARED_VISION = 0x08;
+
 export interface MapInfo {
   name: string;
   /** The author's blurb (w3i description) — the Custom Game screen's "Map Description". */
@@ -81,13 +113,16 @@ export interface MapInfo {
   /** Whether the map is a standard melee map (drives melee vs. custom start). */
   isMelee: boolean;
   /**
-   * The map's own FORCES, when it declares custom ones (w3i flag 0x0040): a name and the
-   * players in it. WC3's lobby shows these as headings over the player rows — "Forest Task
-   * Force" above the four humans, "Monolithic Creeps" above the four computers — because on
-   * a custom map the teams are the map's to name, not the lobby's. Empty on a melee map,
-   * which declares one nameless force holding everybody.
+   * The map's own FORCES, when it declares custom ones (w3i flag 0x0040): a name, the players
+   * in it, and **what its members grant each other**. WC3's lobby shows these as headings over
+   * the player rows — "Forest Task Force" above the four humans, "Monolithic Creeps" above the
+   * four computers — because on a custom map the teams are the map's to name, not the lobby's.
+   * Empty on a melee map, which declares one nameless force holding everybody.
+   *
+   * A force is NOT automatically an alliance, and a team number is not shared sight. See
+   * `ForceGrants`.
    */
-  forces: Array<{ name: string; players: number[] }>;
+  forces: Array<{ name: string; players: number[] } & ForceGrants>;
   /** w3i flag 0x0020 ("fixed player settings", set by WarChasers) — the map, not the lobby,
    *  owns the setup. Measured against the real client on WarChasers, what it actually fixes is
    *  every slot BUT your own: the AI player's team and handicap are greyed while yours are
@@ -162,6 +197,8 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
       ? info.forces.map((f) => ({
           name: resolveName(f.name, "", strings),
           players: slots.filter((s) => (f.playerMasks & (1 << s.id)) !== 0).map((s) => s.id),
+          allied: (f.flags & FORCE_ALLIED) !== 0, // see ForceGrants
+          sharedVision: (f.flags & FORCE_SHARED_VISION) !== 0,
         }))
       : [],
     fixedPlayerSettings: (info.flags & W3I_FIXED_PLAYER_SETTINGS) !== 0,

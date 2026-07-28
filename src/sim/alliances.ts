@@ -101,11 +101,20 @@ export class AllianceTable {
     );
   }
 
-  /** Seed the matrix from the lobby's teams: team-mates are mutually passive and share
-   *  vision, everyone else is unallied. This reproduces exactly what a melee game got
-   *  when allegiance was nothing but `teamOf(a) === teamOf(b)`, and gives the script
-   *  something real to mutate. `teamOf` returns a team index per player slot. */
-  seedFromTeams(teamOf: (player: number) => number): void {
+  /**
+   * Seed the matrix from the lobby's teams: team-mates are mutually passive and share vision,
+   * everyone else is unallied. This reproduces exactly what a melee game got when allegiance
+   * was nothing but `teamOf(a) === teamOf(b)`, and gives the script something real to mutate.
+   * `teamOf` returns a team index per player slot.
+   *
+   * `grantsOf` says what a given team's members actually grant each other, and exists because
+   * a CUSTOM map's team is a force it wrote down with its own flags — Terror of the Tides'
+   * chapter one puts you on a force with the Watchers, the Villagers and the Prisoners and
+   * grants **allied, not shared vision** (`MapInfo.ForceGrants`), so seeding sight there lit
+   * their whole half of the map from the first frame. Omitted (every melee game) means the
+   * melee default: allies share everything, as the lobby's own Team column promises.
+   */
+  seedFromTeams(teamOf: (player: number) => number, grantsOf?: (team: number) => { allied: boolean; sharedVision: boolean } | undefined): void {
     this.grants.fill(0);
     for (let a = 0; a < SLOTS; a++) {
       for (let b = 0; b < SLOTS; b++) {
@@ -118,16 +127,21 @@ export class AllianceTable {
         // is held out of the fight by `neutralPassive` rather than by this matrix.
         if (a >= 12 || b >= 12) continue;
         if (a === b || teamOf(a) !== teamOf(b)) continue;
-        for (const t of [
-          AllianceType.Passive,
-          AllianceType.HelpRequest,
-          AllianceType.HelpResponse,
-          AllianceType.SharedXp,
-          AllianceType.SharedSpells,
-          AllianceType.SharedVision,
-        ]) {
-          this.set(a, b, t, true);
+        const grants = grantsOf?.(teamOf(a)) ?? { allied: true, sharedVision: true };
+        // The five `SetPlayerAllianceStateAllyBJ` sets, and then sight — which is its own
+        // setting in the game and its own flag in the map (see seedFromTeams).
+        if (grants.allied) {
+          for (const t of [
+            AllianceType.Passive,
+            AllianceType.HelpRequest,
+            AllianceType.HelpResponse,
+            AllianceType.SharedXp,
+            AllianceType.SharedSpells,
+          ]) {
+            this.set(a, b, t, true);
+          }
         }
+        if (grants.sharedVision) this.set(a, b, AllianceType.SharedVision, true);
       }
     }
   }

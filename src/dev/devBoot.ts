@@ -89,7 +89,7 @@ function meleeConfigFor(info: MapInfo, player: number, seed: number, fog: FogMod
     startY: s.startY,
     name: s.name,
   }));
-  return { slots, fog, seed, localPlayer: player };
+  return { slots, fog, seed, localPlayer: player, forces: info.forces.map((f) => ({ allied: f.allied, sharedVision: f.sharedVision })) };
 }
 
 /** Ceiling on `?maps=`. Each map is a fetch and a mount; twenty is plenty to fill a list and

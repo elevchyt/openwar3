@@ -1449,6 +1449,11 @@ export class MapViewerScene {
     // its chapters branch on GetGameDifficulty from map init onwards. A skirmish sends none
     // and the match runs at MAP_DIFFICULTY_NORMAL, which is what the reference calls it.
     this.gameDifficulty = config.difficulty ?? 1;
+    // What the Quest Log calls this match. The map's own w3i name is the default and is right
+    // for every map you pick off a list; a CAMPAIGN chapter is titled by the campaign index
+    // instead, because its w3i name is the file's ("NightElfX01") and nothing a player has
+    // ever seen. See MeleeConfig.mapName.
+    if (config.mapName) this.mapDisplayName = config.mapName;
     // Who WE are. A LAN client is told (every human slot in a shared config says "user", so
     // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
     this.localPlayer = config.localPlayer
@@ -1497,8 +1502,10 @@ export class MapViewerScene {
     // fog-mode calls below so the match setting reaches all of them by both routes.
     this.rts!.seatPlayers(config.slots.map((s) => ({ player: s.id, team: s.team })));
     // Seed the alliance matrix from those teams (7.22) BEFORE the map script runs, so the
-    // script's own SetPlayerAlliance calls land on top of it rather than under it.
-    this.rts!.seedAlliances((p) => this.teamOf(p));
+    // script's own SetPlayerAlliance calls land on top of it rather than under it — and seed
+    // it with what the map says a force GRANTS, which on a custom map is not "everything"
+    // (see MapInfo.ForceGrants). A team index IS the force index there.
+    this.rts!.seedAlliances((p) => this.teamOf(p), (team) => config.forces?.[team]);
     // Fog-of-war start mode from the lobby: "explored" reveals the whole map as grey
     // terrain memory (live fog still hides current enemy movement); "revealall" drops
     // fog entirely; "unexplored" leaves the default pitch-black unseen ground.
@@ -4432,24 +4439,21 @@ export class MapViewerScene {
    *  fades a hover ring. `live` collects the keys painted this frame for pruning. */
   private addRing(
     key: string,
-    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; neutral?: boolean; isBuilding?: boolean } | null,
+    info: { x: number; y: number; z: number; radius: number; owner: number; team: number; allegiance: "own" | "neutral" | "enemy"; isBuilding?: boolean } | null,
     tint: number[] | null,
     dim: boolean,
     live: Set<string>,
   ): void {
     if (!this.ringSplats || !info) return;
-    // Ring colour — same rules as the old flat model: flashes carry their own tint off a
-    // white base; real rings colour by alliance (own/allied green, else red; neutral-
-    // passive yellow). The overlay MULTIPLIES this into the (white) ring texture.
-    let vcolor: number[];
-    if (tint) {
-      vcolor = tint;
-    } else if (info.neutral) {
-      vcolor = MapViewerScene.NEUTRAL_RING_TINT;
-    } else {
-      const friendly = info.owner === this.localPlayer || info.team === this.teamOf(this.localPlayer);
-      vcolor = friendly ? MapViewerScene.FRIENDLY_RING_TINT : MapViewerScene.ENEMY_RING_TINT;
-    }
+    // Ring colour — flashes carry their own tint off a white base; a real ring wears one of
+    // the three colours `UI\MiscData.txt` [SelectionCircle] defines, picked where the alliance
+    // table is (RtsController.ringAllegiance). The overlay MULTIPLIES it into the (white) ring
+    // texture.
+    const vcolor0 = tint
+      ?? (info.allegiance === "own" ? MapViewerScene.FRIENDLY_RING_TINT
+        : info.allegiance === "neutral" ? MapViewerScene.NEUTRAL_RING_TINT
+        : MapViewerScene.ENEMY_RING_TINT);
+    let vcolor: number[] = vcolor0;
     // Half-width matches the old model sizing (scale = max(0.7, radius/38), native 38),
     // so a ring's outer edge still lands on the unit's click collider.
     const scale = Math.max(0.7, info.radius / 38);
@@ -4542,7 +4546,9 @@ export class MapViewerScene {
       }
       // Two on/off blinks over 0.7s — paint the ring only on the "on" phase.
       const on = (f.t % 0.35) > 0.12;
-      if (on) this.addRing(`flash-${f.id}`, { x: f.x, y: f.y, z: 0, radius: f.radius, owner: -2, team: -2 }, f.color, false, live);
+      // A flash carries its OWN colour (the order it confirms picked it), so its allegiance
+      // is never consulted — it is stated only because every ring record carries one.
+      if (on) this.addRing(`flash-${f.id}`, { x: f.x, y: f.y, z: 0, radius: f.radius, owner: -2, team: -2, allegiance: "neutral" }, f.color, false, live);
     }
   }
 
