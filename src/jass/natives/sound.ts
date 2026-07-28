@@ -258,7 +258,11 @@ export function registerSoundNatives(rt: Runtime): void {
     }
     s.started = true;
     s.startedAt = c.rt.gameTime; // TriggerWaitForSound waits out the REMAINDER of this line
-    c.rt.hooks?.playSound?.(s);
+    // …and `pending` says the line has not actually BEGUN yet: the engine has to read the
+    // file out of the archive and decode it first, and `startedAt` is re-stamped when it
+    // does (see SoundObj.pending). Left undefined when nothing is going to play — a wait
+    // that polled for a clip nobody is loading would hang the cinematic.
+    s.pending = c.rt.hooks?.playSound?.(s) === true ? true : undefined;
     return JNULL;
   });
   // StopSound(snd, killWhenDone, fadeOut)

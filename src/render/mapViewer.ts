@@ -1108,8 +1108,10 @@ export class MapViewerScene {
    * can name. That is ~18 of this map's 2698 destructibles; the other 2502 are trees, which
    * have their own path, and the rest is scenery.
    *
-   * A record placed DEAD stays dead — the stock dungeon gates that start open are exactly
-   * that, and giving one a body would put a solid gate back across an open doorway.
+   * A record placed DEAD stays dead — a felled tree, a smashed crate — and giving one a body
+   * would put it back. What is NOT placed dead is a gate written with a life of 0: no gate in
+   * the game can be placed dead (`canPlaceDead`), and NightElfX07 proves the byte means
+   * something else by opening one of those with a script later. See collectMapDestructibles.
    */
   private seedDestructibles(): void {
     const rts = this.rts;
@@ -1332,9 +1334,9 @@ export class MapViewerScene {
       // a gate OPENS by dying (see mapDestructibles.ts), which swaps its collider for the
       // `pathTexDeath` one that blocks only the posts.
       this.destructibles = collectMapDestructibles(doodads, (id) => destr.getRow(id) ?? undefined);
-      // A record the editor placed DEAD (life 0 — the stock dungeon gates that start open, and
-      // the pre-felled trees a few maps scatter) stamps its `pathTexDeath` instead, or nothing
-      // at all when its type leaves no wreckage.
+      // A record the editor placed DEAD (the pre-felled trees a few maps scatter) stamps its
+      // `pathTexDeath` instead, or nothing at all when its type leaves no wreckage. A gate
+      // written with a life of 0 is not one of those — see collectMapDestructibles.
       const dead = new Map<number, string>(); // .doo index (1-based) → the texture that replaces pathTex
       for (const d of this.destructibles) if (d.life <= 0) dead.set(d.id, d.pathTexDeath);
       const pathTexOf = (id: string): string | undefined =>
@@ -1963,6 +1965,14 @@ export class MapViewerScene {
           coneOutside: s.coneOutside,
           coneOutsideVolume: s.coneOutsideVolume,
           coneOrient: s.coneOrient,
+        },
+        // The clip's first sample is going out NOW — which is when the line actually began,
+        // and therefore what `TriggerWaitForSound` has to measure from (see SoundObj.pending).
+        // Reading the archive and decoding it took however long it took.
+        () => {
+          s.pending = false;
+          const rt = this.mapScript?.interp.rt;
+          if (rt) s.startedAt = rt.gameTime;
         }) ?? false,
       stopSound: (id, fadeOut) => this.sounds?.stopScript(id, fadeOut),
       soundIsPlaying: (id) => this.sounds?.isScriptPlaying(id) ?? false,
@@ -1995,6 +2005,7 @@ export class MapViewerScene {
       },
       setUnitColor: (id, color) => this.rts?.setUnitTeamColor(id, color),
       setPlayerColor: (p, color) => this.rts?.setPlayerColor(p, color),
+      setPlayerNeutral: (p, neutral) => this.rts?.setPlayerNeutral(p, neutral),
       setUnitScale: (id, scale) => this.rts?.setUnitScale(id, scale),
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.

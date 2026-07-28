@@ -13,8 +13,10 @@ import type { DoodadInstance } from "./doodads";
 // `Gate1PathDeath.tga` blocks only the two posts and leaves the middle walkable, which is
 // exactly what an open gate looks like to a unit walking through it.
 //
-// A record placed with `life` 0 in the editor starts dead — the stock maps do this (every
-// `DTg3` in the corpus is a dungeon gate placed already open).
+// A record placed with `life` 0 in the editor starts dead — the stock maps do this — UNLESS
+// its type says it cannot be placed dead (`canPlaceDead`, 0 on every gate in the game), which
+// is the map contradicting the table and resolves in favour of the thing standing on the
+// terrain. See the `life` field below.
 
 export interface MapDestructible {
   /** 1-based index in war3map.doo — the map's own ordering, and the handle a script gets. */
@@ -78,6 +80,7 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
     const row = rowOf(d.id);
     if (!row) continue; // scenery, not a destructible
     const maxLife = Number(row.string("HP")) || 0;
+    const canPlaceDead = row.string("canPlaceDead") === "1";
     const pathTex = tex(row.string("pathTex"));
     const pathTexDeath = tex(row.string("pathTexDeath"));
     const targType = row.string("targType") || "";
@@ -89,9 +92,17 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
       z: d.z,
       angle: d.angle,
       maxLife,
-      // The .doo's `life` byte is a PERCENT of the type's HP (100 for everything the editor
-      // places normally, 0 for one placed dead, 40/50 for the pre-damaged trees a few maps use).
-      life: (maxLife * d.life) / 100,
+      // The .doo's `life` byte is a PERCENT of the type's HP — 100 for everything the editor
+      // places normally, 40/50 for the pre-damaged trees a few maps use, 0 for one placed dead.
+      //
+      // Except that some types CANNOT be placed dead, and the data says which: `canPlaceDead`
+      // ("Editor - Can Place Dead") is 0 on every gate in the game. A 0 percent on one of those
+      // is the map contradicting the table, and the thing standing on the terrain is what the
+      // player sees — so it stands, at full life. Rise of the Naga writes exactly that for the
+      // vertical Elven Gate at (384, -4352): read as dead it kept only the two posts its
+      // `pathTexDeath` leaves, could not be attacked, and had no life to spend, while the
+      // doodad pass went on drawing a closed gate across the path.
+      life: d.life > 0 ? (maxLife * d.life) / 100 : canPlaceDead ? 0 : maxLife,
       pathTex,
       pathTexDeath,
       isTree: targType === "tree",

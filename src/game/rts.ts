@@ -591,6 +591,13 @@ export class RtsController {
    *  (see SimUnit.guarding); a human's do not. */
   private aiPlayers = new Set<number>();
 
+  /** `SetPlayerController(p, MAP_CONTROL_NEUTRAL)` — this slot is PLAYED as a neutral (see
+   *  the native). Passed straight through to the sim, where `hostile()` reads it. */
+  setPlayerNeutral(player: number, neutral: boolean): void {
+    if (neutral) this.sim.neutralPlayers.add(player);
+    else this.sim.neutralPlayers.delete(player);
+  }
+
   setAiPlayers(players: Iterable<number>): void {
     this.aiPlayers = new Set(players);
   }

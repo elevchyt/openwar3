@@ -115,10 +115,12 @@ check("vertical gate blocks 4 wide × 20 tall", vert[0] === 4 && vert[1] === 20,
 const { collectMapDestructibles, findDestructibleAt } = require(join(REPO, ".sim-build", "src", "world", "mapDestructibles.js"));
 {
   // Rows shaped like the real Units\DestructableData.slk (a gate, a tree, a barrel).
+  // `canPlaceDead` is that column's own: 1 on all 27 tree types, 0 on all 15 walls, all 100
+  // bridges and every gate in the game.
   const ROWS = {
-    LTg3: { HP: "500", pathTex: "PathTextures\\Gate1Path.tga", pathTexDeath: "PathTextures\\Gate1PathDeath.tga", targType: "debris", Name: "WESTRING_DEST_GATE_VERTICAL" },
-    LTlt: { HP: "50", pathTex: "PathTextures\\4x4Default.tga", pathTexDeath: "_", targType: "tree", Name: "WESTRING_DEST_SUMMER_TREE_WALL" },
-    LTbr: { HP: "20", pathTex: "PathTextures\\2x2Default.tga", pathTexDeath: "none", targType: "debris", Name: "WESTRING_DEST_BARREL" },
+    LTg3: { HP: "500", pathTex: "PathTextures\\Gate1Path.tga", pathTexDeath: "PathTextures\\Gate1PathDeath.tga", targType: "debris", canPlaceDead: "0", Name: "WESTRING_DEST_GATE_VERTICAL" },
+    LTlt: { HP: "50", pathTex: "PathTextures\\4x4Default.tga", pathTexDeath: "_", targType: "tree", canPlaceDead: "1", Name: "WESTRING_DEST_SUMMER_TREE_WALL" },
+    LTbr: { HP: "20", pathTex: "PathTextures\\2x2Default.tga", pathTexDeath: "none", targType: "debris", canPlaceDead: "1", Name: "WESTRING_DEST_BARREL" },
   };
   const rowOf = (id) => (ROWS[id] ? { string: (c) => ROWS[id][c] } : undefined);
   const doodads = [
@@ -126,17 +128,28 @@ const { collectMapDestructibles, findDestructibleAt } = require(join(REPO, ".sim
     { id: "LTg3", x: 4032, y: -2176, z: 0, angle: 0, scale: [1, 1, 1], life: 100, scriptCreated: true },
     { id: "LTlt", x: 100, y: 200, z: 0, angle: RAD(270), scale: [1, 1, 1], life: 40, scriptCreated: false },
     { id: "LTbr", x: 300, y: 400, z: 0, angle: RAD(90), scale: [1, 1, 1], life: 0, scriptCreated: false }, // placed dead
+    // A GATE with the same 0 — which several campaigns write and none of them mean.
+    { id: "LTg3", x: 900, y: 900, z: 0, angle: 0, scale: [1, 1, 1], life: 0, scriptCreated: false },
   ];
   const list = collectMapDestructibles(doodads, rowOf);
-  check("scenery is not a destructible", list.length === 3, `got ${list.length}`);
+  check("scenery is not a destructible", list.length === 4, `got ${list.length}`);
   // The id is the .doo INDEX (1-based), not a position in the filtered list — that is the
   // identity a `destructable` handle carries, and the scenery record must not shift it.
-  check("ids are .doo indices", list.map((d) => d.id).join(",") === "2,3,4", list.map((d) => d.id).join(","));
+  check("ids are .doo indices", list.map((d) => d.id).join(",") === "2,3,4,5", list.map((d) => d.id).join(","));
   const gate = list[0];
   const tree = list[1];
   const barrel = list[2];
+  const zeroGate = list[3];
   check("life is a PERCENT of the type's HP", gate.life === 500 && tree.life === 20 && barrel.life === 0,
     `${gate.life}/${tree.life}/${barrel.life}`);
+  // …unless the TYPE cannot be placed dead, which is what `canPlaceDead` 0 says and what every
+  // gate in the game carries. NightElfX07 settles what the byte means: its cage gate is written
+  // with life 0 and the map OPENS it later —
+  //     call SetDestructableLife( gg_dest_DTg3_0739, 0.00 )   // "Player Kills Paladin Guards"
+  // — which it could not do if the gate had started open. Read as dead, Rise of the Naga's
+  // vertical Elven Gate lost its life bar and all but its two posts, while the doodad pass went
+  // on drawing a closed gate across the path.
+  check("a type that cannot be placed dead never is", zeroGate.life === 500, `${zeroGate.life}`);
   check("a gate leaves posts behind", gate.pathTexDeath.endsWith("Gate1PathDeath.tga"));
   check("`_` and `none` both mean no texture", tree.pathTexDeath === "" && barrel.pathTexDeath === "");
   check("targType picks out the harvestable trees", tree.isTree && !gate.isTree && !barrel.isTree);

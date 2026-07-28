@@ -327,6 +327,19 @@ function letterboxBar(f: FdfFrame, width: number): FdfFrame {
  *  The portrait's ornate frame comes off BackdropBlendAll for the same reason the bars do. */
 function sizeSceneText(panel: FdfFrame): FdfFrame {
   const LINE = 0.016; // one line of the EscMenu title font, plus leading
+  // How much room the FILE leaves the subtitle, worked out from its own anchors rather than
+  // guessed at as a line count. `CinematicPortraitCover` is 0.144 tall off the panel's bottom
+  // corner; `CinematicSpeakerText` hangs 0.035 below that frame's top; the dialogue hangs
+  // 0.004 below the speaker's line. What is left between there and the bottom of the screen
+  // is the subtitle's, and it is a good deal more than the three lines this used to allow —
+  // the Naga's "You are too late, little warden…" is four, and the fourth was sheared off
+  // halfway down its letters. The inset keeps that last line off the border's own edge (the
+  // bottom border declares `BackdropBackgroundInsets 0.0 0.01 0.0 0.0`).
+  const PORTRAIT_COVER_H = 0.144;
+  const SPEAKER_DROP = 0.035;
+  const DIALOGUE_GAP = 0.004;
+  const BOTTOM_INSET = 0.012;
+  const DIALOGUE_H = PORTRAIT_COVER_H - SPEAKER_DROP - LINE - DIALOGUE_GAP - BOTTOM_INSET;
   const children = panel.children.map((c) => {
     if (c.name === "CinematicPortraitCover") {
       // The "cover" is the frame drawn OVER the bust (EscMenuBorder on a blank pane). Under
@@ -356,7 +369,7 @@ function sizeSceneText(panel: FdfFrame): FdfFrame {
           // below the speaker's name instead of sitting under it, which is exactly what the
           // real game's panel does NOT do.
           ...c.props.filter((p) => p.key !== "Height" && p.key !== "FontJustificationV"),
-          { key: "Height", args: [num(LINE * 3)] },
+          { key: "Height", args: [num(DIALOGUE_H)] },
           // A TEXT frame is anchored by its TOP-left here, so it has to grow DOWNWARD from
           // the speaker's line — hence a top-anchored box rather than the solver's default.
           { key: "FontJustificationV", args: [word("JUSTIFYTOP")] },

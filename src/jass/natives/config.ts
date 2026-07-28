@@ -50,9 +50,31 @@ export function registerConfigNatives(rt: Runtime): void {
     if (p) p.raceSelectable = truthy(a[1]);
     return JNULL;
   });
+  /**
+   * `SetPlayerController(p, mapcontrol)` — and one of the six values is a GAMEPLAY rule, not a
+   * lobby setting.
+   *
+   * common.j: USER 0, COMPUTER 1, RESCUABLE 2, **NEUTRAL 3**, CREEP 4, NONE 5. A slot set to
+   * NEUTRAL (or RESCUABLE, which is neutral-until-rescued) is played as a *neutral* player: its
+   * units are nobody's enemy and pick nobody's fight, exactly as Neutral Passive's are. That is
+   * the whole reason a campaign can park a village next to the army that is about to burn it.
+   *
+   * Rise of the Naga's config() sets it on three slots — the Fishing Village (2), the Watchers'
+   * Trackers (1) and the Prisoners (9) — and every one of them is a side the mission needs to
+   * find ALIVE when you get there. Without it, Illidan (a real computer slot standing 573 units
+   * from the village's transport ship, well inside his 650 acquisition) simply attacked it in
+   * the opening seconds, and the ships the quest is named after started dying before the player
+   * had moved. The map's one-way `bj_ALLIANCE_NEUTRAL` lines are the belt to this braces: they
+   * stop the Naga RETALIATING, and this stops anyone starting.
+   *
+   * The harbour sequence still burns those ships when it is time — it ORDERS its Naga onto
+   * them, and an ordered attack overrides neutrality exactly as a force-attack on a shop does.
+   */
   def(rt, "SetPlayerController", (c, a) => {
     const p = player(c, a[0]);
-    if (p) p.controller = c.rt.enumIndex(a[1]);
+    if (!p) return JNULL;
+    p.controller = c.rt.enumIndex(a[1]);
+    c.rt.hooks?.setPlayerNeutral?.(p.index, p.controller === 2 || p.controller === 3);
     return JNULL;
   });
   def(rt, "SetPlayerStartLocation", (c, a) => {

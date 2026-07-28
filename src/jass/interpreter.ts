@@ -172,6 +172,11 @@ type ThreadGen = Generator<number, JassValue, void>;
 /** Natives the thread layer must handle itself, because each one either suspends the
  *  calling thread or runs more JASS on it — neither of which a plain (synchronous) native
  *  impl can do. Intercepted at statement-call sites; see Interpreter.execThreadNative. */
+/** How many frames `TriggerWaitForSound` will wait for a clip to start playing before giving
+ *  up on it (see the native). Two seconds at 60 Hz — well past any archive read, and short
+ *  enough that a clip which never arrives costs a beat rather than the whole cinematic. */
+const WAIT_FOR_SOUND_SPINS = 120;
+
 const THREAD_NATIVES = new Set(["TriggerSleepAction", "TriggerWaitForSound", "TriggerExecute", "ConditionalTriggerExecute", "ExecuteFunc"]);
 
 /** A **trigger thread** (7.15). WC3 runs a trigger's actions — and `main()`, and timer
@@ -556,7 +561,18 @@ export class Interpreter {
       // Never started (or no handle) → nothing is playing, so there is nothing to wait OUT.
       // Deliberately not "wait the clip's length anyway": a map that forgot to start its
       // sound would then hang its cinematic on a line nobody can hear.
-      const left = snd && snd.startedAt >= 0 ? snd.duration / 1000 - offset - (this.rt.gameTime - snd.startedAt) : 0;
+      if (!snd || snd.startedAt < 0) {
+        yield 0;
+        return JNULL;
+      }
+      // Wait for the line to actually BEGIN first. `StartSound` only asks; the engine still
+      // has to read the clip out of the archive and decode it, and every millisecond of that
+      // is a millisecond this wait would otherwise finish early — which lands on the NEXT
+      // line, and is what the player hears as two people talking over each other. One frame
+      // per poll, capped so a clip that never arrives costs a beat rather than the cinematic
+      // (`pending` is undefined when nothing is going to play at all).
+      for (let spins = 0; snd.pending && spins < WAIT_FOR_SOUND_SPINS; spins++) yield 0;
+      const left = snd.duration / 1000 - offset - (this.rt.gameTime - snd.startedAt);
       yield Math.max(0, left);
       return JNULL;
     }

@@ -241,8 +241,24 @@ export interface SoundObj {
   started: boolean; // StartSound has been called at least once (for the kill-when-done sweep)
   /** Game time (seconds) of the last `StartSound`, or -1 if it has never played. What
    *  `TriggerWaitForSound` measures its wait from — "wait for THIS line to finish" only
-   *  means anything relative to when the line began. */
+   *  means anything relative to when the line began. RE-STAMPED when the clip's first
+   *  sample actually goes out (see `pending`), because that is when the line began. */
   startedAt: number;
+  /**
+   * `StartSound` has been called and the clip has not begun playing yet.
+   *
+   * Sound is not instantaneous here: the file has to be read out of the archive and decoded
+   * before a single sample can be scheduled, and a several-second campaign mp3 played for the
+   * first time is not free. Stamping "it started" at the moment the SCRIPT asked makes every
+   * `TriggerWaitForSound` finish that much before the voice does — and since a cinematic is
+   * nothing but a chain of them, the error lands on the next line, which is what the player
+   * hears as two people talking at once.
+   *
+   * Undefined when nothing is going to play at all (no engine, no such file, audio muted or
+   * still locked): there is nothing to wait FOR, and a wait that polled for it would hang the
+   * cinematic instead.
+   */
+  pending?: boolean;
 }
 
 /** What a sound LABEL resolves to in the UI\SoundInfo tables — the row's playback
@@ -409,6 +425,11 @@ export interface JassUnit {
   y: number;
   facing: number;
   simId: number; // our engine's sim id, or -1 when running headless
+  /** `RemoveUnit` took this one out of the world. NOT the same as dead: a corpse is still a
+   *  widget and still sits in every group it was in, which is why so much GUI code filters on
+   *  `IsUnitAliveBJ`; a removed unit has no widget left and drops out of them (see
+   *  natives/groups.ts liveMembers). */
+  removed?: boolean;
   /** SetUnitUserData / GetUnitUserData — the "custom value" every unit carries. Pure
    *  script state (the engine never reads it), so it lives on the handle. */
   userData?: number;
@@ -514,6 +535,11 @@ export interface EngineHooks {
    *  minimap dots and name). NOT retroactive: recolouring what is already on the field is
    *  `SetPlayerColorBJ`'s `changeExisting` loop, which comes back through `setUnitColor`. */
   setPlayerColor?(player: number, color: number): void;
+  /** `SetPlayerController(p, MAP_CONTROL_NEUTRAL | MAP_CONTROL_RESCUABLE)` — this slot is
+   *  PLAYED as a neutral: its units are nobody's enemy and start nobody's fight (see
+   *  natives/config.ts). A gameplay rule, not a lobby setting, and a campaign leans on it
+   *  hard — it is what keeps the villages and the prisoners alive until you arrive. */
+  setPlayerNeutral?(player: number, neutral: boolean): void;
   removeUnit?(unitId: number): void; // RemoveUnit — no death/corpse
   killUnit?(unitId: number): void; // KillUnit — death animation + corpse
   hideUnit?(unitId: number, hidden: boolean): void;

@@ -203,6 +203,27 @@ attack wave means it.
 tree, 60 for a crate. Sizing the selection off `radius` made a 640-unit Elven Gate clickable only
 within a stride of its centre.
 
+## A gate written with a life of 0 is not an open gate
+
+The `.doo`'s `life` byte is a PERCENT of the type's HP, and 0 usually means "placed dead" — the
+felled trees and rubble the maps scatter by the hundred. It does **not** mean that on a gate, and
+`DestructableData` says which types those are: `canPlaceDead` ("Editor - Can Place Dead") is 1 on
+all 27 tree types and 0 on all 15 walls, all 100 bridges and **every gate in the game**.
+
+Across the 97 bundled maps, life-0 records on a `canPlaceDead=0` type are eighteen, and every one
+of them is a gate or a door. NightElfX07 settles what they mean: its cage gate `gg_dest_DTg3_0739`
+is written with life 0 and the map OPENS it later —
+
+```
+call SetDestructableLife( gg_dest_DTg3_0739, 0.00 )   // "Player Kills Paladin Guards"
+```
+
+— which it could not do if the gate had started open. Read as dead, Rise of the Naga's vertical
+Elven Gate at (384, -4352) lost its life bar and all but the two posts its `pathTexDeath` keeps,
+while the doodad pass went on drawing a closed gate across the path: a gate you could see, could
+not attack, and could walk through. So a type that cannot be placed dead never is, and stands at
+full life. (`pnpm sim:test` pins it.)
+
 ## Not done yet
 
 - The campaign **cinematics** (`OpenCinematic`/`EndCinematic`) are listed and greyed. WC3 ships

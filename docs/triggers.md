@@ -1681,6 +1681,56 @@ And the speaker's bust TALKS. `SetCinematicScene`'s last parameter is the voiceo
 the model's "Portrait Talk" clip. The HUD's portrait had done this since the selection sounds
 landed; the cinematic panel's, the one the player actually watches, never did.
 
+### MAP_CONTROL_NEUTRAL is a gameplay rule
+
+`SetPlayerController(p, mapcontrol)` looks like a lobby setting, and five of its six values are.
+The sixth is not: common.j's **NEUTRAL (3)** — and RESCUABLE (2), which is neutral-until-rescued —
+means the slot is *played as a neutral*. Its units are nobody's enemy and start nobody's fight,
+exactly as Neutral Passive's are.
+
+That is how a campaign parks a village next to the army about to burn it. Rise of the Naga sets it
+on three slots — the Fishing Village (2), the Watchers' Trackers (1) and the Prisoners (9) — every
+one of them a side the mission needs to find ALIVE. Ignoring it, Illidan (a real computer slot,
+standing 573 units from the village's transport ship and carrying a 650 acquisition range) simply
+attacked it in the opening seconds, and the ships the quest is named after started dying before
+the player had moved. The map's one-way `bj_ALLIANCE_NEUTRAL` lines are the belt to this braces:
+they stop the Naga RETALIATING, and this stops anyone starting. The harbour sequence still burns
+those ships when it is time — it ORDERS its Naga onto them, and an ordered attack overrides
+neutrality exactly as a force-attack on a shop does. `SimWorld.neutralPlayers`.
+
+### RemoveUnit takes a unit out of every group
+
+WC3 draws a line a plain `Set<handle>` does not. A unit that DIES stays in the groups it was in
+(which is why so much GUI code filters on `IsUnitAliveBJ`); a unit that is REMOVED is gone from
+the world and therefore from the groups too — there is no widget left to hold.
+
+Rise of the Naga refuses to end without it. Its victory is
+
+```
+if ( CountUnitsInGroup(udg_NagaVictoryGroup) <= 0 ) then …
+```
+
+over a group filled at init from every Naga in a rect — and the very next init trigger, the
+difficulty pass, calls `RemoveUnit` on the extra hard-mode Naga standing in that same rect. On
+Normal the group therefore started with two members that could never die, so killing every Naga on
+the map left the count at 2 and the chapter simply never finished. `natives/groups.ts`'s
+`liveMembers` prunes them — permanently, since the handle can never come back — and `RemoveUnit`
+records the fact on the handle (`JassUnit.removed`).
+
+### A cinematic waits for the line to actually START
+
+`TriggerWaitForSound` measured its wait from the moment the SCRIPT called `StartSound`. Sound is
+not instantaneous here: the clip has to be read out of the archive and decoded before a sample can
+be scheduled, and a several-second campaign mp3 played for the first time is not free. Every wait
+therefore finished that much before the voice did — and since a cinematic is a chain of them, the
+error lands on the next line, which is what the player hears as two people talking at once.
+
+`SoundObj.pending` is the gap: true between `StartSound` and the first sample, and the audio layer
+re-stamps `startedAt` when it gets there (`playScript`'s `onStart`). The wait polls one frame at a
+time until the line has begun, then waits out the remainder — capped, and skipped entirely when
+nothing is going to play at all (no engine, no file, audio muted), because a poll for a clip nobody
+is loading would hang the cinematic rather than pace it.
+
 ### ESC skips a cinematic, and the map decides what that means
 
 `EVENT_PLAYER_END_CINEMATIC` (`ConvertPlayerEvent(17)`). The engine raises it for the local

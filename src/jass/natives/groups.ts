@@ -43,6 +43,36 @@ interface GroupObj {
 
 const group = (c: NativeCtx, v: JassValue): GroupObj | undefined => c.rt.data<GroupObj>(v);
 const unit = (c: NativeCtx, v: JassValue): JassUnit | undefined => c.rt.data<JassUnit>(v);
+
+/**
+ * A group's LIVE members, with anything `RemoveUnit` took out of the world dropped from the
+ * set for good.
+ *
+ * WC3 draws a line our set did not: a unit that DIES stays in every group it was in (which is
+ * why so much GUI code filters on `IsUnitAliveBJ`), but a unit that is REMOVED is gone from the
+ * world and therefore gone from the groups too — there is no widget left to hold. We kept the
+ * handle either way, and a counted group could then never empty.
+ *
+ * That is exactly how Rise of the Naga refused to end. Its victory is
+ *
+ *     if ( CountUnitsInGroup(udg_NagaVictoryGroup) <= 0 ) then …
+ *
+ * over a group filled at init from every Naga in a rect — and its very next init trigger,
+ * the difficulty pass, calls `RemoveUnit` on the extra hard-mode Naga standing in that same
+ * rect. On Normal the group therefore started with members that could never die, so killing
+ * every Naga on the map left the count above zero and the mission simply never finished.
+ *
+ * Pruning rather than filtering, because the removal is permanent: the handle can never come
+ * back, and a group that keeps re-checking it would pay for it on every ForGroup.
+ */
+function liveMembers(c: NativeCtx, g: GroupObj): number[] {
+  const out: number[] = [];
+  for (const hid of [...g.units]) {
+    if ((c.rt.handles.get(hid) as JassUnit | undefined)?.removed) g.units.delete(hid);
+    else out.push(hid);
+  }
+  return out;
+}
 const playerIndex = (c: NativeCtx, v: JassValue): number => c.rt.data<JassPlayer>(v)?.index ?? asInt(v);
 
 /** Every unit currently in the sim (the enumeration source). Empty with no engine
@@ -106,7 +136,9 @@ export function registerGroupNatives(rt: Runtime): void {
     if (g && a[1].k === "handle") g.units.delete(a[1].h);
     return JNULL;
   });
-  def(rt, "IsUnitInGroup", (c, a) => jBool(a[0].k === "handle" && (group(c, a[1])?.units.has(a[0].h) ?? false)));
+  def(rt, "IsUnitInGroup", (c, a) => jBool(
+    a[0].k === "handle" && !unit(c, a[0])?.removed && (group(c, a[1])?.units.has(a[0].h) ?? false),
+  ));
 
   // --- enumeration: fill a group from the live sim ---
   def(rt, "GroupEnumUnitsInRect", (c, a) => {
@@ -179,7 +211,7 @@ export function registerGroupNatives(rt: Runtime): void {
   def(rt, "ForGroup", (c, a) => {
     const g = group(c, a[0]);
     if (g && a[1].k === "code") {
-      for (const hid of [...g.units]) {
+      for (const hid of liveMembers(c, g)) {
         c.rt.eventStack.push(new Map([["EnumUnit", jHandle(hid, "unit")]]));
         try {
           c.call(a[1].fn, []);
@@ -196,7 +228,7 @@ export function registerGroupNatives(rt: Runtime): void {
   // classic "loop / FirstOfGroup / GroupRemoveUnit" drain.
   def(rt, "FirstOfGroup", (c, a) => {
     const g = group(c, a[0]);
-    for (const hid of g?.units ?? []) return jHandle(hid, "unit");
+    for (const hid of g ? liveMembers(c, g) : []) return jHandle(hid, "unit");
     return JNULL;
   });
   def(rt, "GetEnumUnit", (c) => c.rt.eventResponse("EnumUnit"));
@@ -208,7 +240,7 @@ export function registerGroupNatives(rt: Runtime): void {
     if (!g) return jBool(false);
     const t = kind === "target" ? unit(c, targetV) : undefined;
     let any = false;
-    for (const hid of [...g.units]) {
+    for (const hid of liveMembers(c, g)) {
       const u = c.rt.handles.get(hid) as JassUnit | undefined;
       if (!u || u.simId < 0) continue;
       if (c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, t?.simId ?? 0)) any = true;

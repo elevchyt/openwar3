@@ -884,7 +884,11 @@ export class SoundBoard {
    *  configured on it. A 3D sound past its DistanceCutoff isn't played at all, exactly as
    *  in the engine-side pools. Returns whether playback was actually committed (the file
    *  resolved and the context is live) — the caller reports that as GetSoundIsPlaying. */
-  playScript(id: number, s: ScriptSoundSpec): boolean {
+  /** `onStart` fires the instant the clip's first sample is scheduled — NOT when this
+   *  returns. Reading a several-second campaign mp3 out of the archive and decoding it is
+   *  the gap between the two, and a cinematic that paces itself off `TriggerWaitForSound`
+   *  needs the later moment (see SoundObj.pending). */
+  playScript(id: number, s: ScriptSoundSpec, onStart?: () => void): boolean {
     this.stopScript(id, false); // StartSound on a live handle restarts it
     if (!s.file || !this.vfs.exists(s.file)) return false;
     this.unlock();
@@ -925,6 +929,7 @@ export class SoundBoard {
         if (this.scripts.get(id) === token) this.scripts.delete(id);
       };
       src.start();
+      onStart?.();
     });
     return true;
   }

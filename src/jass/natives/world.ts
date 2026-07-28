@@ -87,7 +87,12 @@ export function registerWorldNatives(rt: Runtime): void {
   });
   def(rt, "RemoveUnit", (c, a) => {
     const u = unit(c, a[0]);
-    if (u && u.simId >= 0) c.rt.hooks?.removeUnit?.(u.simId);
+    if (u) {
+      // Out of the WORLD, not merely dead — and that difference is one every group has to
+      // honour, so it is recorded on the handle (see natives/groups.ts liveMembers).
+      u.removed = true;
+      if (u.simId >= 0) c.rt.hooks?.removeUnit?.(u.simId);
+    }
     return JNULL;
   });
   def(rt, "KillUnit", (c, a) => {
