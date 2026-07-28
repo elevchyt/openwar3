@@ -52,7 +52,7 @@ interface CreepSeed {
 }
 import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_CLUSTERS, resolveRace, type PlayableRace, type WorkerCluster } from "../data/races";
 import { ModelViewerScene } from "./modelViewer";
-import type { MeleeConfig, SlotConfig } from "../ui/lobby";
+import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, isTyping, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, worldLayer } from "../ui/stage";
@@ -202,6 +202,18 @@ const MAX_HEROES = MELEE.MELEE_HERO_LIMIT; // altars + tavern combined
  *  default). Named here because the sim unit and its model are now made in two steps and
  *  both have to be told the same thing. */
 const TRAINED_FACING = (3 * Math.PI) / 2;
+
+/** A lobby `Controller` as common.j's `mapcontrol` — what `applyLobby` hands the script for
+ *  each slot. An empty seat ("open"/"closed") never reaches that handoff, and a slot the MAP
+ *  owns as neutral or rescuable keeps exactly what the map made it (see MapInfo.neutralPlayers). */
+const MAP_CONTROL_FOR: Record<Controller, number> = {
+  user: MAP_CONTROL.USER,
+  computer: MAP_CONTROL.COMPUTER,
+  open: MAP_CONTROL.USER,
+  closed: MAP_CONTROL.USER,
+  neutral: MAP_CONTROL.NEUTRAL,
+  rescuable: MAP_CONTROL.RESCUABLE,
+};
 
 // Our race ids → the suffix WC3's UISounds.slk uses on its per-race cues
 // (ResearchCompleteHuman, UpgradeCompleteNightElf, …).
@@ -1455,7 +1467,8 @@ export class MapViewerScene {
     // Only a slot the map left unnamed falls back — an AI slot to "Computer (Normal)" (the
     // one difficulty we model, matching the Custom Game screen's label), a human slot to a
     // generic "Player N". The local player never shows an owner line, so its own label is
-    // never seen.
+    // never seen. Neutral and rescuable players are in this map too and only ever take the
+    // map's name: nobody is playing them, so "Computer (Normal)" would be a lie about them.
     this.playerNames = new Map(
       config.slots.map((s) => [
         s.id,
@@ -2166,7 +2179,10 @@ export class MapViewerScene {
           // EMPTY force and every GUI "for each user player" loop silently did nothing.
           // config() had already set the right value; applyLobby was overwriting it. Found
           // by 7.24: Monolith runs its whole intro cinematic inside one of those loops.)
-          controller: s.controller === "computer" ? MAP_CONTROL.COMPUTER : MAP_CONTROL.USER,
+          // A neutral/rescuable player keeps what the MAP made it: applyLobby writes this over
+          // whatever config() set, so handing it USER would undo the map's own
+          // SetPlayerController(p, MAP_CONTROL_NEUTRAL) an instant after it ran.
+          controller: MAP_CONTROL_FOR[s.controller],
           team: s.team,
           startLocation: -1, // config()'s SetPlayerStartLocation already placed each slot
         })),
@@ -2226,6 +2242,9 @@ export class MapViewerScene {
     // is 271 / 288.
     sw.captureItems = any("playerUnitEvent", 48, 50) || any("unitEvent", 85, 87)
       || any("playerUnitEvent", 271) || any("unitEvent", 288);
+    // LOADED — 51 player / 88 unit. A campaign harbour scene is the case: the ship leaves the
+    // moment its passenger is aboard, and it is a unit-scoped registration on the PASSENGER.
+    sw.captureLoads = any("playerUnitEvent", 51) || any("unitEvent", 88);
     // EVENT_UNIT_STATE_LIMIT is polled, not raised by the sim (see pumpUnitStates).
     this.scriptWatchesUnitState = rt.triggerRegs.some((r) => r.kind === "unitState");
     this.scriptRegCount = rt.triggerRegs.length;
@@ -2288,6 +2307,9 @@ export class MapViewerScene {
       // over the item both come through here — they're the same sim path).
       const items = sw.drainItemEvents();
       if (items.length) engine.interp.pumpItemEvents(items);
+      // A unit that just boarded a transport / burrow (EVENT_UNIT_LOADED).
+      const loads = sw.drainLoadEvents();
+      if (loads.length) engine.interp.pumpLoadEvents(loads);
       // Unit-state thresholds (EVENT_UNIT_STATE_LIMIT) are POLLED — nothing in the sim
       // raises "life dropped below 100", so the interpreter tests each watched unit itself.
       if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();
@@ -3409,7 +3431,7 @@ export class MapViewerScene {
     if (!world) return;
     for (const unitId of world.shopArrowUnits(this.localPlayer)) {
       const key = `shoparrow|${unitId}`;
-      this.trackBuffFx(active, key, SHOP_ARROW_FX, unitId, this.localPlayer);
+      this.trackBuffFx(active, key, SHOP_ARROW_FX, unitId, this.rts?.playerColor(this.localPlayer) ?? this.localPlayer);
     }
   }
 
@@ -5271,15 +5293,18 @@ export class MapViewerScene {
     const path = this.vfs.exists(portraitPath) ? portraitPath : sel.model;
     this.portraitLoading = true;
     const id = sel.id;
-    // Team glow follows the owner; 12 is the classic neutral (black) slot. The
-    // `portrait` flag makes the viewer loop the model's "Portrait" idle clip
+    // Team glow follows the owner's COLOUR, not their slot (see RtsController.playerColor) —
+    // Rise of the Naga recolours Maiev's slot 0 to BLUE, and a bust keyed on the slot showed
+    // her red in the console while the same model stood blue on the terrain. 12 is the
+    // classic neutral (black) slot, for a unit with no owner at all.
+    // The `portrait` flag makes the viewer loop the model's "Portrait" idle clip
     // instead of walk/stand (portrait models have no walk — a stray one on some
     // heroes was being picked, so the bust just froze).
     // The Paladin's authored portrait camera crops the right of his face — pan
     // the bust camera a bit left so the whole face shows.
     const panLeft = /paladin/i.test(sel.model) ? 0.14 : 0;
     this.portraitViewer
-      .load(path, sel.owner >= 0 ? sel.owner : 12, true, panLeft)
+      .load(path, sel.owner >= 0 ? this.rts.playerColor(sel.owner) : 12, true, panLeft)
       .then(() => {
         this.portraitFor = id;
         this.portraitViewer!.start();
@@ -6454,7 +6479,7 @@ export class MapViewerScene {
       inst = model.addInstance();
       inst.setScene(map.worldScene);
       inst.setUniformScale(def.modelScale || 1);
-      inst.setTeamColor(this.localPlayer); // show the team-coloured parts
+      inst.setTeamColor(this.rts?.playerColor(this.localPlayer) ?? this.localPlayer); // the team-coloured parts, in YOUR colour
       this.buildGhosts.set(def.id, inst);
     }
     // (Re)apply the finished-building pose every time it's shown.
@@ -6555,7 +6580,7 @@ export class MapViewerScene {
     const inst = model.addInstance();
     inst.setScene(this.viewer.map.worldScene);
     inst.setUniformScale(def.modelScale || 1);
-    inst.setTeamColor(this.localPlayer);
+    inst.setTeamColor(this.rts?.playerColor(this.localPlayer) ?? this.localPlayer);
     const g = { inst, defId: def.id, frame: this.applyGhostPose(inst) };
     this.pendingGhosts.set(key, g);
     this.placePendingGhost(g, x, y);

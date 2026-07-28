@@ -8,7 +8,10 @@ import type { Race } from "../data/races";
 // is now built from the game's own UI\FrameDef\Glue\Skirmish.fdf like every other menu
 // (issue #61), so all that is left here is the contract between it and the sim.
 
-export type Controller = "user" | "computer" | "open" | "closed";
+/** Who is at the wheel of a slot. `open`/`closed` are lobby states (an empty seat a joiner
+ *  drops into, and one the host took off the table); `neutral`/`rescuable` are the MAP's, for
+ *  the players it declares that no lobby ever seats — see MapInfo.neutralPlayers. */
+export type Controller = "user" | "computer" | "open" | "closed" | "neutral" | "rescuable";
 
 export interface SlotConfig {
   id: number;

@@ -110,6 +110,14 @@ export class Authority {
    *  re-derives it (seeded PRNG in jass/runtime.ts, game-time timers in interpreter.ts). */
   issueUnitOrder(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean {
     const s = order || orderIdToString(orderId);
+    // A cargo order first, BEFORE castOrder: the carrier's own Load/Unload are abilities with
+    // exactly these order strings (Slo3/Sdro), so a ship told to "load" would otherwise be
+    // asked to cast a spell it has no handler for and the order would die there.
+    const cargo = this.cargoOrder(unitId, s, targetId);
+    if (cargo !== null) {
+      if (cargo) this.sim.noteOrder(unitId, orderId, kind, x, y, targetId);
+      return cargo;
+    }
     // Ability order? Find the ability on this unit whose Order/Orderon/Orderoff string
     // matches, and cast it (autocast toggles flip the autocast instead of casting).
     const cast = this.castOrder(unitId, s, targetId, x, y);
@@ -270,6 +278,37 @@ export class Authority {
         this.sim.noteOrder(id, ORDER_IDS.stop, "immediate", 0, 0, 0);
         break;
     }
+  }
+
+  /**
+   * A cargo-hold order — a unit getting into a transport (or a burrow), or one getting out.
+   * Null when `order` is not one of those, so the caller falls through to everything else.
+   *
+   * The strings are the game's own (NeutralAbilityFunc.txt: `Slo3`/`Sloa` Order=load,
+   * `Sdro`/`Adro`/`Adri` Order=unload), plus **"board"**, which is the order the engine gives
+   * the PASSENGER and which no ability row carries. Terror of the Tides' first chapter ends
+   * its harbour cinematic with it:
+   *
+   *     call IssueTargetOrderBJ( udg_Illidan, "board", gg_unit_e000_0034 )
+   *
+   * and then sails the ship on `EVENT_UNIT_LOADED`. Unhandled, "board" fell through to the
+   * generic target order, came out as *follow*, and Illidan walked circles round the boat
+   * while the scene it belonged to never came.
+   *
+   * A "load" can be issued from either end and the direction is read off the units: the one
+   * with the hold is the carrier. That is what the two ability rows mean — the Load button is
+   * on the SHIP, aimed at a passenger — while a script that spells the same thing the other
+   * way round (order the passenger to "load" the ship) still gets what it asked for.
+   */
+  private cargoOrder(unitId: number, order: string, targetId: number): boolean | null {
+    if (order === "unload" || order === "unloadall") return this.sim.unloadBurrow(unitId);
+    if (order !== "board" && order !== "load") return null;
+    const u = this.sim.units.get(unitId);
+    const t = this.sim.units.get(targetId);
+    if (!u || !t) return null;
+    // "board" is always the passenger's; a "load" goes whichever way the holds point.
+    const carrierIsUs = order === "load" && u.garrisonCap > 0 && t.garrisonCap === 0;
+    return carrierIsUs ? this.sim.issueGarrison(targetId, unitId) : this.sim.issueGarrison(unitId, targetId);
   }
 
   /** A JASS order string that names one of the unit's ABILITIES (rather than a generic

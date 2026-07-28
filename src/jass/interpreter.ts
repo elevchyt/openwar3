@@ -93,6 +93,12 @@ export interface ItemEvent {
   /** GetSellingUnit — the shop, on a "sell" (see the sim's ItemEvent). */
   seller?: UnitSnapshot;
 }
+/** A unit that climbed into a transport or a burrow — EVENT_UNIT_LOADED (88) and its player
+ *  twin (51). `unit` is the passenger, `transport` the carrier. */
+export interface LoadEvent {
+  unit: UnitSnapshot;
+  transport: UnitSnapshot;
+}
 
 /** common.j `constant playerevent EVENT_PLAYER_END_CINEMATIC = ConvertPlayerEvent(17)` — ESC
  *  pressed while a cinematic is playing. Exported because the RAISER is the engine side
@@ -146,6 +152,9 @@ const EVENT_PLAYER_UNIT_SELL_ITEM = 271;
 const EVENT_UNIT_SELL_ITEM = 288;
 /** The three contiguous item phases, in common.j's order (phase index + base = event id). */
 const ITEM_PHASES = ["drop", "pickup", "use"] as const;
+// A unit loaded into a transport / burrow (common.j 51 player, 88 unit).
+const EVENT_PLAYER_UNIT_LOADED = 51;
+const EVENT_UNIT_LOADED = 88;
 
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
@@ -1223,6 +1232,29 @@ export class Interpreter {
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, playerEvt, owner, subject)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, subject)));
+    }
+  }
+
+  /**
+   * Pump cargo-load events — a unit that just climbed into a transport or a burrow.
+   *
+   * The SUBJECT is the PASSENGER, and the campaign is what settles that: Rise of the Naga
+   * registers `EVENT_UNIT_LOADED` on Illidan, not on the ship he boards, and sails the ship
+   * from that trigger. So a unit-scoped registration matches the loaded unit, and the player
+   * event is filed under the loaded unit's owner. Responses: GetLoadedUnit (the passenger,
+   * also GetTriggerUnit) and GetTransportUnit (the carrier).
+   */
+  pumpLoadEvents(events: ReadonlyArray<LoadEvent>): void {
+    for (const e of events) {
+      const passenger = this.rt.unitForSim(e.unit);
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", passenger],
+        ["LoadedUnit", passenger],
+        ["TransportUnit", this.rt.unitForSim(e.transport)],
+      ]);
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_LOADED, e.unit.owner, passenger)) ||
+        (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_LOADED) && this.paramUnitIs(reg, passenger)));
     }
   }
 

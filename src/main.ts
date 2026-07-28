@@ -24,7 +24,7 @@ import { GlueAudio } from "./ui/glueAudio";
 import { SoundBoard } from "./audio/sounds";
 import type { DataSource } from "./vfs/types";
 import type { MeleeConfig, SlotConfig } from "./ui/lobby";
-import { parseMapInfo, type MapInfo } from "./world/mapInfo";
+import { parseMapInfo, type MapInfo, type NeutralPlayer, type PlayerSlot } from "./world/mapInfo";
 import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
@@ -375,6 +375,23 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
 /** The chapter the player is IN, so a victory can be credited to it. */
 let pendingCampaign: { key: string; index: number } | null = null;
 
+/** The `?dev&chapter=` boot (src/dev/devBoot.ts): start the campaign chapter whose map path
+ *  contains `name`, straight out of the mounted archives and on the campaign's own config.
+ *  The chapters are where the cinematics and the scripted set-pieces are, and there is no
+ *  other way for automation to reach one — the campaign screen needs a human. */
+async function startChapter(name: string, difficulty: string): Promise<void> {
+  const vfs = resolver.installSource;
+  if (!vfs) throw new Error("no install mounted");
+  const campaigns = await loadCampaigns(vfs);
+  for (const c of campaigns) {
+    const index = c.missions.findIndex((m) => m.playable && m.file.toLowerCase().includes(name.toLowerCase()));
+    if (index < 0) continue;
+    await startCampaignMission(vfs, c, index, difficulty as Difficulty);
+    return;
+  }
+  throw new Error(`no campaign chapter matching "${name}"`);
+}
+
 /** A campaign map's lobby config. A campaign is single-player: the local player takes the
  *  first slot the map declares a human, and every other slot stays what the MAP made it —
  *  these maps seat their own AI (and their own neutral-hostile), and the start locations are
@@ -383,15 +400,22 @@ let pendingCampaign: { key: string; index: number } | null = null;
  *  Terror of the Tides gates waves on `GetGameDifficulty()`. */
 function campaignConfig(info: MapInfo, difficulty: Difficulty): MeleeConfig {
   const local = Math.max(0, info.slots.findIndex((s) => s.controller === "user"));
-  const slots: SlotConfig[] = info.slots.map((s, i) => ({
+  const seat = (s: PlayerSlot | NeutralPlayer, i: number): SlotConfig => ({
     id: s.id,
-    controller: i === local ? "user" : "computer",
+    controller: i === local ? "user" : s.controller === "user" ? "computer" : s.controller,
     race: s.defaultRace,
     team: s.team,
     startX: s.startX,
     startY: s.startY,
     name: s.name, // the map's own name for the side ("Illidan's Naga"), for the hover tooltip
-  }));
+  });
+  // The map's neutral/rescuable players ride along at the end, keeping the controller the map
+  // gave them — they are nobody's AI and nobody's seat, but they own units and the mission
+  // names them ("Prisoners", "Night Elf Villagers"). See MapInfo.neutralPlayers.
+  const slots: SlotConfig[] = [
+    ...info.slots.map(seat),
+    ...info.neutralPlayers.map((s) => seat(s, -1)),
+  ];
   return {
     slots,
     // A campaign chapter starts BLACK. "explored" is the Custom Game screen's convenience
@@ -585,7 +609,7 @@ window.addEventListener("contextmenu", (e) => e.preventDefault());
 // route. See src/dev/devBoot.ts and tools/vite-plugin-dev-install.ts.
 if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
   void import("./dev/devBoot")
-    .then((m) => m.devBoot({ mountInstall, showMenu, startGame }))
+    .then((m) => m.devBoot({ mountInstall, showMenu, startGame, startChapter }))
     .catch((err) => {
       console.error("[dev-boot] failed:", err);
       gate = mountLoadGate(ui, onFilesLoaded); // fall back to the human path

@@ -1254,10 +1254,15 @@ export class RtsController {
     // cell its footprint fits, exactly as a freshly-trained unit leaves its factory. Flyers and
     // buildings are exempt (buildings snap above).
     if (!def.isBuilding && def.moveType !== MoveType.Fly) {
+      // …in the medium the unit actually moves through. A transport ship is created ON the
+      // sea (Rise of the Naga's harbour fills its docks with `CreateUnit(p, 'etrs', …)` at
+      // water coordinates), and asked the GROUND question every one of those was "displaced"
+      // onto the nearest beach — a fleet of boats standing on the sand.
+      const domain = def.moveType === MoveType.Float ? "water" : "ground";
       const n = footprintCells(def.collision || 16);
       const [cx, cy] = grid.worldToCell(x, y);
-      if (!grid.footprintFits(cx, cy, n)) {
-        const fit = grid.nearestFit(cx, cy, n) ?? grid.nearestWalkable(cx, cy);
+      if (!grid.footprintFits(cx, cy, n, domain)) {
+        const fit = grid.nearestFit(cx, cy, n, undefined, undefined, domain) ?? grid.nearestWalkable(cx, cy, undefined, domain);
         if (fit) [x, y] = grid.cellToWorld(fit[0], fit[1]);
       }
     }

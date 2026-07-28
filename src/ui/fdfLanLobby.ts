@@ -8,13 +8,13 @@ import type { LanLobby } from "../net/lobby";
 import type { PeerInfo, StartMatch } from "../net/protocol";
 import {
   allSeated, applyRequest, buildStart, newSetup, rosterDiff, seatPeers,
-  type LobbyChat, type LobbyRequest, type LobbySetup, type LobbySlot,
+  type LobbyChat, type LobbyRequest, type LobbySetup, type LobbySlot, type SlotKind,
 } from "../net/lobbySetup";
 import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import type { Controller, MeleeConfig } from "./lobby";
+import type { MeleeConfig } from "./lobby";
 import {
   INFO_ROWS, adopt, fillMapInfo, findFrame, layoutInfoPane, loadMinimapIcons, nudgeX, num,
   paneRowsToHide, readMapPreviewFor, setProp, size, type MinimapIcons,
@@ -343,7 +343,7 @@ export async function mountLanLobbyScreen(
           : CONTROLLERS.map(([v, l]) => ({ value: v, label: l })),
         );
         name.value = slot.kind;
-        name.onChange = (v) => hostSetKind(i, v as Exclude<Controller, "user">);
+        name.onChange = (v) => hostSetKind(i, v as Exclude<SlotKind, "player">);
         name.setEnabled(isHost() && slot.kind !== "player" && !slot.locked);
       }
 
@@ -406,7 +406,7 @@ export async function mountLanLobbyScreen(
   }
 
   /** Host only: what an empty row's slot menu does — Open / Closed / Computer. */
-  function hostSetKind(index: number, kind: Exclude<Controller, "user">): void {
+  function hostSetKind(index: number, kind: Exclude<SlotKind, "player">): void {
     const slot = setup?.slots[index];
     if (!isHost() || !setup || !slot || slot.kind === "player" || slot.locked) return;
     setup = { ...setup, slots: setup.slots.map((s, i) => (i === index ? { ...s, kind } : s)) };

@@ -18,13 +18,26 @@ export const PATHING_CELL = 32;
 export const BUILD_CELL = 64;
 export const BUILD_CELL_CELLS = BUILD_CELL / PATHING_CELL; // pathing cells per build cell
 
-/** The two war3map.wpm bits we act on. They are independent channels — a cliff face
- *  sets both, but ~14% of walkable cells set Unbuildable alone (slopes, the margin a
- *  production building leaves walkable around itself). Never collapse them into one. */
+/** The war3map.wpm bits we act on. They are independent channels — a cliff face
+ *  sets Unwalkable and Unbuildable both, but ~14% of walkable cells set Unbuildable alone
+ *  (slopes, the margin a production building leaves walkable around itself). Never collapse
+ *  them into one.
+ *
+ *  `NoWater` is the third domain, and the one that makes a SEA a place rather than a wall.
+ *  Counted over Rise of the Naga's own wpm (384×512): 67,768 cells are a bare 0x40 (open
+ *  land), 46,304 are 0x0a — Unwalkable + Unbuildable with NoWater CLEAR, which is its ocean —
+ *  and 40,328 are 0xce / 12,516 0xca, Unwalkable WITH NoWater set: cliffs, which are not water
+ *  and no boat sails over them. So a ground unit asks "is Unwalkable clear?" and a floating one
+ *  asks "is NoWater clear?", and the map's shallows (0x00) answer yes to both, exactly as WC3
+ *  has it — a Footman wades where a transport can also sail. */
 export enum PathingFlag {
   Unwalkable = 0x02,
   Unbuildable = 0x08,
+  NoWater = 0x40,
 }
+
+/** Which domain a unit moves through — the question `walkable` is really asking. */
+export type PathDomain = "ground" | "water";
 
 export interface PathingData {
   width: number;
@@ -180,10 +193,13 @@ export class PathingGrid {
     return cx >= 0 && cy >= 0 && cx < this.width && cy < this.height;
   }
 
-  walkable(cx: number, cy: number): boolean {
+  /** May a unit of this domain stand on the cell? A stamped footprint (a tree, a building)
+   *  stops both — a pier is in the way of a boat as much as of a Footman. */
+  walkable(cx: number, cy: number, domain: PathDomain = "ground"): boolean {
     if (!this.inBounds(cx, cy)) return false;
     const i = cy * this.width + cx;
-    return (this.flags[i] & PathingFlag.Unwalkable) === 0 && !(this.blockStamps && this.blockStamps[i] > 0);
+    const flag = domain === "water" ? PathingFlag.NoWater : PathingFlag.Unwalkable;
+    return (this.flags[i] & flag) === 0 && !(this.blockStamps && this.blockStamps[i] > 0);
   }
 
   /** True if a building may be founded on this cell: not unbuildable *and* not
@@ -238,14 +254,14 @@ export class PathingGrid {
     return [this.originX + (cx + 0.5) * PATHING_CELL, this.originY + (cy + 0.5) * PATHING_CELL];
   }
 
-  /** Nearest walkable cell to (cx,cy), searched in growing rings. Null if none near. */
-  nearestWalkable(cx: number, cy: number, maxRadius = 32): [number, number] | null {
-    if (this.walkable(cx, cy)) return [cx, cy];
+  /** Nearest cell this domain can stand on, searched in growing rings. Null if none near. */
+  nearestWalkable(cx: number, cy: number, maxRadius = 32, domain: PathDomain = "ground"): [number, number] | null {
+    if (this.walkable(cx, cy, domain)) return [cx, cy];
     for (let r = 1; r <= maxRadius; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
-          if (this.walkable(cx + dx, cy + dy)) return [cx + dx, cy + dy];
+          if (this.walkable(cx + dx, cy + dy, domain)) return [cx + dx, cy + dy];
         }
       }
     }
@@ -254,12 +270,12 @@ export class PathingGrid {
 
   /** True if an n×n unit footprint centred on (cx,cy) fits entirely on walkable,
    *  unreserved cells. */
-  footprintFits(cx: number, cy: number, n: number): boolean {
-    if (n <= 1) return this.walkable(cx, cy) && !this.isReserved(cx, cy);
+  footprintFits(cx: number, cy: number, n: number, domain: PathDomain = "ground"): boolean {
+    if (n <= 1) return this.walkable(cx, cy, domain) && !this.isReserved(cx, cy);
     const half = n >> 1;
     for (let y = cy - half; y < cy - half + n; y++) {
       for (let x = cx - half; x < cx - half + n; x++) {
-        if (!this.walkable(x, y) || this.isReserved(x, y)) return false;
+        if (!this.walkable(x, y, domain) || this.isReserved(x, y)) return false;
       }
     }
     return true;
@@ -269,13 +285,13 @@ export class PathingGrid {
    *  placing a freshly-trained unit on empty tiles it actually fits on.
    *  `accept` optionally rejects otherwise-fitting cells: a batch placed in one frame uses
    *  it to skip cells already handed out, since reservations only land on the next tick. */
-  nearestFit(cx: number, cy: number, n: number, maxRadius = 24, accept?: (x: number, y: number) => boolean): [number, number] | null {
+  nearestFit(cx: number, cy: number, n: number, maxRadius = 24, accept?: (x: number, y: number) => boolean, domain: PathDomain = "ground"): [number, number] | null {
     for (let r = 0; r <= maxRadius; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring only
           if (accept && !accept(cx + dx, cy + dy)) continue;
-          if (this.footprintFits(cx + dx, cy + dy, n)) return [cx + dx, cy + dy];
+          if (this.footprintFits(cx + dx, cy + dy, n, domain)) return [cx + dx, cy + dy];
         }
       }
     }

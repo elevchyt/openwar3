@@ -17,7 +17,8 @@ export interface PlayerSlot {
    *  computer. A computer slot is the map's own AI player and the lobby may not re-seat it —
    *  WarChasers' "Dungeon Denizens" (player 11) is a computer, and the real client shows its
    *  slot menu greyed at "Computer (Normal)" while the four user slots still offer Open/Closed.
-   *  A melee map declares every slot as a user slot, so nothing is locked there. */
+   *  A melee map declares every slot as a user slot, so nothing is locked there. Types 3 and 4
+   *  are players no lobby seats and so are not slots at all — see `MapInfo.neutralPlayers`. */
   controller: "user" | "computer";
   /**
    * The slot's NAME, as the map wrote it in the w3i player record (a TRIGSTR key into
@@ -39,6 +40,10 @@ export interface PlayerSlot {
   team: number;
 }
 
+/** A player the map declares but no lobby seats — the same record as a `PlayerSlot`, minus
+ *  the one thing it isn't: a slot. See `MapInfo.neutralPlayers`. */
+export type NeutralPlayer = Omit<PlayerSlot, "controller"> & { controller: "neutral" | "rescuable" };
+
 export interface MapInfo {
   name: string;
   /** The author's blurb (w3i description) — the Custom Game screen's "Map Description". */
@@ -47,7 +52,23 @@ export interface MapInfo {
   tileset: string;
   width: number;
   height: number;
+  /** The slots the LOBBY seats: w3i player types 1 (user) and 2 (computer). */
   slots: PlayerSlot[];
+  /**
+   * The players the map declares that no lobby ever seats — w3i player type 3 (neutral) and
+   * 4 (rescuable, i.e. neutral until you free it). They are real players all the same: they
+   * own units, they hold a slot's colour, they sit in one of the map's forces, and the map
+   * names them.
+   *
+   * Kept beside `slots` rather than in it because everything that reads `slots` is asking
+   * "what rows does the setup screen have?", and the answer for these is "none" — the real
+   * client shows no row for Rise of the Naga's "Prisoners" either. But the MATCH needs them:
+   * a chapter's config() re-states each one with `SetPlayerController(p, MAP_CONTROL_NEUTRAL)`
+   * and its w3i name is what WC3 prints on the owner line of their units. Without them, the
+   * villagers you are sent to save, the Watchers' trackers and the caged Prisoners all
+   * hovered as a bare "Player 10" while every hostile side across the map read its own name.
+   */
+  neutralPlayers: NeutralPlayer[];
   /**
    * How many players the map is FOR — the badge on its row and beside its name. Only the
    * slots a human may take (w3i player type 1) count: Monolith seats eight, but four of them
@@ -87,7 +108,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const minimap = mpq.rawBytes("war3mapMap.blp") ?? null;
   const empty: MapInfo = {
     name: fallbackName, description: "", recommendedPlayers: "", tileset: "", width: 0, height: 0,
-    slots: [], maxPlayers: 0, minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false,
+    slots: [], neutralPlayers: [], maxPlayers: 0, minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false,
     classification,
   };
   const w3iBytes = mpq.rawBytes("war3map.w3i");
@@ -103,20 +124,25 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const wtsBytes = mpq.rawBytes("war3map.wts");
   const strings = wtsBytes ? parseWts(new TextDecoder("utf-8").decode(wtsBytes)) : new Map<number, string>();
   const customForces = (info.flags & W3I_USE_CUSTOM_FORCES) !== 0;
-  // Player TYPE: 1 = user (a human may take the slot), 2 = computer (the map's own AI). Both
-  // are seated in the lobby — Monolith's creeps get four rows of their own — but only the
-  // user slots are what the map is "for" (maxPlayers).
+  // Player TYPE: 1 = user (a human may take the slot), 2 = computer (the map's own AI),
+  // 3 = neutral, 4 = rescuable. The first two are seated in the lobby — Monolith's creeps get
+  // four rows of their own — but only the user slots are what the map is "for" (maxPlayers).
+  // The other two are players the lobby never shows and the match still needs: see
+  // MapInfo.neutralPlayers.
+  const record = <C extends string>(p: (typeof info.players)[number], controller: C): Omit<PlayerSlot, "controller"> & { controller: C } => ({
+    id: p.id,
+    defaultRace: raceFromW3i(p.race),
+    startX: p.startLocation[0],
+    startY: p.startLocation[1],
+    controller,
+    name: resolveName(p.name, "", strings), // see PlayerSlot.name
+    team: customForces ? forceOf(info, p.id) : p.id, // see PlayerSlot.team
+  });
   const playable = info.players.filter((p) => p.type === 1 || p.type === 2);
-  const slots: PlayerSlot[] = playable
-    .map((p) => ({
-      id: p.id,
-      defaultRace: raceFromW3i(p.race),
-      startX: p.startLocation[0],
-      startY: p.startLocation[1],
-      controller: p.type === 2 ? "computer" : "user",
-      name: resolveName(p.name, "", strings), // see PlayerSlot.name
-      team: customForces ? forceOf(info, p.id) : p.id, // see PlayerSlot.team
-    }));
+  const slots: PlayerSlot[] = playable.map((p) => record(p, p.type === 2 ? "computer" : "user"));
+  const neutralPlayers: NeutralPlayer[] = info.players
+    .filter((p) => p.type === 3 || p.type === 4)
+    .map((p) => record(p, p.type === 4 ? ("rescuable" as const) : ("neutral" as const)));
 
   return {
     name: resolveName(info.name, fallbackName, strings),
@@ -126,6 +152,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     width: info.playableSize[0],
     height: info.playableSize[1],
     slots,
+    neutralPlayers,
     maxPlayers: playable.filter((p) => p.type === 1).length || slots.length,
     minimap,
     isMelee: classification.isMelee,

@@ -1,4 +1,4 @@
-import { PATHING_CELL, footprintCells, type PathingGrid } from "./pathing";
+import { PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
@@ -7,7 +7,7 @@ import { type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
-import { AttackType, ArmorType, PrimaryAttribute, RegenType, isRangedWeapon } from "../data/enums";
+import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, isRangedWeapon } from "../data/enums";
 import {
   MISC_DATA,
   MISC_GAME,
@@ -402,6 +402,14 @@ export interface ItemEvent {
   seller?: EventUnitInfo;
 }
 
+/** A unit that just climbed into a cargo hold — EVENT_UNIT_LOADED / EVENT_PLAYER_UNIT_LOADED.
+ *  `unit` is GetLoadedUnit (and the subject a unit-scoped registration watches: the campaign
+ *  registers this event on the PASSENGER), `transport` is GetTransportUnit. */
+export interface LoadEvent {
+  unit: EventUnitInfo;
+  transport: EventUnitInfo;
+}
+
 /** A creep's dropped-item table (from war3mapUnits.doo). Each SET drops (at most)
  *  one item, chosen among its entries by their `chance` percentages; multiple sets
  *  mean multiple independent drops. Ids may be real item rawcodes or a "random item
@@ -685,6 +693,12 @@ export interface SimUnit {
   turnRate: number; // UnitData turnrate; scaled to rad/sec below
   radius: number; // collision radius (0 = no unit collision)
   flying: boolean; // air units ignore ground pathing & collision
+  /** `movetype=float` (UnitBalance/UnitData) — a transport ship, and the Sea Giant. It paths
+   *  the WATER: the same grid read through `PathingFlag.NoWater` instead of `Unwalkable`, so
+   *  the sea it sits on is open ground to it and the shore is the wall. Everything else about
+   *  it is a ground unit — it is hit by ground attacks, holds cells, and takes AoE — which is
+   *  exactly why it cannot simply be spelled `flying`. Derived at spawn from the registry. */
+  waterborne: boolean;
   flyHeight: number; // altitude above ground the unit floats/draws at (0 for ground);
   // matches the render lift so missiles launch from / land at the unit's real height
   sightDay: number; // fog-of-war sight radius in daylight (UnitBalance `sight`)
@@ -1156,6 +1170,10 @@ function buildsFromInside(u: SimUnit): boolean {
 function speedBuilds(u: SimUnit): boolean {
   return u.race === "human";
 }
+/** The grid domain a unit searches — see SimUnit.waterborne. */
+function pathDomain(u: SimUnit): PathDomain {
+  return u.waterborne ? "water" : "ground";
+}
 // Proactive reroute poll (issue #6). A unit's path is computed once, but other
 // units may stop and reserve cells across it while it travels. Rather than let a
 // unit grind into that crowd until checkStuck() fires (0.5 s of no progress),
@@ -1362,6 +1380,7 @@ export class SimWorld {
   captureTrain = false; // EVENT_(PLAYER_)UNIT_TRAIN_* (7.17)
   captureHeroEvents = false; // EVENT_PLAYER_HERO_LEVEL / _SKILL (7.17)
   captureItems = false; // EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM (7.18)
+  captureLoads = false; // EVENT_UNIT_LOADED (88) / EVENT_PLAYER_UNIT_LOADED (51)
   private deathEvents: Array<{ victim: EventUnitInfo; killer: EventUnitInfo | null }> = [];
   private damageEvents: Array<{ target: EventUnitInfo; source: EventUnitInfo | null; amount: number }> = [];
   private attackEvents: Array<{ attacked: EventUnitInfo; attacker: EventUnitInfo }> = [];
@@ -1371,6 +1390,7 @@ export class SimWorld {
   private trainEvents: TrainEvent[] = [];
   private heroEvents: HeroEvent[] = [];
   private itemEvents: ItemEvent[] = [];
+  private loadEvents: LoadEvent[] = [];
   private removals: number[] = []; // units removed WITHOUT a death animation (cancels)
   private felled: SimTree[] = [];
   private depleted: SimMine[] = [];
@@ -2414,58 +2434,89 @@ export class SimWorld {
     w.desiredFacing = Math.atan2(b.y - w.y, b.x - w.x);
   }
 
-  // === Orc Burrow garrison ============================================================
+  // === Cargo holds: the Orc Burrow, and transports ====================================
   // Peons climb inside an Orc Burrow (up to Abun's Dataa1 = 4) and it fires arrows: one
   // piercing projectile whose DPS scales with the peon count (cooldown = base/(n+1);
   // recomputeStats). Ground truth: UnitAbilities.slk otrb has Abun (Load) + Abtl (Battle
   // Stations); Abun Dataa1=4; weapon 23-27 pierce, range 700, base cd 4 (UnitWeapons.slk);
   // scaling per Liquipedia Orc_Burrow.
+  //
+  // A TRANSPORT is the same mechanism with a different cargo hold. AbilityData.slk keeps them
+  // in one family, told apart by the `code` column (the ability CLASS, which is what we
+  // dispatch on everywhere): `Abun` is "Cargo Hold (Burrow)" and `Acar` is the transport's —
+  // `Sch5` "Cargo Hold (Ship)" (Dataa1 = 10; every transport ship: hbot/obot/nbot/etrs/ubot)
+  // and `Sch3` "Cargo Hold (Transport)" (8; the Goblin Zeppelin and the air barge). The other
+  // "Cargo Hold" rows are NOT this: `Advc` is Devour, `Sch2`/`Amtc` is the Meat Wagon's corpse
+  // bin and `Aenc` a Gold Mine's crew, and none of them takes a passenger that walks back out.
+  //
+  // Rise of the Naga is why transports exist here at all: its harbour cinematic ends with
+  // `IssueTargetOrderBJ(Illidan, "board", ship)`, and the ship sails on the map's own
+  // `EVENT_UNIT_LOADED` trigger. With no cargo hold the order fell through to "follow",
+  // Illidan trotted after the boat forever and the chapter's last scene never happened.
 
-  /** Passenger capacity of a unit type: Abun's Dataa1 (4 for the Orc Burrow), 0 if the
-   *  type lacks the Load ability. Cached per unit in `garrisonCap` (computed once). */
-  private computeGarrisonCap(typeId: string): number {
+  /** Which cargo hold a unit type carries, by ability CODE — `Abun` (burrow) or `Acar`
+   *  (transport), with the alias it came from so the capacity can be read off that row.
+   *  Null for a type with neither. */
+  private cargoHold(typeId: string): { alias: string; code: string } | null {
     const def = this.unitReg?.get(typeId);
-    if (!def?.abilities.includes("Abun")) return 0; // only the Orc Burrow carries Load
-    const cap = this.abilities?.get("Abun")?.levelData[0]?.data[0];
-    return cap && cap > 0 ? Math.round(cap) : 4;
+    if (!def) return null;
+    for (const alias of def.abilities) {
+      const code = this.abilities?.get(alias)?.code ?? alias;
+      if (code === "Abun" || code === "Acar") return { alias, code };
+    }
+    return null;
   }
 
-  /** Whether `burrow` can take another passenger right now. */
-  private burrowHasRoom(burrow: SimUnit): boolean {
+  /** Passenger capacity of a unit type: its cargo hold's Dataa1 (4 for the Orc Burrow, 10 for
+   *  a transport ship), 0 if it has no hold. Cached per unit in `garrisonCap`. */
+  private computeGarrisonCap(typeId: string): number {
+    const hold = this.cargoHold(typeId);
+    if (!hold) return 0;
+    const cap = this.abilities?.get(hold.alias)?.levelData[0]?.data[0];
+    if (cap && cap > 0) return Math.round(cap);
+    return hold.code === "Abun" ? 4 : 8; // the data's own defaults, if the row went missing
+  }
+
+  /** Whether `host` can take another passenger right now. */
+  private hostHasRoom(host: SimUnit): boolean {
     return (
-      burrow.garrisonCap > 0 &&
-      burrow.hp > 0 &&
-      (!burrow.building || burrow.building.constructionLeft <= 0) &&
-      burrow.garrison.length < burrow.garrisonCap
+      host.garrisonCap > 0 &&
+      host.hp > 0 &&
+      (!host.building || host.building.constructionLeft <= 0) &&
+      host.garrison.length < host.garrisonCap
     );
   }
 
-  /** Order a peon to garrison an Orc Burrow: walk there, then climb inside (tickGarrison). */
-  issueGarrison(peonId: number, burrowId: number): boolean {
-    const p = this.units.get(peonId);
-    const b = this.units.get(burrowId);
-    if (!p || !p.worker || this.castLocked(p) || !b || b.garrisonCap === 0) return false;
-    if (this.hostile(p, b)) return false; // only your own / allied burrows
+  /** Order a unit into a cargo hold: walk there, then climb inside (tickGarrison). A BURROW
+   *  takes workers only (WC3 lets nothing else man one); a transport takes any ground unit
+   *  that isn't itself a building or a flier — Acar's targs are "ground,friend,vuln,invu". */
+  issueGarrison(passengerId: number, hostId: number): boolean {
+    const p = this.units.get(passengerId);
+    const b = this.units.get(hostId);
+    if (!p || this.castLocked(p) || !b || b.garrisonCap === 0) return false;
+    const burrow = this.cargoHold(b.typeId)?.code === "Abun";
+    if (burrow ? !p.worker : p.building || p.flying) return false;
+    if (this.hostile(p, b)) return false; // only your own / allied holds
     p.order = "garrison";
-    p.targetId = burrowId;
+    p.targetId = hostId;
     p.inCombat = false;
     p.noCollision = false;
     this.cancelSwing(p);
-    this.detachBuilder(peonId); // drop any build/harvest job
+    this.detachBuilder(passengerId); // drop any build/harvest job
     p.stuckT = 0;
     p.stuckRetries = 0;
-    if (this.inBurrowReach(p, b)) {
-      this.enterBurrow(p, b); // already at the door — hop in now
+    if (this.inHostReach(p, b)) {
+      this.enterHost(p, b); // already at the door — hop in now
       return true;
     }
-    const [ax, ay] = this.burrowApproach(p, b);
-    if (!this.pathTo(p, ax, ay)) this.stop(peonId); // no path at all → give up
+    const [ax, ay] = this.hostApproach(p, b);
+    if (!this.pathTo(p, ax, ay)) this.stop(passengerId); // no path at all → give up
     return true;
   }
 
-  /** A walkable point just outside the burrow's footprint on the peon's side — the burrow
-   *  centre itself is blocked, so pathing straight at it fails. */
-  private burrowApproach(p: SimUnit, b: SimUnit): [number, number] {
+  /** A walkable point just outside the host's footprint on the passenger's side — the burrow
+   *  centre itself is blocked (and a ship sits on water), so pathing straight at it fails. */
+  private hostApproach(p: SimUnit, b: SimUnit): [number, number] {
     const dx = p.x - b.x, dy = p.y - b.y;
     const d = Math.hypot(dx, dy) || 1;
     const reach = b.radius + p.radius + 20;
@@ -2475,11 +2526,11 @@ export class SimWorld {
     return free ? this.grid.cellToWorld(free[0], free[1]) : [ax, ay];
   }
 
-  private inBurrowReach(p: SimUnit, b: SimUnit): boolean {
+  private inHostReach(p: SimUnit, b: SimUnit): boolean {
     return Math.max(Math.abs(p.x - b.x), Math.abs(p.y - b.y)) - b.radius - p.radius < 48;
   }
 
-  /** Drive a peon walking to garrison: enter once it reaches the burrow's edge. */
+  /** Drive a unit walking to its cargo hold: enter once it reaches the host's edge. */
   private tickGarrison(u: SimUnit): void {
     const b = u.targetId ? this.units.get(u.targetId) : null;
     if (!b || b.garrisonCap === 0 || b.hp <= 0) {
@@ -2487,56 +2538,77 @@ export class SimWorld {
       return;
     }
     if (u.moving) return; // still walking up
-    if (this.inBurrowReach(u, b)) {
-      if (this.burrowHasRoom(b)) this.enterBurrow(u, b);
+    if (this.inHostReach(u, b)) {
+      if (this.hostHasRoom(b)) this.enterHost(u, b);
       else this.stop(u.id); // full while we walked — give up
     } else {
-      // Stopped short of the burrow (blocked); one more try toward the door, else idle.
-      const [ax, ay] = this.burrowApproach(u, b);
+      // Stopped short of the host (blocked); one more try toward the door, else idle.
+      const [ax, ay] = this.hostApproach(u, b);
       if (!this.pathTo(u, ax, ay)) this.stop(u.id);
     }
   }
 
-  /** Peon climbs into a burrow: hidden, reserving no cells, added to its garrison. */
-  private enterBurrow(peon: SimUnit, burrow: SimUnit): void {
-    this.unsettle(peon); // no cell block while inside
-    peon.inBurrow = true;
-    peon.garrisonHost = burrow.id;
-    peon.order = "idle";
-    peon.targetId = null;
-    peon.moving = false;
-    peon.path = [];
-    peon.noCollision = false;
-    if (!burrow.garrison.includes(peon.id)) burrow.garrison.push(peon.id);
-    this.recomputeStats(burrow); // switch the arrow attack on / rescale its cooldown
+  /** A passenger climbs in: hidden, reserving no cells, added to the hold's roster — and
+   *  riding along, since a transport takes its cargo with it (`carryPassengers`). */
+  private enterHost(passenger: SimUnit, host: SimUnit): void {
+    this.unsettle(passenger); // no cell block while inside
+    passenger.inBurrow = true;
+    passenger.garrisonHost = host.id;
+    passenger.order = "idle";
+    passenger.targetId = null;
+    passenger.moving = false;
+    passenger.path = [];
+    passenger.noCollision = false;
+    passenger.x = host.x;
+    passenger.y = host.y;
+    if (!host.garrison.includes(passenger.id)) host.garrison.push(passenger.id);
+    this.recomputeStats(host); // switch the burrow's arrow attack on / rescale its cooldown
+    this.noteLoad(passenger, host);
   }
 
-  /** Eject one garrisoned peon to a free doorstep tile beside its burrow. */
-  private ejectPeon(peon: SimUnit, burrow: SimUnit): void {
-    peon.inBurrow = false;
-    peon.garrisonHost = 0;
-    const n = peon.footprint || footprintCells(peon.radius);
-    const [bcx, bcy] = this.grid.worldToCell(burrow.x, burrow.y);
+  /** Eject one passenger to a free tile beside its host. */
+  private ejectPassenger(passenger: SimUnit, host: SimUnit): void {
+    passenger.inBurrow = false;
+    passenger.garrisonHost = 0;
+    const n = passenger.footprint || footprintCells(passenger.radius);
+    const [bcx, bcy] = this.grid.worldToCell(host.x, host.y);
     const fit = this.grid.nearestFit(bcx, bcy, n) ?? this.grid.nearestWalkable(bcx, bcy);
-    if (fit) [peon.x, peon.y] = this.grid.cellToWorld(fit[0], fit[1]);
-    peon.order = "idle";
-    peon.moving = false;
-    peon.path = [];
-    this.settle(peon); // blocks its cell so the next ejected peon fans out beside it
-    peon.desiredFacing = Math.atan2(peon.y - burrow.y, peon.x - burrow.x);
+    if (fit) [passenger.x, passenger.y] = this.grid.cellToWorld(fit[0], fit[1]);
+    passenger.order = "idle";
+    passenger.moving = false;
+    passenger.path = [];
+    this.settle(passenger); // blocks its cell so the next one out fans out beside it
+    passenger.desiredFacing = Math.atan2(passenger.y - host.y, passenger.x - host.x);
   }
 
-  /** Unload every peon from a burrow (the Unload command). */
-  unloadBurrow(burrowId: number): boolean {
-    const b = this.units.get(burrowId);
+  /** Unload every passenger from a cargo hold — the Stand Down / Unload command. */
+  unloadBurrow(hostId: number): boolean {
+    const b = this.units.get(hostId);
     if (!b || b.garrison.length === 0) return false;
     for (const pid of [...b.garrison]) {
       const p = this.units.get(pid);
-      if (p) this.ejectPeon(p, b);
+      if (p) this.ejectPassenger(p, b);
     }
     b.garrison = [];
     this.recomputeStats(b); // empty → arrow attack off
     return true;
+  }
+
+  /** Cargo rides with its carrier. A burrow never moves and this costs it nothing; a ship
+   *  does, and without it a passenger would be put ashore wherever it happened to board —
+   *  `ejectPassenger` places it beside the HOST, so the host's position has to be the one it
+   *  is standing at. It also keeps everything that reads a unit's position (vision, groups,
+   *  a trigger's GetUnitX) answering where the unit actually is. */
+  private carryPassengers(): void {
+    for (const u of this.units.values()) {
+      if (!u.garrison.length) continue;
+      for (const pid of u.garrison) {
+        const p = this.units.get(pid);
+        if (!p) continue;
+        p.x = u.x;
+        p.y = u.y;
+      }
+    }
   }
 
   /** Battle Stations: order nearby idle friendly peons into burrows with room, this one
@@ -2980,6 +3052,7 @@ export class SimWorld {
     unit: Omit<
       SimUnit,
       | "desiredFacing"
+      | "waterborne" // derived from the type's movetype, below
       | "path"
       | "waypoint"
       | "moving"
@@ -3153,6 +3226,10 @@ export class SimWorld {
       ...unit,
       weapon,
       swingWeapon: null,
+      // Which medium it moves through, straight off the unit's own `movetype` — see
+      // SimUnit.waterborne. Derived rather than passed because it is a fact about the TYPE,
+      // and every caller that spawns a unit would otherwise have to remember to look it up.
+      waterborne: this.unitReg?.get(unit.typeId)?.moveType === MoveType.Float,
       // Pre-upgrade vision baselines. recomputeStats() rebuilds the live values from these
       // every tick, so researching Forged Swords mid-game lifts every existing Footman (the
       // weapon baselines live on each SimWeapon — see SimWeapon.base*).
@@ -3767,6 +3844,21 @@ export class SimWorld {
     if (!this.itemEvents.length) return this.itemEvents;
     const out = this.itemEvents;
     this.itemEvents = [];
+    return out;
+  }
+
+  /** Record a unit climbing into a cargo hold (`captureLoads`) — EVENT_UNIT_LOADED (88) and
+   *  EVENT_PLAYER_UNIT_LOADED (51). Rise of the Naga's harbour sails its ship off exactly
+   *  this: `TriggerRegisterUnitEvent(gg_trg_Ships_Sails, <Illidan>, EVENT_UNIT_LOADED)`. */
+  private noteLoad(passenger: SimUnit, host: SimUnit): void {
+    if (!this.captureLoads) return;
+    this.loadEvents.push({ unit: eventInfo(passenger), transport: eventInfo(host) });
+  }
+  /** Load events since the last drain (`captureLoads`). */
+  drainLoadEvents(): LoadEvent[] {
+    if (!this.loadEvents.length) return this.loadEvents;
+    const out = this.loadEvents;
+    this.loadEvents = [];
     return out;
   }
 
@@ -4782,7 +4874,9 @@ export class SimWorld {
     // and its attack SPEED scales with the peon count — one projectile always, cooldown =
     // base/(peons+1) → 100/150/200/250 % DPS for 1-4 (Liquipedia Orc_Burrow; base cd 4 from
     // UnitWeapons.slk). Damage per hit is unchanged. Empty → weapon off (no auto-attack).
-    if (u.garrisonCap > 0) {
+    // …the BURROW's hold only. A transport's cargo arms nothing (and a hold that armed its
+    // carrier would switch a Siege Engine's gun off the moment it emptied).
+    if (u.garrisonCap > 0 && this.cargoHold(u.typeId)?.code === "Abun") {
       const n = u.garrison.length;
       for (const w of u.weapons) {
         w.enabled = n >= 1;
@@ -7085,6 +7179,7 @@ export class SimWorld {
       }
     }
     this.tickMovement(dt);
+    this.carryPassengers(); // a transport's cargo moves with it
     this.resolveCollisions();
     this.tickWaygates(); // anything now standing in a gate's box comes out the far end
     this.resolveAirSeparation(dt);
@@ -10078,7 +10173,8 @@ export class SimWorld {
     this.unsettle(u);
     const start = this.grid.worldToCell(u.x, u.y);
     const blocked = this.clearanceBlocker(u, start);
-    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), blocked, maxExpansions);
+    const domain = pathDomain(u);
+    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), blocked, maxExpansions, domain);
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
       if (wasReserved) this.settle(u);
@@ -10089,7 +10185,7 @@ export class SimWorld {
     // glide straight toward each turn-point instead of stepping cell-to-cell in
     // 45° increments — the per-segment heading (and thus facing) then tracks the
     // real travel direction rather than zig-zagging and snapping on arrival.
-    const smoothed = smoothPath(this.grid, cells, blocked);
+    const smoothed = smoothPath(this.grid, cells, blocked, domain);
     // Cell centres as waypoints. When the path actually reaches the target cell
     // (best-effort paths stop short), finish on the footprint-aligned point so
     // the unit settles exactly onto the cells it will reserve.
@@ -10113,9 +10209,10 @@ export class SimWorld {
     if (n > 0) {
       const [sx, sy] = this.grid.snapForFootprint(u.chaseX, u.chaseY, n);
       const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+      const domain = pathDomain(u);
       for (let y = cy0; y < cy0 + n; y++) {
         for (let x = cx0; x < cx0 + n; x++) {
-          if (!this.grid.walkable(x, y) || this.grid.isReserved(x, y)) return false;
+          if (!this.grid.walkable(x, y, domain) || this.grid.isReserved(x, y)) return false;
         }
       }
     }
@@ -10140,12 +10237,13 @@ export class SimWorld {
     const half = n >> 1;
     const ownX0 = sx - half; // the unit's own footprint (reservation-exempt) origin
     const ownY0 = sy - half;
+    const domain = pathDomain(self);
     return (cx, cy) => {
       const cx0 = cx - half;
       const cy0 = cy - half;
       for (let y = cy0; y < cy0 + n; y++) {
         for (let x = cx0; x < cx0 + n; x++) {
-          if (!this.grid.walkable(x, y)) return true;
+          if (!this.grid.walkable(x, y, domain)) return true;
           if (this.grid.isReserved(x, y)) {
             const own = x >= ownX0 && x < ownX0 + n && y >= ownY0 && y < ownY0 + n;
             if (!own) return true;
@@ -10258,9 +10356,14 @@ export class SimWorld {
     const list: SimUnit[] = [];
     // Movable ground units only. Buildings (speed 0) block via their stamped grid
     // footprint, not separation; air units don't collide; mining workers ghost
-    // through everything until manually controlled (u.noCollision).
+    // through everything until manually controlled (u.noCollision). A unit that is OFF THE
+    // FIELD is not there to collide with either — and a passenger is the case that bites,
+    // because it rides at its carrier's exact position: the two then read as one unit
+    // standing inside another, and the separation pass shoved the ship off its course a few
+    // hundred units into the voyage. (A mining peon or a devoured sheep was only ever saved
+    // from the same fate by sitting inside a building's footprint.)
     for (const u of this.units.values())
-      if (!u.flying && u.radius > 0 && u.speed > 0 && !u.noCollision) list.push(u);
+      if (!u.flying && u.radius > 0 && u.speed > 0 && !u.noCollision && !isOffField(u)) list.push(u);
     // Snapshot each unit's intended (pathed) velocity for this tick, captured
     // before the nudges below mutate positions. prevX/prevY are set pre-movement,
     // so (x-prevX) is the step tickMovement just took toward the goal — used to
@@ -10406,11 +10509,12 @@ export class SimWorld {
   private footprintWalkableAt(u: SimUnit, wx: number, wy: number): boolean {
     const [cx, cy] = this.grid.worldToCell(wx, wy);
     const n = u.footprint;
-    if (n <= 0) return this.grid.walkable(cx, cy);
+    const domain = pathDomain(u);
+    if (n <= 0) return this.grid.walkable(cx, cy, domain);
     const half = n >> 1;
     for (let y = cy - half; y < cy - half + n; y++)
       for (let x = cx - half; x < cx - half + n; x++)
-        if (!this.grid.walkable(x, y)) return false;
+        if (!this.grid.walkable(x, y, domain)) return false;
     return true;
   }
 

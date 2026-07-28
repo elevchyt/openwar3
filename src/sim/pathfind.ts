@@ -1,4 +1,4 @@
-import type { PathingGrid } from "./pathing";
+import type { PathDomain, PathingGrid } from "./pathing";
 
 // A* pathfinding on the walkability grid (plan Phase 5/6). 8-directional,
 // octile heuristic, no cutting across blocked diagonal corners. Pure/headless.
@@ -29,8 +29,10 @@ function octile(ax: number, ay: number, bx: number, by: number): number {
 
 /**
  * Find a walkable cell path from start toward goal (inclusive of both ends).
- * `blocked` marks extra dynamic obstacles (stationary units). Returns null
- * only when start/goal can't be snapped to the static grid; otherwise returns
+ * `blocked` marks extra dynamic obstacles (stationary units). `domain` is the medium the
+ * unit moves through — a transport ship searches the water the same way a Footman searches
+ * the land, over the same grid read through its other flag (see PathingFlag.NoWater).
+ * Returns null only when start/goal can't be snapped to the static grid; otherwise returns
  * the path to the goal or, if unreachable, to the closest explored cell.
  */
 export function findPath(
@@ -39,15 +41,16 @@ export function findPath(
   goal: Cell,
   blocked?: (cx: number, cy: number) => boolean,
   maxExpansions = MAX_EXPANSIONS,
+  domain: PathDomain = "ground",
 ): Cell[] | null {
-  const from = grid.nearestWalkable(start[0], start[1]);
-  const to = grid.nearestWalkable(goal[0], goal[1]);
+  const from = grid.nearestWalkable(start[0], start[1], undefined, domain);
+  const to = grid.nearestWalkable(goal[0], goal[1], undefined, domain);
   if (!from || !to) return null;
 
   const width = grid.width;
   const key = (x: number, y: number) => y * width + x;
   const goalKey = key(to[0], to[1]);
-  const open = (x: number, y: number) => grid.walkable(x, y) && !(blocked && blocked(x, y));
+  const open = (x: number, y: number) => grid.walkable(x, y, domain) && !(blocked && blocked(x, y));
 
   const cameFrom = new Map<number, number>();
   const gScore = new Map<number, number>();
@@ -180,8 +183,9 @@ function lineClear(
   a: Cell,
   b: Cell,
   blocked?: (cx: number, cy: number) => boolean,
+  domain: PathDomain = "ground",
 ): boolean {
-  const open = (x: number, y: number) => grid.walkable(x, y) && !(blocked && blocked(x, y));
+  const open = (x: number, y: number) => grid.walkable(x, y, domain) && !(blocked && blocked(x, y));
   let x = a[0];
   let y = a[1];
   if (!open(x, y)) return false;
@@ -222,6 +226,7 @@ export function smoothPath(
   grid: PathingGrid,
   cells: Cell[],
   blocked?: (cx: number, cy: number) => boolean,
+  domain: PathDomain = "ground",
 ): Cell[] {
   if (cells.length <= 2) return cells;
   const out: Cell[] = [cells[0]];
@@ -229,7 +234,7 @@ export function smoothPath(
   for (let i = 1; i < cells.length - 1; i++) {
     // Keep cell i only when the anchor can no longer see the cell after it —
     // i.e. i is a real corner. Otherwise i is redundant and gets skipped.
-    if (!lineClear(grid, cells[anchor], cells[i + 1], blocked)) {
+    if (!lineClear(grid, cells[anchor], cells[i + 1], blocked, domain)) {
       out.push(cells[i]);
       anchor = i;
     }

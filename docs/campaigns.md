@@ -99,6 +99,11 @@ ordinary custom-map path: the map is not melee-flagged, so its own triggers set 
 **not** implemented — the stock campaigns ship as loose maps inside the MPQs, and the only
 `.w3n` in a 1.27a install is War3x's `DemoCampaign.w3n`.
 
+For DRIVING one — a chapter cannot be reached through the dev boot's `?map=`, whose manifest
+lists the install's `Maps\` folder and not the archives — there is `?dev&chapter=NightElfX01`
+(`&difficulty=easy|normal|hard`). It resolves the name against the campaign index and starts the
+chapter on `campaignConfig`, exactly as the campaign screen would. See `src/dev/devBoot.ts`.
+
 **ESC skips the opening cinematic**, as it does in the game — the engine raises
 `EVENT_PLAYER_END_CINEMATIC` for the local player while the interface is hidden, and the chapter's
 own `Intro Skipped` trigger does the rest. It is the map that decides when a cinematic is
@@ -184,6 +189,23 @@ enemy. They are TRIGSTR keys into the map's own `war3map.wts`, resolved in `pars
 carried on `PlayerSlot.name` → `SlotConfig.name` → the hover tooltip. Only a slot the map left
 unnamed falls back to "Computer (Normal)".
 
+**…including the sides no lobby seats.** The w3i player TYPE is 1 user / 2 computer / **3 neutral
+/ 4 rescuable**, and `parseMapInfo` kept only the first two — everything downstream of it is a
+question about lobby ROWS, and neutral players have none (the real client shows no row for
+"Prisoners" either). But they are players: they own units, they hold a colour, they sit in one of
+the map's forces, and the map names them. Rise of the Naga fields three — the Watchers' trackers
+(1), the Night Elf Villagers (2) and the Prisoners (9) — so the villagers you are sent to save
+and the caged prisoners you are sent to free all hovered as a bare "Player 3" / "Player 10" while
+every hostile side across the map read its own name. They now ride beside the slots as
+`MapInfo.neutralPlayers` and are appended to the match's `MeleeConfig.slots` with the controller
+the MAP gave them, which also keeps `applyLobby` from writing MAP_CONTROL_USER over the
+`SetPlayerController(p, MAP_CONTROL_NEUTRAL)` the chapter's own `config()` just ran.
+
+**And the player's colour is the MAP's.** Chapter one recolours Maiev's slot 0 to
+`PLAYER_COLOR_BLUE`; the HUD portrait was passing the owner's SLOT to `setTeamColor` and so
+showed a red bust over blue units. Everything that tints team-coloured art asks
+`RtsController.playerColor(owner)` — the units did, the bust and the build ghosts did not.
+
 **A placed AI unit holds its ground.** `Units\MiscGame.txt` states the rule for a *unit*, not
 for a creep: "After a unit has strayed 'GuardDistance' from where it started, that unit begins
 thinking about heading back to its start position" (600, with `MaxGuardDistance` 1000 and
@@ -223,6 +245,59 @@ Elven Gate at (384, -4352) lost its life bar and all but the two posts its `path
 while the doodad pass went on drawing a closed gate across the path: a gate you could see, could
 not attack, and could walk through. So a type that cannot be placed dead never is, and stands at
 full life. (`pnpm sim:test` pins it.)
+
+## A ship is a place to stand, and the sea is a place to sail
+
+Chapter one ends its harbour cinematic by putting Illidan on a boat:
+
+```
+call IssueTargetOrderBJ( udg_Illidan, "board", gg_unit_e000_0034 )
+...
+call TriggerRegisterUnitEvent( gg_trg_Ships_Sails, gg_unit_Eevi_0030, EVENT_UNIT_LOADED )
+```
+
+Three things had to exist for that to play, and none of them did.
+
+**The cargo hold is one mechanism with two members.** We had the Orc Burrow's (`Abun`, workers
+only, four of them) and nothing else. `AbilityData.slk` keeps both under the `code` column we
+dispatch on everywhere: `Abun` is "Cargo Hold (Burrow)", `Acar` is the transport's — alias `Sch5`
+"Cargo Hold (Ship)" with `Dataa1` = 10 on every transport ship (hbot/obot/nbot/etrs/ubot) and
+`Sch3` = 8 on the Goblin Zeppelin and the air barge. The other rows named "Cargo Hold" are NOT
+this and are deliberately excluded: `Advc` is Devour, `Sch2`/`Amtc` the Meat Wagon's corpse bin,
+`Aenc` a Gold Mine's crew. A burrow still takes only workers; a transport takes any ground unit
+that is not a building or a flier (`Acar` targs: `ground,friend,vuln,invu`). Passengers ride with
+the carrier — a ship that sailed off without them would put them ashore at the dock they boarded
+from.
+
+**"board" is an order, and it was falling through to `follow`.** The order strings are the game's
+own: `Slo3`/`Sloa` carry `Order=load` and `Sdro`/`Adro` `Order=unload` (NeutralAbilityFunc.txt) —
+those sit on the CARRIER — while **`board`** is the passenger's and appears in no ability row.
+Unhandled, it hit the generic target-order rule ("not hostile → follow") and Illidan walked
+circles round the boat forever. `Authority.cargoOrder` takes all three now, and takes them
+*before* `castOrder`, or a ship told to "load" would be asked to cast its own `Slo3`.
+
+**A transport paths the WATER.** `movetype=float` is the flag, and the pathing map already
+carries the other half of the answer: `war3map.wpm`'s `0x40` bit is "no water". Counted over this
+chapter's own wpm (384×512): 67,768 cells are a bare `0x40` (open land), 46,304 are `0x0a` —
+Unwalkable + Unbuildable with `0x40` CLEAR, which is the ocean — and 40,328 `0xce` / 12,516
+`0xca` are Unwalkable *with* `0x40` set: cliffs, which are not water and which no boat sails
+over. So a ground unit asks "is Unwalkable clear?" and a floating one asks "is NoWater clear?",
+over one grid, and the shallows (`0x00`) answer yes to both exactly as WC3 has it. That is
+`PathDomain` in `src/sim/pathing.ts`, threaded through `findPath`/`smoothPath` and every
+walkability test a mover makes. It also fixes the spawn: `createScriptUnit` displaces a unit
+created on a blocked cell to the nearest fit, and asked the ground question, every one of the
+harbour's `CreateUnit(p, 'etrs', …)` ships was displaced onto the nearest beach.
+
+**And a passenger is not there to collide with.** Cargo rides at its carrier's exact position, so
+the separation pass read the two as one unit standing inside another and shoved the ship off
+course a few hundred units into the voyage. `resolveCollisions` now skips anything `isOffField`
+says is not on the field — which a mining peon and a devoured sheep were only ever saved from by
+sitting inside a building's footprint.
+
+`EVENT_UNIT_LOADED` (88, and its player twin 51) is raised by the sim, matched on the PASSENGER —
+that is what the map's own registration settles, since it registers on Illidan and not on the
+boat — and answers `GetLoadedUnit` / `GetTransportUnit`. `pnpm sim:test` pins the whole path
+(`tools/sim-transport-test.cjs`).
 
 ## Not done yet
 

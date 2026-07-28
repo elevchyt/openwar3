@@ -307,8 +307,15 @@ function toConfig(slots: Slot[], info: MapInfo): MeleeConfig {
         team: s.team,
         startX: mapSlot?.startX ?? 0,
         startY: mapSlot?.startY ?? 0,
+        name: mapSlot?.name,
       };
     });
+  // The map's neutral/rescuable players had no row to be seated in and are in the match all
+  // the same — they own units, and the map's name for them is what a hover reads (see
+  // MapInfo.neutralPlayers).
+  for (const p of info.neutralPlayers) {
+    playing.push({ id: p.id, controller: p.controller, race: p.defaultRace, team: p.team, startX: p.startX, startY: p.startY, name: p.name });
+  }
   // A fresh seed per match, so two games on the same map don't roll the same crits and
   // drops. Math.random picks it; the sim never touches Math.random itself (world.ts).
   return { slots: playing, fog: "explored", seed: 1 + Math.floor(Math.random() * 2147483645) };

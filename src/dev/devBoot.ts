@@ -30,10 +30,17 @@ import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
  *   ?dev&map=EchoIsles                      …and start the first map whose path contains that
  *   ?dev&map=EchoIsles&player=1&seed=7      …as slot 1, on a seed shared with the other client
  *   ?dev&map=EchoIsles&fog=unexplored       …with normal WC3 fog rather than start-explored
+ *   ?dev&chapter=NightElfX01                start a CAMPAIGN chapter (&difficulty=easy|normal|hard)
  *
  * `player` and `seed` are what make two-client testing possible: point two browser contexts at
  * the same map and seed with different slots and they are in the same world looking at it from
  * different eyes, which is the only way to see that a viewpoint is actually per-player.
+ *
+ * `chapter` is the campaign's twin of `map`, and it needs its own switch because a chapter is
+ * not reachable through `map` at all: campaign maps live INSIDE War3xLocal.mpq, not in the
+ * install's Maps\ folder that the manifest lists, and they start on the campaign's config
+ * rather than a lobby's. The chapters are where the cinematics, the transports and the
+ * neutral/rescuable players are, so they are exactly what needs driving.
  */
 
 export interface DevBootHooks {
@@ -42,6 +49,11 @@ export interface DevBootHooks {
   /** Show the main menu over its 3D scene — skipped when a map was asked for. */
   showMenu(load: GateLoad): void;
   startGame(file: File, info: MapInfo, config: MeleeConfig, link?: MatchLinkSetup): Promise<void>;
+  /** Start a CAMPAIGN chapter by the name in its map path (`?chapter=`, see devBoot).
+   *  Separate from `startGame` because a chapter is a different start: its map comes out of
+   *  the ARCHIVES rather than the install's Maps\ folder, and it runs on the campaign's own
+   *  config (single player in the map's own first human slot, unexplored fog, a difficulty). */
+  startChapter(name: string, difficulty: string): Promise<void>;
 }
 
 interface Manifest {
@@ -64,7 +76,8 @@ async function fetchFile(path: string): Promise<File> {
  * their own seeds are not in the same match. Here the seed is an input.
  */
 function meleeConfigFor(info: MapInfo, player: number, seed: number, fog: FogMode): MeleeConfig {
-  const slots: SlotConfig[] = info.slots.map((s) => ({
+  // …plus the map's neutral/rescuable players, which no seating ever covers (MapInfo.neutralPlayers).
+  const slots: SlotConfig[] = [...info.slots, ...info.neutralPlayers].map((s) => ({
     id: s.id,
     // Every seat a human could take is filled by one, so a second client can walk into any of
     // them. Slots the MAP owns as computers stay computers — that is the map's call, not the
@@ -74,6 +87,7 @@ function meleeConfigFor(info: MapInfo, player: number, seed: number, fog: FogMod
     team: s.team,
     startX: s.startX,
     startY: s.startY,
+    name: s.name,
   }));
   return { slots, fog, seed, localPlayer: player };
 }
@@ -87,6 +101,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const params = new URLSearchParams(location.search);
   const want = params.get("map") ?? params.get("dev");
   const wantMap = want && want !== "" && want !== "1" ? want : null;
+  const wantChapter = params.get("chapter");
   const player = Number(params.get("player") ?? 0);
   const seed = Number(params.get("seed") ?? 1);
   // The lobby's three fog modes, because Phase D is ABOUT fog and a boot path that
@@ -157,6 +172,14 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const load = await loadProfile(files, DEFAULT_PROFILE);
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);
   hooks.mountInstall(load);
+
+  // A campaign chapter comes out of the archives we just mounted, so it needs no map file and
+  // no manifest entry — only the name of one.
+  if (wantChapter) {
+    log(`starting chapter ${wantChapter}`);
+    await hooks.startChapter(wantChapter, params.get("difficulty") ?? "normal");
+    return;
+  }
 
   if (!mapPath) {
     hooks.showMenu(load);
