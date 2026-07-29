@@ -1234,7 +1234,15 @@ export class MapViewerScene {
         // The record is what GetDestructableLife reads and what the .doo/`w3d` world calls
         // life, so damage dealt in the sim has to land there too.
         const d = this.destructibleById(destId);
-        if (d) d.life = u.hp;
+        if (d) {
+          // …and a blow that landed since the last frame makes the thing SHUDDER. The record
+          // still holds last frame's life, so a drop here is damage the sim just dealt — and
+          // only that: a script's SetDestructableLife writes the record and the body together
+          // (syncDestructibleToSim), which is right, because setting a gate's life in WC3
+          // does not make it flinch.
+          if (u.hp < d.life) this.hitDestructibleVisual(d);
+          d.life = u.hp;
+        }
         continue;
       }
       this.destSimIds.delete(simId);
@@ -4140,12 +4148,7 @@ export class MapViewerScene {
       if (!w) continue;
       const a = this.doodadActor(w);
       if (!a || a.dead) continue;
-      const hit = this.seqByName(a.inst.model.sequences, /stand hit/i);
-      if (hit < 0) continue;
-      a.inst.setSequence(hit);
-      a.inst.setSequenceLoopMode(0); // play the wobble once
-      a.revertEnd = a.inst.model.sequences[hit].interval?.[1] ?? 0;
-      a.clipT = 0; // start this actor's own clip clock
+      this.playHitWobble(a);
     }
     this.advanceDoodadClips(dt);
     for (const a of this.doodadActors.values()) {
@@ -4158,6 +4161,18 @@ export class MapViewerScene {
       a.revertEnd = 0;
       a.clipT = -1; // a looping idle needs no clock
     }
+  }
+
+  /** Play a stand-in's "Stand Hit" flinch once — the shudder a tree gives at every axe blow
+   *  and a gate at every axe blow landed on IT. The settle back to "stand" is the loop above,
+   *  which watches `revertEnd` for every actor, so this only has to start it. */
+  private playHitWobble(a: DoodadActor): void {
+    const hit = this.seqByName(a.inst.model.sequences, /stand hit/i);
+    if (hit < 0) return;
+    a.inst.setSequence(hit);
+    a.inst.setSequenceLoopMode(0); // play the wobble once
+    a.revertEnd = a.inst.model.sequences[hit].interval?.[1] ?? 0;
+    a.clipT = 0; // start this actor's own clip clock (and so it plays out off-camera, issue #88)
   }
 
   /** Drive every stand-in's one-shot clip (a tree's fall, a gate swinging open) off our own
@@ -4301,6 +4316,32 @@ export class MapViewerScene {
     a.dead = hold;
     a.revertEnd = 0;
     a.clipT = hold ? 0 : -1; // a held clip (the gate swinging open) runs off-camera too
+  }
+
+  /**
+   * A destructible took a blow: flinch, exactly as a chopped tree does.
+   *
+   * Every gate and door in the game ships the clip to do it — `stand` / **`Stand Hit`** /
+   * `Death Alternate` / `death` is the sequence list of the Elven Gate, the Demon Gate and
+   * both Dungeon Gates alike (read off the models loaded for Rise of the Naga). Without this
+   * a gate under an axe was the one thing in the world that took damage without moving: the
+   * health bar fell and the model stood there, and the first sign anything had happened was
+   * the gate swinging open at zero.
+   *
+   * A model that has no such clip is left ALONE rather than swapped for a stand-in that
+   * would play nothing — the crates are `Stand`/`Death` only, and standing one in is pure
+   * cost (it hides the batched doodad and adds a scene instance for no motion at all).
+   */
+  private hitDestructibleVisual(d: MapDestructible): void {
+    const map = this.viewer.map;
+    if (!map) return;
+    const w = this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]);
+    const existing = w ? this.doodadActors.get(w) : undefined;
+    const sequences = existing?.inst.model.sequences ?? w?.instance?.model?.sequences;
+    if (!w || !sequences || this.seqByName(sequences, /stand hit/i) < 0) return;
+    const a = existing ?? this.doodadActor(w);
+    if (!a || a.dead) return;
+    this.playHitWobble(a);
   }
 
   /** `KillDestructable` — and, through `ModifyGateBJ`, "open gate". The gate does not vanish:
