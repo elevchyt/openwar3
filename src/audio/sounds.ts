@@ -221,6 +221,7 @@ interface ModelSounds {
   launch: Clip[]; // M events whose label is a "…Launch"
   impact: Clip[]; // M events whose label is a "…Hit"/"…Impact" (or a single generic missile sound)
   ability: Clip[]; // A events — the sound the effect model itself plays when it appears
+  death: Clip[]; // D events — what the model itself crashes with (a gate's SNDXDGAT → GateDeath)
 }
 
 /** A live `sound` handle the script started (StartSound). The nodes arrive a tick late —
@@ -511,6 +512,27 @@ export class SoundBoard {
     if (clips.length) this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
   }
 
+  /** Play the crash a MODEL carries for its own death — the SND "D" event object. For the
+   *  things with no sound set to ask instead: every gate in the game holds `SNDXDGAT` →
+   *  AnimLookups `DGAT` → AnimSounds `GateDeath` → GateEpicDeath.wav, fired 33 ms into its
+   *  `death` clip, and its `DestructableData` row's own `deathSnd` column is empty.
+   *  @returns whether the model carried such an event (and the clip was cued). */
+  playModelDeath(modelArt: string, at?: SoundPos): boolean {
+    if (!modelArt) return false;
+    const clips = this.resolveModelSounds(modelArt).death;
+    if (!clips.length) return false;
+    this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
+    return true;
+  }
+
+  /** Play an `AnimSounds.slk` label at a world position. A LABEL, not a path: the row
+   *  carries the WAVs, their folder and the 3D metadata (`CrateDeath` →
+   *  Sound\Destructibles\CrateDeath1.wav, WANT3D, min 600 / max 10000). This is what a
+   *  destructible's `deathSnd` column names. */
+  playAnimSound(label: string, at?: SoundPos): void {
+    if (label) this.playPool(this.resolve("anim", label), "impact", at);
+  }
+
   /** Play the sound an EFFECT MODEL carries itself — an SND "A" event object, fired by
    *  WC3 at the moment that model's clip plays. This is the authentic chain and beats any
    *  folder guess: Flame Strike's warning vortex (FlameStrikeTarget.mdx) holds SND…AHFT →
@@ -590,13 +612,15 @@ export class SoundBoard {
    *  attack/flight/effect animation. The 4-char event code (e.g. "KRIF") maps through
    *  AnimLookups (→ SoundLabel) then AnimSounds (→ WAVs + 3D metadata). Cached per model
    *  path — the MDX is parsed once, lazily on first use. We take K (a unit's fire sound),
-   *  M (a missile's launch/impact) and A (an effect model's own spell sound); D (death) is
-   *  played via the unit's sound-set label instead. */
+   *  M (a missile's launch/impact), A (an effect model's own spell sound) and D (death).
+   *  A UNIT's death cry comes from its sound-set label instead and never reaches here; D is
+   *  read for the things that HAVE no sound set — the map's destructibles, where the model
+   *  is the only place the crash is written down (see playModelDeath). */
   private resolveModelSounds(modelArt: string): ModelSounds {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [] };
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [] };
     this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
     const bytes = this.vfs.rawBytes(modelArt);
     if (!bytes) return out;
@@ -612,12 +636,13 @@ export class SoundBoard {
       if (evt.name.substring(0, 3) !== "SND") continue;
       const id = evt.name.substring(4);
       const cat = id[0]; // K = attack, M = missile, D = death, A = ability
-      if (cat !== "K" && cat !== "M" && cat !== "A") continue;
+      if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D") continue;
       const label = this.animLabel(id);
       if (!label) continue;
       const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
       if (!clip) continue;
       if (cat === "K") out.attack.push(clip);
+      else if (cat === "D") out.death.push(clip);
       else if (cat === "A") out.ability.push(clip);
       else if (/launch/i.test(label)) out.launch.push(clip);
       else out.impact.push(clip); // "…Hit"/"…Impact", or a single generic missile sound

@@ -174,6 +174,12 @@ export class AllianceDialogOverlay {
         textOverrides: this.rowText(),
         onBuild: (built) => this.onBuild(built),
       });
+      // Closed while we were mounting (an FDF mount is async — it decodes the panel's BLPs):
+      // throw the finished screen away rather than strand it on screen. See EscMenu.build.
+      if (!this.shown) {
+        screen.dispose();
+        return;
+      }
       prev?.dispose();
       this.screen = screen;
       if (!this.scrim) {

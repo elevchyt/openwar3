@@ -62,7 +62,7 @@ import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { ChatDialogOverlay } from "../ui/chatDialog";
 import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
-import { ConsoleUi } from "../ui/consoleUi";
+import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
 import {
   chatPrompt, chatRecipients, formatChatLine,
@@ -4344,6 +4344,29 @@ export class MapViewerScene {
     this.playHitWobble(a);
   }
 
+  /**
+   * The crash a destructible makes when it goes — and the data keeps it in TWO places, so
+   * this asks both, in the order the game does.
+   *
+   * `DestructableData`'s own `deathSnd` column is an `AnimSounds.slk` label and covers the
+   * crates and the walls (`CrateDeath`, `RockWallDeath`, `TreeWallDeath`,
+   * `MagicalCellDeathSound`) — 43 of the 247 types. It is EMPTY on the other 204, and that
+   * includes **every one of the game's 25 gates**, whose crash is instead an SND event
+   * object on the model: `SNDXDGAT` → AnimLookups `DGAT` → AnimSounds `GateDeath` →
+   * `Doodads\LordaeronSummer\Terrain\Gate\GateEpicDeath.wav`, keyed at frame 2533 — 33 ms
+   * into the `death` clip [2500..3333] that is starting right now. So a column-only reading
+   * leaves every gate in the game silent, which is exactly how this was found.
+   *
+   * (Both end up in the same table, which is why the two lines below look alike: one
+   * arrives with its label already written down, the other has to fetch it from the model.)
+   */
+  private playDestructibleDeathSound(d: MapDestructible): void {
+    if (!this.sounds) return;
+    const at = { x: d.x, y: d.y, z: d.z };
+    if (d.deathSound) this.sounds.playAnimSound(d.deathSound, at);
+    else this.sounds.playModelDeath(d.model, at);
+  }
+
   /** `KillDestructable` — and, through `ModifyGateBJ`, "open gate". The gate does not vanish:
    *  it plays its death clip and holds the last frame (swung open), and its collider drops to
    *  the two posts `pathTexDeath` keeps. Idempotent, so a script that opens an open gate is a
@@ -4355,6 +4378,7 @@ export class MapViewerScene {
     this.syncDestructibleToSim(d);
     this.restampDestructible(d, true);
     this.playDestructibleClip(d, clip, true);
+    this.playDestructibleDeathSound(d);
     // …and the map is told. A destructable is a WIDGET, and `TriggerRegisterDeathEvent` takes
     // widgets — three of Rise of the Naga's triggers hang off exactly this (the harbour
     // sequence off its demon gate, two lines off the village's elven gate). Queued rather
@@ -5016,12 +5040,7 @@ export class MapViewerScene {
     // Built BEFORE the HUD so the HUD's own layers (the day/night medallion that hangs in the
     // strip's gap, the message column) stack over the console chrome rather than under it.
     this.consoleUi = new ConsoleUi(ui, this.vfs, SKIN_SECTION[this.localRace], {
-      openPanel: (panel) => {
-        if (panel === "quests") this.questLog?.toggle();
-        else if (panel === "menu") this.paused = this.gameMenu?.toggle() ?? false; // F10 pauses
-        else if (panel === "allies") this.allies?.toggle();
-        else this.chatDialog?.toggle();
-      },
+      openPanel: (panel) => this.togglePanel(panel),
       mountClock: (slot) => this.mountClock(slot),
     });
     this.hud = new GameHud(ui, driver);
@@ -5392,6 +5411,28 @@ export class MapViewerScene {
 
   // --- cinematics (7.24) -------------------------------------------------------------
 
+  /**
+   * Open or close one of the four console panels: the Quest Log (F9), the Game Menu (F10),
+   * the Allies dialog (F11) and the Chat dialog (F12).
+   *
+   * BOTH routes to them come through here — the console's own buttons and the F-keys —
+   * because they share one rule: **not during a cinematic.** WC3 takes the whole interface
+   * away for the length of one (`ShowInterface(false)` IS the letterbox), and these panels
+   * are interface: the key does nothing while the bars are down, and one that was already
+   * open goes with the console rather than floating over the film (see syncHudVisible).
+   *
+   * Keyed on the letterbox alone, like the cursor and like ESC-skips-the-cinematic:
+   * `EnableUserUI(false)` is the momentary blackout blizzard.j flicks around each cinematic
+   * FADE, and a panel must not blink shut and back for that.
+   */
+  private togglePanel(panel: ConsolePanel): void {
+    if (!this.interfaceShown) return;
+    if (panel === "quests") this.questLog?.toggle();
+    else if (panel === "menu") this.paused = this.gameMenu?.toggle() ?? false; // F10 pauses
+    else if (panel === "allies") this.allies?.toggle();
+    else this.chatDialog?.toggle();
+  }
+
   /** The HUD is on screen only when the interface (ShowInterface) AND the UI (EnableUserUI)
    *  are both on. Two natives, two different jobs — the letterbox hides the console for the
    *  duration of a cinematic; EnableUserUI hides everything for the duration of a fade. */
@@ -5416,6 +5457,22 @@ export class MapViewerScene {
     // `EnableUserUI(false)`, which blizzard.j flicks around each cinematic fade, is a
     // momentary blackout of the same screen and must not make the cursor blink back.)
     document.body.classList.toggle("cine-on", !this.interfaceShown);
+    // A panel that was already open when the bars came down goes with the console. Leaving
+    // it up would float the Quest Log over the film — and the Game Menu holds the sim
+    // PAUSED, which would stop the cinematic the player is watching dead.
+    if (!this.interfaceShown) this.closePanels();
+  }
+
+  /** Shut the four console panels (see togglePanel). Resuming with them is the Game Menu's
+   *  own "Return to Game": the menu is the one that pauses, so it is the one that unpauses. */
+  private closePanels(): void {
+    if (this.gameMenu?.visible) {
+      this.gameMenu.hide();
+      this.paused = false;
+    }
+    if (this.questLog?.visible) this.questLog.toggle();
+    if (this.allies?.visible) this.allies.toggle();
+    if (this.chatDialog?.visible) this.chatDialog.toggle();
   }
 
   /** Put a dialog on screen — or take it down — and with it the MOUSE (issue #104).
@@ -8475,29 +8532,33 @@ export class MapViewerScene {
         this.mapScript?.interp.firePlayerEvent(this.localPlayer, EVENT_PLAYER_END_CINEMATIC);
         return;
       }
+      // The four console panels. Each `preventDefault` is about the BROWSER (F10 opens its
+      // menu, F11 goes full-screen, F12 opens devtools) and stands whether or not the panel
+      // itself answers — togglePanel is what decides that, and it refuses while a cinematic
+      // is running.
       if (e.key === "F10") {
         e.preventDefault(); // F10 opens WC3's game menu, not the browser's
-        this.paused = this.gameMenu?.toggle() ?? false;
+        this.togglePanel("menu");
         return;
       }
       // F9 is the Quest Log ("F9 - Toggle the Quest Log on/off"). No pause, as in the game.
       if (e.key === "F9") {
         e.preventDefault();
-        this.questLog?.toggle();
+        this.togglePanel("quests");
         return;
       }
       // F11 is the Allies dialog (UI\HelpStrings.txt: "F11 - Toggle the Allies menu on/off").
       // Unlike F10 it does NOT pause: WC3 keeps the match running behind it.
       if (e.key === "F11") {
         e.preventDefault(); // and not the browser's full-screen toggle
-        this.allies?.toggle();
+        this.togglePanel("allies");
         return;
       }
       // F12 is the Messaging dialog ("F12 - Toggle the Chat menu on/off"). It picks who the
       // entry line talks to and shows the history; it does not pause either.
       if (e.key === "F12") {
         e.preventDefault(); // and not the browser's devtools
-        this.chatDialog?.toggle();
+        this.togglePanel("chat");
         return;
       }
       // Same rule as the HUD's own hotkeys (ui/hud.ts isTyping): a keystroke aimed at a text

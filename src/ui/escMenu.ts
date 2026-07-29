@@ -157,6 +157,16 @@ export class EscMenu {
         handlers: this.handlers(),
         onBuild: (built) => this.onBuild(built),
       });
+      // Closed while we were mounting? Then this panel is already gone as far as everything
+      // else is concerned, and showing it now would strand it on screen with nothing left to
+      // close it. Mounting an FDF screen is ASYNC (it reads and decodes the panel's BLPs), so
+      // the window is real: a cinematic that starts on the frame after the player hit F10
+      // hides the menu, and the mount lands afterwards. (Same guard in the other three
+      // panels — see mapViewer.closePanels.)
+      if (!this.shown) {
+        screen.dispose();
+        return;
+      }
       prev?.dispose();
       this.screen = screen;
       // Modal, as in the game: the world behind must not take the click that missed a

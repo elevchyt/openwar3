@@ -65,6 +65,16 @@ export interface MapDestructible {
   /** `portraitmodel` — a dedicated bust (the gate has one), since the doodad's own model is
    *  a piece of terrain and makes a poor talking head. `.mdl` as the editor spells it. */
   portraitModel: string;
+  /** `file` — the doodad's own model, already spelled `.mdx` as the archives ship it. The
+   *  doodad pass draws it; we read it for the sound events it carries (see deathSound). */
+  model: string;
+  /** `deathSnd` — an `AnimSounds.slk` LABEL for the crash it makes when it is destroyed:
+   *  `CrateDeath` (→ Sound\Destructibles\CrateDeath1.wav), `TreeWallDeath` (TreeFall1-3),
+   *  `RockWallDeath`, `MagicalCellDeathSound`. Empty on 204 of the 247 types — **including
+   *  every one of the 25 gates**, whose crash is an SND event on the MODEL instead
+   *  (`SNDXDGAT` → AnimLookups `DGAT` → `GateDeath` → GateEpicDeath.wav). Two sources, one
+   *  table: whoever plays this has to try the column and then the model. */
+  deathSound: string;
   /** The SLK's `Name` — usually a `WESTRING_*` key into `UI\WorldEditStrings.txt`, resolved
    *  by the caller (GetDestructableName is the only thing that reads it). */
   name: string;
@@ -112,6 +122,8 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
       selCircle: Number(row.string("selcircsize")) || 0,
       armorSound: tex(row.string("armor")),
       portraitModel: tex(row.string("portraitmodel")),
+      model: mdx(tex(row.string("file"))),
+      deathSound: tex(row.string("deathSnd")),
       name: row.string("Name") || "",
     });
   }
@@ -121,6 +133,12 @@ export function collectMapDestructibles(doodads: DoodadInstance[], rowOf: Destru
 /** SLK's two spellings of "no texture" — a bare `_` and the literal `none`. */
 function tex(v: string | undefined): string {
   return !v || v === "_" || v === "none" ? "" : v;
+}
+
+/** The data spells model paths the editor's way — extensionless, or `.mdl`. The archives
+ *  ship `.mdx`. (`file` is "Doodads\LordaeronSummer\Terrain\ElfGate\ElfGate".) */
+function mdx(v: string): string {
+  return v ? `${v.replace(/\.mdl$/i, "")}.mdx` : "";
 }
 
 /** The destructible a script's `CreateDestructable`/`CreateDestructableZ` is re-making.

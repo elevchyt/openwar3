@@ -402,6 +402,18 @@ export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
   private byId = new Map<number, Entry>();
+  /**
+   * Defs for the sim units the unit REGISTRY does not hold: the map's destructibles, whose
+   * type codes come out of `DestructableData.slk` rather than `UnitData.slk`. Combat reads a
+   * def for the same thing here as anywhere — the armour MATERIAL that picks the impact
+   * sound — and without this a gate under an axe was struck in total silence.
+   *
+   * Keyed by SIM ID, not by type id, because a destructible's render body is optional: the
+   * doodad pass already drew the gate, so `attachDestructibleBody` only ever lands if a
+   * widget is found for it, and the `byId` entry that carries a type id may simply not
+   * exist. The sim id is what a hit event actually carries.
+   */
+  private destructibleDefs = new Map<number, UnitDef>();
   // Multi-unit selection: `selected` holds the whole group, `primary` is the
   // leader that drives the HUD (portrait, info panel, command card).
   private selected = new Set<number>();
@@ -1187,6 +1199,12 @@ export class RtsController {
     if (this.sounds.play(def.soundSet, cat, undefined, this.primary!) && single) this.voiceStreak++;
   }
 
+  /** The def behind a sim unit: the registry's, or — for the map's destructibles, which have
+   *  no registry row — the one they were seeded with (see destructibleDefs). */
+  private defOf(simId: number): UnitDef | undefined {
+    return this.registry.get(this.byId.get(simId)?.typeId ?? "") ?? this.destructibleDefs.get(simId);
+  }
+
   /** Play weapon-impact SFX for every hit landed this tick (attacker's weapon
    *  material vs target's armour material) plus lumber-chop SFX (worker's 2nd-weapon
    *  material vs Wood) — all sourced from the game's combat sounds. */
@@ -1197,13 +1215,13 @@ export class RtsController {
     // fires. Melee units without such an event are silent here; their audible attack
     // is the weapon-impact clang below. Resolved authentically (AnimLookups→AnimSounds).
     for (const attackerId of this.sim.drainAttackSwings()) {
-      const def = this.registry.get(this.byId.get(attackerId)?.typeId ?? "");
+      const def = this.defOf(attackerId);
       const au = this.sim.units.get(attackerId);
       if (def?.model && au) this.sounds.playModelAttack(def.model, { x: au.x, y: au.y, z: this.heightAt(au.x, au.y) });
     }
     for (const h of this.sim.drainHits()) {
-      const atk = this.registry.get(this.byId.get(h.attackerId)?.typeId ?? "");
-      const tgt = this.registry.get(this.byId.get(h.targetId)?.typeId ?? "");
+      const atk = this.defOf(h.attackerId);
+      const tgt = this.defOf(h.targetId);
       if (!atk) continue;
       const tu = this.sim.units.get(h.targetId); // impact rings out at the struck unit
       const at = tu ? { x: tu.x, y: tu.y, z: this.heightAt(tu.x, tu.y) } : undefined;
@@ -1214,7 +1232,7 @@ export class RtsController {
       }
     }
     for (const workerId of this.sim.drainChops()) {
-      const def = this.registry.get(this.byId.get(workerId)?.typeId ?? "");
+      const def = this.defOf(workerId);
       const w = this.sim.units.get(workerId);
       const at = w ? { x: w.x, y: w.y, z: this.heightAt(w.x, w.y) } : undefined;
       if (def?.lumberSound) this.sounds.playImpact(def.lumberSound, "Wood", at); // trees are "Wood" armour
@@ -2145,6 +2163,7 @@ export class RtsController {
  */
   addDestructible(def: UnitDef, x: number, y: number, facing: number, life: number): number {
     const simId = this.addSimUnit(def, x, y, facing, NEUTRAL_PASSIVE_OWNER, NEUTRAL_PASSIVE_TEAM);
+    this.destructibleDefs.set(simId, def);
     const u = this.sim.units.get(simId);
     if (u) {
       u.neutralPassive = true;
