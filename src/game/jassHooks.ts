@@ -167,6 +167,15 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
       sim.dawnDusk = enable;
     },
     isDawnDuskEnabled: () => sim.dawnDusk,
+    // …and how fast it runs, and whether it runs at all. Both belong beside the clock rather
+    // than on the JASS runtime, which is where the scale used to sit unread (see world.ts).
+    setTimeOfDayScale: (scale) => {
+      sim.timeOfDayScale = scale;
+    },
+    getTimeOfDayScale: () => sim.timeOfDayScale,
+    suspendTimeOfDay: (flag) => {
+      sim.timeOfDaySuspended = flag;
+    },
     // --- the tech tree (issue #57) ---
     playerTechCount: (player, tech) => sim.tech?.count(player, tech) ?? 0,
     setPlayerTechResearched: (player, tech, level) => sim.tech?.setResearchLevel(player, tech, level),

@@ -130,6 +130,8 @@ const prop = (key: string, ...args: Arg[]): FdfProp => ({ key, args });
 /** The four panels the button bar opens — the same ones F9…F12 open. */
 export type ConsolePanel = "quests" | "menu" | "allies" | "chat";
 
+const EMPTY_PANELS: ReadonlySet<ConsolePanel> = new Set();
+
 const BUTTONS: Array<{ frame: string; panel: ConsolePanel }> = [
   { frame: "UpperButtonBarQuestsButton", panel: "quests" },
   { frame: "UpperButtonBarMenuButton", panel: "menu" },
@@ -139,6 +141,10 @@ const BUTTONS: Array<{ frame: string; panel: ConsolePanel }> = [
 
 export interface ConsoleUiActions {
   openPanel(panel: ConsolePanel): void;
+  /** Which of the four buttons are dead in this match — greyed and unclickable. A CAMPAIGN
+   *  kills Allies and Chat: a mission has nobody to ally with and nobody to talk to. Asked
+   *  on every build rather than passed once, because a resize rebuilds the whole strip. */
+  disabledPanels?(): ReadonlySet<ConsolePanel>;
   /** Put the day/night medallion in the slot the strip leaves for it (render/timeIndicator.ts).
    *  Returns false when there is no install to render the model from. */
   mountClock(slot: HTMLElement): boolean;
@@ -278,8 +284,9 @@ export class ConsoleUi {
     if (this.mounting) return;
     this.mounting = true;
     try {
+      const dead = this.actions.disabledPanels?.() ?? EMPTY_PANELS;
       const handlers: Record<string, () => void> = {};
-      for (const b of BUTTONS) handlers[b.frame] = () => this.actions.openPanel(b.panel);
+      for (const b of BUTTONS) if (!dead.has(b.panel)) handlers[b.frame] = () => this.actions.openPanel(b.panel);
       const prev = this.screen;
       const screen = await mountFdfScreen({
         container: this.container,
@@ -304,6 +311,9 @@ export class ConsoleUi {
           this.backing(built);
           this.paint(built);
           this.mountClock(built);
+          // …and grey the buttons this match has no use for. In onBuild, not after the mount:
+          // a resize rebuilds every frame from the FDF and would hand them back enabled.
+          for (const b of BUTTONS) if (dead.has(b.panel)) built.setEnabled(b.frame, false);
         },
       });
       prev?.dispose();

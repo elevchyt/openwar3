@@ -45,6 +45,9 @@ const EXPECTED = [
   "setResourceAmount",
   "setHeroXp", "setItemCharges", "setItemPosition", "setPlayerTechMaxAllowed",
   "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel",
+  // The rest of the day/night clock: how fast it runs and whether it runs at all. A campaign
+  // sets both (Rise of the Naga: 25% speed, then UseTimeOfDayBJ(false) to hold it at night).
+  "getTimeOfDayScale", "setTimeOfDayScale", "suspendTimeOfDay",
   "setUnitFacing", "setUnitFlyHeight", "setUnitInvulnerable", "setUnitMoveSpeed", "setUnitOwner",
   "setUnitPathing", "setUnitPosition",
   "setUnitState", "setUnitTurnSpeed", "unitAddAbility", "unitAddItem", "unitDropItemPoint",
@@ -85,6 +88,21 @@ world.dawnDusk = true;
 hooks.setDawnDusk(false);
 check("setDawnDusk writes the sim", world.dawnDusk, false);
 check("isDawnDuskEnabled reads it", hooks.isDawnDuskEnabled(), false);
+
+// The clock's SPEED and its FREEZE — and that they are two switches, not one. A campaign
+// suspends the cycle for the whole mission while cinematics turn dawn/dusk off and back on,
+// so a restored EnableDawnDusk must not restart a clock the map stopped.
+hooks.setTimeOfDayScale(0.25);
+check("setTimeOfDayScale writes the sim", world.timeOfDayScale, 0.25);
+check("getTimeOfDayScale reads it", hooks.getTimeOfDayScale(), 0.25);
+world.dawnDusk = true;
+world.timeOfDay = 19;
+hooks.suspendTimeOfDay(true);
+world.tick(1);
+check("a suspended clock does not advance", world.timeOfDay, 19);
+hooks.suspendTimeOfDay(false);
+world.tick(1);
+check("…and runs again when released, at the scale it was given", world.timeOfDay > 19 && world.timeOfDay < 19.1, true);
 
 // --- the dual-writers ------------------------------------------------------------------------
 //

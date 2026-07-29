@@ -167,14 +167,16 @@ export class Viewpoint {
     if (this.isOurs(u) && !u.neutralPassive) return false;
     if (this.isExposed(u)) return false;
     if (u.building != null) {
-      // A NEUTRAL PASSIVE structure — a shop, a tavern, a fountain — is map furniture every
-      // player knows from the loading screen (its minimap glyph paints over pitch-black
-      // ground in the real client), so its image never needs SCOUTING: it draws from match
-      // start, dimmed as a memory, under whatever veil covers the ground. This is the same
-      // rule the snapshot send already applies (`visibilityFor` demotes them to remembered,
-      // never absent) — a client had it and the host did not, and the two must agree.
-      // `fogBlocksClick` still stands: known is not watched, and you cannot shop through fog.
-      if (u.neutralPassive) return false;
+      // EVERY structure, including the map's furniture, has to be SEEN before it is drawn.
+      //
+      // The neutral-passive ones — a shop, a tavern, a fountain — used to be exempt, on the
+      // argument that a player "knows them from the loading screen" because their minimap
+      // glyphs paint over unexplored ground in the real client. That was wrong twice over:
+      // issue #71 already made the GLYPH explored-gated (minimapView.minimapIcons), and the
+      // exemption was never about glyphs anyway — it put the fountain's MODEL, water splash
+      // and all, floating in pitch-black terrain nobody had walked. Unexplored ground shows
+      // nothing in WC3, furniture included. (`visibilityFor` matches this: an undiscovered
+      // one is omitted from a client's payload rather than sent as a memory.)
       const [cx, cy] = this.vision.worldToCell(u.x, u.y);
       return !this.vision.hasSeen(cx, cy);
     }

@@ -433,6 +433,9 @@ function campaignConfig(info: MapInfo, difficulty: Difficulty, title: string): M
     mapName: title,
     seed: 1 + Math.floor(Math.random() * 2147483645),
     difficulty: DIFFICULTY_INDEX[difficulty],
+    // A mission, not a game off a list — which is what makes the console's Allies and Chat
+    // buttons dead: there is nobody to ally with and nobody to talk to.
+    campaign: true,
   };
 }
 

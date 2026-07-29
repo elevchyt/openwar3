@@ -79,4 +79,13 @@ export interface MeleeConfig {
    * is the AI's, not the game's. Campaign chapters read it through `GetGameDifficulty`.
    */
   difficulty?: number;
+  /**
+   * This match is a CAMPAIGN chapter rather than a game off a map list.
+   *
+   * Set by the campaign start (src/main.ts) and read for the things a mission is not: there is
+   * nobody to ally with and nobody to talk to, so WC3 leaves the console's Allies and Chat
+   * buttons dead in a campaign (see MapViewerScene.togglePanel). `difficulty` happens to be
+   * campaign-only too, but reading THAT as "this is a campaign" is reading a coincidence.
+   */
+  campaign?: boolean;
 }

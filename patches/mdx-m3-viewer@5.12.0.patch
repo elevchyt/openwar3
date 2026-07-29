@@ -325,7 +325,7 @@ index fbd43cb761b6de95a8a74aacc2f3087203c5c9e7..bf8e927987f5295727656033499491fa
      }
      return offset;
 diff --git a/dist/cjs/parsers/w3x/w3d/file.d.ts b/dist/cjs/parsers/w3x/w3d/file.d.ts
-index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..08e499edc59573c8d2a2652aa4590da775202d34 100644
+index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..af203a247a924c6a0a427b75735e919df367ffb9 100644
 --- a/dist/cjs/parsers/w3x/w3d/file.d.ts
 +++ b/dist/cjs/parsers/w3x/w3d/file.d.ts
 @@ -9,6 +9,8 @@ export default class War3MapW3d {
@@ -338,7 +338,7 @@ index c210e02c8002aed4e3ddc02e42ebe25f04d2a27e..08e499edc59573c8d2a2652aa4590da7
      save(): Uint8Array;
      getByteLength(): number;
 diff --git a/dist/cjs/parsers/w3x/w3d/file.js b/dist/cjs/parsers/w3x/w3d/file.js
-index 5c2629bdcf279decae84d9fddfc523d5548192e8..07db70d7c51c53b2d5555e7df31c5e2aed0de369 100644
+index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e4936364d94 100644
 --- a/dist/cjs/parsers/w3x/w3d/file.js
 +++ b/dist/cjs/parsers/w3x/w3d/file.js
 @@ -12,6 +12,8 @@ class War3MapW3d {
@@ -874,7 +874,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..cecf65149c8f6ba8bfe96255c96a8df836430afc 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..4ae284d745737499caef488b013b5fda0fa56265 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -168,7 +168,11 @@ class War3MapViewerMap {
@@ -1064,7 +1064,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..cecf65149c8f6ba8bfe96255c96a8df8
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 15);
-@@ -558,6 +695,8 @@ class War3MapViewerMap {
+@@ -558,11 +695,17 @@ class War3MapViewerMap {
              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
              webgl.useShader(shader);
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1073,7 +1073,16 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..cecf65149c8f6ba8bfe96255c96a8df8
              gl.uniform2fv(uniforms['u_offset'], this.centerOffset);
              gl.uniform2f(uniforms['u_size'], this.columns, this.rows);
              gl.uniform1i(uniforms['u_heightMap'], 0);
-@@ -599,6 +738,8 @@ class War3MapViewerMap {
+             gl.uniform1i(uniforms['u_waterHeightMap'], 1);
+             gl.uniform1i(uniforms['u_waterTexture'], 2);
++            // OpenWar3: fog of war — the sea sits ABOVE the ground veil wherever it is deeper
++            // than the shore, so the veil passes under it and the water stayed lit through
++            // unexplored black. Dim it in the shader, as the cliffs do.
++            this.setFogOfWarUniforms(uniforms, 3);
+             gl.uniform1f(uniforms['u_offsetHeight'], this.waterHeightOffset);
+             gl.uniform4fv(uniforms['u_maxDeepColor'], this.maxDeepColor);
+             gl.uniform4fv(uniforms['u_minDeepColor'], this.minDeepColor);
+@@ -599,6 +742,8 @@ class War3MapViewerMap {
              gl.disable(gl.BLEND);
              shader.use();
              gl.uniformMatrix4fv(uniforms['u_VP'], false, this.worldScene.camera.viewProjectionMatrix);
@@ -1082,26 +1091,17 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..cecf65149c8f6ba8bfe96255c96a8df8
              gl.uniform1i(uniforms['u_heightMap'], 0);
              gl.uniform2f(uniforms['u_pixel'], 1 / (this.columns + 1), 1 / (this.rows + 1));
              gl.uniform2fv(uniforms['u_centerOffset'], this.centerOffset);
-@@ -612,6 +753,18 @@ class War3MapViewerMap {
+@@ -612,6 +757,9 @@ class War3MapViewerMap {
                  gl.activeTexture(gl.TEXTURE2);
                  gl.bindTexture(gl.TEXTURE_2D, this.cliffTextures[1].webglResource);
              }
 +            // OpenWar3: fog of war — dim cliff faces by the fog mask (set by FogOverlay
-+            // via mapViewer). Stays off (stock behaviour) until fogTexture is installed.
-+            if (this.fogTexture) {
-+                gl.uniform1f(uniforms['u_fogEnabled'], 1);
-+                gl.uniform4fv(uniforms['u_fogParams'], this.fogParams);
-+                gl.uniform1i(uniforms['u_fogTexture'], 3);
-+                gl.activeTexture(gl.TEXTURE3);
-+                gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
-+            }
-+            else {
-+                gl.uniform1f(uniforms['u_fogEnabled'], 0);
-+            }
++            // via mapViewer); the ground veil cannot cover their overhang.
++            this.setFogOfWarUniforms(uniforms, 3);
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +824,62 @@ class War3MapViewerMap {
+@@ -671,6 +819,85 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -1141,6 +1141,29 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..cecf65149c8f6ba8bfe96255c96a8df8
 +        }
 +        else {
 +            gl.uniform1f(uniforms['u_distFogEnabled'], 0);
++        }
++    }
++    /**
++     * OpenWar3: feed a terrain shader the FOG OF WAR mask (src/render/fogOverlay.ts, installed
++     * on the map by mapViewer as `fogTexture`/`fogParams`).
++     *
++     * Two of the three terrain passes need it, and for the same reason: the fog veil is a mesh
++     * laid on the GROUND, so anything the ground is not covers itself. A cliff face overhangs
++     * it; the water sheet sits above it wherever the sea is deeper than the shore. Both dim in
++     * their own shader instead. `textureUnit` differs per pass only because each pass has its
++     * own textures bound below it. Stays off — stock behaviour — until a fog texture exists.
++     */
++    setFogOfWarUniforms(uniforms, textureUnit) {
++        const gl = this.viewer.gl;
++        if (this.fogTexture) {
++            gl.uniform1f(uniforms['u_fogEnabled'], 1);
++            gl.uniform4fv(uniforms['u_fogParams'], this.fogParams);
++            gl.uniform1i(uniforms['u_fogTexture'], textureUnit);
++            gl.activeTexture(gl.TEXTURE0 + textureUnit);
++            gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
++        }
++        else {
++            gl.uniform1f(uniforms['u_fogEnabled'], 0);
 +        }
 +    }
 +    /**
@@ -1311,10 +1334,10 @@ index 26a5b4c8758bfb80c62f458fbc4a85293c18060b..a611f04f49f48bf98e308e50653c6f7c
      v_uv[0] = vec2(0.0);
      v_uv[1] = vec2(0.0);
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
-index 6f31791753b2bf146060b8adfb44767cc468be55..99f3dfa6a2c5bca2316facb831ff64a47d2d52fe 100644
+index 6f31791753b2bf146060b8adfb44767cc468be55..2cd00484ad61505a2b1433d34dfc882341d9c4ca 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
-@@ -6,11 +6,39 @@ ${precision_glsl_1.default}
+@@ -6,11 +6,57 @@ ${precision_glsl_1.default}
  
  uniform sampler2D u_waterTexture;
  
@@ -1333,6 +1356,16 @@ index 6f31791753b2bf146060b8adfb44767cc468be55..99f3dfa6a2c5bca2316facb831ff64a4
 +uniform vec3 u_distFogColor;
 +uniform vec3 u_distFogEye;
 +
++// OpenWar3: fog of war. The water sheet is drawn at the WATER level, which on a shore or a
++// deep channel sits ABOVE the ground — so FogOverlay's veil mesh, which hugs the terrain,
++// passes underneath it and the sea stayed lit through pitch-black unexplored map. Dim it
++// here instead, exactly as the cliff faces are (cliffs.frag). Same mask, same mapping:
++// u_fogTexture is per-corner brightness (1=in sight, 0.5=explored, 0=unexplored) and
++// u_fogParams maps world XY → mask UV. u_fogEnabled 0 keeps stock behaviour.
++uniform sampler2D u_fogTexture;
++uniform vec4 u_fogParams;
++uniform float u_fogEnabled;
++
  varying vec2 v_uv;
  varying vec4 v_color;
 +varying vec3 v_dfPos;
@@ -1349,6 +1382,14 @@ index 6f31791753b2bf146060b8adfb44767cc468be55..99f3dfa6a2c5bca2316facb831ff64a4
 +  if (u_distFogEnabled > 0.5) {
 +    float f = clamp((u_distFogEnd - length(u_distFogEye - v_dfPos)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
 +    color.rgb = mix(u_distFogColor, color.rgb, f);
++  }
++
++  // Fog of war, last — over unexplored ground this takes the sea to black, which is what
++  // the veil has already done to the shore beside it. RGB only, like the haze above: the
++  // alpha is Water.slk's shore fade and dimming it would eat the coastline.
++  if (u_fogEnabled > 0.5) {
++    vec2 fogUv = (v_dfPos.xy - u_fogParams.xy) * u_fogParams.zw;
++    color.rgb *= texture2D(u_fogTexture, fogUv).r;
 +  }
 +
 +  gl_FragColor = color;

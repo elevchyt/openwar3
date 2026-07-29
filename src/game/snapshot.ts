@@ -139,17 +139,19 @@ export type Visibility = "live" | "remembered" | "omit";
 export function visibilityFor(viewer: SnapshotViewer, u: SimUnit): Visibility {
   if (isOffField(u)) return viewer.seesFor(u.owner) ? "live" : "omit";
   if (viewer.invisHides(u)) return "omit";
-  // A NEUTRAL PASSIVE structure — a shop, a tavern, a fountain — is sent as REMEMBERED even
-  // where fog would omit a player's building. The justification used to be "its minimap glyph
-  // paints over pitch-black unexplored ground in the real client anyway, so its identity and
-  // pose were never secrets"; issue #71 retired that half — the glyph IS explored-gated now
-  // (minimapView.minimapIcons) — and what remains is the structural reason, which was always
-  // the load-bearing one: this is what keeps a frozen client's copy of the map furniture
-  // standing instead of letting the applier delete it (records, models, glyphs and splats all
-  // hang off the record). What the client then DRAWS is still `fogHides`'s call. Its DESTRUCTION
-  // is still learned by discovery: the ghost path keeps the image for every viewer that was
-  // not watching, and only re-scouting the spot clears it (GhostMemory.forgetSeen).
-  if (viewer.fogHides(u)) return u.neutralPassive && u.building != null ? "remembered" : "omit";
+  // Fog omits, and that now includes the map's FURNITURE. A neutral-passive structure — a
+  // shop, a tavern, a fountain — used to be promoted to "remembered" here even where fog
+  // omitted a player's building, on the argument that its identity and pose were never
+  // secrets (its minimap glyph paints over unexplored ground in the real client). Issue #71
+  // retired that for the glyph, and `fogHides` has now retired it for the model too: an
+  // UNDISCOVERED fountain is not drawn, so sending it bought nothing and cost the fog its
+  // meaning. What the promotion was really load-bearing for — keeping a frozen client's copy
+  // of the furniture standing instead of letting its applier delete it — is untouched: a
+  // fountain the player HAS discovered still comes through the `fogBlocksClick` line below as
+  // remembered, which is every fountain that was ever on screen. Its DESTRUCTION is still
+  // learned by discovery (the ghost path keeps the image for every viewer that was not
+  // watching, and only re-scouting the spot clears it — GhostMemory.forgetSeen).
+  if (viewer.fogHides(u)) return "omit";
   return viewer.fogBlocksClick(u) ? "remembered" : "live";
 }
 

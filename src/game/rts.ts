@@ -2822,6 +2822,24 @@ export class RtsController {
    *  array a `for…of` is walking silently skips the next element. */
   private readonly forgotten: Entry[] = [];
 
+  /**
+   * Fog a CORPSE. A corpse outlives its render Entry — the model is adopted into `corpses` and
+   * sequenced through Death → Decay Flesh → Decay Bone in place — and the visibility rule that
+   * governed it went with the Entry, so an archer cut down in ground nobody has scouted lay
+   * there in plain sight through the black. This is that rule, applied where the bones live.
+   *
+   * A corpse follows the UNIT rule, not the building one: units are not remembered in WC3, so
+   * it is drawn only while its spot is actually in sight and goes when the sight does. That is
+   * `fogBlocksAt` — the same "no eyes on this spot" the gold mines and the ground items use,
+   * and the one that answers correctly under reveal-all. Nothing else touches these instances'
+   * visibility, so a plain toggle is safe.
+   */
+  private fogCorpse(c: { instance: Instance }): void {
+    const loc = c.instance.localLocation;
+    if (this.local.fogBlocksAt({ x: loc[0], y: loc[1] })) c.instance.hide();
+    else c.instance.show();
+  }
+
   private tickCorpses(dt: number): void {
     for (let i = this.corpses.length - 1; i >= 0; i--) {
       const c = this.corpses[i];
@@ -2835,6 +2853,7 @@ export class RtsController {
         this.corpses.splice(i, 1);
         continue;
       }
+      this.fogCorpse(c);
       c.phaseT += dt;
       if (c.phase === "death") {
         // Wait out the death animation, then either vanish (no corpse) or begin

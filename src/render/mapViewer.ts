@@ -328,6 +328,9 @@ interface HideableWidget {
     show(): void;
     vertexColor?: Float32Array; // MDX instance tint (base colour before fog dimming)
     setVertexColor?(c: ArrayLike<number>): void;
+    /** The viewer's own "is this being drawn" flag — `hide()` clears it, `show()` sets it.
+     *  Read by the fog sweep so it only ever re-shows what IT hid (fogSpawnedInstances). */
+    rendered?: boolean;
     // A placed doodad is a full MDX instance/model, but War3MapViewer renders it through a
     // STATIC batched path: its animation never advances and Widget.update resets any sequence
     // we set, so we can't play the tree's clips on it directly (see treeActor). We only read
@@ -745,6 +748,9 @@ export class MapViewerScene {
   private gameSpeed = 2;
   /** common.j gamedifficulty index — MAP_DIFFICULTY_NORMAL until a campaign says otherwise. */
   private gameDifficulty = 1;
+  /** This match is a campaign CHAPTER (MeleeConfig.campaign) — a mission, not a game off a
+   *  map list. Read by panelDead: no allies to talk to, nobody to chat with. */
+  private campaign = false;
   // The speaker's animated bust during a transmission — its own bust viewer, on the FDF
   // panel's canvas, exactly like the HUD's portrait (which it must not steal).
   private cinePortraitViewer: ModelViewerScene | null = null;
@@ -1474,6 +1480,9 @@ export class MapViewerScene {
     // its chapters branch on GetGameDifficulty from map init onwards. A skirmish sends none
     // and the match runs at MAP_DIFFICULTY_NORMAL, which is what the reference calls it.
     this.gameDifficulty = config.difficulty ?? 1;
+    // …and whether this is a MISSION at all, which decides the two console buttons a campaign
+    // has no use for (see panelDead).
+    this.campaign = config.campaign === true;
     // What the Quest Log calls this match. The map's own w3i name is the default and is right
     // for every map you pick off a list; a CAMPAIGN chapter is titled by the campaign index
     // instead, because its w3i name is the file's ("NightElfX01") and nothing a player has
@@ -5041,6 +5050,7 @@ export class MapViewerScene {
     // strip's gap, the message column) stack over the console chrome rather than under it.
     this.consoleUi = new ConsoleUi(ui, this.vfs, SKIN_SECTION[this.localRace], {
       openPanel: (panel) => this.togglePanel(panel),
+      disabledPanels: () => this.deadPanels(),
       mountClock: (slot) => this.mountClock(slot),
     });
     this.hud = new GameHud(ui, driver);
@@ -5415,22 +5425,72 @@ export class MapViewerScene {
    * Open or close one of the four console panels: the Quest Log (F9), the Game Menu (F10),
    * the Allies dialog (F11) and the Chat dialog (F12).
    *
-   * BOTH routes to them come through here — the console's own buttons and the F-keys —
-   * because they share one rule: **not during a cinematic.** WC3 takes the whole interface
-   * away for the length of one (`ShowInterface(false)` IS the letterbox), and these panels
-   * are interface: the key does nothing while the bars are down, and one that was already
-   * open goes with the console rather than floating over the film (see syncHudVisible).
+   * BOTH routes to them come through here — the console's own buttons and the F-keys — and
+   * three rules live here because all three are about the panels as a GROUP:
    *
-   * Keyed on the letterbox alone, like the cursor and like ESC-skips-the-cinematic:
-   * `EnableUserUI(false)` is the momentary blackout blizzard.j flicks around each cinematic
-   * FADE, and a panel must not blink shut and back for that.
+   *  • **Not during a cinematic.** WC3 takes the whole interface away for the length of one
+   *    (`ShowInterface(false)` IS the letterbox), and these panels are interface: the key does
+   *    nothing while the bars are down, and one that was already open goes with the console
+   *    rather than floating over the film (see syncHudVisible). Keyed on the letterbox alone,
+   *    like the cursor and like ESC-skips-the-cinematic: `EnableUserUI(false)` is the momentary
+   *    blackout blizzard.j flicks around each cinematic FADE, and a panel must not blink for it.
+   *  • **One at a time.** They are all modal (each mounts its own scrim), so two at once is two
+   *    scrims and a panel buried under a panel. Opening any of them shuts the rest.
+   *  • **Some are dead in a campaign** (see panelDead).
    */
   private togglePanel(panel: ConsolePanel): void {
-    if (!this.interfaceShown) return;
-    if (panel === "quests") this.questLog?.toggle();
-    else if (panel === "menu") this.paused = this.gameMenu?.toggle() ?? false; // F10 pauses
-    else if (panel === "allies") this.allies?.toggle();
-    else this.chatDialog?.toggle();
+    if (!this.interfaceShown || this.panelDead(panel)) return;
+    const wasOpen = this.panelOpen(panel);
+    this.closePanels(); // one at a time — and this is also how a toggle CLOSES its own panel
+    if (!wasOpen) {
+      if (panel === "quests") this.questLog?.show();
+      else if (panel === "menu") this.gameMenu?.show();
+      else if (panel === "allies") this.allies?.show();
+      else this.chatDialog?.show();
+    }
+    this.syncPanelPause();
+  }
+
+  /** Is this panel on screen right now? */
+  private panelOpen(panel: ConsolePanel): boolean {
+    if (panel === "quests") return this.questLog?.visible === true;
+    if (panel === "menu") return this.gameMenu?.visible === true;
+    if (panel === "allies") return this.allies?.visible === true;
+    return this.chatDialog?.visible === true;
+  }
+
+  /** Panels this match has no use for: a CAMPAIGN chapter is single-player against the map's
+   *  own AI, so there is nobody to ally with and nobody to talk to — WC3 leaves the Allies and
+   *  Chat buttons dead through a mission, and the F-keys with them. The console greys the same
+   *  two from the same answer (ConsoleUiActions.disabledPanels). */
+  private panelDead(panel: ConsolePanel): boolean {
+    return this.campaign && (panel === "allies" || panel === "chat");
+  }
+
+  /** The panels a campaign kills — the console's own copy of `panelDead`. */
+  private deadPanels(): ReadonlySet<ConsolePanel> {
+    return this.campaign ? MapViewerScene.CAMPAIGN_DEAD_PANELS : MapViewerScene.NO_DEAD_PANELS;
+  }
+  private static readonly CAMPAIGN_DEAD_PANELS: ReadonlySet<ConsolePanel> = new Set(["allies", "chat"] as const);
+  private static readonly NO_DEAD_PANELS: ReadonlySet<ConsolePanel> = new Set();
+
+  /** Shut every console panel. Idempotent — each panel's own `hide` is. */
+  private closePanels(): void {
+    this.gameMenu?.hide();
+    this.questLog?.hide();
+    this.allies?.hide();
+    this.chatDialog?.hide();
+    this.syncPanelPause();
+  }
+
+  /** **The Quest Log stops the world, exactly as the Game Menu does.** Single-player WC3
+   *  pauses behind both — they are the two panels you READ, and the mission is not allowed to
+   *  move on while you do. The Allies and Chat dialogs do not pause: those are things you do
+   *  while the match runs. Recomputed from what is actually open rather than tracked per
+   *  keypress, so the "one at a time" rule above can't leave the world stopped behind a panel
+   *  that is no longer there. */
+  private syncPanelPause(): void {
+    this.paused = this.gameMenu?.visible === true || this.questLog?.visible === true;
   }
 
   /** The HUD is on screen only when the interface (ShowInterface) AND the UI (EnableUserUI)
@@ -5461,18 +5521,6 @@ export class MapViewerScene {
     // it up would float the Quest Log over the film — and the Game Menu holds the sim
     // PAUSED, which would stop the cinematic the player is watching dead.
     if (!this.interfaceShown) this.closePanels();
-  }
-
-  /** Shut the four console panels (see togglePanel). Resuming with them is the Game Menu's
-   *  own "Return to Game": the menu is the one that pauses, so it is the one that unpauses. */
-  private closePanels(): void {
-    if (this.gameMenu?.visible) {
-      this.gameMenu.hide();
-      this.paused = false;
-    }
-    if (this.questLog?.visible) this.questLog.toggle();
-    if (this.allies?.visible) this.allies.toggle();
-    if (this.chatDialog?.visible) this.chatDialog.toggle();
   }
 
   /** Put a dialog on screen — or take it down — and with it the MOUSE (issue #104).
@@ -7740,14 +7788,69 @@ export class MapViewerScene {
       inst.show();
     };
     for (const w of map.doodads) {
+      this.mapProps.add(w.instance); // …and claimed, so the sweep below leaves it to us
       if (!this.removedWidgets.has(w)) tint(w); // felled trees stay gone
     }
     const units = map.units as unknown as Array<HideableWidget & { row?: unknown }>;
     for (const w of units) {
+      this.mapProps.add(w.instance);
       if (this.removedWidgets.has(w)) continue; // mined-out gold mines stay gone
       if (!w.row) continue; // start-location markers (rowless) are hidden for good — see hideStartLocations
       if (this.rts?.managesViewerInstance(w.instance)) continue; // RTS fog-hides creeps/shops
       tint(w);
+    }
+    this.fogSpawnedInstances(vision);
+  }
+
+  /** Instances the two loops above have claimed — the map's own props and units. Everything
+   *  else in the scene belongs to the sweep below. A WeakSet, so an instance the viewer drops
+   *  takes its entry with it. */
+  private readonly mapProps = new WeakSet<object>();
+  /** Instances THIS pass hid, and the only ones it will ever show again (see the sweep). */
+  private readonly fogHiddenInsts = new Set<HideableWidget["instance"]>();
+
+  /**
+   * **The catch-all: nothing we put in the world escapes the darkness.**
+   *
+   * The two loops above cover what the map file laid down. They are not the whole world — we
+   * spawn scene instances of our own all over the place, and every one of them was drawing
+   * through pitch-black unexplored ground: a felled tree's animated stand-in (doodadActor), a
+   * gate swung open, a building's ubersplat FX, a buff's particles, a projectile mid-flight, a
+   * spell's effect model. Rather than remember to fog each new one, this sweeps the scene
+   * itself, so anything added later is covered by construction.
+   *
+   * Two rules keep it from fighting the code that owns those instances:
+   *
+   *  • **It only ever re-shows what it hid itself.** An instance its owner has already hidden
+   *    (a finished effect, a worker inside a mine, a unit the RTS is fogging by its own
+   *    stricter rule) is never recorded, so the sweep cannot hand it back. Without that, a
+   *    unit the RTS had hidden would pop into view the moment its ground became explored and
+   *    stay there — the RTS's own hide is edge-triggered and would not fire again.
+   *  • **It hides, it does not tint.** The explored-grey dimming above multiplies a widget's
+   *    remembered base colour; effects animate their own colour and a projectile has no
+   *    business being dimmed. Unexplored is the bug; grey is a nicety.
+   */
+  private fogSpawnedInstances(vision: VisionMap): void {
+    const scene = this.viewer.map?.worldScene as unknown as { grid?: { cells?: Array<{ instances?: HideableWidget["instance"][] }> } } | undefined;
+    const cells = scene?.grid?.cells;
+    if (!cells) return;
+    for (const cell of cells) {
+      for (const inst of cell.instances ?? []) {
+        if (this.mapProps.has(inst)) continue; // the map's own — handled above, with its tint
+        if (this.rts?.managesViewerInstance(inst)) continue; // adopted map unit: the RTS's rule
+        const loc = inst.localLocation;
+        if (!loc) continue;
+        if (vision.bestStateAt(loc[0], loc[1], 0) === FogState.Unexplored) {
+          // `rendered` is the viewer's own "is this drawn" flag (hide() clears it). Recording
+          // only the ones we actually turned off is what makes the re-show safe.
+          if (inst.rendered !== false) {
+            inst.hide();
+            this.fogHiddenInsts.add(inst);
+          }
+        } else if (this.fogHiddenInsts.delete(inst)) {
+          inst.show();
+        }
+      }
     }
   }
 

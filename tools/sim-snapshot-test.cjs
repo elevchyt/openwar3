@@ -128,16 +128,31 @@ console.log("the recipient's research rides along — its own, nobody else's");
   check("player 1 gets its own, never player 0's", snapshotFor(world, viewer(1, { 1: 1 }), 1, 0).research, { Rhme: 3 });
 }
 
-console.log("neutral-passive structures are map furniture: fog demotes them to remembered, never to absent");
+// The map's furniture is furniture, not a free reveal. A neutral-passive structure used to be
+// promoted to "remembered" wherever fog would have omitted a player's building — including
+// ground nobody had ever walked, which put a fountain's model floating in pitch-black terrain.
+// `fogHides` now gates it on having been SEEN like every other structure, and the send follows:
+// undiscovered → absent, discovered-but-unwatched → a remembered image (which is what keeps a
+// frozen client's copy of the furniture standing).
+console.log("neutral-passive structures are furniture ONCE SEEN: undiscovered is absent, seen is remembered");
 {
-  const fogged = { fogHides: () => true, fogBlocksClick: () => true };
-  const shop = unit({ id: 1, owner: 15, neutralPassive: true, typeId: "ngme", building: { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false } });
+  const building = { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, producesUnits: false };
+  const shop = unit({ id: 1, owner: 15, neutralPassive: true, typeId: "ngme", building });
   const critter = unit({ id: 2, owner: 15, neutralPassive: true, typeId: "npig" });
-  const mine = unit({ id: 3, owner: 0, typeId: "htow", building: shop.building });
-  const snap = snapshotFor(worldOf([shop, critter, mine]), viewer(1, { 0: 0, 1: 1 }, fogged), 1, 0);
-  check("the fogged shop is SENT, as a remembered image", snap.units.map((u) => [u.id, u.remembered]), [[1, true]]);
-  check("a fogged critter is still absent — furniture is buildings only", snap.units.some((u) => u.id === 2), false);
-  check("and a fogged PLAYER building still hides entirely", snap.units.some((u) => u.id === 3), false);
+  const mine = unit({ id: 3, owner: 0, typeId: "htow", building });
+  const world = worldOf([shop, critter, mine]);
+
+  // Never scouted: `fogHides` true for everything, furniture included.
+  const dark = { fogHides: () => true, fogBlocksClick: () => true };
+  const unseen = snapshotFor(world, viewer(1, { 0: 0, 1: 1 }, dark), 1, 0);
+  check("an UNDISCOVERED shop is absent, like any unscouted building", unseen.units.some((u) => u.id === 1), false);
+  check("a fogged critter is absent too", unseen.units.some((u) => u.id === 2), false);
+  check("and a fogged PLAYER building still hides entirely", unseen.units.some((u) => u.id === 3), false);
+
+  // Seen before, nothing watching it now — the memory case, and the one the wire must keep.
+  const seen = { fogHides: (u) => u.building == null, fogBlocksClick: () => true };
+  const remembered = snapshotFor(world, viewer(1, { 0: 0, 1: 1 }, seen), 1, 0);
+  check("a DISCOVERED shop is sent as a remembered image", remembered.units.filter((u) => u.id === 1).map((u) => u.remembered), [true]);
 }
 
 console.log("in-flight missiles cross under your eyes, with the target's position as aim fallback");

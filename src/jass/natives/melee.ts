@@ -66,8 +66,18 @@ export function registerMeleeNatives(rt: Runtime): void {
   // harmless, since the stub ignores its argument, but the 7.25 enum gate exists because
   // that kind of miscount is exactly what went wrong with `mapcontrol`.)
   def(rt, "GetIntegerGameState", () => jInt(0));
-  def(rt, "SetTimeOfDayScale", (c, a) => ((c.rt.timeOfDayScale = asNum(a[0])), JNULL));
-  def(rt, "GetTimeOfDayScale", (c) => jReal(c.rt.timeOfDayScale));
+  // How fast the clock runs, and whether it runs at all — the sim owns both, beside the clock
+  // itself. The scale used to be parked on the runtime and multiplied by nothing, so a map
+  // that asked for a slow night got a normal one: Rise of the Naga opens at 19:00 with
+  // `SetTimeOfDayScalePercentBJ(25.00)` and was in daylight minutes later.
+  //
+  // `SuspendTimeOfDay` is the MAP's freeze (blizzard.j's `UseTimeOfDayBJ(false)` is a call to
+  // it) and is deliberately a different switch from the cinematic's `EnableDawnDusk`: a
+  // cinematic restores dawn/dusk on its way out and must not thereby restart a cycle the map
+  // stopped for the whole mission.
+  def(rt, "SetTimeOfDayScale", (c, a) => (c.rt.hooks?.setTimeOfDayScale?.(asNum(a[0])), JNULL));
+  def(rt, "GetTimeOfDayScale", (c) => jReal(c.rt.hooks?.getTimeOfDayScale?.() ?? 1));
+  def(rt, "SuspendTimeOfDay", (c, a) => (c.rt.hooks?.suspendTimeOfDay?.(truthy(a[0])), JNULL));
 
   // --- the camera (MeleeStartingUnits* frames the starting workers, not the hall) ---
   // The …ForPlayer BJs gate on GetLocalPlayer — and since item 7b that gate is re-run once per

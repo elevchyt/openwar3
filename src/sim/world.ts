@@ -1361,6 +1361,22 @@ export class SimWorld {
    *  blizzard.j's CinematicModeExBJ turns it off on the way in and restores it on the way
    *  out. Nothing else in the game switches it. */
   dawnDusk = true;
+  /**
+   * `SetTimeOfDayScale` — how fast the clock runs, 1 being WC3's own day length.
+   *
+   * A MAP's setting, and campaign chapters lean on it hard: Rise of the Naga opens with
+   * `SetTimeOfDayScalePercentBJ(25.00)` and `SetTimeOfDay(19.00)` — a night that creeps
+   * forward at quarter speed, because the mission is written to be played in the dark. We
+   * stored the number on the JASS runtime and never multiplied by it, so the chapter's night
+   * ran out at full speed and the map was in broad daylight a few minutes in.
+   */
+  timeOfDayScale = 1;
+  /** `SuspendTimeOfDay(true)` — the clock is HELD where it stands. A separate switch from
+   *  `dawnDusk` because they are separate natives with separate owners: a map suspends the
+   *  cycle for the whole mission (blizzard.j's `UseTimeOfDayBJ` is exactly this), while
+   *  EnableDawnDusk is the cinematic's, restored the moment the cinematic ends. One must not
+   *  hand the other's answer back. */
+  timeOfDaySuspended = false;
   private deaths: number[] = [];
   /** Dead STRUCTURES, kept whole for the ghost path — see drainDeadStructures. */
   private deadStructures: SimUnit[] = [];
@@ -7071,7 +7087,9 @@ export class SimWorld {
 
   tick(dt: number): void {
     this.elapsed += dt;
-    if (this.dawnDusk) this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC) % MISC_DATA.DayHours;
+    if (this.dawnDusk && !this.timeOfDaySuspended) {
+      this.timeOfDay = (this.timeOfDay + dt * GAME_HOURS_PER_SEC * this.timeOfDayScale) % MISC_DATA.DayHours;
+    }
     // The tech census (who owns what, and so what each player may build) is invalidated
     // wholesale each tick rather than at every birth/death/morph/construction-finish. The
     // rebuild is a single O(units) pass and only happens if something actually asks — but

@@ -705,6 +705,13 @@ export interface EngineHooks {
    *  (bj_MELEE_STARTING_TOD), which is MeleeStartingVisibility's whole job. */
   setTimeOfDay?(hour: number): void;
   getTimeOfDay?(): number;
+  /** `SetTimeOfDayScale` / `GetTimeOfDayScale` — how fast the clock runs (1 = WC3's own day
+   *  length). A campaign's setting: Rise of the Naga opens its night at 25%. */
+  setTimeOfDayScale?(scale: number): void;
+  getTimeOfDayScale?(): number;
+  /** `SuspendTimeOfDay` — hold the clock where it stands. blizzard.j's `UseTimeOfDayBJ(false)`
+   *  is this, and it is the MAP's switch: distinct from the cinematic's EnableDawnDusk. */
+  suspendTimeOfDay?(flag: boolean): void;
   /** SetCameraPosition / SetCameraQuickPosition (via the …ForPlayer BJs, which gate on
    *  GetLocalPlayer). MeleeStartingUnits* centres the view on the starting workers. */
   setCameraPosition?(x: number, y: number): void;
@@ -1245,8 +1252,6 @@ export class Runtime {
     return this.spawnDepth > 0;
   }
 
-  /** Time-of-day scale (SetTimeOfDayScale) — kept here; the sim owns the clock itself. */
-  timeOfDayScale = 1;
   /** SetPlayerTechMaxAllowed / GetPlayerTechMaxAllowed — "player:tech" → cap. We have no
    *  tech-limit system yet (MeleeStartingHeroLimit sets the 3-hero + 1-per-type caps), so
    *  this just records what the script asked for; -1 means "no limit", as in WC3. */
