@@ -1949,7 +1949,7 @@ export class MapViewerScene {
       // post-game score screen (Glue\ScoreScreen.fdf) — we don't build one yet, so both
       // paths simply leave the match.
       endGame: () => {
-        this.dialog?.update(null);
+        this.showDialog(null);
         this.paused = false;
         this.onExit?.();
       },
@@ -2385,10 +2385,13 @@ export class MapViewerScene {
     this.timerDialogs?.dispose();
     this.cinematic?.dispose();
     this.dialog?.dispose();
-    // A fresh match starts out of any cinematic the last one may have ended in.
+    // A fresh match starts out of any cinematic the last one may have ended in — including
+    // the body classes the cursor rules read, which outlive the match that set them: a game
+    // quit mid-cinematic would otherwise hand the next one a `cine-on` body and no mouse.
     this.interfaceShown = true;
     this.userUi = true;
     this.userControl = true;
+    document.body.classList.remove("cine-on", "dialog-on");
     this.gameSpeed = 2; // MAP_SPEED_NORMAL
     this.cinePortraitFor = "";
     this.cinePortraitWant = "";
@@ -2432,7 +2435,7 @@ export class MapViewerScene {
         // it. Without this the per-frame update below would hand it straight back and the
         // screen could never be closed.
         this.remoteDialog = null;
-        this.dialog?.update(null);
+        this.showDialog(null);
         engine?.interp.fireDialogClick(button.handleId, button.dialogId, this.localPlayer);
         if (button.quit) {
           this.paused = false;
@@ -2512,7 +2515,7 @@ export class MapViewerScene {
     }
     // A dialog the authority sent US wins over our own script's, which on a client is empty
     // anyway — and on the host `remoteDialog` is never set, so this reads as it always did.
-    this.dialog?.update(this.remoteDialog ?? rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
+    this.showDialog(this.remoteDialog ?? rt.dialogs.find((d) => d.visibleFor.has(this.localPlayer)) ?? null);
 
     // THE WIRE CLOSES HERE, AND THE PLACE IS THE POINT (Phase G item 1). The match is decided,
     // so every machine keeping its own private idea of the world from now on costs nothing —
@@ -5374,6 +5377,21 @@ export class MapViewerScene {
     document.body.classList.toggle("cine-on", !this.interfaceShown);
   }
 
+  /** Put a dialog on screen — or take it down — and with it the MOUSE (issue #104).
+   *
+   *  A cinematic hides the cursor (`cine-on`, above), but a dialog is the one thing that
+   *  outranks the letterbox: it is BUTTONS, and buttons you cannot see the pointer over are
+   *  buttons you cannot click. WC3 does exactly this — a `DialogDisplay` during cinematic
+   *  mode brings the cursor back for as long as the dialog is up, and hides it again when the
+   *  dialog is dismissed. That is the ENGINE's doing, not the script's: no native shows the
+   *  cursor, and blizzard.j's own cinematic path (CinematicModeExBJ) never mentions it.
+   *  The rule is body-wide, as the cursor itself is — once the engine draws it, it is drawn
+   *  over the whole screen, not clipped to the panel. */
+  private showDialog(d: DialogObj | null): void {
+    this.dialog?.update(d);
+    document.body.classList.toggle("dialog-on", !!d);
+  }
+
   /** The speaker's animated bust, on the cinematic panel's own canvas. Same machinery as the
    *  HUD's portrait (a `_Portrait.mdx` looping its Portrait clip) but a SEPARATE viewer —
    *  the two are on screen at once during a transmission in ordinary play, and one would
@@ -6683,11 +6701,14 @@ export class MapViewerScene {
     //    to #map was the bug — hovering the HUD showed the reticle AND the hand.
     //  - `cine-on` is the letterbox: WC3 draws no cursor at all while a cinematic is running,
     //    and it is the whole screen's rule — the console is gone, and the mouse with it.
+    //    …UNLESS a dialog is up (`dialog-on`, issue #104). A dialog is buttons, and a
+    //    cinematic that raises one has just asked the player to click something — so the
+    //    cursor comes back for as long as it is on screen, and goes again with it.
     this.cursorStyleEl.textContent =
       `body.in-game, body.in-game * { cursor: ${rule} !important; }\n` +
       `body.in-game.reticle-on #map { cursor: none !important; }\n` +
       `body.in-game.armed-on, body.in-game.armed-on * { cursor: none !important; }\n` +
-      `body.in-game.cine-on, body.in-game.cine-on * { cursor: none !important; }`;
+      `body.in-game.cine-on:not(.dialog-on), body.in-game.cine-on:not(.dialog-on) * { cursor: none !important; }`;
   }
 
   /** The real WC3 target reticle (row 2 of the race cursor sheet: a circle with
