@@ -40,7 +40,8 @@ import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import { UI_HEIGHT } from "./fdf/layout";
+import { fitBox } from "./fdf/layout";
+import { stageSize } from "./stage";
 
 const CINEMATIC_FDF = "UI\\FrameDef\\UI\\CinematicPanel.fdf";
 
@@ -286,7 +287,17 @@ export class CinematicPanelOverlay {
     if (!base) throw new Error('FDF: frame "CinematicPanel" not found');
     // The FDF world is 0.8 × 0.6 at 4:3; on any other aspect the screen is WIDER than 0.8
     // (see fitBox), and a 0.8-wide bar would stop short of both edges.
-    const worldW = window.innerWidth / (window.innerHeight / UI_HEIGHT);
+    //
+    // Measured off the STAGE, not the window. The panel is mounted inside the stage box —
+    // the largest 16:9 frame the window allows, with the rest letterboxed off (ui/stage.ts) —
+    // and `mountFdfScreen` fits the layout to that same box. Sizing the bars off `window`
+    // instead made them as wide as the WINDOW while the box they sit in is narrower, and
+    // because each bar is anchored by one corner (the top one TOPLEFT, the bottom one
+    // BOTTOMRIGHT) the overshoot fell off opposite ends: on a 1600 px window over a 1346 px
+    // stage the top bar ran 254 px past the right edge and left the top-left corner bare,
+    // while the bottom bar hung off the left and left the bottom-right corner bare.
+    const stage = stageSize();
+    const worldW = fitBox(stage.w, stage.h).worldW;
     const children = base.children.flatMap((c) => {
       if (c.name === "CinematicTopBorder" || c.name === "CinematicBottomBorder") {
         return letterbox ? [letterboxBar(c, worldW)] : [];
