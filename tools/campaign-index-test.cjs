@@ -15,13 +15,13 @@
 //     Doodads\Cinematic\ArthasIllidanFight\ArthasIllidanFight.mdl, a model played in-engine.
 //     That single row is why `CampaignEntry.playable` exists.
 
-const { readFileSync, writeFileSync } = require('node:fs');
+const { writeFileSync } = require('node:fs');
 const { join, resolve } = require('node:path');
+const { openInstall } = require('./install.cjs');
 
 const REPO = resolve(__dirname, '..');
 const argDir = process.argv.indexOf('--wc3-dir');
 const WC3_DIR = argDir !== -1 ? process.argv[argDir + 1] : join(REPO, 'Warcraft III');
-const ARCHIVES = ['War3.mpq', 'War3x.mpq', 'War3xLocal.mpq', 'War3Patch.mpq'];
 
 const mpqMod = require('mdx-m3-viewer/dist/cjs/parsers/mpq');
 const MpqArchive = (mpqMod.default ?? mpqMod).Archive;
@@ -31,21 +31,14 @@ const MpqArchive = (mpqMod.default ?? mpqMod).Archive;
 writeFileSync(join(REPO, '.campaign-build', 'package.json'), '{"type":"commonjs"}');
 const { parseCampaigns, campaignRows } = require(join(REPO, '.campaign-build', 'src', 'data', 'campaigns.js'));
 
-const archives = ARCHIVES.map((name) => {
-  const buf = readFileSync(join(WC3_DIR, name));
-  const bytes = new Uint8Array(buf.byteLength);
-  bytes.set(buf);
-  const archive = new MpqArchive();
-  archive.load(bytes, true);
-  return archive;
-});
+main().catch((err) => { console.error(err); process.exit(1); });
 
-/** Read a path with the engine's own mount order — later archives win (src/vfs/profiles.ts). */
-function read(path) {
-  let out = null;
-  for (const a of archives) if (a.has(path)) out = a.get(path).bytes();
-  return out;
-}
+async function main() {
+
+// Either storage (issue #102) — the engine's own mount, so the campaign index is read exactly
+// as the campaign screen reads it whichever install the developer has.
+const install = await openInstall(WC3_DIR);
+const read = (path) => install.vfs.rawBytes(path);
 const text = (path) => Buffer.from(read(path)).toString('latin1');
 
 // war3skins.txt resolves a campaign's `Background` KEY to its model, `_V1` for the expansion.
@@ -125,8 +118,15 @@ check('Scourge finale is a MODEL, not a map',
   finale.playable === false && /\.mdl$/i.test(finale.file)
   && read(finale.file.replace(/\.mdl$/i, '.mdx')) !== null, finale.file);
 
-const missing = [];
-for (const c of campaigns) for (const m of c.missions) if (m.playable && !read(m.file)) missing.push(m.file);
+// A chapter map is a `.w3x` blob on a 1.27a install and a set of exploded entries on a 1.30
+// one, so it is asked for the way the campaign screen asks for it (src/vfs/mapArchive.ts).
+const chapterBytes = new Map();
+for (const c of campaigns) {
+  for (const m of c.missions) {
+    if (m.playable) chapterBytes.set(m.file, await install.readMapBytes(m.file));
+  }
+}
+const missing = [...chapterBytes].filter(([, b]) => !b).map(([p]) => p);
 check('every playable chapter map is in the archives', missing.length === 0, missing.join(', '));
 
 // …and every one of them PARSES. A campaign map's object data is read by mdx-m3-viewer the
@@ -141,7 +141,8 @@ for (const c of campaigns) {
   for (const m of c.missions) {
     if (!m.playable) continue;
     const mapArchive = new MpqArchive();
-    const bytes = read(m.file);
+    const bytes = chapterBytes.get(m.file);
+    if (!bytes) continue;
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
     mapArchive.load(copy, true);
@@ -164,5 +165,7 @@ check('every campaign map\'s object data parses', broken.length === 0, broken.sl
 check('both doodad-table layouts appear in the campaigns',
   w3dLayouts.withInts > 0 && w3dLayouts.without > 0, JSON.stringify(w3dLayouts));
 
-console.log(failures ? `\n${failures} check(s) FAILED` : `\nall ${campaigns.length} campaigns verified against the archives`);
+console.log(failures ? `\n${failures} check(s) FAILED` : `\nall ${campaigns.length} campaigns verified against the ${install.kind === 'casc' ? 'content store' : 'archives'}`);
 process.exit(failures ? 1 : 0);
+
+}

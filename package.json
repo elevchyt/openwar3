@@ -10,14 +10,15 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "data:extract": "node --max-old-space-size=8192 tools/extract-mpq.mjs",
+    "data:extract": "tsc -p tools/tsconfig.casc.json && node --max-old-space-size=8192 tools/extract-data.mjs",
+    "casc:test": "tsc -p tools/tsconfig.casc.json && node --max-old-space-size=8192 tools/casc-test.cjs",
     "data:build": "node tools/build-data-browser.mjs",
     "data:browse": "node tools/build-data-browser.mjs --open",
     "data:verify": "node tools/verify-gameplay-constants.mjs",
-    "campaign:test": "tsc -p tools/tsconfig.campaign.json && node tools/campaign-index-test.cjs",
+    "campaign:test": "tsc -p tools/tsconfig.casc.json && tsc -p tools/tsconfig.campaign.json && node --max-old-space-size=8192 tools/campaign-index-test.cjs",
     "jass:coverage": "node tools/native-coverage.mjs",
     "jass:test": "tsc -p tools/tsconfig.jass.json && node tools/jass-audience-test.cjs && node tools/jass-chat-test.cjs && node tools/jass-quest-test.cjs && node tools/jass-triggering-trigger-test.cjs && node tools/jass-cinematic-test.cjs && node tools/jass-corpus-test.cjs",
-    "sim:test": "tsc -p tools/tsconfig.sim.json && node tools/sim-targeting-test.cjs && node tools/sim-doodad-pathing-test.cjs && node tools/sim-harvest-test.cjs && node tools/sim-attack-order-test.cjs && node tools/sim-destructible-test.cjs && node tools/sim-transport-test.cjs && node tools/sim-alliance-test.cjs && node tools/sim-item-regen-test.cjs && node tools/sim-regen-test.cjs && node tools/sim-autocast-test.cjs && node tools/sim-spells-test.cjs && node tools/sim-drain-test.cjs && node tools/sim-death-blast-test.cjs && node tools/sim-detection-test.cjs && node tools/sim-vision-test.cjs && node tools/sim-shadowmeld-test.cjs && node tools/sim-root-test.cjs && node tools/sim-morph-test.cjs && node tools/sim-attack-anim-test.cjs && node tools/sim-aura-test.cjs && node tools/sim-fountain-test.cjs && node tools/sim-order-funnel-test.cjs && node tools/sim-jass-hooks-test.cjs && node tools/sim-minimap-test.cjs && node tools/sim-audio-nostack-test.cjs && node tools/sim-options-test.cjs && node tools/sim-snapshot-test.cjs && node tools/sim-apply-test.cjs && node tools/sim-wire-test.cjs && node tools/lobby-test.cjs && node tools/sim-determinism-test.cjs",
+    "sim:test": "tsc -p tools/tsconfig.casc.json && tsc -p tools/tsconfig.sim.json && node tools/sim-targeting-test.cjs && node tools/sim-doodad-pathing-test.cjs && node tools/sim-harvest-test.cjs && node tools/sim-attack-order-test.cjs && node tools/sim-destructible-test.cjs && node tools/sim-transport-test.cjs && node tools/sim-alliance-test.cjs && node tools/sim-item-regen-test.cjs && node tools/sim-regen-test.cjs && node tools/sim-autocast-test.cjs && node tools/sim-spells-test.cjs && node tools/sim-drain-test.cjs && node tools/sim-death-blast-test.cjs && node tools/sim-detection-test.cjs && node tools/sim-vision-test.cjs && node tools/sim-shadowmeld-test.cjs && node tools/sim-root-test.cjs && node tools/sim-morph-test.cjs && node tools/sim-attack-anim-test.cjs && node tools/sim-aura-test.cjs && node tools/sim-fountain-test.cjs && node tools/sim-order-funnel-test.cjs && node tools/sim-jass-hooks-test.cjs && node tools/sim-minimap-test.cjs && node tools/sim-audio-nostack-test.cjs && node tools/sim-options-test.cjs && node tools/sim-snapshot-test.cjs && node tools/sim-apply-test.cjs && node tools/sim-wire-test.cjs && node tools/lobby-test.cjs && node tools/sim-determinism-test.cjs",
     "data:audit": "node tools/audit-abilities.mjs",
     "relay": "node server/relay.mjs",
     "relay-kill": "node server/relay-kill.mjs",
@@ -27,7 +28,8 @@
   "dependencies": {
     "events": "^3.3.0",
     "gl-matrix": "^3.4.3",
-    "mdx-m3-viewer": "^5.12.0"
+    "mdx-m3-viewer": "^5.12.0",
+    "pako": "^3.0.1"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

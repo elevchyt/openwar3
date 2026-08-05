@@ -1,6 +1,6 @@
 # CLAUDE.md — working guide for OpenWar3
 
-OpenWar3 is a browser-first, asset-compatible re-creation of the **Warcraft III (TFT 1.27a)** engine in TypeScript.
+OpenWar3 is a browser-first, asset-compatible re-creation of the **Warcraft III (TFT 1.30.4)** engine in TypeScript.
 See [`README.md`](./README.md) and [`OpenWar3_PLAN.md`](./OpenWar3_PLAN.md) for scope; this file is the standing
 guidance for how to build here.
 
@@ -12,18 +12,23 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 
 **Our sources (read these, in this order for a given question):**
 
-1. **The real 1.27a MPQs in `Warcraft III/`** — the ground truth. When a reference and the game data disagree, the MPQ
-   wins (this is a hard-won rule; see the cliff-ramp story in `docs/REFERENCES.md`). Read `.slk`/`.txt`/`.w3*` data,
-   model `.mdx`, and asset paths straight from the archives.
+1. **The real game data in `Warcraft III/`** — the ground truth. When a reference and the game data disagree, the game
+   data wins (this is a hard-won rule; see the cliff-ramp story in `docs/REFERENCES.md`). Read `.slk`/`.txt`/`.w3*`
+   data, model `.mdx`, and asset paths straight from the install. `pnpm data:extract` unpacks the readable ones to
+   `Warcraft III/ExtractedData/` so you can grep them.
    - **[`docs/wc3-data-formats.md`](docs/wc3-data-formats.md)** — where each piece of data lives (archives, file
      formats, and the exact tables/fields for target flags, tooltips, names, hotkeys, icons, sounds, maps).
-   - **Archive split** (mounted in `src/vfs/profiles.ts`, patch wins): `War3.mpq` = all Reign-of-Chaos content +
-     base sounds; `War3x.mpq` = Frozen-Throne models/data/effect sounds; `War3xLocal.mpq` = TFT **localized unit
-     voices**. So a TFT unit (e.g. the Blood Mage) draws its model from War3x but its voice lines from War3xLocal.
-   - **TFT audio (Huffman+ADPCM):** WC3 stores every WAV as **Huffman(+ADPCM)**. War3.mpq WAVs are PCM (RoC), but
-     **all** War3x/War3xLocal WAVs are huffman — stock `mdx-m3-viewer` threw `compression type 'huffman' not
-     supported`, muting every expansion sound. Fixed in `patches/mdx-m3-viewer@5.12.0.patch` (Storm-Huffman port in
-     `huffman.js` + `file.js` wiring + an `adpcm.js` signedness fix). Verify decodes from Node against the real MPQs.
+   - **[`docs/casc.md`](docs/casc.md)** — read this before touching `src/vfs/`, the install picker, or the extractor.
+     1.30.4 is a **CASC** content store, not MPQs: nothing in it is addressed by name, a campaign map is no longer a
+     file, and six `common.j`/`Blizzard.j` constants became natives the engine has to answer.
+   - **Archive split** (`ARCHIVE_ORDER` in `src/vfs/casc.ts`, later wins): `Deprecated.mpq` = art old custom maps
+     still reference; `War3.mpq` = everything shared; `<locale>-War3Local.mpq` = localized text, unit voices and the
+     campaign maps. 1.30 kept the MPQ *names* after dropping the format. A 1.27a install is still mountable and
+     layers `war3 < war3x < war3xlocal < war3patch` (`src/vfs/profiles.ts`).
+   - **TFT audio (Huffman+ADPCM):** WC3 stores every WAV as **Huffman(+ADPCM)**. Stock `mdx-m3-viewer` threw
+     `compression type 'huffman' not supported`, muting every expansion sound. Fixed in
+     `patches/mdx-m3-viewer@5.12.0.patch` (Storm-Huffman port in `huffman.js` + `file.js` wiring + an `adpcm.js`
+     signedness fix). This is an MPQ-sector codec, so on 1.30.4 it applies to the map archives rather than the store.
 2. **[`docs/REFERENCES.md`](docs/REFERENCES.md)** — the curated index of reference projects and research threads, with
    per-source gotchas. Start here to find the right reference for a topic.
 3. **[`docs/reverse-engineering/`](docs/reverse-engineering/)** — locally archived engine internals:
@@ -38,11 +43,11 @@ data, or asset behaviour, **consult our sources** and cite what you used.
    fetchers — fetch with a browser `User-Agent` (see `docs/REFERENCES.md`).
 
 **Rules when using sources:**
-- **Verify, don't trust blindly.** References are hypotheses — confirm format/behaviour against the real MPQs or
-  observed game behaviour before building on them.
+- **Verify, don't trust blindly.** References are hypotheses — confirm format/behaviour against the real game
+  data or observed game behaviour before building on them.
 - **Cite the source next to the code.** When a constant or behaviour comes from a thread/repo/data file, name it in a
   comment right there (the codebase already does this — match that style).
-- **Prefer the real asset.** If WC3 has a model/texture/icon/sound for something, use its real path from the MPQs
+- **Prefer the real asset.** If WC3 has a model/texture/icon/sound for something, use its real path from the install
   (asset-resolver philosophy: authentic when present, placeholder otherwise). Example: the learn-skill button uses
   `ReplaceableTextures\CommandButtons\BTNSkillz.blp` (the `CommandButtonsDisabled\DIS*` twin of any icon is just
   its desaturated "unavailable" art — never reach for it for a live button); spell AoE circles are
@@ -57,7 +62,8 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   explicitly asks for one. Still commit only when the change is done and verified (`pnpm typecheck` / in-browser as needed).
 - **Build / check:** `pnpm dev` (localhost:5173), `pnpm build` (typecheck + build), `pnpm typecheck`. Run `pnpm typecheck`
   before considering a change done. `pnpm data:verify` re-checks `src/data/gameplayConstants.ts` against the unpacked
-  archives — run it after touching that file (needs `pnpm data:extract` first).
+  data — run it after touching that file (needs `pnpm data:extract` first). `pnpm casc:test` checks the CASC mount
+  itself against the local install.
 - **Show your work with screenshots — often.** Anything visual (rendering, HUD, camera, effects, terrain, shadows, fog,
   UI) must be previewed in the REAL running game and the screenshots **sent to the developer** so they can see how it
   looks as you go — don't just describe it or keep the shots to yourself. Drive the app live per the `live-browser-testing`

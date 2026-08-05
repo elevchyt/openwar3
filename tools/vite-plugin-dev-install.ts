@@ -17,15 +17,23 @@ import type { Plugin } from "vite";
  * The install is read from `OPENWAR3_INSTALL`, defaulting to `Warcraft III/` beside the repo
  * (which is where it already sits, and where `pnpm data:extract` looks). Two endpoints:
  *
- *   GET /wc3/manifest.json          → { archives: string[], maps: string[] }
+ *   GET /wc3/manifest.json          → { archives, maps, casc }
  *   GET /wc3/file?path=<encoded>    → the bytes of one of those paths
  *
  * Paths speak WC3's `\` separator, matching the keys `InstallFiles` uses (assets/opfs.ts), so
  * what the manifest hands back can be used as a map key verbatim.
+ *
+ * `/file` honours `Range`, which is not a nicety on a 1.30.4 install (issue #102): its content
+ * store is a pair of `data.NNN` files totalling 1.7 GB and the mount reads scattered slices of
+ * them. Downloading those whole to reach 291 MB of them would make the dev boot unusable.
  */
 
 const MPQ = /\.mpq$/i;
 const MAP = /\.(w3m|w3x)$/i;
+const IDX = /^[0-9a-f]{10}\.idx$/i;
+const DATA_FILE = /^data\.\d{3}$/i;
+const CONFIG_HASH = /^[0-9a-f]{32}$/i;
+const BUILD_INFO = ".build.info";
 
 /** Reject anything that escapes the install root — `..`, absolute paths, symlink games. */
 function safeJoin(root: string, rel: string): string | null {
@@ -39,6 +47,32 @@ async function collectMaps(dir: string, prefix: string, into: string[]): Promise
     if (entry.isDirectory()) await collectMaps(join(dir, entry.name), rel, into);
     else if (MAP.test(entry.name)) into.push(rel);
   }
+}
+
+/** The CASC pieces a mount needs, as install-relative paths (vfs/casc.ts). */
+interface CascManifest {
+  buildInfo: string;
+  config: string[];
+  idx: string[];
+  /** `data.NNN` → its path, so the browser can range-read it. */
+  data: Record<number, string>;
+}
+
+async function collectCasc(root: string): Promise<CascManifest | null> {
+  if (!existsSync(join(root, BUILD_INFO)) || !existsSync(join(root, "Data"))) return null;
+  const out: CascManifest = { buildInfo: BUILD_INFO, config: [], idx: [], data: {} };
+  const walk = async (dir: string, prefix: string, depth: number): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const rel = `${prefix}\\${entry.name}`;
+      if (entry.isDirectory()) {
+        if (depth < 3) await walk(join(dir, entry.name), rel, depth + 1);
+      } else if (IDX.test(entry.name)) out.idx.push(rel);
+      else if (DATA_FILE.test(entry.name)) out.data[Number(entry.name.slice(5))] = rel;
+      else if (CONFIG_HASH.test(entry.name)) out.config.push(rel);
+    }
+  };
+  await walk(join(root, "Data"), "Data", 0);
+  return out;
 }
 
 export function devInstall(): Plugin {
@@ -66,8 +100,9 @@ export function devInstall(): Plugin {
             const maps: string[] = [];
             const mapsDir = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === "maps");
             if (mapsDir) await collectMaps(join(root, mapsDir.name), mapsDir.name, maps);
+            const casc = await collectCasc(root);
             res.setHeader("content-type", "application/json");
-            res.end(JSON.stringify({ archives, maps }));
+            res.end(JSON.stringify({ archives, maps, casc }));
           })();
           return;
         }
@@ -80,8 +115,27 @@ export function devInstall(): Plugin {
             res.end("not found");
             return;
           }
+          const size = statSync(full).size;
+          res.setHeader("accept-ranges", "bytes");
           res.setHeader("content-type", "application/octet-stream");
-          res.setHeader("content-length", String(statSync(full).size));
+          // `bytes=<start>-<end>`, end inclusive, as the browser's Range header spells it.
+          const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? "");
+          if (range) {
+            const start = Number(range[1]);
+            const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+            if (start > end) {
+              res.statusCode = 416;
+              res.setHeader("content-range", `bytes */${size}`);
+              res.end();
+              return;
+            }
+            res.statusCode = 206;
+            res.setHeader("content-range", `bytes ${start}-${end}/${size}`);
+            res.setHeader("content-length", String(end - start + 1));
+            createReadStream(full, { start, end }).pipe(res);
+            return;
+          }
+          res.setHeader("content-length", String(size));
           createReadStream(full).pipe(res);
           return;
         }

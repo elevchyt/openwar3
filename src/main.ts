@@ -29,6 +29,7 @@ import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
 import { loadMapBytes } from "./world/map";
+import { readMapBytes } from "./vfs/mapArchive";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
 import { MapViewerScene } from "./render/mapViewer";
 import type { MatchLinkSetup } from "./game/matchLink";
@@ -352,19 +353,20 @@ function leaveCampaignScreen(vfs: DataSource): void {
   glueAudio?.startAmbience();
 }
 
-/** Play a chapter. Campaign maps live INSIDE the archives (Maps\FrozenThrone\Campaign\*.w3x in
- *  War3x/War3xLocal), not in the install's `Maps\` folder the Custom Game screen browses, so
- *  the bytes come from the VFS. Everything after that is the ordinary custom-map path: the map
- *  is not melee-flagged, so its own triggers set the mission up — which is the point of the
- *  campaign as a test bed, since these maps are where WC3's cinematics actually live. */
+/** Play a chapter. Campaign maps live INSIDE the mounted install (Maps\FrozenThrone\Campaign\*.w3x
+ *  in War3x/War3xLocal on 1.27a, exploded into the content store on 1.30 — see vfs/mapArchive.ts),
+ *  not in the install's `Maps\` folder the Custom Game screen browses, so the bytes come from the
+ *  VFS. Everything after that is the ordinary custom-map path: the map is not melee-flagged, so
+ *  its own triggers set the mission up — which is the point of the campaign as a test bed, since
+ *  these maps are where WC3's cinematics actually live. */
 async function startCampaignMission(vfs: DataSource, c: Campaign, index: number, difficulty: Difficulty): Promise<void> {
   const mission = c.missions[index];
-  if (!mission || !vfs.exists(mission.file)) {
+  const bytes = mission ? await readMapBytes(vfs, mission.file) : null;
+  if (!bytes) {
     console.warn(`[OpenWar3] campaign map missing from this install: ${mission?.file}`);
     return;
   }
   leaveCampaignScreen(vfs);
-  const bytes = await vfs.read(mission.file);
   const info = parseMapInfo(bytes, mission.name);
   // The mission is finished the moment its own script declares victory — that is what opens
   // the next chapter (data/campaignProgress.ts).
@@ -555,7 +557,7 @@ async function showMainMenu(vfs: DataSource): Promise<void> {
     mountMainMenu(ui, resolver, {
       onSinglePlayer: () => window.alert(
         "This install is missing the UI\\FrameDef\\Glue files the menus are built from, " +
-        "so the game can't be set up. Re-import a complete Warcraft III (TFT 1.27a) folder.",
+        "so the game can't be set up. Re-import a complete Warcraft III (TFT 1.30.4) folder.",
       ),
     });
   }

@@ -4,11 +4,12 @@
 //
 // Every key in MISC_GAME / MISC_DATA / MELEE / MINIMAP is looked up in the file it
 // claims to come from — Units\MiscGame.txt, Units\MiscData.txt, Scripts\Blizzard.j,
-// UI\MiscData.txt — and the values compared numerically. A transcription that drifts from the MPQ (or a value
-// a patch changed under us) fails here instead of quietly mis-simulating the game.
+// UI\MiscData.txt — and the values compared numerically. A transcription that drifts from the
+// install (or a value a patch changed under us) fails here instead of quietly mis-simulating
+// the game.
 //
-// Needs the archives unpacked: `pnpm data:extract` first. ExtractedData/ is
-// gitignored — this is a developer check, not a CI gate.
+// Needs the install unpacked: `pnpm data:extract` first (it reads whichever storage the local
+// install uses). ExtractedData/ is gitignored — this is a developer check, not a CI gate.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +21,7 @@ const SOURCE = path.join(root, "src", "data", "gameplayConstants.ts");
 
 function read(file) {
   if (!fs.existsSync(file)) {
-    console.error(`missing ${path.relative(root, file)}\nRun \`pnpm data:extract\` to unpack the MPQs first.`);
+    console.error(`missing ${path.relative(root, file)}\nRun \`pnpm data:extract\` to unpack the install first.`);
     process.exit(1);
   }
   return fs.readFileSync(file, "latin1");
@@ -38,14 +39,36 @@ function parseMiscIni(text) {
   return out;
 }
 
-/** `constant integer bj_FOO = 12` (and the one `local real unitSpacing = 64.00`). */
+/**
+ * Constants declared as literals in a JASS file.
+ *
+ * Some are NOT literals any more: 1.29 raised the player cap (1.30.4's common.j declares 24
+ * player colours) and turned the six constants that describe the player table into native
+ * calls — `bj_MAX_PLAYERS = GetBJMaxPlayers()` — so the same scripts run on either table.
+ * A native has no value to compare against here; the value is the ENGINE's answer, and ours
+ * is in src/jass/natives/config.ts, keyed to src/data/enums.ts's PlayerSlot. `ENGINE_ANSWERS`
+ * records that so this check reports "the engine decides" rather than a spurious mismatch.
+ */
 function parseJassConstants(text) {
   const out = new Map();
   for (const m of text.matchAll(/^\s*constant\s+\w+\s+(\w+)\s*=\s*([-\d.]+)\s*$/gm)) out.set(m[1], m[2]);
+  for (const m of text.matchAll(/^\s*constant\s+\w+\s+(\w+)\s*=\s*(\w+)\s*\(\s*\)\s*$/gm)) {
+    if (ENGINE_ANSWERS.has(m[1])) out.set(m[1], ENGINE_ANSWERS.get(m[1]));
+  }
   const spacing = /^\s*local\s+real\s+unitSpacing\s*=\s*([-\d.]+)/m.exec(text);
   if (spacing) out.set("unitSpacing", spacing[1]);
   return out;
 }
+
+/** The 1.27a literals these natives replaced — and still what OpenWar3's engine answers. */
+const ENGINE_ANSWERS = new Map([
+  ["bj_MAX_PLAYERS", "12"],
+  ["bj_MAX_PLAYER_SLOTS", "16"],
+  ["bj_PLAYER_NEUTRAL_VICTIM", "13"],
+  ["bj_PLAYER_NEUTRAL_EXTRA", "14"],
+  ["PLAYER_NEUTRAL_AGGRESSIVE", "12"],
+  ["PLAYER_NEUTRAL_PASSIVE", "15"],
+]);
 
 /** Pull `Name: <number | [number, …]>` pairs out of one `export const X = { … } as const` block. */
 function parseTsBlock(source, name) {
@@ -97,7 +120,7 @@ for (const [block, { label, data }] of Object.entries(files)) {
 if (problems.length) {
   console.error(`${problems.length} of ${checked} gameplay constants disagree with the game data:\n`);
   for (const p of problems) console.error(`  ${p}`);
-  console.error("\nThe MPQ wins (CLAUDE.md). Fix src/data/gameplayConstants.ts.");
+  console.error("\nThe game data wins (CLAUDE.md). Fix src/data/gameplayConstants.ts.");
   process.exit(1);
 }
-console.log(`gameplayConstants.ts: all ${checked} constants match the 1.27a game data.`);
+console.log(`gameplayConstants.ts: all ${checked} constants match the game data`);

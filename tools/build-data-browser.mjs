@@ -1,7 +1,7 @@
 // Build `Warcraft III/ExtractedData/index.html` — a dark, self-contained browser for
 // the unpacked WC3 data tables.
 //
-//   node tools/extract-mpq.mjs                 # first: unpack the archives
+//   pnpm data:extract                          # first: unpack the install
 //   node tools/build-data-browser.mjs [--open] # then: build the page and open it
 //
 // The page is fully self-contained: it embeds a manifest (file tree, sizes, archive
@@ -24,7 +24,7 @@ const ROOT = join(REPO, 'Warcraft III', 'ExtractedData');
 const MERGED = join(ROOT, 'merged');
 
 if (!existsSync(MERGED)) {
-  console.error(`No ${MERGED}. Run: node tools/extract-mpq.mjs`);
+  console.error(`No ${MERGED}. Run: pnpm data:extract`);
   process.exit(1);
 }
 

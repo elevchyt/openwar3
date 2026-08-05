@@ -4,6 +4,7 @@ dist/
 .DS_Store
 .vscode/
 # Never commit Blizzard assets (see plan §0)
+Warcraft III 1.30.4/
 Warcraft III/
 *.mpq
 *.w3x
@@ -20,3 +21,6 @@ Warcraft III/
 
 # Campaign index throwaway build (tools/tsconfig.campaign.json → CJS for the headless check)
 .campaign-build/
+
+# CASC reader throwaway build (tools/tsconfig.casc.json → CJS for casc:test and data:extract)
+.casc-build/

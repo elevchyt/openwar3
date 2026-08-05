@@ -36,7 +36,7 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
   const sub = document.createElement("p");
   sub.className = "load-gate-sub";
   sub.textContent =
-    "Select your Warcraft III (TFT 1.27a) folder to begin. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.";
+    "Select your Warcraft III (TFT 1.30.4) folder to begin — a 1.27a install works too. The menu is built from the game's own files, so they're loaded first. Nothing is uploaded — your install is read locally in the browser.";
 
   const btn = document.createElement("button");
   btn.className = "load-gate-btn";
@@ -54,14 +54,16 @@ export function mountLoadGate(root: HTMLElement, onLoaded: (r: GateLoad) => void
 
   btn.onclick = async (): Promise<void> => {
     status.classList.remove("error");
-    const files = await pickInstall();
-    if (!files) { status.textContent = "No folder selected."; return; }
+    const install = await pickInstall();
+    if (!install) { status.textContent = "No folder selected."; return; }
     btn.disabled = true;
     btn.textContent = "Loading…";
     status.textContent = "Mounting archives…";
     try {
       await requestPersistence();
-      const load = await loadProfile(files, DEFAULT_PROFILE);
+      // A CASC mount reads a few hundred megabytes off disk before the first file can be
+      // asked for (vfs/casc.ts), so it reports as it goes rather than sitting mute.
+      const load = await loadProfile(install, DEFAULT_PROFILE, (msg) => { status.textContent = msg; });
       status.textContent = `Mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files, ${load.maps.size} maps. Building menu…`;
       onLoaded(load);
     } catch (err) {

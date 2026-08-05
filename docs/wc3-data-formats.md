@@ -1,14 +1,27 @@
 # WC3 data layout — where the game keeps its data
 
-A field guide to the Warcraft III (TFT 1.27a) data model: which archives hold what, the file formats,
+A field guide to the Warcraft III (TFT) data model: which archives hold what, the file formats,
 and **exactly where a given piece of data lives** (target flags, tooltips, names, hotkeys, icons, sounds…).
-Everything here is verified against the real MPQs in `Warcraft III/`; the **MPQ wins** over any reference
-(see [`REFERENCES.md`](REFERENCES.md)). OpenWar3's parsers that consume each file are noted inline.
+Everything here is verified against the real game data in `Warcraft III/`; the **game data wins** over any
+reference (see [`REFERENCES.md`](REFERENCES.md)). OpenWar3's parsers that consume each file are noted inline.
 
-## Archives (MPQs)
+The *paths* below are the same on every version — that is the point of the layout. Where the bytes physically
+live is not: 1.30.4 keeps them in a CASC content store rather than in MoPaQ archives. Read
+[`casc.md`](casc.md) before touching anything that reads them.
 
-The game data is spread across four MoPaQ archives, mounted **lowest-priority first** (later overrides
-earlier — a "patch wins" layering). OpenWar3 mounts them in `src/vfs/profiles.ts`:
+## Archives
+
+**1.30.4 (the target).** Three virtual archives, named inside the CASC root listing and mounted
+**lowest-priority first**. `ARCHIVE_ORDER` in `src/vfs/casc.ts`:
+
+| Archive | Holds | Notes |
+|---|---|---|
+| `Deprecated.mpq` | Art that only old custom maps still reference | 665 files; overridden by everything |
+| `War3.mpq` | Everything shared — RoC **and** TFT data, models, textures, effect sounds | 1.30 merged the old War3 + War3x split |
+| `<locale>-War3Local.mpq` | **Localized** content — unit voice lines, UI strings, cinematics, and the campaign maps | One locale per install (`enUS`) |
+
+**1.27a and older (still mounted).** Four MoPaQ archives, same lowest-first rule, in
+`src/vfs/profiles.ts`:
 
 | Archive | Holds | Notes |
 |---|---|---|
@@ -17,9 +30,9 @@ earlier — a "patch wins" layering). OpenWar3 mounts them in `src/vfs/profiles.
 | `War3xLocal.mpq` | TFT **localized** content — unit **voice** lines, cinematics | Locale-specific (`enUS`) |
 | `War3Patch.mpq` | The 1.27a patch — **overrides** rows/files in all of the above | Highest priority; always check here first |
 
-A given table (e.g. `AbilityData.slk`) may exist in several archives; the patch copy is authoritative.
-Probe every archive when a row/file seems missing — the internal `(listfile)` is incomplete, but
-`archive.has(path)` is reliable.
+A given table (e.g. `AbilityData.slk`) may exist in several archives; the last one wins. On an MPQ install,
+probe every archive when a row/file seems missing — the internal `(listfile)` is incomplete, but
+`archive.has(path)` is reliable. A CASC root listing, by contrast, is complete by construction.
 
 **Audio gotcha:** every WAV is stored **Huffman(+ADPCM)** compressed. `War3.mpq` WAVs are PCM and decode
 trivially; **all** `War3x`/`War3xLocal` WAVs are Huffman, which needs a dedicated decoder

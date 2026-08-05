@@ -1,11 +1,18 @@
 import { MpqDataSource } from "./mpq";
 import { LayeredDataSource } from "./layered";
+import { CascDataSource, isCascInstall } from "./casc";
 import type { DataSource } from "./types";
 import type { ContentProfile } from "./profiles";
-import { installMaps, type InstallFiles } from "../assets/opfs";
+import { installMaps, type PickedInstall } from "../assets/opfs";
 
-// Turn imported install files into a mounted, layered VFS for a content profile
-// (plan §1 exit: "enumerate/extract any file by path from a real install").
+// Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
+// from a real install").
+//
+// Two storages, one mount (issue #102). A 1.30.4 folder is a CASC content store, and that is
+// the version OpenWar3 targets — it is the one whose UI is built for widescreen. A 1.27a
+// folder is four MPQs, and that path stays: it is what the engine was first written against,
+// and an install nobody has patched is still a perfectly good install. Which one a folder is
+// is not a question the player gets asked — `.build.info` beside the exe answers it.
 
 export interface LoadResult {
   vfs: DataSource;
@@ -21,20 +28,29 @@ export interface LoadResult {
 }
 
 export async function loadProfile(
-  files: InstallFiles,
+  install: PickedInstall,
   profile: ContentProfile,
+  onProgress?: (message: string) => void,
 ): Promise<LoadResult> {
+  const maps = installMaps(install.files);
+
+  if (isCascInstall(install.casc)) {
+    const vfs = await CascDataSource.open(install.casc, onProgress);
+    return { vfs, mounted: vfs.mounted, missing: [], fileCount: vfs.list().length, maps };
+  }
+
   const sources: DataSource[] = [];
   const mounted: string[] = [];
   const missing: string[] = [];
 
   // Build lowest→highest as declared; skip archives the folder doesn't have.
   for (const name of profile.archives) {
-    const file = files.get(name.toLowerCase());
+    const file = install.files.get(name.toLowerCase());
     if (!file) {
       missing.push(name);
       continue;
     }
+    onProgress?.(`Mounting ${name}…`);
     const buffer = new Uint8Array(await file.arrayBuffer());
     sources.push(new MpqDataSource(name, buffer));
     mounted.push(name);
@@ -42,11 +58,11 @@ export async function loadProfile(
 
   if (!sources.length) {
     throw new Error(
-      `No ${profile.name} archives found. Is this your Warcraft III folder?`,
+      `No ${profile.name} archives and no Data\\ content store. Is this your Warcraft III folder?`,
     );
   }
 
   // LayeredDataSource wants highest priority first, so reverse the mount order.
   const vfs = new LayeredDataSource(sources.slice().reverse());
-  return { vfs, mounted, missing, fileCount: vfs.list().length, maps: installMaps(files) };
+  return { vfs, mounted, missing, fileCount: vfs.list().length, maps };
 }

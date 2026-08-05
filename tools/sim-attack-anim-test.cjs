@@ -16,7 +16,7 @@
 //
 // Run: pnpm sim:test
 const { join } = require("node:path");
-const { readFileSync, existsSync } = require("node:fs");
+const { existsSync } = require("node:fs");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { buildAnimSet } = require(join(REPO, ".sim-build", "src", "render", "unitAnims.js"));
@@ -38,40 +38,52 @@ const FALLBACK = {
     "Attack Slam", "Attack Slam -2", "Death", "Walk", "Decay Flesh", "Decay Bone",
   ],
   "units\\human\\Footman\\Footman.mdx": [
-    "Stand - 1", "Stand - 2", "Stand - 4", "Stand Ready", "Attack - 1", "Attack - 2",
-    "Attack Slam", "Death", "Walk", "Decay Flesh", "Decay Bone",
+    "Stand - 1", "Stand - 2", "Stand Victory", "Stand - 4", "Attack - 1", "Attack - 2",
+    "Walk", "Stand Defend", "Walk Defend", "Death", "Decay Flesh", "Attack Defend", "Decay Bone",
+  ],
+  // The proc slam lives here rather than on the Footman: 1.30.4 re-exported Footman.mdx with
+  // Defend clips in place of its slam, and the Blademaster's is the better example anyway —
+  // "Attack Slam" IS his Critical Strike, a clip the picker must keep OUT of the ordinary
+  // swing rotation and still be able to reach by name when the proc fires.
+  "units\\orc\\HeroBladeMaster\\HeroBladeMaster.mdx": [
+    "Stand - 2", "Stand cinematic", "Attack", "Attack Slam", "Stand - 4", "Death", "Walk",
+    "Stand", "Attack 2", "Stand Ready", "Stand Victory", "Dissipate", "Portrait 1",
+    "Attack Walk Stand Spin",
   ],
   "units\\human\\Priest\\Priest.mdx": [
     "Stand", "Stand - 2", "Spell Attack", "Spell", "Death", "Walk", "Decay Flesh", "Decay Bone",
   ],
 };
 
-/** A model's sequence names, from the archives if this machine has them. */
-function sequences(path) {
+/** A model's sequence names, read from the install when this machine has one — either
+ *  storage, since the mount is the engine's own (tools/install.cjs). */
+async function readSequences() {
+  const out = new Map();
   const wc3 = join(REPO, "Warcraft III");
-  if (!existsSync(wc3)) return FALLBACK[path];
+  if (!existsSync(wc3)) return out;
   try {
-    const { Archive } = require("mdx-m3-viewer/dist/cjs/parsers/mpq");
+    const { openInstall } = require("./install.cjs");
     const Model = require("mdx-m3-viewer/dist/cjs/parsers/mdlx/model");
-    for (const name of ["War3.mpq", "War3x.mpq", "War3xLocal.mpq", "War3Patch.mpq"]) {
-      const file = join(wc3, name);
-      if (!existsSync(file)) continue;
-      const buf = readFileSync(file);
-      const bytes = new Uint8Array(buf.byteLength);
-      bytes.set(buf);
-      const archive = new Archive();
-      archive.load(bytes, true);
-      const entry = archive.get(path);
-      if (!entry) continue;
+    const { vfs } = await openInstall(wc3);
+    for (const path of Object.keys(FALLBACK)) {
+      const bytes = vfs.rawBytes(path);
+      if (!bytes) continue;
       const model = new (Model.default ?? Model)();
-      model.load(entry.bytes());
-      return model.sequences.map((s) => s.name);
+      model.load(bytes);
+      out.set(path, model.sequences.map((s) => s.name));
     }
   } catch {
-    /* fall through to the transcript */
+    /* fall through to the transcripts */
   }
-  return FALLBACK[path];
+  return out;
 }
+
+main().catch((err) => { console.error(err); process.exit(1); });
+
+async function main() {
+
+const fromInstall = await readSequences();
+const sequences = (path) => fromInstall.get(path) ?? FALLBACK[path];
 
 console.log("the Berserk Wildkin swings, it does not stomp");
 {
@@ -95,7 +107,17 @@ console.log("a model with a plain Attack is untouched");
   const name = named(a, seqs);
   check("the Footman swings his first plain attack", name(a.attack), "Attack - 1");
   check("…with every plain variant in the rotation", a.attackVariants.map(name), ["Attack - 1", "Attack - 2"]);
-  check("…and his proc slam is separate", name(a.attackSlam), "Attack Slam");
+}
+
+console.log("a proc slam is kept out of the ordinary rotation");
+{
+  const names = sequences("units\\orc\\HeroBladeMaster\\HeroBladeMaster.mdx");
+  const seqs = names.map((name) => ({ name }));
+  const a = buildAnimSet(seqs);
+  const name = named(a, seqs);
+  check("the Blademaster swings his plain attack", name(a.attack), "Attack");
+  check("…with both plain variants in the rotation", a.attackVariants.map(name), ["Attack", "Attack 2"]);
+  check("…and his Critical Strike slam is separate", name(a.attackSlam), "Attack Slam");
 }
 
 console.log("a caster whose ONLY attack is a spell keeps it");
@@ -108,3 +130,5 @@ console.log("a caster whose ONLY attack is a spell keeps it");
 
 console.log(failed === 0 ? "\nattack animations: all checks passed" : `\nattack animations: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
+
+}

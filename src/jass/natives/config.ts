@@ -6,6 +6,8 @@
 // correctness oracle for this milestone (7.1). No engine bridge is needed: config
 // is pure declaration, so it runs identically headless or live.
 
+import { MELEE } from "../../data/gameplayConstants";
+import { PlayerSlot } from "../../data/enums";
 import { MAP_CONTROL, type JassPlayer, type NativeCtx, type Runtime } from "../runtime";
 import { asInt, asNum, asStr, jBool, jInt, JNULL, truthy, type JassValue } from "../values";
 
@@ -95,6 +97,33 @@ export function registerConfigNatives(rt: Runtime): void {
     if (p) p.team = asInt(a[1]);
     return JNULL;
   });
+
+  // --- the player-table shape itself (issue #102) ---
+  //
+  // All six of these were LITERALS in 1.27a's common.j/Blizzard.j:
+  //
+  //     constant integer bj_MAX_PLAYERS            = 12
+  //     constant integer bj_MAX_PLAYER_SLOTS       = 16
+  //     constant integer bj_PLAYER_NEUTRAL_VICTIM  = 13
+  //     constant integer bj_PLAYER_NEUTRAL_EXTRA   = 14
+  //     constant integer PLAYER_NEUTRAL_AGGRESSIVE = 12
+  //     constant integer PLAYER_NEUTRAL_PASSIVE    = 15
+  //
+  // 1.29 raised the cap (1.30.4's common.j declares 24 player colours, PLAYER_COLOR_PEANUT
+  // being 23) and turned all six into natives so the same scripts run on either table. That
+  // makes them OURS to answer, and the answer is the table this engine actually has:
+  // src/data/enums.ts's PlayerSlot — 12 playable slots and four fixed neutral ones.
+  //
+  // Left unimplemented they each return a typed zero, and none of those zeroes is harmless.
+  // PLAYER_NEUTRAL_PASSIVE = 0 hands every gold mine, shop and tavern to the first player; and
+  // bj_PLAYER_NEUTRAL_VICTIM = 0 makes `InitBlizzard`'s very first act, ConfigureNeutralVictim,
+  // walk the player list un-allying player 0 from their own team-mates.
+  def(rt, "GetBJMaxPlayers", () => jInt(MELEE.MAX_PLAYERS));
+  def(rt, "GetBJMaxPlayerSlots", () => jInt(MELEE.MAX_PLAYER_SLOTS));
+  def(rt, "GetBJPlayerNeutralVictim", () => jInt(PlayerSlot.NeutralVictim));
+  def(rt, "GetBJPlayerNeutralExtra", () => jInt(PlayerSlot.NeutralExtra));
+  def(rt, "GetPlayerNeutralAggressive", () => jInt(PlayerSlot.NeutralHostile));
+  def(rt, "GetPlayerNeutralPassive", () => jInt(PlayerSlot.NeutralPassive));
 
   // --- player queries (used by blizzard.j slot logic + custom triggers) ---
   def(rt, "Player", (c, a) => c.rt.playerHandle(asInt(a[0])));

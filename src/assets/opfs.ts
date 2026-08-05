@@ -1,3 +1,5 @@
+import { fileReader, type CascFiles } from "../vfs/casc";
+
 // Asset import + persistence (plan §1.2). Import once → read the user's own WC3
 // install client-side → cache in OPFS later. Copyrighted bytes never touch a
 // server (plan §0). Phase 1 delivers the picker + the MPQ files it yields; the
@@ -57,11 +59,36 @@ interface DirHandle {
 const isMpq = (name: string): boolean => name.toLowerCase().endsWith(".mpq");
 
 /**
- * Pick a WC3 folder and return its top-level MPQ archives plus every map under `Maps\`.
- * Uses showDirectoryPicker on Chromium, falling back to <input webkitdirectory> on
- * Firefox/Safari. Returns null if the user cancels or nothing is selected.
+ * A picked install, whichever storage it uses (issue #102).
+ *
+ * `files` is the same as it always was — the MPQ archives of a 1.27a install, plus the maps
+ * on disk, which BOTH eras keep in a plain `Maps\` folder. `casc` is filled in instead of the
+ * archives when the folder is 1.30+: `.build.info` beside the exe and the `Data\` content
+ * store. The two never coexist, and the loader mounts whichever it was handed.
  */
-export async function pickInstall(): Promise<InstallFiles | null> {
+export interface PickedInstall {
+  files: InstallFiles;
+  casc: CascFiles | null;
+}
+
+/** `.build.info` is the marker of a CASC install; a 1.27a folder has no such file. */
+const BUILD_INFO = ".build.info";
+const isIdx = (name: string): boolean => /^[0-9a-f]{10}\.idx$/i.test(name);
+const dataFileNumber = (name: string): number | null => {
+  const m = /^data\.(\d{3})$/i.exec(name);
+  return m ? Number(m[1]) : null;
+};
+
+function emptyCasc(): CascFiles {
+  return { buildInfo: "", config: new Map(), idx: new Map(), data: new Map() };
+}
+
+/**
+ * Pick a WC3 folder and return what it holds: MPQ archives or a CASC store, plus every map
+ * under `Maps\`. Uses showDirectoryPicker on Chromium, falling back to <input webkitdirectory>
+ * on Firefox/Safari. Returns null if the user cancels or nothing is selected.
+ */
+export async function pickInstall(): Promise<PickedInstall | null> {
   const picker = (
     window as unknown as { showDirectoryPicker?: () => Promise<DirHandle> }
   ).showDirectoryPicker;
@@ -74,17 +101,47 @@ export async function pickInstall(): Promise<InstallFiles | null> {
       return null; // user cancelled
     }
     const files: InstallFiles = new Map();
+    const casc = emptyCasc();
     for await (const entry of handle.values()) {
       if (entry.kind === "file" && isMpq(entry.name)) {
         files.set(entry.name.toLowerCase(), await entry.getFile());
+      } else if (entry.kind === "file" && entry.name.toLowerCase() === BUILD_INFO) {
+        casc.buildInfo = await (await entry.getFile()).text();
       } else if (entry.kind === "directory" && entry.name.toLowerCase() === "maps") {
         await collectMaps(entry, entry.name, files);
+      } else if (entry.kind === "directory" && entry.name.toLowerCase() === "data") {
+        await collectCasc(entry, casc);
       }
     }
-    return files;
+    return { files, casc: casc.buildInfo ? casc : null };
   }
 
   return pickViaInput();
+}
+
+/** Walk `Data\` for the pieces a CASC mount needs (vfs/casc.ts). Everything but the
+ *  `data.NNN` files is small and read whole; those are kept as ranged readers. */
+async function collectCasc(dir: DirEntry, into: CascFiles, depth = 0): Promise<void> {
+  for await (const entry of dir.values()) {
+    if (entry.kind === "directory") {
+      // config/ is a two-level hash fan-out, data/ and indices/ are flat — three levels of
+      // recursion covers both without walking anything deeper.
+      if (depth < 3) await collectCasc(entry, into, depth + 1);
+      continue;
+    }
+    const name = entry.name;
+    if (isIdx(name)) {
+      into.idx.set(name.toLowerCase(), new Uint8Array(await (await entry.getFile()).arrayBuffer()));
+      continue;
+    }
+    const number = dataFileNumber(name);
+    if (number !== null) {
+      into.data.set(number, fileReader(await entry.getFile()));
+      continue;
+    }
+    // A config file is named by its own MD5 — 32 hex characters and no extension.
+    if (/^[0-9a-f]{32}$/i.test(name)) into.config.set(name.toLowerCase(), await (await entry.getFile()).text());
+  }
 }
 
 /** Walk `Maps\` and add every .w3m/.w3x under it, keyed by its relative path. */
@@ -100,24 +157,38 @@ async function collectMaps(dir: DirEntry, prefix: string, into: InstallFiles): P
 }
 
 /** Firefox/Safari fallback: a directory <input>. webkitRelativePath gives the same keys. */
-function pickViaInput(): Promise<InstallFiles | null> {
+function pickViaInput(): Promise<PickedInstall | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.webkitdirectory = true;
     input.onchange = () => {
-      const list = input.files;
-      if (!list || list.length === 0) return resolve(null);
-      const files: InstallFiles = new Map();
-      for (const file of Array.from(list)) {
-        if (isMpq(file.name)) { files.set(file.name.toLowerCase(), file); continue; }
-        if (!isMap(file.name)) continue;
-        // webkitRelativePath is "<pickedFolder>/Maps/FrozenThrone/(2)EchoIsles.w3x";
-        // drop the folder the user picked, and speak WC3's separator.
-        const rel = file.webkitRelativePath.split("/").slice(1).join("\\");
-        if (isUnderMaps(rel)) files.set(rel, file);
-      }
-      resolve(files.size ? files : null);
+      void (async () => {
+        const list = input.files;
+        if (!list || list.length === 0) return resolve(null);
+        const files: InstallFiles = new Map();
+        const casc = emptyCasc();
+        for (const file of Array.from(list)) {
+          // webkitRelativePath is "<pickedFolder>/Maps/FrozenThrone/(2)EchoIsles.w3x";
+          // drop the folder the user picked, and speak WC3's separator.
+          const parts = file.webkitRelativePath.split("/").slice(1);
+          const top = parts[0]?.toLowerCase();
+          if (parts.length === 1 && isMpq(file.name)) { files.set(file.name.toLowerCase(), file); continue; }
+          if (parts.length === 1 && file.name.toLowerCase() === BUILD_INFO) { casc.buildInfo = await file.text(); continue; }
+          if (top === "data") {
+            if (isIdx(file.name)) { casc.idx.set(file.name.toLowerCase(), new Uint8Array(await file.arrayBuffer())); continue; }
+            const number = dataFileNumber(file.name);
+            if (number !== null) { casc.data.set(number, fileReader(file)); continue; }
+            if (/^[0-9a-f]{32}$/i.test(file.name)) casc.config.set(file.name.toLowerCase(), await file.text());
+            continue;
+          }
+          if (!isMap(file.name)) continue;
+          const rel = parts.join("\\");
+          if (isUnderMaps(rel)) files.set(rel, file);
+        }
+        if (!files.size && !casc.buildInfo) return resolve(null);
+        resolve({ files, casc: casc.buildInfo ? casc : null });
+      })();
     };
     input.oncancel = () => resolve(null);
     input.click();

@@ -1,0 +1,19 @@
+{
+  "//": "Throwaway config: compile the CASC reader to CommonJS so headless Node can mount a real 1.30.4 install (tools/casc-test.cjs, tools/extract-data.mjs). Strict typechecking is done by the main `pnpm typecheck`. Same pattern as tools/tsconfig.sim.json.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "types": [],
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "..",
+    "outDir": "../.casc-build",
+    "noEmit": false
+  },
+  "files": ["../src/vfs/casc.ts", "../src/vfs/mapArchive.ts"]
+}

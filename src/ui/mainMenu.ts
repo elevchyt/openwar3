@@ -58,12 +58,14 @@ export function mountMainMenu(
 }
 
 async function importInstall(resolver: AssetResolver, status: HTMLElement): Promise<void> {
-  const files = await pickInstall();
-  if (!files) return;
+  const install = await pickInstall();
+  if (!install) return;
   status.textContent = "Loading archives…";
   try {
     await requestPersistence();
-    const { vfs, mounted, missing, fileCount } = await loadProfile(files, DEFAULT_PROFILE);
+    const { vfs, mounted, missing, fileCount } = await loadProfile(install, DEFAULT_PROFILE, (msg) => {
+      status.textContent = msg;
+    });
     resolver.setInstall(vfs);
     // Expose the mounted VFS so files can be enumerated/extracted by path from
     // the console — the Phase 1 exit criterion (plan §1).

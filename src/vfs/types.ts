@@ -13,6 +13,13 @@ export interface DataSource {
   rawBytes(path: string): Uint8Array | null;
   /** Known file paths. Requires a listfile for MPQ sources (WC3's MPQs ship one). */
   list(): string[];
+  /**
+   * Open a nested archive this source keeps EXPLODED rather than as a blob, or null when it
+   * has no such thing. Only CASC does: 1.30 flattened every campaign map into the content
+   * store, so `Maps\…\OrcX01.w3x` is a set of entries rather than a file (vfs/casc.ts).
+   * Prefer `openMapArchive` (vfs/mapArchive.ts) over calling this — it covers both storages.
+   */
+  openArchive?(path: string): DataSource | null;
 }
 
 /**

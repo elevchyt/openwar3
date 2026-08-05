@@ -2,7 +2,7 @@
 
 ![OpenWar3 screenshot](screenshot.png)
 
-A browser-first recreation of the **Warcraft III: The Frozen Throne (1.27a)** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime.
+A browser-first recreation of the **Warcraft III: The Frozen Throne (1.30.4)** engine in TypeScript. Ships **zero Blizzard assets** — uses your own install at runtime (1.30's CASC content store, or the MPQs of 1.27a and older).
 
 Goal: liberate WC3 from legacy constraints. Modern features planned:
 

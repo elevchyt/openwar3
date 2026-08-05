@@ -1,12 +1,13 @@
-# ExtractedData — the Warcraft III (TFT 1.27a) data files, unpacked
+# ExtractedData — the Warcraft III (TFT) data files, unpacked
 
 <!-- Source of truth: tools/data-readme.md. `node tools/build-data-browser.mjs` copies it here.
      Edit it there, not in ExtractedData/ — this folder gets wiped and rebuilt. -->
 
-Generated from the four MPQ archives in this folder's parent:
+Generated from the install in this folder's parent — a 1.30.4 **CASC content store** or the four
+**MPQ** archives of 1.27a and older, whichever is there:
 
 ```bash
-pnpm data:extract    # unpack the archives  (tools/extract-mpq.mjs)
+pnpm data:extract    # unpack the install  (tools/extract-data.mjs)
 pnpm data:browse     # build + open the data browser
 ```
 
@@ -41,14 +42,14 @@ is exactly how you'll open it. Needs Chrome 80+ / Firefox 113+ / Safari 16.4+.
 
 | Folder | What's in it |
 |---|---|
-| `merged/` | The **effective** data files — what the running game actually sees after the patch overrides everything. Each `.slk` also has a generated `.csv` next to it. **Start here.** |
-| `by-archive/` | Byte-exact originals, one tree per archive. Use to see *who owns what* and to diff a table across RoC → TFT → patch. |
-| `_index/` | Filename listings for **all 17,362 files**, including the models, textures and sounds that were *not* extracted. |
+| `merged/` | The **effective** data files — what the running game actually sees after the higher layers override everything. Each `.slk` also has a generated `.csv` next to it. **Start here.** |
+| `by-archive/` | Byte-exact originals, one tree per archive. **MPQ installs only:** a CASC store keeps one copy of shared bytes, so there the merged view *is* the per-archive view. |
+| `_index/` | Filename listings for every file, including the models, textures and sounds that were *not* extracted. |
 
-Only text/data formats were extracted — **627 files** (`merged/` is 21 MB, `by-archive/` 39 MB, `_index/` 2 MB).
-The binary assets — `.mdx` models, `.blp` textures, `.wav`/`.mp3` audio, `.w3x`/`.w3m` maps — stay in the
-MPQs, because the engine reads them straight from there at runtime via `src/vfs/`. Their **paths** are in
-`_index/` so you can find an asset without unpacking a gigabyte.
+Only text/data formats are extracted. The binary assets — `.mdx` models, `.blp` textures, `.wav`/`.mp3`
+audio, `.w3x`/`.w3m` maps — stay where they are, because the engine reads them straight from the install at
+runtime via `src/vfs/`. Their **paths** are in `_index/` so you can find an asset without unpacking a
+gigabyte. See `extract-report.txt` for the counts from the last run.
 
 ### `_index/`
 
@@ -56,14 +57,29 @@ MPQs, because the engine reads them straight from there at runtime via `src/vfs/
 |---|---|
 | `all-files.tsv` | Every file: `path`, `ext`, `effective_archive`, `all_archives`. Grep this to locate any model/icon/sound. |
 | `listfile-War3.mpq.txt` etc. | Per-archive filename listings. |
-| `overrides.txt` | The 996 files that exist in more than one archive, and which copy wins. |
+| `overrides.txt` | The files that exist in more than one archive, and which copy wins. |
 | `extract-report.txt` | Stats + decode failures from the last run. |
 
 ---
 
 ## The archives, and the layering rule
 
-Mounted lowest-priority first; **later overrides earlier**. Mirrored in `src/vfs/profiles.ts`.
+Mounted lowest-priority first; **later overrides earlier**.
+
+**1.30.4** — three virtual archives named inside the CASC root listing (`ARCHIVE_ORDER` in
+`src/vfs/casc.ts`); 1.30 kept the MPQ *names* after dropping the format. See [`docs/casc.md`](../../docs/casc.md).
+
+```
+Deprecated.mpq  <  War3.mpq  <  <locale>-War3Local.mpq
+```
+
+| Archive | Holds |
+|---|---|
+| `Deprecated.mpq` | Art that only old custom maps still reference |
+| `War3.mpq` | Everything shared — RoC **and** TFT data, models, textures, effect sounds |
+| `<locale>-War3Local.mpq` | **Localized** content: unit voice lines, UI strings, cinematics, and the campaign maps |
+
+**1.27a and older** — four MoPaQ archives, mirrored in `src/vfs/profiles.ts`:
 
 ```
 War3.mpq  <  War3x.mpq  <  War3xLocal.mpq  <  War3Patch.mpq
@@ -76,16 +92,17 @@ War3.mpq  <  War3x.mpq  <  War3xLocal.mpq  <  War3Patch.mpq
 | `War3xLocal.mpq` | 1,136 | TFT **localized** content — unit **voice** lines (`enUS`), cinematics |
 | `War3Patch.mpq` | 578 | The 1.27a patch. **Highest priority — always authoritative.** |
 
-So a TFT unit like the Blood Mage draws its *model* from `War3x` but its *voice lines* from `War3xLocal`,
-and if the patch touched its stats, `War3Patch` has the real numbers.
+So on 1.27a a TFT unit like the Blood Mage draws its *model* from `War3x` but its *voice lines* from
+`War3xLocal`, and if the patch touched its stats, `War3Patch` has the real numbers. On 1.30.4 the first two
+of those are one archive.
 
-**When a reference and the MPQ disagree, the MPQ wins.** That's the prime directive in `CLAUDE.md`.
+**When a reference and the game data disagree, the game data wins.** That's the prime directive in `CLAUDE.md`.
 
-### Two facts about `War3Patch.mpq` worth knowing
+### Two facts about `War3Patch.mpq` worth knowing (1.27a installs)
 
 1. **It ships no `(listfile)`.** All 576 of its blocks are anonymous; a generic MPQ tool shows you
    `file00000000`, `file00000001`, … and nothing else. The hash table still resolves a *name* to a block,
-   so `tools/extract-mpq.mjs` recovers the patch's contents by probing it with every filename known from
+   so `tools/extract-data.mjs` recovers the patch's contents by probing it with every filename known from
    the other three archives. `archive.has(path)` is reliable even when listing is not.
 2. **MPQ name hashing is case-insensitive.** Probing yields 578 name spellings for 576 blocks, because
    case-variant spellings (`…\Orc\Earthquake\…` and `…\Orc\EarthQuake\…`) alias onto the same block.
@@ -368,14 +385,20 @@ hiveworkshop 403s plain fetchers, send a browser `User-Agent`).
   and `Units\CommandStrings.txt` are the same block, and collapse to a single file when extracted onto a
   case-insensitive filesystem. That is why 629 data-path spellings yield 627 files on disk (one, `war3x.txt`,
   fails to decode; two collapse into one).
-- **`War3x.mpq\war3x.txt` cannot be decoded** — a root-level stub with a malformed sector table (its
-  declared sector count doesn't fit the block). Not gameplay data; the extractor logs it and moves on.
-  It is the only decode failure across all 17,362 files, and it is absent from `merged/`.
+- **`War3x.mpq\war3x.txt` cannot be decoded** (1.27a) — a root-level stub with a malformed sector table
+  (its declared sector count doesn't fit the block). Not gameplay data; the extractor logs it and moves on.
+  It is the only decode failure in the whole archive set, and it is absent from `merged/`.
 - **All TFT audio is Huffman(+ADPCM) compressed.** `War3.mpq` WAVs are plain PCM, but *every* `War3x` /
   `War3xLocal` WAV is Huffman. Stock `mdx-m3-viewer` throws `compression type 'huffman' not supported` and
-  silently mutes the entire expansion. Fixed in `patches/mdx-m3-viewer@5.12.0.patch`.
+  silently mutes the entire expansion. Fixed in `patches/mdx-m3-viewer@5.12.0.patch`. That codec is an MPQ
+  *sector* format, so on a 1.30.4 install it applies to the map archives rather than to the content store —
+  CASC wraps everything in BLTE instead (see [`docs/casc.md`](../../docs/casc.md)).
 - **RoC vs TFT is a data split, not a fork.** Same engine, different mounted archives — see
   `src/vfs/profiles.ts`.
+- **Six `common.j` / `Blizzard.j` constants are natives on 1.29+**, not literals: `bj_MAX_PLAYERS`,
+  `bj_MAX_PLAYER_SLOTS`, `bj_PLAYER_NEUTRAL_VICTIM`, `bj_PLAYER_NEUTRAL_EXTRA`,
+  `PLAYER_NEUTRAL_AGGRESSIVE`, `PLAYER_NEUTRAL_PASSIVE`. Grepping the script for a number finds nothing;
+  the engine answers them (`src/jass/natives/config.ts`).
 
 ---
 

@@ -36,4 +36,12 @@ export class LayeredDataSource implements DataSource {
     for (const layer of this.layers) for (const name of layer.list()) all.add(name);
     return [...all].sort();
   }
+
+  openArchive(path: string): DataSource | null {
+    for (const layer of this.layers) {
+      const archive = layer.openArchive?.(path);
+      if (archive) return archive;
+    }
+    return null;
+  }
 }
