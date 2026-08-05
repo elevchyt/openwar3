@@ -836,6 +836,15 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
       const tileH = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.height;
       g.save();
       g.beginPath(); g.rect(ix, iy, iw, ih); g.clip();
+      // A TILED background is a SURFACE — the stone a panel is made of — and WC3 draws it
+      // over nothing, so what little alpha the tile carries must not let the world through.
+      // (The cinematic letterbox is where that shows: its stone is dark, the map behind it is
+      // bright, and the bars came out faintly see-through.) Black goes under the tile and only
+      // under it — INSIDE the inset — so a frame that pulls its background back to let its
+      // border ornament overhang open screen still does (see backgroundInsets). The element
+      // used to carry `background: #000` instead, which covered the overhang too.
+      g.fillStyle = "#000";
+      g.fillRect(ix, iy, iw, ih);
       for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
       g.restore();
     } else {
