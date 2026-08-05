@@ -25,6 +25,16 @@ export interface SlotConfig {
    *  and that name is what the owner line of a hover tooltip reads, exactly as in WC3. Absent
    *  on a melee map, where a slot is named after whoever sits in it. */
   name?: string;
+  /**
+   * WHO is in the seat — the human's own name, as they typed it on the LAN screen or as the
+   * profile saved it. Distinct from `name`, which is what the MAP calls the side: on Rise of
+   * the Naga slot 0 is "Watchers" and the person playing it is you.
+   *
+   * It is here for the LOADING SCREEN, which is the one screen that lists the players by name
+   * (issue #110) — `UI\FrameDef\Glue\Loading.fdf`'s `LoadingPlayerSlotName`. Absent on a
+   * computer slot and on everything the map owns, which are named by what they are.
+   */
+  playerName?: string;
   /** In a LAN game, the relay peer sitting in this slot (src/net/protocol.ts). Absent in a
    *  single-player match, and absent on a computer slot in any match. */
   peer?: number;

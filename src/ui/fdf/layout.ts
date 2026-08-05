@@ -366,20 +366,44 @@ function placeByTwoPoints(
  * SCREEN's right edge (like WC3's own widescreen glue), instead of on the right edge
  * of a centred 4:3 box. Pass `worldW` as the root frame's width to `layout()`.
  */
-export function fitBox(viewportW: number, viewportH: number): { scale: number; worldW: number } {
+export function fitBox(viewportW: number, viewportH: number): FitBox {
   const scale = viewportH / UI_HEIGHT; // height-based → fills the screen height, no letterbox
-  return { scale, worldW: viewportW / scale };
+  return { scale, worldW: viewportW / scale, xScale: 1 };
 }
+
+/**
+ * Fit the AUTHORED 4:3 box to the viewport by STRETCHING it — the loading screen's rule, and
+ * only its (issue #110).
+ *
+ * A glue screen is furniture arranged on a screen, so it scales by height and spreads to the
+ * edges (`fitBox`). The loading screen is a PICTURE: `Loading.fdf`'s root is `SetAllPoints`
+ * and so is the background sprite it carries, so on a wide screen the picture itself widens,
+ * and everything printed on it — the minimap, the player rows, the load bar — has to widen
+ * with it or it stops lining up with the art it is printed on.
+ *
+ * Positions and widths take `scale × xScale`; TYPE does not (the renderer sizes fonts off
+ * `scale` alone), which is why the two are separate numbers rather than one non-uniform
+ * transform over the whole overlay.
+ */
+export function stretchBox(viewportW: number, viewportH: number): FitBox {
+  const scale = viewportH / UI_HEIGHT;
+  return { scale, worldW: UI_WIDTH, xScale: viewportW / (UI_WIDTH * scale) };
+}
+
+/** How a world rect becomes pixels: a height-based `scale`, and how much wider than square
+ *  the x axis is drawn (1 everywhere but the loading screen — see `stretchBox`). */
+export interface FitBox { scale: number; worldW: number; xScale: number }
 
 /** World rect (y-up, bottom-left origin) → CSS pixel rect (y-down, top-left origin). */
 export function toPixels(
   n: LaidOutFrame,
-  fit: { scale: number },
+  fit: { scale: number; xScale?: number },
 ): { left: number; top: number; width: number; height: number } {
+  const sx = fit.scale * (fit.xScale ?? 1);
   return {
-    left: n.x * fit.scale,
+    left: n.x * sx,
     top: (UI_HEIGHT - (n.y + n.h)) * fit.scale,
-    width: n.w * fit.scale,
+    width: n.w * sx,
     height: n.h * fit.scale,
   };
 }

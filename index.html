@@ -14,7 +14,13 @@
     <canvas id="menubg" hidden></canvas>
     <canvas id="model" hidden></canvas>
     <canvas id="map" hidden></canvas>
-    <div id="ui"></div>
+    <div id="ui">
+      <!-- The loading screen's art (issue #110). Its own canvas because it is up at the one
+           moment BOTH the menu scene and the map scene are being torn down / stood up — and
+           it lives INSIDE #ui because #ui is a stacking context, so this is the only place
+           from which it can sit under the loading screen's own DOM and over everything else. -->
+      <canvas id="loading" hidden></canvas>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

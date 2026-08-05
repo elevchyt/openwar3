@@ -5,6 +5,7 @@ import { PLAYER_COLORS } from "./hud";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { savedPlayerName } from "./fdfLan";
 import type { Controller, MeleeConfig, SlotConfig } from "./lobby";
 import {
   MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, nudgeY, num, setProp, size, str,
@@ -308,6 +309,9 @@ function toConfig(slots: Slot[], info: MapInfo): MeleeConfig {
         startX: mapSlot?.startX ?? 0,
         startY: mapSlot?.startY ?? 0,
         name: mapSlot?.name,
+        // The one seat a human is in on this screen is theirs, under the name the profile
+        // saved — the loading screen's roster is the only thing that reads it.
+        ...(s.controller === "user" ? { playerName: savedPlayerName() } : {}),
       };
     });
   // The map's neutral/rescuable players had no row to be seated in and are in the match all

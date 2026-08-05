@@ -70,7 +70,8 @@ html, body {
 #bg,
 #menubg,
 #model,
-#map {
+#map,
+#loading {
   position: fixed;
   inset: 0;
   width: 100%;
@@ -118,9 +119,17 @@ body.in-game {
 #bg[hidden],
 #menubg[hidden],
 #model[hidden],
-#map[hidden] {
+#map[hidden],
+#loading[hidden] {
   display: none;
 }
+
+/* The loading screen (issue #110) covers EVERYTHING: it is up while the menu is being torn
+   down and the match stood up, so both of those may be mid-swap underneath it. Its art canvas
+   and the FDF overlay printed on it are the top two layers of #ui — which puts them over the
+   HUD the match builds underneath while this is still the only thing on screen. */
+#loading { z-index: 8; background: #000; }
+.fdf-screen.fdf-loading { z-index: 9; }
 
 /* Floating status bars above EVERY visible unit (always-on, WC3-style): a hero
    level badge (left), an HP bar, and a mana bar below (when the unit has mana).
@@ -2047,8 +2056,13 @@ body.in-game .fdf-screen.fdf-ingame {
 /* The GLUE screens (main menu, Single Player, Custom Game) hide themselves during a match.
    The in-game FDF panels — the script's dialogs and leaderboards (7.19) — are built from
    the same FDF machinery but must survive it, hence the opt-out class. */
-body.in-game .fdf-screen:not(.fdf-ingame),
+body.in-game .fdf-screen:not(.fdf-ingame):not(.fdf-loading),
 body.in-game .load-gate { display: none; }
+
+/* A HIGHLIGHT frame the SCREEN drives (the loading roster's "this player is ready" band).
+   Painted at build time, shown when its screen says so — see fdf/render.ts paintHighlight. */
+.fdf-highlight { opacity: 0; }
+.fdf-highlight.fdf-highlight-on { opacity: 1; }
 
 /* --- the trigger's on-screen output (Phase 7.19 — issue #33) --------------------- */
 

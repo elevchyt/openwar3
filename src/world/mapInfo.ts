@@ -72,6 +72,40 @@ export interface ForceGrants {
   sharedVision: boolean;
 }
 
+/**
+ * What the map says its LOADING SCREEN is (issue #110) — the four w3i fields the World
+ * Editor's "Loading Screen" dialog writes, and nothing else on the screen comes from the map.
+ *
+ * The numbering is the trap. mdx-m3-viewer calls the first int `campaignBackground`, which
+ * reads as "only campaigns use this" — but it is the row number into `UI\WorldEditData.txt`'s
+ * `[LoadingScreens]` for EVERY map that names a preset screen, and the int AFTER the subtitle
+ * (its `loadingScreen`) is not a screen at all. Read straight out of the archives:
+ *
+ * | map                     | 1st int | 2nd int | `[LoadingScreens]` row it names   |
+ * |-------------------------|---------|---------|-----------------------------------|
+ * | NightElfX01 (v25)       | 46      | −1      | WESTRING_LOADINGSCREEN_NIGHTELFX01|
+ * | HumanX01 (v25)          | 57      | −1      | …HUMANX01                         |
+ * | Human01 (RoC, v18)      | 2       | −1      | …HUMAN01                          |
+ * | WarChasers (RoC, v18)   | 44      | −1      | …CREDITS                          |
+ * | Echo Isles (melee, v25) | −1      | 0       | none — melee shows a RACE screen   |
+ *
+ * Every campaign chapter's number is exactly its own chapter's row, and the melee map is the
+ * one that names none. So: first int = the screen, second int = the TFT "used game data set"
+ * field, which has nothing to do with this.
+ */
+export interface MapLoadingScreen {
+  /** The `[LoadingScreens]` row this map asks for, or −1 for "none" (every melee map). */
+  screen: number;
+  /** The map's OWN imported loading-screen model, when it ships one (TFT w3i only). Wins over
+   *  `screen` — a map that imported art means to show it. Empty on everything stock. */
+  model: string;
+  /** The three lines the screen prints, TRIGSTR-resolved. A campaign chapter fills all three
+   *  ("Chapter One" / "Rise of the Naga" / the mission blurb); a melee map fills none. */
+  title: string;
+  subtitle: string;
+  text: string;
+}
+
 /** The force flag bits we act on — see `ForceGrants` for how each was pinned down. */
 const FORCE_ALLIED = 0x01;
 const FORCE_SHARED_VISION = 0x08;
@@ -129,6 +163,8 @@ export interface MapInfo {
    *  still yours to pick, and the race stays open on any seated slot (the client happily lets
    *  you re-race the Dungeon Denizens). See fdfSkirmish's row rules. */
   fixedPlayerSettings: boolean;
+  /** What the map asks its loading screen to be (issue #110). */
+  loading: MapLoadingScreen;
   /** Melee/custom classification + the map's flags and trigger script. */
   classification: MapClassification;
 }
@@ -144,6 +180,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   const empty: MapInfo = {
     name: fallbackName, description: "", recommendedPlayers: "", tileset: "", width: 0, height: 0,
     slots: [], neutralPlayers: [], maxPlayers: 0, minimap, isMelee: classification.isMelee, forces: [], fixedPlayerSettings: false,
+    loading: { screen: -1, model: "", title: "", subtitle: "", text: "" },
     classification,
   };
   const w3iBytes = mpq.rawBytes("war3map.w3i");
@@ -202,6 +239,14 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
         }))
       : [],
     fixedPlayerSettings: (info.flags & W3I_FIXED_PLAYER_SETTINGS) !== 0,
+    // See MapLoadingScreen for why the screen number is the field named `campaignBackground`.
+    loading: {
+      screen: info.campaignBackground,
+      model: info.loadingScreenModel.replace(/\.mdl$/i, ".mdx"),
+      title: resolveName(info.loadingScreenTitle, "", strings),
+      subtitle: resolveName(info.loadingScreenSubtitle, "", strings),
+      text: resolveName(info.loadingScreenText, "", strings),
+    },
     classification,
   };
 }

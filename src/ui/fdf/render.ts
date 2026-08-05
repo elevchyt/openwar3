@@ -4,7 +4,10 @@ import { wc3ToHtml, wc3ToPlain } from "../wc3Text";
 import { gameFontStack, gameFontsReady, onGameFontsReady } from "../gameFont";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, propagateDecorate, strProp } from "./library";
-import { fitBox, fontSizeOf, layout, toPixels, UI_HEIGHT, type LaidOutFrame } from "./layout";
+import {
+  fitBox, fontSizeOf, layout, stretchBox, toPixels, UI_HEIGHT,
+  type FitBox, type LaidOutFrame,
+} from "./layout";
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import {
   buildCheckBox, buildEditBox, buildList, buildPopup, buildSlider, buildTextArea, widgetKind,
@@ -85,6 +88,10 @@ export interface FdfScreenOptions {
   /** Place the root at the centre of the screen at its own Width/Height, rather than
    *  stretching it over the whole viewport — how WC3 puts a dialog on screen. */
   centerRoot?: boolean;
+  /** Lay the screen out in the authored 4:3 box STRETCHED across the viewport, rather than
+   *  scaled by height with the extra width given away. For a screen that is one full-screen
+   *  PICTURE with things printed on it — see `stretchBox`. The loading screen is the only one. */
+  stretchRoot?: boolean;
   /** Extra class on the overlay. `fdf-ingame` keeps it visible during a match (the glue
    *  screens hide themselves then — see style.css). */
   overlayClass?: string;
@@ -207,7 +214,9 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     // frame anchored TOPRIGHT lands on the right edge of the frame it belongs to. Measuring
     // the window here is what threw the multiboard and the leaderboard off once the game got
     // letterboxed: they were laid out for a box wider than the one they were drawn in.
-    const fit = fitBox(overlay.clientWidth || window.innerWidth, overlay.clientHeight || window.innerHeight);
+    const vw = overlay.clientWidth || window.innerWidth;
+    const vh = overlay.clientHeight || window.innerHeight;
+    const fit = opts.stretchRoot ? stretchBox(vw, vh) : fitBox(vw, vh);
     // Root fills the full screen width (worldW × 0.6) so TOPRIGHT-anchored frames land
     // on the screen's right edge, not a centred 4:3 box's right edge. A CENTRED root
     // instead keeps its own Width/Height and sits in the middle — how the game puts a
@@ -215,8 +224,12 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     const box = opts.centerRoot
       ? centreBox(numProp(root, "Width") ?? fit.worldW, numProp(root, "Height") ?? UI_HEIGHT, fit.worldW)
       : { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT };
+    // A shrink-wrapped TEXT frame is measured in PIXELS and handed back a world width, so the
+    // conversion has to use the factor its box will be DRAWN at — `scale × xScale` — even
+    // though the glyphs inside it are sized off `scale` alone. Use `scale` here on a stretched
+    // screen and every auto-sized caption comes out a fifth too wide for its own text.
     const { tree } = layout(root, box, opts.buttonWidthScale ?? 1, (f) =>
-      measureTextFrame(f, lib, opts.textOverrides ?? {}, fit.scale));
+      measureTextFrame(f, lib, opts.textOverrides ?? {}, fit.scale * fit.xScale));
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas, overlay,
       handlers: opts.handlers ?? {},
@@ -337,7 +350,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
 
 interface RenderCtx {
   lib: FdfLibrary;
-  fit: { scale: number; worldW: number };
+  fit: FitBox;
   blpCanvas: (path: string) => HTMLCanvasElement | null;
   handlers: FdfScreenHandlers;
   textOverrides: Record<string, string>;
@@ -392,6 +405,8 @@ function renderFrame(
     wireButton(el, f, ctx);
   } else if (isButton) {
     wireButton(el, f, ctx);
+  } else if (f.type === "HIGHLIGHT") {
+    paintHighlight(el, f, ctx);
   } else if ((f.type === "SPRITE" || f.type === "MODEL") && ctx.sprites[f.name]) {
     const canvas = ctx.blpCanvas(ctx.sprites[f.name]);
     if (canvas) el.style.background = `url(${canvas.toDataURL()}) center/contain no-repeat`;
@@ -606,6 +621,29 @@ function renderCheckBox(
     renderFrame(child, el, ctx, abs);
   }
   ctx.controls.set(f.name, buildCheckBox(el));
+}
+
+/**
+ * A HIGHLIGHT frame standing on its own — a wash the SCREEN turns on and off, rather than one
+ * of a control's mouse-over states.
+ *
+ * The game uses exactly two kinds and both are here: `SHADE` is a flat `HighlightColor` rgba
+ * over the frame's box (the loading screen's green "this player has finished loading" band, and
+ * the editor-ish red washes elsewhere), `FILETEXTURE` is a `HighlightAlphaFile` stretched over
+ * it. It starts HIDDEN (`.fdf-highlight` in style.css) — nothing in the FDF says when it lights
+ * up, so that is its screen's to say, by putting `fdf-highlight-on` on the element.
+ */
+function paintHighlight(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
+  el.classList.add("fdf-highlight");
+  const type = (strProp(f, "HighlightType") ?? "SHADE").toUpperCase();
+  if (type === "FILETEXTURE") {
+    const art = texture(f, "HighlightAlphaFile", ctx);
+    if (art) el.style.background = `url(${art.toDataURL()}) center/100% 100% no-repeat`;
+    return;
+  }
+  const c = firstProp(f, "HighlightColor")?.args ?? [];
+  const ch = (i: number): number => Math.round(Math.max(0, Math.min(1, c[i]?.n ?? 1)) * 255);
+  el.style.background = `rgba(${ch(0)}, ${ch(1)}, ${ch(2)}, ${Math.max(0, Math.min(1, c[3]?.n ?? 1))})`;
 }
 
 /** Composite a named HIGHLIGHT frame's alpha file as a full-box overlay layer. */

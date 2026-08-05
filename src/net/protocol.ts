@@ -110,6 +110,9 @@ export interface StartMatch {
     startX: number;
     startY: number;
     peer?: number;
+    /** The person in the seat, by name — what the LOADING SCREEN's roster prints (issue #110).
+     *  Absent on a computer slot, which is named by what it is. */
+    name?: string;
   }>;
 }
 

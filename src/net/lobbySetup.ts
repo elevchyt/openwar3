@@ -234,6 +234,9 @@ export function buildStart(setup: LobbySetup, seed?: number): StartMatch {
         startX: s.startX,
         startY: s.startY,
         ...(s.peer === undefined ? {} : { peer: s.peer }),
+        // Who is sitting there, for the loading screen's roster. Only a PERSON has one —
+        // a computer row's `name` is the lobby's label for an empty seat, not a player.
+        ...(s.kind === "player" && s.name ? { name: s.name } : {}),
       })),
   };
 }

@@ -18,6 +18,7 @@ import { WebSocketTransport } from "./net/transport";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { GlueManager, type GlueScreenDef } from "./ui/glue";
+import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
 import { mountLoadGate, type GateLoad } from "./ui/gate";
 import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
 import { GlueAudio } from "./ui/glueAudio";
@@ -50,6 +51,9 @@ const modelCanvas = document.getElementById("model") as HTMLCanvasElement;
 // Not `const`: each match gets a canvas of its own, and leaving one replaces this
 // (see `freshMapCanvas`).
 let mapCanvas = document.getElementById("map") as HTMLCanvasElement;
+// The loading screen's art (issue #110). Not part of `show()`'s one-at-a-time set: it is up
+// over the top of whichever of those is mid-swap, which is the whole point of it.
+const loadingCanvas = document.getElementById("loading") as HTMLCanvasElement;
 const ui = document.getElementById("ui") as HTMLElement;
 
 const resolver = new AssetResolver(null);
@@ -412,6 +416,9 @@ function campaignConfig(info: MapInfo, difficulty: Difficulty, title: string): M
     startX: s.startX,
     startY: s.startY,
     name: s.name, // the map's own name for the side ("Illidan's Naga"), for the hover tooltip
+    // …and, in the seat the player is actually in, who they are — the loading screen's roster
+    // never shows for a chapter (it is not a melee map), but the seating is the same shape.
+    ...(i === local ? { playerName: savedPlayerName() } : {}),
   });
   // The map's neutral/rescuable players ride along at the end, keeping the controller the map
   // gave them — they are nobody's AI and nobody's seat, but they own units and the mission
@@ -473,12 +480,25 @@ async function startGame(
   glue.dispose(); // the menus are done; the match owns the screen now — including its wire,
                   // which the LAN screen handed over before calling us (LanLobby.handOff)
   glueAudio?.stop(); // …and the music channel: the map's own script cues its music from here
-  const bytes = map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer());
-  await enterMap(bytes, info.name);
+
+  // The LOADING SCREEN (issue #110) goes up before a byte of the map is read and comes down
+  // when the match is standing. Every step below is a `step()`, and `step` yields to the
+  // browser before running its body — which is not politeness but the whole reason the screen
+  // is visible at all: `loadMap` is one long SYNCHRONOUS call, so without a paint between the
+  // steps the bar would go up and come down inside a single frame nobody ever saw.
+  const loading = await showLoadingScreen(info, config);
+  const step = async <T>(at: number, body: () => T | Promise<T>): Promise<T> => {
+    loading?.setProgress(at);
+    await nextFrame();
+    return body();
+  };
+
+  const bytes = await step(0.05, async () =>
+    map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer()));
+  await step(0.15, () => enterMap(bytes, info.name));
   // Melee maps get the standard setup (town hall + workers, melee rules);
   // custom/scenario maps run their own triggers instead (see mapKind.ts).
-  if (info.isMelee) await mapScene?.startMelee(config);
-  else await mapScene?.startCustom(config);
+  await step(0.75, () => (info.isMelee ? mapScene?.startMelee(config) : mapScene?.startCustom(config)));
   // A LAN match hands over the match's end of the wire (docs/multiplayer.md item 10b-note); a
   // skirmish passes none, and the controller runs exactly as it always has. Attach it AFTER
   // setup so the world it snapshots exists.
@@ -489,6 +509,49 @@ async function startGame(
     // wire simply goes quiet and the client keeps simulating a world nobody owns any more.
     link.channel.onRoomClosed = () => mapScene?.showMatchOver();
   }
+  // Full bar, every seat lit — then the screen is taken away only once the match has actually
+  // DRAWN a frame behind it, so the first thing the player sees is the map and never the black
+  // canvas it was on a moment ago.
+  loading?.finish();
+  await nextFrame();
+  await nextFrame();
+  loading?.dispose();
+  loadingCanvas.hidden = true;
+}
+
+/**
+ * Put the loading screen up over everything, on its own canvas (ui/loadingScreen.ts).
+ *
+ * A campaign chapter hands it the campaign INDEX's title lines rather than the map's, for the
+ * same reason the quest log's header takes them: `NightElfX01`'s w3i calls itself "NightElfX01"
+ * and the screen the player came from calls it "Chapter One — Rise of the Naga".
+ */
+async function showLoadingScreen(info: MapInfo, config: MeleeConfig): Promise<LoadingScreen | null> {
+  const vfs = resolver.installSource;
+  if (!vfs) return null; // the zero-asset fallback has no art to put up
+  const chapter = pendingCampaign
+    ? campaigns.find((c) => c.key === pendingCampaign?.key)?.missions[pendingCampaign.index]
+    : undefined;
+  try {
+    // The menu's 3D scene is behind this and about to be thrown away; stop it rather than
+    // leave it drawing an invisible seascape for the whole load, which is the one moment the
+    // machine has something better to do.
+    show("none");
+    loadingCanvas.hidden = false;
+    return await mountLoadingScreen({
+      container: ui, canvas: loadingCanvas, vfs, info, config,
+      title: chapter?.header, subtitle: chapter?.name,
+    });
+  } catch (err) {
+    console.warn("[OpenWar3] loading screen unavailable:", err);
+    loadingCanvas.hidden = true;
+    return null;
+  }
+}
+
+/** Let the browser paint. Every load step is fenced by one of these — see `startGame`. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 /** Enumerable unit models from the mounted install (portraits excluded). */

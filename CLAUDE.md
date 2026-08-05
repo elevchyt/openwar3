@@ -89,6 +89,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   chapter-start path. The whole campaign is ONE text file (`UI\CampaignStrings_exp.txt`) that documents itself, and
   three of its rows break the obvious parse (a comma inside quotes, a fourth field, a "mission" that is a `.mdl`).
   The screen is also the one glue screen with **no panel chrome** — the campaign's 3D backdrop is the screen.
+- **Loading screens:** read [`docs/loading-screens.md`](docs/loading-screens.md) before touching `Loading.fdf`, the
+  `[LoadingScreens]` table, or the start-of-match path. The w3i field that picks a map's screen is the one the
+  parsers call **`campaignBackground`** (the int AFTER the subtitle is not a screen at all), the art is flat 2D in
+  the FDF's own 0.8×0.6 box rather than a 3D scene, and the load bar carries no keyframes — its fill is a bone the
+  engine scales. It is also the one screen laid out **stretched** rather than height-scaled, because it is a
+  picture with things printed on it.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a
