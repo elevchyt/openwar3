@@ -24,6 +24,7 @@
 // JS-side state cache, so we snapshot and restore everything we touch.
 
 import type { WeatherDef } from "../data/weather";
+import { pipelineState } from "./glPipelineState";
 
 const VERT_SRC = `
 attribute vec3 aPos;
@@ -315,12 +316,11 @@ export class WeatherOverlay {
     const prevBlend = gl.isEnabled(gl.BLEND);
     const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST);
     const prevCull = gl.isEnabled(gl.CULL_FACE);
-    const prevDepthFunc = gl.getParameter(gl.DEPTH_FUNC) as number;
-    const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK) as boolean;
-    const prevBlendSrcRGB = gl.getParameter(gl.BLEND_SRC_RGB) as number;
-    const prevBlendDstRGB = gl.getParameter(gl.BLEND_DST_RGB) as number;
-    const prevBlendSrcA = gl.getParameter(gl.BLEND_SRC_ALPHA) as number;
-    const prevBlendDstA = gl.getParameter(gl.BLEND_DST_ALPHA) as number;
+    // The scalar pipeline state, from our own shadow of it — reading these eight off the
+    // driver is a blocking round-trip to the GPU process and was ~1.1 ms a frame across the
+    // overlays. See render/glPipelineState.ts.
+    const pipeline = pipelineState(gl);
+    const prevPipeline = pipeline.save();
     const prevActiveTex = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
     gl.activeTexture(gl.TEXTURE0);
     const prevTex0 = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
@@ -374,9 +374,7 @@ export class WeatherOverlay {
     setEnabled(gl, gl.BLEND, prevBlend);
     setEnabled(gl, gl.DEPTH_TEST, prevDepthTest);
     setEnabled(gl, gl.CULL_FACE, prevCull);
-    gl.depthFunc(prevDepthFunc);
-    gl.depthMask(prevDepthMask);
-    gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcA, prevBlendDstA);
+    pipeline.restore(prevPipeline);
     for (let i = 0; i < this.maxAttribs; i++) {
       if (prevAttribEnabled[i]) gl.enableVertexAttribArray(i);
       else gl.disableVertexAttribArray(i);

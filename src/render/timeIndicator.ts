@@ -138,6 +138,7 @@ export class TimeIndicatorClock {
     instance.setSequenceLoopMode(2);
     instance.setSequence(stand);
     this.instance = instance;
+    this.watchCanvasSize();
     this.frameCamera(mdlx);
     await this.viewer.whenAllLoaded();
     return true;
@@ -185,17 +186,49 @@ export class TimeIndicatorClock {
    *  and a new HUD (and clock) is built for every map. */
   dispose(): void {
     this.instance = null;
+    this.sizeObserver?.disconnect();
+    this.sizeObserver = null;
     (this.viewer.gl.getExtension("WEBGL_lose_context") as { loseContext(): void } | null)?.loseContext();
   }
 
+  /**
+   * Match the backing buffer to the widget's on-screen size, on the frames where that
+   * actually changed.
+   *
+   * `clientWidth`/`clientHeight` are layout reads, and this runs inside the frame, after the
+   * HP bars have written a few hundred style changes into the world layer — so asking here
+   * flushed all of them and forced a synchronous reflow, every frame, to learn a number that
+   * only moves when the window does. A ResizeObserver reports the same number out of band.
+   */
+  private pendingSize: { w: number; h: number } | null = null;
+  private sizeObserver: ResizeObserver | null = null;
+
+  private watchCanvasSize(): void {
+    if (this.sizeObserver || typeof ResizeObserver === "undefined") return;
+    this.sizeObserver = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.contentRect;
+      if (!box) return;
+      this.pendingSize = {
+        w: Math.max(1, Math.floor(box.width * devicePixelRatio)),
+        h: Math.max(1, Math.floor(box.height * devicePixelRatio)),
+      };
+    });
+    this.sizeObserver.observe(this.canvas);
+  }
+
   private syncCanvasSize(): void {
-    const w = Math.max(1, Math.floor(this.canvas.clientWidth * devicePixelRatio));
-    const h = Math.max(1, Math.floor(this.canvas.clientHeight * devicePixelRatio));
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
-      this.scene.viewport[2] = w;
-      this.scene.viewport[3] = h;
+    // No observer (an environment without one, or the very first frame before it has
+    // reported): fall back to measuring, which is what this always did.
+    const size = this.pendingSize ?? {
+      w: Math.max(1, Math.floor(this.canvas.clientWidth * devicePixelRatio)),
+      h: Math.max(1, Math.floor(this.canvas.clientHeight * devicePixelRatio)),
+    };
+    this.pendingSize = null;
+    if (this.canvas.width !== size.w || this.canvas.height !== size.h) {
+      this.canvas.width = size.w;
+      this.canvas.height = size.h;
+      this.scene.viewport[2] = size.w;
+      this.scene.viewport[3] = size.h;
     }
   }
 }

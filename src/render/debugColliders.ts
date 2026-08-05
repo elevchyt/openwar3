@@ -7,6 +7,8 @@
 // restore every GL state it touches — mdx-m3-viewer caches GL state JS-side and will draw
 // the next frame with our shader if we leave the program/attribs dirty (see FogOverlay).
 
+import { pipelineState, type PipelineState } from "./glPipelineState";
+
 const VERT_SRC = `
 attribute vec3 aPos;
 attribute vec4 aColor;
@@ -86,10 +88,7 @@ interface SavedGLState {
   blend: boolean;
   depthTest: boolean;
   cull: boolean;
-  blendSrcRGB: number;
-  blendDstRGB: number;
-  blendSrcA: number;
-  blendDstA: number;
+  pipeline: PipelineState;
   attribs: boolean[];
 }
 
@@ -160,10 +159,8 @@ export class DebugColliders {
       blend: gl.isEnabled(gl.BLEND),
       depthTest: gl.isEnabled(gl.DEPTH_TEST),
       cull: gl.isEnabled(gl.CULL_FACE),
-      blendSrcRGB: gl.getParameter(gl.BLEND_SRC_RGB) as number,
-      blendDstRGB: gl.getParameter(gl.BLEND_DST_RGB) as number,
-      blendSrcA: gl.getParameter(gl.BLEND_SRC_ALPHA) as number,
-      blendDstA: gl.getParameter(gl.BLEND_DST_ALPHA) as number,
+      // Scalar pipeline state off our own shadow — see render/glPipelineState.ts.
+      pipeline: pipelineState(gl).save(),
       attribs: [],
     };
     for (let i = 0; i < this.maxAttribs; i++) {
@@ -190,7 +187,7 @@ export class DebugColliders {
     setEnabled(gl, gl.BLEND, saved.blend);
     setEnabled(gl, gl.DEPTH_TEST, saved.depthTest);
     setEnabled(gl, gl.CULL_FACE, saved.cull);
-    gl.blendFuncSeparate(saved.blendSrcRGB, saved.blendDstRGB, saved.blendSrcA, saved.blendDstA);
+    pipelineState(gl).restore(saved.pipeline);
     for (let i = 0; i < this.maxAttribs; i++) {
       if (saved.attribs[i]) gl.enableVertexAttribArray(i);
       else gl.disableVertexAttribArray(i);

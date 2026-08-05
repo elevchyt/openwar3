@@ -17,6 +17,7 @@
 // the viewer's cache goes stale and it draws the next frame's world with our shader.
 
 import { CELL, cornerHeight, type TerrainData } from "../world/terrain";
+import { pipelineState } from "./glPipelineState";
 
 const VERT_SRC = `
 attribute vec3 aPos;
@@ -248,15 +249,12 @@ export class UberSplatOverlay {
     const prevBlend = gl.isEnabled(gl.BLEND);
     const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST);
     const prevCull = gl.isEnabled(gl.CULL_FACE);
-    const prevDepthFunc = gl.getParameter(gl.DEPTH_FUNC) as number;
-    const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK) as boolean;
-    const prevBlendSrcRGB = gl.getParameter(gl.BLEND_SRC_RGB) as number;
-    const prevBlendDstRGB = gl.getParameter(gl.BLEND_DST_RGB) as number;
-    const prevBlendSrcA = gl.getParameter(gl.BLEND_SRC_ALPHA) as number;
-    const prevBlendDstA = gl.getParameter(gl.BLEND_DST_ALPHA) as number;
+    // The scalar pipeline state, from our own shadow of it — reading these eight off the
+    // driver is a blocking round-trip to the GPU process and was ~1.1 ms a frame across the
+    // overlays. See render/glPipelineState.ts.
+    const pipeline = pipelineState(gl);
+    const prevPipeline = pipeline.save();
     const prevPolyOffset = gl.isEnabled(gl.POLYGON_OFFSET_FILL);
-    const prevPolyFactor = gl.getParameter(gl.POLYGON_OFFSET_FACTOR) as number;
-    const prevPolyUnits = gl.getParameter(gl.POLYGON_OFFSET_UNITS) as number;
     const prevActiveTex = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
     gl.activeTexture(gl.TEXTURE0);
     const prevTex0 = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
@@ -313,10 +311,7 @@ export class UberSplatOverlay {
     setEnabled(gl, gl.DEPTH_TEST, prevDepthTest);
     setEnabled(gl, gl.CULL_FACE, prevCull);
     setEnabled(gl, gl.POLYGON_OFFSET_FILL, prevPolyOffset);
-    gl.polygonOffset(prevPolyFactor, prevPolyUnits);
-    gl.depthFunc(prevDepthFunc);
-    gl.depthMask(prevDepthMask);
-    gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcA, prevBlendDstA);
+    pipeline.restore(prevPipeline);
     for (let i = 0; i < this.maxAttribs; i++) {
       if (prevAttribEnabled[i]) gl.enableVertexAttribArray(i);
       else gl.disableVertexAttribArray(i);

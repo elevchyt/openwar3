@@ -19,6 +19,7 @@
 // state this touches is snapshotted and restored.
 
 import type { LightningDef, LightningRegistry } from "../data/lightning";
+import { pipelineState } from "./glPipelineState";
 
 const VERT_SRC = `
 attribute vec3 aPos;
@@ -221,12 +222,9 @@ export class LightningOverlay {
     const prevBlend = gl.isEnabled(gl.BLEND);
     const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST);
     const prevCull = gl.isEnabled(gl.CULL_FACE);
-    const prevDepthFunc = gl.getParameter(gl.DEPTH_FUNC) as number;
-    const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK) as boolean;
-    const prevBlendSrcRGB = gl.getParameter(gl.BLEND_SRC_RGB) as number;
-    const prevBlendDstRGB = gl.getParameter(gl.BLEND_DST_RGB) as number;
-    const prevBlendSrcA = gl.getParameter(gl.BLEND_SRC_ALPHA) as number;
-    const prevBlendDstA = gl.getParameter(gl.BLEND_DST_ALPHA) as number;
+    // Scalar pipeline state off our own shadow — see render/glPipelineState.ts.
+    const pipeline = pipelineState(gl);
+    const prevPipeline = pipeline.save();
     const prevActiveTex = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
     gl.activeTexture(gl.TEXTURE0);
     const prevTex0 = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
@@ -275,9 +273,7 @@ export class LightningOverlay {
     setEnabled(gl, gl.BLEND, prevBlend);
     setEnabled(gl, gl.DEPTH_TEST, prevDepthTest);
     setEnabled(gl, gl.CULL_FACE, prevCull);
-    gl.depthFunc(prevDepthFunc);
-    gl.depthMask(prevDepthMask);
-    gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcA, prevBlendDstA);
+    pipeline.restore(prevPipeline);
     for (let i = 0; i < this.maxAttribs; i++) {
       if (prevAttribEnabled[i]) gl.enableVertexAttribArray(i);
       else gl.disableVertexAttribArray(i);
