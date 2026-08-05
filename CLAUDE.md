@@ -92,9 +92,10 @@ data, or asset behaviour, **consult our sources** and cite what you used.
 - **Loading screens:** read [`docs/loading-screens.md`](docs/loading-screens.md) before touching `Loading.fdf`, the
   `[LoadingScreens]` table, or the start-of-match path. The w3i field that picks a map's screen is the one the
   parsers call **`campaignBackground`** (the int AFTER the subtitle is not a screen at all), the art is flat 2D in
-  the FDF's own 0.8×0.6 box rather than a 3D scene, and the load bar carries no keyframes — its fill is a bone the
-  engine scales. It is also the one screen laid out **stretched** rather than height-scaled, because it is a
-  picture with things printed on it.
+  the FDF's own 0.8×0.6 box rather than a 3D scene, and the load bar **fills itself** — its clip animates empty→full
+  and progress is just where you park the playhead. It is also the one screen laid out **stretched** rather than
+  height-scaled (it is a picture with things printed on it) and the one that must live OUTSIDE `#ui`, which a match
+  re-boxes to the 16:9 game frame while the bar is still moving.
 - **Gameplay constants live in one place.** Every number the game itself keeps in `Units\MiscGame.txt` /
   `Units\MiscData.txt` / `Scripts\Blizzard.j` belongs in [`src/data/gameplayConstants.ts`](src/data/gameplayConstants.ts),
   under its **exact file key** (`MISC_GAME.GuardDistance`, `MELEE.MELEE_STARTING_GOLD_V1`). Never re-type such a value as a

@@ -34,6 +34,7 @@ import { readMapBytes } from "./vfs/mapArchive";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
 import { MapViewerScene } from "./render/mapViewer";
 import type { MatchLinkSetup } from "./game/matchLink";
+import { LoadGate } from "./game/loadGate";
 import { MenuScene } from "./render/menuScene";
 import { applyMenuCursor } from "./ui/cursor";
 import { applyGameFont } from "./ui/gameFont";
@@ -488,12 +489,23 @@ async function startGame(
   await glue.leave();
   glueAudio?.stop(); // …and the music channel: the map's own script cues its music from here
 
+  // The readiness gate goes up FIRST, before a byte is read (src/game/loadGate.ts). A peer on a
+  // faster disk finishes while we are still inside `loadMap` — one long synchronous call — and
+  // its message lands on whatever `onPeerData` is installed at that moment, which is nothing
+  // until the link is attached further down. Installed here, it catches them all.
+  const gate = link ? new LoadGate(link.channel, remotePeers(link)) : null;
+
   // The LOADING SCREEN (issue #78) goes up before a byte of the map is read and comes down
   // when the match is standing. Every step below is a `step()`, and `step` yields to the
   // browser before running its body — which is not politeness but the whole reason the screen
   // is visible at all: `loadMap` is one long SYNCHRONOUS call, so without a paint between the
   // steps the bar would go up and come down inside a single frame nobody ever saw.
   const loading = await showLoadingScreen(info, config);
+  if (gate && loading) {
+    gate.onReady = (peer) => loading.setPeerReady(peer);
+    // …including anyone who reported while the screen was still being built.
+    for (const peer of gate.readyPeers) loading.setPeerReady(peer);
+  }
   const step = async <T>(at: number, body: () => T | Promise<T>): Promise<T> => {
     loading?.setProgress(at);
     await nextFrame();
@@ -516,14 +528,36 @@ async function startGame(
     // wire simply goes quiet and the client keeps simulating a world nobody owns any more.
     link.channel.onRoomClosed = () => mapScene?.showMatchOver();
   }
-  // Full bar, every seat lit — then the screen is taken away only once the match has actually
-  // DRAWN a frame behind it, so the first thing the player sees is the map and never the black
-  // canvas it was on a moment ago.
+  // Our bar is full. Tell the room (a LAN match), and hold while any other machine is still
+  // loading — their seats light as their messages arrive and the bar's caption becomes the
+  // game's own "WAITING FOR OTHER PLAYERS". `waitForAll` gives up after a minute rather than
+  // stranding a player whose opponent closed the tab (LOAD_GATE_TIMEOUT_MS).
   loading?.finish();
+  if (gate) {
+    gate.announce();
+    await gate.waitForAll();
+  }
+  // …then a beat on the finished screen before the match takes over. This one is OURS and is
+  // not measured off anything: the developer asked for it, because a load that ends the instant
+  // the bar fills never shows the player the screen they were waiting on.
+  await wait(START_HOLD_MS);
+  // Taken away only once the match has actually DRAWN a frame behind it, so the first thing the
+  // player sees is the map and never the black canvas it was on a moment ago.
   await nextFrame();
   await nextFrame();
   loading?.dispose();
   loadingCanvas.hidden = true;
+}
+
+/** The deliberate pause on the full bar before the match appears — see `startGame`. */
+const START_HOLD_MS = 3000;
+
+/** The relay peers of the OTHER machines in this match — everyone the gate waits for. A seat
+ *  with no peer is an AI or an empty chair; ours is the seat `localPlayer` names. */
+function remotePeers(link: MatchLinkSetup): number[] {
+  return link.seats
+    .filter((s) => s.peer !== undefined && s.id !== link.localPlayer)
+    .map((s) => s.peer as number);
 }
 
 /**
@@ -562,6 +596,10 @@ async function showLoadingScreen(info: MapInfo, config: MeleeConfig): Promise<Lo
 /** Let the browser paint. Every load step is fenced by one of these — see `startGame`. */
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Enumerable unit models from the mounted install (portraits excluded). */

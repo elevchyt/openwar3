@@ -63,13 +63,26 @@ Two traps follow:
   `scale × xScale` and type takes `scale` alone. Checked against a reference shot at 16:10:
   the minimap frame, a square 0.16 × 0.16 in the file, is drawn there 1.2× wider than tall.
 
-## 3. The load bar has no animation — the engine IS its animation
+## 3. The load bar fills ITSELF — progress is the animation's playhead
 
-`LoadBar.mdx` carries not one keyframe. Its `Loading Bar Fill` and `Loading Bar Glow` bones
-sit at full width in the bind pose and both pivot at x ≈ 0.1992, the fill quad's left edge, so
-progress is the engine scaling those two bones in x. `LoadingScene.setProgress` does the same
-and pushes the bone texture itself, because mdx-m3-viewer only re-uploads after re-sampling
-nodes and a bone with no tracks is never re-sampled.
+`LoadBar.mdx` is not a bar the engine has to draw at a width. Its `Loading Bar Fill` and
+`Loading Bar Glow` bones each carry one `KGSC` scaling track with exactly two keys:
+
+```
+KGSC  frames [3333, 26800]  values [[0.012, 1, 1], [1, 1, 1]]   (linear)
+```
+
+Those two frames are precisely the bounds of the model's own "Birth" sequence, and both bones
+pivot at x ≈ 0.1992 — the fill quad's left edge. So the clip *is* the bar going from empty to
+full, and progress is just where you park the playhead:
+`instance.frame = start + p × (end − start)`, re-applied every frame because
+`updateAnimations` advances it on its own.
+
+Driving `localScale` by hand instead looks like it should work and does not: the very track you
+are imitating overwrites the poke on the next update, and the bar ignores `setProgress`
+entirely and creeps up over the clip's own 23.5 seconds. (Watch out for the parser, too —
+these tracks live on `bone.animations`, not on a `scalings`/`timelines` field, so a dump that
+looks in the wrong place reports the model as having no keyframes at all.)
 
 ## 4. It is a full-WINDOW screen, and `#ui` stops being one mid-load
 
@@ -94,13 +107,32 @@ whooshes included. That is `GlueManager.leave()` (the leaving half of `goTo`, on
 awaited by `startGame` before the loading screen is built, and awaited before the menu music
 is cut so the departure is not silent.
 
+## Who is in, and when the match actually starts
+
+The green `LoadingPlayerSlotReadyHighlight` per seat is the reference's "this one is in" light,
+and `LOADING_WAITING_FOR_PLAYERS` is what the bar says while it holds for the stragglers. Both
+are driven by one message of our own, [`src/game/loadGate.ts`](../src/game/loadGate.ts):
+
+- Lit from the first frame for every seat this machine can vouch for — a COMPUTER, our own, and
+  any human seat with no relay peer behind it (single player).
+- Every other seat is another machine, and lights when its `ready` reaches us. We announce ours
+  the moment our bar fills, and hold until everyone has answered — the bar reading
+  "WAITING FOR OTHER PLAYERS" while it does, and only ever forwards: the last arrival does not
+  put "L O A D I N G" back up.
+- `LoadGate` is constructed BEFORE the map is read, because a peer on a faster disk finishes
+  while we are still inside `loadMap` and its message would land on nothing. It survives the
+  match link being attached over it — `MatchLink`'s constructor chains onto the handler it
+  finds — so there is nothing to buffer and nothing to restore.
+- It gives up after `LOAD_GATE_TIMEOUT_MS` (a minute) rather than stranding a player whose
+  opponent closed the tab. The reference would offer to drop them; we have no such dialog.
+
+Then a deliberate **3-second hold** on the finished screen before the match appears. That one
+is OURS and is not measured off anything — a load that ends the instant the bar fills never
+shows the player the screen they were waiting on.
+
 ## Not done yet
 
-`GlobalStrings.fdf` carries `LOADING_WAITING_FOR_PLAYERS` ("WAITING FOR OTHER PLAYERS"), and
-the green `LoadingPlayerSlotReadyHighlight` per seat is on Battle.net a per-player "this one is
-in" light. We light a COMPUTER's seat and THIS MACHINE's own from the first frame — a bot has
-nothing to connect and we are plainly here — and another person's only when our own load
-finishes, which is the last moment we can say anything at all. The waiting caption never
-prints. There is no readiness message on the wire yet (see
-[`docs/multiplayer.md`](./multiplayer.md)), so a LAN match still starts as soon as each client
-is individually ready.
+The gate holds the loading SCREEN, not the simulation: the world starts ticking when the map
+scene starts, which is well before the gate is consulted. That is no worse than it was — every
+client already began simulating whenever it happened to finish — but it is not lockstep, and it
+is not a fix for drift (see [`docs/multiplayer.md`](./multiplayer.md)).

@@ -53,40 +53,32 @@ interface Viewer {
   whenAllLoaded(): Promise<unknown>;
   updateAndRender(dt: number): void;
 }
-/** The one piece of a SkeletalNode we touch — see `setProgress`. */
-interface SkeletalNode {
-  localScale: Float32Array;
-  recalculateTransformation(instance: unknown): void;
-}
 interface MdxInstance {
-  nodes: SkeletalNode[];
+  /** The animation's playhead, in the model's own frame times. Writable — which is the whole
+   *  of `LoadingScene.setProgress`; see there. */
+  frame: number;
   setScene(scene: unknown): void;
   setSequence(index: number): void;
   setSequenceLoopMode(mode: number): void;
-  updateBoneTexture(): void;
 }
 interface MdxModel {
   sequences: Array<{ name: string; interval: Int32Array | number[] }>;
-  bones: Array<{ name: string }>;
   addInstance(): MdxInstance;
 }
 
 const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElement): Viewer };
 
-/** The two bones the ENGINE drives on `LoadBar.mdx`. Neither carries a single animation
- *  track in the file — the fill and its halo simply sit at full width in the bind pose — so
- *  the bar's whole behaviour is the engine scaling them, and that is what `setProgress` does.
- *  Both pivot at x ≈ 0.1992, the fill quad's LEFT edge, so an x scale of `p` fills the bar to
- *  `p` and grows rightwards exactly as the reference's does. */
-const FILL_BONE = "Loading Bar Fill";
-const GLOW_BONE = "Loading Bar Glow";
+/** `setSequenceLoopMode(1)` — hold the last frame instead of wrapping. The load bar's clip must
+ *  not restart from empty when the playhead reaches the end (mode 0 and 2 both wrap it). */
+const HOLD_AT_END = 1;
 
 export class LoadingScene {
   private viewer: Viewer;
   private scene: Scene;
   private solver: Solver;
   private instances: MdxInstance[] = [];
-  private bar: { model: MdxModel; instance: MdxInstance } | null = null;
+  /** The load bar, and the frame range of the clip that fills it — see `setProgress`. */
+  private bar: { instance: MdxInstance; start: number; end: number } | null = null;
   private raf = 0;
   private last = 0;
   private progress = 0;
@@ -116,12 +108,11 @@ export class LoadingScene {
     if (bg) this.add(bg, Math.min(background.sequence, bg.sequences.length - 1));
 
     const barModel = await this.model(LOAD_BAR_MODEL);
-    if (barModel) {
-      // The bar arrives on its own "Birth" and settles into the looping "Stand" underneath —
-      // the same two-step every glue model in the game arrives with. Both clips leave the fill
-      // bone alone, so the progress we set below survives them.
-      const instance = this.add(barModel, 0);
-      this.bar = { model: barModel, instance };
+    const birth = barModel?.sequences.findIndex((s) => /^birth$/i.test(s.name)) ?? -1;
+    if (barModel && birth >= 0) {
+      const instance = this.add(barModel, birth, HOLD_AT_END);
+      const seq = barModel.sequences[birth];
+      this.bar = { instance, start: seq.interval[0], end: seq.interval[1] };
       this.setProgress(0);
     }
 
@@ -132,29 +123,27 @@ export class LoadingScene {
   /**
    * How full the bar is, 0…1.
    *
-   * Poking a bone rather than playing a clip is not a shortcut — it is what the model asks
-   * for. `LoadBar.mdx` has no keyframes anywhere (verified against the file), so the fill and
-   * its glow are static geometry whose only motion can come from outside; the engine's own
-   * loading bar works the same way. mdx-m3-viewer re-samples a node's local transform each
-   * frame ONLY when the sequence has a track for it, so a bone with no tracks keeps whatever
-   * we write here for as long as the instance lives.
+   * **The progress IS the animation's playhead.** `LoadBar.mdx` fills itself: its
+   * `Loading Bar Fill` and `Loading Bar Glow` bones each carry one `KGSC` scaling track with
+   * exactly two keys — x 0.012 at frame 3333 and x 1.0 at frame 26800, linearly interpolated —
+   * and those two frames are precisely the bounds of its "Birth" sequence. Both bones pivot at
+   * x ≈ 0.1992, the fill quad's left edge, so the clip grows the bar rightwards from empty to
+   * full and the engine's only job is to seek it.
+   *
+   * So we seek it rather than driving the bones ourselves. Poking `localScale` instead is
+   * overwritten on the next update by the very track it was imitating, which showed as a bar
+   * that ignored `setProgress` entirely and crept up over the clip's own 23.5 seconds.
    */
   setProgress(p: number): void {
     this.progress = Math.max(0, Math.min(1, p));
-    const bar = this.bar;
-    if (!bar) return;
-    for (const name of [FILL_BONE, GLOW_BONE]) {
-      // `instance.nodes` is indexed by `model.genericObjects`, and bones come first in that
-      // list — so a bone's index IS its node's.
-      const i = bar.model.bones.findIndex((b) => b.name === name);
-      const node = i >= 0 ? bar.instance.nodes[i] : undefined;
-      if (!node) continue;
-      node.localScale[0] = this.progress;
-      node.recalculateTransformation(bar.instance);
-    }
-    // …and push the new matrices at the GPU now. The next update won't: it only re-uploads
-    // after re-sampling nodes, and these two have nothing to re-sample.
-    bar.instance.updateBoneTexture();
+    this.seekBar();
+  }
+
+  /** Park the bar's playhead where the progress says. Re-applied every frame because
+   *  `updateAnimations` advances it on its own, and a bar that crept would be lying. */
+  private seekBar(): void {
+    if (!this.bar) return;
+    this.bar.instance.frame = this.bar.start + this.progress * (this.bar.end - this.bar.start);
   }
 
   start(): void {
@@ -163,6 +152,7 @@ export class LoadingScene {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
       this.syncCanvasSize();
+      this.seekBar();
       this.viewer.updateAndRender(dt);
       this.raf = requestAnimationFrame(frame);
     };
@@ -194,10 +184,12 @@ export class LoadingScene {
     }
   }
 
-  private add(model: MdxModel, sequence: number): MdxInstance {
+  private add(model: MdxModel, sequence: number, loopMode = 2): MdxInstance {
     const instance = model.addInstance();
     instance.setScene(this.scene);
-    instance.setSequenceLoopMode(2); // loop — a load can outlast any of these clips
+    // Backgrounds loop (a load can outlast any of these clips, and a campaign background's
+    // location marker is keyed to its own); the bar holds, because it is seeked, not played.
+    instance.setSequenceLoopMode(loopMode);
     instance.setSequence(Math.max(0, sequence));
     this.instances.push(instance);
     return instance;

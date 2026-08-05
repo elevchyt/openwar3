@@ -66,8 +66,15 @@ export interface LoadingScreenOptions {
 export interface LoadingScreen {
   /** Move the bar. `0` is empty, `1` full. */
   setProgress(p: number): void;
-  /** The load is done: every seat lights up its "ready" band, as the reference's do. */
+  /**
+   * OUR load is done: the bar fills, and the caption becomes "WAITING FOR OTHER PLAYERS" if any
+   * seat is still dark — which is exactly what the reference says while it holds for the last
+   * machine to arrive (`LOADING_WAITING_FOR_PLAYERS`).
+   */
   finish(): void;
+  /** A remote machine reported in (src/game/loadGate.ts): light the seat its peer sits in, and
+   *  drop the waiting caption once nobody is left to wait for. */
+  setPeerReady(peer: number): void;
   dispose(): void;
 }
 
@@ -92,11 +99,11 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
    * Which seats wear the green band — `LoadingPlayerSlotReadyHighlight`, the reference's
    * "this one is in" marker.
    *
-   * A COMPUTER is in from the first frame: there is nobody to wait for and nothing for it to
-   * load. So is THIS MACHINE's own seat — we are plainly here. The one seat we cannot answer
-   * for is another person's, and that one lights when our own load finishes, because that is
-   * the last moment we can say anything at all: there is no readiness message on the wire yet
-   * (see docs/loading-screens.md).
+   * Lit from the first frame for every seat THIS MACHINE can vouch for: a COMPUTER (there is
+   * nobody to wait for and nothing for it to load), our own (we are plainly here), and any
+   * human seat with no relay peer behind it — a single-player game's rows are ours as much as
+   * the computers' are. What is left is exactly the OTHER machines in a LAN game, and each of
+   * those lights when its own `ready` reaches us (src/game/loadGate.ts).
    *
    * A `Set` of row indices rather than a class left on the DOM, because the screen rebuilds
    * itself on every resize and the bands have to come back with it — which is also why this
@@ -105,8 +112,13 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
   const ready = new Set<number>();
   const local = localSlot(config)?.id;
   rows.forEach((row, i) => {
-    if (row.slot.controller === "computer" || row.slot.id === local) ready.add(i);
+    const remote = row.slot.peer !== undefined && row.slot.id !== local;
+    if (!remote || row.slot.controller === "computer") ready.add(i);
   });
+
+  /** Mutable on purpose: `mountFdfScreen` re-reads this on every build, which is how the load
+   *  bar's caption can change and be re-measured for its new string (see `setCaption`). */
+  const overrides = captions(opts, rows, melee, (k, f) => string(lib, k, f));
 
   const screen = await mountFdfScreen({
     container: opts.container,
@@ -128,7 +140,7 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
      * is one line tall, and a campaign chapter's blurb is five, so four of them are clipped
      * away and the one that survives sits half out of the box.
      */
-    textOverrides: captions(opts, rows, melee, (k, f) => string(lib, k, f)),
+    textOverrides: overrides,
     onBuild: (s) => {
       if (!melee) return;
       paintMinimap(s, info);
@@ -136,12 +148,44 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
     },
   });
 
+  /** Our own load is over — which is what turns "L O A D I N G" into the waiting caption. */
+  let loaded = false;
+
+  /**
+   * The bar's caption: the file's own while we are loading, and the game's own waiting line
+   * once WE are done and somebody else is not (both are GlobalStrings keys `Loading.fdf`
+   * already names).
+   *
+   * Swapped through the overrides and a RELAYOUT rather than through `setText`, because
+   * `LoadingBarText` declares no Width: the engine auto-sizes a TEXT frame to its string and so
+   * do we, at layout time. Write the longer caption straight into the box measured for
+   * "L O A D I N G" and it is clipped to about "WAITING FOR OTH".
+   */
+  const setCaption = (key: string, fallback: string): void => {
+    const next = string(lib, key, fallback);
+    if (overrides.LoadingBarText === next) return;
+    overrides.LoadingBarText = next;
+    screen.relayout();
+  };
+  const refreshCaption = (): void => {
+    // Only ever forwards. The last player arriving does NOT put "L O A D I N G" back up: our
+    // load finished a moment ago, so that would be a lie, and the screen is on its way out
+    // anyway — a caption that flips back for the beat before the match appears is just flicker.
+    if (loaded && ready.size < rows.length) setCaption("LOADING_WAITING_FOR_PLAYERS", "WAITING FOR OTHER PLAYERS");
+    else if (!loaded) setCaption("LOADING_LOADING", "L  O  A  D  I  N  G");
+  };
+
   return {
     setProgress: (p) => scene.setProgress(p),
     finish(): void {
+      loaded = true;
       scene.setProgress(1);
-      rows.forEach((_, i) => ready.add(i));
+      refreshCaption();
+    },
+    setPeerReady(peer): void {
+      rows.forEach((row, i) => { if (row.slot.peer === peer) ready.add(i); });
       paintReady(screen, ready);
+      refreshCaption();
     },
     dispose(): void {
       scene.dispose();
@@ -290,17 +334,22 @@ function captions(
   opts: LoadingScreenOptions, rows: RosterRow[], melee: boolean, text: Strings,
 ): Record<string, string> {
   const { info, config } = opts;
+  // The bar's caption is the FDF's own `Text "LOADING_LOADING"` — stated here anyway so that
+  // the one caption that CHANGES is owned by the overrides from the first build (`setCaption`).
+  const bar = { LoadingBarText: text("LOADING_LOADING", "L  O  A  D  I  N  G") };
   if (!melee) {
     // The custom panel: the three lines the MAP carries, with the campaign index's title
     // winning where it has one, and the map's own name standing in for a scenario that
     // filled none of them.
     return {
+      ...bar,
       LoadingTitleText: opts.title || info.loading.title || info.name,
       LoadingSubtitleText: opts.subtitle || info.loading.subtitle,
       LoadingText: info.loading.text,
     };
   }
   const out: Record<string, string> = {
+    ...bar,
     LoadingMeleeMapName: config.mapName ?? info.name,
     LoadingMeleeGameTypeValue: gameType(rows, text),
   };
