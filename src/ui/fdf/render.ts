@@ -861,11 +861,40 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
       g.restore();
     };
     const c = cornerPx;
+
+    /**
+     * An edge REPEATS its tile along the run; it does not stretch to fill it.
+     *
+     * `BackdropCornerSize` is the tile's size, and it is the only size the tile is ever drawn
+     * at — that is what makes a border look the same on a 200 px button and a 1900 px letterbox
+     * bar. Stretching instead smears one 64 px tile across the whole run, which on the small
+     * frames this was first tuned against passed for a border and on the cinematic bars did
+     * not: the real panel's top edge is a row of evenly spaced metal clasps and its bottom
+     * edge a run of leaves, and ours was a single clasp and a single leaf pulled the width of
+     * the screen (issue: cinematic HUD doesn't match the original).
+     *
+     * The last tile is CLIPPED rather than squeezed, for the same reason: a partial repeat is
+     * what the run is short by, and rescaling the final tile to fit would put a different-sized
+     * ornament at one end of every bar.
+     */
+    const edgeRun = (idx: number, dx: number, dy: number, run: number, rot: number): void => {
+      if (run <= 0) return;
+      g.save();
+      g.beginPath();
+      g.rect(dx, dy, rot % 180 === 0 ? c : run, rot % 180 === 0 ? run : c);
+      g.clip();
+      for (let at = 0; at < run; at += c) {
+        if (rot % 180 === 0) tile(idx, dx, dy + at, c, c, rot); // vertical run (L/R)
+        else tile(idx, dx + at, dy, c, c, rot); // horizontal run (T/B)
+      }
+      g.restore();
+    };
+
     // Edges (tiles 2/3 are vertical strips in the source → rotate for top/bottom).
-    if (on("L")) tile(EDGE_TILE.L, 0, c, c, h - 2 * c);
-    if (on("R")) tile(EDGE_TILE.R, w - c, c, c, h - 2 * c);
-    if (on("T")) tile(EDGE_TILE.T, c, 0, w - 2 * c, c, 90);
-    if (on("B")) tile(EDGE_TILE.B, c, h - c, w - 2 * c, c, 90);
+    if (on("L")) edgeRun(EDGE_TILE.L, 0, c, h - 2 * c, 0);
+    if (on("R")) edgeRun(EDGE_TILE.R, w - c, c, h - 2 * c, 0);
+    if (on("T")) edgeRun(EDGE_TILE.T, c, 0, w - 2 * c, 90);
+    if (on("B")) edgeRun(EDGE_TILE.B, c, h - c, w - 2 * c, 90);
     // Corners.
     if (on("UL")) tile(EDGE_TILE.UL, 0, 0, c, c);
     if (on("UR")) tile(EDGE_TILE.UR, w - c, 0, c, c);
