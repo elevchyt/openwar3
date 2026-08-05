@@ -63,6 +63,9 @@ export class GlueManager {
    * the one menu that never animated in.
    */
   async show(def: GlueScreenDef): Promise<FdfScreen> {
+    // Putting a first screen up re-opens the stack, which is the one thing that lifts the gate
+    // `leave` deliberately left closed behind it (see there).
+    this.busy = false;
     this.current?.dispose();
     const next = await def.mount();
     this.current = next;
@@ -132,6 +135,30 @@ export class GlueManager {
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * Send the current screen away and put nothing in its place — the menus are over.
+   *
+   * This is the LEAVING half of `goTo`, on its own, and it is what starting a match runs
+   * (issue #78): the reference does not cut from the Custom Game screen to the loading screen,
+   * it plays the same departure as any other transition — every button goes dead, the panel's
+   * contents fade out where they stand, and the empty panel slides up and off on the chrome's
+   * own "<Screen> Death" clip, whooshes and all. Only once that has finished does the loading
+   * screen appear.
+   *
+   * Stays `busy` afterwards on purpose: there is no screen left to navigate away from, and a
+   * click that landed on the way out must not open a menu over the match.
+   */
+  async leave(): Promise<void> {
+    const leaving = this.current;
+    if (this.busy || !leaving) return;
+    this.busy = true;
+    leaving.setAllDisabled(true);
+    const death = this.backdropUp ? 0 : this.scene?.playChromeDeath() ?? 0;
+    await leaving.animatePanels("out", death || NO_CHROME_OUT_MS);
+    leaving.dispose();
+    this.current = null;
   }
 
   /** The screen currently on the menu (null while nothing is mounted). */

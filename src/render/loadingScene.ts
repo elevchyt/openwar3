@@ -5,7 +5,7 @@ import { LOAD_BAR_MODEL } from "../data/loadingScreens";
 import { UI_HEIGHT, UI_WIDTH } from "../ui/fdf/layout";
 import type { DataSource } from "../vfs/types";
 
-// The loading screen's ART (issue #110) — the background and the load bar, both of them real
+// The loading screen's ART (issue #78) — the background and the load bar, both of them real
 // MDX read out of the player's install.
 //
 // This is NOT a 3D scene, and that is the whole reason it is not `MenuScene.showBackdrop`.

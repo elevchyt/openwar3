@@ -31,7 +31,7 @@ export interface SlotConfig {
    * the Naga slot 0 is "Watchers" and the person playing it is you.
    *
    * It is here for the LOADING SCREEN, which is the one screen that lists the players by name
-   * (issue #110) — `UI\FrameDef\Glue\Loading.fdf`'s `LoadingPlayerSlotName`. Absent on a
+   * (issue #78) — `UI\FrameDef\Glue\Loading.fdf`'s `LoadingPlayerSlotName`. Absent on a
    * computer slot and on everything the map owns, which are named by what they are.
    */
   playerName?: string;

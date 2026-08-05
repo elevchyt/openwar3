@@ -124,10 +124,16 @@ body.in-game {
   display: none;
 }
 
-/* The loading screen (issue #110) covers EVERYTHING: it is up while the menu is being torn
+/* The loading screen (issue #78) covers EVERYTHING: it is up while the menu is being torn
    down and the match stood up, so both of those may be mid-swap underneath it. Its art canvas
    and the FDF overlay printed on it are the top two layers of #ui — which puts them over the
    HUD the match builds underneath while this is still the only thing on screen. */
+#loading-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40; /* over the HUD and the world layer, under the F10 menu's modal (50) */
+  pointer-events: none;
+}
 #loading { z-index: 8; background: #000; }
 .fdf-screen.fdf-loading { z-index: 9; }
 

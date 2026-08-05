@@ -1,7 +1,7 @@
 import type { DataSource } from "../vfs/types";
 import type { Race } from "./races";
 
-// The loading screens (issue #110) — the art WC3 puts up between the menus and the match.
+// The loading screens (issue #78) — the art WC3 puts up between the menus and the match.
 //
 // There are three families, and a map picks one of them without ever naming a file:
 //

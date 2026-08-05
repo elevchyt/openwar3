@@ -14,11 +14,15 @@
     <canvas id="menubg" hidden></canvas>
     <canvas id="model" hidden></canvas>
     <canvas id="map" hidden></canvas>
-    <div id="ui">
-      <!-- The loading screen's art (issue #110). Its own canvas because it is up at the one
-           moment BOTH the menu scene and the map scene are being torn down / stood up — and
-           it lives INSIDE #ui because #ui is a stacking context, so this is the only place
-           from which it can sit under the loading screen's own DOM and over everything else. -->
+    <div id="ui"></div>
+    <!-- The loading screen (issue #78): its art canvas, and the layer its DOM is mounted
+         into. Deliberately NOT inside #ui — a match sets `body.in-game`, which puts a
+         `transform` on #ui and so makes it the containing block for every fixed thing under
+         it, re-boxing them into the 16:9 GAME frame. The loading screen is up across exactly
+         that moment and is a full-WINDOW screen (the browser's frame, like the menus), so
+         being re-boxed mid-load shifted its whole DOM right and left it 12% too wide against
+         its own art. -->
+    <div id="loading-layer">
       <canvas id="loading" hidden></canvas>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -13,7 +13,7 @@ import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import type { MeleeConfig, SlotConfig } from "./lobby";
 import { adopt, arg, num, setProp, str } from "./mapBrowser";
 
-// The LOADING SCREEN (issue #110) — what stands between the menus and the match, built from
+// The LOADING SCREEN (issue #78) — what stands between the menus and the match, built from
 // the game's own `UI\FrameDef\Glue\Loading.fdf`.
 //
 // That file declares the screen and fills almost none of it, the same way Skirmish.fdf and
@@ -88,6 +88,26 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
   const lib = new FdfLibrary(vfs);
   await lib.load(LOADING_FDF);
 
+  /**
+   * Which seats wear the green band — `LoadingPlayerSlotReadyHighlight`, the reference's
+   * "this one is in" marker.
+   *
+   * A COMPUTER is in from the first frame: there is nobody to wait for and nothing for it to
+   * load. So is THIS MACHINE's own seat — we are plainly here. The one seat we cannot answer
+   * for is another person's, and that one lights when our own load finishes, because that is
+   * the last moment we can say anything at all: there is no readiness message on the wire yet
+   * (see docs/loading-screens.md).
+   *
+   * A `Set` of row indices rather than a class left on the DOM, because the screen rebuilds
+   * itself on every resize and the bands have to come back with it — which is also why this
+   * is declared BEFORE the mount: `onBuild` fires from inside it.
+   */
+  const ready = new Set<number>();
+  const local = localSlot(config)?.id;
+  rows.forEach((row, i) => {
+    if (row.slot.controller === "computer" || row.slot.id === local) ready.add(i);
+  });
+
   const screen = await mountFdfScreen({
     container: opts.container,
     vfs,
@@ -109,29 +129,34 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
      * away and the one that survives sits half out of the box.
      */
     textOverrides: captions(opts, rows, melee, (k, f) => string(lib, k, f)),
-    onBuild: (s) => { if (melee) paintMinimap(s, info); },
+    onBuild: (s) => {
+      if (!melee) return;
+      paintMinimap(s, info);
+      paintReady(s, ready);
+    },
   });
-
-  let ready = false;
-  const markReady = (): void => {
-    for (let i = 0; i < rows.length; i++) {
-      screen.frame(`LoadingPlayerSlotReadyHighlight${i}`)?.classList.add("fdf-highlight-on");
-    }
-  };
 
   return {
     setProgress: (p) => scene.setProgress(p),
     finish(): void {
-      if (ready) return;
-      ready = true;
       scene.setProgress(1);
-      markReady();
+      rows.forEach((_, i) => ready.add(i));
+      paintReady(screen, ready);
     },
     dispose(): void {
       scene.dispose();
       screen.dispose();
     },
   };
+}
+
+/** Put the green band on the seats in `ready` and take it off the rest. */
+function paintReady(s: FdfScreen, ready: ReadonlySet<number>): void {
+  for (let i = 0; ; i++) {
+    const band = s.frame(`LoadingPlayerSlotReadyHighlight${i}`);
+    if (!band) return;
+    band.classList.toggle("fdf-highlight-on", ready.has(i));
+  }
 }
 
 /**
@@ -164,13 +189,18 @@ async function chooseBackground(
   return { path: GENERIC_LOADING_SCREEN, sequence: 0 };
 }
 
-/** The race the melee screen wears: THIS machine's seat. `random` is a screen of its own —
- *  the art is a question mark, not a rolled race, because the roll is the match's secret. */
-function localRace(config: MeleeConfig): Race {
-  const mine = config.localPlayer !== undefined
+/** THIS MACHINE's seat. `localPlayer` states it in a LAN match, where every human slot says
+ *  `user` and only that field tells two clients apart; single player has one and needs none. */
+function localSlot(config: MeleeConfig): SlotConfig | undefined {
+  return config.localPlayer !== undefined
     ? config.slots.find((s) => s.id === config.localPlayer)
     : config.slots.find((s) => s.controller === "user");
-  return mine?.race ?? "random";
+}
+
+/** The race the melee screen wears: this machine's own. `random` is a screen of its own —
+ *  the art is a question mark, not a rolled race, because the roll is the match's secret. */
+function localRace(config: MeleeConfig): Race {
+  return localSlot(config)?.race ?? "random";
 }
 
 /** One line of the roster: a player, or the heading over a team's run of them. */

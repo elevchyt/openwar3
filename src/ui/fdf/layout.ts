@@ -373,7 +373,7 @@ export function fitBox(viewportW: number, viewportH: number): FitBox {
 
 /**
  * Fit the AUTHORED 4:3 box to the viewport by STRETCHING it — the loading screen's rule, and
- * only its (issue #110).
+ * only its (issue #78).
  *
  * A glue screen is furniture arranged on a screen, so it scales by height and spreads to the
  * edges (`fitBox`). The loading screen is a PICTURE: `Loading.fdf`'s root is `SetAllPoints`

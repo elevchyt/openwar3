@@ -5,7 +5,7 @@ The screen between the menus and the match: `UI\FrameDef\Glue\Loading.fdf`, draw
 [`src/render/loadingScene.ts`](../src/render/loadingScene.ts) and its table in
 [`src/data/loadingScreens.ts`](../src/data/loadingScreens.ts).
 
-Three things about it are not guessable from the FDF, and each one is a bug if you assume
+Four things about it are not guessable from the FDF, and each one is a bug if you assume
 otherwise.
 
 ## 1. The w3i field that picks the screen is the one named "campaign background"
@@ -71,11 +71,36 @@ progress is the engine scaling those two bones in x. `LoadingScene.setProgress` 
 and pushes the bone texture itself, because mdx-m3-viewer only re-uploads after re-sampling
 nodes and a bone with no tracks is never re-sampled.
 
+## 4. It is a full-WINDOW screen, and `#ui` stops being one mid-load
+
+`body.in-game` puts a **`transform`** on `#ui` to re-box it to the 16:9 game frame — and a
+transform makes an element the containing block for every `position: fixed` thing under it.
+The loading screen is up across exactly the moment that class is set (`enterMap` sets it while
+the bar is still moving), so anything of its own mounted inside `#ui` is silently re-boxed
+mid-load: its DOM keeps the pixel positions it was laid out with for the full window, inside a
+box that is now narrower and offset. On a 1920×962 window that reads as everything sitting
+~105px right of the art and drawn 12% too wide — the load bar's caption off-centre, the
+minimap hanging out of its painted frame, the name plates overlong.
+
+So the screen has a layer of its own, `#loading-layer`, a sibling of `#ui` in `index.html`. It
+is the browser's frame, like the menus, not the game's.
+
+## And the menus leave before it arrives
+
+The reference does not cut from the Custom Game screen to the loading screen: it plays the same
+departure as any other transition — every button goes dead, the panel's contents fade where
+they stand, and the empty panel slides up and off on the chrome's own "<Screen> Death" clip,
+whooshes included. That is `GlueManager.leave()` (the leaving half of `goTo`, on its own),
+awaited by `startGame` before the loading screen is built, and awaited before the menu music
+is cut so the departure is not silent.
+
 ## Not done yet
 
-`GlobalStrings.fdf` carries `LOADING_WAITING_FOR_PLAYERS` ("WAITING FOR OTHER PLAYERS") and
-`Loading.fdf` carries a green `LoadingPlayerSlotReadyHighlight` per seat, because on Battle.net
-the screen waits for the slowest player and lights each seat as it reports in. We light every
-seat when the LOCAL load finishes and never print the waiting caption: there is no readiness
-message on the wire yet (see [`docs/multiplayer.md`](./multiplayer.md)), so a LAN match still
-starts as soon as each client is individually ready.
+`GlobalStrings.fdf` carries `LOADING_WAITING_FOR_PLAYERS` ("WAITING FOR OTHER PLAYERS"), and
+the green `LoadingPlayerSlotReadyHighlight` per seat is on Battle.net a per-player "this one is
+in" light. We light a COMPUTER's seat and THIS MACHINE's own from the first frame — a bot has
+nothing to connect and we are plainly here — and another person's only when our own load
+finishes, which is the last moment we can say anything at all. The waiting caption never
+prints. There is no readiness message on the wire yet (see
+[`docs/multiplayer.md`](./multiplayer.md)), so a LAN match still starts as soon as each client
+is individually ready.

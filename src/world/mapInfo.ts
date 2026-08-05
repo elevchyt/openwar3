@@ -73,7 +73,7 @@ export interface ForceGrants {
 }
 
 /**
- * What the map says its LOADING SCREEN is (issue #110) — the four w3i fields the World
+ * What the map says its LOADING SCREEN is (issue #78) — the four w3i fields the World
  * Editor's "Loading Screen" dialog writes, and nothing else on the screen comes from the map.
  *
  * The numbering is the trap. mdx-m3-viewer calls the first int `campaignBackground`, which
@@ -163,7 +163,7 @@ export interface MapInfo {
    *  still yours to pick, and the race stays open on any seated slot (the client happily lets
    *  you re-race the Dungeon Denizens). See fdfSkirmish's row rules. */
   fixedPlayerSettings: boolean;
-  /** What the map asks its loading screen to be (issue #110). */
+  /** What the map asks its loading screen to be (issue #78). */
   loading: MapLoadingScreen;
   /** Melee/custom classification + the map's flags and trigger script. */
   classification: MapClassification;

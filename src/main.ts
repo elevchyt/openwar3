@@ -51,9 +51,12 @@ const modelCanvas = document.getElementById("model") as HTMLCanvasElement;
 // Not `const`: each match gets a canvas of its own, and leaving one replaces this
 // (see `freshMapCanvas`).
 let mapCanvas = document.getElementById("map") as HTMLCanvasElement;
-// The loading screen's art (issue #110). Not part of `show()`'s one-at-a-time set: it is up
-// over the top of whichever of those is mid-swap, which is the whole point of it.
+// The loading screen (issue #78): its art canvas and the layer its DOM goes in. Not part of
+// `show()`'s one-at-a-time set — it is up over the top of whichever of those is mid-swap,
+// which is the whole point of it — and not inside `#ui`, which a match re-boxes to the 16:9
+// game frame while this is still on screen (see index.html).
 const loadingCanvas = document.getElementById("loading") as HTMLCanvasElement;
+const loadingLayer = document.getElementById("loading-layer") as HTMLElement;
 const ui = document.getElementById("ui") as HTMLElement;
 
 const resolver = new AssetResolver(null);
@@ -477,11 +480,15 @@ async function startGame(
 ): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
-  glue.dispose(); // the menus are done; the match owns the screen now — including its wire,
-                  // which the LAN screen handed over before calling us (LanLobby.handOff)
+  // The menus LEAVE the way they always leave (issue #78): the panel's contents fade out and
+  // the chrome slides up on its own "<Screen> Death" clip, whooshes and all, and only then
+  // does the loading screen appear. Awaited, so the two never overlap — and awaited BEFORE the
+  // music is cut, or the departure plays silent. The match owns the screen from here, wire
+  // included; the LAN screen handed that over before calling us (LanLobby.handOff).
+  await glue.leave();
   glueAudio?.stop(); // …and the music channel: the map's own script cues its music from here
 
-  // The LOADING SCREEN (issue #110) goes up before a byte of the map is read and comes down
+  // The LOADING SCREEN (issue #78) goes up before a byte of the map is read and comes down
   // when the match is standing. Every step below is a `step()`, and `step` yields to the
   // browser before running its body — which is not politeness but the whole reason the screen
   // is visible at all: `loadMap` is one long SYNCHRONOUS call, so without a paint between the
@@ -533,15 +540,18 @@ async function showLoadingScreen(info: MapInfo, config: MeleeConfig): Promise<Lo
     ? campaigns.find((c) => c.key === pendingCampaign?.key)?.missions[pendingCampaign.index]
     : undefined;
   try {
-    // The menu's 3D scene is behind this and about to be thrown away; stop it rather than
-    // leave it drawing an invisible seascape for the whole load, which is the one moment the
-    // machine has something better to do.
-    show("none");
-    loadingCanvas.hidden = false;
-    return await mountLoadingScreen({
-      container: ui, canvas: loadingCanvas, vfs, info, config,
+    // Built while still HIDDEN, and revealed only once it resolves — `mountLoadingScreen`
+    // decodes its art before it returns, so the menu's last frame gives way to a finished
+    // picture instead of to a black canvas that fills in a beat later. The menu's own 3D scene
+    // stops in the same breath: it is about to be thrown away, and the load is the one moment
+    // the machine has something better to do than draw an invisible seascape.
+    const screen = await mountLoadingScreen({
+      container: loadingLayer, canvas: loadingCanvas, vfs, info, config,
       title: chapter?.header, subtitle: chapter?.name,
     });
+    show("none");
+    loadingCanvas.hidden = false;
+    return screen;
   } catch (err) {
     console.warn("[OpenWar3] loading screen unavailable:", err);
     loadingCanvas.hidden = true;
