@@ -231,10 +231,20 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // reachable through a menu a human clicks — so a harness that wants to check what LEAVING
   // one does (MapViewerScene.dispose: nothing a match puts on the page may outlive it) could
   // never play the second game that would show it. Reloading is no substitute: it resets the
-  // very page state the check is about. So publish the start the boot itself just used.
-  // Dev-server-only with the rest of this module — see the header.
-  ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {}).devStartChapter =
-    (name: string, difficulty = "normal"): Promise<void> => hooks.startChapter(name, difficulty);
+  // very page state the check is about. So publish the starts the boot itself uses.
+  // `devStartMap` takes any map mounted by `?map=`/`?maps=`, because the thing worth watching
+  // is the change of map: a second game on the SAME one cannot show the first one's terrain
+  // still on screen. Dev-server-only with the rest of this module — see the header.
+  const api = ((window as unknown as { openwar3: Record<string, unknown> }).openwar3 ??= {});
+  api.devStartChapter = (name: string, difficulty = "normal"): Promise<void> =>
+    hooks.startChapter(name, difficulty);
+  api.devStartMap = async (name: string): Promise<void> => {
+    const path = [...load.maps.keys()].find((m) => m.toLowerCase().includes(name.toLowerCase()));
+    const mapFile = path ? load.maps.get(path) : undefined;
+    if (!mapFile) throw new Error(`no mounted map matching "${name}" — mount it with ?maps=`);
+    const info = parseMapInfo(new Uint8Array(await mapFile.arrayBuffer()), path!);
+    await hooks.startGame(mapFile, info, meleeConfigFor(info, player, seed, fog));
+  };
 
   // A campaign chapter comes out of the archives we just mounted, so it needs no map file and
   // no manifest entry — only the name of one.

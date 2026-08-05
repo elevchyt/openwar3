@@ -47,7 +47,9 @@ import { applyGameFont } from "./ui/gameFont";
 const bgCanvas = document.getElementById("bg") as HTMLCanvasElement;
 const menuBgCanvas = document.getElementById("menubg") as HTMLCanvasElement;
 const modelCanvas = document.getElementById("model") as HTMLCanvasElement;
-const mapCanvas = document.getElementById("map") as HTMLCanvasElement;
+// Not `const`: each match gets a canvas of its own, and leaving one replaces this
+// (see `freshMapCanvas`).
+let mapCanvas = document.getElementById("map") as HTMLCanvasElement;
 const ui = document.getElementById("ui") as HTMLElement;
 
 const resolver = new AssetResolver(null);
@@ -514,11 +516,47 @@ function showTerrain(): void {
   terrain.start();
 }
 
+/** Throw away the map canvas and put a fresh one in its place — the last and biggest thing a
+ *  match leaves behind, and the two ways it shows.
+ *
+ *  **The picture.** A canvas holds the last frame drawn into it, and `enterMap` reveals this
+ *  one (`show("map")`) BEFORE the next match's viewer exists, let alone its map — seconds, on
+ *  a map that isn't cached. So the first thing the second game shows is the last thing the
+ *  first game showed, frozen at the moment you quit. Whether a `preserveDrawingBuffer: false`
+ *  buffer survives that is up to the driver, which is exactly why it must not be left to it: a
+ *  canvas that has never been drawn to cannot show anything but the `#map { background: #000 }`
+ *  underneath it, on any machine.
+ *
+ *  **The memory.** A WebGL context belongs to its CANVAS, and `getContext()` hands back the one
+ *  already there — so building the next match's viewer on this element puts it on the DEAD
+ *  match's context, alongside every texture, buffer and shader the last map uploaded.
+ *  mdx-m3-viewer never deletes a GL object and offers no teardown, so replacing the element is
+ *  the only release there is. `loseContext` makes it immediate rather than whenever the old
+ *  canvas is collected, and it is why the two halves live in one function: a lost context
+ *  cannot be got back, so nothing may ever ask THIS canvas for one again.
+ *
+ *  Everything about `#map` is styled by that id (style.css), so the replacement inherits the
+ *  whole look. */
+function freshMapCanvas(): void {
+  const gl = mapCanvas.getContext("webgl2") ?? mapCanvas.getContext("webgl");
+  gl?.getExtension("WEBGL_lose_context")?.loseContext();
+  const next = document.createElement("canvas");
+  next.id = "map";
+  next.hidden = mapCanvas.hidden;
+  mapCanvas.replaceWith(next);
+  mapCanvas = next;
+}
+
 /** Leave the current match (F10 → End Game): tear down the map scene and return to
  *  the main menu over its animated 3D scene. A fresh scene is built next game. */
 function exitToMenu(): void {
+  const played = !!mapScene;
   mapScene?.dispose(); // …which silences the match's audio and flushes what it put on the page
   mapScene = null;
+  // …and the canvas the match rendered into, WITH its WebGL context — but only if there was
+  // one, since asking an untouched canvas for a context just to lose it would leave the next
+  // match nothing to draw on.
+  if (played) freshMapCanvas();
   meleeConfig = null;
   // The mixer is the one thing the match could move that isn't the match's to keep: a map's
   // VolumeGroupSetVolume / SetMusicVolume write to the very groups the player's saved Sound
