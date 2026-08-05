@@ -7789,7 +7789,19 @@ export class MapViewerScene {
     };
     for (const w of map.doodads) {
       this.mapProps.add(w.instance); // …and claimed, so the sweep below leaves it to us
-      if (!this.removedWidgets.has(w)) tint(w); // felled trees stay gone
+      // A doodad that has a STAND-IN is drawn by the stand-in, full stop.
+      //
+      // `removedWidgets` says the same thing for the ones we retired, and it is what this
+      // used to ask alone — but it is bookkeeping, a Set that has to be kept in step with the
+      // world, and the state a player caught it in says it can fall out of step: a destroyed
+      // elven gate on Rise of the Naga, its stand-in correctly dead and holding the last frame
+      // of `death`, and its STATIC doodad drawn over the top of it, door and all. I could not
+      // reproduce that in a harness, so rather than guess which of the two ways it drifts,
+      // this asks the thing that cannot drift. `doodadActors` HAS the widget precisely because
+      // `doodadActor()` hid its static and put an animated copy in its place, so a member of
+      // that map must never be shown again by this pass — whatever the Set thinks.
+      if (this.removedWidgets.has(w) || this.doodadActors.has(w)) continue; // felled trees, open gates
+      tint(w);
     }
     const units = map.units as unknown as Array<HideableWidget & { row?: unknown }>;
     for (const w of units) {
