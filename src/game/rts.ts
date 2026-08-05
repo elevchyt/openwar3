@@ -210,6 +210,27 @@ interface Entry {
    *  us its last-seen image (item 6d). The model stays standing and the entry stays alive —
    *  it is now drawn from the ghost record, not from a unit. Only ever set on a client. */
   ghosted: boolean;
+  /**
+   * **This body is BORROWED — the RTS may read it, but never decide what is drawn there.**
+   *
+   * A destructible has no model of its own: `attachDestructibleBody` hands us the viewer's
+   * OWN placed doodad, the one war3map.doo laid down (see its note on instance reuse). And
+   * the renderer swaps that doodad out from under us whenever it has to MOVE — a gate under
+   * an axe, or swinging open — because a placed doodad's animation never advances, so
+   * mapViewer hides the static and puts an animated stand-in in its place (`doodadActor`).
+   *
+   * So the instance we hold may already be retired, and we have no way to know. Every draw
+   * decision here — fog show/hide, the death clip, corpse adoption — has to be skipped and
+   * left to mapViewer's own doodad fog pass, which owns the whole `map.doodads` array and is
+   * the only side that knows about the stand-in. `hidden` is still tracked (the health bar,
+   * the hover slab and the selection all read it); only the instance is left alone.
+   *
+   * A destroyed elven gate on Rise of the Naga is what it looks like when we forget: the RTS
+   * adopted the gate's static doodad as a CORPSE, `fogCorpse` re-showed it every frame, and
+   * mdx-m3-viewer's `Widget.update` stood it back up on its looping `stand` clip — the intact
+   * door, drawn over the rubble the stand-in was correctly holding.
+   */
+  borrowedBody?: true;
   curSeq: number; // sequence index currently playing (avoid redundant sets)
   // Art - Animation - Walk/Run Speed (unitUI): the movement speeds the model's "Walk"/"Walk
   // Fast" clips were authored for. The walk cycle is re-rated by speed/gait — see walkAnim().
@@ -1075,15 +1096,19 @@ export class RtsController {
       }
     }
     if (hide !== e.hidden) {
+      // The flag is tracked for EVERY entry — the health bar, the hover slab and the
+      // selection all read it — but a borrowed body's instance is not ours to toggle, and
+      // this is the edge that used to put a destroyed gate's door back: mapViewer had hidden
+      // the static doodad in favour of the stand-in, and the first re-reveal showed it again.
       e.hidden = hide;
       if (hide) {
-        e.unit.instance.hide();
+        if (!e.borrowedBody) e.unit.instance.hide();
         if (this.hovered === e.simId) this.hovered = null;
-      } else {
+      } else if (!e.borrowedBody) {
         e.unit.instance.show();
       }
     }
-    if (!hide) this.applyFogTint(e, u);
+    if (!hide && !e.borrowedBody) this.applyFogTint(e, u); // borrowed: mapViewer's doodad pass tints it
   }
 
   /** Re-skin a unit that has changed FORM: rebuild its animation set for the new state and
@@ -2183,6 +2208,10 @@ export class RtsController {
   attachDestructibleBody(simId: number, def: UnitDef, instance: Instance): void {
     if (this.byId.has(simId) || !this.sim.units.has(simId)) return;
     this.attachInstance(simId, instance, def);
+    // …on LOAN. The instance is the map's own doodad and mapViewer may retire it at any
+    // moment — see Entry.borrowedBody, which is what keeps us from drawing over the swap.
+    const e = this.byId.get(simId);
+    if (e) e.borrowedBody = true;
   }
   /** Give a sim unit its rendered body: the model instance + everything derived from it
    *  (animation set, birth clip, scale). Called the moment the model is ready — the same
@@ -2754,6 +2783,17 @@ export class RtsController {
   private onDeath(simId: number): void {
     const e = this.byId.get(simId);
     if (!e) return;
+    // A destructible does not die like a unit, and its body is not ours to bury (see
+    // Entry.borrowedBody). mapViewer's `killDestructible` is already playing the model's own
+    // `death` clip on the stand-in and holding the last frame — that held pose IS the
+    // wreckage, the collider has already dropped to whatever `pathTexDeath` keeps, and the
+    // widget's death event has been queued for the map's triggers. Retire the entry and touch
+    // nothing else: adopting the gate's placed doodad as a corpse is what drew the intact door
+    // back over its own rubble on Rise of the Naga.
+    if (e.borrowedBody) {
+      this.dropEntry(e);
+      return;
+    }
     // **A death you did not witness is not a death you may animate** (item 6d). The authority
     // decides that, and it says so by continuing to send the building: `GhostMemory` mints an
     // image only for a viewer who was NOT watching when it fell (6b), so a `remembered` record
@@ -2814,7 +2854,7 @@ export class RtsController {
     if (i >= 0) this.entries.splice(i, 1);
     this.deselect(e.simId);
     if (this.hovered === e.simId) this.hovered = null;
-    e.unit.instance.hide();
+    if (!e.borrowedBody) e.unit.instance.hide(); // borrowed: mapViewer decides what stands there
   }
 
   /** Ghost entries whose image the host has just dropped, collected during the entry sync and

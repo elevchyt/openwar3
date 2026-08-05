@@ -1251,9 +1251,17 @@ export class MapViewerScene {
         }
         continue;
       }
+      // Kill it FIRST, while the doo→sim link is still there to follow. `killDestructible`
+      // retires the sim body through `syncDestructibleToSim`, which looks it up in
+      // `destSimByDoo` — so clearing these two first (as this used to) meant the lookup found
+      // nothing, silently skipped the `removeUnit`, and left the destructible's sim unit in
+      // the world forever at zero life. That orphan kept its render Entry alive, and an Entry
+      // whose body is the gate's own placed doodad is an Entry that will eventually draw over
+      // the stand-in (see RtsController.borrowedBody). Both deletes stay for the case
+      // syncDestructibleToSim returns early — the sim already dropped the unit itself.
+      this.killDestructible(destId);
       this.destSimIds.delete(simId);
       this.destSimByDoo.delete(destId);
-      this.killDestructible(destId);
     }
   }
 
