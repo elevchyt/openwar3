@@ -40,3 +40,12 @@ export function worldLayer(): HTMLElement {
   }
   return layer;
 }
+
+/** Take the world layer off the page — the match that filled it is over. The cached node has
+ *  to be dropped WITH it: keep the variable and the next match's bars are appended to a div
+ *  that is no longer in the document, which looks exactly like "the health bars stopped
+ *  working" and nothing like a teardown bug. */
+export function disposeWorldLayer(): void {
+  layer?.remove();
+  layer = null;
+}

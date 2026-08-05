@@ -55,7 +55,7 @@ import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
 import { GameHud, isTyping, type HudDriver, type CommandButton } from "../ui/hud";
-import { GAME_WIDTH, GAME_HEIGHT, worldLayer } from "../ui/stage";
+import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { UI_HEIGHT } from "../ui/fdf/layout";
 import { MatchOverDialog } from "../ui/gameMenu";
 import { EscMenu } from "../ui/escMenu";
@@ -4793,7 +4793,7 @@ export class MapViewerScene {
       if (document.fullscreenElement) void kb.lock!().catch(() => {});
       else kb.unlock?.();
     };
-    document.addEventListener("fullscreenchange", sync);
+    this.on(document, "fullscreenchange", sync);
     sync();
   }
 
@@ -6958,6 +6958,10 @@ export class MapViewerScene {
     let i = 0;
     const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback.bind(window) : null;
     const step = (deadline?: IdleDeadline) => {
+      // The match may have been left while this was still draining. Every icon it decodes
+      // mints a blob URL onto `blobUrls`, and dispose() has already revoked that list —
+      // anything added after it would never be released.
+      if (this.disposed) return;
       // With real idle time, drain until the budget runs low. When the browser
       // forced us in on the timeout (or there's no idle API) decode a small fixed
       // batch instead, so we make steady progress without stealing a whole frame.
@@ -7546,9 +7550,25 @@ export class MapViewerScene {
     this.updateCarriedItem(-1, 0, 0); // never leave an item stuck to the cursor
   }
 
-  /** Release the viewer's blob URLs (call when discarding the scene). */
+  /** Leave the match: put back everything it touched, and release the viewer's blob URLs.
+   *
+   *  The rule this exists to enforce: **nothing a match put on the page may outlive it.** A
+   *  MapViewerScene is thrown away on the way to the menu and a fresh one is built for the
+   *  next game (main.ts `exitToMenu`), so its own fields take care of themselves — but the
+   *  surfaces it wrote to do NOT belong to it. `document.body`'s classes, the `#ui` and
+   *  `#map` elements, `window`'s listeners, the world layer, the shared SoundBoard: all of
+   *  them are the page's, and all of them are still there when the main menu comes back.
+   *
+   *  What that looked like before this swept them: quitting mid-cinematic left the letterbox
+   *  bars, the transmission panel and the fade filter painted over the main menu, with
+   *  `cine-on` still on the body so the menu had no cursor. */
   dispose(): void {
+    this.disposed = true;
     this.stop();
+    // The listeners first: they are the only leak that would keep FIRING — every keydown
+    // handler a dead match left on `window` still answers keys typed at the main menu.
+    for (const off of this.detachers) off();
+    this.detachers = [];
     this.rts?.dispose();
     this.rts = null;
     this.clock?.dispose();
@@ -7587,6 +7607,7 @@ export class MapViewerScene {
     this.textTags = null;
     this.leaderboard?.dispose();
     this.multiboard?.dispose();
+    this.multiboard = null;
     this.weather?.dispose();
     this.weather = null;
     this.leaderboard = null;
@@ -7594,6 +7615,21 @@ export class MapViewerScene {
     this.timerDialogs = null;
     this.dialog?.dispose();
     this.dialog = null;
+    // The cinematic surface (7.24) — the one piece mountScriptUi tore down at the START of
+    // the next match but nothing tore down at the END of this one, so a game quit mid-cutscene
+    // handed the main menu a letterbox, a transmission panel and a fade to sit behind.
+    this.cinematic?.dispose();
+    this.cinematic = null;
+    this.cinePortraitViewer?.stop();
+    this.cinePortraitViewer = null;
+    this.portraitViewer?.stop();
+    this.portraitViewer = null;
+    // …and the body classes the cinematic drove. `cine-on` hides the cursor outright, so
+    // left standing it is not a cosmetic leak: the menu you land on has no mouse pointer.
+    document.body.classList.remove("cine-on", "dialog-on");
+    this.interfaceShown = true;
+    this.userUi = true;
+    this.userControl = true;
     this.mapScript = null;
     this.registry.clearCustom(); // drop this map's custom object data
     this.abilities.clearCustom();
@@ -7644,8 +7680,17 @@ export class MapViewerScene {
     this.cursorSheet = null;
     this.reticleUrls.clear();
     this.handUrls.clear();
+    this.disposeFog(); // the veil mesh and its GL texture — loadMap dropped these, exit didn't
     document.body.classList.remove("reticle-on", "armed-on", "carrying-item");
     document.body.style.cursor = ""; // restore the default cursor off the map
+    // The last three things the match wrote to the PAGE rather than to itself: the edge-scroll
+    // arrow and the world-anchored overlay layer, both parented to `document.body`, and the
+    // audio — the SoundBoard is the page's and survives, so the match's beds, voices, script
+    // handles and map music have to be told to stop (see SoundBoard.endMatch).
+    this.scrollArrow?.remove();
+    this.scrollArrow = null;
+    disposeWorldLayer();
+    this.sounds?.endMatch();
     for (const url of this.blobUrls) URL.revokeObjectURL(url);
     this.blobUrls = [];
   }
@@ -8634,9 +8679,32 @@ export class MapViewerScene {
     }
   }
 
+  /** Register an input listener FOR THE LENGTH OF THE MATCH, remembering how to take it off.
+   *
+   *  Every surface these hang on outlives the match: `window`, `document`, and the `#map`
+   *  canvas itself, which is a fixed element in index.html that each new MapViewerScene is
+   *  built onto. So a listener added here and never removed is not a slow leak — it is the
+   *  PREVIOUS match still reading the keyboard from the main menu, and a second copy of it
+   *  after the game after that (see `dispose`).
+   *
+   *  `(e: never)` is what lets each call site annotate its own event type and have the body
+   *  typed from that — a handler taking any event is assignable to one taking `never`. */
+  private on(target: EventTarget, type: string, fn: (e: never) => void, opts?: AddEventListenerOptions): void {
+    const listener = fn as EventListener;
+    target.addEventListener(type, listener, opts);
+    this.detachers.push(() => target.removeEventListener(type, listener, opts));
+  }
+
+  /** Undo list for `on` — run and emptied by `dispose`. */
+  private detachers: Array<() => void> = [];
+
+  /** Set by `dispose`. Background work that outlives the frame loop (the idle icon warm)
+   *  checks it: the scene is gone and anything it produces now would never be freed. */
+  private disposed = false;
+
   private attachControls(): void {
     const c = this.canvas;
-    window.addEventListener("keydown", (e) => {
+    this.on(window, "keydown", (e: KeyboardEvent) => {
       // ESC during a cinematic SKIPS it — WC3 raises EVENT_PLAYER_END_CINEMATIC for the
       // local player and the map's own skip trigger takes it from there (see
       // Interpreter.firePlayerEvent for the NightElfX01 trigger this exists for).
@@ -8692,16 +8760,16 @@ export class MapViewerScene {
       this.keys.add(e.key.toLowerCase());
       this.checkCheatCode(e.key);
     });
-    window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
-    c.addEventListener("contextmenu", (e) => e.preventDefault());
+    this.on(window, "keyup", (e: KeyboardEvent) => this.keys.delete(e.key.toLowerCase()));
+    this.on(c, "contextmenu", (e: Event) => e.preventDefault());
     // Suppress the browser's middle-click autoscroll (it fires off mousedown, which
     // preventDefault on pointerdown doesn't reach) so button 1 is free to drag-pan.
-    c.addEventListener("mousedown", (e) => {
+    this.on(c, "mousedown", (e: MouseEvent) => {
       if (e.button === 1) e.preventDefault();
     });
     // Left-drag rotates the camera; a left-click (no drag) selects a unit;
     // right-click issues a move order for the selection.
-    c.addEventListener("pointerdown", (e) => {
+    this.on(c, "pointerdown", (e: PointerEvent) => {
       c.setPointerCapture(e.pointerId);
       this.sounds?.unlock(); // browsers gate audio until the first user gesture
       // EnableUserControl(false) — a cinematic owns the mouse (7.24). No selecting, no
@@ -8754,11 +8822,11 @@ export class MapViewerScene {
     });
     // Belt-and-suspenders: if the browser cancels/steals the pointer mid-drag,
     // tear the drag state down so the marquee can't get stuck on screen.
-    c.addEventListener("pointercancel", () => {
+    this.on(c, "pointercancel", () => {
       this.cancelDrag();
       this.midPanning = false;
     });
-    c.addEventListener("pointerup", (e) => {
+    this.on(c, "pointerup", (e: PointerEvent) => {
       // Release capture only once ALL buttons are up, so a second button's release
       // can't strand the primary button's pointerup off-target (stuck marquee).
       if (e.buttons === 0) c.releasePointerCapture(e.pointerId);
@@ -8790,7 +8858,7 @@ export class MapViewerScene {
         }
       }
     });
-    c.addEventListener("pointermove", (e) => {
+    this.on(c, "pointermove", (e: PointerEvent) => {
       this.lastMouse.x = e.offsetX;
       this.lastMouse.y = e.offsetY;
       if (this.midPanning) {
@@ -8830,14 +8898,14 @@ export class MapViewerScene {
       this.lastCursor.y = e.clientY;
       this.pointerInWindow = true;
     };
-    window.addEventListener("pointermove", trackCursor, { capture: true });
-    window.addEventListener("pointerdown", trackCursor, { capture: true });
-    window.addEventListener("contextmenu", trackCursor, { capture: true });
+    this.on(window, "pointermove", trackCursor, { capture: true });
+    this.on(window, "pointerdown", trackCursor, { capture: true });
+    this.on(window, "contextmenu", trackCursor, { capture: true });
     // Cursor left the page (or the window lost focus): stop edge-scrolling. Without this the
     // camera would keep panning off the last edge the cursor crossed on its way out.
-    document.addEventListener("pointerleave", () => (this.pointerInWindow = false));
-    window.addEventListener("blur", () => (this.pointerInWindow = false));
-    window.addEventListener("pointermove", (e) => {
+    this.on(document, "pointerleave", () => (this.pointerInWindow = false));
+    this.on(window, "blur", () => (this.pointerInWindow = false));
+    this.on(window, "pointermove", (e: PointerEvent) => {
       // Self-heal a stuck drag even while the pointer is off the canvas (over the
       // HUD): still "dragging" with the left button not held means the pointerup
       // was lost, so cancel it here too — the canvas handler can't see these moves.
@@ -8855,9 +8923,10 @@ export class MapViewerScene {
         }
       }
     });
-    c.addEventListener(
+    this.on(
+      c,
       "wheel",
-      (e) => {
+      (e: WheelEvent) => {
         e.preventDefault();
         if (!this.userControl) return; // a cinematic owns the zoom too (7.24)
         this.distance = clamp(this.distance * (1 + Math.sign(e.deltaY) * 0.1), MapViewerScene.ZOOM_MIN, MapViewerScene.ZOOM_MAX);

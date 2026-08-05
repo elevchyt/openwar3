@@ -517,9 +517,14 @@ function showTerrain(): void {
 /** Leave the current match (F10 → End Game): tear down the map scene and return to
  *  the main menu over its animated 3D scene. A fresh scene is built next game. */
 function exitToMenu(): void {
-  mapScene?.dispose();
+  mapScene?.dispose(); // …which silences the match's audio and flushes what it put on the page
   mapScene = null;
   meleeConfig = null;
+  // The mixer is the one thing the match could move that isn't the match's to keep: a map's
+  // VolumeGroupSetVolume / SetMusicVolume write to the very groups the player's saved Sound
+  // options do (SoundBoard.endMatch says why it leaves them alone). This is the layer that
+  // knows what the player chose, so this is where their levels come back.
+  if (sounds) applyAudioOptions(sounds, loadOptions());
   // The match owned the relay connection from the moment the LAN screen handed it over, so
   // leaving the match is what closes it. Skipping this would leave the room listed and the
   // socket open behind a player who is back at the main menu.

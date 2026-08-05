@@ -765,7 +765,11 @@ export class GameHud {
     parent.appendChild(this.root);
     this.applyWidgetSkin();
     window.addEventListener("keydown", this.onKey);
+    this.unwatchPress = watchPress();
   }
+
+  /** Takes the console's press watcher back off `window` — see `watchPress`. */
+  private unwatchPress: () => void = () => {};
 
   /** Hand the real console/tooltip textures to the stylesheet as custom properties.
    *  Each is optional: without a mounted install the CSS keeps its own placeholder
@@ -854,11 +858,24 @@ export class GameHud {
 
   dispose(): void {
     window.removeEventListener("keydown", this.onKey);
+    this.unwatchPress();
     this.minimapResize?.disconnect();
     for (const id of this.msgTimers) clearTimeout(id);
     this.msgTimers.clear();
     clearTimeout(this.errTimer);
     this.root.remove();
+    // Removing the root is not enough: the skin classes and the art behind them were written
+    // to `document.body` / `:root` (see applyTooltipSkin and its neighbours), because the
+    // pieces they style — the world-layer hover slab, the floating status bars — are not in
+    // this subtree. Those two elements outlive the match, so the HUD has to un-skin them, and
+    // the blob URLs the properties hold are revoked with the scene right after this.
+    document.body.classList.remove(
+      "hud-tooltip-skinned", "hud-widget-skinned", "hud-statbar-skinned", "order-armed",
+    );
+    const root = document.documentElement.style;
+    for (const prop of [...root].filter((p) => p.startsWith("--hud-") || p.startsWith("--statbar-"))) {
+      root.removeProperty(prop);
+    }
   }
 
   hide(): void {
@@ -2405,7 +2422,25 @@ function attrIcon(kind: "str" | "agi" | "int"): string {
  *  rather than as per-element state so that a card rebuild mid-hold (onPress is
  *  re-bound every time the command list changes) can't lose track of the press. */
 let pressedEl: HTMLElement | null = null;
-let pressWatched = false;
+
+/** Watch for the release that ENDS a console-button press, for the length of one console.
+ *
+ *  A release (or a cancelled pointer — a touch turning into a scroll, the window losing
+ *  focus) that didn't land on the held button drops the press. The button's own handler runs
+ *  first, at the target, so by the time these fire a confirmed press has already cleared
+ *  itself. They hang on `window`, which outlives the match, so this hands back the detacher
+ *  rather than registering once and forever: a dead console must not still be reading the
+ *  page's pointer events, and `pressedEl` must not keep a button of it alive. */
+function watchPress(): () => void {
+  const drop = (): void => setPressed(null);
+  window.addEventListener("pointerup", drop);
+  window.addEventListener("pointercancel", drop);
+  return () => {
+    window.removeEventListener("pointerup", drop);
+    window.removeEventListener("pointercancel", drop);
+    setPressed(null);
+  };
+}
 
 function setPressed(el: HTMLElement | null): void {
   if (pressedEl === el) return;
@@ -2420,19 +2455,10 @@ function setPressed(el: HTMLElement | null): void {
  *  drifts a pixel onto the frame art beside the button is swallowed — half of issue
  *  #44 — whereas here the press is ours the moment it lands and only the release
  *  point is checked. Let go anywhere else and the press is abandoned (the standard
- *  way to back out of a misclick), which the window listeners below handle.
+ *  way to back out of a misclick), which `watchPress` above handles.
  *  preventDefault keeps the press from focusing the button, so a later Space/Enter
  *  can't re-fire it. Pass null to unbind a slot. */
 function onPress(el: HTMLElement, fn: ((e: PointerEvent) => void) | null): void {
-  if (!pressWatched) {
-    pressWatched = true;
-    // A release (or a cancelled pointer — a touch turning into a scroll, the window
-    // losing focus) that didn't land on the held button drops the press. The
-    // button's own handler runs first, at the target, so by the time this fires a
-    // confirmed press has already cleared itself.
-    window.addEventListener("pointerup", () => setPressed(null));
-    window.addEventListener("pointercancel", () => setPressed(null));
-  }
   if (!fn) {
     el.onpointerdown = null;
     el.onpointerup = null;

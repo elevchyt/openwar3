@@ -1457,6 +1457,52 @@ export class SoundBoard {
     this.applyMusicGain();
   }
 
+  /** The match is over: silence everything it started.
+   *
+   *  The SoundBoard is the PAGE's audio, not the match's — it is built once the archives are
+   *  mounted and shared by the menus and every game after (main.ts), so nothing here disposes
+   *  it. What it drops is the match's own layers, none of which stop by themselves: the
+   *  sustained beds (`setAmbienceLoop`'s waterfalls and braziers, `setPathLoop`'s channelled
+   *  spell howls), the voice lines and pooled one-shots still in the air, the trigger script's
+   *  live `StartSound` handles, and the music the map cued with SetMapMusic.
+   *
+   *  `musicSkin` goes back to its default with them — it is the local player's RACE, which
+   *  means nothing outside the match, and left standing it would hand the next match's
+   *  playlist lookup the last game's race until its own main() happened to overwrite it.
+   *
+   *  The MIXER is deliberately not touched. A map's `VolumeGroupSetVolume` / `SetMusicVolume`
+   *  write to the same groups the player's saved Sound options do (data/options.ts
+   *  `applyAudioOptions`), so resetting them here would silently discard the settings rather
+   *  than the map's overrides. Putting the player's own levels back is the caller's job, and
+   *  it is the only layer that knows them — see main.ts `exitToMenu`. */
+  endMatch(): void {
+    // Every sustained loop, named or by-path, plus the ones still queued behind a decode.
+    for (const src of this.loops.values()) {
+      try { src.stop(); } catch { /* not started yet / already stopped */ }
+    }
+    this.loops.clear();
+    this.pendingLoops.clear();
+    this.loopOwner.clear();
+    this.loopQueue.clear();
+    this.loopFile.clear();
+    // One-shots: `playing` holds every WAV in the air (the never-stack rule keeps it exact),
+    // and each entry's kill() also unhooks it from `voices`/`channelVoices`. Copy first —
+    // kill() calls release(), which edits the map we'd be iterating.
+    for (const active of [...this.playing.values()]) active.kill();
+    this.playing.clear();
+    this.voices.clear();
+    this.channelVoices.clear();
+    for (const id of [...this.scripts.keys()]) this.stopScript(id, false);
+    // The music channel. No fade: the menu's own theme starts on the way out and the two
+    // must not overlap. `musicList` goes with it so a later ResumeMusic finds nothing.
+    this.stopMusic(false);
+    this.musicList = [];
+    this.fadeOutTrack(this.thematic, false);
+    this.thematic = null;
+    this.musicSkin = "Default";
+    this.listener = null; // no camera any more; a 3D sound has nothing to be panned against
+  }
+
   /** Resolve a table row → clip metadata, memoized. Row lookup is case-insensitive. */
   private resolve(tag: string, key: string): Clip | null {
     const memo = `${tag}|${key.toLowerCase()}`;
