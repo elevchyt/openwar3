@@ -39,7 +39,7 @@ import type { CineFilter, CinematicScene } from "../jass/runtime";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
-import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { mountFdfScreen, OPAQUE_BACKDROP, type FdfScreen } from "./fdf/render";
 import { fitBox } from "./fdf/layout";
 import { stageSize } from "./stage";
 
@@ -329,6 +329,11 @@ function letterboxBar(f: FdfFrame, width: number): FdfFrame {
     props: [
       ...f.props.filter((p) => p.key !== "Width" && p.key !== "BackdropBlendAll"),
       { key: "Width", args: [num(width)] },
+      // The bars HIDE the world — that is what a letterbox is — and the stone that makes them
+      // carries enough alpha to read through against a bright map. Everything else the FDF
+      // system draws is meant to be see-through, so the plate is asked for here rather than
+      // applied to every backdrop (see OPAQUE_BACKDROP).
+      { key: OPAQUE_BACKDROP, args: [] },
     ],
   };
 }

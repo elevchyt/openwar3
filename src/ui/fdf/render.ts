@@ -23,6 +23,22 @@ import {
 // strips, 4–7 are the corners. These indices are tuned against the live render.
 const EDGE_TILE = { L: 0, R: 1, T: 2, B: 3, UL: 4, UR: 5, LL: 6, LR: 7 };
 
+/**
+ * OUR flag, not the game's: "put an opaque plate under this backdrop's background".
+ *
+ * WC3's backdrops are see-through by default and most of them mean it — the map list, the
+ * tooltips, the campaign chapter rows are all a wash over what is behind them. The cinematic
+ * letterbox is the exception: its bars hide the world outright, and the night elf stone that
+ * makes them carries enough alpha that a bright map read straight through it.
+ *
+ * The bars used to get that from `background: #000` on the ELEMENT, which is wrong in the
+ * other direction: an element's colour fills the whole frame, and these two frames
+ * deliberately do not — each insets its background so its border ornament overhangs open
+ * screen (see backgroundInsets). So the plate is drawn here instead, inside the inset, and
+ * only for the frames that ask. `ui/cinematicPanel.ts` is the only thing that asks.
+ */
+export const OPAQUE_BACKDROP = "OpenWar3OpaqueBackdrop";
+
 /** Font stack for menu text: Warcraft III's own Friz Quadrata TT, read out of the
  *  player's archives at runtime (ui/gameFont.ts) — the glue screens use the same
  *  face as the rest of the game. Call it, don't cache it: the stack is only the
@@ -836,15 +852,15 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
       const tileH = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.height;
       g.save();
       g.beginPath(); g.rect(ix, iy, iw, ih); g.clip();
-      // A TILED background is a SURFACE — the stone a panel is made of — and WC3 draws it
-      // over nothing, so what little alpha the tile carries must not let the world through.
-      // (The cinematic letterbox is where that shows: its stone is dark, the map behind it is
-      // bright, and the bars came out faintly see-through.) Black goes under the tile and only
-      // under it — INSIDE the inset — so a frame that pulls its background back to let its
-      // border ornament overhang open screen still does (see backgroundInsets). The element
-      // used to carry `background: #000` instead, which covered the overhang too.
-      g.fillStyle = "#000";
-      g.fillRect(ix, iy, iw, ih);
+      // Most tiled backgrounds are MEANT to be see-through — the map list, the tooltips, the
+      // campaign chapter rows are all a translucent wash over whatever is behind them, and
+      // painting a plate under every one of them flattened the lot. Only a frame that asks
+      // (see OPAQUE_BACKDROP) gets one, and then only inside the inset, so a border ornament
+      // that hangs past the background still hangs over open screen.
+      if (hasFlag(f, OPAQUE_BACKDROP)) {
+        g.fillStyle = "#000";
+        g.fillRect(ix, iy, iw, ih);
+      }
       for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
       g.restore();
     } else {
