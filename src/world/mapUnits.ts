@@ -41,6 +41,28 @@ export interface PlacedUnit {
   dropSets: Array<{ items: Array<{ id: string; chance: number }> }>;
 }
 
+/**
+ * The first neutral player in the FILE's own numbering.
+ *
+ * war3mapUnits.doo stores the WORLD EDITOR's owner slots, and there the four neutral players
+ * sit at 24–27 — not at the 12–15 that `Player(n)`, `PlayerSlot` and everything downstream
+ * use. Read straight out of Echo Isles: its creeps (murlocs, ogres, gnolls, kobolds) are owner
+ * **24** and its gold mines, tavern, goblin merchant, marketplace and critters are owner
+ * **27**, in the same order as the runtime's Hostile / Victim / Extra / Passive.
+ *
+ * Left unmapped, `player >= FIRST_NEUTRAL_SLOT` still said "neutral" for both — which is why
+ * this went unnoticed — but `player === PlayerSlot.NeutralPassive` could never be true, so
+ * every shop, tavern and critter in the game came back NOT passive and was classified as a
+ * creep (render/mapViewer.ts), and the lobby's minimap preview drew no neutral buildings.
+ */
+const EDITOR_FIRST_NEUTRAL = 24;
+
+/** The file's owner slot as the ENGINE's. Only the neutral block moves; 0–11 are the same
+ *  number in both. */
+function ownerSlot(raw: number): number {
+  return raw >= EDITOR_FIRST_NEUTRAL ? raw - (EDITOR_FIRST_NEUTRAL - FIRST_NEUTRAL_SLOT) : raw;
+}
+
 /** Parse war3mapUnits.doo into typed placed units. `buildVersion` comes from
  *  war3map.w3i (0 for pre-1.32); returns [] if the file is absent/unparseable. */
 export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): PlacedUnit[] {
@@ -52,7 +74,7 @@ export function parseMapUnits(bytes: Uint8Array | null, buildVersion = 0): Place
     return []; // a format we can't read yet — degrade to no pre-placed units
   }
   return file.units.map((u): PlacedUnit => {
-    const player = u.player ?? 0;
+    const player = ownerSlot(u.player ?? 0);
     const neutral = player >= FIRST_NEUTRAL_SLOT;
     return {
       typeId: u.id,

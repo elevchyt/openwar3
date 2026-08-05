@@ -25,6 +25,8 @@ import { GlueAudio } from "./ui/glueAudio";
 import { SoundBoard } from "./audio/sounds";
 import type { DataSource } from "./vfs/types";
 import type { MeleeConfig, SlotConfig } from "./ui/lobby";
+import { readMapPreviewBytes } from "./ui/mapBrowser";
+import type { MapPreview } from "./world/mapPreview";
 import { parseMapInfo, type MapInfo, type NeutralPlayer, type PlayerSlot } from "./world/mapInfo";
 import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
@@ -514,6 +516,11 @@ async function startGame(
 
   const bytes = await step(0.05, async () =>
     map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer()));
+  // The minimap's markers are read out of the map itself (its terrain header and its placed
+  // units), so they can only be stamped once its bytes are in hand — which is why the loading
+  // screen takes them afterwards rather than at mount. Never at the cost of the match: a map
+  // whose unit list we cannot read still starts, with a bare picture.
+  loading?.setMinimapPreview(previewOf(bytes));
   await step(0.15, () => enterMap(bytes, info.name));
   // Melee maps get the standard setup (town hall + workers, melee rules);
   // custom/scenario maps run their own triggers instead (see mapKind.ts).
@@ -551,6 +558,18 @@ async function startGame(
 
 /** The deliberate pause on the full bar before the match appears — see `startGame`. */
 const START_HOLD_MS = 3000;
+
+/** A map's gold mines, shops and start locations for the loading screen's minimap. */
+function previewOf(bytes: Uint8Array): MapPreview | null {
+  const vfs = resolver.installSource;
+  if (!vfs) return null;
+  try {
+    return readMapPreviewBytes(vfs, bytes);
+  } catch (err) {
+    console.warn("[OpenWar3] couldn't read the map's minimap markers:", err);
+    return null;
+  }
+}
 
 /** The relay peers of the OTHER machines in this match — everyone the gate waits for. A seat
  *  with no peer is an AI or an empty chair; ours is the seat `localPlayer` names. */

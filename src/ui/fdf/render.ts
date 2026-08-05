@@ -1,6 +1,6 @@
 import type { DataSource } from "../../vfs/types";
 import { blpToCanvas } from "../../render/blputil";
-import { wc3ToHtml, wc3ToPlain } from "../wc3Text";
+import { wc3StripMarkup, wc3ToHtml } from "../wc3Text";
 import { gameFontStack, gameFontsReady, onGameFontsReady } from "../gameFont";
 import type { FdfFrame } from "./parser";
 import { FdfLibrary, firstProp, hasFlag, numProp, propagateDecorate, strProp } from "./library";
@@ -224,12 +224,13 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     const box = opts.centerRoot
       ? centreBox(numProp(root, "Width") ?? fit.worldW, numProp(root, "Height") ?? UI_HEIGHT, fit.worldW)
       : { x: 0, y: 0, w: fit.worldW, h: UI_HEIGHT };
-    // A shrink-wrapped TEXT frame is measured in PIXELS and handed back a world width, so the
-    // conversion has to use the factor its box will be DRAWN at — `scale × xScale` — even
-    // though the glyphs inside it are sized off `scale` alone. Use `scale` here on a stretched
-    // screen and every auto-sized caption comes out a fifth too wide for its own text.
+    // A shrink-wrapped TEXT frame is measured in PIXELS and handed back a world width, and the
+    // two axes of that conversion are DIFFERENT on a stretched screen: the glyphs are set at
+    // `scale` (type never stretches) while the box they land in is drawn at `scale × xScale`.
+    // Use one number for both and the box comes out `xScale` too wide for its own text, which
+    // on the loading screen parked "WAITING FOR OTHER PLAYERS" 45px left of its bar.
     const { tree } = layout(root, box, opts.buttonWidthScale ?? 1, (f) =>
-      measureTextFrame(f, lib, opts.textOverrides ?? {}, fit.scale * fit.xScale));
+      measureTextFrame(f, lib, opts.textOverrides ?? {}, fit));
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas, overlay,
       handlers: opts.handlers ?? {},
@@ -1167,23 +1168,28 @@ function measureTextFrame(
   f: FdfFrame,
   lib: FdfLibrary,
   overrides: Record<string, string>,
-  scale: number,
+  fit: FitBox,
 ): number | undefined {
   const raw = overrides[f.name] ?? lib.string(strProp(f, "Text") ?? "");
   // A frame the ENGINE fills has no text to measure yet — and the file says so with
   // `TextLength`, which is there for exactly this: the resource readouts declare 8 because
   // that is the widest number they will ever hold. Reserve that many digits.
   const reserve = numProp(f, "TextLength");
-  const text = raw ? wc3ToPlain(raw) : reserve ? "0".repeat(reserve) : "";
+  // Measured as it is DRAWN — markup gone, whitespace kept. See `wc3StripMarkup`.
+  const text = raw ? wc3StripMarkup(raw) : reserve ? "0".repeat(reserve) : "";
   if (!text) return undefined;
   measureCtx ??= document.createElement("canvas").getContext("2d");
   if (!measureCtx) return undefined;
   const sizeWorld = fontSizeOf(f) ?? 0.013;
-  const px = Math.max(8, sizeWorld * scale);
+  // Set at the size the renderer will set it at — `fit.scale` alone, because `paintText` sizes
+  // type off the height and never off the stretch…
+  const px = Math.max(8, sizeWorld * fit.scale);
   measureCtx.font = `${px}px ${uiFont()}`;
-  // A hair of slack: a box measured to the exact advance width clips the last glyph's
-  // right side bearing on some faces, and `overflow: hidden` on a TEXT frame is unforgiving.
-  return (measureCtx.measureText(text).width * 1.04) / scale;
+  // …then back to world units through the factor the BOX will be drawn at, which is the one
+  // that carries the stretch. A hair of slack first: a box measured to the exact advance width
+  // clips the last glyph's right side bearing on some faces, and `overflow: hidden` on a TEXT
+  // frame is unforgiving.
+  return (measureCtx.measureText(text).width * 1.04) / (fit.scale * fit.xScale);
 }
 
 // --- small helpers ---------------------------------------------------------------

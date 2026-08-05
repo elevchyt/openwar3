@@ -20,7 +20,8 @@ export interface LaidOutFrame {
   h: number;
   children: LaidOutFrame[];
   placed: boolean;
-  /** We invented this frame's WIDTH (the FDF declared none) — see `autoJustifyH`. */
+  /** This frame's WIDTH is not the file's: either measured from its own string or inherited
+   *  from its parent, both of which stand in for a shrink-wrap — see `autoJustifyH`. */
   fabricatedWidth?: boolean;
   /**
    * The horizontal justification a shrink-wrapped TEXT frame effectively has.
@@ -274,7 +275,12 @@ export function layout(
         // top-left corner.
         if (isTextFrame(n.frame) && points.length) {
           const measured = measure?.(n.frame);
-          if (Number.isNaN(n.w) && measured !== undefined) n.w = measured;
+          // A measured box is a shrink-wrap we did ourselves, and it is NOT exact — the
+          // measurer leaves a hair of slack so the last glyph's bearing is not clipped. So it
+          // is a fabricated width like an inherited one, and its ANCHOR decides where the text
+          // sits in it (see `autoJustifyH`); left-justifying inside it parks every centred
+          // caption in the game a few pixels left of where the file put it.
+          if (Number.isNaN(n.w) && measured !== undefined) { n.w = measured; n.fabricatedWidth = true; }
           if (Number.isNaN(n.h)) {
             // A frame that declares a Width but no Height WRAPS to it, and its height is
             // however many lines that takes. AllianceDialog's column headers are the case:
@@ -308,8 +314,9 @@ export function layout(
       const ly = rel.y + fy(pt.relPoint) * rel.h + pt.dy;
       n.x = lx - fx(pt.myPoint) * n.w;
       n.y = ly - fy(pt.myPoint) * n.h;
-      // A TEXT frame whose width we invented is standing in for one the engine would have
-      // shrink-wrapped; the anchor, not the file's justification, is what centres it.
+      // A TEXT frame whose width we invented — measured or inherited — is standing in for one
+      // the engine would have shrink-wrapped; the anchor, not the file's justification, is
+      // what centres it.
       if (n.fabricatedWidth && isTextFrame(n.frame)) {
         const f = fx(pt.myPoint);
         n.autoJustifyH = f === 0 ? "JUSTIFYLEFT" : f === 1 ? "JUSTIFYRIGHT" : "JUSTIFYCENTER";

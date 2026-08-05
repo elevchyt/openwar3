@@ -89,10 +89,17 @@ export async function readMapPreviewFor(
   const file = maps.get(path);
   if (!file) return null;
   const bytes = new Uint8Array(await file.arrayBuffer());
-  registry ??= loadUnitRegistry(vfs);
-  const read = readMapPreview(bytes, (id) => registry?.get(id)?.minimapIcon ?? false);
+  const read = readMapPreviewBytes(vfs, bytes);
   previewCache.set(path, read);
   return read;
+}
+
+/** The same read from BYTES already in hand — the loading screen's case: it is handed the map
+ *  it is about to play, not a path to browse for (ui/loadingScreen.ts). Which neutral buildings
+ *  earn a glyph is the unit table's `nbmmIcon`, so the registry is loaded once and kept. */
+export function readMapPreviewBytes(vfs: DataSource, bytes: Uint8Array): MapPreview | null {
+  registry ??= loadUnitRegistry(vfs);
+  return readMapPreview(bytes, (id) => registry?.get(id)?.minimapIcon ?? false);
 }
 
 /**
@@ -359,7 +366,7 @@ function centreNameRow(s: FdfScreen): void {
 }
 
 /** Stamp the lobby's markers onto a copy of the map's own minimap picture. */
-function drawPreviewMarkers(canvas: HTMLCanvasElement, info: MapInfo, preview: MapPreview, icons: MinimapIcons): void {
+export function drawPreviewMarkers(canvas: HTMLCanvasElement, info: MapInfo, preview: MapPreview, icons: MinimapIcons): void {
   const g = canvas.getContext("2d");
   if (!g) return;
   // The picture covers the whole terrain rect, so world → picture is a straight remap

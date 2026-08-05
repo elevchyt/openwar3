@@ -10,8 +10,12 @@ import type { MapInfo } from "../world/mapInfo";
 import { cloneNamespaced, FdfLibrary } from "./fdf/library";
 import type { FdfFrame } from "./fdf/parser";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import type { MapPreview } from "../world/mapPreview";
 import type { MeleeConfig, SlotConfig } from "./lobby";
-import { adopt, arg, num, setProp, str } from "./mapBrowser";
+import {
+  adopt, arg, drawPreviewMarkers, findFrame, loadMinimapIcons, num, setProp, str,
+  type MinimapIcons,
+} from "./mapBrowser";
 
 // The LOADING SCREEN (issue #78) — what stands between the menus and the match, built from
 // the game's own `UI\FrameDef\Glue\Loading.fdf`.
@@ -45,6 +49,18 @@ const LOADING_FDF = "UI\\FrameDef\\Glue\\Loading.fdf";
 const ROW_PITCH = 0.03;
 const HEADING_PITCH = 0.0175;
 
+/**
+ * How far the bar's caption drops from the point `Loading.fdf` anchors it at, in world units.
+ *
+ * OUR correction, not the file's: WC3 centres the glyph RUN in the bar, and CSS centres the
+ * LINE BOX. A line box carries descent space under the baseline that an all-caps string
+ * ("L  O  A  D  I  N  G", "WAITING FOR OTHER PLAYERS") never occupies, so centring the box
+ * leaves the caps sitting high in it — measured at 720p, the caps spanned y 636…646 against a
+ * bar whose fill quad centres on 643. A fifth of the type size puts them back on it, and being
+ * a fraction of the FONT rather than a pixel count it holds at every resolution.
+ */
+const BAR_TEXT_NUDGE = 0.2 * 0.013; // 0.013 is StandardLabelTextTemplate's own FrameFont size
+
 export interface LoadingScreenOptions {
   container: HTMLElement;
   /** The canvas the background art and the load bar are drawn into. */
@@ -75,6 +91,9 @@ export interface LoadingScreen {
   /** A remote machine reported in (src/game/loadGate.ts): light the seat its peer sits in, and
    *  drop the waiting caption once nobody is left to wait for. */
   setPeerReady(peer: number): void;
+  /** The map's own gold mines, shops and start locations, once its bytes have been read —
+   *  stamped onto the minimap picture exactly as the lobby's preview stamps them. */
+  setMinimapPreview(preview: MapPreview | null): void;
   dispose(): void;
 }
 
@@ -120,6 +139,12 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
    *  bar's caption can change and be re-measured for its new string (see `setCaption`). */
   const overrides = captions(opts, rows, melee, (k, f) => string(lib, k, f));
 
+  // The minimap's markers arrive a beat after the screen does — they are read out of the map
+  // file, which is the first thing the load does — so they live here and are re-stamped by
+  // every build (a resize rebuilds the DOM and would otherwise drop them).
+  const icons = melee ? loadMinimapIcons(vfs) : null;
+  let preview: MapPreview | null = null;
+
   const screen = await mountFdfScreen({
     container: opts.container,
     vfs,
@@ -143,7 +168,7 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
     textOverrides: overrides,
     onBuild: (s) => {
       if (!melee) return;
-      paintMinimap(s, info);
+      paintMinimap(s, info, preview, icons);
       paintReady(s, ready);
     },
   });
@@ -186,6 +211,10 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
       rows.forEach((row, i) => { if (row.slot.peer === peer) ready.add(i); });
       paintReady(screen, ready);
       refreshCaption();
+    },
+    setMinimapPreview(next): void {
+      preview = next;
+      if (melee) paintMinimap(screen, info, preview, icons);
     },
     dispose(): void {
       scene.dispose();
@@ -283,6 +312,11 @@ function buildLoadingRoot(lib: FdfLibrary, rows: RosterRow[], melee: boolean): F
   const root = lib.resolveRoot("Loading");
   if (!root) throw new Error("Loading.fdf: no Loading frame");
   if (melee) adopt(root, "LoadingMeleePlayerContainer", buildRoster(lib, rows));
+  // The file's own `SetPoint BOTTOM, "Loading", BOTTOM, 0.0, 0.057`, dropped by the caps
+  // correction — see BAR_TEXT_NUDGE.
+  setProp(findFrame(root, "LoadingBarText"), "SetPoint", [
+    arg("BOTTOM"), str("Loading"), arg("BOTTOM"), num(0), num(0.057 - BAR_TEXT_NUDGE),
+  ]);
   return root;
 }
 
@@ -365,13 +399,24 @@ function captions(
   return out;
 }
 
-/** The map's own minimap image (war3mapMap.blp), which is what the reference shows here. It
- *  is bytes out of the MAP archive rather than a path in the install, so it can't ride in on
- *  `mountFdfScreen`'s `sprites` and is painted onto the frame after each build. */
-function paintMinimap(s: FdfScreen, info: MapInfo): void {
+/**
+ * The map's own minimap image (war3mapMap.blp) with the lobby's own glyphs stamped on it — a
+ * ball on every gold mine, a house on every neutral building the unit table marks as worth
+ * visiting, and each start location as a cross in that player's colour (world/mapPreview.ts).
+ * The reference's loading screen carries the same three, and it is the same drawing code the
+ * Custom Game screen's preview uses, because it is the same picture.
+ *
+ * Painted onto the frame rather than declared as a sprite: the picture is bytes out of the MAP
+ * archive, not a path in the install, so it cannot ride in on `mountFdfScreen`'s `sprites`.
+ */
+function paintMinimap(
+  s: FdfScreen, info: MapInfo, preview: MapPreview | null, icons: MinimapIcons | null,
+): void {
   const art = info.minimap ? blpToCanvas(info.minimap) : null;
   const box = s.frame("MinimapImage");
-  if (art && box) box.style.background = `url(${art.toDataURL()}) 0 0/100% 100% no-repeat`;
+  if (!art || !box) return;
+  if (preview && icons) drawPreviewMarkers(art, info, preview, icons);
+  box.style.background = `url(${art.toDataURL()}) 0 0/100% 100% no-repeat`;
 }
 
 /** A GlobalStrings lookup with a literal to fall back on. */

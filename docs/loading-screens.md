@@ -6,7 +6,7 @@ The screen between the menus and the match: `UI\FrameDef\Glue\Loading.fdf`, draw
 [`src/data/loadingScreens.ts`](../src/data/loadingScreens.ts).
 
 Four things about it are not guessable from the FDF, and each one is a bug if you assume
-otherwise.
+otherwise — plus a handful of smaller traps in its text and its minimap.
 
 ## 1. The w3i field that picks the screen is the one named "campaign background"
 
@@ -83,6 +83,28 @@ are imitating overwrites the poke on the next update, and the bar ignores `setPr
 entirely and creeps up over the clip's own 23.5 seconds. (Watch out for the parser, too —
 these tracks live on `bone.animations`, not on a `scalings`/`timelines` field, so a dump that
 looks in the wrong place reports the model as having no keyframes at all.)
+
+## 3b. Two things about its text and its minimap
+
+**The caption is measured on two different axes.** A shrink-wrapped TEXT frame is measured in
+pixels and handed back a world width — but on the stretched loading screen the glyphs are set
+at `scale` (type never stretches) while the box they land in is drawn at `scale × xScale`. One
+number for both makes the box `xScale` too wide for its own text, and with the file's
+`JUSTIFYLEFT` that parked "WAITING FOR OTHER PLAYERS" 45px left of its bar. Two more traps sit
+next to it: the measured string must keep its WHITESPACE (`wc3StripMarkup`, not `wc3ToPlain` —
+the caption is the literal `"L  O  A  D  I  N  G"` and its collapsed twin is six spaces too
+narrow), and a measured box is a shrink-wrap we did *approximately*, so like an inherited one
+it takes its justification from its ANCHOR rather than from the file.
+
+**Caps sit high in a centred line box.** WC3 centres the glyph run in the bar; CSS centres the
+line box, which carries descent space an all-caps string never occupies. Measured at 720p the
+caps spanned y 636…646 against a bar centred on 643. `BAR_TEXT_NUDGE` drops them a fifth of the
+type size — a fraction of the FONT, so it holds at any resolution.
+
+**The minimap carries the map's own markers**, the same three the lobby's preview draws: a ball
+on every gold mine, a house on every neutral building the unit table flags (`nbmmIcon`), and
+each start location as a cross in that player's colour. They are read from the map's bytes, so
+the screen takes them a beat after it mounts (`setMinimapPreview`) rather than at build time.
 
 ## 4. It is a full-WINDOW screen, and `#ui` stops being one mid-load
 
