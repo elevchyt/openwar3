@@ -816,7 +816,7 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
   // 9-slice: interior background + edge-file border. cornerSize/backgroundSize are in
   // 0.8×0.6 world units; scale them to pixels with the same factor as the layout.
   const cornerPx = Math.max(2, Math.round((prop(f, "BackdropCornerSize") ?? 0.012) * ctx.fit.scale));
-  const inset = (prop(f, "BackdropBackgroundInsets") ?? 0) * ctx.fit.scale;
+  const inset = backgroundInsets(f, ctx.fit.scale);
   const edge = texture(f, "BackdropEdgeFile", ctx);
 
   if (bg) {
@@ -828,7 +828,8 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
     // backgrounds — was already made opaque by the loader above, and CANNOT be repaired here:
     // a canvas stores premultiplied pixels, so by this point the colour is already black.
     // See reviveDeadAlpha in render/blputil.ts.)
-    const ix = inset, iy = inset, iw = Math.max(0, w - inset * 2), ih = Math.max(0, h - inset * 2);
+    const ix = inset.left, iy = inset.top;
+    const iw = Math.max(0, w - inset.left - inset.right), ih = Math.max(0, h - inset.top - inset.bottom);
     if (f.props.some((p) => p.key === "BackdropTileBackground")) {
       const bgSizeWorld = prop(f, "BackdropBackgroundSize");
       const tileW = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.width;
@@ -876,25 +877,31 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
      * The last tile is CLIPPED rather than squeezed, for the same reason: a partial repeat is
      * what the run is short by, and rescaling the final tile to fit would put a different-sized
      * ornament at one end of every bar.
+     *
+     * `across` is the run's direction and is passed EXPLICITLY rather than inferred from `rot`.
+     * The two are usually the same thing — a top edge is a horizontal run of a quarter-turned
+     * side strip — but not always: a bar paves its run with its own end-cap art, which is
+     * already horizontal and needs no turn at all (see below). Deriving one from the other laid
+     * that case out down the screen instead of across it.
      */
-    const edgeRun = (idx: number, dx: number, dy: number, run: number, rot: number): void => {
+    const edgeRun = (idx: number, dx: number, dy: number, run: number, rot: number, across: "x" | "y"): void => {
       if (run <= 0) return;
       g.save();
       g.beginPath();
-      g.rect(dx, dy, rot % 180 === 0 ? c : run, rot % 180 === 0 ? run : c);
+      g.rect(dx, dy, across === "x" ? run : c, across === "x" ? c : run);
       g.clip();
       for (let at = 0; at < run; at += c) {
-        if (rot % 180 === 0) tile(idx, dx, dy + at, c, c, rot); // vertical run (L/R)
-        else tile(idx, dx + at, dy, c, c, rot); // horizontal run (T/B)
+        if (across === "x") tile(idx, dx + at, dy, c, c, rot);
+        else tile(idx, dx, dy + at, c, c, rot);
       }
       g.restore();
     };
 
     // Edges (tiles 2/3 are vertical strips in the source → rotate for top/bottom).
-    if (on("L")) edgeRun(EDGE_TILE.L, 0, c, h - 2 * c, 0);
-    if (on("R")) edgeRun(EDGE_TILE.R, w - c, c, h - 2 * c, 0);
-    if (on("T")) edgeRun(EDGE_TILE.T, c, 0, w - 2 * c, 90);
-    if (on("B")) edgeRun(EDGE_TILE.B, c, h - c, w - 2 * c, 90);
+    if (on("L")) edgeRun(EDGE_TILE.L, 0, c, h - 2 * c, 0, "y");
+    if (on("R")) edgeRun(EDGE_TILE.R, w - c, c, h - 2 * c, 0, "y");
+    if (on("T")) edgeRun(EDGE_TILE.T, c, 0, w - 2 * c, 90, "x");
+    if (on("B")) edgeRun(EDGE_TILE.B, c, h - c, w - 2 * c, 90, "x");
     // Corners.
     if (on("UL")) tile(EDGE_TILE.UL, 0, 0, c, c);
     if (on("UR")) tile(EDGE_TILE.UR, w - c, 0, c, c);
@@ -1131,6 +1138,31 @@ function rgba(args: { n: number | null }[]): string {
 
 function prop(f: FdfFrame, key: string): number | undefined {
   return firstProp(f, key)?.args[0]?.n ?? undefined;
+}
+
+/**
+ * `BackdropBackgroundInsets` — how far the interior pulls back from each side, in pixels.
+ *
+ * All FOUR values, which matters exactly twice in the whole game and both times on the thing
+ * that reported it. Every other backdrop in every shipped FDF declares the four the same
+ * (`0.004 0.004 0.004 0.004` and friends), so reading only the first passed everywhere — but
+ * the two cinematic letterbox bars are asymmetric, and they are asymmetric on purpose:
+ *
+ *     CinematicBottomBorder   0.0 0.01 0.0 0.0     ornament along its TOP
+ *     CinematicTopBorder      0.0 0.0 0.01 0.0     ornament along its BOTTOM
+ *
+ * Each bar pulls its background back from the side its border ornament sits on, so the
+ * ornament hangs over open screen rather than over its own stone — which is what lets the
+ * night elf bar's leaves cover the panel edge instead of stopping a hair short of it. That
+ * pairing is also the only evidence there is for the ORDER: slots 2 and 3 are the top and the
+ * bottom, because that is the only reading under which both declarations do the same sensible
+ * thing. (Slots 1 and 4 are then left and right; nothing in the game distinguishes them, and
+ * nothing in the game sets them differently either.)
+ */
+function backgroundInsets(f: FdfFrame, scale: number): { left: number; top: number; bottom: number; right: number } {
+  const args = firstProp(f, "BackdropBackgroundInsets")?.args ?? [];
+  const at = (i: number): number => (args[i]?.n ?? 0) * scale;
+  return { left: at(0), top: at(1), bottom: at(2), right: at(3) };
 }
 
 /** Find a named sub-frame anywhere under `f` (for Control* backdrop references). */

@@ -2151,12 +2151,14 @@ body.in-game .load-gate { display: none; }
    the minimap is, and it is not hidden behind it. */
 .fdf-screen.fdf-cinematic { z-index: 4; }
 
-/* The letterbox is OPAQUE — WC3's cinematic bars are the EscMenu stone over black, and the
-   map must not show through them. The FDF's own textures are composited on top of this. */
-.fdf-cinematic [data-frame="CinematicTopBorder"],
-.fdf-cinematic [data-frame="CinematicBottomBorder"] {
-  background: #000;
-}
+/* The letterbox bars carry NO background of their own. They used to be painted solid black
+   under the FDF's own textures, on the grounds that the map must not show through — but a
+   colour on the ELEMENT covers the whole frame, and these two frames deliberately do not fill
+   their whole frame: each declares `BackdropBackgroundInsets` that pulls its stone back from
+   the side its border ornament sits on (0.01 off the bottom bar's top, off the top bar's
+   bottom), precisely so the ornament overhangs open screen. Black behind it filled that gap
+   back in, and the night elf bar's leaves ended up sitting against a black stripe instead of
+   over the world. The stone tile is opaque, so it is its own plate. */
 
 /* ShowInterface's fadeDuration (bj_CINEMODE_INTERFACEFADE = 0.5 s) — the bars SLIDE in
    from off-screen; the duration is stamped on from the native's argument. Only applied on
