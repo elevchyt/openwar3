@@ -47,11 +47,34 @@ const ARROW_DX = -0.004;
 const ARROW_DY = 0.005;
 /** The grey the FDF paints a row's second line (`FontColor 0.764 0.764 0.764 1.0`). */
 const DESC_GREY = 0.764;
-/** The logo is a model authored in FDF screen units — its own extent is 0.2235 × 0.1115
- *  (CampaignWarCraftIIILogo.mdx) — and the FDF hangs it off the corner so it is cropped. */
+/**
+ * The corner logo. It is a SPRITE in the FDF with neither art nor size — the engine hands it
+ * both — and what it hands it is a MODEL: war3skins.txt's `CampaignLogo` =
+ * `UI\Glues\SinglePlayer\CampaignWarCraftIIILogo\CampaignWarCraftIIILogo.mdl`, whose own extent
+ * is 0.2235 × 0.1115 in these units (a 2:1 box, matching the 512×256 texture inside it).
+ *
+ * **The art is the EXPANSION logo on an expansion install.** `CampaignLogo` is the one skin key
+ * with no `_V1` twin, so the naming convention that resolves the campaign backdrops
+ * (data/campaigns.ts) has nothing to resolve here and the RoC-era model is all the table
+ * offers — its texture is the Reign of Chaos logo. The Frozen Throne art is real and shipped:
+ * `MainMenuLogo_V1` → `WarCraftIIILogo_exp.mdx`, which references
+ * `ReplaceableTextures\WorldEditUI\WarcraftIIIFTLogo.blp` (dumped from the model in the
+ * archives). TFT's own campaign screen wears the expansion logo, so we take that texture when
+ * the install has it and fall back to the RoC one when it does not.
+ */
 const LOGO_W = 0.2235;
 const LOGO_H = 0.1115;
-const LOGO_ART = "UI\\Glues\\SinglePlayer\\CampaignWarCraftIIILogo\\WarcraftIII-logo-alpha.blp";
+const LOGO_ART_TFT = "ReplaceableTextures\\WorldEditUI\\WarcraftIIIFTLogo.blp";
+const LOGO_ART_ROC = "UI\\Glues\\SinglePlayer\\CampaignWarCraftIIILogo\\WarcraftIII-logo-alpha.blp";
+/**
+ * …and it is anchored INSIDE the corner, against the FDF's own `SetPoint TOPRIGHT … 0.08, 0.04`.
+ * Those offsets belong to the MODEL: a glue model is a scene with its art somewhere inside a
+ * much larger authored extent, and the file pushes that extent off the corner so the art lands
+ * on it. We draw a flat texture that fills its whole box instead, so honouring the offsets
+ * pushes the LOGO itself off-screen — the same substitution, one layer down, that makes a
+ * sprite's size our problem in the first place. This inset puts the whole logo on screen.
+ */
+const LOGO_INSET = -0.012;
 
 /** The 3D backdrop and the sliding doors are drawn by the scene behind the DOM, not here. */
 const SCENE_SPRITES = ["CampaignBackdrop", "SlidingDoors"];
@@ -107,7 +130,7 @@ export function mountCampaignScreen(
     // The campaign backdrop is a 3D model in the scene behind us, and the sliding doors are
     // the transition between two of them — neither is a texture this screen can draw.
     hidden: SCENE_SPRITES,
-    sprites: { WarCraftIIILogo: LOGO_ART },
+    sprites: { WarCraftIIILogo: vfs.exists(LOGO_ART_TFT) ? LOGO_ART_TFT : LOGO_ART_ROC },
     buildRoot: (l) => { lib = l; return buildCampaignRoot(l, campaigns, state, rows); },
     // One panel: the whole screen fades as one, because there is no chrome to fade it
     // against — every other glue screen's panels are carried by the 3D chain panels.
@@ -198,11 +221,14 @@ function buildCampaignRoot(
   const root = lib.resolveRoot("CampaignMenu");
   if (!root) throw new Error("CampaignMenu.fdf: no CampaignMenu frame");
 
-  // The logo: a SPRITE with neither art nor size in TFT's file (the engine hands it both).
-  // Its own model is authored at 0.2235 × 0.1115 in these units, and the FDF's +0.08/+0.04
-  // offsets hang it past the corner, so the corner crops it exactly as the reference does.
+  // The logo: a SPRITE with neither art nor size in TFT's file (the engine hands it both), and
+  // re-anchored inside the corner because we draw a flat texture where the file expects a model
+  // (see LOGO_ART_TFT / LOGO_INSET).
   const logo = findChild(root, "WarCraftIIILogo");
-  if (logo) size(logo, LOGO_W, LOGO_H);
+  if (logo) {
+    size(logo, LOGO_W, LOGO_H);
+    setProp(logo, "SetPoint", [arg("TOPRIGHT"), str("CampaignMenu"), arg("TOPRIGHT"), num(LOGO_INSET), num(LOGO_INSET)]);
+  }
 
   // The rows, into whichever of the two select frames this mode is.
   const container = state.chapters ? "MissionSelectFrame" : "CampaignSelectFrame";

@@ -36,8 +36,10 @@ const ROTATION: Slider<"camYaw" | "camPitch" | "camRoll">[] = [
 
 const MENU_SLIDERS: Slider<MenuKey>[] = [
   { key: "camZoom", label: "Cam zoom (dolly)", min: 0.4, max: 1.6, step: 0.01 },
-  { key: "camPanX", label: "Cam pan X", min: -3000, max: 3000, step: 10 },
-  { key: "camPanY", label: "Cam pan Y", min: -3000, max: 3000, step: 10 },
+  // ±1500 rather than ±3000 so a 5-unit step is actually reachable by dragging: the authored
+  // camera already frames its scene, and every value we have baked is a nudge under 150.
+  { key: "camPanX", label: "Cam pan X", min: -1500, max: 1500, step: 5 },
+  { key: "camPanY", label: "Cam pan Y", min: -1500, max: 1500, step: 5 },
   { key: "camFov", label: "Cam FOV ×", min: 0.4, max: 1.6, step: 0.01 },
   ...ROTATION,
   { key: "panelCx", label: "Panel centre X", min: -0.6, max: 0.6, step: 0.005 },
@@ -59,8 +61,10 @@ const MENU_SLIDERS: Slider<MenuKey>[] = [
 
 const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
   { key: "camZoom", label: "Cam zoom (dolly)", min: 0.2, max: 2, step: 0.01 },
-  { key: "camPanX", label: "Cam pan X", min: -3000, max: 3000, step: 10 },
-  { key: "camPanY", label: "Cam pan Y", min: -3000, max: 3000, step: 10 },
+  // ±1500 rather than ±3000 so a 5-unit step is actually reachable by dragging: the authored
+  // camera already frames its scene, and every value we have baked is a nudge under 150.
+  { key: "camPanX", label: "Cam pan X", min: -1500, max: 1500, step: 5 },
+  { key: "camPanY", label: "Cam pan Y", min: -1500, max: 1500, step: 5 },
   { key: "camFov", label: "Cam FOV ×", min: 0.4, max: 1.6, step: 0.01 },
   ...ROTATION,
   // BackgroundFogEnd runs 1700 (Sentinels) → 16000 (Alliance) in CampaignStrings_exp.txt.
@@ -69,6 +73,13 @@ const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
   { key: "fogR", label: "Fog R", min: 0, max: 1, step: 0.01 },
   { key: "fogG", label: "Fog G", min: 0, max: 1, step: 0.01 },
   { key: "fogB", label: "Fog B", min: 0, max: 1, step: 0.01 },
+  // Colour grade over the whole frame — what fog cannot do, since fog only tints what is far
+  // and the reference's whole scene is darker (MenuScene.updateGrade). Backdrops only: the
+  // menu's canvas also carries the sprite chrome.
+  { key: "gradeBrightness", label: "Grade brightness", min: 0.2, max: 1.6, step: 0.01 },
+  { key: "gradeContrast", label: "Grade contrast", min: 0.4, max: 2, step: 0.01 },
+  { key: "gradeSaturation", label: "Grade saturation", min: 0, max: 2, step: 0.01 },
+  { key: "gradeHue", label: "Grade hue (°)", min: -60, max: 60, step: 1 },
 ];
 
 export function mountMenuDebug(root: HTMLElement, scene: MenuScene): { dispose(): void } {

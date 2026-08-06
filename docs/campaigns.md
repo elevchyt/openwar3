@@ -75,15 +75,46 @@ moving). They turn the eye about the MODEL's own camera target, which is the sam
 camera setup describes — an angle about a target, not a free-flying eye. The main menu's block
 carries the identical three.
 
+There are also four **colour-grade** sliders (brightness, contrast, saturation, hue), and they
+exist because fog could not do the job: the reference's campaign screens read much darker and
+warmer than our render of the same models, and fog only tints what is FAR — Maiev stands a few
+hundred units from the eye and stays bright at any fog setting. The grade is a CSS filter on the
+canvas (`MenuScene.updateGrade`), which costs one property instead of a post-process pass
+through mdx-m3-viewer's render loop. **Backdrops only**: the same canvas carries the menu's
+sprite-layer chrome, and dimming the metal panels with the seascape is not what this is for.
+
 Two properties of that panel are the point rather than conveniences:
 
 * **One tuning block per backdrop MODEL** (`BackdropTuning`, `render/menuScene.ts`), because the
   four campaign scenes are four different sets — a nudge that frames Maiev's ruins says nothing
   about Durotar. Switching campaigns re-binds the sliders and each keeps what you left on it.
-* **The defaults are neutral, not tuned.** Camera multipliers of 1 and no pan, so an untouched
-  backdrop renders the model's authored camera exactly as before; the fog is seeded from that
-  campaign's own `BackgroundFog*` keys. Nothing here overrides the game's data until a slider
-  moves, so the panel can never quietly become the source of truth for something the file says.
+* **A backdrop with no baked entry starts neutral.** Camera multipliers of 1 and no pan, so it
+  renders the model's authored camera exactly; the fog is seeded from that campaign's own
+  `BackgroundFog*` keys. Tuned values are then baked per model path in `BACKDROP_DEFAULTS`
+  (`render/menuScene.ts`) — an override list, never a replacement for the data.
+
+A baked entry's fog will not match `CampaignStrings_exp.txt`, and that is deliberate. The file's
+numbers describe the game's own fog — a `BackgroundFogStyle` and a `BackgroundFogDensity` driving
+a renderer that is not ours — so feeding its start/end into our linear distance fog buries the
+scene in haze at the depth Blizzard wanted a tint. The baked values are the ones that reproduce
+what the reference SHOWS, which is what "match the original" means when the two disagree.
+
+### The corner logo
+
+`CampaignMenu.fdf` declares `WarCraftIIILogo` as a SPRITE with neither art nor size — the engine
+hands it a MODEL, `war3skins.txt`'s `CampaignLogo`. Two traps live in that one frame:
+
+1. **`CampaignLogo` is the one skin key with no `_V1` twin**, so the expansion naming convention
+   that resolves the backdrops has nothing to resolve and the table only offers the RoC-era model,
+   whose texture is the Reign of Chaos logo. The Frozen Throne art ships under the *main menu's*
+   key instead: `MainMenuLogo_V1` → `WarCraftIIILogo_exp.mdx` → `ReplaceableTextures\WorldEditUI\
+   WarcraftIIIFTLogo.blp`. TFT's campaign screen wears the expansion logo, so that texture is
+   what we use when the install has it.
+2. **The FDF's `SetPoint TOPRIGHT … 0.08, 0.04` belongs to the model, not to the art.** A glue
+   model is a scene with its art somewhere inside a much larger authored extent, and those
+   offsets push the extent off the corner so the art lands on it. We draw a flat texture that
+   fills its whole box, so honouring them pushes the LOGO off-screen — it must be anchored
+   inside the corner instead (`LOGO_INSET`).
 
 **Where the rows come from.** TFT's `CampaignMenu.fdf` declares no rows at all: it dropped
 RoC's fourteen hand-authored `MissionNFrame`s for a runtime list (`CampaignListBox.fdf`, whose

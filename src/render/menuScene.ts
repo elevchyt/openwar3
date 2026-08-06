@@ -81,6 +81,13 @@ export interface BackdropTuning {
   fogR: number;
   fogG: number;
   fogB: number;
+  /** Colour grade over the finished frame — the reference's campaign screens read much darker
+   *  and warmer than our render of the same models, which no fog setting can fix (fog only
+   *  tints what is FAR). 1/1/1/0 is untouched. */
+  gradeBrightness: number;
+  gradeContrast: number;
+  gradeSaturation: number;
+  gradeHue: number;
 }
 
 type Solver = (src: unknown) => unknown;
@@ -133,6 +140,27 @@ const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElemen
 /** A backdrop's camera as AUTHORED — what a backdrop with no tuning block of its own (one
  *  whose model failed to load) is framed by, and the values a fresh block starts at. */
 const NEUTRAL_BACKDROP = { camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0 } as const;
+
+/**
+ * Framing/fog/grade baked per backdrop MODEL, tuned in-browser against a capture of the real
+ * client (issue #105). A backdrop with no entry here keeps the authored camera and the fog its
+ * campaign's own `BackgroundFog*` keys ask for, so this table is an override list, not a
+ * replacement for the data.
+ *
+ * The fog on a tuned entry deliberately does NOT match `CampaignStrings_exp.txt`: the file's
+ * numbers describe the game's own fog (a STYLE and a DENSITY, `BackgroundFogStyle=0`,
+ * `Density=0.5`) driving a renderer that is not ours, and feeding its start/end straight into
+ * our linear distance fog buries the scene in haze at the depth Blizzard wanted a tint. The
+ * values here are the ones that reproduce what the reference SHOWS — which is what
+ * "match the original" means when the two disagree (CLAUDE.md).
+ */
+const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
+  // Sentinels / Terror of the Tides (and every campaign on the night-elf backdrop).
+  "ui\\glues\\singleplayer\\nightelf_exp\\nightelf_exp.mdx": {
+    camZoom: 1.09, camPanX: 90, camPanY: -20, camFov: 0.76, camYaw: 10, camPitch: 6, camRoll: 0,
+    fogStart: 0, fogEnd: 13300, fogR: 0.39, fogG: 0.34, fogB: 0.26,
+  },
+};
 
 export class MenuScene {
   private viewer: Viewer;
@@ -224,7 +252,33 @@ export class MenuScene {
   onBackdropChange: (() => void) | null = null;
 
   /** Apply the current tuning values (called by the debug controls after a change). */
-  applyTuning(): void { this.frameCameras(); this.updateFog(); }
+  applyTuning(): void { this.frameCameras(); this.updateFog(); this.updateGrade(); }
+
+  /**
+   * The campaign backdrop's colour grade, as a CSS filter on the canvas.
+   *
+   * The reference's campaign screens are markedly darker and warmer than our render of the same
+   * models, and fog cannot close that gap — fog only tints what is FAR, while the whole frame
+   * (Maiev included, a few hundred units from the eye) needs to come down. Grading the finished
+   * frame is what actually matches, and on a canvas that costs one CSS property rather than a
+   * post-process pass through mdx-m3-viewer's render loop.
+   *
+   * Only a BACKDROP is graded. The same canvas carries the menu's sprite-layer chrome, and
+   * dimming the metal panels and their chains along with the seascape is not what any of this
+   * is for; a campaign screen has no chrome on the canvas at all (its viewports are zeroed),
+   * so there the filter reaches only the 3D scene. The DOM text over it is untouched either
+   * way, which is also how the reference reads: bright text on a dark scene.
+   */
+  private updateGrade(): void {
+    const t = this.backdropTuning;
+    if (!t) { this.canvas.style.filter = ""; return; }
+    const parts: string[] = [];
+    if (t.gradeBrightness !== 1) parts.push(`brightness(${t.gradeBrightness})`);
+    if (t.gradeContrast !== 1) parts.push(`contrast(${t.gradeContrast})`);
+    if (t.gradeSaturation !== 1) parts.push(`saturate(${t.gradeSaturation})`);
+    if (t.gradeHue !== 0) parts.push(`hue-rotate(${t.gradeHue}deg)`);
+    this.canvas.style.filter = parts.join(" ");
+  }
 
   private updateFog(): void {
     // A backdrop's fog is the campaign's (seeded into its tuning block); the menu's is its own.
@@ -312,8 +366,10 @@ export class MenuScene {
     // own fog. Coming back to a campaign keeps whatever the sliders left on it.
     if (!this.backdropTunings.has(path)) {
       this.backdropTunings.set(path, {
-        camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0,
+        ...NEUTRAL_BACKDROP,
         fogStart: fog.start, fogEnd: fog.end, fogR: fog.r, fogG: fog.g, fogB: fog.b,
+        gradeBrightness: 1, gradeContrast: 1, gradeSaturation: 1, gradeHue: 0,
+        ...BACKDROP_DEFAULTS[path.toLowerCase()],
       });
     }
     // Birth once, then settle into the looping Stand — the same two-step every glue model
@@ -334,6 +390,7 @@ export class MenuScene {
     if (this.menuInstance) this.scene3d.removeInstance(this.menuInstance);
     this.panelsHidden = true;
     this.updateFog();
+    this.updateGrade();
     this.frameCameras();
     this.onBackdropChange?.();
   }
@@ -346,6 +403,7 @@ export class MenuScene {
     if (this.menuInstance) this.menuInstance.setScene(this.scene3d);
     this.panelsHidden = false;
     this.updateFog();
+    this.updateGrade(); // the menu's own scene is never graded — see updateGrade
     this.frameCameras();
     this.onBackdropChange?.();
   }
@@ -476,6 +534,7 @@ export class MenuScene {
 
   dispose(): void {
     this.stop();
+    this.canvas.style.filter = ""; // the grade is ours; don't leave it on the element
     clearTimeout(this.chromeTimer);
     clearTimeout(this.backdropTimer);
     this.clearSoundTimers();
