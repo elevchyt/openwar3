@@ -57,6 +57,7 @@ const MENU_SLIDERS: Slider<MenuKey>[] = [
   { key: "fogR", label: "Fog R", min: 0, max: 1, step: 0.01 },
   { key: "fogG", label: "Fog G", min: 0, max: 1, step: 0.01 },
   { key: "fogB", label: "Fog B", min: 0, max: 1, step: 0.01 },
+  { key: "lightAmbient", label: "Light ambient", min: 0, max: 1, step: 0.01 },
 ];
 
 const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
@@ -80,6 +81,9 @@ const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
   { key: "gradeContrast", label: "Grade contrast", min: 0.4, max: 2, step: 0.01 },
   { key: "gradeSaturation", label: "Grade saturation", min: 0, max: 2, step: 0.01 },
   { key: "gradeHue", label: "Grade hue (°)", min: -60, max: 60, step: 1 },
+  // The base ambient under the model's own omni lights — the one lighting number that is NOT
+  // in the file (MenuScene.updateOmniLights explains why it has to exist).
+  { key: "lightAmbient", label: "Light ambient", min: 0, max: 1, step: 0.01 },
 ];
 
 export function mountMenuDebug(root: HTMLElement, scene: MenuScene): { dispose(): void } {
@@ -89,6 +93,7 @@ export function mountMenuDebug(root: HTMLElement, scene: MenuScene): { dispose()
   const title = document.createElement("div");
   title.className = "menu-debug-title";
   const body = document.createElement("div");
+  body.className = "menu-debug-body"; // scrolls on its own; the title and buttons stay put
   const actions = document.createElement("div");
   actions.className = "menu-debug-actions";
   box.append(title, body, actions);

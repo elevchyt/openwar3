@@ -403,10 +403,10 @@ index 5c2629bdcf279decae84d9fddfc523d5548192e8..4a65c029e233f1a4f11a092c6bb76e49
  }
  exports.default = War3MapW3d;
 diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-index 7fe06bd7314e83b578dc8987e819b08cea287dfb..2c0fe916a43253124b9feff9b5755c429060d390 100644
+index 7fe06bd7314e83b578dc8987e819b08cea287dfb..9b3726c4e3fb9fb127e0ad9eaef0b5b695dad65e 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-@@ -45,6 +45,32 @@ class BatchGroup {
+@@ -45,6 +45,47 @@ class BatchGroup {
              gl.uniform1f(uniforms['u_hasBones'], 0);
          }
          gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
@@ -422,6 +422,21 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..2c0fe916a43253124b9feff9b5755c42
 +        }
 +        else {
 +            gl.uniform1f(uniforms['u_dncEnabled'], 0);
++        }
++        // OpenWar3: the model's own MDX omni lights (scene.omniLights, filled per frame by
++        // src/render/menuScene.ts from the backdrop instance's LITE nodes). Array uniforms are
++        // keyed by their first element here (gl/shader.js expands them), and one uniform3fv on
++        // that location writes the whole array. Same no-op rule as dnc.
++        const omni = scene.omniLights;
++        if (omni && omni.count > 0) {
++            gl.uniform1f(uniforms['u_omniEnabled'], 1);
++            gl.uniform3fv(uniforms['u_omniAmbient'], omni.ambient);
++            gl.uniform3fv(uniforms['u_omniPos[0]'], omni.positions);
++            gl.uniform3fv(uniforms['u_omniColor[0]'], omni.colors);
++            gl.uniform2fv(uniforms['u_omniAtten[0]'], omni.attenuations);
++        }
++        else {
++            gl.uniform1f(uniforms['u_omniEnabled'], 0);
 +        }
 +        // OpenWar3: scene distance fog (src/render/fog.ts → scene.distFog). Same no-op
 +        // rule as dnc: only the SD shader declares these uniforms.
@@ -439,7 +454,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..2c0fe916a43253124b9feff9b5755c42
          gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
          if (isHd) {
-@@ -115,6 +141,14 @@ class BatchGroup {
+@@ -115,6 +156,14 @@ class BatchGroup {
              const uvAnims = instance.uvAnims;
              gl.uniform4fv(uniforms['u_vertexColor'], instance.vertexColor);
              gl.uniform1i(uniforms['u_texture'], 0);
@@ -454,7 +469,7 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..2c0fe916a43253124b9feff9b5755c42
              for (const object of this.objects) {
                  const batch = batches[object];
                  const geoset = batch.geoset;
-@@ -133,7 +167,7 @@ class BatchGroup {
+@@ -133,7 +182,7 @@ class BatchGroup {
                      gl.uniform2f(uniforms['u_uvTrans'], uvAnim[0], uvAnim[1]);
                      gl.uniform2f(uniforms['u_uvRot'], uvAnim[2], uvAnim[3]);
                      gl.uniform1f(uniforms['u_uvScale'], uvAnim[4]);
@@ -729,10 +744,10 @@ index 020a99b949ec1634579d439261027e00b6da23ac..b80da6448a597b662087852d83a1f499
          const model = this.model;
          if (this.sequence === -1) {
 diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-index 235f29101256617d34587316e8f40984a8f95685..f093f8e5f3357540123748bd71d11e675646fba7 100644
+index 235f29101256617d34587316e8f40984a8f95685..df64fc5532e9044a63eb59621a0dbbb5db3b1650 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-@@ -11,12 +11,65 @@ uniform sampler2D u_texture;
+@@ -11,12 +11,82 @@ uniform sampler2D u_texture;
  uniform float u_filterMode;
  uniform bool u_unshaded;
  
@@ -752,6 +767,23 @@ index 235f29101256617d34587316e8f40984a8f95685..f093f8e5f3357540123748bd71d11e67
 +uniform vec3 u_dncAmbient;
 +uniform vec3 u_dncDiffuse;
 +uniform vec3 u_dncLightDir;
++
++// OpenWar3: the model's OWN omni lights — the MDX LITE chunk (src/render/menuScene.ts).
++// Every glue scene carries them: NightElf_Exp and Orc_Exp four each (Omni01..Omni04),
++// MainMenu3D_Exp five, keyframed across the model's own Birth/Stand. They are what lights
++// those scenes in the reference, and with none of them a backdrop falls through to the
++// stock near-flat lambert below and reads flat and over-bright.
++//
++// A point light with WC3's linear attenuation window: full inside AttenuationStart, zero
++// past AttenuationEnd. u_omniEnabled is 0 for every scene that has no LITE lights of its
++// own (the map, the portrait bust), and the branch is uniform, so the loop costs those
++// scenes nothing. MAX_OMNI covers the largest glue model with room to spare.
++#define MAX_OMNI 8
++uniform float u_omniEnabled;
++uniform vec3 u_omniAmbient; // Σ (AmbColor × AmbIntensity) over the model's lights
++uniform vec3 u_omniPos[MAX_OMNI]; // world space, from the light NODE (they animate)
++uniform vec3 u_omniColor[MAX_OMNI]; // Color × Intensity; unused slots are black
++uniform vec2 u_omniAtten[MAX_OMNI]; // (AttenuationStart, AttenuationEnd)
 +
 +// OpenWar3: linear distance fog (src/render/fog.ts). Fragments fade toward
 +// u_distFogColor between u_distFogStart and u_distFogEnd world units from the eye —
@@ -798,7 +830,7 @@ index 235f29101256617d34587316e8f40984a8f95685..f093f8e5f3357540123748bd71d11e67
  
  vec4 getDiffuseColor() {
    vec2 uv = v_uv;
-@@ -43,7 +96,7 @@ vec4 getDiffuseColor() {
+@@ -43,7 +113,7 @@ vec4 getDiffuseColor() {
      discard;
    }
  
@@ -807,7 +839,7 @@ index 235f29101256617d34587316e8f40984a8f95685..f093f8e5f3357540123748bd71d11e67
  }
  
  void onlyTexCoords() {
-@@ -55,19 +108,30 @@ void onlyNormals() {
+@@ -55,19 +125,44 @@ void onlyNormals() {
  }
  
  void onlyDiffuse() {
@@ -825,7 +857,21 @@ index 235f29101256617d34587316e8f40984a8f95685..f093f8e5f3357540123748bd71d11e67
 -    lambertFactor = clamp(lambertFactor + 0.7, 0.0, 1.0);
 -
 -    color.rgb *= lambertFactor;
-+    if (u_dncEnabled > 0.5) {
++    if (u_omniEnabled > 0.5) {
++      // The model's own lights (see the u_omni* block): ambient + Σ colour·attenuation·N·L.
++      vec3 n = normalize(v_normal);
++      vec3 light = u_omniAmbient;
++      for (int i = 0; i < MAX_OMNI; i++) {
++        vec3 toLight = u_omniPos[i] - v_worldPos;
++        float dist = length(toLight);
++        // Linear window between the light's own start/end. Unused slots are black, so they
++        // add nothing whatever this evaluates to — no dynamic loop bound needed.
++        float atten = clamp((u_omniAtten[i].y - dist) / max(u_omniAtten[i].y - u_omniAtten[i].x, 0.001), 0.0, 1.0);
++        float ndotl = max(dot(n, toLight / max(dist, 0.001)), 0.0);
++        light += u_omniColor[i] * (atten * ndotl);
++      }
++      color.rgb *= clamp(light, 0.0, 1.0);
++    } else if (u_dncEnabled > 0.5) {
 +      // WC3's fixed-function lighting: ambient + diffuse*N·L, clamped per channel.
 +      // v_normal is already world space (the vertex shader skins into world space
 +      // and gl_Position needs no model matrix), so N·L is a plain world-space dot.

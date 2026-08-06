@@ -88,7 +88,45 @@ export interface BackdropTuning {
   gradeContrast: number;
   gradeSaturation: number;
   gradeHue: number;
+  /** Base ambient under the model's own lights — see `MenuScene.updateOmniLights`. NOT from
+   *  the file: every glue model carries `AmbIntensity 0`, and with a light reach of 200 units
+   *  that would leave a scene whose bounds run to ±3000 pitch black past the set, which the
+   *  reference plainly is not. Tuned by eye against a capture of the real client. */
+  lightAmbient: number;
 }
+
+/**
+ * The model's own lights, evaluated for one frame in the shape the patched SD shader reads
+ * (`scene.omniLights`, see patches/mdx-m3-viewer@5.12.0.patch).
+ *
+ * Every glue model carries them in its MDX **LITE** chunk and we used to ignore all of them,
+ * which is why these scenes read flat: with no light on the scene the SD shader falls through
+ * to mdx-m3-viewer's stock `clamp(N·L + 0.7)` — a 0.7…1.0 wash with no real falloff anywhere.
+ *
+ * Dumped from the real models, and the numbers only make sense together:
+ *   NightElf_Exp   4 omni, attenuation 80→200, colour (0.82, 1.00, 1.00), intensity 6/250/15/7
+ *   Orc_Exp        4 omni, same window, intensity 80/75/80/35
+ *   MainMenu3D_Exp 5 omni, same window, intensity 170…280
+ * An 80→200 unit reach sounds far too small for a scene whose bounds run to ±3000 — until you
+ * read the model's own camera: it sits 340 units from its target. These are **dioramas**, a
+ * small lit set close to the eye with a big painted backdrop far behind it, and the lights are
+ * sized for the set. The far scenery is what the campaign's own `BackgroundFog*` is for.
+ *
+ * Every light in all three is `type 0` (omnidirectional) and every one carries
+ * `AmbIntensity 0` — the scene's whole illumination is these point lights.
+ */
+export interface OmniLights {
+  /** How many slots are filled; 0 means "no lights", and the shader skips the loop. */
+  count: number;
+  /** Σ (AmbColor × AmbIntensity) over the model's lights. */
+  ambient: Float32Array;
+  positions: Float32Array; // MAX_OMNI × 3, world space
+  colors: Float32Array; // MAX_OMNI × 3, Color × Intensity
+  attenuations: Float32Array; // MAX_OMNI × 2, (start, end)
+}
+
+/** Must match `MAX_OMNI` in the patched sd.frag. */
+const MAX_OMNI = 8;
 
 type Solver = (src: unknown) => unknown;
 interface Camera {
@@ -102,6 +140,7 @@ interface Scene {
   viewport: Float32Array;
   camera: Camera;
   distFog?: DistFog; // OpenWar3: read by the patched SD shaders
+  omniLights?: OmniLights | null; // …as is this (the model's own LITE lights)
   removeInstance(instance: unknown): void;
 }
 interface Viewer {
@@ -110,7 +149,8 @@ interface Viewer {
   addScene(): Scene;
   load(src: unknown, solver?: Solver): Promise<unknown>;
   whenAllLoaded(): Promise<unknown>;
-  updateAndRender(dt: number): void;
+  update(dt: number): void;
+  render(): void;
 }
 interface MdxSequence { name: string; interval: Int32Array | number[] }
 /** An MDX event object as the viewer exposes it: `type` is the 3-char kind ("SND", "SPN"),
@@ -120,6 +160,24 @@ interface MdxInstance {
   setScene(scene: unknown): void;
   setSequence(index: number): void;
   setSequenceLoopMode(mode: number): void;
+  /** The instance's own nodes, laid out bones-then-lights-then-helpers (mdx/modelinstance.js),
+   *  so light i is at `model.bones.length + i` and carries that light's animated world position. */
+  nodes: Array<{ worldLocation: Float32Array }>;
+  /** Where the instance is in its clip — what the lights' animated tracks are sampled at. */
+  sequence: number;
+  frame: number;
+  counter: number;
+}
+
+/** An MDX light as the viewer exposes it. Each getter writes the sampled value into `out`
+ *  (out[0] for the scalars) and falls back to the model's static value off-sequence. */
+interface MdxLight {
+  getAttenuationStart(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getAttenuationEnd(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getColor(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getIntensity(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getAmbientColor(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getAmbientIntensity(out: Float32Array, sequence: number, frame: number, counter: number): number;
 }
 interface MdxCamera {
   position: Float32Array;
@@ -132,6 +190,8 @@ interface MdxModel {
   sequences: MdxSequence[];
   cameras: MdxCamera[];
   eventObjects: MdxEventObject[];
+  lights: MdxLight[];
+  bones: unknown[];
   addInstance(): MdxInstance;
 }
 
@@ -139,7 +199,7 @@ const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElemen
 
 /** A backdrop's camera as AUTHORED — what a backdrop with no tuning block of its own (one
  *  whose model failed to load) is framed by, and the values a fresh block starts at. */
-const NEUTRAL_BACKDROP = { camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0 } as const;
+const NEUTRAL_BACKDROP = { camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0, lightAmbient: 0.45 } as const;
 
 /**
  * Framing/fog/grade baked per backdrop MODEL, tuned in-browser against a capture of the real
@@ -190,6 +250,16 @@ export class MenuScene {
   private soundTimers: number[] = [];
   private raf = 0;
   private last = 0;
+  /** This frame's evaluation of the scene model's own lights, rebuilt in place each frame. */
+  private omni: OmniLights = {
+    count: 0,
+    ambient: new Float32Array(3),
+    positions: new Float32Array(MAX_OMNI * 3),
+    colors: new Float32Array(MAX_OMNI * 3),
+    attenuations: new Float32Array(MAX_OMNI * 2),
+  };
+  private lightVec = new Float32Array(3);
+  private lightScalar = new Float32Array(1);
 
   /** Fired when one of the panel chrome's own SND event objects comes due in a clip we are
    *  playing, with its 4-char AnimLookups code ("ARPD"). The host hands it to the SoundBoard,
@@ -213,6 +283,7 @@ export class MenuScene {
     camYaw: 0, // rotation about world Z
     camPitch: 0, // angle of attack (positive raises the eye)
     camRoll: 0, // roll on the up vector
+    lightAmbient: 0.45, // base ambient under the model's own omni lights (see BackdropTuning)
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
@@ -520,10 +591,74 @@ export class MenuScene {
       const dt = this.last ? t - this.last : 1000 / 60;
       this.last = t;
       this.syncCanvasSize();
-      this.viewer.updateAndRender(dt);
+      // update() then render(), rather than updateAndRender(), so the lights are read from
+      // nodes THIS frame's animation has already moved — a glue model's lights are keyframed
+      // and parented into the scene's own hierarchy, so a frame's lag is a frame's lag.
+      this.viewer.update(dt);
+      this.updateOmniLights();
+      this.viewer.render();
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
+  }
+
+  /**
+   * Evaluate the scene model's own MDX lights for this frame (see OmniLights). Whatever is in
+   * the 3D scene is what gets lit — a campaign backdrop, or the menu's own Icecrown model,
+   * both of which ship with omni lights of their own.
+   *
+   * The colours come out of the file **BGR**, the same quirk `dayNight.ts` documents for the
+   * day/night LITE lights: neither the parser nor Warsmash swizzles them, and reading them
+   * straight gives every scene a mirror-image tint.
+   */
+  private updateOmniLights(): void {
+    const model = this.backdropModel ?? this.bgModel;
+    const instance = this.backdropInstance ?? this.menuInstance;
+    const lights = model?.lights ?? [];
+    if (!model || !instance || !lights.length) {
+      this.omni.count = 0;
+      this.scene3d.omniLights = null;
+      return;
+    }
+
+    const o = this.omni;
+    o.positions.fill(0);
+    o.colors.fill(0);
+    o.attenuations.fill(0);
+    o.ambient.fill(0);
+
+    const { sequence, frame, counter } = instance;
+    const v = this.lightVec;
+    const s = this.lightScalar;
+    const count = Math.min(lights.length, MAX_OMNI);
+    for (let i = 0; i < count; i++) {
+      const light = lights[i];
+      // Light i's node sits right after the bones — mdx/modelinstance.js builds them in that
+      // order — and carries the light's animated position in world space.
+      const node = instance.nodes[(model.bones.length as number) + i];
+      if (node) o.positions.set(node.worldLocation.subarray(0, 3), i * 3);
+
+      light.getColor(v, sequence, frame, counter);
+      light.getIntensity(s, sequence, frame, counter);
+      for (let c = 0; c < 3; c++) o.colors[i * 3 + c] = v[2 - c] * s[0]; // BGR → RGB
+
+      light.getAttenuationStart(s, sequence, frame, counter);
+      const start = s[0];
+      light.getAttenuationEnd(s, sequence, frame, counter);
+      o.attenuations[i * 2] = start;
+      o.attenuations[i * 2 + 1] = Math.max(s[0], start + 1); // never a zero-width window
+
+      light.getAmbientColor(v, sequence, frame, counter);
+      light.getAmbientIntensity(s, sequence, frame, counter);
+      for (let c = 0; c < 3; c++) o.ambient[c] += v[2 - c] * s[0];
+    }
+
+    // …plus the base ambient the models do NOT carry (see BackdropTuning.lightAmbient).
+    const base = (this.backdropTuning ?? this.tuning).lightAmbient;
+    for (let c = 0; c < 3; c++) o.ambient[c] += base;
+
+    o.count = count;
+    this.scene3d.omniLights = o;
   }
 
   stop(): void {
