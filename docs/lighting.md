@@ -58,6 +58,17 @@ We ignored all of them until issue #105, and with no light on the scene the SD s
 through to mdx-m3-viewer's stock `clamp(N·L + 0.7)` — a 0.7…1.0 wash with no falloff anywhere.
 That is exactly the flat, over-bright look the campaign screen had.
 
+**The main menu is on the same path**, not a special case: `updateOmniLights` reads whatever is
+in the 3D scene (`backdropModel ?? bgModel`), so MainMenu3D_Exp's five lights are sampled and
+uploaded exactly as a backdrop's are. Verified by toggling `scene.omniLights` on a frozen frame:
+the tower, the chains, the ice spikes, the bergs and the ocean all change. What it does NOT have
+is any shadow art — the model names 49 textures and not one of them is a shadow — so there is
+nothing further to hook up there; a glue scene's shadows are painted into its textures.
+
+The screen-edge sprite layers (`scenePanel` / `sceneLeft`) deliberately get no lights. They are
+flat UI chrome drawn through an orthographic camera, and lighting the metal border with the
+seascape's lamps is not what any of this is for.
+
 **An 80→200 unit reach reads as far too small** for a scene whose bounds run to ±3000 — until
 you read the model's own camera, which sits **340 units** from its target. These are dioramas:
 a small lit set near the eye with a big painted backdrop far behind it, and the lights are
