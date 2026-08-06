@@ -41,7 +41,7 @@ import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
 import { CAMERA, MELEE, MISC_DATA } from "../data/gameplayConstants";
 import { DayNightCycle, type DayNightLight } from "./dayNight";
-import { makeFog, type DistFog } from "./fog";
+import { makeMapFog, type DistFog } from "./fog";
 import { TimeIndicatorClock, timeIndicatorPath } from "./timeIndicator";
 
 /** Per-creep seed data collected from the map (guard post + drop table). */
@@ -1395,7 +1395,7 @@ export class MapViewerScene {
       const fi = info as unknown as { useTerrainFog: number; fogHeight: Float32Array; fogColor: Uint8Array };
       if (fi.useTerrainFog > 0 && fi.fogHeight[1] > fi.fogHeight[0]) {
         const c = fi.fogColor;
-        this.mapFog = makeFog(fi.fogHeight[0], fi.fogHeight[1], c[0] / 255, c[1] / 255, c[2] / 255);
+        this.mapFog = makeMapFog(fi.fogHeight[0], fi.fogHeight[1], c[0] / 255, c[1] / 255, c[2] / 255);
       }
       // Remember it: a script's SetTerrainFogEx replaces the haze, and ResetTerrainFog
       // puts the map's OWN fog back (7.22) — so the w3i's settings are the baseline, not
@@ -1494,7 +1494,7 @@ export class MapViewerScene {
     }
     // Every placed unit in war3mapUnits.doo ORDER. This is the map's own ordering of its
     // units and the only stable identity they have — see RtsController.setPlacedOrder.
-    const placedOrder: PlacedRef[] = placed.map((u) => ({ x: u.x, y: u.y, typeId: u.typeId }));
+    const placedOrder: PlacedRef[] = placed.map((u) => ({ x: u.x, y: u.y, typeId: u.typeId, facing: u.facing }));
     return { trees, mines, neutral, creeps, players, placedFootprints, placedOrder };
   }
 
@@ -1653,6 +1653,7 @@ export class MapViewerScene {
     const races = this.beginMatch(config, 0, 0);
     this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
     await this.waitForMapUnits(); // …and the creeps/mines must all be in the sim before the script runs
+    this.rts.seedModellessPlaced(); // …including the ones the renderer never delivers (dummy units)
     const engine = this.runMapScript({ melee: true, races, slots: config.slots });
     // No script (or it created nothing for the local player — a script that leans on
     // natives we haven't written yet): fall back to our own roster so the match still
@@ -1838,13 +1839,17 @@ export class MapViewerScene {
     this.rts.holdWorld(true);
     this.rts.enableSeeding(); // owners/teams configured → trySeed may adopt the map's units
     await this.waitForMapUnits(); // …and every one of them must be adopted before the script runs
+    // A dummy unit never arrives through the renderer at all, and on a custom map it is often
+    // load-bearing — Extreme Candy War's cinematic vision pair is the whole reason its intro
+    // is visible. Seed those from the .doo before the script runs, like everything else.
+    const dummies = this.rts.seedModellessPlaced();
 
     // Run the map's own script (Phase 7). config() sets players/start-locations;
     // main() fires the map's initialization triggers, so its welcome text / quest
     // messages appear in the HUD message log.
     this.runMapScript({ melee: false, slots: config.slots });
     this.rts.holdWorld(false); // the map has had its say — let the world run
-    console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33).`);
+    console.info(`[openwar3] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33)${dummies ? `, plus ${dummies} model-less dummy unit(s)` : ""}.`);
   }
 
   /** The engine bridge the JASS interpreter calls into. A script `CreateUnit` inside
@@ -2115,7 +2120,7 @@ export class MapViewerScene {
       // lands next frame with no extra plumbing). Our shader is linear, which is all the
       // corpus asks for: every SetTerrainFogEx call in all 165 maps passes style 0.
       setTerrainFog: (_style, zstart, zend, _density, r, g, b) => {
-        this.mapFog = makeFog(zstart, zend, r, g, b);
+        this.mapFog = makeMapFog(zstart, zend, r, g, b);
       },
       resetTerrainFog: () => {
         this.mapFog = this.w3iFog;
@@ -2906,6 +2911,18 @@ export class MapViewerScene {
     const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
     if (fp && this.grid) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
 
+    // A type with NO model is invisible, not absent — WC3's dummy-unit convention (see
+    // `normModel`). It is still a unit in every other respect, so it gets a record and no
+    // body. Distinct from art we merely failed to FIND, which falls through to the load
+    // below and is still dropped: that is a broken asset, and it should look like one.
+    if (!def.model) {
+      // A reserved id means the record already exists (the JASS CreateUnit path) and this
+      // call was only here to hand it a body. There is none. Every other caller is asking
+      // for the unit itself, so make it.
+      return reservedId !== undefined
+        ? null
+        : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
+    }
     const model = await this.viewer.load(def.model, this.solver);
     if (!model) return null;
     const instance = model.addInstance();

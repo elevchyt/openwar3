@@ -15,6 +15,9 @@ export interface PlacedRef {
   x: number;
   y: number;
   typeId: string;
+  /** The .doo's authored facing, radians. Carried because a unit the RENDERER never
+   *  delivers has no instance to read a rotation off (see `unclaimedPlaced`). */
+  facing: number;
 }
 
 export class PlacedIndex {
@@ -24,7 +27,7 @@ export class PlacedIndex {
   private placedFootprints: PlacedFootprint[] = [];
   private nextId = 1;
   /** Placed units in .doo order, each with the sim id reserved for it. See setPlacedOrder. */
-  private placedIds: Array<{ x: number; y: number; typeId: string; id: number; taken: boolean }> = [];
+  private placedIds: Array<PlacedRef & { id: number; taken: boolean }> = [];
 
   /** The next id for a unit the .doo never described — trained, summoned, or created by
    *  a map script. Runs ABOVE the reserved block; see setPlacedOrder. */
@@ -84,6 +87,13 @@ export class PlacedIndex {
     if (best < 0) return this.nextId++;
     this.placedIds[best].taken = true;
     return this.placedIds[best].id;
+  }
+
+  /** The placed rows no seed has claimed an id for yet — i.e. the units the renderer never
+   *  handed to `trySeed`. Read once adoption has settled, to find the ones that were never
+   *  coming (see `RtsController.seedModellessPlaced`). */
+  unclaimedPlaced(): PlacedRef[] {
+    return this.placedIds.filter((p) => !p.taken).map(({ x, y, typeId, facing }) => ({ x, y, typeId, facing }));
   }
 
   isNeutralPassiveAt(x: number, y: number): boolean {

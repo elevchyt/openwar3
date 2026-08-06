@@ -195,11 +195,17 @@ function applyWidgetDefaults(root: FdfFrame): void {
  */
 export type MeasureText = (frame: FdfFrame) => number | undefined;
 
+/** The HEIGHT half of the same auto-size: how many lines that frame's string takes once it is
+ *  wrapped to `widthWorld`. Separate from `MeasureText` because it can only be asked once the
+ *  width is settled — see the `lines` note below. */
+export type MeasureTextLines = (frame: FdfFrame, widthWorld: number) => number | undefined;
+
 export function layout(
   root: FdfFrame,
   box: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: UI_WIDTH, h: UI_HEIGHT },
   buttonWidthScale = 1,
   measure?: MeasureText,
+  measureLines?: MeasureTextLines,
 ): { tree: LaidOutFrame; byName: Map<string, LaidOutFrame> } {
   applyWidgetDefaults(root);
   const tree = buildTree(root, null);
@@ -286,9 +292,16 @@ export function layout(
             // however many lines that takes. AllianceDialog's column headers are the case:
             // "Share Vision" over a 0.0375-wide box is two lines, and one line tall clips
             // the second — which is exactly how the game draws that header, stacked.
-            const lines = measured !== undefined && n.w > 0
-              ? Math.max(1, Math.ceil(measured / n.w - 0.01)) // ε: a self-measured box is 1
-              : 1;
+            //
+            // Ask the real wrap where a measurer is supplied. The width ratio below is only a
+            // LOWER BOUND — it scores a line break as zero width — so a paragraph with breaks
+            // in it comes out short and the surplus lines are clipped (see
+            // `measureTextFrameLines`). It stays as the fallback for a caller that hands us no
+            // measurer at all.
+            const lines = measureLines?.(n.frame, n.w)
+              ?? (measured !== undefined && n.w > 0
+                ? Math.max(1, Math.ceil(measured / n.w - 0.01)) // ε: a self-measured box is 1
+                : 1);
             n.h = lines * textLineHeight(n.frame);
           }
         }

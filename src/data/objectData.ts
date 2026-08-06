@@ -29,9 +29,22 @@ type Val = number | string;
 const s = (v: Val): string => (typeof v === "string" ? v : String(v));
 const n = (v: Val): number => (typeof v === "number" ? v : parseFloat(v) || 0);
 
-/** Model/path field → the `.mdx` the MPQ actually ships (WE stores `.mdl` or no ext). */
+/**
+ * Model/path field → the `.mdx` the MPQ actually ships (WE stores `.mdl` or no ext).
+ *
+ * A BLANK field is not a path — it is the DUMMY UNIT, and it answers `""`. Clearing
+ * "Art - Model File" in the object editor leaves a single space behind, and WC3 then draws
+ * the unit with no model at all rather than refusing to make it: that is how every map builds
+ * an invisible unit to carry vision, an aura or a dummy cast. Extreme Candy War places two of
+ * them, named in the map's own data — `hrdh` "Dummy Cinematic Vision Horde" and `njks` "Dummy
+ * Cinematic Vision Alliance", one per team, standing in the opening shot and removed the
+ * moment it ends. Appending `.mdx` to the space instead asked for a file called " .mdx", and
+ * a unit whose art fails to load is one this engine used to drop (see `spawnUnit` and
+ * `seedModellessPlaced`) — so the cinematic played with nobody's fog lifted.
+ */
 function normModel(v: string): string {
-  return v.replace(/\//g, "\\").replace(/\.(mdl|mdx)$/i, "") + ".mdx";
+  const p = v.trim().replace(/\//g, "\\").replace(/\.(mdl|mdx)$/i, "");
+  return p ? `${p}.mdx` : "";
 }
 
 /** Icon field → the `.blp` the MPQ ships. Same shape as `normModel`, and for the same

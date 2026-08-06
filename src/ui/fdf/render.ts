@@ -229,8 +229,11 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     // `scale` (type never stretches) while the box they land in is drawn at `scale × xScale`.
     // Use one number for both and the box comes out `xScale` too wide for its own text, which
     // on the loading screen parked "WAITING FOR OTHER PLAYERS" 45px left of its bar.
-    const { tree } = layout(root, box, opts.buttonWidthScale ?? 1, (f) =>
-      measureTextFrame(f, lib, opts.textOverrides ?? {}, fit));
+    const { tree } = layout(
+      root, box, opts.buttonWidthScale ?? 1,
+      (f) => measureTextFrame(f, lib, opts.textOverrides ?? {}, fit),
+      (f, w) => measureTextFrameLines(f, lib, opts.textOverrides ?? {}, fit, w),
+    );
     renderFrame(tree, overlay, {
       lib, fit, blpCanvas, overlay,
       handlers: opts.handlers ?? {},
@@ -1205,6 +1208,65 @@ function measureTextFrame(
   // clips the last glyph's right side bearing on some faces, and `overflow: hidden` on a TEXT
   // frame is unforgiving.
   return (measureCtx.measureText(text).width * 1.04) / (fit.scale * fit.xScale);
+}
+
+/**
+ * How many LINES that string takes inside a box `widthWorld` wide — the other half of the
+ * engine's TEXT auto-size, and the height a frame that declares a Width but no Height gets.
+ *
+ * It has to be a real word-wrap rather than `naturalWidth / boxWidth`, because that ratio is a
+ * lower bound and a bad one: it counts a line break as nothing at all. A map's loading-screen
+ * blurb is the case that shows it — Extreme Candy War's is three bullet points separated by
+ * blank lines, eight lines as drawn, and the ratio called it two. The box was then sized for
+ * two, and `JUSTIFYMIDDLE` centred the eight inside it, so the screen printed the middle
+ * bullet and clipped the rest against `overflow: hidden`.
+ *
+ * Counted with the FONT WE WILL ACTUALLY DRAW IT IN and against the BOX AS DRAWN — the same
+ * two-axis conversion `measureTextFrame` undoes, run the other way: glyphs at `scale`, box at
+ * `scale × xScale`.
+ */
+function measureTextFrameLines(
+  f: FdfFrame,
+  lib: FdfLibrary,
+  overrides: Record<string, string>,
+  fit: FitBox,
+  widthWorld: number,
+): number | undefined {
+  const raw = overrides[f.name] ?? lib.string(strProp(f, "Text") ?? "");
+  if (!raw) return undefined;
+  // `|n` is a BREAK here, where `wc3StripMarkup` flattens it to a space — that helper measures
+  // a width, and this counts the lines the same string will be laid out on.
+  const text = wc3StripMarkup(raw.replace(/\|[nN]/g, "\n"));
+  if (!text) return undefined;
+  measureCtx ??= document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return undefined;
+  measureCtx.font = `${Math.max(8, (fontSizeOf(f) ?? 0.013) * fit.scale)}px ${uiFont()}`;
+  const boxPx = widthWorld * fit.scale * fit.xScale;
+  if (!(boxPx > 0)) return undefined;
+  let lines = 0;
+  for (const para of text.split(/\r\n|[\r\n]/)) lines += wrappedLines(measureCtx, para, boxPx);
+  return Math.max(1, lines);
+}
+
+/** Lines one paragraph takes in a `boxPx`-wide box, wrapped greedily on whitespace — where
+ *  CSS `white-space: pre-wrap` breaks it. A blank paragraph is still a line. */
+function wrappedLines(ctx: CanvasRenderingContext2D, para: string, boxPx: number): number {
+  if (!para.trim()) return 1;
+  // Each word carries the whitespace BEFORE it, so the run measured is the run drawn; a break
+  // then drops that leading space, exactly as the line box does.
+  const words = para.match(/\s*\S+/g) ?? [];
+  let lines = 1;
+  let width = 0;
+  for (const word of words) {
+    const w = ctx.measureText(word).width;
+    if (width > 0 && width + w > boxPx) {
+      lines++;
+      width = ctx.measureText(word.replace(/^\s+/, "")).width;
+    } else {
+      width += w;
+    }
+  }
+  return lines;
 }
 
 // --- small helpers ---------------------------------------------------------------

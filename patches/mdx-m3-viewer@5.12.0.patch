@@ -406,7 +406,7 @@ diff --git a/dist/cjs/viewer/handlers/mdx/batchgroup.js b/dist/cjs/viewer/handle
 index 7fe06bd7314e83b578dc8987e819b08cea287dfb..9b3726c4e3fb9fb127e0ad9eaef0b5b695dad65e 100644
 --- a/dist/cjs/viewer/handlers/mdx/batchgroup.js
 +++ b/dist/cjs/viewer/handlers/mdx/batchgroup.js
-@@ -45,6 +45,47 @@ class BatchGroup {
+@@ -45,6 +45,52 @@ class BatchGroup {
              gl.uniform1f(uniforms['u_hasBones'], 0);
          }
          gl.uniform3fv(uniforms['u_lightPos'], scene.lightPosition);
@@ -447,6 +447,11 @@ index 7fe06bd7314e83b578dc8987e819b08cea287dfb..9b3726c4e3fb9fb127e0ad9eaef0b5b6
 +            gl.uniform1f(uniforms['u_distFogEnd'], distFog.end);
 +            gl.uniform3fv(uniforms['u_distFogColor'], distFog.color);
 +            gl.uniform3fv(uniforms['u_distFogEye'], camera.location);
++            // The camera's +Z axis in world space — which points BACKWARD, away from what
++            // the camera looks at (gl-matrix lookAt convention). The shaders take the fog
++            // distance along it, so `eye - fragment` projects to a POSITIVE depth. See the
++            // u_distFogDir note in the SD fragment shader.
++            gl.uniform3fv(uniforms['u_distFogDir'], camera.directionZ);
 +        }
 +        else {
 +            gl.uniform1f(uniforms['u_distFogEnabled'], 0);
@@ -747,7 +752,7 @@ diff --git a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js b/dist/cjs/viewer/h
 index 235f29101256617d34587316e8f40984a8f95685..df64fc5532e9044a63eb59621a0dbbb5db3b1650 100644
 --- a/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
 +++ b/dist/cjs/viewer/handlers/mdx/shaders/sd.frag.js
-@@ -11,12 +11,82 @@ uniform sampler2D u_texture;
+@@ -11,12 +11,94 @@ uniform sampler2D u_texture;
  uniform float u_filterMode;
  uniform bool u_unshaded;
  
@@ -794,6 +799,18 @@ index 235f29101256617d34587316e8f40984a8f95685..df64fc5532e9044a63eb59621a0dbbb5
 +uniform float u_distFogEnd;
 +uniform vec3 u_distFogColor;
 +uniform vec3 u_distFogEye;
++// The camera's BACKWARD axis in world space, so the fog distance is dot(eye - frag, dir):
++// the fragment's DEPTH along the view axis, not its straight-line range from the eye.
++//
++// That is what WC3 measures. Its fog is Direct3D's, and D3D linear fog runs on the view-space
++// z unless D3DRS_RANGEFOGENABLE is turned on — which defaults to FALSE, only ever applied to
++// vertex fog, and which WC3 does not use. Radial range is the same number dead ahead and
++// larger everywhere else, by 1/cos(angle off the axis): at 32° vertical FOV on a 16:9 frame
++// that is ~17% too far in the corners, so a scene with fog on wore a dark vignette that the
++// real client does not have, heaviest exactly where the eye notices it least justified.
++// Distances near the screen centre are unchanged, which is why this reads as the haze being
++// evened out rather than simply turned down.
++uniform vec3 u_distFogDir;
 +
  varying vec2 v_uv;
  varying vec3 v_normal;
@@ -808,7 +825,7 @@ index 235f29101256617d34587316e8f40984a8f95685..df64fc5532e9044a63eb59621a0dbbb5
 +// disappear rather than tint the scene with fog colour.
 +vec3 applyDistFog(vec3 rgb, float filterMode) {
 +  if (u_distFogEnabled < 0.5) return rgb;
-+  float dist = length(u_distFogEye - v_worldPos);
++  float dist = dot(u_distFogEye - v_worldPos, u_distFogDir); // view depth — see u_distFogDir
 +  float f = clamp((u_distFogEnd - dist) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
 +  if (filterMode >= 3.0 && filterMode <= 4.0) return rgb * f;
 +  return mix(u_distFogColor, rgb, f);
@@ -1147,7 +1164,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
              // Set instanced attributes.
              if (!vertexArrayObject) {
                  instancedArrays.vertexAttribDivisorANGLE(attribs['a_instancePosition'], 1);
-@@ -671,6 +819,85 @@ class War3MapViewerMap {
+@@ -671,6 +819,86 @@ class War3MapViewerMap {
          const topRight = corners[row + 1][column + 1].layerHeight;
          return bottomLeft !== bottomRight || bottomLeft !== topLeft || bottomLeft !== topRight;
      }
@@ -1184,6 +1201,7 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb
 +            gl.uniform1f(uniforms['u_distFogEnd'], fog.end);
 +            gl.uniform3fv(uniforms['u_distFogColor'], fog.color);
 +            gl.uniform3fv(uniforms['u_distFogEye'], scene.camera.location);
++            gl.uniform3fv(uniforms['u_distFogDir'], scene.camera.directionZ);
 +        }
 +        else {
 +            gl.uniform1f(uniforms['u_distFogEnabled'], 0);
@@ -1279,7 +1297,7 @@ diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/view
 index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77e6c74119 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
-@@ -9,6 +9,32 @@ ${precision_glsl_1.default}
+@@ -9,6 +9,33 @@ ${precision_glsl_1.default}
  uniform sampler2D u_texture1;
  uniform sampler2D u_texture2;
  
@@ -1308,6 +1326,7 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77
 +uniform float u_distFogEnd;
 +uniform vec3 u_distFogColor;
 +uniform vec3 u_distFogEye;
++uniform vec3 u_distFogDir; // view axis — the fog distance is a DEPTH (see the SD shader)
 +
  varying vec3 v_normal;
  varying vec2 v_uv;
@@ -1324,7 +1343,7 @@ index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77
 +
 +  // OpenWar3: atmospheric distance fog (haze), before the fog-of-war dimming.
 +  if (u_distFogEnabled > 0.5) {
-+    float f = clamp((u_distFogEnd - length(u_distFogEye - v_position)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
++    float f = clamp((u_distFogEnd - dot(u_distFogEye - v_position, u_distFogDir)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
 +    color.rgb = mix(u_distFogColor, color.rgb, f);
 +  }
 +
@@ -1341,7 +1360,7 @@ diff --git a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js b/dist/cjs/view
 index 70449d8d52f46ac83662d302c94dcee8e29147e7..7a855a22ef9cb7a1a3f39eb183aecef834869ed6 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/ground.frag.js
-@@ -6,11 +6,35 @@ ${precision_glsl_1.default}
+@@ -6,11 +6,36 @@ ${precision_glsl_1.default}
  
  uniform sampler2D u_tilesets[15];
  
@@ -1363,6 +1382,7 @@ index 70449d8d52f46ac83662d302c94dcee8e29147e7..7a855a22ef9cb7a1a3f39eb183aecef8
 +uniform float u_distFogEnd;
 +uniform vec3 u_distFogColor;
 +uniform vec3 u_distFogEye;
++uniform vec3 u_distFogDir; // view axis — the fog distance is a DEPTH (see the SD shader)
 +
  varying vec4 v_tilesets;
  varying vec2 v_uv[4];
@@ -1372,7 +1392,7 @@ index 70449d8d52f46ac83662d302c94dcee8e29147e7..7a855a22ef9cb7a1a3f39eb183aecef8
 -const vec3 lightDirection = normalize(vec3(-0.3, -0.3, 0.25));
 +vec3 applyDistFog(vec3 rgb) {
 +  if (u_distFogEnabled < 0.5) return rgb;
-+  float f = clamp((u_distFogEnd - length(u_distFogEye - v_dfPos)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
++  float f = clamp((u_distFogEnd - dot(u_distFogEye - v_dfPos, u_distFogDir)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
 +  return mix(u_distFogColor, rgb, f);
 +}
  
@@ -1425,7 +1445,7 @@ diff --git a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js b/dist/cjs/viewe
 index 6f31791753b2bf146060b8adfb44767cc468be55..2cd00484ad61505a2b1433d34dfc882341d9c4ca 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
 +++ b/dist/cjs/viewer/handlers/w3x/shaders/water.frag.js
-@@ -6,11 +6,57 @@ ${precision_glsl_1.default}
+@@ -6,11 +6,58 @@ ${precision_glsl_1.default}
  
  uniform sampler2D u_waterTexture;
  
@@ -1443,6 +1463,7 @@ index 6f31791753b2bf146060b8adfb44767cc468be55..2cd00484ad61505a2b1433d34dfc8823
 +uniform float u_distFogEnd;
 +uniform vec3 u_distFogColor;
 +uniform vec3 u_distFogEye;
++uniform vec3 u_distFogDir; // view axis — the fog distance is a DEPTH (see the SD shader)
 +
 +// OpenWar3: fog of war. The water sheet is drawn at the WATER level, which on a shore or a
 +// deep channel sits ABOVE the ground — so FogOverlay's veil mesh, which hugs the terrain,
@@ -1468,7 +1489,7 @@ index 6f31791753b2bf146060b8adfb44767cc468be55..2cd00484ad61505a2b1433d34dfc8823
 +
 +  // Atmospheric haze — mix rgb only (keep the shore-fade alpha intact).
 +  if (u_distFogEnabled > 0.5) {
-+    float f = clamp((u_distFogEnd - length(u_distFogEye - v_dfPos)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
++    float f = clamp((u_distFogEnd - dot(u_distFogEye - v_dfPos, u_distFogDir)) / (u_distFogEnd - u_distFogStart), 0.0, 1.0);
 +    color.rgb = mix(u_distFogColor, color.rgb, f);
 +  }
 +

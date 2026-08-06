@@ -2100,6 +2100,42 @@ export class RtsController {
     this.byId.set(simId, entry);
   }
 
+  /**
+   * The placed units the RENDERER will never deliver, seeded straight from the .doo.
+   *
+   * `trySeed` adopts what the viewer hands it, and the viewer only builds a widget for a unit
+   * whose MODEL loaded (`loadUnitsAndItems`: `this.load(path).then(model => { if (model) … })`).
+   * A type with no model therefore never arrives — and that is not an edge case, it is WC3's
+   * DUMMY UNIT: clear "Art - Model File" in the object editor and you get an invisible unit
+   * that still holds its ground, its sight and its abilities (see `normModel`). Extreme Candy
+   * War's opening cinematic is built on exactly two of them, `hrdh` "Dummy Cinematic Vision
+   * Horde" and `njks` "Dummy Cinematic Vision Alliance" — one placed in the shot per team, and
+   * removed the moment the cinematic ends. They are the ONLY thing lifting the fog there (the
+   * map's script reveals nothing, and re-MASKS the area afterwards, which is the proof it was
+   * uncovered), so without them the whole intro played black.
+   *
+   * Only a type with no model at all qualifies. Art we merely failed to find is a broken asset
+   * and stays dropped, so it still looks broken instead of quietly becoming an invisible unit.
+   *
+   * Called once adoption has settled (`waitForMapUnits`) — before then, "unclaimed" only means
+   * "still streaming".
+   */
+  seedModellessPlaced(): number {
+    let seeded = 0;
+    for (const p of this.placed.unclaimedPlaced()) {
+      const def = this.registry.get(p.typeId);
+      if (!def || def.model) continue;
+      // Owner by the same three-way split trySeed uses; a dummy has no aggro post, no drop
+      // table and no footprint to inherit, so `addSimUnit` alone is the whole seed.
+      const seed = this.placed.playerSeedAt(p.x, p.y);
+      const owner = seed ? seed.owner : this.placed.isNeutralPassiveAt(p.x, p.y) ? NEUTRAL_PASSIVE_OWNER : -1;
+      const team = seed ? seed.team : this.placed.isNeutralPassiveAt(p.x, p.y) ? NEUTRAL_PASSIVE_TEAM : -1;
+      this.addSimUnit(def, p.x, p.y, p.facing, owner, team, 0, this.placed.reserveIdAt(p.x, p.y, def.id));
+      seeded++;
+    }
+    return seeded;
+  }
+
   /** Adopt a pre-placed PLAYER unit (custom map) as an OWNED, simulated unit by
    *  reusing the viewer's already-rendered .doo instance — the same instance-reuse
    *  trySeed does for creeps, but owned instead of neutral. This is what lifts the
