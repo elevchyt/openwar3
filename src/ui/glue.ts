@@ -49,6 +49,16 @@ export interface GlueScreenDef {
   backdrop?: { path: string; fog: { r: number; g: number; b: number; start: number; end: number } };
   /** Build the FDF screen. Fading it in is the manager's job, not the screen's. */
   mount(): Promise<FdfScreen>;
+  /**
+   * Run once the screen's BACKGROUND is in place — which on a scene change is under the black,
+   * before any of it is revealed.
+   *
+   * Anything the player would SEE change belongs here rather than in `mount`. `mount` runs while
+   * the outgoing screen is still on display (it is built first so a failure leaves the player
+   * where they were), so a cursor swapped there changes under the pointer on the screen being
+   * left, seconds before the screen it belongs to appears.
+   */
+  onArrived?(): void;
 }
 
 /** How long a screen with no chrome takes to leave / arrive. The chrome's own clips time
@@ -96,11 +106,14 @@ export class GlueManager {
     if (def.backdrop) {
       await this.scene?.showBackdrop(def.backdrop.path, def.backdrop.fog);
       this.backdropUp = true;
+      def.onArrived?.();
       return 0; // the backdrop's own Birth runs behind the screen; the DOM doesn't wait on it
     }
     if (this.backdropUp) this.scene?.restoreMenuBackground();
     this.backdropUp = false;
-    return this.scene?.playChromeBirth(def.chrome) ?? 0;
+    const birth = this.scene?.playChromeBirth(def.chrome) ?? 0;
+    def.onArrived?.();
+    return birth;
   }
 
   /**

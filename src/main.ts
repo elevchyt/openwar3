@@ -278,9 +278,12 @@ function mapFileFor(path: string): File {
   return file;
 }
 
-function singlePlayerScreen(vfs: DataSource): { chrome: "SinglePlayer"; mount: () => Promise<FdfScreen> } {
+function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
   return {
     chrome: "SinglePlayer",
+    // The default hand comes back HERE rather than when Back was clicked — under the black, with
+    // the campaign screen already gone (GlueScreenDef.onArrived).
+    onArrived: () => applyMenuCursor(vfs),
     mount: () => mountSinglePlayerMenu(ui, vfs, {
       onCampaign: () => void openCampaignScreen(vfs),
       onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
@@ -324,8 +327,10 @@ function campaignScreen(vfs: DataSource): GlueScreenDef {
     backdrop: state.campaign.background
       ? { path: state.campaign.background, fog: state.campaign.fog }
       : undefined,
+    // The campaign's own racial cursor, put on under the black once the backdrop is up — not
+    // while the player is still looking at the screen they are leaving (see onArrived).
+    onArrived: () => applyMenuCursor(vfs, state.campaign.cursor),
     mount: () => {
-      applyMenuCursor(vfs, state.campaign.cursor); // the campaign's own racial cursor
       setCampaignAmbience(state.campaign);
       return mountCampaignScreen(ui, vfs, campaigns, state, {
         onSelectCampaign: (c) => {
@@ -336,7 +341,7 @@ function campaignScreen(vfs: DataSource): GlueScreenDef {
         onPlayMission: (c, index) => void startCampaignMission(vfs, c, index, state.difficulty),
         onBack: () => {
           if (state.chapters) { state.chapters = false; void glue.goTo(campaignScreen(vfs)); return; }
-          leaveCampaignScreen(vfs);
+          leaveCampaignScreen();
           void glue.goTo(singlePlayerScreen(vfs));
         },
         onDifficulty: (d) => saveDifficulty(d),
@@ -357,9 +362,11 @@ function setCampaignAmbience(c: Campaign): void {
 }
 let campaignAmbience: string | null = null;
 
-/** Leaving the Campaign screen for another menu: the main menu's cursor and wind come back. */
-function leaveCampaignScreen(vfs: DataSource): void {
-  applyMenuCursor(vfs);
+/** Leaving the Campaign screen: the main menu's wind comes back. The CURSOR is not restored
+ *  here — a glue screen puts its own on when it arrives (GlueScreenDef.onArrived), so doing it
+ *  at the click would change the pointer while the campaign screen is still on display. The one
+ *  path with no glue screen to arrive at is a chapter start, which resets it itself. */
+function leaveCampaignScreen(): void {
   if (campaignAmbience) sounds?.setAmbienceLoop(campaignAmbience, false);
   campaignAmbience = null;
   glueAudio?.startAmbience();
@@ -378,7 +385,8 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
     console.warn(`[OpenWar3] campaign map missing from this install: ${mission?.file}`);
     return;
   }
-  leaveCampaignScreen(vfs);
+  leaveCampaignScreen();
+  applyMenuCursor(vfs); // no glue screen arrives after this one — see leaveCampaignScreen
   const info = parseMapInfo(bytes, mission.name);
   // The mission is finished the moment its own script declares victory — that is what opens
   // the next chapter (data/campaignProgress.ts).
