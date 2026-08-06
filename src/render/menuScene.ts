@@ -447,8 +447,16 @@ export class MenuScene {
    * Icecrown scene against the button panel, and there is no panel here to frame against.
    * The per-backdrop `BackdropTuning` block layered on top of that starts neutral, so it
    * changes nothing until the `?menudebug` sliders move it (issue #105).
+   *
+   * **Asking for the backdrop already up is a no-op**, and that is the point rather than an
+   * optimisation. The Campaign screen navigates to ITSELF constantly — Back from a chapter
+   * list, picking the campaign you are already on, every re-mount of the two modes over one
+   * FDF — and each of those went through here and started the model's Birth again, so the
+   * whole scene lurched and re-assembled behind a screen the player never left. A Birth is
+   * how a scene ARRIVES; if it is already standing there, it has arrived.
    */
   async showBackdrop(path: string, fog: { r: number; g: number; b: number; start: number; end: number }): Promise<void> {
+    if (path === this.backdropShown && this.backdropInstance) return; // already standing
     if (!this.vfs.exists(path)) return;
     let model = this.backdrops.get(path);
     if (!model) {

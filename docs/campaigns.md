@@ -53,6 +53,14 @@ frame. So `GlueScreenDef` grew a `backdrop` field: a screen with one skips the c
 entirely, and `MenuScene.showBackdrop` swaps the 3D model, applies the campaign's fog, and
 zeroes both sprite-layer viewports.
 
+**A Birth plays only on a real switch.** The Campaign screen navigates to ITSELF constantly —
+Back from a chapter list, picking the campaign you are already on, every re-mount of the two
+modes over one FDF — and `showBackdrop` returns immediately when asked for the backdrop that is
+already standing. Without that, each of those lurched the whole 3D scene and re-assembled it
+behind a screen the player never left. A Birth is how a scene *arrives*; if it is already
+there, it has arrived. Only a different campaign's model tears the old one down and births the
+new one.
+
 A backdrop's camera is used **as authored**, with one correction: it frames a 4:3 screen
 exactly (Maiev's ruins have nothing painted past their edges), so a wider viewport keeps the
 authored HORIZONTAL extent and gives up height for it. Feed that vertical FOV to 16:9 unchanged
