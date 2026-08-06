@@ -711,6 +711,9 @@ export class MapViewerScene {
    *  leaving, since there is no migration (docs/multiplayer.md Phase F item 6). */
   private matchOver: MatchOverDialog | null = null;
   private paused = false; // F10 game menu freezes the sim (rendering continues)
+  /** The world is standing at the gate: built, but not yet begun — a campaign chapter whose
+   *  loading screen is still holding for "PRESS ANY KEY TO CONTINUE" (see `holdAtStart`). */
+  private startHeld = false;
   private simAccum = 0; // unspent real time, in seconds, waiting to become whole sim steps
   /** Ticks elapsed since the match began. THE match clock — the number a multiplayer
    *  command is stamped with and a snapshot is taken at (docs/multiplayer.md). */
@@ -5491,6 +5494,22 @@ export class MapViewerScene {
     this.syncPanelPause();
   }
 
+  /**
+   * Hold the world at the gate, for as long as the loading screen is still asking the player
+   * to press a key (a campaign chapter — see `startGame` in src/main.ts).
+   *
+   * The map is built and its script's init has run by then, but nothing may MOVE yet: a
+   * chapter opens on a cinematic, and the reference does not play it to a loading screen. A
+   * flag of its own rather than `paused`, because the map's own `PauseGame` writes that one and
+   * the two must not clobber each other — a chapter that pauses itself in init (they do, for
+   * their opening scenes) would otherwise be un-paused by our release.
+   */
+  holdAtStart(on: boolean): void {
+    this.startHeld = on;
+    // The clock is not owed the held time: `advanceSim` re-stamps `simLast` every pass while
+    // held, so releasing steps forward from now rather than replaying the whole wait at once.
+  }
+
   /** **The Quest Log stops the world, exactly as the Game Menu does.** Single-player WC3
    *  pauses behind both — they are the two panels you READ, and the mission is not allowed to
    *  move on while you do. The Allies and Chat dialogs do not pause: those are things you do
@@ -7146,7 +7165,7 @@ export class MapViewerScene {
    *  to lose: the alternative is a death spiral. (With the background pump running, no
    *  hidden-window backlog builds in the first place — 50 ms of debt is at most 3 steps.) */
   private advanceSim(now: number): void {
-    if (this.paused) {
+    if (this.paused || this.startHeld) {
       this.simLast = now;
       return;
     }

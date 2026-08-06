@@ -544,10 +544,26 @@ async function startGame(
     gate.announce();
     await gate.waitForAll();
   }
-  // …then a beat on the finished screen before the match takes over. This one is OURS and is
-  // not measured off anything: the developer asked for it, because a load that ends the instant
-  // the bar fills never shows the player the screen they were waiting on.
-  await wait(START_HOLD_MS);
+  // A single-player CAMPAIGN chapter does not begin on its own. The reference holds the
+  // finished screen on `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE") and starts the
+  // mission on the player's key: the chapter's title and its blurb are on that screen to be
+  // read, and how long that takes is the player's business. Nothing else waits — a custom
+  // game, a skirmish and a LAN match all drop into the map on their own.
+  //
+  // The WORLD is held with the screen (`holdAtStart`). It is standing behind it already — the
+  // map is built and its script's init has run — and a chapter opens on a cinematic, which the
+  // reference does not play to a loading screen. The 3-second hold below is the same idea for
+  // every other game, so it needs no such freeze: three seconds is a beat, not a wait.
+  if (config.campaign && !link && loading) {
+    mapScene?.holdAtStart(true);
+    await loading.waitForKey();
+    mapScene?.holdAtStart(false);
+  } else {
+    // …a beat on the finished screen before the match takes over. This one is OURS and is not
+    // measured off anything: the developer asked for it, because a load that ends the instant
+    // the bar fills never shows the player the screen they were waiting on.
+    await wait(START_HOLD_MS);
+  }
   // Taken away only once the match has actually DRAWN a frame behind it, so the first thing the
   // player sees is the map and never the black canvas it was on a moment ago.
   await nextFrame();

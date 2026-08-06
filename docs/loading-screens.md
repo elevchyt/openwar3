@@ -152,6 +152,31 @@ Then a deliberate **3-second hold** on the finished screen before the match appe
 is OURS and is not measured off anything — a load that ends the instant the bar fills never
 shows the player the screen they were waiting on.
 
+## A campaign chapter waits for the player instead
+
+A single-player CAMPAIGN chapter does not start itself. Its bar fills and its caption becomes
+`LOADING_PRESS_A_KEY` — "PRESS ANY KEY TO CONTINUE", one of the loading captions
+`GlobalStrings.fdf` already carries next to `LOADING_LOADING` and `LOADING_WAITING_FOR_PLAYERS` —
+and the mission begins on the player's key. The chapter's title and its blurb are on that screen
+to be read, and how long that takes is the player's business. Nothing else waits: a custom game, a
+skirmish and a LAN match all get the 3-second beat above (`LoadingScreen.waitForKey`, chosen in
+`startGame` on `config.campaign && !link`).
+
+Two things fall out of it, both of them a bug if you skip them:
+
+- **The world is held with the screen** (`MapViewerScene.holdAtStart`). The match is standing
+  behind the loading screen by then — the map is built and its script's init has run — and a
+  chapter opens on a CINEMATIC, which the reference does not play to a loading screen. Held for
+  three seconds nobody notices; held for however long a player takes to read, the intro is half
+  over before they see it (measured on Rise of the Naga: the sim tick stands still across the
+  whole wait, then steps on from where it stopped). It is a flag of its own rather than `paused`,
+  because the map's own `PauseGame` writes that one and chapters do pause themselves in init.
+- **The key is swallowed** (capture phase, `preventDefault` + `stopPropagation`). The match's own
+  window-level handlers are already live behind the screen — the HUD's hotkeys, the camera's
+  arrows, F10 — and the key that dismisses the loading screen must not also be a key the game was
+  given. A click counts too: the browser only sends us keys while the page has focus, and a click
+  is both how focus comes back and what a player will try first.
+
 ## Not done yet
 
 The gate holds the loading SCREEN, not the simulation: the world starts ticking when the map

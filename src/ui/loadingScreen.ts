@@ -88,6 +88,17 @@ export interface LoadingScreen {
    * machine to arrive (`LOADING_WAITING_FOR_PLAYERS`).
    */
   finish(): void;
+  /**
+   * Hold the finished screen until the player says go, and say so: the bar's caption becomes
+   * the game's own `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE",
+   * `UI\FrameDef\GlobalStrings.fdf`).
+   *
+   * This is how a SINGLE-PLAYER CAMPAIGN chapter ends its load in the reference — the chapter's
+   * title and its blurb are on screen to be read, and the mission does not begin until the
+   * player is done reading. Nothing else waits: a custom game, a skirmish and a multiplayer
+   * match all drop straight into the map (see `startGame`).
+   */
+  waitForKey(): Promise<void>;
   /** A remote machine reported in (src/game/loadGate.ts): light the seat its peer sits in, and
    *  drop the waiting caption once nobody is left to wait for. */
   setPeerReady(peer: number): void;
@@ -192,10 +203,17 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
     overrides.LoadingBarText = next;
     screen.relayout();
   };
+  /** We are asking for the key, and nothing may write over that caption any more. */
+  let awaitingKey = false;
+  /** Taken off on the key, and on `dispose` — a screen torn down some other way (the load
+   *  failed, the developer's `?dev=` boot moved on) must not leave a listener on the window. */
+  let stopWaiting: (() => void) | null = null;
+
   const refreshCaption = (): void => {
     // Only ever forwards. The last player arriving does NOT put "L O A D I N G" back up: our
     // load finished a moment ago, so that would be a lie, and the screen is on its way out
     // anyway — a caption that flips back for the beat before the match appears is just flicker.
+    if (awaitingKey) return;
     if (loaded && ready.size < rows.length) setCaption("LOADING_WAITING_FOR_PLAYERS", "WAITING FOR OTHER PLAYERS");
     else if (!loaded) setCaption("LOADING_LOADING", "L  O  A  D  I  N  G");
   };
@@ -207,6 +225,32 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
       scene.setProgress(1);
       refreshCaption();
     },
+    waitForKey(): Promise<void> {
+      awaitingKey = true;
+      setCaption("LOADING_PRESS_A_KEY", "PRESS ANY KEY TO CONTINUE");
+      return new Promise<void>((resolve) => {
+        const go = (e: Event): void => {
+          // CAPTURE, and swallowed: the match is already standing behind this screen, with its
+          // own window-level key handlers live (the HUD's hotkeys, the camera's arrows, F10).
+          // The key that dismisses the loading screen is not also a key the game was given.
+          e.preventDefault();
+          e.stopPropagation();
+          stopWaiting?.();
+          resolve();
+        };
+        // "Any key" is what the caption says and what the reference means. The mouse rides
+        // along because a browser only sends us keys while the page HAS focus, and a click is
+        // both the ordinary way to give it back and what the player will try first.
+        window.addEventListener("keydown", go, true);
+        window.addEventListener("mousedown", go, true);
+        stopWaiting = () => {
+          window.removeEventListener("keydown", go, true);
+          window.removeEventListener("mousedown", go, true);
+          stopWaiting = null;
+          awaitingKey = false;
+        };
+      });
+    },
     setPeerReady(peer): void {
       rows.forEach((row, i) => { if (row.slot.peer === peer) ready.add(i); });
       paintReady(screen, ready);
@@ -217,6 +261,7 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
       if (melee) paintMinimap(screen, info, preview, icons);
     },
     dispose(): void {
+      stopWaiting?.();
       scene.dispose();
       screen.dispose();
     },
