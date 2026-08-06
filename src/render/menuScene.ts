@@ -828,9 +828,9 @@ export class MenuScene {
       // then just turning that offset, which is what the game's camera fields describe: an
       // angle about a target, not a free-flying eye (docs/camera.md).
       let off: V3 = [
-        (cam.position[0] - tgt[0]) * zoom,
-        (cam.position[1] - tgt[1]) * zoom,
-        (cam.position[2] - tgt[2]) * zoom,
+        (cam.position[0] + camOff[0] - tgt[0]) * zoom,
+        (cam.position[1] + camOff[1] - tgt[1]) * zoom,
+        (cam.position[2] + camOff[2] - tgt[2]) * zoom,
       ];
       // ROTATION about world Z, then ANGLE OF ATTACK about the camera's own right axis after
       // that turn (so pitch stays "up/down on screen" at any yaw). Rotating the offset about

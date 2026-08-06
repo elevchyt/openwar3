@@ -113,11 +113,13 @@ export class GlueManager {
     if (this.busy) return null;
     this.busy = true;
     const leaving = this.current;
-    // A swap of the 3D scene itself goes through black (see FADE_MS). Re-entering the SAME
-    // backdrop is not a swap — the scene stays exactly where it is (MenuScene.showBackdrop),
-    // so there is nothing to cover and the screen must not blink.
-    const swappingScene = !!def.backdrop && def.backdrop.path !== this.scene?.backdropPath;
-    if (swappingScene) await this.toBlack(true);
+    // A change of the 3D scene itself goes through black (see FADE_MS) — in EITHER direction:
+    // onto a campaign backdrop, from one campaign's set to another, and back off a backdrop to
+    // the menu's own Icecrown, which is the same cut in reverse. Re-entering the SAME backdrop
+    // is not a change — the scene stays exactly where it is (MenuScene.showBackdrop) — so there
+    // is nothing to cover and the screen must not blink.
+    const swappingScene = (def.backdrop?.path ?? null) !== (this.scene?.backdropPath ?? null);
+    let wentBlack = false;
     // Every button on the screen goes dead the moment one of them is clicked — BEFORE the
     // next screen is built below, which is an await and can take a moment (the Custom Game
     // screen loads four more .fdf files). Wait until after it and the buttons stay live for
@@ -137,6 +139,16 @@ export class GlueManager {
         const death = this.backdropUp ? 0 : this.scene?.playChromeDeath() ?? 0;
         await leaving.animatePanels("out", death || NO_CHROME_OUT_MS);
         leaving.dispose();
+      }
+
+      // Black comes down only ONCE THE OLD SCREEN HAS GONE. The panel chrome's Death and the
+      // fading of its buttons are the game's own animation and belong in view; fading first
+      // threw them away and made clicking Campaign look like an instant cut to black. The
+      // black then stands in for the usual beat between screens.
+      if (swappingScene) {
+        await this.toBlack(true);
+        wentBlack = true;
+      } else if (leaving) {
         await wait(GAP_MS);
       }
 
@@ -147,7 +159,7 @@ export class GlueManager {
       // over it rather than after it. A backdrop's Birth is a camera move — NightElf_Exp sweeps
       // its eye ~220 units and rolls it while Maiev turns to meet it — and holding black until
       // the DOM had finished (another 0.7 s) spent most of that shot behind the cover.
-      const reveal = swappingScene ? this.toBlack(false) : null;
+      const reveal = wentBlack ? this.toBlack(false) : null;
       // animatePanels("in") drops the contents to transparent in this same task, so they
       // never paint at full opacity for a frame before the panel that carries them arrives.
       await next.animatePanels("in", birth || NO_CHROME_IN_MS);
@@ -157,7 +169,7 @@ export class GlueManager {
     } catch (err) {
       console.error("[OpenWar3] couldn't open that menu:", err);
       leaving?.setAllDisabled(false); // give the player their screen back
-      if (swappingScene) await this.toBlack(false); // never leave the player staring at black
+      if (wentBlack) await this.toBlack(false); // never leave the player staring at black
       return null;
     } finally {
       this.busy = false;

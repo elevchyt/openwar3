@@ -78,12 +78,17 @@ Two traps sit under that, and both produce the same "there is no animation" symp
   wall time by however long the stall was, so a `setTimeout(birthLength)` cut the arrival short.
   `settleBackdrop` switches on the frame the Birth's last keyframe is reached.
 
-**A scene swap crosses through black.** Arriving on a campaign screen from the menu's own
-Icecrown, or crossing from one campaign's set to another, fades out and back (`FADE_MS` in
-`ui/glue.ts`). Every other glue transition is carried by the panel chrome sliding off and back
-on with the 3D background untouched behind it; a campaign screen has no chrome, so a swap there
-is one whole world cutting to another with nothing covering the join. Re-entering the SAME
-backdrop is not a swap and must not blink.
+**A change of scene crosses through black**, in either direction: onto a campaign screen from
+the menu's own Icecrown, from one campaign's set to another, and back off a backdrop to the
+menu, which is the same cut in reverse (`FADE_MS` in `ui/glue.ts`). Every other glue transition
+is carried by the panel chrome sliding off and back on with the 3D background untouched behind
+it; a campaign screen has no chrome, so a change there is one whole world cutting to another
+with nothing covering the join. Re-entering the SAME backdrop is not a change and must not blink.
+
+The black comes down **only once the old screen has gone** — after the chrome's Death clip and
+the fade of its buttons, which are the game's own animation and belong in view. Fading first
+made clicking Campaign look like an instant cut. It lifts again the moment the new scene
+exists, so the backdrop's Birth plays in view rather than behind the cover.
 
 A backdrop's camera is used **as authored**, with one correction: it frames a 4:3 screen
 exactly (Maiev's ruins have nothing painted past their edges), so a wider viewport keeps the
