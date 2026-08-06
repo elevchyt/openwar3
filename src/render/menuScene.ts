@@ -245,7 +245,7 @@ const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
   // and ambient this was tuned alongside are in NEUTRAL_BACKDROP, since they are the screen's
   // look rather than this set's framing.
   "ui\\glues\\singleplayer\\nightelf_exp\\nightelf_exp.mdx": {
-    camZoom: 1.05, camPanX: 0, camPanY: -15, camFov: 0.76, camYaw: 10, camPitch: 6, camRoll: 0,
+    camZoom: 1, camPanX: 0, camPanY: -15, camFov: 0.66, camYaw: 10, camPitch: 6, camRoll: 0,
     fogStart: 0, fogEnd: 13300, fogR: 0.79, fogG: 0.34, fogB: 0.26,
   },
   // Bonus / The Founding of Durotar. Its camera sits ~990 units from its subject while the
