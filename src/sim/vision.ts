@@ -22,6 +22,15 @@
 // coarse enough that ray-casting ~50 units' sight each update stays cheap.
 export const VISION_CELL = 64;
 
+/** The two halves of `cellSpan`, as plain functions so the hot callers can take the numbers
+ *  without a tuple to allocate (see `bestStateAt`). Same arithmetic, said twice. */
+function spanLo(lo: number, origin: number): number {
+  return Math.max(0, Math.ceil((lo - origin) / VISION_CELL - 0.5));
+}
+function spanHi(hi: number, origin: number, limit: number): number {
+  return Math.min(limit - 1, Math.ceil((hi - origin) / VISION_CELL - 0.5) - 1);
+}
+
 // Line-of-sight tuning (world units). EYE_BONUS raises a ground unit's eye a little
 // above the terrain so it sees across gentle bumps but NOT up a full 128-unit cliff
 // (that's what makes high ground block vision). TREE_BLOCK is how tall a tree stands
@@ -166,10 +175,7 @@ export class VisionMap {
 
   /** Clamped range of cells whose CENTRE falls in the half-open world span [lo, hi). */
   private cellSpan(lo: number, hi: number, origin: number, limit: number): [number, number] {
-    return [
-      Math.max(0, Math.ceil((lo - origin) / VISION_CELL - 0.5)),
-      Math.min(limit - 1, Math.ceil((hi - origin) / VISION_CELL - 0.5) - 1),
-    ];
+    return [spanLo(lo, origin), spanHi(hi, origin, limit)];
   }
 
   /** The BRIGHTEST fog state over the footprint square of half-extent `radius` centred
@@ -181,8 +187,15 @@ export class VisionMap {
   bestStateAt(wx: number, wy: number, radius: number): FogState {
     if (this.revealAll) return FogState.Visible;
     if (radius <= 0) return this.stateAt(wx, wy);
-    const [x0, x1] = this.cellSpan(wx - radius, wx + radius, this.originX, this.width);
-    const [y0, y1] = this.cellSpan(wy - radius, wy + radius, this.originY, this.height);
+    // Spans computed inline rather than through `cellSpan`, which hands back a tuple. This is
+    // the hottest call in the renderer's fog pass — asked for every doodad on the map, and
+    // nine in ten of them are trees, which is what carries a radius (mapViewer.fogWidgets) —
+    // so at ten passes a second the two throwaway arrays per call were ~90,000 allocations a
+    // second on Extreme Candy War's 4,345 doodads.
+    const x0 = spanLo(wx - radius, this.originX);
+    const x1 = spanHi(wx + radius, this.originX, this.width);
+    const y0 = spanLo(wy - radius, this.originY);
+    const y1 = spanHi(wy + radius, this.originY, this.height);
     let best = FogState.Unexplored;
     for (let cy = y0; cy <= y1; cy++) {
       for (let cx = x0; cx <= x1; cx++) {

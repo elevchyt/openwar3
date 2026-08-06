@@ -3,6 +3,7 @@ import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import type { DataSource } from "../vfs/types";
+import { CanvasSize } from "./canvasSize";
 import type { PlayableRace } from "../data/races";
 import { MISC_DATA } from "../data/gameplayConstants";
 
@@ -186,8 +187,8 @@ export class TimeIndicatorClock {
    *  and a new HUD (and clock) is built for every map. */
   dispose(): void {
     this.instance = null;
-    this.sizeObserver?.disconnect();
-    this.sizeObserver = null;
+    this.size?.dispose();
+    this.size = null;
     (this.viewer.gl.getExtension("WEBGL_lose_context") as { loseContext(): void } | null)?.loseContext();
   }
 
@@ -195,40 +196,32 @@ export class TimeIndicatorClock {
    * Match the backing buffer to the widget's on-screen size, on the frames where that
    * actually changed.
    *
-   * `clientWidth`/`clientHeight` are layout reads, and this runs inside the frame, after the
-   * HP bars have written a few hundred style changes into the world layer — so asking here
-   * flushed all of them and forced a synchronous reflow, every frame, to learn a number that
-   * only moves when the window does. A ResizeObserver reports the same number out of band.
+   * The size comes from a `CanvasSize` (see there) rather than from `clientWidth` — asking the
+   * canvas directly is a LAYOUT READ, and this runs inside the frame, after the HP bars have
+   * written a few hundred style changes into the world layer and a selection change has
+   * rewritten the whole command card. Asking here flushed all of that and forced a synchronous
+   * reflow, every frame, to learn a number that only moves when the window does.
+   *
+   * (There was already a ResizeObserver here for exactly this reason, and it never took
+   * effect: its report was consumed and cleared on the one frame it arrived, so every OTHER
+   * frame fell through to the "just measure it" fallback — which is to say, all of them.)
    */
-  private pendingSize: { w: number; h: number } | null = null;
-  private sizeObserver: ResizeObserver | null = null;
+  private size: CanvasSize | null = null;
 
   private watchCanvasSize(): void {
-    if (this.sizeObserver || typeof ResizeObserver === "undefined") return;
-    this.sizeObserver = new ResizeObserver((entries) => {
-      const box = entries[entries.length - 1]?.contentRect;
-      if (!box) return;
-      this.pendingSize = {
-        w: Math.max(1, Math.floor(box.width * devicePixelRatio)),
-        h: Math.max(1, Math.floor(box.height * devicePixelRatio)),
-      };
-    });
-    this.sizeObserver.observe(this.canvas);
+    this.size ??= new CanvasSize(this.canvas);
   }
 
   private syncCanvasSize(): void {
-    // No observer (an environment without one, or the very first frame before it has
-    // reported): fall back to measuring, which is what this always did.
-    const size = this.pendingSize ?? {
-      w: Math.max(1, Math.floor(this.canvas.clientWidth * devicePixelRatio)),
-      h: Math.max(1, Math.floor(this.canvas.clientHeight * devicePixelRatio)),
-    };
-    this.pendingSize = null;
-    if (this.canvas.width !== size.w || this.canvas.height !== size.h) {
-      this.canvas.width = size.w;
-      this.canvas.height = size.h;
-      this.scene.viewport[2] = size.w;
-      this.scene.viewport[3] = size.h;
+    const size = this.size;
+    if (!size) return;
+    const w = size.width;
+    const h = size.height;
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+      this.scene.viewport[2] = w;
+      this.scene.viewport[3] = h;
     }
   }
 }

@@ -2,6 +2,7 @@ import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import type { DataSource } from "../vfs/types";
+import { CanvasSize } from "./canvasSize";
 
 // Phase 3: render real animated MDX (v800) models using mdx-m3-viewer's own
 // WebGL renderer (plan §1.1 — borrow the renderer behind a thin interface). The
@@ -99,7 +100,13 @@ export class ModelViewerScene {
   private talkSeq = -1; // the "Portrait Talk" sequence, or -1 if the model has none
   private talkRemaining = 0; // ms left playing the talk clip before reverting to idle
 
+  /** The canvas's on-screen size, observed rather than measured — `syncCanvasSize` runs
+   *  inside the render frame, and asking the canvas directly there forces a synchronous
+   *  reflow of everything the frame has already written (see CanvasSize). */
+  private size: CanvasSize;
+
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
+    this.size = new CanvasSize(canvas);
     // Canvas must have a nonzero size before addScene() (viewport/aspect read here).
     this.syncCanvasSize();
 
@@ -238,6 +245,14 @@ export class ModelViewerScene {
     this.last = 0; // fresh dt on resume
   }
 
+  /** Done with this viewer for good — as opposed to `stop`, which is a pause the portrait
+   *  resumes from on the next selection. Releases the observer watching its canvas, which
+   *  would otherwise keep a disposed match's console element alive. */
+  dispose(): void {
+    this.stop();
+    this.size.dispose();
+  }
+
   /**
    * Point the scene camera at the model the way the model itself asks to be looked at.
    *
@@ -324,8 +339,8 @@ export class ModelViewerScene {
   }
 
   private syncCanvasSize(): void {
-    const w = Math.floor(this.canvas.clientWidth * devicePixelRatio) || 800;
-    const h = Math.floor(this.canvas.clientHeight * devicePixelRatio) || 600;
+    const w = Math.floor(this.size.clientWidth * devicePixelRatio) || 800;
+    const h = Math.floor(this.size.clientHeight * devicePixelRatio) || 600;
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;

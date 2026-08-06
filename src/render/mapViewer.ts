@@ -788,7 +788,7 @@ export class MapViewerScene {
   // Fog footprint half-extent of each tree, keyed by its rounded world position — the
   // doodad widgets stream in async, so we can't hold instance refs here. Lets fogWidgets
   // light a tree from ANY cell it covers rather than one self-shadowed origin cell (#43).
-  private treeFogRadius = new Map<string, number>();
+  private treeFogRadius = new Map<number, number>();
   // Animated portrait of the selected unit (own small viewer + canvas).
   private portraitViewer: ModelViewerScene | null = null;
   private portraitFor: number | null = null;
@@ -7745,9 +7745,9 @@ export class MapViewerScene {
     // handed the main menu a letterbox, a transmission panel and a fade to sit behind.
     this.cinematic?.dispose();
     this.cinematic = null;
-    this.cinePortraitViewer?.stop();
+    this.cinePortraitViewer?.dispose();
     this.cinePortraitViewer = null;
-    this.portraitViewer?.stop();
+    this.portraitViewer?.dispose();
     this.portraitViewer = null;
     // …and the body classes the cinematic drove. `cine-on` hides the cursor outright, so
     // left standing it is not a cosmetic leak: the menu you land on has no mouse pointer.
@@ -7958,13 +7958,30 @@ export class MapViewerScene {
       // front-line tree as explored-grey (#43). Props with no footprint use their cell.
       const state = vision.bestStateAt(loc[0], loc[1], this.treeFogRadius.get(fogKey(loc[0], loc[1])) ?? 0);
       if (state === FogState.Unexplored) {
+        if (inst.rendered === false) return; // already dark — nothing to do
         inst.hide(); // never seen — don't even hint at what's there
         return;
       }
       const b = state === FogState.Visible ? 1 : MapViewerScene.FOG_EXPLORED_BRIGHT;
       const base = this.widgetBase(inst);
+      const r = base[0] * b, g = base[1] * b, bl = base[2] * b, a = base[3];
+      // Already wearing exactly this? Then leave it alone.
+      //
+      // A widget's fog state almost never changes from one pass to the next, and this pass
+      // walks EVERY widget the map laid down — 4,345 doodads on Extreme Candy War — ten times
+      // a second. Re-applying an identical tint is not free: `setVertexColor` dirties the
+      // instance for the next batch update, and `show()` churns the scene's render flags with
+      // it. Skipping the unchanged ones is what takes this pass off the frame budget.
+      //
+      // The test reads the instance's CURRENT colour rather than trusting a note of what we
+      // last wrote, which makes it self-healing: a tree mid harvest-blink or lit green as a
+      // spell's target has had its colour taken over by something else (both are skipped
+      // above — but only while they are running), and it must be re-tinted when it comes back
+      // rather than left wearing the effect's colour forever.
+      const cur = inst.vertexColor;
+      if (inst.rendered !== false && cur && cur[0] === r && cur[1] === g && cur[2] === bl && cur[3] === a) return;
       const s = this.tintScratch;
-      s[0] = base[0] * b; s[1] = base[1] * b; s[2] = base[2] * b; s[3] = base[3];
+      s[0] = r; s[1] = g; s[2] = bl; s[3] = a;
       inst.setVertexColor?.(s);
       inst.show();
     };
@@ -9098,11 +9115,20 @@ function standSequence(seqs: Array<{ name: string }>): number {
 }
 
 // Quaternion for a rotation `angle` about +Z (WC3 units are Z-up), into `out`.
-/** Position key for `treeFogRadius`. The sim tree and its rendered doodad are seeded
- *  from the same war3map.doo record, so rounding to a whole world unit matches them
- *  exactly while tolerating float round-tripping through the widget's localLocation. */
-function fogKey(x: number, y: number): string {
-  return `${Math.round(x)},${Math.round(y)}`;
+/**
+ * Position key for `treeFogRadius`. The sim tree and its rendered doodad are seeded
+ * from the same war3map.doo record, so rounding to a whole world unit matches them
+ * exactly while tolerating float round-tripping through the widget's localLocation.
+ *
+ * A NUMBER, not a `"x,y"` string. `fogWidgets` asks this for every widget on the map on
+ * every pass — 4,345 doodads on Extreme Candy War, ten times a second — and building a
+ * string for each one was ~45,000 throwaway strings a second before the Map had even been
+ * consulted. The packing is exact: `y` is a whole number under 65,536/2 in magnitude, so
+ * `x * 131072 + y` is unique, and the largest WC3 map reaches ±30,720 world units, which
+ * keeps the product inside the integers a double represents exactly.
+ */
+function fogKey(x: number, y: number): number {
+  return Math.round(x) * 131072 + Math.round(y);
 }
 
 function zQuat(out: Float32Array, angle: number): void {
