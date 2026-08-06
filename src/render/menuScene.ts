@@ -197,9 +197,24 @@ interface MdxModel {
 
 const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElement): Viewer };
 
-/** A backdrop's camera as AUTHORED — what a backdrop with no tuning block of its own (one
- *  whose model failed to load) is framed by, and the values a fresh block starts at. */
-const NEUTRAL_BACKDROP = { camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0, lightAmbient: 0.45 } as const;
+/**
+ * What EVERY campaign backdrop starts at.
+ *
+ * The camera half is the model's own, untouched — multipliers of 1, no pan, no orbit — because
+ * framing is per-diorama and a nudge that frames Maiev's ruins says nothing about Durotar.
+ *
+ * The LOOK half is shared, because it is not per-scene: the grade and the base ambient describe
+ * how the campaign screen is lit and printed, and the four campaigns are the same screen. Both
+ * were tuned in-browser against a capture of the real client on the Sentinels backdrop
+ * (issue #105); the grade is why an untouched backdrop no longer renders at raw texture
+ * brightness, and lightAmbient is the base the models themselves do not carry
+ * (see `updateOmniLights`).
+ */
+const NEUTRAL_BACKDROP = {
+  camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0,
+  gradeBrightness: 0.67, gradeContrast: 1, gradeSaturation: 0.97, gradeHue: 0,
+  lightAmbient: 0.5,
+} as const;
 
 /**
  * Framing/fog/grade baked per backdrop MODEL, tuned in-browser against a capture of the real
@@ -215,10 +230,12 @@ const NEUTRAL_BACKDROP = { camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw
  * "match the original" means when the two disagree (CLAUDE.md).
  */
 const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
-  // Sentinels / Terror of the Tides (and every campaign on the night-elf backdrop).
+  // Sentinels / Terror of the Tides (and every campaign on the night-elf backdrop). The grade
+  // and ambient this was tuned alongside are in NEUTRAL_BACKDROP, since they are the screen's
+  // look rather than this set's framing.
   "ui\\glues\\singleplayer\\nightelf_exp\\nightelf_exp.mdx": {
-    camZoom: 1.09, camPanX: 90, camPanY: -20, camFov: 0.76, camYaw: 10, camPitch: 6, camRoll: 0,
-    fogStart: 0, fogEnd: 13300, fogR: 0.39, fogG: 0.34, fogB: 0.26,
+    camZoom: 1.05, camPanX: 90, camPanY: -15, camFov: 0.76, camYaw: 10, camPitch: 6, camRoll: 0,
+    fogStart: 0, fogEnd: 13300, fogR: 0.79, fogG: 0.34, fogB: 0.26,
   },
 };
 
@@ -438,8 +455,9 @@ export class MenuScene {
     if (!this.backdropTunings.has(path)) {
       this.backdropTunings.set(path, {
         ...NEUTRAL_BACKDROP,
+        // The campaign's own BackgroundFog* — per-campaign data, so it seeds per campaign and
+        // only a baked entry overrides it.
         fogStart: fog.start, fogEnd: fog.end, fogR: fog.r, fogG: fog.g, fogB: fog.b,
-        gradeBrightness: 1, gradeContrast: 1, gradeSaturation: 1, gradeHue: 0,
         ...BACKDROP_DEFAULTS[path.toLowerCase()],
       });
     }
