@@ -19,6 +19,7 @@ import { makeHeightSampler, makeCliffLevelSampler, makeFootprintMaxSampler, type
 import { FogOverlay } from "./fogOverlay";
 import { UberSplatOverlay } from "./uberSplatOverlay";
 import { ShadowOverlay } from "./shadowOverlay";
+import { parseTerrainShadows, TerrainShadowOverlay } from "./terrainShadowOverlay";
 import { LightningOverlay } from "./lightningOverlay";
 import { WeatherOverlay } from "./weather";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
@@ -850,6 +851,8 @@ export class MapViewerScene {
   // buildings after the foundation decals — see the render loop).
   private shadows: ShadowOverlay | null = null;
   private buildingShadows: ShadowOverlay | null = null;
+  /** The map's own baked shadow layer (war3map.shd) — cliffs, doodads and scenery. */
+  private terrainShadows: TerrainShadowOverlay | null = null;
   // Lightning ribbons (issue #97) — Chain Lightning, Healing Wave, the Drains and kin.
   // Its own GL pass, drawn after the world's translucent instances and before the fog; the
   // bolts are strung by the sim's `drainFxLightnings` events and follow their units.
@@ -1013,6 +1016,8 @@ export class MapViewerScene {
     this.shadows = null;
     this.buildingShadows?.dispose();
     this.buildingShadows = null;
+    this.terrainShadows?.dispose();
+    this.terrainShadows = null;
     this.simBuildingSplats.clear();
     this.mapBuildingSplats.clear();
     this.rts?.dispose();
@@ -1084,6 +1089,11 @@ export class MapViewerScene {
       // foundation decal, not just the grass around it.
       this.shadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
       this.buildingShadows = new ShadowOverlay(this.viewer.gl, terrain, splatLoader);
+      // …and the STATIC half of WC3's shadows: the mask the World Editor bakes for
+      // everything that never moves (render/terrainShadowOverlay.ts). Maps without one
+      // simply get no layer.
+      const shadowMask = parseTerrainShadows(archive.rawBytes("war3map.shd"), terrain);
+      this.terrainShadows = shadowMask ? new TerrainShadowOverlay(this.viewer.gl, terrain, shadowMask) : null;
       // Weather (7.23) — the map's rain/snow/fog particles. Its own pass, drawn last:
       // atmosphere sits between the eye and the world. Particles are born at
       // `height` above the GROUND, so it needs the same terrain sampler the sim uses.
@@ -7493,6 +7503,9 @@ export class MapViewerScene {
         map.renderCliffs();
         // Unit shadows draw BEFORE the opaque units: the top-right cast falls north (away
         // from the camera), so it must be laid down first or the unit body would occlude it.
+        // The map's baked shadow layer goes down FIRST, under everything: it is part of how
+        // the ground looks, so a unit blob and a foundation decal both belong on top of it.
+        if (this.terrainShadows) this.terrainShadows.render(fogScene.camera.viewProjectionMatrix);
         if (this.shadows) this.shadows.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderOpaque();
         map.renderWater();
@@ -7601,6 +7614,8 @@ export class MapViewerScene {
     this.shadows = null;
     this.buildingShadows?.dispose();
     this.buildingShadows = null;
+    this.terrainShadows?.dispose();
+    this.terrainShadows = null;
     this.simBuildingSplats.clear();
     this.mapBuildingSplats.clear();
     this.debug?.dispose();

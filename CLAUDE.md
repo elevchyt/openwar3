@@ -81,6 +81,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   FIVE presentation mechanisms (effect models, buff art, **lightning ribbons**, ubersplats, sound), and two of
   them play no model at all — a Chain Lightning or a Drain has no `Targetart` to find, and a buff's art lives on
   the BUFF row rather than on the ability. Reaching for the wrong one is the standard "this spell has no art" bug.
+- **Lighting & shadows:** read [`docs/lighting.md`](docs/lighting.md) before adding anything light- or
+  shadow-shaped. WC3 has **no real-time shadows** — a shadow is a blob decal, a baked `war3map.shd` mask
+  (16 bytes per terrain CELL, 0-or-255, no header), or nothing — and the glue screens are lit by the
+  models' OWN `LITE` omni lights, sized for a diorama the camera sits 340 units from. It also has the
+  trap that costs an hour: after editing the mdx-m3-viewer patch, restart the dev server and delete
+  `node_modules/.vite`, or Vite keeps serving the pre-patch bundle and your shader change does nothing.
 - **Illusions:** read [`docs/illusions.md`](docs/illusions.md) before touching Mirror Image (`AOmi`), the Wand of
   Illusion (`AIil`), or anything that copies a unit. An illusion's whole point is that the ENEMY can't tell it from
   the original, so every tell (blue wash, summon timer, portrait) is gated on the LOCAL viewpoint, and its
