@@ -38,6 +38,11 @@ interface MdxInstance {
   setSequenceLoopMode(mode: number): void;
   setTeamColor(id: number): void;
   setVertexColor?(c: ArrayLike<number>): void;
+  /** Where the instance's animation is right now — what the camera's own tracks are
+   *  sampled at (see applyCamera). -1 sequence = no clip playing. */
+  sequence: number;
+  frame: number;
+  counter: number;
 }
 interface MdxCamera {
   position: Float32Array;
@@ -45,6 +50,11 @@ interface MdxCamera {
   fieldOfView: number;
   nearClippingPlane: number;
   farClippingPlane: number;
+  /** An MDX camera is an ANIMATED object: `position`/`targetPosition` are its rest pose and
+   *  the KCTR/KTTR/KCRL tracks say where it actually is in the clip being played. */
+  getTranslation(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getTargetTranslation(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getRotation(out: Float32Array, sequence: number, frame: number, counter: number): number;
 }
 interface MdxModel {
   sequences: MdxSequence[];
@@ -58,6 +68,10 @@ const ViewerClass = ModelViewerCtor as unknown as { new (canvas: HTMLCanvasEleme
 // How far to pedestal a portrait bust down, as a fraction of the eye→target
 // distance. Small — just enough to seat the face lower in the console arch.
 const PORTRAIT_PAN_DOWN = 0.08;
+
+// Scratch for the camera's animated offset, sampled once per frame (see applyCamera).
+const CAM_TR = new Float32Array(3);
+const CAM_TTR = new Float32Array(3);
 
 export interface SequenceInfo {
   index: number;
@@ -164,7 +178,7 @@ export class ModelViewerScene {
     this.talkSeq = portrait ? sequences.find((s) => /portrait\s*talk/i.test(s.name))?.index ?? -1 : -1;
     this.talkRemaining = 0;
 
-    this.frameCamera();
+    this.applyCamera();
     await this.viewer.whenAllLoaded(); // wait for textures so it isn't untextured
     return sequences;
   }
@@ -210,6 +224,9 @@ export class ModelViewerScene {
       }
       this.syncCanvasSize();
       this.viewer.updateAndRender(dt); // dt in milliseconds
+      // …then re-aim: the model's camera is animated, so its pose belongs to the frame
+      // that was just advanced (applyCamera).
+      this.applyCamera();
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
@@ -221,20 +238,48 @@ export class ModelViewerScene {
     this.last = 0; // fresh dt on resume
   }
 
-  private frameCamera(): void {
+  /**
+   * Point the scene camera at the model the way the model itself asks to be looked at.
+   *
+   * A portrait bust is framed by the camera the ARTIST put in the file, and that camera is an
+   * **animated object** like any bone: `position`/`targetPosition` are only its rest pose, and
+   * the KCTR (translation), KTTR (target translation) and KCRL (roll) tracks say where it
+   * actually sits for the clip being played. We read the rest pose and stopped there, so every
+   * bust whose camera is animated was framed from a pose the artist never intended anyone to
+   * see — the Spirit Walker's camera pulls back 32 units over its Portrait clip, so his bust
+   * arrived a third too close and cropped to the muzzle. (Models with no camera track — the
+   * Peasant is one — sample to zero and are unaffected, which is why most portraits looked
+   * right and the fancy hero/creep models a custom map reaches for did not.)
+   *
+   * Sampled at the INSTANCE's current sequence/frame, and re-applied every frame from the
+   * render loop, so the camera drifts through the clip as it does in the game.
+   */
+  private applyCamera(): void {
     if (!this.model) return;
     // Portrait (and many unit) models ship their own camera aimed at the face —
     // using it gives the authentic close-up instead of a distant bounds view.
     const cam = this.model.cameras?.[0];
     if (cam) {
       this.scene.camera.perspective(cam.fieldOfView, this.aspect(), cam.nearClippingPlane || 1, cam.farClippingPlane || 10000);
+      // The camera's animated offset at the frame the bust is on. `sequence` is -1 before a
+      // clip is set (and on a model with none), which the tracks read as "rest pose".
+      const seq = this.instance?.sequence ?? -1;
+      const frame = this.instance?.frame ?? 0;
+      const counter = this.instance?.counter ?? 0;
+      cam.getTranslation(CAM_TR, seq, frame, counter);
+      cam.getTargetTranslation(CAM_TTR, seq, frame, counter);
       // Dolly the eye toward the target by camZoom (<1 = closer) for the portrait
       // close-up, keeping the model's authored framing/angle.
-      const tgt = new Float32Array(cam.targetPosition as ArrayLike<number>);
+      const tgt = new Float32Array([
+        cam.targetPosition[0] + CAM_TTR[0],
+        cam.targetPosition[1] + CAM_TTR[1],
+        cam.targetPosition[2] + CAM_TTR[2],
+      ]);
+      const pos = [cam.position[0] + CAM_TR[0], cam.position[1] + CAM_TR[1], cam.position[2] + CAM_TR[2]];
       const eye = new Float32Array([
-        tgt[0] + (cam.position[0] - tgt[0]) * this.camZoom,
-        tgt[1] + (cam.position[1] - tgt[1]) * this.camZoom,
-        tgt[2] + (cam.position[2] - tgt[2]) * this.camZoom,
+        tgt[0] + (pos[0] - tgt[0]) * this.camZoom,
+        tgt[1] + (pos[1] - tgt[1]) * this.camZoom,
+        tgt[2] + (pos[2] - tgt[2]) * this.camZoom,
       ]);
       // Pan the camera sideways (eye + target together) by a fraction of the
       // eye→target distance. "Left" is the horizontal axis perpendicular to the
@@ -287,7 +332,7 @@ export class ModelViewerScene {
       if (this.scene) {
         this.scene.viewport[2] = w;
         this.scene.viewport[3] = h;
-        this.frameCamera();
+        this.applyCamera();
       }
     }
   }

@@ -323,6 +323,14 @@ export function unitSnapshots(sim: {
   return snap;
 }
 
+/** One sim unit as the script sees it — the single-unit twin of `unitSnapshots`, for the
+ *  pumps that name a unit by id rather than sweeping the world (selection events). Null when
+ *  the unit has left the world between the event and the drain. */
+export function unitSnapshot(sim: { readonly units: ReadonlyMap<number, SimUnit> }, id: number): UnitSnapshot | null {
+  const u = sim.units.get(id);
+  return u ? { id: u.id, typeId: u.typeId, owner: jassOwnerOf(u), x: u.x, y: u.y, facing: u.facing } : null;
+}
+
 /** How far a pre-placed unit may sit from the coordinates its own script row names. They should
  *  agree exactly (same placement, two encodings) — a terrain tile of slack absorbs the sim's
  *  spawn re-settle without ever reaching the next unit over. */

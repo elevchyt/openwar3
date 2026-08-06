@@ -28,7 +28,7 @@ import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
 import { RtsController, ILLUSION_TINT, type RtsHost, type SelectionInfo, type PlacedRef } from "../game/rts";
 import type { Instance as RtsInstance } from "../game/rts";
 import type { MatchLinkSetup } from "../game/matchLink";
-import { unitSnapshots } from "../game/jassHooks";
+import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
@@ -680,6 +680,9 @@ export class MapViewerScene {
   /** Does the script watch a unit-state threshold (EVENT_UNIT_STATE_LIMIT)? That event is
    *  polled per tick rather than raised by the sim, so it needs its own gate (7.17). */
   private scriptWatchesUnitState = false;
+  /** Does the script watch SELECTION (EVENT_PLAYER_UNIT_SELECTED/…)? Raised by the RTS's own
+   *  diff of the local selection rather than by the sim — see pumpSelectionEvents. */
+  private scriptWatchesSelection = false;
   private gameMenu: EscMenu | null = null; // F10 — the game's own EscMenuMainPanel.fdf
   private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
   private chatDialog: ChatDialogOverlay | null = null; // F12 — ChatDialog.fdf
@@ -1052,6 +1055,10 @@ export class MapViewerScene {
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
     this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
+    // …and mounted over the install for AUDIO, so a map's imported clips resolve: the paths
+    // its CreateSound calls name (`war3mapImported\HalloweenMusic.wav`) are inside this
+    // archive and nowhere else. See SoundBoard.mountMap.
+    this.sounds?.mountMap(archive);
     // The map's own display name (war3map.w3i) — the Quest Log's white subtitle line.
     // parseMapInfo takes the whole MAP ARCHIVE (it opens the MPQ itself and resolves the
     // name's TRIGSTR_ through war3map.wts), not the w3i bytes — feeding it the w3i was a
@@ -2307,6 +2314,10 @@ export class MapViewerScene {
     // LOADED — 51 player / 88 unit. A campaign harbour scene is the case: the ship leaves the
     // moment its passenger is aboard, and it is a unit-scoped registration on the PASSENGER.
     sw.captureLoads = any("playerUnitEvent", 51) || any("unitEvent", 88);
+    // SELECTED / DESELECTED — 24/25 player, 57/58 unit. Not a sim capture: a selection is
+    // not world state, so the RTS diffs its own (see RtsController.drainSelectionEvents) and
+    // this flag only decides whether we bother asking.
+    this.scriptWatchesSelection = any("playerUnitEvent", 24, 25) || any("unitEvent", 57, 58);
     // EVENT_UNIT_STATE_LIMIT is polled, not raised by the sim (see pumpUnitStates).
     this.scriptWatchesUnitState = rt.triggerRegs.some((r) => r.kind === "unitState");
     this.scriptRegCount = rt.triggerRegs.length;
@@ -2372,6 +2383,18 @@ export class MapViewerScene {
       // A unit that just boarded a transport / burrow (EVENT_UNIT_LOADED).
       const loads = sw.drainLoadEvents();
       if (loads.length) engine.interp.pumpLoadEvents(loads);
+      // What the player selected or deselected this frame. The RTS owns the selection, so
+      // this drain is off the controller rather than the world (the one non-sim event kind).
+      // Drained every tick even when nothing listens — it is the drain that advances the
+      // "what was selected last time" baseline, so a trigger registered mid-match must not
+      // find the whole standing selection waiting for it as news.
+      const picks = this.rts.drainSelectionEvents();
+      if (picks.length && this.scriptWatchesSelection) {
+        engine.interp.pumpSelectionEvents(picks.flatMap((p) => {
+          const u = this.rts ? unitSnapshot(this.rts.simView, p.unitId) : null;
+          return u ? [{ unit: u, player: p.player, selected: p.selected }] : [];
+        }));
+      }
       // Unit-state thresholds (EVENT_UNIT_STATE_LIMIT) are POLLED — nothing in the sim
       // raises "life dropped below 100", so the interpreter tests each watched unit itself.
       if (this.scriptWatchesUnitState) engine.interp.pumpUnitStates();
@@ -2514,17 +2537,25 @@ export class MapViewerScene {
       this.hud?.flashQuests(true);
     }
     if (this.questLog?.visible) this.hud?.flashQuests(false);
-    this.leaderboard?.update(rt.leaderboardFor(this.localPlayer));
+    // **The top-right stack is INTERFACE, and a cinematic takes the interface away.**
+    // `ShowInterface(false)` is the letterbox (see syncHudVisible), and in WC3 it takes the
+    // scoreboard, the leaderboard and the countdown windows with the console — there is no
+    // scoreboard hanging over a cutscene. Ours stayed up, so Extreme Candy War's intro played
+    // under its own kill-count board. Keyed on the letterbox alone, like the cursor and the
+    // console panels: `EnableUserUI(false)` is the momentary blackout blizzard.j flicks around
+    // each cinematic fade, and a board must not blink for it.
+    const cine = !this.interfaceShown;
+    this.leaderboard?.update(cine ? null : rt.leaderboardFor(this.localPlayer));
     // The three top-right panels stack, in the order WC3 stacks them: leaderboard, then
     // multiboard, then the countdown windows — each hangs below whatever the ones above it
     // are already using, so they never overlap.
     const underBoard = this.leaderboard?.occupiedHeight() ?? 0;
-    this.multiboard?.update(rt.multiboards, rt.multiboardSuppressed, underBoard ? underBoard + TIMER_STACK_GAP : 0);
+    this.multiboard?.update(rt.multiboards, cine || rt.multiboardSuppressed, underBoard ? underBoard + TIMER_STACK_GAP : 0);
     // Countdown windows stack below both (7.21). Their TIME isn't pushed — it's read live
     // off each dialog's timer, so this runs every frame, not just when something changed.
     if (this.timerDialogs) {
       const below = underBoard + (this.multiboard?.occupiedHeight() ?? 0);
-      this.timerDialogs.update(rt.timerDialogs, (td) => rt.timerDialogSeconds(td), below ? below + TIMER_STACK_GAP : 0);
+      this.timerDialogs.update(cine ? [] : rt.timerDialogs, (td) => rt.timerDialogSeconds(td), below ? below + TIMER_STACK_GAP : 0);
     }
     // The AUTHORITY's dialogs, for players who are not sitting here (item F7). A client's own
     // script never raises the melee victory/defeat screen — blizzard.j's check runs off unit
@@ -7665,6 +7696,9 @@ export class MapViewerScene {
     this.userUi = true;
     this.userControl = true;
     this.mapScript = null;
+    // The SoundBoard is shared with the menu, so this map's archive comes back off it with
+    // everything else this map brought (see mountMap).
+    this.sounds?.mountMap(null);
     this.registry.clearCustom(); // drop this map's custom object data
     this.abilities.clearCustom();
     this.items.clearCustom();

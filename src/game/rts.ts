@@ -419,6 +419,18 @@ export interface ScriptSpawn {
   simId: number;
 }
 
+/** One change to a player's SELECTION, for the trigger engine's selection events
+ *  (`EVENT_PLAYER_UNIT_SELECTED` / `_DESELECTED`). Raised here rather than by the sim
+ *  because a selection is not world state — it belongs to whoever is looking at the
+ *  world. See RtsController.drainSelectionEvents. */
+export interface SelectionEvent {
+  unitId: number;
+  /** The player who selected it — `GetTriggerPlayer()`, and NOT the unit's owner: the
+   *  hero a picker clicks belongs to a slot nobody is playing. */
+  player: number;
+  selected: boolean;
+}
+
 export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
@@ -438,6 +450,13 @@ export class RtsController {
   // Multi-unit selection: `selected` holds the whole group, `primary` is the
   // leader that drives the HUD (portrait, info panel, command card).
   private selected = new Set<number>();
+  /** What `selected` held the last time the trigger engine was told about it, so the next
+   *  drain can say what entered and what left (see drainSelectionEvents). */
+  private selectionSeen = new Set<number>();
+  /** Units this frame's click RE-ISSUED into the selection although they were already in
+   *  it — WC3's double-click/Ctrl-click rebuilds the selection rather than leaving it
+   *  alone, so the unit is deselected and selected again. See drainSelectionEvents. */
+  private reselected: number[] = [];
   private primary: number | null = null;
   private focusedKey = ""; // sub-group (type, or hero id) currently focused
   private selectedMine: number | null = null; // a selected gold mine (resource)
@@ -1418,6 +1437,39 @@ export class RtsController {
     if (this.primary === id) this.refocus(this.focusedKey);
   }
 
+  /**
+   * What has entered and left the local player's selection since the last drain —
+   * `EVENT_PLAYER_UNIT_SELECTED` / `_DESELECTED` (common.j 24/25), which nothing raised
+   * before and which a large family of custom maps is built on: a hero picker, a shop that
+   * describes what you clicked, a "click the sign to vote" mode chooser. Extreme Candy War
+   * 2004 is the plain case — `TriggerRegisterPlayerSelectionEventBJ` for every player, and
+   * a `Pick Heroes` trigger that hands you the hero on the SECOND selection of the same
+   * costume — so with no event at all its heroes could never be picked.
+   *
+   * Diffed rather than raised at each mutation site, because a selection changes down a
+   * dozen routes (a click, a drag box, a control group, the hero bar, `SelectUnit` from the
+   * script itself, a unit dying or walking into a mine) and every one of them must count.
+   * The re-selection pulse — a deselect+select pair for a unit a double-click re-issued —
+   * is the one thing a diff cannot see, so the click path records it (see selectAt).
+   *
+   * Only the local player has a selection here, so these are all his: the remote slots
+   * aren't playing, and inventing selections for them would fire triggers that never fired.
+   */
+  drainSelectionEvents(): SelectionEvent[] {
+    const out: SelectionEvent[] = [];
+    // WC3's order within one change: what left, then what arrived.
+    for (const id of this.reselected) {
+      if (!this.selectionSeen.has(id) || !this.selected.has(id)) continue; // a real change; the diff has it
+      out.push({ unitId: id, player: this.localPlayer, selected: false });
+      out.push({ unitId: id, player: this.localPlayer, selected: true });
+    }
+    this.reselected.length = 0;
+    for (const id of this.selectionSeen) if (!this.selected.has(id)) out.push({ unitId: id, player: this.localPlayer, selected: false });
+    for (const id of this.selected) if (!this.selectionSeen.has(id)) out.push({ unitId: id, player: this.localPlayer, selected: true });
+    if (out.length) this.selectionSeen = new Set(this.selected);
+    return out;
+  }
+
   // --- sub-group focus (multi-unit selection) -------------------------------
 
   /** Grouping key: units group by type; each hero is its own group. */
@@ -1925,14 +1977,28 @@ export class RtsController {
     this.seeded = true;
   }
 
-  /** Seed a Neutral Passive entity (shop/tavern/lab/merchant/fountain/critter):
-   *  a static, non-hostile sim unit with the yellow ring. We don't drive its
-   *  instance in tick() (the map viewer already renders it) — this record just
-   *  makes it hoverable/selectable and rings it. */
+  /**
+   * Seed a Neutral Passive entity (shop/tavern/lab/merchant/fountain/critter): a non-hostile
+   * sim unit with the yellow ring, so it is hoverable, selectable and ringed.
+   *
+   * "Neutral Passive" is a SLOT, not a promise to stand still, and treating the two as the
+   * same thing is what froze Extreme Candy War's opening. Its whole intro cast — the bats
+   * over the graveyard, the villagers who scatter, the abominations lumbering after them —
+   * is pre-placed on Neutral Passive and moved by `IssuePointOrderLocBJ` from the cinematic
+   * trigger. We gave every neutral-passive unit `speed: 0`, so those orders were accepted
+   * and then obeyed by standing perfectly still, and the intro played out as a group photo.
+   *
+   * So the split is BUILDING vs MOBILE, which is what it always meant: a shop, a fountain or
+   * a tavern is static and keeps the Z the map placed it at (the viewer draws it, tick()
+   * doesn't), while a critter or a cinematic extra gets its real movement from unit data and
+   * is driven like any other unit. Weapons stay empty either way — a neutral-passive unit
+   * never fights, which is the part of "passive" that IS a promise.
+   */
   private seedNeutral(unit: MapUnit, def: UnitDef | undefined, loc: Float32Array): void {
     const simId = this.placed.reserveIdAt(loc[0], loc[1], def?.id ?? "");
     this.seededInstances.add(unit.instance); // RTS drives this shop/critter's fog visibility
     const isBuilding = def?.isBuilding ?? false;
+    const flying = !isBuilding && def?.moveType === MoveType.Fly;
     // Buildings get a (complete) building state so pickAt/rings treat them as
     // structures (footprint-sized ring, lowered collider); their footprint is
     // already stamped by the map loader, so speed 0 → no cell reservation here.
@@ -1949,11 +2015,16 @@ export class RtsController {
         x: loc[0],
         y: loc[1],
         facing: quatToZ(unit.instance.localRotation),
-        speed: 0, // static (never wanders in our sim)
+        // A structure never moves (and its footprint is already stamped by the map loader, so
+        // speed 0 also means no cell reservation here); anything else moves at its own pace,
+        // because a script can order it to.
+        speed: isBuilding ? 0 : def?.speed ?? 0,
         turnRate: def?.turnRate ?? 0.5,
         radius: def?.collision || 16,
-        flying: false,
-        flyHeight: 0, // neutral-passive entities keep their map-placed Z
+        flying,
+        // A static neutral keeps the Z the map placed it at; a mobile one rides the ground
+        // plus its own flight height, the same lift its Entry gets.
+        flyHeight: flying ? lift(def?.moveHeight ?? 0) : 0,
         sightDay: def?.sightDay || 1400,
         sightNight: def?.sightNight || def?.sightDay || 800,
         hp: def?.hitPoints || 100,
@@ -1990,7 +2061,9 @@ export class RtsController {
       simId,
       unit,
       anims: buildAnimSet(unit.instance.model.sequences, def?.animProps),
-      moveHeight: 0,
+      // A static neutral keeps its map-placed Z (tick() does not drive it); a mobile one is
+      // drawn like any unit, so it needs the same flight lift its sim unit carries.
+      moveHeight: isBuilding ? 0 : lift(def?.moveHeight ?? 0),
       footHalfW: 0, // neutral-passive buildings keep their map-placed Z (not driven here)
       footHalfH: 0,
       selRadius: (def?.selScale || 1) * SEL_RADIUS_PER_SCALE,
@@ -2605,7 +2678,13 @@ export class RtsController {
       const prevY = Number.isNaN(e.prevDrawnY) ? u.y : e.prevDrawnY;
       e.prevDrawnX = u.x;
       e.prevDrawnY = u.y;
-      if (u.neutralPassive) {
+      // A neutral-passive STRUCTURE (shop, tavern, fountain) is drawn where the map put it —
+      // the viewer already placed that widget and we only own its fog visibility. So is a
+      // DESTRUCTIBLE, whose body is borrowed outright from the doodad pass (Entry.borrowedBody)
+      // and whose Z is the doodad's, not the terrain's — drive one from the sim and the crate
+      // floats. A mobile neutral is neither: a critter, or a cinematic extra a trigger orders
+      // across the graveyard, is drawn from the sim like any other unit (see seedNeutral).
+      if (u.neutralPassive && (u.building || e.borrowedBody)) {
         this.applyVisibility(e, u, this.modelHidden(e.simId)); // static & viewer-rendered, but fog still hides/reveals it
         continue;
       }
@@ -3043,6 +3122,14 @@ export class RtsController {
         this.selectByType(e!.typeId);
         return;
       }
+      // A double-click (or a Ctrl-click) REBUILDS the selection — WC3 clears it and selects
+      // the type group afresh, even when that group is the one unit you were already
+      // holding. That rebuild is what raises a second EVENT_PLAYER_UNIT_SELECTED on a unit
+      // already selected, and a whole genre of custom map is written on it: Extreme Candy
+      // War's hero picker shows the costume's description on the first click and hands you
+      // the hero on the second (`Pick Heroes`, war3map.j — the two clicks are two selection
+      // events on the same unit). A plain re-click is NOT a rebuild and raises nothing.
+      if (mods.sameType && this.selected.has(id)) this.reselected.push(id);
       this.selected.clear();
       this.selected.add(id);
       this.selectedMine = null;
@@ -3095,7 +3182,13 @@ export class RtsController {
       if (this.onScreen(u, e)) picked.push(e.simId);
     }
     if (!picked.length) return;
-    if (!additive) this.selected.clear();
+    // A same-type grab REPLACES the selection, so a unit that was in it and is in it again
+    // has been deselected and reselected — the second selection event a double-click owes
+    // the script (see selectAt).
+    if (!additive) {
+      for (const sid of picked) if (this.selected.has(sid)) this.reselected.push(sid);
+      this.selected.clear();
+    }
     for (const sid of picked) {
       if (this.selected.size >= MAX_SELECT) break;
       this.selected.add(sid);

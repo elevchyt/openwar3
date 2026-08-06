@@ -40,6 +40,20 @@ const ROW_H = 0.0135; // one row's pitch — sized off MultiboardTitle's 0.011f 
 const TITLE_H = 0.0235; // the title band (the FDF's 0.024 minimize button, near enough)
 const COL_W = 0.055; // a column's default width when the script sets none
 const PAD = 0.008; // the body backdrop's inset below the last row
+// How far the title band's right edge reaches PAST the minimize button's left edge —
+// MultiBoard.fdf's own number: `SetPoint TOPRIGHT, "MultiboardMinimizeButton", TOPLEFT, 0.0057, 0`.
+// The body backdrop spans the title's left edge to the button's RIGHT edge, so it is wider than
+// the title by the button (0.024) less this overlap. Getting that subtraction wrong is not a
+// hairline: the body is the box the CELLS are laid out in, so an over-wide one hangs the whole
+// first column out past the left edge of the panel, which is what the rows were doing.
+const TITLE_BUTTON_OVERLAP = 0.0057;
+// A row's left/right inset inside the body backdrop — the same job ROW_INSET does on the
+// leaderboard, and read the same way: the FDF's own `MultiboardListContainer` offset (0.001f)
+// does not even clear the border, which is what put the first column hard against the gold edge
+// and the longest names ("The Alliance", "Player 10") half under it. The floor is the backdrop's
+// `BackdropBackgroundInsets 0.005f` — the ring the border art occupies — and this sits a gutter
+// past it so the left margin reads the same as the right one the last column leaves.
+const ROW_INSET = 0.014;
 const MARGIN_X = 0.006;
 const MARGIN_Y = 0.052; // clears the resource bar — the same top inset the leaderboard uses
 
@@ -178,7 +192,7 @@ export class MultiboardOverlay {
           props: [
             ...c.props.filter((p) => p.key !== "Height" && p.key !== "Width"),
             { key: "Height", args: [num(Math.max(0.001, bodyH))] },
-            { key: "Width", args: [num(width + 0.024)] },
+            { key: "Width", args: [num(width + 0.024 - TITLE_BUTTON_OVERLAP)] },
           ],
         };
       }
@@ -217,6 +231,9 @@ export class MultiboardOverlay {
     const scale = (screen.element.clientHeight || box.height) / UI_HEIGHT;
     const rowPx = ROW_H * scale;
     const fontPx = Math.max(8, Math.min(FONT * scale, rowPx));
+    // The grid lives INSIDE the border, not against it (see ROW_INSET).
+    const insetPx = ROW_INSET * scale;
+    const gridW = Math.max(1, box.width - 2 * insetPx);
 
     // Column x-offsets, from the same per-column widths the board was sized with.
     const widths: number[] = [];
@@ -235,8 +252,8 @@ export class MultiboardOverlay {
         const cell = document.createElement("div");
         cell.className = "multiboard-cell";
         cell.style.top = `${r * rowPx}px`;
-        cell.style.left = `${xFrac * box.width}px`;
-        cell.style.width = `${wFrac * box.width}px`;
+        cell.style.left = `${insetPx + xFrac * gridW}px`;
+        cell.style.width = `${wFrac * gridW}px`;
         cell.style.height = `${rowPx}px`;
         cell.style.fontSize = `${fontPx}px`;
         xFrac += wFrac;

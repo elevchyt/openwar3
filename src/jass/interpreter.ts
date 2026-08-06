@@ -99,6 +99,13 @@ export interface LoadEvent {
   unit: UnitSnapshot;
   transport: UnitSnapshot;
 }
+/** A unit entering or leaving a player's SELECTION (24/25 player, 57/58 unit). `player` is
+ *  who selected it, which is NOT the unit's owner — see pumpSelectionEvents. */
+export interface SelectionEvent {
+  unit: UnitSnapshot;
+  player: number;
+  selected: boolean;
+}
 
 /** common.j `constant playerevent EVENT_PLAYER_END_CINEMATIC = ConvertPlayerEvent(17)` — ESC
  *  pressed while a cinematic is playing. Exported because the RAISER is the engine side
@@ -155,6 +162,12 @@ const ITEM_PHASES = ["drop", "pickup", "use"] as const;
 // A unit loaded into a transport / burrow (common.j 51 player, 88 unit).
 const EVENT_PLAYER_UNIT_LOADED = 51;
 const EVENT_UNIT_LOADED = 88;
+// Selection (common.j 24/25 player, 57/58 unit) — what TriggerRegisterPlayerSelectionEventBJ
+// compiles to. See pumpSelectionEvents.
+const EVENT_PLAYER_UNIT_SELECTED = 24;
+const EVENT_PLAYER_UNIT_DESELECTED = 25;
+const EVENT_UNIT_SELECTED = 57;
+const EVENT_UNIT_DESELECTED = 58;
 
 const isRect = (o: unknown): o is RectObj =>
   !!o && typeof (o as RectObj).minx === "number" && typeof (o as RectObj).maxx === "number";
@@ -1255,6 +1268,36 @@ export class Interpreter {
       this.dispatchToRegs(responses, (reg) =>
         (reg.kind === "playerUnitEvent" && this.playerUnitEventMatches(reg, EVENT_PLAYER_UNIT_LOADED, e.unit.owner, passenger)) ||
         (reg.kind === "unitEvent" && this.unitEventIs(reg, EVENT_UNIT_LOADED) && this.paramUnitIs(reg, passenger)));
+    }
+  }
+
+  /**
+   * Pump SELECTION events — `EVENT_PLAYER_UNIT_SELECTED` / `_DESELECTED` (24/25), and their
+   * unit-scoped twins (57/58).
+   *
+   * These are the one event family matched by a player who is NOT the subject's owner.
+   * `TriggerRegisterPlayerSelectionEventBJ(t, Player(0), true)` asks "when player 0 selects
+   * ANY unit", and the unit is routinely somebody else's — Extreme Candy War's hero costumes
+   * stand on slots 5 and 11, which nobody plays, and the trigger reads
+   * `GetOwningPlayer(GetTriggerUnit())` itself to check that's where the click landed. So the
+   * registration's player is compared against the SELECTOR (`GetTriggerPlayer`) here, not
+   * against the owner the way every other player-unit event does.
+   */
+  pumpSelectionEvents(events: ReadonlyArray<SelectionEvent>): void {
+    for (const e of events) {
+      const unit = this.rt.unitForSim(e.unit);
+      const responses = new Map<string, JassValue>([
+        ["TriggerUnit", unit],
+        ["TriggerPlayer", this.rt.playerHandle(e.player)],
+      ]);
+      const playerEvt = e.selected ? EVENT_PLAYER_UNIT_SELECTED : EVENT_PLAYER_UNIT_DESELECTED;
+      const unitEvt = e.selected ? EVENT_UNIT_SELECTED : EVENT_UNIT_DESELECTED;
+      this.dispatchToRegs(responses, (reg) =>
+        (reg.kind === "playerUnitEvent"
+          && this.rt.enumIndex(reg.params[1] ?? JNULL) === playerEvt
+          && this.rt.data<JassPlayer>(reg.params[0])?.index === e.player
+          && this.eventFilterPasses(reg.params[2], unit))
+        || (reg.kind === "unitEvent" && this.unitEventIs(reg, unitEvt) && this.paramUnitIs(reg, unit)));
     }
   }
 

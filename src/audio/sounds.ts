@@ -1,6 +1,7 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import { parseWar3Skins, skinValue, SKIN_VERSION_SUFFIX, WAR3SKINS } from "../data/war3skins";
+import { LayeredDataSource } from "../vfs/layered";
 import type { DataSource } from "../vfs/types";
 
 // Unit voice lines & sound effects, sourced entirely from the real WC3 sound data
@@ -349,10 +350,29 @@ export class SoundBoard {
    *  the host drives the 3D portrait's talk animation off this. */
   onVoiceStart: ((label: string, durationSec: number) => void) | null = null;
 
-  constructor(private vfs: DataSource) {
+  /** Where a sound's bytes are read from: the install, with the running MAP's own archive
+   *  layered on top (see mountMap). Starts as the install alone. */
+  private vfs: DataSource;
+
+  constructor(private install: DataSource) {
+    this.vfs = install;
     for (const [tag, path] of [["ack", ACK_TABLE], ["anim", ANIM_TABLE], ["combat", COMBAT_TABLE], ["ui", UI_TABLE], ["ambience", AMBIENCE_TABLE], ["animlookups", ANIMLOOKUPS_TABLE], ["ability", ABILITY_TABLE], ["dialog", DIALOG_TABLE]] as const) {
       this.tables.set(tag, this.loadTable(path));
     }
+  }
+
+  /**
+   * Mount the running map's archive over the install, or `null` to take it back off.
+   *
+   * A map's IMPORTED sounds live in the map, not in the game — `war3mapImported\…` is a path
+   * inside the `.w3x`, and the file search order WC3 uses puts the map archive first. We only
+   * ever looked in the install, so `CreateSound("war3mapImported\\HalloweenMusic.wav")` found
+   * nothing and every imported clip a custom map plays was silent: Extreme Candy War's intro
+   * music, its bats, its wolves, all 27 of its imported WAVs. Layered rather than swapped, so
+   * a map that names a stock path still gets the stock file.
+   */
+  mountMap(map: DataSource | null): void {
+    this.vfs = map ? new LayeredDataSource([map, this.install]) : this.install;
   }
 
   private loadTable(path: string): Table | null {
