@@ -20,6 +20,19 @@ import type { GlueChrome, MenuScene } from "../render/menuScene";
 /** The beat between one screen leaving and the next arriving. */
 const GAP_MS = 120;
 
+/**
+ * How long the screen takes to go to black, and to come back off it, when the 3D scene behind
+ * it CHANGES — arriving on a campaign screen from the menu's own Icecrown, or crossing from one
+ * campaign's set to another.
+ *
+ * Every other glue transition is carried by the panel chrome: the old screen's frames slide off
+ * on their Death clip and the new one's drop in on its Birth, and the 3D background behind them
+ * never moves. A campaign screen has no chrome at all (see GlueScreenDef.backdrop), so a swap
+ * there is one whole world cutting to another with nothing covering the join. Black is what
+ * covers it.
+ */
+const FADE_MS = 260;
+
 /** A screen that can be built on demand — the manager mounts it only when navigated to. */
 export interface GlueScreenDef {
   /** Which of the panel model's chrome sets this screen wears. Ignored when `backdrop` is
@@ -49,6 +62,8 @@ export class GlueManager {
   /** Whether the screen on screen is a backdrop one — it decides what leaving it does. */
   private backdropUp = false;
   private busy = false;
+  /** The black the screen crosses through on a scene swap; built on first use. */
+  private fade: HTMLElement | null = null;
 
   constructor(private scene: MenuScene | null) {}
 
@@ -98,6 +113,11 @@ export class GlueManager {
     if (this.busy) return null;
     this.busy = true;
     const leaving = this.current;
+    // A swap of the 3D scene itself goes through black (see FADE_MS). Re-entering the SAME
+    // backdrop is not a swap — the scene stays exactly where it is (MenuScene.showBackdrop),
+    // so there is nothing to cover and the screen must not blink.
+    const swappingScene = !!def.backdrop && def.backdrop.path !== this.scene?.backdropPath;
+    if (swappingScene) await this.toBlack(true);
     // Every button on the screen goes dead the moment one of them is clicked — BEFORE the
     // next screen is built below, which is an await and can take a moment (the Custom Game
     // screen loads four more .fdf files). Wait until after it and the buttons stay live for
@@ -123,14 +143,21 @@ export class GlueManager {
       this.current = next;
       next.element.style.visibility = "";
       const birth = await this.arrive(def);
+      // Lift the black the MOMENT the new scene exists, and let the screen's contents fade up
+      // over it rather than after it. A backdrop's Birth is a camera move — NightElf_Exp sweeps
+      // its eye ~220 units and rolls it while Maiev turns to meet it — and holding black until
+      // the DOM had finished (another 0.7 s) spent most of that shot behind the cover.
+      const reveal = swappingScene ? this.toBlack(false) : null;
       // animatePanels("in") drops the contents to transparent in this same task, so they
       // never paint at full opacity for a frame before the panel that carries them arrives.
       await next.animatePanels("in", birth || NO_CHROME_IN_MS);
+      await reveal;
       next.setInteractive(true);
       return next;
     } catch (err) {
       console.error("[OpenWar3] couldn't open that menu:", err);
       leaving?.setAllDisabled(false); // give the player their screen back
+      if (swappingScene) await this.toBlack(false); // never leave the player staring at black
       return null;
     } finally {
       this.busy = false;
@@ -161,12 +188,29 @@ export class GlueManager {
     this.current = null;
   }
 
+  /** Cover the screen in black (or take the cover away), and resolve once it has finished.
+   *  The overlay swallows clicks while it is up, so the dead beat mid-swap cannot be clicked
+   *  through to whichever screen happens to be mounted underneath. */
+  private async toBlack(on: boolean): Promise<void> {
+    if (!this.fade) {
+      this.fade = document.createElement("div");
+      this.fade.className = "glue-fade";
+      document.body.appendChild(this.fade);
+    }
+    const el = this.fade;
+    el.style.transitionDuration = `${FADE_MS}ms`;
+    el.classList.toggle("glue-fade-on", on);
+    await wait(FADE_MS);
+  }
+
   /** The screen currently on the menu (null while nothing is mounted). */
   get screen(): FdfScreen | null { return this.current; }
 
   dispose(): void {
     this.current?.dispose();
     this.current = null;
+    this.fade?.remove();
+    this.fade = null;
   }
 }
 

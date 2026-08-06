@@ -134,6 +134,27 @@ body.in-game {
   z-index: 40; /* over the HUD and the world layer, under the F10 menu's modal (50) */
   pointer-events: none;
 }
+/* The black a glue transition crosses when the 3D SCENE behind it changes — onto a campaign
+   backdrop, or from one campaign's set to another (ui/glue.ts). Every other transition is
+   carried by the panel chrome sliding off and back on; a campaign screen has no chrome, so a
+   swap there is one world cutting to another and black is what covers the join.
+
+   Below #loading-layer (40) — starting a match must black the screen out over this, not
+   under it — and above #ui and its debug panel, which are part of what a swap replaces. */
+.glue-fade {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+.glue-fade.glue-fade-on {
+  opacity: 1;
+  pointer-events: auto; /* a click into the dead beat must not reach the screen underneath */
+}
+
 #loading { z-index: 8; background: #000; }
 .fdf-screen.fdf-loading { z-index: 9; }
 

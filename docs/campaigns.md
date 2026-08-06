@@ -61,6 +61,30 @@ behind a screen the player never left. A Birth is how a scene *arrives*; if it i
 there, it has arrived. Only a different campaign's model tears the old one down and births the
 new one.
 
+**The Birth is a camera move, and the camera is the model's.** A glue model's camera carries
+`KCTR`/`KTTR`/`KCRL` tracks — NightElf_Exp sweeps its eye and rolls it across its
+`Birth [6633..9933]` while Maiev turns to meet it — so `frameCameras` samples the camera at the
+instance's current frame every frame rather than reading the static pose. The static pose is
+where the camera ENDS; reading only that threw the whole shot away and made a model with a
+Birth look as though it had none.
+
+Two traps sit under that, and both produce the same "there is no animation" symptom:
+
+* **A stalled frame must not fast-forward the clip.** Building the screen blocks the main
+  thread, and the first frame afterwards carries the whole stall as its `dt`. Fed straight to
+  the animation clock, a 3.3 s hitch advanced the 3.3 s Birth in ONE step. The scene's step is
+  clamped (`MAX_FRAME_MS`).
+* **The hand-off to `Stand` is watched, not timed.** With the step clamped, the clip runs behind
+  wall time by however long the stall was, so a `setTimeout(birthLength)` cut the arrival short.
+  `settleBackdrop` switches on the frame the Birth's last keyframe is reached.
+
+**A scene swap crosses through black.** Arriving on a campaign screen from the menu's own
+Icecrown, or crossing from one campaign's set to another, fades out and back (`FADE_MS` in
+`ui/glue.ts`). Every other glue transition is carried by the panel chrome sliding off and back
+on with the 3D background untouched behind it; a campaign screen has no chrome, so a swap there
+is one whole world cutting to another with nothing covering the join. Re-entering the SAME
+backdrop is not a swap and must not blink.
+
 A backdrop's camera is used **as authored**, with one correction: it frames a 4:3 screen
 exactly (Maiev's ruins have nothing painted past their edges), so a wider viewport keeps the
 authored HORIZONTAL extent and gives up height for it. Feed that vertical FOV to 16:9 unchanged

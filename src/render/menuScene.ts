@@ -128,6 +128,11 @@ export interface OmniLights {
 /** Must match `MAX_OMNI` in the patched sd.frag. */
 const MAX_OMNI = 8;
 
+/** The largest step the scene's animation clock will take in one frame (see `start`). Two
+ *  dropped frames' worth — enough that ordinary jitter passes through untouched, small enough
+ *  that a screen build cannot swallow a whole clip. */
+const MAX_FRAME_MS = 33;
+
 type Solver = (src: unknown) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
@@ -185,6 +190,12 @@ interface MdxCamera {
   fieldOfView: number;
   nearClippingPlane: number;
   farClippingPlane: number;
+  /** A glue model's camera is ANIMATED — see `frameCameras`. KCTR moves the eye, KTTR the
+   *  target, KCRL rolls it; each getter writes into `out` and falls back to no offset at all
+   *  off-sequence, so a model with no tracks samples to the static pose. */
+  getTranslation(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getTargetTranslation(out: Float32Array, sequence: number, frame: number, counter: number): number;
+  getRotation(out: Float32Array, sequence: number, frame: number, counter: number): number;
 }
 interface MdxModel {
   sequences: MdxSequence[];
@@ -262,7 +273,9 @@ export class MenuScene {
   private backdrops = new Map<string, MdxModel>();
   private backdropModel: MdxModel | null = null;
   private backdropInstance: MdxInstance | null = null;
-  private backdropTimer = 0;
+  /** The frame the current backdrop's Birth ends on, or null once it has settled (see
+   *  showBackdrop). Watched by the frame loop rather than timed off a wall clock. */
+  private backdropBirthEnd: number | null = null;
   /** Per-backdrop framing/fog tuning (issue #105) and which one is currently up. */
   private backdropTunings = new Map<string, BackdropTuning>();
   private backdropShown: string | null = null;
@@ -286,6 +299,8 @@ export class MenuScene {
   };
   private lightVec = new Float32Array(3);
   private lightScalar = new Float32Array(1);
+  private camVec = new Float32Array(3);
+  private camScalar = new Float32Array(1);
 
   /** Fired when one of the panel chrome's own SND event objects comes due in a clip we are
    *  playing, with its 4-char AnimLookups code ("ARPD"). The host hands it to the SoundBoard,
@@ -483,15 +498,15 @@ export class MenuScene {
     const instance = this.addInstance(model, this.scene3d, /^birth$/i);
     instance.setSequenceLoopMode(0);
     this.backdropInstance = instance;
-    const birth = seqLengthOf(model, "Birth");
-    clearTimeout(this.backdropTimer);
-    this.backdropTimer = window.setTimeout(() => {
-      const stand = model.sequences.findIndex((s) => /^stand$/i.test(s.name));
-      if (stand >= 0 && this.backdropInstance === instance) {
-        instance.setSequenceLoopMode(2);
-        instance.setSequence(stand);
-      }
-    }, birth);
+    // Settle onto the Stand when the BIRTH ITSELF finishes — watched on the animation clock in
+    // `start`, not scheduled on a wall clock. The two are not the same thing: building the
+    // screen and any hitch after it starve the render loop, whose step is clamped
+    // (MAX_FRAME_MS), so the clip runs behind wall time by however long the stall was. A
+    // setTimeout(birthLength) then cut the arrival short — on a cold entry it fired while the
+    // camera was still a third of the way through its sweep, which is the same "no Birth
+    // animation" symptom by a different route.
+    const birthSeq = model.sequences.find((q) => /^birth$/i.test(q.name));
+    this.backdropBirthEnd = birthSeq ? birthSeq.interval[1] : null;
     // The menu's own scene stops drawing behind it, as do the screen-edge sprite layers.
     if (this.menuInstance) this.scene3d.removeInstance(this.menuInstance);
     this.panelsHidden = true;
@@ -515,7 +530,6 @@ export class MenuScene {
   }
 
   private clearBackdrop(): void {
-    clearTimeout(this.backdropTimer);
     if (this.backdropInstance) {
       this.scene3d.removeInstance(this.backdropInstance);
       this.instances = this.instances.filter((i) => i !== this.backdropInstance);
@@ -523,6 +537,7 @@ export class MenuScene {
     this.backdropInstance = null;
     this.backdropModel = null;
     this.backdropShown = null;
+    this.backdropBirthEnd = null;
   }
 
   private async loadPanel(path: string, scene: Scene): Promise<void> {
@@ -623,7 +638,14 @@ export class MenuScene {
   start(): void {
     if (this.raf) return;
     const frame = (t: number): void => {
-      const dt = this.last ? t - this.last : 1000 / 60;
+      // CLAMP the step. Building a glue screen blocks the main thread — the campaign screen
+      // parses CampaignMenu.fdf and decodes its textures — and the first frame after that
+      // stall carries the whole stall as its dt. Fed to the animation clock straight, a 3.3 s
+      // hitch advanced NightElf_Exp's 3.3 s "Birth" in ONE step: the model's camera arrived at
+      // its final pose before a single frame of the sweep had been drawn, so the campaign
+      // screen looked like it had no arrival animation at all. A dropped frame is time the
+      // player did not see; it is not time the scene should skip.
+      const dt = Math.min(this.last ? t - this.last : 1000 / 60, MAX_FRAME_MS);
       this.last = t;
       this.syncCanvasSize();
       // update() then render(), rather than updateAndRender(), so the lights are read from
@@ -631,10 +653,28 @@ export class MenuScene {
       // and parented into the scene's own hierarchy, so a frame's lag is a frame's lag.
       this.viewer.update(dt);
       this.updateOmniLights();
+      this.settleBackdrop();
+      // A backdrop's camera is keyframed (see frameCameras), so its framing is a per-frame
+      // question while one is up — not something to settle once at showBackdrop.
+      if (this.backdropInstance) this.frameCameras();
       this.viewer.render();
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);
+  }
+
+  /** Hand a backdrop from its Birth to its looping Stand the frame the Birth reaches its last
+   *  keyframe — see showBackdrop for why this is watched rather than timed. */
+  private settleBackdrop(): void {
+    const end = this.backdropBirthEnd;
+    const instance = this.backdropInstance;
+    const model = this.backdropModel;
+    if (end === null || !instance || !model || instance.frame < end) return;
+    this.backdropBirthEnd = null;
+    const stand = model.sequences.findIndex((q) => /^stand$/i.test(q.name));
+    if (stand < 0) return;
+    instance.setSequenceLoopMode(2);
+    instance.setSequence(stand);
   }
 
   /**
@@ -706,7 +746,6 @@ export class MenuScene {
     this.stop();
     this.canvas.style.filter = ""; // the grade is ours; don't leave it on the element
     clearTimeout(this.chromeTimer);
-    clearTimeout(this.backdropTimer);
     this.clearSoundTimers();
     for (const inst of this.instances) {
       for (const scene of [this.scene3d, this.scenePanel, this.sceneLeft]) {
@@ -756,7 +795,35 @@ export class MenuScene {
         ? 2 * Math.atan(Math.tan(cam.fieldOfView / 2) * Math.min(1, (4 / 3) / (w / h))) * (bt?.camFov ?? 1)
         : cam.fieldOfView * t.camFov;
       this.scene3d.camera.perspective(fov, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
-      const tgt = [cam.targetPosition[0], cam.targetPosition[1], cam.targetPosition[2]];
+
+      // The model's camera is ANIMATED, and on a campaign backdrop that animation IS the
+      // screen's arrival: NightElf_Exp keys KCTR/KTTR/KCRL across its "Birth" [6633..9933], so
+      // the eye sweeps and rolls into place while Maiev turns to meet it. Reading only the
+      // static pose — which is where the camera ENDS — threw the whole shot away and made a
+      // model with a Birth look as though it had none.
+      //
+      // The tracks are offsets from the static pose, so a model with no camera animation (or an
+      // instance off-sequence) samples to zero and lands exactly where it always did.
+      const anim = backdrop ? this.backdropInstance : null;
+      const camOff = this.camVec;
+      let rollRad = 0;
+      if (anim && typeof cam.getTranslation === "function") {
+        cam.getTargetTranslation(camOff, anim.sequence, anim.frame, anim.counter);
+      } else {
+        camOff.fill(0);
+      }
+      const tgt = [
+        cam.targetPosition[0] + camOff[0],
+        cam.targetPosition[1] + camOff[1],
+        cam.targetPosition[2] + camOff[2],
+      ];
+      if (anim && typeof cam.getTranslation === "function") {
+        cam.getTranslation(camOff, anim.sequence, anim.frame, anim.counter);
+        cam.getRotation(this.camScalar, anim.sequence, anim.frame, anim.counter);
+        rollRad = this.camScalar[0];
+      } else {
+        camOff.fill(0);
+      }
       // The eye as an OFFSET from the model's own camera target, dollied by zoom — rotating is
       // then just turning that offset, which is what the game's camera fields describe: an
       // angle about a target, not a free-flying eye (docs/camera.md).
@@ -785,7 +852,9 @@ export class MenuScene {
       }
       // ROLL is the up vector turned about the view direction — the image spins, the framing
       // does not move.
-      const worldUp: V3 = c.camRoll ? rotateAbout([0, 0, 1], fwd, (c.camRoll * Math.PI) / 180) : [0, 0, 1];
+      // The model's own KCRL roll and the tuning's camRoll are the same axis; sum them.
+      const roll = rollRad + (c.camRoll * Math.PI) / 180;
+      const worldUp: V3 = roll ? rotateAbout([0, 0, 1], fwd, roll) : [0, 0, 1];
       this.scene3d.camera.moveToAndFace(new Float32Array(eye), new Float32Array(tgt), new Float32Array(worldUp));
     }
     this.scene3d.viewport.set([0, 0, w, h]);
