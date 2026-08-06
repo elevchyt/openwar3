@@ -137,6 +137,20 @@ body.in-game {
 #loading { z-index: 8; background: #000; }
 .fdf-screen.fdf-loading { z-index: 9; }
 
+/* NO CURSOR while the loading screen is up. The reference takes the pointer away for the load —
+   there is nothing on that screen to point at, and on a campaign chapter it stays up until the
+   player presses a key, which is not a thing you click. Set by mountLoadingScreen and taken off
+   by its dispose.
+
+   The `html` on the front is not decoration: both rules this has to beat are `!important` — the
+   menu hand (ui/cursor.ts, `body:not(.in-game) *`) and the in-game race cursor
+   (mapViewer.applyRaceCursor, `body.in-game *`, which also writes an inline style, and which is
+   live during the load because `body.in-game` is set while the bar is still moving). At equal
+   specificity the winner is source order, and both of those style elements are appended to
+   <head> at RUNTIME — after this file. The extra element selector settles it outright. */
+html body.loading-screen,
+html body.loading-screen * { cursor: none !important; }
+
 /* Floating status bars above EVERY visible unit (always-on, WC3-style): a hero
    level badge (left), an HP bar, and a mana bar below (when the unit has mana).
    Width is set inline, relative to the unit's on-screen size. The selection/

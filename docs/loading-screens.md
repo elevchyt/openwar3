@@ -120,6 +120,14 @@ minimap hanging out of its painted frame, the name plates overlong.
 So the screen has a layer of its own, `#loading-layer`, a sibling of `#ui` in `index.html`. It
 is the browser's frame, like the menus, not the game's.
 
+And it shows **no cursor**: `mountLoadingScreen` puts `loading-screen` on the body for as long as
+it is up, and `style.css` takes the pointer away for it. There is nothing on that screen to point
+at, and on a campaign chapter it stays up until a KEY. The rule has to out-specify two
+`!important` ones — the menu hand (`ui/cursor.ts`) and the in-game race cursor
+(`applyRaceCursor`, live during the load because `body.in-game` is already set) — and both of
+those style elements are appended to `<head>` at runtime, i.e. after `style.css`, so an
+equal-specificity rule would lose on source order. Hence `html body.loading-screen`.
+
 ## And the menus leave before it arrives
 
 The reference does not cut from the Custom Game screen to the loading screen: it plays the same

@@ -43,6 +43,10 @@ import {
 
 const LOADING_FDF = "UI\\FrameDef\\Glue\\Loading.fdf";
 
+/** On `<body>` for as long as the screen is up: the reference shows NO cursor while a map is
+ *  loading — there is nothing on that screen to point at (style.css). */
+const LOADING_CURSOR_CLASS = "loading-screen";
+
 /** The pitch of the roster: one player row, and one team heading over a run of them. The row
  *  itself is the FDF's own 0.0217 tall; the rest is the gap the reference leaves between the
  *  name plates, and a heading is a line of `StandardLabelTextTemplate` (0.013) plus its lead. */
@@ -218,6 +222,12 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
     else if (!loaded) setCaption("LOADING_LOADING", "L  O  A  D  I  N  G");
   };
 
+  // The pointer goes away with the menus, and comes back with the match (style.css
+  // `body.loading-screen`). Set here rather than at the top of this function so a mount that
+  // THROWS — the load failed, the art is missing — leaves the cursor alone rather than taking
+  // it away for good; by this line the screen is built and its `dispose` will run.
+  document.body.classList.add(LOADING_CURSOR_CLASS);
+
   return {
     setProgress: (p) => scene.setProgress(p),
     finish(): void {
@@ -261,6 +271,7 @@ export async function mountLoadingScreen(opts: LoadingScreenOptions): Promise<Lo
       if (melee) paintMinimap(screen, info, preview, icons);
     },
     dispose(): void {
+      document.body.classList.remove(LOADING_CURSOR_CLASS);
       stopWaiting?.();
       scene.dispose();
       screen.dispose();
