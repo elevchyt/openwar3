@@ -4,7 +4,7 @@ import type { FdfLibrary } from "./fdf/library";
 import type { FdfScreen } from "./fdf/render";
 import type { Option } from "./fdf/widgets";
 import type { Controller } from "./lobby";
-import { arg, num, setProp, size, str } from "./mapBrowser";
+import { arg, findFrame, num, setProp, size, str } from "./mapBrowser";
 
 // The player rows — one `UI\FrameDef\Glue\PlayerSlot.fdf` per slot, stacked under the map's
 // own force headings — and everything about laying them out.
@@ -96,6 +96,7 @@ export function fillForceLabels(s: FdfScreen, groups: Group[]): void {
 export function buildSlotRows(lib: FdfLibrary, groups: Group[], container: string): FdfFrame[] {
   const slot = lib.resolveRoot("PlayerSlot");
   if (!slot) return [];
+  setProp(findFrame(slot, "HandicapMenu"), "Width", [num(HANDICAP_WIDTH)]);
   const built: FdfFrame[] = [];
   let y = 0;
   groups.forEach((group, g) => {
@@ -121,6 +122,23 @@ export function buildSlotRows(lib: FdfLibrary, groups: Group[], container: strin
   });
   return built;
 }
+
+/**
+ * The handicap dropdown, wider than the 0.05 PlayerSlot.fdf gives it.
+ *
+ * Every dropdown in the row declares the same type size (`FrameFont "MasterFont",0.011`
+ * on PlayerSlotPopupMenu's title), and WC3's own font sets "100%" inside 0.05 at that
+ * size. Ours does not — the same gap `POPUP_LABEL_SCALE` exists for — so `fitLabel` was
+ * shrinking the handicap label alone, seven steps down to 9.6px against the 13.1px of the
+ * Name/Race/Team boxes beside it, and past the floor the ellipsis cut it to "10…".
+ *
+ * The label's room is the widget less the title's `FontJustificationOffset` (0.01) on the
+ * left and `PopupButtonInset` + the arrow (0.01 + 0.011) on the right, which leaves 0.019
+ * of the 0.05 for text where "100%" wants ~0.025. This is that, with a little slack —
+ * the value reads at the row's own size, and nothing is cut. Widening it moves only
+ * PingValue, which chains off its right edge and is empty outside a network game.
+ */
+const HANDICAP_WIDTH = 0.06;
 
 /** One line of the team-setup panel: a player row (PlayerSlot is 0.025 tall) or a force's
  *  heading. The rows sit shoulder to shoulder in the reference, so the pitch is barely more
