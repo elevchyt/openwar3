@@ -598,12 +598,39 @@ export class Interpreter {
       yield Math.max(0, left);
       return JNULL;
     }
-    // ExecuteFunc takes a function NAME, not a trigger — run it on this thread.
-    if (name === "ExecuteFunc") return args[0]?.k === "string" ? yield* this.callFunctionG(args[0].s, []) : JNULL;
+    // ExecuteFunc takes a function NAME, not a trigger. WC3 starts a thread for it (that is
+    // why `TriggerSleepAction` works inside one at all), so it runs INLINE until it waits and
+    // then detaches — the same rule as TriggerExecute below, and for the same reason.
+    if (name === "ExecuteFunc") {
+      if (args[0]?.k === "string") this.runSync(this.callFunctionG(args[0].s, []), `ExecuteFunc:${args[0].s}`, true);
+      return JNULL;
+    }
 
-    // TriggerExecute runs the trigger's actions on the CALLING thread (so a wait inside
-    // blocks the caller — this is how a map-init trigger's Wait delays the init after it);
-    // ConditionalTriggerExecute gates that on the trigger's conditions first.
+    // TriggerExecute runs the trigger's actions INLINE on the calling thread — until they hit
+    // a wait, at which point the rest of them becomes a thread of its own and **the caller
+    // carries straight on**. ConditionalTriggerExecute gates that on the trigger's conditions.
+    //
+    // We used to block the caller through the wait, which is the intuitive reading and is
+    // wrong. Three things say so, and the first is decisive:
+    //
+    //  • It is TESTED. A Hive thread on exactly this question ("TriggerSleepAction inside
+    //    TriggerEvaluate/TriggerExecute", hiveworkshop.com/threads/…275707) reports the
+    //    experiment: a sleep inside `TriggerEvaluate` KILLS the thread and it never resumes;
+    //    a sleep inside `TriggerExecute` RETURNS CONTROL to the calling thread; and
+    //    `TriggerExecuteWait` does the same thing as `TriggerExecute`. We already had the
+    //    first of those right.
+    //  • blizzard.j's own TRIGGER QUEUE cannot work any other way. `QueuedTriggerAttemptExec`
+    //    runs a queued trigger with `TriggerExecuteBJ`, then **arms a timeout timer** and
+    //    waits for the trigger to call `QueuedTriggerDoneBJ` on its way out. If the call had
+    //    blocked until the trigger finished, there would be nothing for either to do.
+    //  • And it is what map scripts assume. Extreme Candy War's hero picker is
+    //
+    //        call AddSpecialEffectTargetUnitBJ( "overhead", GetTriggerUnit(), "…HolyBolt…" )
+    //        call TriggerExecute( gg_trg_Special_Effect_Destruction )   // PolledWait(7) inside
+    //        set udg_Has_Picked[…] = true                               // …then hand over the hero
+    //
+    //    — a fire-and-forget cleanup, which blocking turned into a seven-second stare at the
+    //    costume you had just double-clicked before your hero appeared.
     //
     // **And the trigger it runs becomes "the triggering trigger" for the duration.** That is
     // WC3's rule for an executed trigger as much as for an evented one, and the World Editor
@@ -618,16 +645,20 @@ export class Interpreter {
     // half was involved, the trigger quietly stopped being run-once instead — worse, because
     // nothing looks broken until it fires twice.
     //
-    // The frame is pushed on the SHARED stack rather than handed to a new thread, because
-    // these two natives deliberately run on the CALLING thread: a wait inside must block the
-    // caller. That also makes the response survive the wait for free — `resumeThread` lifts
-    // whatever frames the thread left behind and re-pushes them on resume.
+    // The frame is pushed on the SHARED stack and popped here, which is right either way: the
+    // actions run inline under it, and a detached remainder took a flat COPY of the stack on
+    // its way out (adoptSuspended) — so `GetTriggeringTrigger()` still answers after the wait,
+    // which the editor's own post-wait `QueuedTriggerRemoveBJ(GetTriggeringTrigger())` needs.
     const t = this.rt.data<TriggerObj>(args[0] ?? JNULL);
     if (!t) return JNULL;
     this.rt.eventStack.push(new Map([["TriggeringTrigger", jHandle(t.handleId, "trigger")]]));
     try {
       if (name === "ConditionalTriggerExecute" && !(t.enabled && this.conditionsPass(t))) return JNULL;
-      yield* this.runActionsG(t);
+      // `adoptWaits` is the whole rule: run it here, and hand the rest to the scheduler if it
+      // sleeps. Note this makes the statement form behave exactly like the EXPRESSION form
+      // (`if TriggerExecuteBJ(…)`), which has adopted since the campaign trigger queue needed
+      // it — the two were never meant to differ.
+      this.runSync(this.runActionsG(t), `trigger#${t.handleId}`, true);
     } finally {
       // Pop OUR frame specifically. A suspension inside the actions is resumed by
       // `resumeThread`, which restores the same frames in the same order, so the top of the

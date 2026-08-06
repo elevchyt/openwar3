@@ -366,6 +366,8 @@ interface W3xViewer {
   /** UnitData + UnitUI + ItemData, merged — and the map's war3map.w3u/.w3t declarations
    *  folded in on top of it by the map handler. See repairCustomRowIds. */
   unitsData: MappedData;
+  /** Doodad + destructable data, merged — and, like `unitsData`, GLOBAL across maps. */
+  doodadsData: MappedData;
   /** OpenWar3 patch hook: lets the map handler check which cliff-ramp
    *  (CliffTrans) models exist in the VFS before placing them. */
   terrainModelExists?: (path: string) => boolean;
@@ -834,6 +836,10 @@ export class MapViewerScene {
   // local player has vision/control (issue #33) and runs the map's config() (Phase 7).
   private mapPlayerUnits: Array<{ x: number; y: number; owner: number }> = [];
   private mapArchive: MpqDataSource | null = null;
+  /** The viewer's object-data tables as the GAME ships them, snapshotted at the first map load
+   *  so every map after it starts from the game's data rather than the last map's. Keyed by
+   *  table name → row id → that row's raw values. See resetObjectData. */
+  private pristineObjectData = new Map<string, Map<string, Record<string, unknown>>>();
   // Start-location (`sloc`) markers load async: the viewer flips `unitsReady`
   // synchronously but pushes each Unit into `map.units` only once its model has
   // finished loading, so a marker can arrive a frame or two after `unitsReady`.
@@ -1031,6 +1037,9 @@ export class MapViewerScene {
     this.rallyFlagModel = null;
     this.queueFlags = [];
 
+    // The viewer's object-data tables are global and every map merges into them, so give the
+    // next map the game's own tables rather than the last map's (see resetObjectData).
+    this.resetObjectData();
     this.viewer.loadMap(bytes);
     this.repairCustomRowIds(); // …before anything asks a placed unit which type it is
     const map = this.viewer.map;
@@ -2655,6 +2664,40 @@ export class MapViewerScene {
     for (const [id, row] of Object.entries(this.viewer.unitsData.map)) {
       for (const col of ["unitid", "itemid"]) {
         if (row.string(col) !== undefined && row.string(col) !== id) row.set(col, id);
+      }
+    }
+  }
+
+  /**
+   * Put the viewer's object-data tables back the way the GAME ships them, before the next map
+   * writes its own over the top.
+   *
+   * `unitsData` and `doodadsData` are the viewer's own words: *"Global tables like WC3. It's
+   * bad."* They are loaded once from the SLKs and every map's `war3map.w3u`/`.w3t`/`.w3d`/`.w3b`
+   * is merged INTO them — so a map's overrides outlive the map. That did no harm while the
+   * library mis-filed every ORIGINAL-table override onto a junk row (the `'\0\0\0\0'` newId bug
+   * this repo patches); now that they land on the type they name, they leak: play Extreme Candy
+   * War, quit to the menu, start Echo Isles, and its Footmen are still Zombies.
+   *
+   * So the first map to load takes a snapshot of every row, and each map after it restores from
+   * that snapshot and drops the rows a previous map INVENTED (its `h001`-style custom ids). One
+   * shallow copy per row, taken once — the tables are ~1100 rows of plain values.
+   */
+  private resetObjectData(): void {
+    const tables: Array<[string, MappedData]> = [["units", this.viewer.unitsData], ["doodads", this.viewer.doodadsData]];
+    for (const [name, table] of tables) {
+      const rows = table.map as Record<string, { map: Record<string, unknown> }>;
+      const saved = this.pristineObjectData.get(name);
+      if (!saved) {
+        const snap = new Map<string, Record<string, unknown>>();
+        for (const [id, row] of Object.entries(rows)) snap.set(id, { ...row.map });
+        this.pristineObjectData.set(name, snap);
+        continue; // nothing has overwritten anything yet — this IS the pristine state
+      }
+      for (const id of Object.keys(rows)) {
+        const pristine = saved.get(id);
+        if (pristine) rows[id].map = { ...pristine };
+        else delete rows[id]; // a type the last map invented
       }
     }
   }

@@ -7,7 +7,7 @@
 import { ArmorType, AttackType, PrimaryAttribute } from "../data/enums";
 import { campMarker, NEUTRAL_DOT_COLOR } from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
-import { escapeHtml, wc3ToHtml } from "./wc3Text";
+import { escapeHtml, wc3StripMarkup, wc3ToHtml } from "./wc3Text";
 
 import { CHAT_MAX_LENGTH, sanitizeChat, type ChatTarget } from "../game/chat";
 import type { HeroBarEntry } from "../game/rts";
@@ -1228,7 +1228,7 @@ export class GameHud {
       }
       const opt = document.createElement("option");
       opt.value = h.id;
-      opt.textContent = h.name;
+      opt.textContent = wc3StripMarkup(h.name); // an <option> can carry no markup
       (group ?? heroSel).append(opt);
     }
     const spawnBtn = document.createElement("button");
@@ -1921,7 +1921,8 @@ export class GameHud {
       btn.classList.toggle("unavailable", c.disabled);
       btn.classList.toggle("passive", !!c.passive);
       if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
-      else this.cmdLabels[idx].textContent = c.name.slice(0, 4);
+      else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
+
       if (c.count && c.count > 0) this.cmdCount[idx].textContent = String(c.count);
       // A passive takes no press — it's an indicator, so it never sinks and never
       // fires. Nor does an UNAVAILABLE button: WC3's greyed DISBTN state is inert,
@@ -1994,7 +1995,10 @@ export class GameHud {
     if (sel) {
       // A hero is titled by its GIVEN name ("Painkiller"); its class ("Demon Hunter")
       // is what the XP bar spells out below, as "Level 1 Demon Hunter".
-      this.selName.textContent = sel.isHero && sel.properName ? sel.properName : sel.name;
+      // The NAME carries WC3's own markup and the game draws it: a custom map colours its
+      // unit names in the object editor (Candy War's "|cffffaa00Boogie Kid"), and printing the
+      // raw string put the code on screen instead of the colour on the name.
+      this.selName.innerHTML = wc3ToHtml(sel.isHero && sel.properName ? sel.properName : sel.name);
       this.selHpText.textContent = poolReadout(Math.ceil(sel.hp), sel.maxHp);
       this.selMpText.textContent = poolReadout(Math.floor(sel.mana), sel.maxMana);
       const icons = this.driver.selectionIcons();
@@ -2085,7 +2089,7 @@ export class GameHud {
           this.xpBar.classList.remove("summon");
           // The bar reads "Level 1 Demon Hunter", as the game writes it; the raw XP
           // numbers are the bar's hover tooltip, not its label.
-          this.xpText.textContent = `Level ${sel.level} ${sel.name}`;
+          this.xpText.innerHTML = `Level ${sel.level} ${wc3ToHtml(sel.name)}`;
           this.xpBar.title = span > 0 ? `Experience: ${into} / ${span}` : "Experience: (max level)";
           this.xpFill.style.width = `${span > 0 ? Math.max(0, Math.min(1, into / span)) * 100 : 100}%`;
         } else if (sel.isSummon) {
@@ -2206,10 +2210,10 @@ export class GameHud {
       slot.hidden = false;
       const url = b.icon ? this.driver.blpUrl(b.icon) : null;
       slot.style.backgroundImage = url ? `url(${url})` : "";
-      if (!url) slot.textContent = b.name.slice(0, 3);
+      if (!url) slot.textContent = wc3StripMarkup(b.name).slice(0, 3);
       else slot.textContent = "";
       slot.classList.toggle("harmful", b.harmful);
-      slot.title = b.name;
+      slot.title = wc3StripMarkup(b.name); // a native tooltip draws no colour, so don't print the codes
     }
   }
 
@@ -2483,6 +2487,10 @@ function onPress(el: HTMLElement, fn: ((e: PointerEvent) => void) | null): void 
 // needed for the buttons with no game `Tip` string behind them; a real Tip already
 // carries `|cffffcc00`…`|r` around the letter.
 function highlightHotkey(name: string, hotkey: string): string {
+  // A name that carries its own markup is drawn AS the map wrote it — its colour is the
+  // stronger signal than our hotkey bolding, and the two cannot be composed without mapping
+  // offsets through the codes.
+  if (/\|[cCrRnN]/.test(name)) return wc3ToHtml(name);
   if (!hotkey || hotkey.length !== 1) return escapeHtml(name);
   const idx = name.toUpperCase().indexOf(hotkey.toUpperCase());
   if (idx < 0) return escapeHtml(name);

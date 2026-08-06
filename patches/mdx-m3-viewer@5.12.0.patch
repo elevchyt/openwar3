@@ -920,7 +920,7 @@ index 49733805785c0ef269901d8928e47a953ada93a9..ff78a025f24375c345bb3ac705f0e393
    gl_Position = u_VP * vec4(position, 1.0);
  }
 diff --git a/dist/cjs/viewer/handlers/w3x/map.js b/dist/cjs/viewer/handlers/w3x/map.js
-index e4c8ea760e92653ef6423bd34f9111d0b062a901..4ae284d745737499caef488b013b5fda0fa56265 100644
+index e4c8ea760e92653ef6423bd34f9111d0b062a901..0abcf7ef9b7933b0a192b48853b4e3eb04739275 100644
 --- a/dist/cjs/viewer/handlers/w3x/map.js
 +++ b/dist/cjs/viewer/handlers/w3x/map.js
 @@ -168,7 +168,11 @@ class War3MapViewerMap {
@@ -1233,6 +1233,48 @@ index e4c8ea760e92653ef6423bd34f9111d0b062a901..4ae284d745737499caef488b013b5fda
      /**
       * Is the tile at the given column and row water?
       */
+@@ -730,17 +957,37 @@ class War3MapViewerMap {
+     applyModificationTable(dataMap, metadataMap, modificationTable) {
+         for (const modificationObject of modificationTable.objects) {
+             let row;
+-            if (modificationObject.newId !== '') {
+-                row = dataMap.getRow(modificationObject.newId);
++            // OpenWar3 fix: an ORIGINAL-table object (a map retuning a BUILT-IN type) carries
++            // four ZERO BYTES where a custom object carries its new rawcode, and the parser
++            // reads that as the 4-char string "\0\0\0\0" -- not "". So `newId !== ''` was true
++            // for every one of them, and every override a map makes to a stock unit/item/
++            // doodad/destructable was filed on a junk row keyed "\0\0\0\0" instead of on the
++            // type it names. Extreme Candy War 2004 is a map made almost entirely of such
++            // overrides: its heroes are stock hero ids wearing other models, and every one of
++            // them rendered as the stock hero.
++            const newId = modificationObject.newId;
++            const hasNewId = newId !== '' && newId !== '\0\0\0\0';
++            if (hasNewId) {
++                row = dataMap.getRow(newId);
+                 if (!row) {
++                    const base = dataMap.getRow(modificationObject.oldId);
++                    if (!base) {
++                        console.warn('Unknown base object', modificationObject.oldId);
++                        continue;
++                    }
+                     row = new mappeddata_1.MappedDataRow();
+-                    row.map = Object.assign({}, dataMap.getRow(modificationObject.oldId).map);
+-                    dataMap.setRow(modificationObject.newId, row);
++                    row.map = Object.assign({}, base.map);
++                    dataMap.setRow(newId, row);
+                 }
+             }
+             else {
+                 row = dataMap.getRow(modificationObject.oldId);
+             }
++            // A row for a type this table does not carry (a .w3u entry for an item id, say --
++            // units and items share one modification file) is simply not ours to write.
++            if (!row) {
++                continue;
++            }
+             for (const modification of modificationObject.modifications) {
+                 const metadata = metadataMap.getRow(modification.id);
+                 if (metadata) {
 diff --git a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js b/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js
 index c2a27060799ff26b5c86ccedd0bedda2d6a54746..d751e671164bc972aff80d3a7e1cfa77e6c74119 100644
 --- a/dist/cjs/viewer/handlers/w3x/shaders/cliffs.frag.js

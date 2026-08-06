@@ -868,9 +868,13 @@ endfunction`;
   if (fired && fired.n === 0 && iD.sleepingThreads === 0) ok(`a wait in a condition is abandoned, not spun (trigger didn't fire, nothing parked)`);
   else fail(`condition wait: fired ${fired && fired.n} sleeping ${iD.sleepingThreads} (want 0/0)`);
 
-  // Part E: the real-world shape — a MAP INIT trigger that waits, then spawns. WC3 runs
-  // main() on a thread, and ConditionalTriggerExecute runs the trigger's actions ON it, so
-  // the wait suspends main() itself and the rest of init is deferred (faithful to WC3).
+  // Part E: the real-world shape — a MAP INIT trigger that waits, then spawns.
+  // `ConditionalTriggerExecute` runs the trigger's actions INLINE on main()'s thread, but a
+  // wait inside them does NOT hold main() up: the rest of the trigger becomes its own thread
+  // and the caller carries straight on. Tested behaviour, not a guess — see the note on
+  // `execThreadNative`: a sleep inside `TriggerEvaluate` kills the thread, a sleep inside
+  // `TriggerExecute` returns control to the caller, and blizzard.j's own trigger queue (which
+  // arms a timeout and waits for `QueuedTriggerDoneBJ`) could not work any other way.
   const spawned = [];
   const hooksE = { createUnit: (player, typeId, x, y) => (spawned.push({ player, typeId, x, y }), 300 + spawned.length) };
   const SRC_E = `
@@ -891,14 +895,11 @@ endfunction`;
   const iE = buildInterpreter([COMMON_J, BLIZZARD_J, SRC_E], { hooks: hooksE });
   iE.run('main', []);
   const initFlagPre = iE.rt.globals.get('udg_afterInit');
-  if (spawned.length === 0 && initFlagPre && initFlagPre.n === 0 && iE.sleepingThreads === 1) ok(`a Wait in map init suspends main() itself — nothing spawned yet, init deferred`);
-  else fail(`init wait: spawned ${spawned.length} afterInit ${initFlagPre && initFlagPre.n} sleeping ${iE.sleepingThreads} (want 0/0/1)`);
+  if (spawned.length === 0 && initFlagPre && initFlagPre.n === 1 && iE.sleepingThreads === 1) ok(`a Wait in an executed trigger does NOT hold up its caller — init finished, the trigger is parked`);
+  else fail(`init wait: spawned ${spawned.length} afterInit ${initFlagPre && initFlagPre.n} sleeping ${iE.sleepingThreads} (want 0/1/1)`);
   for (let i = 0; i < 120 && iE.sleepingThreads > 0; i++) iE.advanceTime(0.05); // 6s
-  const initFlag = iE.rt.globals.get('udg_afterInit');
   if (spawned.length === 1 && spawned[0].typeId === 'hfoo') ok(`after the 5s wait the trigger spawned its unit (CreateUnit reached the bridge)`);
   else fail(`post-wait spawn: ${JSON.stringify(spawned)}`);
-  if (initFlag && initFlag.n === 1) ok(`main() resumed and finished after the trigger's wait`);
-  else fail(`afterInit: ${initFlag && initFlag.n} (want 1)`);
 
   // Part F: the TRIGGER QUEUE — blizzard.j's own "Run Trigger (queued)", and the shape every
   // campaign cinematic arrives in. `QueuedTriggerAddBJ` runs the queue through

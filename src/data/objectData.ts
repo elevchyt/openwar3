@@ -34,6 +34,15 @@ function normModel(v: string): string {
   return v.replace(/\//g, "\\").replace(/\.(mdl|mdx)$/i, "") + ".mdx";
 }
 
+/** Icon field → the `.blp` the MPQ ships. Same shape as `normModel`, and for the same
+ *  reason: the World Editor stores whatever the author typed into the box, which is a `.blp`,
+ *  a `.tga` (the extension the import list uses) or — often — NO extension at all. Extreme
+ *  Candy War writes `…\BTNproudmoore` and `…\BTNAvengingAssassin` bare, and a bare path
+ *  resolves to nothing, so those two custom units came up with an empty command-card button. */
+function normIcon(v: string): string {
+  return v.replace(/\//g, "\\").replace(/\.(blp|tga|dds)$/i, "") + ".blp";
+}
+
 /** The hero primary-attribute value that a hero's base attack damage adds in. */
 function primaryVal(d: UnitDef): number {
   return d.primaryAttr === PrimaryAttribute.Strength ? d.strength
@@ -61,7 +70,7 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   umdl: (d, v) => { d.model = normModel(s(v)); },
   usca: (d, v) => { d.modelScale = n(v); },
   uble: (d, v) => { d.animBlend = n(v); },
-  uico: (d, v) => { d.icon = s(v).replace(/\//g, "\\").replace(/\.tga$/i, ".blp"); },
+  uico: (d, v) => { d.icon = normIcon(s(v)); },
   // Movement / geometry.
   ucol: (d, v) => { d.collision = n(v); },
   umvt: (d, v) => { d.moveType = toMoveType(s(v)); },

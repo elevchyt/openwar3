@@ -1,4 +1,5 @@
 import { worldLayer } from "../ui/stage";
+import { wc3ToHtml } from "../ui/wc3Text";
 
 // The floating world overlays: a status bar above every visible unit, and the hover
 // slab under the cursor. Both are DOM, both live in the world layer (ui/stage.ts),
@@ -320,8 +321,8 @@ export class WorldOverlays {
       for (const l of tip.lines) {
         const div = document.createElement("div");
         div.className = "uht-line";
-        div.style.color = l.color;
-        div.textContent = l.text;
+        div.style.color = l.color; // the line's DEFAULT colour…
+        div.innerHTML = wc3ToHtml(l.text); // …which the text's own markup overrides, as in-game
         root.appendChild(div);
       }
     }
