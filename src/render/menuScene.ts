@@ -50,6 +50,33 @@ export type GlueChrome =
  *  own sequence intervals, so the DOM panels can be animated over the same window. */
 export interface ChromeTiming { death: number; birth: number }
 
+/**
+ * Live-tunable framing + fog for ONE campaign backdrop (issue #105), the backdrop-screen
+ * counterpart of `MenuScene.tuning`. Kept per backdrop MODEL, because the four campaign
+ * scenes are four different sets (Maiev's ruins, Theramore's docks…) and a nudge that
+ * frames one says nothing about the next.
+ *
+ * The defaults are deliberately NEUTRAL — camera multipliers of 1 and no pan, so an
+ * untouched entry renders the model's authored camera exactly as `showBackdrop` always
+ * has, and the fog seeded straight from that campaign's own `BackgroundFog*` keys. The
+ * `?menudebug` sliders move them from there; "Log values" prints them for baking.
+ */
+export interface BackdropTuning {
+  /** Dolly the eye toward the model's camera target (<1 closer). */
+  camZoom: number;
+  /** Pan eye+target along the camera's screen right / up axes, in world units. */
+  camPanX: number;
+  camPanY: number;
+  /** Multiplier on the aspect-corrected field of view. */
+  camFov: number;
+  /** Distance fog, seeded from `BackgroundFogStart` / `End` / `Color`. */
+  fogStart: number;
+  fogEnd: number;
+  fogR: number;
+  fogG: number;
+  fogB: number;
+}
+
 type Solver = (src: unknown) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
@@ -112,6 +139,9 @@ export class MenuScene {
   private backdropModel: MdxModel | null = null;
   private backdropInstance: MdxInstance | null = null;
   private backdropTimer = 0;
+  /** Per-backdrop framing/fog tuning (issue #105) and which one is currently up. */
+  private backdropTunings = new Map<string, BackdropTuning>();
+  private backdropShown: string | null = null;
   /** True while a campaign backdrop is up: the screen-edge sprite layers draw nothing. */
   private panelsHidden = false;
   private instances: MdxInstance[] = [];
@@ -162,11 +192,28 @@ export class MenuScene {
     fogB: 0.77,
   };
 
-  /** Apply the current `tuning` values (called by the debug controls after a change). */
+  /** The campaign backdrop currently up (its model path), or null on the menu's own scene. */
+  get backdropPath(): string | null { return this.backdropShown; }
+
+  /** The tuning block the debug controls should be driving: the backdrop's while one is up,
+   *  else the menu's own. Null when a backdrop is up that failed to load. */
+  get backdropTuning(): BackdropTuning | null {
+    return this.backdropShown ? this.backdropTunings.get(this.backdropShown) ?? null : null;
+  }
+
+  /** Every backdrop tuned this session, for the debug controls' "Log values". */
+  get tunedBackdrops(): ReadonlyMap<string, BackdropTuning> { return this.backdropTunings; }
+
+  /** Fired when the backdrop changes (a campaign swap, or leaving the campaign screen), so
+   *  the on-screen controls can re-bind to the block they are now driving. */
+  onBackdropChange: (() => void) | null = null;
+
+  /** Apply the current tuning values (called by the debug controls after a change). */
   applyTuning(): void { this.frameCameras(); this.updateFog(); }
 
   private updateFog(): void {
-    const t = this.tuning;
+    // A backdrop's fog is the campaign's (seeded into its tuning block); the menu's is its own.
+    const t = this.backdropTuning ?? this.tuning;
     this.scene3d.distFog = makeFog(t.fogStart, t.fogEnd, t.fogR, t.fogG, t.fogB);
   }
 
@@ -232,6 +279,8 @@ export class MenuScene {
    * The backdrop model brings its own two clips — "Birth" then a looping "Stand" — and its
    * own camera, which is used AS AUTHORED: the main menu's zoom/pan tuning frames the
    * Icecrown scene against the button panel, and there is no panel here to frame against.
+   * The per-backdrop `BackdropTuning` block layered on top of that starts neutral, so it
+   * changes nothing until the `?menudebug` sliders move it (issue #105).
    */
   async showBackdrop(path: string, fog: { r: number; g: number; b: number; start: number; end: number }): Promise<void> {
     if (!this.vfs.exists(path)) return;
@@ -243,6 +292,15 @@ export class MenuScene {
     }
     this.clearBackdrop();
     this.backdropModel = model;
+    this.backdropShown = path;
+    // Seed this backdrop's tuning the first time it is shown: neutral camera, the campaign's
+    // own fog. Coming back to a campaign keeps whatever the sliders left on it.
+    if (!this.backdropTunings.has(path)) {
+      this.backdropTunings.set(path, {
+        camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1,
+        fogStart: fog.start, fogEnd: fog.end, fogR: fog.r, fogG: fog.g, fogB: fog.b,
+      });
+    }
     // Birth once, then settle into the looping Stand — the same two-step every glue model
     // arrives with (playChromeBirth does it for the panel chrome).
     const instance = this.addInstance(model, this.scene3d, /^birth$/i);
@@ -260,8 +318,9 @@ export class MenuScene {
     // The menu's own scene stops drawing behind it, as do the screen-edge sprite layers.
     if (this.menuInstance) this.scene3d.removeInstance(this.menuInstance);
     this.panelsHidden = true;
-    this.scene3d.distFog = makeFog(fog.start, fog.end, fog.r, fog.g, fog.b);
+    this.updateFog();
     this.frameCameras();
+    this.onBackdropChange?.();
   }
 
   /** Back to the menu's own background and its screen-edge chrome (leaving the campaign
@@ -273,6 +332,7 @@ export class MenuScene {
     this.panelsHidden = false;
     this.updateFog();
     this.frameCameras();
+    this.onBackdropChange?.();
   }
 
   private clearBackdrop(): void {
@@ -283,6 +343,7 @@ export class MenuScene {
     }
     this.backdropInstance = null;
     this.backdropModel = null;
+    this.backdropShown = null;
   }
 
   private async loadPanel(path: string, scene: Scene): Promise<void> {
@@ -427,14 +488,17 @@ export class MenuScene {
     const t = this.tuning;
 
     // Background: the model's authored camera, dollied in and panned to frame the scene.
-    // A CAMPAIGN backdrop is framed by its own camera untouched (zoom 1, no pan, no FOV
-    // multiplier): the tuning below exists to sit the Icecrown scene behind the main menu's
-    // button panel, and a campaign screen has no panel to sit behind.
+    // A CAMPAIGN backdrop starts from its own camera untouched (zoom 1, no pan, no FOV
+    // multiplier): the `tuning` block exists to sit the Icecrown scene behind the main menu's
+    // button panel, and a campaign screen has no panel to sit behind. Its own per-backdrop
+    // block (issue #105) rides on top of the authored camera by the same rules, and is neutral
+    // until the debug sliders move it.
+    const bt = this.backdropTuning;
     const backdrop = this.backdropModel !== null;
     const cam = (this.backdropModel ?? this.bgModel)?.cameras?.[0];
     if (cam) {
-      const zoom = backdrop ? 1 : t.camZoom;
-      const [panX, panY] = backdrop ? [0, 0] : [t.camPanX, t.camPanY];
+      const zoom = backdrop ? (bt?.camZoom ?? 1) : t.camZoom;
+      const [panX, panY] = backdrop ? [bt?.camPanX ?? 0, bt?.camPanY ?? 0] : [t.camPanX, t.camPanY];
       // A backdrop's camera is authored for the 4:3 screen WC3 shipped on, and it frames the
       // scene exactly — Maiev's ruins have nothing painted past their edges. Feed that vertical
       // FOV to a 16:9 viewport and the extra width is scene that was never built: a black void
@@ -443,7 +507,7 @@ export class MenuScene {
       // cannot reveal a hole. The main menu needs none of this — its scene is an open seascape,
       // and its framing is the tuning above.
       const fov = backdrop
-        ? 2 * Math.atan(Math.tan(cam.fieldOfView / 2) * Math.min(1, (4 / 3) / (w / h)))
+        ? 2 * Math.atan(Math.tan(cam.fieldOfView / 2) * Math.min(1, (4 / 3) / (w / h))) * (bt?.camFov ?? 1)
         : cam.fieldOfView * t.camFov;
       this.scene3d.camera.perspective(fov, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
       const tgt = [cam.targetPosition[0], cam.targetPosition[1], cam.targetPosition[2]];

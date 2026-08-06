@@ -58,6 +58,25 @@ exactly (Maiev's ruins have nothing painted past their edges), so a wider viewpo
 authored HORIZONTAL extent and gives up height for it. Feed that vertical FOV to 16:9 unchanged
 and you see scene that was never built — a black void down one side.
 
+### Tuning a backdrop's camera and fog (issue #105)
+
+The main menu's scene has had on-screen sliders since issue #54, and the campaign backdrops
+share them: boot with **`?menudebug`** (e.g. `http://localhost:5173/?dev&menudebug`) and the
+panel in the top-left drives whichever 3D scene is up. On the campaign screen its title reads
+"Campaign backdrop — NightElf_Exp" and it carries **camera + fog only**, because that screen
+has no sprite-layer chrome to frame anything against. "Log values" prints every backdrop
+touched this session, one line per model path, ready to be baked in.
+
+Two properties of that panel are the point rather than conveniences:
+
+* **One tuning block per backdrop MODEL** (`BackdropTuning`, `render/menuScene.ts`), because the
+  four campaign scenes are four different sets — a nudge that frames Maiev's ruins says nothing
+  about Durotar. Switching campaigns re-binds the sliders and each keeps what you left on it.
+* **The defaults are neutral, not tuned.** Camera multipliers of 1 and no pan, so an untouched
+  backdrop renders the model's authored camera exactly as before; the fog is seeded from that
+  campaign's own `BackgroundFog*` keys. Nothing here overrides the game's data until a slider
+  moves, so the panel can never quietly become the source of truth for something the file says.
+
 **Where the rows come from.** TFT's `CampaignMenu.fdf` declares no rows at all: it dropped
 RoC's fourteen hand-authored `MissionNFrame`s for a runtime list (`CampaignListBox.fdf`, whose
 entire contents are a scrollbar) so a custom campaign can carry 128 missions. The stock TFT
