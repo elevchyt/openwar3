@@ -69,6 +69,12 @@ export interface BackdropTuning {
   camPanY: number;
   /** Multiplier on the aspect-corrected field of view. */
   camFov: number;
+  /** Orbit the eye around the model's own camera target, in DEGREES off the authored angle —
+   *  the game's own camera vocabulary (docs/camera.md): `rotation` about world Z, `angle of
+   *  attack` about the camera's right axis (positive raises the eye), `roll` on the up vector. */
+  camYaw: number;
+  camPitch: number;
+  camRoll: number;
   /** Distance fog, seeded from `BackgroundFogStart` / `End` / `Color`. */
   fogStart: number;
   fogEnd: number;
@@ -124,6 +130,10 @@ interface MdxModel {
 
 const ViewerClass = ModelViewerCtor as unknown as { new(canvas: HTMLCanvasElement): Viewer };
 
+/** A backdrop's camera as AUTHORED — what a backdrop with no tuning block of its own (one
+ *  whose model failed to load) is framed by, and the values a fresh block starts at. */
+const NEUTRAL_BACKDROP = { camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0 } as const;
+
 export class MenuScene {
   private viewer: Viewer;
   private scene3d: Scene; // perspective background
@@ -170,6 +180,11 @@ export class MenuScene {
     camPanX: 0, // pan the eye+target screen-right (world units)
     camPanY: -140, // pan the eye+target screen-up (world units)
     camFov: 0.67, // field-of-view multiplier
+    // Orbit off the model's authored angle, in degrees — WC3's own camera fields
+    // (docs/camera.md). Zero here: the Icecrown scene is framed by the dolly/pan above.
+    camYaw: 0, // rotation about world Z
+    camPitch: 0, // angle of attack (positive raises the eye)
+    camRoll: 0, // roll on the up vector
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
@@ -297,7 +312,7 @@ export class MenuScene {
     // own fog. Coming back to a campaign keeps whatever the sliders left on it.
     if (!this.backdropTunings.has(path)) {
       this.backdropTunings.set(path, {
-        camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1,
+        camZoom: 1, camPanX: 0, camPanY: 0, camFov: 1, camYaw: 0, camPitch: 0, camRoll: 0,
         fogStart: fog.start, fogEnd: fog.end, fogR: fog.r, fogG: fog.g, fogB: fog.b,
       });
     }
@@ -497,8 +512,10 @@ export class MenuScene {
     const backdrop = this.backdropModel !== null;
     const cam = (this.backdropModel ?? this.bgModel)?.cameras?.[0];
     if (cam) {
-      const zoom = backdrop ? (bt?.camZoom ?? 1) : t.camZoom;
-      const [panX, panY] = backdrop ? [bt?.camPanX ?? 0, bt?.camPanY ?? 0] : [t.camPanX, t.camPanY];
+      // Whichever block is driving this scene — both carry the same camera fields.
+      const c = backdrop ? bt ?? NEUTRAL_BACKDROP : t;
+      const zoom = c.camZoom;
+      const [panX, panY] = [c.camPanX, c.camPanY];
       // A backdrop's camera is authored for the 4:3 screen WC3 shipped on, and it frames the
       // scene exactly — Maiev's ruins have nothing painted past their edges. Feed that vertical
       // FOV to a 16:9 viewport and the extra width is scene that was never built: a black void
@@ -511,11 +528,24 @@ export class MenuScene {
         : cam.fieldOfView * t.camFov;
       this.scene3d.camera.perspective(fov, w / h, cam.nearClippingPlane || 1, cam.farClippingPlane || 100000);
       const tgt = [cam.targetPosition[0], cam.targetPosition[1], cam.targetPosition[2]];
-      const eye = [
-        tgt[0] + (cam.position[0] - tgt[0]) * zoom,
-        tgt[1] + (cam.position[1] - tgt[1]) * zoom,
-        tgt[2] + (cam.position[2] - tgt[2]) * zoom,
+      // The eye as an OFFSET from the model's own camera target, dollied by zoom — rotating is
+      // then just turning that offset, which is what the game's camera fields describe: an
+      // angle about a target, not a free-flying eye (docs/camera.md).
+      let off: V3 = [
+        (cam.position[0] - tgt[0]) * zoom,
+        (cam.position[1] - tgt[1]) * zoom,
+        (cam.position[2] - tgt[2]) * zoom,
       ];
+      // ROTATION about world Z, then ANGLE OF ATTACK about the camera's own right axis after
+      // that turn (so pitch stays "up/down on screen" at any yaw). Rotating the offset about
+      // `right` by +θ drops the eye, so the sign is flipped: positive pitch raises it, as the
+      // slider's label promises.
+      if (c.camYaw) off = rotateAbout(off, [0, 0, 1], (c.camYaw * Math.PI) / 180);
+      if (c.camPitch) {
+        const axis = norm(cross(norm([-off[0], -off[1], -off[2]]), [0, 0, 1]));
+        off = rotateAbout(off, axis, (-c.camPitch * Math.PI) / 180);
+      }
+      const eye = [tgt[0] + off[0], tgt[1] + off[1], tgt[2] + off[2]];
       // Pan eye+target along the camera's screen axes (right, up) with Z as world up.
       const fwd = norm([tgt[0] - eye[0], tgt[1] - eye[1], tgt[2] - eye[2]]);
       const right = norm(cross(fwd, [0, 0, 1]));
@@ -524,7 +554,10 @@ export class MenuScene {
         const d = right[i] * panX + up[i] * panY;
         eye[i] += d; tgt[i] += d;
       }
-      this.scene3d.camera.moveToAndFace(new Float32Array(eye), new Float32Array(tgt), new Float32Array([0, 0, 1]));
+      // ROLL is the up vector turned about the view direction — the image spins, the framing
+      // does not move.
+      const worldUp: V3 = c.camRoll ? rotateAbout([0, 0, 1], fwd, (c.camRoll * Math.PI) / 180) : [0, 0, 1];
+      this.scene3d.camera.moveToAndFace(new Float32Array(eye), new Float32Array(tgt), new Float32Array(worldUp));
     }
     this.scene3d.viewport.set([0, 0, w, h]);
 
@@ -588,4 +621,16 @@ function cross(a: V3, b: V3): V3 {
 function norm(a: V3): V3 {
   const l = Math.hypot(a[0], a[1], a[2]) || 1;
   return [a[0] / l, a[1] / l, a[2] / l];
+}
+/** Rotate `v` about the unit axis `k` by `rad` (Rodrigues). */
+function rotateAbout(v: V3, k: V3, rad: number): V3 {
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  const kv = cross(k, v);
+  const kd = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+  return [
+    v[0] * c + kv[0] * s + k[0] * kd * (1 - c),
+    v[1] * c + kv[1] * s + k[1] * kd * (1 - c),
+    v[2] * c + kv[2] * s + k[2] * kd * (1 - c),
+  ];
 }

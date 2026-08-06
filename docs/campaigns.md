@@ -67,6 +67,14 @@ panel in the top-left drives whichever 3D scene is up. On the campaign screen it
 has no sprite-layer chrome to frame anything against. "Log values" prints every backdrop
 touched this session, one line per model path, ready to be baked in.
 
+The camera sliders are dolly, pan X/Y, FOV × and — since pan and zoom cannot produce them —
+three **orbit** angles in the game's own vocabulary (`docs/camera.md`): **rotation** (yaw about
+world Z), **angle of attack** (pitch about the camera's right axis, positive raises the eye) and
+**roll** (the up vector turned about the view direction, so the image spins without the framing
+moving). They turn the eye about the MODEL's own camera target, which is the same thing a WC3
+camera setup describes — an angle about a target, not a free-flying eye. The main menu's block
+carries the identical three.
+
 Two properties of that panel are the point rather than conveniences:
 
 * **One tuning block per backdrop MODEL** (`BackdropTuning`, `render/menuScene.ts`), because the

@@ -25,11 +25,21 @@ interface Slider<K extends string> {
 
 type MenuKey = keyof MenuScene["tuning"];
 
+// The three camera-ORBIT sliders, shared by both scenes: the eye turned about the model's own
+// camera target, in the game's own vocabulary (docs/camera.md — rotation, angle of attack,
+// roll). Whole degrees; pan and zoom cannot produce any of these three.
+const ROTATION: Slider<"camYaw" | "camPitch" | "camRoll">[] = [
+  { key: "camYaw", label: "Cam rotation (yaw °)", min: -180, max: 180, step: 1 },
+  { key: "camPitch", label: "Cam angle of attack (°)", min: -89, max: 89, step: 1 },
+  { key: "camRoll", label: "Cam roll (°)", min: -180, max: 180, step: 1 },
+];
+
 const MENU_SLIDERS: Slider<MenuKey>[] = [
   { key: "camZoom", label: "Cam zoom (dolly)", min: 0.4, max: 1.6, step: 0.01 },
   { key: "camPanX", label: "Cam pan X", min: -3000, max: 3000, step: 10 },
   { key: "camPanY", label: "Cam pan Y", min: -3000, max: 3000, step: 10 },
   { key: "camFov", label: "Cam FOV ×", min: 0.4, max: 1.6, step: 0.01 },
+  ...ROTATION,
   { key: "panelCx", label: "Panel centre X", min: -0.6, max: 0.6, step: 0.005 },
   { key: "panelCy", label: "Panel centre Y", min: -0.6, max: 0.6, step: 0.005 },
   { key: "panelHalfX", label: "Panel width (½, smaller=wider)", min: 0.15, max: 0.9, step: 0.005 },
@@ -52,6 +62,7 @@ const BACKDROP_SLIDERS: Slider<keyof BackdropTuning>[] = [
   { key: "camPanX", label: "Cam pan X", min: -3000, max: 3000, step: 10 },
   { key: "camPanY", label: "Cam pan Y", min: -3000, max: 3000, step: 10 },
   { key: "camFov", label: "Cam FOV ×", min: 0.4, max: 1.6, step: 0.01 },
+  ...ROTATION,
   // BackgroundFogEnd runs 1700 (Sentinels) → 16000 (Alliance) in CampaignStrings_exp.txt.
   { key: "fogStart", label: "Fog start (world)", min: 0, max: 20000, step: 100 },
   { key: "fogEnd", label: "Fog end (world)", min: 0, max: 20000, step: 100 },
