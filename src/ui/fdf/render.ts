@@ -889,19 +889,34 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
       const bgSizeWorld = prop(f, "BackdropBackgroundSize");
       const tileW = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.width;
       const tileH = bgSizeWorld ? bgSizeWorld * ctx.fit.scale : bg.height;
-      g.save();
-      g.beginPath(); g.rect(ix, iy, iw, ih); g.clip();
-      // Most tiled backgrounds are MEANT to be see-through — the map list, the tooltips, the
-      // campaign chapter rows are all a translucent wash over whatever is behind them, and
-      // painting a plate under every one of them flattened the lot. Only a frame that asks
-      // (see OPAQUE_BACKDROP) gets one, and then only inside the inset, so a border ornament
-      // that hangs past the background still hangs over open screen.
-      if (hasFlag(f, OPAQUE_BACKDROP)) {
-        g.fillStyle = "#000";
-        g.fillRect(ix, iy, iw, ih);
+      // A tile at least as big as the interior is not a PATTERN — it is one face, and the
+      // insets are what pulled the interior in from the frame's own size. Fit it, exactly as
+      // an untiled background is fitted below.
+      //
+      // The campaign chapter buttons are the case that proves it: CampaignArrowButtonTemplate
+      // is 0.032 square, its backdrop declares `BackdropBackgroundSize 0.032` — one tile the
+      // size of the whole button — and `BackdropBackgroundInsets 0.007` on every side, leaving
+      // an 0.018 interior for the border to sit around. Tiling that draws the 32×32 face at
+      // 0.032 anchored to the interior's TOP-LEFT and clips away the rest, so the arrow (which
+      // is centred in its own art) ends up shoved up and left inside its frame. Fitting puts it
+      // back in the middle, which is where the reference has it.
+      if (tileW >= iw && tileH >= ih) {
+        g.drawImage(bg, ix, iy, iw, ih);
+      } else {
+        g.save();
+        g.beginPath(); g.rect(ix, iy, iw, ih); g.clip();
+        // Most tiled backgrounds are MEANT to be see-through — the map list, the tooltips, the
+        // campaign chapter rows are all a translucent wash over whatever is behind them, and
+        // painting a plate under every one of them flattened the lot. Only a frame that asks
+        // (see OPAQUE_BACKDROP) gets one, and then only inside the inset, so a border ornament
+        // that hangs past the background still hangs over open screen.
+        if (hasFlag(f, OPAQUE_BACKDROP)) {
+          g.fillStyle = "#000";
+          g.fillRect(ix, iy, iw, ih);
+        }
+        for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
+        g.restore();
       }
-      for (let y = iy; y < iy + ih; y += tileH) for (let x = ix; x < ix + iw; x += tileW) g.drawImage(bg, x, y, tileW, tileH);
-      g.restore();
     } else {
       g.drawImage(bg, ix, iy, iw, ih);
     }

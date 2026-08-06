@@ -237,6 +237,15 @@ const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
     camZoom: 1.05, camPanX: 90, camPanY: -15, camFov: 0.76, camYaw: 10, camPitch: 6, camRoll: 0,
     fogStart: 0, fogEnd: 13300, fogR: 0.79, fogG: 0.34, fogB: 0.26,
   },
+  // Bonus / The Founding of Durotar. Its camera sits ~990 units from its subject while the
+  // model's lights only reach 200, so this set is mostly ambient-lit — hence the dolly in and
+  // the ambient a notch above the shared default. Its fog is the campaign's own colour with a
+  // start pushed way out, so the haze lands on the far mesas rather than on Rexxar.
+  "ui\\glues\\singleplayer\\orc_exp\\orc_exp.mdx": {
+    camZoom: 1.03, camFov: 0.68,
+    fogStart: 8600, fogEnd: 19600, fogR: 0.298, fogG: 0.298, fogB: 0.4,
+    lightAmbient: 0.53, // the grade stays the shared one (NEUTRAL_BACKDROP)
+  },
 };
 
 export class MenuScene {
@@ -291,16 +300,16 @@ export class MenuScene {
   // / panelHalfY are independent so the [0,1]²-authored (4:3) panel can be stretched to
   // frame the buttons on a 16:9 screen.
   readonly tuning = {
-    camZoom: 0.88, // dolly the eye toward the target (<1 closer)
+    camZoom: 0.82, // dolly the eye toward the target (<1 closer)
     camPanX: 0, // pan the eye+target screen-right (world units)
-    camPanY: -140, // pan the eye+target screen-up (world units)
-    camFov: 0.67, // field-of-view multiplier
+    camPanY: 10, // pan the eye+target screen-up (world units)
+    camFov: 0.72, // field-of-view multiplier
     // Orbit off the model's authored angle, in degrees — WC3's own camera fields
     // (docs/camera.md). Zero here: the Icecrown scene is framed by the dolly/pan above.
     camYaw: 0, // rotation about world Z
     camPitch: 0, // angle of attack (positive raises the eye)
     camRoll: 0, // roll on the up vector
-    lightAmbient: 0.45, // base ambient under the model's own omni lights (see BackdropTuning)
+    lightAmbient: 0.42, // base ambient under the model's own omni lights (see BackdropTuning)
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
@@ -314,13 +323,13 @@ export class MenuScene {
     leftCy: -0.2,
     leftHalfX: 0.295,
     leftHalfY: 0.29,
-    leftStretchX: 1.07,
+    leftStretchX: 1.23,
     // Distance-fog haze on the icy background (world units from the eye; rgb 0..1).
-    fogStart: 2700,
-    fogEnd: 4200,
+    fogStart: 1300,
+    fogEnd: 3500,
     fogR: 0.62,
     fogG: 0.63,
-    fogB: 0.77,
+    fogB: 0.69,
   };
 
   /** The campaign backdrop currently up (its model path), or null on the menu's own scene. */
