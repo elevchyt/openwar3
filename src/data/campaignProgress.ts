@@ -16,6 +16,11 @@ import type { Campaign } from "./campaigns";
 // Within a campaign, chapter N+1 opens when chapter N is completed; cinematics never gate
 // anything (you may watch the opening one, or not, and chapter one is open either way).
 
+// TEMPORARY (issue #105 tuning): every campaign selectable regardless of progress, so the
+// Alliance and Scourge backdrops can be reached to tune their camera/fog/grade. REVERT THIS —
+// the rule above is the real one, and it becomes per-profile once single-player profiles exist.
+const UNLOCK_ALL_CAMPAIGNS = true;
+
 const STORAGE_KEY = "openwar3.campaigns";
 const DIFFICULTY_KEY = "openwar3.campaignDifficulty";
 
@@ -70,6 +75,7 @@ function saveProgress(p: Progress): void {
 export function isCampaignOpen(campaigns: Campaign[], index: number, p = loadProgress()): boolean {
   const c = campaigns[index];
   if (!c) return false;
+  if (UNLOCK_ALL_CAMPAIGNS) return true; // TEMPORARY — see the constant
   if (c.defaultOpen) return true;
   const prev = campaigns[index - 1];
   if (!prev) return true;

@@ -5,7 +5,7 @@ import { completed, isCampaignOpen, isMissionOpen, loadProgress, type Difficulty
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
-import { arg, num, setProp, size, str } from "./mapBrowser";
+import { arg, num, setProp, str } from "./mapBrowser";
 
 // The Campaign screen (issue #101), built from the game's own UI\FrameDef\Glue\CampaignMenu.fdf.
 //
@@ -48,36 +48,36 @@ const ARROW_DY = 0.005;
 /** The grey the FDF paints a row's second line (`FontColor 0.764 0.764 0.764 1.0`). */
 const DESC_GREY = 0.764;
 /**
- * The corner logo. It is a SPRITE in the FDF with neither art nor size — the engine hands it
- * both — and what it hands it is a MODEL: war3skins.txt's `CampaignLogo` =
- * `UI\Glues\SinglePlayer\CampaignWarCraftIIILogo\CampaignWarCraftIIILogo.mdl`, whose own extent
- * is 0.2235 × 0.1115 in these units (a 2:1 box, matching the 512×256 texture inside it).
+ * A row's two lines, one size down from the templates they inherit (`StandardSmallTextTemplate`
+ * 0.011 over the header, `StandardTitleTextTemplate` 0.015 over the name). Set here rather than
+ * left to the templates because the LIST has to fit: a row is as tall as its own type — the
+ * chain that stacks them adds `pitch` to the height each line asks for — so the type size is
+ * what decides whether a campaign fits the screen. Legacy of the Damned is the one that settles
+ * it, at 14 chapters plus 2 cinematics; at the templates' own sizes its top three rows ran off
+ * the top edge and behind the corner logo.
  *
- * **The art is the EXPANSION logo on an expansion install.** `CampaignLogo` is the one skin key
- * with no `_V1` twin, so the naming convention that resolves the campaign backdrops
- * (data/campaigns.ts) has nothing to resolve here and the RoC-era model is all the table
- * offers — its texture is the Reign of Chaos logo. The Frozen Throne art is real and shipped:
- * `MainMenuLogo_V1` → `WarCraftIIILogo_exp.mdx`, which references
- * `ReplaceableTextures\WorldEditUI\WarcraftIIIFTLogo.blp` (dumped from the model in the
- * archives). TFT's own campaign screen wears the expansion logo, so we take that texture when
- * the install has it and fall back to the RoC one when it does not.
+ * The reference never faces this: it has a scrollbar (`CampaignListBox.fdf`), and the file says
+ * when it appears — "putting more than 15 will make a scrollbar appear to see the rest"
+ * (UI\CampaignStrings_exp.txt). Until that list box is real, the type is what makes room.
  */
-const LOGO_W = 0.2235;
-const LOGO_H = 0.1115;
-const LOGO_ART_TFT = "ReplaceableTextures\\WorldEditUI\\WarcraftIIIFTLogo.blp";
-const LOGO_ART_ROC = "UI\\Glues\\SinglePlayer\\CampaignWarCraftIIILogo\\WarcraftIII-logo-alpha.blp";
-/**
- * …and it is anchored INSIDE the corner, against the FDF's own `SetPoint TOPRIGHT … 0.08, 0.04`.
- * Those offsets belong to the MODEL: a glue model is a scene with its art somewhere inside a
- * much larger authored extent, and the file pushes that extent off the corner so the art lands
- * on it. We draw a flat texture that fills its whole box instead, so honouring the offsets
- * pushes the LOGO itself off-screen — the same substitution, one layer down, that makes a
- * sprite's size our problem in the first place. This inset puts the whole logo on screen.
- */
-const LOGO_INSET = -0.012;
+const ROW_HEADER_FONT = 0.0095;
+const ROW_NAME_FONT = 0.0125;
+/** The campaign list is four rows and never crowds, so it only comes down a hair. */
+const CAMPAIGN_HEADER_FONT = 0.0105;
+const CAMPAIGN_NAME_FONT = 0.0135;
 
-/** The 3D backdrop and the sliding doors are drawn by the scene behind the DOM, not here. */
-const SCENE_SPRITES = ["CampaignBackdrop", "SlidingDoors"];
+/**
+ * Drawn by the scene behind the DOM rather than here (the backdrop and the doors between two
+ * of them) — plus `WarCraftIIILogo`, which is suppressed rather than delegated.
+ *
+ * **The logo is deliberately off.** TFT's campaign screen does wear it (the corner sprite the
+ * engine hands `war3skins.txt`'s `CampaignLogo`, and on an expansion install the Frozen Throne
+ * art at `MainMenuLogo_V1`); it is hidden here by request, and it is the one thing on this
+ * screen that overlaps the chapter list on a long campaign. docs/campaigns.md keeps what it
+ * takes to bring it back — the art it resolves to, the size, and the anchor correction a flat
+ * texture needs where the file positions a MODEL.
+ */
+const SCENE_SPRITES = ["CampaignBackdrop", "SlidingDoors", "WarCraftIIILogo"];
 
 export type { Difficulty };
 
@@ -130,7 +130,16 @@ export function mountCampaignScreen(
     // The campaign backdrop is a 3D model in the scene behind us, and the sliding doors are
     // the transition between two of them — neither is a texture this screen can draw.
     hidden: SCENE_SPRITES,
-    sprites: { WarCraftIIILogo: vfs.exists(LOGO_ART_TFT) ? LOGO_ART_TFT : LOGO_ART_ROC },
+    // The bottom-centre pair names the campaign whose chapters are on screen, and it has to be
+    // handed over HERE rather than written in afterwards. Both frames declare no Width — the
+    // engine auto-sizes a TEXT frame to its string — so the layout measures whatever text it
+    // can see, and what the FDF gives it is `EMPTY_STRING`. Filled in after the build, the
+    // campaign's name landed in a box measured for nothing and came out a column of single
+    // letters. On the campaign list there is nothing selected yet and the file's own empty
+    // string stands, exactly as the reference has it.
+    textOverrides: state.chapters
+      ? { MissionNameHeader: state.campaign.header, MissionName: state.campaign.name }
+      : {},
     buildRoot: (l) => { lib = l; return buildCampaignRoot(l, campaigns, state, rows); },
     // One panel: the whole screen fades as one, because there is no chrome to fade it
     // against — every other glue screen's panels are carried by the 3D chain panels.
@@ -140,13 +149,6 @@ export function mountCampaignScreen(
   });
 
   function fill(s: FdfScreen): void {
-    // The bottom-centre pair names the campaign whose chapters are on screen. On the campaign
-    // list there is nothing selected yet, and the FDF's own EMPTY_STRING stands.
-    if (state.chapters) {
-      s.setText("MissionNameHeader", state.campaign.header);
-      s.setText("MissionName", state.campaign.name);
-    }
-
     const difficulty = s.popup("DifficultySelect");
     if (difficulty) {
       difficulty.setOptions(DIFFICULTIES.map((d) => ({ value: d.value, label: lib?.string(d.key) ?? d.key })));
@@ -221,20 +223,13 @@ function buildCampaignRoot(
   const root = lib.resolveRoot("CampaignMenu");
   if (!root) throw new Error("CampaignMenu.fdf: no CampaignMenu frame");
 
-  // The logo: a SPRITE with neither art nor size in TFT's file (the engine hands it both), and
-  // re-anchored inside the corner because we draw a flat texture where the file expects a model
-  // (see LOGO_ART_TFT / LOGO_INSET).
-  const logo = findChild(root, "WarCraftIIILogo");
-  if (logo) {
-    size(logo, LOGO_W, LOGO_H);
-    setProp(logo, "SetPoint", [arg("TOPRIGHT"), str("CampaignMenu"), arg("TOPRIGHT"), num(LOGO_INSET), num(LOGO_INSET)]);
-  }
-
   // The rows, into whichever of the two select frames this mode is.
   const container = state.chapters ? "MissionSelectFrame" : "CampaignSelectFrame";
   const built = state.chapters
-    ? buildRows(lib, rows.map((r) => ({ header: r.header, name: r.name, camera: !r.playable })), MISSION_BOTTOM, MISSION_PITCH)
-    : buildRows(lib, campaigns.map((c) => ({ header: `${c.header}:`, name: c.name, camera: false })), CAMPAIGN_BOTTOM, CAMPAIGN_PITCH);
+    ? buildRows(lib, rows.map((r) => ({ header: r.header, name: r.name, camera: !r.playable })),
+        MISSION_BOTTOM, MISSION_PITCH, ROW_HEADER_FONT, ROW_NAME_FONT)
+    : buildRows(lib, campaigns.map((c) => ({ header: `${c.header}:`, name: c.name, camera: false })),
+        CAMPAIGN_BOTTOM, CAMPAIGN_PITCH, CAMPAIGN_HEADER_FONT, CAMPAIGN_NAME_FONT);
   const target = findChild(root, container);
   if (target) target.children.push(...built);
 
@@ -255,6 +250,8 @@ function buildRows(
   entries: Array<{ header: string; name: string; camera: boolean }>,
   bottom: number,
   pitch: number,
+  headerFont: number,
+  nameFont: number,
 ): FdfFrame[] {
   const out: FdfFrame[] = [];
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -268,6 +265,8 @@ function buildRows(
 
     label.name = rowLabel(i);
     setProp(label, "Text", [str(entry.header)]);
+    // Same shape the FDF spells a size in — "MasterFont", size, flags (StandardTemplates.fdf).
+    setProp(label, "FrameFont", [str("MasterFont"), num(headerFont), str("")]);
     const below = i === entries.length - 1
       ? [arg("BOTTOMLEFT"), str("BackButton"), arg("TOPLEFT"), num(-0.03), num(bottom)]
       : [arg("BOTTOMLEFT"), str(rowLabel(i + 1)), arg("TOPLEFT"), num(0), num(pitch)];
@@ -275,6 +274,7 @@ function buildRows(
 
     desc.name = rowDesc(i);
     setProp(desc, "Text", [str(entry.name)]);
+    setProp(desc, "FrameFont", [str("MasterFont"), num(nameFont), str("")]);
     setProp(desc, "FontColor", [num(DESC_GREY), num(DESC_GREY), num(DESC_GREY), num(1)]);
     setProp(desc, "SetPoint", [arg("TOPLEFT"), str(rowLabel(i)), arg("BOTTOMLEFT"), num(0), num(0)]);
 

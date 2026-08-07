@@ -136,7 +136,20 @@ a renderer that is not ours — so feeding its start/end into our linear distanc
 scene in haze at the depth Blizzard wanted a tint. The baked values are the ones that reproduce
 what the reference SHOWS, which is what "match the original" means when the two disagree.
 
-### The corner logo
+### The corner logo — currently OFF
+
+**It is suppressed by request** (`SCENE_SPRITES` in `src/ui/fdfCampaign.ts` lists the frame among
+the ones this screen does not draw). The reference does wear it, so this is a deliberate
+departure and not a gap; everything needed to bring it back is below, and it is four lines —
+drop `WarCraftIIILogo` from that list, re-add the `sprites` mapping on the mount, and re-apply
+the size and anchor in `buildCampaignRoot`:
+
+```
+const LOGO_W = 0.2235, LOGO_H = 0.1115;  // the CampaignLogo model's own extent, a 2:1 box
+const LOGO_INSET = -0.012;               // TOPRIGHT of CampaignMenu, both axes
+const LOGO_ART_TFT = "ReplaceableTextures\\WorldEditUI\\WarcraftIIIFTLogo.blp";
+const LOGO_ART_ROC = "UI\\Glues\\SinglePlayer\\CampaignWarCraftIIILogo\\WarcraftIII-logo-alpha.blp";
+```
 
 `CampaignMenu.fdf` declares `WarCraftIIILogo` as a SPRITE with neither art nor size — the engine
 hands it a MODEL, `war3skins.txt`'s `CampaignLogo`. Two traps live in that one frame:
@@ -162,6 +175,25 @@ it, and a `CampaignArrowButtonTemplate` (or `CampaignCameraButtonTemplate` for a
 isn't a playable map) hanging off its left — the stack anchored above the Back button and
 chained upwards, each row to the one below it. Chaining, not computed offsets: a row's height
 is its text's, and only the file's own chain knows it without measuring.
+
+**And a row's height is its TYPE SIZE, which is why the rows carry their own.** The chain adds a
+fixed pitch to whatever height each line asks for, so the font is what decides whether a campaign
+fits the screen at all. Legacy of the Damned settles it — 14 chapters plus 2 cinematics, 16 rows,
+the longest in the game — and at the templates' own sizes (`StandardSmallTextTemplate` 0.011 over
+the header, `StandardTitleTextTemplate` 0.015 over the name) its top three ran off the top edge.
+The rows are set one size down instead (0.0095 / 0.0125 for chapters, 0.0105 / 0.0135 for the
+four campaign rows, which never crowd). The reference never meets this problem because it
+*scrolls*: `CampaignListBox.fdf`, and the index says exactly when it kicks in — "putting more
+than 15 will make a scrollbar appear to see the rest". Until that list box is real, the type is
+what makes the room, and any campaign past 16 rows will need the scrollbar rather than a smaller
+font.
+
+**The bottom-centre title must be handed over at BUILD time.** `MissionName` and
+`MissionNameHeader` declare no `Width` — the engine auto-sizes a TEXT frame to its string — so
+the layout measures whatever text it can see, and what the FDF gives it is `EMPTY_STRING`.
+Written in afterwards with `setText`, "Legacy of the Damned" landed in a box measured for nothing
+and rendered as a column of single letters. It goes through `textOverrides` on the mount, which
+is the input the measure pass actually reads.
 
 Two modes over one FDF, as the reference has it: the campaign list, then that campaign's
 chapters. Both `CampaignSelectFrame` and `MissionSelectFrame` stay mounted (RoC's glue script
