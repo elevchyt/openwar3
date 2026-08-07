@@ -52,11 +52,15 @@ export interface CommandButton {
    *
    *  A PRICE is deliberately NOT this — see `cantAfford`. */
   disabled: boolean;
-  /** Greyed, but still a button: the thing is unlocked and you just can't pay for it
-   *  this second (gold, lumber, food, mana, an empty shelf, no patron in range). WC3
-   *  takes that click and answers it with the refusal every player knows — "Not enough
-   *  gold." in the worker's own voice, which is an [Errors] line precisely BECAUSE the
-   *  button stays live. So this greys and nothing more; it must never eat the press. */
+  /** A FULL button you just can't pay for this second (gold, lumber, food, mana, an empty
+   *  shelf, no patron in range). It looks exactly like one you can afford, because that is
+   *  what it is: the thing is unlocked and the button is live. WC3 takes the click and
+   *  answers it with the refusal every player knows — "Not enough gold." in the worker's
+   *  own voice, which is an [Errors] line precisely BECAUSE the button stays live. The
+   *  price is shown where a price belongs: the tooltip reddens the number you're short of.
+   *
+   *  So this draws nothing, and it must never eat the press. Grey art means UNAVAILABLE
+   *  (`disabled`), and saying that about a Barracks you're 40 gold from is just wrong. */
   cantAfford?: boolean;
   /** A passive ability (Critical Strike, an aura): an INDICATOR that the unit has
    *  the thing, not an order. It shows in full colour — it is working right now —
@@ -1908,7 +1912,7 @@ export class GameHud {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed", "autocast", "cant-afford", "dis-art", "unavailable", "passive");
+      btn.classList.remove("armed", "autocast", "dis-art", "unavailable", "passive");
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
       onPress(btn, null);
@@ -1922,17 +1926,17 @@ export class GameHud {
       btn.disabled = false;
       btn.classList.toggle("armed", c.active);
       btn.classList.toggle("autocast", !!c.autocast);
-      // The two unavailable states do NOT look the same. `disabled` — a prerequisite is
-      // missing — is a texture swap in the original, not a tint: the engine draws the
-      // icon's `CommandButtonsDisabled\DIS*` twin, which is desaturated AND has no gold
-      // button frame. Losing the frame is most of what reads as "you can't press this".
-      // A `cantAfford` button is still a live button (its click is what earns "Not enough
-      // gold."), so it keeps its own framed art and only dims.
+      // Only ONE of the two unavailable states shows at all. `disabled` — a prerequisite
+      // is missing — is a texture swap in the original, not a tint: the engine draws the
+      // icon's `CommandButtonsDisabled\DIS*` twin, desaturated and with no gold button
+      // frame. `.dis-art` says that art is on screen so the CSS leaves it alone; without a
+      // twin the stylesheet desaturates the live art instead, off `.unavailable`.
       //
-      // `.cant-afford` is that dim, and it doubles as the fallback for the few icons that
-      // ship no twin; `.dis-art` says the engine's own art is already on screen.
+      // `cantAfford` draws NOTHING. A price is not a lock: the thing is unlocked, the
+      // button takes the click, and the click is what earns "Not enough gold." / "Not
+      // enough mana." — which is the answer, said out loud. The only mark WC3 puts on the
+      // screen for it is the reddened cost number in the tooltip (showTooltip's `short`).
       const disArt = c.disabled ? c.disabledIcon ?? null : null;
-      btn.classList.toggle("cant-afford", !disArt && (c.disabled || !!c.cantAfford));
       btn.classList.toggle("dis-art", !!disArt);
       btn.classList.toggle("unavailable", c.disabled);
       btn.classList.toggle("passive", !!c.passive);

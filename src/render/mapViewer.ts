@@ -6101,9 +6101,11 @@ export class MapViewerScene {
         cooldownFrac: restocking ? Math.max(0, Math.min(1, st.timer / st.period)) : 0,
         col: slot % 4,
         row: Math.floor(slot / 4),
-        // Only the tech gate makes the ware inert. Everything else here has an
-        // [Errors] line of its own — "Out of stock", "A valid patron must be nearby."
-        // — and buyItem speaks it when the click arrives.
+        // Only the tech gate makes the ware inert — and unavailable is the only thing the
+        // card draws. Everything else here has an [Errors] line of its own — "Not enough
+        // gold.", "Out of stock", "A valid patron must be nearby." — which buyItem speaks
+        // when the click arrives, so the ware sits there at full brightness looking exactly
+        // as buyable as it is (an empty shelf also carries the restock sweep, below).
         disabled: missing.length > 0,
         cantAfford: !afford || stock <= 0 || !hasPatron,
       }));
@@ -6485,17 +6487,17 @@ export class MapViewerScene {
         desc: this.abilityDesc(def, ab.level),
         mana: lvl.cost,
         col, row,
-        // Cooldown is shown by the radial overlay, not the greyed "can't afford"
-        // look (a click while on cooldown is harmlessly rejected by the sim).
-        // A PASSIVE is not "unavailable" either — Critical Strike is working right
-        // now, and WC3 draws it in full colour off its own PASBTN art ([AOcr]
-        // Art=…\PassiveButtons\PASBTNCriticalStrike.blp). It just isn't a button
-        // you press (see `passive` below), so only the mana check may grey it.
-        // Grey, but NOT inert: the click is how you hear "Not enough mana." (the
-        // sim's own [Errors] key for it, SimWorld.castRefusal).
+        // Being short of mana changes NOTHING about the button: the spell is learned and
+        // ready, and the click is how you hear "Not enough mana." (the sim's own [Errors]
+        // key for it, SimWorld.castRefusal). Cooldown likewise says itself, with the
+        // radial overlay. A PASSIVE is not "unavailable" either — Critical Strike is
+        // working right now, and WC3 draws it in full colour off its own PASBTN art
+        // ([AOcr] Art=…\PassiveButtons\PASBTNCriticalStrike.blp); it just isn't a button
+        // you press (see `passive` below).
         cantAfford: noMana,
-        // Unavailable, on the other hand, IS inert, and wears the DIS* art with no button
-        // frame — a silenced hero's spellbook reads as unpressable at a glance.
+        // Silence IS unavailable, and it is the only thing here that is: the button goes
+        // inert and wears the DIS* art with no frame, so a silenced spellbook reads as
+        // unpressable at a glance.
         disabled: muted,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right

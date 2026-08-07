@@ -938,24 +938,22 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
 .tt-cost-item.short { color: #ff2020; } /* can't pay it right now — WC3 reddens the number */
 .tt-cost-icon { width: 16px; height: 16px; display: block; }
 
-/* UNAVAILABLE (a prerequisite is missing) drawn with the engine's OWN art — the icon's
-   ReplaceableTextures\CommandButtonsDisabled\DIS* twin (see MapViewerScene.disabledArt).
-   Nothing goes on top of it: it is already desaturated, and it deliberately carries NO
-   gold button frame. Wearing the frame is what makes a button look pressable, so the one
-   you can't press doesn't. */
-.hud-cmd.dis-art { filter: none; }
+/* UNAVAILABLE (a prerequisite is missing) is drawn with the engine's OWN art — the icon's
+   ReplaceableTextures\CommandButtonsDisabled\DIS* twin (`.dis-art`, see
+   MapViewerScene.disabledArt). Nothing goes on top of it: it is already desaturated, and
+   it deliberately carries NO gold button frame. Wearing the frame is what makes a button
+   look pressable, so the one you can't press doesn't.
 
-/* Command button that the player can't currently afford. NOT the above: the thing is
-   unlocked and the click is live (it's what earns "Not enough gold."), so it keeps its
-   own bordered art and only dims. This is also the fallback for the handful of icons
-   that ship no DIS* twin. */
-.hud-cmd.cant-afford { filter: grayscale(0.7) brightness(0.6); }
-.hud-cmd.cant-afford::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  box-shadow: inset 0 0 0 1px rgba(224, 80, 70, 0.7);
-}
+   Desaturating in CSS is only the fallback for the handful of icons that ship no twin —
+   it can't take the frame off, so it is a worse likeness, never a first choice.
+
+   Note what is NOT here: a PRICE changes nothing about how a button looks. A Barracks you
+   are 40 gold short of, a Potion the shop will sell you the moment you can pay, a spell
+   waiting on mana — all of them are unlocked, all of them take the click, and the click is
+   what earns "Not enough gold." / "Not enough mana." WC3 says so in words, not by dimming
+   the art; the only thing it colours is the cost number in the tooltip (.tt-cost-item.short
+   above). Greying them here would have said "unavailable", which is a different word. */
+.hud-cmd.unavailable:not(.dis-art) { filter: grayscale(0.7) brightness(0.6); }
 .hud-cmd { position: relative; overflow: hidden; }
 .hud-cmd-label { pointer-events: none; }
 /* Radial cooldown sweep (clockwise dark wedge) + seconds count over an ability. */
@@ -1478,10 +1476,10 @@ body.carrying-item .hud-inv-slot:hover { border-color: var(--gold); }
 /* A passive ability is an indicator, not an order: full colour (it IS working)
    but nothing to press, so it doesn't take the hand cursor either. */
 .hud-cmd.passive { cursor: default; }
-/* Unavailable (a prerequisite is missing): WC3 greys it and it stops being a
-   button. The greying is `.cant-afford` above; this is the half that says so to
-   the hand — no pointer, no press sink (issue #98). One you merely can't afford
-   keeps both, because that click is what earns "Not enough gold." */
+/* Unavailable (a prerequisite is missing): WC3 swaps in the frameless DIS* art and it
+   stops being a button. The art is handled above; this is the half that says so to the
+   hand — no pointer, no press sink (issue #98). One you merely can't afford keeps both,
+   because that click is what earns "Not enough gold." */
 .hud-cmd.unavailable { cursor: default; }
 .hud-cmd.armed {
   border-color: #6fe06a;
