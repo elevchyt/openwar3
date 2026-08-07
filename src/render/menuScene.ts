@@ -107,13 +107,24 @@ export interface BackdropTuning {
  *   NightElf_Exp   4 omni, attenuation 80→200, colour (0.82, 1.00, 1.00), intensity 6/250/15/7
  *   Orc_Exp        4 omni, same window, intensity 80/75/80/35
  *   MainMenu3D_Exp 5 omni, same window, intensity 170…280
+ *   Undead3D_Exp   4 omni, same window, intensity 120/111/222/40
+ *   Alliance_Exp   4 omni, same window, intensity 400/1000/1000/800 — plus one DIRECTIONAL
  * An 80→200 unit reach sounds far too small for a scene whose bounds run to ±3000 — until you
  * read the model's own camera: it sits 340 units from its target. These are **dioramas**, a
  * small lit set close to the eye with a big painted backdrop far behind it, and the lights are
  * sized for the set. The far scenery is what the campaign's own `BackgroundFog*` is for.
  *
- * Every light in all three is `type 0` (omnidirectional) and every one carries
- * `AmbIntensity 0` — the scene's whole illumination is these point lights.
+ * Every one of them carries `AmbIntensity 0`, so a glue scene's whole illumination is its
+ * point lights and the base ambient `BackdropTuning.lightAmbient` supplies.
+ *
+ * **`Type` is not always 0.** Four of the five glue models carry nothing but omnis, and
+ * Alliance_Exp carries `FDirect01`, `Type 1` — a DIRECTIONAL light, which has a direction
+ * instead of a position and no attenuation at all. Read as an omni it was a point light at the
+ * node's pivot with an 80→200 window, 6102 units from that model's own camera target, so it
+ * contributed exactly nothing while occupying a slot and making the loop's arithmetic a lie.
+ * It is filtered out rather than approximated: the MDX gives it no orientation to use (identity
+ * rotation, no parent, `Intensity 0.1`), and inventing one would be guessing at what the
+ * reference shows. See docs/lighting.md.
  */
 export interface OmniLights {
   /** How many slots are filled; 0 means "no lights", and the shader skips the loop. */
@@ -177,6 +188,9 @@ interface MdxInstance {
 /** An MDX light as the viewer exposes it. Each getter writes the sampled value into `out`
  *  (out[0] for the scalars) and falls back to the model's static value off-sequence. */
 interface MdxLight {
+  /** The LITE chunk's own `Type`: 0 omnidirectional, 1 directional, 2 ambient. Only 0 is a
+   *  point light, and only 0 is what `updateOmniLights` uploads — see the filter there. */
+  type: number;
   getAttenuationStart(out: Float32Array, sequence: number, frame: number, counter: number): number;
   getAttenuationEnd(out: Float32Array, sequence: number, frame: number, counter: number): number;
   getColor(out: Float32Array, sequence: number, frame: number, counter: number): number;
@@ -247,6 +261,17 @@ const BACKDROP_DEFAULTS: Record<string, Partial<BackdropTuning>> = {
   "ui\\glues\\singleplayer\\nightelf_exp\\nightelf_exp.mdx": {
     camZoom: 1, camPanX: 0, camPanY: -15, camFov: 0.66, camYaw: 10, camPitch: 6, camRoll: 0,
     fogStart: 0, fogEnd: 13300, fogR: 0.79, fogG: 0.34, fogB: 0.26,
+  },
+  // Alliance / Curse of the Blood Elves. Kael stands in the middle of his own set with the
+  // Outland skerries floating well behind him, so this one is framed by widening the lens and
+  // sliding the subject off-centre rather than by orbiting — the authored camera already looks
+  // at him from the right angle. Its fog is the campaign's red at a start of 0, which is what
+  // paints the whole sky; the ambient is up because Kael's own lights are few and dim against
+  // a set that reads lit from everywhere in the reference.
+  "ui\\glues\\singleplayer\\alliance_exp\\alliance_exp.mdx": {
+    camZoom: 0.91, camPanX: 15, camFov: 0.79,
+    fogStart: 0, fogEnd: 12200, fogR: 0.7, fogG: 0.2, fogB: 0.2,
+    lightAmbient: 0.83, // the grade stays the shared one (NEUTRAL_BACKDROP)
   },
   // Bonus / The Founding of Durotar. Its camera sits ~990 units from its subject while the
   // model's lights only reach 200, so this set is mostly ambient-lit — hence the dolly in and
@@ -705,34 +730,43 @@ export class MenuScene {
     const { sequence, frame, counter } = instance;
     const v = this.lightVec;
     const s = this.lightScalar;
-    const count = Math.min(lights.length, MAX_OMNI);
-    for (let i = 0; i < count; i++) {
+    let n = 0; // slots FILLED — not the light's index, since a non-omni is skipped
+    for (let i = 0; i < lights.length && n < MAX_OMNI; i++) {
       const light = lights[i];
+      // Only `Type 0` is a point light, and everything below it — a world position, a distance
+      // and a linear attenuation window — is a point light's arithmetic. Alliance_Exp carries
+      // the one exception in the glue set (`FDirect01`, type 1); see OmniLights.
+      if (light.type !== 0) continue;
       // Light i's node sits right after the bones — mdx/modelinstance.js builds them in that
-      // order — and carries the light's animated position in world space.
+      // order — and carries the light's animated position in world space. Indexed by `i`, the
+      // light's own index, while the uploaded slot is `n`.
       const node = instance.nodes[(model.bones.length as number) + i];
-      if (node) o.positions.set(node.worldLocation.subarray(0, 3), i * 3);
+      if (node) o.positions.set(node.worldLocation.subarray(0, 3), n * 3);
 
       light.getColor(v, sequence, frame, counter);
       light.getIntensity(s, sequence, frame, counter);
-      for (let c = 0; c < 3; c++) o.colors[i * 3 + c] = v[2 - c] * s[0]; // BGR → RGB
+      for (let c = 0; c < 3; c++) o.colors[n * 3 + c] = v[2 - c] * s[0]; // BGR → RGB
 
       light.getAttenuationStart(s, sequence, frame, counter);
       const start = s[0];
       light.getAttenuationEnd(s, sequence, frame, counter);
-      o.attenuations[i * 2] = start;
-      o.attenuations[i * 2 + 1] = Math.max(s[0], start + 1); // never a zero-width window
+      o.attenuations[n * 2] = start;
+      o.attenuations[n * 2 + 1] = Math.max(s[0], start + 1); // never a zero-width window
 
       light.getAmbientColor(v, sequence, frame, counter);
       light.getAmbientIntensity(s, sequence, frame, counter);
       for (let c = 0; c < 3; c++) o.ambient[c] += v[2 - c] * s[0];
+      n++;
     }
 
     // …plus the base ambient the models do NOT carry (see BackdropTuning.lightAmbient).
     const base = (this.backdropTuning ?? this.tuning).lightAmbient;
     for (let c = 0; c < 3; c++) o.ambient[c] += base;
 
-    o.count = count;
+    // Uploaded even if the filter left `n` at 0: the base ambient is still this screen's, and
+    // the shader's unused slots are black, so a model of nothing but directional lights is lit
+    // by the ambient rather than dropped back onto the stock 0.7 wash.
+    o.count = n;
     this.scene3d.omniLights = o;
   }
 

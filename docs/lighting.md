@@ -48,11 +48,30 @@ the bilinear filter still has real texels to blend toward at a shadow's edge.
 The main menu and the campaign backdrops are 3D scenes, and **every glue model carries its own
 lights** in its MDX `LITE` chunk:
 
-| Model | lights | type | attenuation | intensity |
-| --- | --- | --- | --- | --- |
-| `NightElf_Exp` | 4 (`Omni01`–`Omni04`) | omni | 80 → 200 | 6 / 250 / 15 / 7 |
-| `Orc_Exp` | 4 | omni | 80 → 200 | 80 / 75 / 80 / 35 |
-| `MainMenu3D_Exp` | 5 | omni | 80 → 200 | 170 … 280 |
+| Model | screen | lights | type | attenuation | intensity |
+| --- | --- | --- | --- | --- | --- |
+| `NightElf_Exp` | Sentinels | 4 (`Omni01`–`Omni04`) | omni | 80 → 200 | 6 / 250 / 15 / 7 |
+| `Alliance_Exp` | Alliance | 4 + `FDirect01` | omni + **1 directional** | 80 → 200 | 400 / 1000 / 1000 / 800, directional 0.1 |
+| `Undead3D_Exp` | Scourge | 4 (`Omni01`,`03`,`04`,`05`) | omni | 80 → 200 | 120 / 111 / 222 / 40 |
+| `Orc_Exp` | Bonus | 4 | omni | 80 → 200 | 80 / 75 / 80 / 35 |
+| `MainMenu3D_Exp` | main menu | 5 | omni | 80 → 200 | 170 … 280 |
+
+**`Type` is not always 0**, and Alliance_Exp is the model that proves it: `FDirect01` is
+`Type 1`, a DIRECTIONAL light — a direction and no attenuation, where every other light in the
+glue set is a point. `updateOmniLights` had no filter and uploaded it as an omni at its pivot,
+which put it 6102 units from that model's own camera target against a 200-unit reach: it lit
+nothing, and it spent a shader slot claiming to. Non-omni lights are skipped now. It is skipped
+rather than approximated because the MDX gives no direction to approximate FROM — identity
+rotation, no parent, `Intensity 0.1` — and picking a base axis for it would be inventing what
+the reference shows rather than reading it.
+
+**Alliance_Exp is lit almost entirely by the base ambient, and that is the data's doing.** Its
+four omnis sit 1361 / 5804 / 7109 / 4206 units from the camera target with the same 80→200 reach
+every glue light has, so barely any of that set is inside a light. Measured by rendering one
+frozen frame with `scene.omniLights` on and then null, mean |Δ| over the scene: Sentinels 17.1,
+Scourge 14.5, Bonus 10.7 — **Alliance 2.8**. That is why its baked `lightAmbient` is 0.83 where
+the others sit near 0.5, and it is the right answer rather than a workaround: with no practical
+lights near the subject, ambient is what the engine has left to light Kael with.
 
 We ignored all of them until issue #105, and with no light on the scene the SD shader fell
 through to mdx-m3-viewer's stock `clamp(N·L + 0.7)` — a 0.7…1.0 wash with no falloff anywhere.
@@ -64,6 +83,31 @@ uploaded exactly as a backdrop's are. Verified by toggling `scene.omniLights` on
 the tower, the chains, the ice spikes, the bergs and the ocean all change. What it does NOT have
 is any shadow art — the model names 49 textures and not one of them is a shadow — so there is
 nothing further to hook up there; a glue scene's shadows are painted into its textures.
+
+### A glue scene's shadows are painted, and one of them is painted 178 times
+
+There is no shadow *pass* to hook up on these screens — a glue model's shadows are in its art.
+Read out of each model's `TEXS` chunk, four of the five name no shadow texture at all
+(NightElf_Exp 88, Alliance_Exp 26, Orc_Exp 23, MainMenu3D_Exp 49 — none shadow-named), and the
+fifth is the exception worth knowing about:
+
+**`Undead3D_Exp` ships 216 of its 248 textures as baked shadow FRAMES** —
+`UI\Glues\SinglePlayer\Undead3D_Exp\shadowMap0000…0354.blp` (178, even numbers) and
+`Textures\shadowMapHair0000…0074.blp` (38). They are Arthas's own self-shadowing, baked per
+animation frame and played back as a flipbook: two material layers (22 and 29) carry a **`KMTF`
+texture-id track**, animated in both `Birth` and `Stand`, blended over the model at alpha 0.35
+and 0.5 — the second one `Unshaded` and `Unfogged`, since a shadow cast by his hair onto his
+face is not something the scene's own lights or haze should touch.
+
+**This already works, and it works because mdx-m3-viewer samples KMTF per instance per frame**
+(`modelinstance.js`, `layer.variants['textureId'][sequence]` → `instance.layerTextures[i]`,
+which is what the batch binds). Nothing in OpenWar3 had to be added for it. Verified on the
+running screen: all 248 textures resolve in the install and all 248 load, and forcing the two
+cached layer textures to something else on a frozen frame changes 68k pixels across Arthas —
+his face and hair flatten out and the modelling on his armour goes. If you are ever testing
+this, note the trap that made it look dead the first time: **the render path reads the CACHED
+`instance.layerTextures`, not `getTextureId`**, so monkeypatching the getter on a stopped scene
+proves nothing — nothing calls it until an update runs.
 
 The screen-edge sprite layers (`scenePanel` / `sceneLeft`) deliberately get no lights. They are
 flat UI chrome drawn through an orthographic camera, and lighting the metal border with the
