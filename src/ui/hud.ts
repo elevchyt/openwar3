@@ -23,6 +23,13 @@ export type OrderMode = "move" | "attack" | null;
 export interface CommandButton {
   id: string; // "move" | "stop" | "attack" | "build" | "cancel" | "build:htow" | "train:hfoo"
   icon: string | null; // data URL
+  /** The art to draw INSTEAD of `icon` while the button is `disabled` — the icon's own
+   *  `CommandButtonsDisabled\DIS*` twin (see MapViewerScene.disabledArt). It is a different
+   *  texture, not a filter: the twin is drawn desaturated AND with the gold button frame
+   *  removed, which is how the original says "you can't press this". Only set when the
+   *  button is unavailable, and null when the icon ships no twin — the button then falls
+   *  back to desaturating the live art. */
+  disabledIcon?: string | null;
   name: string;
   hotkey: string;
   /** The tooltip TITLE as the game itself writes it (UnitStrings/AbilityStrings
@@ -1901,7 +1908,7 @@ export class GameHud {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed", "autocast", "cant-afford", "unavailable", "passive");
+      btn.classList.remove("armed", "autocast", "cant-afford", "dis-art", "unavailable", "passive");
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
       onPress(btn, null);
@@ -1915,12 +1922,21 @@ export class GameHud {
       btn.disabled = false;
       btn.classList.toggle("armed", c.active);
       btn.classList.toggle("autocast", !!c.autocast);
-      // Both unavailable states wear the same greyed-out look; only `disabled` also
-      // takes the button out of service.
-      btn.classList.toggle("cant-afford", c.disabled || !!c.cantAfford);
+      // The two unavailable states do NOT look the same. `disabled` — a prerequisite is
+      // missing — is a texture swap in the original, not a tint: the engine draws the
+      // icon's `CommandButtonsDisabled\DIS*` twin, which is desaturated AND has no gold
+      // button frame. Losing the frame is most of what reads as "you can't press this".
+      // A `cantAfford` button is still a live button (its click is what earns "Not enough
+      // gold."), so it keeps its own framed art and only dims.
+      //
+      // `.cant-afford` is that dim, and it doubles as the fallback for the few icons that
+      // ship no twin; `.dis-art` says the engine's own art is already on screen.
+      const disArt = c.disabled ? c.disabledIcon ?? null : null;
+      btn.classList.toggle("cant-afford", !disArt && (c.disabled || !!c.cantAfford));
+      btn.classList.toggle("dis-art", !!disArt);
       btn.classList.toggle("unavailable", c.disabled);
       btn.classList.toggle("passive", !!c.passive);
-      if (c.icon) btn.style.backgroundImage = `url(${c.icon})`;
+      if (disArt || c.icon) btn.style.backgroundImage = `url(${disArt ?? c.icon})`;
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 
       if (c.count && c.count > 0) this.cmdCount[idx].textContent = String(c.count);

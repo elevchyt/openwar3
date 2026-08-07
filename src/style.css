@@ -938,7 +938,17 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
 .tt-cost-item.short { color: #ff2020; } /* can't pay it right now — WC3 reddens the number */
 .tt-cost-icon { width: 16px; height: 16px; display: block; }
 
-/* Command button that the player can't currently afford. */
+/* UNAVAILABLE (a prerequisite is missing) drawn with the engine's OWN art — the icon's
+   ReplaceableTextures\CommandButtonsDisabled\DIS* twin (see MapViewerScene.disabledArt).
+   Nothing goes on top of it: it is already desaturated, and it deliberately carries NO
+   gold button frame. Wearing the frame is what makes a button look pressable, so the one
+   you can't press doesn't. */
+.hud-cmd.dis-art { filter: none; }
+
+/* Command button that the player can't currently afford. NOT the above: the thing is
+   unlocked and the click is live (it's what earns "Not enough gold."), so it keeps its
+   own bordered art and only dims. This is also the fallback for the handful of icons
+   that ship no DIS* twin. */
 .hud-cmd.cant-afford { filter: grayscale(0.7) brightness(0.6); }
 .hud-cmd.cant-afford::after {
   content: "";

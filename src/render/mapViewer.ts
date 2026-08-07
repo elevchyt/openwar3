@@ -776,6 +776,11 @@ export class MapViewerScene {
   private world3 = new Float32Array(3);
   private minimap: HTMLCanvasElement | null = null;
   private iconCache = new Map<string, string | null>();
+  /** Every icon URL blpIcon() has handed out, mapped back to the BLP it was decoded from.
+   *  A greyed command button needs its icon's DIS* twin, and by the time the card is
+   *  assembled the call site has long since thrown the path away — this is how `cmd()`
+   *  finds it again without threading a second path through every push site. */
+  private iconSource = new Map<string, string>();
   private localPlayer = 0;
   private localRace: PlayableRace = "human";
   // Footprints of registered resource nodes, for unstamping on removal.
@@ -5798,6 +5803,13 @@ export class MapViewerScene {
     const b: CommandButton = { id: "", icon: null, name: "", hotkey: "", desc: "", gold: 0, lumber: 0, food: 0, mana: 0, col: 0, row: 0, disabled: false, cantAfford: false, active: false, ...over };
     b.desc = this.tipText(b.desc);
     if (b.tip) b.tip = this.tipText(b.tip);
+    // Unavailable is a texture swap in the original, not a tint (see disabledArt), so the
+    // one place a button is made is also the one place that finds its greyed twin. Only
+    // for `disabled`: a button you merely can't PAY for is still a live button — it takes
+    // the click that earns "Not enough gold.", and it keeps its frame to say so. And only
+    // when it is actually greyed, because the twins of live buttons would double every
+    // card's decode for art nobody sees.
+    if (b.icon && b.disabled) b.disabledIcon = this.disabledArt(b.icon);
     return b;
   }
 
@@ -6459,6 +6471,11 @@ export class MapViewerScene {
       const passive = def.target === "passive";
       const onCd = ab.cooldownLeft > 0;
       const noMana = su.mana < lvl.cost;
+      // Silenced (Silence, Soul Burn) or stunned: the unit cannot cast at all. This is the
+      // one refusal WC3 ships no [Errors] line for, and SimWorld.castRefusal says why —
+      // the engine GREYS THE BUTTON, so the click never happens and nothing needs saying.
+      // A passive is untouched: Silence stops spellcasting, not Critical Strike.
+      const muted = !passive && (su.silenced || su.stunned);
       out.push(this.cmd({
         id: passive ? "noop" : def.autocast ? `autocast:${ab.code}` : `ability:${ab.code}`,
         icon: this.blpIcon(def.icon),
@@ -6477,6 +6494,9 @@ export class MapViewerScene {
         // Grey, but NOT inert: the click is how you hear "Not enough mana." (the
         // sim's own [Errors] key for it, SimWorld.castRefusal).
         cantAfford: noMana,
+        // Unavailable, on the other hand, IS inert, and wears the DIS* art with no button
+        // frame — a silenced hero's spellbook reads as unpressable at a glance.
+        disabled: muted,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and
@@ -7053,8 +7073,34 @@ export class MapViewerScene {
       const bytes = this.vfs.rawBytes(path);
       url = bytes ? blpToDataUrl(bytes) : null;
       this.iconCache.set(path, url);
+      if (url) this.iconSource.set(url, path);
     }
     return url;
+  }
+
+  /** Where the greyed twin of an icon lives. Both button folders answer to the same rule:
+   *  `CommandButtons\BTNFoo.blp` → `CommandButtonsDisabled\DISBTNFoo.blp`, and a passive's
+   *  `PassiveButtons\PASBTNFoo.blp` → `CommandButtonsDisabled\DISPASBTNFoo.blp` (verified
+   *  against the 1.30.4 store: 1,086 DISBTN + 59 DISPASBTN cover all but six icons). */
+  private static disabledIconPath(path: string): string | null {
+    const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+    if (cut < 0) return null;
+    return `ReplaceableTextures\\CommandButtonsDisabled\\DIS${path.slice(cut + 1)}`;
+  }
+
+  /** The art WC3 draws for an unavailable command button. It is NOT the live icon tinted —
+   *  the engine swaps in a second texture, and that texture differs in two ways: it is
+   *  desaturated, and the gold button frame is GONE (the DIS* art fills the tile edge to
+   *  edge where the BTN art spends its outer pixels on the frame). Wearing the frame is
+   *  what makes a button look pressable, so a greyed one must not.
+   *
+   *  Null for the six icons in 1.30.4 that ship no twin — the caller falls back to
+   *  desaturating the live art, which is the closest we can get without one. */
+  private disabledArt(iconUrl: string): string | null {
+    const path = this.iconSource.get(iconUrl);
+    if (!path) return null;
+    const dis = MapViewerScene.disabledIconPath(path);
+    return dis ? this.blpIcon(dis) : null;
   }
 
   /** Pre-decode every command-card icon in the background so none is ever decoded
@@ -7073,7 +7119,13 @@ export class MapViewerScene {
     for (const d of this.registry.all()) if (d.icon) paths.add(d.icon);
     for (const a of this.abilities.all()) if (a.icon) paths.add(a.icon);
     for (const it of this.items.all()) if (it.icon) paths.add(it.icon);
-    const queue = [...paths].filter((p) => !this.iconCache.has(p));
+    // …and each icon's greyed twin, which a card reaches for the moment a building's
+    // prerequisite is missing — i.e. on the FIRST worker selected, for most of the build
+    // card. Queued strictly behind the live art: a twin nobody has greyed yet must never
+    // delay the icon that is on screen right now.
+    const queue = [...paths, ...[...paths].map(MapViewerScene.disabledIconPath).filter((p): p is string => !!p)].filter(
+      (p) => !this.iconCache.has(p),
+    );
 
     let i = 0;
     const ric = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback.bind(window) : null;
