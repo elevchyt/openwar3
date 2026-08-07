@@ -404,7 +404,7 @@ function renderFrame(
     // A STRING *is* a text element — the glue screens only ever used them as templates
     // (`String "StandardButtonTextTemplate"`), so nothing drew one until the resource bar,
     // whose gold/lumber/supply readouts are String frames sitting in the frame directly.
-    paintText(el, f, ctx, node.autoJustifyH);
+    paintText(el, f, ctx, node.autoJustifyH, node.shrinkWrapped);
   } else if (f.type === "SIMPLEBUTTON") {
     wireButton(el, f, ctx);
   } else if (isButton) {
@@ -990,7 +990,30 @@ function compositeBackdrop(f: FdfFrame, w: number, h: number, ctx: RenderCtx): H
     if (on("BL") || on("LL")) tile(EDGE_TILE.LL, 0, h - c, c, c);
     if (on("BR") || on("LR")) tile(EDGE_TILE.LR, w - c, h - c, c, c);
   }
-  return canvas;
+
+  return hasFlag(f, "BackdropMirrored") ? mirrored(canvas) : canvas;
+}
+
+/**
+ * `BackdropMirrored` — the finished backdrop, flipped left-to-right.
+ *
+ * The ornate menu bases are ONE asymmetric picture (`StandardMenuButtonBaseBackdrop` is
+ * GlueScreen-Button1-Border.blp stretched, no tiling and no edge file): a fleur end at the
+ * left, plain plate to the right, and the widget sits in the plate. A widget that fills its
+ * base from the LEFT instead — every pulldown on the Options screen, which anchors its
+ * POPUPMENU TOPLEFT inside a 0.256-wide base — needs that picture the other way round, and
+ * the file says so with this flag. Ignored, the fleur is drawn underneath the dropdown where
+ * nothing can see it and the base's right quarter reads as an empty dark strip.
+ */
+function mirrored(src: HTMLCanvasElement): HTMLCanvasElement {
+  const out = document.createElement("canvas");
+  out.width = src.width; out.height = src.height;
+  const g = out.getContext("2d");
+  if (!g) return src;
+  g.translate(src.width, 0);
+  g.scale(-1, 1);
+  g.drawImage(src, 0, 0);
+  return out;
 }
 
 /** A referenced template, wearing the referrer's `DecorateFileNames` if it has one of its
@@ -1043,11 +1066,23 @@ function paintTexture(el: HTMLElement, f: FdfFrame, ctx: RenderCtx): void {
 
 /** Paint a TEXT frame: markup → html, font/colour/justification from the FDF. `autoJustifyH`
  *  overrides the file's when the frame is one the ENGINE would have shrink-wrapped and we
- *  gave a fabricated width to instead (see LaidOutFrame.autoJustifyH). */
-function paintText(el: HTMLElement, f: FdfFrame, ctx: RenderCtx, autoJustifyH?: string): void {
+ *  gave a fabricated width to instead (see LaidOutFrame.autoJustifyH). `shrinkWrapped` says
+ *  its HEIGHT is the engine's one-line box — the font's own size (see `textBoxHeight`). */
+function paintText(
+  el: HTMLElement,
+  f: FdfFrame,
+  ctx: RenderCtx,
+  autoJustifyH?: string,
+  shrinkWrapped?: boolean,
+): void {
   const raw = ctx.textOverrides[f.name] ?? ctx.lib.string(strProp(f, "Text") ?? "");
   el.style.display = "flex";
-  el.style.overflow = "hidden";
+  // A shrink-wrapped box is exactly one font-size tall, which is what the engine chains the
+  // next frame off — but the line the browser draws in it carries leading (1.2 below), so the
+  // glyph box is a hair taller than the frame. Let it hang over the edge; clipping it is how
+  // the tail of every g and y goes missing. Everything else still clips: a box the FILE sized
+  // is a box the text is meant to stay inside.
+  el.style.overflow = shrinkWrapped ? "visible" : "hidden";
   el.innerHTML = "";
   const span = document.createElement("span");
   span.innerHTML = wc3ToHtml(raw);

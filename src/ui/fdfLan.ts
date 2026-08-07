@@ -244,7 +244,7 @@ function buildLanRoot(lib: FdfLibrary): FdfFrame {
 
   // NOTE: this screen chains its anchors down a ladder of unsized TEXT frames
   // (title → label → editbox → list, each SetPoint TOPLEFT … BOTTOMLEFT). Those get their
-  // one-line height from the layout solver itself (ui/fdf/layout.ts `textLineHeight`) — it
+  // one-line height from the layout solver itself (ui/fdf/layout.ts `textBoxHeight`) — it
   // used to inherit the parent's height and push the list clean off the screen.
   const listBox = lib.resolveRoot("MapListBox");
   if (listBox) {

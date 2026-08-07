@@ -52,6 +52,9 @@ type PanelSide = "left" | "right";
 /** The three clips a screen's chrome plays, in the order it plays them. */
 interface ChromeClips { birth: string; stand: string; death: string }
 
+/** One sprite-layer panel: its model, the instance in the scene, and which side it is. */
+interface Panel { model: MdxModel; instance: MdxInstance; side: PanelSide }
+
 /**
  * The screens whose two panels do NOT play the same clip.
  *
@@ -340,7 +343,9 @@ export class MenuScene {
   private instances: MdxInstance[] = [];
   /** The sprite-layer panels, kept with their model so we can look sequences up by name, and
    *  with which SIDE they are — a screen may drive the two differently (LEFT_PANEL_CLIPS). */
-  private panels: Array<{ model: MdxModel; instance: MdxInstance; side: PanelSide }> = [];
+  private panels: Panel[] = [];
+  /** Pending hand-offs from a `replayPanel` — its Death→Birth→Stand chain. */
+  private panelTimers: number[] = [];
   private chrome: GlueChrome = "MainMenu";
   private chromeTimer = 0;
   private soundTimers: number[] = [];
@@ -639,18 +644,54 @@ export class MenuScene {
   /** The chrome currently on screen. */
   get chromeScreen(): GlueChrome { return this.chrome; }
 
-  /** Play one phase of `screen`'s chrome on both panels — each on the clip its own side owns
-   *  (clipFor); `loop` for the idle Stand clips. */
-  private playPhase(screen: GlueChrome, phase: keyof ChromeClips, loop: boolean): void {
+  /** Play one phase of the CURRENT screen's chrome on both panels — each on the clip its own
+   *  side owns (clipFor); `loop` for the idle Stand clips. */
+  private playPhase(phase: keyof ChromeClips, loop: boolean): void {
     this.clearSoundTimers();
-    for (const { model, instance, side } of this.panels) {
-      const name = this.clipFor(screen, phase, side);
-      const idx = model.sequences.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
-      if (idx < 0) continue;
-      instance.setSequenceLoopMode(loop ? 2 : 0);
-      instance.setSequence(idx);
-      this.scheduleClipSounds(model, model.sequences[idx]);
-    }
+    this.clearPanelTimers();
+    for (const panel of this.panels) this.playOn(panel, phase, loop);
+  }
+
+  /** One panel, one phase — the clip that side owns, plus whatever the clip whooshes. */
+  private playOn(panel: Panel, phase: keyof ChromeClips, loop: boolean): void {
+    const { model, instance, side } = panel;
+    const name = this.clipFor(this.chrome, phase, side);
+    const idx = model.sequences.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
+    if (idx < 0) return;
+    instance.setSequenceLoopMode(loop ? 2 : 0);
+    instance.setSequence(idx);
+    this.scheduleClipSounds(model, model.sequences[idx]);
+  }
+
+  /**
+   * Send ONE panel away and bring it straight back, on the same two clips a screen change
+   * uses — Death, then Birth, then back to its looping Stand. Returns their lengths so the
+   * DOM that panel carries can fade out and in on the same beats.
+   *
+   * The Options screen is what this is for. Its three settings panels are three different
+   * heights, and the left-hand frame that carries them is a fixed piece of art — so the
+   * reference does not resize it under the player, it swings the frame away and swings it
+   * back around the new contents. On that screen those two clips ARE the Morph pair
+   * (LEFT_PANEL_CLIPS), which is the transition the model was given for exactly this.
+   */
+  replayPanel(side: PanelSide): ChromeTiming {
+    const panel = this.panels.find((p) => p.side === side);
+    if (!panel) return { death: 0, birth: 0 };
+    this.clearPanelTimers();
+    const death = seqLengthOf(panel.model, this.clipFor(this.chrome, "death", side));
+    const birth = seqLengthOf(panel.model, this.clipFor(this.chrome, "birth", side));
+    this.playOn(panel, "death", false);
+    this.panelTimers.push(window.setTimeout(() => {
+      this.playOn(panel, "birth", false);
+      this.panelTimers.push(window.setTimeout(() => this.playOn(panel, "stand", true), birth));
+    }, death));
+    return { death, birth };
+  }
+
+  /** Drop a pending `replayPanel` hand-off — a screen change owns the panels now. */
+  private clearPanelTimers(): void {
+    for (const t of this.panelTimers) clearTimeout(t);
+    this.panelTimers = [];
   }
 
   /**
@@ -690,7 +731,7 @@ export class MenuScene {
   /** Send the current screen's chrome away: play "<screen> Death" once. */
   playChromeDeath(): number {
     clearTimeout(this.chromeTimer);
-    this.playPhase(this.chrome, "death", false);
+    this.playPhase("death", false);
     return this.seqLength(`${this.chrome} Death`);
   }
 
@@ -698,9 +739,9 @@ export class MenuScene {
   playChromeBirth(screen: GlueChrome): number {
     clearTimeout(this.chromeTimer);
     this.chrome = screen;
-    this.playPhase(screen, "birth", false);
+    this.playPhase("birth", false);
     const birth = this.seqLength(`${screen} Birth`);
-    this.chromeTimer = window.setTimeout(() => this.playPhase(screen, "stand", true), birth);
+    this.chromeTimer = window.setTimeout(() => this.playPhase("stand", true), birth);
     return birth;
   }
 
@@ -825,6 +866,7 @@ export class MenuScene {
     this.canvas.style.filter = ""; // the grade is ours; don't leave it on the element
     clearTimeout(this.chromeTimer);
     this.clearSoundTimers();
+    this.clearPanelTimers();
     for (const inst of this.instances) {
       for (const scene of [this.scene3d, this.scenePanel, this.sceneLeft]) {
         try { scene.removeInstance(inst); } catch { /* not in this scene */ }

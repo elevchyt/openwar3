@@ -1,6 +1,7 @@
 import type { DataSource } from "../vfs/types";
 import type { SoundBoard } from "../audio/sounds";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
+import { fadePanels } from "./fdf/anim";
 import type { FdfLibrary } from "./fdf/library";
 import {
   OPTION_DEFS,
@@ -17,8 +18,13 @@ import {
 // localStorage (src/data/options.ts).
 //
 // Two things the FDF doesn't do that the engine's glue code did, and so we do here:
-//   • Show ONE panel at a time. GameplayPanel / VideoPanel / SoundPanel are three overlapping
-//     frames in the file; the category buttons pick which is visible (WC3 hides the other two).
+//   • Show ONE panel at a time, and SWAP it the way the screen was built to. GameplayPanel /
+//     VideoPanel / SoundPanel are three overlapping frames in the file, and they are three
+//     different heights — so the left-hand frame that carries them, being a fixed piece of
+//     3D art, cannot just resize under the player. It leaves and comes back: the panel plays
+//     its Death, the contents cross over behind it, and it plays its Birth around the new
+//     ones (MenuScene.replayPanel, and on this screen those two clips are the Morph pair the
+//     model carries for exactly this — see LEFT_PANEL_CLIPS).
 //   • Give OK / Cancel their meaning. We edit a WORKING copy of the options and apply the audio
 //     ones live so a volume drag is heard immediately; OK commits the copy to localStorage,
 //     Cancel throws it away and restores the committed values (re-applying the audio it touched).
@@ -42,17 +48,20 @@ const PANEL_FRAME: Record<PanelName, string> = {
   video: "VideoPanel",
   sound: "SoundPanel",
 };
-const CATEGORY_BUTTON: Record<PanelName, string> = {
-  gameplay: "GameplayButton",
-  video: "VideoButton",
-  sound: "SoundButton",
-};
-
 export interface OptionsHandlers {
   /** The live SoundBoard, so the Sound panel is audible as you drag it. */
   sounds?: SoundBoard | null;
   /** Leave the Options screen — both OK and Cancel go here (back to the main menu). */
   onClose: () => void;
+  /**
+   * Send the left-hand settings frame away and bring it back, and say how long each half
+   * takes — `MenuScene.replayPanel("left")`. Handed in rather than reached for, because the
+   * 3D scene is main.ts's and this screen only ever asks it one question.
+   *
+   * Absent (or answering 0) the panels simply cross over where they stand, which is what a
+   * screen mounted with no scene behind it should do.
+   */
+  swapPanel?: () => { death: number; birth: number };
 }
 
 export async function mountOptions(
@@ -65,6 +74,8 @@ export async function mountOptions(
   // and cancels is exactly where they started, audio included.
   const working: Options = { ...committed };
   let activePanel: PanelName = "gameplay";
+  /** True while the frame is away and the panels are crossing over (see showPanel). */
+  let swapping = false;
   let lib: FdfLibrary | null = null;
 
   const applyAudio = (opts: Options): void => {
@@ -90,9 +101,9 @@ export async function mountOptions(
     },
     buttonWidthScale: 1.35, // the category + OK/Cancel buttons fill the widescreen chain slot
     handlers: {
-      GameplayButton: () => showPanel("gameplay"),
-      VideoButton: () => showPanel("video"),
-      SoundButton: () => showPanel("sound"),
+      GameplayButton: () => void showPanel("gameplay"),
+      VideoButton: () => void showPanel("video"),
+      SoundButton: () => void showPanel("sound"),
       OKButton: () => { saveOptions(working); h.onClose(); },
       // Undo everything this visit changed — including the audio applied live along the way.
       CancelButton: () => { Object.assign(working, committed); applyAudio(committed); h.onClose(); },
@@ -100,19 +111,40 @@ export async function mountOptions(
     onBuild: (s) => bind(s),
   });
 
-  /** Switch the visible settings panel, and latch the chosen category button pressed. */
-  function showPanel(panel: PanelName): void {
-    activePanel = panel;
-    applyPanelState(screen);
+  /**
+   * Switch the visible settings panel — as a TRANSITION, not a swap.
+   *
+   * The frame these three panels sit on leaves on its Death and comes back on its Birth
+   * (see the file header), so the contents go with it: they fade out into the departing
+   * frame, change over while there is nothing on screen to change under, and fade up on the
+   * frame as it lands. `fadePanels` puts an exit at the start of the window it is given and
+   * an entrance at the end, so handing it the two clip lengths is all the timing there is.
+   *
+   * Re-entrant clicks are dropped: the screen is inert for the duration anyway, but the
+   * category buttons live on the OTHER panel and stay up throughout.
+   */
+  async function showPanel(panel: PanelName): Promise<void> {
+    if (panel === activePanel || swapping) return;
+    swapping = true;
+    screen.setInteractive(false);
+    try {
+      const { death, birth } = h.swapPanel?.() ?? { death: 0, birth: 0 };
+      const leaving = screen.frame(PANEL_FRAME[activePanel]);
+      if (leaving) await fadePanels([leaving], "out", death);
+      activePanel = panel;
+      applyPanelState(screen);
+      const arriving = screen.frame(PANEL_FRAME[activePanel]);
+      if (arriving) await fadePanels([arriving], "in", birth);
+    } finally {
+      swapping = false;
+      screen.setInteractive(true);
+    }
   }
 
   function applyPanelState(s: FdfScreen): void {
     for (const name of Object.keys(PANEL_FRAME) as PanelName[]) {
       const el = s.frame(PANEL_FRAME[name]);
       if (el) el.style.display = name === activePanel ? "" : "none";
-      // The chosen category button stays visually pressed, as its counterpart does in WC3.
-      const btn = s.frame(CATEGORY_BUTTON[name]);
-      if (btn) btn.classList.toggle("fdf-latched", name === activePanel);
     }
   }
 

@@ -182,6 +182,9 @@ function optionsScreen(vfs: DataSource): { chrome: "Options"; mount: () => Promi
     mount: () => mountOptions(ui, vfs, {
       sounds,
       onClose: () => void glue.goTo(mainMenuScreen(vfs)),
+      // Picking a category swings the left-hand settings frame away and back — its Death and
+      // its Birth, the same two clips a screen change plays (ui/fdfOptions.ts).
+      swapPanel: () => menuScene?.replayPanel("left") ?? { death: 0, birth: 0 },
     }),
   };
 }

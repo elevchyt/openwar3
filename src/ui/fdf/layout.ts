@@ -23,6 +23,10 @@ export interface LaidOutFrame {
   /** This frame's WIDTH is not the file's: either measured from its own string or inherited
    *  from its parent, both of which stand in for a shrink-wrap — see `autoJustifyH`. */
   fabricatedWidth?: boolean;
+  /** This frame's HEIGHT is the engine's one-line shrink-wrap — the font's own size, with no
+   *  room for the leading the renderer draws with (see `textBoxHeight`). Such a frame lets its
+   *  glyphs overhang instead of clipping them. */
+  shrinkWrapped?: boolean;
   /**
    * The horizontal justification a shrink-wrapped TEXT frame effectively has.
    *
@@ -92,11 +96,31 @@ function readPoints(frame: FdfFrame): { setAllPoints: boolean; points: PointSpec
   return { setAllPoints, points };
 }
 
-/** One line of a TEXT frame's own font, in world units. 1.2 is the line box the renderer
- *  uses (ui/fdf/render.ts — it must clear descenders), and 0.013 its FrameFont default, so
- *  an unsized TEXT frame ends up exactly as tall as the line it draws. */
-function textLineHeight(frame: FdfFrame): number {
-  return (fontSizeOf(frame) ?? 0.013) * 1.2;
+/**
+ * How tall the engine makes an auto-sized TEXT frame of `lines` lines, in world units.
+ *
+ * **One line is exactly the font's own size** — no leading. OptionsMenu.fdf proves it twice
+ * over, and the proof is worth keeping because it is what an eight-row ladder drifts on.
+ * That screen runs two parallel chains down the Video panel: the labels, each anchored
+ * TOPLEFT to the one above's BOTTOMLEFT, and the pulldown bases, each anchored to the base
+ * above. For the two to stay level, one row of label + gap must equal one row of base + gap:
+ *
+ *   Resolution → Model Detail   label −0.042 + h   ==   base 0.053 + 0.002    ⇒ h = 0.013
+ *   Model Detail → Anim Quality label −0.02625 + h ==   base 0.053 − 0.01375  ⇒ h = 0.013
+ *
+ * and 0.013 is exactly `StandardInfoTextTemplate`'s `FrameFont` size. Two different base
+ * offsets, one answer: the engine gives a one-line TEXT frame its font size and nothing more.
+ * Carrying the renderer's 1.2 line box here instead put 20% of a line under every label, and
+ * eight rows down the Video panel the pulldowns sat 24 px above the labels they belong to.
+ *
+ * MULTI-line frames keep the 1.2, because there a line box is what stacks: the renderer draws
+ * them at `line-height: 1.2` and the frame has to hold all of them. Only the single-line case
+ * is the engine's shrink-wrap, and only it lets its glyphs overhang (ui/fdf/render.ts).
+ */
+const LINE_LEADING = 1.2;
+function textBoxHeight(frame: FdfFrame, lines: number): number {
+  const size = fontSizeOf(frame) ?? 0.013;
+  return lines <= 1 ? size : lines * size * LINE_LEADING;
 }
 
 /** A text frame's declared type size. `Frame "TEXT"` spells it `FrameFont`; a `String` block
@@ -134,7 +158,15 @@ const BUTTON_TYPES = new Set(["GLUETEXTBUTTON", "GLUEBUTTON", "TEXTBUTTON", "BUT
 
 /** Widen each button widget (the button frame + its ornate BACKDROP parent) by
  *  `scale`, before the layout is solved. Text is unaffected — its size comes from
- *  FrameFont, not the frame width, so it just recentres in the wider button. */
+ *  FrameFont, not the frame width, so it just recentres in the wider button.
+ *
+ *  A SLIDER's KNOB is exempt. It is declared a `Frame "BUTTON"` like any other
+ *  (`StandardThumbButtonTemplate`, 0.016 × 0.016) but it is not a button in the sense this
+ *  is for — it is a round bead of art, `SinglePlayerSkirmish-ScrollBarKnob.blp`, and widening
+ *  it does not fill a wider slot, it draws the bead as an ellipse. Its vertical twin already
+ *  escapes for a different reason: a SCROLLBAR's knob is drawn from the frame's own declared
+ *  size rather than the solved layout (ui/fdf/render.ts `scrollBarStyle`), which is why the
+ *  map list's caret in the Custom Game screen has always been round. */
 function scaleButtonWidths(root: LaidOutFrame, scale: number): void {
   const done = new Set<LaidOutFrame>();
   const widen = (n: LaidOutFrame): void => {
@@ -142,8 +174,14 @@ function scaleButtonWidths(root: LaidOutFrame, scale: number): void {
     n.w *= scale;
     done.add(n);
   };
+  const knobs = new Set<string>();
+  (function findKnobs(f: FdfFrame): void {
+    const name = firstProp(f, "SliderThumbButtonFrame")?.args[0]?.s;
+    if (name) knobs.add(name);
+    f.children.forEach(findKnobs);
+  })(root.frame);
   (function walk(n: LaidOutFrame): void {
-    if (BUTTON_TYPES.has(n.frame.type)) {
+    if (BUTTON_TYPES.has(n.frame.type) && !(n.frame.name && knobs.has(n.frame.name))) {
       widen(n);
       if (n.parent && n.parent.frame.type === "BACKDROP") widen(n.parent);
     }
@@ -302,7 +340,11 @@ export function layout(
               ?? (measured !== undefined && n.w > 0
                 ? Math.max(1, Math.ceil(measured / n.w - 0.01)) // ε: a self-measured box is 1
                 : 1);
-            n.h = lines * textLineHeight(n.frame);
+            n.h = textBoxHeight(n.frame, lines);
+            // A single-line box is the engine's shrink-wrap — exactly the font's size, with
+            // no room in it for the leading the renderer draws with. Let it overhang rather
+            // than clip (see textBoxHeight, and `shrinkWrapped` in ui/fdf/render.ts).
+            n.shrinkWrapped = lines <= 1;
           }
         }
         if (n.parent?.placed) {
