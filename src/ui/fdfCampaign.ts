@@ -82,8 +82,9 @@ const SCENE_SPRITES = ["CampaignBackdrop", "SlidingDoors", "WarCraftIIILogo"];
 export type { Difficulty };
 
 /** The difficulty menu, as CustomCampaignMenu.fdf declares it: EASY / NORMAL / HARD, in that
- *  order, as GlobalStrings keys. */
-const DIFFICULTIES: Array<{ value: Difficulty; key: string }> = [
+ *  order, as GlobalStrings keys. Exported because that screen is real too (ui/fdfCustomCampaign.ts)
+ *  and it is the same three rows out of the same file. */
+export const DIFFICULTIES: Array<{ value: Difficulty; key: string }> = [
   { value: "easy", key: "EASY" },
   { value: "normal", key: "NORMAL" },
   { value: "hard", key: "HARD" },

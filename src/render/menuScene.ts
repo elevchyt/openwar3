@@ -44,7 +44,38 @@ const LEFT_ROC = "UI\\Glues\\SpriteLayers\\TopLeftPanel.mdx";
 // TopRightPanel-Expansion.mdx alongside the rest.
 export type GlueChrome =
   | "MainMenu" | "SinglePlayer" | "SinglePlayerSkirmish" | "BattlenetCustom"
-  | "MultiplayerPreGameChat" | "Options";
+  | "BattlenetCustomCreate" | "MultiplayerPreGameChat" | "Options";
+
+/** Which of the two sprite layers a panel instance is. */
+type PanelSide = "left" | "right";
+
+/** The three clips a screen's chrome plays, in the order it plays them. */
+interface ChromeClips { birth: string; stand: string; death: string }
+
+/**
+ * The screens whose two panels do NOT play the same clip.
+ *
+ * A screen's chrome is normally one triple played on both sprite layers at once, and each
+ * model animates whatever it owns of that screen (the skirmish screen's big left-hand frames
+ * live in "SinglePlayerSkirmish Stand" on the LEFT model, its button panels in the same clip
+ * on the RIGHT one). **Options is the exception**, and the model says so: on the LEFT panel
+ * "Options Stand" draws nothing but the screen-edge post, and the big settings frame the
+ * gameplay/video/sound controls sit on is in "Options Stand **Alternate**" — reached by
+ * "Options Morph" and left by "Options Morph Alternate".
+ *
+ * That the two are meant to play TOGETHER is in the intervals: dumped from the real
+ * TopRightPanel-Expansion.mdx / TopLeftPanel-Expansion.mdx, Birth and Morph are both 1000 ms
+ * and Death and Morph Alternate are both 667 ms. They are the two halves of one transition,
+ * one per side — so the left panel's settings frame swings in on exactly the beat the right
+ * panel's buttons drop, and lifts away on exactly the beat they leave.
+ */
+const LEFT_PANEL_CLIPS: Partial<Record<GlueChrome, ChromeClips>> = {
+  Options: {
+    birth: "Options Morph",
+    stand: "Options Stand Alternate",
+    death: "Options Morph Alternate",
+  },
+};
 
 /** How long a screen's chrome takes to leave / arrive, in ms — read from the model's
  *  own sequence intervals, so the DOM panels can be animated over the same window. */
@@ -307,8 +338,9 @@ export class MenuScene {
   /** True while a campaign backdrop is up: the screen-edge sprite layers draw nothing. */
   private panelsHidden = false;
   private instances: MdxInstance[] = [];
-  /** The sprite-layer panels, kept with their model so we can look sequences up by name. */
-  private panels: Array<{ model: MdxModel; instance: MdxInstance }> = [];
+  /** The sprite-layer panels, kept with their model so we can look sequences up by name, and
+   *  with which SIDE they are — a screen may drive the two differently (LEFT_PANEL_CLIPS). */
+  private panels: Array<{ model: MdxModel; instance: MdxInstance; side: PanelSide }> = [];
   private chrome: GlueChrome = "MainMenu";
   private chromeTimer = 0;
   private soundTimers: number[] = [];
@@ -462,8 +494,8 @@ export class MenuScene {
     this.menuInstance = this.addInstance(bg, this.scene3d, /^stand$/i);
 
     // The screen-edge sprite layers: metal border, gears, the button frames and chains.
-    await this.loadPanel(tft ? RIGHT_TFT : RIGHT_ROC, this.scenePanel);
-    await this.loadPanel(tft ? LEFT_TFT : LEFT_ROC, this.sceneLeft);
+    await this.loadPanel(tft ? RIGHT_TFT : RIGHT_ROC, this.scenePanel, "right");
+    await this.loadPanel(tft ? LEFT_TFT : LEFT_ROC, this.sceneLeft, "left");
 
     this.frameCameras();
     this.updateFog();
@@ -565,12 +597,12 @@ export class MenuScene {
     this.backdropBirthEnd = null;
   }
 
-  private async loadPanel(path: string, scene: Scene): Promise<void> {
+  private async loadPanel(path: string, scene: Scene, side: PanelSide): Promise<void> {
     if (!this.vfs.exists(path)) return;
     const model = (await this.viewer.load(await this.vfs.read(path), this.solver)) as MdxModel | undefined;
     if (!model) return;
     const instance = this.addInstance(model, scene, /^mainmenu stand$/i);
-    this.panels.push({ model, instance });
+    this.panels.push({ model, instance, side });
   }
 
   private addInstance(model: MdxModel, scene: Scene, prefer: RegExp): MdxInstance {
@@ -583,10 +615,20 @@ export class MenuScene {
     return instance;
   }
 
-  /** Duration (ms) of a named sequence on the panel model, or 0 if it has none. */
+  /** Duration (ms) of a named sequence on the panel model, or 0 if it has none. Read off the
+   *  RIGHT panel, which is every screen's own triple — the left panel's alternate clips are
+   *  the same lengths by construction (see LEFT_PANEL_CLIPS). */
   private seqLength(name: string): number {
     const model = this.panels[0]?.model;
     return model ? seqLengthOf(model, name) : 0;
+  }
+
+  /** The clip `side` plays for `screen`'s `phase` — its own triple unless the screen splits
+   *  the two panels (LEFT_PANEL_CLIPS). */
+  private clipFor(screen: GlueChrome, phase: keyof ChromeClips, side: PanelSide): string {
+    const split = side === "left" ? LEFT_PANEL_CLIPS[screen] : undefined;
+    if (split) return split[phase];
+    return `${screen} ${phase === "birth" ? "Birth" : phase === "death" ? "Death" : "Stand"}`;
   }
 
   /** How long `screen`'s chrome takes to leave and to arrive — the model's own timings. */
@@ -597,10 +639,12 @@ export class MenuScene {
   /** The chrome currently on screen. */
   get chromeScreen(): GlueChrome { return this.chrome; }
 
-  /** Play one named clip on every panel instance; `loop` for the idle Stand clips. */
-  private playClip(name: string, loop: boolean): void {
+  /** Play one phase of `screen`'s chrome on both panels — each on the clip its own side owns
+   *  (clipFor); `loop` for the idle Stand clips. */
+  private playPhase(screen: GlueChrome, phase: keyof ChromeClips, loop: boolean): void {
     this.clearSoundTimers();
-    for (const { model, instance } of this.panels) {
+    for (const { model, instance, side } of this.panels) {
+      const name = this.clipFor(screen, phase, side);
       const idx = model.sequences.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
       if (idx < 0) continue;
       instance.setSequenceLoopMode(loop ? 2 : 0);
@@ -646,7 +690,7 @@ export class MenuScene {
   /** Send the current screen's chrome away: play "<screen> Death" once. */
   playChromeDeath(): number {
     clearTimeout(this.chromeTimer);
-    this.playClip(`${this.chrome} Death`, false);
+    this.playPhase(this.chrome, "death", false);
     return this.seqLength(`${this.chrome} Death`);
   }
 
@@ -654,9 +698,9 @@ export class MenuScene {
   playChromeBirth(screen: GlueChrome): number {
     clearTimeout(this.chromeTimer);
     this.chrome = screen;
-    this.playClip(`${screen} Birth`, false);
+    this.playPhase(screen, "birth", false);
     const birth = this.seqLength(`${screen} Birth`);
-    this.chromeTimer = window.setTimeout(() => this.playClip(`${screen} Stand`, true), birth);
+    this.chromeTimer = window.setTimeout(() => this.playPhase(screen, "stand", true), birth);
     return birth;
   }
 

@@ -6,6 +6,8 @@ import { mountFdfMainMenu } from "./ui/fdfMainMenu";
 import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
+import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
+import { mountViewReplayScreen } from "./ui/fdfViewReplay";
 import { loadCampaigns, type Campaign } from "./data/campaigns";
 import {
   loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
@@ -286,8 +288,32 @@ function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
     onArrived: () => applyMenuCursor(vfs),
     mount: () => mountSinglePlayerMenu(ui, vfs, {
       onCampaign: () => void openCampaignScreen(vfs),
+      onCustomCampaign: () => void glue.goTo(customCampaignScreen(vfs)),
+      onViewReplay: () => void glue.goTo(viewReplayScreen(vfs)),
       onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
       onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
+    }),
+  };
+}
+
+/** The Custom Campaign and View Replay screens — the two file-list screens hanging off Single
+ *  Player. Both wear the "BattlenetCustomCreate" chrome: the panel models carry no triple of
+ *  their own, and that is the set whose single tall left-hand frame is the shape these two
+ *  files are authored for (see ui/fdfCustomCampaign.ts for the full reasoning). */
+function customCampaignScreen(vfs: DataSource): GlueScreenDef {
+  return {
+    chrome: "BattlenetCustomCreate",
+    mount: () => mountCustomCampaignScreen(ui, vfs, {
+      onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+    }),
+  };
+}
+
+function viewReplayScreen(vfs: DataSource): GlueScreenDef {
+  return {
+    chrome: "BattlenetCustomCreate",
+    mount: () => mountViewReplayScreen(ui, vfs, {
+      onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
     }),
   };
 }

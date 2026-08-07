@@ -26,6 +26,13 @@ import {
 // The three video-quality dropdowns and the gameplay sliders are remembered but don't yet drive
 // anything (a WebGL client sizes to its canvas; see OPTION_DEFS `applied:false`) — the Sound
 // panel is the one with a live backend, wired through applyAudioOptions.
+//
+// WHERE THE BIG PANEL BEHIND THESE CONTROLS COMES FROM. Nothing in this file draws it: the
+// settings frame is 3D chrome in the LEFT sprite layer, and it is the one screen in the game
+// whose two panels play different clips of their triple — the right panel's buttons are
+// "Options Stand", the left panel's frame is "Options Stand *Alternate*". See
+// `LEFT_PANEL_CLIPS` in render/menuScene.ts; the FDF's left column is authored to land inside
+// that frame and needs no nudge (unlike the right-hand columns of the wider screens).
 
 const OPTIONS_FDF = "UI\\FrameDef\\Glue\\OptionsMenu.fdf";
 
