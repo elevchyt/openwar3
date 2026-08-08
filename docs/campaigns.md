@@ -203,9 +203,11 @@ bottom-centre title belong to the screen in either mode.
 ## Progress and difficulty
 
 WC3 keeps campaign progress in the PROFILE ("Each profile will hold information for your
-campaign progress" — GlobalStrings `PROFILE_MESSAGE`). We have no profiles yet, so there is one
-implicit profile in localStorage (`src/data/campaignProgress.ts`): chapter N+1 opens when N is
-completed, and a campaign opens when the one before it in list order is finished.
+campaign progress" — GlobalStrings `PROFILE_MESSAGE`), and so do we (issue #80): both keys in
+`src/data/campaignProgress.ts` are suffixed with the profile in play by `profileKey`
+(`src/data/profiles.ts`), and deleting that profile takes them with it. Within a profile the
+rules are the game's: chapter N+1 opens when N is completed, and a campaign opens when the one
+before it in list order is finished.
 
 "Completed" is the map's own word for it: `RemovePlayer(p, PLAYER_GAME_RESULT_VICTORY)`, which
 `CustomVictoryBJ` calls before it shows anything — surfaced as `MapViewerScene.onLocalVictory`.
@@ -533,4 +535,5 @@ texture). Scoped to that one draw so the null shadow and the blank highlight are
   engine decodes.
 - **Game caches** — the `InitGameCache`/`StoreUnit` family that carries a hero's level and
   inventory from one chapter to the next — are still stubs, so chapters start fresh.
-- No profiles, no saved games, no custom-campaign (`.w3n`) screen.
+- No saved games, and no custom-campaign (`.w3n`) screen. Profiles exist (issue #80) and own the
+  progress above; the "personal saved games list" half of what one holds waits on saving.

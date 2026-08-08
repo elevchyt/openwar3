@@ -3,7 +3,7 @@ import { AssetResolver } from "./assets/resolver";
 import { decodeBlp } from "./assets/blp";
 import { mountMainMenu } from "./ui/mainMenu";
 import { mountFdfMainMenu } from "./ui/fdfMainMenu";
-import { mountSinglePlayerMenu } from "./ui/fdfSinglePlayerMenu";
+import { mountSinglePlayerMenu, singlePlayerSides } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
@@ -286,6 +286,9 @@ function mapFileFor(path: string): File {
 function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
   return {
     chrome: "SinglePlayer",
+    // Its two halves ride separate clips, and which ones depends on whether the player has a
+    // profile yet (issue #80 — ui/fdfSinglePlayerMenu.ts).
+    sides: singlePlayerSides,
     // The default hand comes back HERE rather than when Back was clicked — under the black, with
     // the campaign screen already gone (GlueScreenDef.onArrived).
     onArrived: () => applyMenuCursor(vfs),
@@ -295,6 +298,7 @@ function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
       onViewReplay: () => void glue.goTo(viewReplayScreen(vfs)),
       onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
       onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
+      movePanel: (side, play, wearing) => menuScene?.sidePanel(side, play, wearing) ?? 0,
     }),
   };
 }

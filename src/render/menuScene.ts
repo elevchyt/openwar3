@@ -65,10 +65,10 @@ export type GlueChrome =
   | "BattlenetCustomCreate" | "MultiplayerPreGameChat" | "Options";
 
 /** Which of the two sprite layers a panel instance is. */
-type PanelSide = "left" | "right";
+export type PanelSide = "left" | "right";
 
 /** The three clips a screen's chrome plays, in the order it plays them. */
-interface ChromeClips { birth: string; stand: string; death: string }
+export interface ChromeClips { birth: string; stand: string; death: string }
 
 /** One sprite-layer panel: its model, the instance in the scene, and which side it is. */
 interface Panel { model: MdxModel; instance: MdxInstance; side: PanelSide }
@@ -368,6 +368,9 @@ export class MenuScene {
   private logo: { model: MdxModel; instance: MdxInstance } | null = null;
   /** Pending hand-offs from a `replayPanel` — its Death→Birth→Stand chain. */
   private panelTimers: number[] = [];
+  /** Sides currently wearing clips of their OWN rather than the screen's (see `sidePanel`).
+   *  Cleared whenever a screen arrives — a new screen owns both panels. */
+  private sideClips = new Map<PanelSide, ChromeClips>();
   private chrome: GlueChrome = "MainMenu";
   private chromeTimer = 0;
   /** The logo's own Birth→Stand hand-off, on the same pattern as `chromeTimer`. */
@@ -722,12 +725,22 @@ export class MenuScene {
     return model ? seqLengthOf(model, name) : 0;
   }
 
-  /** The clip `side` plays for `screen`'s `phase` — its own triple unless the screen splits
-   *  the two panels (LEFT_PANEL_CLIPS). */
+  /** The clip `side` plays for `screen`'s `phase` — clips of its own if `sidePanel` gave it
+   *  some, else its own triple unless the screen splits the two panels (LEFT_PANEL_CLIPS). */
   private clipFor(screen: GlueChrome, phase: keyof ChromeClips, side: PanelSide): string {
+    const own = this.sideClips.get(side);
+    if (own) return own[phase];
     const split = side === "left" ? LEFT_PANEL_CLIPS[screen] : undefined;
     if (split) return split[phase];
     return `${screen} ${phase === "birth" ? "Birth" : phase === "death" ? "Death" : "Stand"}`;
+  }
+
+  /** The longest `phase` clip across both panels, so the DOM's window covers whichever side
+   *  is slowest. They only differ when `sidePanel` has split the two (issue #80). */
+  private longestPhase(phase: keyof ChromeClips): number {
+    let ms = 0;
+    for (const p of this.panels) ms = Math.max(ms, seqLengthOf(p.model, this.clipFor(this.chrome, phase, p.side)));
+    return ms;
   }
 
   /** How long `screen`'s chrome takes to leave and to arrive — the model's own timings. */
@@ -782,6 +795,41 @@ export class MenuScene {
     return { death, birth };
   }
 
+  /**
+   * Move ONE panel on a clip of its own, and leave it wearing `wearing` until the screen
+   * changes (issue #80). Returns that clip's length so the DOM it carries can fade on the
+   * same beat.
+   *
+   * `replayPanel` above is the case where a panel leaves and comes straight back on the
+   * SCREEN's own clips. This is the other case: a screen whose halves are separate entries in
+   * the model's sequence table and come and go independently of each other. The Single Player
+   * screen is the one that needs it — see ui/fdfSinglePlayerMenu.ts for the clip table and
+   * how it was measured off the two models.
+   *
+   * `wearing` is what that side is on once `play` finishes: it settles on that triple's Stand,
+   * and — the point of remembering it — LEAVING the screen later sends this panel away on that
+   * triple's Death rather than the screen's, so a panel the screen never had cannot slide out
+   * on a clip that would pop it back in first. `null` hands the side back to the screen's own
+   * chrome.
+   */
+  sidePanel(side: PanelSide, play: string, wearing: ChromeClips | null): number {
+    const panel = this.panels.find((p) => p.side === side);
+    if (!panel) return 0;
+    const idx = panel.model.sequences.findIndex((s) => s.name.toLowerCase() === play.toLowerCase());
+    if (idx < 0) return 0;
+    this.clearPanelTimers();
+    if (wearing) this.sideClips.set(side, wearing);
+    else this.sideClips.delete(side);
+
+    panel.instance.setSequenceLoopMode(0);
+    panel.instance.setSequence(idx);
+    this.scheduleClipSounds(panel.model, panel.model.sequences[idx]);
+    const length = seqLengthOf(panel.model, play);
+    // Settle onto whatever this side now wears — its own Stand, or the screen's.
+    this.panelTimers.push(window.setTimeout(() => this.playOn(panel, "stand", true), length));
+    return length;
+  }
+
   /** Drop a pending `replayPanel` hand-off — a screen change owns the panels now. */
   private clearPanelTimers(): void {
     for (const t of this.panelTimers) clearTimeout(t);
@@ -822,23 +870,37 @@ export class MenuScene {
     this.soundTimers = [];
   }
 
-  /** Send the current screen's chrome away: play "<screen> Death" once. */
+  /** Send the current screen's chrome away: play "<screen> Death" once — or, for a side that
+   *  `sidePanel` put on clips of its own, that triple's Death. */
   playChromeDeath(): number {
     clearTimeout(this.chromeTimer);
+    const death = this.longestPhase("death");
     this.playPhase("death", false);
     // The logo only ever stands on the MAIN MENU — MainMenu.fdf is the one glue file that
     // carries the sprite (the campaign screen has its own copy of the model). So it leaves
     // with the main menu's chrome, on the model's own Death, rather than being cut.
     if (this.chrome === "MainMenu") this.playLogo("death", false);
-    return this.seqLength(`${this.chrome} Death`);
+    return death;
   }
 
-  /** Bring `screen`'s chrome in: "<screen> Birth" once, then settle on its looping Stand. */
-  playChromeBirth(screen: GlueChrome): number {
+  /**
+   * Bring `screen`'s chrome in: "<screen> Birth" once, then settle on its looping Stand.
+   *
+   * `sides` gives a panel clips of its OWN for this screen — the Single Player screen arrives
+   * with its profile half on one triple and its button column on another (see `sidePanel`).
+   * It is taken HERE rather than set afterwards so each panel plays exactly one birth, and so
+   * fires exactly one of the whooshes its clip keys (scheduleClipSounds).
+   */
+  playChromeBirth(screen: GlueChrome, sides?: Partial<Record<PanelSide, ChromeClips>>): number {
     clearTimeout(this.chromeTimer);
     this.chrome = screen;
+    this.sideClips.clear(); // an arriving screen owns both panels again
+    for (const side of ["left", "right"] as const) {
+      const clips = sides?.[side];
+      if (clips) this.sideClips.set(side, clips);
+    }
     this.playPhase("birth", false);
-    const birth = this.seqLength(`${screen} Birth`);
+    const birth = this.longestPhase("birth");
     this.chromeTimer = window.setTimeout(() => this.playPhase("stand", true), birth);
     if (screen === "MainMenu") {
       this.playLogo("birth", false);

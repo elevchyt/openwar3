@@ -1,5 +1,5 @@
 import type { FdfScreen } from "./fdf/render";
-import type { GlueChrome, MenuScene } from "../render/menuScene";
+import type { ChromeClips, GlueChrome, MenuScene, PanelSide } from "../render/menuScene";
 
 // The glue-screen manager (issue #61): one screen on the menu at a time, and the
 // transition between them.
@@ -38,6 +38,15 @@ export interface GlueScreenDef {
   /** Which of the panel model's chrome sets this screen wears. Ignored when `backdrop` is
    *  set: such a screen has none (see below). */
   chrome: GlueChrome;
+  /**
+   * Clips ONE of the two sprite-layer panels wears instead of `chrome`'s (issue #80).
+   *
+   * Almost every screen is one triple played on both panels. The Single Player screen is not:
+   * its profile half and its button column are separate entries in the model's sequence table
+   * and come and go independently, so which clips it arrives on depends on whether the player
+   * has a profile yet (ui/fdfSinglePlayerMenu.ts). Evaluated per arrival, not once.
+   */
+  sides?(): Partial<Record<PanelSide, ChromeClips>> | undefined;
   /**
    * A CAMPAIGN screen (issue #101): a full-screen 3D backdrop instead of panel chrome.
    *
@@ -111,7 +120,7 @@ export class GlueManager {
     }
     if (this.backdropUp) this.scene?.restoreMenuBackground();
     this.backdropUp = false;
-    const birth = this.scene?.playChromeBirth(def.chrome) ?? 0;
+    const birth = this.scene?.playChromeBirth(def.chrome, def.sides?.()) ?? 0;
     def.onArrived?.();
     return birth;
   }

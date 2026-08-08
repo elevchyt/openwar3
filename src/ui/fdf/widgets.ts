@@ -494,7 +494,8 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
   const border = (firstProp(f, "ListBoxBorder")?.args[0]?.n ?? 0.008) * scale;
   rows.style.inset = `${border}px`;
   rows.style.fontSize = fontSize(f, scale, 0.012);
-  // The rows stop where the scrollbar starts — it is beside them, not over them.
+  // The rows stop where the scrollbar starts — it is beside them, not over them. `sync` moves
+  // this back to the border when there is nothing to scroll and the bar goes away with it.
   if (bar) rows.style.right = `${border + bar.width}px`;
   el.appendChild(rows);
   const scrollbar = bar ? buildScrollBar(el, rows, bar, border) : null;
@@ -703,7 +704,11 @@ function buildScrollBar(
 
   const sync = (): void => {
     const over = rows.scrollHeight - rows.clientHeight;
-    knob.hidden = over <= 1; // nothing to scroll: no knob, as in the game
+    // Nothing to scroll: the WHOLE bar goes, not just the knob — the reference's Profile List
+    // with two names in it draws no track and no arrows at all, and its selection band runs to
+    // the box's own inner edge (issue #80). The rows get that strip of width back with it.
+    track.hidden = over <= 1;
+    rows.style.right = `${border + (track.hidden ? 0 : bar.width)}px`;
     if (over <= 1) return;
     knob.style.top = `${bar.arrow + (rows.scrollTop / over) * Math.max(0, span())}px`;
   };

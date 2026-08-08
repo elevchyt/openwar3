@@ -1,11 +1,13 @@
 import type { Campaign } from "./campaigns";
+import { profileKey } from "./profiles";
 
 // Campaign progress (issue #101) — which campaigns are open and how far into each one the
 // player has got. In Warcraft III this lives in the PROFILE (SinglePlayerMenu.fdf's profile
 // half: "Each profile will hold information for your campaign progress as well as a personal
-// saved games list" — GlobalStrings PROFILE_MESSAGE). OpenWar3 has no profiles yet, so there
-// is exactly one implicit profile and it is stored the way the Options screen stores its
-// settings: localStorage, one JSON blob (data/options.ts).
+// saved games list" — GlobalStrings PROFILE_MESSAGE), and since issue #80 it does here too:
+// both keys below are read and written through `profileKey`, so they land under the profile in
+// play and deleting that profile takes them with it (data/profiles.ts). The store is the one
+// the Options screen uses — localStorage, one JSON blob (data/options.ts).
 //
 // The rules are the game's own, and both come out of the campaign index itself:
 //   • a campaign with `DefaultOpen=1` is "initially open and selectable by a new user"; TFT
@@ -16,6 +18,8 @@ import type { Campaign } from "./campaigns";
 // Within a campaign, chapter N+1 opens when chapter N is completed; cinematics never gate
 // anything (you may watch the opening one, or not, and chapter one is open either way).
 
+// The BASE keys. Never read one directly — `profileKey` suffixes it with the profile in play,
+// and these two are listed in that module's PROFILE_OWNED so a deleted profile takes them with it.
 const STORAGE_KEY = "openwar3.campaigns";
 const DIFFICULTY_KEY = "openwar3.campaignDifficulty";
 
@@ -29,7 +33,7 @@ const DIFFICULTIES: Difficulty[] = ["easy", "normal", "hard"];
  *  remembers it per profile. WC3's own default is Normal. */
 export function loadDifficulty(): Difficulty {
   try {
-    const raw = localStorage.getItem(DIFFICULTY_KEY) as Difficulty | null;
+    const raw = localStorage.getItem(profileKey(DIFFICULTY_KEY)) as Difficulty | null;
     return raw && DIFFICULTIES.includes(raw) ? raw : "normal";
   } catch {
     return "normal";
@@ -38,7 +42,7 @@ export function loadDifficulty(): Difficulty {
 
 export function saveDifficulty(d: Difficulty): void {
   try {
-    localStorage.setItem(DIFFICULTY_KEY, d);
+    localStorage.setItem(profileKey(DIFFICULTY_KEY), d);
   } catch { /* storage unavailable */ }
 }
 
@@ -47,7 +51,7 @@ type Progress = Record<string, number>;
 
 export function loadProgress(): Progress {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(profileKey(STORAGE_KEY));
     const parsed = raw ? (JSON.parse(raw) as unknown) : null;
     if (!parsed || typeof parsed !== "object") return {};
     const out: Progress = {};
@@ -62,7 +66,7 @@ export function loadProgress(): Progress {
 
 function saveProgress(p: Progress): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
+    localStorage.setItem(profileKey(STORAGE_KEY), JSON.stringify(p));
   } catch { /* storage unavailable — progress is lost, the menus still work */ }
 }
 
