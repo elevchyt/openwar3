@@ -84,6 +84,11 @@ the tower, the chains, the ice spikes, the bergs and the ocean all change. What 
 is any shadow art — the model names 49 textures and not one of them is a shadow — so there is
 nothing further to hook up there; a glue scene's shadows are painted into its textures.
 
+If a glue scene looks *sharper* than a screenshot of the real client, that is very likely the
+screenshot rather than the renderer — see **"Calibrate a screenshot reference on something you
+render identically"** in [`REFERENCES.md`](REFERENCES.md), which measures it and also rules out the
+mip chain, a missing shading layer and the install's `*_mip1.blp` files as causes.
+
 ### A glue scene's shadows are painted, and one of them is painted 178 times
 
 There is no shadow *pass* to hook up on these screens — a glue model's shadows are in its art.

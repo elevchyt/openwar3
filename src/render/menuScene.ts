@@ -417,7 +417,13 @@ export class MenuScene {
     // back. Tuned together against the reference in issue #107 — at the old 0.42/1300-3500 the
     // set was a milk bath: the shipwreck beam, the rock ledges and the teal ice all dissolved
     // into haze that starts in front of the water, which the reference plainly does not do.
-    lightAmbient: 0.72,
+    //
+    // These two are the ONLY knobs for how much of the set reads. If our scene still looks
+    // crisper than a screenshot of the real client, reach for these rather than for the texture
+    // path: the reference frames are ~0.6 px soft from video compression, and once the chrome
+    // (which we render identically) is blurred to match, the ice and the ocean match too. The
+    // measurement, and the three plausible renderer causes it rules out, are in docs/REFERENCES.md.
+    lightAmbient: 0.65,
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
@@ -456,7 +462,7 @@ export class MenuScene {
     // than we were giving. The start sits PAST the near water, which is why the water reads as
     // deep blue there and as grey here at 1300.
     fogStart: 1800,
-    fogEnd: 5200,
+    fogEnd: 4800,
     fogR: 0.67,
     fogG: 0.7,
     fogB: 0.83,

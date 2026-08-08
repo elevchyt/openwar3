@@ -65,6 +65,44 @@ Practical notes:
 - When a mechanic matters for gameplay feel, write the source (thread/repo) next to the constant in
   the code.
 
+### Calibrate a screenshot reference on something you render identically
+
+Most of our visual references are frames lifted from YouTube, and **a YouTube frame is soft**. Ours
+is not. Compare the two directly and every textured surface in the reference reads as lower detail
+than ours, which invites a hunt for a rendering fault that is not there.
+
+Find something in the frame that both sides draw from the *same* art at the *same* size and use it
+as a control. On the glue screens that is the sprite-layer chrome — the metal panel, its rivets and
+its chains are one model rendered through an orthographic camera, so if our render is right they
+should be identical.
+
+Worked example, the main menu against the issue #107 reference (`?dev&menudebug`, headless Chrome at
+1280×720). Detail measured as mean |Laplacian| ÷ the region's own standard deviation, which divides
+out the fact that haze lowers contrast and so lowers |Laplacian| for free:
+
+| region | reference | ours | ours after σ=0.6 blur |
+| --- | --- | --- | --- |
+| chrome (panel, quit panel, chains) | 0.271 | 0.451 | **0.273** |
+| tower rock | 0.421 | 0.663 | 0.500 |
+| island mass | 0.309 | 0.486 | 0.345 |
+| left ice spikes | 0.278 | 0.264 | 0.197 |
+| ocean | 0.147 | 0.213 | 0.174 |
+
+The chrome fixes the capture's softness at **σ ≈ 0.6 px**, and once that same blur is applied to the
+whole frame the scene lands on the reference too. So the entire "their scene is blurrier" gap is the
+capture. What is left after it is the *haze*, which is a `MenuScene.tuning` question rather than a
+renderer one.
+
+Things that were checked and are **not** the cause, so nobody re-checks them: the scene's textures
+are 256×256 (512 for the sky) with full internal mip chains — 7 to 10 levels, none of them BLP1's
+"fake mipmaps" trick, all power-of-two — so `viewer/handlers/blp/texture.js` takes its
+`LINEAR_MIPMAP_LINEAR` branch and we render trilinear, as the original does. `MainMenu3D_Exp` has no
+second material layer and no second UV set anywhere in its 18 geosets, so there is no shading or
+lightmap pass being skipped. The `*_mip1/2/3.blp` files sitting next to the textures in the install
+look like a hand-authored LOD chain but are the artists' source files: `Chains_silver_mip1.blp` is a
+standalone 32×16 BLP with its own 6-level chain, no MDX references it, and the chain that is actually
+used is the one inside `Chains_silver.blp`.
+
 ### Specific threads / videos used
 
 - **Engine internals / `Game.dll` structure.** The [Reverse Engineer Game.dll thread (268718)](https://www.hiveworkshop.com/threads/reverse-engineer-game-dll.268718/)
