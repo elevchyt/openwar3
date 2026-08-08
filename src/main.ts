@@ -545,72 +545,95 @@ async function startGame(
     // …including anyone who reported while the screen was still being built.
     for (const peer of gate.readyPeers) loading.setPeerReady(peer);
   }
-  const step = async <T>(at: number, body: () => T | Promise<T>): Promise<T> => {
-    loading?.setProgress(at);
-    await nextFrame();
-    return body();
-  };
+  // NOTHING BEHIND THE SCREEN MAY BE HEARD. The map's script cues its soundtrack from
+  // `main()` and every unit it spawns lands with a sound, so the match used to be plainly
+  // audible under a picture that still said "L O A D I N G". Held here, released with the
+  // screen — the world is held with it (`holdAtStart`, below), so what the player hears and
+  // what the player sees begin on the same frame (src/audio/sounds.ts setLoadingGate).
+  sounds?.setLoadingGate(true);
+  try {
+    const step = async <T>(at: number, body: () => T | Promise<T>): Promise<T> => {
+      loading?.setProgress(at);
+      await nextFrame();
+      return body();
+    };
 
-  const bytes = await step(0.05, async () =>
-    map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer()));
-  // The minimap's markers are read out of the map itself (its terrain header and its placed
-  // units), so they can only be stamped once its bytes are in hand — which is why the loading
-  // screen takes them afterwards rather than at mount. Never at the cost of the match: a map
-  // whose unit list we cannot read still starts, with a bare picture.
-  loading?.setMinimapPreview(previewOf(bytes));
-  await step(0.15, () => enterMap(bytes, info.name));
-  // Melee maps get the standard setup (town hall + workers, melee rules);
-  // custom/scenario maps run their own triggers instead (see mapKind.ts).
-  await step(0.75, () => (info.isMelee ? mapScene?.startMelee(config) : mapScene?.startCustom(config)));
-  // A LAN match hands over the match's end of the wire (docs/multiplayer.md item 10b-note); a
-  // skirmish passes none, and the controller runs exactly as it always has. Attach it AFTER
-  // setup so the world it snapshots exists.
-  if (link) {
-    mapScene?.attachMatchLink(link);
-    // v1 has no host migration, so the room closing IS the end of the match — and this message
-    // is the only evidence a client gets (docs/multiplayer.md Phase F item 6). Without it the
-    // wire simply goes quiet and the client keeps simulating a world nobody owns any more.
-    link.channel.onRoomClosed = () => mapScene?.showMatchOver();
-  }
-  // Our bar is full. Tell the room (a LAN match), and hold while any other machine is still
-  // loading — their seats light as their messages arrive and the bar's caption becomes the
-  // game's own "WAITING FOR OTHER PLAYERS". `waitForAll` gives up after a minute rather than
-  // stranding a player whose opponent closed the tab (LOAD_GATE_TIMEOUT_MS).
-  loading?.finish();
-  if (gate) {
-    gate.announce();
-    await gate.waitForAll();
-  }
-  // A single-player CAMPAIGN chapter does not begin on its own. The reference holds the
-  // finished screen on `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE") and starts the
-  // mission on the player's key: the chapter's title and its blurb are on that screen to be
-  // read, and how long that takes is the player's business. Nothing else waits — a custom
-  // game, a skirmish and a LAN match all drop into the map on their own.
-  //
-  // The WORLD is held with the screen (`holdAtStart`). It is standing behind it already — the
-  // map is built and its script's init has run — and a chapter opens on a cinematic, which the
-  // reference does not play to a loading screen. The 3-second hold below is the same idea for
-  // every other game, so it needs no such freeze: three seconds is a beat, not a wait.
-  if (config.campaign && !link && loading) {
+    const bytes = await step(0.05, async () =>
+      map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer()));
+    // The minimap's markers are read out of the map itself (its terrain header and its placed
+    // units), so they can only be stamped once its bytes are in hand — which is why the loading
+    // screen takes them afterwards rather than at mount. Never at the cost of the match: a map
+    // whose unit list we cannot read still starts, with a bare picture.
+    loading?.setMinimapPreview(previewOf(bytes));
+    await step(0.15, () => enterMap(bytes, info.name));
+    // Melee maps get the standard setup (town hall + workers, melee rules);
+    // custom/scenario maps run their own triggers instead (see mapKind.ts).
+    await step(0.6, () => (info.isMelee ? mapScene?.startMelee(config) : mapScene?.startCustom(config)));
+    // …and there the world STOPS, built but not begun, until the screen comes down
+    // (MapViewerScene.holdAtStart). Every game, not only a campaign chapter: setup returns
+    // seconds before the player is looking at the map, and the creeps, the melee clock and the
+    // music used to spend those seconds running behind the loading screen.
     mapScene?.holdAtStart(true);
-    await loading.waitForKey();
+    // A LAN match hands over the match's end of the wire (docs/multiplayer.md item 10b-note); a
+    // skirmish passes none, and the controller runs exactly as it always has. Attach it AFTER
+    // setup so the world it snapshots exists.
+    if (link) {
+      mapScene?.attachMatchLink(link);
+      // v1 has no host migration, so the room closing IS the end of the match — and this message
+      // is the only evidence a client gets (docs/multiplayer.md Phase F item 6). Without it the
+      // wire simply goes quiet and the client keeps simulating a world nobody owns any more.
+      link.channel.onRoomClosed = () => mapScene?.showMatchOver();
+    }
+    // The last stretch of the bar is a REAL load rather than a number climbing on its own: the
+    // models and icons the opening minutes will ask for, fetched now instead of hitching the
+    // frame each is first wanted on (MapViewerScene.preloadForStart — the job WC3's own
+    // `Preload` natives do for a map). It is also what the hold below is spent on.
+    const tailStart = performance.now();
+    await mapScene?.preloadForStart((p) => loading?.setProgress(0.6 + 0.4 * p));
+    // Our bar is full. Tell the room (a LAN match), and hold while any other machine is still
+    // loading — their seats light as their messages arrive and the bar's caption becomes the
+    // game's own "WAITING FOR OTHER PLAYERS". `waitForAll` gives up after a minute rather than
+    // stranding a player whose opponent closed the tab (LOAD_GATE_TIMEOUT_MS).
+    loading?.finish();
+    if (gate) {
+      gate.announce();
+      await gate.waitForAll();
+    }
+    // A single-player CAMPAIGN chapter does not begin on its own. The reference holds the
+    // finished screen on `LOADING_PRESS_A_KEY` ("PRESS ANY KEY TO CONTINUE") and starts the
+    // mission on the player's key: the chapter's title and its blurb are on that screen to be
+    // read, and how long that takes is the player's business. Nothing else waits — a custom
+    // game, a skirmish and a LAN match all drop into the map on their own.
+    if (config.campaign && !link && loading) await loading.waitForKey();
+    else await wait(Math.max(MIN_FULL_BAR_MS, START_HOLD_MS - (performance.now() - tailStart)));
+    // Taken away only once the match has actually DRAWN a frame behind it, so the first thing the
+    // player sees is the map and never the black canvas it was on a moment ago.
+    await nextFrame();
+    await nextFrame();
+  } finally {
+    // The screen goes, and the match begins in the same breath — whatever happened. A load
+    // that THREW must not leave a frozen, silent world behind a dead loading screen.
+    loading?.dispose();
+    loadingCanvas.hidden = true;
     mapScene?.holdAtStart(false);
-  } else {
-    // …a beat on the finished screen before the match takes over. This one is OURS and is not
-    // measured off anything: the developer asked for it, because a load that ends the instant
-    // the bar fills never shows the player the screen they were waiting on.
-    await wait(START_HOLD_MS);
+    sounds?.setLoadingGate(false);
   }
-  // Taken away only once the match has actually DRAWN a frame behind it, so the first thing the
-  // player sees is the map and never the black canvas it was on a moment ago.
-  await nextFrame();
-  await nextFrame();
-  loading?.dispose();
-  loadingCanvas.hidden = true;
 }
 
-/** The deliberate pause on the full bar before the match appears — see `startGame`. */
+/**
+ * How long the tail of the load lasts — the preload, and then a beat on the full bar.
+ *
+ * OURS, not the game's: the developer asked for it, because a load that ends the instant the
+ * bar fills never shows the player the screen they were waiting on. Measured from the START of
+ * the preload rather than added after it, so the three seconds are spent LOADING on a cold
+ * machine and idling on a warm one — either way the screen is up for the same three seconds
+ * and the match begins when it comes down.
+ */
 const START_HOLD_MS = 3000;
+
+/** …and the floor under that, so a preload that ate the whole beat still lets the filled bar
+ *  be seen rather than flashing full for one frame. */
+const MIN_FULL_BAR_MS = 500;
 
 /** A map's gold mines, shops and start locations for the loading screen's minimap. */
 function previewOf(bytes: Uint8Array): MapPreview | null {

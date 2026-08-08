@@ -1729,14 +1729,25 @@ export class MapViewerScene {
    *  empty (every load resolved) → two more frames, for trySeed to adopt the stragglers.
    *  Capped, so a model that never resolves can't hang the match. */
   private waitForMapUnits(timeoutMs = 30000): Promise<void> {
+    return this.waitForLoader(
+      () => !!this.viewer.map?.unitsReady && this.viewer.promiseMap.size === 0,
+      timeoutMs,
+      "map units",
+    );
+  }
+
+  /** Poll until the loader goes quiet — `ready()` true on two CONSECUTIVE frames, because a
+   *  fetch that resolves often dispatches the next one (a model's textures) and a single
+   *  empty `promiseMap` is just the gap between them. Capped: a model that never resolves
+   *  must not hang the match. Shared by `waitForMapUnits` and the start preload. */
+  private waitForLoader(ready: () => boolean, timeoutMs: number, what: string): Promise<void> {
     return new Promise((resolve) => {
       const t0 = performance.now();
       let settledFrames = 0;
       const poll = (): void => {
-        const loaded = this.viewer.map?.unitsReady && this.viewer.promiseMap.size === 0;
-        settledFrames = loaded ? settledFrames + 1 : 0;
+        settledFrames = ready() ? settledFrames + 1 : 0;
         if (settledFrames >= 2 || performance.now() - t0 > timeoutMs) {
-          if (settledFrames < 2) console.warn("[openwar3] map units still streaming after 30s — starting anyway.");
+          if (settledFrames < 2) console.warn(`[openwar3] ${what} still streaming after ${Math.round(timeoutMs / 1000)}s — starting anyway.`);
           resolve();
           return;
         }
@@ -1744,6 +1755,60 @@ export class MapViewerScene {
       };
       requestAnimationFrame(poll);
     });
+  }
+
+  /**
+   * Pull in what the first minutes of the match will ask for, while the loading screen is
+   * still up — the last stretch of the bar, and what makes the beat at the end of the load
+   * worth anything (see `startGame` in src/main.ts).
+   *
+   * The original does exactly this from the map's own script: `Preload` / `PreloadStart` /
+   * `PreloadEnd` (common.j) exist so a map can name the art it is about to want and have the
+   * engine fetch it before the mission runs, rather than hitch the frame each piece is first
+   * drawn on. We have the same two costs — an `.mdx` is parsed and uploaded the first time
+   * something asks for it, and an icon's `.blp` is decoded the first time a command card
+   * shows it — so this fetches:
+   *
+   *   1. everything already in flight (the models the map's script spawned, and their
+   *      textures), and
+   *   2. the local player's ROSTER: what their worker builds, what those buildings train and
+   *      what they upgrade into — models AND command-card icons. That is the set the opening
+   *      minutes actually touch, and being one race's tech tree it is bounded.
+   *
+   * Portrait busts stay on the idle warmer (`warmPortraits`): they are the heaviest models
+   * here and nothing is drawn with one until a unit is CLICKED, so they are not worth holding
+   * the screen for.
+   */
+  async preloadForStart(onProgress: (p: number) => void = () => {}): Promise<void> {
+    const t0 = performance.now();
+    // Whatever the script set going — its spawns are still streaming when it returns.
+    await this.waitForLoader(() => this.viewer.promiseMap.size === 0, 20000, "the map's art");
+    onProgress(0.2);
+    const roster = this.producibleRoster();
+    let done = 0;
+    await Promise.all(roster.map(async (id) => {
+      const def = this.registry.get(id);
+      if (def?.icon) this.blpIcon(def.icon); // decodes the BLP into the icon cache, once
+      if (def?.model) await this.viewer.load(def.model, this.solver).catch(() => undefined);
+      onProgress(0.2 + (0.8 * ++done) / roster.length);
+    }));
+    onProgress(1);
+    console.info(`[openwar3] preloaded ${roster.length} ${this.localRace} unit model(s) + icons in ${Math.round(performance.now() - t0)}ms.`);
+  }
+
+  /** Everything the local player is likely to MAKE: their worker, what it builds, and what
+   *  each of those buildings trains or upgrades into. The start preload fetches this set and
+   *  the portrait warmer walks it — one definition of "what this player is about to need". */
+  private producibleRoster(): string[] {
+    const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
+    const out = new Set<string>();
+    if (workerId) out.add(workerId);
+    for (const bid of workerId ? this.tech.builds(workerId) : []) {
+      out.add(bid);
+      for (const uid of this.tech.trains(bid)) out.add(uid);
+      for (const uid of this.tech.upgradesTo(bid)) out.add(uid);
+    }
+    return [...out];
   }
 
   /** Debug (cheat panel): spawn a hero at the camera centre for the local player, maxed
@@ -5609,14 +5674,19 @@ export class MapViewerScene {
   }
 
   /**
-   * Hold the world at the gate, for as long as the loading screen is still asking the player
-   * to press a key (a campaign chapter — see `startGame` in src/main.ts).
+   * Hold the world at the gate, for as long as the loading screen is up (see `startGame` in
+   * src/main.ts).
    *
-   * The map is built and its script's init has run by then, but nothing may MOVE yet: a
-   * chapter opens on a cinematic, and the reference does not play it to a loading screen. A
-   * flag of its own rather than `paused`, because the map's own `PauseGame` writes that one and
-   * the two must not clobber each other — a chapter that pauses itself in init (they do, for
-   * their opening scenes) would otherwise be un-paused by our release.
+   * The map is built and its script's init has run by then, but nothing may MOVE yet — and
+   * that is every game, not just a campaign chapter waiting on a keypress. The match used to
+   * begin the moment its setup returned, which is several seconds before the screen came
+   * down: the soundtrack played, creeps wandered and the melee clock ran to a picture that
+   * said "L O A D I N G". The world now stands built and still behind the screen and starts
+   * when the player sees it.
+   *
+   * A flag of its own rather than `paused`, because the map's own `PauseGame` writes that one
+   * and the two must not clobber each other — a chapter that pauses itself in init (they do,
+   * for their opening scenes) would otherwise be un-paused by our release.
    */
   holdAtStart(on: boolean): void {
     this.startHeld = on;
@@ -5765,14 +5835,9 @@ export class MapViewerScene {
       this.portraitWarmQueue.push(path);
     };
     for (const u of this.rts.simView.units.values()) consider(u.typeId);
-    // Everything the local player is likely to make: what their worker builds, and what each
-    // of those buildings trains or becomes.
-    const workerId = (STARTING_UNITS[this.localRace] ?? []).map((s) => s.id).find((id) => WORKERS[id]);
-    for (const bid of workerId ? this.tech.builds(workerId) : []) {
-      consider(bid);
-      for (const uid of this.tech.trains(bid)) consider(uid); // units this building trains
-      for (const uid of this.tech.upgradesTo(bid)) consider(uid); // and what it upgrades into
-    }
+    // …plus everything the local player is likely to make (see producibleRoster), whose
+    // models the start preload has already pulled in — this is their busts.
+    for (const id of this.producibleRoster()) consider(id);
     this.schedulePortraitWarm();
   }
 
@@ -7391,6 +7456,12 @@ export class MapViewerScene {
   private advanceSim(now: number): void {
     if (this.paused || this.startHeld) {
       this.simLast = now;
+      // A world held at the gate still ADOPTS: the loading screen's last stretch is the start
+      // preload, and models the map's script spawned are still resolving through it. Seeding
+      // is not simulation — it is how a delivered instance becomes a sim unit at all — so a
+      // unit that lands while we are held must not have to wait for the release to exist
+      // (the same split `holdWorld` draws: "adoption yes, simulation no").
+      if (this.startHeld) this.rts?.seedPending();
       return;
     }
     // rAF timestamps and performance.now() share a clock, but a frame's vsync stamp can

@@ -2590,6 +2590,14 @@ export class RtsController {
     }
   }
 
+  /** Adopt whatever the renderer has delivered since the last look, WITHOUT stepping the
+   *  world — what a world held at the start gate still needs, since the sim never ticks there
+   *  and `trySeed` is the only way a delivered instance becomes a unit
+   *  (see MapViewerScene.holdAtStart). */
+  seedPending(): void {
+    this.trySeed();
+  }
+
   tick(dt: number): void {
     this.trySeed();
     if (this.worldHeld) return; // adoption yes, simulation no — see holdWorld

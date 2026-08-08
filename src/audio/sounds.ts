@@ -312,6 +312,8 @@ export class SoundBoard {
   /** Named loops asked for while the AudioContext was still gated (see startPendingLoops). */
   private pendingLoops = new Map<string, { tag: string; group?: number }>();
   private muted = false;
+  /** A match is still behind its loading screen — see `setLoadingGate`. */
+  private loadingGate = false;
   private volume = 0.85;
   private listener: Listener | null = null; // last camera frame (for WANT3D panning)
   /** VolumeGroupSetVolume scales (0–1), one per SOUND_VOLUMEGROUP_* index. */
@@ -341,6 +343,8 @@ export class SoundBoard {
    *  against a stale token is discarded instead of played. */
   private musicGen = 0;
   private thematic: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  /** A thematic track cued while the loading gate was shut — see `setLoadingGate`. */
+  private pendingThematic: { file: string; fromMs: number } | null = null;
   private skins: Map<string, Map<string, string>> | null = null;
   /** Which war3skins.txt section the music playlists come from — the LOCAL player's
    *  race, which is how melee gives an Orc player orc music (set by the host). */
@@ -401,9 +405,47 @@ export class SoundBoard {
     else this.startPending();
   }
 
+  /**
+   * The match is BUILT but has not begun: a loading screen is still up, and nothing behind it
+   * may be heard (see `startGame` in src/main.ts).
+   *
+   * The map's own script cues the soundtrack from `main()` — `SetMapMusic` runs while the bar
+   * is still moving — and every unit it spawns lands with a sound, so a world set up before
+   * the screen comes down plays its opening bars TO the screen. That was the whole complaint:
+   * the game was plainly already running behind a picture that said "L O A D I N G".
+   *
+   * Modelled on the gate the browser's autoplay policy already put here — `audible()` answers
+   * both questions at once, so a one-shot is DROPPED and a standing request (the map's
+   * playlist, a looping ambience) survives as a PENDING one and starts when the gate opens.
+   * A gate of our own rather than `ctx.suspend()`, which looks equivalent and is not: the
+   * menu's music is fading out as the load begins, and a suspended context freezes that ramp
+   * where it stands and finishes it on resume — the menu's last second of music playing over
+   * the first second of the match.
+   */
+  setLoadingGate(on: boolean): void {
+    if (this.loadingGate === on) return;
+    this.loadingGate = on;
+    if (!on) this.unlock(); // …which drains everything cued while the screen was up
+  }
+
+  /** Can a sound start right now? The autoplay gate and the loading gate in one question, and
+   *  the place every play path asks it — a match building behind a loading screen is silent
+   *  for the same reason a page nobody has clicked yet is. */
+  private audible(): boolean {
+    if (this.loadingGate) return false;
+    this.unlock();
+    return !!this.ctx && !!this.master && this.ctx.state === "running";
+  }
+
   /** Everything that was asked for while the autoplay gate was still shut. */
   private startPending(): void {
-    this.startPendingMusic();
+    if (this.loadingGate) return; // …and it stays pending until the loading screen comes down
+    const thematic = this.pendingThematic;
+    this.pendingThematic = null;
+    // A thematic PRE-EMPTS the playlist, so a load that cued both starts only the theme — and
+    // the playlist comes back on its own when the theme ends (playThematicMusic's `onended`).
+    if (thematic) this.playThematicMusic(thematic.file, thematic.fromMs);
+    else this.startPendingMusic();
     this.startPendingLoops();
   }
 
@@ -772,8 +814,7 @@ export class SoundBoard {
     if (this.loops.has(name)) return;
     const clip = this.resolve(tag, name);
     if (!clip || !clip.paths.length) return;
-    this.unlock();
-    if (!this.ctx || !this.master || this.ctx.state !== "running") {
+    if (!this.audible()) {
       // The browser's autoplay gate hasn't opened yet. A one-shot would simply be missed,
       // but a LOOP is a standing request — the menu's wind is meant to be there from the
       // moment the menu is. Remember it and start it when the context comes up, exactly as
@@ -835,8 +876,7 @@ export class SoundBoard {
         this.loopFile.set(key, path);
         return;
       }
-      this.unlock();
-      if (!this.ctx || !this.master || this.ctx.state !== "running") return;
+      if (!this.audible()) return;
       const placeholder = {} as AudioBufferSourceNode;
       this.loops.set(key, placeholder); // reserve synchronously so we don't double-start
       this.loopOwner.set(path, key);
@@ -936,8 +976,7 @@ export class SoundBoard {
   playScript(id: number, s: ScriptSoundSpec, onStart?: () => void): boolean {
     this.stopScript(id, false); // StartSound on a live handle restarts it
     if (!s.file || !this.vfs.exists(s.file)) return false;
-    this.unlock();
-    if (!this.ctx || !this.master || this.ctx.state !== "running") return false;
+    if (!this.audible()) return false;
     const positional = s.is3D && !!s.at && !!this.listener;
     if (positional && s.cutoff > 0 && this.distanceTo(s.at!) > s.cutoff) return false;
     // Reserve the slot synchronously: the WAV decodes async, and a script that calls
@@ -1079,6 +1118,13 @@ export class SoundBoard {
   playThematicMusic(file: string, fromMs = 0): void {
     const paths = this.musicPaths(file);
     if (!paths.length) return;
+    // …and behind a loading screen it is REMEMBERED rather than dropped: a chapter's opening
+    // theme is cued from an init that runs while the screen is still up, and unlike the map's
+    // playlist a thematic leaves nothing behind for `startPending` to find (setLoadingGate).
+    if (this.loadingGate) {
+      this.pendingThematic = { file, fromMs };
+      return;
+    }
     this.fadeOutTrack(this.thematic, true); // only one thematic track at a time
     this.thematic = null;
     // A thematic pre-empts the map music, but it is the SAME one channel — so it claims it
@@ -1104,6 +1150,7 @@ export class SoundBoard {
   }
 
   endThematicMusic(): void {
+    this.pendingThematic = null; // one cued behind the loading screen is ended before it starts
     if (!this.thematic) return;
     this.fadeOutTrack(this.thematic, true);
     this.thematic = null;
@@ -1140,6 +1187,11 @@ export class SoundBoard {
   private startMusicTrack(offsetSec = 0): void {
     const path = this.musicList[this.musicIndex];
     if (!path || this.thematic) return;
+    // Behind a loading screen the list is cued and LEFT cued — nothing here is touched, so
+    // `startPendingMusic` finds exactly the state it looks for and starts the track when the
+    // screen comes down (setLoadingGate). The map cues its music from `main()`, which is why
+    // this is the gate's most important stop.
+    if (this.loadingGate) return;
     const gen = this.claimMusicChannel(); // …before the decode, not after it (see musicGen)
     this.musicCueing = true; // the track decodes async — don't let the gate retry double-start it
     void this.startTrack(path, offsetSec).then((t) => {
@@ -1232,8 +1284,7 @@ export class SoundBoard {
     if (this.voices.has(key)) return false; // this source is still talking — don't stack or cut it
     const clip = this.resolve("ack", label + category);
     if (!clip || !clip.paths.length) return false;
-    this.unlock();
-    if (!this.ctx || !this.master || this.ctx.state !== "running") return false;
+    if (!this.audible()) return false;
     if (this.voices.size >= MAX_VOICES) return false; // bound a pathological overlap burst
     // Never stack the same clip (pickVariant): a line still in the air isn't said a second
     // time even by a DIFFERENT unit — two Footmen answering with the same WAV on the same
@@ -1290,8 +1341,7 @@ export class SoundBoard {
    *  pans + attenuates around the listener regardless of kind. */
   private playPool(clip: Clip | null, kind: "death" | "impact" | "ui" | "spell", at?: SoundPos, group = POOL_GROUP[kind]): void {
     if (!clip || !clip.paths.length) return;
-    this.unlock();
-    if (!this.ctx || !this.master || this.ctx.state !== "running") return;
+    if (!this.audible()) return;
     const positional = clip.threeD && !!at && !!this.listener;
     // WC3 DistanceCutoff: a positional sound past its cutoff isn't played at all —
     // drop it before reserving a pool slot so far-off battles don't starve the cap.
