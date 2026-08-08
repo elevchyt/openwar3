@@ -3517,6 +3517,32 @@ export class RtsController {
       }
       // Nothing under the cursor: attack-MOVE to the ground point (below).
     }
+    if (mode === "move") {
+      // A Move command AIMED AT A UNIT OR BUILDING means "go to THAT thing", so its
+      // destination is the target's CENTRE — not wherever the click ray happens to meet the
+      // terrain. Those two are not the same point: a model is drawn standing up the screen
+      // from the ground it occupies, so clicking a barracks near its roof puts the ground
+      // hit a couple of hundred units BEHIND it while clicking near its doorstep puts it in
+      // front. The group was being sent to a different place depending on which part of the
+      // same building was clicked. Aiming at the centre also gets the whole formation
+      // packing in around the target, which is what a surround is.
+      //
+      // And no ground arrow: the arrow marks a spot on the terrain, and this order does not
+      // name one. Feedback is the target's own ring flashing, exactly as a right-click on it
+      // gives — green for our own, yellow for anyone else's (the colours the ring already
+      // uses), sized to the footprint for a building and to the constant unit ring
+      // otherwise, and lifted to a flyer's altitude so it hugs the model.
+      const picked = this.pickAt(cssX, cssY);
+      const target = picked !== null ? this.sim.units.get(picked) : undefined;
+      if (target && picked !== null) {
+        const e = this.byId.get(picked);
+        const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+        const own = !!prim && target.owner === prim.owner;
+        this.groupMove(target.x, target.y, queued);
+        this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, own ? FLASH_GREEN : FLASH_YELLOW, !!target.building, e?.moveHeight ?? 0);
+        return true;
+      }
+    }
     const dpr = this.dpr();
     this.screen[0] = cssX * dpr;
     this.screen[1] = cssY * dpr;
