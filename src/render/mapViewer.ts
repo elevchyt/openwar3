@@ -6643,7 +6643,19 @@ export class MapViewerScene {
       // A passive is untouched: Silence stops spellcasting, not Critical Strike.
       const muted = !passive && (su.silenced || su.stunned);
       out.push(this.cmd({
-        id: passive ? "noop" : def.autocast ? `autocast:${ab.code}` : `ability:${ab.code}`,
+        // An autocastable ability answers to BOTH mouse buttons, as in the game: left casts
+        // it here and now (Heal that wounded Footman), right flips whether the unit casts it
+        // by itself. It used to answer only the toggle, which left Heal, Slow, Abolish Magic
+        // and every other one of them with no way to be aimed at all (issue #106).
+        //
+        // …unless there is nothing to aim. An attack modifier — Searing Arrows, Cold Arrows,
+        // Black Arrow — is autocast over a NO-TARGET ability HERE (data/abilities.ts), so its
+        // button has only the one meaning and both buttons flip it rather than the left one
+        // firing a cast at nobody. The original lets those be aimed by hand as well; the day
+        // our table gives one a target, this reads it and the button gains its left-click
+        // with no change needed.
+        id: passive ? "noop" : def.autocast && KNOWN_ABILITIES[ab.code]?.target === "none" ? `autocast:${ab.code}` : `ability:${ab.code}`,
+        altId: passive || !def.autocast ? undefined : `autocast:${ab.code}`,
         icon: this.blpIcon(def.icon),
         name: def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
         hotkey: def.hotkey,

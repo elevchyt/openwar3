@@ -92,6 +92,10 @@ export interface CommandButton {
    *  active border. At most one button in a card ever has this set. */
   active: boolean;
   autocast?: boolean; // autocast toggled on: a persistent setting, not the current order
+  /** What a RIGHT-click on this button runs instead of `id`. An autocastable ability is the
+   *  one button in WC3 that answers to both buttons: left casts it now, right flips whether
+   *  the unit casts it by itself (issue #106). Absent on everything else. */
+  altId?: string;
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
@@ -2039,6 +2043,16 @@ export class GameHud {
       // reason the button is on the card at all. A `cantAfford` button is NOT inert —
       // its click is what earns the "Not enough gold." line.
       onPress(btn, c.passive || c.disabled ? null : () => this.driver.runCommand(c.id));
+      // …and the right button, for the one kind of button that has a second meaning. It is
+      // bound on `contextmenu` rather than pointerup so the menu is suppressed on the button
+      // itself, and it takes NO click sound and no sink: WC3 flips the little autocast glow
+      // and says nothing (issue #106).
+      btn.oncontextmenu = c.altId && !c.passive && !c.disabled
+        ? (e) => {
+            e.preventDefault();
+            this.driver.runCommand(c.altId!);
+          }
+        : (e) => e.preventDefault();
       btn.onpointerenter = () => this.showTooltip(c);
       btn.onpointerleave = () => (this.cmdTooltip.hidden = true);
     }
