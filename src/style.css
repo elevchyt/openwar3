@@ -1273,7 +1273,11 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
   border: 1px solid rgba(216, 180, 90, 0.3);
   border-radius: 2px;
 }
-.hud-sel-icon.focused .hud-sel-icon-art { border-color: #f0c850; box-shadow: 0 0 5px rgba(240, 200, 80, 0.8); }
+/* Focused sub-group: the gold frame is the picture's, but the GLOW belongs to the whole
+   icon — art and bars together — so a focused unit reads as one lit block rather than a lit
+   picture with two unlit strips hanging off the bottom of it. */
+.hud-sel-icon.focused { box-shadow: 0 0 5px 1px rgba(240, 200, 80, 0.8); }
+.hud-sel-icon.focused .hud-sel-icon-art { border-color: #f0c850; }
 /* The bars are the SAME thing the world draws over a unit's head (see .unit-hpbar-track):
    the game's own black frame, 1px above and below the fill, with the tinted
    human-healthbar-fill.blp slab inside it. The fill height comes from the grid's tier, so the
