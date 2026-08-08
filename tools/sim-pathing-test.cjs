@@ -403,5 +403,89 @@ console.log("attack-move: nobody freezes with an unreached target");
   check(`and it is dealing real damage (${dealt.toFixed(0)} hp)`, dealt > 500);
 }
 
+// ── 9. A jam PAUSES an order, it never cancels it ──────────────────────────────────────
+// Bodies in the way used to cost a unit its order outright: two windows of no progress and
+// checkStuck called stop(), so a group that jammed in a doorway simply forgot where it had
+// been sent and stood there. Bodies move — the order has to outlive them.
+console.log("a jam pauses a move order, it does not cancel it");
+{
+  const grid = gridOf(wallWithGaps(30, [20]));
+  const w = new SimWorld(grid, 1);
+  // The one-body gap is plugged for the first stretch, then the plug walks away.
+  const plug = addUnit(w, 2, 0, 992, 672);
+  w.issueHold(2);
+  w.tick(SIM_DT);
+  addUnit(w, 1, 0, 500, 672);
+  w.issueMove(1, 1500, 672);
+  run(w, 6); // long enough that the old code had given up twice over
+  const u = w.units.get(1);
+  check(`still under its move order while jammed (order ${u.order})`, u.order === "move");
+  check(`and waiting on the near side (x ${u.x.toFixed(0)})`, u.x < 960);
+  // Let the plug walk off; the order must resume on its own, with no new command.
+  w.issueMove(2, 992, 1600);
+  run(w, 14);
+  check(`resumed and got through unaided (x ${u.x.toFixed(0)})`, u.x > 1100);
+}
+
+// …and the same for attack-move: the destination survives the jam.
+console.log("a jam pauses an attack-move, it does not cancel it");
+{
+  const grid = gridOf(wallWithGaps(30, [20]));
+  const w = new SimWorld(grid, 1);
+  const plug = addUnit(w, 2, 0, 992, 672);
+  w.issueHold(2);
+  w.tick(SIM_DT);
+  addUnit(w, 1, 0, 500, 672);
+  w.issueAttackMove(1, 1500, 672);
+  run(w, 6);
+  const u = w.units.get(1);
+  check(`still under its attack-move (order ${u.order})`, u.order === "attackmove");
+  check(`with its destination intact (${u.amDestX.toFixed(0)}, ${u.amDestY.toFixed(0)})`, Math.round(u.amDestX) === 1500);
+  w.issueMove(2, 992, 1600);
+  run(w, 14);
+  check(`resumed and arrived unaided (x ${u.x.toFixed(0)})`, u.x > 1100);
+}
+
+// …and a whole SQUAD queued at a one-body gap drains through it. This is the case that
+// caught the first attempt: parking by settling made every waiting unit RESERVE its cells,
+// and reservations are walls to the pathfinder — so the queue became a wall to itself and
+// sat there with the gap wide open. A parked unit holds its walking CLAIM instead: solid to
+// the others' movement, transparent to their routing.
+console.log("a squad queued at a one-body gap drains through it");
+{
+  const grid = gridOf(wallWithGaps(30, [20]));
+  const w = new SimWorld(grid, 1);
+  const plug = addUnit(w, 2, 0, 992, 672);
+  w.issueHold(2);
+  w.tick(SIM_DT);
+  const squad = [];
+  for (let i = 0; i < 6; i++) {
+    squad.push(addUnit(w, 10 + i, 0, 420 + (i % 2) * 72, 600 + Math.floor(i / 2) * 72).id);
+    w.issueMove(10 + i, 1600, 672);
+  }
+  run(w, 8); // jammed behind the plug the whole time
+  const held = squad.filter((id) => w.units.get(id).order === "move").length;
+  check(`the whole squad still holds its order (${held}/6)`, held === 6);
+  w.issueMove(2, 1400, 1400); // uncork; nothing re-issues the squad's order
+  const overlap = runWatched(w, grid, 30);
+  const through = squad.filter((id) => w.units.get(id).x > 1100).length;
+  check(`and all six drain through unaided (${through}/6)`, through === 6);
+  check(`without ever standing inside anybody (${overlap ?? "clean"})`, overlap === null);
+}
+
+// Terrain is the one thing that DOES end a move: no waiting opens a cliff.
+console.log("an unreachable destination still ends the order");
+{
+  const flags = new Uint8Array(W * H);
+  for (let cy = 0; cy < H; cy++) { flags[cy * W + 30] = PathingFlag.Unwalkable; flags[cy * W + 31] = PathingFlag.Unwalkable; }
+  const w = new SimWorld(gridOf(flags), 1);
+  addUnit(w, 1, 0, 500, 672);
+  w.issueMove(1, 1500, 672); // behind a wall with no gap anywhere
+  run(w, 10);
+  const u = w.units.get(1);
+  check(`gave the order up (order ${u.order})`, u.order === "idle");
+  check(`having walked up to the wall (x ${u.x.toFixed(0)})`, u.x > 800 && u.x < 960);
+}
+
 console.log(failures ? `\npathing: ${failures} check(s) FAILED` : "\npathing: all checks passed");
 process.exit(failures ? 1 : 0);

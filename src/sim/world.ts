@@ -811,6 +811,11 @@ export interface SimUnit {
   stuckAnchorX: number; // position at the start of the current stuck window (net-progress check)
   stuckAnchorY: number;
   repathT: number; // chase-repath cooldown after getting blocked
+  // Seconds a PARKED mover waits before trying its route again. A move/attack-move whose
+  // way is shut by other bodies keeps its order and parks (see parkAndWait) instead of
+  // being cancelled — a unit does not forget where it was sent because somebody stood in
+  // front of it for a second (issue #108). Backs off while the jam lasts.
+  waitT: number;
   repollT: number; // proactive-reroute poll timer (issue #6): seconds until the next
   // check of whether the path ahead is still clear of newly-stopped units
   yieldT: number; // seconds paused giving way to another unit (breaks head-on "dancing")
@@ -1164,6 +1169,12 @@ const ASSIST_RANGE = 800;
 // walking in front of a unit visibly re-routes it, long enough that a walker briefly
 // crossing our tile is simply waited out instead of triggering an A* every time.
 const BLOCKED_REPATH_TIME = 0.3;
+// A mover whose way is shut by other BODIES parks and tries again after this, growing with
+// the length of the jam up to BLOCKED_WAIT_MAX. It does NOT lose its order: bodies move, so
+// where the unit was sent is still where it is going (issue #108). Only terrain that puts
+// the destination out of reach ends a move.
+const BLOCKED_WAIT = 0.5;
+const BLOCKED_WAIT_MAX = 3.0;
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
 // When two units meet head-on, the lower-priority one pauses for YIELD_TIME so the
@@ -2722,6 +2733,7 @@ export class SimWorld {
     this.cancelSwing(u);
     u.stuckT = 0;
     u.stuckRetries = 0;
+    u.waitT = 0; // a fresh order is never still parked on the old one
     u.repair = { targetId: buildingId, hpPerSec, goldPerHp, lumberPerHp, active: false };
     this.pathTo(u, b.x, b.y);
     return true;
@@ -3145,6 +3157,7 @@ export class SimWorld {
       | "stuckAnchorX"
       | "stuckAnchorY"
       | "repathT"
+      | "waitT"
       | "repollT"
       | "yieldT"
       | "prevX"
@@ -3334,6 +3347,7 @@ export class SimWorld {
       stuckAnchorX: unit.x,
       stuckAnchorY: unit.y,
       repathT: 0,
+      waitT: 0,
       repollT: 0,
       yieldT: 0,
       prevX: unit.x,
@@ -4042,6 +4056,7 @@ export class SimWorld {
     this.detachBuilder(id); // wandering off halts the construction
     u.stuckT = 0;
     u.stuckRetries = 0;
+    u.waitT = 0; // a fresh order is never still parked on the old one
     // Ordered essentially onto our own position: don't shuffle, just pivot.
     if (Math.hypot(tx - u.x, ty - u.y) <= MOVE_MIN_DIST) {
       this.settle(u);
@@ -4050,9 +4065,11 @@ export class SimWorld {
       return false;
     }
     if (!this.pathTo(u, tx, ty, undefined, false, approach)) {
-      this.stop(id);
-      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
-      return false;
+      // Boxed in by bodies at this instant — a crowded rally, a group all told to go at
+      // once. The order is still good; park and take it up when the way opens (issue #108).
+      // Only terrain that puts the point out of reach refuses the move outright.
+      this.holdOrGiveUp(u, tx, ty);
+      return u.order === "move"; // parked keeps the order (accepted); stopped does not
     }
     return true;
   }
@@ -4100,6 +4117,7 @@ export class SimWorld {
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
+    u.waitT = 0; // a fresh order is never still parked on the old one
     u.amDestX = tx; // final destination; tickAttackMove engages enemies en route
     u.amDestY = ty;
     u.acquireT = 0; // scan on the very first tick so it fights before advancing
@@ -4121,6 +4139,7 @@ export class SimWorld {
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
+    u.waitT = 0; // a fresh order is never still parked on the old one
     u.patrolX = u.x; // the return endpoint is where the patrol was issued
     u.patrolY = u.y;
     if (!this.pathTo(u, tx, ty)) {
@@ -4144,6 +4163,7 @@ export class SimWorld {
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
+    u.waitT = 0; // a fresh order is never still parked on the old one
     u.acquireT = 0; // scan for an in-range enemy immediately
     this.settle(u); // stop any current movement and hold this cell
     return true;
@@ -4298,6 +4318,7 @@ export class SimWorld {
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
+    u.waitT = 0; // a fresh order is never still parked on the old one
     return true;
   }
 
@@ -4326,6 +4347,7 @@ export class SimWorld {
       u.atNode = false;
       u.noCollision = false; // manual stop restores collision
       u.stallT = 0;
+      u.waitT = 0; // nothing left to resume
       u.gaveUp = false;
       u.acquireT = 0; // scan for a new target on the very next idle tick (no ½s lag)
       this.cancelSwing(u);
@@ -4469,6 +4491,7 @@ export class SimWorld {
     this.detachBuilder(id);
     u.stuckT = 0;
     u.stuckRetries = 0;
+    u.waitT = 0; // a fresh order is never still parked on the old one
     if (ax !== undefined && ay !== undefined) this.pathTo(u, ax, ay); // spread approach for a grouped command
     else this.pathToNode(u); // walk toward the node once; arrival latches atNode
     return true;
@@ -7276,6 +7299,7 @@ export class SimWorld {
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
       if (u.repathT > 0) u.repathT -= dt;
+      if (u.waitT > 0) u.waitT -= dt; // parked in a jam — counting down to the next try
       for (const a of u.abilities) if (a.cooldownLeft > 0) a.cooldownLeft -= dt;
       for (const it of u.inventory) if (it && it.cooldownLeft > 0) it.cooldownLeft -= dt;
       if (u.summonLeft > 0) {
@@ -7313,8 +7337,10 @@ export class SimWorld {
       switch (u.order) {
         case "move":
           // Movement itself is driven by tickMovement while u.moving stays true;
-          // this only restarts a move that a stun/interrupt paused.
+          // this restarts a move that a stun/interrupt paused, and — when there is no path
+          // left at all — one that PARKED because the way was blocked (see parkAndWait).
           if (!u.moving && u.waypoint < u.path.length) u.moving = true;
+          else if (!u.moving) this.resumeRoute(u);
           break;
         case "attack":
           this.tickAttack(u, dt);
@@ -7345,6 +7371,7 @@ export class SimWorld {
           break;
         case "patrol":
           if (!u.moving && u.waypoint < u.path.length) u.moving = true; // resume after a stun
+          else if (!u.moving) this.resumeRoute(u); // …or after parking in a jam
           // Autocast first here too — patrol is one of the orders Liquipedia lists as leaving
           // autocast active, so a patrolling Priest heals what it passes (issue #94).
           if (!this.tickAutocast(u)) this.tickAcquire(u, dt); // else engage enemies en route
@@ -7456,14 +7483,22 @@ export class SimWorld {
       u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
       return;
     }
-    // Blocked/orbiting: the blockers may have stopped since the original path
-    // was computed — repath around them. A unit that stays stuck (boxed in)
-    // stands down after a couple of attempts and just faces where it was
-    // ordered — WC3 units never squeeze through crowds.
-    if (++u.stuckRetries > 1 || !this.pathTo(u, tx, ty)) {
-      this.stop(u.id);
-      u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+    // Blocked/orbiting: the blockers may have stopped since the original path was computed,
+    // so try a fresh route around them first (avoidMovers — go round the crowd rather than
+    // grind into it). Two attempts; a unit that is genuinely hemmed in should stop probing
+    // and wait, not re-flood A* every window.
+    if (u.stuckRetries < 2 && this.pathTo(u, tx, ty, undefined, true)) {
+      u.stuckRetries++;
+      return;
     }
+    // No way through right now. The order STANDS — a unit does not forget where it was sent
+    // because somebody stood in its way for a second (issue #108: a jammed group used to
+    // have its move / attack-move cancelled and just stopped there). Park on our own tile so
+    // we stop shoving at the crowd, and pick the route up when the wait lapses.
+    //
+    // The one thing that DOES end the order is terrain: if the destination is out of reach
+    // even with every other unit taken off the map, no amount of waiting will open it.
+    this.holdOrGiveUp(u, tx, ty);
   }
 
   // --- combat -------------------------------------------------------------
@@ -7991,9 +8026,12 @@ export class SimWorld {
       return;
     }
     if (!u.moving) {
+      // Parked in a jam: the order stands, we are just waiting for the way to open.
+      if (u.waitT > 0) return;
       if (!this.pathTo(u, u.amDestX, u.amDestY)) {
-        this.stop(u.id);
-        u.desiredFacing = Math.atan2(u.amDestY - u.y, u.amDestX - u.x);
+        // Bodies in the way → wait them out, keeping the order. Terrain → the destination
+        // is genuinely out of reach, and only then does the attack-move end (issue #108).
+        this.holdOrGiveUp(u, u.amDestX, u.amDestY);
       }
     } else if (Math.hypot(u.chaseX - u.amDestX, u.chaseY - u.amDestY) > CHASE_REPATH) {
       this.pathTo(u, u.amDestX, u.amDestY); // was chasing an enemy — steer back on course
@@ -10526,6 +10564,154 @@ export class SimWorld {
     return true;
   }
 
+  /** The way is shut by other bodies. KEEP the order and park: settle onto our own tile so
+   *  we stop grinding at the crowd, face where we were sent, and pick the route up again in
+   *  a moment (resumeRoute). The wait grows with the length of the jam so a long one costs
+   *  almost nothing, and nothing here ends the order — that is the whole point (issue #108:
+   *  units that stood still a moment used to have their move / attack-move cancelled). */
+  private parkAndWait(u: SimUnit): void {
+    // Stop walking, but do NOT settle. A unit waiting its turn at a choke has not STOPPED,
+    // it is still on its way — and that distinction is load-bearing here, because settling
+    // RESERVES cells and reservations are walls to the pathfinder. A queue that all settled
+    // in front of a gap became a wall to itself: every one of them blocked every other's
+    // route and the whole group sat there with the way ahead wide open. Holding the walking
+    // CLAIM instead leaves them solid to each other's MOVEMENT while staying transparent to
+    // each other's ROUTING, which is precisely the difference the two layers exist to draw.
+    // (tickMovement's claim pass keeps a parked unit's claim alive off waitT.)
+    u.moving = false;
+    u.path = [];
+    u.waypoint = 0;
+    u.stuckT = 0;
+    u.waitT = Math.min(BLOCKED_WAIT * Math.max(1, u.stuckRetries), BLOCKED_WAIT_MAX);
+    u.stuckRetries++;
+    u.desiredFacing = Math.atan2(u.chaseY - u.y, u.chaseX - u.x);
+  }
+
+  /** Ask whoever is corking us to shuffle aside — WC3 units make way for one another, and
+   *  without that a queue at a narrow gap can cork itself for good. Two units waiting on
+   *  either side of a two-cell corridor each hold ONE of the rows the next unit needs
+   *  (blocks are two cells a side but sit on a one-cell stride, so neighbouring blocks
+   *  overlap the one between them), and neither has any reason to budge. One tile of
+   *  sideways shuffle from either of them frees the corridor for everybody.
+   *
+   *  Only an ally that is standing about — parked on its own blocked order, or plain idle —
+   *  is ever asked. Nobody is shoved off a job, off a Hold, or out of a fight. */
+  private makeWay(u: SimUnit): void {
+    const n = u.footprint;
+    if (n <= 0 || u.waypoint >= u.path.length) return;
+    const [wx, wy] = u.path[u.waypoint];
+    const d = Math.hypot(wx - u.x, wy - u.y);
+    if (d < 1e-3) return;
+    // The block we just failed to take: one cell further along the way we were heading.
+    const [bx0, by0] = this.grid.footprintOrigin(u.x + ((wx - u.x) / d) * PATHING_CELL, u.y + ((wy - u.y) / d) * PATHING_CELL, n);
+    for (const o of this.units.values()) {
+      if (o === u || o.moving || o.building || o.speed <= 0 || o.footprint <= 0) continue;
+      if (o.team !== u.team || o.hp <= 0 || isOffField(o)) continue;
+      if (!(o.waitT > 0 || o.order === "idle")) continue; // busy with something of its own
+      const m = o.footprint;
+      const [ox0, oy0] = this.grid.footprintOrigin(o.x, o.y, m);
+      if (!(ox0 < bx0 + n && bx0 < ox0 + m && oy0 < by0 + n && by0 < oy0 + m)) continue; // not in our way
+      // A tile of its own to step onto: any neighbouring block it fits in that is clear of
+      // the one we want. Nearest ring first, so the shuffle is as small as it can be.
+      for (let r = 1; r <= 2 && !o.moving; r++) {
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+            const cx0 = ox0 + dx;
+            const cy0 = oy0 + dy;
+            if (cx0 < bx0 + n && bx0 < cx0 + m && cy0 < by0 + n && by0 < cy0 + m) continue; // still in the way
+            if (!this.blockClaimable(o, cx0, cy0)) continue;
+            const [sx, sy] = this.grid.footprintCenter(cx0 + (m >> 1), cy0 + (m >> 1), m);
+            // Written onto the path directly rather than through pathTo(), so the ally's
+            // OWN destination (chaseX/chaseY) survives the errand: it steps out of the way
+            // and then carries straight on with the order it was already under.
+            o.path = [[sx, sy]];
+            o.waypoint = 0;
+            o.moving = true;
+            o.waitT = 0;
+            o.stuckT = 0;
+            o.desiredFacing = Math.atan2(sy - o.y, sx - o.x);
+            break;
+          }
+          if (o.moving) break;
+        }
+      }
+      if (o.moving) return; // one is enough — the corridor only needs one row back
+    }
+  }
+
+  /** The way is shut. Keep the order and WAIT when only bodies are in the way — they move,
+   *  so where the unit was sent is still where it is going. End it only when the terrain
+   *  itself puts the destination out of reach, because no amount of waiting opens a cliff.
+   *  Every give-up path for a move / attack-move / patrol goes through here (issue #108). */
+  private holdOrGiveUp(u: SimUnit, tx: number, ty: number): void {
+    if (this.terrainReachable(u, tx, ty)) {
+      this.parkAndWait(u);
+      return;
+    }
+    this.stop(u.id);
+    u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
+  }
+
+  /** Has this mover actually got where it was sent? A plain point means standing within a
+   *  body or two of it — closer than that is the crowd standing on the spot, and WC3 stops
+   *  there rather than shoving. An APPROACH (a move that named a unit or building) aims at
+   *  the middle of the thing, ground the unit can never stand on, so arrival there is
+   *  standing against its box. */
+  private atMoveGoal(u: SimUnit): boolean {
+    const dx = Math.abs(u.chaseX - u.x);
+    const dy = Math.abs(u.chaseY - u.y);
+    if (u.chaseHX > 0) {
+      const ox = Math.max(0, dx - u.chaseHX);
+      const oy = Math.max(0, dy - u.chaseHY);
+      return Math.hypot(ox, oy) <= (u.footprint || 1) * PATHING_CELL * 0.5 + PATHING_CELL * 1.5;
+    }
+    return Math.hypot(dx, dy) <= PATHING_CELL * 2;
+  }
+
+  /** A parked mover picking its route back up once the wait lapses. True when it is walking
+   *  again. Standing within a body or two of the ordered point counts as having ARRIVED —
+   *  the crowd on the spot is the only thing left between us and it, and WC3 stops there
+   *  rather than shoving. */
+  private resumeRoute(u: SimUnit): boolean {
+    if (u.waitT > 0) return false; // still counting down
+    if (this.atMoveGoal(u)) {
+      this.stop(u.id); // as close as the crowd allows — that IS arriving
+      u.desiredFacing = Math.atan2(u.chaseY - u.y, u.chaseX - u.x);
+      return false;
+    }
+    if (this.pathTo(u, u.chaseX, u.chaseY)) return true;
+    this.holdOrGiveUp(u, u.chaseX, u.chaseY);
+    return false;
+  }
+
+  /** Could this unit get there if nobody else were in the way — is the destination reachable
+   *  through the TERRAIN? The question that decides whether a blocked mover keeps its order
+   *  (bodies move, so wait them out) or gives it up (a cliff does not). Deliberately a
+   *  separate, unit-blind search rather than a flag on the usual one: the ordinary clearance
+   *  test cannot tell "a Grunt is standing there" from "that is a cliff", and those two
+   *  deserve opposite answers. Run only when a unit is about to give up, so it is rare. */
+  private terrainReachable(u: SimUnit, tx: number, ty: number): boolean {
+    const n = u.footprint;
+    const domain = pathDomain(u);
+    const start = this.grid.footprintAnchor(u.x, u.y, n);
+    const goal = this.grid.footprintAnchor(tx, ty, n);
+    const half = n >> 1;
+    const blocked =
+      n <= 0
+        ? undefined
+        : (cx: number, cy: number) => {
+            for (let y = cy - half; y < cy - half + n; y++)
+              for (let x = cx - half; x < cx - half + n; x++) if (!this.grid.walkable(x, y, domain)) return true;
+            return false;
+          };
+    const cells = findPath(this.grid, start, goal, blocked, undefined, domain);
+    if (!cells || cells.length <= 1) return false;
+    const [ecx, ecy] = cells[cells.length - 1];
+    const [ex, ey] = this.grid.footprintCenter(ecx, ecy, n);
+    return Math.hypot(tx - ex, ty - ey) <= PATHING_CELL * 2;
+  }
+
   /** After finishing a path that stopped short of the ordered point, try again
    *  when the goal's cells have been vacated in the meantime. */
   private retryFreedGoal(u: SimUnit): boolean {
@@ -10594,11 +10780,11 @@ export class SimWorld {
     for (const u of this.units.values()) {
       // Stopped, dead, boarded or ghosting: a claim it may still hold is stale. (settle()
       // normally hands it back; this catches every other way movement can end.)
-      if (u.moving && this.claimsCells(u)) this.ensureClaim(u);
+      if ((u.moving || u.waitT > 0) && this.claimsCells(u)) this.ensureClaim(u);
       else if (u.hasClaim) this.releaseClaim(u);
     }
     for (const u of this.units.values()) {
-      if (!u.moving) continue;
+      if (!u.moving || !u.path.length) continue; // parked units hold a claim but walk nowhere
       // Proactively reroute around units that have stopped across our path since
       // it was computed (issue #6), before we grind into them (checkStuck backstop).
       this.repathPoll(u, dt);
@@ -10660,7 +10846,10 @@ export class SimWorld {
         u.blockedT += dt;
         if (u.blockedT >= BLOCKED_REPATH_TIME) {
           u.blockedT = 0;
-          if (u.waypoint < u.path.length && !u.flying) this.pathTo(u, u.chaseX, u.chaseY, undefined, true);
+          if (u.waypoint < u.path.length && !u.flying) {
+            this.makeWay(u); // ask an idle/parked ally standing in the gap to shuffle over
+            this.pathTo(u, u.chaseX, u.chaseY, undefined, true);
+          }
         }
         continue;
       }
@@ -10676,14 +10865,16 @@ export class SimWorld {
           const ny = u.patrolY;
           u.patrolX = u.chaseX; // the endpoint just reached becomes the return point
           u.patrolY = u.chaseY;
-          if (!this.pathTo(u, nx, ny)) this.stop(u.id);
+          if (!this.pathTo(u, nx, ny)) this.holdOrGiveUp(u, nx, ny);
           continue;
         }
-        // A plain move ends here. An attack-move only ends when it has actually
-        // reached its destination — a path that ended mid-chase (or short of the
-        // goal) stays an attack-move so tickAttackMove keeps fighting/advancing.
+        // A move ends when it has actually got WHERE IT WAS SENT — not merely because its
+        // path ran out. Those are different things: a best-effort route around a blocker
+        // ends short of the goal, and treating that as arrival is what cancelled a move the
+        // moment a crowd got in the way (issue #108). Falling short parks instead, and
+        // resumeRoute picks the order back up. An attack-move already worked this way.
         const arrived =
-          u.order === "move" ||
+          (u.order === "move" && this.atMoveGoal(u)) ||
           (u.order === "attackmove" && Math.hypot(u.amDestX - u.x, u.amDestY - u.y) <= PATHING_CELL * 1.5);
         if (arrived) {
           // Flip to idle BEFORE settling so a finished attack-move fans out at its
@@ -10702,8 +10893,10 @@ export class SimWorld {
           // tick), so it lands facing the way it came — as WC3 units do. Belt-and-
           // suspenders alongside path smoothing + the final-nudge guard above.
           u.desiredFacing = u.facing;
+        } else if (u.order === "move") {
+          this.holdOrGiveUp(u, u.chaseX, u.chaseY); // fell short — hold it, or end it if walled off
         } else {
-          this.settle(u); // attack-move paused mid-chase (or a short move): settle in place
+          this.settle(u); // attack-move paused mid-chase: settle in place and keep fighting
         }
       }
     }
