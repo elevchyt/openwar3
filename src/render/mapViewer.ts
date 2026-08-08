@@ -7464,6 +7464,16 @@ export class MapViewerScene {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
           this.splats?.remove(`m${mine.id}`); // drop the mine's ground texture
         }
+        // A building you were putting up is UP: the worker's "Job's done." (issue #111). The
+        // THIRD completion cue, and a separate row from the two below — war3skins.txt gives
+        // each race a `JobDoneSound`, and every one of them is that race's builder saying so
+        // (JobDoneSoundOrc → Sound\Buildings\Orc\PeonJobDone.wav, JobDoneSoundNightElf →
+        // HuntressBuildingComplete1.wav, since a Wisp has no voice to say it with).
+        // A 2D interface cue like its neighbours (UISounds.slk Flags=0), so it is heard the
+        // same wherever on the map the scaffolding came down.
+        for (const c of world.drainBuildCompletions()) {
+          if (c.owner === this.localPlayer) this.sounds?.playUi(`JobDoneSound${UI_SOUND_RACE[this.localRace]}`);
+        }
         // --- research + structure upgrades (issue #57) ---
         // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an
         // upgrade you research (Forged Swords) and UpgradeComplete<Race> for a structure that

@@ -1506,6 +1506,8 @@ export class SimWorld {
   private trainCompletions: Array<{ buildingId: number; unitId: string; owner: number; x: number; y: number; rallyX: number; rallyY: number; rallyKind: RallyKind; rallyTargetId: number }> = [];
   // Finished research (renderer plays the "upgrade complete" sound + refreshes the card).
   private researchCompletions: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> = [];
+  // Buildings that finished being BUILT this tick (renderer plays the "job's done" sound).
+  private buildCompletions: Array<{ buildingId: number; owner: number }> = [];
   // Buildings that changed type this tick (Town Hall → Keep): the renderer swaps the model.
   private morphs: Array<{ unitId: number; from: string; to: string }> = [];
   private nextNodeId = 1;
@@ -2215,6 +2217,13 @@ export class SimWorld {
     return out;
   }
 
+  /** Buildings finished since the last drain (renderer plays the "job's done" cue). */
+  drainBuildCompletions(): Array<{ buildingId: number; owner: number }> {
+    const out = this.buildCompletions;
+    this.buildCompletions = [];
+    return out;
+  }
+
   /** Buildings that morphed since the last drain (renderer swaps the model + food). */
   drainMorphs(): Array<{ unitId: number; from: string; to: string }> {
     const out = this.morphs;
@@ -2788,6 +2797,7 @@ export class SimWorld {
           u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
           if (b.constructionLeft === 0) {
             for (const bid of [...b.builderIds]) this.detachBuilder(bid);
+            this.buildCompletions.push({ buildingId: u.id, owner: u.owner });
             this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
           }
           continue;
@@ -2841,6 +2851,7 @@ export class SimWorld {
           u.hp = u.maxHp * (0.1 + 0.9 * done);
           if (b.constructionLeft === 0) {
             for (const bid of [...b.builderIds]) this.detachBuilder(bid); // free the workers
+            this.buildCompletions.push({ buildingId: u.id, owner: u.owner });
             this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
           }
         }
