@@ -636,6 +636,38 @@ export interface SpellEvent {
   y: number;
 }
 
+/**
+ * Something happened that the engine ANNOUNCES on its own — the news half of
+ * `Units\CommandStrings.txt`'s [Errors] block.
+ *
+ * Those 216 rows are not all refusals. Beside "Not enough gold." sit `Unitattack`,
+ * `Townattack`, `Herodeath`, `Goldminelow` and `Goldminedestroyed`: lines nobody asked
+ * for, raised by the game itself, and each one paired with a war3skins.txt sound key
+ * (`UnderAttackSound`, `TownAttackSound`, `HeroDiesSound`, `GoldMineLowSound`,
+ * `GoldMineCollapseSound`). That pairing is the whole test for whether a cue prints
+ * text: the three COMPLETION sounds — `JobDoneSound`, `UpgradeComplete`,
+ * `ResearchComplete` — have no [Errors] row at all, which is why a finished building
+ * only speaks (issue #111).
+ *
+ * The sim raises them; the renderer decides who is told what. It has to be that way
+ * round for the ally variants — the same blow is "Our town is under siege!" to the
+ * owner and "%s's city is under siege!" to their ally, and only the renderer knows
+ * which one is watching (see MapViewerScene.showAlert).
+ */
+export interface Alert {
+  kind: "attack" | "townattack" | "herodeath" | "minelow" | "minedestroyed";
+  /** Whose news it is: the owner of what was hit, died, or was being mined. */
+  player: number;
+  x: number;
+  y: number;
+  /** `herodeath` only — the dead hero, whose record is gone by the time anyone drains
+   *  (kill() deletes it), so the three fields `Herodeath` prints travel with the alert. */
+  hero?: { properName: string; typeId: string; level: number };
+  /** `herodeath` only, and only when another HERO struck the blow — `Herokilledhero`
+   *  ("%s was defeated by %s.") is the line for that, in place of the plain one. */
+  killer?: { properName: string; typeId: string };
+}
+
 /** A structure's construction reaching a milestone (EVENT_(PLAYER_)UNIT_CONSTRUCT_*):
  *  the foundation laid, the build cancelled, or the building finished. */
 export interface ConstructEvent {
@@ -1508,6 +1540,18 @@ export class SimWorld {
   private researchCompletions: Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> = [];
   // Buildings that finished being BUILT this tick (renderer plays the "job's done" sound).
   private buildCompletions: Array<{ buildingId: number; owner: number }> = [];
+  // News the engine announces by itself — see Alert.
+  private alerts: Alert[] = [];
+  /** Per player, WHEN and WHERE they were last told they are under attack. Both halves are
+   *  needed: MiscData carries `AttackNotifyDelay=30.0` ("seconds between attack
+   *  notifications") beside `AttackNotifyRange=1250`, and a delay alone would have no use
+   *  for a range. Read as one rule — a fresh blow is news if the last warning has gone
+   *  stale OR it lands somewhere else entirely — which is what stops a raid on the far
+   *  side of the map from being silenced by a creep nibbling at home. */
+  private attackNotify = new Map<number, { t: number; x: number; y: number }>();
+  /** Mines already announced as running low, so the warning is given once per mine rather
+   *  than on every trip below the line. */
+  private minesRunningLow = new Set<number>();
   // Buildings that changed type this tick (Town Hall → Keep): the renderer swaps the model.
   private morphs: Array<{ unitId: number; from: string; to: string }> = [];
   private nextNodeId = 1;
@@ -2214,6 +2258,13 @@ export class SimWorld {
   drainResearchCompletions(): Array<{ buildingId: number; upgradeId: string; level: number; owner: number }> {
     const out = this.researchCompletions;
     this.researchCompletions = [];
+    return out;
+  }
+
+  /** Announcements since the last drain (renderer turns each into text + sound + ping). */
+  drainAlerts(): Alert[] {
+    const out = this.alerts;
+    this.alerts = [];
     return out;
   }
 
@@ -8558,6 +8609,14 @@ export class SimWorld {
           if (mine.gold <= 0) {
             this.mines.delete(mine.id);
             this.depleted.push(mine);
+            // "A gold mine has collapsed." — told to whoever was working it, since they are
+            // the one who has to go and find another (Goldminedestroyed + GoldMineCollapseSound).
+            this.alerts.push({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
+          } else if (mine.gold < MISC_DATA.LowGoldAmount && !this.minesRunningLow.has(mine.id)) {
+            // MiscData names the line itself: "this is the amount where a gold mine is
+            // considered low" (LowGoldAmount=1500). Warned on the trip that crosses it, once.
+            this.minesRunningLow.add(mine.id);
+            this.alerts.push({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
           }
           // Emerge on the side facing the town hall — the worker was invisible
           // inside, so re-placing it here is seamless and makes it ALWAYS exit
@@ -8998,6 +9057,30 @@ export class SimWorld {
     return this.attackReveals.values();
   }
 
+  /**
+   * A blow landed on somebody's property: raise the under-attack warning, at most as often
+   * as MiscData allows (see `attackNotify`).
+   *
+   * Which of the two lines it is comes from what was hit — a STRUCTURE is the town
+   * ("Our town is under siege!"), anything else is the field ("The battle has been
+   * joined."). The data gives no rule for the split, but it gives the pair: two [Errors]
+   * rows, `Unitattack` and `Townattack`, matched by two war3skins sound keys,
+   * `UnderAttackSound` and `TownAttackSound`. Unit-or-building is the only division of a
+   * hit that both halves can be read off.
+   *
+   * Called from `landDamage`, so a spell counts as an attack — being burned by a Flame
+   * Strike is being attacked, and the warning has no way to tell the player otherwise.
+   */
+  private noteAttacked(target: SimUnit, attackerId: number): void {
+    const src = attackerId ? this.units.get(attackerId) : undefined;
+    if (!src || !this.hostile(src, target)) return; // friendly fire is not an invasion
+    const last = this.attackNotify.get(target.owner);
+    if (last && this.elapsed - last.t < MISC_DATA.AttackNotifyDelay &&
+        Math.hypot(target.x - last.x, target.y - last.y) <= MISC_DATA.AttackNotifyRange) return;
+    this.attackNotify.set(target.owner, { t: this.elapsed, x: target.x, y: target.y });
+    this.alerts.push({ kind: target.building ? "townattack" : "attack", player: target.owner, x: target.x, y: target.y });
+  }
+
   /** Apply FINAL (post-reduction) damage: death, return fire, and (for physical
    *  hits) the impact SFX. Spell damage calls this directly with recordHit=false —
    *  WC3 ability damage ignores the armor value and plays its own effects. Returns
@@ -9025,6 +9108,7 @@ export class SimWorld {
     amount = this.absorbWithManaShield(target, amount);
     if (amount <= 0) return 0;
     if (recordHit) this.hits.push({ attackerId, targetId: target.id });
+    this.noteAttacked(target, attackerId); // "The battle has been joined." / "Our town is under siege!"
     this.revealFoggedAttacker(attackerId, target);
     // EVENT_UNIT_DAMAGED: the amount that actually landed (after mana shield), with
     // the source. Captured before the hp subtraction so the target snapshot is live.
@@ -9228,6 +9312,19 @@ export class SimWorld {
     this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
     this.dropInventory(u); // a dying non-hero inventory-unit drops its held items
     this.spawnCorpse(u); // leave a decaying corpse (targetable by corpse spells)
+    // A hero has fallen, and the whole army is told. Raised HERE rather than off the death
+    // event stream because that one only runs when a script is listening (captureDeaths) —
+    // and a melee match, which is exactly where this line matters, listens to nothing.
+    // Reincarnation and an illusion popping both returned long before this point, so
+    // neither is announced: nothing has actually been lost.
+    if (u.isHero) {
+      const killer = killerId ? this.units.get(killerId) : undefined;
+      this.alerts.push({
+        kind: "herodeath", player: u.owner, x: u.x, y: u.y,
+        hero: { properName: u.properName, typeId: u.typeId, level: u.level },
+        killer: killer?.isHero ? { properName: killer.properName, typeId: killer.typeId } : undefined,
+      });
+    }
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
     // A structure is kept WHOLE, not just as an id: a player who cannot see this spot must go

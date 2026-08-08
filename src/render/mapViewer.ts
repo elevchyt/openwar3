@@ -9,7 +9,7 @@ import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
-import { type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
+import { type Alert, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
@@ -215,6 +215,14 @@ const MAP_CONTROL_FOR: Record<Controller, number> = {
   neutral: MAP_CONTROL.NEUTRAL,
   rescuable: MAP_CONTROL.RESCUABLE,
 };
+
+/** Fill a commandstrings row's printf slots left to right ("%s the %s (level %d) has
+ *  fallen."). The engine's own strings are C format strings; a missing argument leaves the
+ *  slot empty rather than printing "%s" at the player. */
+function fillSlots(text: string, args: Array<string | number>): string {
+  let i = 0;
+  return text.replace(/%[sd]/g, () => String(args[i++] ?? ""));
+}
 
 // Our race ids → the suffix WC3's UISounds.slk uses on its per-race cues
 // (ResearchCompleteHuman, UpgradeCompleteNightElf, …).
@@ -6678,6 +6686,67 @@ export class MapViewerScene {
     this.sounds?.playUi(voice ? `${voice}${UI_SOUND_RACE[this.localRace]}` : "InterfaceError");
   }
 
+  /**
+   * Say the game's own news out loud: the [Errors] rows nobody asked for (see SimWorld.Alert).
+   *
+   * Same gold line as a refusal, deliberately — these live in the same 216-row block as
+   * "Not enough gold." and the engine hands them to the same one-line, replace-never-stack
+   * display, so "Our town is under siege!" arrives exactly where "Spell is not ready yet."
+   * does. Each is paired with its war3skins.txt sound, all of which are the local player's
+   * own race speaking (`UnderAttackOrc` → Sound\Interface\Warning\Orc\GruntUnitAttack1.wav).
+   *
+   * The ALLY variants are why the sim doesn't do this itself: one blow, two audiences, and
+   * a different row and a different WAV for each. An ally's gold mine is the exception with
+   * no second row at all — the data offers nothing to say about it, so nothing is said.
+   */
+  private showAlert(a: Alert): void {
+    const own = a.player === this.localPlayer;
+    const ally = !own && (this.rts?.playersAreCoAllied(a.player, this.localPlayer) ?? false);
+    if (!own && !ally) return; // an enemy's troubles are their own
+    const name = (typeId: string | undefined, proper: string | undefined): string =>
+      proper || this.registry.get(typeId ?? "")?.name || "";
+    let key = "";
+    let sound = "";
+    const args: Array<string | number> = [];
+    switch (a.kind) {
+      case "attack":
+      case "townattack": {
+        const town = a.kind === "townattack";
+        key = own ? (town ? "Townattack" : "Unitattack") : (town ? "Allytownattack" : "Allyunderattack");
+        sound = own ? (town ? "TownAttack" : "UnderAttack") : (town ? "AllyTownUnderAttack" : "AllyUnderAttack");
+        if (!own) args.push(this.playerLabel(a.player)); // "%s's city is under siege!" — the possessive names a PLAYER
+        // …and the minimap flashes where the blow landed, which is how you find a raid you
+        // cannot see. Observed behaviour rather than a data field: no table carries a colour
+        // for it, so it takes the ping's own WC3 default duration and alarm red.
+        this.hud?.ping({ x: a.x, y: a.y, duration: 0, r: 255, g: 0, b: 0, extraEffects: false });
+        break;
+      }
+      case "herodeath":
+        sound = own ? "HeroDies" : "AllyHeroDies";
+        if (!own) {
+          key = "Herodies"; // "%s has fallen in battle." — one slot, so it is the hero, not the class
+          args.push(name(a.hero?.typeId, a.hero?.properName));
+        } else if (a.killer) {
+          key = "Herokilledhero"; // "%s was defeated by %s." — a hero taken by another hero is a duel
+          args.push(name(a.hero?.typeId, a.hero?.properName), name(a.killer.typeId, a.killer.properName));
+        } else {
+          key = "Herodeath"; // "%s the %s (level %d) has fallen." — proper name, then TYPE name
+          args.push(name(a.hero?.typeId, a.hero?.properName), this.registry.get(a.hero?.typeId ?? "")?.name ?? "", a.hero?.level ?? 0);
+        }
+        break;
+      case "minelow":
+      case "minedestroyed":
+        if (!own) return; // no Ally* row exists for a mine — the data has nothing to say here
+        key = a.kind === "minelow" ? "Goldminelow" : "Goldminedestroyed";
+        sound = a.kind === "minelow" ? "GoldMineLow" : "GoldMineCollapse";
+        break;
+    }
+    // forRace on every key: the four-way rows (Goldminelow, Goldminedestroyed, Herodeath)
+    // are indexed by it and the rest come back whole, exactly as `refuse` relies on.
+    this.hud?.showError(fillSlots(this.strings.forRace(key, this.localRace), args));
+    this.sounds?.playUi(`${sound}${UI_SOUND_RACE[this.localRace]}`);
+  }
+
   /** Can the local player afford this? Refuses (naming the resource they're short of)
    *  when not. WC3 reports gold first, so a player short of both hears "Not enough gold."
    *  Callers still do the deduction themselves — it happens later, once the order's own
@@ -7464,6 +7533,10 @@ export class MapViewerScene {
           this.removeNodeVisual(mine.id, mine.x, mine.y, map.units as unknown as HideableWidget[]);
           this.splats?.remove(`m${mine.id}`); // drop the mine's ground texture
         }
+        // The news the engine announces by itself — a raid, a hero lost, a mine running out
+        // (see SimWorld.Alert). Drained before the completion cues so that if a Town Hall
+        // finishes in the same frame its site is stormed, the player is told about the raid.
+        for (const a of world.drainAlerts()) this.showAlert(a);
         // A building you were putting up is UP: the worker's "Job's done." (issue #111). The
         // THIRD completion cue, and a separate row from the two below — war3skins.txt gives
         // each race a `JobDoneSound`, and every one of them is that race's builder saying so
