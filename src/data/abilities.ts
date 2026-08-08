@@ -218,7 +218,7 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AEah: { target: "passive" }, // Thorns Aura — return melee damage
   AEtq: { target: "point" }, // Tranquility — channelled area heal field
   // -- Priestess of the Moon --
-  AHfa: { target: "none", autocast: true }, // Searing Arrows — bonus fire damage on attack
+  AHfa: { target: "unit", autocast: true }, // Searing Arrows — bonus fire damage on attack
   AEst: { target: "none" }, // Scout — summon a flying owl
   AEar: { target: "passive" }, // Trueshot Aura — +ranged attack damage
   AEsf: { target: "none" }, // Starfall — channelled PBAoE waves around the caster
@@ -235,12 +235,12 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // === Neutral heroes ===
   // -- Naga Sea Witch --
   ANfl: { target: "point" }, // Forked Lightning — cone nuke
-  AHca: { target: "none", autocast: true }, // Cold / Frost Arrows — slow on attack
+  AHca: { target: "unit", autocast: true }, // Cold / Frost Arrows — slow on attack
   ANms: { target: "none" }, // Mana Shield — absorb damage into mana (toggle)
   ANto: { target: "point" }, // Tornado — summon a tornado
   // -- Dark Ranger --
   ANsi: { target: "point" }, // Silence — area silence
-  ANba: { target: "none", autocast: true }, // Black Arrow — bonus damage on attack
+  ANba: { target: "unit", autocast: true }, // Black Arrow — bonus damage on attack
   ANch: { target: "unit" }, // Charm — take control of a target
   // -- Pandaren Brewmaster --
   ANbf: { target: "point" }, // Breath of Fire — line nuke
@@ -263,7 +263,7 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   ANeg: { target: "passive" }, // Engineering Upgrade (passive)
   ANrg: { target: "none" }, // Robo-Goblin — self transform buff
   // -- Firelord --
-  ANia: { target: "none", autocast: true }, // Incinerate — bonus fire damage on attack
+  ANia: { target: "unit", autocast: true }, // Incinerate — bonus fire damage on attack
   ANso: { target: "unit" }, // Soul Burn — DoT + silence
   ANlm: { target: "point" }, // Summon Lava Spawn
   ANvc: { target: "point" }, // Volcano — point field

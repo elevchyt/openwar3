@@ -1038,6 +1038,9 @@ export interface SimUnit {
    *  death: a summon killed in combat plays its Death clip and dissipates instead. */
   unsummonArt: string;
   pendingCast: PendingCast | null; // in-progress cast (order === "cast")
+  /** An attack modifier aimed BY HAND at one target: the next blow that lands on it carries
+   *  the effect and pays for it, once. See ARROW_SHOTS / issueArrowShot. */
+  arrowShot: { code: string; targetId: number } | null;
   // --- neutral-hostile creep guard AI (see the CREEP_* constants) -----------
   isCreep: boolean; // a map-placed Neutral Hostile creep with guard/leash behaviour
   /**
@@ -1350,6 +1353,19 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
 }
 
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
+/**
+ * The ATTACK MODIFIERS: abilities that ride on a shot rather than being one.
+ *
+ * They are unit-target abilities in the data — `AHfa` (Searing Arrows) carries
+ * `targs1 = air,ground,structure,enemy,neutral` and `Rng1 = 600`, `AHca` (Cold Arrows)
+ * `air,ground,enemy,neutral`, `ANba` (Black Arrow) the same plus `organic`, `ANia`
+ * (Incinerate) `enemy,neutral,organic,nonancient` — and each has a per-shot `Cost1` rather
+ * than a per-cast one. So a manual cast is not a bolt fired at the target: it is an ATTACK
+ * on that target whose next landed blow carries the effect and pays the mana, which is why
+ * these need a path of their own rather than a SPELL_HANDLERS entry. Autocast is the same
+ * effect standing on every shot instead of one (applyArrowEffects serves both).
+ */
+const ARROW_SHOTS = new Set(["AHfa", "AHca", "ANba", "ANia"]);
 /** Buff group prefix worn by the regeneration items (`AIrg` — Healing Salve, Clarity
  *  Potion, Potion/Scroll of Rejuvenation). One prefix so a single filter drops both the
  *  life and the mana half together when the effect breaks. */
@@ -3320,6 +3336,7 @@ export class SimWorld {
       | "illusionDamageDealt"
       | "illusionDamageTaken"
       | "pendingCast"
+      | "arrowShot"
       | "isCreep"
       | "guarding"
       | "guardX"
@@ -3511,6 +3528,7 @@ export class SimWorld {
       illusionDamageDealt: 1,
       illusionDamageTaken: 1,
       pendingCast: null,
+      arrowShot: null,
       // Creep guard AI is off by default; the map seeder flips isCreep on and sets
       // the guard point / aggro range / sleep flag for Neutral Hostile units.
       isCreep: false,
@@ -4402,6 +4420,7 @@ export class SimWorld {
     if (u) {
       u.order = "idle";
       this.clearCast(u); // the one command that aborts a locked-in wind-up (raises SPELL_ENDCAST)
+      u.arrowShot = null; // …and an aimed arrow is called off with the attack that carried it
       u.targetId = null;
       u.followLeaderId = null; // an explicit stop ends any follow-and-guard episode
       u.inCombat = false;
@@ -5773,6 +5792,10 @@ export class SimWorld {
     if (this.castLocked(u)) return false; // already committed to a spell — see castLocked
     const t = def.target === "unit" ? this.units.get(targetId) : undefined;
     if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags, code))) return false;
+    // An attack modifier aimed by hand: not a cast at all, but an ATTACK carrying one
+    // enhanced shot (see ARROW_SHOTS). Checked after the target test so it inherits the
+    // same data-driven rules — Searing Arrows may be aimed at a building, Cold Arrows may not.
+    if (ARROW_SHOTS.has(code)) return this.issueArrowShot(u, ab, lvl, targetId);
     // Remember an attack-move/follow to resume after the cast (WC3 casters keep
     // marching/following once they've cast).
     const resume: PendingCast["resume"] =
@@ -5801,6 +5824,27 @@ export class SimWorld {
       auto,
       resume,
     };
+    return true;
+  }
+
+  /**
+   * Aim an attack modifier by hand (ARROW_SHOTS): shoot THAT unit, and let the blow that
+   * lands carry the ability.
+   *
+   * No PendingCast, no wind-up, no cast animation — the Priestess does not stop and gesture,
+   * she looses one searing arrow at what she was told to shoot. So the order this leaves on
+   * the unit is an ordinary commanded attack, and everything that already governs an attack
+   * (walking into weapon range, the swing, retaliation, a target that dies on the way) governs
+   * this untouched. The only thing carried is which ability the next landed blow owes.
+   *
+   * Mana is checked here for the feedback — pressing a spell you cannot pay for should say so
+   * — but it is SPENT at the hit, in applyArrowEffects, because that is where the per-shot
+   * cost is actually incurred and where a shot that never lands must cost nothing.
+   */
+  private issueArrowShot(u: SimUnit, ab: SimAbility, lvl: AbilityLevel, targetId: number): boolean {
+    if (ab.cooldownLeft > 0 || u.mana < lvl.cost) return false;
+    if (!this.issueAttack(u.id, targetId, true, true)) return false; // forced: it is a command
+    u.arrowShot = { code: ab.code, targetId };
     return true;
   }
 
@@ -6052,6 +6096,12 @@ export class SimWorld {
     if (!this.abilities || u.mana <= 0) return false;
     for (const ab of u.abilities) {
       if (!ab.autocastOn || ab.level < 1 || ab.cooldownLeft > 0) continue;
+      // An attack modifier is a unit-target autocast that must NOT be sought out: its
+      // standing order is "enhance the shots you were already taking" (applyArrowEffects at
+      // the blow), not "go and find someone to shoot". Left in, a Priestess with Searing
+      // Arrows on would hunt down anything inside her acquisition range under a COMMANDED
+      // attack — which outranks her guard post and would drag her off a march.
+      if (ARROW_SHOTS.has(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def || def.target !== "unit") continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -8863,9 +8913,10 @@ export class SimWorld {
 
   /** Apply already-rolled PHYSICAL damage: reduced by the target's armor value,
    *  plays the weapon-impact SFX. Returns the HP actually removed (0 if immune). */
-  /** Autocast attack modifiers that fire on a landed ranged hit: Searing Arrows
-   *  (AHfa) / Black Arrow (ANba) / Incinerate (ANia) add bonus fire damage; Cold &
-   *  Frost Arrows (AHca) slow the target. Each spends the ability's per-shot mana. */
+  /** Attack modifiers that fire on a landed hit — by standing order (autocast) or because
+   *  this one shot was aimed by hand (issueArrowShot). Searing Arrows (AHfa) / Black Arrow
+   *  (ANba) / Incinerate (ANia) add bonus fire damage; Cold & Frost Arrows (AHca) slow the
+   *  target. Each spends the ability's per-shot mana, here, as the blow lands. */
   /** Liquid Fire (Batrider passive Aliq): a struck BUILDING burns for dataA dps over the
    *  duration, its attack rate cut by dataC, and it cannot be repaired while burning. The
    *  burn refreshes on each hit (re-applied by group), so sustained fire keeps it down. */
@@ -8885,9 +8936,17 @@ export class SimWorld {
 
   private applyArrowAutocast(attacker: SimUnit | undefined, target: SimUnit): void {
     if (!attacker || !this.abilities || target.hp <= 0) return;
+    // The one blow this unit was told to enhance by hand, if it is landing on the unit it
+    // was aimed at (issueArrowShot). Taken now whether or not it ends up firing: an aimed
+    // shot is spent on the shot, and a second arrow is a second order.
+    const aimed = attacker.arrowShot?.targetId === target.id ? attacker.arrowShot.code : "";
+    if (aimed) attacker.arrowShot = null;
     for (const ab of attacker.abilities) {
-      if (!ab.autocastOn || ab.level < 1) continue;
-      if (ab.code !== "AHfa" && ab.code !== "ANba" && ab.code !== "ANia" && ab.code !== "AHca") continue;
+      if (ab.level < 1) continue;
+      // Standing order or aimed shot — the same effect either way, which is the whole point
+      // of the pair. Autocast wins the tie harmlessly: it is the same ability firing once.
+      if (!ab.autocastOn && ab.code !== aimed) continue;
+      if (!ARROW_SHOTS.has(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
