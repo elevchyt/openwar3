@@ -1496,28 +1496,38 @@ export class RtsController {
     return e ? this.registry.get(e.typeId)?.priority ?? 0 : 0;
   }
 
-  /** Distinct group keys, ordered the way WC3 orders selection sub-groups: by unit
-   *  priority (UnitData `prio`) descending, so heroes lead, then stable by the
-   *  order units were added for ties. Drives the icon grid, Tab cycle, and primary. */
+  /**
+   * The selection in the order WC3 displays it: unit priority (UnitData `prio`)
+   * descending, so heroes lead, then by sim id ascending.
+   *
+   * The tie-break must NOT be the order the player happened to add the units. WC3's
+   * selection is a property of WHO is selected, not of how you selected them — box-drag
+   * two heroes and shift-click the same two in the opposite order and you get the same
+   * command card. This used to fall out of `this.selected`'s insertion order, which
+   * agreed with WC3 only for a box-drag (the entries it scans are in creation order);
+   * shift-clicking the younger hero first put it ahead of the elder one. Sim ids are
+   * handed out in creation order (`PlacedIndex`), so ordering by id IS "oldest first".
+   */
+  private orderedSelection(): number[] {
+    return [...this.selected].sort((a, b) => this.priorityOf(b) - this.priorityOf(a) || a - b);
+  }
+
+  /** Distinct group keys, in that same order. Drives the icon grid, Tab cycle, primary. */
   private orderedGroups(): string[] {
     const keys: string[] = [];
-    const prio = new Map<string, number>();
-    const seq = new Map<string, number>();
-    let i = 0;
-    for (const id of this.selected) {
+    const seen = new Set<string>();
+    for (const id of this.orderedSelection()) {
       const k = this.groupKeyOf(id);
-      if (k && !prio.has(k)) {
-        prio.set(k, this.priorityOf(id));
-        seq.set(k, i);
+      if (k && !seen.has(k)) {
+        seen.add(k);
         keys.push(k);
       }
-      i++;
     }
-    return keys.sort((a, b) => (prio.get(b)! - prio.get(a)!) || (seq.get(a)! - seq.get(b)!));
+    return keys;
   }
 
   private firstOfGroup(key: string): number | null {
-    for (const id of this.selected) if (this.groupKeyOf(id) === key) return id;
+    for (const id of this.orderedSelection()) if (this.groupKeyOf(id) === key) return id;
     return null;
   }
 
@@ -1533,8 +1543,9 @@ export class RtsController {
   selectionIcons(): SelIcon[] {
     if (this.selected.size <= 1) return [];
     const out: SelIcon[] = [];
+    const ordered = this.orderedSelection();
     for (const key of this.orderedGroups()) {
-      for (const id of this.selected) {
+      for (const id of ordered) {
         if (this.groupKeyOf(id) !== key) continue;
         const u = this.sim.units.get(id);
         const e = this.byId.get(id);
