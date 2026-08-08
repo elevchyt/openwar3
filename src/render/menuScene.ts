@@ -24,6 +24,24 @@ const RIGHT_TFT = "UI\\Glues\\SpriteLayers\\Expansion\\TopRightPanel-Expansion.m
 const RIGHT_ROC = "UI\\Glues\\SpriteLayers\\TopRightPanel.mdx";
 const LEFT_TFT = "UI\\Glues\\SpriteLayers\\Expansion\\TopLeftPanel-Expansion.mdx";
 const LEFT_ROC = "UI\\Glues\\SpriteLayers\\TopLeftPanel.mdx";
+// The game's own logo, top-left of the main menu (issue #107). Like the chrome it is a MODEL
+// rather than a texture we blit: one flat quad in the FDF's own units (extent x ±0.112,
+// y ±0.058, z 0 — the same 0.8×0.6 screen space ui/fdf/layout.ts lays the buttons out in),
+// carrying `ReplaceableTextures\WorldEditUI\WarcraftIIIFTLogo.blp` on the expansion and
+// `Textures\WarcraftIII-logo-alpha.blp` on RoC, with a Birth/Stand/Death triple of its own.
+// Its layer is `filterMode 2, flags 65` — blended and UNSHADED, so it takes neither the
+// scene's lights nor its fog; it is UI printed over the seascape, not part of it.
+const LOGO_TFT = "UI\\Glues\\MainMenu\\WarCraftIIILogo_exp\\WarCraftIIILogo_exp.mdx";
+const LOGO_ROC = "UI\\Glues\\MainMenu\\WarCraftIIILogo\\WarCraftIIILogo.mdx";
+
+/**
+ * Half-width of the logo's ortho window, in the model's OWN units.
+ *
+ * The quad only runs to ±0.112 × ±0.058, so this is a square box with room to spare around it
+ * — the window is square and the viewport is square, which is what keeps the scale uniform and
+ * the logo un-stretched at any screen aspect. Anything the model does not fill is transparent.
+ */
+const LOGO_HALF = 0.16;
 
 // The sprite-layer panel model is not one panel with one idle clip: it carries the
 // chrome of EVERY glue screen, and a screen's chrome is a sequence TRIPLE named after
@@ -323,6 +341,7 @@ export class MenuScene {
   private scene3d: Scene; // perspective background
   private scenePanel: Scene; // orthographic right-edge sprite layer, over the background
   private sceneLeft: Scene; // …and the left-edge one, in its own left-anchored viewport
+  private sceneLogo: Scene; // …and the WarCraft III logo, in a square top-left viewport
   private solver: Solver;
   private bgModel: MdxModel | null = null;
   /** The main menu's own background instance, kept so a campaign backdrop can take its place
@@ -344,10 +363,15 @@ export class MenuScene {
   /** The sprite-layer panels, kept with their model so we can look sequences up by name, and
    *  with which SIDE they are — a screen may drive the two differently (LEFT_PANEL_CLIPS). */
   private panels: Panel[] = [];
+  /** The WarCraft III logo, kept with its model so its own Birth/Stand/Death can be driven
+   *  alongside the chrome's (see `playLogo`). Null on an install that has no logo model. */
+  private logo: { model: MdxModel; instance: MdxInstance } | null = null;
   /** Pending hand-offs from a `replayPanel` — its Death→Birth→Stand chain. */
   private panelTimers: number[] = [];
   private chrome: GlueChrome = "MainMenu";
   private chromeTimer = 0;
+  /** The logo's own Birth→Stand hand-off, on the same pattern as `chromeTimer`. */
+  private logoTimer = 0;
   private soundTimers: number[] = [];
   private raf = 0;
   private last = 0;
@@ -386,7 +410,14 @@ export class MenuScene {
     camYaw: 0, // rotation about world Z
     camPitch: 0, // angle of attack (positive raises the eye)
     camRoll: 0, // roll on the up vector
-    lightAmbient: 0.42, // base ambient under the model's own omni lights (see BackdropTuning)
+    // Base ambient under the model's own omni lights (see BackdropTuning). This and the fog
+    // below are ONE setting, not two: the Icecrown set is lit almost entirely by ambient (its
+    // five omnis reach 200 units into a scene whose bounds run to ±3000), so ambient decides
+    // how much of the island there is to see and the fog decides how much of it the haze takes
+    // back. Tuned together against the reference in issue #107 — at the old 0.42/1300-3500 the
+    // set was a milk bath: the shipwreck beam, the rock ledges and the teal ice all dissolved
+    // into haze that starts in front of the water, which the reference plainly does not do.
+    lightAmbient: 0.72,
     panelCx: -0.31, // panel ortho window centre (panel [0,1] space)
     panelCy: -0.2,
     panelHalfX: 0.61, // panel ortho half-width
@@ -401,12 +432,34 @@ export class MenuScene {
     leftHalfX: 0.295,
     leftHalfY: 0.29,
     leftStretchX: 1.23,
-    // Distance-fog haze on the icy background (world units from the eye; rgb 0..1).
-    fogStart: 1300,
-    fogEnd: 3500,
-    fogR: 0.62,
-    fogG: 0.63,
-    fogB: 0.69,
+    // The WarCraft III logo, placed in the FDF's own screen space (ui/fdf/layout.ts: 0.8×0.6,
+    // origin BOTTOM-LEFT, +y up, x=0 at the screen's left edge) — the space the model's quad
+    // is authored in, so `logoScale` 1 is the size Blizzard drew it at.
+    //
+    // The position is measured off the reference rather than read out of MainMenu.fdf, because
+    // the file does not carry one: its `Frame "SPRITE" "WarCraftIIILogo"` has its
+    // `BackgroundArt` line COMMENTED OUT, so the frame draws nothing and the engine hangs the
+    // model somewhere of its own choosing. Its `SetPoint TOPLEFT, "MainMenuFrame", TOPLEFT,
+    // 0.13, 0.04` cannot be that place under any reading — +0.04 is ABOVE the top of a 0.6-tall
+    // screen, and 0.13 from the left is past where the logo plainly starts.
+    logoX: 0.17, // world x of the model's ORIGIN (the quad's centre)
+    logoY: 0.529, // …and its world y, up from the screen's bottom
+    logoScale: 1, // multiplier on the model's authored size
+    // …and how much WIDER than its authored aspect it is drawn. The reference is 16:9 and its
+    // logo measures 257 px across the gold "WarCraft" against the 198 px the authored quad
+    // gives at the same height — the 4:3 → 16:9 widening the chrome already wears
+    // (`panelStretchX` 1.32, `leftStretchX` 1.23). 1 draws it at true aspect instead.
+    logoStretchX: 1.3,
+    // Distance-fog haze on the icy background (world units from the eye; rgb 0..1). The colour
+    // is the reference's, which is a cold LAVENDER rather than the neutral grey this used to
+    // carry — measured off it patch by patch, where every one of them wanted 13-35 more blue
+    // than we were giving. The start sits PAST the near water, which is why the water reads as
+    // deep blue there and as grey here at 1300.
+    fogStart: 1800,
+    fogEnd: 5200,
+    fogR: 0.67,
+    fogG: 0.7,
+    fogB: 0.83,
   };
 
   /** The campaign backdrop currently up (its model path), or null on the menu's own scene. */
@@ -481,10 +534,14 @@ export class MenuScene {
     const sceneLeft = viewer.addScene();
     sceneLeft.alpha = true;
 
+    const sceneLogo = viewer.addScene();
+    sceneLogo.alpha = true;
+
     this.viewer = viewer;
     this.scene3d = scene3d;
     this.scenePanel = scenePanel;
     this.sceneLeft = sceneLeft;
+    this.sceneLogo = sceneLogo;
   }
 
   /** Load the background scene + the sprite-layer panels and loop their idle clips. */
@@ -501,6 +558,7 @@ export class MenuScene {
     // The screen-edge sprite layers: metal border, gears, the button frames and chains.
     await this.loadPanel(tft ? RIGHT_TFT : RIGHT_ROC, this.scenePanel, "right");
     await this.loadPanel(tft ? LEFT_TFT : LEFT_ROC, this.sceneLeft, "left");
+    await this.loadLogo(tft ? LOGO_TFT : LOGO_ROC);
 
     this.frameCameras();
     this.updateFog();
@@ -608,6 +666,36 @@ export class MenuScene {
     if (!model) return;
     const instance = this.addInstance(model, scene, /^mainmenu stand$/i);
     this.panels.push({ model, instance, side });
+  }
+
+  /**
+   * The WarCraft III logo (issue #107). It arrives on its own "Birth" and settles on the
+   * looping "Stand", exactly as the chrome does — and it is a separate model rather than part
+   * of the left sprite layer because the game keeps it separate: `MainMenu.fdf` gives it its
+   * own `Frame "SPRITE" "WarCraftIIILogo"`, and the campaign screen has a THIRD copy of it
+   * (`UI\Glues\SinglePlayer\CampaignWarCraftIIILogo\…`, anchored TOPRIGHT there — not wired up
+   * here, since this issue is the main menu's).
+   */
+  private async loadLogo(path: string): Promise<void> {
+    if (!this.vfs.exists(path)) return;
+    const model = (await this.viewer.load(await this.vfs.read(path), this.solver)) as MdxModel | undefined;
+    if (!model) return;
+    const instance = this.addInstance(model, this.sceneLogo, /^birth$/i);
+    instance.setSequenceLoopMode(0);
+    this.logo = { model, instance };
+    this.logoTimer = window.setTimeout(() => this.playLogo("stand", true), seqLengthOf(model, "Birth"));
+  }
+
+  /** Play one of the logo's own clips. It shares the chrome's Birth/Stand/Death vocabulary, so
+   *  a screen change drives it on the same beats the panels move on (`playPhase`). */
+  private playLogo(phase: keyof ChromeClips, loop: boolean): void {
+    if (!this.logo) return;
+    clearTimeout(this.logoTimer);
+    const name = phase === "birth" ? "Birth" : phase === "death" ? "Death" : "Stand";
+    const idx = this.logo.model.sequences.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
+    if (idx < 0) return;
+    this.logo.instance.setSequenceLoopMode(loop ? 2 : 0);
+    this.logo.instance.setSequence(idx);
   }
 
   private addInstance(model: MdxModel, scene: Scene, prefer: RegExp): MdxInstance {
@@ -732,6 +820,10 @@ export class MenuScene {
   playChromeDeath(): number {
     clearTimeout(this.chromeTimer);
     this.playPhase("death", false);
+    // The logo only ever stands on the MAIN MENU — MainMenu.fdf is the one glue file that
+    // carries the sprite (the campaign screen has its own copy of the model). So it leaves
+    // with the main menu's chrome, on the model's own Death, rather than being cut.
+    if (this.chrome === "MainMenu") this.playLogo("death", false);
     return this.seqLength(`${this.chrome} Death`);
   }
 
@@ -742,7 +834,17 @@ export class MenuScene {
     this.playPhase("birth", false);
     const birth = this.seqLength(`${screen} Birth`);
     this.chromeTimer = window.setTimeout(() => this.playPhase("stand", true), birth);
+    if (screen === "MainMenu") {
+      this.playLogo("birth", false);
+      this.logoTimer = window.setTimeout(() => this.playLogo("stand", true), this.logoLength("Birth"));
+    }
+    this.frameCameras(); // the logo's viewport is per-screen (see frameCameras)
     return birth;
+  }
+
+  /** Duration (ms) of one of the logo model's clips, or 0 if there is no logo. */
+  private logoLength(name: string): number {
+    return this.logo ? seqLengthOf(this.logo.model, name) : 0;
   }
 
   start(): void {
@@ -865,15 +967,17 @@ export class MenuScene {
     this.stop();
     this.canvas.style.filter = ""; // the grade is ours; don't leave it on the element
     clearTimeout(this.chromeTimer);
+    clearTimeout(this.logoTimer);
     this.clearSoundTimers();
     this.clearPanelTimers();
     for (const inst of this.instances) {
-      for (const scene of [this.scene3d, this.scenePanel, this.sceneLeft]) {
+      for (const scene of [this.scene3d, this.scenePanel, this.sceneLeft, this.sceneLogo]) {
         try { scene.removeInstance(inst); } catch { /* not in this scene */ }
       }
     }
     this.instances = [];
     this.panels = [];
+    this.logo = null;
     this.bgModel = null;
     this.menuInstance = null;
     this.backdropInstance = null;
@@ -884,7 +988,7 @@ export class MenuScene {
   /** Frame the background with its own camera and the panels with an ortho projection
    *  mapping their [0,1]² screen space onto the centred 4:3 box (shared with the FDF). */
   private frameCameras(): void {
-    if (!this.scene3d || !this.scenePanel || !this.sceneLeft) return; // not constructed yet
+    if (!this.scene3d || !this.scenePanel || !this.sceneLeft || !this.sceneLogo) return; // not constructed yet
     const w = this.canvas.width || 1;
     const h = this.canvas.height || 1;
 
@@ -989,6 +1093,31 @@ export class MenuScene {
     // stretch, so the container can be widened without changing its height.
     // With a campaign backdrop up there is no chrome at all: both sprite layers get an empty
     // viewport, which is how a screen the panel models have no sequence for is rendered.
+    // The logo, laid out in the FDF's own screen space rather than in a tuned ortho window like
+    // the panels: it IS a UI sprite (MainMenu.fdf frames it), and its quad is authored in those
+    // very units, so mapping them 1:1 is what makes `logoScale` 1 mean "the size it was drawn".
+    // `fitBox` (ui/fdf/layout.ts) is the same mapping the buttons get — height-based, x=0 at
+    // the screen's left edge — so the logo and the DOM over it move together at any aspect.
+    // A SQUARE viewport around a SQUARE ortho window keeps the scale uniform on both axes.
+    // Off on every screen but the main menu, and off entirely behind a campaign backdrop.
+    if (this.logo && this.chrome === "MainMenu" && !this.panelsHidden) {
+      const px = h / 0.6; // world units → pixels (UI_HEIGHT; see ui/fdf/layout.ts fitBox)
+      const halfY = LOGO_HALF * t.logoScale * px;
+      const halfX = halfY * t.logoStretchX; // …the widescreen widening (see `logoStretchX`)
+      this.sceneLogo.camera.ortho(-LOGO_HALF, LOGO_HALF, -LOGO_HALF, LOGO_HALF, 1, 2000);
+      this.sceneLogo.camera.moveToAndFace(
+        new Float32Array([0, 0, 1000]),
+        new Float32Array([0, 0, 0]),
+        new Float32Array([0, 1, 0]),
+      );
+      // GL viewports count y from the BOTTOM, which is also how the FDF space runs — so this
+      // is the one place in the file where no flip is needed. A wider viewport over the same
+      // square ortho window is what stretches the quad.
+      this.sceneLogo.viewport.set([t.logoX * px - halfX, t.logoY * px - halfY, 2 * halfX, 2 * halfY]);
+    } else {
+      this.sceneLogo.viewport.set([0, 0, 0, 0]);
+    }
+
     if (this.panelsHidden) {
       this.scenePanel.viewport.set([0, 0, 0, 0]);
       this.sceneLeft.viewport.set([0, 0, 0, 0]);

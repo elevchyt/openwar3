@@ -52,6 +52,11 @@ const MENU_SLIDERS: Slider<MenuKey>[] = [
   { key: "leftHalfX", label: "Left width (½)", min: 0.15, max: 0.9, step: 0.005 },
   { key: "leftHalfY", label: "Left height (½)", min: 0.15, max: 0.9, step: 0.005 },
   { key: "leftStretchX", label: "Left stretch X", min: 0.7, max: 1.8, step: 0.01 },
+  // The WarCraft III logo, in the FDF's own 0.8×0.6 screen space (issue #107).
+  { key: "logoX", label: "Logo X (world)", min: 0, max: 0.8, step: 0.002 },
+  { key: "logoY", label: "Logo Y (world)", min: 0, max: 0.6, step: 0.002 },
+  { key: "logoScale", label: "Logo scale ×", min: 0.4, max: 2, step: 0.01 },
+  { key: "logoStretchX", label: "Logo stretch X", min: 0.7, max: 1.8, step: 0.01 },
   { key: "fogStart", label: "Fog start (world)", min: 0, max: 12000, step: 100 },
   { key: "fogEnd", label: "Fog end (world)", min: 0, max: 18000, step: 100 },
   { key: "fogR", label: "Fog R", min: 0, max: 1, step: 0.01 },
