@@ -85,6 +85,9 @@ function runWatched(w, grid, seconds) {
 
 const run = (w, seconds) => { for (let i = 0; i < Math.round(seconds / SIM_DT); i++) w.tick(SIM_DT); };
 
+/** A solid w x h pathTex footprint — every cell of the core unwalkable, as a building's is. */
+const stamp = (w, h) => ({ w, h, blocked: new Array(w * h).fill(true), buildBlocked: new Array(w * h).fill(true) });
+
 /** A vertical wall of unwalkable cells at column `cx` (2 cells thick — the width of an
  *  even footprint's block), with walkable gaps at the given 2-cell-tall row pairs. */
 function wallWithGaps(cx, gapRows) {
@@ -282,6 +285,82 @@ console.log("a squad attack-moving into a camp all engages");
   check(`every attacker picked a fight (${fighting}/6)`, fighting === 6);
   const hurt = [50, 51, 52].filter((id) => w.units.get(id) && w.units.get(id).hp < w.units.get(id).maxHp).length;
   check(`the camp is taking damage (${hurt}/3 hurt)`, hurt >= 1);
+  check(`nobody stood inside anybody (${overlap ?? "clean"})`, overlap === null);
+}
+
+// ── 7. A move AT a thing walks up to it the short way ──────────────────────────────────
+// A move order naming a unit/building means "go to THAT". Its centre is ground the mover
+// can never stand on, so the ordinary point search hunts the cell nearest that centre —
+// which can sit on the FAR side, reached the long way round. A named move must stop against
+// the near face, and its path must not be longer than the straight run in.
+console.log("a move at a building stops against the near face");
+{
+  const grid = gridOf();
+  const w = new SimWorld(grid, 1);
+  // A 6x6-cell block of unwalkable terrain standing in for a building's stamped footprint:
+  // cells 34-39 in both axes, i.e. world 1088..1280, so its centre is (1184, 1184).
+  for (let cy = 34; cy < 40; cy++) for (let cx = 34; cx < 40; cx++) grid.block(cx, cy);
+  const bld = addUnit(w, 90, 1, 1184, 1184, { weapons: [], speed: 0, radius: 96 });
+  bld.pathStamp = { fp: stamp(6, 6), x: 1184, y: 1184 };
+  // Approaching from due west, a long way out.
+  addUnit(w, 1, 0, 400, 1184);
+  const ok = w.issueOrder(1, { kind: "move", x: 1184, y: 1184, targetId: 90 });
+  check("the order was accepted", ok);
+  const overlap = runWatched(w, grid, 14);
+  const u = w.units.get(1);
+  // Stopped on the WEST face — never walked round to another side.
+  check(`stayed on the side it came from (x ${u.x.toFixed(0)}, y ${u.y.toFixed(0)})`, u.x < 1088 && Math.abs(u.y - 1184) < 200);
+  // And right up against it: the footprint's west face is at x = 1088, and a footman's
+  // 2x2 block puts its centre one block clear of that.
+  check(`up against the face (gap ${(1088 - u.x).toFixed(0)} units)`, 1088 - u.x <= 64);
+  check("came to rest", !u.moving && u.hasReservation);
+  check("nobody stood inside anybody", overlap === null);
+}
+
+// …and the fastest route means the near face even when the far side is marginally closer
+// to the CENTRE. Approaching a wide, shallow block from the long side, the cells nearest
+// its centre lie off the short ends; a unit must not detour to one.
+console.log("a move at a thing never hikes round it for a nearer cell");
+{
+  const grid = gridOf();
+  const w = new SimWorld(grid, 1);
+  for (let cy = 38; cy < 42; cy++) for (let cx = 28; cx < 46; cx++) grid.block(cx, cy); // 18x4 cells
+  const wide = addUnit(w, 90, 1, 1184, 1280, { weapons: [], speed: 0, radius: 96 });
+  wide.pathStamp = { fp: stamp(18, 4), x: 1184, y: 1280 };
+  addUnit(w, 1, 0, 1184, 1900); // due NORTH of the middle of the long side
+  w.issueOrder(1, { kind: "move", x: 1184, y: 1280, targetId: 90 });
+  run(w, 14);
+  const u = w.units.get(1);
+  check(`stopped on the long side it approached (x ${u.x.toFixed(0)}, y ${u.y.toFixed(0)})`, u.y > 1344 && u.x > 900 && u.x < 1470);
+  check(`up against it (gap ${(u.y - 1344).toFixed(0)} units)`, u.y - 1344 <= 64);
+}
+
+// …and a whole GROUP sent at it stays on the side it came from. This is the case a re-path
+// used to lose: the first arrivals take the near face, the ones behind are blocked, reroute
+// — and a reroute that forgot the order named a THING aimed at the building's centre
+// instead, whose goal-snapping lands on one fixed side, so the stragglers hiked round it.
+console.log("a group sent at a building all stays on the near side");
+{
+  const grid = gridOf();
+  const w = new SimWorld(grid, 1);
+  for (let cy = 34; cy < 40; cy++) for (let cx = 34; cx < 40; cx++) grid.block(cx, cy);
+  // OUR building, so this is a pure move — a hostile one would be auto-acquired and the
+  // squad would be running an attack instead.
+  const bld = addUnit(w, 90, 0, 1184, 1184, { weapons: [], speed: 0, radius: 96 });
+  bld.pathStamp = { fp: stamp(6, 6), x: 1184, y: 1184 };
+  const squad = [];
+  for (let i = 0; i < 6; i++) {
+    squad.push(addUnit(w, 10 + i, 0, 300 + (i % 2) * 72, 1120 + Math.floor(i / 2) * 72).id);
+    w.issueOrder(10 + i, { kind: "move", x: 1184, y: 1184, targetId: 90 });
+  }
+  const overlap = runWatched(w, grid, 20);
+  // Only three 2x2 blocks fit along a 6-cell face, so the last few wrap the near corners —
+  // what must never happen is a unit crossing to the FAR side, which is the long way round
+  // for no gain. Nobody may end up past the building's centre line.
+  const nearSide = squad.filter((id) => w.units.get(id).x <= 1184).length;
+  const packed = squad.filter((id) => Math.hypot(w.units.get(id).x - 1184, w.units.get(id).y - 1184) <= 96 + 160).length;
+  check(`nobody crossed to the far side (${nearSide}/6 on the near side)`, nearSide === 6);
+  check(`and all six are up against it (${packed}/6)`, packed === 6);
   check(`nobody stood inside anybody (${overlap ?? "clean"})`, overlap === null);
 }
 

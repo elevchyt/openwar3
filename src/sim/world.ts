@@ -540,7 +540,11 @@ const DEFAULT_SHOP_RADIUS = 450;
 /** A shift-queued follow-up order, replayed when the unit's current order ends.
  *  WC3 allows chaining several (up to ~35) — move, attack, harvest, build… */
 export type QueuedOrder =
-  | { kind: "move"; x: number; y: number }
+  // targetId: this move NAMES a unit or building — "go to THAT" rather than "go to that
+  // spot". x/y are its centre, and the mover walks up to it: as close as it can get, by
+  // the cheapest route to any spot that close (see SimWorld.approachExtent / findPath's
+  // `arrived`). Without it a move is an ordinary point order.
+  | { kind: "move"; x: number; y: number; targetId?: number }
   | { kind: "attackmove"; x: number; y: number }
   | { kind: "patrol"; x: number; y: number }
   | { kind: "hold" }
@@ -759,6 +763,14 @@ export interface SimUnit {
   moving: boolean;
   chaseX: number; // where the current chase path was aimed (repath when stale)
   chaseY: number;
+  // Half-extents of the THING standing on (chaseX, chaseY) when this path is an approach —
+  // "walk up to that unit/building" rather than "walk to that spot". 0 = a bare point.
+  // Held on the unit because every re-path (a blocked reroute, the stuck watchdog) re-aims
+  // at chaseX/chaseY, and a reroute that forgot this would quietly turn the order back into
+  // a move at the target's CENTRE — ground it can never stand on — and send it round the
+  // building to whichever cell the goal-snapping happened to pick.
+  chaseHX: number;
+  chaseHY: number;
   // Follow-formation offset from the leader's centre (0,0 = a lone follower that
   // just trails). A group told to follow one unit is fanned into distinct slots
   // so they hold a spread instead of stacking on the leader's centre and shoving.
@@ -3107,6 +3119,8 @@ export class SimWorld {
       | "targetKey"
       | "chaseX"
       | "chaseY"
+      | "chaseHX"
+      | "chaseHY"
       | "followOffX"
       | "followOffY"
       | "followLeaderId"
@@ -3294,6 +3308,8 @@ export class SimWorld {
       moving: false,
       chaseX: 0,
       chaseY: 0,
+      chaseHX: 0,
+      chaseHY: 0,
       followOffX: 0,
       followOffY: 0,
       followLeaderId: null,
@@ -4004,10 +4020,19 @@ export class SimWorld {
 
   /** Order a unit to a world point via the pathing grid. When no movement is
    *  possible at all (blocked in by units/terrain), the unit stays put and
-   *  only turns to face the point — WC3 does exactly this. */
-  issueMove(id: number, tx: number, ty: number): boolean {
+   *  only turns to face the point — WC3 does exactly this.
+   *
+   *  `targetId` makes it a move at a THING: the unit walks up to that unit/building and
+   *  stops as close to it as it can get, by the fastest route to anywhere that close. The
+   *  ordered x/y is the target's centre, which is ground it can never stand on, so the
+   *  ordinary point search would flood the map hunting a cell it cannot have and then take
+   *  whichever explored cell was nearest the centre — possibly on the far side, reached the
+   *  long way round the building. */
+  issueMove(id: number, tx: number, ty: number, targetId = 0): boolean {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
+    const target = targetId ? this.units.get(targetId) : undefined;
+    const approach = target && target.id !== id ? this.approachExtent(target) : undefined;
     this.clearGuardPost(u);
     u.order = "move";
     u.targetId = null;
@@ -4024,12 +4049,41 @@ export class SimWorld {
       if (Math.hypot(tx - u.x, ty - u.y) > 1) u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
       return false;
     }
-    if (!this.pathTo(u, tx, ty)) {
+    if (!this.pathTo(u, tx, ty, undefined, false, approach)) {
       this.stop(id);
       u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
       return false;
     }
     return true;
+  }
+
+  /** Half-extents (world units) of the ground a move target actually occupies, measured
+   *  from its centre — the box an approach stops OUTSIDE of. A building's is its stamped
+   *  pathTex footprint, which is the real thing the pathing grid blocks and is rectangular
+   *  (a barracks is not a circle); anything else uses its own hull, floored at the cell
+   *  block it reserves, since that block is what nobody else may stand on. */
+  private approachExtent(t: SimUnit): { hx: number; hy: number } {
+    const fp = t.pathStamp?.fp;
+    if (fp) {
+      // The BLOCKED core, not the whole texture. A pathTex is wider than the ground it
+      // makes unwalkable — the blue border around a production building is walkable spacing
+      // — and stopping outside the border would park every visitor a cell short of the wall.
+      // Measured as the farthest blocked edge from the stamp's centre on each axis, so a
+      // core that sits off-centre in its texture is covered rather than clipped.
+      let hxc = 0;
+      let hyc = 0;
+      for (let y = 0; y < fp.h; y++) {
+        for (let x = 0; x < fp.w; x++) {
+          if (!fp.blocked[y * fp.w + x]) continue;
+          hxc = Math.max(hxc, fp.w / 2 - x, x + 1 - fp.w / 2);
+          hyc = Math.max(hyc, fp.h / 2 - y, y + 1 - fp.h / 2);
+        }
+      }
+      if (hxc > 0 && hyc > 0) return { hx: hxc * PATHING_CELL, hy: hyc * PATHING_CELL };
+      // Nothing blocked at all (a bridge, a walkable doodad): fall through to the hull.
+    }
+    const r = Math.max(t.radius, (t.footprint || 1) * PATHING_CELL * 0.5);
+    return { hx: r, hy: r };
   }
 
   /** Attack-move to a point: walk there but engage any enemies acquired en
@@ -4372,7 +4426,7 @@ export class SimWorld {
    *  orders (issueOrder) and queue replay (startNextQueued). */
   private dispatch(id: number, o: QueuedOrder): boolean {
     switch (o.kind) {
-      case "move": return this.issueMove(id, o.x, o.y);
+      case "move": return this.issueMove(id, o.x, o.y, o.targetId);
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
       case "patrol": return this.issuePatrol(id, o.x, o.y);
       case "hold": return this.issueHold(id);
@@ -10302,10 +10356,31 @@ export class SimWorld {
    *  through a crowd that is itself on the move, and a group marching together would
    *  otherwise re-route around its own members every few metres. It goes on only for the
    *  reroute a genuinely blocked unit makes — the disruption the issue describes, where the
-   *  way is shut right now and the answer is to go round rather than to keep pushing. */
-  private pathTo(u: SimUnit, tx: number, ty: number, maxExpansions?: number, avoidMovers = false): boolean {
+   *  way is shut right now and the answer is to go round rather than to keep pushing.
+   *
+   *  `approach` says the goal is a THING standing on (tx,ty) with these half-extents, not a
+   *  spot: walk up to its box and stop, taking the fastest route to anywhere against it
+   *  rather than the nearest cell to its unreachable centre. See findPath's `arrived`. */
+  private pathTo(
+    u: SimUnit,
+    tx: number,
+    ty: number,
+    maxExpansions?: number,
+    avoidMovers = false,
+    approach?: { hx: number; hy: number },
+  ): boolean {
+    // A re-path at the SAME goal inherits the approach. Every reroute (blocked, stuck,
+    // repath-poll) re-aims at chaseX/chaseY without knowing what is standing there, and
+    // without this the order would quietly degrade to "walk to the middle of that
+    // building" — unreachable ground whose goal-snapping lands on one fixed side, which is
+    // how two units out of six ended up hiking round to the far face.
+    if (!approach && u.chaseHX > 0 && tx === u.chaseX && ty === u.chaseY) {
+      approach = { hx: u.chaseHX, hy: u.chaseHY };
+    }
     u.chaseX = tx;
     u.chaseY = ty;
+    u.chaseHX = approach?.hx ?? 0;
+    u.chaseHY = approach?.hy ?? 0;
     if (u.flying) {
       // Air units ignore the pathing grid (fly over trees/cliffs/buildings) —
       // straight line to the target. Height is applied by the renderer.
@@ -10322,13 +10397,26 @@ export class SimWorld {
     let blocked = this.clearanceBlocker(u, start, avoidMovers);
     const domain = pathDomain(u);
     const goal = this.grid.footprintAnchor(tx, ty, u.footprint);
-    let cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain);
+    // How many whole cells clear of the target this cell leaves us — 0 is "up against it".
+    // Measured from the mover's own block edge (half its footprint), because that block is
+    // the thing that actually has to fit, and rounded to cells so an entire face ties and
+    // the cheapest one to walk to wins (findPath's `ring`).
+    const half = (u.footprint || 1) * PATHING_CELL * 0.5;
+    const ring = approach
+      ? (cx: number, cy: number) => {
+          const [wx, wy] = this.grid.footprintCenter(cx, cy, u.footprint);
+          const dx = Math.max(0, Math.abs(wx - tx) - approach.hx);
+          const dy = Math.max(0, Math.abs(wy - ty) - approach.hy);
+          return Math.max(0, Math.round((Math.hypot(dx, dy) - half) / PATHING_CELL));
+        }
+      : undefined;
+    let cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain, ring);
     // Routing around the live crowd can leave nowhere to go at all (hemmed in on every
     // side). Fall back to the ordinary route — walk up to the obstruction and wait it out —
     // rather than reporting "no path" and standing down.
     if (avoidMovers && (!cells || cells.length <= 1)) {
       blocked = this.clearanceBlocker(u, start);
-      cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain);
+      cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain, ring);
     }
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
@@ -10353,7 +10441,9 @@ export class SimWorld {
     // on the footprint-aligned point so the unit settles exactly onto the cells it reserves.
     const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.footprintCenter(cx, cy, u.footprint)) as Array<[number, number]>;
     const [lastX, lastY] = pts[pts.length - 1];
-    if (Math.hypot(tx - lastX, ty - lastY) <= PATHING_CELL) {
+    // …but never for an approach: (tx,ty) is the middle of the thing we walked up to, and
+    // stepping onto it is the one place the unit must not go.
+    if (!approach && Math.hypot(tx - lastX, ty - lastY) <= PATHING_CELL) {
       pts.push(this.grid.snapForFootprint(tx, ty, u.footprint));
     }
     u.path = pts;

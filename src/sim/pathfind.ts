@@ -21,6 +21,13 @@ const NEIGHBORS: Array<[number, number, number]> = [
 // path toward the goal.
 const MAX_EXPANSIONS = 8192;
 
+// Expansions an APPROACH search (one carrying a `ring` measure) is allowed once it has
+// first stood right against the target. A* pops in f order, so the first cell that reaches
+// ring 0 is already found by about the cheapest route there is — but a cheaper or tidier
+// one may be a few expansions behind it. This buys that little bit of extra looking, and
+// nothing like the map flood a goal it can never occupy would otherwise provoke.
+const ARRIVE_EXTRA = 192;
+
 function octile(ax: number, ay: number, bx: number, by: number): number {
   const dx = Math.abs(ax - bx);
   const dy = Math.abs(ay - by);
@@ -34,6 +41,24 @@ function octile(ax: number, ay: number, bx: number, by: number): number {
  * the land, over the same grid read through its other flag (see PathingFlag.NoWater).
  * Returns null only when start/goal can't be snapped to the static grid; otherwise returns
  * the path to the goal or, if unreachable, to the closest explored cell.
+ *
+ * `ring` turns the search into an APPROACH: "walk up to that thing", where the goal is a
+ * unit or a building whose own cells the mover can never stand on. It reports, for a unit
+ * standing on a cell, how many whole CELLS clear of the target that leaves it — 0 meaning
+ * "up against it". Three things change.
+ *
+ *   • The goal cell is NOT snapped to the nearest walkable one. Snapping a building's
+ *     centre spirals out to whichever cell the ring scan happens to reach first — always
+ *     the same corner — and the heuristic would then steer at THAT corner.
+ *   • Closeness for the best-effort endpoint is `ring`, not the distance to the goal cell.
+ *     That matters because a building is a BOX: measured from its centre cell, the spots
+ *     off its short ends are nearer than the whole length of its long face, so a unit
+ *     walking at the long face would always find something "closer" round the corner and
+ *     hike there. Measured as clearance from the box, every face is ring 0 and the tie
+ *     goes to the cheapest one to WALK to — which is the side the unit came from. That is
+ *     what "as close as possible, by the fastest path" means.
+ *   • It stops early (ARRIVE_EXTRA) once ring 0 is touched, instead of flooding the
+ *     reachable map looking for a goal cell it can never occupy.
  */
 export function findPath(
   grid: PathingGrid,
@@ -42,9 +67,10 @@ export function findPath(
   blocked?: (cx: number, cy: number) => boolean,
   maxExpansions = MAX_EXPANSIONS,
   domain: PathDomain = "ground",
+  ring?: (cx: number, cy: number) => number,
 ): Cell[] | null {
   const from = grid.nearestWalkable(start[0], start[1], undefined, domain);
-  const to = grid.nearestWalkable(goal[0], goal[1], undefined, domain);
+  const to = ring ? goal : grid.nearestWalkable(goal[0], goal[1], undefined, domain);
   if (!from || !to) return null;
 
   const width = grid.width;
@@ -116,27 +142,39 @@ export function findPath(
   gScore.set(startKey, 0);
   hpush(startKey, 0, octile(from[0], from[1], to[0], to[1]));
 
+  // Closeness measure for the best-effort endpoint: distance to the goal CELL normally,
+  // clearance from the target's own box in approach mode (see the `ring` note above).
+  const closeness = ring ?? ((cx: number, cy: number) => octile(cx, cy, to[0], to[1]));
+
   let bestKey = startKey;
-  let bestH = octile(from[0], from[1], to[0], to[1]);
+  let bestH = closeness(from[0], from[1]);
   let bestG = 0;
   let expansions = 0;
+  let limit = maxExpansions;
 
   while (heapF.length) {
     const currentKey = hpop();
     if (closed.has(currentKey)) continue; // stale duplicate from a decrease-key
-    if (currentKey === goalKey) return reconstruct(cameFrom, currentKey, width);
+    // An approach never "reaches" its goal — the goal is the thing itself, standing on
+    // cells nobody may occupy — so it is `ring` + the closeness rule that end it.
+    if (!ring && currentKey === goalKey) return reconstruct(cameFrom, currentKey, width);
     closed.add(currentKey);
     const cx = currentKey % width;
     const cy = (currentKey / width) | 0;
     const cg = gScore.get(currentKey)!;
 
-    const h = octile(cx, cy, to[0], to[1]);
+    const h = closeness(cx, cy);
     if (h < bestH || (h === bestH && cg < bestG)) {
       bestH = h;
       bestG = cg;
       bestKey = currentKey;
     }
-    if (++expansions > maxExpansions) break;
+    // First time we stand right against the target: give the search a short tail to settle
+    // on the cheapest such spot, then stop. Set once — `limit` only ever shrinks.
+    if (ring && limit === maxExpansions && h <= 0) {
+      limit = Math.min(maxExpansions, expansions + ARRIVE_EXTRA);
+    }
+    if (++expansions > limit) break;
 
     for (const [dx, dy, cost] of NEIGHBORS) {
       const nx = cx + dx;

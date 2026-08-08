@@ -3538,7 +3538,7 @@ export class RtsController {
         const e = this.byId.get(picked);
         const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
         const own = !!prim && target.owner === prim.owner;
-        this.groupMove(target.x, target.y, queued);
+        this.groupMoveTo(target, picked, queued);
         this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, own ? FLASH_GREEN : FLASH_YELLOW, !!target.building, e?.moveHeight ?? 0);
         return true;
       }
@@ -5213,7 +5213,7 @@ export class RtsController {
     } else if (own && target.hp < target.maxHp) {
       handled = this.repairAt(picked, queued); // own damaged building: workers repair
     }
-    if (!handled) this.groupMove(target.x, target.y, queued); // move toward it (no arrow)
+    if (!handled) this.groupMoveTo(target, picked, queued); // walk up to it (no arrow)
     this.flashRing(target.x, target.y, selR, own ? FLASH_GREEN : FLASH_YELLOW);
   }
 
@@ -5222,6 +5222,20 @@ export class RtsController {
   private groupMove(tx: number, ty: number, queued = false): void {
     const targets = groupTargets(this.sim, [...this.selected], tx, ty);
     for (const [id, [x, y]] of targets) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued });
+  }
+
+  /** Move the whole selection AT a unit or building: everyone is given the target itself,
+   *  and each walks up to it and stops as close as it can get, by the fastest route.
+   *
+   *  Deliberately NOT groupMove: a formation fan spreads distinct slots evenly AROUND the
+   *  destination, which is right for a patch of ground and wrong for a thing — it hands
+   *  some of the group a slot on the far side and they hike round the building to reach a
+   *  spot no better than the one they were standing next to. Aimed at the target itself,
+   *  each unit stops on the side it approached from and the group packs in from there. */
+  private groupMoveTo(target: SimUnit, targetId: number, queued = false): void {
+    for (const id of this.selected) {
+      this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x: target.x, y: target.y, targetId }, queued: queued });
+    }
   }
 
   /** Attack-move the whole selection to a ground point. Same destination logic as
