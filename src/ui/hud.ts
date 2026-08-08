@@ -62,6 +62,17 @@ export interface CommandButton {
    *  So this draws nothing, and it must never eat the press. Grey art means UNAVAILABLE
    *  (`disabled`), and saying that about a Barracks you're 40 gold from is just wrong. */
   cantAfford?: boolean;
+  /** The one price WC3 DOES draw: a spell whose mana cost is above the caster's current
+   *  mana. The engine multiplies the icon by a deep blue (Warsmash reads the same tint off
+   *  the original: `CommandCardIcon.setColor(0.3, 0.5, 1, 1)` when `mana < manaCost`), so
+   *  the whole card tells you at a glance which spells are out of reach. It is a TINT on
+   *  the art, not the greyed DIS* swap — the spell is learned and ready, it just isn't
+   *  paid for.
+   *
+   *  The button stays live: the click still earns "Not enough mana." out loud. What it no
+   *  longer does is arm a target (see RTS.armCast) — WC3 refuses at the press, so you
+   *  never pick a target for a cast that can't happen (issue #110). */
+  noMana?: boolean;
   /** A passive ability (Critical Strike, an aura): an INDICATOR that the unit has
    *  the thing, not an order. It shows in full colour — it is working right now —
    *  but it takes no press at all: no sink, no click sound, no hotkey. Learning one
@@ -1900,7 +1911,7 @@ export class GameHud {
     // TEXT — a tavern hero stays greyed while its red "Requires:" line goes from "Altar of
     // Storms, Stronghold" to "Stronghold" the moment the altar goes up. Leave it out and the
     // tooltip keeps showing the requirement the player has just met.
-    const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${c.active}:${c.autocast}:${c.count ?? 0}:${c.desc}`).join("|");
+    const key = cmds.map((c) => `${c.id}:${c.disabled}:${!!c.cantAfford}:${!!c.noMana}:${c.active}:${c.autocast}:${c.count ?? 0}:${c.desc}`).join("|");
     if (key === this.cmdKey) return;
     this.cmdKey = key;
     // The card changed (e.g. a building was cancelled and its buttons vanished):
@@ -1912,7 +1923,7 @@ export class GameHud {
       const btn = this.cmdSlots[i];
       btn.disabled = true;
       btn.style.backgroundImage = "";
-      btn.classList.remove("armed", "autocast", "dis-art", "unavailable", "passive");
+      btn.classList.remove("armed", "autocast", "dis-art", "unavailable", "passive", "no-mana");
       this.cmdLabels[i].textContent = "";
       this.cmdCount[i].textContent = "";
       onPress(btn, null);
@@ -1933,13 +1944,21 @@ export class GameHud {
       // twin the stylesheet desaturates the live art instead, off `.unavailable`.
       //
       // `cantAfford` draws NOTHING. A price is not a lock: the thing is unlocked, the
-      // button takes the click, and the click is what earns "Not enough gold." / "Not
-      // enough mana." — which is the answer, said out loud. The only mark WC3 puts on the
-      // screen for it is the reddened cost number in the tooltip (showTooltip's `short`).
+      // button takes the click, and the click is what earns "Not enough gold." — which is
+      // the answer, said out loud. The only mark WC3 puts on the screen for it is the
+      // reddened cost number in the tooltip (showTooltip's `short`).
+      //
+      // MANA is the exception, and it is a third state rather than either of these: the
+      // icon is multiplied by a deep blue (`.no-mana`) while the button stays live. Only
+      // the ART is tinted, so it rides with `dis-art`/`unavailable` rather than replacing
+      // them — a DIS* swap already means something else and wins the tile.
       const disArt = c.disabled ? c.disabledIcon ?? null : null;
       btn.classList.toggle("dis-art", !!disArt);
       btn.classList.toggle("unavailable", c.disabled);
       btn.classList.toggle("passive", !!c.passive);
+      // The tint is a multiply over the ICON, so it needs one there: a button falling back
+      // to its 4-letter name has no art to darken and would just turn into a blue tile.
+      btn.classList.toggle("no-mana", !!c.noMana && !c.disabled && !!c.icon);
       if (disArt || c.icon) btn.style.backgroundImage = `url(${disArt ?? c.icon})`;
       else this.cmdLabels[idx].textContent = wc3StripMarkup(c.name).slice(0, 4); // 4 chars of NAME, not of "|cff…"
 

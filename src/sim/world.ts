@@ -5641,16 +5641,17 @@ export class SimWorld {
    *  gold line appears. Not every "no" in WC3 comes with a sentence. */
   static readonly SILENT_REFUSAL = SILENT_REFUSAL;
 
-  /** WHY this unit can't cast this ability at this target right now — a commandstrings.txt
-   *  [Errors] key, or null if it can. This is the click-time gate: the UI asks before it
-   *  spends the order, so the player gets told and the cursor stays armed rather than the
-   *  click being silently eaten.
+  /** WHY this unit can't cast this ability AT ALL right now, target or no target — the
+   *  caster-side half of `castError`, in the engine's own order: does it have the spell,
+   *  is it able to cast, is the spell ready, can it pay. A commandstrings.txt [Errors]
+   *  key, or null when the only thing left to check is the target.
    *
-   *  Mana and cooldown are checked HERE, at click time, and not only in tickCast — WC3
-   *  says "Not enough mana." the instant you click, it doesn't walk the caster into range
-   *  first and then quietly give up. tickCast still re-checks both, because the walk takes
-   *  time and a cheaper spell may drain the mana in the meantime. */
-  castError(unitId: number, code: string, targetId = 0): string | null {
+   *  This half is asked ONE STEP EARLIER than the other: at the BUTTON, before the game
+   *  hands you a reticle. Warsmash keeps the same seam (`CAbilitySpellBase.innerCheckCanUse`
+   *  → cooldown, then mana; `MeleeUI.onClick` only enters targeting mode `if (isUseOk())`),
+   *  and it is why a spell you have no mana for answers your click with "Not enough mana."
+   *  instead of arming a cast that was never going to happen (issue #110). */
+  castUseError(unitId: number, code: string): string | null {
     const u = this.units.get(unitId);
     if (!u || !this.abilities) return "Notthisunit";
     const ab = this.findAbility(u, code);
@@ -5664,6 +5665,24 @@ export class SimWorld {
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     if (ab.cooldownLeft > 0) return "Cooldown"; // "Spell is not ready yet."
     if (u.mana < lvl.cost) return "Nomana"; // "Not enough mana."
+    return null;
+  }
+
+  /** WHY this unit can't cast this ability at this target right now — a commandstrings.txt
+   *  [Errors] key, or null if it can. This is the click-time gate: the UI asks before it
+   *  spends the order, so the player gets told and the cursor stays armed rather than the
+   *  click being silently eaten.
+   *
+   *  Mana and cooldown are checked HERE, at click time, and not only in tickCast — WC3
+   *  says "Not enough mana." the instant you click, it doesn't walk the caster into range
+   *  first and then quietly give up. tickCast still re-checks both, because the walk takes
+   *  time and a cheaper spell may drain the mana in the meantime. */
+  castError(unitId: number, code: string, targetId = 0): string | null {
+    const use = this.castUseError(unitId, code);
+    if (use !== null) return use;
+    const u = this.units.get(unitId)!;
+    const ab = this.findAbility(u, code)!;
+    const def = this.abilities!.get(ab.id)!;
     if (def.target !== "unit") return null;
     const t = this.units.get(targetId);
     if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground

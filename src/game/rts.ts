@@ -3655,11 +3655,23 @@ export class RtsController {
    *  ("Not enough mana." beats "Must target an enemy unit." from a unit that lacks the
    *  spell entirely). CAST_ERROR_RANK orders them; the last is the most specific. */
   private castRefusal(code: string, targetId: number): string | null {
+    return this.bestRefusal((id) => this.sim.castError(id, code, targetId));
+  }
+
+  /** The same question one step earlier: can ANY unit in the selection USE this ability at
+   *  all — spell known, not silenced, off cooldown, mana paid — with no target chosen yet
+   *  (SimWorld.castUseError). */
+  private castUseRefusal(code: string): string | null {
+    return this.bestRefusal((id) => this.sim.castUseError(id, code));
+  }
+
+  /** Reduce a per-unit refusal over the selection to the ONE reason to say out loud. */
+  private bestRefusal(errorOf: (unitId: number) => string | null): string | null {
     let worst: string | null = null;
     let worstRank = -1;
     for (const id of this.selected) {
       if (this.sim.units.get(id)?.owner !== this.localPlayer) continue;
-      const err = this.sim.castError(id, code, targetId);
+      const err = errorOf(id);
       if (err === null) return null; // someone can cast — the order stands
       const rank = castErrorRank(err);
       if (rank >= worstRank) {
@@ -3668,6 +3680,26 @@ export class RtsController {
       }
     }
     return worst;
+  }
+
+  /** Arm a target-taking spell: the reticle goes up and the NEXT click aims it.
+   *
+   *  Unless the press itself is refusable. WC3 does not hand you a reticle for a spell the
+   *  caster can't cast — press Storm Bolt with no mana and you get "Not enough mana." right
+   *  there, with the cursor left alone; you never get to pick a target for a cast that was
+   *  never going to leave the ground (issue #110). Warsmash keeps the same gate at the same
+   *  place (`MeleeUI.onClick` enters targeting mode only `if (isUseOk())`).
+   *
+   *  Returns true when the spell is armed and the HUD should show it. */
+  armCast(code: string, target: "unit" | "point", area = 0): boolean {
+    const err = this.castUseRefusal(code);
+    if (err !== null) {
+      this.refuseOrder(err);
+      return false;
+    }
+    this.armedCast = { code, target, area };
+    this.orderMode = "cast";
+    return true;
   }
 
   /** Refuse the armed order: tell the player why and LEAVE IT ARMED. WC3 doesn't spend

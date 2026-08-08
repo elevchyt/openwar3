@@ -6487,14 +6487,14 @@ export class MapViewerScene {
         desc: this.abilityDesc(def, ab.level),
         mana: lvl.cost,
         col, row,
-        // Being short of mana changes NOTHING about the button: the spell is learned and
-        // ready, and the click is how you hear "Not enough mana." (the sim's own [Errors]
-        // key for it, SimWorld.castRefusal). Cooldown likewise says itself, with the
-        // radial overlay. A PASSIVE is not "unavailable" either — Critical Strike is
-        // working right now, and WC3 draws it in full colour off its own PASBTN art
-        // ([AOcr] Art=…\PassiveButtons\PASBTNCriticalStrike.blp); it just isn't a button
-        // you press (see `passive` below).
-        cantAfford: noMana,
+        // Mana is the ONE price WC3 draws: short of it, the icon goes deep blue (see
+        // `noMana` on CommandButton). The button stays live and the click is still how you
+        // hear "Not enough mana." — it just can't arm a target any more (issue #110).
+        // Cooldown says itself, with the radial overlay. A PASSIVE is not "unavailable"
+        // either — Critical Strike is working right now, and WC3 draws it in full colour
+        // off its own PASBTN art ([AOcr] Art=…\PassiveButtons\PASBTNCriticalStrike.blp);
+        // it just isn't a button you press (see `passive` below).
+        noMana,
         // Silence IS unavailable, and it is the only thing here that is: the button goes
         // inert and wears the DIS* art with no frame, so a silenced spellbook reads as
         // unpressable at a glance.
@@ -6544,9 +6544,9 @@ export class MapViewerScene {
       if (target === "none") {
         this.rts.castNoTarget(code); // Thunder Clap / Divine Shield / Avatar — fire now
       } else if (target === "unit" || target === "point") {
-        this.rts.armedCast = { code, target, area: target === "point" ? this.armedAbilityArea(code) : 0 };
-        this.rts.orderMode = "cast";
-        this.hud?.setArmed(true);
+        // armCast can REFUSE the press — a spell with no mana behind it answers "Not enough
+        // mana." here rather than arming a reticle for a cast that can't happen (issue #110).
+        if (this.rts.armCast(code, target, target === "point" ? this.armedAbilityArea(code) : 0)) this.hud?.setArmed(true);
       }
       return;
     }

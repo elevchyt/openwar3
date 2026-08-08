@@ -954,6 +954,22 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
    the art; the only thing it colours is the cost number in the tooltip (.tt-cost-item.short
    above). Greying them here would have said "unavailable", which is a different word. */
 .hud-cmd.unavailable:not(.dis-art) { filter: grayscale(0.7) brightness(0.6); }
+
+/* …with ONE exception to the paragraph above: mana. A spell you can't pay for is the one
+   price the engine does draw, and it draws it as a deep blue wash over the icon — the
+   art multiplied by (0.3, 0.5, 1.0), which is the tint Warsmash reads off the original
+   (CommandCardIcon.setColor when `unit.getMana() < manaCost`). Red and green are pulled
+   down, blue is left alone, and a card of half-cast spells reads at a glance.
+   `background-blend-mode` multiplies the icon against the colour beneath it in the same
+   element, so the tint lands on the ART only and leaves the cooldown sweep, the count
+   badge and the green active border on top of it untouched.
+   The selector carries the slot class so it outranks the skinned console's own
+   `.hud-slot { background: … }` shorthand, which would otherwise put the near-black tile
+   colour back under the icon and multiply it to nothing. */
+.hud-slot.hud-cmd.no-mana {
+  background-color: rgb(77, 128, 255);
+  background-blend-mode: multiply;
+}
 .hud-cmd { position: relative; overflow: hidden; }
 .hud-cmd-label { pointer-events: none; }
 /* Radial cooldown sweep (clockwise dark wedge) + seconds count over an ability. */
