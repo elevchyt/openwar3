@@ -520,11 +520,13 @@ const STATBAR_TINT = {
  *  grid steps down a tier every 12: the columns go up, the icons and their bars shrink, and the
  *  same panel space holds four times as many. Past the last tier the final visible slot carries
  *  a "+N" badge counting the units that aren't drawn. `cols` is what the CSS grid uses; `bar` is
- *  the height (px) of one of the two stat bars under an icon, which has to come down with the
- *  icon or a 12-column icon would be more bar than art. */
+ *  the FILL height (px) of one of the two stat bars under an icon, which has to come down with
+ *  the icon or a 12-column icon would be more bar than art. The largest tier's 5 is STATBAR_ROWS
+ *  — the number of fill rows the client shows in a bar floating over a unit — so a big group
+ *  icon's bar is the same art at the same size as the one over that unit's head. */
 const SEL_GRID_TIERS = [
-  { max: 12, cols: 6, bar: 4, gap: 4 },
-  { max: 24, cols: 8, bar: 3, gap: 3 },
+  { max: 12, cols: 6, bar: 5, gap: 4 },
+  { max: 24, cols: 8, bar: 4, gap: 3 },
   { max: 36, cols: 10, bar: 3, gap: 2 },
   { max: 48, cols: 12, bar: 2, gap: 2 },
 ] as const;
@@ -722,7 +724,13 @@ export class GameHud {
   private selDesc!: HTMLDivElement; // item description shown when a ground item is selected
   private selGrid!: HTMLDivElement; // multi-selection icon grid
   private selGridSlots: HTMLButtonElement[] = [];
-  private selGridBars: Array<{ hp: HTMLDivElement; mana: HTMLDivElement; more: HTMLSpanElement }> = [];
+  private selGridBars: Array<{
+    art: HTMLDivElement;
+    hp: HTMLDivElement;
+    manaTrack: HTMLDivElement;
+    mana: HTMLDivElement;
+    more: HTMLSpanElement;
+  }> = [];
   // Construction / training progress display.
   private progressWrap!: HTMLDivElement;
   private statusIcon!: HTMLDivElement;
@@ -1751,17 +1759,31 @@ export class GameHud {
     for (let i = 0; i < SEL_GRID_MAX; i++) {
       const slot = document.createElement("button");
       slot.className = "hud-sel-icon";
-      const hp = document.createElement("div");
-      hp.className = "hud-sel-icon-hp";
-      const mana = document.createElement("div");
-      mana.className = "hud-sel-icon-mana";
-      mana.hidden = true;
+      // Art on top, then the bars UNDER it — HP first, mana below it — rather than laid
+      // over the picture. Each bar is the same thing the world draws over a unit: the black
+      // frame with the game's own `human-healthbar-fill.blp` slab inside it (see
+      // STATBAR_FILL / applyStatBarSkin), so a group icon and the unit it stands for wear
+      // the same art.
+      const art = document.createElement("div");
+      art.className = "hud-sel-icon-art";
       const more = document.createElement("span");
       more.className = "hud-sel-icon-more";
       more.hidden = true;
-      slot.append(hp, mana, more);
+      art.appendChild(more);
+      const hpTrack = document.createElement("div");
+      hpTrack.className = "hud-sel-icon-track";
+      const hp = document.createElement("div");
+      hp.className = "hud-sel-icon-fill";
+      hpTrack.appendChild(hp);
+      const manaTrack = document.createElement("div");
+      manaTrack.className = "hud-sel-icon-track";
+      manaTrack.hidden = true; // no pool, no bar — the icon is just that much shorter
+      const mana = document.createElement("div");
+      mana.className = "hud-sel-icon-fill mana";
+      manaTrack.appendChild(mana);
+      slot.append(art, hpTrack, manaTrack);
       this.selGridSlots.push(slot);
-      this.selGridBars.push({ hp, mana, more });
+      this.selGridBars.push({ art, hp, manaTrack, mana, more });
       this.selGrid.appendChild(slot);
     }
     infoText.append(this.selName, this.selSub, this.xpBar, this.progressWrap, this.selStats, this.selDesc, this.selCarry, this.selGrid);
@@ -2237,16 +2259,21 @@ export class GameHud {
       }
       slot.hidden = false;
       const url = ic.icon ? this.driver.blpUrl(ic.icon) : null;
-      slot.style.backgroundImage = url ? `url(${url})` : "";
+      bars.art.style.backgroundImage = url ? `url(${url})` : "";
       slot.classList.toggle("focused", ic.focused);
       const frac = Math.max(0, Math.min(1, ic.hpFrac));
-      const bar = bars.hp;
-      bar.style.width = `${frac * 100}%`;
-      bar.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+      // The slab is drawn across the WHOLE track and CLIPPED to the fraction — the same rule
+      // the floating bars follow, so the art's shading stays put as the bar drains instead of
+      // squashing with it. Clip rather than width because the grid's tracks have no fixed
+      // pixel width to bake a background-size from.
+      bars.hp.style.clipPath = `inset(0 ${(1 - frac) * 100}% 0 0)`;
+      // Green→yellow→red by HP fraction, at WC3's thresholds (render/worldOverlays.ts). The
+      // tint is baked into the fill art, so the state picks an image rather than a colour.
+      bars.hp.dataset.state = frac > 0.6 ? "green" : frac > 0.3 ? "yellow" : "red";
       // Mana, under the HP bar, only for a unit that has a pool (issue #109) — the same
       // -1 = "no pool" contract the hero bar uses.
-      bars.mana.hidden = ic.manaFrac < 0;
-      bars.mana.style.width = `${Math.max(0, Math.min(1, ic.manaFrac)) * 100}%`;
+      bars.manaTrack.hidden = ic.manaFrac < 0;
+      bars.mana.style.clipPath = `inset(0 ${(1 - Math.max(0, Math.min(1, ic.manaFrac))) * 100}% 0 0)`;
       // Only the very last drawn icon can carry the overflow count.
       const showMore = overflow > 0 && i === SEL_GRID_MAX - 1;
       bars.more.hidden = !showMore;

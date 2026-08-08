@@ -1253,31 +1253,59 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
   padding: 2px;
   align-content: start;
 }
+/* One icon: the art, then the HP bar, then the mana bar — stacked UNDER the picture rather
+   than drawn over it, which is where WC3 puts them. */
 .hud-sel-icon {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.hud-sel-icon-art {
+  position: relative; /* the "+N" badge sits over the picture, not over the bars */
   aspect-ratio: 1;
   background-size: 100% 100%;
   background-repeat: no-repeat;
   background-color: #07080b;
   border: 1px solid rgba(216, 180, 90, 0.3);
   border-radius: 2px;
-  padding: 0;
-  cursor: pointer;
 }
-.hud-sel-icon.focused { border-color: #f0c850; box-shadow: 0 0 5px rgba(240, 200, 80, 0.8); }
-/* HP sits on the floor of the icon; mana stacks directly on top of it. Both track heights
-   come from the tier, so the pair never eats more of a small icon than of a big one. The
-   blue is the game's own mana tint (ManaBarConsoleSmall.mdx's 0.0627, 0, 0.9020), lifted to
-   the same brightness the grid's greens carry over the floating bars' primaries. */
-.hud-sel-icon-hp,
-.hud-sel-icon-mana {
+.hud-sel-icon.focused .hud-sel-icon-art { border-color: #f0c850; box-shadow: 0 0 5px rgba(240, 200, 80, 0.8); }
+/* The bars are the SAME thing the world draws over a unit's head (see .unit-hpbar-track):
+   the game's own black frame, 1px above and below the fill, with the tinted
+   human-healthbar-fill.blp slab inside it. The fill height comes from the grid's tier, so the
+   pair never eats more of a small icon than of a big one. */
+.hud-sel-icon-track {
+  position: relative;
+  height: calc(var(--sel-bar, 3px) + 2px);
+  background: #000;
+  border: 1px solid #000;
+  overflow: hidden;
+}
+/* Placeholder fill for a session with no install mounted, matching the floating bars': a flat
+   colour with the slab's shading faked as a vertical gradient. */
+.hud-sel-icon-fill {
   position: absolute;
-  left: 1px;
-  right: 1px;
-  height: var(--sel-bar, 3px);
+  inset: 0;
+  background-color: #00c800;
+  background-image: linear-gradient(to bottom,
+    rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 22%, rgba(0, 0, 0, 0.3) 100%);
 }
-.hud-sel-icon-hp { bottom: 1px; background: #46e05a; }
-.hud-sel-icon-mana { bottom: calc(1px + var(--sel-bar, 3px)); background: #4658e0; }
+.hud-sel-icon-fill[data-state="yellow"] { background-color: #c8c800; }
+.hud-sel-icon-fill[data-state="red"] { background-color: #c80000; }
+.hud-sel-icon-fill.mana { background-color: #0f0080; }
+/* The real thing: the slab ui/hud.ts baked per bar colour (applyStatBarSkin), stretched across
+   the whole track. What varies with the pool is the CLIP, set inline — so the shading stays put
+   as the bar drains instead of squashing along with it. */
+body.hud-statbar-skinned .hud-sel-icon-fill {
+  background: var(--statbar-green) 0 0 / 100% 100% no-repeat;
+}
+body.hud-statbar-skinned .hud-sel-icon-fill[data-state="yellow"] { background-image: var(--statbar-yellow); }
+body.hud-statbar-skinned .hud-sel-icon-fill[data-state="red"] { background-image: var(--statbar-red); }
+body.hud-statbar-skinned .hud-sel-icon-fill.mana { background-image: var(--statbar-mana); }
 /* "+N": the units past the last grid tier, printed over the final icon. */
 .hud-sel-icon-more {
   position: absolute;
