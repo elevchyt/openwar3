@@ -7968,7 +7968,18 @@ export class SimWorld {
         this.setAttackSlot(u, t); // fan out around it, like a direct attack order
         u.targetId = t.id;
         this.engage(u, t);
-        return; // an enemy is in range — stand and fight, don't advance
+        // engage() either planted us in striking distance or set us walking. If it managed
+        // neither, the way to this enemy is shut; and even when it did set us walking, the
+        // walk may be going nowhere. Standing off from a fight we never join is the one
+        // thing an attack-move must never do (issue #108), so both cases let the enemy go
+        // and fall through to advancing on the destination — advancing is itself what
+        // usually opens the way, and the scan half a second later picks up whatever we CAN
+        // reach, this one included. A committed swing counts as fighting: it is in flight.
+        const engaged = u.moving || u.inCombat || u.swingLeft >= 0;
+        if (engaged && !this.attackMoveStalled(u, t, dt)) return;
+        u.targetId = null;
+        u.acquireT = ACQUIRE_PERIOD;
+        u.stallT = 0;
       }
     }
     // Nothing to fight nearby (and nothing to cast on — that was tried first): resume toward
@@ -7987,6 +7998,52 @@ export class SimWorld {
     } else if (Math.hypot(u.chaseX - u.amDestX, u.chaseY - u.amDestY) > CHASE_REPATH) {
       this.pathTo(u, u.amDestX, u.amDestY); // was chasing an enemy — steer back on course
     }
+  }
+
+  /** Attack-move's approach watchdog — the thing tickAttack has had all along and this did
+   *  not (issue #108). Without it an attacker whose surround slot turns out to be a dead
+   *  end never closes and never lets go: it wobbles a few metres short of the fight for the
+   *  rest of the battle, holding a target it neither reaches nor hits.
+   *
+   *  Headway here is measured ONLY as the GAP shrinking, not as ground covered. That is the
+   *  whole distinction: a unit genuinely walking in closes; a unit shuffling between two
+   *  spots it can reach covers plenty of ground and closes nothing, and reading that as
+   *  progress is exactly what let the wobble run forever.
+   *
+   *  True = give this enemy up for now. The caller then advances on the attack-move
+   *  destination and re-scans; nothing is lost, because advancing changes the geometry that
+   *  blocked us and the same enemy is a candidate again half a second later. */
+  private attackMoveStalled(u: SimUnit, t: SimUnit, dt: number): boolean {
+    const w = this.weaponVs(u, t);
+    if (!w) return true;
+    const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    if (gap <= w.range + ATTACK_LEASH) {
+      u.stallT = 0; // in the fight — nothing to watch
+      u.attackStalls = 0;
+      return false;
+    }
+    if (u.stallT === 0) {
+      u.stallAnchorX = u.x;
+      u.stallAnchorY = u.y;
+      u.stallGap = gap;
+    }
+    u.stallT += dt;
+    if (u.stallT < ATTACK_STALL_TIME) return false;
+    const closed = u.stallGap - gap;
+    u.stallT = 0;
+    if (closed >= ATTACK_PROGRESS) {
+      u.attackStalls = 0; // genuinely closing — leave it alone
+      return false;
+    }
+    // One window lost: the slot we were handed may simply be walled off by the ranks
+    // already fighting. Claim a fresh one and route again before giving up on the enemy.
+    if (++u.attackStalls < 2) {
+      this.repathAttack(u, t);
+      return false;
+    }
+    u.attackStalls = 0;
+    u.atkOffTarget = -1; // that slot was a dead end — take a new one if we come back to it
+    return true;
   }
 
   /** Nearest hostile within `range` (gap measured hull-to-hull), or null. */
@@ -8316,11 +8373,25 @@ export class SimWorld {
    *  lining up behind each other and shoving. The slot is a relative offset, so it
    *  tracks a moving target. A lone attacker (no slot) heads straight in. */
   private chaseToAttack(u: SimUnit, t: SimUnit): void {
+    // The slot is a PREFERENCE, not a requirement. It can turn out to be unreachable —
+    // walled off by the ring of allies already fighting, or on a tile this unit no longer
+    // fits — and then the chase simply fails and the unit stands there with a target it
+    // never walks at. So fall back to the enemy itself: join the fight and let
+    // settleSpread find the tile once we are there. tickAttack has a whole stall watchdog
+    // that eventually rescues this; attack-move calls engage() directly and has none, which
+    // is how an attack-moved squad ended up with members frozen mid-field, in range of
+    // nothing, staring at a grunt 250 units away (issue #108).
     if (u.atkOffTarget === t.id && (u.atkOffX !== 0 || u.atkOffY !== 0)) {
-      this.chasePoint(u, t.x + u.atkOffX, t.y + u.atkOffY);
+      if (this.chasePoint(u, t.x + u.atkOffX, t.y + u.atkOffY)) return;
     } else {
       this.chasePoint(u, t.x, t.y);
+      return;
     }
+    // The slot was unreachable. Only walk at the enemy itself if we can genuinely GET to
+    // it — a best-effort path exists toward anything, so an unconditional fallback would
+    // march a unit ordered at a walled-off enemy into the wall and then shuffle it along
+    // that wall forever, which the give-up watchdog reads as headway and so never fires.
+    if (this.canReachToAttack(u, t)) this.chasePoint(u, t.x, t.y);
   }
 
   /** Follow a leader: trail it at FOLLOW_GAP, parking when close and re-approaching
@@ -8381,16 +8452,19 @@ export class SimWorld {
     }
   }
 
-  private chasePoint(u: SimUnit, x: number, y: number): void {
-    if (u.repathT > 0) return;
-    if (u.moving && Math.hypot(x - u.chaseX, y - u.chaseY) < CHASE_REPATH) return;
+  /** False when no route toward the point could be laid at all — the caller then still has
+   *  a standing unit on its hands and must do something else with it. Already-heading-there
+   *  and committed-to-a-hold both count as success: nothing is wrong in either case. */
+  private chasePoint(u: SimUnit, x: number, y: number): boolean {
+    if (u.repathT > 0) return true;
+    if (u.moving && Math.hypot(x - u.chaseX, y - u.chaseY) < CHASE_REPATH) return true;
     // Chasing (an attack target or a follow leader) is LOCAL — the thing is within
     // acquisition/leader range, a couple of dozen cells off. Cap the search low so a
     // blocked/unreachable chase gives up after a small local flood instead of the full
     // 8192-cell map flood (issue #24 perf: 100 melee all probing paths to one crowded
     // target flooded the frame to ~20fps). A best-effort short path is fine here —
     // chasePoint re-runs as the target moves anyway.
-    this.pathTo(u, x, y, COMBAT_EXPANSIONS);
+    return this.pathTo(u, x, y, COMBAT_EXPANSIONS);
   }
 
   // --- resource gathering ---------------------------------------------------

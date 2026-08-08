@@ -364,5 +364,44 @@ console.log("a group sent at a building all stays on the near side");
   check(`nobody stood inside anybody (${overlap ?? "clean"})`, overlap === null);
 }
 
+// ── 8. Attack-move never freezes staring at an enemy it hasn't reached ─────────────────
+// tickAttack has a whole watchdog for an approach that stops making headway; attack-move
+// calls engage() straight and had none. So when the surround slot a unit was handed turned
+// out to be unreachable — walled off by the ranks already fighting — its chase simply
+// failed, and it stood there for the rest of the battle with a target 250 units away that
+// it never walked at and never hit.
+console.log("attack-move: nobody freezes with an unreached target");
+{
+  const grid = gridOf();
+  const w = new SimWorld(grid, 1);
+  const foes = [];
+  for (let i = 0; i < 4; i++) {
+    foes.push(addUnit(w, 50 + i, 1, 1500, 1080 + i * 80, { hp: 4e5, maxHp: 4e5 }).id);
+  }
+  const squad = [];
+  for (let i = 0; i < 6; i++) {
+    squad.push(addUnit(w, 30 + i, 0, 500 + (i % 2) * 72, 1100 + Math.floor(i / 2) * 72).id);
+    w.issueAttackMove(30 + i, 2200, 1200);
+  }
+  run(w, 8);
+  // A unit is FROZEN if it holds a target it is neither in reach of nor walking toward.
+  const frozen = () => squad.filter((id) => {
+    const u = w.units.get(id);
+    if (u.targetId === null) return false;
+    const t = w.units.get(u.targetId);
+    if (!t) return false;
+    const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
+    return gap > 90 + 48 && !u.moving;
+  });
+  const a = frozen();
+  run(w, 6);
+  const b = frozen();
+  check(`nobody stood off with an unreached target (${a.length} at 8s, ${b.length} at 14s)`, a.length === 0 && b.length === 0);
+  const fighting = squad.filter((id) => w.units.get(id).inCombat).length;
+  check(`the whole squad is in the fight (${fighting}/6 in combat)`, fighting === 6);
+  const dealt = foes.reduce((n, id) => n + (w.units.get(id).maxHp - w.units.get(id).hp), 0);
+  check(`and it is dealing real damage (${dealt.toFixed(0)} hp)`, dealt > 500);
+}
+
 console.log(failures ? `\npathing: ${failures} check(s) FAILED` : "\npathing: all checks passed");
 process.exit(failures ? 1 : 0);
