@@ -1241,12 +1241,15 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 }
 .hud-status-icon.harmful { border-color: #9a3a34; } /* red = debuff */
 
-/* Multi-selection grid: up to 24 unit icons (8 per row), grouped by type, each
-   with an HP bar; the focused sub-group has a gold outline. */
+/* Multi-selection grid: unit icons grouped by type, each with an HP bar and (when the
+   unit has a pool) a mana bar; the focused sub-group has a gold outline. The selection is
+   uncapped (issue #109), so ui/hud.ts picks a tier by size and hands the grid its column
+   count, bar height and gap — 6 columns of big icons for 12 units, down to 12 columns for
+   48 — rather than the grid fixing one shape. */
 .hud-sel-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 3px;
+  grid-template-columns: repeat(var(--sel-cols, 8), 1fr);
+  gap: var(--sel-gap, 3px);
   padding: 2px;
   align-content: start;
 }
@@ -1262,7 +1265,33 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
   cursor: pointer;
 }
 .hud-sel-icon.focused { border-color: #f0c850; box-shadow: 0 0 5px rgba(240, 200, 80, 0.8); }
-.hud-sel-icon-hp { position: absolute; left: 1px; right: 1px; bottom: 1px; height: 3px; background: #46e05a; }
+/* HP sits on the floor of the icon; mana stacks directly on top of it. Both track heights
+   come from the tier, so the pair never eats more of a small icon than of a big one. The
+   blue is the game's own mana tint (ManaBarConsoleSmall.mdx's 0.0627, 0, 0.9020), lifted to
+   the same brightness the grid's greens carry over the floating bars' primaries. */
+.hud-sel-icon-hp,
+.hud-sel-icon-mana {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  height: var(--sel-bar, 3px);
+}
+.hud-sel-icon-hp { bottom: 1px; background: #46e05a; }
+.hud-sel-icon-mana { bottom: calc(1px + var(--sel-bar, 3px)); background: #4658e0; }
+/* "+N": the units past the last grid tier, printed over the final icon. */
+.hud-sel-icon-more {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 12, 0.72);
+  color: #f0c850;
+  font-size: clamp(9px, calc(60px / var(--sel-cols, 8)), 15px);
+  font-weight: 700;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
 
 /* Construction / training progress (WC3 info panel): status icon + gold label,
    a gold progress bar, and the queue slots. */

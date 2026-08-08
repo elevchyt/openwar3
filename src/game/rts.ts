@@ -374,7 +374,11 @@ const TREE_COLLIDER_HEIGHT = 110; // pick trees against a raised plane so clicki
 // Max world distance from the click's ground point to a pickable unit. Gates out
 // far/behind-camera units that screen-projection alone would wrongly match.
 const PICK_WORLD_MAX = 700;
-const MAX_SELECT = 24; // WC3 control-group / selection cap
+// NOTE: there is deliberately NO selection cap here any more. WC3 stops a selection at 12 units
+// (we long stopped at 24), but OpenWar3 lifts it (issue #109): a box-select, a same-type grab or
+// a control group holds as many units as you put in it. The HUD absorbs the size instead of the
+// sim — `showSelectionGrid` steps the icon grid down a tier every 12 units and folds whatever is
+// past the last tier into a "+N" badge on the final icon.
 // Neutral Passive (WC3 player 15): shops, taverns, labs, merchants, fountains,
 // critters. Owner < 0 (grey minimap, never a player), a distinct team, and the
 // sim's `neutralPassive` flag makes them non-hostile with a yellow ring.
@@ -386,6 +390,7 @@ export interface SelIcon {
   simId: number;
   icon: string; // BLP command icon path
   hpFrac: number;
+  manaFrac: number; // -1 when the unit has no mana pool (no bar drawn), like the hero bar
   focused: boolean; // part of the currently-focused sub-group
   owner: number;
 }
@@ -1528,7 +1533,14 @@ export class RtsController {
         const u = this.sim.units.get(id);
         const e = this.byId.get(id);
         if (!u || !e) continue;
-        out.push({ simId: id, icon: this.registry.get(e.typeId)?.icon ?? "", hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1, focused: key === this.focusedKey, owner: u.owner });
+        out.push({
+          simId: id,
+          icon: this.registry.get(e.typeId)?.icon ?? "",
+          hpFrac: u.maxHp > 0 ? u.hp / u.maxHp : 1,
+          manaFrac: u.maxMana > 0 ? u.mana / u.maxMana : -1, // -1: no pool, so no mana bar (issue #109)
+          focused: key === this.focusedKey,
+          owner: u.owner,
+        });
       }
     }
     return out;
@@ -1656,7 +1668,7 @@ export class RtsController {
   // --- control groups (keys 1-0) --------------------------------------------
 
   /** Own selection members, partitioned units-vs-buildings; units WIN a mixed pick
-   *  (WC3 exclusion rule: a group is units XOR buildings). Capped at MAX_SELECT. */
+   *  (WC3 exclusion rule: a group is units XOR buildings). Uncapped (issue #109). */
   private ownSelectionByKind(): { kind: "unit" | "building" | null; ids: number[] } {
     const units: number[] = [];
     const buildings: number[] = [];
@@ -1665,8 +1677,8 @@ export class RtsController {
       if (!u || u.owner !== this.localPlayer) continue;
       (u.building ? buildings : units).push(id);
     }
-    if (units.length) return { kind: "unit", ids: units.slice(0, MAX_SELECT) };
-    if (buildings.length) return { kind: "building", ids: buildings.slice(0, MAX_SELECT) };
+    if (units.length) return { kind: "unit", ids: units };
+    if (buildings.length) return { kind: "building", ids: buildings };
     return { kind: null, ids: [] };
   }
 
@@ -1687,7 +1699,7 @@ export class RtsController {
   }
 
   /** Shift+N: append the current selection to group N, keeping the group's kind
-   *  (units XOR buildings) and the MAX_SELECT cap, skipping duplicates. */
+   *  (units XOR buildings), skipping duplicates. No size cap (issue #109). */
   appendGroup(key: string): void {
     const existing = this.livingGroup(key);
     const sel = this.ownSelectionByKind();
@@ -1696,7 +1708,6 @@ export class RtsController {
     const merged = [...existing];
     const seen = new Set(existing);
     for (const id of this.selected) {
-      if (merged.length >= MAX_SELECT) break;
       const u = this.sim.units.get(id);
       if (!u || u.owner !== this.localPlayer || seen.has(id)) continue;
       if ((u.building ? "building" : "unit") !== kind) continue;
@@ -3141,11 +3152,11 @@ export class RtsController {
         return;
       }
       if (mods.additive) {
-        // Already in the group → toggle it out. Otherwise add own mobile units
-        // (up to the cap). A shift-click on anything else (enemy/neutral/building)
-        // is ignored so a stray click never wipes the current selection.
+        // Already in the group → toggle it out. Otherwise add own mobile units.
+        // A shift-click on anything else (enemy/neutral/building) is ignored so a
+        // stray click never wipes the current selection.
         if (this.selected.has(id)) this.deselect(id);
-        else if (ownMobile && this.selected.size < MAX_SELECT) {
+        else if (ownMobile) {
           this.selected.add(id);
           this.selectedMine = null;
           this.selectedItem = null;
@@ -3225,10 +3236,7 @@ export class RtsController {
       for (const sid of picked) if (this.selected.has(sid)) this.reselected.push(sid);
       this.selected.clear();
     }
-    for (const sid of picked) {
-      if (this.selected.size >= MAX_SELECT) break;
-      this.selected.add(sid);
-    }
+    for (const sid of picked) this.selected.add(sid);
     this.selectedMine = null;
     this.selectedItem = null;
     this.refocus(additive ? this.focusedKey : "");
@@ -3301,10 +3309,7 @@ export class RtsController {
     const picked = this.unitsInBox(x0, y0, x1, y1);
     if (picked.length === 0) return; // empty box: keep the current selection
     if (!additive) this.selected.clear();
-    for (const id of picked) {
-      if (this.selected.size >= MAX_SELECT) break; // WC3 cap
-      this.selected.add(id);
-    }
+    for (const id of picked) this.selected.add(id); // no cap (issue #109)
     this.selectedMine = null;
     this.selectedItem = null;
     this.refocus(additive ? this.focusedKey : "");

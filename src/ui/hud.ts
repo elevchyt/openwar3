@@ -178,7 +178,7 @@ export interface HudDriver {
   setOrderMode(mode: OrderMode): void;
   stopSelected(): void;
   /** Icons for a multi-unit selection grid (empty for a single unit / mine). */
-  selectionIcons(): Array<{ simId: number; icon: string; hpFrac: number; focused: boolean; owner: number }>;
+  selectionIcons(): Array<{ simId: number; icon: string; hpFrac: number; manaFrac: number; focused: boolean; owner: number }>;
   /** Grid icon click: focus the unit's sub-group (like Tab), or (if that group is
    *  already focused) drill down to just this one unit. */
   selectGridUnit(simId: number): void;
@@ -515,6 +515,22 @@ const STATBAR_TINT = {
   mana: [16, 0, 230],
 } as const;
 
+/** Multi-selection grid tiers (issue #109). WC3's own selection stops at 12 units and draws
+ *  them as one row of large icons; OpenWar3 lifts the cap, so instead of refusing units the
+ *  grid steps down a tier every 12: the columns go up, the icons and their bars shrink, and the
+ *  same panel space holds four times as many. Past the last tier the final visible slot carries
+ *  a "+N" badge counting the units that aren't drawn. `cols` is what the CSS grid uses; `bar` is
+ *  the height (px) of one of the two stat bars under an icon, which has to come down with the
+ *  icon or a 12-column icon would be more bar than art. */
+const SEL_GRID_TIERS = [
+  { max: 12, cols: 6, bar: 4, gap: 4 },
+  { max: 24, cols: 8, bar: 3, gap: 3 },
+  { max: 36, cols: 10, bar: 3, gap: 2 },
+  { max: 48, cols: 12, bar: 2, gap: 2 },
+] as const;
+/** How many icons the grid can ever draw — the largest tier. Everything past this is a "+N". */
+const SEL_GRID_MAX = SEL_GRID_TIERS[SEL_GRID_TIERS.length - 1].max;
+
 // The tooltip border strip is 8 square tiles laid out left-to-right, in the order
 // the engine's BACKDROP frames name them (UI\FrameDef\Glue\BattleNetChatActionMenu.fdf
 // draws the identical bnet-tooltip-border with BackdropCornerFlags "UL|UR|BL|BR|T|L|B|R"):
@@ -706,6 +722,7 @@ export class GameHud {
   private selDesc!: HTMLDivElement; // item description shown when a ground item is selected
   private selGrid!: HTMLDivElement; // multi-selection icon grid
   private selGridSlots: HTMLButtonElement[] = [];
+  private selGridBars: Array<{ hp: HTMLDivElement; mana: HTMLDivElement; more: HTMLSpanElement }> = [];
   // Construction / training progress display.
   private progressWrap!: HTMLDivElement;
   private statusIcon!: HTMLDivElement;
@@ -1723,18 +1740,28 @@ export class GameHud {
     this.selDesc = document.createElement("div");
     this.selDesc.className = "hud-sel-desc";
     this.selDesc.hidden = true;
-    // Multi-selection grid: up to 24 unit icons (grouped by type), each with an
-    // HP bar; the focused sub-group is highlighted. Clicking focuses that group.
+    // Multi-selection grid: unit icons (grouped by type), each with an HP bar and — when
+    // the unit has a pool — a mana bar under it; the focused sub-group is highlighted.
+    // Clicking focuses that group. The selection itself is uncapped (issue #109), so the
+    // grid steps down a tier every 12 units and the last slot carries a "+N" badge for
+    // whatever doesn't fit.
     this.selGrid = document.createElement("div");
     this.selGrid.className = "hud-sel-grid";
     this.selGrid.hidden = true;
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < SEL_GRID_MAX; i++) {
       const slot = document.createElement("button");
       slot.className = "hud-sel-icon";
-      const bar = document.createElement("div");
-      bar.className = "hud-sel-icon-hp";
-      slot.appendChild(bar);
+      const hp = document.createElement("div");
+      hp.className = "hud-sel-icon-hp";
+      const mana = document.createElement("div");
+      mana.className = "hud-sel-icon-mana";
+      mana.hidden = true;
+      const more = document.createElement("span");
+      more.className = "hud-sel-icon-more";
+      more.hidden = true;
+      slot.append(hp, mana, more);
       this.selGridSlots.push(slot);
+      this.selGridBars.push({ hp, mana, more });
       this.selGrid.appendChild(slot);
     }
     infoText.append(this.selName, this.selSub, this.xpBar, this.progressWrap, this.selStats, this.selDesc, this.selCarry, this.selGrid);
@@ -2192,9 +2219,17 @@ export class GameHud {
     this.progressWrap.hidden = true;
     this.selCarry.hidden = true;
     this.selDesc.hidden = true; // a multi-unit recall (e.g. a control group) replaces a selected item
+    // Pick the tier the selection's size falls in and hand the CSS its two numbers; a
+    // selection past the last tier stays on it and spends its final slot on the "+N".
+    const tier = SEL_GRID_TIERS.find((t) => icons.length <= t.max) ?? SEL_GRID_TIERS[SEL_GRID_TIERS.length - 1];
+    this.selGrid.style.setProperty("--sel-cols", String(tier.cols));
+    this.selGrid.style.setProperty("--sel-bar", `${tier.bar}px`);
+    this.selGrid.style.setProperty("--sel-gap", `${tier.gap}px`);
+    const overflow = Math.max(0, icons.length - SEL_GRID_MAX);
     this.selGridSlots.forEach((slot, i) => {
       const ic = icons[i];
-      if (!ic) {
+      const bars = this.selGridBars[i];
+      if (!ic || i >= tier.max) {
         slot.hidden = true;
         onPress(slot, null);
         slot.ondblclick = null;
@@ -2205,9 +2240,17 @@ export class GameHud {
       slot.style.backgroundImage = url ? `url(${url})` : "";
       slot.classList.toggle("focused", ic.focused);
       const frac = Math.max(0, Math.min(1, ic.hpFrac));
-      const bar = slot.firstElementChild as HTMLDivElement;
+      const bar = bars.hp;
       bar.style.width = `${frac * 100}%`;
       bar.style.background = frac > 0.6 ? "#46e05a" : frac > 0.3 ? "#e0c146" : "#e05046";
+      // Mana, under the HP bar, only for a unit that has a pool (issue #109) — the same
+      // -1 = "no pool" contract the hero bar uses.
+      bars.mana.hidden = ic.manaFrac < 0;
+      bars.mana.style.width = `${Math.max(0, Math.min(1, ic.manaFrac)) * 100}%`;
+      // Only the very last drawn icon can carry the overflow count.
+      const showMore = overflow > 0 && i === SEL_GRID_MAX - 1;
+      bars.more.hidden = !showMore;
+      if (showMore) bars.more.textContent = `+${overflow}`;
       // A click with a spell/attack armed targets this unit through the console;
       // Shift+click removes just this unit from the selection; otherwise a plain click
       // focuses this unit's sub-group (like Tab), and clicking again (group now focused)
