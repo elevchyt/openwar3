@@ -69,10 +69,19 @@ export class AllianceTable {
     );
   }
 
+  /** Called for each grant that actually CHANGES. The engine announces two of them to the
+   *  player on the receiving end ("You have been granted control of %s's units."), and a
+   *  matrix that reports every write would announce the seeding sweep as news. */
+  onChange: (source: number, other: number, type: AllianceType, value: boolean) => void = () => {};
+
   /** SetPlayerAlliance(source, other, whichAllianceSetting, value). */
   set(source: number, other: number, type: AllianceType, value: boolean): void {
     if (!this.valid(source, other, type)) return;
-    this.grants[this.idx(source, other, type)] = value ? 1 : 0;
+    const at = this.idx(source, other, type);
+    const now = value ? 1 : 0;
+    if (this.grants[at] === now) return;
+    this.grants[at] = now;
+    this.onChange(source, other, type, value);
   }
 
   /** GetPlayerAlliance(source, other, whichAllianceSetting). A player grants itself

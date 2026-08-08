@@ -773,6 +773,12 @@ export class RtsController {
     this.alliances.seedFromTeams(teamOf, grantsOf);
   }
 
+  /** Watch the alliance matrix for grants that actually change hands — what the "You have
+   *  been granted control of %s's units." line is raised off (see AllianceTable.onChange). */
+  set onAllianceChange(fn: (source: number, other: number, type: number, value: boolean) => void) {
+    this.alliances.onChange = fn;
+  }
+
   /** JASS SetPlayerAlliance / GetPlayerAlliance. */
   setPlayerAlliance(source: number, other: number, type: number, value: boolean): void {
     this.alliances.set(source, other, type, value);

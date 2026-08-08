@@ -17,6 +17,16 @@ import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 /** WC3's upkeep bands, as the resource bar colours them. */
 const UPKEEP_COLORS = { none: "#5be05a", low: "#e0c146", high: "#e05046" };
 
+/** Which upkeep band a food count falls in: 0 none (0–50), 1 low (51–80), 2 high (81+).
+ *  Shared with the message the game prints when a player crosses one (`Upkeeplevel`, see
+ *  MapViewerScene.noteUpkeep) so the label and the line can never disagree. */
+export function upkeepBand(foodUsed: number): 0 | 1 | 2 {
+  return foodUsed <= 50 ? 0 : foodUsed <= 80 ? 1 : 2;
+}
+
+/** The band's label, as the resource bar prints it. */
+export const UPKEEP_LABEL = ["No Upkeep", "Low Upkeep", "High Upkeep"] as const;
+
 export type OrderMode = "move" | "attack" | null;
 
 /** One command-card button (order, build, or train). */
@@ -173,6 +183,9 @@ export interface HudDriver {
    *  "ordered" → it became a command (clear the armed highlight, do NOT pan); "ignored" →
    *  consumed, armed order still stands; "none" → not a command (left-click pans). */
   minimapClick(wx: number, wy: number, right: boolean, queued: boolean): "ordered" | "ignored" | "none";
+  /** Alt-click on the minimap: mark a spot for your allies (`Allyminimapping`, "%s has
+   *  marked the way."). The binding is ours — no data file names a key for it. */
+  minimapPing(wx: number, wy: number): void;
   /** Portrait clicked: snap the camera to the selected unit; `lock` follows it. */
   focusSelected(lock: boolean): void;
   setOrderMode(mode: OrderMode): void;
@@ -1479,6 +1492,12 @@ export class GameHud {
       const [ox, oy, w, h] = this.driver.mapBounds();
       const wx = ox + u * w;
       const wy = oy + (1 - v) * h; // minimap is north-up
+      // Alt-click marks the spot for the team before anything else looks at the click — a
+      // ping is not an order, and must not be read as one.
+      if (e.altKey && e.button === 0) {
+        this.driver.minimapPing(wx, wy);
+        return;
+      }
       // The minimap takes orders too (issue #64): right-click moves, an armed order aims.
       const r = this.driver.minimapClick(wx, wy, e.button === 2, e.shiftKey);
       if (r === "ordered") this.clearOrderMode();
@@ -2067,14 +2086,14 @@ export class GameHud {
 
   private updateTexts(): void {
     const r = this.driver.resources();
-    // WC3 upkeep brackets: 0–50 none, 51–80 low, 81+ high.
-    const upkeep = r.foodUsed <= 50 ? "No Upkeep" : r.foodUsed <= 80 ? "Low Upkeep" : "High Upkeep";
+    // WC3 upkeep brackets: 0–50 none, 51–80 low, 81+ high (upkeepBand).
+    const band = upkeepBand(r.foodUsed);
     this.driver.setResources({
       gold: String(Math.floor(r.gold)),
       lumber: String(Math.floor(r.lumber)),
       supply: `${r.foodUsed}/${r.foodMax}`,
-      upkeep,
-      upkeepColor: upkeep[0] === "N" ? UPKEEP_COLORS.none : upkeep[0] === "L" ? UPKEEP_COLORS.low : UPKEEP_COLORS.high,
+      upkeep: UPKEEP_LABEL[band],
+      upkeepColor: [UPKEEP_COLORS.none, UPKEEP_COLORS.low, UPKEEP_COLORS.high][band],
     });
 
     const sel = this.driver.selection();

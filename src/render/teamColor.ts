@@ -30,6 +30,12 @@ function rgb(vfs: DataSource, player: number): [number, number, number] | null {
   return out;
 }
 
+/** The colour's three channels, for a caller that needs numbers rather than a string (a
+ *  minimap ping is given r/g/b). Falls back to white when the install has no such swatch. */
+export function teamColorRgb(vfs: DataSource, player: number): [number, number, number] {
+  return rgb(vfs, player) ?? [255, 255, 255];
+}
+
 /** `rgb(r, g, b)` for a stylesheet, or null. */
 export function teamColorCss(vfs: DataSource, player: number): string | null {
   const c = rgb(vfs, player);

@@ -9,6 +9,7 @@ import { parseDoo } from "../world/doodads";
 import { collectMapDestructibles, findDestructibleAt, type MapDestructible } from "../world/mapDestructibles";
 import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
+import { AllianceType } from "../sim/alliances";
 import { type Alert, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
@@ -55,7 +56,7 @@ import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_C
 import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
-import { GameHud, isTyping, type HudDriver, type CommandButton } from "../ui/hud";
+import { GameHud, isTyping, upkeepBand, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { UI_HEIGHT } from "../ui/fdf/layout";
 import { MatchOverDialog } from "../ui/gameMenu";
@@ -69,7 +70,7 @@ import {
   chatPrompt, chatRecipients, formatChatLine,
   type ChatLine, type ChatTarget, type ChatWorld,
 } from "../game/chat";
-import { teamColorHex } from "./teamColor";
+import { teamColorHex, teamColorRgb } from "./teamColor";
 import { GameDialogOverlay } from "../ui/gameDialog";
 import { LeaderboardOverlay } from "../ui/leaderboard";
 import { MultiboardOverlay } from "../ui/multiboard";
@@ -1147,6 +1148,13 @@ export class MapViewerScene {
       this.rts.setFootprintReader((tex) => this.footprintFor(tex)); // pathTex decode is a VFS read
       this.rts.setSoundBoard(this.sounds);
       this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
+      // Somebody handed us the keys to their army (or took them back). SHARED CONTROL only:
+      // the other alliance settings change constantly and silently, and the data keeps a line
+      // for this one alone.
+      this.rts.onAllianceChange = (source, other, type, value) => {
+        if (other !== this.localPlayer || type !== AllianceType.SharedControl) return;
+        this.announce(fillSlots(this.strings.forRace(value ? "Controlgranted" : "Controlrevoked", this.localRace), [this.playerLabel(source)]));
+      };
       this.registerResourceNodes(nodes);
       this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
@@ -5115,6 +5123,7 @@ export class MapViewerScene {
       resources: () => {
         const food = this.rts?.foodFor(this.localPlayer) ?? { used: 0, made: 0 };
         const stash = this.rts?.stashFor(this.localPlayer) ?? { gold: 0, lumber: 0 };
+        this.noteUpkeep(food.used); // the one place the local player's food is already read
         return {
           gold: stash.gold,
           lumber: stash.lumber,
@@ -5122,6 +5131,7 @@ export class MapViewerScene {
           foodMax: food.made,
         };
       },
+      minimapPing: (wx, wy) => this.signalPing(this.localPlayer, wx, wy),
       selection: () => this.rts?.selectedInfo() ?? null,
       dots: () => this.rts?.dots() ?? [],
       creepCamps: () => this.rts?.creepCamps() ?? [],
@@ -5408,17 +5418,98 @@ export class MapViewerScene {
    * The amounts have already been clamped to what the treasury holds, so this can't overdraw.
    */
   private giveResources(other: number, gold: number, lumber: number): void {
+    this.transferResources(this.localPlayer, other, gold, lumber);
+  }
+
+  /**
+   * Move gold and lumber from one player's treasury to another's, and tell the RECIPIENT —
+   * the only player for whom a gift is news ("Received %d gold from %s.").
+   *
+   * Public because the giver is not always us: an AI ally handing over its bank, and a remote
+   * player's gift arriving over the wire, are the same transaction from the other end, and
+   * they must announce identically.
+   */
+  transferResources(fromPlayer: number, toPlayer: number, gold: number, lumber: number): void {
     const sim = this.rts?.simWorld;
-    if (!sim) return;
-    const from = sim.stashOf(this.localPlayer);
-    const to = sim.stashOf(other);
-    const sentGold = Math.min(gold, from.gold);
-    const sentLumber = Math.min(lumber, from.lumber);
+    if (!sim || fromPlayer === toPlayer) return;
+    const from = sim.stashOf(fromPlayer);
+    const to = sim.stashOf(toPlayer);
+    const sentGold = Math.max(0, Math.min(gold, from.gold));
+    const sentLumber = Math.max(0, Math.min(lumber, from.lumber));
     from.gold -= sentGold;
     from.lumber -= sentLumber;
     to.gold += sentGold;
     to.lumber += sentLumber;
+    if (toPlayer === this.localPlayer) this.noteResourcesFrom(fromPlayer, sentGold, sentLumber);
   }
+
+  /**
+   * The engine's OTHER voice: the top-left message log, where a map's own
+   * `DisplayTextToPlayer` lines land — the ones WarChasers opens with — rather than the
+   * centred gold line a refusal or a warning uses.
+   *
+   * Which of the two an [Errors] row belongs to is decided by what the row IS. A warning
+   * about something happening to you is shouted over the console, where it interrupts
+   * ("Our town is under siege!"); a report of a transaction between players — resources
+   * arriving, control changing hands — is a line of record, and it reads with the map's
+   * own text and stays there to be read.
+   */
+  private announce(text: string): void {
+    if (text) this.hud?.showMessage(text, -1); // -1: the log's own default dwell
+  }
+
+  /** "Received %d gold and %d lumber from %s." — one row per combination the gift can be,
+   *  which is why the data carries all three. */
+  private noteResourcesFrom(from: number, gold: number, lumber: number): void {
+    const g = Math.floor(gold);
+    const l = Math.floor(lumber);
+    if (g <= 0 && l <= 0) return;
+    const who = this.playerLabel(from);
+    const key = g > 0 && l > 0 ? "Goldandlumberfromally" : g > 0 ? "Goldfromally" : "Lumberfromally";
+    const args = g > 0 && l > 0 ? [g, l, who] : [g > 0 ? g : l, who];
+    this.announce(fillSlots(this.strings.forRace(key, this.localRace), args));
+  }
+
+  /**
+   * Mark a spot on the minimap for the team, and — when somebody else is the one marking —
+   * say so ("%s has marked the way.").
+   *
+   * MINIMAL, and knowingly so. The ping is raised and shown locally; nothing carries it to
+   * the other machines yet, so today only this player and a map script (`PingMinimapForPlayer`
+   * lands here too) can raise one. The audience test and the line are the parts worth having
+   * early — when the wire learns to carry a ping, it calls this with the sender's id and the
+   * message is already right.
+   */
+  signalPing(player: number, x: number, y: number): void {
+    const co = player === this.localPlayer || (this.rts?.playersAreCoAllied(player, this.localPlayer) ?? false);
+    if (!co) return; // an enemy's marker is not ours to see
+    // The pinging player's own colour, so two allies marking two places are told apart.
+    const [r, g, b] = teamColorRgb(this.vfs, this.rts?.playerColor(player) ?? player);
+    this.hud?.ping({ x, y, duration: 0, r, g, b, extraEffects: true });
+    if (player !== this.localPlayer) {
+      this.announce(fillSlots(this.strings.forRace("Allyminimapping", this.localRace), [this.playerLabel(player)]));
+    }
+  }
+
+  /**
+   * "Upkeep level %d." — the line the game keeps for crossing an upkeep bracket, raised on
+   * the change rather than every frame.
+   *
+   * MINIMAL, and the honest reason is that the data stops short: `Upkeeplevel` is one of the
+   * few [Errors] rows with no war3skins sound beside it and nothing anywhere says what its
+   * `%d` counts, so the band index (0 none / 1 low / 2 high — hud.ts upkeepBand) is our
+   * reading and not the file's. Printed to the message log with the other reports.
+   */
+  private noteUpkeep(foodUsed: number): void {
+    const band = upkeepBand(foodUsed);
+    if (band === this.upkeepBandNow) return;
+    const first = this.upkeepBandNow < 0;
+    this.upkeepBandNow = band;
+    if (first) return; // the opening reading is the state, not a change
+    this.announce(fillSlots(this.strings.forRace("Upkeeplevel", this.localRace), [band]));
+  }
+  /** The band the local player was last seen in; -1 until the first reading. */
+  private upkeepBandNow = -1;
 
   /**
    * The match ended out from under us: the room is gone, which in v1 means the host left.
