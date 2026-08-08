@@ -816,6 +816,14 @@ export interface SimUnit {
   resX: number; // origin cell of the current reservation
   resY: number;
   hasReservation: boolean;
+  // The cell block a MOVING unit holds (see PathingGrid.claim). A walker owns the block it
+  // stands on and may only advance once it owns the next one, so it never interpolates
+  // toward a tile it will not be allowed to reach and then get shoved back out of it
+  // (issue #108). Mirrors resX/resY/hasReservation for the stationary half of the same idea.
+  claimX: number;
+  claimY: number;
+  hasClaim: boolean;
+  blockedT: number; // seconds a mover has been unable to take the next tile (forces a reroute)
   resKind: "gold" | "lumber" | null; // active harvest target kind
   resId: number; // mine/tree id being harvested
   /** Consecutive re-paths a gatherer has spent trying to actually REACH its node/depot
@@ -1139,6 +1147,11 @@ const ACQUIRE_PERIOD = 0.5; // seconds between idle auto-acquire scans
 // unit doesn't sprint across the map to every distant skirmish. Only enemies actively
 // attacking an ally qualify (see assistTarget), so it never wakes a peaceful creep camp.
 const ASSIST_RANGE = 800;
+// A mover that cannot take the next tile waits this long before recalculating a route
+// AROUND whoever holds it (issue #108's "path-finding disruption"). Short enough that
+// walking in front of a unit visibly re-routes it, long enough that a walker briefly
+// crossing our tile is simply waited out instead of triggering an A* every time.
+const BLOCKED_REPATH_TIME = 0.3;
 const STUCK_TIME = 0.5; // seconds of blocked movement before a unit gives up
 const STUCK_RATIO = 0.3; // "blocked" = actual displacement below this share of expected
 // When two units meet head-on, the lower-priority one pauses for YIELD_TIME so the
@@ -2442,9 +2455,11 @@ export class SimWorld {
     if (!w.insideBuild) return;
     w.insideBuild = false;
     const n = w.footprint || footprintCells(w.radius);
-    const [bcx, bcy] = this.grid.worldToCell(b.x, b.y);
+    // Anchor space, so the cell nearestFit clears is the cell the worker ends up standing on
+    // (they differ by half a cell for an even footprint — see PathingGrid.footprintCenter).
+    const [bcx, bcy] = this.grid.footprintAnchor(b.x, b.y, n);
     const fit = this.grid.nearestFit(bcx, bcy, n) ?? this.grid.nearestWalkable(bcx, bcy);
-    if (fit) [w.x, w.y] = this.grid.cellToWorld(fit[0], fit[1]);
+    if (fit) [w.x, w.y] = this.grid.footprintCenter(fit[0], fit[1], n);
     w.order = "idle";
     w.moving = false;
     w.path = [];
@@ -2589,9 +2604,9 @@ export class SimWorld {
     passenger.inBurrow = false;
     passenger.garrisonHost = 0;
     const n = passenger.footprint || footprintCells(passenger.radius);
-    const [bcx, bcy] = this.grid.worldToCell(host.x, host.y);
+    const [bcx, bcy] = this.grid.footprintAnchor(host.x, host.y, n);
     const fit = this.grid.nearestFit(bcx, bcy, n) ?? this.grid.nearestWalkable(bcx, bcy);
-    if (fit) [passenger.x, passenger.y] = this.grid.cellToWorld(fit[0], fit[1]);
+    if (fit) [passenger.x, passenger.y] = this.grid.footprintCenter(fit[0], fit[1], n);
     passenger.order = "idle";
     passenger.moving = false;
     passenger.path = [];
@@ -3022,6 +3037,7 @@ export class SimWorld {
     this.noteConstruct(u.id, "cancel"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_CANCEL (before it's gone)
     for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     this.unsettle(u); // free its reserved cells
+    this.releaseClaim(u); // …and any tile it was walking onto
     this.releasePathStamp(u); // …and its footprint's collision
     this.units.delete(u.id);
     this.removals.push(u.id);
@@ -3035,6 +3051,7 @@ export class SimWorld {
     if (!u) return false;
     this.refundPendingBuild(u);
     this.unsettle(u);
+    this.releaseClaim(u); // a unit that leaves the world takes its walking claim with it
     this.releasePathStamp(u);
     if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     if (u.constructing) this.detachBuilder(u.id);
@@ -3125,6 +3142,10 @@ export class SimWorld {
       | "resX"
       | "resY"
       | "hasReservation"
+      | "claimX"
+      | "claimY"
+      | "hasClaim"
+      | "blockedT"
       | "resKind"
       | "resId"
       | "nodeRetries"
@@ -3309,6 +3330,10 @@ export class SimWorld {
       resX: 0,
       resY: 0,
       hasReservation: false,
+      claimX: 0,
+      claimY: 0,
+      hasClaim: false,
+      blockedT: 0,
       resKind: null,
       resId: 0,
       nodeRetries: 0,
@@ -3449,6 +3474,9 @@ export class SimWorld {
     u.moving = false;
     u.yieldT = 0; // no longer moving — drop any pending give-way pause
     u.path = [];
+    // Hand the walker's claim back BEFORE the free-block tests below, or the unit would
+    // find its own claim sitting on the tile it is trying to settle onto and shuffle off it.
+    this.releaseClaim(u);
     if (u.footprint <= 0 || u.hasReservation) return;
     const n = u.footprint;
     let sx = u.x;
@@ -3505,12 +3533,14 @@ export class SimWorld {
     u.hasReservation = true;
   }
 
-  /** True if the n×n reservation block at origin (cx0,cy0) is entirely walkable and
-   *  unreserved — i.e. a unit can settle there without overlapping another's tile. */
+  /** True if the n×n reservation block at origin (cx0,cy0) is entirely walkable and held
+   *  by nobody — i.e. a unit can settle there without overlapping another's tile. Callers
+   *  release their OWN claim first (settle/settleSpread do), so a walking unit stopping
+   *  where it stands still reads its own block as free. */
   private blockFree(cx0: number, cy0: number, n: number): boolean {
     for (let y = cy0; y < cy0 + n; y++)
       for (let x = cx0; x < cx0 + n; x++)
-        if (!this.grid.walkable(x, y) || this.grid.isReserved(x, y)) return false;
+        if (!this.grid.walkable(x, y) || this.grid.isOccupied(x, y)) return false;
     return true;
   }
 
@@ -3521,10 +3551,11 @@ export class SimWorld {
    *  whole neighbourhood is packed (caller then settles in place — a rare overlap beats
    *  a teleport across the map). */
   private nearestFreeBlock(sx: number, sy: number, n: number, maxR = 6, unitsBlockLine = true): [number, number] | null {
-    const [scx, scy] = this.grid.worldToCell(sx, sy);
-    const half = n >> 1;
-    const oX0 = scx - half; // the unit's own footprint — exempt from the reachability
-    const oY0 = scy - half; // block-check so it can leave the tile it's overlapping
+    // The unit's own footprint — exempt from the reachability block-check so it can leave
+    // the tile it's overlapping. footprintOrigin, NOT worldToCell − half: for an EVEN
+    // footprint the two disagree by a cell half the time, and the exemption then covers the
+    // wrong block, so a unit reads its own cells as somebody else's and refuses to move.
+    const [oX0, oY0] = this.grid.footprintOrigin(sx, sy, n);
     for (let r = 1; r <= maxR; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
@@ -3559,7 +3590,7 @@ export class SimWorld {
       if (!this.grid.walkable(cx, cy)) return false;
       if (!unitsBlock) continue; // terrain-only line (for a snap-around-allies de-conflict)
       const own = cx >= oX0 && cx < oX0 + n && cy >= oY0 && cy < oY0 + n;
-      if (!own && this.grid.isReserved(cx, cy)) return false;
+      if (!own && this.grid.isOccupied(cx, cy)) return false;
     }
     return true;
   }
@@ -3572,6 +3603,7 @@ export class SimWorld {
    *  them walk↔settle forever at the range edge). No free in-range tile (the surround is
    *  full) → settle in place; the slot system parked the extras further out on approach. */
   private settleSpread(u: SimUnit, t: SimUnit): void {
+    this.releaseClaim(u); // stopping: the walking claim becomes a standing reservation
     if (u.hasReservation) {
       u.moving = false;
       u.yieldT = 0;
@@ -3628,10 +3660,7 @@ export class SimWorld {
    *  the target within the nearest ring, so attackers pack into a tight surround. */
   private nearestFreeBlockInRange(u: SimUnit, t: SimUnit, n: number, maxGap: number): [number, number] | null {
     const [sx, sy] = this.grid.snapForFootprint(u.x, u.y, n);
-    const half = n >> 1;
-    const [scx, scy] = this.grid.worldToCell(sx, sy);
-    const oX0 = scx - half;
-    const oY0 = scy - half;
+    const [oX0, oY0] = this.grid.footprintOrigin(sx, sy, n); // our own cells — see nearestFreeBlock
     for (let r = 1; r <= 6; r++) {
       let best: [number, number] | null = null;
       let bestGap = Infinity;
@@ -3662,6 +3691,90 @@ export class SimWorld {
       this.grid.release(u.resX, u.resY, u.footprint);
       u.hasReservation = false;
     }
+  }
+
+  // --- moving-unit tile claims (issue #108) --------------------------------
+  //
+  // A stopped unit RESERVES its cells; a walking one CLAIMS them. The difference is who
+  // reads the layer: the pathfinder routes around reservations only — WC3 units path
+  // straight through a crowd that is itself on the move and sort the crossing out locally —
+  // while the movement step itself honours both, so no unit ever walks THROUGH another.
+  //
+  // The rule the issue asks for falls out of that: a mover may only step into a cell block
+  // it already holds. It takes the next block up front (a "reservation" in the issue's
+  // words) and only then interpolates into it; a block it cannot take is a block it never
+  // moves toward, so there is no preemptive glide followed by a shove back out.
+
+  /** Does a unit hold cells at all? Flyers pass over everything, footprint-less movers
+   *  (an uprooted Ancient) collide by radius only, and a ghosting worker walks through
+   *  the crowd around its mine on purpose. */
+  private claimsCells(u: SimUnit): boolean {
+    return u.footprint > 0 && !u.flying && !u.noCollision && u.hp > 0 && !isOffField(u);
+  }
+
+  /** The unit stands where it stands: take the block under it, whatever else holds those
+   *  cells. Only ADVANCING a claim is gated (see claimStep) — you can always own the ground
+   *  you are already on, which is what lets a unit spawned on top of another walk out. */
+  private ensureClaim(u: SimUnit): void {
+    const n = u.footprint;
+    const [cx0, cy0] = this.grid.footprintOrigin(u.x, u.y, n);
+    if (u.hasClaim) {
+      if (u.claimX === cx0 && u.claimY === cy0) return;
+      this.grid.unclaim(u.claimX, u.claimY, n);
+    }
+    this.grid.claim(cx0, cy0, n);
+    u.claimX = cx0;
+    u.claimY = cy0;
+    u.hasClaim = true;
+  }
+
+  private releaseClaim(u: SimUnit): void {
+    if (!u.hasClaim) return;
+    this.grid.unclaim(u.claimX, u.claimY, u.footprint);
+    u.hasClaim = false;
+    u.blockedT = 0;
+  }
+
+  /** May `u` take the n×n block at (cx0,cy0)? Every cell must be walkable for its domain
+   *  and held by nobody else — cells inside the block it already holds are its own. */
+  private blockClaimable(u: SimUnit, cx0: number, cy0: number): boolean {
+    const n = u.footprint;
+    const domain = pathDomain(u);
+    for (let y = cy0; y < cy0 + n; y++) {
+      for (let x = cx0; x < cx0 + n; x++) {
+        if (!this.grid.walkable(x, y, domain)) return false;
+        if (u.hasClaim && x >= u.claimX && x < u.claimX + n && y >= u.claimY && y < u.claimY + n) continue;
+        if (this.grid.isOccupied(x, y)) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Move `u` to (nx,ny) if — and only if — it can hold the cell block it would then stand
+   *  on. Returns false when the way is taken, in which case the unit does not budge: the
+   *  whole point is that it never interpolates into a tile it cannot have. */
+  private claimStep(u: SimUnit, nx: number, ny: number): boolean {
+    if (!this.claimsCells(u)) {
+      u.x = nx;
+      u.y = ny;
+      return true;
+    }
+    const n = u.footprint;
+    const [cx0, cy0] = this.grid.footprintOrigin(nx, ny, n);
+    if (u.hasClaim && cx0 === u.claimX && cy0 === u.claimY) {
+      u.x = nx; // still inside the block we hold — free movement
+      u.y = ny;
+      return true;
+    }
+    if (!this.blockClaimable(u, cx0, cy0)) return false;
+    if (u.hasClaim) this.grid.unclaim(u.claimX, u.claimY, n);
+    this.grid.claim(cx0, cy0, n);
+    u.claimX = cx0;
+    u.claimY = cy0;
+    u.hasClaim = true;
+    u.x = nx;
+    u.y = ny;
+    return true;
   }
 
   /** Hand a building the pathTex footprint that was stamped for it, so leaving the
@@ -4071,10 +4184,7 @@ export class SimWorld {
     const stand = tr + wr + Math.min(this.weaponVs(u, t)?.range ?? 0, 160);
     // Own footprint origin — exempt from the reachability line check so the unit can
     // step off the tile it's standing on.
-    const half = u.footprint >> 1;
-    const [scx, scy] = this.grid.worldToCell(u.x, u.y);
-    const oX0 = scx - half;
-    const oY0 = scy - half;
+    const [oX0, oY0] = this.grid.footprintOrigin(u.x, u.y, u.footprint);
     let best: [number, number] | null = null; // nearest slot we can actually reach
     let bestD = Infinity;
     let fallback: [number, number] | null = null; // nearest fitting slot, reachable or not
@@ -4096,7 +4206,7 @@ export class SimWorld {
         if (taken) continue;
         // Skip a slot our own footprint can't actually stand on (blocked terrain, a
         // building, or a cell reserved by a settled unit) — only offer slots we FIT.
-        const [cx, cy] = this.grid.worldToCell(sx, sy);
+        const [cx, cy] = this.grid.footprintAnchor(sx, sy, u.footprint);
         if (u.footprint > 0 && !this.grid.footprintFits(cx, cy, u.footprint)) continue;
         const d = Math.hypot(sx - u.x, sy - u.y);
         if (d < fallbackD) { fallbackD = d; fallback = [ox, oy]; }
@@ -5004,7 +5114,7 @@ export class SimWorld {
       // the 0 it walks around with.
       const n = u.rootedFootprint;
       if (n > 0 && this.grid) {
-        const [cx, cy] = this.grid.worldToCell(u.x, u.y);
+        const [cx, cy] = this.grid.footprintAnchor(u.x, u.y, n);
         if (!this.grid.footprintFits(cx, cy, n)) return false;
       }
       u.uprooted = false;
@@ -6343,10 +6453,10 @@ export class SimWorld {
       const wy = caster.y + Math.sin(ang) * dist;
       let spot = { x: wx, y: wy };
       if (this.grid) {
-        const [cx, cy] = this.grid.worldToCell(wx, wy);
+        const [cx, cy] = this.grid.footprintAnchor(wx, wy, n);
         const cell = this.grid.nearestFit(cx, cy, n, 14) ?? this.grid.nearestWalkable(cx, cy, 14);
         if (cell) {
-          const [fx, fy] = this.grid.cellToWorld(cell[0], cell[1]);
+          const [fx, fy] = this.grid.footprintCenter(cell[0], cell[1], n);
           spot = { x: fx, y: fy };
         }
       }
@@ -6789,10 +6899,11 @@ export class SimWorld {
    *  Mass Teleport). Clears its current path so it doesn't walk back. */
   private teleportUnit(u: SimUnit, x: number, y: number): void {
     this.unsettle(u);
+    this.releaseClaim(u); // the tile it was walking onto is behind it now
     if (this.grid && !u.flying) {
-      const [cx, cy] = this.grid.worldToCell(x, y);
+      const [cx, cy] = this.grid.footprintAnchor(x, y, u.footprint);
       const spot = this.grid.nearestFit(cx, cy, u.footprint, 12) ?? this.grid.nearestWalkable(cx, cy, 12);
-      if (spot) [x, y] = this.grid.cellToWorld(spot[0], spot[1]);
+      if (spot) [x, y] = this.grid.footprintCenter(spot[0], spot[1], u.footprint);
     }
     u.x = x;
     u.y = y;
@@ -7459,10 +7570,10 @@ export class SimWorld {
     // ways: net ground covered, and how much the gap shrank. Either clears it; a
     // wobbler blocked by other bodies does neither, so it re-decides.
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    // Reset iff engage() counted us "in range" this tick (didn't chase) — same band it
-    // uses: melee attack from within the strike leash, ranged only once actually in
-    // range (leash is just their re-chase hysteresis).
-    const band = w.ranged ? (u.inCombat ? w.range + ATTACK_LEASH : w.range) : w.range + ATTACK_LEASH;
+    // Reset iff engage() counted us "in range" this tick (didn't chase) — the SAME band it
+    // uses, ranged and melee alike: weapon range while there is still road to walk,
+    // range + leash once the approach has run out or the fight has already started.
+    const band = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
     if (gap <= band) {
       u.stallT = 0;
       u.attackStalls = 0; // in the fight — clear the stall streak
@@ -7645,13 +7756,14 @@ export class SimWorld {
     if (gap <= reach) return true;
     const wasReserved = u.hasReservation;
     this.unsettle(u);
-    const start = this.grid.worldToCell(u.x, u.y);
+    const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
     const blocked = this.clearanceBlocker(u, start);
-    const cells = findPath(this.grid, start, this.grid.worldToCell(t.x, t.y), blocked, COMBAT_EXPANSIONS);
+    const goal = this.grid.footprintAnchor(t.x, t.y, u.footprint);
+    const cells = findPath(this.grid, start, goal, blocked, COMBAT_EXPANSIONS, pathDomain(u));
     if (wasReserved) this.settle(u);
     if (!cells || cells.length <= 1) return false;
     const [ecx, ecy] = cells[cells.length - 1];
-    const [ex, ey] = this.grid.cellToWorld(ecx, ecy);
+    const [ex, ey] = this.grid.footprintCenter(ecx, ecy, u.footprint);
     const endGap = Math.hypot(t.x - ex, t.y - ey) - u.radius - t.radius;
     return endGap <= reach + PATHING_CELL;
   }
@@ -7693,15 +7805,26 @@ export class SimWorld {
       return;
     }
     const gap = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius;
-    // How close is "close enough to plant and swing". For MELEE this is the full
-    // strike band (range + ATTACK_LEASH) at all times — the same reach tickSwing
-    // actually connects a hit from — so a unit in a crowd stops and attacks the
-    // moment it's within striking distance instead of shoving toward a pixel-exact
-    // surround slot it can't physically reach through the other bodies (issue #24:
-    // the "tries to pass through units, wobbling next to the target without hitting"
-    // report). Ranged units keep the tight range (they stand off and don't surround),
-    // with the leash only as re-chase hysteresis once already in combat.
-    const chaseGap = w.ranged ? (u.inCombat ? w.range + ATTACK_LEASH : w.range) : w.range + ATTACK_LEASH;
+    // How close is "close enough to plant and swing". Walk in to the WEAPON RANGE; the
+    // extra ATTACK_LEASH is only what a unit may already be standing at, never a licence
+    // to stop short of the range.
+    //
+    // Issue #24 used to give MELEE the whole band (range + leash) unconditionally, so a
+    // unit in a crowd stopped and attacked the moment it was within striking distance
+    // rather than shoving toward a pixel-exact surround slot it could not physically reach
+    // through the other bodies ("tries to pass through units, wobbling next to the target
+    // without hitting"). That cost every melee attacker a full leash of ground: a ring of
+    // them read as a loose scatter around the target rather than a surround pressed up
+    // against it — issue #108's "surrounds aren't working as expected, we must move unit A
+    // a bit closer". The grinding that made the wide band necessary is what the tile claims
+    // removed: a blocked attacker no longer pushes, it stops and re-routes.
+    //
+    // So the band is now the same shape ranged units always had, and applies to both: the
+    // tight range while there is still road to walk (a live approach path), the wide one
+    // once that route has run out — it arrived, or a body stopped it — and once the fight
+    // has started, where it is re-chase hysteresis. The wide reach is honest either way:
+    // range + leash is what tickSwing actually connects a hit from.
+    const chaseGap = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
     if (gap > chaseGap) {
       u.inCombat = false;
       if (noChase) {
@@ -8867,6 +8990,7 @@ export class SimWorld {
     this.deathBlast(u); // `Adda` — goblin land mines and sappers take the neighbours with them
     this.refundPendingBuild(u); // died before its building went up → refund the cost
     this.unsettle(u); // corpses don't block cells
+    this.releaseClaim(u); // …nor does a tile the dead unit was walking onto
     this.releasePathStamp(u); // …and neither does a collapsed building's footprint
     if (u.inMine) {
       const mine = this.mines.get(u.resId);
@@ -10142,7 +10266,7 @@ export class SimWorld {
    *  path polyline, no A*. Uses the SAME clearance predicate A* would, so it only
    *  flags obstructions A* would actually route around. */
   private pathAheadBlocked(u: SimUnit): boolean {
-    const start = this.grid.worldToCell(u.x, u.y);
+    const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
     const blocked = this.clearanceBlocker(u, start);
     if (!blocked) return false; // footprint-less mover — nothing to check
     const stepLen = PATHING_CELL * 0.5;
@@ -10158,7 +10282,8 @@ export class SimWorld {
         const ux = segDx / segLen;
         const uy = segDy / segLen;
         for (let d = stepLen; d <= segLen && remaining > 0; d += stepLen) {
-          const [cx, cy] = this.grid.worldToCell(px + ux * d, py + uy * d);
+          // Anchor space, like every other cell the clearance predicate is asked about.
+          const [cx, cy] = this.grid.footprintAnchor(px + ux * d, py + uy * d, u.footprint);
           if (blocked(cx, cy)) return true;
           remaining -= stepLen;
         }
@@ -10170,8 +10295,15 @@ export class SimWorld {
   }
 
   /** Set a path toward a world point (straight line for air units). False when
-   *  no movement toward the point is possible at all. */
-  private pathTo(u: SimUnit, tx: number, ty: number, maxExpansions?: number): boolean {
+   *  no movement toward the point is possible at all.
+   *
+   *  `avoidMovers` widens the clearance test from "cells a STOPPED unit reserves" to "cells
+   *  anybody is holding, walking units included". Off by default on purpose: WC3 paths
+   *  through a crowd that is itself on the move, and a group marching together would
+   *  otherwise re-route around its own members every few metres. It goes on only for the
+   *  reroute a genuinely blocked unit makes — the disruption the issue describes, where the
+   *  way is shut right now and the answer is to go round rather than to keep pushing. */
+  private pathTo(u: SimUnit, tx: number, ty: number, maxExpansions?: number, avoidMovers = false): boolean {
     u.chaseX = tx;
     u.chaseY = ty;
     if (u.flying) {
@@ -10186,10 +10318,18 @@ export class SimWorld {
     // if no path exists (position/reservation must stay consistent).
     const wasReserved = u.hasReservation;
     this.unsettle(u);
-    const start = this.grid.worldToCell(u.x, u.y);
-    const blocked = this.clearanceBlocker(u, start);
+    const start = this.grid.footprintAnchor(u.x, u.y, u.footprint);
+    let blocked = this.clearanceBlocker(u, start, avoidMovers);
     const domain = pathDomain(u);
-    const cells = findPath(this.grid, start, this.grid.worldToCell(tx, ty), blocked, maxExpansions, domain);
+    const goal = this.grid.footprintAnchor(tx, ty, u.footprint);
+    let cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain);
+    // Routing around the live crowd can leave nowhere to go at all (hemmed in on every
+    // side). Fall back to the ordinary route — walk up to the obstruction and wait it out —
+    // rather than reporting "no path" and standing down.
+    if (avoidMovers && (!cells || cells.length <= 1)) {
+      blocked = this.clearanceBlocker(u, start);
+      cells = findPath(this.grid, start, goal, blocked, maxExpansions, domain);
+    }
     // A single-cell (or empty) result means the unit can't get any closer.
     if (!cells || cells.length <= 1) {
       if (wasReserved) this.settle(u);
@@ -10201,10 +10341,17 @@ export class SimWorld {
     // 45° increments — the per-segment heading (and thus facing) then tracks the
     // real travel direction rather than zig-zagging and snapping on arrival.
     const smoothed = smoothPath(this.grid, cells, blocked, domain);
-    // Cell centres as waypoints. When the path actually reaches the target cell
-    // (best-effort paths stop short), finish on the footprint-aligned point so
-    // the unit settles exactly onto the cells it will reserve.
-    const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.cellToWorld(cx, cy)) as Array<[number, number]>;
+    // Waypoints are where the unit STANDS when its footprint is anchored on that cell —
+    // footprintCenter, not cellToWorld. For an EVEN footprint (every unit whose collision
+    // is 16–31: a Footman, a Grunt, a Ghoul) the two are half a cell apart, and the whole
+    // search is run in anchor space: the clearance predicate checks the block
+    // `cx-n/2 … cx+n/2-1`, which is the block a unit standing at footprintCenter reserves,
+    // and NOT the one it reserves standing at the cell centre. Walking to cell centres
+    // therefore marched every even-footprint unit half a cell off the cells A* had cleared
+    // for it — it would arrive somewhere it did not fit, get shoved back, and re-path.
+    // When the path actually reaches the target cell (best-effort paths stop short), finish
+    // on the footprint-aligned point so the unit settles exactly onto the cells it reserves.
+    const pts = smoothed.slice(1).map(([cx, cy]) => this.grid.footprintCenter(cx, cy, u.footprint)) as Array<[number, number]>;
     const [lastX, lastY] = pts[pts.length - 1];
     if (Math.hypot(tx - lastX, ty - lastY) <= PATHING_CELL) {
       pts.push(this.grid.snapForFootprint(tx, ty, u.footprint));
@@ -10227,7 +10374,7 @@ export class SimWorld {
       const domain = pathDomain(u);
       for (let y = cy0; y < cy0 + n; y++) {
         for (let x = cx0; x < cx0 + n; x++) {
-          if (!this.grid.walkable(x, y, domain) || this.grid.isReserved(x, y)) return false;
+          if (!this.grid.walkable(x, y, domain) || this.grid.isOccupied(x, y)) return false;
         }
       }
     }
@@ -10245,6 +10392,7 @@ export class SimWorld {
   private clearanceBlocker(
     self: SimUnit,
     start: [number, number],
+    avoidMovers = false,
   ): ((cx: number, cy: number) => boolean) | undefined {
     const n = self.footprint;
     if (n <= 0) return undefined;
@@ -10253,13 +10401,18 @@ export class SimWorld {
     const ownX0 = sx - half; // the unit's own footprint (reservation-exempt) origin
     const ownY0 = sy - half;
     const domain = pathDomain(self);
+    // Normally only STOPPED units are walls (see pathTo's `avoidMovers`); a blocked unit's
+    // reroute widens it to everyone currently holding ground, walkers included.
+    const held = avoidMovers
+      ? (x: number, y: number) => this.grid.isOccupied(x, y)
+      : (x: number, y: number) => this.grid.isReserved(x, y);
     return (cx, cy) => {
       const cx0 = cx - half;
       const cy0 = cy - half;
       for (let y = cy0; y < cy0 + n; y++) {
         for (let x = cx0; x < cx0 + n; x++) {
           if (!this.grid.walkable(x, y, domain)) return true;
-          if (this.grid.isReserved(x, y)) {
+          if (held(x, y)) {
             const own = x >= ownX0 && x < ownX0 + n && y >= ownY0 && y < ownY0 + n;
             if (!own) return true;
           }
@@ -10270,6 +10423,16 @@ export class SimWorld {
   }
 
   private tickMovement(dt: number): void {
+    // Every walker takes the block it is standing on BEFORE anyone takes a step. Done in
+    // its own pass because the claims have to be complete for the stepping pass to mean
+    // anything: whoever ran first would otherwise walk straight over a unit that had not
+    // got round to claiming its own ground yet, and iteration order would decide who wins.
+    for (const u of this.units.values()) {
+      // Stopped, dead, boarded or ghosting: a claim it may still hold is stale. (settle()
+      // normally hands it back; this catches every other way movement can end.)
+      if (u.moving && this.claimsCells(u)) this.ensureClaim(u);
+      else if (u.hasClaim) this.releaseClaim(u);
+    }
     for (const u of this.units.values()) {
       if (!u.moving) continue;
       // Proactively reroute around units that have stopped across our path since
@@ -10284,6 +10447,7 @@ export class SimWorld {
       let budget = u.speed * dt;
       let dirX = 0;
       let dirY = 0;
+      let blocked = false;
       while (budget > 0 && u.waypoint < u.path.length) {
         const isLast = u.waypoint === u.path.length - 1;
         const [wx, wy] = u.path[u.waypoint];
@@ -10297,8 +10461,14 @@ export class SimWorld {
         const ux = dx / dist;
         const uy = dy / dist;
         const step = Math.min(budget, dist);
-        u.x += ux * step;
-        u.y += uy * step;
+        // The tile has to be OURS before we glide onto it (issue #108). claimStep takes the
+        // block the step would land us in and only then moves us; if another unit holds it,
+        // we stay exactly where we are this tick rather than sliding in and being shoved
+        // back out. That is what makes standing in front of a unit actually stop it.
+        if (!this.claimStep(u, u.x + ux * step, u.y + uy * step)) {
+          blocked = true;
+          break;
+        }
         budget -= step;
         // Steer facing from real travel segments only. pathTo appends a sub-cell
         // "footprint-snap" nudge as the final waypoint (so even-footprint units
@@ -10316,6 +10486,21 @@ export class SimWorld {
       if (dirX || dirY) {
         u.desiredFacing = Math.atan2(dirY, dirX);
       }
+      if (blocked) {
+        // Held up by a body in the way. This is the case the issue describes as
+        // path-finding disruption: the way is shut, so recalculate and route AROUND rather
+        // than grind into it. The reroute treats the crowd's current cells as walls too
+        // (avoidMovers) so it genuinely goes round; if that leaves nowhere to go it falls
+        // back to the ordinary route and waits the blocker out. checkStuck is still the
+        // longer backstop for a unit that is simply boxed in.
+        u.blockedT += dt;
+        if (u.blockedT >= BLOCKED_REPATH_TIME) {
+          u.blockedT = 0;
+          if (u.waypoint < u.path.length && !u.flying) this.pathTo(u, u.chaseX, u.chaseY, undefined, true);
+        }
+        continue;
+      }
+      u.blockedT = 0;
       if (u.waypoint >= u.path.length) {
         // A best-effort path may have stopped short because the goal cells
         // were reserved when it was computed; if the blocker has since left,
@@ -10515,16 +10700,20 @@ export class SimWorld {
     // blocked, which is exactly the grid's "this tile isn't reachable for your size".
     if (!this.footprintWalkableAt(u, nx, ny)) return;
     if (this.footprintReservedAt(u, nx, ny) > this.footprintReservedAt(u, u.x, u.y)) return;
-    u.x = nx;
-    u.y = ny;
+    // Go through claimStep, not a bare assignment: a shove that carries the unit into a
+    // NEW cell block has to take that block first, exactly as a walked step does — else
+    // separation would be the back door through which a unit slides into a tile its own
+    // movement is forbidden from entering, and its claim would be left behind on the block
+    // it no longer stands on.
+    this.claimStep(u, nx, ny);
   }
 
-  /** True if every cell under `u`'s footprint centred at world (wx,wy) is walkable
+  /** True if every cell under `u`'s footprint anchored at world (wx,wy) is walkable
    *  terrain. Footprint-less movers (radius 0 / flyers) test just the centre cell. */
   private footprintWalkableAt(u: SimUnit, wx: number, wy: number): boolean {
-    const [cx, cy] = this.grid.worldToCell(wx, wy);
     const n = u.footprint;
     const domain = pathDomain(u);
+    const [cx, cy] = this.grid.footprintAnchor(wx, wy, n);
     if (n <= 0) return this.grid.walkable(cx, cy, domain);
     const half = n >> 1;
     for (let y = cy - half; y < cy - half + n; y++)
@@ -10533,17 +10722,22 @@ export class SimWorld {
     return true;
   }
 
-  /** How many cells under `u`'s footprint centred at (wx,wy) are reserved by settled
-   *  units — the "how far into someone else's space" measure nudge() guards on. */
+  /** How many cells under `u`'s footprint anchored at (wx,wy) another unit is holding —
+   *  the "how far into someone else's space" measure nudge() guards on. Both layers count:
+   *  a stopped unit's reservation and a walker's claim are equally "not yours". Cells inside
+   *  `u`'s OWN claim are its own, so a shove that only slides it around inside the tile it
+   *  holds is always allowed — which is what keeps the separation pass working at all. */
   private footprintReservedAt(u: SimUnit, wx: number, wy: number): number {
     const n = u.footprint;
     if (n <= 0) return 0;
-    const [cx, cy] = this.grid.worldToCell(wx, wy);
+    const [cx, cy] = this.grid.footprintAnchor(wx, wy, n);
     const half = n >> 1;
     let count = 0;
     for (let y = cy - half; y < cy - half + n; y++)
-      for (let x = cx - half; x < cx - half + n; x++)
-        if (this.grid.isReserved(x, y)) count++;
+      for (let x = cx - half; x < cx - half + n; x++) {
+        if (u.hasClaim && x >= u.claimX && x < u.claimX + n && y >= u.claimY && y < u.claimY + n) continue;
+        if (this.grid.isOccupied(x, y)) count++;
+      }
     return count;
   }
 }

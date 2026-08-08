@@ -73,6 +73,14 @@ export class PathingGrid {
   // Dynamic reservation layer (stationary units). Counted, so overlapping
   // reservations (rare, e.g. spawn overflow) release cleanly.
   private reservations: Uint16Array | null = null;
+  // Dynamic CLAIM layer: the block a *moving* unit holds while it walks. Kept apart from
+  // the reservations because the two answer different questions — the pathfinder routes
+  // around STOPPED units only (WC3 units path straight through a crowd that is itself on
+  // the move and sort it out locally), while the movement step itself must respect both or
+  // two units walk through each other. Counted for the same reason reservations are: a
+  // claim is taken before the old one is dropped at a block boundary, and a unit that
+  // spawns on top of another starts out sharing cells.
+  private claims: Uint16Array | null = null;
   // Stamped footprint layers (trees + buildings), kept OFF the terrain baseline and
   // COUNTED for the same reason the reservations are: footprints overlap (a gnoll hut
   // pressed into the treeline shares cells with the trees, and a pathTex's blue border
@@ -112,6 +120,41 @@ export class PathingGrid {
 
   isReserved(cx: number, cy: number): boolean {
     return this.reservations !== null && this.inBounds(cx, cy) && this.reservations[cy * this.width + cx] > 0;
+  }
+
+  /** Claim an n×n cell block (origin = low corner) for a unit that is WALKING onto it.
+   *  A claim is the "reserve the tile before you step into it" half of WC3 movement: a
+   *  mover holds the block it stands on for as long as it is on the move, and may only
+   *  advance once it holds the next one — which is what makes body-blocking work and stops
+   *  a unit interpolating toward a tile it will never be allowed to occupy. */
+  claim(cx0: number, cy0: number, n: number): void {
+    this.claims ??= new Uint16Array(this.width * this.height);
+    for (let y = cy0; y < cy0 + n; y++) {
+      for (let x = cx0; x < cx0 + n; x++) {
+        if (this.inBounds(x, y)) this.claims[y * this.width + x]++;
+      }
+    }
+  }
+
+  unclaim(cx0: number, cy0: number, n: number): void {
+    if (!this.claims) return;
+    for (let y = cy0; y < cy0 + n; y++) {
+      for (let x = cx0; x < cx0 + n; x++) {
+        const i = y * this.width + x;
+        if (this.inBounds(x, y) && this.claims[i] > 0) this.claims[i]--;
+      }
+    }
+  }
+
+  isClaimed(cx: number, cy: number): boolean {
+    return this.claims !== null && this.inBounds(cx, cy) && this.claims[cy * this.width + cx] > 0;
+  }
+
+  /** Is any unit — stopped (reservation) or walking (claim) — holding this cell right now?
+   *  The question anything that PLACES a body asks; `isReserved` alone is the pathfinder's
+   *  narrower question and answers "no" for a cell somebody is currently standing on. */
+  isOccupied(cx: number, cy: number): boolean {
+    return this.isReserved(cx, cy) || this.isClaimed(cx, cy);
   }
 
   /** Snap a world position so an n×n footprint aligns to the cell grid: odd
@@ -164,7 +207,7 @@ export class PathingGrid {
    *  so the anchor is the centre cell for an odd footprint and the high-corner cell for an
    *  even one — which is why the two parities round differently. */
   footprintAnchor(wx: number, wy: number, n: number): [number, number] {
-    if (n % 2 === 1) return this.worldToCell(wx, wy);
+    if (n <= 0 || n % 2 === 1) return this.worldToCell(wx, wy);
     return [
       Math.round((wx - this.originX) / PATHING_CELL),
       Math.round((wy - this.originY) / PATHING_CELL),
@@ -179,7 +222,7 @@ export class PathingGrid {
    *  centre lands exactly on a .5 boundary, so the re-snap's Math.round pushes it a whole
    *  cell off (and JS rounds .5 toward +∞, so the error is directional). */
   footprintCenter(cx: number, cy: number, n: number): [number, number] {
-    const half = n % 2 === 1 ? 0.5 : 0;
+    const half = n <= 0 || n % 2 === 1 ? 0.5 : 0;
     return [this.originX + (cx + half) * PATHING_CELL, this.originY + (cy + half) * PATHING_CELL];
   }
 
@@ -268,14 +311,16 @@ export class PathingGrid {
     return null;
   }
 
-  /** True if an n×n unit footprint centred on (cx,cy) fits entirely on walkable,
-   *  unreserved cells. */
+  /** True if an n×n unit footprint anchored on (cx,cy) — see footprintAnchor — fits
+   *  entirely on walkable cells no other unit is holding. "Holding" is the wide test
+   *  (isOccupied): a spot somebody is currently WALKING across is not a spot to drop a
+   *  freshly-trained unit on, or to send an attacker to stand in. */
   footprintFits(cx: number, cy: number, n: number, domain: PathDomain = "ground"): boolean {
-    if (n <= 1) return this.walkable(cx, cy, domain) && !this.isReserved(cx, cy);
+    if (n <= 1) return this.walkable(cx, cy, domain) && !this.isOccupied(cx, cy);
     const half = n >> 1;
     for (let y = cy - half; y < cy - half + n; y++) {
       for (let x = cx - half; x < cx - half + n; x++) {
-        if (!this.walkable(x, y, domain) || this.isReserved(x, y)) return false;
+        if (!this.walkable(x, y, domain) || this.isOccupied(x, y)) return false;
       }
     }
     return true;
