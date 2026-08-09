@@ -1818,11 +1818,23 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 .fdf-frame { pointer-events: none; }
 
+/* NO focus ring anywhere on an FDF screen.
+   The page-wide `*:focus-visible` rule at the top of this file gives everything a gold outline
+   and a gold glow, which is right for ordinary DOM and wrong here: every one of these widgets
+   already draws its own focused/pushed/hover state from the game's art, and the reference has
+   no such ring on any of them. The buttons and the slider used to turn off the outline one at
+   a time and left the GLOW behind — which is what put a gold halo around the Single Player
+   screen's New Profile box the moment it was clicked. Both, once, for the whole family. */
+.fdf-screen :focus,
+.fdf-screen :focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .fdf-button {
   pointer-events: auto;
   /* No cursor override — the WC3 hand cursor (ui/cursor.ts) stays in every state. */
 }
-.fdf-button:focus-visible { outline: none; }
 .fdf-button:hover .fdf-button-glow { opacity: 1; }
 
 .fdf-button-glow {
@@ -1872,7 +1884,6 @@ body.in-game .fdf-screen.fdf-ingame {
   pointer-events: auto;
   touch-action: none; /* the drag is ours — don't let the browser pan/scroll on it */
 }
-.fdf-slider:focus-visible { outline: none; }
 .fdf-slider-thumb {
   pointer-events: none; /* the whole track is draggable; the knob is just the visual */
   transform: translate(-50%, -50%); /* centre on (left%, 50%) */

@@ -491,7 +491,12 @@ export function buildList(el: HTMLElement, f: FdfFrame, scale: number, bar?: Scr
 
   const rows = document.createElement("div");
   rows.className = "fdf-list-rows";
-  const border = (firstProp(f, "ListBoxBorder")?.args[0]?.n ?? 0.008) * scale;
+  // The fallback is the game's OWN number, not a guess: both LISTBOX templates it ships —
+  // StandardTemplates.fdf's StandardListBoxTemplate and BattleNetTemplates.fdf's
+  // BattleNetListBoxTemplate — declare `ListBoxBorder 0.01`, and a CONTROL pressed into service
+  // as a list (ListBoxWar3) declares none, so that is what the engine gives it. At 0.008 the
+  // selected row's blue band ran flush into the box's border art instead of sitting inside it.
+  const border = (firstProp(f, "ListBoxBorder")?.args[0]?.n ?? 0.01) * scale;
   rows.style.inset = `${border}px`;
   rows.style.fontSize = fontSize(f, scale, 0.012);
   // The rows stop where the scrollbar starts — it is beside them, not over them. `sync` moves

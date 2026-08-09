@@ -9,7 +9,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fadePanels } from "./fdf/anim";
 import { showGlueDialog } from "./glueDialog";
-import { adopt, setProp } from "./mapBrowser";
+import { adopt, findFrame, nudgeX, setProp } from "./mapBrowser";
 
 // The Single Player menu (issues #61, #80), built from the game's own
 // UI\FrameDef\Glue\SinglePlayerMenu.fdf. That file holds BOTH halves of the screen, as the
@@ -70,6 +70,18 @@ const COLUMN_ARRIVES = "SinglePlayer Birth Alternate";
 const COLUMN_LEAVES = "SinglePlayer Death Alternate";
 
 const LIST_FDF = "UI\\FrameDef\\Glue\\ListBoxWar3.fdf";
+
+/**
+ * How far right the profile name moves to sit inside the 3D bar that frames it.
+ *
+ * The same widescreen correction every glue screen's right-hand column needs (ui/mapBrowser.ts
+ * `nudgeX`), only in the other direction. `ProfileNameText` is anchored to `CampaignBackdrop`'s
+ * TOPLEFT, and that backdrop is a good deal wider on its left than the chrome slot it is drawn
+ * in — so the name landed 5px LEFT of the bar's interior, printing over its border. Measured
+ * against the live render: the bar's interior starts 0.045 in from the backdrop's left edge and
+ * the FDF puts the name at 0.04, and the reference sets the name a further ~0.011 inside that.
+ */
+const NAME_NUDGE = 0.016;
 
 /** Move one of the 3D chrome panels and say how long the clip runs — `MenuScene.sidePanel`,
  *  handed in so this screen never reaches into the renderer itself. */
@@ -323,5 +335,7 @@ function buildSinglePlayerRoot(lib: FdfLibrary): FdfFrame {
     setProp(profileList, "SetAllPoints", []); // fill the container the FDF already sized
     adopt(root, "ProfileListContainer", [profileList]);
   }
+
+  nudgeX(findFrame(root, "ProfileNameText"), NAME_NUDGE);
   return root;
 }
