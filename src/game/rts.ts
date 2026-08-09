@@ -4323,9 +4323,10 @@ export class RtsController {
       const m = this.sim.mines.get(b.rallyTargetId);
       if (m) { x = m.x; y = m.y; }
     }
-    // The flag carries a team-colour slot (RallyPoint.mdx texture replaceableId 1),
-    // so it must be tinted with the OWNING player's colour — not left on the default
-    // slot 0, which is red (issue #86).
+    // The flag carries a team-colour slot (the rally-flag models' texture replaceableId 1 —
+    // human, orc and night elf; the undead banner is bone and has none), so it must be
+    // tinted with the OWNING player's colour — not left on the default slot 0, which is
+    // red (issue #86).
     return { x, y, z: this.heightAt(x, y), owner: bu.owner };
   }
 

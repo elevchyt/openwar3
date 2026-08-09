@@ -881,7 +881,7 @@ export class MapViewerScene {
   // bolts are strung by the sim's `drainFxLightnings` events and follow their units.
   private lightning: LightningOverlay | null = null;
   private rallyFlag: SpawnInstance | null = null; // shown at the selected building's rally
-  private rallyFlagModel: SpawnModel | null = null; // reused for the smaller queue flags
+  private queueFlagModel: SpawnModel | null = null; // the (smaller) waypoint flag, pooled below
   private queueFlags: SpawnInstance[] = []; // pool: small flags at queued-order positions
   private selectBoxEl: HTMLDivElement | null = null;
   private cursorStyleEl: HTMLStyleElement | null = null;
@@ -1048,7 +1048,7 @@ export class MapViewerScene {
     this.dayNight = null;
     this.lastMarkerScanCount = -1;
     this.rallyFlag = null;
-    this.rallyFlagModel = null;
+    this.queueFlagModel = null;
     this.queueFlags = [];
 
     // The viewer's object-data tables are global and every map merges into them, so give the
@@ -3215,29 +3215,49 @@ export class MapViewerScene {
     // Preload the local race's cancel-explosion so the first cancel is instant.
     const cancelPath = CANCEL_FX[this.localRace];
     void this.viewer.load(cancelPath, this.solver).then((m) => this.effectModels.set(cancelPath, (m as SpawnModel | undefined) ?? null));
-    // Rally flag shown at a selected building's rally point.
-    const flag = (await this.viewer.load("UI\\Feedback\\RallyPoint\\RallyPoint.mdx", this.solver)) as SpawnModel | undefined;
-    if (flag && map) {
-      this.rallyFlagModel = flag; // reused to spawn the small queue-flag pool
-      this.rallyFlag = flag.addInstance();
-      this.rallyFlag.setScene(map.worldScene);
-      this.rallyFlag.setSequence(0); // play its waving clip so the flag animates
-      this.rallyFlag.setSequenceLoopMode(2); // loop always
-      this.rallyFlag.hide();
-    }
+    // Rally flag shown at a selected building's rally point, and the smaller waypoint flag
+    // dropped on each shift-queued order. Both are per-race art, and war3skins.txt is where
+    // the game itself keeps that mapping — `[Orc] RallyIndicatorDst=…\OrcRallyFlag.mdl`,
+    // `WaypointIndicator=…\OrcWaypointFlag.mdl` — so they resolve through the same skin
+    // table (the LOCAL player's race) that dresses the console and the rally button icon.
+    this.rallyFlag = await this.spawnFlag(this.skinModel("RallyIndicatorDst"));
+    this.queueFlagModel = ((await this.viewer.load(this.skinModel("WaypointIndicator"), this.solver)) as SpawnModel | undefined) ?? null;
   }
 
-  /** Get (or lazily create) the i-th small queue flag — the rally-point model at
-   *  a reduced scale, one per queued order of the current selection. */
+  /** A war3skins.txt model key → a loadable path. The table spells every model `.mdl` (the
+   *  World Editor's own spelling) and the archives ship the compiled `.mdx` — same fixup the
+   *  campaign backdrops need (data/campaigns.ts). */
+  private skinModel(key: string): string {
+    return this.skinPath(key).replace(/\.mdl$/i, ".mdx");
+  }
+
+  /** Load a flag model and put one hidden, looping instance of it in the world. */
+  private async spawnFlag(path: string): Promise<SpawnInstance | null> {
+    const model = (await this.viewer.load(path, this.solver)) as SpawnModel | undefined;
+    const map = this.viewer.map;
+    if (!model || !map) return null;
+    const inst = model.addInstance();
+    inst.setScene(map.worldScene);
+    // Play the waving clip by NAME: the human flags carry a Birth clip at index 0 and Stand
+    // at 1, the other three races ship Stand alone — so a hard-coded 0 loops the human
+    // flag's pop-in forever and waves for everyone else.
+    inst.setSequence(Math.max(0, this.seqIndex(inst, /^stand/i)));
+    inst.setSequenceLoopMode(2); // loop always
+    inst.hide();
+    return inst;
+  }
+
+  /** Get (or lazily create) the i-th small queue flag — one per queued order of the current
+   *  selection. This is its own model (WaypointFlag), natively about half the rally flag's
+   *  height, rather than the rally flag scaled down. */
   private queueFlag(i: number): SpawnInstance | null {
     const scene = this.viewer.map?.worldScene;
-    if (!this.rallyFlagModel || !scene) return null;
+    if (!this.queueFlagModel || !scene) return null;
     while (this.queueFlags.length <= i) {
-      const inst = this.rallyFlagModel.addInstance();
+      const inst = this.queueFlagModel.addInstance();
       inst.setScene(scene);
-      inst.setSequence(0);
+      inst.setSequence(Math.max(0, this.seqIndex(inst, /^stand/i)));
       inst.setSequenceLoopMode(2); // loop the waving clip
-      inst.setUniformScale(0.6); // smaller than the full rally flag
       inst.hide();
       this.queueFlags.push(inst);
     }
