@@ -191,6 +191,15 @@ console.log("the AUTHORITY refuses an order naming an off-field unit (a client's
   check("…and left the worker inside, untouched", [u.inMine, u.order], [true, "harvest"]);
   u.inMine = false;
   check("back on the field the same command is accepted", auth.execute(0, move), true);
+
+  // The ONE off-field state a player can still name. An Orc peon inside the structure it is
+  // raising deliberately stays selected (rts.applyVisibility), so an order naming it is live
+  // intent rather than a stale client's echo — and a queued one is the whole point: it waits
+  // out the build and runs the moment the peon steps back out.
+  const p = miner({ order: "idle", insideBuild: true, constructing: 999 });
+  const walk = { c: "order", unitId: p.id, order: { kind: "move", x: 500, y: 500 }, queued: true };
+  check("a queued order for a peon inside its own build IS accepted", auth.execute(0, walk), true);
+  check("…and waits there, with the peon still building", [p.orderQueue.length, p.insideBuild, p.order], [1, true, "idle"]);
 }
 
 console.log(failed === 0 ? "\norder funnel: all checks passed" : `\norder funnel: ${failed} check(s) failed`);

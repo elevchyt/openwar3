@@ -668,16 +668,23 @@ export class Authority {
    */
   private applyOrder(player: number, id: number, o: QueuedOrder, queued: boolean): boolean {
     if (!this.ownedBy(player, id)) return false;
-    // No WC3 UI can address an OFF-FIELD unit — a worker inside a mine or its own build,
-    // a garrisoned peon, a devoured sheep — because the game deselects it the moment it
-    // leaves the field. But a LAN client's deselect is one payload-interval STALE (it
-    // fires when the snapshot lands, not when the sim swallowed the unit), so a client's
-    // selection CAN still name one for a beat. Refused here, same door as a forged
-    // unitId: mid-mine state is not order-shaped — a re-targeted `resId` made the emerge
-    // branch clear the WRONG mine's one-worker `busy` latch, and every later peon parked
-    // at the wedged mine's entrance forever (the "stuck outside the gold mine" playtest).
+    // No UI can address an OFF-FIELD unit — a worker inside a mine, a garrisoned peon, a
+    // devoured sheep — because it is not in the selection to be named: the game drops it the
+    // moment it leaves the field. But a LAN client's deselect is one payload-interval STALE
+    // (it fires when the snapshot lands, not when the sim swallowed the unit), so a client's
+    // selection CAN still name one for a beat. Refused here, same door as a forged unitId:
+    // mid-mine state is not order-shaped — a re-targeted `resId` made the emerge branch clear
+    // the WRONG mine's one-worker `busy` latch, and every later peon parked at the wedged
+    // mine's entrance forever (the "stuck outside the gold mine" playtest).
+    //
+    // A peon inside the structure it is RAISING is the one exception, and the reason the test
+    // cannot simply be `isOffField`: that peon deliberately stays selected, so an order naming
+    // it is the player's live intent rather than a stale client's echo. Both halves work from
+    // in there — queued, it waits out the build and runs the moment the peon steps out
+    // (`startNextQueued` holds while `constructing`); immediate, `issueMove` detaches it from
+    // the site and it walks off the job.
     const u = this.sim.units.get(id);
-    if (!u || isOffField(u)) return false;
+    if (!u || (isOffField(u) && !u.insideBuild)) return false;
     this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
     if (queued) {
       this.sim.queueOrder(id, o);

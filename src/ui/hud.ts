@@ -2179,6 +2179,11 @@ export class GameHud {
       } else if (constructing || training) {
         // Progress display replaces the stat lines.
         this.progressWrap.hidden = false;
+        // A structure going up trains nothing, so the queue widget's six numbered slots are
+        // six lies — and the peon's button sits in the first of them. The backdrop art comes
+        // off entirely while it is under construction; what stays is the building's icon, the
+        // builder's button under it, and the bar (all three carry their own art).
+        this.progressWrap.classList.toggle("constructing", constructing);
         this.selStats.hidden = true;
         this.selSub.textContent = "";
         this.selCarry.hidden = true;

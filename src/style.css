@@ -1423,6 +1423,11 @@ body.hud-widget-skinned .hud-progress-wrap {
   margin: 0;
   background: var(--hud-queue-border) 0 0 / 100% 100% no-repeat;
 }
+/* …except while the structure is UNDER CONSTRUCTION, when the widget is the wrong widget: it
+   is a build QUEUE, its six slots are painted with the numbers 2…7, and a building that is
+   going up trains nothing to put in them. Off it comes, leaving the building's icon, the
+   builder's button beneath it and the bar — each of which carries its own art. */
+body.hud-widget-skinned .hud-progress-wrap.constructing { background: none; }
 /* The status line is only a wrapper here: it spans the whole backdrop so that BOTH of its
    children can be placed against the texture, rather than the label being placed against
    the icon it happens to sit next to in the DOM. */
@@ -1441,17 +1446,16 @@ body.hud-widget-skinned .hud-status-icon {
   border: none;
   border-radius: 0;
 }
-/* The builder — the peon inside the site — takes the queue widget's FIRST slot, directly under
-   the big in-progress one: the slot is free while a structure is going up (a building under
-   construction trains nothing), and it is the one box in this art that sits where the button
-   belongs. Same geometry as .hud-queue-slot:nth-child(1) below, so the icon lands in the
-   painted box and covers its "2". */
+/* The builder — the peon inside the site — hangs directly under the in-progress icon and is
+   the same size as it: with the queue backdrop off (it only ever shows while a structure is
+   under construction) there is no painted box to fit into, so the two icons simply stack in
+   one column at the panel's left edge. */
 body.hud-widget-skinned .hud-status-builder {
   position: absolute;
-  left: 2.7%;
+  left: 3.13%;
   top: 57.9%;
-  width: 14.1%;
-  height: 25.6%;
+  width: 20.31%;
+  height: 39.84%;
 }
 /* The status label sits where SimpleBuildingActionLabel does — CENTER of the info panel's
    TOPLEFT + (0.11375, −0.029875), which inside this backdrop is 56.4% across. */
