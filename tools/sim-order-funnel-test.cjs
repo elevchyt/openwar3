@@ -194,12 +194,19 @@ console.log("the AUTHORITY refuses an order naming an off-field unit (a client's
 
   // The ONE off-field state a player can still name. An Orc peon inside the structure it is
   // raising deliberately stays selected (rts.applyVisibility), so an order naming it is live
-  // intent rather than a stale client's echo — and a queued one is the whole point: it waits
-  // out the build and runs the moment the peon steps back out.
+  // intent rather than a stale client's echo — and it WAITS: an order for a peon in the wall
+  // goes into its queue whether or not shift was held, and runs when the build lets it out.
   const p = miner({ order: "idle", insideBuild: true, constructing: 999 });
   const walk = { c: "order", unitId: p.id, order: { kind: "move", x: 500, y: 500 }, queued: true };
   check("a queued order for a peon inside its own build IS accepted", auth.execute(0, walk), true);
   check("…and waits there, with the peon still building", [p.orderQueue.length, p.insideBuild, p.order], [1, true, "idle"]);
+  // The unshifted one is the same deal — REPLACING the queue, as an unqueued order does
+  // everywhere. Dispatched for real it would reach issueMove, which detaches the builder: the
+  // peon would step out of a half-built burrow and walk off, mid-build.
+  const plain = { c: "order", unitId: p.id, order: { kind: "harvest", res: "lumber", nodeId: 1 }, queued: false };
+  check("an UNQUEUED order queues too, rather than tearing the peon out of the build",
+    [auth.execute(0, plain), p.orderQueue.map((o) => o.kind), p.insideBuild, p.order],
+    [true, ["harvest"], true, "idle"]);
 }
 
 console.log(failed === 0 ? "\norder funnel: all checks passed" : `\norder funnel: ${failed} check(s) failed`);

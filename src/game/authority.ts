@@ -389,6 +389,11 @@ export class Authority {
       case "cast":
         return this.ownedBy(player, cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
       case "garrison":
+        // The one other right-click that re-tasks a worker, and it has no queued form — there
+        // is no "board" among the `QueuedOrder` kinds for `applyOrder` to defer. So a peon
+        // sealed into a structure it is raising simply refuses to climb out and man a burrow;
+        // the caller falls through to an ordinary move, which does queue.
+        if (this.sim.units.get(cmd.unitId)?.insideBuild) return false;
         return this.ownedBy(player, cmd.unitId) && this.sim.issueGarrison(cmd.unitId, cmd.buildingId);
       case "getitem":
         return this.ownedBy(player, cmd.unitId) && this.sim.issueGetItem(cmd.unitId, cmd.itemId);
@@ -679,13 +684,23 @@ export class Authority {
     //
     // A peon inside the structure it is RAISING is the one exception, and the reason the test
     // cannot simply be `isOffField`: that peon deliberately stays selected, so an order naming
-    // it is the player's live intent rather than a stale client's echo. Both halves work from
-    // in there — queued, it waits out the build and runs the moment the peon steps out
-    // (`startNextQueued` holds while `constructing`); immediate, `issueMove` detaches it from
-    // the site and it walks off the job.
+    // it is the player's live intent rather than a stale client's echo.
     const u = this.sim.units.get(id);
     if (!u || (isOffField(u) && !u.insideBuild)) return false;
     this.notePlayerOrder(id, o); // fire EVENT_..._ISSUED_ORDER for the trigger engine
+    // …but it takes those orders WITHOUT leaving the job. Every order for a peon in the wall
+    // goes into its queue, shift or no shift — an unqueued one REPLACING the queue, exactly as
+    // an unqueued order replaces it everywhere else. Run immediately, a plain right-click would
+    // reach `issueMove`, which detaches the builder: the peon would pop out of a half-built
+    // burrow and walk off, which is not what "go there" means while it is building. Nothing
+    // but the build ending — or being cancelled — puts it back on the field.
+    if (u.insideBuild) {
+      if (!queued) this.sim.clearQueue(id);
+      // Stop is "forget the queue", and in there that is all of it: there is no current order
+      // to abort, and a stop left sitting in the queue would only run as a no-op on emerge.
+      if (o.kind !== "stop") this.sim.queueOrder(id, o);
+      return true;
+    }
     if (queued) {
       this.sim.queueOrder(id, o);
       return true;
