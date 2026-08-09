@@ -151,6 +151,8 @@ export interface HudSelection {
   queueLength: number;
   queue: Array<{ icon: string }>; // icons of queued training units
   icon: string; // the selected thing's own command icon (BLP path)
+  builderId: number; // the worker hidden INSIDE this structure while it goes up (0 = none)
+  builderIcon: string; // that worker's icon (BLP path) — the button under the building's icon
   isMine: boolean; // selected gold mine
   goldRemaining: number; // gold left in the selected mine
   isItem: boolean; // selected ground item (show name + description instead of stats)
@@ -751,6 +753,7 @@ export class GameHud {
   // Construction / training progress display.
   private progressWrap!: HTMLDivElement;
   private statusIcon!: HTMLDivElement;
+  private builderBtn!: HTMLButtonElement; // the peon inside a structure under construction
   private statusLabel!: HTMLDivElement;
   private progressFill!: HTMLDivElement;
   private queueRow!: HTMLDivElement;
@@ -1508,20 +1511,22 @@ export class GameHud {
       if (r !== "none") return;
       this.driver.panTo(wx, wy); // plain left-click: jump the camera there
     });
-    // Idle-worker button — a framed race-worker icon above the minimap (like the
-    // WC3 console), with an idle count at the bottom-right. Click (or F8 / ~)
-    // selects and cycles through workers doing nothing. Hidden when there are none.
+    // Idle-worker button — the race's own worker button above the minimap, with an idle count
+    // at the bottom-right. Click (or F8 / ~) selects and cycles through workers doing nothing.
+    // Hidden when there are none.
+    //
+    // The art is the worker's `BTN*.blp` and nothing else: a command button in WC3 carries its
+    // gold frame IN the texture, so a border of our own around it is a second frame. It sinks
+    // under the press exactly as a hero-bar button does — same `onPress`, same `.pressed`.
     this.idleWorkerBadge = document.createElement("button");
-    this.idleWorkerBadge.className = "hud-idle-worker";
+    this.idleWorkerBadge.className = "hud-idle-worker hud-iconbtn";
     this.idleWorkerBadge.title = "Select idle worker (F8 / ~)";
     this.idleWorkerBadge.hidden = true;
     this.idleWorkerCount = document.createElement("span");
     this.idleWorkerCount.className = "hud-idle-count";
     this.idleWorkerBadge.appendChild(this.idleWorkerCount);
-    this.idleWorkerBadge.addEventListener("pointerdown", (e) => {
-      e.stopPropagation(); // don't also ping the minimap
-      this.driver.cycleIdleWorker();
-    });
+    this.idleWorkerBadge.addEventListener("pointerdown", (e) => e.stopPropagation()); // never a minimap ping
+    onPress(this.idleWorkerBadge, () => this.driver.cycleIdleWorker());
     box.appendChild(this.idleWorkerBadge);
     return box;
   }
@@ -1684,9 +1689,29 @@ export class GameHud {
     this.statusIcon.onclick = () => {
       if (this.queueTrainable) this.driver.runCommand("cancelqueue:0");
     };
+    // The builder's button, under the building's own icon. An Orc peon builds from INSIDE the
+    // structure, so while it is up there is no peon on the terrain to click — this is how you
+    // get it back (and queue orders on it) without cancelling the build. `InfoPanelBuildingDetail.fdf`
+    // defines no such frame — the panel there is name/description/armour/supply, the build
+    // timer and the queue backdrop — so this button is ours rather than the original's.
+    this.builderBtn = document.createElement("button");
+    this.builderBtn.className = "hud-status-builder hud-iconbtn";
+    this.builderBtn.title = "Select the worker building this";
+    this.builderBtn.hidden = true;
+    onPress(this.builderBtn, () => {
+      const id = this.driver.selection()?.builderId ?? 0;
+      if (!id) return;
+      this.driver.selectSingle(id);
+      this.refreshSelectionNow();
+    });
+    // Both icons live in one column so the placeholder console stacks them; with the console
+    // art up they are each placed against the queue widget's own slots instead (style.css).
+    const iconCol = document.createElement("div");
+    iconCol.className = "hud-status-icons";
+    iconCol.append(this.statusIcon, this.builderBtn);
     this.statusLabel = document.createElement("div");
     this.statusLabel.className = "hud-status-label";
-    statusLine.append(this.statusIcon, this.statusLabel);
+    statusLine.append(iconCol, this.statusLabel);
     const track = document.createElement("div");
     track.className = "hud-progress";
     this.progressFill = document.createElement("div");
@@ -2170,6 +2195,12 @@ export class GameHud {
         this.statusIcon.style.backgroundImage = url ? `url(${url})` : "";
         this.statusIcon.style.visibility = url ? "visible" : "hidden";
         this.statusIcon.classList.toggle("clickable", training);
+        // The peon walled into the site (Orc only — nothing else builds from inside), as a
+        // button that selects it. Its art is the icon's own, frame included, so there is no
+        // border of ours around it.
+        const bUrl = sel.builderId && sel.builderIcon ? this.driver.blpUrl(sel.builderIcon) : null;
+        this.builderBtn.hidden = !bUrl;
+        this.builderBtn.style.backgroundImage = bUrl ? `url(${bUrl})` : "";
         // Queue slots hold positions 2..7 (the current unit is above the bar).
         this.queueRow.hidden = !training;
         if (training) {

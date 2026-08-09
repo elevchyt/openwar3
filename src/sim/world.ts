@@ -5236,6 +5236,11 @@ export class SimWorld {
     u.cloaked = cloaked;
     u.invulnerable = invuln || u.baseInvulnerable; // buffs (Divine Shield/Avatar) OR the unit type's Avul (issue #26)
     if (u.vanished) u.invulnerable = true; // whisked off the field mid-effect — nothing can reach it
+    // An Orc peon building from INSIDE the site is off the field entirely (isOffField): it has
+    // no position anything can aim at, so it is invulnerable for as long as it is in there.
+    // It comes back out — and the flag with it — through detachBuilder: on completion, on a
+    // cancelled build, or when the half-built structure dies under it.
+    if (u.insideBuild) u.invulnerable = true;
     // Item attribute contribution (shown as green "+N" / red "-N" beside the stat).
     u.bonusStr = item.str;
     u.bonusAgi = item.agi;
@@ -9336,6 +9341,12 @@ export class SimWorld {
       if (mine) mine.busy = false; // don't wedge the mine shut forever
     }
     if (u.constructing) this.detachBuilder(u.id); // free the halted construction
+    // …and the same in the other direction: a half-built STRUCTURE dying takes its builders off
+    // the job. An Orc peon is inside it, and without this it stays in there — hidden, off the
+    // field and (since it is off the field) invulnerable — for the rest of the match. Both of
+    // the other ways a unit leaves the world, destroyUnit and removeUnit, already did this; the
+    // death path was the one that did not, and death is how a building under attack goes.
+    if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
     // Orc Burrow destroyed with peons inside: they die with it (WC3). Kill them first so
     // each death is recorded, then this burrow's own death proceeds.
     if (u.garrison.length) {

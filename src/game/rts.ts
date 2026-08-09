@@ -1,5 +1,5 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
-import { SimWorld, weaponsFromDef, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning } from "../sim/world";
+import { SimWorld, weaponsFromDef, isOffField, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning } from "../sim/world";
 import { KNOWN_ABILITIES } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
@@ -140,6 +140,12 @@ export interface SelectionInfo {
   queueLength: number;
   queue: Array<{ icon: string }>; // icons of the units queued for training
   icon: string; // the selected thing's own command-card icon (BLP path)
+  /** The worker HIDDEN inside this structure while it goes up — an Orc peon, and only an Orc
+   *  peon (`buildsFromInside`): every other race's builder is still standing on the terrain
+   *  where you can click it. 0 when there is none. The construction panel puts its icon under
+   *  the building's so the peon can be had back without cancelling the build. */
+  builderId: number;
+  builderIcon: string; // that worker's command-card icon (BLP path), "" when builderId is 0
   carryGold: number;
   carryLumber: number;
   isMine: boolean; // a selected gold mine (resource, not a unit)
@@ -1105,10 +1111,12 @@ export class RtsController {
     }
     if (u.insideBuild !== e.insideBuild) {
       e.insideBuild = u.insideBuild;
-      if (u.insideBuild) {
-        this.deselect(e.simId); // an Orc peon vanishing into its build drops out of the selection
-        if (this.hovered === e.simId) this.hovered = null;
-      }
+      // An Orc peon vanishing into its build KEEPS the selection (unlike a mine or a burrow,
+      // which take the worker out of your hands): the peon is still yours to order, and the
+      // orders you queue on it while it works are what it does the moment it steps back out.
+      // Its ring goes with its position (selectionRings skips anything off the field), so all
+      // that stays on screen is the panel.
+      if (u.insideBuild && this.hovered === e.simId) this.hovered = null;
     }
     if (u.inBurrow !== e.inBurrow) {
       e.inBurrow = u.inBurrow;
@@ -3919,7 +3927,7 @@ export class RtsController {
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
-      queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
+      queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: false, goldRemaining: 0,
       isItem: true, description: def ? this.tipText(def.description) : "",
       isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
@@ -3946,11 +3954,36 @@ export class RtsController {
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
-      queue: [], icon: def?.icon ?? "", carryGold: 0, carryLumber: 0,
+      queue: [], icon: def?.icon ?? "", builderId: 0, builderIcon: "", carryGold: 0, carryLumber: 0,
       isMine: true, goldRemaining: m.gold,
       isItem: false, description: "",
       isSummon: false, summonSecondsLeft: 0, summonFrac: 0, buffs: [],
     };
+  }
+
+  /**
+   * The worker hidden INSIDE a structure that is going up, or 0.
+   *
+   * Only an Orc peon is ever in there — `buildsFromInside` in the sim is the race test, and
+   * the point of asking here is exactly that: a peasant hammering away outside can be clicked
+   * on the terrain, and a peon in the wall cannot be reached at all until the build ends. So
+   * the panel of the thing it is inside carries its button.
+   *
+   * Read off the RENDER records rather than the building's `builderIds`, because a client is
+   * drawing a snapshot and the snapshot carries the worker (its owner is still told about its
+   * own off-field units) but not the site's builder list. Only ever asked for one selected
+   * structure that is still under construction, so the walk is over entries once a frame.
+   */
+  private builderInside(buildingId: number): number {
+    for (const e of this.entries) {
+      const u = this.frameUnit(e.simId);
+      // YOUR peon only. You may click an enemy's half-built structure, and the worker sealed
+      // inside it is one of the things the fog is hiding — a button naming it would be telling
+      // you a peon is in there and handing you a click on an off-field unit. (A client is
+      // never sent it in the first place; the host has to refuse it here.)
+      if (u?.insideBuild && u.constructing === buildingId && u.owner === this.localPlayer) return e.simId;
+    }
+    return 0;
   }
 
   private infoFor(id: number): SelectionInfo | null {
@@ -3966,6 +3999,7 @@ export class RtsController {
     const b = u.building;
     const q = b?.queue ?? [];
     const def = this.registry.get(e.typeId);
+    const builderId = b && b.constructionLeft > 0 ? this.builderInside(e.simId) : 0;
     return {
       id: e.simId,
       typeId: e.typeId,
@@ -4022,6 +4056,8 @@ export class RtsController {
         icon: (j.kind === "research" ? this.upgrades.icon(j.unitId, j.level ?? 0) : this.registry.get(j.unitId)?.icon) ?? "",
       })),
       icon: this.registry.get(e.typeId)?.icon ?? "",
+      builderId,
+      builderIcon: builderId ? (this.registry.get(this.byId.get(builderId)?.typeId ?? "")?.icon ?? "") : "",
       carryGold: u.worker?.carryGold ?? 0,
       carryLumber: u.worker?.carryLumber ?? 0,
       isMine: false,
@@ -4159,6 +4195,10 @@ export class RtsController {
     for (const id of this.selected) {
       const u = this.frameUnit(id); // the ring sits under the MODEL, so it reads the model's record
       const e = this.byId.get(id);
+      // Nothing to ring for a unit that is off the field — an Orc peon inside the structure it
+      // is raising stays SELECTED (applyVisibility), and its parked-at-the-centre coordinates
+      // are not a place it can be said to be standing.
+      if (u && isOffField(u)) continue;
       // Buildings get a ring sized to their footprint (a constant tiny ring is
       // hidden under the model); units keep the constant ring. Neutral Passive
       // entities ring yellow.

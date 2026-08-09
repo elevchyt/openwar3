@@ -613,25 +613,33 @@ body.in-game .menu-panel { display: none; }
   height: 100%;
 }
 .hud-minimap-img { image-rendering: pixelated; }
-/* Idle-worker button — a framed race-worker action icon ABOVE the minimap's
-   top-left corner, with an idle-count in its bottom-right (WC3 console). */
-.hud-idle-worker {
-  position: absolute;
-  bottom: calc(100% + 42px); /* sit well above the minimap */
-  left: 0;
-  width: 46px;
-  height: 46px;
-  z-index: 4;
+/* A WC3 command-button icon used as a button — the idle-worker badge, the builder button on a
+   construction panel. The BLP already carries the gold frame the game draws around every
+   command button, so NOTHING here draws one: a border of ours would be a second frame around
+   art that has its own. Presses sink it, exactly as the hero bar's buttons do (.pressed). */
+.hud-iconbtn {
   padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent center / 100% 100% no-repeat;
   cursor: pointer;
-  background-color: #0a0a08;
-  background-size: cover;
-  background-position: center;
-  border: 2px solid #c8a860;
-  border-radius: 3px;
-  box-shadow: 0 0 5px rgba(0, 0, 0, 0.75);
 }
-.hud-idle-worker:hover { border-color: #ffe08a; filter: brightness(1.15); }
+.hud-iconbtn:hover { filter: brightness(1.12); }
+.hud-iconbtn.pressed { transform: scale(0.98); }
+
+/* Idle-worker button — the race's own worker button ABOVE the minimap's top-left corner, with
+   an idle-count in its bottom-right. Sized and offset off the STAGE like the hero bar (same
+   68 px at 1080p as a hero's button — these are the same kind of button), so it scales with
+   the game's frame instead of the window. */
+.hud-idle-worker {
+  --idle-btn: calc(var(--stage-h) * 68 / 1080);
+  position: absolute;
+  bottom: calc(100% + var(--stage-h) * 42 / 1080); /* sit well above the minimap */
+  left: 0;
+  width: var(--idle-btn);
+  height: var(--idle-btn);
+  z-index: 4;
+}
 
 /* --- Hero bar (issue #95): your heroes stacked down the top-left corner, each an icon
    with an HP and a mana bar under it. Every length comes from ui/hud.ts HERO_BAR, which
@@ -802,9 +810,9 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
 .game-menu-btn.danger:hover:not(:disabled) { border-color: #e06a5a; color: #ffb0a0; }
 .hud-idle-count {
   position: absolute;
-  right: 1px;
-  bottom: 0;
-  font: 700 13px/1 ui-monospace, Menlo, Consolas, monospace;
+  right: calc(var(--idle-btn) * 4 / 68);
+  bottom: calc(var(--idle-btn) * 2 / 68);
+  font: 700 max(11px, calc(var(--idle-btn) * 16 / 68))/1 ui-monospace, Menlo, Consolas, monospace;
   color: #fff;
   padding: 0 2px;
   text-shadow: 0 0 3px #000, 0 0 3px #000, 1px 1px 1px #000;
@@ -1347,6 +1355,11 @@ body.hud-statbar-skinned .hud-sel-icon-fill.mana { background-image: var(--statb
   border: 1px solid rgba(216, 180, 90, 0.5);
   border-radius: 2px;
 }
+/* The two stacked icons of a construction panel: what is being built, and (Orc) the peon
+   walled up inside building it. A column here; with the console art up they are each placed
+   against the queue widget's own slots instead — see .hud-status-builder below. */
+.hud-status-icons { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.hud-status-builder { width: 34px; height: 34px; }
 /* Click-to-cancel affordance: the in-progress icon (while training) and filled
    queue slots take a pointer cursor and brighten on hover. */
 .hud-status-icon.clickable, .hud-queue-slot.filled { cursor: pointer; }
@@ -1427,6 +1440,18 @@ body.hud-widget-skinned .hud-status-icon {
   height: 39.84%;
   border: none;
   border-radius: 0;
+}
+/* The builder — the peon inside the site — takes the queue widget's FIRST slot, directly under
+   the big in-progress one: the slot is free while a structure is going up (a building under
+   construction trains nothing), and it is the one box in this art that sits where the button
+   belongs. Same geometry as .hud-queue-slot:nth-child(1) below, so the icon lands in the
+   painted box and covers its "2". */
+body.hud-widget-skinned .hud-status-builder {
+  position: absolute;
+  left: 2.7%;
+  top: 57.9%;
+  width: 14.1%;
+  height: 25.6%;
 }
 /* The status label sits where SimpleBuildingActionLabel does — CENTER of the info panel's
    TOPLEFT + (0.11375, −0.029875), which inside this backdrop is 56.4% across. */

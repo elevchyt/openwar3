@@ -546,7 +546,7 @@ console.log("the sim hands over a dead structure whole, because its id resolves 
   };
   // A structure and a footman, so the structures-only rule is exercised on the SIM side rather
   // than only inside GhostMemory.
-  const hall = put({ id: 501, typeId: "htow", owner: 0, x: 300, y: 300, building: { constructionLeft: 0, queue: [] } });
+  const hall = put({ id: 501, typeId: "htow", owner: 0, x: 300, y: 300, building: { constructionLeft: 0, queue: [], builderIds: [] } });
   const foot = put({ id: 502, typeId: "hfoo", owner: 0, x: 900, y: 900, building: null });
 
   w.killUnit(hall.id);
