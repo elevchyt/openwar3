@@ -11,7 +11,7 @@ import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
 import { type Alert, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
-import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
+import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { EVENT_PLAYER_END_CINEMATIC } from "../jass/interpreter";
@@ -648,6 +648,10 @@ export class MapViewerScene {
   // blocked footprint cell — green where buildable, red where the pathing grid obstructs.
   private placeCells = new Float32Array(0);
   private placeCellVerts = 0;
+  /** Ground the player's own not-yet-started builds hold, as of the last ghost update — see
+   *  `pendingBuildCells`. Refreshed with the ghost so the squares it reddens and the click
+   *  `placementValid` refuses are always the same answer. */
+  private placeReserved: ReadonlySet<number> = new Set();
   // Static geometry (pathing/vision cells + tree click-rings) — rebuilt on a slow timer;
   // dynamic geometry (unit click-rings) — rebuilt every frame since units move.
   private dbgCells = new Float32Array(0); // pathing + vision quads (triangles)
@@ -3076,8 +3080,11 @@ export class MapViewerScene {
     if (p.fp) [x, y] = this.grid.snapForBuildingRect(x, y, p.fp.w, p.fp.h);
     // A refused placement keeps the building on the cursor, exactly like a refused cast
     // keeps the reticle: the player gets told why and clicks again, without re-picking the
-    // building off the card.
-    if (!this.placementValid(x, y)) {
+    // building off the card. Asked against the grid AND this player's own pending build
+    // sites — a shift-queued building placed over a ghost is refused here rather than
+    // discovered a minute later when the worker walks over. An unshifted click retires this
+    // worker's own orders first, so its own ghosts don't refuse it.
+    if (!this.placementValid(x, y, this.pendingBuildCells(queued ? 0 : p.workerId))) {
       this.refuse("Cantplace"); // "Unable to build there." — the worker says so out loud
       return;
     }
@@ -5072,12 +5079,46 @@ export class MapViewerScene {
 
 
   /** Whether the building on the cursor may be founded here — the shared per-cell
-   *  buildable test (see `footprintBuildable`), asked of the placement's own footprint.
-   *  A building with no pathTex reserves nothing and can go anywhere. */
-  private placementValid(x: number, y: number): boolean {
+   *  buildable test (see `footprintBuildable`), asked of the placement's own footprint
+   *  against the grid PLUS the ground the player's own pending builds have already spoken
+   *  for. A building with no pathTex reserves nothing and can go anywhere. */
+  private placementValid(x: number, y: number, reserved: ReadonlySet<number>): boolean {
     const p = this.placement;
     if (!p || !this.grid || !p.fp) return true;
-    return footprintBuildable(this.grid, p.fp, x, y);
+    return footprintBuildable(this.grid, p.fp, x, y, reserved);
+  }
+
+  /**
+   * The cells the local player's own build orders have already spoken for: every worker's
+   * active `buildPending` site and every `buildnew` shift-queued behind it — i.e. exactly the
+   * dark-blue ghosts on the ground (updatePendingBuildGhosts).
+   *
+   * WC3 draws those ghosts so you can see where you have already committed to build, and a
+   * second building placed over one is the same mistake as one placed over the finished
+   * structure — it just doesn't fail until the worker walks over. Nothing on the pathing grid
+   * says so (no structure exists yet), so the reservation is carried here and handed to
+   * `footprintBuildable` as its `taken` set.
+   *
+   * `exclude` is the worker whose orders this placement would REPLACE: an unshifted build
+   * clears its worker's whole queue (issueOrder → clearQueue) before adding itself, so those
+   * sites are about to be refunded and must not refuse the click that retires them — which is
+   * what moving a build you just ordered a cell to the left is.
+   */
+  private pendingBuildCells(exclude = 0): Set<number> {
+    const cells = new Set<number>();
+    const grid = this.grid;
+    if (!this.rts || !grid) return cells;
+    const add = (defId: string, x: number, y: number): void => {
+      const def = this.registry.get(defId);
+      const fp = def?.pathTex ? this.footprintFor(def.pathTex) : null;
+      if (fp) footprintCellsAt(grid, fp, x, y, cells);
+    };
+    for (const u of this.rts.simView.units.values()) {
+      if (u.owner !== this.localPlayer || u.id === exclude) continue;
+      if (u.buildPending) add(u.buildPending.defId, u.buildPending.x, u.buildPending.y);
+      for (const o of u.orderQueue) if (o.kind === "buildnew") add(o.defId, o.x, o.y);
+    }
+    return cells;
   }
 
   /** Whether a NEW building of `defId` can no longer be founded at (x, y) — the same test
@@ -5112,6 +5153,11 @@ export class MapViewerScene {
     let [x, y] = hit;
     const fp = this.placement.fp;
     if (fp) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
+    // What this player's own pending builds have already claimed, in the same view the CLICK
+    // will take: an unshifted placement retires its worker's own orders, so those cells are
+    // free to it and the squares must not be drawn red over them. Shift is read from the
+    // held-key set so the grid re-colours the instant the player reaches for it.
+    this.placeReserved = this.pendingBuildCells(this.keys.has("shift") ? 0 : this.placement.workerId);
     // Rebuild the green/red footprint collider grid under the ghost.
     this.rebuildPlacementFootprint(x, y);
     if (this.buildGhost) {
@@ -5172,6 +5218,9 @@ export class MapViewerScene {
             if (!fp.buildBlocked[cy * fp.w + cx]) continue; // the full reserved footprint
             reserved = true;
             if (!this.grid.buildable(bx + cx, by + cy)) blocked = true;
+            // …and the ground the player's own un-started builds have spoken for reads as
+            // blocked too, since the click over it is refused (see placementValid).
+            if (this.placeReserved.has((by + cy) * this.grid.width + (bx + cx))) blocked = true;
           }
         }
         if (!reserved) continue;
@@ -7178,24 +7227,44 @@ export class MapViewerScene {
    *  begun: each worker's active `buildPending` site AND its shift-queued `buildnew`
    *  orders (issue #18). Rebuilt each frame from the live sim so a ghost appears the
    *  moment the order is given and vanishes the instant it clears (build starts, is
-   *  canceled, or the worker is re-tasked). Only the owning player's sites are drawn. */
+   *  canceled, or the worker is re-tasked). Only the owning player's sites are drawn.
+   *
+   *  A site that CANNOT be built — its ground has gone, or an earlier ghost already holds
+   *  it — is drawn dark RED instead: a silhouette standing inside another silhouette is a
+   *  building that is never going to rise, and saying so where the player is looking beats
+   *  a refusal a minute later. First claim wins, so the ghost that turns red is the second
+   *  one placed. (Placing one there is refused up front — see `placementValid` — so this is
+   *  for the ones no click could catch: an order from another of your workers landing in the
+   *  same tick, or ground taken by an ally after you queued.) */
   private updatePendingBuildGhosts(): void {
     if (!this.rts || !this.viewer.map) {
       this.clearPendingGhosts();
       return;
     }
     // Collect every desired build site (keyed by defId + snapped position, unique per
-    // footprint) from the local player's workers.
-    const desired = new Map<string, { defId: string; x: number; y: number }>();
+    // footprint) from the local player's workers, in order, each judged against the ground
+    // and against the sites already claimed ahead of it.
+    const desired = new Map<string, { defId: string; x: number; y: number; blocked: boolean }>();
+    const claimed = new Set<number>();
+    const note = (defId: string, x: number, y: number): void => {
+      const key = this.pendingKey(defId, x, y);
+      if (desired.has(key)) return; // one ghost per footprint, however many workers want it
+      const def = this.registry.get(defId);
+      const fp = def?.pathTex ? this.footprintFor(def.pathTex) : null;
+      let blocked = this.siteBlocked(defId, x, y); // something has since gone up on it
+      if (fp && this.grid) {
+        const cells = new Set<number>();
+        footprintCellsAt(this.grid, fp, x, y, cells);
+        for (const c of cells) if (claimed.has(c)) { blocked = true; break; }
+        // A site that isn't going to be built claims nothing — it must not redden a third.
+        if (!blocked) for (const c of cells) claimed.add(c);
+      }
+      desired.set(key, { defId, x, y, blocked });
+    };
     for (const u of this.rts.simView.units.values()) {
       if (u.owner !== this.localPlayer) continue;
-      if (u.buildPending) {
-        const pb = u.buildPending;
-        desired.set(this.pendingKey(pb.defId, pb.x, pb.y), { defId: pb.defId, x: pb.x, y: pb.y });
-      }
-      for (const o of u.orderQueue) {
-        if (o.kind === "buildnew") desired.set(this.pendingKey(o.defId, o.x, o.y), { defId: o.defId, x: o.x, y: o.y });
-      }
+      if (u.buildPending) note(u.buildPending.defId, u.buildPending.x, u.buildPending.y);
+      for (const o of u.orderQueue) if (o.kind === "buildnew") note(o.defId, o.x, o.y);
     }
     // Drop ghosts whose site is no longer pending (order started/canceled/re-tasked).
     for (const [key, g] of this.pendingGhosts) {
@@ -7208,14 +7277,14 @@ export class MapViewerScene {
     for (const [key, site] of desired) {
       const g = this.pendingGhosts.get(key);
       if (g) {
-        this.placePendingGhost(g, site.x, site.y);
+        this.placePendingGhost(g, site.x, site.y, site.blocked);
         continue;
       }
       if (this.pendingGhostLoading.has(key)) continue; // model still loading
       const def = this.registry.get(site.defId);
       if (!def) continue;
       this.pendingGhostLoading.add(key);
-      void this.spawnPendingGhost(key, def, site.x, site.y);
+      void this.spawnPendingGhost(key, def, site.x, site.y, site.blocked);
     }
   }
 
@@ -7224,9 +7293,9 @@ export class MapViewerScene {
     return `${defId}@${Math.round(x)},${Math.round(y)}`;
   }
 
-  /** Load (async) and register a dark-blue ghost for a pending build site, unless the
-   *  order was canceled while the model streamed in. */
-  private async spawnPendingGhost(key: string, def: UnitDef, x: number, y: number): Promise<void> {
+  /** Load (async) and register a ghost for a pending build site, unless the order was
+   *  canceled while the model streamed in. */
+  private async spawnPendingGhost(key: string, def: UnitDef, x: number, y: number, blocked: boolean): Promise<void> {
     const map = this.viewer.map;
     const model = map ? ((await this.viewer.load(def.model, this.solver)) as SpawnModel | undefined) : undefined;
     this.pendingGhostLoading.delete(key);
@@ -7238,13 +7307,14 @@ export class MapViewerScene {
     inst.setTeamColor(this.rts?.playerColor(this.localPlayer) ?? this.localPlayer);
     const g = { inst, defId: def.id, frame: this.applyGhostPose(inst) };
     this.pendingGhosts.set(key, g);
-    this.placePendingGhost(g, x, y);
+    this.placePendingGhost(g, x, y, blocked);
   }
 
   /** Position a pending-build ghost on its site — seated on the tallest terrain its
    *  footprint spans (like the real building, issue #15), pinned to the built pose, and
-   *  tinted a hard dark blue so it reads clearly as "about to be built". */
-  private placePendingGhost(g: { inst: SpawnInstance; defId: string; frame: number }, x: number, y: number): void {
+   *  tinted a hard dark blue so it reads clearly as "about to be built" — or dark RED when
+   *  the site is no longer one, which is a silhouette announcing that it will never rise. */
+  private placePendingGhost(g: { inst: SpawnInstance; defId: string; frame: number }, x: number, y: number, blocked = false): void {
     const def = this.registry.get(g.defId);
     const fp = def?.pathTex ? this.footprintFor(def.pathTex) : null;
     this.loc3[0] = x;
@@ -7253,7 +7323,7 @@ export class MapViewerScene {
       fp && this.footMaxHeight ? this.footMaxHeight(x, y, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2) : (this.rts?.groundHeightAt(x, y) ?? 0);
     g.inst.setLocation(this.loc3);
     if (g.frame >= 0) g.inst.frame = g.frame; // keep it fully built, not mid-animation
-    g.inst.setVertexColor(PENDING_GHOST_TINT); // hard dark blue
+    g.inst.setVertexColor(blocked ? PENDING_GHOST_BLOCKED_TINT : PENDING_GHOST_TINT);
     g.inst.show();
   }
 
@@ -9532,6 +9602,10 @@ function zQuat(out: Float32Array, angle: number): void {
 // translucent alpha now genuinely fades the model (issue #66) rather than making it
 // vanish, so this is a look, not a constraint.
 const PENDING_GHOST_TINT = [0.12, 0.22, 0.85, 1.0] as const;
+// …and its refusal twin: the same hard, opaque treatment swung to red, for a pending build
+// standing where one can no longer go (see updatePendingBuildGhosts). Deliberately the same
+// vocabulary as the placement grid's red squares — one colour means "not here" everywhere.
+const PENDING_GHOST_BLOCKED_TINT = [0.85, 0.12, 0.12, 1.0] as const;
 const COLLIDER_LIFT = 12; // raise shapes above the ground so they read clearly
 // "Show Regions" overlay palette: cyan outline + a faint cyan wash inside each rect.
 const REGION_COLORS = { outline: [0.2, 0.95, 1.0, 0.9] as const, fill: [0.2, 0.85, 1.0, 0.12] as const };

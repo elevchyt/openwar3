@@ -159,16 +159,42 @@ function applyFootprint(grid: PathingGrid, fp: Footprint, worldX: number, worldY
  *  reservations do not, since those scatter when the foundation goes down.
  *
  *  Same centring as `applyFootprint` by construction: this is the question the stamp
- *  answers in reverse, so the two must index the grid identically. */
-export function footprintBuildable(grid: PathingGrid, fp: Footprint, worldX: number, worldY: number): boolean {
+ *  answers in reverse, so the two must index the grid identically.
+ *
+ *  `taken` is the cells (`cy * grid.width + cx`) something has SPOKEN FOR without standing
+ *  on yet — a build the player has ordered but no worker has raised. Those reserve nothing on
+ *  the grid (no structure exists), so they have to be carried alongside it. */
+export function footprintBuildable(
+  grid: PathingGrid,
+  fp: Footprint,
+  worldX: number,
+  worldY: number,
+  taken?: ReadonlySet<number>,
+): boolean {
   const [bx, by] = grid.worldToCell(worldX - (fp.w * PATHING_CELL) / 2, worldY - (fp.h * PATHING_CELL) / 2);
   for (let y = 0; y < fp.h; y++) {
     for (let x = 0; x < fp.w; x++) {
       if (!fp.buildBlocked[y * fp.w + x]) continue;
       if (!grid.buildable(bx + x, by + y)) return false;
+      if (taken?.has((by + y) * grid.width + (bx + x))) return false;
     }
   }
   return true;
+}
+
+/** The cells a footprint centred on (worldX, worldY) would reserve — its blue (unbuildable)
+ *  extent as grid indices, the currency `footprintBuildable`'s `taken` set is counted in.
+ *  Cells off the map are skipped: nothing can be built there anyway, and the index would
+ *  wrap onto the row above. */
+export function footprintCellsAt(grid: PathingGrid, fp: Footprint, worldX: number, worldY: number, out: Set<number>): void {
+  const [bx, by] = grid.worldToCell(worldX - (fp.w * PATHING_CELL) / 2, worldY - (fp.h * PATHING_CELL) / 2);
+  for (let y = 0; y < fp.h; y++) {
+    for (let x = 0; x < fp.w; x++) {
+      if (!fp.buildBlocked[y * fp.w + x]) continue;
+      if (bx + x < 0 || by + y < 0 || bx + x >= grid.width || by + y >= grid.height) continue;
+      out.add((by + y) * grid.width + (bx + x));
+    }
+  }
 }
 
 // Decode a WC3 pathing texture (uncompressed 24bpp TGA) into its two channels:

@@ -21,7 +21,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
-const { stampFootprint, footprintBuildable } = require(join(REPO, ".sim-build", "src", "sim", "destructibles.js"));
+const { stampFootprint, footprintBuildable, footprintCellsAt } = require(join(REPO, ".sim-build", "src", "sim", "destructibles.js"));
 
 let failed = 0;
 function check(what, got, want) {
@@ -71,6 +71,25 @@ console.log("footprintBuildable indexes the grid exactly as the stamp does");
   // One cell of overlap is enough — the corner cases are the ones a sloppy centring gets wrong.
   check("a site overlapping by a single cell is refused", footprintBuildable(grid, fp, x + 3 * CELL, y + 3 * CELL), false);
   check("a site exactly clear of it is accepted", footprintBuildable(grid, fp, x + 4 * CELL, y + 4 * CELL), true);
+}
+
+console.log("\nground a pending build has spoken for, which is on no grid");
+{
+  // The click-time half: a queued build reserves nothing on the pathing grid (no structure
+  // exists yet), so its cells are carried alongside it and refuse the next placement there.
+  const fp = solidFp(4);
+  const [x, y] = [40 * CELL, 40 * CELL];
+  const taken = new Set();
+  footprintCellsAt(grid, fp, x, y, taken);
+  check("the reserved cells are the footprint's own", taken.size, 16);
+  check("the site itself is still clear ground", footprintBuildable(grid, fp, x, y), true);
+  check("…but refused once its own order holds it", footprintBuildable(grid, fp, x, y, taken), false);
+  check("an overlapping neighbour is refused too", footprintBuildable(grid, fp, x + 3 * CELL, y, taken), false);
+  check("…and one clear of it is not", footprintBuildable(grid, fp, x + 4 * CELL, y, taken), true);
+  // Off-map cells must not wrap onto the row above and reserve ground on the far edge.
+  const edge = new Set();
+  footprintCellsAt(grid, fp, 0, 0, edge);
+  check("a site half off the map reserves only its on-map cells", edge.size, 4);
 }
 
 console.log("\nthe bug: a queued build on top of the one before it");
