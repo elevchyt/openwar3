@@ -1102,10 +1102,16 @@ export class GameHud {
       this.refreshSelectionNow();
       return;
     }
-    // NumPad maps to the 2×3 inventory grid (INVENTORY_NUMPAD). Key off `e.code` so
-    // NumLock-off symbols don't interfere.
+    // NumPad maps to the 2×3 inventory grid (INVENTORY_NUMPAD). Which PHYSICAL key that is
+    // comes from `e.code` (Numpad7), so no layout can move it. Whether it is an item hotkey
+    // at all comes from `e.key`: the game's own Tip50 (UI\TipStrings.txt) says the slots
+    // answer the keypad "when |Cfffed312Num Lock|r is turned on", and with the lock ON the OS
+    // sends the DIGIT while with it OFF it sends the arrow/Home/End the same key doubles as —
+    // which is a camera pan (mapViewer reads "arrowup"/"arrowleft"/…), exactly as in WC3.
+    // Read that off the keystroke rather than getModifierState("NumLock"), which a keyboard
+    // with no numpad at all cannot answer meaningfully.
     const numpad = /^Numpad([0-9])$/.exec(e.code);
-    const slot = numpad ? INVENTORY_NUMPAD.indexOf(Number(numpad[1])) : -1;
+    const slot = numpad && e.key === numpad[1] ? INVENTORY_NUMPAD.indexOf(Number(numpad[1])) : -1;
     if (slot >= 0) {
       e.preventDefault();
       this.driver.useInventory(slot);
