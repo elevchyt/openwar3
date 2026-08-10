@@ -1245,7 +1245,11 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-attr-lines { display: flex; flex-direction: column; line-height: 1.25; }
 .hud-attr-line { font-size: 12px; color: #fff; } /* SimpleInfoPanelAttributeTextTemplate: white */
 .hud-attr-line .attr-name { color: #e0b93a; }
-.hud-attr-line.primary { font-weight: 700; color: #fff8e0; }
+/* The PRIMARY attribute is marked by colour alone. Nothing in this panel is bold: every string
+   it draws comes from a SimpleInfoPanel.fdf template, and a template carries a font, a size
+   and a colour — highlighting there is a swap of TEMPLATE (…LabelHighlightTextTemplate), never
+   of weight. So the primary keeps a brighter gold name and the same white value as the other
+   two, and Strength/Agility/Intelligence all read at one weight. */
 .hud-attr-line.primary .attr-name { color: #f4d060; }
 /* The info panel's Status line: the gold "Status:" label (InfoPanelStrings COLON_STATUS) with
    the active buffs' own icons in a row to its right, under the Damage/Armor blocks.
