@@ -1141,7 +1141,10 @@ body.hud-statbar-skinned .hud-hero-fill.mana { background-image: var(--statbar-m
      In the skinned console `place()` sets position:absolute inline, which does the same job. */
   position: relative;
 }
-.hud-sel-name { font-size: 17px; color: #f4e8c8; text-align: center; letter-spacing: 0.3px; }
+/* WHITE, like every info-panel string the FDF does not paint gold. SimpleInfoPanel.fdf gives
+   the title, the values and the attributes one colour — `FontColor 1.0 1.0 1.0 1.0` — and only
+   SimpleInfoPanelLabelTextTemplate ("Damage:", "Armor:") is the gold 0.99 0.827 0.0705. */
+.hud-sel-name { font-size: 17px; color: #fff; text-align: center; letter-spacing: 0.3px; }
 .hud-sel-sub { font-size: 12px; color: #c9a24a; text-align: center; margin: -2px 0 4px; }
 /* Hero XP / summon-timer bar — the label (level + experience, or "Summoned Unit
    (Ns)") sits INSIDE the bar, centred over the purple (XP) / green (summon) fill. */
@@ -1232,7 +1235,7 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-stat-block { display: flex; align-items: center; gap: 8px; }
 .hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; }
 .hud-stat-label { font-size: 12px; color: #e0b93a; font-weight: 600; }
-.hud-stat-value { font-size: 13px; color: #eae2c4; }
+.hud-stat-value { font-size: 13px; color: #fff; } /* SimpleInfoPanelValueTextTemplate: white */
 .stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura/item bonus */
 .stat-penalty { color: #e0504a; font-weight: 700; } /* red debuff/negative-item penalty */
 .hud-stat-invuln { font-size: 12px; color: #e0504a; font-weight: 700; } /* red "Invulnerable" under the armour value (issue #26) */
@@ -1240,7 +1243,7 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-attr-col { display: flex; align-items: center; gap: 8px; }
 .hud-attr-primary-icon { width: 30px; height: 30px; }
 .hud-attr-lines { display: flex; flex-direction: column; line-height: 1.25; }
-.hud-attr-line { font-size: 12px; color: #eae2c4; }
+.hud-attr-line { font-size: 12px; color: #fff; } /* SimpleInfoPanelAttributeTextTemplate: white */
 .hud-attr-line .attr-name { color: #e0b93a; }
 .hud-attr-line.primary { font-weight: 700; color: #fff8e0; }
 .hud-attr-line.primary .attr-name { color: #f4d060; }
@@ -1264,9 +1267,8 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 }
 /* White, not the gold the other info-panel labels wear: the engine draws this one with
    SimpleInfoPanelValueTextTemplate, which is the label template with `FontColor 1 1 1 1`
-   (SimpleInfoPanel.fdf) — same font, same size, only the colour differs. Same off-white the
-   panel's VALUES already use, so "Status:" reads as one of them rather than a second white. */
-.hud-buff-label { font-size: 12px; color: #eae2c4; font-weight: 600; flex: none; }
+   (SimpleInfoPanel.fdf) — same font, same size, only the colour differs. */
+.hud-buff-label { font-size: 12px; color: #fff; font-weight: 600; flex: none; }
 .hud-buff-icons { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
 /* Two thirds of a stat icon, and no chrome of our own: a BTN icon already carries the gold
    button frame the console reads by, so a border around it just makes the row noisy. */
