@@ -27,6 +27,9 @@ const ability = (id, over = {}) => ({
   target: "unit", targetFlags: ["ground", "air", "vuln", "invu", "player", "neutral"],
   autocast: false, name: id, icon: "", hotkey: "", researchHotkey: "", buttonX: 0, buttonY: 0,
   learnX: 0, learnY: 0, research: false, tips: [], uberTips: [], researchTip: "", researchUberTip: "",
+  // The Mass Teleport set the staves borrow, basenames only — the sound the renderer plays
+  // is resolved off these paths (MassTeleportTarget.wav), so which art carries `sound` is
+  // what the checks below pin down.
   missileArt: "", targetArt: "MassTeleportTarget.mdx", targetAttach: [],
   casterArt: "MassTeleportCaster.mdx", specialArt: "MassTeleportTarget.mdx", effectArt: "",
   areaArt: "", effectSound: "", buffFx: [], buffArt: "", buffEffectArt: "", buffSpecialArt: "",
@@ -122,6 +125,14 @@ const near = (what, got, want, tol = 0.5) => {
   near("…and the target lands at the Castle (y)", target.y, 3000, 200);
   check("…and it spends the item's 30s cooldown", hero.inventory[0].cooldownLeft, 30);
   check("…and the target takes no buff", target.buffs.length, 0);
+  // Three models: the staff-bearer's flourish, the traveller's departure, its arrival — and
+  // the teleport whoosh on the two that are the TRAVELLER's, at each end of the hop.
+  const fx = world.drainSpellEffects();
+  check("three effects play", fx.length, 3);
+  check("…the caster's, silently, on the bearer", `${fx[0].art}@${fx[0].x},${fx[0].y}:${!!fx[0].sound}`, "MassTeleportCaster.mdx@1000,1000:false");
+  check("…the departure, with the whoosh", `${fx[1].art}@${fx[1].x},${fx[1].y}:${!!fx[1].sound}`, "MassTeleportTarget.mdx@1400,1000:true");
+  check("…and the arrival, with it too", `${fx[2].art}:${!!fx[2].sound}`, "MassTeleportTarget.mdx:true");
+  near("…at the Castle it arrived on", Math.hypot(fx[2].x - 3000, fx[2].y - 3000), 0, 200);
 }
 
 // --- The fallback chain, exactly as Liquipedia documents it for the Human race ---------

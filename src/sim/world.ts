@@ -10441,10 +10441,21 @@ export class SimWorld {
           // the sibling Staff of Teleportation: `Casterart` on whoever waved the staff,
           // `Targetart` on the traveller where it LEAVES from, `Specialart` on it where it
           // ARRIVES. All three are the Mass Teleport set — the staves borrow it wholesale.
+          //
+          // And so is the SOUND: the teleport whoosh, which is `MassTeleportTarget.wav`, the
+          // one WAV in that folder. Neither staff names an `Effectsound`, so it is resolved
+          // off the effect model like every other spell's (see playSpellSound) — the models'
+          // own embedded SND event if they carry one, else the folder WAV, which
+          // MassTeleportCaster.mdx also reaches through folderSounds' folder-name pass.
+          //
+          // It rides the TRAVELLER, at both ends of the hop, not the staff-bearer: those are
+          // two different places, the whoosh belongs to the unit that moved, and the two are
+          // positional so distance already decides which one you actually hear. Sounding the
+          // caster's flourish too would be a third copy of one clip in the same instant.
           this.emitEffectAt(ad.casterArt, u.x, u.y);
-          this.emitEffectAt(ad.targetArt, t.x, t.y);
+          this.emitEffectAt(ad.targetArt, t.x, t.y, true);
           this.teleportUnit(t, dest.x, dest.y);
-          this.emitEffectAt(ad.specialArt, t.x, t.y);
+          this.emitEffectAt(ad.specialArt, t.x, t.y, true);
           this.stop(t.id); // it arrives idle, not still walking the errand it was pulled off
           if (ad.code === "ANsa") {
             // Sanctuary's payload (`ANsa` DataB/DataC/DataE, named by AbilityMetaData.slk's
