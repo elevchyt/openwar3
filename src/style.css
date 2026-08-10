@@ -1234,7 +1234,9 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 /* A stat block: [icon] then "Damage:" over "67 - 76 +36". */
 .hud-stat-block { display: flex; align-items: center; gap: 8px; }
 .hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; }
-.hud-stat-label { font-size: 12px; color: #e0b93a; font-weight: 600; }
+/* "Damage:" / "Armor:" and the attribute names are the SAME string in the game — both are
+   SimpleInfoPanelLabelTextTemplate — so they are drawn alike here: one gold, one weight. */
+.hud-stat-label { font-size: 12px; color: #e0b93a; }
 .hud-stat-value { font-size: 13px; color: #fff; } /* SimpleInfoPanelValueTextTemplate: white */
 .stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura/item bonus */
 .stat-penalty { color: #e0504a; font-weight: 700; } /* red debuff/negative-item penalty */
@@ -1243,13 +1245,14 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-attr-col { display: flex; align-items: center; gap: 8px; }
 .hud-attr-primary-icon { width: 30px; height: 30px; }
 .hud-attr-lines { display: flex; flex-direction: column; line-height: 1.25; }
-.hud-attr-line { font-size: 12px; color: #fff; } /* SimpleInfoPanelAttributeTextTemplate: white */
-.hud-attr-line .attr-name { color: #e0b93a; }
 /* All three attributes are drawn ALIKE — one gold name, one white value, one weight. Which is
    the hero's primary is already said by the icon beside them (the panel shows the primary
-   attribute's icon and no other), so the lines themselves say it a second time in neither
-   colour nor weight. Nothing in this panel is bold at all: every string it draws comes from a
-   SimpleInfoPanel.fdf template — a font, a size and a colour — so there is no weight to vary. */
+   attribute's icon and no other), so the lines themselves would be saying it a second time.
+   No label or value in this panel varies its weight at all: each is a SimpleInfoPanel.fdf
+   template string — a font, a size and a colour — with no weight to vary. Only the green "+N"
+   bonus and the red warnings are emphasised, and those are ours rather than the game's. */
+.hud-attr-line { font-size: 12px; color: #fff; } /* SimpleInfoPanelAttributeTextTemplate: white */
+.hud-attr-line .attr-name { color: #e0b93a; }
 /* The info panel's Status line: the gold "Status:" label (InfoPanelStrings COLON_STATUS) with
    the active buffs' own icons in a row to its right, under the Damage/Armor blocks.
    NOTE the class names: `.hud-status-icon` is the CONSTRUCTION panel's icon (below), which the
@@ -1271,7 +1274,7 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 /* White, not the gold the other info-panel labels wear: the engine draws this one with
    SimpleInfoPanelValueTextTemplate, which is the label template with `FontColor 1 1 1 1`
    (SimpleInfoPanel.fdf) — same font, same size, only the colour differs. */
-.hud-buff-label { font-size: 12px; color: #fff; font-weight: 600; flex: none; }
+.hud-buff-label { font-size: 12px; color: #fff; flex: none; }
 .hud-buff-icons { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
 /* Two thirds of a stat icon, and no chrome of our own: a BTN icon already carries the gold
    button frame the console reads by, so a border around it just makes the row noisy. */
