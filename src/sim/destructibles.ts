@@ -150,6 +150,27 @@ function applyFootprint(grid: PathingGrid, fp: Footprint, worldX: number, worldY
   }
 }
 
+/** May a building whose footprint is `fp` be founded centred on (worldX, worldY)?
+ *
+ *  Every reserved (blue) cell must be buildable — the UNBUILDABLE footprint, not just the
+ *  unwalkable red core, so a building's walkable border still reserves build space (that
+ *  border is what keeps two production buildings' cores apart). Terrain (cliffs, water,
+ *  unbuildable margins) and other buildings' blue footprints block; movable-unit
+ *  reservations do not, since those scatter when the foundation goes down.
+ *
+ *  Same centring as `applyFootprint` by construction: this is the question the stamp
+ *  answers in reverse, so the two must index the grid identically. */
+export function footprintBuildable(grid: PathingGrid, fp: Footprint, worldX: number, worldY: number): boolean {
+  const [bx, by] = grid.worldToCell(worldX - (fp.w * PATHING_CELL) / 2, worldY - (fp.h * PATHING_CELL) / 2);
+  for (let y = 0; y < fp.h; y++) {
+    for (let x = 0; x < fp.w; x++) {
+      if (!fp.buildBlocked[y * fp.w + x]) continue;
+      if (!grid.buildable(bx + x, by + y)) return false;
+    }
+  }
+  return true;
+}
+
 // Decode a WC3 pathing texture (uncompressed 24bpp TGA) into its two channels:
 // red → `blocked` (unwalkable), blue → `buildBlocked` (unbuildable). (Rotation
 // ignored — blocking footprints are square/symmetric for trees & buildings here.)

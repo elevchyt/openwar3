@@ -4548,6 +4548,47 @@ export class SimWorld {
     if (u) this.refundPendingBuild(u);
   }
 
+  /**
+   * Abandon every new-building order this worker still holds — the site it is walking to
+   * raise AND anything shift-queued behind it — whose ground `blocked` now refuses,
+   * refunding each.
+   *
+   * A queued build's site is only ever checked when the player PLACES it, and by the time
+   * the worker gets there the ground can have changed under it: shift-queue two buildings
+   * that overlap and the second was raised straight through the first, because nothing
+   * re-asked (nor need the two builds be the same player's — an ally or an enemy raising
+   * something on the spot you queued does it just as well). So the sites are re-asked, and
+   * an order that has become impossible is dropped rather than carried to a wrong build.
+   *
+   * `blocked` is the renderer's, because answering it needs the pathTex footprint the
+   * renderer decodes (same split as `setFootprintReader`); the money and the queue are the
+   * sim's, so the dropping happens here. Returns how many orders went, so the caller can
+   * say so out loud.
+   */
+  dropBlockedBuilds(id: number, blocked: (defId: string, x: number, y: number) => boolean): number {
+    const u = this.units.get(id);
+    if (!u) return 0;
+    let dropped = 0;
+    if (u.buildPending && blocked(u.buildPending.defId, u.buildPending.x, u.buildPending.y)) {
+      this.refundPendingBuild(u);
+      // It was walking to a site that no longer exists as a site. Stop, so the shift-queue
+      // advances now instead of after a pointless walk to nowhere (the tick's queue pump
+      // wants `idle`); a Stop never touches the queue itself.
+      this.stop(id);
+      dropped++;
+    }
+    for (let i = u.orderQueue.length - 1; i >= 0; i--) {
+      const o = u.orderQueue[i];
+      if (o.kind !== "buildnew" || !blocked(o.defId, o.x, o.y)) continue;
+      const s = this.stashOf(u.owner);
+      s.gold += o.gold;
+      s.lumber += o.lumber;
+      u.orderQueue.splice(i, 1);
+      dropped++;
+    }
+    return dropped;
+  }
+
   /** Send a worker to raise a NEW building at (x,y): it walks there and the
    *  renderer raises the foundation on arrival (watches `buildPending`). Used for
    *  immediate (non-shift) placement; the shift path queues a `buildnew` order.

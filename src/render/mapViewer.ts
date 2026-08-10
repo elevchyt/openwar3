@@ -11,7 +11,7 @@ import { destructibleUnitDef } from "../data/units";
 import { PathingGrid, parseWpm, footprintCells, PATHING_CELL, BUILD_CELL, BUILD_CELL_CELLS } from "../sim/pathing";
 import { AllianceType } from "../sim/alliances";
 import { type Alert, type RallyKind, type ShopResult, type SimUnit, type SimWorld } from "../sim/world";
-import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
+import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { loadMapScript, type MapScriptEngine } from "../jass/index";
 import { EVENT_PLAYER_END_CINEMATIC } from "../jass/interpreter";
@@ -3105,13 +3105,31 @@ export class MapViewerScene {
     if (!this.rts) return;
     const world = this.rts.simWorld;
     for (const w of world.units.values()) {
+      // A worker mid-spawn is exempt from BOTH halves below: its foundation's own footprint
+      // is already on the grid (spawnUnit stamps before its model promise settles) while it
+      // still holds the `buildPending` that raised it, so asking would refuse the very build
+      // that is happening.
+      if (this.buildSpawning.has(w.id)) continue;
+      // Re-ask the ground of every build order this worker still holds, and drop the ones it
+      // now refuses (with a refund). A build site is authorised when the player CLICKS it,
+      // and a shift-queued one can sit for a minute before the worker walks over — long
+      // enough for the previous building in the same queue to rise straight through it, which
+      // is exactly the "two buildings inside each other" the queue used to allow. Runs every
+      // tick rather than only on arrival so a doomed order clears (and its ghost with it) the
+      // moment the ground goes, whoever took it — this worker, an ally, or an enemy.
+      if (w.buildPending || w.orderQueue.length) {
+        const dropped = world.dropBlockedBuilds(w.id, this.siteBlocked);
+        // "Unable to build there." — the same refusal the click itself would have got, said
+        // once however many orders went, and only to the player whose orders they were.
+        if (dropped && w.owner === this.localPlayer) this.refuse("Cantplace");
+      }
       const pb = w.buildPending;
       // No owner filter: on a LAN host EVERY player's pending builds are this machine's to
       // start — the client's worker walked here on the host's own sim, and skipping it left
       // the foundation never rising (playtest bug 6's true root, the localPlayer disease
       // bug 4 had). Single-player is unchanged: only the local player ever has one. A
       // frozen client never runs this at all (advanceSim's gate).
-      if (!pb || this.buildSpawning.has(w.id)) continue;
+      if (!pb) continue;
       if (Math.hypot(w.x - pb.x, w.y - pb.y) >= 160 || w.moving) { this.buildWait.delete(w.id); continue; } // not there yet
       const def = this.registry.get(pb.defId);
       if (!def) { world.cancelPendingBuild(w.id); this.buildWait.delete(w.id); continue; }
@@ -5053,24 +5071,25 @@ export class MapViewerScene {
   }
 
 
-  /** Every cell of the building's full (blue) pathTex footprint must be buildable.
-   *  We test the UNBUILDABLE footprint — not just the unwalkable red core — so a
-   *  building's walkable border still reserves build space: that border is what
-   *  keeps two production buildings' cores apart, leaving the corridor units pass
-   *  through. Terrain (cliffs/water/unbuildable margins) and other buildings' blue
-   *  footprints block; movable-unit reservations do NOT (they scatter on arrival). */
+  /** Whether the building on the cursor may be founded here — the shared per-cell
+   *  buildable test (see `footprintBuildable`), asked of the placement's own footprint.
+   *  A building with no pathTex reserves nothing and can go anywhere. */
   private placementValid(x: number, y: number): boolean {
     const p = this.placement;
     if (!p || !this.grid || !p.fp) return true;
-    const [bx, by] = this.grid.worldToCell(x - (p.fp.w * 32) / 2, y - (p.fp.h * 32) / 2);
-    for (let cy = 0; cy < p.fp.h; cy++) {
-      for (let cx = 0; cx < p.fp.w; cx++) {
-        if (!p.fp.buildBlocked[cy * p.fp.w + cx]) continue;
-        if (!this.grid.buildable(bx + cx, by + cy)) return false;
-      }
-    }
-    return true;
+    return footprintBuildable(this.grid, p.fp, x, y);
   }
+
+  /** Whether a NEW building of `defId` can no longer be founded at (x, y) — the same test
+   *  the placement ghost's green/red squares draw, asked of a build order that was authorised
+   *  earlier and may since have been overtaken by whatever went up on the spot. Bound once as
+   *  a field: `tickPendingBuild` hands it to the sim for every worker on every frame, and has
+   *  no business minting a closure each time. */
+  private readonly siteBlocked = (defId: string, x: number, y: number): boolean => {
+    const def = this.registry.get(defId);
+    const fp = def?.pathTex ? this.footprintFor(def.pathTex) : null;
+    return !!fp && !!this.grid && !footprintBuildable(this.grid, fp, x, y);
+  };
 
   /** Update the build-placement ghost under the cursor: the finished-building
    *  silhouette positioned on the ground, plus a green/red per-cell footprint grid
