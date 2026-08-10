@@ -6312,7 +6312,18 @@ export class SimWorld {
     const handler = SPELL_HANDLERS[code];
     const d = def ?? (this.abilities ? this.abilityByCode(code) : undefined);
     if (!handler || !d) return;
-    handler(this.spellApi, caster, d, Math.max(1, rank), ctx);
+    // Which ability is casting, for the length of the handler. Every buff it applies belongs
+    // to this ability's buff row unless it says otherwise, so `applyBuff` can fill `buffId`
+    // in rather than each of the ~90 handlers repeating it — and a handler that applies a
+    // DIFFERENT row (a drain picks among nine) still just passes its own. Saved and restored
+    // because a handler may cast in turn (Chain Lightning's bounce, an item's sub-ability).
+    const outer = this.casting;
+    this.casting = { def: d, rank: Math.max(1, rank) };
+    try {
+      handler(this.spellApi, caster, d, Math.max(1, rank), ctx);
+    } finally {
+      this.casting = outer;
+    }
     // A drain is a channel whose effect is a pair of buffs rather than a field, so it is
     // recorded here — the one place that knows the caster AND the victim — for tickDrains to
     // tear down if the channel breaks. Re-casting replaces the caster's own entry: WC3 lets
@@ -6335,6 +6346,10 @@ export class SimWorld {
    *  A channel that simply ran out is not an interrupt: `channelLeft` has reached 0 and the
    *  buffs expire on their own clock the same tick, so they are left alone. */
   private drains: Array<{ casterId: number; targetId: number }> = [];
+
+  /** The ability whose handler is running right now, if any — see applySpellEffect. Only
+   *  the SpellApi's applyBuff reads it, to fill in the buff row a handler didn't name. */
+  private casting: { def: AbilityDef; rank: number } | null = null;
 
   private tickDrains(): void {
     if (!this.drains.length) return;
@@ -7112,7 +7127,8 @@ export class SimWorld {
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
-    applyBuff: (t, buff) => this.applyBuffInternal(t, buff),
+    applyBuff: (t, buff) =>
+      this.applyBuffInternal(t, buff.buffId === undefined && this.casting ? { ...buff, buffId: buffIdOf(this.casting.def, this.casting.rank) } : buff),
     dispel: (t) => this.dispelUnit(t),
     requestSummon: (unitId, x, y, facing, owner, team, dur, src, art, atPoint) => {
       this.summonRequests.push({ unitId, x, y, facing, owner, team, summonLeft: dur, sourceId: src, summonArt: art?.summon ?? "", unsummonArt: art?.unsummon ?? "", atPoint: !!atPoint });
@@ -10353,23 +10369,26 @@ export class SimWorld {
           if (hp > 0 && mana > 0 && u.hp >= u.maxHp && u.mana >= u.maxMana) break;
           const buffId = hp > 0 && mana > 0 ? "BIrg" : hp > 0 ? "BIrl" : "BIrm";
           const fx = this.abilities.buffFx(buffId);
+          // …and that same choice is the icon the info panel's Status line shows: a salve's
+          // BTNHealingSalve, a Clarity Potion's BTNPotionOfClarity, a Rejuvenation scroll's
+          // BTNGreaterRejuvScroll — one row, one art, one name ("Regeneration").
           if (hp > 0) {
             this.applyBuffInternal(u, {
               kind: "hot", group: ITEM_REGEN_GROUP, timeLeft: seconds, sourceId: u.id,
-              value: hp / seconds, value2: 0, fx,
+              value: hp / seconds, value2: 0, fx, buffId,
             });
           }
           if (mana > 0) {
             this.applyBuffInternal(u, {
               kind: "manaRegen", group: `${ITEM_REGEN_GROUP}:mana`, timeLeft: seconds, sourceId: u.id,
-              value: mana / seconds, value2: 0, fx: hp > 0 ? [] : fx, // one set of models, not two
+              value: mana / seconds, value2: 0, fx: hp > 0 ? [] : fx, buffId, // one set of models, not two
             });
           }
           fired = true;
           break;
         }
-        case "AIvu": // Potion of Invulnerability → brief invulnerability
-          this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0 });
+        case "AIvu": // Potion of Invulnerability → brief invulnerability (`Bvul`, "Invulnerable")
+          this.applyBuffInternal(u, { kind: "invuln", group: "item:invuln", timeLeft: lvl?.duration || 15, sourceId: u.id, value: 0, value2: 0, buffId: buffIdOf(ad) });
           fired = true;
           break;
         case "AEbl": { // Kelen's Dagger of Escape → blink to a point within range

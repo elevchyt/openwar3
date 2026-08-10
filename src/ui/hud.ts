@@ -2409,11 +2409,10 @@ export class GameHud {
         continue;
       }
       slot.hidden = false;
-      const url = b.icon ? this.driver.blpUrl(b.icon) : null;
+      // Always art: a buff the panel has no icon for never reaches this row (rts.ts
+      // statusBuffsFor drops it, following the data's own "not visible on the info card").
+      const url = this.driver.blpUrl(b.icon);
       slot.style.backgroundImage = url ? `url(${url})` : "";
-      // No icon art (an internal buff whose row carries no Buffart): the first letters of
-      // the name stand in, so the slot still reads as something rather than a black square.
-      slot.textContent = url ? "" : wc3StripMarkup(b.name).slice(0, 3);
       slot.title = ""; // the slab below replaces the browser's own tooltip
       slot.onpointerenter = () => {
         this.buffHover = i;

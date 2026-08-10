@@ -59,13 +59,31 @@ panel is built from, and they are the buff's — never the ability's:
   rate and movement speed are increased.").
 
 `AbilityRegistry.buff(buffId)` returns all of it (`BuffDef`), and `SimBuff.buffId` is how a
-live buff finds its row — set from `fx(def)`, which hands the id over with the art. Auras land
-here too: `BHad`/`BOae`/`BUau` all carry a `Buffart`, so a unit inside a Devotion Aura shows
-the aura's icon just as a Bloodlusted one shows Bloodlust's.
+live buff finds its row. Nothing has to pass it by hand: `World.applySpellEffect` records the
+ability it is running, so every `api.applyBuff` a handler makes is stamped with that ability's
+`buffid<rank>` unless the handler names a different row itself. Auras land here too:
+`BHad`/`BOae`/`BUau` all carry a `Buffart`, so a unit inside a Devotion Aura shows the aura's
+icon just as a Bloodlusted one shows Bloodlust's.
 
 One WC3 buff is often several of ours (an Inner Fire is an armour buff *and* a damage buff, a
-Slow Poison a dot *and* a slow), so the row de-dupes on the buff id — otherwise the same state
-is drawn twice, once resolved and once as a generic fallback.
+Slow Poison a dot *and* a slow), so the line de-dupes on the buff row — one state, one icon.
+
+**A row with no `Buffart` is not shown, and that is the point.** 22 of the 188 buff rows carry
+none, and the data explains itself: the drain's caster and target rows are written `//Buffart=`
+under the comment *"This buff isn't ever visible on the info card"*. So there is no generic
+placeholder to fall back to — a buff we cannot find art for is left off the line. Abilities that
+define no buff at all (Avatar, Robo-Goblin) show nothing for the same reason: a morph is not a
+buff. The one thing the fallback table `KIND_BUFF_ROW` is for is the states the ENGINE owns
+rather than an ability: Storm Bolt, Firebolt and Bash carry no `BuffID`, yet a stunned unit
+always shows "Stunned" — that is `BPSE`, whose `EditorSuffix= (Pause)` says what it is.
+
+Two traps when looking a row up:
+
+* **`BuffID` is not always a `B….`** — Tranquility's `[AEtq] BuffID1 = AEtr`, an ability row.
+  So the index has to cover every id the ability table points at, not just the `B` space.
+* **The case does not always match.** `AbilityData.slk` says `BUhf` and `Bust`; the sections are
+  `[Buhf]` and `[BUst]`. Two rows out of 194, and one of them is Unholy Frenzy — an exact-match
+  lookup loses its icon. `AbilityRegistry.buff` folds case for this reason.
 
 ### An ability may list several buffs, and it picks between them off its own numbers
 

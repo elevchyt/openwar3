@@ -327,30 +327,15 @@ const POSE_SNAP_DIST = 400;
 const DEATH_CLIP_FALLBACK = 1.6; // seconds to hold a Death clip of unknown length
 const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown length
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
-// Buff status-row display. A buff normally names its own `B….` row (SimBuff.buffId), which
-// is where the icon, the name and the tooltip come from — see BuffDef. These two tables are
-// the FALLBACK for the buffs nothing named a row for: map the group back to a source ability
-// code, and give the remaining kinds a generic icon + label.
-const GROUP_TO_CODE: Record<string, string> = {
-  innerfire: "Ainf", avatar: "AHav", slow: "Aslo",
-  // Orb effects (src/sim/orbs.ts). `frostattack` is the generic Slowed buff every frost
-  // source hangs, so it takes Frost Attack's own PASBTNFrost art rather than the Orb of
-  // Frost's — that icon IS the buff's, and a Frost Wyrm wearing an item icon would be odd.
-  coldarrow: "AHca", frostattack: "Afra", orbcorruption: "AIcb", blackarrow: "ANba",
-  incinerate: "ANia", itempurge: "AIlp",
-};
-/** The poison orbs key their buff `poison-<code>[-<attackerId>]` (see World.applyPoison), so
- *  the status row recovers the ability from the middle rather than from a fixed table. */
-const POISON_GROUP = /^poison-(\w{4})/;
-const BUFF_KIND_ICON: Record<string, string> = {
-  stun: "ReplaceableTextures\\CommandButtons\\BTNStun.blp",
-  invuln: "ReplaceableTextures\\CommandButtons\\BTNDivineIntervention.blp",
-};
-const BUFF_KIND_LABEL: Record<string, string> = {
-  stun: "Stunned", slow: "Slowed", invuln: "Invulnerable", armor: "Bonus Armor", damage: "Bonus Damage",
-  damagePct: "Bonus Damage", haste: "Haste", manaRegen: "Mana Regeneration", hpRegen: "Health Regeneration",
-  lifesteal: "Life Steal", thorns: "Thorns", hot: "Healing", dot: "Damage",
-};
+/** The engine's OWN buff rows, for the states no ability defines a buff for.
+ *
+ *  A stun is the case that matters: Storm Bolt, Firebolt and the Mountain King's Bash carry
+ *  no `BuffID` at all, yet a stunned unit shows the "Stunned" icon in every game — because the
+ *  engine hangs `BPSE` on anything it pauses. The row says as much itself: Bufftip "Stunned",
+ *  Buffubertip "This unit will not move.", `EditorSuffix= (Pause)`, art BTNStun
+ *  (Units\CommonAbilityFunc.txt / CommonAbilityStrings.txt). `Bvul` is the same thing for
+ *  invulnerability. Only consulted when the buff named no row of its own. */
+const KIND_BUFF_ROW: Record<string, string> = { stun: "BPSE", invuln: "Bvul" };
 // mdx-m3-viewer sequence loop modes, named from its ModelInstance code (its own doc
 // comment is stale). The mode is not "how many times to play" — it decides who wins
 // when the clip ends: the model's own MDX looping flag, or us.
@@ -4096,41 +4081,33 @@ export class RtsController {
   }
 
   /** Active buffs/auras/debuffs on a unit, resolved to the icon + name + tooltip the info
-   *  panel's **Status** row shows, in the order they landed.
+   *  panel's **Status** line shows, in the order they landed.
    *
-   *  The row is the BUFF's, not the ability's: `Bfro` is what Slow, Frost Attack and every
-   *  orb of frost all hang, and its Bufftip is "Slowed" — the state the unit is in — where
-   *  the ability is called "Slow". So `SimBuff.buffId` is the first thing tried; only a buff
-   *  that named no row falls back to its caster's ability icon/name (GROUP_TO_CODE), and
-   *  then to a generic per-kind label.
+   *  One rule, and it is the data's: **a Status entry is a BUFF ROW with art.** The row is the
+   *  buff's own, never the ability's — `Bfro` is what Slow, Frost Attack and every orb of frost
+   *  hang, and its Bufftip is "Slowed", the state the unit is in, where the ability is called
+   *  "Slow". Everything that applies a buff names its row (`SimBuff.buffId`, filled in by
+   *  World.applySpellEffect for any handler that doesn't say otherwise), and the few states the
+   *  engine itself owns rather than an ability fall back to its rows (KIND_BUFF_ROW).
    *
-   *  One WC3 buff can be several of ours — an Inner Fire is an armour buff AND a damage buff,
-   *  a Slow Poison a dot AND a slow — so the row de-dupes on the buff row (or, failing that,
-   *  the non-stacking group) rather than showing the same state twice. */
+   *  A row with no `Buffart` is one the game does not put on the info card, and the data says
+   *  so out loud — the drain's six caster/target rows are written `//Buffart=` under the
+   *  comment "This buff isn't ever visible on the info card" (Units\HumanAbilityFunc.txt), and
+   *  22 of the 188 rows are like that. Those are skipped, as are the buffs of abilities that
+   *  define none at all (Avatar, Robo-Goblin: a morph is not a buff). Nothing else is invented
+   *  to fill the gap — a row of icons with a placeholder in it is not a row of icons.
+   *
+   *  One WC3 buff is often several of ours — an Inner Fire is an armour buff AND a damage buff,
+   *  a Slow Poison a dot AND a slow — so entries de-dupe on the row: one state, one icon. */
   private statusBuffsFor(u: RenderUnit): Array<{ icon: string; name: string; tip: string }> {
     if (!u.buffs.length) return [];
     const out: Array<{ icon: string; name: string; tip: string }> = [];
     const seen = new Set<string>();
     for (const b of u.buffs) {
-      const code = b.group.includes(":") ? b.group.split(":")[0] : (GROUP_TO_CODE[b.group] ?? POISON_GROUP.exec(b.group)?.[1] ?? "");
-      const buff = b.buffId ? this.abilities.buff(b.buffId) : undefined;
-      // BOTH keys are checked and both are remembered: Inner Fire's two halves share a group
-      // but only the one carrying the art names `Binf`, so matching on either alone shows the
-      // same buff twice — the icon it resolved to, and then the fallback for its other half.
-      // `kind` is the key of LAST resort (a buff with neither row nor group), never a key
-      // alongside them: two different armour buffs are two states, not one.
-      const named = [buff?.id ?? "", b.group].filter(Boolean);
-      const keys = named.length ? named : [b.kind];
-      if (keys.some((k) => seen.has(k))) continue;
-      for (const k of keys) seen.add(k);
-      const def = !buff && code ? this.abilityDefByCode(code) : undefined;
-      // A buff row with no `Buffart` (a handful of internal ones) still shows — the
-      // kind's generic icon stands in, as it did before any of them had a row at all.
-      out.push({
-        icon: buff?.icon || def?.icon || BUFF_KIND_ICON[b.kind] || "",
-        name: buff?.name || def?.name || BUFF_KIND_LABEL[b.kind] || b.kind,
-        tip: this.tipText(buff?.tip ?? ""),
-      });
+      const row = this.abilities.buff(b.buffId || KIND_BUFF_ROW[b.kind] || "");
+      if (!row?.icon || seen.has(row.id)) continue;
+      seen.add(row.id);
+      out.push({ icon: row.icon, name: row.name, tip: this.tipText(row.tip) });
     }
     return out;
   }

@@ -1277,18 +1277,15 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-buff-label { font-size: 12px; color: #fff; flex: none; }
 .hud-buff-icons { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
 /* Two thirds of a stat icon, and no chrome of our own: a BTN icon already carries the gold
-   button frame the console reads by, so a border around it just makes the row noisy. */
+   button frame the console reads by, so a border around it just makes the row noisy. Nothing
+   but art ever lands in one — a buff the panel has no icon for is not put on the line at all
+   (rts.ts statusBuffsFor), so there is no text case to style. */
 .hud-buff-icon {
   width: 18px;
   height: 18px;
   flex: none;
   background-size: 100% 100%;
   background-repeat: no-repeat;
-  font-size: 8px;
-  color: #cfc7ab;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   cursor: help;
 }
 

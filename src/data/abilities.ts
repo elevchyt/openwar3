@@ -431,11 +431,16 @@ export class AbilityRegistry {
   ) {}
   /** The persistent models a given buff id hangs on its holder ([] if unknown). */
   buffFx(buffId: string): BuffFx[] {
-    return this.buffs.get(buffId)?.fx ?? [];
+    return this.buff(buffId)?.fx ?? [];
   }
-  /** A buff's own row — icon/name/tooltip for the info panel's Status row. */
+  /** A buff's own row — icon/name/tooltip for the info panel's Status row.
+   *
+   *  Looked up CASE-INSENSITIVELY, because Blizzard's own data does not agree with itself:
+   *  `AbilityData.slk` sends Unholy Frenzy to `BUhf` and Frost Nova's stun to `Bust`, while
+   *  the sections that define them are `[Buhf]` and `[BUst]`. Two rows out of 194, and an
+   *  exact match loses both — Unholy Frenzy's icon among them. */
   buff(buffId: string): BuffDef | undefined {
-    return this.buffs.get(buffId);
+    return buffId ? this.buffs.get(buffId.toLowerCase()) : undefined;
   }
   get(id: string): AbilityDef | undefined {
     return this.custom.get(id) ?? this.defs.get(id);
@@ -574,16 +579,24 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
   // Index every buff section — its models (so an ability that lists several buffs can pick
   // the one its numbers call for) AND its icon/name/tooltip (the info panel's Status row).
-  // Buff ids are the `B….` space; nothing in AbilityData shares it, so the first letter is
-  // the whole test. A buff has no `[…]` section in AbilityFunc when it hangs no model — the
-  // STRINGS file still names it, which is why both files are consulted here.
+  //
+  // Buff ids are the `B….` space, but that is not the whole test: a `BuffID` column may name
+  // something outside it, and Tranquility's does — `AEtq` lists `AEtr`, an ABILITY row, as its
+  // buff. So every id the ability table actually points at is indexed too, or that buff has no
+  // row and the panel falls back to art the game never shows there.
+  //
+  // A buff that hangs no model has no `[…]` section in AbilityFunc at all — the STRINGS file
+  // still names it — which is why both files are consulted. Keys are lower-cased: see
+  // AbilityRegistry.buff for the two rows whose case the data gets wrong.
+  const referenced = new Set<string>();
+  for (const def of defs.values()) for (const lvl of def.levelData) for (const b of lvl.buffs) referenced.add(b);
   const buffs = new Map<string, BuffDef>();
   for (const id of new Set([...Object.keys(func.map), ...Object.keys(strs.map)])) {
-    if (id[0] !== "B") continue;
+    if (id[0] !== "B" && !referenced.has(id)) continue;
     const f = func.getRow(id) as Row | undefined;
     const s = strs.getRow(id) as Row | undefined;
     if (!f && !s) continue;
-    buffs.set(id, {
+    buffs.set(id.toLowerCase(), {
       id,
       icon: f ? str(f, "Buffart") : "",
       name: rawTip(s ? str(s, "Bufftip") : "") || id,
