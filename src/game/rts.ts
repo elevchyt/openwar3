@@ -31,7 +31,7 @@ import { applyWorldSnapshot } from "./snapshotApply";
 import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
 import { CreepCamps, hiddenFor, minimapDots, minimapIcons, dotsFromSnapshot } from "./minimapView";
-import type { RenderUnit } from "./renderUnit";
+import type { RenderBuildJob, RenderUnit } from "./renderUnit";
 import { SnapshotIndex } from "./renderView";
 import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable, AllianceType } from "../sim/alliances";
@@ -249,6 +249,10 @@ interface Entry {
   lastSwingSeq: number; // last sim swingSeq the attack clip was re-triggered for
   lastChopSeq: number; // last sim chopSeq the chop clip was re-triggered for
   castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
+  /** The TARGET tier's Birth clip while this building is upgrading into it (Scout Tower →
+   *  Guard Tower). Resolved once per target and cached here because it costs a sequence-name
+   *  pass; `seq` -1 means "this pair has no upgrade clip to play". See upgradeBirthFor. */
+  upgradeBirth?: { toTypeId: string; seq: number; start: number; end: number };
   moveEma: number; // smoothed actual/expected displacement — gates the walk clip
   // The position this entry was DRAWN at last frame. The walk/stand picker needs "how far did
   // the drawn unit move this frame", and that is a render fact — the previous DRAWN position —
@@ -2475,6 +2479,7 @@ export class RtsController {
     entry.curSeq = -1;
     entry.lastSwingSeq = -1;
     entry.lastChopSeq = -1;
+    entry.upgradeBirth = undefined; // resolved against the OLD body's sequence list
     if (entry.anims.stand >= 0) {
       instance.setSequence(entry.anims.stand);
       instance.setSequenceLoopMode(SequenceLoopMode.PlayOnce);
@@ -2824,6 +2829,31 @@ export class RtsController {
       if (e.curScale !== e.baseScale) {
         e.curScale = e.baseScale;
         e.unit.instance.setUniformScale(e.baseScale);
+      }
+      // A finished building UPGRADING into its next tier plays the TARGET tier's "Birth"
+      // clip, scrubbed to the upgrade timer — the same treatment construction gets, because
+      // it is the same thing: that clip exists for no other reason. HumanTower.mdx's is
+      // "Birth Upgrade First Second third" — ONE clip shared by the Guard, Cannon and Arcane
+      // towers, none of which can be built directly, so an upgrade is the only way to reach
+      // it. Ziggurat → Spirit Tower and Town Hall → Keep are the same shape.
+      //
+      // Without this an upgrading building just ran `pickSequence`'s "queue is busy" branch
+      // and stood on "Stand Work" — and a tower has no work clip, so that fell all the way
+      // back to its ATTACK swing (see buildAnimSet's `build`).
+      const upJob = u.building && u.building.queue[0]?.kind === "upgrade" ? u.building.queue[0] : null;
+      if (upJob) {
+        const b = this.upgradeBirthFor(e, upJob.unitId);
+        if (b.seq >= 0) {
+          setAnimRate(e, 1); // scrubbed by progress, not played at a rate
+          if (e.curSeq !== b.seq) {
+            e.curSeq = b.seq;
+            e.unit.state = WidgetState.WALK; // keep mdx-m3-viewer from auto-standing
+            e.unit.instance.setSequence(b.seq);
+            e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
+          }
+          e.unit.instance.frame = b.start + upgradeProgress(upJob) * (b.end - b.start);
+          continue; // don't run the normal animation picker while it rises
+        }
       }
       // A materializing summon holds its birth clip (sim `spawning`) — don't let
       // the picker override it until it can act.
@@ -4352,11 +4382,36 @@ export class RtsController {
     this.aoeHighlight = new Set(ids);
   }
 
+  /**
+   * The Birth clip of the tier this building is upgrading INTO, resolved against the body
+   * already standing here.
+   *
+   * A tiered building is one model carrying every tier as sequences (HumanTower.mdx is the
+   * Scout, Guard, Cannon AND Arcane towers; uzg1/uzg2 share the Ziggurat's), and which clips
+   * a tier may see is decided by its `Animprops` — so the target's birth is a clip this
+   * instance already has, just named with the target's tier tokens ("Birth Upgrade First").
+   * Reading it through findBirthFields with the TARGET's props is the whole trick.
+   *
+   * A pair that genuinely changes model file has nothing here to play, and says so with -1:
+   * there is no new body until the morph lands, so it keeps the old "queue is busy" pose.
+   */
+  private upgradeBirthFor(e: Entry, toTypeId: string): { seq: number; start: number; end: number } {
+    if (e.upgradeBirth?.toTypeId === toTypeId) return e.upgradeBirth;
+    const def = this.registry.get(toTypeId);
+    const f =
+      def && def.model === e.modelPath
+        ? findBirthFields(e.unit.instance.model.sequences, def.animProps)
+        : { birthSeq: -1, birthStart: 0, birthEnd: 0 };
+    e.upgradeBirth = { toTypeId, seq: f.birthSeq, start: f.birthStart, end: f.birthEnd };
+    return e.upgradeBirth;
+  }
+
   /** Re-pin under-construction buildings' Birth frame to construction progress
    *  AFTER the renderer's animation update — otherwise mdx-m3-viewer's per-frame
    *  frame advance creeps the birth forward, so a HALTED construction still
    *  looked like it was building. Called each frame post-update; this makes the
-   *  birth freeze when paused and resume exactly with progress. */
+   *  birth freeze when paused and resume exactly with progress. A tier upgrade is
+   *  scrubbed the same way, and creeps the same way if it isn't re-pinned here. */
   repinConstructionFrames(): void {
     for (const e of this.entries) {
       // The SAME record the entry sync scrubbed this frame (item 10c-2c-4). Reading the sim
@@ -4364,9 +4419,17 @@ export class RtsController {
       // two different progresses — a building that visibly stutters between two states of
       // construction on a client, and only on a client.
       const u = this.frameUnit(e.simId);
-      if (!u?.building || u.building.constructionLeft <= 0 || e.birthSeq < 0) continue;
-      const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
-      e.unit.instance.frame = e.birthStart + prog * (e.birthEnd - e.birthStart);
+      if (!u?.building) continue;
+      if (u.building.constructionLeft > 0) {
+        if (e.birthSeq < 0) continue;
+        const prog = 1 - u.building.constructionLeft / u.building.buildTimeTotal;
+        e.unit.instance.frame = e.birthStart + prog * (e.birthEnd - e.birthStart);
+        continue;
+      }
+      const job = u.building.queue[0];
+      if (job?.kind !== "upgrade") continue;
+      const b = this.upgradeBirthFor(e, job.unitId);
+      if (b.seq >= 0) e.unit.instance.frame = b.start + upgradeProgress(job) * (b.end - b.start);
     }
   }
 
@@ -5684,6 +5747,14 @@ export class RtsController {
 // 30–50. No fudge — this is the authentic Z the game floats each unit at.
 function lift(moveHeight: number): number {
   return moveHeight > 0 ? moveHeight : 0;
+}
+
+// How far along a tier upgrade is, 0..1 — the playhead of the target's Birth clip while the
+// building rises into its next form. A job with no recorded build time (a debug fast-build,
+// a job restored without one) reads as finished rather than NaN.
+function upgradeProgress(job: RenderBuildJob): number {
+  if (!(job.buildTime > 0)) return 1;
+  return Math.min(1, Math.max(0, 1 - job.timeLeft / job.buildTime));
 }
 
 // A unit's weapon from its registry stats; null when it can't attack.

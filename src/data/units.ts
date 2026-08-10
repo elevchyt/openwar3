@@ -161,7 +161,13 @@ export interface UnitDef {
   shadowX: number;
   shadowY: number;
   speed: number; // world units / second
-  turnRate: number; // radians-ish per second scale (UnitData turnrate)
+  /** UnitData `turnRate` (a 0..1 scale, see sim turnSpeed()). **0 means the unit CANNOT turn** —
+   *  which is what the SLK's "-" says, and every structure row carries it: a Guard Tower, a
+   *  Ziggurat and a Phoenix Egg all read `turnRate="-", orientInterp=0`. A tower shoots
+   *  whatever comes into range from the facing it was PLACED at (its head may swivel inside
+   *  its own attack clip, but the model never rotates). The uprootable Ancients are the
+   *  structures that DO turn, and the data says so: `etol`/`etoa` carry turnRate 0.4. */
+  turnRate: number;
   moveHeight: number; // fly altitude above ground (0 for ground units)
   collision: number;
   // Fog-of-war sight radii (UnitBalance.slk `sight`/`nsight`, world units). Night
@@ -441,7 +447,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       shadowX: u ? num(u, "shadowX", 0) : 0,
       shadowY: u ? num(u, "shadowY", 0) : 0,
       speed: b ? num(b, "spd", 0) : 0,
-      turnRate: d ? num(d, "turnrate", 0.5) : 0.5,
+      // "-" is NOT a missing value here, it is "no turn rate" — so it must not fall back to
+      // the 0.5 default the way `num` would. See UnitDef.turnRate: 0 = this thing never rotates.
+      turnRate: d && d.string("turnrate") === "-" ? 0 : d ? num(d, "turnrate", 0.5) : 0.5,
       moveHeight: d ? num(d, "moveheight", 0) : 0,
       // 1.27 layering quirk: collision lives in UnitBalance.slk in the
       // expansion/patch MPQs but in UnitData.slk in the RoC base.

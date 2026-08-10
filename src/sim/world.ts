@@ -6103,7 +6103,7 @@ export class SimWorld {
       // Divine Shield, Avatar) keep the current facing so the caster doesn't spin
       // to face east — and so the summon appears in front of where it's looking.
       if (Math.hypot(tx - u.x, ty - u.y) > 1) u.desiredFacing = Math.atan2(ty - u.y, tx - u.x);
-      if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_CAST_EPS) return; // still turning
+      if (!this.facesTarget(u, FACING_CAST_EPS)) return; // still turning
       // Gate on affordability up front so the caster never winds up a spell it
       // can't pay for. Mana/cooldown are only COMMITTED at the effect (below), so
       // interrupting the wind-up cancels the spell for free.
@@ -7403,7 +7403,10 @@ export class SimWorld {
     const u = this.units.get(id);
     if (!u) return;
     u.desiredFacing = rad;
-    if (instant) u.facing = rad;
+    // A unit that cannot turn (turnRate 0 — every structure) would otherwise sit on an
+    // unreachable target forever, so the timed form lands instantly too. The trigger still
+    // gets what it asked for; only the rotating-there part has no meaning here.
+    if (instant || u.turnRate <= 0) u.facing = rad;
   }
   /** JASS SetUnitOwner — reassign owner + team (team decides allegiance/vision). */
   setUnitOwner(id: number, owner: number, team: number): void {
@@ -7688,8 +7691,10 @@ export class SimWorld {
     this.tickCorpses(dt); // decay flesh→bone→gone
     for (const u of this.units.values()) {
       // Turning runs every tick, independent of movement: a unit that arrived
-      // (or stands attacking) still finishes rotating to its desired heading.
-      if (u.facing !== u.desiredFacing && !u.paused) {
+      // (or stands attacking) still finishes rotating to its desired heading —
+      // unless it has no turn rate at all (a structure; see facesTarget), in which
+      // case the heading combat asked for is simply never taken up.
+      if (u.turnRate > 0 && u.facing !== u.desiredFacing && !u.paused) {
         u.facing = turnToward(u.facing, u.desiredFacing, turnSpeed(u.turnRate) * dt);
       }
       this.tickSwing(u, dt); // land pending strikes at their damage point
@@ -8145,6 +8150,22 @@ export class SimWorld {
     return endGap <= reach + PATHING_CELL;
   }
 
+  /**
+   * "Is this unit pointed close enough at what it is about to do" — the gate a swing and a
+   * cast both wait on while the turning pass rotates the body.
+   *
+   * A unit with NO turn rate always passes it. `turnRate` 0 is what UnitData's "-" means
+   * (see UnitDef.turnRate), and every structure row carries it: a Guard Tower, a Spirit
+   * Tower, a Black Citadel. They shoot whatever walks into range from the facing they were
+   * PLACED at and never rotate to track it — the swivelling a tower does show lives inside
+   * its own attack clip (the Cannon Tower's head, HumanTower.mdx "Attack Stand  Ready
+   * Upgrade Second"), which is the model's business, not the sim's. Without this a tower
+   * would be gated forever on a heading it can never reach, and never fire at all.
+   */
+  private facesTarget(u: SimUnit, eps: number): boolean {
+    return u.turnRate <= 0 || Math.abs(angleDiff(u.facing, u.desiredFacing)) <= eps;
+  }
+
   /** Close to weapon range, then face + swing at the damage point. Shared by
    *  direct Attack orders and attack-move engagements. `noChase` (Hold Position)
    *  makes the unit strike only what's already in range and never pursue. */
@@ -8218,7 +8239,7 @@ export class SimWorld {
     u.desiredFacing = Math.atan2(t.y - u.y, t.x - u.x);
     // Don't start a new swing while facing the wrong way, cooling down, or with a
     // swing already mid-flight toward its damage point.
-    if (Math.abs(angleDiff(u.facing, u.desiredFacing)) > FACING_EPS || u.cooldownLeft > 0 || u.swingLeft >= 0) return;
+    if (!this.facesTarget(u, FACING_EPS) || u.cooldownLeft > 0 || u.swingLeft >= 0) return;
     // Begin the attack: the cooldown starts now, but the strike/projectile only
     // lands at the weapon's damage point (a fraction into the swing animation) —
     // matching WC3 so e.g. the Archmage's fireball leaves at the right moment.
