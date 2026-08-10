@@ -3508,23 +3508,35 @@ export class RtsController {
       this.castFromSelection(cast.code, 0, hit[0], hit[1]);
       return true;
     }
-    // An aimed ITEM refuses like a cast: a staff pointed at the wrong thing leaves the
-    // order armed and says why, rather than eating the click. Checked before orderMode is
-    // torn down, for the same reason the cast branch above is.
-    if (mode === "item" && this.armedItem?.mode === "useunit") {
-      const armed = this.armedItem;
+    // An aimed ITEM refuses like a cast: a staff pointed at the wrong thing leaves the order
+    // armed and says why, rather than eating the click. Checked before orderMode is torn
+    // down, for the same reason the cast branch above is — a refusal must leave the reticle
+    // exactly where it was, and the reticle is derived from these two fields each frame.
+    //
+    // Arming already refused a cooling-down item, but a SHARED cooldown group can start one
+    // in between (drinking a potion cools every potion), so both aimed modes re-check here.
+    const aimedItem = mode === "item" && this.armedItem?.mode !== "move" ? this.armedItem : null;
+    if (aimedItem) {
       const id = this.primary;
       if (id === null || !this.controls(id)) {
         this.orderMode = null;
         this.armedItem = null;
         return true;
       }
-      const picked = this.pickAt(cssX, cssY);
-      const err = this.sim.itemUseError(id, armed.slot, picked ?? 0);
+      const point = aimedItem.mode === "usepoint";
+      const picked = point ? null : this.pickAt(cssX, cssY);
+      const err = point
+        ? this.sim.itemReadyError(id, aimedItem.slot)
+        : this.sim.itemUseError(id, aimedItem.slot, picked ?? 0);
       if (err !== null) return this.refuseOrder(err);
+      const hit = point ? this.groundHitAt(cssX, cssY) : null;
+      if (point && !hit) return this.refuseOrder("Canttargetloc"); // "Unable to target there."
       this.orderMode = null;
       this.armedItem = null;
-      this.execute(this.localPlayer, { c: "useitem", unitId: id, slot: armed.slot, targetId: picked!, x: 0, y: 0 });
+      this.execute(this.localPlayer, {
+        c: "useitem", unitId: id, slot: aimedItem.slot, targetId: picked ?? 0,
+        x: hit?.[0] ?? 0, y: hit?.[1] ?? 0,
+      });
       return true;
     }
     this.orderMode = null;
@@ -3533,11 +3545,6 @@ export class RtsController {
       this.armedItem = null;
       const id = this.primary;
       if (!armed || id === null || !this.controls(id)) return true;
-      if (armed.mode === "usepoint") {
-        const hit = this.groundHitAt(cssX, cssY);
-        if (hit) this.execute(this.localPlayer, { c: "useitem", unitId: id, slot: armed.slot, targetId: 0, x: hit[0], y: hit[1] });
-        return true;
-      }
       // "move": the carried item goes to whatever was clicked — a SHOP buys it back (WC3 sells
       // by exactly this gesture: right-click the item, then click the Goblin Merchant / Arcane
       // Vault / Marketplace), an allied hero is handed it, and bare ground gets it dropped.
@@ -3856,6 +3863,16 @@ export class RtsController {
     if (!u || !held) return;
     const def = this.items.get(held.itemId);
     if (!def?.usable) return; // passive item — left-click is a no-op (right-click to move/drop)
+    // A cooling-down item is answered ON THE PRESS — both from the button and from its numpad
+    // key, which funnel through here — with the game's own "This item is cooling down." and
+    // the error sound. Nothing is armed: WC3 does not let you walk a targeting cursor around
+    // for an item that was never going to fire, and the click you eventually spend on it
+    // would only be thrown away.
+    const notReady = this.sim.itemReadyError(id, slot);
+    if (notReady !== null) {
+      this.refuseOrder(notReady);
+      return;
+    }
     // How the item is AIMED is its ability's own `target` (KNOWN_ABILITIES): a point for
     // Kelen's Dagger, a unit for the staves, nothing at all for a potion — which is the
     // overwhelming majority and fires on this very click.

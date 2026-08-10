@@ -10554,18 +10554,35 @@ export class SimWorld {
     return best ? { x: best.x, y: best.y } : null;
   }
 
-  /** Why the local player's click on `targetId` with the item in `slot` would be refused,
-   *  as a commandstrings.txt [Errors] key (null = it goes through). The HUD asks this before
-   *  it spends an aimed item-use, the way it asks `castError` before an aimed spell — so a
-   *  bad target draws the game's own gold line and leaves the item armed to click again. */
-  itemUseError(unitId: number, slot: number, targetId: number): string | null {
+  /** Why the item in `slot` cannot be used AT ALL right now, before any question of what it
+   *  would be aimed at — as a commandstrings.txt [Errors] key, null if it is ready.
+   *
+   *  This is the half that must be answered the moment the button is PRESSED. WC3 never lets
+   *  a cooling-down item put the cursor into targeting mode: pressing it says "This item is
+   *  cooling down." there and then, and nothing is armed. Which matters most for the item
+   *  that has to be aimed — arming a staff you cannot actually use leaves the player holding
+   *  a live reticle over a click that was always going to be thrown away. */
+  itemReadyError(unitId: number, slot: number): string | null {
     const u = this.units.get(unitId);
-    if (!u || !this.itemReg || !this.abilities) return "Cantuseitem";
+    if (!u || !this.itemReg) return "Cantuseitem";
     const held = u.inventory[slot];
     if (!held) return "Cantuseitem";
     if (held.cooldownLeft > 0) return "Itemcooldown"; // "This item is cooling down."
     const def = this.itemReg.get(held.itemId);
     if (!def?.usable) return "Cantuseitem";
+    return null;
+  }
+
+  /** Why the local player's click on `targetId` with the item in `slot` would be refused,
+   *  as a commandstrings.txt [Errors] key (null = it goes through). The HUD asks this before
+   *  it spends an aimed item-use, the way it asks `castError` before an aimed spell — so a
+   *  bad target draws the game's own gold line and leaves the item armed to click again. */
+  itemUseError(unitId: number, slot: number, targetId: number): string | null {
+    const ready = this.itemReadyError(unitId, slot);
+    if (ready !== null) return ready;
+    const u = this.units.get(unitId)!;
+    const def = this.itemReg!.get(u.inventory[slot]!.itemId)!;
+    if (!this.abilities) return "Cantuseitem";
     for (const abilId of def.abilities) {
       const ad = this.abilities.get(abilId);
       if (!ad || (ad.code !== "ANpr" && ad.code !== "ANsa")) continue;

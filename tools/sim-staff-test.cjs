@@ -170,6 +170,20 @@ const near = (what, got, want, tol = 0.5) => {
   check("a plain own unit in range is accepted", world.itemUseError(hero.id, 0, ok.id), null);
 }
 
+// --- A cooling-down item is refused ON THE PRESS, before anything is aimed --------------
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true }), "spre");
+  building("htow", 3000, 3000);
+  const target = unit({ x: 1400, y: 1000 });
+  check("a ready item arms", world.itemReadyError(hero.id, 0), null);
+  check("…and fires", world.useItem(hero.id, 0, target.id, 0, 0), true);
+  check("the spent item is now cooling down", world.itemReadyError(hero.id, 0), "Itemcooldown");
+  check("…which is what an aimed click would say too", world.itemUseError(hero.id, 0, target.id), "Itemcooldown");
+  check("…and a second use does nothing", world.useItem(hero.id, 0, target.id, 0, 0), false);
+  check("an empty slot is not usable either", world.itemReadyError(hero.id, 3), "Cantuseitem");
+}
+
 // --- Staff of Sanctuary: teleport + stun + regenerate until full -----------------------
 {
   world = newWorld();
