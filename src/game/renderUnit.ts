@@ -54,12 +54,15 @@ export interface RenderBuildJob {
   readonly buildTime: number;
 }
 
-/** What the HUD's status row reads off one buff — its non-stacking key and what kind of thing
- *  it is. The magnitudes, the timers and the attached-model list are the sim's and the effect
- *  layer's; neither is a row of icons. */
+/** What the HUD's Status line reads off one buff — the buff row it is, its non-stacking key
+ *  and what kind of thing it is. The magnitudes, the timers and the attached-model list are
+ *  the sim's and the effect layer's; neither is a row of icons. */
 export interface RenderBuff {
   readonly kind: string;
   readonly group: string;
+  /** The `B….` buff row this IS — where the Status line reads its icon, name and tooltip
+   *  (see BuffDef). "" when nothing named one, which falls back to the group. */
+  readonly buffId: string;
 }
 
 /** The unit, as the render path reads it. */

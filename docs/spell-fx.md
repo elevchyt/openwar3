@@ -45,6 +45,28 @@ A buff row carries **three** different arts and they are not interchangeable:
   Armor's is the chill on an attacker, Mirror Image's is an illusion popping. Never treat it
   as a generic death slot.
 
+### The same row is what the info panel's Status line reads
+
+A buff row is not only art. It also carries the three fields the **Status** line of the info
+panel is built from, and they are the buff's — never the ability's:
+
+* `Buffart` — the ICON, and the one art field on the row that is a `CommandButtons` **BLP**
+  rather than a model.
+* `Bufftip` — the name. Often not the ability's: Slow (`Aslo`) hangs `Bslo`, whose Bufftip is
+  **"Slow"**; the generic frost debuff `Bfro` is **"Slowed"**. The row names the STATE the
+  unit is in, which is what a status row is for.
+* `Buffubertip` — the sentence the hover tooltip shows ("This unit has Bloodlust; its attack
+  rate and movement speed are increased.").
+
+`AbilityRegistry.buff(buffId)` returns all of it (`BuffDef`), and `SimBuff.buffId` is how a
+live buff finds its row — set from `fx(def)`, which hands the id over with the art. Auras land
+here too: `BHad`/`BOae`/`BUau` all carry a `Buffart`, so a unit inside a Devotion Aura shows
+the aura's icon just as a Bloodlusted one shows Bloodlust's.
+
+One WC3 buff is often several of ours (an Inner Fire is an armour buff *and* a damage buff, a
+Slow Poison a dot *and* a slow), so the row de-dupes on the buff id — otherwise the same state
+is drawn twice, once resolved and once as a generic fallback.
+
 ### An ability may list several buffs, and it picks between them off its own numbers
 
 `BuffID1` is a LIST. `AbilityRegistry.buffFx(buffId)` (via `SpellApi.buffFxOf`) resolves any

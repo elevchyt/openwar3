@@ -119,6 +119,10 @@ export interface SimBuffInit {
   /** The buff's persistent models + attachment points (def.buffFx). Pass this via
    *  `...fx(def)` — see below — rather than setting `art` by hand. */
   fx?: BuffFx[];
+  /** The `B….` row this buff IS (`Ablo` → `Bblo`). Carried so the info panel's Status
+   *  row can name and describe it the way the game does — see `fx(def)`, which supplies
+   *  it alongside the art, and AbilityRegistry.buff(). */
+  buffId?: string;
   delay?: number; // seconds before the effect engages (Wind Walk's Transition Time)
   /** Marks a Shadow Meld invisibility, which also breaks on MOVEMENT and at DAWN
    *  (world.ts tickMeld). See SimBuff.meld. */
@@ -134,10 +138,22 @@ export interface SimBuffInit {
  *  TargetArt of their own at all, so reaching for `def.targetArt` here silently
  *  rendered nothing. `def.targetArt` is the one-shot CAST burst (Holy Light's
  *  flash) and belongs in emitEffect, not on a buff. Falls back to targetArt for
- *  the handful of custom abilities that do put their buff model there. */
-export function fx(def: AbilityDef): { art: string; fx: BuffFx[] } {
-  if (def.buffFx.length) return { art: def.buffArt, fx: def.buffFx };
-  return { art: def.targetArt, fx: def.targetArt ? [{ path: def.targetArt, attach: [] }] : [] };
+ *  the handful of custom abilities that do put their buff model there.
+ *
+ *  It also carries the buff's own ID along, because the same row is what the info
+ *  panel's Status row reads its icon, name and tooltip off (see BuffDef). */
+export function fx(def: AbilityDef): { art: string; fx: BuffFx[]; buffId: string } {
+  const buffId = buffIdOf(def);
+  if (def.buffFx.length) return { art: def.buffArt, fx: def.buffFx, buffId };
+  return { art: def.targetArt, fx: def.targetArt ? [{ path: def.targetArt, attach: [] }] : [], buffId };
+}
+
+/** An ability's buff row (`buffid<rank>`, first of the list). Rank is rarely worth passing:
+ *  no stock ability changes which buff it applies between ranks — the LEVELS of a spell
+ *  differ in numbers, not in the state they put the target in. */
+export function buffIdOf(def: AbilityDef, rank = 1): string {
+  const lvl = def.levelData[Math.min(Math.max(1, rank), def.levelData.length) - 1];
+  return lvl?.buffs?.[0] ?? ""; // `buffs` is absent on hand-built defs (tests, custom rows)
 }
 
 export interface SpellFieldInit {
@@ -160,7 +176,7 @@ export interface SpellFieldInit {
   //                            budget evenly — Blizzard's 30/wave hits 5 units for full, 10 for 15.
   buildingReduction?: number; // "Building Reduction" (DataD): fraction of the wave's damage a
   //                             BUILDING shrugs off (0.5 → structures take half).
-  dot?: { dps: number; duration: number; heroDuration: number; group: string; art: string }; // per-wave
+  dot?: { dps: number; duration: number; heroDuration: number; group: string; art: string; buffId: string }; // per-wave
   //       burn left on everything the wave hits (Rain of Fire's "and N damage per second for 3 seconds").
   impactDelay?: number; // seconds between a wave's art SPAWNING and its damage landing. The shard
   //                       is a falling model, and WC3 hurts you when it hits the ground, not when
@@ -253,7 +269,7 @@ function waveField(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number
     impactDelay: SHARD_FALL,
     buildingReduction: d(lvl, 3, 0), // DataD
     maxDamagePerWave: d(lvl, 5, 0), // DataF (0 = uncapped)
-    dot: dps > 0 ? { dps, duration: lvl.duration || 3, heroDuration: lvl.heroDuration || lvl.duration || 3, group: def.code, art: def.buffArt } : undefined,
+    dot: dps > 0 ? { dps, duration: lvl.duration || 3, heroDuration: lvl.heroDuration || lvl.duration || 3, group: def.code, art: def.buffArt, buffId: buffIdOf(def, rank) } : undefined,
   });
 }
 

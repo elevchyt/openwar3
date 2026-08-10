@@ -50,7 +50,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 1;
+const CODEC_VERSION = 2; // 2: buffs carry their `B….` row id (the info panel Status line)
 
 const TWO_PI = Math.PI * 2;
 
@@ -388,6 +388,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   for (const b of s.buffs) {
     w.u16(w.intern(b.kind));
     w.u16(w.intern(b.group));
+    w.u16(w.intern(b.buffId)); // the `B….` row — the Status line's icon/name/tooltip
     w.u16(w.intern(b.art));
     w.u32(b.sourceId);
     w.f32(b.timeLeft); // f32 carries an aura's Infinity, which JSON never could
@@ -581,6 +582,7 @@ function readUnit(r: Reader): UnitSnapshot {
     const b = {
       kind: r.str(),
       group: r.str(),
+      buffId: r.str(),
       art: r.str(),
       sourceId: r.u32(),
       timeLeft: r.f32(),

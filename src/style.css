@@ -1239,25 +1239,29 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-attr-line .attr-name { color: #e0b93a; }
 .hud-attr-line.primary { font-weight: 700; color: #fff8e0; }
 .hud-attr-line.primary .attr-name { color: #f4d060; }
-/* Buff / aura / debuff status icons under the stats. */
-.hud-sel-status { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.hud-status-icon {
-  width: 22px;
-  height: 22px;
+/* The info panel's Status line: the gold "Status:" label (InfoPanelStrings COLON_STATUS) with
+   the active buffs' own icons in a row to its right, under the Damage/Armor blocks.
+   NOTE the class names: `.hud-status-icon` is the CONSTRUCTION panel's icon (below), which the
+   skinned console pins absolutely into the queue widget's big slot — these carry their own
+   `hud-buff-*` names so they cannot inherit that placement and land on top of the stats. */
+.hud-sel-status { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.hud-buff-label { font-size: 12px; color: #e0b93a; font-weight: 600; flex: none; }
+.hud-buff-icons { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
+/* Two thirds of a stat icon, and no chrome of our own: a BTN icon already carries the gold
+   button frame the console reads by, so a border around it just makes the row noisy. */
+.hud-buff-icon {
+  width: 18px;
+  height: 18px;
   flex: none;
   background-size: 100% 100%;
   background-repeat: no-repeat;
-  background-color: #0c0c0a;
-  border: 1px solid #2f6a3a; /* green = beneficial */
-  border-radius: 2px;
-  font-size: 9px;
+  font-size: 8px;
   color: #cfc7ab;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+  cursor: help;
 }
-.hud-status-icon.harmful { border-color: #9a3a34; } /* red = debuff */
 
 /* Multi-selection grid: unit icons grouped by type, each with an HP bar and (when the
    unit has a pool) a mana bar; the focused sub-group has a gold outline. The selection is

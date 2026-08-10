@@ -159,7 +159,9 @@ export interface SelectionInfo {
   isIllusion: boolean;
   summonSecondsLeft: number; // seconds until the summon expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
-  buffs: Array<{ icon: string; name: string; harmful: boolean }>; // active auras/buffs/debuffs
+  /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
+   *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
+  buffs: Array<{ icon: string; name: string; tip: string }>;
 }
 
 // A ground selection/hover ring the renderer draws as a flat model.
@@ -325,8 +327,10 @@ const POSE_SNAP_DIST = 400;
 const DEATH_CLIP_FALLBACK = 1.6; // seconds to hold a Death clip of unknown length
 const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown length
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
-// Buff status-row display: map non-aura buff groups to their source ability code,
-// and give the remaining buff kinds a generic icon + label.
+// Buff status-row display. A buff normally names its own `B….` row (SimBuff.buffId), which
+// is where the icon, the name and the tooltip come from — see BuffDef. These two tables are
+// the FALLBACK for the buffs nothing named a row for: map the group back to a source ability
+// code, and give the remaining kinds a generic icon + label.
 const GROUP_TO_CODE: Record<string, string> = {
   innerfire: "Ainf", avatar: "AHav", slow: "Aslo",
   // Orb effects (src/sim/orbs.ts). `frostattack` is the generic Slowed buff every frost
@@ -4091,20 +4095,42 @@ export class RtsController {
     };
   }
 
-  /** Active buffs/auras/debuffs on a unit, de-duped by source, resolved to an icon
-   *  + name for the HUD status row. Aura buffs carry their base code in `group`. */
-  private statusBuffsFor(u: RenderUnit): Array<{ icon: string; name: string; harmful: boolean }> {
+  /** Active buffs/auras/debuffs on a unit, resolved to the icon + name + tooltip the info
+   *  panel's **Status** row shows, in the order they landed.
+   *
+   *  The row is the BUFF's, not the ability's: `Bfro` is what Slow, Frost Attack and every
+   *  orb of frost all hang, and its Bufftip is "Slowed" — the state the unit is in — where
+   *  the ability is called "Slow". So `SimBuff.buffId` is the first thing tried; only a buff
+   *  that named no row falls back to its caster's ability icon/name (GROUP_TO_CODE), and
+   *  then to a generic per-kind label.
+   *
+   *  One WC3 buff can be several of ours — an Inner Fire is an armour buff AND a damage buff,
+   *  a Slow Poison a dot AND a slow — so the row de-dupes on the buff row (or, failing that,
+   *  the non-stacking group) rather than showing the same state twice. */
+  private statusBuffsFor(u: RenderUnit): Array<{ icon: string; name: string; tip: string }> {
     if (!u.buffs.length) return [];
-    const out: Array<{ icon: string; name: string; harmful: boolean }> = [];
+    const out: Array<{ icon: string; name: string; tip: string }> = [];
     const seen = new Set<string>();
     for (const b of u.buffs) {
       const code = b.group.includes(":") ? b.group.split(":")[0] : (GROUP_TO_CODE[b.group] ?? POISON_GROUP.exec(b.group)?.[1] ?? "");
-      const key = code || b.kind;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const def = code ? this.abilityDefByCode(code) : undefined;
-      const harmful = b.kind === "stun" || b.kind === "slow" || b.kind === "dot";
-      out.push({ icon: def?.icon ?? BUFF_KIND_ICON[b.kind] ?? "", name: def?.name ?? BUFF_KIND_LABEL[b.kind] ?? b.kind, harmful });
+      const buff = b.buffId ? this.abilities.buff(b.buffId) : undefined;
+      // BOTH keys are checked and both are remembered: Inner Fire's two halves share a group
+      // but only the one carrying the art names `Binf`, so matching on either alone shows the
+      // same buff twice — the icon it resolved to, and then the fallback for its other half.
+      // `kind` is the key of LAST resort (a buff with neither row nor group), never a key
+      // alongside them: two different armour buffs are two states, not one.
+      const named = [buff?.id ?? "", b.group].filter(Boolean);
+      const keys = named.length ? named : [b.kind];
+      if (keys.some((k) => seen.has(k))) continue;
+      for (const k of keys) seen.add(k);
+      const def = !buff && code ? this.abilityDefByCode(code) : undefined;
+      // A buff row with no `Buffart` (a handful of internal ones) still shows — the
+      // kind's generic icon stands in, as it did before any of them had a row at all.
+      out.push({
+        icon: buff?.icon || def?.icon || BUFF_KIND_ICON[b.kind] || "",
+        name: buff?.name || def?.name || BUFF_KIND_LABEL[b.kind] || b.kind,
+        tip: this.tipText(buff?.tip ?? ""),
+      });
     }
     return out;
   }

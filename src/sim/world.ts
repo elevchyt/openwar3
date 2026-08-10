@@ -33,7 +33,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, fx, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -227,6 +227,9 @@ export interface SimBuff {
   /** Every persistent model this buff hangs on the unit, with its attachment point
    *  (see AbilityDef.buffFx). Usually one; Bloodlust wears two, Spiked Carapace four. */
   fx: BuffFx[];
+  /** The `B….` row this buff IS ("" when nothing named one). The info panel's Status row
+   *  takes its icon, name and tooltip straight off it — see BuffDef and statusBuffsFor. */
+  buffId: string;
   /** Seconds until the buff's effect actually engages — Wind Walk's "Transition Time"
    *  (AbilityData.slk AOwk DataA = 0.6), the beat between the cast and the vanish. The
    *  buff exists and its duration is already running; it just isn't in force yet. 0 for
@@ -5596,7 +5599,7 @@ export class SimWorld {
             if (e.pctOfMax && value <= 0) continue; // a unit with no mana pool gains nothing
             // An ordinary aura re-applies on a short TTL so it fades as its holder walks
             // away; one with its own `duration` (Disease Cloud) leaves something behind.
-            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value, value2: e.value2 });
+            this.applyBuffInternal(t, { kind: e.kind, group: `${ab.code}:${e.kind}`, timeLeft: e.duration ?? AURA_REFRESH, sourceId: src.id, value, value2: e.value2, buffId: buffIdOf(def, ab.level) });
           }
         }
       }
@@ -5618,11 +5621,12 @@ export class SimWorld {
         existing.sourceId = init.sourceId;
         existing.delay = init.delay ?? 0; // a re-cast restarts the transition
         if (init.art) existing.art = init.art;
+        if (init.buffId) existing.buffId = init.buffId;
         return;
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -6972,7 +6976,7 @@ export class SimWorld {
       if (dmg > 0) this.landDamage(t, dmg, w.casterId, false); // spell damage: ignore armor
       // Rain of Fire's burn: every wave (re)lights whatever it hits for DataE dps.
       if (w.dot && w.dot.dps > 0 && !t.building) {
-        this.applyBuffInternal(t, { kind: "dot", group: w.dot.group, timeLeft: t.isHero && w.dot.heroDuration > 0 ? w.dot.heroDuration : w.dot.duration, sourceId: w.casterId, value: w.dot.dps, art: w.dot.art });
+        this.applyBuffInternal(t, { kind: "dot", group: w.dot.group, timeLeft: t.isHero && w.dot.heroDuration > 0 ? w.dot.heroDuration : w.dot.duration, sourceId: w.casterId, value: w.dot.dps, art: w.dot.art, buffId: w.dot.buffId });
       }
     }
     // Burn down trees too when the ability lists `tree` in Targets Allowed
@@ -9012,8 +9016,9 @@ export class SimWorld {
     const lvl = this.passiveLevelData(attacker, "Aliq");
     if (!lvl) return;
     const dur = lvl.duration || 3;
-    this.applyBuffInternal(target, { kind: "dot", group: "liquidfire", timeLeft: dur, value: this.dataOf(lvl, 0, 8), sourceId: attacker.id });
-    this.applyBuffInternal(target, { kind: "slow", group: "liquidfire-atk", timeLeft: dur, value: 0, value2: this.dataOf(lvl, 2, 0.8), sourceId: attacker.id });
+    const buffId = lvl.buffs?.[0] ?? ""; // `BUlf` — one buff row behind both halves (Status row)
+    this.applyBuffInternal(target, { kind: "dot", group: "liquidfire", timeLeft: dur, value: this.dataOf(lvl, 0, 8), sourceId: attacker.id, buffId });
+    this.applyBuffInternal(target, { kind: "slow", group: "liquidfire-atk", timeLeft: dur, value: 0, value2: this.dataOf(lvl, 2, 0.8), sourceId: attacker.id, buffId });
   }
 
   /** Whether a building is currently burning under Liquid Fire (blocks repair). */
@@ -9365,15 +9370,18 @@ export class SimWorld {
     const group = `poison-${def.code}` + (stack & STACK_DAMAGE ? `-${attacker.id}` : "");
     if (dps > 0) this.applyBuffInternal(target, { kind: "dot", group, timeLeft: t, value: dps, sourceId: attacker.id, nonLethal: true, ...this.buffArtOf(def) });
     if (moveFactor > 0 || attackFactor > 0) {
-      this.applyBuffInternal(target, { kind: "slow", group: `poison-${def.code}-slow`, timeLeft: t, value: moveFactor, value2: attackFactor, sourceId: attacker.id });
+      // Same buff row as the damage half above (`BSpo` IS "Slow Poison"), split in two only
+      // because our buffs carry one kind each — so the Status row shows it once.
+      this.applyBuffInternal(target, { kind: "slow", group: `poison-${def.code}-slow`, timeLeft: t, value: moveFactor, value2: attackFactor, sourceId: attacker.id, buffId: buffIdOf(def) });
     }
   }
 
   /** The persistent models a buff-carrying orb hangs on its victim — its own `buffid1` row's
    *  art, exactly as every other buff resolves it. Never the ability's `Targetart`: for an
    *  orb that field is the model worn by the CARRIER (see orbAttachments). */
-  private buffArtOf(def: AbilityDef): { art?: string; fx?: BuffFx[] } {
-    return def.buffFx.length ? { art: def.buffArt, fx: def.buffFx } : {};
+  private buffArtOf(def: AbilityDef): { art?: string; fx?: BuffFx[]; buffId: string } {
+    const buffId = buffIdOf(def);
+    return def.buffFx.length ? { art: def.buffArt, fx: def.buffFx, buffId } : { buffId };
   }
 
   /**

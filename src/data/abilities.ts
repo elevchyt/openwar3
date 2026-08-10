@@ -26,6 +26,27 @@ export interface BuffFx {
   attach: string[];
 }
 
+/** A buff — its own object type in the data, with its own `[B….]` section in the same
+ *  AbilityFunc/AbilityStrings files the abilities live in. What the info panel's
+ *  **Status** row shows comes from HERE, not from the ability that applied it:
+ *
+ *      [Bblo]  Buffart     = ReplaceableTextures\CommandButtons\BTNBloodLust.blp
+ *              Bufftip     = Bloodlust
+ *              Buffubertip = "This unit has Bloodlust; its attack rate and movement
+ *                             speed are increased."
+ *
+ *  `Buffart` is an ICON (a CommandButtons BLP), unlike every other art field on the row,
+ *  which names a model. And the name is often NOT the ability's: Slow (`Aslo`) hangs
+ *  `Bfro`, whose Bufftip is "Slowed" — the state the unit is in, which is what a status
+ *  row is for. */
+export interface BuffDef {
+  id: string; // the `B….` code
+  icon: string; // Buffart — the status-row icon
+  name: string; // Bufftip — the tooltip title
+  tip: string; // Buffubertip — the tooltip body (WC3 markup intact)
+  fx: BuffFx[]; // Targetart(s) — the models it hangs on its holder (see buffFxOf)
+}
+
 /** Per-level numbers pulled from AbilityData's level-indexed columns. */
 export interface AbilityLevel {
   cost: number; // mana cost (cost1..)
@@ -400,16 +421,21 @@ export class AbilityRegistry {
   constructor(
     private defs: Map<string, AbilityDef>,
     private custom = new Map<string, AbilityDef>(),
-    /** Every `[B….]` buff section's persistent models, by buff id. `AbilityDef.buffFx` is
-     *  only buffid1's, which is right for the many abilities that apply one buff — but an
-     *  ability may list SEVERAL and choose between them at cast time off its own numbers.
-     *  The regeneration items are the clear case: `BIrg,BIrl,BIrm` is life-and-mana, life,
-     *  mana, and which one a Healing Salve wears depends on whether DataB is 0. */
-    private buffs = new Map<string, BuffFx[]>(),
+    /** Every `[B….]` buff section, by buff id — its icon, name, tooltip and persistent
+     *  models. `AbilityDef.buffFx` is only buffid1's, which is right for the many abilities
+     *  that apply one buff — but an ability may list SEVERAL and choose between them at cast
+     *  time off its own numbers. The regeneration items are the clear case: `BIrg,BIrl,BIrm`
+     *  is life-and-mana, life, mana, and which one a Healing Salve wears depends on whether
+     *  DataB is 0. */
+    private buffs = new Map<string, BuffDef>(),
   ) {}
   /** The persistent models a given buff id hangs on its holder ([] if unknown). */
   buffFx(buffId: string): BuffFx[] {
-    return this.buffs.get(buffId) ?? [];
+    return this.buffs.get(buffId)?.fx ?? [];
+  }
+  /** A buff's own row — icon/name/tooltip for the info panel's Status row. */
+  buff(buffId: string): BuffDef | undefined {
+    return this.buffs.get(buffId);
   }
   get(id: string): AbilityDef | undefined {
     return this.custom.get(id) ?? this.defs.get(id);
@@ -546,13 +572,24 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     });
   }
   for (const id of UI_BUTTON_IDS) addUiButton(defs, id, func, strs);
-  // Index every buff section's models, so an ability that lists several buffs can pick the
-  // one its numbers call for (see AbilityRegistry.buffFx).
-  const buffs = new Map<string, BuffFx[]>();
-  for (const id of Object.keys(func.map)) {
+  // Index every buff section — its models (so an ability that lists several buffs can pick
+  // the one its numbers call for) AND its icon/name/tooltip (the info panel's Status row).
+  // Buff ids are the `B….` space; nothing in AbilityData shares it, so the first letter is
+  // the whole test. A buff has no `[…]` section in AbilityFunc when it hangs no model — the
+  // STRINGS file still names it, which is why both files are consulted here.
+  const buffs = new Map<string, BuffDef>();
+  for (const id of new Set([...Object.keys(func.map), ...Object.keys(strs.map)])) {
     if (id[0] !== "B") continue;
-    const fx = buffFxOf(func, id);
-    if (fx.length) buffs.set(id, fx);
+    const f = func.getRow(id) as Row | undefined;
+    const s = strs.getRow(id) as Row | undefined;
+    if (!f && !s) continue;
+    buffs.set(id, {
+      id,
+      icon: f ? str(f, "Buffart") : "",
+      name: rawTip(s ? str(s, "Bufftip") : "") || id,
+      tip: rawTip(s ? str(s, "Buffubertip") : ""),
+      fx: buffFxOf(func, id),
+    });
   }
   return new AbilityRegistry(defs, new Map(), buffs);
 }

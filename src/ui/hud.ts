@@ -160,7 +160,9 @@ export interface HudSelection {
   isSummon: boolean; // temporary summon — show the "Summoned Unit" timer bar
   summonSecondsLeft: number; // seconds until it expires
   summonFrac: number; // remaining fraction of its lifetime (bar fill)
-  buffs: Array<{ icon: string; name: string; harmful: boolean }>; // active auras/buffs/debuffs
+  /** Active auras/buffs/debuffs, as the info panel's Status row shows them: the BUFF's
+   *  own icon, name and tooltip body (`Buffart`/`Bufftip`/`Buffubertip`). */
+  buffs: Array<{ icon: string; name: string; tip: string }>;
 }
 
 export interface HudDriver {
@@ -784,6 +786,7 @@ export class GameHud {
   private idleIconSet = false; // worker icon lazily applied once
   private cmdTooltip!: HTMLDivElement; // the ONE tooltip slab, above the command card
   private invHover = -1; // inventory slot under the cursor (-1 = none), so its tooltip can refresh
+  private buffHover = -1; // Status-line slot under the cursor, so an expiring buff drops its tooltip
   private cmdSlots: HTMLButtonElement[] = [];
   private cmdLabels: HTMLSpanElement[] = []; // per-slot fallback text (icon-less buttons)
   private cmdCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
@@ -1778,17 +1781,27 @@ export class GameHud {
     cols.className = "hud-stat-cols";
     cols.append(leftCol, rightCol);
     this.selStats.append(cols);
-    // Buff / aura / debuff status icons, below the stats (WC3 reference).
+    // Buff / aura / debuff icons, on their own line under the stat blocks and led by the
+    // game's own label — `UI\FrameDef\InfoPanelStrings.fdf` COLON_STATUS "Status:", written
+    // in the gold the other info-panel labels use (SimpleInfoPanelLabelTextTemplate,
+    // FontColor 0.99 0.827 0.0705). The icons are the buffs' own `Buffart` BLPs and sit at
+    // roughly two thirds the size of a Damage/Armor icon, as they do in the real console.
     this.selStatus = document.createElement("div");
     this.selStatus.className = "hud-sel-status";
     this.selStatus.hidden = true;
+    const statusLabel = document.createElement("div");
+    statusLabel.className = "hud-buff-label";
+    statusLabel.textContent = "Status:";
+    const statusIcons = document.createElement("div");
+    statusIcons.className = "hud-buff-icons";
     for (let i = 0; i < 8; i++) {
       const slot = document.createElement("div");
-      slot.className = "hud-status-icon";
+      slot.className = "hud-buff-icon";
       slot.hidden = true;
       this.selStatusSlots.push(slot);
-      this.selStatus.appendChild(slot);
+      statusIcons.appendChild(slot);
     }
+    this.selStatus.append(statusLabel, statusIcons);
     this.selStats.append(this.selStatus);
     this.selCarry = document.createElement("div");
     this.selCarry.className = "hud-sel-carry";
@@ -2373,13 +2386,23 @@ export class GameHud {
   }
 
 
-  /** Render the active buff / aura / debuff status icons under the stats. */
-  private renderStatus(buffs: Array<{ icon: string; name: string; harmful: boolean }>): void {
+  /** Render the active buff / aura / debuff icons on the Status line.
+   *
+   *  Hovering one tooltips it exactly as the game does — the buff's `Bufftip` as the title
+   *  over its `Buffubertip` ("This unit has Bloodlust; its attack rate and movement speed are
+   *  increased.") — in the same slab above the command card every other HUD tooltip uses. */
+  private renderStatus(buffs: Array<{ icon: string; name: string; tip: string }>): void {
     this.selStatus.hidden = buffs.length === 0;
     for (let i = 0; i < this.selStatusSlots.length; i++) {
       const slot = this.selStatusSlots[i];
       const b = buffs[i];
       if (!b) {
+        // A buff that expires under the cursor takes its tooltip with it — the slot is
+        // hidden from under the pointer, so no pointerleave is guaranteed to arrive.
+        if (this.buffHover === i) {
+          this.buffHover = -1;
+          this.cmdTooltip.hidden = true;
+        }
         slot.hidden = true;
         slot.onpointerenter = null;
         slot.onpointerleave = null;
@@ -2388,10 +2411,20 @@ export class GameHud {
       slot.hidden = false;
       const url = b.icon ? this.driver.blpUrl(b.icon) : null;
       slot.style.backgroundImage = url ? `url(${url})` : "";
-      if (!url) slot.textContent = wc3StripMarkup(b.name).slice(0, 3);
-      else slot.textContent = "";
-      slot.classList.toggle("harmful", b.harmful);
-      slot.title = wc3StripMarkup(b.name); // a native tooltip draws no colour, so don't print the codes
+      // No icon art (an internal buff whose row carries no Buffart): the first letters of
+      // the name stand in, so the slot still reads as something rather than a black square.
+      slot.textContent = url ? "" : wc3StripMarkup(b.name).slice(0, 3);
+      slot.title = ""; // the slab below replaces the browser's own tooltip
+      slot.onpointerenter = () => {
+        this.buffHover = i;
+        const desc = b.tip ? `<div class="hud-tooltip-desc">${wc3ToHtml(b.tip)}</div>` : "";
+        this.cmdTooltip.innerHTML = `<div class="hud-tooltip-title">${wc3ToHtml(b.name)}</div>${desc}`;
+        this.cmdTooltip.hidden = false;
+      };
+      slot.onpointerleave = () => {
+        this.buffHover = -1;
+        this.cmdTooltip.hidden = true;
+      };
     }
   }
 
