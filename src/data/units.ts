@@ -116,6 +116,23 @@ export interface UnitDef {
   // Empty for everything that isn't a hero.
   properNames: string[];
   priority: number; // UnitData `prio`: selection sub-group order (heroes 9, Footman 6, Peasant 1) — higher sorts first & leads the group
+  /** UnitData `buffType` — the building's PICK CATEGORY, one of `townhall` / `resource` /
+   *  `factory` / `buffer`, and "" (SLK "_") for everything that has none. The column name is
+   *  a red herring: it has nothing to do with buffs. It is the unit half of the object
+   *  editor's `pickFlags` domain, whose four bits UI\UnitEditorData.txt lists in exactly this
+   *  order — TOWNHALL / RESOURCE / FACTORY / BUFFER — and WorldEditStrings names "Hall",
+   *  "Resource", "Factory", "General". The staves' "Building Types Allowed" (ANpr/ANsa DataA
+   *  = 15 = all four) is a mask over it, which is how the sim picks where a Staff of
+   *  Preservation sends its target — see SimWorld.staffDestination.
+   *
+   *  Only 63 of the 836 rows carry one, and the split is the ranked list Liquipedia
+   *  documents for the staves: `factory` = the unit/hero producers (Barracks, Workshop,
+   *  Arcane Sanctum, the Altars, the Ancients of War/Lore/Wind), `buffer` = the towers, the
+   *  Moon Well and the Orc Burrow, `resource` = the three gold mines, `townhall` = the
+   *  twelve main halls. A Farm, Blacksmith, Lumber Mill, Arcane Vault, Gryphon Aviary,
+   *  Hunter's Hall or Chimaera Roost carries none — which is exactly Liquipedia's
+   *  "cannot be teleported to" list, for both races it documents. */
+  buffType: string;
   moveType: MoveType; // UnitData `movetp` (None for buildings/immovable units)
   isBuilding: boolean;
   pathTex: string; // pathing-footprint texture (buildings); "" for units
@@ -410,6 +427,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
         ? str(strings, "Propernames").split(",").map((s) => s.trim()).filter(Boolean)
         : [],
       priority: d ? num(d, "prio", 0) : 0, // UnitData `prio` — WC3 selection-order priority
+      buffType: ((d ? str(d, "buffType") : "") || "").toLowerCase().trim().replace(/^[-_]$/, ""),
       moveType: toMoveType(d ? str(d, "movetp") : ""),
       isBuilding: (b ? num(b, "isbldg", 0) : 0) === 1,
       pathTex: d ? str(d, "pathTex") : "",
@@ -666,6 +684,7 @@ export function destructibleUnitDef(d: {
     isHero: false,
     properNames: [],
     priority: 0,
+    buffType: "",
     moveType: MoveType.None,
     // Not a BUILDING: `isBuilding` carries a tail of building behaviour with it (rally
     // points, a production queue, repair, the "structure" weapon-target key). Immobility

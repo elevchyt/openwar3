@@ -1637,6 +1637,23 @@ export class RtsController {
       this.castFromSelection(cast.code, simId, 0, 0);
       return true;
     }
+    // A unit-target ITEM aims through the console too — clicking an ally's portrait in the
+    // group grid is a legitimate way to point a Staff of Sanctuary at it.
+    if (this.orderMode === "item" && this.armedItem?.mode === "useunit") {
+      const armed = this.armedItem;
+      const id = this.primary;
+      if (id === null || !this.controls(id)) {
+        this.orderMode = null;
+        this.armedItem = null;
+        return true;
+      }
+      const err = this.sim.itemUseError(id, armed.slot, simId);
+      if (err !== null) return this.refuseOrder(err); // stays armed, exactly as on the map
+      this.orderMode = null;
+      this.armedItem = null;
+      this.execute(this.localPlayer, { c: "useitem", unitId: id, slot: armed.slot, targetId: simId, x: 0, y: 0 });
+      return true;
+    }
     if (this.orderMode === "attack") {
       this.orderMode = null;
       const t = this.sim.units.get(simId);
@@ -3422,9 +3439,9 @@ export class RtsController {
    *  AoE cast circle at the cursor for point-target area spells. */
   armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
   /** The inventory item armed for targeting when orderMode === "item": a point-use
-   *  item (blink) awaiting a ground click, or a passive item awaiting a drop/give
-   *  target (ground → drop, allied hero → give). */
-  armedItem: { slot: number; mode: "usepoint" | "move" } | null = null;
+   *  item (blink) awaiting a ground click, a unit-use item (the staves) awaiting a unit,
+   *  or a passive item awaiting a drop/give target (ground → drop, allied hero → give). */
+  armedItem: { slot: number; mode: "usepoint" | "useunit" | "move" } | null = null;
 
   /** Called when an order is refused, with a commandstrings.txt [Errors] key — the host
    *  (render/mapViewer.ts) turns it into the gold line above the console and the error
@@ -3489,6 +3506,25 @@ export class RtsController {
       this.orderMode = null;
       this.armedCast = null;
       this.castFromSelection(cast.code, 0, hit[0], hit[1]);
+      return true;
+    }
+    // An aimed ITEM refuses like a cast: a staff pointed at the wrong thing leaves the
+    // order armed and says why, rather than eating the click. Checked before orderMode is
+    // torn down, for the same reason the cast branch above is.
+    if (mode === "item" && this.armedItem?.mode === "useunit") {
+      const armed = this.armedItem;
+      const id = this.primary;
+      if (id === null || !this.controls(id)) {
+        this.orderMode = null;
+        this.armedItem = null;
+        return true;
+      }
+      const picked = this.pickAt(cssX, cssY);
+      const err = this.sim.itemUseError(id, armed.slot, picked ?? 0);
+      if (err !== null) return this.refuseOrder(err);
+      this.orderMode = null;
+      this.armedItem = null;
+      this.execute(this.localPlayer, { c: "useitem", unitId: id, slot: armed.slot, targetId: picked!, x: 0, y: 0 });
       return true;
     }
     this.orderMode = null;
@@ -3820,9 +3856,12 @@ export class RtsController {
     if (!u || !held) return;
     const def = this.items.get(held.itemId);
     if (!def?.usable) return; // passive item — left-click is a no-op (right-click to move/drop)
-    const point = def.abilities.some((aid) => this.abilities.get(aid)?.target === "point");
-    if (point) {
-      this.armedItem = { slot, mode: "usepoint" };
+    // How the item is AIMED is its ability's own `target` (KNOWN_ABILITIES): a point for
+    // Kelen's Dagger, a unit for the staves, nothing at all for a potion — which is the
+    // overwhelming majority and fires on this very click.
+    const aim = def.abilities.map((aid) => this.abilities.get(aid)?.target).find((t) => t === "point" || t === "unit");
+    if (aim) {
+      this.armedItem = { slot, mode: aim === "point" ? "usepoint" : "useunit" };
       this.orderMode = "item";
       return;
     }

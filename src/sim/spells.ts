@@ -129,6 +129,9 @@ export interface SimBuffInit {
   meld?: boolean;
   /** A `dot` that cannot land the killing blow — WC3 poison. See SimBuff.nonLethal. */
   nonLethal?: boolean;
+  /** Runs on the holder's HEALTH BAR rather than on a clock: it ends the moment the unit is
+   *  at full hit points, whenever that is. See SimBuff.untilHealed (Staff of Sanctuary). */
+  untilHealed?: boolean;
 }
 
 /** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).

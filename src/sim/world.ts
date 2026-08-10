@@ -246,6 +246,12 @@ export interface SimBuff {
    *  — which is why a Dryad's Slow Poison whittles a fleeing unit down and never finishes it.
    *  Liquid Fire and the other damage-over-time effects are ordinary and DO kill. */
   nonLethal?: boolean;
+  /** A buff with no clock: it holds until the unit is at FULL HIT POINTS. The Staff of
+   *  Sanctuary is the only one — "Lasts until the unit is fully healed" (Liquipedia), and
+   *  its `ANsa` row indeed carries no `Dur1`/`HeroDur1` at all, which is the data saying the
+   *  same thing. Both halves of the effect (the regeneration and the stun that pins the
+   *  unit while it runs) wear the flag, so they end together. `timeLeft` is Infinity. */
+  untilHealed?: boolean;
 }
 
 /** The ORB EFFECT one blow carries, once the priority ladder has picked it (see
@@ -1420,6 +1426,16 @@ const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
 const ITEM_REGEN_GROUP = "item:regen";
 /** Damage that dispels a regeneration item's effect. Not in any data file — see landDamage. */
 const ITEM_REGEN_BREAK = 20;
+/** The four `pickFlags` values of UI\UnitEditorData.txt, **in bit order** — the domain a
+ *  building's UnitData `buffType` draws from and a staff's "Building Types Allowed" masks
+ *  (see UnitDef.buffType and SimWorld.staffDestination). WorldEditStrings names them Hall,
+ *  Resource, Factory and General; the index in this array IS the bit. */
+const STAFF_PICK_CATEGORIES = ["townhall", "resource", "factory", "buffer"];
+/** What "crowd-controlled" means to the staves, which refuse to teleport a unit under any of
+ *  it — "including with Purge" (Liquipedia), whose contribution is the plain `slow`. Every
+ *  member is something holding the unit where it stands: a stun, a Sleep, Entangling Roots
+ *  or Ensnare, a slow, or Banish's ethereal drag. */
+const CROWD_CONTROL_BUFFS = new Set<BuffKind>(["stun", "sleep", "root", "slow", "ethereal"]);
 /** Abilities that may be aimed at a magic-immune unit anyway. There is no flag for this in
  *  the ability data — no `targs1` value means "may target the immune" — so the engine
  *  hardcodes it and so must we, which is why the list is short and explicit rather than
@@ -5409,12 +5425,20 @@ export class SimWorld {
   private tickBuffs(u: SimUnit, dt: number): boolean {
     if (!u.buffs.length) return false;
     for (const b of u.buffs) {
-      if (b.kind === "hot" && b.value) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
+      // `delay` gates a heal-over-time the same way it gates Wind Walk's fade: the buff is
+      // already on the unit and its clock is already running, the healing just hasn't
+      // engaged yet. Only the Staff of Sanctuary sets one (its "Hero/Unit Regeneration
+      // Delay", 1s and 5s) — every other hot lands with delay 0 and is unaffected.
+      if (b.kind === "hot" && b.value && b.delay <= 0) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
       // A non-lethal dot (every poison) whittles and stops: it may take the last point off
       // a unit's health bar's worth of hp but never the last point itself.
       else if (b.kind === "dot" && b.value) u.hp = b.nonLethal ? Math.max(1, u.hp - b.value * dt) : u.hp - b.value * dt;
       if (b.delay > 0) b.delay -= dt; // Wind Walk's Transition Time, counting down to the vanish
       b.timeLeft -= dt;
+      // Sanctuary ends on the health bar, not on a clock. Checked AFTER this tick's healing
+      // so the pass that tops the unit up is also the pass that drops the stun with it —
+      // the caller recomputes stats straight after this, so the unit acts again the same tick.
+      if (b.untilHealed && u.hp >= u.maxHp) b.timeLeft = 0;
     }
     u.buffs = u.buffs.filter((b) => b.timeLeft > 0);
     if (u.hp <= 0) {
@@ -5626,7 +5650,7 @@ export class SimWorld {
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -10325,7 +10349,7 @@ export class SimWorld {
   /** Use an active item in a slot (potion/scroll). Returns true if it fired (a
    *  charge was consumed / a cooldown started). Dispatches on the granted ability's
    *  base `code`, like spells. */
-  useItem(unitId: number, slot: number, _targetId: number, x: number, y: number): boolean {
+  useItem(unitId: number, slot: number, targetId: number, x: number, y: number): boolean {
     // …and a copy cannot USE one either: no potion, no scroll, no charge spent. Its items
     // are not the original's, so drinking one would heal off a bottle nobody owns — and the
     // charge would not come off the real hero's.
@@ -10404,6 +10428,47 @@ export class SimWorld {
           fired = true;
           break;
         }
+        // The two STAVES that send a unit home: Staff of Preservation (`spre` → `ANpr`) and
+        // Staff of Sanctuary (`ssan` → `ANsa`). One ability shape, two payloads — see
+        // staffSendHome for the shared half and the Sanctuary buff below for the rest.
+        case "ANpr":
+        case "ANsa": {
+          const t = this.units.get(targetId);
+          if (!t || this.staffTargetError(u, ad, t) !== null) break;
+          const dest = this.staffDestination(t.owner, d(0));
+          if (!dest) break;
+          // Art, in the roles Blizzard's own comments in ItemAbilityFunc.txt spell out for
+          // the sibling Staff of Teleportation: `Casterart` on whoever waved the staff,
+          // `Targetart` on the traveller where it LEAVES from, `Specialart` on it where it
+          // ARRIVES. All three are the Mass Teleport set — the staves borrow it wholesale.
+          this.emitEffectAt(ad.casterArt, u.x, u.y);
+          this.emitEffectAt(ad.targetArt, t.x, t.y);
+          this.teleportUnit(t, dest.x, dest.y);
+          this.emitEffectAt(ad.specialArt, t.x, t.y);
+          this.stop(t.id); // it arrives idle, not still walking the errand it was pulled off
+          if (ad.code === "ANsa") {
+            // Sanctuary's payload (`ANsa` DataB/DataC/DataE, named by AbilityMetaData.slk's
+            // Nsa2/Nsa3/Nsa5 rows through WorldEditStrings): "Hero Regeneration Delay" 1,
+            // "Unit Regeneration Delay" 5, "Hit Points Per Second" 15 — the last of which the
+            // item's own tooltip prints as `<ANsa,DataE1>`. The delay is the beat between
+            // landing and the healing engaging; a hero waits 1s, everything else 5s.
+            //
+            // Both halves run `untilHealed` rather than on a duration, and `ANsa` carries no
+            // Dur1 to run on anyway: "Lasts until the unit is fully healed" (Liquipedia).
+            // The regeneration STACKS (same page), so it takes no group — a second staff adds
+            // a second 15 hp/sec — while the stun takes one, since two stuns are one stun.
+            const delay = t.isHero ? d(1) : d(2);
+            // fx(ad) is BNsa's own art — Staff_Sanctuary_Target.mdx, worn for as long as the
+            // effect runs — plus the buff id the info panel's Status row reads its icon,
+            // name and "cannot move, attack or cast spells" tooltip off.
+            this.applyBuffInternal(t, { kind: "hot", timeLeft: Infinity, sourceId: u.id, value: d(4), delay, untilHealed: true, ...fx(ad) });
+            // The stun wears no art of its own: one set of models, not two (see the salve).
+            this.applyBuffInternal(t, { kind: "stun", group: "ANsa", timeLeft: Infinity, sourceId: u.id, buffId: buffIdOf(ad), untilHealed: true });
+            this.recomputeStats(t); // pinned from this instant, not from the next tick
+          }
+          fired = true;
+          break;
+        }
         default:
           continue; // ability we don't handle — try the next granted ability
       }
@@ -10416,6 +10481,103 @@ export class SimWorld {
       return true;
     }
     return false;
+  }
+
+  /** Why a staff (`ANpr`/`ANsa`) may not be aimed at `t`, as a commandstrings.txt [Errors]
+   *  key — or null if it may. Split out of useItem so the HUD can ask BEFORE it spends the
+   *  click, exactly as `castError` lets it ask about a spell (see itemUseError).
+   *
+   *  On top of the row's own `targs1` (`ground,air,vuln,invu,player,neutral`, so no
+   *  buildings and never the staff-bearer itself) and its Rng1 of 700, the staves carry two
+   *  rules the flags cannot express, both from Liquipedia's Staff of Preservation /
+   *  Staff of Sanctuary pages:
+   *
+   *  • **"Cannot target summoned units."** A Water Elemental has no home to be sent to.
+   *  • **"Cannot teleport crowd-controlled units (including with Purge)."** Anything
+   *    holding the unit in place holds it against the staff too — a stun, a sleep,
+   *    Entangling Roots or Ensnare, a slow (Purge's included), Banish's ethereal drag.
+   *
+   *  And one from the patch notes: 1.13 "Staff of Preservation no longer affects allied
+   *  units — it now can only affect its owner's units." That is what `player` means in the
+   *  flag list, and it is stricter than the generic friend test targetAllowed applies, so
+   *  it is checked here rather than left to the flags. */
+  private staffTargetError(u: SimUnit, ad: AbilityDef, t: SimUnit): string | null {
+    if (t.hp <= 0) return "Notthisunit";
+    const flagErr = this.targetError(u, t, ad.targetFlags, ad.code);
+    if (flagErr !== null) return flagErr;
+    if (t.owner !== u.owner) return "Targetowned"; // "Must target one of your own units."
+    if (t.isSummon) return "Notsummoned"; // "Unable to target summoned units."
+    // …with the unit's OWN Sanctuary exempted. Its hold is a `stun` like any other, but the
+    // same pages say "multiple instances of the heal-over-time effect stack" — which is only
+    // possible if a second staff may be aimed at a unit the first one is already holding.
+    if (t.buffs.some((b) => !b.untilHealed && CROWD_CONTROL_BUFFS.has(b.kind))) return "Teleportfail"; // "A unit could not be teleported."
+    const range = ad.levelData[0]?.castRange ?? 0;
+    if (range > 0 && Math.hypot(t.x - u.x, t.y - u.y) > range + u.radius + t.radius) return "Notinrange";
+    return null;
+  }
+
+  /** Where a staff sends its target: the highest-ranked building `owner` holds that the
+   *  ability's **"Building Types Allowed"** mask admits (`ANpr`/`ANsa` DataA = 15 = all four).
+   *  Null when they hold none — the game has a string for exactly that case,
+   *  `Nopreservationtarget` = "No structures are available to teleport the target to."
+   *
+   *  The mask's bits are the four `pickFlags` UI\UnitEditorData.txt lists in this order —
+   *  Hall, Resource, Factory, General — and a building declares which one it is in
+   *  UnitData.slk's `buffType` (see UnitDef.buffType). Ranking is that bit order first,
+   *  then UnitData `prio` descending inside a category, and it reproduces Liquipedia's
+   *  documented fallback chains exactly, for both races they list:
+   *
+   *    Human   halls → Barracks (prio 9) → Workshop / Arcane Sanctum / Altar of Kings (5)
+   *            → Cannon Tower (3) → Arcane / Guard Tower (2) → Scout Tower (1)
+   *    Elf     halls → Altar of Elders (6) → Ancient of War (5) → Ancient of Lore (4)
+   *            → Ancient of Wind (3) → Ancient Protector (4, General) → Moon Well (2)
+   *
+   *  …and it drops exactly the buildings both pages call out as never-valid destinations
+   *  (Farm, Blacksmith, Lumber Mill, Arcane Vault, Gryphon Aviary; Hunter's Hall, Ancient
+   *  of Wonders, Chimaera Roost) without naming one of them: none carries a `buffType`.
+   *  "Highest LEVEL town hall" falls out of the same sort — a Castle's prio is 8, a Keep's
+   *  7, a Town Hall's 6 — and the categories are what keeps the prio-9 Barracks behind them. */
+  private staffDestination(owner: number, buildingTypes: number): { x: number; y: number } | null {
+    let best: SimUnit | null = null;
+    let bestRank = -1;
+    for (const b of this.units.values()) {
+      if (b.owner !== owner || b.hp <= 0 || !b.building) continue;
+      if (b.building.constructionLeft > 0) continue; // a shell is not somewhere to arrive
+      const def = this.unitReg?.get(b.typeId);
+      const category = STAFF_PICK_CATEGORIES.indexOf(def?.buffType ?? "");
+      if (category < 0 || !(buildingTypes & (1 << category))) continue;
+      // Category dominates prio: pack it into the high bits so the whole comparison is one
+      // number and a prio-9 Barracks can never outrank a prio-6 Town Hall.
+      const rank = (STAFF_PICK_CATEGORIES.length - category) * 1000 + (def?.priority ?? 0);
+      if (rank > bestRank) { bestRank = rank; best = b; }
+    }
+    return best ? { x: best.x, y: best.y } : null;
+  }
+
+  /** Why the local player's click on `targetId` with the item in `slot` would be refused,
+   *  as a commandstrings.txt [Errors] key (null = it goes through). The HUD asks this before
+   *  it spends an aimed item-use, the way it asks `castError` before an aimed spell — so a
+   *  bad target draws the game's own gold line and leaves the item armed to click again. */
+  itemUseError(unitId: number, slot: number, targetId: number): string | null {
+    const u = this.units.get(unitId);
+    if (!u || !this.itemReg || !this.abilities) return "Cantuseitem";
+    const held = u.inventory[slot];
+    if (!held) return "Cantuseitem";
+    if (held.cooldownLeft > 0) return "Itemcooldown"; // "This item is cooling down."
+    const def = this.itemReg.get(held.itemId);
+    if (!def?.usable) return "Cantuseitem";
+    for (const abilId of def.abilities) {
+      const ad = this.abilities.get(abilId);
+      if (!ad || (ad.code !== "ANpr" && ad.code !== "ANsa")) continue;
+      const t = this.units.get(targetId);
+      if (!t) return "Targetunit"; // "Must target a unit with this action." — clicked bare ground
+      const err = this.staffTargetError(u, ad, t);
+      if (err !== null) return err;
+      const lvl = ad.levelData[0];
+      const mask = lvl?.data[0] === undefined || Number.isNaN(lvl.data[0]) ? 0 : lvl.data[0];
+      return this.staffDestination(t.owner, mask) ? null : "Nopreservationtarget";
+    }
+    return null; // not an aimed item — nothing to check here
   }
 
   /** Spend a charge + start the item's cooldown (shared across its cooldown group,

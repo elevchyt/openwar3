@@ -322,6 +322,17 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Adev: { target: "unit" }, // Devour (Kodo Beast) — swallow & digest an enemy land unit
   Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
   Acpf: { target: "none" }, // Corporeal/Ethereal Form (Spirit Walker) — self toggle between forms
+  // === ITEM abilities that must be AIMED ===
+  // An item's behaviour is dispatched off its ability `code` in world.ts useItem, and most
+  // item actives need no aiming at all (a potion drinks itself), so they stay out of this
+  // table and load as "passive" — which is what makes the HUD fire them on the click. The
+  // ones listed here are the ones the player has to point at something: without a row the
+  // inventory button would fire them instantly at nothing.
+  //
+  // The STAVES (docs: Liquipedia Staff_of_Preservation / Staff_of_Sanctuary). Both take a
+  // unit — `targs1 = ground,air,vuln,invu,player,neutral`, Rng1 700 — and send it home.
+  ANpr: { target: "unit" }, // Staff of Preservation (`spre`) — teleport a unit to its own base
+  ANsa: { target: "unit" }, // Staff of Sanctuary (`ssan`) — the same, plus a stun + heal-over-time
   // === ORB EFFECTS the unit TYPE carries (src/sim/orbs.ts) ===
   // Attack modifiers, not casts: each rides the unit's own blows and competes with every
   // other orb for the one slot a blow has (see the priority ladder in orbs.ts). Listed here
