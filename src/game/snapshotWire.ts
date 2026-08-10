@@ -395,6 +395,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.f32(b.value2);
     w.f32(b.delay);
     w.u8(b.meld ? 1 : 0);
+    w.u8(b.nonLethal ? 1 : 0);
     w.u8(b.fx.length);
     for (const fx of b.fx) {
       w.u16(w.intern(fx.path));
@@ -589,6 +590,7 @@ function readUnit(r: Reader): UnitSnapshot {
     } as unknown as SimBuff;
     const meld = r.u8() !== 0;
     if (meld) b.meld = true; // written only when set — the sim omits the key everywhere else
+    if (r.u8() !== 0) b.nonLethal = true; // …and the same for a poison's non-lethal flag
     b.fx = [];
     const nFx = r.u8();
     for (let j = 0; j < nFx; j++) {

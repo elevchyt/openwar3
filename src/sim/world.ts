@@ -1,12 +1,24 @@
 import { PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { unstampFootprint, type Footprint } from "./destructibles";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
+import {
+  ENABLED_ATTACK_INDEX,
+  SLOWED_ATTACK,
+  SLOWED_MOVE,
+  STACK_DAMAGE,
+  abilityOrbTier,
+  isArrowOrb,
+  isOrbCode,
+  itemOrbTier,
+  pickOrb,
+  type OrbCandidate,
+} from "./orbs";
 import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, isRangedWeapon } from "../data/enums";
 import {
   MISC_DATA,
@@ -105,6 +117,10 @@ export interface SimProjectile {
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
   // instead of dealing plain `damage` — the base code + rank to dispatch.
   spell?: { code: string; rank: number; abilityId: string };
+  /** The ORB effect this shot carries, resolved and paid for at the launch (see
+   *  World.resolveOrb). It travels with the missile because the orb is what the missile is
+   *  DRAWN as — swapping art at launch and re-resolving at impact could disagree. */
+  orb?: ResolvedOrb;
 }
 
 /** One lightning bolt the renderer should string up (issue #97).
@@ -222,6 +238,24 @@ export interface SimBuff {
    *  are checked in tickMeld; everything else (attack, cast) reveals it through the shared
    *  breakInvisibility path, same as Wind Walk. */
   meld?: boolean;
+  /** A `dot` that cannot land the killing blow: it stops at 1 hp. Every WC3 POISON is one —
+   *  "the poison damage is 8 damage per second and is non-lethal" (Liquipedia, Orb of Venom)
+   *  — which is why a Dryad's Slow Poison whittles a fleeing unit down and never finishes it.
+   *  Liquid Fire and the other damage-over-time effects are ordinary and DO kill. */
+  nonLethal?: boolean;
+}
+
+/** The ORB EFFECT one blow carries, once the priority ladder has picked it (see
+ *  src/sim/orbs.ts and World.resolveOrb). Resolved when the attack is delivered, applied
+ *  when it lands — for a ranged attacker those are a flight apart, so it rides the missile. */
+export interface ResolvedOrb {
+  def: AbilityDef; // the exact ability — its art, its missile, its Data columns
+  rank: number;
+  lvl: AbilityLevel; // that rank's numbers
+  /** The other orb abilities the SAME ITEM grants, which win or lose with this one: the Orb
+   *  of Venom is `AIpb` (+5 damage) plus `Apo2` (the poison), and the RoC Orb of Lightning
+   *  is `AIlb` plus `AIlp` (the purge). Empty for an ability orb. */
+  extra?: ResolvedOrb[];
 }
 
 export type BuffKind =
@@ -243,6 +277,8 @@ export type BuffKind =
   | "manaShield" // absorb incoming damage into mana instead of hp; value = mana spent per hp
   | "root" // value = move-slow fraction (Entangling Roots pins to 1.0); can still attack
   | "vuln" // value = fraction of EXTRA damage the holder takes (Berserk +50%)
+  | "mark" // no effect of its own: a timed FLAG the holder wears (Black Arrow's, whose whole
+  //          point is what happens if the holder dies before it expires — see orbDeathEffects)
   | "shield" // Lightning Shield: value = dps dealt to units around the holder, value2 = radius
   | "ethereal" // Banish: value = move-slow fraction; can't attack, immune to physical
   //            damage but takes +66% from Magic/Spells (see u.ethereal, EtherealDamageBonus)
@@ -1039,8 +1075,16 @@ export interface SimUnit {
   unsummonArt: string;
   pendingCast: PendingCast | null; // in-progress cast (order === "cast")
   /** An attack modifier aimed BY HAND at one target: the next blow that lands on it carries
-   *  the effect and pays for it, once. See ARROW_SHOTS / issueArrowShot. */
+   *  the effect and pays for it, once. See isArrowOrb / issueArrowShot. */
   arrowShot: { code: string; targetId: number } | null;
+  /** Marked by Black Arrow / Orb of Darkness (`ANba`/`ANbs`): dying while marked raises the
+   *  ability's `UnitID1` in this unit's place, for whoever laid the mark. The mark is the
+   *  whole of the effect — it does no damage of its own — so it is state on the VICTIM,
+   *  cleared when the buff that carries it expires (see tickBuffs) and read in kill(). */
+  blackArrow: { abilityId: string; rank: number; sourceId: number; owner: number; team: number } | null;
+  /** Marked by Incinerate (`ANia`/`ANic`): dying while still aflame blasts everything nearby.
+   *  Paired with the "incinerate" buff, whose `value2` counts the stacks. */
+  incinerate: { abilityId: string; rank: number; sourceId: number } | null;
   // --- neutral-hostile creep guard AI (see the CREEP_* constants) -----------
   isCreep: boolean; // a map-placed Neutral Hostile creep with guard/leash behaviour
   /**
@@ -1354,7 +1398,9 @@ function altFormOf(lvl: AbilityLevel | undefined): string {
 
 const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
 /**
- * The ATTACK MODIFIERS: abilities that ride on a shot rather than being one.
+ * The ARROWS, the loudest members of the ATTACK MODIFIER (orb) family — abilities that ride
+ * on a shot rather than being one. The family itself, and the rule that only ONE of its
+ * members may ride any given blow, lives in src/sim/orbs.ts.
  *
  * They are unit-target abilities in the data — `AHfa` (Searing Arrows) carries
  * `targs1 = air,ground,structure,enemy,neutral` and `Rng1 = 600`, `AHca` (Cold Arrows)
@@ -1363,9 +1409,8 @@ const IMMEDIATE = new Set(["AHds", "ACds", "AOwk"]);
  * than a per-cast one. So a manual cast is not a bolt fired at the target: it is an ATTACK
  * on that target whose next landed blow carries the effect and pays the mana, which is why
  * these need a path of their own rather than a SPELL_HANDLERS entry. Autocast is the same
- * effect standing on every shot instead of one (applyArrowEffects serves both).
+ * effect standing on every shot instead of one (resolveOrb serves both).
  */
-const ARROW_SHOTS = new Set(["AHfa", "AHca", "ANba", "ANia"]);
 /** Buff group prefix worn by the regeneration items (`AIrg` — Healing Salve, Clarity
  *  Potion, Potion/Scroll of Rejuvenation). One prefix so a single filter drops both the
  *  life and the mana half together when the effect breaks. */
@@ -3337,6 +3382,8 @@ export class SimWorld {
       | "illusionDamageTaken"
       | "pendingCast"
       | "arrowShot"
+      | "blackArrow"
+      | "incinerate"
       | "isCreep"
       | "guarding"
       | "guardX"
@@ -3529,6 +3576,8 @@ export class SimWorld {
       illusionDamageTaken: 1,
       pendingCast: null,
       arrowShot: null,
+      blackArrow: null,
+      incinerate: null,
       // Creep guard AI is off by default; the map seeder flips isCreep on and sets
       // the guard point / aggro range / sleep flag for Neutral Hostile units.
       isCreep: false,
@@ -4859,14 +4908,13 @@ export class SimWorld {
    *  Item behaviour is dispatched off the granted ability's base `code` (verified
    *  against AbilityData.slk): +damage AIat, +armour AIde, +attributes AIab
    *  (dataA=agi, dataB=int, dataC=str), +attack-speed AIas, +mana-regen AHab.
-   *  Lifesteal (Mask of Death AIva) does NOT stack — we keep the strongest.
    *  Permanent item stats are computed here every tick rather than stored as
    *  buffs, so Dispel Magic (which wipes `u.buffs`) can never remove them. */
   private itemBonuses(u: SimUnit): {
-    str: number; agi: number; int: number; damage: number; armor: number; attackSpeed: number; manaRegen: number; lifesteal: number;
-    speed: number; maxHp: number; hpRegen: number;
+    str: number; agi: number; int: number; damage: number; armor: number; attackSpeed: number; manaRegen: number;
+    speed: number; maxHp: number; hpRegen: number; weaponsOn: number;
   } {
-    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, lifesteal: 0, speed: 0, maxHp: 0, hpRegen: 0 };
+    const b = { str: 0, agi: 0, int: 0, damage: 0, armor: 0, attackSpeed: 0, manaRegen: 0, speed: 0, maxHp: 0, hpRegen: 0, weaponsOn: 0 };
     if (!u.inventory.length || !this.itemReg || !this.abilities) return b;
     for (const held of u.inventory) {
       if (!held) continue;
@@ -4889,17 +4937,26 @@ export class SimWorld {
           // Sobi Mask and the wands give dataA mana per second.
           case "Arel": b.hpRegen += val(0); break; // Regen Life (+2 hp/sec)
           case "AIrm": b.manaRegen += val(0); break; // ItemRegenMana (+0.5 mana/sec)
-          // Orb of Fire and its family — the part of an orb that is plainly data: dataA
-          // flat bonus damage. NOT modelled: the on-hit effect an orb also carries (the
-          // burn, the frost slow, the lightning), which lives in the attack path rather
-          // than in a stat, and the air-attack grant some orbs give a ground-only weapon.
-          case "AIfb": b.damage += val(0); break; // Item Attack Fire Bonus (+5)
-          case "AIva": b.lifesteal = Math.max(b.lifesteal, val(0)); break; // Mask of Death (lifesteal)
           // The two the shops made reachable (issue #57). Both are plain passive bonuses, and
           // both were dead code paths until now because nothing sold them: Boots of Speed are
           // the Goblin Merchant's signature item, and the Periapt is the +HP staple.
           case "AIms": b.speed += val(0); break; // Boots of Speed (+60 movement)
           case "AIml": b.maxHp += val(0); break; // Periapt of Vitality (+150 max HP)
+        }
+        // --- The two things an ORB gives simply by being CARRIED, neither of which is
+        // subject to the one-orb-at-a-time rule (src/sim/orbs.ts). The on-hit EFFECT is,
+        // and it lives in the attack path (resolveOrb), not here.
+        if (isOrbCode(def.code)) {
+          // "Adds <DataA> bonus damage to the attack of a Hero when carried" — every orb
+          // item's own Ubertip words it as a carried stat, i.e. a Claws of Attack line, so
+          // two orbs really do give two damage bonuses. `AIva` (Mask of Death) and the
+          // effect-only halves carry no DataA and add nothing.
+          if (def.code !== "AIva") b.damage += val(0);
+          // "The Hero's attacks also become ranged when attacking air" — DataE, the
+          // "Enabled Attack Index" (see ENABLED_ATTACK_INDEX). Every hero ships a dormant
+          // second weapon that is ranged and lists `air`; the orb switches it on.
+          const slot = val(ENABLED_ATTACK_INDEX);
+          if (slot >= 1) b.weaponsOn |= 1 << (slot - 1);
         }
       }
     }
@@ -5119,6 +5176,12 @@ export class SimWorld {
       // rather than an OR with the old one, which is what lets Impaling Bolt take the Glaive
       // Thrower OFF its original weapon.
       if (upg.weaponMask >= 0) w.enabled = (upg.weaponMask & (1 << u.weapons.indexOf(w))) !== 0;
+      // …and an ORB switches its "Enabled Attack Index" slot ON, which is the whole of "the
+      // Hero's attacks also become ranged when attacking air": a hero's dormant slot 2 is a
+      // 500-range homing missile that lists `air` (UnitWeapons.slk), and carrying the orb is
+      // all it takes to wake it. An OR, never an assignment — the orb adds a way to attack,
+      // it never takes the melee away.
+      if (item.weaponsOn & (1 << u.weapons.indexOf(w))) w.enabled = true;
       const base = w.baseDamage + primaryDelta;
       w.damage = Math.max(0, base + damageBonus + item.damage + upg.damage + base * damagePct); // Command/Trueshot add a % of base
       w.dice = w.baseDice + upg.dice; // Forged Swords / Gunpowder add dice, widening the roll
@@ -5192,7 +5255,9 @@ export class SimWorld {
     if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
     u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen + upg.manaRegen;
     u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
-    u.lifesteal = Math.max(lifesteal, item.lifesteal);
+    // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
+    // other orb, and it works on a ranged attack), so it is applied at the blow instead.
+    u.lifesteal = lifesteal;
     // Spiked Carapace also returns a fraction of melee damage (dataA), like Thorns.
     u.thorns = Math.max(thorns, carapace ? this.dataOf(carapace, 0) : 0);
     u.stunned = stun;
@@ -5342,7 +5407,9 @@ export class SimWorld {
     if (!u.buffs.length) return false;
     for (const b of u.buffs) {
       if (b.kind === "hot" && b.value) u.hp = Math.min(u.maxHp, u.hp + b.value * dt);
-      else if (b.kind === "dot" && b.value) u.hp -= b.value * dt;
+      // A non-lethal dot (every poison) whittles and stops: it may take the last point off
+      // a unit's health bar's worth of hp but never the last point itself.
+      else if (b.kind === "dot" && b.value) u.hp = b.nonLethal ? Math.max(1, u.hp - b.value * dt) : u.hp - b.value * dt;
       if (b.delay > 0) b.delay -= dt; // Wind Walk's Transition Time, counting down to the vanish
       b.timeLeft -= dt;
     }
@@ -5555,7 +5622,7 @@ export class SimWorld {
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), delay: init.delay ?? 0, meld: init.meld });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -5798,9 +5865,9 @@ export class SimWorld {
     const t = def.target === "unit" ? this.units.get(targetId) : undefined;
     if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags, code))) return false;
     // An attack modifier aimed by hand: not a cast at all, but an ATTACK carrying one
-    // enhanced shot (see ARROW_SHOTS). Checked after the target test so it inherits the
+    // enhanced shot (see isArrowOrb). Checked after the target test so it inherits the
     // same data-driven rules — Searing Arrows may be aimed at a building, Cold Arrows may not.
-    if (ARROW_SHOTS.has(code)) return this.issueArrowShot(u, ab, lvl, targetId);
+    if (isArrowOrb(code)) return this.issueArrowShot(u, ab, lvl, targetId);
     // Remember an attack-move/follow to resume after the cast (WC3 casters keep
     // marching/following once they've cast).
     const resume: PendingCast["resume"] =
@@ -5833,7 +5900,7 @@ export class SimWorld {
   }
 
   /**
-   * Aim an attack modifier by hand (ARROW_SHOTS): shoot THAT unit, and let the blow that
+   * Aim an attack modifier by hand (isArrowOrb): shoot THAT unit, and let the blow that
    * lands carry the ability.
    *
    * No PendingCast, no wind-up, no cast animation — the Priestess does not stop and gesture,
@@ -6106,7 +6173,7 @@ export class SimWorld {
       // the blow), not "go and find someone to shoot". Left in, a Priestess with Searing
       // Arrows on would hunt down anything inside her acquisition range under a COMMANDED
       // attack — which outranks her guard post and would drag her off a march.
-      if (ARROW_SHOTS.has(ab.code)) continue;
+      if (isArrowOrb(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def || def.target !== "unit") continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -8413,6 +8480,11 @@ export class SimWorld {
    *  and applied when it lands (armor is applied at impact). */
   private spawnProjectile(u: SimUnit, t: SimUnit, w: SimWeapon, bonus = 0): void {
     const id = this.nextProjectileId++;
+    // The orb this shot carries is decided — and paid for — HERE, at the loosing, because
+    // the orb owns the missile: every member of the family carries its own `Missileart`
+    // (Searing Arrows' fire arrow, Orb of Frost's LichMissile, the Mask of Death's
+    // NeutralizationMissile), which is the community's own test for what counts as an orb.
+    const orb = this.resolveOrb(u, t);
     // Launch from the weapon's model point (local offset rotated by facing), not the
     // unit's feet — e.g. the Archmage's fireball leaves from launchz=66 (his rod).
     const [lx, ly, lz0] = launchPoint(u, w.launchX, w.launchY, w.launchZ);
@@ -8431,8 +8503,9 @@ export class SimWorld {
       targetId: t.id,
       speed: w.missileSpeed > 0 ? w.missileSpeed : 900,
       damage: this.rollDamage(w) + bonus, // + Backstab Damage if this shot broke a fade
-      art: w.missileArt,
+      art: this.orbMissileArt(orb) || w.missileArt,
       attackType: w.attackType,
+      orb: orb ?? undefined,
       startZ: lz,
       impactZ: impactBase + t.flyHeight,
       startDist: Math.hypot(t.x - lx, t.y - ly),
@@ -8512,8 +8585,12 @@ export class SimWorld {
           const def = this.abilities?.get(p.spell.abilityId);
           this.applySpellEffect(p.spell.code, p.spell.rank, caster, { targetId: t.id, x: t.x, y: t.y }, def);
         } else {
+          // Orb of Corruption strips armour BEFORE the blow it rode in on (Liquipedia,
+          // Orb of Corruption: "the armor reduction happens before the damage of the hero is
+          // dealt"), so the debuff half of an orb goes on first and the rest after.
+          this.applyOrbArmorFirst(this.units.get(p.sourceId), t, p.orb);
           const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None);
-          if (dealt > 0) this.applyArrowAutocast(this.units.get(p.sourceId), t); // Searing/Frost/Black/Incinerate arrows
+          this.applyOrbEffect(this.units.get(p.sourceId), t, p.orb, dealt); // the orb this arrow carried
           this.applyLiquidFire(this.units.get(p.sourceId), t); // Batrider: burn a struck building
           const shooter = this.units.get(p.sourceId);
           if (shooter) this.applyPillage(shooter, t, dealt); // ranged Pillage (Raider) off a struck building
@@ -8874,6 +8951,10 @@ export class SimWorld {
     // backstab: it is a flat bonus on the strike, not something a crit doubles.
     const bashBonus = attacker.swingBash ? this.bashDamageBonus(attacker) : 0;
     const raw = this.applyCriticalStrike(attacker, this.rollDamage(w)) + bonus + bashBonus;
+    // A melee strike is delivered and lands in the same instant, so its orb is resolved here
+    // rather than at a launch — but the ordering inside the blow is the same (see above).
+    const orb = this.resolveOrb(attacker, target);
+    this.applyOrbArmorFirst(attacker, target, orb);
     const dealt = this.applyDamage(target, raw, attacker.id, w.attackType);
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
@@ -8884,6 +8965,7 @@ export class SimWorld {
     // Thorns Aura: the target returns a fraction of the damage to the attacker.
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
     if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
+    this.applyOrbEffect(attacker, target, orb, dealt); // the one orb this swing carried
     this.applyPillage(attacker, target, dealt); // Pillage: gold off a struck enemy building
     // Bash: rolled when the swing began (see engage), spent here on the blow that landed.
     if (attacker.swingBash) this.applyBash(attacker, target);
@@ -8939,33 +9021,392 @@ export class SimWorld {
     return u.buffs.some((b) => b.group === "liquidfire");
   }
 
-  private applyArrowAutocast(attacker: SimUnit | undefined, target: SimUnit): void {
-    if (!attacker || !this.abilities || target.hp <= 0) return;
-    // The one blow this unit was told to enhance by hand, if it is landing on the unit it
-    // was aimed at (issueArrowShot). Taken now whether or not it ends up firing: an aimed
+  // === Orb effects ==========================================================
+  //
+  // See src/sim/orbs.ts for what an "orb" is, which abilities are in the family, and the
+  // priority ladder that decides which single one rides a blow. This half is the sim's:
+  // resolving the winner at the moment the attack is DELIVERED, and running its effect at
+  // the moment the blow LANDS.
+  //
+  // Delivered, not landed, is deliberate. A ranged orb has to be resolved at the launch
+  // because the orb OWNS THE MISSILE — every member of the family carries its own
+  // `Missileart` (Searing Arrows' fire arrow, Orb of Frost's LichMissile, the Mask of
+  // Death's NeutralizationMissile), which is the community's own test for whether an
+  // ability is an orb. That is also where the per-shot mana goes: the arrow you have
+  // already loosed is paid for whether or not it connects. The chosen orb then travels on
+  // the projectile so that impact runs exactly the orb the missile was drawn as.
+
+  /** The orb one blow carries: the exact ability (art, missile, per-rank numbers) plus the
+   *  inventory it came from, if any (see resolveOrb). */
+  private orbOf(def: AbilityDef, rank: number): ResolvedOrb {
+    return { def, rank, lvl: def.levelData[Math.min(rank, def.levelData.length) - 1] ?? emptyAbilityLevel() };
+  }
+
+  /**
+   * Pick — and pay for — the orb effect this unit's blow carries, or null.
+   *
+   * Candidates come from two places, exactly as in WC3:
+   *   • the unit's own ability list — arrows (only while autocast is on, or on the one shot
+   *     that was aimed by hand) and always-on passives like Slow Poison or Feedback;
+   *   • every ITEM in the inventory, whose orb abilities are taken as a SET — the Orb of
+   *     Venom is `AIpb` (+5 damage) *and* `Apo2` (the poison), one orb with two halves, so
+   *     they must win or lose together rather than compete with each other.
+   *
+   * An arrow the caster cannot pay for is not a candidate at all, which is what lets a
+   * Priestess out of mana fall through to the orb in her bag instead of shooting nothing.
+   */
+  private resolveOrb(attacker: SimUnit, target: SimUnit): ResolvedOrb | null {
+    if (!this.abilities) return null;
+    // Almost every attacker in the game has no orb of any kind, and this runs on every blow.
+    if (!attacker.arrowShot && !attacker.inventory.some(Boolean) && !attacker.abilities.some((a) => a.level >= 1 && isOrbCode(a.code))) return null;
+    // The one blow this unit was told to enhance by hand, if it is going at the unit it was
+    // aimed at (issueArrowShot). Consumed here whether or not it ends up winning: an aimed
     // shot is spent on the shot, and a second arrow is a second order.
     const aimed = attacker.arrowShot?.targetId === target.id ? attacker.arrowShot.code : "";
     if (aimed) attacker.arrowShot = null;
+    const candidates: OrbCandidate<ResolvedOrb>[] = [];
     for (const ab of attacker.abilities) {
-      if (ab.level < 1) continue;
-      // Standing order or aimed shot — the same effect either way, which is the whole point
-      // of the pair. Autocast wins the tie harmlessly: it is the same ability firing once.
-      if (!ab.autocastOn && ab.code !== aimed) continue;
-      if (!ARROW_SHOTS.has(ab.code)) continue;
+      if (ab.level < 1 || !isOrbCode(ab.code)) continue;
+      const tier = abilityOrbTier(ab.code);
+      if (tier === null) continue;
+      // An arrow only counts while its standing order is on, or on the shot it was aimed
+      // for. A passive orb is always on — but still has to clear its own upgrade gate
+      // (`[Aven] Requires=Rovs`), the same test the command card and every other
+      // upgrade-granted ability makes.
+      if (isArrowOrb(ab.code)) {
+        if (!ab.autocastOn && ab.code !== aimed) continue;
+      } else if (!this.techMeets(attacker.owner, ab.id)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
-      const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
-      if (attacker.mana < lvl.cost) continue;
-      attacker.mana -= lvl.cost;
-      if (ab.code === "AHca") {
-        const d = target.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration || 4;
-        this.applyBuffInternal(target, { kind: "slow", group: "coldarrow", timeLeft: d, value: this.dataOf(lvl, 0, 0.25) || 0.25, value2: this.dataOf(lvl, 1, 0.25) || 0.25, sourceId: attacker.id, art: def.targetArt });
-      } else {
-        const bonus = this.dataOf(lvl, 0, 10) || 10;
-        this.landDamage(target, bonus, attacker.id, false);
-      }
-      if (def.targetArt) this.spellEffects.push({ art: def.targetArt, x: target.x, y: target.y, targetId: target.id, z: 0 });
+      const orb = this.orbOf(def, ab.level);
+      if (attacker.mana < orb.lvl.cost) continue; // can't pay for this shot — try the next orb
+      candidates.push({ tier, slot: -1, payload: orb });
     }
+    if (this.itemReg) {
+      for (let slot = 0; slot < attacker.inventory.length; slot++) {
+        const held = attacker.inventory[slot];
+        const item = held ? this.itemReg.get(held.itemId) : undefined;
+        if (!item) continue;
+        const codes: string[] = [];
+        const parts: ResolvedOrb[] = [];
+        for (const abilId of item.abilities) {
+          const def = this.abilities.get(abilId);
+          if (!def || !isOrbCode(def.code)) continue;
+          codes.push(def.code);
+          parts.push(this.orbOf(def, 1));
+        }
+        if (!parts.length) continue;
+        // The item's PRIMARY half is the one that names the effect; the rest ride with it
+        // (Orb of Venom's poison, the RoC Orb of Lightning's purge).
+        const primary = parts[0];
+        primary.extra = parts.slice(1);
+        candidates.push({ tier: itemOrbTier(codes), slot, payload: primary });
+      }
+    }
+    const orb = pickOrb(candidates);
+    if (orb && orb.lvl.cost > 0) attacker.mana -= orb.lvl.cost; // per-shot cost, spent on the shot
+    return orb;
+  }
+
+  /** Run a resolved orb's on-hit effect. `dealt` is the damage the blow itself did (0 if it
+   *  was absorbed or the target was immune) — an orb whose effect is a share of the hit
+   *  needs it, and every orb needs to know the blow actually connected. */
+  private applyOrbEffect(attacker: SimUnit | undefined, target: SimUnit, orb: ResolvedOrb | null | undefined, dealt: number): void {
+    if (!attacker || !orb || target.hp <= 0) return;
+    // A blow that did not connect carries nothing: "Missing an Attack does not trigger the
+    // reduction" (Liquipedia, Orb of Corruption), and the same holds for the slow, the
+    // poison and the mark. `dealt` is 0 for an evaded swing, an invulnerable target and the
+    // physical immunity of an ethereal one — every way an attack fails to land.
+    if (dealt <= 0) return;
+    this.runOrbPart(attacker, target, orb, dealt);
+    for (const part of orb.extra ?? []) this.runOrbPart(attacker, target, part, dealt);
+  }
+
+  private runOrbPart(attacker: SimUnit, target: SimUnit, orb: ResolvedOrb, dealt: number): void {
+    const { def, lvl } = orb;
+    const code = def.code;
+    // Duration: WC3 gives heroes their own, shorter figure for almost every debuff, and an
+    // orb is no exception (Orb of Frost 3s on a unit, 1s on a hero).
+    const dur = target.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
+    switch (code) {
+      // --- Flat bonus damage on the blow. Searing Arrows' whole effect, and Black Arrow's
+      // and Orb of Annihilation's damage half. `DataA` is "Damage Bonus"/"Extra Damage" in
+      // AbilityMetaData (Hfa1/Nba1/fak1) for all of them.
+      case "AHfa":
+        this.landDamage(target, this.dataOf(lvl, 0, 10), attacker.id, false);
+        break;
+      // --- Cold / Frost Arrows: `DataA` Extra Damage, `DataB` Movement Speed Factor,
+      // `DataC` Attack Speed Factor (AbilityMetaData Hca1..Hca3). The creep row `ACcw` fills
+      // only A and B, so it slows movement and not attack rate — that is what its data says.
+      case "AHca": {
+        const extra = this.dataOf(lvl, 0);
+        if (extra > 0) this.landDamage(target, extra, attacker.id, false);
+        this.applyBuffInternal(target, {
+          kind: "slow", group: "coldarrow", timeLeft: dur || 4,
+          value: this.dataOf(lvl, 1, 0.3), value2: this.dataOf(lvl, 2, 0.3), sourceId: attacker.id, ...this.buffArtOf(def),
+        });
+        break;
+      }
+      // --- Black Arrow / Orb of Darkness: `DataA` bonus damage, and a MARK — a unit that
+      // dies carrying it rises as `UnitID1` (`ndr1`, the Dark Minion), `DataB` of them for
+      // `DataC` seconds. The raise lives in kill(); this only lays the mark.
+      case "ANba":
+      case "ANbs": {
+        const bonus = this.dataOf(lvl, 0);
+        if (bonus > 0) this.landDamage(target, bonus, attacker.id, false);
+        // The mark only takes on something that could leave a body to raise: `targs1` is
+        // `air,ground,enemy,organic,neutral` — no `structure` — and a hero or a summon
+        // leaves no corpse to make a skeleton of. The bonus damage above lands regardless.
+        if (target.hp > 0 && lvl.summon && !target.building && !target.isHero && !target.isSummon) {
+          target.blackArrow = { abilityId: def.id, rank: orb.rank, sourceId: attacker.id, owner: attacker.owner, team: attacker.team };
+          this.applyBuffInternal(target, { kind: "mark", group: "blackarrow", timeLeft: dur || 2, sourceId: attacker.id, ...this.buffArtOf(def) });
+        }
+        break;
+      }
+      // --- Incinerate: "<DataA> damage on the first attack, twice as much on the second,
+      // three times as much on the third, etc." — the ability's own Ubertip. The stack count
+      // rides the buff (`value2`), and a unit that dies still burning explodes for up to
+      // `DataB` in `DataE` (see kill()).
+      case "ANia":
+      case "ANic": {
+        const step = this.dataOf(lvl, 0, 2);
+        const worn = target.buffs.find((b) => b.group === "incinerate");
+        const stacks = (worn ? worn.value2 : 0) + 1;
+        this.landDamage(target, step * stacks, attacker.id, false);
+        if (target.hp > 0) {
+          this.applyBuffInternal(target, {
+            kind: "mark", group: "incinerate", timeLeft: dur || 4, value: 0, value2: stacks,
+            sourceId: attacker.id, ...this.buffArtOf(def),
+          });
+          target.incinerate = { abilityId: def.id, rank: orb.rank, sourceId: attacker.id };
+        }
+        break;
+      }
+      // --- Orb of Annihilation (Destroyer): `DataA` bonus damage on the target plus a
+      // falloff splash — `fak2`/`fak3` are the Medium and Small Damage Factors, `Area1` the
+      // radius the medium band reaches.
+      case "Afak": {
+        const bonus = this.dataOf(lvl, 0, 15);
+        this.landDamage(target, bonus, attacker.id, false);
+        const radius = lvl.area || 150;
+        for (const o of this.unitsInAreaInternal(target.x, target.y, radius)) {
+          if (o === target || o === attacker || !this.hostile(attacker, o)) continue;
+          this.landDamage(o, bonus * this.dataOf(lvl, 1, 0.45), attacker.id, false);
+        }
+        break;
+      }
+      // --- Poison Arrows: `DataA` Extra Damage, then the poison columns (Poa2..Poa4 =
+      // Damage per Second / Attack Speed Factor / Movement Speed Factor).
+      case "AEpa": {
+        const extra = this.dataOf(lvl, 0);
+        if (extra > 0) this.landDamage(target, extra, attacker.id, false);
+        // `Poa5` is its Stacking Types column (0 — nothing stacks), one place further along
+        // than the poison family's, because Poison Arrows carries an Extra Damage column too.
+        this.applyPoison(attacker, target, def, dur, this.dataOf(lvl, 1, 1), this.dataOf(lvl, 2), this.dataOf(lvl, 3), this.dataOf(lvl, 4));
+        break;
+      }
+      // --- Poison (Slow Poison, Envenomed Spears, Poison Sting, Orb of Venom's half).
+      // AbilityMetaData Poi1..Poi3 / Spo1..Spo3: `DataA` Damage per Second, `DataB` and
+      // `DataC` the Attack- and Movement-Speed factors — and the two families put them in
+      // the OPPOSITE order, which is the metadata's own answer and not a guess:
+      //   Spo2 = "Movement Speed Factor", Spo3 = "Attack Speed Factor"   (Aspo)
+      //   Poi2 = "Attack Speed Factor",   Poi3 = "Movement Speed Factor" (Apoi/Apo2/Aven)
+      case "Aspo":
+        this.applyPoison(attacker, target, def, dur, this.dataOf(lvl, 0), this.dataOf(lvl, 2), this.dataOf(lvl, 1), this.dataOf(lvl, 3));
+        break;
+      case "Apoi":
+      case "Apo2":
+      case "Aven":
+        this.applyPoison(attacker, target, def, dur, this.dataOf(lvl, 0), this.dataOf(lvl, 1), this.dataOf(lvl, 2), this.dataOf(lvl, 3));
+        break;
+      // --- Feedback (Spell Breaker, Arcane Tower): burn up to `DataA` mana from a unit or
+      // `DataC` from a hero, and deal that much damage times the matching Damage Ratio
+      // (`DataB`/`DataD`). `DataE` is flat bonus damage to SUMMONED units — the Arcane
+      // Tower's 20, and 0 on the Spell Breaker, so it costs nothing to read here.
+      case "Afbk": {
+        const cap = target.isHero ? this.dataOf(lvl, 2, 4) : this.dataOf(lvl, 0, 20);
+        const ratio = target.isHero ? this.dataOf(lvl, 3, 1) : this.dataOf(lvl, 1, 1);
+        const burned = Math.min(cap, Math.max(0, target.mana));
+        if (burned > 0) {
+          target.mana -= burned;
+          this.landDamage(target, burned * ratio, attacker.id, false);
+        }
+        const vsSummon = this.dataOf(lvl, 4);
+        if (vsSummon > 0 && target.isSummon && target.hp > 0) this.landDamage(target, vsSummon, attacker.id, false);
+        break;
+      }
+      // --- Life steal (Mask of Death, Killmaim). `DataA` is "Life Stolen Per Attack" as a
+      // FRACTION of the damage dealt (0.5). Unlike the Vampiric Aura this is an orb, so it
+      // works on a ranged attack too — which is why it lives here and not on u.lifesteal.
+      case "AIva":
+        if (dealt > 0 && attacker.hp > 0) attacker.hp = Math.min(attacker.maxHp, attacker.hp + dealt * this.dataOf(lvl, 0, 0.5));
+        break;
+      // --- Orb of Fire / Orb of Kil'jaeden: "do splash damage to nearby enemy units" (the
+      // items' own Ubertip). `Area1` is the radius; the splash is the orb's own damage bonus,
+      // the only magnitude the row carries.
+      case "AIfb": {
+        const splash = this.dataOf(lvl, 0, 10);
+        for (const o of this.unitsInAreaInternal(target.x, target.y, lvl.area || 150)) {
+          if (o === target || o === attacker || !this.hostile(attacker, o)) continue;
+          this.landDamage(o, splash, attacker.id, false);
+        }
+        break;
+      }
+      // --- Orb of Frost: the generic Slowed buff (`Bfro`) for the row's own duration. The
+      // magnitudes are engine-internal — see SLOWED_MOVE/SLOWED_ATTACK in orbs.ts. Frost
+      // Attack (Frost Wyrm, Nerubian Tower, the Blue Dragons) is the same buff, longer.
+      case "AIob":
+      case "Afra":
+      case "Afrb":
+        this.applyBuffInternal(target, {
+          kind: "slow", group: "frostattack", timeLeft: dur || 3,
+          value: SLOWED_MOVE, value2: SLOWED_ATTACK, sourceId: attacker.id, ...this.buffArtOf(def),
+        });
+        break;
+      // --- Orb of Corruption. Its armour strip goes on BEFORE the blow that carried it, so
+      // it is applied in applyOrbArmorFirst rather than here; all that is left for the
+      // landing is the proc art at the bottom of this function.
+      case "AIcb":
+        break;
+      // --- The RoC Orb of Lightning's purge half. Its own row carries a slow factor
+      // (`DataA`) and bonus damage to summons (`DataC`) but no chance column, so it fires on
+      // every hit.
+      case "AIlp": {
+        const bonusVsSummon = this.dataOf(lvl, 2);
+        if (target.isSummon && bonusVsSummon > 0) this.landDamage(target, bonusVsSummon, attacker.id, false);
+        this.applyBuffInternal(target, {
+          kind: "slow", group: "itempurge", timeLeft: dur || 3,
+          value: Math.min(1, this.dataOf(lvl, 0, 1)), value2: 0, sourceId: attacker.id, ...this.buffArtOf(def),
+        });
+        break;
+      }
+      // --- The "Effect Ability" orbs — Orb of Slow, the TFT Orb of Lightning, Orb of
+      // Darkness. AbilityMetaData names their columns outright: `Iob2`/`Iob3`/`Iob4` are
+      // "Chance To Hit Units/Heros/Summons (%)" and `Iobu` (UnitID1) is the "Effect Ability"
+      // to run on the target. So this is one generic wrapper for all three, and what each
+      // does is entirely in its own data: 15/5/35 → Slow, 30/10/30 → Purge, 100/100/100 →
+      // raise a Dark Minion.
+      case "AIsb": {
+        const chance = target.isHero ? this.dataOf(lvl, 2) : target.isSummon ? this.dataOf(lvl, 3) : this.dataOf(lvl, 1);
+        if (this.rng() * 100 >= chance) break;
+        const effect = this.abilities?.get(lvl.summon);
+        if (!effect) break;
+        // The wrapper's own effect ability is a real spell row (`AIos` is Slow, `AIpg` is
+        // Purge), so it dispatches through the ordinary spell path — no mana, no cooldown,
+        // it is the orb that paid. `ANbs` is not a spell but an orb in its own right and
+        // runs through this same switch.
+        if (isOrbCode(effect.code)) this.runOrbPart(attacker, target, this.orbOf(effect, 1), dealt);
+        else this.applySpellEffect(effect.code, 1, attacker, { targetId: target.id, x: target.x, y: target.y }, effect);
+        break;
+      }
+      // Damage-bonus-only orbs (Orb of Lightning's `AIlb`, Orb of Venom's `AIpb`): the bonus
+      // is a carried stat (itemBonuses), so winning the priority contest costs them nothing
+      // and there is no on-hit effect of their own. They are still full members of the
+      // family — an Orb of Venom in slot 6 really does switch a Dryad's Slow Poison off.
+      default:
+        break;
+    }
+    // The orb's `Specialart` is its PROC — the flash on the unit that was hit (Orb of
+    // Corruption's ribbon, the Mask of Death's VampiricAuraTarget, Feedback's
+    // SpellBreakerAttack). Distinct from `Targetart`, which for an orb is the persistent
+    // model worn on the carrier's weapon and never a one-shot (see orbAttachments).
+    if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: target.x, y: target.y, targetId: target.id, z: 0 });
+  }
+
+  /** The missile model an orb lends the shot it rides — the orb's own `Missileart`, which
+   *  every member of the family carries and which is what makes an orb visible on a ranged
+   *  unit at all. An item orb's damage half names it (Orb of Frost → LichMissile); if it
+   *  doesn't, one of its other halves might (Orb of Venom's `Apo2` → OrbVenomMissile). */
+  private orbMissileArt(orb: ResolvedOrb | null): string {
+    if (!orb) return "";
+    if (orb.def.missileArt) return orb.def.missileArt;
+    for (const part of orb.extra ?? []) if (part.def.missileArt) return part.def.missileArt;
+    return "";
+  }
+
+  /**
+   * The half of an orb that has to land BEFORE the blow it rode in on: Orb of Corruption's
+   * armour strip. Liquipedia's Orb of Corruption page is explicit — "The armor reduction
+   * happens, before the damage of the hero is dealt" — so even the first hit of a fight is
+   * already taking the reduced-armour damage, which is most of why the item is worth its
+   * 375 gold in a big fight. Everything else an orb does happens after (applyOrbEffect).
+   */
+  private applyOrbArmorFirst(attacker: SimUnit | undefined, target: SimUnit, orb: ResolvedOrb | null | undefined): void {
+    if (!attacker || !orb || target.hp <= 0) return;
+    for (const part of [orb, ...(orb.extra ?? [])]) {
+      if (part.def.code !== "AIcb") continue;
+      const lvl = part.lvl;
+      const dur = target.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration;
+      this.applyBuffInternal(target, {
+        kind: "armor", group: "orbcorruption", timeLeft: dur || 5,
+        value: -this.dataOf(lvl, 1, 4), sourceId: attacker.id, ...this.buffArtOf(part.def),
+      });
+      this.recomputeStats(target); // armour is a derived stat — the strip has to be live NOW
+    }
+  }
+
+  /**
+   * A poison DoT + its slow, shared by every poison orb.
+   *
+   * WC3 poison is NON-LETHAL — "the poison damage is 8 damage per second and is non-lethal"
+   * (Liquipedia, Orb of Venom) — so the tick clamps at 1 hp rather than killing.
+   *
+   * `stack` is the ability's Stacking Types bitmask (see STACK_DAMAGE in orbs.ts). With the
+   * Damage bit set — which the whole poison family carries — the DoT is keyed per ATTACKER,
+   * so two Wind Riders' poison adds up while one Wind Rider's re-hit merely refreshes. The
+   * slow half is keyed per ability either way: our slow model takes the strongest rather
+   * than summing, so a per-source key there would change nothing.
+   *
+   * NOTE the group names carry no colon. A colon in a buff group means "aura, and the first
+   * half is its ability code" to the renderer's persistent-FX pass, and a poison is not one.
+   */
+  private applyPoison(attacker: SimUnit, target: SimUnit, def: AbilityDef, dur: number, dps: number, attackFactor: number, moveFactor: number, stack = 0): void {
+    const t = dur || 5;
+    const group = `poison-${def.code}` + (stack & STACK_DAMAGE ? `-${attacker.id}` : "");
+    if (dps > 0) this.applyBuffInternal(target, { kind: "dot", group, timeLeft: t, value: dps, sourceId: attacker.id, nonLethal: true, ...this.buffArtOf(def) });
+    if (moveFactor > 0 || attackFactor > 0) {
+      this.applyBuffInternal(target, { kind: "slow", group: `poison-${def.code}-slow`, timeLeft: t, value: moveFactor, value2: attackFactor, sourceId: attacker.id });
+    }
+  }
+
+  /** The persistent models a buff-carrying orb hangs on its victim — its own `buffid1` row's
+   *  art, exactly as every other buff resolves it. Never the ability's `Targetart`: for an
+   *  orb that field is the model worn by the CARRIER (see orbAttachments). */
+  private buffArtOf(def: AbilityDef): { art?: string; fx?: BuffFx[] } {
+    return def.buffFx.length ? { art: def.buffArt, fx: def.buffFx } : {};
+  }
+
+  /**
+   * The persistent orb art a unit is WEARING, for the renderer.
+   *
+   * Every orb item names it the same way and it is not the buff system's business:
+   *
+   *     [AIfb]  Targetart   = Abilities\Spells\Items\AIfb\AIfbTarget.mdl
+   *             Targetattach = weapon
+   *
+   * "Targetart" is a misnomer inherited from the spell rows — these models are LOOPS (every
+   * one of them is a single `Stand` sequence flagged looping; verified by parsing them out of
+   * the install), so they cannot be one-shot hit effects. They are the glowing orb on the
+   * hero's weapon hand, and `Targetattach` is the bone to hang it from. Mask of Death spells
+   * out the counter-case by writing `Targetart=` empty: no orb, nothing worn.
+   *
+   * Unlike the on-hit EFFECT this is not exclusive — a hero carrying three orbs wears three,
+   * because carrying is all it takes.
+   */
+  orbAttachments(u: SimUnit): BuffFx[] {
+    if (!this.abilities || !this.itemReg || !u.inventory.length) return [];
+    const out: BuffFx[] = [];
+    for (const held of u.inventory) {
+      if (!held) continue;
+      const item = this.itemReg.get(held.itemId);
+      if (!item) continue;
+      for (const abilId of item.abilities) {
+        const def = this.abilities.get(abilId);
+        if (!def || !isOrbCode(def.code) || !def.targetArt) continue;
+        out.push({ path: def.targetArt, attach: def.targetAttach });
+      }
+    }
+    return out;
   }
 
   private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None): number {
@@ -9319,6 +9760,59 @@ export class SimWorld {
     }
   }
 
+  /**
+   * The two orb effects that only pay out when their victim DIES.
+   *
+   * Black Arrow / Orb of Darkness: "Units killed while under the effect of Black Arrow will
+   * turn into <ndr1,RealHP> hit point skeletons" (the ability's own Ubertip). The numbers are
+   * `DataB` "Number of Summoned Units", `DataC` "Summoned Unit Duration (seconds)" and
+   * `UnitID1` "Summoned Unit Type" — AbilityMetaData's own names for Nba1..NbaU. The minion
+   * belongs to whoever fired the arrow, not to the corpse's owner.
+   *
+   * Incinerate: "If a unit dies while under this effect, it is incinerated, causing up to
+   * <DataB> damage to all nearby hostile units" — `DataE` is the radius and `DataF` the
+   * falloff at its edge.
+   *
+   * Both read the mark the blow laid (SimUnit.blackArrow / .incinerate), and both are gated
+   * on the matching buff still being on: the mark and its timer are the same effect.
+   */
+  private orbDeathEffects(u: SimUnit): void {
+    const mark = u.blackArrow;
+    u.blackArrow = null;
+    if (mark && this.abilities && u.buffs.some((b) => b.group === "blackarrow")) {
+      const def = this.abilities.get(mark.abilityId);
+      const lvl = def?.levelData[Math.min(mark.rank, def.levelData.length) - 1];
+      if (def && lvl && lvl.summon) {
+        const count = Math.max(1, Math.round(this.dataOf(lvl, 1, 1)));
+        for (let i = 0; i < count; i++) {
+          this.summonRequests.push({
+            unitId: lvl.summon, x: u.x, y: u.y, facing: u.facing, owner: mark.owner, team: mark.team,
+            summonLeft: this.dataOf(lvl, 2, 80), sourceId: mark.sourceId,
+            summonArt: def.targetArt, unsummonArt: def.buffEffectArt, atPoint: true,
+          });
+        }
+      }
+    }
+    const burn = u.incinerate;
+    u.incinerate = null;
+    if (burn && this.abilities && u.buffs.some((b) => b.group === "incinerate")) {
+      const def = this.abilities.get(burn.abilityId);
+      const lvl = def?.levelData[Math.min(burn.rank, def.levelData.length) - 1];
+      const src = this.units.get(burn.sourceId);
+      if (def && lvl && src) {
+        const full = this.dataOf(lvl, 1, 30);
+        const radius = this.dataOf(lvl, 4, 240);
+        const edge = this.dataOf(lvl, 5, 0.2); // the share still dealt at the rim
+        for (const t of this.unitsInAreaInternal(u.x, u.y, radius)) {
+          if (t.id === u.id || t.hp <= 0 || !this.hostile(src, t)) continue;
+          const k = radius > 0 ? Math.min(1, Math.hypot(t.x - u.x, t.y - u.y) / radius) : 0;
+          this.landDamage(t, full * (1 - k * (1 - edge)), burn.sourceId, false);
+        }
+        if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: u.x, y: u.y, targetId: 0, z: 0, sound: true });
+      }
+    }
+  }
+
   private kill(u: SimUnit, killerId = 0): void {
     // A Mirror Image illusion that is destroyed does not die — it pops, with BOmi's
     // Specialart (MirrorImageDeathCaster, whose AOMI SND event is MirrorImageDeath.wav).
@@ -9332,6 +9826,7 @@ export class SimWorld {
     // revives the hero in place, on a long cooldown (stored on the ability).
     if (this.tryReincarnate(u)) return;
     this.deathBlast(u); // `Adda` — goblin land mines and sappers take the neighbours with them
+    this.orbDeathEffects(u); // Black Arrow raises its minion, Incinerate goes off
     this.refundPendingBuild(u); // died before its building went up → refund the cost
     this.unsettle(u); // corpses don't block cells
     this.releaseClaim(u); // …nor does a tile the dead unit was walking onto

@@ -94,6 +94,12 @@ export interface AbilityDef {
   missileArt: string; // travelling projectile (Storm Bolt hammer, Death Coil orb)
   targetArt: string; // effect attached to the target (Holy Light burst, Heal); for an
   //                    aura this is the BIG model shown under its OWNER only.
+  /** `Targetattach` — the attachment point `targetArt` rides, in the same token form as a
+   *  buff's (see BuffFx.attach). Almost every ability leaves it empty, because its target
+   *  art is a one-shot burst at the victim's feet. The ORBS are what it exists for here:
+   *  `[AIfb] Targetattach = weapon` hangs the fire orb on the carrier's weapon hand, and
+   *  those models are loops rather than bursts (src/sim/orbs.ts, World.orbAttachments). */
+  targetAttach: string[];
   casterArt: string; // effect attached to the caster (Thunder Clap ring)
   specialArt: string; // extra one-shot effect (Flame Strike's erupting fire pillar)
   effectArt: string; // ability "beware"/effect art — Flame Strike's ground warning ring
@@ -295,6 +301,20 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   Adev: { target: "unit" }, // Devour (Kodo Beast) — swallow & digest an enemy land unit
   Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
   Acpf: { target: "none" }, // Corporeal/Ethereal Form (Spirit Walker) — self toggle between forms
+  // === ORB EFFECTS the unit TYPE carries (src/sim/orbs.ts) ===
+  // Attack modifiers, not casts: each rides the unit's own blows and competes with every
+  // other orb for the one slot a blow has (see the priority ladder in orbs.ts). Listed here
+  // for the same reason the passive derivations above are — a code this table omits is a
+  // code no unit ever carries, so leaving one out silently switches the effect off for the
+  // whole game rather than merely hiding a button.
+  Aspo: { target: "passive" }, // Slow Poison — Dryad (`edry`), Hydra, Snap Dragon; `AIsz` is the item twin
+  Aven: { target: "passive" }, // Envenomed Spears — Wind Rider (`owyv`, gated on `Rovs`); `ACvs` on creeps
+  Apoi: { target: "passive" }, // Poison Sting; `Apo2` is Orb of Venom's half of the same effect
+  Afbk: { target: "passive" }, // Feedback — Spell Breaker (`hspt`), Arcane Tower (`Afbt`, `hatw`)
+  Afra: { target: "passive" }, // Frost Attack — Nerubian Tower, Halls of the Dead / Black Citadel
+  Afrb: { target: "passive" }, // Frost Attack (long) — Frost Wyrm (`ufro`), the Blue Dragons
+  Afak: { target: "unit", autocast: true }, // Orb of Annihilation — Destroyer (`ubsp`), 25 mana a shot
+  AEpa: { target: "unit", autocast: true }, // Poison Arrows — the arrow-shaped poison
   // === Creep & neutral casters (issue: ability audit) ===
   // Each Data column's meaning below is the game's own, read from AbilityMetaData.slk's
   // `useSpecific` rows through WorldEditStrings.txt — not inferred from behaviour.
@@ -503,6 +523,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       levelData,
       missileArt: mdlPath(f ? str(f, "Missileart") : ""),
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
+      targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       casterArt: mdlPath(f ? str(f, "Casterart") : ""),
       specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
       effectArt: mdlPath(f ? str(f, "Effectart") : ""),
@@ -582,6 +603,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     levelData: [],
     missileArt: "",
     targetArt: "",
+    targetAttach: [],
     casterArt: "",
     specialArt: "",
     effectArt: "",

@@ -123,6 +123,8 @@ export interface SimBuffInit {
   /** Marks a Shadow Meld invisibility, which also breaks on MOVEMENT and at DAWN
    *  (world.ts tickMeld). See SimBuff.meld. */
   meld?: boolean;
+  /** A `dot` that cannot land the killing blow — WC3 poison. See SimBuff.nonLethal. */
+  nonLethal?: boolean;
 }
 
 /** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).

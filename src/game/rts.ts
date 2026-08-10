@@ -327,7 +327,17 @@ const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown 
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
 // Buff status-row display: map non-aura buff groups to their source ability code,
 // and give the remaining buff kinds a generic icon + label.
-const GROUP_TO_CODE: Record<string, string> = { innerfire: "Ainf", avatar: "AHav", slow: "Aslo" };
+const GROUP_TO_CODE: Record<string, string> = {
+  innerfire: "Ainf", avatar: "AHav", slow: "Aslo",
+  // Orb effects (src/sim/orbs.ts). `frostattack` is the generic Slowed buff every frost
+  // source hangs, so it takes Frost Attack's own PASBTNFrost art rather than the Orb of
+  // Frost's — that icon IS the buff's, and a Frost Wyrm wearing an item icon would be odd.
+  coldarrow: "AHca", frostattack: "Afra", orbcorruption: "AIcb", blackarrow: "ANba",
+  incinerate: "ANia", itempurge: "AIlp",
+};
+/** The poison orbs key their buff `poison-<code>[-<attackerId>]` (see World.applyPoison), so
+ *  the status row recovers the ability from the middle rather than from a fixed table. */
+const POISON_GROUP = /^poison-(\w{4})/;
 const BUFF_KIND_ICON: Record<string, string> = {
   stun: "ReplaceableTextures\\CommandButtons\\BTNStun.blp",
   invuln: "ReplaceableTextures\\CommandButtons\\BTNDivineIntervention.blp",
@@ -4088,7 +4098,7 @@ export class RtsController {
     const out: Array<{ icon: string; name: string; harmful: boolean }> = [];
     const seen = new Set<string>();
     for (const b of u.buffs) {
-      const code = b.group.includes(":") ? b.group.split(":")[0] : (GROUP_TO_CODE[b.group] ?? "");
+      const code = b.group.includes(":") ? b.group.split(":")[0] : (GROUP_TO_CODE[b.group] ?? POISON_GROUP.exec(b.group)?.[1] ?? "");
       const key = code || b.kind;
       if (seen.has(key)) continue;
       seen.add(key);

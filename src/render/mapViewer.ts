@@ -3668,8 +3668,38 @@ export class MapViewerScene {
       }
     }
     this.collectShopArrows(active);
+    this.collectOrbAttachments(active);
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
+    }
+  }
+
+  /**
+   * The ORB a hero is carrying, worn on its model.
+   *
+   * An orb item's ability names both the model and the bone:
+   *
+   *     [AIfb]  Targetart    = Abilities\Spells\Items\AIfb\AIfbTarget.mdl
+   *             Targetattach = weapon
+   *
+   * — and despite the "Target" in the field name that model is not a hit effect on the
+   * victim: it is a single LOOPING `Stand` sequence (verified by parsing AIfbTarget,
+   * AIobTarget, AIlbTarget, OrbVenom, OrbCorruption and OrbDarkness out of the install), i.e.
+   * the glowing sphere that orbits the hero's weapon hand for as long as the orb is in the
+   * bag. `Targetattach` is the attachment node to hang it from, in the same token form a
+   * buff's is, so it rides the identical persistent-FX pool: found → parented to the bone and
+   * animated by the hero's own skeleton, not found → left at the unit's origin.
+   *
+   * Not exclusive, unlike the on-hit effect: carrying two orbs shows two orbs, because
+   * wearing one asks nothing of the priority ladder (src/sim/orbs.ts). The Mask of Death is
+   * the deliberate blank — its row writes `Targetart=` with nothing after it.
+   */
+  private collectOrbAttachments(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || !u.inventory.length) continue;
+      world.orbAttachments(u).forEach((fx, i) => this.trackBuffFx(active, `orb|${u.id}|${i}|${fx.path}`, fx, u.id));
     }
   }
 
@@ -6655,6 +6685,12 @@ export class MapViewerScene {
       const col = def.buttonX; // the ability's real WC3 command-card slot
       const row = def.buttonY;
       const passive = def.target === "passive";
+      // A passive with no `Art` at all gets NO button — the engine has nothing to draw and
+      // the row means it. The clear case is Frost Attack: `[Afra]` (Nerubian Tower) carries
+      // `PASBTNFrost.blp` at Buttonpos 0,2 and shows, while `[Afrb]` (Frost Wyrm, the Blue
+      // Dragons) carries neither art nor position and does not. Without this the Frost Wyrm
+      // grew a blank button in the top-left corner, on top of whatever was already there.
+      if (passive && !def.icon) continue;
       const onCd = ab.cooldownLeft > 0;
       const noMana = su.mana < lvl.cost;
       // Silenced (Silence, Soul Burn) or stunned: the unit cannot cast at all. This is the
