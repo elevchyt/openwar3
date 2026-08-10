@@ -131,6 +131,22 @@ Volume=127
 Pitch=1
 Channel=8
 Flags=0
+
+[GlueScreenClick]
+FileNames=BigButtonClick.wav
+DirectoryBase=Sound\\Interface\\
+Volume=100
+Pitch=1
+Channel=8
+Flags=NODUPLICATES
+
+[PlaceBuildingDefault]
+FileNames=BuildingPlacement.wav
+DirectoryBase=Sound\\Buildings\\Shared\\
+Volume=110
+Pitch=1
+Channel=8
+Flags=0
 `;
 const TABLES = {
   "UI\\SoundInfo\\UnitCombatSounds.slk": COMBAT,
@@ -211,14 +227,41 @@ const look = (b, x, y) => b.setListener([x, y, 0], [x, y, 1000]);
     check("nothing started", started.length, 0);
   }
 
-  console.log("\na 2D interface sound (the NODUPLICATES case)");
+  // Which of the two a UI row gets is the DATA's call, not the kind's: 69 of UISounds'
+  // 133 rows carry NODUPLICATES and 64 do not, and the split is exactly the one the
+  // GlueScreenClick comment column describes — the flag is there to stop ONE event
+  // sounding twice (a cancel button firing on both press and release), not to mute a
+  // second press.
+  console.log("\na 2D interface sound that ASKS for NODUPLICATES (GlueScreenClick)");
   {
     const b = board();
-    b.playUi("InterfaceClick");
-    b.playUi("InterfaceClick"); // a double-click, or a cancel button firing twice
+    b.playUi("GlueScreenClick");
+    b.playUi("GlueScreenClick"); // the cancel button firing twice off one press
     await settle();
-    check("clicked twice, played once", started.length, 1);
-    check("and it is still sounding", sounding(), ["Sound\\Interface\\MouseClick1.wav"]);
+    check("fired twice, played once", started.length, 1);
+    check("and it is still sounding", sounding(), ["Sound\\Interface\\BigButtonClick.wav"]);
+    b.playUi("GlueScreenClick"); // …and refused again while that copy is genuinely up
+    await settle();
+    check("a later press is refused too, while the copy is up", started.length, 1);
+  }
+
+  console.log("\na 2D interface sound that does NOT (Flags=0 — it sounds per press)");
+  {
+    const b = board();
+    const WAV = "Sound\\Buildings\\Shared\\BuildingPlacement.wav";
+    b.playUi("PlaceBuildingDefault");
+    await settle(); // the first tower's confirm is genuinely in the air
+    check("the first placement sounds", started.length, 1);
+    b.playUi("PlaceBuildingDefault"); // the next tower of a shift-placed row
+    await settle();
+    check("…and so does the next one", started.length, 2);
+    check("…which cut the first, so still only one copy is in the air", started[0].live, false);
+    check("…and it is the new one", sounding(), [WAV]);
+    b.playUi("InterfaceClick");
+    await settle();
+    b.playUi("InterfaceClick"); // a real double-click clicks twice
+    await settle();
+    check("a plain card click is the same deal", started.length, 4);
   }
 
   console.log("\nthe file is free again once its copy ends");

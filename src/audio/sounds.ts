@@ -201,6 +201,12 @@ interface Clip {
   // channel's longest-running voice. UnitCombatSounds carries NEITHER flag on any of its 60
   // rows, so a full combat channel really does refuse the clang — that part is authentic.
   preempt?: boolean;
+  // Flags contains NODUPLICATES: this row refuses a second copy of itself outright. Only
+  // 69 of UISounds' 133 rows carry it, and GlueScreenClick spells out why in its own
+  // comment column — "prevent douple playing of this sound by cancel buttons", i.e. ONE
+  // event firing twice, not two presses. A UI row WITHOUT it (InterfaceClick,
+  // PlaceBuildingDefault) is a sound per press; see pickVariant.
+  noDup?: boolean;
 }
 
 /** One copy of a WAV that is currently in the air — what the never-stack rule (below)
@@ -1349,7 +1355,10 @@ export class SoundBoard {
     const where = positional ? at! : null;
     // Never stack the same clip: take a variant nobody is playing, or win one off the
     // least audible copy of it — and if we're the quiet one, stay silent (see pickVariant).
-    const choice = this.pickVariant(clip, where);
+    // A UI one-shot the row does NOT flag NODUPLICATES RETRIGGERS: each press is its own
+    // sound, so laying down a row of towers clicks once per tower. Everything else keeps
+    // the plain never-stack rule (see pickVariant).
+    const choice = this.pickVariant(clip, where, kind === "ui" && !clip.noDup);
     if (!choice) return;
     const path = choice.path;
     // Concurrency is budgeted per SOUND CHANNEL (see CHANNEL_VOICES). Reserve the slot
@@ -1458,8 +1467,18 @@ export class SoundBoard {
    *       the player can actually hear; a nearer source takes the file off it, a further
    *       one is refused (it would have been the quieter of the two anyway).
    *
-   *  @returns the path to play plus the copy to cut for it, or null to refuse outright. */
-  private pickVariant(clip: Clip, at: SoundPos | null): { path: string; taken: ActiveFile | null } | null {
+   *  `retrigger` is the third case, and it is the DATA's: a UI row that does not carry
+ *  NODUPLICATES is a sound per press, so an equally audible challenge WINS rather than
+ *  being refused — the new copy cuts the old one, which is a retrigger and still leaves
+ *  exactly one copy in the air. (The engine agrees where it matters: 69 UISounds rows ask
+ *  for NODUPLICATES and GlueScreenClick says in its comment column that it is there to stop
+ *  "douple playing … by cancel buttons" — one EVENT firing twice. PlaceBuildingDefault and
+ *  InterfaceClick carry Flags=0, and in the game they sound for every click.) Combat is
+ *  untouched: UnitCombatSounds carries the flag on none of its 59 rows, but two blows in
+ *  one frame are the phasing case this rule exists for, so a tie there still refuses.
+ *
+ *  @returns the path to play plus the copy to cut for it, or null to refuse outright. */
+  private pickVariant(clip: Clip, at: SoundPos | null, retrigger = false): { path: string; taken: ActiveFile | null } | null {
     const free = clip.paths.filter((p) => !this.playing.has(p));
     if (free.length) return { path: free[(Math.random() * free.length) | 0], taken: null };
     let path = clip.paths[0];
@@ -1474,7 +1493,8 @@ export class SoundBoard {
         path = p;
       }
     }
-    return this.audibility(clip, at) > quietest ? { path, taken } : null;
+    const mine = this.audibility(clip, at);
+    return mine > quietest || (retrigger && mine >= quietest) ? { path, taken } : null;
   }
 
   /** Build a positional node for a WANT3D clip: equalpower stereo pan (WC3 isn't
@@ -1617,8 +1637,7 @@ export class SoundBoard {
           refDist: num("mindistance"),
           maxDist: num("maxdistance"),
           cutoff: num("distancecutoff"),
-          // (NODUPLICATES isn't read: never-stacking is now the rule for EVERY clip, not
-          // the 160 rows that ask for it — see pickVariant.)
+          noDup: /NODUPLICATES/i.test(flags),
           preempt: /CHANNELFULLPREEMPT/i.test(flags), // also matches …PREEMPTOLDEST
         };
       }
