@@ -3098,6 +3098,13 @@ export class MapViewerScene {
       c: "build", unitId: p.workerId, defId: p.def.id, x, y, queued,
     })) return;
     this.sounds?.playUi("PlaceBuildingDefault"); // WC3 building-placement confirm
+    // Shift-placing KEEPS the building on the cursor, so the next site is one more click
+    // rather than Build → pick the tower again → click (WC3 — it is how a line of towers or
+    // a wall of Farms actually gets laid down). The armed ghost stays with the same worker
+    // and the same building; it ends the way any placement does — an unshifted click, a
+    // right-click, Escape, or selecting something else. An unshifted click is unchanged:
+    // one building, cursor cleared, back to the root page.
+    if (queued) return;
     this.cardPage = "root";
     this.cancelPlacement();
   }
