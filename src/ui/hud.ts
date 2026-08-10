@@ -2291,9 +2291,9 @@ export class GameHud {
           this.attrLines.hidden = false;
           const prim = sel.primaryAttr === PrimaryAttribute.Agility ? "agi" : sel.primaryAttr === PrimaryAttribute.Intelligence ? "int" : "str";
           this.setIcon(this.attrIconEl, attrIcon(prim));
-          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.strengthBonus, sel.primaryAttr === PrimaryAttribute.Strength);
-          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.agilityBonus, sel.primaryAttr === PrimaryAttribute.Agility);
-          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.intelligenceBonus, sel.primaryAttr === PrimaryAttribute.Intelligence);
+          this.strLine.innerHTML = attrLineHtml("Strength", sel.strength, sel.strengthBonus);
+          this.agiLine.innerHTML = attrLineHtml("Agility", sel.agility, sel.agilityBonus);
+          this.intLine.innerHTML = attrLineHtml("Intelligence", sel.intelligence, sel.intelligenceBonus);
         } else {
           this.attrIconEl.hidden = true;
           this.attrLines.hidden = true;
@@ -2589,11 +2589,11 @@ function bonusHtml(bonus: number): string {
   if (bonus < 0) return ` <span class="stat-penalty">${bonus}</span>`; // `bonus` already carries the minus
   return "";
 }
-// An attribute line: "Strength: 34 +9" — the label is yellow, the primary bold, and
-// the item contribution shows as a green "+N" (red "-N" if the total is negative).
-function attrLineHtml(label: string, value: number, bonus: number, primary: boolean): string {
-  const cls = primary ? "hud-attr-line primary" : "hud-attr-line";
-  return `<span class="${cls}"><span class="attr-name">${label}:</span> ${value}${bonusHtml(bonus)}</span>`;
+// An attribute line: "Strength: 34 +9" — a gold label, a white value, and the item
+// contribution as a green "+N" (red "-N" if the total is negative). All three lines are
+// identical; the primary attribute is named by the ICON beside them, not by the text.
+function attrLineHtml(label: string, value: number, bonus: number): string {
+  return `<span class="hud-attr-line"><span class="attr-name">${label}:</span> ${value}${bonusHtml(bonus)}</span>`;
 }
 
 // WC3 infocard type icons (real BLPs under UI\Widgets\Console\Human\). Attack/
