@@ -209,6 +209,12 @@ export interface UnitDef {
    *  dark and the Undead heal only on blight. */
   regenType: RegenType;
   mana: number;
+  /** UnitBalance.slk `regenMana` — mana/sec for a NON-hero caster (a hero's comes from its
+   *  Intelligence instead). It is a real per-type number and it spreads wide: a Sorceress
+   *  0.667, a Priest 0.72, a Spirit Walker 1, a Moon Well and an Obsidian Statue 1.5. The sim
+   *  used one flat approximation for all of them until this column arrived. 0 when the row
+   *  has none, which is most units — they have no mana either. */
+  manaRegen: number;
   armor: number;
   // UnitBalance.slk `defUp` — how much ONE level of an armour upgrade is worth to this
   // unit. WC3's armour upgrades (`rarm`: Plating, Leather Armor, Masonry) deliberately
@@ -481,6 +487,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       hpRegen: b ? num(b, "regenHP", 0) : 0,
       regenType: toRegenType(b ? str(b, "regenType") : ""),
       mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
+      manaRegen: b ? num(b, "regenMana", 0) : 0,
       armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
       defUp: b ? num(b, "defUp", 0) : 0,
       stockMax: b ? num(b, "stockMax", 0) : 0,
@@ -743,6 +750,7 @@ export function destructibleUnitDef(d: {
     hpRegen: 0,
     regenType: RegenType.None,
     mana: 0,
+    manaRegen: 0,
     armor: 0,
     defUp: 0,
     stockMax: 0,

@@ -118,6 +118,31 @@ const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i
   check("…with its 3x3 footprint back", u.footprint, 3);
 }
 
+// --- an Ancient carries its BUILDING footprint with it ---------------------------------
+//
+// The one that actually bites. A structure's block is not the `footprint` above — that is the
+// walker's own body — it is a stamped Footprint on the grid (setPathStamp), and it is not part
+// of the reservation system at all. An Ancient that kept it while it walked was inside its own
+// wall: every path out failed and planting again was refused by the hole it had left, so the
+// thing pulled its roots up and then stood there for the rest of the match.
+{
+  // A real 4x4 stamp, laid on the grid exactly as spawnUnit lays a building's.
+  const fp = { w: 4, h: 4, blocked: new Array(16).fill(true), buildBlocked: new Array(16).fill(true) };
+  const u = ancient("Aro1", { footprint: 4, x: 512, y: 512, prevX: 512, prevY: 512 });
+  world.setPathStamp(u.id, fp, 512, 512);
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) grid.block(16 - 2 + x, 16 - 2 + y);
+
+  world.toggleRoot(u);
+  check("uprooting lifts the stamped building footprint", u.pathStamp, null);
+  check("…and keeps it for the walk", !!u.rootedStamp, true);
+  check("…leaving ground the Ancient can path over", grid.walkable(16, 16), true);
+
+  check("planting lays it back down", world.toggleRoot(u), true);
+  check("…on the build grid, where a fresh one would go", [u.x % 64, u.y % 64], [0, 0]);
+  check("…blocking again", grid.walkable(16, 16), false);
+  check("…and carrying nothing", u.rootedStamp, null);
+}
+
 // --- a unit without the ability is untouched -------------------------------------------
 {
   const u = ancient("Aro1", { abilities: [] });

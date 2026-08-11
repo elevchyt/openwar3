@@ -627,6 +627,9 @@ export class MapViewerScene {
   private weatherDefs: WeatherRegistry | null = null; // TerrainArt\Weather.slk (loaded on first use)
   private uberSplats: UberSplatRegistry | null = null;
   private simBuildingSplats = new Set<number>();
+  /** Ancients whose ground decal we lifted when they uprooted, so it can be laid back down
+   *  where they plant. See the splat reconcile in the frame loop. */
+  private liftedSplats = new Set<number>();
   // Pre-placed map buildings paint their splat keyed by index (p<i>), not sim id, so the
   // sim-id reconcile can't prune them when destroyed. Track each with its world position
   // so we can reconcile it BY POSITION (issue #40): once a live sim building has been seen
@@ -682,6 +685,10 @@ export class MapViewerScene {
   private regionLabelPool: HTMLDivElement[] = []; // reused label elements
   private fogAccum = 0; // ms since the last fog resample (throttle)
   private removedWidgets = new Set<HideableWidget>(); // felled trees / mined-out mines — stay gone, never re-fogged
+  /** Gold-mine widgets hidden UNDER an Entangled Gold Mine, keyed by that building's sim id.
+   *  Unlike `removedWidgets` these come back: knock the roots down and the mine is a mine
+   *  again. See raiseEntangledMines. */
+  private entangledMines = new Map<number, { widget: HideableWidget; mineId: number }>();
   private baseColors = new WeakMap<object, Float32Array>(); // each widget's tint before fog dimming
   private tintScratch = new Float32Array(4); // reused fog tint, avoids per-widget allocation
   private cheatBuf = ""; // rolling buffer of typed letters, for WC3 chat cheat codes
@@ -1046,6 +1053,7 @@ export class MapViewerScene {
     this.terrainShadows?.dispose();
     this.terrainShadows = null;
     this.simBuildingSplats.clear();
+    this.liftedSplats.clear();
     this.mapBuildingSplats.clear();
     this.rts?.dispose();
     this.rts = null;
@@ -2987,6 +2995,58 @@ export class MapViewerScene {
     if (def.uberSplat) {
       this.simBuildingSplats.add(simId);
       this.addBuildingSplat(simId, def, su.x, su.y);
+    }
+  }
+
+  /**
+   * Entangle Gold Mine (`Aent`), renderer half: raise the building the sim asked for, and put
+   * the gold mine it swallowed out of sight.
+   *
+   * The sim cannot do this itself for the same reason it cannot summon: `egol` needs a model,
+   * and the model is a load away (see drainSummonRequests). It also cannot do the second half
+   * at all — the plain gold mine is a MAP WIDGET, a doodad-style instance from
+   * war3mapUnits.doo rather than a unit, and hiding it is a render-side act.
+   *
+   * `EntangledGoldMine.mdx` is a whole mine wrapped in roots, not a decoration to lay over
+   * one, so both models on screen at once would be two mines in the same hole. Hidden and
+   * remembered rather than retired: an entangled mine that is destroyed leaves the gold mine
+   * standing, and the second loop here is what puts it back.
+   */
+  private raiseEntangledMines(world: SimWorld): void {
+    const map = this.viewer.map;
+    for (const e of world.drainEntangleRequests()) {
+      const d = this.registry.get(e.unitId);
+      const mine = world.mines.get(e.mineId);
+      if (!d || !mine) continue;
+      const widget = map ? this.nearestDoodadWidget(e.x, e.y, map.units as unknown as HideableWidget[]) : null;
+      const mineId = e.mineId;
+      void this.spawnUnit(d, e.x, e.y, e.owner, e.team).then((simId) => {
+        if (simId === null) {
+          mine.entangledBy = 0; // the model never arrived — leave the mine as it was
+          return;
+        }
+        world.attachEntangled(simId, mineId);
+        if (widget) {
+          widget.instance.hide();
+          this.entangledMines.set(simId, { widget, mineId });
+        }
+        // The mine's own NGOL foundation decal comes up with it: `egol` paints EMDB (roots)
+        // in the same place, and two ubersplats in one spot blend to a dark smear.
+        this.splats?.remove(`m${mineId}`);
+      });
+    }
+    // …and the way back. The building has left the world (destroyed, or the mine ran dry and
+    // it collapsed with it): un-hide the gold mine under it and repaint its foundation.
+    if (!this.entangledMines.size) return;
+    for (const [simId, held] of [...this.entangledMines]) {
+      if (world.units.has(simId)) continue;
+      this.entangledMines.delete(simId);
+      if (world.mines.has(held.mineId)) {
+        held.widget.instance.show();
+        const mineDef = this.registry.get(GOLD_MINE_ID);
+        const m = world.mines.get(held.mineId)!;
+        if (mineDef) this.addBuildingSplat(`m${held.mineId}`, mineDef, m.x, m.y);
+      }
     }
   }
 
@@ -6598,9 +6658,19 @@ export class MapViewerScene {
       // Battle Stations pulls nearby peons in; Stand Down (shown once occupied) sends them
       // back to work. Icons/hotkeys/slots are the ability data's own (OrcAbilityFunc/Strings).
       if (su && su.garrisonCap > 0 && (!su.building || su.building.constructionLeft <= 0)) {
-        out.push(this.cmd({ id: "battlestations", icon: btnIcon("BTNBattleStations"), name: "Battle Stations", hotkey: "B", desc: "Causes nearby Peons to run into the Burrow so that they can defend their base.", col: 0, row: 2 }));
-        if (su.garrison.length > 0)
-          out.push(this.cmd({ id: "standdown", icon: btnIcon("BTNBacktoWork"), name: "Stand Down", hotkey: "D", desc: "Causes Peons within the Burrow to return to work.", col: 1, row: 2 }));
+        // The Entangled Gold Mine has the same kind of hold and a different card. Its crew is
+        // in there to WORK, not to shoot, so there is no Battle Stations to pull them in and
+        // no Stand Down to send them back — just `Aenc`'s own Unload All, with that row's art
+        // and slot (NightElfAbilityFunc [Aenc] Unart=BTNUnload, Unbuttonpos=0,2; hotkey U).
+        // Loading is a right-click: you send a wisp at the mine, you don't fetch it from here.
+        if (world.cargoHoldCode(su.typeId) === "Aenc") {
+          if (su.garrison.length > 0)
+            out.push(this.cmd({ id: "standdown", icon: btnIcon("BTNUnload"), name: "Unload All", hotkey: "U", desc: "Removes all Wisps from the gold mine.", col: 0, row: 2 }));
+        } else {
+          out.push(this.cmd({ id: "battlestations", icon: btnIcon("BTNBattleStations"), name: "Battle Stations", hotkey: "B", desc: "Causes nearby Peons to run into the Burrow so that they can defend their base.", col: 0, row: 2 }));
+          if (su.garrison.length > 0)
+            out.push(this.cmd({ id: "standdown", icon: btnIcon("BTNBacktoWork"), name: "Stand Down", hotkey: "D", desc: "Causes Peons within the Burrow to return to work.", col: 1, row: 2 }));
+        }
       }
 
       // Cancel always owns the bottom-right slot (3,2) — the canonical WC3 spot. Set Rally
@@ -7726,6 +7796,7 @@ export class MapViewerScene {
       world.noteTrainFinish(buildingId, simId);
       void this.spawnUnit(d, sx, sy, t.owner, team, 0, TRAINED_FACING, simId);
     }
+    this.raiseEntangledMines(world);
     const summonClaimed = new Set<string>(); // cells handed out this call (see summonSpot)
     for (const s of world.drainSummonRequests()) {
       const d = this.registry.get(s.unitId);
@@ -8102,6 +8173,32 @@ export class MapViewerScene {
         this.splats.reconcile(this.simBuildingSplats, (id) => world.units.has(id as number));
         for (const id of [...this.simBuildingSplats]) if (!this.splats.has(id)) this.simBuildingSplats.delete(id);
         for (const id of this.simBuildingSplats) this.splats.setVisible(id, this.rts.buildingImageShown(id));
+        // An UPROOTED Ancient takes its foundation with it. The decal is the mark the roots
+        // leave in the ground, so it belongs where the roots are: lifted while the Ancient
+        // walks, and re-laid where it plants again — which is a NEW spot, because toggleRoot
+        // snaps it onto the build grid wherever it stopped. It is the only building in the
+        // game that moves, so this is the only place a splat is ever re-sited.
+        for (const u of world.units.values()) {
+          if (!u.ancient) continue;
+          if (u.uprooted) {
+            if (this.liftedSplats.has(u.id)) continue;
+            this.liftedSplats.add(u.id);
+            if (this.simBuildingSplats.delete(u.id)) this.splats.remove(u.id);
+            // A map-PLACED Ancient's decal is keyed by its .doo index instead (see
+            // stampMapPathing), so it has to be found by the sim id it was tracked against.
+            for (const [key, s] of this.mapBuildingSplats) {
+              if (s.simId !== u.id) continue;
+              this.mapBuildingSplats.delete(key);
+              this.splats.remove(key);
+            }
+          } else if (this.liftedSplats.delete(u.id)) {
+            const def = this.registry.get(u.typeId);
+            if (def?.uberSplat) {
+              this.simBuildingSplats.add(u.id);
+              this.addBuildingSplat(u.id, def, u.x, u.y);
+            }
+          }
+        }
         // Pre-placed buildings (p<i>): their reserved sim id is known statically, so the old
         // 250 ms position-matching prune collapses into an exact per-frame id check.
         const frozen = this.rts.frozenClient;
@@ -8248,6 +8345,7 @@ export class MapViewerScene {
     this.terrainShadows?.dispose();
     this.terrainShadows = null;
     this.simBuildingSplats.clear();
+    this.liftedSplats.clear();
     this.mapBuildingSplats.clear();
     this.debug?.dispose();
     this.debug = null;

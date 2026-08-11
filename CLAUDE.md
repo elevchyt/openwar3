@@ -89,6 +89,12 @@ data, or asset behaviour, **consult our sources** and cite what you used.
   models' OWN `LITE` omni lights, sized for a diorama the camera sits 340 units from. It also has the
   trap that costs an hour: after editing the mdx-m3-viewer patch, restart the dev server and delete
   `node_modules/.vite`, or Vite keeps serving the pre-patch bundle and your shader change does nothing.
+- **Night elf:** read [`docs/night-elf.md`](docs/night-elf.md) before touching the Wisp, the
+  Ancients, the Entangled Gold Mine or the Moon Well. The whole race plays a different economic
+  game and almost none of it is a tuning value: a Wisp is CONSUMED by an Ancient (UnitBalance
+  `type` = "Ancient") and released by a Moon Well, its lumber is credited in the tree with no
+  round trip at all, gold is a crew of five sitting inside a building rather than a queue, and
+  an Ancient is the one building in the game that picks up its own stamped footprint and walks.
 - **Illusions:** read [`docs/illusions.md`](docs/illusions.md) before touching Mirror Image (`AOmi`), the Wand of
   Illusion (`AIil`), or anything that copies a unit. An illusion's whole point is that the ENEMY can't tell it from
   the original, so every tell (blue wash, summon timer, portrait) is gated on the LOCAL viewpoint, and its

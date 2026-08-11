@@ -357,7 +357,11 @@ export function pickSequence(a: AnimSet, u: RenderUnit, moving: boolean): number
   // Only the ACTIVE chop plays the harvest swing — a worker merely holding
   // lumber while standing (its tree fell and it's about to return, so `working`
   // isn't cleared yet) shows the Stand Lumber pose, not the chop.
-  if (u.working && u.order === "harvest") return a.chopLumber;
+  // …and a gatherer with no SWING to play holds the work pose instead. Wisp.mdx authors
+  // exactly five clips — stand / Birth / Death / Stand Lumber / Stand Work — and no attack of
+  // any kind, because a wisp does not hit the tree: it circles it (SimWorld.orbitTree) and the
+  // lumber arrives. "Stand Work" is that, and it is the clip WC3 shows on a harvesting wisp.
+  if (u.working && u.order === "harvest") return a.chopLumber >= 0 ? a.chopLumber : a.build;
   // NOTE: no `inCombat → attack` here. The attack clip is owned entirely by the
   // swing-driven block above (triggered per swing). Reaching pickSequence while in
   // combat means the swing was broken by walking (backswing move-canceled), so the

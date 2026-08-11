@@ -395,6 +395,13 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // Root/Unroot — the Ancients' stance toggle (`Order=root` / `Unorder=unroot`). Self-cast:
   // it takes no target, it just changes what the Ancient is. Aro1/Aro2 alias it.
   Aroo: { target: "none" },
+  // Entangle Gold Mine (`Order=entangle`) — the Tree of Life's. targs1 is literally `_`: it
+  // takes NO target, and the mine it wraps is whichever un-entangled one is inside Rng1=500.
+  // What it creates is named on the row itself (UnitID1 = egol). See SimWorld.entangleMine.
+  Aent: { target: "none" },
+  // Replenish Mana and Life — the Moon Well pouring its own mana into a friendly organic unit
+  // (`Order=replenish`, Orderon/Orderoff make it autocast). See SimWorld.tickReplenish.
+  Ambt: { target: "unit", autocast: true },
   // Call to Arms — the Human militia. `Amil` is the Peasant's own form toggle
   // (`Order=militia` / `Unorder=militiaoff`); `Amic` is the town bell on the hall
   // (`townbellon` / `townbelloff`) that rings for every Peasant within 2000. Both self-cast.

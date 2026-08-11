@@ -1,6 +1,6 @@
 import { PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
-import { unstampFootprint, type Footprint } from "./destructibles";
+import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { type UnitDef, type UnitRegistry } from "../data/units";
@@ -524,6 +524,15 @@ export interface WorkerState {
   lumberPerChop: number;
   chopPeriod: number; // seconds between chops
   damagesTree: boolean; // wisps harvest without hurting the tree
+  /** No haul: the load is credited to the stash the instant it is cut, and the gatherer never
+   *  walks a depot leg at all. TRUE for the night elf Wisp and nothing else — Wisp Harvest
+   *  (`Awha`) is a different ability class from everyone else's `Ahar`/`Ahrl`, and this is the
+   *  difference between them. It is also why `Awha` has no "Lumber Capacity" that means
+   *  anything: with no trip there is nothing to fill. See tickHarvest. */
+  deliversInPlace: boolean;
+  /** Where this gatherer sits on its orbit of the tree, radians. Only `deliversInPlace`
+   *  gatherers orbit — a Wisp circles the tree it is working (see tickHarvest). */
+  orbitAngle: number;
   carryGold: number;
   carryLumber: number;
 }
@@ -649,6 +658,11 @@ export interface SimMine {
   radius: number;
   gold: number;
   busy: boolean; // WC3 classic mines hold one worker at a time
+  /** The Entangled Gold Mine standing on this mine (`egol`), or 0. Entangle (`Aent`) does not
+   *  convert the mine: it CREATES a unit over it (the ability's own `UnitID1` = egol) and the
+   *  mine keeps being the gold. So the two stay separate here as well — the building is the
+   *  thing wisps climb into and enemies knock down, and this is the seam between them. */
+  entangledBy: number;
 }
 
 export interface SimTree {
@@ -1067,6 +1081,10 @@ export interface SimUnit {
    *  morphToggle). It is the same fact about the model either way, so the renderer reads this
    *  one flag rather than knowing about either ability. */
   altModel: boolean;
+  /** The stamped BUILDING footprint an uprooted Ancient is carrying with it, lifted off the
+   *  grid while it walks and laid back down where it plants. Null for everything else — and
+   *  for a rooted Ancient, whose stamp is live in `pathStamp`. See toggleRoot. */
+  rootedStamp: Footprint | null;
   /** The building footprint an uprooted Ancient will take back when it plants (0 for
    *  everything else). While it walks its own `footprint` is 0 — it collides by RADIUS like
    *  any other unit — because a 4×4 stamped block is a thing the pathfinder routes around,
@@ -1091,6 +1109,24 @@ export interface SimUnit {
   // like any other soldier — which is why the classification, not "can harvest", is
   // the flag to key off.
   isPeon: boolean;
+  /** "Ancient" in UnitBalance.slk's `type` column — the six night elf structures that are
+   *  really trees: Tree of Life/Ages/Eternity, Ancient of War/Lore/Wind/Wonders and the
+   *  Ancient Protector. (Moon Well, Hunter's Hall, Altar of Elders and Chimaera Roost are
+   *  `Mechanical` and are NOT ancients, which is the whole distinction below.)
+   *
+   *  Two things hang off it, and both are behaviour no other race has:
+   *   • the Wisp that grows an Ancient is CONSUMED by it, while one that grows a Moon Well
+   *     walks back out (see finishConstruction / killBuilding);
+   *   • the game's own Targets Allowed carries a `nonancient` flag (the human Repair's targs
+   *     list it), so this is the data's own idea of the category rather than ours. */
+  ancient: boolean;
+  /** For an Entangled Gold Mine (`egol`), the SimMine it stands on — the gold its crew pulls
+   *  out. 0 for everything else. See tickEntangledMines. */
+  mineId: number;
+  /** Who this Moon Well is currently pouring itself into (`Ambt`), or 0. Replenish is not an
+   *  instant: the well spends its mana into ONE unit at a rate, so the pour has to be state
+   *  rather than a one-shot effect. See tickReplenish. */
+  replenishTargetId: number;
   isSummon: boolean; // a summoned unit (Water Elemental) — leaves no corpse, ×0.5 XP
   spawning: number; // >0: materializing (playing its birth clip) — cannot act yet
   summonLeft: number; // >0: a temporary summon that expires (Water Elemental); else 0
@@ -1328,10 +1364,18 @@ const SPEED_BUILD_SURCHARGE = 0.15;
 // Warsmash). ORC/NIGHT ELF workers build from INSIDE the structure (hidden, one worker,
 // no assist); HUMAN peasants build from outside and can "speed build" — extra peasants
 // pile on to finish faster (SPEED_BUILD_*). Undead acolytes summon-and-leave (handled
-// elsewhere). Night Elf's wisp is inside-build too; it joins buildsFromInside when we
-// do the NE pass.
+// elsewhere).
+//
+// The night elf half of that has a second rule the orc half does not, and it is the one
+// thing every night elf player plans around: a Wisp that grows an ANCIENT is spent by it and
+// never comes back out, while a Wisp that grows a Moon Well / Hunter's Hall / Altar of Elders
+// / Chimaera Roost walks out again when it is done. The category is the data's own —
+// UnitBalance.slk `type` = "Ancient" (SimUnit.ancient) — and the split is exactly where that
+// column falls. Cancelling always gives the Wisp back, because nothing was finished; and a
+// half-built ANCIENT knocked down takes the Wisp inside it with it, while a half-built Moon
+// Well lets it go (Warcraft Wiki, Wisp). See finishConstruction / releaseBuilders.
 function buildsFromInside(u: SimUnit): boolean {
-  return u.race === "orc";
+  return u.race === "orc" || u.race === "nightelf";
 }
 function speedBuilds(u: SimUnit): boolean {
   return u.race === "human";
@@ -1729,6 +1773,8 @@ export class SimWorld {
   // Units summoned/raised by a spell this tick: the renderer creates their models
   // (same deferral as trainCompletions — the sim owns no model instances).
   private summonRequests: SummonRequest[] = [];
+  /** Entangled Gold Mines waiting for the renderer to raise them (see entangleMine). */
+  private entangleRequests: Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number }> = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -1776,7 +1822,7 @@ export class SimWorld {
   }
 
   addMine(x: number, y: number, gold: number, radius = 96): SimMine {
-    const mine: SimMine = { id: this.nextNodeId++, x, y, radius, gold, busy: false };
+    const mine: SimMine = { id: this.nextNodeId++, x, y, radius, gold, busy: false, entangledBy: 0 };
     this.mines.set(mine.id, mine);
     return mine;
   }
@@ -2692,17 +2738,36 @@ export class SimWorld {
   // `EVENT_UNIT_LOADED` trigger. With no cargo hold the order fell through to "follow",
   // Illidan trotted after the boat forever and the chapter's last scene never happened.
 
-  /** Which cargo hold a unit type carries, by ability CODE — `Abun` (burrow) or `Acar`
-   *  (transport), with the alias it came from so the capacity can be read off that row.
-   *  Null for a type with neither. */
+  /** Which cargo hold a unit type carries, by ability CODE — `Abun` (burrow), `Aenc` (the
+   *  Entangled Gold Mine's crew) or `Acar` (transport), with the alias it came from so the
+   *  capacity can be read off that row. Null for a type with neither.
+   *
+   *  `Aenc` is here because it IS the same mechanism: AbilityData calls it "Cargo Hold (Gold
+   *  Mine)", it carries the family's Cargo Capacity column (Car1 = 5 wisps) and its strings are
+   *  Load / Unload All. What it is not is a transport — its passengers are workers and they
+   *  are in there to work, which is the `holdTakesWorkersOnly` split below. */
   private cargoHold(typeId: string): { alias: string; code: string } | null {
     const def = this.unitReg?.get(typeId);
     if (!def) return null;
     for (const alias of def.abilities) {
       const code = this.abilities?.get(alias)?.code ?? alias;
-      if (code === "Abun" || code === "Acar") return { alias, code };
+      if (code === "Abun" || code === "Acar" || code === "Aenc") return { alias, code };
     }
     return null;
+  }
+
+  /** The ability CODE of a unit type's cargo hold ("Abun" / "Aenc" / "Acar"), or "". The card
+   *  needs it: a burrow's buttons are Battle Stations / Stand Down and an Entangled Gold
+   *  Mine's are `Aenc`'s own Load / Unload All. */
+  cargoHoldCode(typeId: string): string {
+    return this.cargoHold(typeId)?.code ?? "";
+  }
+
+  /** A hold that only workers may climb into: the Orc Burrow (peons man the arrow slits) and
+   *  the Entangled Gold Mine (wisps mine it). A transport takes anyone who walks. */
+  private holdTakesWorkersOnly(typeId: string): boolean {
+    const code = this.cargoHold(typeId)?.code;
+    return code === "Abun" || code === "Aenc";
   }
 
   /** Passenger capacity of a unit type: its cargo hold's Dataa1 (4 for the Orc Burrow, 10 for
@@ -2712,7 +2777,8 @@ export class SimWorld {
     if (!hold) return 0;
     const cap = this.abilities?.get(hold.alias)?.levelData[0]?.data[0];
     if (cap && cap > 0) return Math.round(cap);
-    return hold.code === "Abun" ? 4 : 8; // the data's own defaults, if the row went missing
+    // The data's own defaults, if the row went missing: burrow 4, gold mine 5, transport 8.
+    return hold.code === "Abun" ? 4 : hold.code === "Aenc" ? 5 : 8;
   }
 
   /** Whether `host` can take another passenger right now. */
@@ -2732,9 +2798,13 @@ export class SimWorld {
     const p = this.units.get(passengerId);
     const b = this.units.get(hostId);
     if (!p || this.castLocked(p) || !b || b.garrisonCap === 0) return false;
-    const burrow = this.cargoHold(b.typeId)?.code === "Abun";
-    if (burrow ? !p.worker : p.building || p.flying) return false;
+    const workersOnly = this.holdTakesWorkersOnly(b.typeId);
+    if (workersOnly ? !p.worker : p.building || p.flying) return false;
     if (this.hostile(p, b)) return false; // only your own / allied holds
+    // Boarding does not come through issueOrder (the authority calls this directly), so the
+    // two "put the worker back on the field first" steps that funnel does have to run here.
+    this.popFromMine(p);
+    this.popFromCanopy(p);
     p.order = "garrison";
     p.targetId = hostId;
     p.inCombat = false;
@@ -2752,20 +2822,42 @@ export class SimWorld {
     return true;
   }
 
+  /** How far out from a cargo hold's CENTRE its body actually reaches. A building's collision
+   *  radius is not that: `egol` blocks a 16-cell pathing square and carries a collision of a
+   *  fraction of it, so a door found at `radius` is a door in the middle of the rock. The
+   *  stamped footprint is the honest extent, and using it is what lets a wisp find its way
+   *  into an Entangled Gold Mine at all (it also widens the Orc Burrow's door a little). */
+  private hostExtent(b: SimUnit): number {
+    // The BLOCKED extent, not the texture's: `16x16Goldmine.tga` pads out to 16 cells and
+    // blocks only the middle 8, so its full size would put the door two tiles further out
+    // than the rock actually reaches — far enough that a wisp standing against it is judged
+    // "not there yet" forever. Same measurement the gold mine's own collider uses.
+    const fp = b.pathStamp?.fp;
+    return Math.max(b.radius, fp ? footprintRadius(fp) : 0);
+  }
+
   /** A walkable point just outside the host's footprint on the passenger's side — the burrow
    *  centre itself is blocked (and a ship sits on water), so pathing straight at it fails. */
   private hostApproach(p: SimUnit, b: SimUnit): [number, number] {
     const dx = p.x - b.x, dy = p.y - b.y;
-    const d = Math.hypot(dx, dy) || 1;
-    const reach = b.radius + p.radius + 20;
-    const ax = b.x + (dx / d) * reach, ay = b.y + (dy / d) * reach;
+    // Project onto the footprint SQUARE rather than a circle around it: on a diagonal a
+    // circle of the same reach lands inside the blocked block (the same trap mineStandSpot
+    // documents at length).
+    const m = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
+    const reach = this.hostExtent(b) + p.radius + PATHING_CELL;
+    const ax = b.x + (dx / m) * reach, ay = b.y + (dy / m) * reach;
     const [cx, cy] = this.grid.worldToCell(ax, ay);
     const free = this.grid.nearestWalkable(cx, cy, 6);
     return free ? this.grid.cellToWorld(free[0], free[1]) : [ax, ay];
   }
 
+  /** "Close enough to climb in." Measured against the same square `hostApproach` aims at, plus
+   *  a cell of slack — the door and the test have to agree, or a passenger parks exactly where
+   *  it was sent and is told it has not arrived. (That is not hypothetical: at 48 units of
+   *  tolerance against a gold mine's 128-unit block, wisps walked to the rim and stood there.) */
   private inHostReach(p: SimUnit, b: SimUnit): boolean {
-    return Math.max(Math.abs(p.x - b.x), Math.abs(p.y - b.y)) - b.radius - p.radius < 48;
+    const door = this.hostExtent(b) + p.radius + PATHING_CELL;
+    return Math.max(Math.abs(p.x - b.x), Math.abs(p.y - b.y)) <= door + PATHING_CELL;
   }
 
   /** Drive a unit walking to its cargo hold: enter once it reaches the host's edge. */
@@ -2779,10 +2871,16 @@ export class SimWorld {
     if (this.inHostReach(u, b)) {
       if (this.hostHasRoom(b)) this.enterHost(u, b);
       else this.stop(u.id); // full while we walked — give up
+      u.nodeRetries = 0;
     } else {
-      // Stopped short of the host (blocked); one more try toward the door, else idle.
+      // Stopped short of the host (blocked); try the door again, and give up only after a
+      // couple of honest attempts. One failed A* is not proof the door is shut: five wisps
+      // sent into one Entangled Gold Mine arrive at the same approach cell and take turns
+      // standing in each other's way, so the loser of any single tick would otherwise be
+      // sent home for good. Bounded exactly as the harvest approach is (arriveAtNode).
       const [ax, ay] = this.hostApproach(u, b);
-      if (!this.pathTo(u, ax, ay)) this.stop(u.id);
+      if (this.pathTo(u, ax, ay)) u.nodeRetries = 0;
+      else if (u.nodeRetries++ >= NODE_REPATH_TRIES) this.stop(u.id);
     }
   }
 
@@ -2884,6 +2982,99 @@ export class SimWorld {
     return sent > 0;
   }
 
+  // === The Entangled Gold Mine ==========================================================
+  //
+  // Night elf gold is the only economy in the game with no round trip: the mine is wrapped in
+  // roots, up to five wisps climb inside, and gold simply arrives for as long as they are in
+  // there. Three data rows say all of it, and none of them is on the wisp:
+  //
+  //   `Aent`  "Entangle"            Tree of Life. Rng1 = 500, Cast1 = 3s, targs1 = _ (no
+  //                                 target at all — you press the button and it takes the
+  //                                 mine it is standing next to), and `UnitID1 = egol`: the
+  //                                 ability CREATES a unit. So the SimMine is not converted;
+  //                                 a building is raised over it. See SimMine.entangledBy.
+  //   `Aenc`  "Cargo Hold (Gold Mine)"  on egol. Car1 = 5 — the crew, through exactly the same
+  //                                 cargo-hold machinery the Orc Burrow uses.
+  //   `Aegm`  "Entangled Gold Mine"     on egol. DataA1 = 10 gold, DataB1 = 1 second.
+  //
+  // 10 gold a second is the FULL mine's rate, not one wisp's: five wisps in an entangled mine
+  // must earn what five peasants earn out of a classic one, and a peasant's cycle is
+  // `Agld`'s 1s inside plus the walk — about 2 gold/sec each, 10 for the line. So the payout
+  // scales with how much of the crew is actually aboard (`crew / capacity`), which makes one
+  // lone wisp worth 2 gold/sec and a full mine worth 10. Nothing in the data states the
+  // scaling in so many words; the parity between the four races' mining rates does.
+
+  /** Entangle (`Aent`): wrap the nearest un-entangled gold mine within the ability's range in
+   *  roots. The building itself is spawned by the renderer (it needs a model — same asynchrony
+   *  as a summon), which calls back through attachEntangled. False if there is no mine in
+   *  reach, which is the whole of the ability's failure case. */
+  entangleMine(caster: SimUnit, def: AbilityDef): boolean {
+    const range = def.levelData[0]?.castRange || 500;
+    let best: SimMine | null = null;
+    let bestD = Infinity;
+    for (const m of this.mines.values()) {
+      if (m.entangledBy) continue;
+      const d = Math.hypot(m.x - caster.x, m.y - caster.y);
+      if (d > range + m.radius || d >= bestD) continue;
+      bestD = d;
+      best = m;
+    }
+    if (!best) return false;
+    const unitId = def.levelData[0]?.summon || "egol"; // `Aent` UnitID1 — the unit it raises
+    // Claimed the moment it is asked for, not when the model lands: the request is in flight
+    // for a frame or two and a second Tree of Life must not entangle the same mine again.
+    best.entangledBy = -1;
+    this.entangleRequests.push({ mineId: best.id, unitId, x: best.x, y: best.y, owner: caster.owner, team: caster.team });
+    return true;
+  }
+
+  /** The renderer has raised the Entangled Gold Mine and hands the sim its unit id. Links the
+   *  two halves so the crew inside the building knows which mine it is emptying. */
+  attachEntangled(unitId: number, mineId: number): void {
+    const u = this.units.get(unitId);
+    const mine = this.mines.get(mineId);
+    if (!u || !mine) return;
+    u.mineId = mineId;
+    mine.entangledBy = unitId;
+  }
+
+  drainEntangleRequests(): Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number }> {
+    if (!this.entangleRequests.length) return this.entangleRequests;
+    const out = this.entangleRequests;
+    this.entangleRequests = [];
+    return out;
+  }
+
+  /** Pay out every entangled mine with a crew aboard, and collapse one that runs dry. */
+  private tickEntangledMines(dt: number): void {
+    for (const u of this.units.values()) {
+      if (!u.mineId || u.hp <= 0 || (u.building && u.building.constructionLeft > 0)) continue;
+      const mine = this.mines.get(u.mineId);
+      if (!mine) continue;
+      const crew = u.garrison.length;
+      if (crew <= 0 || u.garrisonCap <= 0) continue;
+      const lvl = this.passiveLevelData(u, "Aegm");
+      const perInterval = lvl ? this.dataOf(lvl, 0, 10) : 10;
+      const interval = (lvl ? this.dataOf(lvl, 1, 1) : 1) || 1;
+      const gold = Math.min(mine.gold, (perInterval * (crew / u.garrisonCap) * dt) / interval);
+      mine.gold -= gold;
+      this.stashOf(u.owner).gold += gold;
+      if (mine.gold <= 0) {
+        this.mines.delete(mine.id);
+        this.depleted.push(mine);
+        this.alerts.push({ kind: "minedestroyed", player: u.owner, x: mine.x, y: mine.y });
+        // The roots have nothing left to hold. WC3 collapses the entangled mine with the mine
+        // — the crew is turned out (unloadBurrow) rather than buried, and the building goes
+        // the way a cancelled one does: no death, no corpse, no kill credit.
+        this.unloadBurrow(u.id);
+        this.removeUnit(u.id);
+      } else if (mine.gold < MISC_DATA.LowGoldAmount && !this.minesRunningLow.has(mine.id)) {
+        this.minesRunningLow.add(mine.id);
+        this.alerts.push({ kind: "minelow", player: u.owner, x: mine.x, y: mine.y });
+      }
+    }
+  }
+
   /** Stop a worker constructing/repairing (manual order, or death). Called by
    *  every re-task path, so it also cancels a repair job. */
   private detachBuilder(workerId: number): void {
@@ -2968,11 +3159,7 @@ export class SimWorld {
         if (this.fastBuild) {
           b.constructionLeft = Math.max(0, b.constructionLeft - Math.max(dt, b.buildTimeTotal * dt));
           u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
-          if (b.constructionLeft === 0) {
-            for (const bid of [...b.builderIds]) this.detachBuilder(bid);
-            this.buildCompletions.push({ buildingId: u.id, owner: u.owner });
-            this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
-          }
+          if (b.constructionLeft === 0) this.finishConstruction(u, b);
           continue;
         }
         // Only advance while a builder is assigned AND standing next to the site
@@ -3022,11 +3209,7 @@ export class SimWorld {
           b.constructionLeft = Math.max(0, b.constructionLeft - rate * dt);
           const done = 1 - b.constructionLeft / b.buildTimeTotal;
           u.hp = u.maxHp * (0.1 + 0.9 * done);
-          if (b.constructionLeft === 0) {
-            for (const bid of [...b.builderIds]) this.detachBuilder(bid); // free the workers
-            this.buildCompletions.push({ buildingId: u.id, owner: u.owner });
-            this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
-          }
+          if (b.constructionLeft === 0) this.finishConstruction(u, b);
         }
         continue; // can't train while still being built
       }
@@ -3061,6 +3244,33 @@ export class SimWorld {
         }
       }
     }
+  }
+
+  /** A structure's last tick of construction: let its builders go, then announce it.
+   *
+   *  "Let go" is not the same thing for every race, and the night elf is where it stops being
+   *  a detail. A Wisp grows an Ancient by MERGING with it, and the merge is the payment: the
+   *  Wisp is spent and the Ancient stands there alone. Grown into a Moon Well it is not spent
+   *  and simply steps back out, which is why night elf food maths works at all. See
+   *  buildsFromInside for the category (UnitBalance's own `type` = "Ancient") and why it is
+   *  read off the data rather than off a list of building ids.
+   *
+   *  Consumed, not KILLED: removeUnit is JASS's RemoveUnit — no corpse, no death sound, no
+   *  XP for anyone. A merged Wisp does not die, it stops existing, and a death here would
+   *  hand a nearby enemy hero experience for a building you just finished. */
+  private finishConstruction(u: SimUnit, b: BuildingState): void {
+    for (const bid of [...b.builderIds]) {
+      const w = this.units.get(bid);
+      if (u.ancient && w?.insideBuild) {
+        w.insideBuild = false; // it is not coming out — don't let detachBuilder place a body
+        this.detachBuilder(bid);
+        this.removeUnit(bid);
+        continue;
+      }
+      this.detachBuilder(bid);
+    }
+    this.buildCompletions.push({ buildingId: u.id, owner: u.owner });
+    this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
   }
 
   /** Transform a finished building into its upgraded form in place (Town Hall → Keep, Scout
@@ -3271,10 +3481,20 @@ export class SimWorld {
         this.recomputeStats(host);
       }
     }
+    this.releaseEntangled(u); // an Entangled Gold Mine leaving hands the mine back
     this.units.delete(u.id);
     this.removals.push(u.id);
     this.unitDrops.delete(u.id);
     return true;
+  }
+
+  /** An Entangled Gold Mine is leaving the world: give the SimMine under it back, so it can be
+   *  worked the ordinary way again (or entangled afresh). No-op for everything else. */
+  private releaseEntangled(u: SimUnit): void {
+    if (!u.mineId) return;
+    const mine = this.mines.get(u.mineId);
+    if (mine && mine.entangledBy === u.id) mine.entangledBy = 0;
+    u.mineId = 0;
   }
 
   /** Kill a unit as if slain (death animation + corpse + drops — JASS KillUnit). */
@@ -3422,6 +3642,7 @@ export class SimWorld {
       | "detectRadius"
       | "uprooted"
       | "rootedFootprint"
+      | "rootedStamp"
       | "altModel"
       | "altFormLeft"
       | "altFormAbil"
@@ -3431,6 +3652,9 @@ export class SimWorld {
       | "baseInvulnerable"
       | "mechanical"
       | "isPeon"
+      | "ancient"
+      | "mineId"
+      | "replenishTargetId"
       | "isSummon"
       | "spawning"
       | "summonLeft"
@@ -3469,7 +3693,7 @@ export class SimWorld {
       | "baseSightNight"
     >,
     building?: BuildingState | null,
-    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
+    opts?: { hero?: HeroInit; abilities?: SimAbility[]; mechanical?: boolean; isPeon?: boolean; ancient?: boolean; manaRegen?: number; level?: number; baseInvulnerable?: boolean },
   ): SimUnit {
     const hero = opts?.hero;
     // The primary weapon is DERIVED, never passed in: it is the first slot `weapsOn` has
@@ -3617,6 +3841,7 @@ export class SimWorld {
       detectRadius: 0, // …and True Sight likewise
       uprooted: false, // an Ancient is built rooted (Aroo)
       rootedFootprint: 0, // set when it uproots, spent when it plants
+      rootedStamp: null, //  …and the building footprint it carries with it while it walks
       altModel: false, // derived: rooted Ancients and burrowed units wear the alternate model
       altFormLeft: 0, // no timed form running
       altFormAbil: "",
@@ -3626,6 +3851,9 @@ export class SimWorld {
       baseInvulnerable: !!opts?.baseInvulnerable,
       mechanical: !!opts?.mechanical,
       isPeon: !!opts?.isPeon,
+      ancient: !!opts?.ancient,
+      mineId: 0, // set by entangleMine for an egol
+      replenishTargetId: 0,
       isSummon: false,
       spawning: 0,
       summonLeft: 0,
@@ -4770,6 +4998,7 @@ export class SimWorld {
     // players' — see Authority.applyOrder) used to leave `inMine` set with nothing ever
     // clearing it, and the mine's one-worker `busy` latch wedged shut with it.
     if (u) this.popFromMine(u);
+    if (u) this.popFromCanopy(u); // …and a wisp told to do something else drifts out of its tree
     // Commanded: this unit is no longer merely holding the ground the map put it on. Placed
     // here because `issueOrder` is the funnel every fresh, non-shift order comes through —
     // a player's click, a network command, and a trigger's IssueXOrder alike.
@@ -4789,6 +5018,24 @@ export class SimWorld {
       mine.busy = false;
       [u.x, u.y] = this.mineApproach(u, mine);
     }
+  }
+
+  /** The orbit's twin of popFromMine: put a Wisp that was working a tree back on ground it
+   *  can walk off, before its new order tries to path out of the canopy.
+   *
+   *  It has to exist because the orbit is allowed to be over blocked ground and usually is —
+   *  a forest's footprints overlap, so the ring around one trunk runs through its neighbours'
+   *  — and A* cannot START from a blocked cell. Without this a wisp recalled from a thick
+   *  grove had its order accepted, played the walk, and never got anywhere: the symptom was
+   *  a handful of wisps standing in the trees forever while the rest of the army moved. */
+  private popFromCanopy(u: SimUnit): void {
+    const w = u.worker;
+    if (!w?.deliversInPlace || u.order !== "harvest" || !u.working) return;
+    u.working = false;
+    const n = Math.max(u.footprint || footprintCells(u.radius), 1);
+    const [cx, cy] = this.grid.footprintAnchor(u.x, u.y, n);
+    const fit = this.grid.nearestFit(cx, cy, n) ?? this.grid.nearestWalkable(cx, cy);
+    if (fit) [u.x, u.y] = this.grid.footprintCenter(fit[0], fit[1], n);
   }
 
   /** Route a QueuedOrder to the matching issue* method. Shared by immediate
@@ -4826,6 +5073,14 @@ export class SimWorld {
     if (!u || !u.worker || this.castLocked(u)) return false;
     if (kind === "gold" && (!u.worker.gold || !this.mines.has(nodeId))) return false;
     if (kind === "lumber" && (!u.worker.lumber || !this.trees.has(nodeId))) return false;
+    // An ENTANGLED mine has no shaft to walk into: the roots close it, and the only way at the
+    // gold is to be a wisp and climb inside the building (issueGarrison). That is the same
+    // refusal for both sides of it — a night elf cannot classic-mine its own entangled mine,
+    // and an enemy peasant cannot mine it at all without knocking the roots down first.
+    if (kind === "gold" && this.mines.get(nodeId)?.entangledBy) return false;
+    // …and the mirror: a wisp has no pick. Night elf gold starts with Entangle (`Aent`), so a
+    // wisp sent at a bare gold mine is not a miner, it is a wisp standing next to a hole.
+    if (kind === "gold" && u.worker.deliversInPlace) return false;
     u.order = "harvest";
     u.targetId = null;
     u.inCombat = false;
@@ -5109,6 +5364,30 @@ export class SimWorld {
       case RegenType.Blight: return this.isBlighted(u.x, u.y) ? def.hpRegen : 0;
       default: return 0; // RegenType.None
     }
+  }
+
+  /** A unit type's own mana regeneration, before buffs/items/upgrades.
+   *
+   *  A HERO's comes from Intelligence and nothing else. Everyone else's is UnitBalance.slk's
+   *  `regenMana`, which is a real per-type number the sim used to flatten to one constant:
+   *  a Sorceress 0.667, a Priest 0.72, a Spirit Walker 1, a Moon Well 1.5. UNIT_MANA_REGEN
+   *  survives only as the fallback for a mana-carrying type whose row states none.
+   *
+   *  The MOON WELL is the one caster whose regeneration has a clock on it: "Regenerates mana
+   *  at night" (NightElfUnitStrings [emow]) — a well drained by day stays drained until dusk,
+   *  which is most of what makes night elf healing a resource rather than a tap. The rule is
+   *  keyed off `Ambt`, the Moon Well's own Mana Battery row, and NOT off the shared `Ambt`
+   *  CODE: the Obsidian Statue carries the same code as `Amb2` and refills at any hour. (The
+   *  two rows do differ at DataE — 1 against 0 — and night-only is one plausible reading of
+   *  that column, but "can restore mana" fits it exactly as well, so the alias is the honest
+   *  discriminator. See tickReplenish.) */
+  private baseManaRegen(u: SimUnit): number {
+    if (u.isHero) return REGEN_PER_INT * u.int;
+    if (u.baseMaxMana <= 0) return 0;
+    const nightOnly = u.abilities.some((a) => a.id === "Ambt");
+    if (nightOnly && this.isDay) return 0;
+    const def = this.unitReg?.get(u.typeId);
+    return def?.manaRegen || UNIT_MANA_REGEN;
   }
 
   /** Same team = allied (friendly), unless the alliance matrix says otherwise (7.22).
@@ -5467,7 +5746,7 @@ export class SimWorld {
     // is already what issueFollow, the stuck check and the collision list all gate on.
     if (root && !u.uprooted) u.speed = 0;
     if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
-    u.manaRegen = (u.isHero ? REGEN_PER_INT * u.int : u.baseMaxMana > 0 ? UNIT_MANA_REGEN : 0) + manaRegenBonus + item.manaRegen + upg.manaRegen;
+    u.manaRegen = this.baseManaRegen(u) + manaRegenBonus + item.manaRegen + upg.manaRegen;
     u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
@@ -5551,22 +5830,55 @@ export class SimWorld {
   toggleRoot(u: SimUnit): boolean {
     if (!this.rootAbility(u)) return false;
     if (u.uprooted) {
-      // Planting: test the ground FIRST, because it is the only step that can fail, and it
-      // must be tested against the footprint the Ancient is about to take back rather than
-      // the 0 it walks around with.
+      // Planting. Stand still and LET GO of the walker's cells before asking whether the
+      // building fits, in that order: an uprooted Ancient holds a mover's reservation (and,
+      // mid-step, a claim on the tile ahead), and asking `footprintFits` while it still holds
+      // them is asking whether it can plant in a spot that it is itself standing in. The
+      // answer is no, every time — which is why an Ancient ordered to root while it was
+      // walking simply kept walking.
       const n = u.rootedFootprint;
-      if (n > 0 && this.grid) {
+      this.stop(u.id); // drop any walk/target — it is a building again
+      this.unsettle(u);
+      this.releaseClaim(u);
+      const fp = u.rootedStamp;
+      if (fp && this.grid) {
+        // The real question is whether the BUILDING footprint fits — `Ancient of War` blocks a
+        // 12×12 pathing square, not the 4-cell body it walks around with — so it is that
+        // stamp, lifted when it uprooted, that has to be offered the ground again.
+        const [ax, ay] = this.grid.snapForBuildingRect(u.x, u.y, fp.w, fp.h);
+        if (!footprintBuildable(this.grid, fp, ax, ay)) {
+          this.settle(u); // genuinely too tight — stay a walker, and take the walker's cell back
+          return false;
+        }
+        // WC3 plants an Ancient on the BUILD grid, exactly where a fresh one would go, so it
+        // ends up aligned with everything else rather than half a cell off wherever it stopped.
+        u.x = ax;
+        u.y = ay;
+        stampFootprint(this.grid, fp, ax, ay);
+        u.pathStamp = { fp, x: ax, y: ay };
+        u.rootedStamp = null;
+      } else if (n > 0 && this.grid) {
         const [cx, cy] = this.grid.footprintAnchor(u.x, u.y, n);
-        if (!this.grid.footprintFits(cx, cy, n)) return false;
+        if (!this.grid.footprintFits(cx, cy, n)) {
+          this.settle(u);
+          return false;
+        }
       }
       u.uprooted = false;
       u.footprint = n;
       u.rootedFootprint = 0;
-      this.stop(u.id); // drop any walk/target — it is a building again
       this.settle(u); // stamp its cells and snap onto the grid
     } else {
       u.uprooted = true;
       this.unsettle(u); // free the cells before it can take a step out of them
+      // …and lift the BUILDING footprint with them. This is the one that matters: a structure's
+      // 12×12 block is stamped straight onto the grid (setPathStamp) and is not part of the
+      // reservation system at all, so an Ancient that kept it walked around inside its own
+      // wall — every path out failed, and planting again was refused by the hole it had left.
+      if (u.pathStamp) {
+        u.rootedStamp = u.pathStamp.fp;
+        this.releasePathStamp(u);
+      }
       // Put the building footprint away for the walk. A stamped n×n block is an obstacle the
       // pathfinder routes AROUND, so an Ancient that kept its 4×4 while walking would be
       // permanently boxed in by itself — pathTo fails on the first step and the thing just
@@ -5662,6 +5974,106 @@ export class SimWorld {
         if (t.hp <= 0) this.kill(t, s.killerId);
       }
     }
+  }
+
+  // === Moon Well: Replenish Mana and Life (`Ambt`, "Mana Battery") =====================
+  //
+  // The Moon Well is a battery, and that word is the ability's own comment in AbilityData.
+  // It holds 300 mana (`emow` manaN), it only refills after dark ("Regenerates mana at
+  // night", NightElfUnitStrings [emow]), and it pours what it has into whoever needs it:
+  //
+  //   DataA1 = 2    hit points per point of the WELL's mana
+  //   DataB1 = 0.5  mana per point of the well's mana
+  //   DataC1 = 10   mana spent per second — the pour is a drink, not an instant
+  //   Area1  = 400  how close the drinker has to be
+  //
+  // The split between the two is the part no column states and every night elf player knows:
+  // "if a unit that has mana uses the Moon Well, it will partition half of its mana for life,
+  // and the other half for mana… if the well has 100 mana, it can replenish 100 health and 25
+  // mana" — and the half whose need is already met SPILLS into the other half rather than
+  // being wasted (Warcraft Wiki / GameFAQs, worked example). That is what the spend below
+  // reproduces, and it is why a full-health hero drinks a well dry into mana alone.
+  //
+  // Rng1 = 99999 is deliberately NOT used as a range. A range of "the whole map" is the
+  // engine's way of never refusing the order; what actually bounds the drink is Area1, and
+  // treating the 99999 as real would let a well heal across the map.
+  //
+  // DataE1 = 1 is unspent. It is the one column that differs from the Obsidian Statue's
+  // otherwise identical `Amb2` (which is 0) in the same place the two units differ — the
+  // statue refills its mana at any hour and the well does not — so "night-only regeneration"
+  // is the obvious reading, but obvious is not verified, and the well's night rule is already
+  // carried by its own row (see tickRegen). DataD1 = 30 vs the statue's -1 is likewise unread.
+
+  /** One well's worth of pouring. Picks a drinker when autocasting, holds the one it has
+   *  while that unit still needs something, and spends mana into it at DataC per second. */
+  private tickReplenish(u: SimUnit, dt: number): void {
+    const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
+    if (!ab) return;
+    const def = this.abilities?.get(ab.id);
+    const lvl = def?.levelData[0];
+    if (!def || !lvl) return;
+    const area = lvl.area || 400;
+    let t = u.replenishTargetId ? this.units.get(u.replenishTargetId) : undefined;
+    if (t && !this.replenishWants(u, t, def)) t = undefined;
+    // Autocast finds its own drinker; the manual cast's target is already sitting in
+    // `replenishTargetId` and simply keeps being poured into until it is full.
+    if (!t && ab.autocastOn) t = this.replenishPick(u, def, area);
+    u.replenishTargetId = t?.id ?? 0;
+    if (!t || u.mana <= 0 || u.paused || u.stunned) return;
+    // A unit ORDERED to drink from a well across the map keeps the order and gets nothing
+    // until it walks in — which is what a cast range of 99999 with an Area of 400 means.
+    if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > area) return;
+
+    const hpPerMana = this.dataOf(lvl, 0, 2);
+    const manaPerMana = this.dataOf(lvl, 1, 0.5);
+    const spend = Math.min(u.mana, this.dataOf(lvl, 2, 10) * dt);
+    // What each half of the spend could absorb, in WELL mana rather than in the drinker's
+    // units — so the two are comparable and the leftover of one can be handed to the other.
+    const lifeCap = hpPerMana > 0 ? (t.maxHp - t.hp) / hpPerMana : 0;
+    const manaCap = manaPerMana > 0 && t.maxMana > 0 ? (t.maxMana - t.mana) / manaPerMana : 0;
+    let toLife = Math.min(spend / 2, lifeCap);
+    let toMana = Math.min(spend / 2, manaCap);
+    const spare = spend - toLife - toMana; // the half that had nowhere to go
+    if (spare > 0) {
+      const moreLife = Math.min(spare, lifeCap - toLife);
+      toLife += moreLife;
+      toMana = Math.min(manaCap, toMana + (spare - moreLife));
+    }
+    const used = toLife + toMana;
+    if (used <= 0) {
+      u.replenishTargetId = 0; // nothing left to give this one
+      return;
+    }
+    u.mana -= used;
+    t.hp = Math.min(t.maxHp, t.hp + toLife * hpPerMana);
+    t.mana = Math.min(t.maxMana, t.mana + toMana * manaPerMana);
+  }
+
+  /** Is `t` still worth pouring into? Alive, allied, short of something, and allowed by the
+   *  ability's own Targets Allowed (which is where `organic` keeps machines out). Range is
+   *  deliberately NOT part of it — see the caller. */
+  private replenishWants(u: SimUnit, t: SimUnit, def: AbilityDef): boolean {
+    if (t.hp <= 0 || t.building) return false;
+    if (!this.allied(u, t)) return false;
+    if (t.hp >= t.maxHp && t.mana >= t.maxMana) return false;
+    return this.targetError(u, t, def.targetFlags, def.code) === null;
+  }
+
+  /** The most-wounded valid drinker in range — same "worst off first" rule the other
+   *  friendly autocasts use (autocastTarget), but scored on the WHOLE deficit, since a hero
+   *  at full health with an empty mana bar is exactly who a Moon Well is for. */
+  private replenishPick(u: SimUnit, def: AbilityDef, area: number): SimUnit | undefined {
+    let best: SimUnit | undefined;
+    let bestFrac = 1;
+    for (const t of this.unitsInAreaInternal(u.x, u.y, area)) {
+      if (!this.replenishWants(u, t, def)) continue;
+      const frac = t.maxMana > 0 ? (t.hp / t.maxHp + t.mana / t.maxMana) / 2 : t.hp / t.maxHp;
+      if (frac < bestFrac) {
+        bestFrac = frac;
+        best = t;
+      }
+    }
+    return best;
   }
 
   /** Witch Doctor wards, ticked off their own data. Only the Stasis Trap (`otot`) needs a
@@ -6397,6 +6809,11 @@ export class SimWorld {
       // Arrows on would hunt down anything inside her acquisition range under a COMMANDED
       // attack — which outranks her guard post and would drag her off a march.
       if (isArrowOrb(ab.code)) continue;
+      // The Moon Well's Replenish is autocast, but not through here: it is a POUR, held open
+      // across seconds, and it is the caster's own tick that opens and closes it
+      // (tickReplenish). Left in, this would re-issue a fresh cast every tick — and pick its
+      // target off `Rng1 = 99999`, i.e. the whole map.
+      if (ab.code === "Ambt") continue;
       const def = this.abilities.get(ab.id);
       if (!def || def.target !== "unit") continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -7364,6 +7781,8 @@ export class SimWorld {
     isDay: () => this.isDay,
     holdPosition: (unit) => { this.issueHold(unit.id); },
     toggleRoot: (unit) => this.toggleRoot(unit),
+    entangleMine: (unit, def) => this.entangleMine(unit, def),
+    setReplenishTarget: (well, targetId) => { well.replenishTargetId = targetId; },
     morphToggle: (unit, def) => this.morphToggle(unit, def),
     abilityOf: (id) => this.abilities?.get(id),
     dismissSummons: (owner, typeIds) => {
@@ -7731,6 +8150,7 @@ export class SimWorld {
     this.tech?.invalidate();
     this.tickAttackReveals(dt);
     this.tickBuildings(dt);
+    this.tickEntangledMines(dt); // night elf gold: no round trip, just a crew and a clock
     this.tickShops(dt);
     this.tickShopBuyers(); // adopt a purchaser for whoever has just walked one up to a shop
     this.applyAuras(); // refresh aura buffs on in-range allies (before recompute)
@@ -7741,6 +8161,7 @@ export class SimWorld {
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
+      this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
       if (u.repathT > 0) u.repathT -= dt;
@@ -9151,15 +9572,32 @@ export class SimWorld {
     }
     // Approach until parked next to the tree, then chop in place (never re-path
     // once working — that was the source of the mining "jiggle").
-    const reach = u.radius + TREE_RADIUS + 40;
+    // An ORBITING gatherer is measured against its orbit, not against an axe's arm: the wisp
+    // ends every tick a full `blockRadius + radius` from the trunk, which is further out than
+    // the chopper's reach. Measured the chopper's way, a wisp would arrive, be judged out of
+    // reach, re-target the nearest tree, orbit THAT one, be out of reach again — and drift
+    // across the forest one tree at a time instead of working the one it was sent to.
+    const reach = w.deliversInPlace
+      ? tree.blockRadius + u.radius + 40
+      : u.radius + TREE_RADIUS + 40;
     if (!this.arriveAtNode(u, tree.x, tree.y, reach)) {
       u.working = false;
       return;
     }
+    // A Wisp does not stand beside the tree with an axe: it goes into the canopy and circles.
+    // Freeing its cell is the honest half of that — it holds no ground while it is up there,
+    // and a body that still reserved a tile beside the tree would wall off the forest one
+    // wisp at a time. (`noCollision` is the same ghosting a laden worker gets on its auto
+    // round trip.)
+    if (w.deliversInPlace) {
+      this.unsettle(u);
+      u.noCollision = true;
+    }
     // Parked. If the clicked tree is out of reach (walled in / deep in the
     // forest), harvest the nearest tree to where the worker actually stopped —
-    // WC3 gathers from the closest ACCESSIBLE tree to the one you clicked.
-    if (Math.hypot(tree.x - u.x, tree.y - u.y) > reach) {
+    // WC3 gathers from the closest ACCESSIBLE tree to the one you clicked. Asked ONCE, on
+    // the tick it parks: this is a fix-up for the approach, not a standing re-evaluation.
+    if (!u.working && Math.hypot(tree.x - u.x, tree.y - u.y) > reach) {
       const near = this.nearestTree(u.x, u.y, reach + 48);
       if (near && near.id !== tree.id) {
         tree = near;
@@ -9168,10 +9606,23 @@ export class SimWorld {
     }
     u.working = true;
     u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
+    if (w.deliversInPlace) this.orbitTree(u, w, tree, dt);
     u.workT -= dt;
     if (u.workT > 0) return;
     u.workT = w.chopPeriod;
     u.chopSeq++; // renderer re-triggers the chop swing so it stays in phase with the SFX
+    // The load, and how it gets home. Everyone else fills a sack and walks it to a depot;
+    // the Wisp has no sack and no walk — Wisp Harvest (`Awha`) pays straight into the stash
+    // every interval, for as long as it is left alone in the tree. That is why night elf
+    // lumber has no round trip to optimise and why a wisp on a tree is worth what it is.
+    if (w.deliversInPlace) {
+      this.stashOf(u.owner).lumber += w.lumberPerChop;
+      // `Awha` Targetart, attached at `origin` — the green glow that says the tree is
+      // being worked. It stands in for the axe SFX every other worker's chop plays: there
+      // is no axe here (NightElfAbilityFunc [Awha] has an Effectsoundlooped, not a hit).
+      if (this.harvestArt) this.spellEffects.push({ art: this.harvestArt, x: tree.x, y: tree.y, targetId: 0, z: 0 });
+      return;
+    }
     this.chops.push(u.id); // axe landed → renderer plays the chop SFX
     w.carryLumber = Math.min(w.lumberCapacity, w.carryLumber + w.lumberPerChop);
     if (w.damagesTree) {
@@ -9198,6 +9649,37 @@ export class SimWorld {
     if (w.carryLumber >= w.lumberCapacity) {
       this.startReturn(u);
     }
+  }
+
+  /** `Awha`'s Targetart — `Abilities\Spells\NightElf\TargetArtLumber\TargetArtLumber.mdl`,
+   *  attached at the tree's origin. Read off the ability row rather than written out, so a
+   *  map that reskins Wisp Harvest reskins this too. */
+  private get harvestArt(): string {
+    return this.abilities?.get("Awha")?.targetArt ?? "";
+  }
+
+  /** A Wisp circling the tree it is harvesting. This is the whole of what night elf lumber
+   *  LOOKS like — there is no swing to animate, so the motion is the animation.
+   *
+   *  One lap per `Awha` interval (Dur1 = 8s), which ties the visible rhythm to the payout
+   *  rather than to a number picked for looking right.
+   *
+   *  The orbit is a SQUARE, traced just outside the tree's blocked footprint, and both halves
+   *  of that matter. A circle of the same reach cuts the corners of the square and puts the
+   *  wisp inside blocked ground on every diagonal — and a unit standing on a blocked cell
+   *  cannot start a path, so a wisp that stopped gathering there could not walk away again.
+   *  (Found the hard way: wisps recalled from the forest to build simply never arrived.) */
+  private orbitTree(u: SimUnit, w: WorkerState, tree: SimTree, dt: number): void {
+    const period = w.chopPeriod > 0 ? w.chopPeriod : 8;
+    w.orbitAngle = (w.orbitAngle + (dt * 2 * Math.PI) / period) % (2 * Math.PI);
+    const cos = Math.cos(w.orbitAngle), sin = Math.sin(w.orbitAngle);
+    const reach = tree.blockRadius + u.radius;
+    const m = Math.max(Math.abs(cos), Math.abs(sin)) || 1; // Chebyshev: clear the SQUARE
+    u.x = tree.x + (cos / m) * reach;
+    u.y = tree.y + (sin / m) * reach;
+    // Face along the orbit, not at the trunk: a wisp leads with its nose the way it does
+    // when it flies. (`desiredFacing` was set at the trunk a line above; this wins.)
+    u.desiredFacing = w.orbitAngle + Math.PI / 2;
   }
 
   /** Latch a worker as "parked at the node". The approach path was issued once
@@ -10186,7 +10668,21 @@ export class SimWorld {
     // field and (since it is off the field) invulnerable — for the rest of the match. Both of
     // the other ways a unit leaves the world, destroyUnit and removeUnit, already did this; the
     // death path was the one that did not, and death is how a building under attack goes.
-    if (u.building) for (const bid of [...u.building.builderIds]) this.detachBuilder(bid);
+    //
+    // An ANCIENT is the exception, and it is the same rule as the one at the other end: a Wisp
+    // that has merged into an Ancient is part of it. "If an Ancient is destroyed while a Wisp
+    // is constructing it, the Wisp will also be killed. However, if a Wisp is creating a
+    // non-Ancient building such as a Moon Well it will survive" (Warcraft Wiki, Wisp). Killed
+    // rather than removed here, unlike the merge at completion: this one IS a death — it is
+    // the enemy's kill, and the credit belongs to them.
+    if (u.building) {
+      const eatsBuilder = u.ancient && u.building.constructionLeft > 0;
+      for (const bid of [...u.building.builderIds]) {
+        const w = eatsBuilder ? this.units.get(bid) : null;
+        this.detachBuilder(bid);
+        if (w && w.hp > 0) this.kill(w, killerId);
+      }
+    }
     // Orc Burrow destroyed with peons inside: they die with it (WC3). Kill them first so
     // each death is recorded, then this burrow's own death proceeds.
     if (u.garrison.length) {
@@ -10235,6 +10731,7 @@ export class SimWorld {
         killer: killer?.isHero ? { properName: killer.properName, typeId: killer.typeId } : undefined,
       });
     }
+    this.releaseEntangled(u); // an Entangled Gold Mine knocked down hands the mine back
     this.units.delete(u.id); // Map delete during values() iteration is safe
     this.deaths.push(u.id);
     // A structure is kept WHOLE, not just as an id: a player who cannot see this spot must go

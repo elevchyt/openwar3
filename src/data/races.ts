@@ -67,7 +67,20 @@ export const MELEE_WORKER_CLUSTERS: Record<PlayableRace, WorkerCluster[]> = {
 
 // Worker harvesting profiles (verified vs community-documented WC3 values:
 // 10 gold/trip; peasant/peon 1 lumber per ~1s chop, capacity 10; ghoul 2/chop
-// capacity 20; wisp 5 per 5s without damaging the tree; acolytes only mine).
+// capacity 20; acolytes only mine).
+//
+// The WISP row is the one that comes straight off the data, because it is the one whose
+// behaviour is not the shared one. Every other worker harvests with `Ahar`/`Ahrl` ("Harvest",
+// "Harvest (Lumber)"); the wisp has its own ability CLASS, `Awha` "Wisp Harvest", and the
+// class is the difference: AbilityData.slk `Awha` gives DataA = 5 lumber per interval and
+// Dur1 = 8s for that interval, with no depot leg at all — the lumber is credited where it is
+// cut (`deliversInPlace`). 5 per 8s is 0.63 lumber/sec, which lands within a rounding error of
+// a Peasant's 10-per-trip round trip; the wisp buys that parity by being stuck in the tree.
+// Its DataB = 5 and DataC = 150 have field ids of their own (Wha2/Wha3) and no source that
+// names them, so they are left unspent rather than guessed at (CLAUDE.md).
+//
+// `damagesTree: false` is the night elf's signature and it is literal: a wisp-worked tree
+// never falls, so night elf lumber is bounded only by how many wisps are in the forest.
 export interface WorkerProfile {
   gold: boolean;
   lumber: boolean;
@@ -75,14 +88,18 @@ export interface WorkerProfile {
   lumberPerChop: number;
   chopPeriod: number; // seconds between chops
   damagesTree: boolean;
+  /** Credit the load at the tree instead of hauling it to a depot — the Wisp, and only the
+   *  Wisp. See SimWorld.tickHarvest. */
+  deliversInPlace: boolean;
 }
 
 export const WORKERS: Record<string, WorkerProfile> = {
-  hpea: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true },
-  opeo: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true },
-  uaco: { gold: true, lumber: false, lumberCapacity: 0, lumberPerChop: 0, chopPeriod: 1, damagesTree: false },
-  ugho: { gold: false, lumber: true, lumberCapacity: 20, lumberPerChop: 2, chopPeriod: 1.1, damagesTree: true },
-  ewsp: { gold: true, lumber: true, lumberCapacity: 5, lumberPerChop: 5, chopPeriod: 5, damagesTree: false },
+  hpea: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false },
+  opeo: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false },
+  uaco: { gold: true, lumber: false, lumberCapacity: 0, lumberPerChop: 0, chopPeriod: 1, damagesTree: false, deliversInPlace: false },
+  ugho: { gold: false, lumber: true, lumberCapacity: 20, lumberPerChop: 2, chopPeriod: 1.1, damagesTree: true, deliversInPlace: false },
+  // Awha: DataA1 = 5 lumber, Dur1 = 8s interval, no carry (see above).
+  ewsp: { gold: true, lumber: true, lumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, damagesTree: false, deliversInPlace: true },
 };
 
 // The four main-hall chains, keyed by the BASE hall's internal type name (UnitUI.slk's

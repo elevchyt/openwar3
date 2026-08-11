@@ -52,6 +52,12 @@ export interface SpellApi {
   /** Root/Unroot (`Aroo`): toggle an Ancient between planted and walking. False if it refused
    *  — the only refusal is trying to plant where the footprint no longer fits. */
   toggleRoot(unit: SimUnit): boolean;
+  /** Entangle (`Aent`): wrap the nearest un-entangled gold mine within the ability's range.
+   *  False when there is no mine in reach. */
+  entangleMine(unit: SimUnit, def: AbilityDef): boolean;
+  /** Point a Moon Well at a unit to drink from it (`Ambt`). The pour itself is a tick, not
+   *  an instant — see SimWorld.tickReplenish. */
+  setReplenishTarget(well: SimUnit, targetId: number): void;
   /** Swap a unit between the two forms its ability names (DataA "Normal Form Unit" and
    *  UnitID1 "Alternate Form Unit") — Burrow and every other two-form ability. */
   morphToggle(unit: SimUnit, def: AbilityDef): boolean;
@@ -1378,6 +1384,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // answer I expect. A rooted Ancient is `fort` in UnitBalance and stays `fort` uprooted until
   // that is settled — see CLAUDE.md on not inventing a number.
   Aroo: (api, caster) => { api.toggleRoot(caster); },
+
+  // Entangle Gold Mine (`Aent`) — the Tree of Life throws roots around a gold mine so that
+  // wisps can climb into it. The only night elf ability with a three-second cast time on a
+  // building, and the reason a night elf expansion is a Tree of Life planted at the mine.
+  //
+  // Nothing here decides WHICH mine: targs1 is `_`, so the ability takes no target at all and
+  // the engine's own rule is "the one in range" (Rng1 = 500). Nor does it decide WHAT it
+  // makes — the row names that too (UnitID1 = egol). Both live in SimWorld.entangleMine,
+  // beside the mine table it has to search.
+  Aent: (api, caster, def) => { api.entangleMine(caster, def); },
+
+  // Replenish Mana and Life (`Ambt`) — the Moon Well. The cast only says WHO is drinking;
+  // the well then spends itself into them over the following seconds at its own rate, so the
+  // effect is a state on the caster rather than anything applied here. See tickReplenish for
+  // the 2-hp/0.5-mana-per-point split and why it spills between the two.
+  Ambt: (api, caster, _def, _rank, ctx) => { api.setReplenishTarget(caster, ctx.targetId); },
 
   // Shadow Meld (`Ashm`) — the night elf racial: an Archer standing still in the dark simply
   // isn't there. Every night elf ground unit has it, which is what a night elf army does when
