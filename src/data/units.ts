@@ -209,6 +209,11 @@ export interface UnitDef {
    *  dark and the Undead heal only on blight. */
   regenType: RegenType;
   mana: number;
+  /** UnitBalance.slk `mana0` — the mana a unit is BORN with, which is not its maximum. A
+   *  Priest is trained at 75 of 200, a Sorceress at 75, a Moon Well finishes construction at
+   *  100 of 300 (Liquipedia lists it as "Initial Mana"). 40 of the game's rows differ from
+   *  their `manaN`, and every one of them is a caster you have to wait on. */
+  manaStart: number;
   /** UnitBalance.slk `regenMana` — mana/sec for a NON-hero caster (a hero's comes from its
    *  Intelligence instead). It is a real per-type number and it spreads wide: a Sorceress
    *  0.667, a Priest 0.72, a Spirit Walker 1, a Moon Well and an Obsidian Statue 1.5. The sim
@@ -487,6 +492,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       hpRegen: b ? num(b, "regenHP", 0) : 0,
       regenType: toRegenType(b ? str(b, "regenType") : ""),
       mana: isHero && realm > 0 ? realm : b ? num(b, "manaN", 0) : 0,
+      manaStart: b ? num(b, "mana0", 0) : 0,
       manaRegen: b ? num(b, "regenMana", 0) : 0,
       armor: Math.round(isHero && realdef > 0 ? realdef : b ? num(b, "def", 0) : 0),
       defUp: b ? num(b, "defUp", 0) : 0,
@@ -750,6 +756,7 @@ export function destructibleUnitDef(d: {
     hpRegen: 0,
     regenType: RegenType.None,
     mana: 0,
+    manaStart: 0,
     manaRegen: 0,
     armor: 0,
     defUp: 0,

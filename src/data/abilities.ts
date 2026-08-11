@@ -11,6 +11,13 @@ import { MISC_GAME } from "./gameplayConstants";
 // `code=AHhb`, so the sim dispatches its behaviour off `code`, never the alias.
 // That is what lets us translate arbitrary maps without per-map code.
 
+/** The three base codes REPAIR ships as — Repair, Restoration and Renew. One behaviour, three
+ *  rows, and the only reason to tell them apart is Renew's missing `nonancient` (see
+ *  KNOWN_ABILITIES). Shared so the sim and the command card agree on what a repair ability is. */
+export function isRepairCode(code: string): boolean {
+  return code === "Arep" || code === "Arst" || code === "Aren";
+}
+
 /** How an ability is aimed. Derived from its `code` (see KNOWN_ABILITIES). */
 export type TargetType = "none" | "unit" | "point" | "passive";
 
@@ -123,6 +130,10 @@ export interface AbilityDef {
   targetAttach: string[];
   casterArt: string; // effect attached to the caster (Thunder Clap ring)
   specialArt: string; // extra one-shot effect (Flame Strike's erupting fire pillar)
+  /** `Specialattach` — where `specialArt` rides, in the same token form as `targetAttach`.
+   *  Eat Tree hangs its sprite on the Ancient's own `eattree` bone; most rows name nothing
+   *  and the model simply sits at the unit's origin. */
+  specialAttach: string[];
   effectArt: string; // ability "beware"/effect art — Flame Strike's ground warning ring
   areaArt: string; // AoE ground effect (Blizzard, Rain of Fire)
   /** AbilityFunc `Effectsound` — a LABEL into `UI\SoundInfo\AbilitySounds.slk`, not a path
@@ -402,6 +413,33 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   // Replenish Mana and Life — the Moon Well pouring its own mana into a friendly organic unit
   // (`Order=replenish`, Orderon/Orderoff make it autocast). See SimWorld.tickReplenish.
   Ambt: { target: "unit", autocast: true },
+  // Detonate (`Order=detonate`) — the Wisp destroys itself, dispelling and burning mana in
+  // Area1. No target: it goes off where the wisp is standing.
+  Adtn: { target: "none" },
+  // Eat Tree (`Order=eattree`) — an Ancient consumes a tree for a 500-hp heal over 30s.
+  // Aimed at a POINT rather than at the tree itself: a tree is not a unit here, so the
+  // handler takes the nearest one to the click that the Ancient can reach.
+  Aeat: { target: "point" },
+  // REPAIR, all four of it. It is one ability wearing four skins, and unusually the skins
+  // are separate BASE CODES rather than aliases of one: `Arep` (Repair — the human `Ahrp`
+  // derives from it, and the orc row IS it), `Arst` (Restoration, undead) and `Aren` (Renew,
+  // night elf). All three carry the same two numbers, Rep1 "Repair Cost Ratio" 0.35 and Rep2
+  // "Repair Time Ratio" 1.5 — a third of the building's price over half again its build time
+  // (Liquipedia lists both on Renew's own card) — so a wisp mends at exactly a peasant's rate.
+  //
+  // Listing them here is what gives each race's worker its OWN button: the row's art, its
+  // Buttonpos 1,1 and the autocast toggle its `Orderon`/`Orderoff` promise, in place of the
+  // one hand-rolled Repair button they all used to share.
+  //
+  // They are NOT dispatched as spells. Repair is a JOB — it runs for as long as the building
+  // is hurt and the owner can pay — so `ability:<code>` arms the ordinary repair order
+  // (mapViewer.runCommand) and the autocast is ticked by SimWorld.tickRenew.
+  //
+  // What makes Renew the night elf one is its Targets Allowed: `Arep`/`Ahrp`/`Arst` all list
+  // `nonancient` and `Aren` does not, so only a Wisp may mend an Ancient (repairRefusal).
+  Arep: { target: "unit", autocast: true },
+  Arst: { target: "unit", autocast: true },
+  Aren: { target: "unit", autocast: true },
   // Call to Arms — the Human militia. `Amil` is the Peasant's own form toggle
   // (`Order=militia` / `Unorder=militiaoff`); `Amic` is the town bell on the hall
   // (`townbellon` / `townbelloff`) that rings for every Peasant within 2000. Both self-cast.
@@ -575,6 +613,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       casterArt: mdlPath(f ? str(f, "Casterart") : ""),
       specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
+      specialAttach: (f ? str(f, "Specialattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       effectArt: mdlPath(f ? str(f, "Effectart") : ""),
       areaArt: mdlPath(f ? str(f, "Areaeffectart") : ""),
       effectSound: f ? str(f, "Effectsound") : "", // a SLK label, NOT a path — no mdlPath here
@@ -674,6 +713,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     targetAttach: [],
     casterArt: "",
     specialArt: "",
+    specialAttach: [],
     effectArt: "",
     areaArt: "",
     effectSound: "",

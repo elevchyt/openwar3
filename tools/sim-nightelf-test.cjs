@@ -19,6 +19,7 @@ const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SimWorld } = require(join(REPO, ".sim-build", "src", "sim", "world.js"));
 const { PathingGrid } = require(join(REPO, ".sim-build", "src", "sim", "pathing.js"));
+const { TechState } = require(join(REPO, ".sim-build", "src", "sim", "tech.js"));
 
 let failed = 0;
 function check(what, ok, detail) {
@@ -32,27 +33,45 @@ const ABILITIES = {
   Aegm: { id: "Aegm", code: "Aegm", target: "passive", targetFlags: [], levelData: [lvl({ data: [10, 1] })] },
   Aenc: { id: "Aenc", code: "Aenc", target: "passive", targetFlags: [], levelData: [lvl({ castRange: 120, area: 250, data: [5] })] },
   Ambt: { id: "Ambt", code: "Ambt", target: "unit", autocast: true, targetFlags: ["air", "ground", "invu", "vuln", "friend", "organic"], levelData: [lvl({ castRange: 99999, area: 400, data: [2, 0.5, 10, 30, 1] })] },
+  // Detonate: 50 mana burned, 225 to summons, in a 300 blast, and no allegiance flag at all.
+  Adtn: { id: "Adtn", code: "Adtn", target: "none", targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"], specialArt: "", targetArt: "", levelData: [lvl({ castRange: 100, area: 300, data: [50, 225] })] },
+  // Eat Tree: 500 hit points over 30 seconds, off a tree within 32 of the Ancient's hull.
+  Aeat: { id: "Aeat", code: "Aeat", target: "point", targetFlags: ["tree"], specialArt: "", specialAttach: [], levelData: [lvl({ castRange: 32, duration: 30, data: [0.8, 2.5, 500], buffs: ["Beat"] })] },
+  // The two repair rows that differ, and differ in exactly one flag.
+  Aren: { id: "Aren", code: "Aren", target: "unit", autocast: true, levelData: [lvl({ castRange: 50, data: [0.35, 1.5, 0, 0, 175] })],
+    targetFlags: ["friend", "ground", "air", "structure", "bridge", "alive", "dead", "invu", "vuln"] },
+  Ahrp: { id: "Ahrp", code: "Arep", target: "unit", autocast: true, levelData: [lvl({ castRange: 50, data: [0.35, 1.5, 0.15, 0.6, 75] })],
+    targetFlags: ["mechanical", "friend", "nonancient", "ground", "air", "structure", "bridge", "alive", "dead", "invu", "vuln"] },
 };
 const abilities = { get: (id) => ABILITIES[id] };
 const UNITS = {
   // `abilities` here is UnitAbilities.slk's abilList — what cargoHold/computeGarrisonCap read.
-  egol: { id: "egol", abilities: ["Aenc", "Aegm"], moveType: "foot", manaRegen: 0, regenType: "none", hpRegen: 0 },
-  emow: { id: "emow", abilities: ["Ambt"], moveType: "foot", manaRegen: 1.5, regenType: "none", hpRegen: 0 },
-  ewsp: { id: "ewsp", abilities: [], moveType: "hover", manaRegen: 0, regenType: "none", hpRegen: 0 },
-  eaom: { id: "eaom", abilities: [], moveType: "foot", manaRegen: 0, regenType: "night", hpRegen: 0.25 },
+  egol: { id: "egol", abilities: ["Aenc", "Aegm"], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 0, lumberCost: 0, manaRegen: 0, regenType: "none", hpRegen: 0 },
+  emow: { id: "emow", abilities: ["Ambt"], moveType: "foot", upgradesUsed: ["Rews"], buildTime: 60, goldCost: 180, lumberCost: 40, manaStart: 100, manaRegen: 1.5, regenType: "none", hpRegen: 0 },
+  ewsp: { id: "ewsp", abilities: [], moveType: "hover", upgradesUsed: [], buildTime: 60, goldCost: 0, lumberCost: 0, manaRegen: 0, regenType: "none", hpRegen: 0 },
+  eaom: { id: "eaom", abilities: [], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 150, lumberCost: 60, manaRegen: 0, regenType: "night", hpRegen: 0.25 },
   // The drinker, with its own regeneration turned as far down as the column allows. A
   // target topping itself up would mean the well spent less on its mana and more on its
   // life, and the arithmetic below would stop being the ability's. (Not a flat 0: an absent
   // `regenMana` and a stated zero look the same to a parser, so the sim reads 0 as "the row
   // says nothing" and falls back to UNIT_MANA_REGEN — see baseManaRegen.)
-  hkni: { id: "hkni", abilities: [], moveType: "foot", manaRegen: 1e-6, regenType: "none", hpRegen: 0 },
+  hkni: { id: "hkni", abilities: [], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 0, lumberCost: 0, manaRegen: 1e-6, regenType: "none", hpRegen: 0 },
 };
 const unitReg = { get: (id) => UNITS[id] };
+
+// Well Spring, exactly as UpgradeData ships it: +125 to the Moon Well's mana ceiling and
+// +0.52/sec to its regeneration. `upgradesUsed` is `emow`'s own `upgrades` column, which is
+// what ties the two together — nothing in the upgrade names the unit.
+const UPGRADES = {
+  Rews: { id: "Rews", maxLevel: 1, effects: [{ effect: "rmnx", base: 125, mod: 0 }, { effect: "rmnr", base: 0.52, mod: 0 }] },
+};
+const upgradeReg = { get: (id) => UPGRADES[id], has: (id) => id in UPGRADES, all: () => Object.values(UPGRADES) };
+const techReg = { get: () => undefined, has: () => false, all: () => [] };
 
 const CELL = 32;
 function newWorld(w = 120, h = 120) {
   const grid = new PathingGrid({ width: w, height: h, flags: new Uint8Array(w * h) }, [0, 0]);
-  return new SimWorld(grid, 1, abilities, undefined, unitReg);
+  return new SimWorld(grid, 1, abilities, undefined, unitReg, techReg, upgradeReg);
 }
 
 const base = (over) => ({
@@ -209,6 +228,133 @@ console.log("Replenish Mana and Life (`Ambt`)");
   // A drinker that needs nothing is not a target at all.
   r = pour(600, 600, 100, 100);
   check("a drinker that needs nothing is left alone", Math.abs(r.well.mana - 100) < 0.01 && r.well.replenishTargetId === 0, `${r.well.mana.toFixed(1)}`);
+}
+
+console.log("Well Spring (`Rews`) — +125 mana, +0.52/sec, and both only after dark");
+{
+  const world = newWorld();
+  world.timeOfDaySuspended = true;
+  world.timeOfDay = 0; // night, or the well regenerates nothing at all
+  world.add(base({ id: 95, typeId: "emow", x: 2000, y: 2000, hp: 600, maxHp: 600, mana: 100, maxMana: 300, speed: 0, radius: 96, isBuilding: true, name: "Moon Well" }),
+    BUILT(2000, 2000), { abilities: [{ id: "Ambt", code: "Ambt", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const well = world.units.get(95);
+  well.mana = 100;
+  world.recomputeStats(well);
+  check("a plain well holds 300", well.maxMana === 300, `${well.maxMana}`);
+  check("…and refills at its own regenMana", Math.abs(well.manaRegen - 1.5) < 0.001, `${well.manaRegen}`);
+  world.tech.setResearchLevel(0, "Rews", 1);
+  world.recomputeStats(well);
+  check("Well Spring lifts the ceiling by 125", well.maxMana === 425, `${well.maxMana}`);
+  // The mana it already held rises with the ceiling, keeping the well's fill fraction —
+  // which is why Liquipedia lists the initial 100 as 133.33 with the upgrade in.
+  check("…carrying what it held up with it", Math.abs(well.mana - (100 * 425) / 300) < 0.01, `${well.mana.toFixed(2)}`);
+  check("…and adds 0.52 a second", Math.abs(well.manaRegen - 2.02) < 0.001, `${well.manaRegen}`);
+  world.timeOfDay = 12;
+  world.recomputeStats(well);
+  check("by day the WHOLE rate is off, upgrade and all", well.manaRegen === 0, `${well.manaRegen}`);
+}
+
+console.log("…and a building has no mana, and no mana bar, until it is finished");
+{
+  const world = newWorld();
+  world.timeOfDaySuspended = true;
+  world.timeOfDay = 12; // noon — the well must not top itself up between the two checks
+  world.add(base({ id: 96, typeId: "emow", x: 2000, y: 2000, hp: 60, maxHp: 600, mana: 0, maxMana: 300, speed: 0, radius: 96, isBuilding: true, name: "Moon Well" }),
+    { ...BUILT(2000, 2000), constructionLeft: 1, buildTimeTotal: 1 },
+    { abilities: [{ id: "Ambt", code: "Ambt", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  world.tick(0.05);
+  const well = world.units.get(96);
+  check("no pool while it goes up", well.maxMana === 0 && well.mana === 0, `${well.mana}/${well.maxMana}`);
+  world.add(wisp(97, 2140, 2000));
+  world.assignBuilder(97, 96);
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05);
+  // `mana0` = 100 of `manaN` = 300: a finished Moon Well opens a third full and fills the
+  // rest overnight. It does NOT open full, which is the whole reason the column exists.
+  check("…and `mana0` when it is done", Math.abs(well.mana - 100) < 0.01 && well.maxMana === 300, `${well.mana.toFixed(0)}/${well.maxMana}`);
+}
+
+console.log("Detonate (`Adtn`) — the Wisp spends itself");
+{
+  const world = newWorld();
+  world.add(wisp(30, 2000, 2000));
+  // In range: a friendly caster (Detonate has no allegiance flag — it burns its own side's
+  // mana too), an invulnerable one (dispelled but NOT drained since 1.25b), and a summon.
+  world.add(base({ id: 31, typeId: "hkni", race: "human", x: 2100, y: 2000, hp: 500, maxHp: 500, mana: 200, maxMana: 200, speed: 200, radius: 16, name: "Friendly caster" }));
+  world.add(base({ id: 32, typeId: "hkni", race: "human", x: 2000, y: 2120, hp: 500, maxHp: 500, mana: 200, maxMana: 200, speed: 200, radius: 16, name: "Invulnerable" }));
+  world.add(base({ id: 33, typeId: "hkni", owner: 1, team: 1, race: "human", x: 1900, y: 2000, hp: 500, maxHp: 500, mana: 0, maxMana: 0, speed: 200, radius: 16, name: "Summon" }));
+  // …and one well outside the 300 blast, which must come out untouched.
+  world.add(base({ id: 34, typeId: "hkni", race: "human", x: 2600, y: 2000, hp: 500, maxHp: 500, mana: 200, maxMana: 200, speed: 200, radius: 16, name: "Bystander" }));
+  const invuln = world.units.get(32);
+  invuln.baseInvulnerable = true;
+  const summon = world.units.get(33);
+  summon.summonLeft = 60;
+  summon.summonMax = 60;
+  for (const id of [31, 32, 34]) {
+    world.units.get(id).buffs.push({ kind: "armor", group: "innerfire", timeLeft: 60, sourceId: 30, value: 5, value2: 0, art: "", fx: [], buffId: "", delay: 0 });
+  }
+  world.recomputeStats(invuln);
+  world.applySpellEffect("Adtn", 1, world.units.get(30), { targetId: 0, x: 2000, y: 2000 }, ABILITIES.Adtn);
+  check("the Wisp is gone", !world.units.has(30));
+  check("a friendly caster is burned all the same", Math.abs(world.units.get(31).mana - 150) < 0.01, `${world.units.get(31).mana}`);
+  check("…and dispelled", world.units.get(31).buffs.length === 0);
+  check("an invulnerable unit keeps its mana", Math.abs(world.units.get(32).mana - 200) < 0.01, `${world.units.get(32).mana}`);
+  check("…but is dispelled anyway", world.units.get(32).buffs.length === 0);
+  check("a summon takes 225", Math.abs(world.units.get(33).hp - 275) < 1, `${world.units.get(33)?.hp}`);
+  check("outside the blast, nothing", world.units.get(34).mana === 200 && world.units.get(34).buffs.length === 1);
+}
+
+console.log("Eat Tree (`Aeat`) — the tree is the cost");
+{
+  const world = newWorld();
+  const tree = world.addTree(2200, 2000, 50, 64);
+  world.add(base({ id: 40, typeId: "eaom", x: 2000, y: 2000, hp: 300, maxHp: 900, speed: 0, radius: 144, isBuilding: true, name: "Ancient of War" }),
+    BUILT(2000, 2000), { ancient: true, abilities: [{ id: "Aeat", code: "Aeat", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  world.applySpellEffect("Aeat", 1, world.units.get(40), { targetId: 0, x: tree.x, y: tree.y }, ABILITIES.Aeat);
+  const a = world.units.get(40);
+  check("the tree is eaten outright", !world.trees.has(tree.id));
+  check("…and nobody gets its lumber", world.stashOf(0).lumber === 0, `${world.stashOf(0).lumber}`);
+  const hot = a.buffs.find((b) => b.kind === "hot");
+  check("a 500-over-30s heal starts", !!hot && Math.abs(hot.value - 500 / 30) < 0.01, `${hot?.value.toFixed(2)}/s`);
+  check("…grouped on its own buff row, so a second tree replaces it", hot?.group === "Beat", `${hot?.group}`);
+  for (let t = 0; t < 30 / 0.05; t++) world.tick(0.05);
+  // 500 over the 30 seconds, on top of the Ancient's own night regeneration (regenType night,
+  // 0.25/s) — the sim starts at MELEE_STARTING_TOD, which is daylight, so nothing else runs.
+  check("…and it lands", Math.abs(a.hp - 800) < 6, `${a.hp.toFixed(0)}/900`);
+  const treeless = world.addTree(9000, 9000, 50, 64) && world.units.get(40);
+  check("with no tree in reach, nothing happens", (() => {
+    a.buffs.length = 0;
+    world.applySpellEffect("Aeat", 1, a, { targetId: 0, x: 9000, y: 9000 }, ABILITIES.Aeat);
+    return a.buffs.length === 0 && world.trees.size === 1;
+  })() && !!treeless);
+}
+
+console.log("Renew (`Aren`) — the one repair that may mend an Ancient");
+{
+  const world = newWorld();
+  world.initStash(0, 1000, 1000);
+  world.add(base({ id: 50, typeId: "eaom", x: 2000, y: 2000, hp: 300, maxHp: 900, speed: 0, radius: 144, isBuilding: true, name: "Ancient of War" }),
+    BUILT(2000, 2000), { ancient: true });
+  // Whole, deliberately: the autocast picks the NEAREST damaged building, and a second
+  // wounded one at the same distance would make which one it mends a coin toss.
+  world.add(base({ id: 51, typeId: "emow", x: 2600, y: 2000, hp: 600, maxHp: 600, speed: 0, radius: 96, isBuilding: true, name: "Moon Well" }), BUILT(2600, 2000));
+  world.add(wisp(52, 2300, 2200), null, { abilities: [{ id: "Aren", code: "Aren", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  world.add(base({ id: 53, typeId: "hpea", race: "human", x: 2300, y: 2300, hp: 220, maxHp: 220, speed: 190, radius: 16, name: "Peasant",
+    worker: { gold: true, lumber: true, lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false, orbitAngle: 0, carryGold: 0, carryLumber: 0 } }),
+    null, { abilities: [{ id: "Ahrp", code: "Arep", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  check("a Wisp may Renew an Ancient", world.repairRefusal(52, 50) === null);
+  check("a Peasant may not — `nonancient`", world.repairRefusal(53, 50) === "Notancient", `${world.repairRefusal(53, 50)}`);
+  check("…but may repair a Moon Well", world.repairRefusal(53, 51) === null, `${world.repairRefusal(53, 51)}`);
+  check("a worker with no repair row at all is refused", world.repairRefusal(51, 50) === "Cantrepair");
+
+  // Autocast: an IDLE wisp with the toggle on goes and mends the nearest damaged building.
+  const w = world.units.get(52);
+  w.abilities[0].autocastOn = true;
+  const before = world.units.get(50).hp;
+  for (let t = 0; t < 14 / 0.05; t++) world.tick(0.05);
+  check("autocast finds the hurt Ancient by itself", world.units.get(50).hp > before, `${before} → ${world.units.get(50).hp.toFixed(0)}`);
+  check("…and the wisp is on the job", w.order === "repair" && !!w.repair);
+  // …and it costs. Rep1 = 0.35 of the build cost across the whole repair.
+  check("…and it is not free", world.stashOf(0).gold < 1000, `${world.stashOf(0).gold.toFixed(1)}`);
 }
 
 console.log("…and the well only refills after dark");

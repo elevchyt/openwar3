@@ -36,7 +36,7 @@ import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgrad
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
-import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
+import { loadAbilityRegistry, mdlPath, type AbilityRegistry, type AbilityDef, type BuffFx, isRepairCode, KNOWN_ABILITIES, requiredHeroLevel } from "../data/abilities";
 import { loadCommandStrings, type CommandStrings } from "../data/commandStrings";
 import { resolveTipRefs } from "../data/tipRefs";
 import { loadItemRegistry, type ItemRegistry } from "../data/items";
@@ -6664,6 +6664,15 @@ export class MapViewerScene {
         // and slot (NightElfAbilityFunc [Aenc] Unart=BTNUnload, Unbuttonpos=0,2; hotkey U).
         // Loading is a right-click: you send a wisp at the mine, you don't fetch it from here.
         if (world.cargoHoldCode(su.typeId) === "Aenc") {
+          // `Aenc`'s own two halves, at that row's own art and slots (NightElfAbilityFunc
+          // [Aenc]: Art=BTNLoad Buttonpos=1,2, Unart=BTNUnload Unbuttonpos=0,2). Load arms a
+          // pick — "Orders a Wisp to enter the gold mine" — and is greyed once the crew is
+          // full, because there is nowhere left to put one.
+          out.push(this.cmd({
+            id: "load", icon: btnIcon("BTNLoad"), name: "Load", hotkey: "L",
+            desc: "Orders a Wisp to enter the gold mine.", col: 1, row: 2,
+            disabled: su.garrison.length >= su.garrisonCap,
+          }));
           if (su.garrison.length > 0)
             out.push(this.cmd({ id: "standdown", icon: btnIcon("BTNUnload"), name: "Unload All", hotkey: "U", desc: "Removes all Wisps from the gold mine.", col: 0, row: 2 }));
         } else {
@@ -6777,7 +6786,14 @@ export class MapViewerScene {
       // Build sits at the bottom-left of a worker's card (developer spec); Repair
       // next to it. Repair = 35% of build cost / 150% of build time to full HP.
       out.push(this.cmd({ id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", desc: "Brings up the list of structures you may build.", col: 0, row: 2, active: active === "build" }));
-      out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: active === "repair" }));
+      // Repair, unless the worker's OWN repair row is already drawing the button. A Wisp
+      // carries `Aren` (Renew) in its ability list, so pushAbilityButtons gives it that row's
+      // art, hotkey and slot — and its autocast toggle, which this generic one has no notion
+      // of. Two repair buttons on one card is the alternative.
+      const su = world.units.get(sel.id);
+      if (!su?.abilities.some((a) => isRepairCode(a.code))) {
+        out.push(this.cmd({ id: "repair", icon: btnIcon("BTNRepair"), name: "Repair", hotkey: "R", desc: "Repairs a damaged building (costs 35% of its build cost).", col: 1, row: 2, active: active === "repair" }));
+      }
     }
     this.pushAbilityButtons(sel, out); // learned spells + a hero's Learn Skill button
     return out;
@@ -6804,7 +6820,11 @@ export class MapViewerScene {
     // So the job — not the order — is what keeps Build Structure lit from the moment
     // the site is placed until the structure is up. Repair likewise.
     if (su.buildPending || su.constructing) return "build";
-    if (su.repair) return "repair";
+    // A worker with its own repair ROW lights that button instead of the generic one — the
+    // two never both exist on a card (see the worker branch of buildCommandCard).
+    const own = su.abilities.find((a) => isRepairCode(a.code));
+    const repairButton = own ? `ability:${own.code}` : "repair";
+    if (su.repair) return repairButton;
     switch (su.order) {
       case "move": return "move";
       // Attack-move and a forced attack share the Attack button, as in the game.
@@ -6812,7 +6832,7 @@ export class MapViewerScene {
       case "attack": return "attack";
       case "patrol": return "patrol";
       case "hold": return "hold";
-      case "repair": return "repair";
+      case "repair": return repairButton;
       case "cast": return su.pendingCast ? `ability:${su.pendingCast.code}` : null;
       // Idle, and every order with no button behind it (harvest, follow, walking to
       // an item), rest on Stop.
@@ -6958,6 +6978,14 @@ export class MapViewerScene {
     // --- spells ---
     if (id.startsWith("ability:")) {
       const code = id.slice(8);
+      // Renew is drawn as an ability (it is one — `Aren`, with its own art, hotkey, slot and
+      // autocast toggle) but ORDERED as a repair: the job outlives any one cast. Same arming
+      // the generic Repair button does, so a wisp's click resolves through repairAt.
+      if (isRepairCode(code)) {
+        this.rts.orderMode = "repair";
+        this.hud?.setArmed(true);
+        return;
+      }
       const target = KNOWN_ABILITIES[code]?.target;
       if (target === "none") {
         this.rts.castNoTarget(code); // Thunder Clap / Divine Shield / Avatar — fire now
@@ -7000,6 +7028,7 @@ export class MapViewerScene {
       if (this.rts.orderMode) {
         this.rts.orderMode = null;
         this.rts.armedCast = null; // disarm a pending spell target
+        this.rts.armedLoad = null; // …and a pending Load pick
         this.hud?.clearOrderMode();
         return;
       }
@@ -7039,6 +7068,14 @@ export class MapViewerScene {
     if (id === "standdown") {
       const sel = this.rts.selectedInfo();
       if (sel) this.rts.execute(this.localPlayer, { c: "standdown", buildingId: sel.id });
+      return;
+    }
+    if (id === "load") {
+      // The selection is the HOLD and the click picks its passenger — the same shape as the
+      // shop's "Select a unit to purchase" pick, and the opposite way round from every other
+      // order on the card. See RtsController.orderClickAt.
+      const sel = this.rts.selectedInfo();
+      if (sel && this.rts.armLoad(sel.id)) this.hud?.setArmed(true);
       return;
     }
     if (id.startsWith("train:")) {

@@ -483,6 +483,11 @@ export class Authority {
         if (!this.sim.units.get(cmd.unitId)?.worker) return false;
         const target = this.sim.units.get(cmd.buildingId);
         if (!target?.building || target.building.constructionLeft > 0 || target.hp >= target.maxHp) return false;
+        // …and that this worker's own repair ability allows that target. The four races'
+        // repair rows differ in exactly one thing and this is it: every one of them lists
+        // `nonancient` except the night elf's Renew, so a Wisp may mend an Ancient of War and
+        // an allied Peasant may not. See SimWorld.repairRefusal.
+        if (this.sim.repairRefusal(cmd.unitId, cmd.buildingId) !== null) return false;
         // The def comes off the SIM unit's own typeId, not the render Entry — a headless
         // authority has no Entry, and reaching through one would silently return undefined
         // and refuse every repair rather than failing loudly.

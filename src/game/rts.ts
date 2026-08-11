@@ -2296,7 +2296,11 @@ export class RtsController {
         sightNight: def.sightNight || def.sightDay || 800,
         hp: constructionTime > 0 ? (def.hitPoints || 100) * 0.1 : def.hitPoints || 100,
         maxHp: def.hitPoints || 100,
-        mana: def.mana,
+        // Mana it is BORN with, not its pool: UnitBalance's `mana0`, which is short of `manaN`
+        // for every caster you have to wait on (a Priest at 75/200, a Moon Well at 100/300).
+        // A structure still going up has NONE — the bar itself is withheld until it is
+        // finished (recomputeStats), and finishConstruction is where it is filled to `mana0`.
+        mana: constructionTime > 0 ? 0 : def.manaStart || def.mana,
         maxMana: def.mana,
         armor: def.armor,
         armorType: def.armorType,
@@ -3473,12 +3477,16 @@ export class RtsController {
   /** Armed command-card order; the next left-click executes it instead of
    *  selecting. "rally" sets a building's rally point; "repair" targets a
    *  damaged friendly building; "cast" targets a spell (see armedCast). */
-  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | "item" | "selectuser" | null = null;
+  orderMode: "move" | "attack" | "patrol" | "rally" | "repair" | "cast" | "item" | "selectuser" | "load" | null = null;
   /** The shop awaiting a purchaser pick when orderMode === "selectuser" (WC3's "Select
    *  Hero"/"Select Unit"). Unlike every other armed order this one belongs to a building
    *  the player may not even own — a neutral Goblin Merchant — so it carries the shop's id
    *  rather than acting on the selection. */
   armedShopUser: { shopId: number } | null = null;
+  /** The cargo hold awaiting a passenger pick when orderMode === "load" — the Entangled Gold
+   *  Mine's `Aenc` Load button. Like the shop pick above and unlike every other armed order,
+   *  the SELECTION is the thing being ordered TO and the click names the unit that acts. */
+  armedLoad: { hostId: number } | null = null;
   /** The spell armed for targeting when orderMode === "cast". `area` (>0) shows an
    *  AoE cast circle at the cursor for point-target area spells. */
   armedCast: { code: string; target: "unit" | "point"; area?: number } | null = null;
@@ -3496,6 +3504,17 @@ export class RtsController {
    *  (the caller should then clear the HUD's armed state); false leaves it armed —
    *  either nothing was armed, or the order was REFUSED and the player gets to
    *  click again without re-arming the spell. */
+  /** Arm the Entangled Gold Mine's Load pick. False if the hold is gone or already full,
+   *  which is the button's own greying-out asked again at the press. */
+  armLoad(hostId: number): boolean {
+    const b = this.sim.units.get(hostId);
+    if (!b || b.garrisonCap === 0 || b.garrison.length >= b.garrisonCap) return false;
+    if (!this.controls(hostId)) return false;
+    this.orderMode = "load";
+    this.armedLoad = { hostId };
+    return true;
+  }
+
   orderClickAt(cssX: number, cssY: number, queued = false): boolean {
     // Nominating a shop's purchaser is checked BEFORE the "do I control the selection"
     // gate: the selection here is the SHOP, and the whole point of a neutral Goblin
@@ -3517,6 +3536,25 @@ export class RtsController {
       if (!this.execute(this.localPlayer, { c: "shopbuyer", shopId, unitId: picked! })) return this.refuseOrder("Neednearbypatron");
       this.orderMode = null;
       this.armedShopUser = null;
+      return true;
+    }
+    // Loading a cargo hold reads the same way round as the shop pick above — the SELECTION is
+    // the mine and the click names the wisp — so it is answered before the "do I control the
+    // selection" gate, and a refused pick keeps the order armed for another click.
+    if (this.orderMode === "load") {
+      const hostId = this.armedLoad?.hostId;
+      if (hostId === undefined) {
+        this.orderMode = null;
+        return true;
+      }
+      const picked = this.pickAt(cssX, cssY);
+      const p = picked === null ? undefined : this.sim.units.get(picked);
+      // "Must target a Peon." — commandstrings.txt [Errors] Targetbunkerunit, which is the
+      // line the Orc Burrow's own Load already refuses with. Same hold, same answer.
+      if (!p || picked === null || !this.controls(picked) || !p.worker) return this.refuseOrder("Targetbunkerunit");
+      if (!this.execute(this.localPlayer, { c: "garrison", unitId: picked, buildingId: hostId })) return this.refuseOrder("Targetbunkerunit");
+      this.orderMode = null;
+      this.armedLoad = null;
       return true;
     }
     if (!this.orderMode || this.selected.size === 0 || !this.hasControllable()) {
@@ -3717,6 +3755,7 @@ export class RtsController {
       this.orderMode = null; // right-click disarms a pending target (WC3), never orders
       this.armedCast = null;
       this.armedItem = null;
+      this.armedLoad = null;
       return "ordered";
     }
     if (!this.selected.size || !this.hasControllable()) {
@@ -3724,6 +3763,7 @@ export class RtsController {
         this.orderMode = null;
         this.armedCast = null;
         this.armedItem = null;
+        this.armedLoad = null;
         return "ordered";
       }
       return "none";
@@ -3731,7 +3771,7 @@ export class RtsController {
     // A spell, an item, a repair or a shop's purchaser pick is aimed at a thing in the
     // WORLD, never at the minimap — swallow the click and leave it armed (right-click,
     // above, is how you back out of one).
-    if (mode === "cast" || mode === "item" || mode === "repair" || mode === "selectuser") return "ignored";
+    if (mode === "cast" || mode === "item" || mode === "repair" || mode === "selectuser" || mode === "load") return "ignored";
     if (mode === "rally") {
       this.orderMode = null;
       for (const id of this.selected) {

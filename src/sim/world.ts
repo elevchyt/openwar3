@@ -1,7 +1,7 @@
 import { PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
-import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
+import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
 import { type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
@@ -1413,6 +1413,11 @@ const TREE_HP = 50;
 const TREE_RADIUS = 16; // half a tree's 2×2-cell footprint, for the reach latch
 const DEPOSIT_RANGE = 64; // gap to a depot edge to turn in the load
 const RETARGET_RANGE = 1200; // how far a worker looks for the next tree
+/** How far an autocasting Wisp looks for a damaged building to Renew. A wisp has no weapon,
+ *  so it has no `acquire` of its own to borrow (the number every other friendly autocast uses
+ *  — see autocastSearchRange); this is the Ancient of War's 500 acquisition range, the closest
+ *  thing the night elf data has to "as far as a building's business reaches". */
+const RENEW_SEEK_RANGE = 500;
 
 // --- hero XP / leveling ---
 // The tables and thresholds live in data/gameplayConstants (Units\MiscGame.txt),
@@ -3269,6 +3274,11 @@ export class SimWorld {
       }
       this.detachBuilder(bid);
     }
+    // The building's mana arrives WITH the building. `mana0` is what it opens with and it is
+    // not the pool — a finished Moon Well holds 100 of its 300 and fills the rest overnight.
+    // Set before recomputeStats runs again, which is what puts the bar back (see there).
+    const start = this.unitReg?.get(u.typeId)?.manaStart ?? 0;
+    if (start > 0) u.mana = Math.min(start, u.baseMaxMana);
     this.buildCompletions.push({ buildingId: u.id, owner: u.owner });
     this.noteConstruct(u.id, "finish"); // EVENT_(PLAYER_)UNIT_CONSTRUCT_FINISH
   }
@@ -5384,10 +5394,15 @@ export class SimWorld {
   private baseManaRegen(u: SimUnit): number {
     if (u.isHero) return REGEN_PER_INT * u.int;
     if (u.baseMaxMana <= 0) return 0;
-    const nightOnly = u.abilities.some((a) => a.id === "Ambt");
-    if (nightOnly && this.isDay) return 0;
     const def = this.unitReg?.get(u.typeId);
     return def?.manaRegen || UNIT_MANA_REGEN;
+  }
+
+  /** A Moon Well by day: it refills at night and not otherwise, and the clock applies to the
+   *  WHOLE rate rather than only its base — Well Spring's +0.52 is more of the same water, and
+   *  a well that trickled by day would defeat the rule it is an upgrade to. */
+  private manaRegenSuspended(u: SimUnit): boolean {
+    return this.isDay && u.abilities.some((a) => a.id === "Ambt");
   }
 
   /** Same team = allied (friendly), unless the alliance matrix says otherwise (7.22).
@@ -5633,7 +5648,13 @@ export class SimWorld {
     if (u.maxHp > 0 && newMaxHp !== u.maxHp) u.hp *= newMaxHp / u.maxHp;
     if (u.maxMana > 0 && newMaxMana !== u.maxMana) u.mana *= newMaxMana / u.maxMana;
     u.maxHp = newMaxHp;
-    u.maxMana = newMaxMana;
+    // A structure still going up has no mana AND no mana bar. WC3 shows a foundation rising
+    // with nothing but its health, and the pool arrives with the finished building — a Moon
+    // Well you have half-built is not a Moon Well you can drink from. Withheld by zeroing the
+    // CEILING rather than the current value, because the bar is drawn off the ceiling: leaving
+    // maxMana up and mana at 0 would show an empty blue bar instead of no bar. finishConstruction
+    // fills it to the type's `mana0`.
+    u.maxMana = u.building && u.building.constructionLeft > 0 ? 0 : newMaxMana;
     if (u.hp > u.maxHp) u.hp = u.maxHp;
     if (u.mana > u.maxMana) u.mana = u.maxMana;
     // Defend: "While Defend is active, movement is reduced to <DataC1,%>% of normal speed"
@@ -5746,7 +5767,9 @@ export class SimWorld {
     // is already what issueFollow, the stuck check and the collision list all gate on.
     if (root && !u.uprooted) u.speed = 0;
     if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
-    u.manaRegen = this.baseManaRegen(u) + manaRegenBonus + item.manaRegen + upg.manaRegen;
+    u.manaRegen = this.manaRegenSuspended(u)
+      ? 0
+      : this.baseManaRegen(u) + manaRegenBonus + item.manaRegen + upg.manaRegen;
     u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR * u.str : 0) + hpRegenBonus + item.hpRegen;
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
@@ -6074,6 +6097,83 @@ export class SimWorld {
       }
     }
     return best;
+  }
+
+  // === Renew (`Aren`) — the Wisp's repair ==============================================
+  //
+  // Repair is one ability with four skins: `Ahrp` (Repair), `Arep` (Repair, orc), `Arst`
+  // (Restoration) and `Aren` (Renew) all share the `Arep` code and the same two numbers —
+  // Rep1 "Repair Cost Ratio" 0.35 and Rep2 "Repair Time Ratio" 1.5, i.e. a third of the
+  // building's price over half again its build time (Liquipedia lists both on Renew's own
+  // card). So Renew costs and takes exactly what a Peasant's hammer does, and none of that
+  // needs restating here.
+  //
+  // What IS Renew's own is its Targets Allowed. Every other race's repair lists `nonancient`;
+  // Renew does not — which is the whole point, because half the night elf's buildings ARE
+  // Ancients and nothing else could mend them. That is `repairRefusal`, below: the flag is
+  // real, so an allied Peasant walked up to an Ancient of War is turned away by the data
+  // rather than by a special case.
+  //
+  // The other difference is that it AUTOCASTS (Orderon/Orderoff `renewon`/`renewoff`), which
+  // the generic autocast tick cannot do for it: that path issues a CAST, and repair is a job
+  // that runs for as long as the building is hurt. Hence a tick of its own.
+
+  /** The repair ability a worker carries (`Arep` code — Repair / Restoration / Renew), or
+   *  undefined for a worker that cannot mend anything (the Acolyte, the Ghoul). */
+  private repairAbility(u: SimUnit): SimAbility | undefined {
+    return u.abilities.find((a) => isRepairCode(a.code) && a.level >= 1);
+  }
+
+  /** Why `worker` may not repair `target`, in the game's own [Errors] key, or null if it may.
+   *  A worker whose type ships no repair ability at all is refused outright. */
+  repairRefusal(workerId: number, buildingId: number): string | null {
+    const w = this.units.get(workerId);
+    const b = this.units.get(buildingId);
+    if (!w || !b) return "Cantrepair";
+    const ab = this.repairAbility(w);
+    // No repair row on the type: nothing to check the target against, and nothing to do the
+    // repairing. (Kept permissive for a bare test/sim world with no ability registry.)
+    if (!ab || !this.abilities) return this.abilities ? "Cantrepair" : null;
+    const def = this.abilities.get(ab.id);
+    if (!def) return null;
+    return this.targetError(w, b, def.targetFlags, def.code);
+  }
+
+  /** Autocast Renew: an idle Wisp with the toggle on walks to the nearest damaged friendly
+   *  building in its acquisition range and mends it. The rates are the same ones the manual
+   *  order uses, derived here from the target's own build cost and time (Rep1 / Rep2).
+   *
+   *  Gated on IDLE deliberately. A wisp gathering lumber, growing a building or sitting in a
+   *  gold mine has a job, and an autocast that pulled workers off the economy every time a
+   *  tower took a hit would be a worse ability than none. */
+  private tickRenew(u: SimUnit): void {
+    const ab = u.abilities.find((a) => isRepairCode(a.code) && a.level >= 1 && a.autocastOn);
+    if (!ab || !u.worker || u.order !== "idle") return;
+    if (u.repair || u.constructing || u.buildPending || u.inMine || u.inBurrow || u.insideBuild) return;
+    const range = Math.max(u.weapon?.acquire ?? 0, RENEW_SEEK_RANGE);
+    let best: SimUnit | null = null;
+    let bestD = Infinity;
+    for (const b of this.units.values()) {
+      if (!b.building || b.building.constructionLeft > 0 || b.hp <= 0 || b.hp >= b.maxHp) continue;
+      if (!this.allied(u, b)) continue;
+      const d = Math.hypot(b.x - u.x, b.y - u.y);
+      if (d > range || d >= bestD) continue;
+      if (this.repairRefusal(u.id, b.id) !== null) continue;
+      bestD = d;
+      best = b;
+    }
+    if (!best) return;
+    const def = this.unitReg?.get(best.typeId);
+    const maxHp = Math.max(1, best.maxHp);
+    const lvl = this.abilities?.get(ab.id)?.levelData[0];
+    const costRatio = lvl ? this.dataOf(lvl, 0, 0.35) : 0.35;
+    const timeRatio = lvl ? this.dataOf(lvl, 1, 1.5) : 1.5;
+    this.issueRepair(
+      u.id, best.id,
+      maxHp / Math.max(1, (def?.buildTime || 60) * timeRatio),
+      ((def?.goldCost ?? 0) * costRatio) / maxHp,
+      ((def?.lumberCost ?? 0) * costRatio) / maxHp,
+    );
   }
 
   /** Witch Doctor wards, ticked off their own data. Only the Stasis Trap (`otot`) needs a
@@ -6407,6 +6507,12 @@ export class SimWorld {
     // A structure-ONLY ability keeps the game's positive wording ("Must target a building.")
     // rather than the generic refusal — that is what Repair says when aimed at a Footman.
     if (F.has("structure") && !F.has("ground") && !F.has("air") && !target.building) return "Targetstructure";
+    // `nonancient` — an EXCLUSION, not an allow-list entry, and the only one in the table
+    // shaped that way. It is what keeps a Peasant from repairing a Tree of Life: Repair,
+    // Restoration and the orc's Repair all list it and only the night elf's Renew does not
+    // (see repairRefusal). commandstrings.txt [Errors] Notancient = "Unable to target
+    // Ancients." — which exists for precisely this flag and nothing else.
+    if (F.has("nonancient") && target.ancient) return "Notancient";
     if (F.has("air") || F.has("ground") || F.has("structure")) {
       const kind = target.building ? "structure" : target.flying ? "air" : "ground";
       if (!F.has(kind)) return kind === "air" ? "Noair" : kind === "structure" ? "Nostructure" : "Noground";
@@ -6814,6 +6920,9 @@ export class SimWorld {
       // (tickReplenish). Left in, this would re-issue a fresh cast every tick — and pick its
       // target off `Rng1 = 99999`, i.e. the whole map.
       if (ab.code === "Ambt") continue;
+      // Renew is not a cast either — it is the ordinary repair JOB under the wisp's own art
+      // (see KNOWN_ABILITIES). tickRenew hands out the work.
+      if (isRepairCode(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def || def.target !== "unit") continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -7782,6 +7891,15 @@ export class SimWorld {
     holdPosition: (unit) => { this.issueHold(unit.id); },
     toggleRoot: (unit) => this.toggleRoot(unit),
     entangleMine: (unit, def) => this.entangleMine(unit, def),
+    eatTree: (eater, x, y, reach) => {
+      // The nearest tree to the CLICK, but only if the eater can actually reach it — the
+      // point is where the player aimed and the range is the Ancient's arm.
+      const tree = this.nearestTree(x, y, reach);
+      if (!tree || Math.hypot(tree.x - eater.x, tree.y - eater.y) - eater.radius > reach) return false;
+      this.trees.delete(tree.id);
+      this.felled.push(tree); // renderer plays the tree's death and leaves the stump
+      return true;
+    },
     setReplenishTarget: (well, targetId) => { well.replenishTargetId = targetId; },
     morphToggle: (unit, def) => this.morphToggle(unit, def),
     abilityOf: (id) => this.abilities?.get(id),
@@ -8162,6 +8280,7 @@ export class SimWorld {
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
+      this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
       if (u.repathT > 0) u.repathT -= dt;

@@ -55,6 +55,9 @@ export interface SpellApi {
   /** Entangle (`Aent`): wrap the nearest un-entangled gold mine within the ability's range.
    *  False when there is no mine in reach. */
   entangleMine(unit: SimUnit, def: AbilityDef): boolean;
+  /** Eat Tree (`Aeat`): fell the nearest tree to (x, y) that `eater` can reach, and say
+   *  whether there was one. The tree is destroyed outright — no lumber for anybody. */
+  eatTree(eater: SimUnit, x: number, y: number, reach: number): boolean;
   /** Point a Moon Well at a unit to drink from it (`Ambt`). The pour itself is a tick, not
    *  an instant — see SimWorld.tickReplenish. */
   setReplenishTarget(well: SimUnit, targetId: number): void;
@@ -1394,6 +1397,69 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // makes — the row names that too (UnitID1 = egol). Both live in SimWorld.entangleMine,
   // beside the mine table it has to search.
   Aent: (api, caster, def) => { api.entangleMine(caster, def); },
+
+  // Detonate (`Adtn`) — the Wisp's last act. It blows itself up, and what the blast carries
+  // is not damage: it is a DISPEL and a mana burn, which is why five wisps beat a hero army
+  // that leans on its buffs and its mana.
+  //
+  //   DataA1  50   mana drained from every unit in the blast (`Dtn1`)
+  //   DataB1  225  damage, to SUMMONED units only (`Dtn2`)
+  //   Area1   300  the blast
+  //   targs1  air,ground,ward,invu,vuln,tree — no allegiance flag at all
+  //
+  // Two things follow from that target list and both are the ability, not an oversight.
+  // There is no `enemy`, so Detonate burns FRIENDLY mana as readily as the enemy's — a wisp
+  // popped in your own army's midst empties your own casters. And `invu` is listed, but only
+  // for the dispel: "Since Patch 1.25b Detonate no longer drains mana from invulnerable
+  // units. The dispelling effect still affects invulnerable units" (Liquipedia, Wisp). Our
+  // 1.30.4 is well past that, so the mana burn skips them and the dispel does not.
+  //
+  // 50 is the 1.30-era figure; it became 40 in 1.32.9, long after the version we are.
+  Adtn: (api, caster, def, rank) => {
+    const lvl = def.levelData[rank - 1];
+    const area = lvl.area || 300;
+    if (def.specialArt) api.emitEffect(def.specialArt, caster.x, caster.y, 0);
+    for (const t of api.unitsInArea(caster.x, caster.y, area)) {
+      if (t === caster || t.hp <= 0 || t.building) continue;
+      api.dispel(t);
+      if (!t.invulnerable) api.burnMana(t, d(lvl, 0, 50));
+      if (t.summonLeft > 0) api.spellDamage(t, d(lvl, 1, 225), caster.id);
+      if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    }
+    api.killUnit(caster); // "Destroys the Wisp" — the cost, and the whole of the cast
+  },
+
+  // Eat Tree (`Aeat`) — an Ancient pulls a tree up and eats it. `DataC1` = 500 hit points
+  // over `Dur1` = 30 seconds, which is a HEAL OVER TIME and not a heal: "Eating trees now
+  // gives a constant, non-stacking healing effect" (1.03), raised to its present 500/30s in
+  // 1.13. Non-stacking is why the buff carries `BuffID1` = Beat as its group — a second tree
+  // eaten mid-heal replaces the first rather than doubling the rate.
+  //
+  // The tree is the cast's real cost: it is destroyed outright and nobody gets its lumber.
+  // Aimed at a POINT rather than at a tree handle, because a tree is not a unit in this sim —
+  // the nearest one to the click that the Ancient can actually reach is the one it eats.
+  // DataA 0.8 and DataB 2.5 have field ids of their own (Eat1/Eat2) and no source that names
+  // them, so they stay unspent.
+  Aeat: (api, caster, def, rank, ctx) => {
+    const lvl = def.levelData[rank - 1];
+    // Rng1 is 32 — a tree the Ancient is already touching. Measured from its HULL, which for
+    // a 12x12 Ancient of War is most of the reason the number can be that small.
+    if (!api.eatTree(caster, ctx.x, ctx.y, (lvl.castRange || 32) + caster.radius)) return;
+    const secs = lvl.duration || 30;
+    // `Beat` carries no art of its own — the sprite is `Aeat`'s own Specialart, worn at the
+    // Ancient's `eattree` attachment point for as long as the heal runs.
+    const art = def.specialArt ? [{ path: def.specialArt, attach: def.specialAttach }] : [];
+    api.applyBuff(caster, {
+      kind: "hot",
+      group: lvl.buffs[0] || "Beat", // non-stacking: a second tree replaces the first
+      timeLeft: secs,
+      sourceId: caster.id,
+      value: d(lvl, 2, 500) / secs,
+      art: art[0]?.path ?? "",
+      fx: art,
+      buffId: lvl.buffs[0] || "",
+    });
+  },
 
   // Replenish Mana and Life (`Ambt`) — the Moon Well. The cast only says WHO is drinking;
   // the well then spends itself into them over the following seconds at its own rate, so the
