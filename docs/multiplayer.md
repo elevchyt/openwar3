@@ -158,10 +158,12 @@ the repair-rate bug, so the client set both what it paid and what it got back.
 **Done:** `build` — placement now carries intent only; `execute` looks the cost up, checks
 affordability, charges, and issues the order. *When* it charges depends on the shift key: a build
 placed outright is paid for at the click, a SHIFT-queued one is paid for when its turn comes
-(`SimWorld.payPendingBuild`, re-asked at the site until the stash can answer), because a queue of
-five towers is meant to be funded by the mining that happens while the first four go up. The order
-carries a `paid` flag so the abandon-refund can only ever give back money that was actually taken,
-and the client shows the unpaid-and-unaffordable sites as red silhouettes rather than blue.
+(`SimWorld.payPendingBuild`), because a queue of five towers is meant to be funded by the mining
+that happens while the first four go up. The order carries a `paid` flag so the abandon-refund can
+only ever give back money that was actually taken, and the client shows the unpaid-and-unaffordable
+sites as red silhouettes rather than blue. The refusal is not skipped, only moved: a site still
+unaffordable when the worker STANDS on it gets "Not enough gold." and is dropped together with
+every unpaid build queued behind it (`SimWorld.dropUnpaidBuilds`).
 
 **Done:** `train` — the command carries only *which building, which unit*. The cost, the build
 time and the **free first hero** are all derived authority-side; `freeHeroUsed` moved onto

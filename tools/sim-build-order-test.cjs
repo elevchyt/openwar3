@@ -164,15 +164,45 @@ console.log("\na shift-queued build is priced when its turn comes, not when it w
   check("…and arriving at the site charges nothing a second time",
     [world.payPendingBuild(w.id), world.stashOf(3).gold], [true, 40]);
 
-  // Order two arrives at a stash that cannot cover it. The build is NOT dropped: the worker
-  // waits at the site (its silhouette drawn red) and the question is asked again next tick.
+  // Order two becomes live at a stash that cannot cover it. Nothing is charged and nothing is
+  // taken; the site is simply unpaid, which is what the red silhouette draws all the way there.
   world.issueBuildNew(w.id, "hwtw", 56 * CELL, 56 * CELL, 60, 0, false);
   check("a build it cannot afford stays pending, unpaid, and takes nothing",
     [world.payPendingBuild(w.id), w.buildPending.paid, world.stashOf(3).gold], [false, false, 40]);
-  // …and the moment the gold lands, the same site goes through.
+  // …and if the gold lands while the worker is still walking, the same site goes through.
   world.stashOf(3).gold += 30;
   check("…and pays the moment the mining catches up",
     [world.payPendingBuild(w.id), w.buildPending.paid, world.stashOf(3).gold], [true, true, 10]);
+}
+
+console.log("\na build still unaffordable when the worker STANDS on it is refused and dropped");
+{
+  // The last time the price is asked. A worker that has walked to a building it cannot pay
+  // for is told which resource ran out and the order goes — with every unpaid build queued
+  // behind it, since a queue that cannot afford its first cannot afford the rest, and the
+  // alternative is a lap of sites refused one at a time.
+  world.initStash(7, 0, 500);
+  const w = worker({ owner: 7, order: "move", moving: true });
+  w.buildPending = { defId: "hwtw", x: 52 * CELL, y: 52 * CELL, gold: 60, lumber: 0, paid: false };
+  world.queueOrder(w.id, { kind: "buildnew", defId: "hwtw", x: 56 * CELL, y: 56 * CELL, gold: 60, lumber: 0, paid: false });
+  world.queueOrder(w.id, { kind: "harvest", res: "lumber", nodeId: 1 });
+  check("the site names the resource it is short of", world.dropUnpaidBuilds(w.id), "gold");
+  check("…the build it was standing on is gone", w.buildPending, null);
+  check("…the unpaid builds behind it go too, and nothing else does",
+    w.orderQueue.map((o) => o.kind), ["harvest"]);
+  // Stopped, so the tick's queue pump takes the worker on to the harvest rather than leaving
+  // it standing on a site it will never raise. Its stash is untouched: it never paid anything.
+  check("…the worker stops, with its stash untouched",
+    [w.order, w.moving, world.stashOf(7).gold, world.stashOf(7).lumber], ["idle", false, 0, 500]);
+  check("…and asking again drops nothing", world.dropUnpaidBuilds(w.id), null);
+  // Lumber is named when that is what ran out, and a PAID build is never dropped: its money
+  // is committed and it is owed its building.
+  const w2 = worker({ owner: 7 });
+  w2.buildPending = { defId: "hwtw", x: 40 * CELL, y: 40 * CELL, gold: 0, lumber: 900, paid: false };
+  check("a site short of lumber says so", world.dropUnpaidBuilds(w2.id), "lumber");
+  const w3 = worker({ owner: 7 });
+  w3.buildPending = { defId: "hwtw", x: 44 * CELL, y: 44 * CELL, gold: 60, lumber: 0, paid: true };
+  check("a PAID build is not dropped", [world.dropUnpaidBuilds(w3.id), !!w3.buildPending], [null, true]);
 }
 
 console.log("\nthe AUTHORITY asks the price of an outright build and not of a queued one");

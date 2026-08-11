@@ -3094,8 +3094,10 @@ export class MapViewerScene {
     //
     // A SHIFT-queued placement is exempt: it is not spending this instant's gold but the gold
     // the next minute's mining will bring in, so it is queued whatever the stash says and
-    // priced when the worker gets there (`SimWorld.payPendingBuild`). What the player gets
-    // instead of a refusal is the silhouette itself, standing red until it can be afforded.
+    // priced when the worker gets there (`SimWorld.payPendingBuild`). The refusal is not
+    // skipped, only MOVED: until then the player reads the answer off the silhouette, which
+    // stands red while the stash can't cover it, and if it is still red when the worker
+    // arrives the order is refused out loud there and dropped.
     if (!queued && !this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
     // Affordability, the charge and the order are all the authority's now — the renderer
     // used to charge the stash itself and post the price into the order (docs/multiplayer.md).
@@ -3154,11 +3156,16 @@ export class MapViewerScene {
       if (!def) { world.cancelPendingBuild(w.id); this.buildWait.delete(w.id); continue; }
       // The worker is standing on the site, so this is the moment a shift-queued build is
       // asked for its money (it was queued without being asked — see Authority's `build`).
-      // Short of it, the worker just waits: no refusal, no dropped order, and no countdown
-      // either — the site-clearing patience below is for ground, not for gold — because the
-      // next trip back from the mine may well pay for it. The player sees the wait as the
-      // site's red silhouette (updatePendingBuildGhosts).
-      if (!world.payPendingBuild(w.id)) { this.buildWait.delete(w.id); continue; }
+      // Short of it, the build is off: the order goes, every unpaid one queued behind it goes
+      // with it, and the player is told which resource ran out in the game's own voice — the
+      // same "Not enough gold." they would have got at the click, arriving where the decision
+      // actually happened. The silhouettes vanish with their orders.
+      if (!world.payPendingBuild(w.id)) {
+        this.buildWait.delete(w.id);
+        const short = world.dropUnpaidBuilds(w.id);
+        if (short && w.owner === this.localPlayer) this.refuse(short === "gold" ? ERR_NOGOLD : ERR_NOLUMBER);
+        continue;
+      }
       const fp = def.pathTex ? this.footprintFor(def.pathTex) : null;
       const occupants = fp ? this.footprintOccupants(fp, pb.x, pb.y, w.id) : [];
       if (occupants.length === 0) {
@@ -7286,7 +7293,9 @@ export class MapViewerScene {
    *    ones ahead of it left, so a queue of five towers on three towers' gold reddens exactly
    *    the last two. This one is not a verdict, unlike the ground: it is re-asked every frame,
    *    so a red site goes back to dark blue the moment the mining catches up, and a blue one
-   *    reddens the moment the gold behind it is spent on something else.
+   *    reddens the moment the gold behind it is spent on something else. It only becomes a
+   *    verdict where it matters — a site still red when the worker STANDS on it is refused
+   *    out loud and dropped (`tickPendingBuild` → `SimWorld.dropUnpaidBuilds`).
    */
   private updatePendingBuildGhosts(): void {
     if (!this.rts || !this.viewer.map) {
@@ -7924,8 +7933,19 @@ export class MapViewerScene {
         // HuntressBuildingComplete1.wav, since a Wisp has no voice to say it with).
         // A 2D interface cue like its neighbours (UISounds.slk Flags=0), so it is heard the
         // same wherever on the map the scaffolding came down.
+        //
+        // It also prints a LINE, which the real client does not: the three completion sounds
+        // have no [Errors] row (see SimWorld.Alert), so in WC3 a finished building only
+        // speaks. A deliberate departure, asked for because "Job's done." names no building
+        // and a base putting up four things at once says it four identical times. The words
+        // are still the game's own — `COLON_COMPLETED` ("Completed: ") out of
+        // GlobalStrings.fdf — so a localized install says it in its own language, and it goes
+        // to the MESSAGE LOG rather than the error line, being news rather than a refusal.
         for (const c of world.drainBuildCompletions()) {
-          if (c.owner === this.localPlayer) this.sounds?.playUi(`JobDoneSound${UI_SOUND_RACE[this.localRace]}`);
+          if (c.owner !== this.localPlayer) continue;
+          this.sounds?.playUi(`JobDoneSound${UI_SOUND_RACE[this.localRace]}`);
+          const name = this.registry.get(world.units.get(c.buildingId)?.typeId ?? "")?.name;
+          if (name) this.hud?.showMessage(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${name}`, -1);
         }
         // --- research + structure upgrades (issue #57) ---
         // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an

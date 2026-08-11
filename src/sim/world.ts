@@ -720,7 +720,10 @@ export interface SpellEvent {
  * `GoldMineCollapseSound`). That pairing is the whole test for whether a cue prints
  * text: the three COMPLETION sounds — `JobDoneSound`, `UpgradeComplete`,
  * `ResearchComplete` — have no [Errors] row at all, which is why a finished building
- * only speaks (issue #111).
+ * only speaks in the real client (issue #111). OpenWar3 prints one anyway for a finished
+ * BUILDING ("Completed: Barracks", GlobalStrings' own `COLON_COMPLETED`) — a deliberate
+ * departure, decided in the renderer where the audience is known, and to the message log
+ * rather than to this one-line [Errors] display.
  *
  * The sim raises them; the renderer decides who is told what. It has to be that way
  * round for the ally variants — the same blow is "Our town is under siege!" to the
@@ -4635,10 +4638,13 @@ export class SimWorld {
    *
    * This is where a SHIFT-queued build meets its price. The click that queued it asked
    * nothing of the stash — the whole point of queueing five towers is that you are spending
-   * gold you have not mined yet — so the question is asked at the site instead, and asked
-   * again every tick until it is answered. A worker whose build cannot be paid for simply
-   * stands there waiting (its silhouette turns red, see updatePendingBuildGhosts); it is
-   * never dropped, because the gold may well arrive a few seconds later.
+   * gold you have not mined yet — so the question is asked at the site instead, while the
+   * silhouette on the ground shows the answer the whole way there (red until the stash can
+   * cover it, see updatePendingBuildGhosts). Asked here, at the site, it is asked for the
+   * LAST time: a worker that has walked all the way to a building it cannot pay for is told
+   * so and the order goes (`dropUnpaidBuilds`), the same way a site whose ground has gone is
+   * told and goes. Waiting there indefinitely would be a worker doing nothing with no
+   * refusal to explain it.
    */
   payPendingBuild(id: number): boolean {
     const pb = this.units.get(id)?.buildPending;
@@ -4650,6 +4656,40 @@ export class SimWorld {
     s.lumber -= pb.lumber;
     pb.paid = true;
     return true;
+  }
+
+  /**
+   * Abandon the build this worker is standing at because it cannot be paid for, AND every
+   * unpaid build queued behind it. Returns which resource the site was short of, so the
+   * caller can say which one out loud ("Not enough gold." — gold first, as WC3 reports it),
+   * or null if there was nothing to drop.
+   *
+   * The ones behind go with it deliberately. The player queued a row of buildings against
+   * gold that was going to be mined, the mining did not keep up, and a queue that cannot
+   * afford its FIRST building certainly cannot afford the rest — leaving them standing would
+   * be a worker walking a lap of sites it will be refused at one by one, with a refusal at
+   * each. One refusal, one clearing of the queue, and the silhouettes go with the orders.
+   *
+   * Only UNPAID builds go: one already charged for has its money committed and is owed its
+   * building. (Nothing queues paid today — a queued build is priced when its turn comes —
+   * but the rule belongs with the flag rather than with today's callers.)
+   */
+  dropUnpaidBuilds(id: number): "gold" | "lumber" | null {
+    const u = this.units.get(id);
+    const pb = u?.buildPending;
+    if (!u || !pb || pb.paid) return null;
+    const s = this.stashOf(u.owner);
+    const short = s.gold < pb.gold ? "gold" : "lumber";
+    u.buildPending = null; // unpaid: nothing to refund (see refundPendingBuild)
+    // It has arrived and is standing on a site it will never raise. Stop, so the tick's queue
+    // pump (idle + no buildPending) takes it on to whatever else it was told to do; a Stop
+    // never touches the queue itself.
+    this.stop(id);
+    for (let i = u.orderQueue.length - 1; i >= 0; i--) {
+      const o = u.orderQueue[i];
+      if (o.kind === "buildnew" && !o.paid) u.orderQueue.splice(i, 1);
+    }
+    return short;
   }
 
   /** Public entry: abandon a worker's pending build and refund it (the renderer
