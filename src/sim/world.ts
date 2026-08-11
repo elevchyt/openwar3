@@ -722,8 +722,8 @@ export interface SpellEvent {
  * `ResearchComplete` — have no [Errors] row at all, which is why a finished building
  * only speaks in the real client (issue #111). OpenWar3 prints one anyway for a finished
  * BUILDING ("Completed: Barracks", GlobalStrings' own `COLON_COMPLETED`) — a deliberate
- * departure, decided in the renderer where the audience is known, and to the message log
- * rather than to this one-line [Errors] display.
+ * departure, decided in the renderer where the audience is known, and shown on this same
+ * one-line display, since that is where the engine puts everything it says in one line.
  *
  * The sim raises them; the renderer decides who is told what. It has to be that way
  * round for the ally variants — the same blow is "Our town is under siege!" to the

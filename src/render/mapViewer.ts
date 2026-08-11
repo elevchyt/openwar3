@@ -7939,13 +7939,16 @@ export class MapViewerScene {
         // speaks. A deliberate departure, asked for because "Job's done." names no building
         // and a base putting up four things at once says it four identical times. The words
         // are still the game's own — `COLON_COMPLETED` ("Completed: ") out of
-        // GlobalStrings.fdf — so a localized install says it in its own language, and it goes
-        // to the MESSAGE LOG rather than the error line, being news rather than a refusal.
+        // GlobalStrings.fdf — so a localized install says it in its own language, and it is
+        // shown where the engine shows every one-line thing it has to tell you: the gold line
+        // above the console that carries "Not enough gold." and "Our town is under siege!"
+        // alike (`showAlert` puts the game's own news there for the same reason). Replaced,
+        // never stacked — four buildings finishing together leave the last one's line up.
         for (const c of world.drainBuildCompletions()) {
           if (c.owner !== this.localPlayer) continue;
           this.sounds?.playUi(`JobDoneSound${UI_SOUND_RACE[this.localRace]}`);
           const name = this.registry.get(world.units.get(c.buildingId)?.typeId ?? "")?.name;
-          if (name) this.hud?.showMessage(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${name}`, -1);
+          if (name) this.hud?.showError(`${this.globalStrings?.strings.get("COLON_COMPLETED") ?? "Completed: "}${name}`);
         }
         // --- research + structure upgrades (issue #57) ---
         // WC3 keeps two DISTINCT completion cues, per race: ResearchComplete<Race> for an
