@@ -321,7 +321,9 @@ export interface UnitSnapshot {
   guardY: number;
 
   // --- private intent: present ONLY on the recipient's own units -------------
-  buildPending: { defId: string; x: number; y: number } | null;
+  // `paid` rides along because the ghost drawn at the site is coloured by what the build
+  // still OWES the stash: a paid one can never be short, an unpaid one can (issue #18).
+  buildPending: { defId: string; x: number; y: number; paid: boolean } | null;
   orderQueue: unknown[] | null;
   pendingCastCode: string | null;
 }
@@ -752,7 +754,9 @@ export function snapshotFor(
       guardX: u.guardX,
       guardY: u.guardY,
 
-      buildPending: own && u.buildPending ? { defId: u.buildPending.defId, x: u.buildPending.x, y: u.buildPending.y } : null,
+      buildPending: own && u.buildPending
+        ? { defId: u.buildPending.defId, x: u.buildPending.x, y: u.buildPending.y, paid: u.buildPending.paid }
+        : null,
       orderQueue: own ? u.orderQueue : null,
       pendingCastCode: own ? (u.pendingCast?.code ?? null) : null,
     });

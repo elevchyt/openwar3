@@ -50,7 +50,7 @@ export type WireSnapshot = Omit<WorldSnapshot, "units" | "projectiles"> & { hot:
 /** Bumped when the binary layout changes. Carried in the blob so a mismatched decode fails
  *  loudly at the header rather than as garbage fields three units in. The relay's
  *  `PROTOCOL_VERSION` still gates the SESSION; this gates the blob. */
-const CODEC_VERSION = 2; // 2: buffs carry their `B….` row id (the info panel Status line)
+const CODEC_VERSION = 3; // 3: a pending build carries its `paid` flag (2: buffs carry their `B….` row id)
 
 const TWO_PI = Math.PI * 2;
 
@@ -422,6 +422,7 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
     w.u16(w.intern(s.buildPending.defId));
     w.f32(s.buildPending.x);
     w.f32(s.buildPending.y);
+    w.u8(s.buildPending.paid ? 1 : 0); // paid → the site's ghost can never be the short one
   }
   if (s.orderQueue) w.u16(w.intern(JSON.stringify(s.orderQueue)));
   if (s.pendingCastCode !== null) w.u16(w.intern(s.pendingCastCode));
@@ -619,7 +620,7 @@ function readUnit(r: Reader): UnitSnapshot {
   const nGar = r.u8();
   for (let i = 0; i < nGar; i++) s.garrison.push(r.u32());
 
-  if (flags & F_HAS_BUILD_PENDING) s.buildPending = { defId: r.str(), x: r.f32(), y: r.f32() };
+  if (flags & F_HAS_BUILD_PENDING) s.buildPending = { defId: r.str(), x: r.f32(), y: r.f32(), paid: r.u8() !== 0 };
   if (flags & F_HAS_ORDER_QUEUE) s.orderQueue = JSON.parse(r.str());
   if (flags & F_HAS_PENDING_CAST) s.pendingCastCode = r.str();
 

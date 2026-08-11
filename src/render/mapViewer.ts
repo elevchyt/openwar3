@@ -3091,7 +3091,12 @@ export class MapViewerScene {
     // Feedback only, and deliberately duplicated (same contract as trainUnit): `execute`
     // decides, but it can't SAY anything, and a placement that fails on price is otherwise
     // a click that does nothing at all. The ghost stays on the cursor either way.
-    if (!this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
+    //
+    // A SHIFT-queued placement is exempt: it is not spending this instant's gold but the gold
+    // the next minute's mining will bring in, so it is queued whatever the stash says and
+    // priced when the worker gets there (`SimWorld.payPendingBuild`). What the player gets
+    // instead of a refusal is the silhouette itself, standing red until it can be afforded.
+    if (!queued && !this.canAfford(p.def.goldCost, p.def.lumberCost)) return;
     // Affordability, the charge and the order are all the authority's now — the renderer
     // used to charge the stash itself and post the price into the order (docs/multiplayer.md).
     if (!this.rts.execute(this.localPlayer, {
@@ -3147,6 +3152,13 @@ export class MapViewerScene {
       if (Math.hypot(w.x - pb.x, w.y - pb.y) >= 160 || w.moving) { this.buildWait.delete(w.id); continue; } // not there yet
       const def = this.registry.get(pb.defId);
       if (!def) { world.cancelPendingBuild(w.id); this.buildWait.delete(w.id); continue; }
+      // The worker is standing on the site, so this is the moment a shift-queued build is
+      // asked for its money (it was queued without being asked — see Authority's `build`).
+      // Short of it, the worker just waits: no refusal, no dropped order, and no countdown
+      // either — the site-clearing patience below is for ground, not for gold — because the
+      // next trip back from the mine may well pay for it. The player sees the wait as the
+      // site's red silhouette (updatePendingBuildGhosts).
+      if (!world.payPendingBuild(w.id)) { this.buildWait.delete(w.id); continue; }
       const fp = def.pathTex ? this.footprintFor(def.pathTex) : null;
       const occupants = fp ? this.footprintOccupants(fp, pb.x, pb.y, w.id) : [];
       if (occupants.length === 0) {
@@ -7258,13 +7270,24 @@ export class MapViewerScene {
    *  moment the order is given and vanishes the instant it clears (build starts, is
    *  canceled, or the worker is re-tasked). Only the owning player's sites are drawn.
    *
-   *  A site that CANNOT be built — its ground has gone, or an earlier ghost already holds
-   *  it — is drawn dark RED instead: a silhouette standing inside another silhouette is a
-   *  building that is never going to rise, and saying so where the player is looking beats
-   *  a refusal a minute later. First claim wins, so the ghost that turns red is the second
-   *  one placed. (Placing one there is refused up front — see `placementValid` — so this is
-   *  for the ones no click could catch: an order from another of your workers landing in the
-   *  same tick, or ground taken by an ally after you queued.) */
+   *  A site that CANNOT be built is drawn dark RED instead, for either of the two reasons a
+   *  queued building never rises:
+   *
+   *  • **Its ground has gone** — something went up on it, or an earlier ghost already holds it.
+   *    A silhouette standing inside another silhouette is a building that is never going to
+   *    rise, and saying so where the player is looking beats a refusal a minute later. First
+   *    claim wins, so the ghost that turns red is the second one placed. (Placing one there is
+   *    refused up front — see `placementValid` — so this is for the ones no click could catch:
+   *    an order from another of your workers landing in the same tick, or ground taken by an
+   *    ally after you queued.)
+   *  • **It isn't paid for** — a shift-queued build is charged when the worker reaches it, not
+   *    when it was queued, so the queue can hold more building than the player has gold for.
+   *    The unpaid sites are priced IN ORDER against the live stash, each one spending what the
+   *    ones ahead of it left, so a queue of five towers on three towers' gold reddens exactly
+   *    the last two. This one is not a verdict, unlike the ground: it is re-asked every frame,
+   *    so a red site goes back to dark blue the moment the mining catches up, and a blue one
+   *    reddens the moment the gold behind it is spent on something else.
+   */
   private updatePendingBuildGhosts(): void {
     if (!this.rts || !this.viewer.map) {
       this.clearPendingGhosts();
@@ -7275,7 +7298,11 @@ export class MapViewerScene {
     // and against the sites already claimed ahead of it.
     const desired = new Map<string, { defId: string; x: number; y: number; blocked: boolean }>();
     const claimed = new Set<number>();
-    const note = (defId: string, x: number, y: number): void => {
+    // What the still-unpaid sites have to come out of, drawn down as they are walked in order.
+    const stash = this.rts.stashFor(this.localPlayer);
+    let gold = stash.gold;
+    let lumber = stash.lumber;
+    const note = (defId: string, x: number, y: number, paid: boolean): void => {
       const key = this.pendingKey(defId, x, y);
       if (desired.has(key)) return; // one ghost per footprint, however many workers want it
       const def = this.registry.get(defId);
@@ -7288,12 +7315,17 @@ export class MapViewerScene {
         // A site that isn't going to be built claims nothing — it must not redden a third.
         if (!blocked) for (const c of cells) claimed.add(c);
       }
+      // A build already charged for owes the stash nothing and can never be the short one.
+      if (!blocked && !paid && def) {
+        if (gold < def.goldCost || lumber < def.lumberCost) blocked = true;
+        else { gold -= def.goldCost; lumber -= def.lumberCost; }
+      }
       desired.set(key, { defId, x, y, blocked });
     };
     for (const u of this.rts.simView.units.values()) {
       if (u.owner !== this.localPlayer) continue;
-      if (u.buildPending) note(u.buildPending.defId, u.buildPending.x, u.buildPending.y);
-      for (const o of u.orderQueue) if (o.kind === "buildnew") note(o.defId, o.x, o.y);
+      if (u.buildPending) note(u.buildPending.defId, u.buildPending.x, u.buildPending.y, u.buildPending.paid);
+      for (const o of u.orderQueue) if (o.kind === "buildnew") note(o.defId, o.x, o.y, o.paid);
     }
     // Drop ghosts whose site is no longer pending (order started/canceled/re-tasked).
     for (const [key, g] of this.pendingGhosts) {

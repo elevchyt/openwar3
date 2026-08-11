@@ -628,7 +628,11 @@ export type QueuedOrder =
   // ax/ay: optional distinct approach point around the node, so a group ordered
   // together fans over the mine's rim instead of all pathing to its centre.
   | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number; ax?: number; ay?: number }
-  | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number }
+  // `paid` is whether the cost has already left the stash. A build placed outright is paid at
+  // the click (the gold drops the instant you put the ghost down); a SHIFT-queued one is not —
+  // it is priced when its turn in the queue comes round, because a building queued behind two
+  // others is meant to be paid for out of the gold those two builds' worth of mining brings in.
+  | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number; paid: boolean }
   // ax/ay: as above, a distinct spot around the building's footprint to spread builders.
   | { kind: "buildresume"; buildingId: number; ax?: number; ay?: number }
   | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number };
@@ -977,9 +981,10 @@ export interface SimUnit {
   constructing: number; // building id this worker is constructing (0 = none)
   repair: RepairState | null; // active repair job (null = not repairing)
   orderQueue: QueuedOrder[]; // shift-queued follow-up orders (drained as each completes)
-  // Walking to raise a new building; gold/lumber are the already-spent cost,
-  // refunded if the build is abandoned before construction starts.
-  buildPending: { defId: string; x: number; y: number; gold: number; lumber: number } | null;
+  // Walking to raise a new building; gold/lumber are its cost, refunded if the build is
+  // abandoned before construction starts — but only once `paid` says the stash actually
+  // gave it up (see the QueuedOrder note: a queued build is priced when its turn comes).
+  buildPending: { defId: string; x: number; y: number; gold: number; lumber: number; paid: boolean } | null;
   // --- hero / abilities / buffs (spells slice) ---
   isHero: boolean;
   properName: string; // hero's drawn name ("Painkiller"); "" for non-heroes
@@ -4610,13 +4615,41 @@ export class SimWorld {
   /** Return an abandoned build's already-spent cost and drop the intent. Called
    *  whenever a `buildPending` worker is re-tasked, stopped, dies, or times out
    *  waiting for its site to clear — i.e. any path where the building never rises.
-   *  (A successful raise clears `buildPending` in assignBuilder, without refund.) */
+   *  (A successful raise clears `buildPending` in assignBuilder, without refund.)
+   *  An UNPAID one gets no refund, having never been charged: it is waiting at its
+   *  site for gold that never came (see `payPendingBuild`). */
   private refundPendingBuild(u: SimUnit): void {
     if (!u.buildPending) return;
-    const s = this.stashOf(u.owner);
-    s.gold += u.buildPending.gold;
-    s.lumber += u.buildPending.lumber;
+    if (u.buildPending.paid) {
+      const s = this.stashOf(u.owner);
+      s.gold += u.buildPending.gold;
+      s.lumber += u.buildPending.lumber;
+    }
     u.buildPending = null;
+  }
+
+  /**
+   * Charge a worker's pending build, if it hasn't been charged yet. Returns whether the
+   * building may now rise: true if it was already paid or the stash could cover it here,
+   * false if the player still can't afford it.
+   *
+   * This is where a SHIFT-queued build meets its price. The click that queued it asked
+   * nothing of the stash — the whole point of queueing five towers is that you are spending
+   * gold you have not mined yet — so the question is asked at the site instead, and asked
+   * again every tick until it is answered. A worker whose build cannot be paid for simply
+   * stands there waiting (its silhouette turns red, see updatePendingBuildGhosts); it is
+   * never dropped, because the gold may well arrive a few seconds later.
+   */
+  payPendingBuild(id: number): boolean {
+    const pb = this.units.get(id)?.buildPending;
+    if (!pb) return false;
+    if (pb.paid) return true;
+    const s = this.stashOf(this.units.get(id)!.owner);
+    if (s.gold < pb.gold || s.lumber < pb.lumber) return false;
+    s.gold -= pb.gold;
+    s.lumber -= pb.lumber;
+    pb.paid = true;
+    return true;
   }
 
   /** Public entry: abandon a worker's pending build and refund it (the renderer
@@ -4658,9 +4691,11 @@ export class SimWorld {
     for (let i = u.orderQueue.length - 1; i >= 0; i--) {
       const o = u.orderQueue[i];
       if (o.kind !== "buildnew" || !blocked(o.defId, o.x, o.y)) continue;
-      const s = this.stashOf(u.owner);
-      s.gold += o.gold;
-      s.lumber += o.lumber;
+      if (o.paid) { // an unpaid queued build never took the money, so there is none to give back
+        const s = this.stashOf(u.owner);
+        s.gold += o.gold;
+        s.lumber += o.lumber;
+      }
       u.orderQueue.splice(i, 1);
       dropped++;
     }
@@ -4670,11 +4705,15 @@ export class SimWorld {
   /** Send a worker to raise a NEW building at (x,y): it walks there and the
    *  renderer raises the foundation on arrival (watches `buildPending`). Used for
    *  immediate (non-shift) placement; the shift path queues a `buildnew` order.
-   *  gold/lumber are the already-spent cost, refunded if the build is abandoned. */
-  issueBuildNew(id: number, defId: string, x: number, y: number, gold: number, lumber: number): void {
+   *  gold/lumber are the cost; `paid` says whether it has already left the stash
+   *  (and so whether abandoning the build refunds anything). An unpaid one tries to
+   *  pay the moment it becomes the worker's live order — the gold drops as the worker
+   *  sets off, WC3-style — and if it can't, it tries again at the site. */
+  issueBuildNew(id: number, defId: string, x: number, y: number, gold: number, lumber: number, paid: boolean): void {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return;
-    u.buildPending = { defId, x, y, gold, lumber };
+    u.buildPending = { defId, x, y, gold, lumber, paid };
+    if (!paid) this.payPendingBuild(id);
     if (!this.issueMove(id, x, y)) u.moving = false; // already at the site → raise now
   }
 
@@ -4726,7 +4765,7 @@ export class SimWorld {
       case "harvest": return this.issueHarvest(id, o.res, o.nodeId, o.ax, o.ay);
       case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
-      case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber); return true;
+      case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
     }
   }
 

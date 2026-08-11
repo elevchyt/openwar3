@@ -113,7 +113,7 @@ const hero = () => ({
   garrison: [1201, 1202], garrisonCap: 4,
   isSummon: true, summonLeft: 40.5, summonMax: 60, isIllusion: true, illusionOf: 1040,
   guardX: -300, guardY: 250,
-  buildPending: { defId: "obar", x: -1216, y: 896 },
+  buildPending: { defId: "obar", x: -1216, y: 896, paid: false }, // unpaid: a shift-queued site, priced on arrival
   orderQueue: [{ kind: "move", x: 10, y: 20 }, { kind: "attack", targetId: 9, force: true }],
   pendingCastCode: "AOsh",
 });

@@ -450,15 +450,29 @@ export class Authority {
         // wire, and until now nothing downstream asked.
         if (!this.tech.builds(worker.typeId).includes(cmd.defId)) return false;
         if (!this.sim.canMake(player, cmd.defId, 0)) return false;
+        // A build placed OUTRIGHT must be paid for now — WC3 never lets you put a structure
+        // down you cannot afford, and the gold leaves the stash at the click.
+        //
+        // A SHIFT-queued one is deliberately not asked the question here. Queueing five towers
+        // is a statement about the next minute, not about this instant: the gold for the fourth
+        // is meant to come out of the mining that happens while the first three go up, so
+        // refusing the order for a stash that will have long since refilled by the time the
+        // worker walks over is refusing it on the wrong evidence. The price is asked instead
+        // when the order becomes the worker's live one and again at the site
+        // (`SimWorld.payPendingBuild`), and until it can be met the queued silhouette stands
+        // red on the ground rather than dark blue (see `updatePendingBuildGhosts`).
         const stash = this.sim.stashOf(player);
-        if (stash.gold < def.goldCost || stash.lumber < def.lumberCost) return false;
-        stash.gold -= def.goldCost;
-        stash.lumber -= def.lumberCost;
-        // The cost rides on the order so the sim can refund it if the build is abandoned
-        // before it starts — but it is OUR figure now, not one the caller handed us.
+        const paid = !cmd.queued;
+        if (paid) {
+          if (stash.gold < def.goldCost || stash.lumber < def.lumberCost) return false;
+          stash.gold -= def.goldCost;
+          stash.lumber -= def.lumberCost;
+        }
+        // The cost rides on the order so the sim can charge it when its turn comes and refund
+        // it if the build is abandoned — but it is OUR figure now, not one the caller handed us.
         return this.applyOrder(player, cmd.unitId, {
           kind: "buildnew", defId: cmd.defId, x: cmd.x, y: cmd.y,
-          gold: def.goldCost, lumber: def.lumberCost,
+          gold: def.goldCost, lumber: def.lumberCost, paid,
         }, cmd.queued);
       }
       case "repair": {
