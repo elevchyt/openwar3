@@ -2912,7 +2912,21 @@ export class RtsController {
               : w && w.carryLumber > 0 && e.anims.attackLumber.length
                 ? e.anims.attackLumber
                 : e.anims.attackVariants;
-        if (u.swingSeq !== e.lastSwingSeq || !vs.includes(e.curSeq)) {
+        // A model whose "attack" IS its stand clip: the Human towers author ONE sequence
+        // apiece that covers both ("Stand Ready Attack", "Stand Upgrade Third Attack Ready"),
+        // so `anims.attack` and `anims.stand` land on the same index. Re-triggering that per
+        // swing plays it once under ModelDefined and holds the last frame — the Arcane Tower
+        // freezing mid-attack. There is no swing gesture to keep in phase here, so the clip
+        // simply keeps looping the way it does when the tower is idle.
+        const standAttack = vs.length === 1 && e.anims.standVariants.includes(vs[0]);
+        if (standAttack) {
+          if (e.curSeq !== vs[0]) {
+            e.curSeq = vs[0];
+            e.unit.state = WidgetState.WALK;
+            e.unit.instance.setSequence(vs[0]);
+            e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
+          }
+        } else if (u.swingSeq !== e.lastSwingSeq || !vs.includes(e.curSeq)) {
           e.lastSwingSeq = u.swingSeq;
           const pick = vs.length > 1 ? vs[(Math.random() * vs.length) | 0] : (vs[0] ?? e.anims.attack);
           e.curSeq = pick;
@@ -3623,6 +3637,10 @@ export class RtsController {
             this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
             return true;
           }
+          // Nobody took it. A TOWER is the case that has something to say about why (see
+          // refuseAttackTarget); the order stays armed for another click, the way a refused
+          // cast does. Anything else falls through to the attack-move below.
+          if (this.refuseAttackTarget(picked)) return false;
         }
       }
       // Nothing under the cursor: attack-MOVE to the ground point (below).
@@ -3817,6 +3835,22 @@ export class RtsController {
    *  aim properly, and only Escape/right-click disarms. */
   private refuseOrder(errorKey: string): boolean {
     this.onRefuse?.(errorKey);
+    return false;
+  }
+
+  /** Say why an attack order nobody took was refused, when the sim has a line for it. The
+   *  one that exists today is the TOWER's: it cannot walk to what you pointed at, so a target
+   *  outside its range answers "Target is outside range." rather than eating the click. Only
+   *  consulted once the order has already failed for everyone, so a mixed selection that DID
+   *  attack never hears it. Returns whether something was said. */
+  private refuseAttackTarget(targetId: number): boolean {
+    for (const id of this.selected) {
+      const err = this.sim.attackRefusal(id, targetId);
+      if (err) {
+        this.refuseOrder(err);
+        return true;
+      }
+    }
     return false;
   }
 
@@ -5261,6 +5295,7 @@ export class RtsController {
             this.flashRing(target.x, target.y, selR, FLASH_RED, false, lift);
             return;
           }
+          if (this.refuseAttackTarget(picked)) return; // a tower, pointed past its range
         } else if (target.targetKey) {
           // A DESTRUCTIBLE: right-clicking a gate or a crate attacks it. It is never hostile
           // (neutral-passive is what keeps anything from auto-acquiring it), so the order is

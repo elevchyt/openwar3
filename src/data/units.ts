@@ -62,6 +62,25 @@ export interface WeaponSlotDef {
   spillDist: number;
   spillRadius: number;
   damageLoss: number; // fraction of damage shed per further unit down the line
+  /**
+   * AREA splash — `Farea`/`Harea`/`Qarea` (the Object Editor's "Area of Effect (Full/Medium/
+   * Small Damage)"), the three concentric rings an ARTILLERY shot lands in: full damage inside
+   * `areaFull`, half out to `areaHalf`, a quarter out to `areaQuarter`. The Cannon Tower is
+   * 50/100/125, the Demolisher 25/50/150, the Mortar Team 25/100/200. 0 = a single-target hit.
+   */
+  areaFull: number;
+  areaHalf: number;
+  areaQuarter: number;
+  splashTargets: string[]; // `splashTargs` — what the AREA may catch (vs `targets`, what it may aim at)
+  /**
+   * `showUI` — "Attack N - Show UI". Whether this attack gets an ATTACK COMMAND on the card.
+   *
+   * This is what separates a tower from a town hall: every tower, and the Orc Burrow, ships
+   * `showUI1=1` and can be told what to shoot; the fourteen rows that ship 0 are the Undead
+   * halls (Necropolis / Halls of the Dead / Black Citadel) and the Night Elf Ancients — armed
+   * buildings whose attack is not yours to aim. See mapViewer's building command card.
+   */
+  showUI: boolean;
 }
 
 export interface UnitDef {
@@ -562,6 +581,13 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       spillDist: num(w, `spillDist${n}`, 0),
       spillRadius: num(w, `spillRadius${n}`, 0),
       damageLoss: num(w, `damageLoss${n}`, 0),
+      areaFull: num(w, `Farea${n}`, 0),
+      areaHalf: num(w, `Harea${n}`, 0),
+      areaQuarter: num(w, `Qarea${n}`, 0),
+      splashTargets: list(str(w, `splashTargs${n}`)),
+      // The column is missing on a custom row that never thought about it; an attack that
+      // exists is one you can aim, so "not stated" reads as shown — only an explicit 0 hides it.
+      showUI: num(w, `showUI${n}`, 1) !== 0,
     });
   }
   return out;

@@ -6558,10 +6558,26 @@ export class MapViewerScene {
       this.pushResearchButtons(sel, out); // upgrades it researches (Blacksmith, Lumber Mill…)
       this.pushBuildingUpgradeButtons(sel, out); // what it can become (Town Hall → Keep)
 
+      const su = world.units.get(sel.id);
+      // The ATTACK command. An armed building is told what to shoot exactly as a unit is —
+      // that is how you point a Guard Tower at the Ziggurat instead of at the Ghoul in front
+      // of it — and which armed buildings get the button is the data's own call: UnitWeapons
+      // `showUI`. Every tower and the Orc Burrow ship showUI1=1; the fourteen rows that ship 0
+      // are the Undead halls (Necropolis / Halls of the Dead / Black Citadel) and the Night
+      // Elf Ancients, whose attack is not yours to aim. An EMPTY Orc Burrow has no button at
+      // all, because it has no attack: recomputeStats switches its arrow slot off until a peon
+      // is inside it. Not for a shop you merely trade with — that is not your building.
+      // A tower cannot walk, so an out-of-range target is refused at the click with the game's
+      // own "Target is outside range." (SimWorld.issueAttack → [Errors] Notinrange).
+      if (!foreignShop && su?.weapons.some((w) => w.enabled && w.showUI)) {
+        out.push(this.cmd({
+          id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A",
+          desc: "Attacks a target unit.", col: 3, row: 0, active: this.activeCommandId() === "attack",
+        }));
+      }
       // Orc Burrow garrison (UnitAbilities.slk otrb: Abtl Battle Stations + Astd Stand Down).
       // Battle Stations pulls nearby peons in; Stand Down (shown once occupied) sends them
       // back to work. Icons/hotkeys/slots are the ability data's own (OrcAbilityFunc/Strings).
-      const su = world.units.get(sel.id);
       if (su && su.garrisonCap > 0 && (!su.building || su.building.constructionLeft <= 0)) {
         out.push(this.cmd({ id: "battlestations", icon: btnIcon("BTNBattleStations"), name: "Battle Stations", hotkey: "B", desc: "Causes nearby Peons to run into the Burrow so that they can defend their base.", col: 0, row: 2 }));
         if (su.garrison.length > 0)
@@ -6578,6 +6594,12 @@ export class MapViewerScene {
         out.push(this.cmd({ id: "rally", icon: btnIcon(rallyIcon), name: "Set Rally Point", hotkey: "Y", desc: "Sets where newly-trained units gather.", col: 3, row: 1 }));
       }
       if (sel.queueLength) out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel the last item in the queue.", col: 3, row: 2 }));
+      // …and the abilities the building's own UnitAbilities row gives it, at the slots their
+      // `Buttonpos` asks for — which is where the Arcane Tower's Feedback (`Afbt`, 3,2) and
+      // Magic Sentry (`Adts`, 2,1) live, and the Nerubian Tower's Frost Attack (`Afra`, 0,2).
+      // Same call the mobile card makes, so an upgrade-gated one (`[Adts] Requires=Rhse`) only
+      // appears once that research lands, exactly as it does on a unit.
+      if (!foreignShop) this.pushAbilityButtons(sel, out);
       return out;
     }
 

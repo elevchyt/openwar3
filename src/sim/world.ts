@@ -19,7 +19,7 @@ import {
   pickOrb,
   type OrbCandidate,
 } from "./orbs";
-import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, isRangedWeapon } from "../data/enums";
+import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon } from "../data/enums";
 import {
   MISC_DATA,
   MISC_GAME,
@@ -77,6 +77,16 @@ export interface SimWeapon {
   baseSpillDist: number; // pre-upgrade (`rasd`/`rasr` add to these, as Long Rifles adds to range)
   baseSpillRadius: number;
   damageLoss: number;
+  /** AREA splash — the three concentric rings an ARTILLERY shot lands in (`Farea`/`Harea`/
+   *  `Qarea`; see WeaponSlotDef). Nonzero only on the siege weapons: Cannon Tower, Demolisher,
+   *  Mortar Team, Glaive Thrower. See spawnProjectile / applyAreaSplash. */
+  areaFull: number;
+  areaHalf: number;
+  areaQuarter: number;
+  splashTargets: string[]; // `splashTargs` — what the area may catch
+  /** `weapTp` — artillery shots fly at the GROUND, everything else homes (see spawnProjectile). */
+  weaponType: WeaponType;
+  showUI: boolean; // `showUI` — does this attack get an Attack command on the card
   acquire: number; // auto-acquisition range (0 = never auto-attacks)
   ranged: boolean; // fires a travelling projectile instead of hitting instantly
   missileArt: string; // projectile model path (renderer), "" = invisible
@@ -114,6 +124,14 @@ export interface SimProjectile {
    *  flight. `ox`/`oy` is the launch point — the line's direction is impact-minus-launch,
    *  and the spill runs on PAST the target from there. See applySpill. */
   spill?: { dist: number; radius: number; loss: number; ox: number; oy: number };
+  /**
+   * An ARTILLERY shot: it is thrown at the GROUND, not at a unit. `aimX`/`aimY` is where the
+   * target stood at the loosing, and the shell flies there whatever the target does next —
+   * which is why a Demolisher, a Mortar Team and a Cannon Tower can all be dodged by walking
+   * out of the way, while a Guard Tower's homing arrow cannot. On arrival it damages
+   * everything in its rings rather than the one unit it was aimed at (see applyAreaSplash).
+   */
+  area?: { aimX: number; aimY: number; full: number; half: number; quarter: number; targets: string[] };
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
   // instead of dealing plain `damage` — the base code + rank to dispatch.
   spell?: { code: string; rank: number; abilityId: string };
@@ -187,6 +205,12 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       baseSpillDist: s.spillDist,
       baseSpillRadius: s.spillRadius,
       damageLoss: s.damageLoss,
+      areaFull: s.areaFull,
+      areaHalf: s.areaHalf,
+      areaQuarter: s.areaQuarter,
+      splashTargets: s.splashTargets,
+      weaponType: s.weaponType,
+      showUI: s.showUI,
       // `acquire`, and the launch/impact offsets, are UNIT columns — not per-weapon ones.
       acquire: def.acquireRange,
       ranged,
@@ -1114,6 +1138,16 @@ export interface SimUnit {
    * at exactly those ships when it is time.
    */
   guarding: boolean;
+  /**
+   * This post was planted by the unit's OWN auto-acquisition (tickAcquire), not by the map.
+   *
+   * `MiscGame.txt` writes the leash for a unit in general — "After a unit has strayed
+   * 'GuardDistance' from where it started, that unit begins thinking about heading back to
+   * its start position" — and only its `MaxGuardDistance` sentence says "creep". So a player's
+   * unit that picks a fight for itself gets the first rule and not the second: it comes back
+   * from a chase it was never told to make, but nothing drags it out of a fight it is losing.
+   */
+  guardAuto: boolean;
   guardX: number; // guard ("home") position — where it was placed; it leashes back here
   guardY: number;
   guardFacing: number; // facing to restore once it has returned home
@@ -3405,6 +3439,7 @@ export class SimWorld {
       | "incinerate"
       | "isCreep"
       | "guarding"
+      | "guardAuto"
       | "guardX"
       | "guardY"
       | "guardFacing"
@@ -3601,6 +3636,7 @@ export class SimWorld {
       // the guard point / aggro range / sleep flag for Neutral Hostile units.
       isCreep: false,
       guarding: false,
+      guardAuto: false,
       guardX: unit.x,
       guardY: unit.y,
       guardFacing: unit.facing,
@@ -4193,6 +4229,7 @@ export class SimWorld {
   issueMove(id: number, tx: number, ty: number, targetId = 0): boolean {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
+    if (!this.canPursue(u)) return false; // a building goes nowhere — and must not sit on a "move" order
     const target = targetId ? this.units.get(targetId) : undefined;
     const approach = target && target.id !== id ? this.approachExtent(target) : undefined;
     this.clearGuardPost(u);
@@ -4256,6 +4293,10 @@ export class SimWorld {
   issueAttackMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
+    // A tower cannot advance on anything, so an attack-move is not an order it can hold: it
+    // would stand there on an "attackmove" it can never finish. Its own auto-acquisition is
+    // already the whole of what a stationary attacker does.
+    if (!this.canPursue(u)) return false;
     this.clearGuardPost(u);
     u.order = "attackmove";
     u.targetId = null;
@@ -4278,6 +4319,7 @@ export class SimWorld {
   issuePatrol(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
     if (!u || this.castLocked(u)) return false;
+    if (!this.canPursue(u)) return false; // nothing to patrol between when you cannot walk
     this.clearGuardPost(u);
     u.order = "patrol";
     u.targetId = null;
@@ -4332,6 +4374,13 @@ export class SimWorld {
     if (!this.canAttack(u, t)) return false;
     if (this.castLocked(u)) return false; // mid-wind-up: only Stop breaks a cast
     if (t.invulnerable) return false; // invulnerable units can't be attacked at all — not even with a forced Attack order (issue #26)
+    // A TOWER cannot walk to what you point it at. An ordered attack on something outside its
+    // weapon range is therefore not an order it can ever carry out, and WC3 refuses it on the
+    // spot — commandstrings.txt [Errors] `Notinrange` = "Target is outside range.", which is
+    // what the caller says out loud. Only the ORDERED form: auto-acquisition already only
+    // reaches as far as `acquire`, and a tower whose acquire outruns its range (the Spirit
+    // Tower's 900 against 700) should still lock on and wait for the target to close.
+    if (ordered && !this.canPursue(u) && !this.inWeaponRange(u, t)) return false;
     // An ORDERED attack is a command: this unit has a job now, not a post (see clearGuardPost).
     // An AUTO-acquired one is not, which is the whole point of the leash.
     if (ordered) this.clearGuardPost(u);
@@ -4359,6 +4408,35 @@ export class SimWorld {
     // its place (no per-hit re-shuffle).
     this.setAttackSlot(u, t);
     return true;
+  }
+
+  /**
+   * Why an ORDERED attack on `targetId` would be refused, as a `commandstrings.txt [Errors]`
+   * key — or null if it would be taken. Only the refusal a player can do something about: a
+   * tower cannot walk to what you point it at, so a target outside its weapon range answers
+   * "Target is outside range." rather than silently eating the click. Mirrors castRefusal /
+   * itemUseError, which is where the rest of the card's refusals come from.
+   */
+  attackRefusal(id: number, targetId: number): string | null {
+    const u = this.units.get(id);
+    const t = this.units.get(targetId);
+    if (!u || !t || !u.weapon || this.canPursue(u)) return null;
+    return this.inWeaponRange(u, t) ? null : "Notinrange";
+  }
+
+  /** Can this unit walk to a fight at all? A structure (and anything else the data gives no
+   *  move speed) cannot: it shoots what comes to it. Read off `baseSpeed` rather than the live
+   *  `speed` so a unit merely slowed to a crawl still counts as mobile. */
+  private canPursue(u: SimUnit): boolean {
+    return u.baseSpeed > 0;
+  }
+
+  /** Is `t` inside the weapon `u` would answer it with — hull to hull, as every range in the
+   *  sim is measured. False when nothing in the loadout may strike it at all. */
+  private inWeaponRange(u: SimUnit, t: SimUnit): boolean {
+    const w = this.weaponVs(u, t);
+    if (!w) return false;
+    return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius <= w.range;
   }
 
   /** Assign `u` a fan-out slot for target `t` (once per target). Melee units get a
@@ -5111,10 +5189,7 @@ export class SimWorld {
       // No Targets Allowed data at all (a summon or custom unit with no weapons row) → treat
       // the weapon as unrestricted rather than silently disarming the unit.
       if (!w.targets.length) return w;
-      // A destructible answers to its OWN class (targType) rather than to one of the three
-      // a unit derives — a gate is `debris`, not a "structure".
-      const key = t.targetKey || (t.building ? "structure" : t.flying ? "air" : "ground");
-      if (w.targets.includes(key)) return w;
+      if (w.targets.includes(targetKeyOf(t))) return w;
     }
     return null;
   }
@@ -8225,6 +8300,14 @@ export class SimWorld {
     const chaseGap = u.inCombat || !u.moving ? w.range + ATTACK_LEASH : w.range;
     if (gap > chaseGap) {
       u.inCombat = false;
+      // A tower cannot follow. Whatever it was shooting at has left, so the order is over and
+      // it goes back to watching its ground — otherwise an ordered target that walks away
+      // blinds the tower for good: it would hold an "attack" order on something it can never
+      // reach while enemies walked past underneath it.
+      if (!this.canPursue(u)) {
+        this.stop(u.id);
+        return;
+      }
       if (noChase) {
         this.settle(u); // Hold Position: attack in range only, never step forward
         return;
@@ -8618,6 +8701,14 @@ export class SimWorld {
       spill: w.spillDist > 0 && w.spillRadius > 0
         ? { dist: w.spillDist, radius: w.spillRadius, loss: w.damageLoss, ox: lx, oy: ly }
         : undefined,
+      // An ARTILLERY slot throws its shell at the ground the target is standing on RIGHT NOW
+      // and forgets about the target (see SimProjectile.area). Keyed on the weapon type the
+      // data states rather than on "has an area", because those are two different claims and
+      // only `weapTp` is the one the engine sorts missiles by: the Cannon Tower's slot 1 is
+      // `artillery` with 50/100/125 rings, its slot 2 is a plain homing `missile` at buildings.
+      area: w.weaponType === WeaponType.Artillery || w.weaponType === WeaponType.ArtilleryLine
+        ? { aimX: t.x, aimY: t.y, full: w.areaFull, half: w.areaHalf, quarter: w.areaQuarter, targets: w.splashTargets }
+        : undefined,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -8673,6 +8764,12 @@ export class SimWorld {
    *  arrival, and fizzle harmlessly if the target died before impact. */
   private tickProjectiles(dt: number): void {
     for (const p of this.projectiles.values()) {
+      // An artillery shell is aimed at GROUND: it keeps flying (and still lands) whether or
+      // not the unit it was thrown at is alive, or still there. See SimProjectile.area.
+      if (p.area) {
+        this.tickAreaProjectile(p, dt);
+        continue;
+      }
       const t = this.units.get(p.targetId);
       if (!t) {
         this.removeProjectile(p.id);
@@ -8711,6 +8808,65 @@ export class SimWorld {
         p.z = p.startZ + (p.impactZ - p.startZ) * prog;
       }
     }
+  }
+
+  /** Fly an ARTILLERY shell to the spot it was thrown at and burst there. Same straight-line
+   *  flight as a homing missile, but the destination is a fixed point rather than a unit, so
+   *  the target can simply walk out from under it. */
+  private tickAreaProjectile(p: SimProjectile, dt: number): void {
+    const a = p.area!;
+    const dx = a.aimX - p.x;
+    const dy = a.aimY - p.y;
+    const dist = Math.hypot(dx, dy);
+    const step = p.speed * dt;
+    if (dist > step) {
+      p.x += (dx / dist) * step;
+      p.y += (dy / dist) * step;
+      const prog = p.startDist > 1 ? Math.max(0, Math.min(1, (p.startDist - dist) / p.startDist)) : 1;
+      p.z = p.startZ + (p.impactZ - p.startZ) * prog;
+      return;
+    }
+    p.x = a.aimX;
+    p.y = a.aimY;
+    this.projectileImpacts.push({ id: p.id, x: a.aimX, y: a.aimY, z: p.impactZ });
+    this.applyAreaSplash(p);
+    this.removeProjectile(p.id);
+  }
+
+  /**
+   * The burst: full damage inside `Farea`, half out to `Harea`, a quarter out to `Qarea`
+   * (the three "Area of Effect (Full/Medium/Small Damage)" rings the SLK carries per weapon
+   * slot). Distance is measured to the unit's HULL, as every other range in the sim is, so a
+   * big building standing at the edge is still caught by the ring its edge is in.
+   *
+   * Who it may catch is `splashTargs` — a list distinct from `targs`, and pointedly narrower:
+   * the Cannon Tower may AIM at `ground,debris,tree,wall,ward,item` but its burst is
+   * `ground,structure,debris,tree,wall,notself`, which is how a shell aimed at a footman also
+   * knocks the wall behind him down. Restricted to hostiles on top of that, which is the same
+   * call applySpill already makes and for the same reason: the one splash list in the data
+   * that names an allegiance at all (the Gryphon's `enemy`) names that one.
+   */
+  private applyAreaSplash(p: SimProjectile): void {
+    const a = p.area!;
+    const source = this.units.get(p.sourceId);
+    const outer = Math.max(a.quarter, a.half, a.full);
+    if (outer <= 0) return; // an artillery row with no rings — nothing to burst
+    let nearest: SimUnit | undefined; // for an `aline` shot, whoever the line starts at
+    for (const t of this.units.values()) {
+      if (t.hp <= 0 || t.invulnerable) continue;
+      if (t.id === p.sourceId) continue; // `notself`
+      if (!source || !this.hostile(source, t)) continue;
+      if (a.targets.length && !a.targets.includes(targetKeyOf(t))) continue;
+      const gap = Math.hypot(t.x - a.aimX, t.y - a.aimY) - t.radius;
+      const frac = gap <= a.full ? 1 : gap <= a.half ? 0.5 : gap <= a.quarter ? 0.25 : 0;
+      if (frac <= 0) continue;
+      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None);
+      if (source) this.applyPillage(source, t, dealt); // a Demolisher with Pillage loots what it shells
+      if (frac === 1 && !nearest) nearest = t;
+    }
+    // Artillery (Line) — the Glaive Thrower — is BOTH: it bursts, and with Impaling Bolt
+    // researched the bolt carries on down the line from whoever it hit (see applySpill).
+    if (p.spill && nearest) this.applySpill(p, nearest);
   }
 
   private removeProjectile(id: number): void {
@@ -10976,6 +11132,10 @@ export class SimWorld {
       ? this.bestCreepTarget(u, range)
       : this.acquireTarget(u, range) ?? this.assistTarget(u, ASSIST_RANGE);
     if (best) {
+      // A fight it chose for itself is leashed to where it stands (see setAutoGuardPost).
+      // Only from IDLE: an attack-move or a patrol already has somewhere to be, and planting
+      // a post under one would have the unit walk "home" instead of resuming its route.
+      if (!u.isCreep && u.order === "idle") this.setAutoGuardPost(u);
       this.issueAttack(u.id, best.id);
       if (u.isCreep) {
         u.campHelper = false; // saw it with its own eyes, inside its own aggro range
@@ -11211,7 +11371,10 @@ export class SimWorld {
       return false;
     }
     const dist = Math.hypot(u.x - u.guardX, u.y - u.guardY);
-    if (dist >= MAX_GUARD_DISTANCE) {
+    // "If a CREEP goes beyond 'MaxGuardDistance' then it always returns home regardless of
+    // who's attacking it" — the one sentence in MiscGame.txt that names creeps, so it holds
+    // for the map's own units and not for a player's unit on a post it planted itself.
+    if (dist >= MAX_GUARD_DISTANCE && !u.guardAuto) {
       this.beginCreepReturn(u);
       return true;
     }
@@ -11233,8 +11396,34 @@ export class SimWorld {
   private clearGuardPost(u: SimUnit): void {
     if (!u.guarding) return;
     u.guarding = false;
+    u.guardAuto = false;
     u.returning = false;
     u.strayT = 0;
+  }
+
+  /**
+   * Plant the post a self-started fight is leashed to: where the unit is STANDING as it
+   * decides, by itself, to go and fight something (see SimUnit.guardAuto).
+   *
+   * This is the half of WC3's aggro model that the sim was missing, and the bug it caused is
+   * the one worth stating: pull a hero back out of a creep camp and stand him somewhere, and
+   * the moment anything wandered into his 600-unit acquisition range he would set off after
+   * it — and then after the next thing from wherever THAT ended, ratcheting back into the camp
+   * he was just pulled out of. A unit fighting on its own account now has somewhere to be, so
+   * the chase ends and it walks back to the spot the player left it on.
+   *
+   * A unit that already holds a post (a map-placed creep or AI unit) keeps its own — the map's
+   * ground outranks wherever this particular fight started.
+   */
+  private setAutoGuardPost(u: SimUnit): void {
+    if (u.guarding) return;
+    u.guarding = true;
+    u.guardAuto = true;
+    u.guardX = u.x;
+    u.guardY = u.y;
+    u.guardFacing = u.facing;
+    u.strayT = 0;
+    u.returning = false;
   }
 
   /** Begin leashing a creep back to its guard point. */
@@ -12100,6 +12289,15 @@ function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, n
 }
 
 // Angular speed in rad/sec from a unit's UnitData turnrate (WC3 semantics).
+/** Which "Targets Allowed" class a target answers to. WC3 sorts by what the thing IS
+ *  (allegiance is the caller's business, via hostile()): a flyer is `air`, a structure is
+ *  `structure`, everything else is `ground` — and a DESTRUCTIBLE carries its own class in
+ *  `targType` (a gate is `debris`, never a "structure"). Shared by the weapon-slot pick and
+ *  by an artillery burst's `splashTargs` list. */
+function targetKeyOf(t: SimUnit): string {
+  return t.targetKey || (t.building ? "structure" : t.flying ? "air" : "ground");
+}
+
 function turnSpeed(turnRate: number): number {
   return Math.min(turnRate, TURN_RATE_CAP) / TURN_FRAME;
 }
