@@ -259,6 +259,8 @@ console.log("Root is a PLACEMENT — the Ancient walks to the spot and settles t
   world.recomputeStats(u);
   check("planted, it will not take a root order", world.issueRootAt(70, 2600, 2000) === false);
   check("uprooting is instant", world.toggleRoot(u) === true && u.uprooted === true);
+  check("…but it is locked for the 2.5s transition", u.morphT > 0 && world.issueRootAt(70, 2600, 2000) === false, `${u.morphT}`);
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05); // let the morph finish
   const site = world.grid.snapForBuildingRect(2600, 2000, 12, 12);
   check("…and then it takes one", world.issueRootAt(70, site[0], site[1]) === true);
   check("…which is a WALK, not a plant on the spot", u.uprooted === true && Math.abs(u.x - 2000) < 40, `${Math.round(u.x)}`);
@@ -282,6 +284,7 @@ console.log("…and any other order calls the plant off");
   u.baseSpeed = 40;
   world.recomputeStats(u);
   world.toggleRoot(u);
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05); // the transition, then it takes orders
   world.issueRootAt(71, 2600, 2000);
   check("the order is held", !!u.rootPending);
   world.issueOrder(71, { kind: "move", x: 1600, y: 2000 });

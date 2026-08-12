@@ -247,6 +247,25 @@ A toggle shows what it can do NEXT, so a PLANTED Ancient wears the `un` half (BT
 (`AbilityDef.unIcon`/`unTip`/…) — every Order/Unorder pair carries them, and so does every
 autocast toggle's on/off art.
 
+**The transition takes 2.5 seconds and the Ancient is neither thing for them.** `Aroo`'s own
+`Dur1` says so and the models author the pair of clips for it. The stance flips at once —
+everything derived from `uprooted` (the live weapon slot, the walk speed, which half of the
+model shows) has to be consistent from one instant — and the unit is then LOCKED for the
+clip's own length: `SimUnit.morphT` counts it down, `castLocked` refuses orders through it and
+`recomputeStats` zeroes the speed. Without the lock a just-uprooted Ancient slid across the
+ground through its own morph, and a planting one was a building before it had sat down.
+
+**A planted Ancient with anything in its queue cannot pull itself up at all.** WC3 greys Uproot
+out for as long as it is training or researching, and `SimWorld.rootRefusal` is the one place
+that says so — the card reads it to grey the button and `toggleRoot` reads it before it acts,
+so the two can never disagree. (It is the mirror of "a walking Ancient's queue is halted rather
+than cancelled": the halt only has to cover work that was already under way.)
+
+**And it settles square.** A building has ONE facing in WC3 (`bj_UNIT_FACING`, 270°), so an
+Ancient that plants keeps nothing of the direction it happened to be walking in: it turns back
+to `SimUnit.builtFacing`, the angle it was RAISED at. Per unit rather than a constant, because
+a map may place a building at any angle and that is the angle it should return to.
+
 **…and the two directions are not the same GESTURE.** Uproot is instant: the Ancient hauls
 itself up where it stands. **Root is a placement** — pressing it hands the player exactly what
 a worker's Build button hands them, the finished building's silhouette riding the cursor over

@@ -7075,6 +7075,11 @@ export class MapViewerScene {
       // Unart=BTNUproot "Uproot") — so a PLANTED Ancient wears the `un` half, because
       // pulling itself up is the move available to it. See AbilityDef.unIcon.
       const reversed = ab.code === "Aroo" && !su.uprooted && !!def.unIcon;
+      // …and a planted Ancient with anything in its queue cannot pull itself up at all: WC3
+      // greys Uproot out for as long as it is training or researching, because the work would
+      // have nowhere to go. The sim refuses it too (SimWorld.rootRefusal) — this is the half
+      // that SHOWS it, so the button reads as unpressable instead of silently doing nothing.
+      const rootBlocked = ab.code === "Aroo" && this.rts.simView.rootRefusal(su) !== null;
       const col = reversed ? def.unButtonX : def.buttonX; // the ability's real WC3 card slot
       const row = reversed ? def.unButtonY : def.buttonY;
       const passive = def.target === "passive";
@@ -7125,7 +7130,7 @@ export class MapViewerScene {
         // Silence IS unavailable, and it is the only thing here that is: the button goes
         // inert and wears the DIS* art with no frame, so a silenced spellbook reads as
         // unpressable at a glance.
-        disabled: muted,
+        disabled: muted || rootBlocked,
         passive,
         // The green border marks the spell the unit is casting (or has armed) right
         // now — it is NOT the autocast toggle, which is a persistent setting and

@@ -46,6 +46,11 @@ export interface SimView {
   abilityLevelOf(unitId: number, abilityId: string): number;
   shopStock(shopId: number, wareId: string): number;
 
+  /** Why this Ancient may not change stance right now (a commandstrings [Errors] key), or
+   *  null. A READ: the command card asks it to grey the Root/Uproot button, and the sim asks
+   *  the same question before it acts, so the button and the rule can never disagree. */
+  rootRefusal(u: SimUnit): string | null;
+
   waygateIsActive(id: number): boolean;
   waygateDestination(id: number): { x: number; y: number } | null;
 }

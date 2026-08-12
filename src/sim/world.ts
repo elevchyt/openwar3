@@ -656,6 +656,10 @@ export type QueuedOrder =
   // move with a promise, the same shape as `drink` — see SimUnit.rootPending.
   | { kind: "rootat"; x: number; y: number };
 
+/** Fallback length of a root/unroot transition, seconds — `Aroo`'s own `Dur1` when the data is
+ *  there (2.5), which is also what Liquipedia lists as Root/Uproot's "Animation Duration". */
+const ROOT_MORPH_TIME = 2.5;
+
 /** How close an Ancient must stop to the spot it was told to plant on before it settles there
  *  (`{kind:"rootat"}`), on top of its own collision radius.
  *
@@ -1153,6 +1157,24 @@ export interface SimUnit {
    *  Tree does NOT release it — an Entangled Gold Mine is its own building with its own 800
    *  hit points, and knocking it down is a separate job.) */
   entangler: number;
+  /** Seconds left of a root/unroot transition (`Aroo` `Dur1` = 2.5), or 0.
+   *
+   *  An Ancient is neither thing while it hauls its roots up or settles them back down, and
+   *  the models author the pair of clips that says so. So the stance flips at once (everything
+   *  derived from `uprooted` has to be consistent from the same instant) and the unit is then
+   *  LOCKED for the animation's own length: it takes no orders (`castLocked`) and it does not
+   *  move (`recomputeStats` zeroes the speed). Without it a walking Ancient slid across the
+   *  ground mid-morph, and a planting one was already a building before it had sat down. */
+  morphT: number;
+  /** The facing a building was RAISED with, in radians — what an Ancient turns back to when it
+   *  plants itself again.
+   *
+   *  WC3 gives every structure one facing (`bj_UNIT_FACING` = 270°), and a re-rooted Ancient
+   *  is a structure again: it settles square with the rest of the base rather than keeping
+   *  whatever direction it happened to be walking in. Kept per unit rather than as a constant
+   *  because a map may place a building at any angle, and THAT is the angle it should return
+   *  to. */
+  builtFacing: number;
   /** Where an uprooted Ancient has been told to plant itself (`{kind:"rootat"}`), or null.
    *
    *  Root is a PLACEMENT, so the order names a spot the player picked off the build grid
@@ -3778,6 +3800,8 @@ export class SimWorld {
       | "ancient"
       | "mineId"
       | "entangler"
+      | "morphT"
+      | "builtFacing"
       | "rootPending"
       | "drinkWellId"
       | "replenishTargetId"
@@ -3980,6 +4004,8 @@ export class SimWorld {
       ancient: !!opts?.ancient,
       mineId: 0, // set by entangleMine for an egol
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
+      morphT: 0,
+      builtFacing: unit.facing,
       rootPending: null,
       drinkWellId: 0,
       replenishTargetId: 0,
@@ -4922,6 +4948,9 @@ export class SimWorld {
    *  canceling), so neither phase is locked. Stuns still interrupt regardless
    *  (interruptForStun). */
   private castLocked(u: SimUnit): boolean {
+    // An Ancient mid-root is locked for exactly the same reason a caster mid-wind-up is: it is
+    // committed to something that takes time and cannot be re-tasked out of it.
+    if (u.morphT > 0) return true;
     const pc = u.pendingCast;
     return u.order === "cast" && pc !== null && pc.started && !pc.fired;
   }
@@ -5961,6 +5990,10 @@ export class SimWorld {
     // Zeroing the speed is the whole of "rooted" as far as movement is concerned — u.speed<=0
     // is already what issueFollow, the stuck check and the collision list all gate on.
     if (root && !u.uprooted) u.speed = 0;
+    // …and neither half of an Ancient walks while it is hauling its roots up or settling them
+    // back down. The stance has already flipped by then (see SimUnit.morphT), so without this
+    // a just-uprooted Ancient slid across the ground through its own morph clip.
+    if (u.morphT > 0) u.speed = 0;
     if (root) u.altModel = !u.uprooted; // planted = the alternate half of the Ancient model
     u.manaRegen = this.manaRegenSuspended(u)
       ? 0
@@ -6046,7 +6079,9 @@ export class SimWorld {
    * can tell a refusal from a no-op.
    */
   toggleRoot(u: SimUnit): boolean {
-    if (!this.rootAbility(u)) return false;
+    const root = this.rootAbility(u);
+    if (!root) return false;
+    if (!this.canToggleRoot(u)) return false;
     if (u.uprooted) {
       // Planting. Stand still and LET GO of the walker's cells before asking whether the
       // building fits, in that order: an uprooted Ancient holds a mover's reservation (and,
@@ -6085,6 +6120,13 @@ export class SimWorld {
       u.uprooted = false;
       u.footprint = n;
       u.rootedFootprint = 0;
+      // Square with the rest of the base again. A building has ONE facing in WC3 (blizzard.j's
+      // `bj_UNIT_FACING`, 270°), so an Ancient that settles keeps none of the direction it
+      // happened to be walking in — it turns back to the angle it was raised at. Both are set:
+      // `desiredFacing` so the turn is the model's own, `facing` because it is planted and a
+      // building does not stand there slowly rotating.
+      u.facing = u.builtFacing;
+      u.desiredFacing = u.builtFacing;
       this.settle(u); // stamp its cells and snap onto the grid
     } else {
       u.uprooted = true;
@@ -6114,8 +6156,34 @@ export class SimWorld {
       // a button you press.
       this.releaseEntangledMine(u);
     }
+    // Neither thing for the length of the transition. `Dur1` is the ability's own 2.5 seconds
+    // and the models author the pair of clips for it; see SimUnit.morphT for why the stance
+    // flips first and the LOCK follows rather than the other way round.
+    const lvl = this.abilities?.get(root.id)?.levelData[0];
+    u.morphT = lvl && lvl.duration > 0 ? lvl.duration : ROOT_MORPH_TIME;
     this.recomputeStats(u);
     return true;
+  }
+
+  /**
+   * May this Ancient change stance right now? A [Errors] key when it may not, null when it may.
+   *
+   * Two reasons it may not, and the second is the one players feel: an Ancient in the middle of
+   * TRAINING or RESEARCHING cannot pull itself up — the queue would have nowhere to go — so WC3
+   * greys the Uproot button out for as long as anything is in it. (Which is the mirror of the
+   * rule that a walking Ancient's queue is halted rather than cancelled: the halt only has to
+   * cover work that was already under way when it left the ground.) The other is the transition
+   * itself: it takes 2.5 seconds and cannot be interrupted by pressing the button again.
+   */
+  rootRefusal(u: SimUnit): string | null {
+    if (!this.rootAbility(u)) return "Notthisunit";
+    if (u.morphT > 0) return SILENT_REFUSAL; // mid-transition; the button is inert, not wrong
+    if (!u.uprooted && u.building && u.building.queue.length > 0) return SILENT_REFUSAL;
+    return null;
+  }
+
+  private canToggleRoot(u: SimUnit): boolean {
+    return this.rootRefusal(u) === null;
   }
 
   /** Defend (Adef), when the unit is actually braced: the ability's level data, else null.
@@ -8568,6 +8636,7 @@ export class SimWorld {
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
+      if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
       if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;

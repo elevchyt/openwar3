@@ -62,6 +62,12 @@ function ancient(abilId, over = {}) {
 }
 const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i) => i >= 0);
 
+/** Let a transition finish. A root/unroot takes `Aroo`'s own `Dur1` (2.5s) and the unit is
+ *  locked for it — no orders, no walking, no second press — so every check about the state on
+ *  the OTHER side of a toggle has to wait the clock out first. These units are hand-built and
+ *  never see `world.tick`, so the clock is run by hand. */
+const settled = (u) => { u.morphT = 0; world.recomputeStats(u); return u; };
+
 // --- an Ancient of War (Aro1) ---------------------------------------------------------
 {
   const u = ancient("Aro1");
@@ -71,12 +77,16 @@ const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i
 
   check("it uproots", world.toggleRoot(u), true);
   world.recomputeStats(u);
+  check("…and is locked for the transition", u.morphT > 0 && u.speed === 0, true);
+  check("…so a second press does nothing", world.toggleRoot(u), false);
+  settled(u);
   check("uprooted, it walks at its UnitBalance speed", u.speed, 40);
   check("…and swaps to DataB \"Uprooted Weapons\" = slot 2", liveSlots(u), [1]);
 
   check("it roots again", world.toggleRoot(u), true);
-  world.recomputeStats(u);
+  settled(u);
   check("planted again, it is immobile once more", u.speed, 0);
+  check("…facing the way it was raised", u.facing, u.builtFacing);
   check("…back on the rooted slot", liveSlots(u), [0]);
 }
 
@@ -91,7 +101,7 @@ const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i
   check("…which is genuinely the long-ranged slot", u.weapons[1].range, 700);
 
   world.toggleRoot(u);
-  world.recomputeStats(u);
+  settled(u);
   check("uprooted it drops to the 128-range melee slot", liveSlots(u), [0]);
   check("…which is genuinely the short-ranged one", u.weapons[0].range, 128);
 }
@@ -103,6 +113,7 @@ const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i
 {
   const u = ancient("Aro1", { footprint: 3 });
   world.toggleRoot(u); // uproot — frees its cells
+  settled(u);
   check("it is walking", u.uprooted, true);
   // Walking, it collides by RADIUS, not as a stamped 3x3 block — otherwise the pathfinder
   // routes around the Ancient's own body and it can never take a step.
@@ -114,6 +125,7 @@ const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i
   check("…and it is still walking, not half-planted", u.uprooted, true);
   FLAGS.fill(0);
   check("…and plants once there is room again", world.toggleRoot(u), true);
+  settled(u);
   check("…now rooted", u.uprooted, false);
   check("…with its 3x3 footprint back", u.footprint, 3);
 }
@@ -133,11 +145,13 @@ const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i
   for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) grid.block(16 - 2 + x, 16 - 2 + y);
 
   world.toggleRoot(u);
+  settled(u);
   check("uprooting lifts the stamped building footprint", u.pathStamp, null);
   check("…and keeps it for the walk", !!u.rootedStamp, true);
   check("…leaving ground the Ancient can path over", grid.walkable(16, 16), true);
 
   check("planting lays it back down", world.toggleRoot(u), true);
+  settled(u);
   check("…on the build grid, where a fresh one would go", [u.x % 64, u.y % 64], [0, 0]);
   check("…blocking again", grid.walkable(16, 16), false);
   check("…and carrying nothing", u.rootedStamp, null);
