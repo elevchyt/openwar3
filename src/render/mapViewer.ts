@@ -899,7 +899,13 @@ export class MapViewerScene {
   private cameraLock = false; // portrait held → camera follows the selected unit
   private cardPage: "root" | "build" | "learn" = "root";
   private lastSelected: number | null = null;
-  private placement: { def: UnitDef; fp: Footprint | null; workerId: number } | null = null;
+  /** The building riding the cursor, waiting for the click that puts it down.
+   *
+   *  `rootUnitId` makes it a ROOT rather than a build: an uprooted Ancient being told where to
+   *  plant itself. Same silhouette, same green/red footprint grid, same click — what differs
+   *  is that no worker is involved, nothing is paid for, and the order goes to the Ancient
+   *  itself (`{kind:"rootat"}`). See runCommand's `Aroo` branch. */
+  private placement: { def: UnitDef; fp: Footprint | null; workerId: number; rootUnitId?: number } | null = null;
   private ghost: HTMLDivElement | null = null;
   // Translucent building-silhouette ghost that follows the cursor while placing.
   private buildGhosts = new Map<string, SpawnInstance>();
@@ -3214,6 +3220,23 @@ export class MapViewerScene {
     // sites — a shift-queued building placed over a ghost is refused here rather than
     // discovered a minute later when the worker walks over. An unshifted click retires this
     // worker's own orders first, so its own ghosts don't refuse it.
+    // Planting an Ancient, not raising a building: no worker, no price, and the game's own
+    // words for a refused site — commandstrings.txt [Errors] `Cantroot` = "Unable to root
+    // there." The Ancient walks to the spot and settles when it arrives (SimWorld.issueRootAt).
+    if (p.rootUnitId !== undefined) {
+      if (!this.placementValid(x, y, this.pendingBuildCells(0))) {
+        this.refuse("Cantroot");
+        return;
+      }
+      if (!this.rts.execute(this.localPlayer, {
+        c: "order", unitId: p.rootUnitId, order: { kind: "rootat", x, y }, queued,
+      })) return;
+      this.sounds?.playUi("PlaceBuildingDefault");
+      if (queued) return;
+      this.cardPage = "root";
+      this.cancelPlacement();
+      return;
+    }
     if (!this.placementValid(x, y, this.pendingBuildCells(queued ? 0 : p.workerId))) {
       this.refuse("Cantplace"); // "Unable to build there." — the worker says so out loud
       return;
@@ -7150,6 +7173,30 @@ export class MapViewerScene {
       if (isRepairCode(code)) {
         this.rts.orderMode = "repair";
         this.hud?.setArmed(true);
+        return;
+      }
+      // Root / Unroot is one row and two very different gestures. UPROOT is instant: the
+      // Ancient hauls itself up where it stands. ROOT is a PLACEMENT — WC3 hands you the
+      // building's own silhouette over a green/red footprint grid and the click chooses the
+      // site, exactly as a worker's Build button does — so the button arms the cursor here
+      // and `placeBuilding` turns the click into a `rootat` order. Nothing is paid for; the
+      // Ancient is the building.
+      if (code === "Aroo") {
+        const su = this.rts.selectedSimUnit();
+        if (su?.uprooted) {
+          const def = this.registry.get(su.typeId);
+          if (!def) return;
+          this.buildGhost?.hide(); // whatever was on the cursor before
+          this.buildGhost = null;
+          // The stamp it LIFTED when it uprooted is the one it will lay back down, so the
+          // grid the player aims with is that one rather than a fresh read of the pathing
+          // texture (they agree, and this cannot drift).
+          const fp = su.rootedStamp ?? (def.pathTex ? this.footprintFor(def.pathTex) : null);
+          this.placement = { def, fp, workerId: 0, rootUnitId: su.id };
+          void this.showBuildGhost(def);
+          return;
+        }
+        this.rts.castNoTarget(code); // planted → pull up, here and now
         return;
       }
       const target = KNOWN_ABILITIES[code]?.target;

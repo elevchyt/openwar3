@@ -9,7 +9,8 @@ difference is a tuning value — each piece is a rule, and each rule is stated b
 This is that list, so the next person does not have to rediscover which column says what.
 
 Implementation: `tickHarvest` / `orbitTree` / `finishConstruction` / `tickEntangledMines` /
-`tickReplenish` / `tickRenew` / `toggleRoot` / `issueEntangleInstant` / `issueDrink` in
+`tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` / `issueEntangleInstant` /
+`issueDrink` in
 [`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
 [`src/sim/spells.ts`](../src/sim/spells.ts), the Wisp's profile in
 [`src/data/races.ts`](../src/data/races.ts), `raiseEntangledMines` / `collectMoonWellWater` and
@@ -245,6 +246,25 @@ A toggle shows what it can do NEXT, so a PLANTED Ancient wears the `un` half (BT
 "Uproot") and a walking one wears the plain half. Those `Un*` columns are parsed now
 (`AbilityDef.unIcon`/`unTip`/…) — every Order/Unorder pair carries them, and so does every
 autocast toggle's on/off art.
+
+**…and the two directions are not the same GESTURE.** Uproot is instant: the Ancient hauls
+itself up where it stands. **Root is a placement** — pressing it hands the player exactly what
+a worker's Build button hands them, the finished building's silhouette riding the cursor over
+a green/red footprint grid, and the click chooses the SITE. The Ancient then walks there and
+settles on it.
+
+So Root is an order with a destination (`{kind:"rootat"}`, `SimWorld.issueRootAt`), not a
+toggle, and it rides the build-placement machinery whole: `MapViewerScene.placement` grows a
+`rootUnitId`, and with it set the click skips the worker, skips the price and issues the order
+to the Ancient itself. The site is asked for twice — once at the click, so the player is told
+("Unable to root there.", the game's own `Cantroot`), and again by `toggleRoot` on arrival,
+because the ground can be taken while a tree walks 500 units at speed 40.
+
+Two details that are easy to get wrong. The grid the player aims with is the stamp the Ancient
+**lifted** (`SimUnit.rootedStamp`), not a fresh read of the pathing texture — they agree, and
+this cannot drift. And the arrival tolerance has to include the unit's own RADIUS: an Ancient
+of War is 144 across and a walk aimed at a point stops about a body short of it, so a flat
+one-cell test lost the order every time and the tree just stood there.
 
 **The two states are two halves of one MODEL**, and which half is showing is `SimUnit.altModel`
 (`recomputeStats`: planted = alternate). The Ancients carry no static `Animprops`, so nothing

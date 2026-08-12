@@ -244,6 +244,52 @@ console.log("…and a Tree of Life that uproots lets the mine go");
   check("planting again leaves the mine loose", world.mines.get(mine.id).entangledBy === 0);
 }
 
+console.log("Root is a PLACEMENT — the Ancient walks to the spot and settles there");
+{
+  // WC3 does not root an Ancient where it stands: the button hands you the building's
+  // silhouette and its footprint grid, and the click picks the SITE. So the order carries a
+  // destination, and only the UPROOT direction is instant.
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const ancient = () => world.units.get(70);
+  world.add(base({ id: 70, typeId: "eaom", x: 2000, y: 2000, hp: 900, maxHp: 900, speed: 0, radius: 144, isBuilding: true, ancient: true, name: "Ancient of War" }),
+    BUILT(2000, 2000), { abilities: [{ id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const u = ancient();
+  u.baseSpeed = 40; // eaom's own walk
+  world.recomputeStats(u);
+  check("planted, it will not take a root order", world.issueRootAt(70, 2600, 2000) === false);
+  check("uprooting is instant", world.toggleRoot(u) === true && u.uprooted === true);
+  const site = world.grid.snapForBuildingRect(2600, 2000, 12, 12);
+  check("…and then it takes one", world.issueRootAt(70, site[0], site[1]) === true);
+  check("…which is a WALK, not a plant on the spot", u.uprooted === true && Math.abs(u.x - 2000) < 40, `${Math.round(u.x)}`);
+  for (let t = 0; t < 60 / 0.05 && u.uprooted; t++) world.tick(0.05);
+  check("it arrives and settles", u.uprooted === false);
+  check("…exactly where the silhouette stood", [Math.round(u.x), Math.round(u.y)], site);
+  // (The stamp and the footprint are only restored for a unit that HAD them — a headless test
+  //  unit never went through the renderer's setPathStamp — so what is checked here is the
+  //  stance itself: planted, it is a building again and goes nowhere.)
+  check("…a building again, going nowhere", u.speed === 0 && u.altModel === true, `${u.speed}`);
+  check("…and the order is spent", u.rootPending === null);
+}
+
+console.log("…and any other order calls the plant off");
+{
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  world.add(base({ id: 71, typeId: "eaom", x: 2000, y: 2000, hp: 900, maxHp: 900, speed: 0, radius: 144, isBuilding: true, ancient: true, name: "Ancient of War" }),
+    BUILT(2000, 2000), { abilities: [{ id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const u = world.units.get(71);
+  u.baseSpeed = 40;
+  world.recomputeStats(u);
+  world.toggleRoot(u);
+  world.issueRootAt(71, 2600, 2000);
+  check("the order is held", !!u.rootPending);
+  world.issueOrder(71, { kind: "move", x: 1600, y: 2000 });
+  check("…and dropped by the next order", u.rootPending === null);
+  for (let t = 0; t < 40 / 0.05; t++) world.tick(0.05);
+  check("…so it walks off still uprooted", u.uprooted === true);
+}
+
 console.log("Replenish Mana and Life (`Ambt`)");
 {
   // Three drinkers, one well each, because the interesting part is where the WELL's mana

@@ -4643,6 +4643,8 @@ export class RtsController {
         const w = this.sim.units.get(o.wellId);
         return w ? { x: w.x, y: w.y, z: this.heightAt(w.x, w.y) } : null;
       }
+      case "rootat":
+        return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
       case "harvest": {
         if (o.res === "lumber") {
           const t = this.sim.trees.get(o.nodeId);

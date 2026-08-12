@@ -649,7 +649,23 @@ export type QueuedOrder =
   // the well and, once inside the ability's Area1, the well pours itself into it. The order is
   // on the DRINKER because the drinker is what was selected and what has to walk — see
   // SimUnit.drinkWellId.
-  | { kind: "drink"; wellId: number };
+  | { kind: "drink"; wellId: number }
+  // Plant an uprooted Ancient at a NAMED spot (`Aroo`'s root direction). Root is a placement
+  // in WC3, not a toggle: the button hands you the building silhouette and its green/red
+  // footprint grid, and the Ancient walks to where you put it and settles. So the order is a
+  // move with a promise, the same shape as `drink` — see SimUnit.rootPending.
+  | { kind: "rootat"; x: number; y: number };
+
+/** How close an Ancient must stop to the spot it was told to plant on before it settles there
+ *  (`{kind:"rootat"}`), on top of its own collision radius.
+ *
+ *  The radius is most of it and cannot be left out: an Ancient of War is 144 across, and a
+ *  walk aimed at a point stops roughly a body short of it, so a flat one-cell tolerance lost
+ *  the order every time and the tree just stood there. What is left over is the build cell the
+ *  site was picked on, so ordinary stopping slop cannot lose it either. Lining the tree up on
+ *  the site from inside that reads as it settling; the order is dropped rather than teleported
+ *  from further out. */
+const ROOT_ARRIVE_SLACK = 64;
 
 const MAX_QUEUED_ORDERS = 35; // WC3 action-queue cap (shift-queued ORDERS on a unit)
 /** WC3 caps a building's PRODUCTION queue at 7 jobs — training, research and tier upgrades
@@ -1137,6 +1153,13 @@ export interface SimUnit {
    *  Tree does NOT release it — an Entangled Gold Mine is its own building with its own 800
    *  hit points, and knocking it down is a separate job.) */
   entangler: number;
+  /** Where an uprooted Ancient has been told to plant itself (`{kind:"rootat"}`), or null.
+   *
+   *  Root is a PLACEMENT, so the order names a spot the player picked off the build grid
+   *  rather than "wherever you are standing". The Ancient walks there under an ordinary move
+   *  and this is what it does when it arrives (tickRootAt). Cleared by planting, by failing to
+   *  get there, and by any other order (`dispatch`). */
+  rootPending: { x: number; y: number } | null;
   /** The Moon Well this unit has been SENT to drink from (`{kind:"drink"}`), or 0.
    *
    *  Replenish is the one ability in the game whose button is on one unit and whose order is
@@ -3755,6 +3778,7 @@ export class SimWorld {
       | "ancient"
       | "mineId"
       | "entangler"
+      | "rootPending"
       | "drinkWellId"
       | "replenishTargetId"
       | "isSummon"
@@ -3956,6 +3980,7 @@ export class SimWorld {
       ancient: !!opts?.ancient,
       mineId: 0, // set by entangleMine for an egol
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
+      rootPending: null,
       drinkWellId: 0,
       replenishTargetId: 0,
       isSummon: false,
@@ -5149,7 +5174,10 @@ export class SimWorld {
     // the one door every player/trigger order comes through; `issueDrink` sets it again a
     // line later for the order that wants it.
     const u0 = this.units.get(id);
-    if (u0) u0.drinkWellId = 0;
+    if (u0) {
+      u0.drinkWellId = 0;
+      u0.rootPending = null;
+    }
     switch (o.kind) {
       case "move": return this.issueMove(id, o.x, o.y, o.targetId);
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
@@ -5163,7 +5191,53 @@ export class SimWorld {
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
       case "drink": return this.issueDrink(id, o.wellId);
+      case "rootat": return this.issueRootAt(id, o.x, o.y);
     }
+  }
+
+  /**
+   * Send an uprooted Ancient to plant itself at a named spot — `Aroo`'s root direction.
+   *
+   * WC3 does not root an Ancient where it stands. Pressing Root hands the player the same
+   * thing pressing a Build button does — the finished building's silhouette riding the cursor
+   * over a green/red footprint grid — and the click chooses the SITE; the Ancient then walks
+   * there and settles. That is why this is an order with a destination rather than a toggle,
+   * and why only the UPROOT direction is instant.
+   *
+   * Refused for a unit that is not an uprooted Ancient. Whether the site is any good is asked
+   * twice: once at the click, so the player is told, and again on arrival by `toggleRoot`,
+   * because the ground can be taken while the tree is walking to it.
+   */
+  issueRootAt(id: number, x: number, y: number): boolean {
+    const u = this.units.get(id);
+    if (!u || !u.uprooted || !this.rootAbility(u) || this.castLocked(u)) return false;
+    // A site it is already standing on: plant now rather than order a zero-length walk.
+    if (Math.hypot(u.x - x, u.y - y) <= u.radius + ROOT_ARRIVE_SLACK) {
+      u.rootPending = { x, y };
+      return this.tickRootAt(u);
+    }
+    if (!this.issueMove(id, x, y)) return false;
+    u.rootPending = { x, y };
+    return true;
+  }
+
+  /** An Ancient walking to a site it was told to plant on has stopped: settle it there.
+   *  Nothing happens while it is still moving. Returns whether it planted. */
+  private tickRootAt(u: SimUnit): boolean {
+    const site = u.rootPending;
+    if (!site || u.moving || !u.uprooted) return false;
+    // Stopped short — the way was blocked, or something took the ground. Drop the order
+    // rather than teleport a building across the gap.
+    if (Math.hypot(u.x - site.x, u.y - site.y) > u.radius + ROOT_ARRIVE_SLACK) {
+      u.rootPending = null;
+      return false;
+    }
+    // Line it up on the spot the player picked, so it plants exactly where the silhouette
+    // stood rather than half a cell off wherever its walk happened to end.
+    u.x = site.x;
+    u.y = site.y;
+    u.rootPending = null;
+    return this.toggleRoot(u);
   }
 
   /** Send a unit to drink from a Moon Well (`Ambt`) — the right-click order. It walks to the
@@ -8494,6 +8568,7 @@ export class SimWorld {
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
+      if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired
