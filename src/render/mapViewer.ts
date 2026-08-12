@@ -56,6 +56,7 @@ import { RACE_INDEX, STARTING_UNITS, WORKERS, MELEE_UNIT_SPACING, MELEE_WORKER_C
 import { ModelViewerScene } from "./modelViewer";
 import type { Controller, MeleeConfig, SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
+import { wc3ToPlain } from "../ui/wc3Text";
 import { GameHud, isTyping, upkeepBand, type HudDriver, type CommandButton } from "../ui/hud";
 import { GAME_WIDTH, GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { UI_HEIGHT } from "../ui/fdf/layout";
@@ -281,6 +282,22 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
   orc: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_Orc.blp",
   undead: "ReplaceableTextures\\Selection\\SpellAreaOfEffect_Undead.blp",
 };
+
+/**
+ * Abilities an Ancient may only use with its roots in the ground.
+ *
+ * The rest of the root/unroot split is structural — an uprooted Ancient is handed the mobile
+ * order card instead of the building one, which takes its training, research, rally point and
+ * cargo buttons away in one move — so this is only for rows that sit in a unit's ABILITY list
+ * and would otherwise show in both stances.
+ *
+ * `Aent` is the whole list today, and the game says why in its own error line:
+ * commandstrings.txt [Errors] `Mustroottoentangle` = "Must root adjacent to a gold mine to
+ * entangle it." Eat Tree (`Aeat`) deliberately is NOT here — an Ancient eats trees walking or
+ * planted — and neither is `Aroo` itself, which is the one button that must show in both (in
+ * opposite faces; see `reversed` in pushAbilityButtons).
+ */
+const ROOTED_ONLY = new Set(["Aent"]);
 
 // Over-bright green a tree flashes while it sits under an armed tree-destroying AoE
 // (Flame Strike) — the doodad counterpart of the green unit-target tint, so the player
@@ -3025,7 +3042,7 @@ export class MapViewerScene {
           mine.entangledBy = 0; // the model never arrived — leave the mine as it was
           return;
         }
-        world.attachEntangled(simId, mineId);
+        world.attachEntangled(simId, mineId, e.casterId);
         if (widget) {
           widget.instance.hide();
           this.entangledMines.set(simId, { widget, mineId });
@@ -5415,6 +5432,12 @@ export class MapViewerScene {
         if (this.rts?.selectHero(index) && jump) this.jumpToSelection();
       },
       heroBar: () => this.rts?.heroBar() ?? [],
+      rallyToHero: (index) => this.rts?.rallyToHero(index) ?? false,
+      dropItemOnHero: (index, slot) => {
+        const gave = this.rts?.dropItemOnHero(index, slot) ?? false;
+        if (gave) this.hud?.setArmed(false); // the picked-up item has left the cursor
+        return gave;
+      },
       commandCard: () => this.commandCard(),
       runCommand: (id) => this.runCommand(id),
       inventory: () =>
@@ -6625,7 +6648,14 @@ export class MapViewerScene {
       out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel construction.", col: 3, row: 2 }));
       return out;
     }
-    if (sel.isBuilding) {
+    // An UPROOTED Ancient is a building that is currently a unit, and its card says so: WC3
+    // gives it the mobile order set and takes the whole structure card away. That is not a
+    // cosmetic swap — everything the building card offers is something a walking Ancient
+    // genuinely cannot do (its queue is HALTED while it walks, it has no rally point to
+    // place, and Entangle Gold Mine wants roots in the ground). Falling through to the
+    // movable-unit branch below is the whole implementation; the rooted-only abilities are
+    // filtered inside pushAbilityButtons, which both branches share.
+    if (sel.isBuilding && !world.units.get(sel.id)?.uprooted) {
       // Which of the two pinned corners are actually spoken for THIS frame — the trainee grid
       // flows around them, and a Tavern (no rally, nothing queued) has both cells free for
       // the Firelord and the Alchemist the data puts there. Kept in step with the two pushes
@@ -6885,11 +6915,20 @@ export class MapViewerScene {
       // reveals it, which is the whole job of the six Human upgrades that grant no stat at all.
       // Abilities with no requirement (every hero spell) pass this untouched.
       if (!this.rts.simView.techMeets(su.owner, ab.id)) continue;
+      // …and an Ancient's card depends on which way up it is. `ROOTED_ONLY` is the list of
+      // abilities the roots pay for; the rest of the split is structural (the building card
+      // itself is withheld while it walks, see buildCommandCard).
+      if (su.uprooted && ROOTED_ONLY.has(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
-      const col = def.buttonX; // the ability's real WC3 command-card slot
-      const row = def.buttonY;
+      // A toggle shows the face of what it can do NEXT. `Aroo` is the case that needs it —
+      // one row, two directions (Order=root Art=BTNRoot "Root" / Unorder=unroot
+      // Unart=BTNUproot "Uproot") — so a PLANTED Ancient wears the `un` half, because
+      // pulling itself up is the move available to it. See AbilityDef.unIcon.
+      const reversed = ab.code === "Aroo" && !su.uprooted && !!def.unIcon;
+      const col = reversed ? def.unButtonX : def.buttonX; // the ability's real WC3 card slot
+      const row = reversed ? def.unButtonY : def.buttonY;
       const passive = def.target === "passive";
       // A passive with no `Art` at all gets NO button — the engine has nothing to draw and
       // the row means it. The clear case is Frost Attack: `[Afra]` (Nerubian Tower) carries
@@ -6918,11 +6957,13 @@ export class MapViewerScene {
         // with no change needed.
         id: passive ? "noop" : def.autocast && KNOWN_ABILITIES[ab.code]?.target === "none" ? `autocast:${ab.code}` : `ability:${ab.code}`,
         altId: passive || !def.autocast ? undefined : `autocast:${ab.code}`,
-        icon: this.blpIcon(def.icon),
-        name: def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
-        hotkey: def.hotkey,
-        tip: this.abilityTip(def, ab.level),
-        desc: this.abilityDesc(def, ab.level),
+        icon: this.blpIcon(reversed ? def.unIcon : def.icon),
+        // The reverse direction has no `Unname` of its own — the row carries one Name — so
+        // the title comes from `Untip`, which is where WC3 keeps it ("Up|cffffcc00r|root").
+        name: reversed ? wc3ToPlain(def.unTip) || def.name : def.levels > 1 ? `${def.name} (Level ${ab.level})` : def.name,
+        hotkey: reversed ? def.unHotkey || def.hotkey : def.hotkey,
+        tip: reversed ? def.unTip || this.abilityTip(def, ab.level) : this.abilityTip(def, ab.level),
+        desc: reversed ? def.unUberTip || this.abilityDesc(def, ab.level) : this.abilityDesc(def, ab.level),
         mana: lvl.cost,
         col, row,
         // Mana is the ONE price WC3 draws: short of it, the icon goes deep blue (see

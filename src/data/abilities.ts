@@ -117,6 +117,20 @@ export interface AbilityDef {
   uberTips: string[]; // per-level bodies (Ubertip)
   researchTip: string; // learn-skill page title (Researchtip); "%d" = the rank being learned
   researchUberTip: string; // learn-skill page body (Researchubertip) — lists every rank
+  /** The REVERSE direction's button, for the abilities that are one row wearing two faces:
+   *  `Unart`/`Unbuttonpos`/`Unhotkey`/`Untip`/`Unubertip` beside the plain ones. Every
+   *  Order/Unorder pair carries them (`[Aroo]` Order=root Art=BTNRoot Tip="Root" against
+   *  Unorder=unroot Unart=BTNUproot Untip="Uproot"), as does every autocast toggle
+   *  (Renew's WispHealOn/Off). The plain half is what the ability can DO next, so a rooted
+   *  Ancient — whose next move is to pull itself up — wears the `un` half.
+   *
+   *  Empty strings / -1 when the row names none, which is the overwhelming majority. */
+  unIcon: string;
+  unHotkey: string;
+  unTip: string;
+  unUberTip: string;
+  unButtonX: number;
+  unButtonY: number;
   levelData: AbilityLevel[]; // index 0 = rank 1
   // Effect model paths (from AbilityFunc) — the renderer plays these on cast.
   missileArt: string; // travelling projectile (Storm Bolt hammer, Death Coil orb)
@@ -563,6 +577,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     const s = strs.getRow(id) as Row | undefined;
     const [bx, by] = f ? parseButtonPos(str(f, "buttonpos") || str(f, "researchbuttonpos")) : [0, 0];
     const [lx, ly] = f ? parseButtonPos(str(f, "researchbuttonpos") || str(f, "buttonpos")) : [0, 0];
+    const [ux, uy] = f && str(f, "unbuttonpos") ? parseButtonPos(str(f, "unbuttonpos")) : [bx, by];
     const known = KNOWN_ABILITIES[code];
     const buffFx = buffFxOf(func, str(r, "buffid1"));
 
@@ -607,6 +622,12 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       uberTips: splitList(s ? str(s, "Ubertip") : ""),
       researchTip: rawTip(s ? str(s, "Researchtip") : ""),
       researchUberTip: rawTip(s ? str(s, "Researchubertip") : ""),
+      unIcon: f ? str(f, "Unart") : "",
+      unHotkey: (s ? (str(s, "Unhotkey").trim()[0] ?? "") : "").toUpperCase(),
+      unTip: rawTip(s ? str(s, "Untip") : ""),
+      unUberTip: rawTip(s ? str(s, "Unubertip") : ""),
+      unButtonX: ux,
+      unButtonY: uy,
       levelData,
       missileArt: mdlPath(f ? str(f, "Missileart") : ""),
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
@@ -707,6 +728,12 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     uberTips: splitList(s ? str(s, "Ubertip") : ""),
     researchTip: "",
     researchUberTip: "",
+    unIcon: "",
+    unHotkey: "",
+    unTip: "",
+    unUberTip: "",
+    unButtonX: bx,
+    unButtonY: by,
     levelData: [],
     missileArt: "",
     targetArt: "",

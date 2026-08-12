@@ -462,6 +462,19 @@ export const POLARITY_SPELLS: Record<string, { healsUndead: boolean; error: stri
  *  UnitHPmaxed) — you cannot burn a Paladin's mana on an undamaged Footman. */
 export const HEAL_SPELLS = new Set(["Ahea"]); // Priest — Heal
 
+/** Spells that need the TARGET to have a mana pool, and the [Errors] line each says when
+ *  it doesn't. Nothing in `targs1` can express this — Mana Burn's is
+ *  `air,ground,enemy,organic,nonancient,vuln,invu`, which a Footman satisfies in full — so
+ *  the rule is the ability's own, and the giveaway is that commandstrings.txt ships a line
+ *  written for exactly one ability: `Cantmanaburn` = "Unable to cast Mana Burn on this
+ *  target." (the general-purpose `Targetmanauser` sits right beside it for the rows that
+ *  want the positive wording). A pool of zero is the test, not an empty one: a drained
+ *  Sorceress is still a caster and burning her nothing is a legal, useless cast — a
+ *  Footman has no mana bar at all and the Demon Hunter simply may not pick him. */
+export const MANA_TARGET_SPELLS: Record<string, string> = {
+  AEmb: "Cantmanaburn", // Demon Hunter — Mana Burn
+};
+
 export const SPELL_HANDLERS: Record<string, Handler> = {
   // Holy Light — heal a friendly living unit for dataA, or smite an enemy Undead
   // unit for dataA (the projectile/impact carries this on units with a missile;

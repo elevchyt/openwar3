@@ -55,14 +55,26 @@ export interface AnimSet {
   standLumber: number;
   walkLumber: number;
   chopLumber: number; // "Attack Lumber" — the chopping swing
-  build: number; // "Stand Work" — the hammering pose while constructing
+  /** "Stand Work" — a BUILDING's production pose (the Blacksmith hammering, the Ancient of
+   *  Lore stirring). -1 when the model authors none, and that -1 is the answer rather than a
+   *  gap: most structures have no work clip and simply keep standing.
+   *
+   *  Distinct from `build` because the OTHER form's clip must never be borrowed. The Ancients
+   *  author their production pose as "Stand Work Alternate" — they train only while planted —
+   *  and applyAnimProps has already renamed it to a plain "Stand Work" when the alternate
+   *  props are on. So a name that still says "alternate" by the time it reaches here belongs
+   *  to the form the unit is NOT in: an uprooted Ancient (whose queue is halted, not
+   *  cancelled) was standing in the planted tree's working pose while it walked. */
+  standWork: number;
+  build: number; // a WORKER's hammering pose: its "Stand Work", else its attack swing
   decayFlesh: number; // corpse decay — flesh rots (heroes lack this)
   decayBone: number; // corpse decay — bones linger, then vanish
   /** "Morph" — the clip a unit plays while CHANGING form. -1 for almost everything; the
    *  Ancients author it as a pair, and which of the pair this index lands on depends on the
-   *  animProps the set was built with: the plain set's "Morph" is the Ancient hauling its
-   *  roots up, and under `alternate` the renamed "Morph Alternate" is it planting again. So
-   *  building the set for the state being moved TO always yields the right transition. */
+   *  animProps the set was built with. A form's Morph is the clip it plays to LEAVE that
+   *  form: under `alternate` the renamed "Morph Alternate" is the planted Ancient hauling
+   *  its roots up, and the plain set's "Morph" is the walking one settling back down. So the
+   *  transition is read off the state being moved FROM (see RtsController.applyFormAnims). */
   morph: number;
   seqNames: string[]; // raw sequence names (for cast-animation tag matching)
 }
@@ -80,6 +92,21 @@ export interface AnimSet {
 // the Headhunter model's alternate animation set. So they ARE identity here, handled just like a
 // tier — the picker sees the "* Alternate" clips renamed to their base action.
 const TIER_PROPS = new Set(["upgrade", "first", "second", "third", "fourth", "fifth", "alternate", "alternateex"]);
+
+/** The two props that mean "the other HALF of a two-state model" rather than "a tier". The
+ *  difference matters when picking a stand: an alternate half is a COMPLETE set of poses for a
+ *  form the unit is genuinely in (planted / burrowed / Avatar), so a plain clip left over from
+ *  the other half is never a legitimate fallback for it. A tier's clips are not like that —
+ *  Death and Decay routinely have no per-tier variant and every tier shares one. */
+const STATE_PROPS = new Set(["alternate", "alternateex"]);
+
+/** A sequence name as `applyAnimProps` hands it back: `mine` marks the clips that carried the
+ *  unit's OWN tier/state props and were renamed to their base action, which is what lets a
+ *  lookup tell "the form I am in" from "what is left of the other one". */
+export interface PropSeq {
+  name: string;
+  mine?: boolean;
+}
 
 /** Rewrite the sequence names a unit is ALLOWED to see, so every lookup below can stay
  *  tier-blind: a tiered unit's own clips are renamed to their base action ("Stand Upgrade
@@ -104,7 +131,7 @@ const TIER_PROPS = new Set(["upgrade", "first", "second", "third", "fourth", "fi
  *  because "Stand Ready Attack" and "Stand Upgrade Third Attack Ready" name the same action in
  *  a different word order, and an order-sensitive test leaves the Arcane Tower wearing the
  *  Scout Tower's model. */
-export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = []): Array<{ name: string }> {
+export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[] = []): Array<PropSeq> {
   const tier = animProps.filter((p) => TIER_PROPS.has(p));
   if (!tier.length) return seqs;
   const BLANK = "(none)"; // matches none of the sequence patterns below
@@ -121,7 +148,7 @@ export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[
     return p.length > 0 && tier.every((t) => p.includes(t));
   };
   return seqs.map((s) => {
-    if (isMine(s.name)) return { name: baseOf(s.name).join(" ") };
+    if (isMine(s.name)) return { name: baseOf(s.name).join(" "), mine: true };
     if (propsOf(s.name).length) return { name: BLANK }; // some other tier's clip
     // A tier-less clip: shared (Death/Decay) unless my tier overrides this same action.
     const overridden = seqs.some((o) => isMine(o.name) && baseKey(o.name) === baseKey(s.name));
@@ -177,7 +204,31 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   // "Stand/-2/-3/-4", Naga "Stand"+"Stand - 2" alongside its Swim/Ready variants (issue #38).
   const PLAIN_STAND = /^stand(\s*-?\s*\d+)?\s*$/i;
   const PLAIN_ATTACK = /^attack(\s*-?\s*\d+)?\s*$/i;
-  const standVariants = indices(PLAIN_STAND);
+  /**
+   * The idle stands — and, while the unit is wearing the ALTERNATE half of its model, only the
+   * stands that belong to that half.
+   *
+   * `applyAnimProps` blanks a plain clip when the alternate half names the same action, and for
+   * four of the five Ancients that is the end of it: AncientOfWar.mdx's "stand alternate"
+   * overrides its "Stand - 1"/"Stand- 2" and the planted tree stands correctly. AncientProtector
+   * .mdx is the exception the docs flagged and could not settle without looking: its planted
+   * stand is authored **"Stand Walk Alternate"**, which no plain-stand pattern matches and whose
+   * base tokens ("stand walk") match none of the four mobile "Stand"/"Stand 2-4" clips — so
+   * those survived, won this lookup, and a ROOTED tower stood in its walking pose. It reads
+   * exactly like a misplaced model: the walker's pose sits forward of the root patch it is
+   * planted in.
+   *
+   * A state half is a COMPLETE set of poses for a form the unit is genuinely in, so anything
+   * left over from the other half is never a legitimate stand for it — hence the fallback to
+   * "any clip of MINE whose name starts with stand" before the plain ones. Tiers are
+   * deliberately excluded (STATE_PROPS): a tier routinely shares clips with the base model.
+   */
+  const alternateForm = animProps.some((p) => STATE_PROPS.has(p));
+  const plainStands = indices(PLAIN_STAND);
+  const ownStands = alternateForm && !plainStands.some((i) => seqs[i].mine)
+    ? indices(/^stand/i).filter((i) => seqs[i].mine)
+    : [];
+  const standVariants = ownStands.length ? ownStands : plainStands;
   /**
    * The SWING clips, for a model that authors no plain "Attack" at all.
    *
@@ -224,6 +275,9 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   const attackGold = carryAttack.filter(({ n }) => /gold/i.test(n)).map(({ i }) => i);
   const attackLumber = carryAttack.filter(({ n }) => /lumber/i.test(n)).map(({ i }) => i);
   const or = (a: number, b: number) => (a >= 0 ? a : b);
+  // The work pose, excluded the same way the swings are: a carry variant is a worker's
+  // laden pose, and an "* Alternate" that survived applyAnimProps is the OTHER form's.
+  const standWork = seqs.findIndex((s) => /stand work/i.test(s.name) && !/gold|lumber|alternate/i.test(s.name));
   return {
     stand,
     standVariants: standVariants.length ? standVariants : stand >= 0 ? [stand] : [],
@@ -243,7 +297,10 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
     standLumber: or(find(/stand lumber/i), stand),
     walkLumber: or(find(/walk lumber/i), walk),
     chopLumber: or(find(/attack lumber/i), attack),
-    build: or(find(/stand work(?! gold| lumber)/i), or(find(/^stand work/i), attack)),
+    standWork,
+    // A worker with no work clip hammers with its attack swing — which is exactly what a
+    // Peasant does, and why this fallback cannot be shared with `standWork` above.
+    build: or(standWork, attack),
     decayFlesh: find(/decay flesh/i),
     decayBone: find(/decay bone/i),
     // Anchored: "Morph" must not pick up "Morph Alternate", which is the OTHER direction's
@@ -351,9 +408,12 @@ export function pickSequence(a: AnimSet, u: RenderUnit, moving: boolean): number
   if (moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
   if (u.constructing || u.repair?.active) return a.build; // hammering (build/repair)
   // A building actively producing (a unit in its queue) runs its "Stand Work"
-  // clip — the blacksmith hammers, the barracks stirs, etc. `build` resolves to
-  // that clip for structures (and is -1 → no-op for ones that lack it).
-  if (u.building && u.building.queue.length > 0) return a.build;
+  // clip — the blacksmith hammers, the barracks stirs, the Ancient of Lore's
+  // "Stand Work Alternate" (it trains only while planted, so the pose lives on the
+  // alternate half of its model). -1 → no-op for the structures that lack one, which
+  // is most of them, and for an UPROOTED Ancient: its queue is halted rather than
+  // cancelled, and a walking tree must not play the planted one's working pose.
+  if (u.building && u.building.queue.length > 0) return a.standWork;
   // Only the ACTIVE chop plays the harvest swing — a worker merely holding
   // lumber while standing (its tree fell and it's about to return, so `working`
   // isn't cleared yet) shows the Stand Lumber pose, not the chop.

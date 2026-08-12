@@ -32,6 +32,11 @@ const lvl = (over) => ({ cost: 0, cooldown: 0, duration: 0, heroDuration: 0, cas
 const ABILITIES = {
   Aegm: { id: "Aegm", code: "Aegm", target: "passive", targetFlags: [], levelData: [lvl({ data: [10, 1] })] },
   Aenc: { id: "Aenc", code: "Aenc", target: "passive", targetFlags: [], levelData: [lvl({ castRange: 120, area: 250, data: [5] })] },
+  // Entangle: no target at all (`targs1` = `_`), Rng1 = 500, and `UnitID1` names the unit it
+  // RAISES rather than converting the mine.
+  Aent: { id: "Aent", code: "Aent", target: "none", targetFlags: [], levelData: [lvl({ castRange: 500, castTime: 3, summon: "egol" })] },
+  // Root/Unroot, the Ancients' own row: DataA "Rooted Weapons" / DataB "Uprooted Weapons".
+  Aro1: { id: "Aro1", code: "Aroo", target: "none", targetFlags: [], levelData: [lvl({ duration: 2.5, data: [1, 2, 0, 2] })] },
   Ambt: { id: "Ambt", code: "Ambt", target: "unit", autocast: true, targetFlags: ["air", "ground", "invu", "vuln", "friend", "organic"], levelData: [lvl({ castRange: 99999, area: 400, data: [2, 0.5, 10, 30, 1] })] },
   // Detonate: 50 mana burned, 225 to summons, in a 300 blast, and no allegiance flag at all.
   Adtn: { id: "Adtn", code: "Adtn", target: "none", targetFlags: ["air", "ground", "ward", "invu", "vuln", "tree"], specialArt: "", targetArt: "", levelData: [lvl({ castRange: 100, area: 300, data: [50, 225] })] },
@@ -50,6 +55,7 @@ const UNITS = {
   emow: { id: "emow", abilities: ["Ambt"], moveType: "foot", upgradesUsed: ["Rews"], buildTime: 60, goldCost: 180, lumberCost: 40, manaStart: 100, manaRegen: 1.5, regenType: "none", hpRegen: 0 },
   ewsp: { id: "ewsp", abilities: [], moveType: "hover", upgradesUsed: [], buildTime: 60, goldCost: 0, lumberCost: 0, manaRegen: 0, regenType: "none", hpRegen: 0 },
   eaom: { id: "eaom", abilities: [], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 150, lumberCost: 60, manaRegen: 0, regenType: "night", hpRegen: 0.25 },
+  etol: { id: "etol", abilities: ["Aent", "Aro1"], moveType: "foot", upgradesUsed: [], buildTime: 60, goldCost: 200, lumberCost: 0, manaRegen: 0, regenType: "night", hpRegen: 0.25 },
   // The drinker, with its own regeneration turned as far down as the column allows. A
   // target topping itself up would mean the well spent less on its mana and more on its
   // life, and the arithmetic below would stop being the ability's. (Not a flat 0: an absent
@@ -195,6 +201,49 @@ console.log("…and the mine is closed to everyone else while the roots are on i
   check("…and the peasant may work it", world.issueHarvest(70, "gold", mine.id));
 }
 
+console.log("`entangleinstant` — the melee opening's own order");
+{
+  // Blizzard.j's MeleeStartingUnitsNightElf plants the Tree of Life beside the nearest mine
+  // and IMMEDIATELY issues `IssueTargetOrder(tree, "entangleinstant", nearestMine)`, which is
+  // why a night elf game starts with its mine already wrapped. The order names the mine and
+  // has no cast time, so the request is in flight the moment it is given.
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const near = world.addMine(2000, 2000, 12500, 128);
+  const far = world.addMine(2000, 3400, 12500, 128);
+  world.add(base({ id: 40, typeId: "etol", x: 2400, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(2400, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  check("the order takes", world.issueEntangleInstant(40, near.id) === true);
+  check("…and it claims the mine it was AIMED at", near.entangledBy !== 0 && far.entangledBy === 0);
+  const reqs = world.drainEntangleRequests();
+  check("…raising the unit `UnitID1` names", reqs.length === 1 && reqs[0].unitId === "egol" && reqs[0].mineId === near.id, JSON.stringify(reqs[0] || null));
+  check("…and remembering whose roots they are", reqs[0]?.casterId === 40);
+  check("a second order on the same mine is refused", world.issueEntangleInstant(40, near.id) === false);
+}
+
+console.log("…and a Tree of Life that uproots lets the mine go");
+{
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  world.add(base({ id: 40, typeId: "etol", x: 2600, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(2600, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  world.add(base({ id: 50, typeId: "egol", x: 2000, y: 2000, hp: 800, maxHp: 800, speed: 0, radius: 128, isBuilding: true, name: "Entangled Gold Mine" }), BUILT(2000, 2000));
+  world.attachEntangled(50, mine.id, 40);
+  world.add(wisp(60, 2200, 2200));
+  world.issueGarrison(60, 50);
+  for (let t = 0; t < 4 / 0.05; t++) world.tick(0.05);
+  check("a wisp is aboard to begin with", world.units.get(50).garrison.length === 1);
+  check("the Tree uproots", world.toggleRoot(world.units.get(40)) === true);
+  check("…the Entangled Gold Mine is gone", !world.units.has(50));
+  check("…the mine is a plain mine again", world.mines.get(mine.id).entangledBy === 0);
+  check("…the crew walked out rather than being buried", !!world.units.get(60) && world.units.get(60).hp > 0);
+  check("…and nobody was killed for it", !world.drainDeaths().includes(50));
+  // Planting again does NOT hand the mine back — entangling is a button you press.
+  world.toggleRoot(world.units.get(40));
+  check("planting again leaves the mine loose", world.mines.get(mine.id).entangledBy === 0);
+}
+
 console.log("Replenish Mana and Life (`Ambt`)");
 {
   // Three drinkers, one well each, because the interesting part is where the WELL's mana
@@ -228,6 +277,47 @@ console.log("Replenish Mana and Life (`Ambt`)");
   // A drinker that needs nothing is not a target at all.
   r = pour(600, 600, 100, 100);
   check("a drinker that needs nothing is left alone", Math.abs(r.well.mana - 100) < 0.01 && r.well.replenishTargetId === 0, `${r.well.mana.toFixed(1)}`);
+}
+
+console.log("…and the drink is a BURST, not a trickle");
+{
+  // One tick — 50 ms — is the whole transaction: the well empties into a unit already
+  // standing at it, rather than metering itself out over ten mana a second. This is the test
+  // that would fail if DataC1 were read as a rate: at 10/s a 100-mana well takes ten seconds.
+  const world = newWorld();
+  world.timeOfDaySuspended = true;
+  world.timeOfDay = 12;
+  world.add(base({ id: 80, typeId: "emow", x: 2000, y: 2000, hp: 600, maxHp: 600, mana: 100, maxMana: 300, speed: 0, radius: 96, isBuilding: true, name: "Moon Well" }),
+    BUILT(2000, 2000), { abilities: [{ id: "Ambt", code: "Ambt", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  world.add(base({ id: 81, typeId: "hkni", race: "human", x: 2100, y: 2000, hp: 200, maxHp: 600, mana: 100, maxMana: 100, speed: 200, radius: 16, name: "Drinker" }));
+  world.units.get(80).mana = 100;
+  world.tick(0.05);
+  check("one tick empties the well", world.units.get(80).mana < 1, `${world.units.get(80).mana.toFixed(1)}`);
+  check("…and the drinker is up 200 hit points", Math.abs(world.units.get(81).hp - 400) < 2, `${world.units.get(81).hp.toFixed(0)}/600`);
+}
+
+console.log("…and a unit RIGHT-CLICKED onto a well drinks from it with autocast off");
+{
+  // The order lives on the DRINKER: you select the unit and right-click the well, so the unit
+  // is what walks. Autocast is off here, which is how the data ships it (`emow`'s
+  // UnitAbilities `auto` column is `_`) — without the order nothing would happen at all.
+  const world = newWorld();
+  world.timeOfDaySuspended = true;
+  world.timeOfDay = 12;
+  world.add(base({ id: 80, typeId: "emow", x: 2000, y: 2000, hp: 600, maxHp: 600, mana: 100, maxMana: 300, speed: 0, radius: 96, isBuilding: true, name: "Moon Well" }),
+    BUILT(2000, 2000), { abilities: [{ id: "Ambt", code: "Ambt", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  world.units.get(80).mana = 100;
+  // Far enough away that it has to walk: Area1 is 400, this is 1200.
+  world.add(base({ id: 81, typeId: "hkni", race: "human", x: 3200, y: 2000, hp: 200, maxHp: 600, mana: 100, maxMana: 100, speed: 300, radius: 16, name: "Drinker" }));
+  world.add(base({ id: 82, typeId: "hkni", race: "human", x: 3200, y: 2200, hp: 600, maxHp: 600, mana: 100, maxMana: 100, speed: 300, radius: 16, name: "Full" }));
+  check("the order is accepted", world.issueDrink(81, 80) === true);
+  check("…and refused for a unit with nothing to gain", world.issueDrink(82, 80) === false);
+  world.tick(0.05);
+  check("nothing is poured while it is still walking", Math.abs(world.units.get(80).mana - 100) < 0.01, `${world.units.get(80).mana.toFixed(1)}`);
+  for (let t = 0; t < 10 / 0.05; t++) world.tick(0.05);
+  check("it arrives and drinks", world.units.get(81).hp > 350, `${world.units.get(81).hp.toFixed(0)}/600`);
+  check("…spending the well", world.units.get(80).mana < 1, `${world.units.get(80).mana.toFixed(1)}`);
+  check("…and the order is spent with it", world.units.get(81).drinkWellId === 0);
 }
 
 console.log("Well Spring (`Rews`) — +125 mana, +0.52/sec, and both only after dark");

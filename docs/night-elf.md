@@ -9,11 +9,14 @@ difference is a tuning value — each piece is a rule, and each rule is stated b
 This is that list, so the next person does not have to rediscover which column says what.
 
 Implementation: `tickHarvest` / `orbitTree` / `finishConstruction` / `tickEntangledMines` /
-`tickReplenish` / `tickRenew` / `toggleRoot` in [`src/sim/world.ts`](../src/sim/world.ts), the
-`Aent` / `Ambt` / `Adtn` / `Aeat` handlers in [`src/sim/spells.ts`](../src/sim/spells.ts), the
-Wisp's profile in [`src/data/races.ts`](../src/data/races.ts), and `raiseEntangledMines` in
-[`src/render/mapViewer.ts`](../src/render/mapViewer.ts). Checked by
-`tools/sim-nightelf-test.cjs` and `tools/sim-root-test.cjs` (`pnpm sim:test`).
+`tickReplenish` / `tickRenew` / `toggleRoot` / `issueEntangleInstant` / `issueDrink` in
+[`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
+[`src/sim/spells.ts`](../src/sim/spells.ts), the Wisp's profile in
+[`src/data/races.ts`](../src/data/races.ts), `raiseEntangledMines` and the command card's
+`ROOTED_ONLY` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts), and the two-form clip
+picking in [`src/render/unitAnims.ts`](../src/render/unitAnims.ts) /
+`RtsController.applyFormAnims`. Checked by `tools/sim-nightelf-test.cjs`,
+`tools/sim-root-test.cjs` and `tools/sim-ancient-anim-test.cjs` (`pnpm sim:test`).
 
 ## 1. The Wisp does not haul
 
@@ -131,6 +134,30 @@ Tree of Life planted at the mine. And it does not convert the mine — `UnitID1`
 a unit*, so the `SimMine` goes on being the gold and a building with 800 HP is raised over it.
 `SimMine.entangledBy` is the seam. Knock the building down and the mine is a mine again.
 
+**The mine is already wrapped when the match starts**, and that is not a special case in the
+melee opening — it is an ORDER the opening gives. `Blizzard.j`'s `MeleeStartingUnitsNightElf`
+plants the Tree beside the nearest mine and immediately issues
+
+```jass
+call IssueTargetOrder(tree, "entangleinstant", nearestMine)
+```
+
+`entangleinstant` is a second order string on the same `Aent` row — `UI\TriggerData.txt` lists
+it (and an `autoentangleinstant` twin that takes no target) while `NightElfAbilityFunc` names
+only `Order=entangle`, so the ordinary "match the order string against the unit's abilities"
+lookup cannot find it and it has to be recognised by name. It is Entangle with the cast time
+dropped and the mine NAMED, which matters where there is more than one in reach: six night elf
+campaign chapters open with the same line. Ours is intercepted in `authorityHooks`, the one
+seam where a gold mine is still a unit (`MINE_ID_BASE`), and lands in
+`SimWorld.issueEntangleInstant`.
+
+**An Ancient that pulls itself out of the ground lets the mine go.** The roots are the *Tree's*
+— `SimUnit.entangler` is the link, set when the building is raised — so uprooting a Tree of
+Life collapses its Entangled Gold Mine, turns the crew out (`unloadBurrow`, not a burial) and
+leaves a plain mine anybody can work. Planting again does not hand it back: entangling is a
+button you press. Killing the Tree does not release it either — the Entangled Gold Mine is its
+own building with its own 800 hit points, and knocking it down is a separate job.
+
 The crew rides the same cargo-hold machinery as the Orc Burrow (`cargoHold` matches `Abun`,
 `Aenc` and `Acar`); what tells them apart is that a burrow's and a mine's passengers must be
 *workers*, while a transport takes anyone.
@@ -187,6 +214,49 @@ source that names them, so they stay unspent.
 An uprooted Ancient trains and researches nothing — WC3 halts the queue rather than cancelling
 it, so it resumes where it stopped when the Ancient plants.
 
+**Its CARD says which way up it is**, and that is not decoration. WC3 hands a walking Ancient
+the ordinary mobile order set — Move, Stop, Hold, Attack, Patrol — and takes the whole building
+card away, because every button on it wants roots: the queue is halted, there is no rally point
+to place, and Entangle Gold Mine has nothing to hold with. So `buildCommandCard` simply lets an
+uprooted Ancient fall through to the movable-unit branch, and the one ability that would still
+show in both stances is filtered by name (`ROOTED_ONLY` — `Aent`, and the game's own
+`Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."). Eat Tree stays on
+both cards: an Ancient eats trees walking or planted.
+
+`Aroo` itself is the button that must appear in BOTH, wearing opposite faces — one row, two
+directions, and `NightElfAbilityFunc` spells out the pair:
+
+```
+[Aroo]  Art=BTNRoot    Order=root      Tip="Root"     Buttonpos=3,2
+        Unart=BTNUproot Unorder=unroot  Untip="Uproot" Unbuttonpos=3,2
+```
+
+A toggle shows what it can do NEXT, so a PLANTED Ancient wears the `un` half (BTNUproot,
+"Uproot") and a walking one wears the plain half. Those `Un*` columns are parsed now
+(`AbilityDef.unIcon`/`unTip`/…) — every Order/Unorder pair carries them, and so does every
+autocast toggle's on/off art.
+
+**The two states are two halves of one MODEL**, and which half is showing is `SimUnit.altModel`
+(`recomputeStats`: planted = alternate). The Ancients carry no static `Animprops`, so nothing
+else would choose for them, and the mapping is the reverse of the obvious guess: the PLAIN clips
+are the walking form (`Walk` has no alternate twin — only an uprooted Ancient walks) and the
+`* Alternate` ones are the planted tree. That is why the training pose is **"Stand Work
+Alternate"**: an Ancient trains only while planted. A non-Ancient night elf building — the
+Chimaera Roost, the Hunter's Hall — has no alternate half at all and simply plays "Stand Work".
+
+Two traps live in that, and both are the kind you only see on screen:
+
+* A clip whose name still says "alternate" by the time the picker looks at it belongs to the
+  form the unit is **not** in. `applyAnimProps` renames or blanks them when the alternate props
+  are on, so an unanchored `/stand work/` match with the props OFF finds the planted tree's
+  working pose — which is what an uprooted Ancient played while it walked, its queue merely
+  halted. Hence `AnimSet.standWork`, excluded by name like the carry/swim variants beside it.
+* **`Morph` is the clip a form plays to LEAVE that form.** "Morph Alternate" is the planted
+  Ancient hauling its roots up; the plain "Morph" is the walking one settling back down. So the
+  transition is read off the state being moved FROM while the new stand/work set is built for
+  the state being moved TO (`RtsController.applyFormAnims`). Read both off the destination and
+  each direction plays the other's clip: an Ancient visibly uproots itself as it plants.
+
 And its GROUND DECAL travels with it. The ubersplat is the mark the roots leave, so it belongs
 where the roots are: removed the moment the Ancient pulls up, and painted afresh wherever it
 plants — a new spot, since planting snaps to the build grid. An Ancient is the only building in
@@ -203,7 +273,7 @@ be found by the id it was tracked against (`liftedSplats` in mapViewer).
 | --- | --- | --- |
 | `DataA1` | 2 | hit points per point of the **well's** mana |
 | `DataB1` | 0.5 | mana per point of the well's mana |
-| `DataC1` | 10 | mana spent per second — the pour is a drink, not an instant |
+| `DataC1` | 10 | **unspent** — the drink is a burst, see below |
 | `Area1` | 400 | how close the drinker has to be |
 | `DataD1` / `DataE1` | 30 / 1 | **unspent** — see below |
 
@@ -212,10 +282,43 @@ half the spend is offered to each, and the half nobody wants **spills into the o
 full-health hero therefore drains a well entirely into its mana bar, and a mechanical unit gets
 nothing at all (`targs1` says `organic`).
 
+**The drink is one step.** A unit that reaches a well flashes and its bars jump while the well's
+mana drops by what that cost — it takes everything it can use in a single transaction and stops
+early only when the well runs dry. Being able to see at a glance whether a well has another
+unit's worth left in it is most of how the race is played, and a metered pour does not read that
+way, so `DataC1` stays unread rather than trickling it out at ten mana a second. The spend is
+still bounded at both ends: by what the drinker can absorb (`(maxHp − hp) / DataA1` plus
+`(maxMana − mana) / DataB1`, in the well's own currency so the halves are comparable) and by
+what the well has left.
+
 `Rng1` = 99999 is deliberately not used as a range. A range of "the whole map" is the engine's
 way of never refusing the order; what bounds the drink is `Area1`, and treating the 99999 as
 real would let a well heal across the map. A unit ordered to drink from a distant well keeps the
 order and gets nothing until it walks in.
+
+**You order the DRINKER, not the well.** `Ambt` is the one ability in the game whose button is
+on one unit and whose order is given to another: you select a unit, right-click a Moon Well —
+your own or an **ally's** — and the unit walks over and drinks. So the order lives on the unit
+(`SimUnit.drinkWellId`, a `{kind:"drink"}` QueuedOrder) and the well reads it when the drinker
+arrives. It has to be an explicit order rather than a side-effect of autocast, because the well
+ships with autocast OFF: `emow`'s `UnitAbilities.slk` `auto` column is `_`. Three ways a drinker
+is chosen, in the order the player's intent runs — the unit the well was aimed at by hand, then
+whoever was right-clicked onto it and has arrived, then (autocast only) the neediest friendly
+standing nearby.
+
+The art is all on the row, one model per place it belongs:
+
+```
+[Ambt]  Casterart  = …\NightElf\MoonWell\MoonWellCasterArt.mdl   on the WELL
+        Effectart  = …\NightElf\MoonWell\MoonWellTarget.mdl      on the drinker
+        Specialart = …\Human\Heal\HealTarget.mdl                 on the drinker
+```
+
+`Specialart` being the Priest's own Heal model is not a mix-up — it is where the green heal
+sparkle over a drinking unit comes from, and the sound rides with it: WC3 keeps
+`HealTarget.wav` in that model's own folder, which is exactly what `playSpellSound` resolves off
+an effect's art. (`Effectart` is a five-entry list, one per race plus the corrupted well; the
+first is taken, as everywhere else.)
 
 `DataE1` = 1 is the one column that differs from the Obsidian Statue's otherwise identical
 `Amb2` (which is 0), in the same place the two units differ — the statue refills its mana at any
@@ -265,9 +368,11 @@ defeat the thing it is an upgrade to.
 
 ## Not done yet
 
-* **The uproot animation takes time.** Liquipedia lists Root/Uproot's "Animation Duration" as
-  2.5 seconds, which is `Aro1`'s own `Dur1`, and the Ancient models author the pair of clips for
-  it (`Morph` / `Morph Alternate`). Ours is instantaneous.
+* **The uproot animation takes time — in the SIM, not just on screen.** Liquipedia lists
+  Root/Uproot's "Animation Duration" as 2.5 seconds, which is `Aro1`'s own `Dur1`. The clip is
+  played and held for its own length now (the right one in each direction, see §4), but the sim
+  side is still instantaneous: the Ancient is a walker on the very tick you press the button,
+  and in the original it is neither thing for those 2.5 seconds.
 * **An uprooted Ancient should be HEAVY armour, not fortified.** `Aroo` `DataD1` = 2 is an index
   into the game's own defense-type ordering and the 1.30 tooltip says the answer outright:
   Root "gives the Ancient Fortified armor", Uproot "gives the Ancient Heavy armor" (and 1.06's

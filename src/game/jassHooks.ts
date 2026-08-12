@@ -259,6 +259,9 @@ export function authorityHooks(authority: {
     y: number,
     targetId: number,
   ): boolean;
+  /** `entangleinstant` — see the interception in `issueUnitOrder` below. `mineHandle` is a
+   *  script-side unit handle (so it goes through MINE_ID_BASE), 0 for the no-target form. */
+  entangleInstant(unitId: number, mineHandle: number): boolean;
 }): Partial<EngineHooks> {
   return {
     // Orders (7.14): trigger issue → the sim; current order ← the sim.
@@ -271,8 +274,18 @@ export function authorityHooks(authority: {
     // It is deliberately NOT gated on ownership and is NOT a hole in the command funnel — see
     // the method's own comment. A trigger order is an effect of the authoritative sim, not an
     // input to it.
+    //
+    // `entangleinstant` is intercepted before it gets there, and this is the one place that
+    // CAN intercept it: its target is a gold mine, so the order only means anything on the
+    // side of the seam where a mine is a unit. It is `Aent` with no cast time and a named
+    // mine — a second order string on the same row (UI\TriggerData.txt) with no AbilityFunc
+    // `Order` entry of its own, which is why the ordinary ability-order match cannot find it
+    // — and it is how a night elf melee game opens with its mine already wrapped
+    // (Blizzard.j, MeleeStartingUnitsNightElf). The `auto…` twin takes no target at all.
     issueUnitOrder: (id, orderId, order, kind, x, y, targetId) =>
-      authority.issueUnitOrder(id, orderId, order, kind, x, y, targetId),
+      order === "entangleinstant" || order === "autoentangleinstant"
+        ? authority.entangleInstant(id, targetId)
+        : authority.issueUnitOrder(id, orderId, order, kind, x, y, targetId),
     getUnitCurrentOrder: (id) => authority.currentOrderId(id),
     // CreateUnit — the sim unit exists the instant this returns, because the native is
     // SYNCHRONOUS and the next JASS statement may order or configure it. Its BODY is queued for

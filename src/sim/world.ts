@@ -33,7 +33,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -644,7 +644,12 @@ export type QueuedOrder =
   | { kind: "buildnew"; defId: string; x: number; y: number; gold: number; lumber: number; paid: boolean }
   // ax/ay: as above, a distinct spot around the building's footprint to spread builders.
   | { kind: "buildresume"; buildingId: number; ax?: number; ay?: number }
-  | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number };
+  | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number }
+  // Go and drink from a Moon Well (`Ambt`). A move with a promise attached: the unit walks to
+  // the well and, once inside the ability's Area1, the well pours itself into it. The order is
+  // on the DRINKER because the drinker is what was selected and what has to walk — see
+  // SimUnit.drinkWellId.
+  | { kind: "drink"; wellId: number };
 
 const MAX_QUEUED_ORDERS = 35; // WC3 action-queue cap (shift-queued ORDERS on a unit)
 /** WC3 caps a building's PRODUCTION queue at 7 jobs — training, research and tier upgrades
@@ -1123,6 +1128,23 @@ export interface SimUnit {
   /** For an Entangled Gold Mine (`egol`), the SimMine it stands on — the gold its crew pulls
    *  out. 0 for everything else. See tickEntangledMines. */
   mineId: number;
+  /** For an Entangled Gold Mine (`egol`), the Tree of Life whose roots are holding it — the
+   *  unit that cast `Aent`. 0 for everything else.
+   *
+   *  The roots are the TREE's, not the mine's, which is why this link has to exist at all:
+   *  an Ancient that pulls itself out of the ground lets go of everything it was holding, so
+   *  the mine is released and its crew turned out the moment its Tree uproots. (Killing the
+   *  Tree does NOT release it — an Entangled Gold Mine is its own building with its own 800
+   *  hit points, and knocking it down is a separate job.) */
+  entangler: number;
+  /** The Moon Well this unit has been SENT to drink from (`{kind:"drink"}`), or 0.
+   *
+   *  Replenish is the one ability in the game whose button is on one unit and whose order is
+   *  given to another: you right-click the well with the drinker selected, and it is the
+   *  drinker that walks. So the order lives here, on the unit that was told to go, and the
+   *  well reads it when the drinker arrives (tickReplenish). Cleared by the pour, and by any
+   *  other order the unit is given (`dispatch`). */
+  drinkWellId: number;
   /** Who this Moon Well is currently pouring itself into (`Ambt`), or 0. Replenish is not an
    *  instant: the well spends its mana into ONE unit at a rate, so the pour has to be state
    *  rather than a one-shot effect. See tickReplenish. */
@@ -1779,7 +1801,7 @@ export class SimWorld {
   // (same deferral as trainCompletions — the sim owns no model instances).
   private summonRequests: SummonRequest[] = [];
   /** Entangled Gold Mines waiting for the renderer to raise them (see entangleMine). */
-  private entangleRequests: Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number }> = [];
+  private entangleRequests: Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number; casterId: number }> = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -3009,41 +3031,109 @@ export class SimWorld {
   // lone wisp worth 2 gold/sec and a full mine worth 10. Nothing in the data states the
   // scaling in so many words; the parity between the four races' mining rates does.
 
-  /** Entangle (`Aent`): wrap the nearest un-entangled gold mine within the ability's range in
-   *  roots. The building itself is spawned by the renderer (it needs a model — same asynchrony
-   *  as a summon), which calls back through attachEntangled. False if there is no mine in
-   *  reach, which is the whole of the ability's failure case. */
-  entangleMine(caster: SimUnit, def: AbilityDef): boolean {
+  /** Entangle (`Aent`): wrap a gold mine in roots. With no `mine` named it takes the nearest
+   *  un-entangled one within the ability's range, which is the button's own behaviour —
+   *  `targs1` is literally `_`, so the ability takes NO target and simply wraps whatever it is
+   *  standing next to. A named mine is the `entangleinstant` order (see issueEntangleInstant).
+   *
+   *  The building itself is spawned by the renderer (it needs a model — same asynchrony as a
+   *  summon), which calls back through attachEntangled. False if there is no mine in reach,
+   *  which is the whole of the ability's failure case. */
+  entangleMine(caster: SimUnit, def: AbilityDef, mine?: SimMine): boolean {
+    // Roots in the air hold nothing. The card already hides the button while an Ancient
+    // walks (ROOTED_ONLY), and the game has a line for the refusal: [Errors]
+    // `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."
+    if (caster.uprooted) return false;
     const range = def.levelData[0]?.castRange || 500;
     let best: SimMine | null = null;
-    let bestD = Infinity;
-    for (const m of this.mines.values()) {
-      if (m.entangledBy) continue;
-      const d = Math.hypot(m.x - caster.x, m.y - caster.y);
-      if (d > range + m.radius || d >= bestD) continue;
-      bestD = d;
-      best = m;
+    if (mine) {
+      if (mine.entangledBy || !this.mines.has(mine.id)) return false;
+      best = mine;
+    } else {
+      let bestD = Infinity;
+      for (const m of this.mines.values()) {
+        if (m.entangledBy) continue;
+        const d = Math.hypot(m.x - caster.x, m.y - caster.y);
+        if (d > range + m.radius || d >= bestD) continue;
+        bestD = d;
+        best = m;
+      }
     }
     if (!best) return false;
     const unitId = def.levelData[0]?.summon || "egol"; // `Aent` UnitID1 — the unit it raises
     // Claimed the moment it is asked for, not when the model lands: the request is in flight
     // for a frame or two and a second Tree of Life must not entangle the same mine again.
     best.entangledBy = -1;
-    this.entangleRequests.push({ mineId: best.id, unitId, x: best.x, y: best.y, owner: caster.owner, team: caster.team });
+    this.entangleRequests.push({ mineId: best.id, unitId, x: best.x, y: best.y, owner: caster.owner, team: caster.team, casterId: caster.id });
     return true;
   }
 
+  /**
+   * `entangleinstant` — Entangle aimed at a NAMED mine, with no cast time.
+   *
+   * A second order string on the same `Aent` row (UI\TriggerData.txt lists both
+   * `UnitOrderEntangleInstant` and `UnitOrderAutoEntangleInstant`), and it exists because the
+   * melee opening needs it: `Blizzard.j`'s `MeleeStartingUnitsNightElf` plants the Tree of
+   * Life beside the nearest mine and immediately issues
+   * `IssueTargetOrder(tree, "entangleinstant", nearestMine)` — which is why a night elf melee
+   * game STARTS with its gold mine already entangled and its five Wisps able to walk straight
+   * in. Six night elf campaign chapters open the same way.
+   *
+   * `mineId` 0 means "the one you are standing next to" — the ability's own no-target rule,
+   * which is what the second order string (`autoentangleinstant`) asks for.
+   *
+   * Returns false if the unit has no Entangle, or the mine is gone/already wrapped.
+   */
+  issueEntangleInstant(casterId: number, mineId: number): boolean {
+    const u = this.units.get(casterId);
+    if (!u || !this.abilities) return false;
+    const mine = mineId ? this.mines.get(mineId) : undefined;
+    if (mineId && !mine) return false;
+    const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
+    const def = ab && this.abilities.get(ab.id);
+    if (!def) return false;
+    return this.entangleMine(u, def, mine);
+  }
+
   /** The renderer has raised the Entangled Gold Mine and hands the sim its unit id. Links the
-   *  two halves so the crew inside the building knows which mine it is emptying. */
-  attachEntangled(unitId: number, mineId: number): void {
+   *  three parties: the crew inside the building knows which mine it is emptying, and the
+   *  building knows whose roots are holding it up (see SimUnit.entangler). */
+  attachEntangled(unitId: number, mineId: number, casterId = 0): void {
     const u = this.units.get(unitId);
     const mine = this.mines.get(mineId);
     if (!u || !mine) return;
     u.mineId = mineId;
+    u.entangler = casterId;
     mine.entangledBy = unitId;
   }
 
-  drainEntangleRequests(): Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number }> {
+  /**
+   * Let go of any gold mine this unit's roots are holding — an Ancient pulling itself out of
+   * the ground (toggleRoot). The mine becomes a plain gold mine again and the crew is turned
+   * OUT rather than buried: `unloadBurrow` puts the Wisps back on the field, and the building
+   * leaves the way a cancelled one does (no death, no corpse, no kill credit for anybody).
+   *
+   * The renderer notices the `egol` record is gone and un-hides the gold mine underneath it,
+   * exactly as it does when an entangled mine runs dry (see raiseEntangledMines).
+   */
+  private releaseEntangledMine(u: SimUnit): void {
+    for (const o of [...this.units.values()]) {
+      if (o.entangler !== u.id) continue;
+      this.unloadBurrow(o.id);
+      this.removeUnit(o.id);
+    }
+    // …including one still in flight: a request whose model has not landed yet has already
+    // claimed its mine (`entangledBy = -1`), and dropping the request without releasing that
+    // claim would leave a mine nobody could ever entangle again.
+    this.entangleRequests = this.entangleRequests.filter((r) => {
+      if (r.casterId !== u.id) return true;
+      const m = this.mines.get(r.mineId);
+      if (m && m.entangledBy === -1) m.entangledBy = 0;
+      return false;
+    });
+  }
+
+  drainEntangleRequests(): Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number; casterId: number }> {
     if (!this.entangleRequests.length) return this.entangleRequests;
     const out = this.entangleRequests;
     this.entangleRequests = [];
@@ -3664,6 +3754,8 @@ export class SimWorld {
       | "isPeon"
       | "ancient"
       | "mineId"
+      | "entangler"
+      | "drinkWellId"
       | "replenishTargetId"
       | "isSummon"
       | "spawning"
@@ -3863,6 +3955,8 @@ export class SimWorld {
       isPeon: !!opts?.isPeon,
       ancient: !!opts?.ancient,
       mineId: 0, // set by entangleMine for an egol
+      entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
+      drinkWellId: 0,
       replenishTargetId: 0,
       isSummon: false,
       spawning: 0,
@@ -5051,6 +5145,11 @@ export class SimWorld {
   /** Route a QueuedOrder to the matching issue* method. Shared by immediate
    *  orders (issueOrder) and queue replay (startNextQueued). */
   private dispatch(id: number, o: QueuedOrder): boolean {
+    // Any new order lets go of a Moon Well the unit was sent to. One place, because this is
+    // the one door every player/trigger order comes through; `issueDrink` sets it again a
+    // line later for the order that wants it.
+    const u0 = this.units.get(id);
+    if (u0) u0.drinkWellId = 0;
     switch (o.kind) {
       case "move": return this.issueMove(id, o.x, o.y, o.targetId);
       case "attackmove": return this.issueAttackMove(id, o.x, o.y);
@@ -5063,7 +5162,29 @@ export class SimWorld {
       case "buildresume": this.assignBuilder(id, o.buildingId, o.ax, o.ay); return true;
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
+      case "drink": return this.issueDrink(id, o.wellId);
     }
+  }
+
+  /** Send a unit to drink from a Moon Well (`Ambt`) — the right-click order. It walks to the
+   *  well like any move-at-a-building; the pour happens when it gets there (tickReplenish),
+   *  and if the well is dry by then nothing happens, which is what walking to an empty well
+   *  looks like in the game too.
+   *
+   *  Refused for a target that is not a battery, not friendly, or not something the ability
+   *  may touch at all (`targs1` says `organic`, so a Mortar Team gets nothing from a well). */
+  issueDrink(id: number, wellId: number): boolean {
+    const u = this.units.get(id);
+    const well = this.units.get(wellId);
+    if (!u || !well || well.hp <= 0 || this.castLocked(u)) return false;
+    const def = this.replenishAbility(well);
+    if (!def || !this.replenishWants(well, u, def)) return false;
+    if (!this.issueMove(id, well.x, well.y, wellId)) {
+      // Already standing at the well — the move is a no-op, but the drink is not.
+      if (u.order !== "idle") return false;
+    }
+    u.drinkWellId = wellId;
+    return true;
   }
 
   /** Start the next queued order (called when a unit falls idle with a queue).
@@ -5911,6 +6032,13 @@ export class SimWorld {
       u.footprint = 0;
       // Whatever it was building keeps its place in the queue: WC3 halts an uprooted
       // Ancient's production rather than cancelling it (see tickBuildings).
+      //
+      // The gold mine, though, is let go outright. `Aent`'s roots are the TREE's — a Tree of
+      // Life that pulls itself out of the ground takes them with it — so the Entangled Gold
+      // Mine collapses, the Wisps working it walk out, and the plain mine is a plain mine
+      // again, minable by anybody. It is not given back when the Tree plants: entangling is
+      // a button you press.
+      this.releaseEntangledMine(u);
     }
     this.recomputeStats(u);
     return true;
@@ -6007,8 +6135,16 @@ export class SimWorld {
   //
   //   DataA1 = 2    hit points per point of the WELL's mana
   //   DataB1 = 0.5  mana per point of the well's mana
-  //   DataC1 = 10   mana spent per second — the pour is a drink, not an instant
+  //   DataC1 = 10   unspent — see below
   //   Area1  = 400  how close the drinker has to be
+  //
+  // The drink is a BURST, not a trickle. A unit sent to a Moon Well walks up, flashes, and its
+  // bars jump in one step while the well's mana drops by what that cost — it takes everything
+  // it can use in one go, and stops early only when the well runs dry. That is what the game
+  // shows and what a night elf player counts on (you know at a glance whether a well has
+  // another unit's worth left in it), so DataC1 stays unread rather than metering the pour out
+  // over ten mana a second: measured against the real client, nothing about the transfer is
+  // gradual. It IS still bounded by the drinker's need and by the well — see the spend below.
   //
   // The split between the two is the part no column states and every night elf player knows:
   // "if a unit that has mana uses the Moon Well, it will partition half of its mana for life,
@@ -6027,33 +6163,57 @@ export class SimWorld {
   // is the obvious reading, but obvious is not verified, and the well's night rule is already
   // carried by its own row (see tickRegen). DataD1 = 30 vs the statue's -1 is likewise unread.
 
-  /** One well's worth of pouring. Picks a drinker when autocasting, holds the one it has
-   *  while that unit still needs something, and spends mana into it at DataC per second. */
-  private tickReplenish(u: SimUnit, dt: number): void {
+  /** Is this a FINISHED Moon Well (or Obsidian Statue — same `Ambt` family) that units can be
+   *  sent to drink from? Public because the right-click has to ask before it decides what a
+   *  click on a friendly building means. Whether a given unit may actually drink is
+   *  `issueDrink`'s question, not this one. */
+  isReplenisher(unitId: number): boolean {
+    const u = this.units.get(unitId);
+    if (!u || u.hp <= 0 || (u.building && u.building.constructionLeft > 0)) return false;
+    return !!this.replenishAbility(u);
+  }
+
+  /** This unit's Replenish row (`Ambt`), or undefined for everything that is not a battery. */
+  private replenishAbility(u: SimUnit): AbilityDef | undefined {
+    const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
+    return ab && this.abilities ? this.abilities.get(ab.id) : undefined;
+  }
+
+  /** One well's worth of pouring: find whoever is drinking and empty into them.
+   *
+   *  Three ways a drinker is chosen, in the order the player's intent runs: the unit the well
+   *  was aimed at by hand (`Ambt` cast from its own card, or by a trigger), then anyone who was
+   *  RIGHT-CLICKED onto this well and has since arrived, then — only with autocast on — the
+   *  neediest friendly standing nearby. */
+  private tickReplenish(u: SimUnit): void {
     const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
     if (!ab) return;
     const def = this.abilities?.get(ab.id);
     const lvl = def?.levelData[0];
     if (!def || !lvl) return;
+    // A well still going up holds no mana and pours nothing (see recomputeStats' mana0 rule).
+    if (u.mana <= 0 || u.paused || u.stunned || (u.building && u.building.constructionLeft > 0)) return;
     const area = lvl.area || 400;
-    let t = u.replenishTargetId ? this.units.get(u.replenishTargetId) : undefined;
-    if (t && !this.replenishWants(u, t, def)) t = undefined;
-    // Autocast finds its own drinker; the manual cast's target is already sitting in
-    // `replenishTargetId` and simply keeps being poured into until it is full.
-    if (!t && ab.autocastOn) t = this.replenishPick(u, def, area);
-    u.replenishTargetId = t?.id ?? 0;
-    if (!t || u.mana <= 0 || u.paused || u.stunned) return;
     // A unit ORDERED to drink from a well across the map keeps the order and gets nothing
     // until it walks in — which is what a cast range of 99999 with an Area of 400 means.
-    if (Math.hypot(t.x - u.x, t.y - u.y) - t.radius > area) return;
+    const reached = (t: SimUnit): boolean => Math.hypot(t.x - u.x, t.y - u.y) - t.radius <= area;
+    let t = u.replenishTargetId ? this.units.get(u.replenishTargetId) : undefined;
+    if (t && !this.replenishWants(u, t, def)) t = undefined;
+    u.replenishTargetId = t?.id ?? 0;
+    if (t && !reached(t)) return; // still on its way — hold the aim, pour nothing
+    if (!t) t = this.replenishSent(u, def, area);
+    if (!t && ab.autocastOn) t = this.replenishPick(u, def, area);
+    if (!t) return;
 
     const hpPerMana = this.dataOf(lvl, 0, 2);
     const manaPerMana = this.dataOf(lvl, 1, 0.5);
-    const spend = Math.min(u.mana, this.dataOf(lvl, 2, 10) * dt);
     // What each half of the spend could absorb, in WELL mana rather than in the drinker's
     // units — so the two are comparable and the leftover of one can be handed to the other.
     const lifeCap = hpPerMana > 0 ? (t.maxHp - t.hp) / hpPerMana : 0;
     const manaCap = manaPerMana > 0 && t.maxMana > 0 ? (t.maxMana - t.mana) / manaPerMana : 0;
+    // Everything the drinker can use, or everything the well has left — whichever runs out
+    // first. That is the whole of "drink": one step, no rate.
+    const spend = Math.min(u.mana, lifeCap + manaCap);
     let toLife = Math.min(spend / 2, lifeCap);
     let toMana = Math.min(spend / 2, manaCap);
     const spare = spend - toLife - toMana; // the half that had nowhere to go
@@ -6063,13 +6223,42 @@ export class SimWorld {
       toMana = Math.min(manaCap, toMana + (spare - moreLife));
     }
     const used = toLife + toMana;
-    if (used <= 0) {
-      u.replenishTargetId = 0; // nothing left to give this one
-      return;
-    }
+    // The order is spent whether or not there was anything left to pour: a unit that walked
+    // to a dry well has had its drink, and standing there waiting for nightfall is not it.
+    t.drinkWellId = 0;
+    u.replenishTargetId = 0;
+    if (used <= 0) return;
     u.mana -= used;
     t.hp = Math.min(t.maxHp, t.hp + toLife * hpPerMana);
     t.mana = Math.min(t.maxMana, t.mana + toMana * manaPerMana);
+    // The three models the row names, each where it belongs: `Casterart` on the well
+    // (MoonWellCasterArt — the water stirring), `Effectart` on the drinker (MoonWellTarget),
+    // and `Specialart` — which for `Ambt` is the Priest's own `Heal\HealTarget.mdl` — on the
+    // drinker too, carrying the heal sound that lives beside it in its folder
+    // (Abilities\Spells\Human\Heal\HealTarget.wav). See NightElfAbilityFunc [Ambt].
+    if (def.casterArt) this.spellEffects.push({ art: def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
+    if (def.effectArt) this.spellEffects.push({ art: def.effectArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
+    if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: t.x, y: t.y, targetId: t.id, z: 0, sound: true });
+  }
+
+  /** The nearest unit that was SENT to this well and has arrived (`{kind:"drink"}`). */
+  private replenishSent(u: SimUnit, def: AbilityDef, area: number): SimUnit | undefined {
+    let best: SimUnit | undefined;
+    let bestD = Infinity;
+    for (const t of this.unitsInAreaInternal(u.x, u.y, area)) {
+      if (t.drinkWellId !== u.id) continue;
+      // Arrived with nothing left to gain (it healed on the way, or the well is the wrong
+      // kind for it): the order is simply finished.
+      if (!this.replenishWants(u, t, def)) {
+        t.drinkWellId = 0;
+        continue;
+      }
+      const d = Math.hypot(t.x - u.x, t.y - u.y);
+      if (d >= bestD) continue;
+      bestD = d;
+      best = t;
+    }
+    return best;
   }
 
   /** Is `t` still worth pouring into? Alive, allied, short of something, and allowed by the
@@ -6451,6 +6640,12 @@ export class SimWorld {
     // ability its own error string. Holy Light and Death Coil are mirror images.
     const polarity = POLARITY_SPELLS[code];
     if (polarity && !this.polarityOk(caster, target, polarity.healsUndead)) return polarity.error;
+    // …and abilities that need the target to HAVE a mana bar. Same shape as the polarity
+    // rule and known the same way: `targs1` cannot express it, and the game ships a line
+    // written for one ability ("Unable to cast Mana Burn on this target."). A Demon Hunter
+    // may not pick a Footman at all — see MANA_TARGET_SPELLS.
+    const manaTarget = MANA_TARGET_SPELLS[code];
+    if (manaTarget && target.maxMana <= 0) return manaTarget;
     // A heal with nothing to heal is refused, not wasted — WC3 won't let you spend a
     // Paladin's mana on an undamaged Footman. The hero/unit split is the data's own:
     // "Hero has full health." vs "Already at full health."
@@ -8279,7 +8474,7 @@ export class SimWorld {
       this.tickAltForm(u, dt); // a timed form (militia) running out and reverting
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
-      this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
+      this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired

@@ -228,6 +228,13 @@ export interface HudDriver {
   /** The hero bar's buttons: the local player's living heroes in hire order, the order
    *  F1/F2/F3 also count in. */
   heroBar(): HeroBarEntry[];
+  /** Right-click a hero's button with a unit-producing building selected: rally it onto that
+   *  hero. False when the selection has nothing to rally (the click then means nothing). */
+  rallyToHero(index: number): boolean;
+  /** Give an inventory item to the hero behind button `index` — `slot` when the gesture was a
+   *  drag out of the inventory grid, omitted to spend the item the player has already picked
+   *  up with a right-click. False when there is nothing to give. */
+  dropItemOnHero(index: number, slot?: number): boolean;
   /** Command-card buttons for the current selection (empty = no card). */
   commandCard(): CommandButton[];
   /** Run a command-card button by id. */
@@ -716,6 +723,12 @@ function cropMinimapLetterbox(src: HTMLCanvasElement, aspect: number): HTMLCanva
 // WC3 maps the 2×3 inventory onto the numpad's matching 2×3 block: 7/8 top, 4/5
 // middle, 1/2 bottom. Drives both the hotkeys and the tooltip's "(NumPad 7)" hint.
 const INVENTORY_NUMPAD: readonly number[] = [7, 8, 4, 5, 1, 2];
+
+/** The drag payload an inventory slot puts on the clipboard when it is dragged out of the
+ *  pockets — the slot index, and nothing else; where it is DROPPED decides what happens. A
+ *  custom MIME type rather than "text/plain" so a stray drag from elsewhere in the page (a
+ *  chat selection) can never be mistaken for an item. */
+const INV_DRAG_TYPE = "application/x-openwar3-item-slot";
 
 const MINIMAP_SIZE = 168; // px along the minimap canvas's LONGEST side
 const DOTS_PERIOD = 100; // ms between minimap dot redraws
@@ -1590,11 +1603,40 @@ export class GameHud {
       // A click selects that hero, a double-click also jumps the camera to it — the mouse
       // half of F1/F2/F3, which count in this same order. Bound through `onPress` so the
       // button sinks under the press exactly as a command-card button does.
+      //
+      // …unless an ITEM is in hand. Right-clicking an inventory slot picks the item up and
+      // the next click spends it, and a hero's button stands in for the hero: clicking one
+      // hands the item over, exactly as clicking that hero's body on the map does. The give
+      // is tried first and only a refusal falls through to selecting.
       onPress(btn, () => {
+        if (this.driver.dropItemOnHero(i)) {
+          this.setArmed(false);
+          this.refreshSelectionNow();
+          return;
+        }
         this.driver.selectHero(i, false);
         this.refreshSelectionNow();
       });
       btn.addEventListener("dblclick", () => this.driver.selectHero(i, true));
+      // Right-click: rally a selected production building onto this hero — the same order a
+      // right-click on its body in the world gives, without having to find the body.
+      btn.oncontextmenu = (e) => {
+        e.preventDefault();
+        this.driver.rallyToHero(i);
+      };
+      // …and the drag half of handing an item over: drop an inventory icon on the portrait.
+      // preventDefault on dragover is what marks the button as a drop target at all.
+      btn.addEventListener("dragover", (e) => {
+        if (e.dataTransfer?.types.includes(INV_DRAG_TYPE)) e.preventDefault();
+      });
+      btn.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const raw = e.dataTransfer?.getData(INV_DRAG_TYPE) ?? "";
+        const slot = Number(raw);
+        if (raw === "" || !Number.isInteger(slot)) return; // not one of ours — `Number("")` is 0
+        this.driver.dropItemOnHero(i, slot);
+        this.refreshSelectionNow();
+      });
     }
     return bar;
   }
@@ -1895,6 +1937,15 @@ export class GameHud {
         e.preventDefault();
         this.driver.moveInventory(i);
       };
+      // Drag an item OUT of the pocket and onto another hero's button in the top-left bar to
+      // hand it over. The slot index is the whole payload; where it lands decides what
+      // happens (see the hero bar's `drop`). Only a slot holding something can be dragged —
+      // `refreshInventory` sets `draggable` per slot as items come and go.
+      btn.addEventListener("dragstart", (e) => {
+        if (!e.dataTransfer) return;
+        e.dataTransfer.setData(INV_DRAG_TYPE, String(i));
+        e.dataTransfer.effectAllowed = "move";
+      });
       // A slot with no item shows nothing (WC3 doesn't tooltip an empty pocket).
       btn.onpointerenter = () => this.showItemTooltip(i);
       btn.onpointerleave = () => {
@@ -1963,11 +2014,13 @@ export class GameHud {
       if (!s) {
         btn.classList.add("empty");
         btn.style.backgroundImage = "";
+        btn.draggable = false; // nothing in the pocket to drag onto a hero's portrait
         this.invCount[i].textContent = "";
         continue;
       }
       btn.classList.remove("empty");
       btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
+      btn.draggable = true;
       this.invCount[i].textContent = s.charges > 0 ? String(s.charges) : "";
     }
     // The slot under the cursor just changed (a charge spent, the item swapped or

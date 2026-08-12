@@ -6,7 +6,7 @@ import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint, Footprint } from "../sim/destructibles";
 import { PlacedIndex, type PlacedRef } from "./placement";
 import { Authority } from "./authority";
-import { simHooks, authorityHooks, visionHooks, rosterHooks } from "./jassHooks";
+import { simHooks, authorityHooks, visionHooks, rosterHooks, mineForScript } from "./jassHooks";
 import type { EngineHooks } from "../jass/runtime";
 import type { SimView } from "./simView";
 export type { PlacedRef };
@@ -1157,8 +1157,15 @@ export class RtsController {
    *
    *  The model never changes — one MDX carries both forms — so this is not a remodel, just a
    *  different reading of the same sequence list (see animPropsFor). The set is built for the
-   *  state being moved TO, which is also what makes `morph` land on the correct half of the
-   *  Morph/Morph Alternate pair without either direction being named here.
+   *  state being moved TO, because that is the state the unit will be standing/working in
+   *  when the transition ends.
+   *
+   *  The TRANSITION clip is the other way round: it comes from the state being moved FROM.
+   *  A form's Morph clip is the one it plays to LEAVE that form, which is what its name says
+   *  — "Morph Alternate" belongs to the alternate half, so it is the ROOTED Ancient pulling
+   *  its roots up, and the plain "Morph" is the walking one settling back down. Read off the
+   *  destination instead (which is what this did), each direction plays the other's clip and
+   *  an Ancient visibly uproots itself while it plants.
    *
    *  Two abilities arrive here and neither is named: an Ancient rooting (`Aroo`, where the
    *  planted pose is the alternate one) and a Crypt Fiend burrowing (`Abur`, where the
@@ -1177,15 +1184,18 @@ export class RtsController {
     if (!seqs) return;
     e.anims = buildAnimSet(seqs, animPropsFor(def, alt));
     if (first) return; // baseline only — no transition to play
+    // The clip belongs to the form being LEFT, so it is read out of that form's set. One
+    // extra buildAnimSet, only on a form change (twice in an Ancient's life, usually).
+    const morph = buildAnimSet(seqs, animPropsFor(def, !alt)).morph;
     // Hold the morph clip for its own length: castAnimT keeps the ordinary stand/walk picker
     // off this unit until the Ancient has finished hauling itself up or settling down.
-    if (e.anims.morph < 0) return; // model authors no transition — snap to the new set
+    if (morph < 0) return; // model authors no transition — snap to the new set
     const inst = e.unit.instance;
-    inst.setSequence(e.anims.morph);
+    inst.setSequence(morph);
     inst.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
-    e.curSeq = e.anims.morph;
+    e.curSeq = morph;
     e.unit.state = WidgetState.WALK; // hold it against the idle picker, as a cast clip does
-    e.castAnimT = seqDuration(inst, e.anims.morph, CAST_ANIM_HOLD);
+    e.castAnimT = seqDuration(inst, morph, CAST_ANIM_HOLD);
   }
 
   /** Dim an enemy/neutral BUILDING that's shown from fog memory (last-seen, out of
@@ -1813,6 +1823,60 @@ export class RtsController {
       });
     }
     return out;
+  }
+
+  /**
+   * Right-click on the (index+1)-th hero's button in the top-left hero bar, with a
+   * unit-producing building selected: rally that building onto the hero.
+   *
+   * The hero bar's buttons stand in for the heroes themselves — that is why clicking one
+   * selects it and double-clicking jumps the camera to it — so the orders you can aim at a
+   * hero in the world can be aimed at its button too, without hunting for it on the map. This
+   * is the rally half; `dropItemOnHero` is the other.
+   *
+   * Deliberately the SAME command the world right-click issues (`kind: "unit"`), so a rallied
+   * building's new units follow the hero as it moves, and the rally flag rides on it.
+   * Returns false when the selection has nothing to rally, so the caller can fall back.
+   */
+  rallyToHero(index: number): boolean {
+    const heroId = this.localHeroes()[index];
+    const hero = heroId !== undefined ? this.sim.units.get(heroId) : undefined;
+    if (!hero) return false;
+    const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    if (!prim?.building?.producesUnits) return false;
+    let any = false;
+    for (const id of this.selected) {
+      if (this.execute(this.localPlayer, { c: "rally", unitId: id, x: hero.x, y: hero.y, kind: "unit", targetId: heroId! })) any = true;
+    }
+    if (!any) return false;
+    this.rallyFeedback({ x: hero.x, y: hero.y, kind: "unit", targetId: heroId! });
+    this.sounds?.playUi("RallyPointPlace");
+    return true;
+  }
+
+  /**
+   * Drop an inventory item onto the (index+1)-th hero's button: hand it over.
+   *
+   * `slot` names the item when the gesture was a DRAG out of the inventory grid; without it
+   * the armed item is used, which is the click-then-click half of the same thing (right-click
+   * an item to pick it up, then click the hero you want it to go to — the world gesture,
+   * answered by a portrait instead of by a body on the map).
+   *
+   * The command is the ordinary `giveitem`, so everything downstream is unchanged: the giver
+   * walks into range, a full inventory refuses, and a hero out of reach is walked to.
+   * Returns false if there was nothing to give or nobody to give it to.
+   */
+  dropItemOnHero(index: number, slot?: number): boolean {
+    const from = this.primary;
+    const heroId = this.localHeroes()[index];
+    if (from === null || heroId === undefined || heroId === from || !this.controls(from)) return false;
+    const armed = slot === undefined ? (this.orderMode === "item" && this.armedItem?.mode === "move" ? this.armedItem.slot : undefined) : slot;
+    if (armed === undefined || !this.sim.units.get(from)?.inventory[armed]) return false;
+    const to = this.sim.units.get(heroId);
+    if (!to?.inventory.length) return false;
+    this.armedItem = null; // whichever way it was aimed, the gesture is spent
+    this.orderMode = null;
+    return this.execute(this.localPlayer, { c: "giveitem", unitId: from, slot: armed, targetId: heroId });
   }
 
   /** F1/F2/F3: select the (index+1)-th of the local player's heroes (stable order),
@@ -4576,6 +4640,10 @@ export class RtsController {
         const b = this.sim.units.get(o.buildingId);
         return b ? { x: b.x, y: b.y, z: this.heightAt(b.x, b.y) } : null;
       }
+      case "drink": {
+        const w = this.sim.units.get(o.wellId);
+        return w ? { x: w.x, y: w.y, z: this.heightAt(w.x, w.y) } : null;
+      }
       case "harvest": {
         if (o.res === "lumber") {
           const t = this.sim.trees.get(o.nodeId);
@@ -5122,6 +5190,12 @@ export class RtsController {
         setPlayerResource: (p, r, v) => this.authority.setPlayerResource(p, r, v),
         currentOrderId: (id) => this.authority.currentOrderId(id),
         issueUnitOrder: (id, oid, o, k, x, y, t) => this.authority.issueUnitOrder(id, oid, o, k, x, y, t),
+        // The mine handle is a JASS fiction (MINE_ID_BASE), so it is resolved here, on the
+        // side of the seam that holds both the world and the fiction's own decoder.
+        entangleInstant: (id, mineHandle) => {
+          const mine = mineHandle ? mineForScript(this.sim, mineHandle) : undefined;
+          return this.sim.issueEntangleInstant(id, mine?.id ?? 0);
+        },
         // CreateUnit needs the CONTROLLER, not the authority object: resolving placement reads
         // the pathing grid and the footprint reader, and attaching a body needs the spawn queue.
         createScriptUnit: (p, t, x, y, f) => this.createScriptUnit(p, t, x, y, f, teamOf),
@@ -5493,6 +5567,30 @@ export class RtsController {
       return;
     }
     const own = this.primary !== null ? target.owner === this.sim.units.get(this.primary)?.owner : false;
+    // A Moon Well is the one friendly building you right-click to USE. Every selected unit
+    // that a well can do something for is sent to drink from it — its own or an ALLY'S, which
+    // is the point of the ability's `friend` targeting and of night elf team play. Units the
+    // well cannot serve (a Glaive Thrower — `targs1` says `organic`) and units with nothing
+    // to gain simply keep their orders, and if that leaves nobody the click falls through to
+    // the ordinary walk-up below.
+    if (this.sim.isReplenisher(picked)) {
+      // …except a WORKER sent at a damaged one, which is mending it. That is what a right-click
+      // on a hurt own building has always meant, and a wisp is organic enough to drink, so the
+      // two orders would otherwise collide on exactly the case that matters (a well taking
+      // fire). Both can happen at once in a mixed selection: the workers repair, the rest drink.
+      const mending = own && target.hp < target.maxHp;
+      let any = false;
+      for (const id of this.selected) {
+        if (mending && this.sim.units.get(id)?.worker) continue;
+        if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "drink", wellId: picked }, queued })) any = true;
+      }
+      if (mending && this.repairAt(picked, queued)) any = true; // issueRepair refuses non-workers
+      if (any) {
+        this.ack(false); // the drinkers answer, as they do for any move order
+        this.flashRing(target.x, target.y, selR, FLASH_GREEN);
+        return;
+      }
+    }
     // Own Orc Burrow (built, with room): peons in the selection climb inside to man it.
     // Only send as many as can fit; the rest keep their orders.
     if (own && target.garrisonCap > 0 && (!target.building || target.building.constructionLeft <= 0)) {

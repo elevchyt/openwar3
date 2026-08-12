@@ -79,6 +79,21 @@ CASES.push(
   ["Aadm", "air,ground,ward,invu,vuln,tree", immuneAlly, null, "…and so does Abolish Magic"],
 );
 
+// Mana Burn (`AEmb`) — the rule `targs1` cannot state. Its flags are satisfied in full by a
+// Footman, and the Demon Hunter still may not pick him: there is no mana bar to burn. The
+// game ships the refusal written for this one ability — commandstrings.txt [Errors]
+// `Cantmanaburn` = "Unable to cast Mana Burn on this target." An EMPTY pool is a different
+// thing and stays legal, because a drained Sorceress is still a caster.
+const MB = "air,ground,enemy,organic,nonancient,vuln,invu";
+const foeCaster = unit({ owner: 1, team: 1, mana: 40, maxMana: 200 });
+const foeDrained = unit({ owner: 1, team: 1, mana: 0, maxMana: 200 });
+const foeFootman = unit({ owner: 1, team: 1, mana: 0, maxMana: 0 });
+CASES.push(
+  ["AEmb", MB, foeCaster, null, "burns an enemy Sorceress"],
+  ["AEmb", MB, foeDrained, null, "…and one that is already empty"],
+  ["AEmb", MB, foeFootman, "Cantmanaburn", "but not a Footman, who has no mana at all"],
+);
+
 let failed = 0;
 for (const [code, targs, target, want, what] of CASES) {
   const flags = targs.split(",").map((s) => s.trim()).filter((s) => s && s !== "_");
