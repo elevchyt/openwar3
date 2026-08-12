@@ -12,8 +12,8 @@ Implementation: `tickHarvest` / `orbitTree` / `finishConstruction` / `tickEntang
 `tickReplenish` / `tickRenew` / `toggleRoot` / `issueEntangleInstant` / `issueDrink` in
 [`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
 [`src/sim/spells.ts`](../src/sim/spells.ts), the Wisp's profile in
-[`src/data/races.ts`](../src/data/races.ts), `raiseEntangledMines` and the command card's
-`ROOTED_ONLY` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts), and the two-form clip
+[`src/data/races.ts`](../src/data/races.ts), `raiseEntangledMines` / `collectMoonWellWater` and
+the command card's `ROOTED_ONLY` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts), and the two-form clip
 picking in [`src/render/unitAnims.ts`](../src/render/unitAnims.ts) /
 `RtsController.applyFormAnims`. Checked by `tools/sim-nightelf-test.cjs`,
 `tools/sim-root-test.cjs` and `tools/sim-ancient-anim-test.cjs` (`pnpm sim:test`).
@@ -218,10 +218,20 @@ it, so it resumes where it stopped when the Ancient plants.
 the ordinary mobile order set — Move, Stop, Hold, Attack, Patrol — and takes the whole building
 card away, because every button on it wants roots: the queue is halted, there is no rally point
 to place, and Entangle Gold Mine has nothing to hold with. So `buildCommandCard` simply lets an
-uprooted Ancient fall through to the movable-unit branch, and the one ability that would still
-show in both stances is filtered by name (`ROOTED_ONLY` — `Aent`, and the game's own
-`Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."). Eat Tree stays on
-both cards: an Ancient eats trees walking or planted.
+uprooted Ancient fall through to the movable-unit branch, and the two ability rows that would
+otherwise show in both stances are filtered by name:
+
+* `ROOTED_ONLY` — **Entangle Gold Mine** (`Aent`), and the game's own error line says why:
+  `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."
+* `UPROOTED_ONLY` — **Eat Tree** (`Aeat`), and the DATA says why rather than intuition:
+  `[Aeat] Buttonpos=0,2` collides head-on with `[Reib] Buttonpos=0,2` (Improved Bows), with
+  Sentinel at 1,2 and Vorpal Blades at 2,2 filling out that line. Two buttons cannot share a
+  cell, so the planted card's bottom row belongs to the upgrades and Eat Tree is not on it —
+  which is also how it is used: an Ancient eats a tree by walking to one.
+
+"No rally point" then has to be enforced past the card as well, and `SimWorld.acceptsRally` is
+where: the rally flag, the rally button, the hero-portrait rally **and the plain right-click**
+all read it, or a walking Ancient answers "go there" by planting a flag and standing still.
 
 `Aroo` itself is the button that must appear in BOTH, wearing opposite faces — one row, two
 directions, and `NightElfAbilityFunc` spells out the pair:
@@ -251,6 +261,19 @@ Two traps live in that, and both are the kind you only see on screen:
   are on, so an unanchored `/stand work/` match with the props OFF finds the planted tree's
   working pose — which is what an uprooted Ancient played while it walked, its queue merely
   halted. Hence `AnimSet.standWork`, excluded by name like the carry/swim variants beside it.
+* **The work pose has to be matched by TOKENS, not by the phrase "Stand Work."** The Ancients
+  spell theirs `stand work alternate`; the Tree of Life spells its
+  `stand birth alternate work upgrade first second`. A substring test finds the first and not
+  the second, which is why a Tree of Life training a Wisp or teching up simply held whatever
+  clip it was already playing.
+* **A state prop is EXCLUSIVE where a tier prop is inclusive**, and TreeOfLife.mdx is one file
+  serving all three tiers, so both of its stands carry the same tier tokens:
+  `Stand Upgrade First Second` and `Stand Alternate Upgrade First Second`. `isMine` is a
+  superset test ("my tokens are all present"), which is right for tiers — one
+  `Birth Upgrade First Second third` serves three towers — and claimed BOTH of those for a
+  Tree of Ages, which then fidgeted between its walking pose and its planted one while it
+  walked. A clip carrying an `alternate` I do not have is the other form's, whatever else it
+  carries.
 * **`Morph` is the clip a form plays to LEAVE that form.** "Morph Alternate" is the planted
   Ancient hauling its roots up; the plain "Morph" is the walking one settling back down. So the
   transition is read off the state being moved FROM while the new stand/work set is built for
@@ -306,19 +329,46 @@ is chosen, in the order the player's intent runs — the unit the well was aimed
 whoever was right-clicked onto it and has arrived, then (autocast only) the neediest friendly
 standing nearby.
 
-The art is all on the row, one model per place it belongs:
+The art is all on the row, one model per place it belongs — and only two of the three are cast
+effects:
 
 ```
-[Ambt]  Casterart  = …\NightElf\MoonWell\MoonWellCasterArt.mdl   on the WELL
-        Effectart  = …\NightElf\MoonWell\MoonWellTarget.mdl      on the drinker
-        Specialart = …\Human\Heal\HealTarget.mdl                 on the drinker
+[Ambt]  Casterart  = …\NightElf\MoonWell\MoonWellCasterArt.mdl   flashes on the WELL
+        Specialart = …\Human\Heal\HealTarget.mdl                 flashes on the drinker
+        Effectart  = …\NightElf\MoonWell\MoonWellTarget.mdl      IS the water. See below.
 ```
 
 `Specialart` being the Priest's own Heal model is not a mix-up — it is where the green heal
 sparkle over a drinking unit comes from, and the sound rides with it: WC3 keeps
 `HealTarget.wav` in that model's own folder, which is exactly what `playSpellSound` resolves off
-an effect's art. (`Effectart` is a five-entry list, one per race plus the corrupted well; the
-first is taken, as everywhere else.)
+an effect's art.
+
+### The water in the basin IS the mana bar
+
+`Effectart` is a five-entry list and the row's own comment says what the five are: "One for each
+normal race, and a special one for demons and their corrupted moon well." That is a list of
+WELLS, not of drinkers. `MoonWellTarget.mdl` is a flat hexagon of rippling blue water — the pool
+standing in the basin — and its **level is the well's mana**, by the same trick the loading bar
+uses (`docs/loading-screens.md`): the clip animates the surface from empty to brimming and the
+engine simply parks the playhead. Its `Stand` runs 8 seconds, which is a very long idle and a
+very ordinary gauge.
+
+So it is not played at a cast at all. It is a persistent model on the building, riding the same
+pool as buff art (`collectMoonWellWater`), with `timeScale` 0 and `frame` = mana fraction along
+the interval — a full well brims, a drained one shows bare stone, and a well refilling through
+the night visibly climbs. Read as a cast effect instead, the water flew to whoever drank and
+evaporated a few seconds later.
+
+Two placement traps, both of which look like "the water is missing":
+
+* It must be **centred on the well and lifted into the basin**, not hung from a bone. The model
+  carries its own height above wherever it is put, so at the unit's feet it sits inside the
+  stone — drawn, and invisible. The artist's own answer is the well's `Sprite First Ref`, which
+  is at the right height and on the RIM, so riding it puts the pool half off the rock;
+  `MOON_WELL_WATER_LIFT` is that height without the offset, and it is measured rather than
+  read, because no column states it.
+* The reference height is the BUILDING's, not the terrain's. A structure is seated above the
+  ground it stands on, so its water has to rise with it.
 
 `DataE1` = 1 is the one column that differs from the Obsidian Statue's otherwise identical
 `Amb2` (which is 0), in the same place the two units differ — the statue refills its mana at any

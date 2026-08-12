@@ -143,8 +143,23 @@ export function applyAnimProps(seqs: Array<{ name: string }>, animProps: string[
   // "Stand Alternate - 1/2/3" override the plain "Stand"/"Stand - 2" (same action, different
   // numbering) — without it the Berserker kept falling back to the Headhunter's non-alt stand.
   const baseKey = (n: string) => baseOf(n).filter((t) => !/^\d+$/.test(t)).sort().join(" ");
+  // A STATE prop is EXCLUSIVE, where a tier prop is inclusive, and conflating the two is the
+  // Tree of Ages bug. `isMine` is a superset test — "my tokens are all present" — which is
+  // exactly right for tiers: "Birth Upgrade First Second third" serves the Guard, Cannon and
+  // Arcane towers at once. But a Tree of Ages walks around carrying `upgrade,first`, and
+  // TreeOfLife.mdx names BOTH of its stands with the same tier tokens:
+  //
+  //     "Stand Upgrade First Second"            the walking form
+  //     "Stand Alternate Upgrade First Second"  the planted one
+  //
+  // — so the superset test claimed both, both were renamed to a plain "Stand", and an uprooted
+  // Tree of Ages fidgeted between its walking pose and its planted one. The two halves of a
+  // two-state model are mutually exclusive by definition: a clip carrying a state prop I do
+  // not have is the OTHER form's, whatever else it carries.
+  const wantState = tier.filter((t) => STATE_PROPS.has(t));
   const isMine = (n: string) => {
     const p = propsOf(n);
+    if (p.some((t) => STATE_PROPS.has(t) && !wantState.includes(t))) return false;
     return p.length > 0 && tier.every((t) => p.includes(t));
   };
   return seqs.map((s) => {
@@ -275,9 +290,30 @@ export function buildAnimSet(raw: Array<{ name: string }>, animProps: string[] =
   const attackGold = carryAttack.filter(({ n }) => /gold/i.test(n)).map(({ i }) => i);
   const attackLumber = carryAttack.filter(({ n }) => /lumber/i.test(n)).map(({ i }) => i);
   const or = (a: number, b: number) => (a >= 0 ? a : b);
-  // The work pose, excluded the same way the swings are: a carry variant is a worker's
-  // laden pose, and an "* Alternate" that survived applyAnimProps is the OTHER form's.
-  const standWork = seqs.findIndex((s) => /stand work/i.test(s.name) && !/gold|lumber|alternate/i.test(s.name));
+  /**
+   * The work pose, matched by TOKENS rather than by the phrase "stand work".
+   *
+   * That distinction is the whole of it, and TreeOfLife.mdx is why: its production clip is
+   * authored
+   *
+   *     "stand birth alternate work upgrade first second"
+   *
+   * — the words in an order nobody would guess, which a substring test for "stand work"
+   * cannot see. So a Tree of Life training a Wisp or teching up found no work clip, the
+   * picker returned -1, and the tree simply held whatever it had been playing. (The Ancients
+   * spell theirs "stand work alternate" and were fine; this is the same trap
+   * `applyAnimProps` already handles by comparing token SETS, for the same reason.)
+   *
+   * Excluded the same way the swings are: a carry variant is a worker's laden pose, and an
+   * "alternate" that survived applyAnimProps belongs to the form the unit is NOT in — an
+   * uprooted Ancient's queue is halted, not cancelled, so the picker still asks for a work
+   * clip while it walks and must be told there is none.
+   */
+  const workTokens = (n: string): string[] => n.toLowerCase().split(/[\s\-_]+/).filter(Boolean);
+  const standWork = seqs.findIndex((s) => {
+    const t = workTokens(s.name);
+    return t.includes("stand") && t.includes("work") && !t.includes("gold") && !t.includes("lumber") && !t.includes("alternate");
+  });
   return {
     stand,
     standVariants: standVariants.length ? standVariants : stand >= 0 ? [stand] : [],

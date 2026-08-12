@@ -1842,8 +1842,7 @@ export class RtsController {
     const heroId = this.localHeroes()[index];
     const hero = heroId !== undefined ? this.sim.units.get(heroId) : undefined;
     if (!hero) return false;
-    const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-    if (!prim?.building?.producesUnits) return false;
+    if (this.primary === null || !this.sim.acceptsRally(this.primary)) return false;
     let any = false;
     for (const id of this.selected) {
       if (this.execute(this.localPlayer, { c: "rally", unitId: id, x: hero.x, y: hero.y, kind: "unit", targetId: heroId! })) any = true;
@@ -4578,7 +4577,7 @@ export class RtsController {
     const bu = this.sim.units.get(this.primary);
     if (!bu) return null;
     const b = bu.building;
-    if (!b || !b.producesUnits) return null;
+    if (!b || !this.sim.acceptsRally(this.primary)) return null; // …and an uprooted Ancient has none
     // For a mine/tree/unit rally, put the flag on the live target (a followed
     // unit may have moved); fall back to the stored point if it's gone.
     let x = b.rallyX;
@@ -5350,8 +5349,10 @@ export class RtsController {
   moveAt(cssX: number, cssY: number, queued = false): void {
     if (this.selected.size === 0 || !this.hasControllable()) return; // can't command enemy/neutral units
     const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-    // A selected unit-producing building: right-click sets its (smart) rally point.
-    if (prim?.building?.producesUnits) {
+    // A selected unit-producing building: right-click sets its (smart) rally point. An UPROOTED
+    // Ancient is deliberately not one — it is a unit while it walks, so a right-click has to
+    // reach the ordinary move below (see SimWorld.acceptsRally).
+    if (this.primary !== null && this.sim.acceptsRally(this.primary)) {
       const r = this.resolveRally(cssX, cssY);
       if (r) {
         for (const id of this.selected) {

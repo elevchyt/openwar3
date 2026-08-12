@@ -56,6 +56,14 @@ const FALLBACK = {
     "Walk", "Spell EatTree", "Morph", "Stand Walk Alternate", "Attack Alternate",
     "Morph Alternate", "Birth", "Death Alternate",
   ],
+  // The Tree of Life, whose model carries TIER tokens on every clip (one file serves the Tree
+  // of Life, of Ages and of Eternity) AND names its production pose in an order no substring
+  // test can see.
+  "buildings\\nightelf\\TreeofLife\\TreeofLife.mdx": [
+    "Stand Upgrade First Second", "Walk", "Morph", "stand birth alternate work upgrade first second",
+    "hold", "Stand Alternate Upgrade First Second", "Morph Alternate", "Attack", "Death",
+    "Birth Alternate", "Death Alternate", "Decay Alternate", "Decay", "Spell Eat Tree", "ATTACK ALTERNATE",
+  ],
   // A night elf building that is NOT an Ancient: no alternate half at all, and its production
   // pose is the plain "Stand Work" every other race's buildings use.
   "buildings\\nightelf\\ChimaeraRoost\\ChimaeraRoost.mdx": ["Birth", "stand", "Stand Work", "Portrait", "Death"],
@@ -142,6 +150,35 @@ console.log("the Ancient Protector, whose planted stand is named for a walk");
   check("…dies its alternate death", rooted.name(rooted.a.death), "Death Alternate");
   check("…and trains nothing at all", rooted.a.standWork, -1);
   check("uprooted, the four mobile stands come back", walking.a.standVariants.map(walking.name), ["Stand", "Stand 2", "Stand 3", "Stand 4"]);
+}
+
+console.log("the Tree of Life trains in a clip no substring match can find");
+{
+  const TOL = "buildings\\nightelf\\TreeofLife\\TreeofLife.mdx";
+  const { rooted, walking } = sets(TOL);
+  check("the model still spells its work pose out of order",
+    sequences(TOL).filter((n) => /work/i.test(n)), ["stand birth alternate work upgrade first second"]);
+  check("planted, it trains in that clip", rooted.name(rooted.a.standWork), "stand birth alternate work upgrade first second");
+  check("…and stands in its planted stand", rooted.name(rooted.a.stand), "Stand Alternate Upgrade First Second");
+  check("walking, it stands in the other one", walking.name(walking.a.stand), "Stand Upgrade First Second");
+  check("…and has no work pose while its queue is halted", walking.a.standWork, -1);
+  check("uprooting plays the planted half's Morph", rooted.name(rooted.a.morph), "Morph Alternate");
+  check("planting plays the walker's", walking.name(walking.a.morph), "Morph");
+}
+
+console.log("…and a TIERED one does not fidget between its two forms");
+{
+  // A Tree of Ages walks around carrying `upgrade,first`, and BOTH of the model's stands
+  // carry those same tier tokens — so a superset test claimed both and the walking tree
+  // cycled through its own planted pose. A state prop is exclusive; a tier prop is not.
+  const TOL = "buildings\\nightelf\\TreeofLife\\TreeofLife.mdx";
+  const seqs = sequences(TOL).map((name) => ({ name }));
+  const name = (i) => (i >= 0 && i < seqs.length ? seqs[i].name : null);
+  const ages = (rooted) => buildAnimSet(seqs, animPropsFor({ animProps: ["upgrade", "first"] }, rooted));
+  check("uprooted, a Tree of Ages has ONE stand", ages(false).standVariants.map(name), ["Stand Upgrade First Second"]);
+  check("planted, it has the other ONE", ages(true).standVariants.map(name), ["Stand Alternate Upgrade First Second"]);
+  check("…and still finds its work pose through the tier tokens",
+    name(ages(true).standWork), "stand birth alternate work upgrade first second");
 }
 
 console.log("a night elf building that is NOT an Ancient has one half and one work pose");

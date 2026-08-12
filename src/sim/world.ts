@@ -6163,6 +6163,21 @@ export class SimWorld {
   // is the obvious reading, but obvious is not verified, and the well's night rule is already
   // carried by its own row (see tickRegen). DataD1 = 30 vs the statue's -1 is likewise unread.
 
+  /**
+   * Does this building take a RALLY POINT right now?
+   *
+   * "Produces units" is most of it — a tower or a farm has nothing to send anywhere — but an
+   * UPROOTED Ancient is the exception that has to be named, and naming it here is what keeps
+   * every asker in step: the rally flag, the rally button, the hero-portrait rally and, above
+   * all, the plain right-click. While an Ancient walks it is a unit, its queue is halted, and
+   * a right-click on the ground has to mean "go there" — reading `producesUnits` alone left it
+   * planting rally flags and refusing to move.
+   */
+  acceptsRally(id: number): boolean {
+    const u = this.units.get(id);
+    return !!u?.building?.producesUnits && !u.uprooted;
+  }
+
   /** Is this a FINISHED Moon Well (or Obsidian Statue — same `Ambt` family) that units can be
    *  sent to drink from? Public because the right-click has to ask before it decides what a
    *  click on a friendly building means. Whether a given unit may actually drink is
@@ -6231,13 +6246,17 @@ export class SimWorld {
     u.mana -= used;
     t.hp = Math.min(t.maxHp, t.hp + toLife * hpPerMana);
     t.mana = Math.min(t.maxMana, t.mana + toMana * manaPerMana);
-    // The three models the row names, each where it belongs: `Casterart` on the well
-    // (MoonWellCasterArt — the water stirring), `Effectart` on the drinker (MoonWellTarget),
-    // and `Specialart` — which for `Ambt` is the Priest's own `Heal\HealTarget.mdl` — on the
-    // drinker too, carrying the heal sound that lives beside it in its folder
-    // (Abilities\Spells\Human\Heal\HealTarget.wav). See NightElfAbilityFunc [Ambt].
+    // Two one-shot models, each where it belongs: `Casterart` on the well (MoonWellCasterArt
+    // — the surface stirring) and `Specialart` — which for `Ambt` is the Priest's own
+    // `Heal\HealTarget.mdl` — on the drinker, carrying the heal sound that lives beside it in
+    // its folder (Abilities\Spells\Human\Heal\HealTarget.wav). See NightElfAbilityFunc [Ambt].
+    //
+    // `Effectart` is deliberately NOT among them. Despite sitting on the same row it is not a
+    // cast effect at all: it is the WATER standing in the well, a persistent model whose level
+    // is the well's mana, and it belongs to the building for as long as the building lives
+    // (renderer, collectMoonWellWater). Playing it here threw the water at the drinker and let
+    // it evaporate a few seconds later.
     if (def.casterArt) this.spellEffects.push({ art: def.casterArt, x: u.x, y: u.y, targetId: u.id, z: 0 });
-    if (def.effectArt) this.spellEffects.push({ art: def.effectArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
     if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: t.x, y: t.y, targetId: t.id, z: 0, sound: true });
   }
 

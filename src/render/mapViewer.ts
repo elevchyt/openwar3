@@ -291,13 +291,66 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
  * cargo buttons away in one move — so this is only for rows that sit in a unit's ABILITY list
  * and would otherwise show in both stances.
  *
- * `Aent` is the whole list today, and the game says why in its own error line:
- * commandstrings.txt [Errors] `Mustroottoentangle` = "Must root adjacent to a gold mine to
- * entangle it." Eat Tree (`Aeat`) deliberately is NOT here — an Ancient eats trees walking or
- * planted — and neither is `Aroo` itself, which is the one button that must show in both (in
- * opposite faces; see `reversed` in pushAbilityButtons).
+ * `Aent` is the whole list, and the game says why in its own error line: commandstrings.txt
+ * [Errors] `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."
  */
 const ROOTED_ONLY = new Set(["Aent"]);
+
+/**
+ * …and the mirror: abilities an Ancient may only use once it has pulled itself up.
+ *
+ * **Eat Tree** (`Aeat`) is the one, and the DATA settles it rather than intuition. `[Aeat]
+ * Buttonpos=0,2` — and the Ancient of War's own research row wants that exact cell:
+ * `[Reib] Buttonpos=0,2` (Improved Bows), with Sentinel at 1,2 and Vorpal Blades at 2,2
+ * filling the rest of that line. Two buttons cannot share a cell in the real client, so the
+ * bottom row of the PLANTED card belongs to the upgrades and Eat Tree cannot be on it. That
+ * also matches how it is used: an Ancient eats a tree by walking to one.
+ *
+ * `Aroo` is in NEITHER list, and must not be: it is the one button that has to show in both
+ * stances or a state becomes unreachable. It shows opposite FACES instead — `Art`/"Root" while
+ * walking, `Unart`/"Uproot" while planted (see `reversed` in pushAbilityButtons).
+ */
+const UPROOTED_ONLY = new Set(["Aeat"]);
+
+/**
+ * How far above a Moon Well's own origin its water model is placed, in world units.
+ *
+ * MEASURED, because nothing in the data states it: `[Ambt] Effectart` names the model and
+ * nothing names where to put it, and the model is authored to be dropped INTO the basin rather
+ * than at the building's feet. Read off a ladder of copies planted at rising offsets beside
+ * real wells — at 0 and 20 the pool is inside the stone (a sliver shows at the rim at 20), at
+ * 40 it fills the basin, and by 80 it has floated clear of the rock. The artist's own answer is
+ * the well's `Sprite First Ref` bone, which lands at this height — but that bone sits on the
+ * RIM, so riding it puts the pool half off the well; this is its height without its offset.
+ */
+const MOON_WELL_WATER_LIFT = 32;
+
+/**
+ * The half-extents a building's SEAT HEIGHT is sampled over — its BODY, not its whole
+ * stamped pathing footprint.
+ *
+ * A structure is seated on the tallest terrain across a rectangle so it does not sink into a
+ * slope (issue #15, and `FOOTPRINT_LIFT` in src/game/heightmap.ts halves the resulting perch).
+ * Handing that sampler the pathing stamp asks the wrong question: `12x12Simple.tga` is 384
+ * units across and includes the walkable margin that keeps the next building from crowding in —
+ * ground the model never stands on. On a slope the max is reached at the far up-slope corner of
+ * that rectangle, so the bigger the stamp the higher the building perches, and it floats off
+ * the ubersplat, which hugs the real terrain. The night elf ANCIENTS are where it shows worst:
+ * they carry the race's largest stamps AND they are tall, so off the camera's axis the lift
+ * spreads sideways too and the tree reads as standing beside its own root patch.
+ *
+ * `collision` (UnitBalance) is the disc the unit actually occupies — 96 for an Ancient of War
+ * against its 192 stamp half — so it is the closest thing the data has to "where the model
+ * touches the ground". Clamped by the stamp so a unit with an outsized collision can never
+ * sample MORE ground than it blocks.
+ */
+function seatHalfExtents(def: { collision: number }, fp: { w: number; h: number } | null): [number, number] {
+  if (!fp) return [0, 0];
+  const stampW = (fp.w * PATHING_CELL) / 2;
+  const stampH = (fp.h * PATHING_CELL) / 2;
+  const body = def.collision > 0 ? def.collision : Math.min(stampW, stampH);
+  return [Math.min(stampW, body), Math.min(stampH, body)];
+}
 
 // Over-bright green a tree flashes while it sits under an armed tree-destroying AoE
 // (Flame Strike) — the doodad counterpart of the green unit-target tint, so the player
@@ -3107,8 +3160,8 @@ export class MapViewerScene {
     // so a drain-spawned neutral building (a frozen client re-scouting a merchant, item 2c)
     // otherwise renders at the map origin forever. Everything else just gets its first
     // frame's pose a frame early.
-    const fpHalfW = fp ? (fp.w * PATHING_CELL) / 2 : 0;
-    const z = fp && this.footMaxHeight ? this.footMaxHeight(x, y, fpHalfW, fp ? (fp.h * PATHING_CELL) / 2 : 0) : (this.heightSampler ? this.heightSampler(x, y) : 0);
+    const [seatW, seatH] = seatHalfExtents(def, fp);
+    const z = fp && this.footMaxHeight ? this.footMaxHeight(x, y, seatW, seatH) : (this.heightSampler ? this.heightSampler(x, y) : 0);
     instance.setLocation([x, y, z]);
     const halfFacing = facing / 2;
     instance.setRotation(new Float32Array([0, 0, Math.sin(halfFacing), Math.cos(halfFacing)]));
@@ -3119,10 +3172,10 @@ export class MapViewerScene {
       // The sim owns the stamp from here: it frees those cells the moment the building
       // leaves the world (death, RemoveUnit, cancelled construction).
       this.rts.simWorld.setPathStamp(simId, fp, x, y);
-      // Seat the structure on the tallest terrain its footprint spans so it never
-      // clips into a small hill/slope (issue #15). Half-extents in world units:
-      // footprint cells are PATHING_CELL (32u) wide, centred on (x, y).
-      this.rts.setBuildingFootprint(simId, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2);
+      // Seat the structure on the tallest terrain its BODY spans so it never clips into a
+      // small hill/slope (issue #15) without perching above its own ground decal — see
+      // seatHalfExtents for why that is the body and not the stamp.
+      this.rts.setBuildingFootprint(simId, seatW, seatH);
     }
     // Paint the building's ground texture (ubersplat) on the terrain under it. Tracked
     // so it's removed when the building is destroyed (reconcile) or cancelled. A frozen
@@ -3797,6 +3850,7 @@ export class MapViewerScene {
     }
     this.collectShopArrows(active);
     this.collectOrbAttachments(active);
+    this.collectMoonWellWater(active);
     for (const [key, inst] of this.buffFx) {
       if (!active.has(key)) this.dropBuffFx(key, inst);
     }
@@ -3828,6 +3882,68 @@ export class MapViewerScene {
     for (const u of world.units.values()) {
       if (u.hp <= 0 || !u.inventory.length) continue;
       world.orbAttachments(u).forEach((fx, i) => this.trackBuffFx(active, `orb|${u.id}|${i}|${fx.path}`, fx, u.id));
+    }
+  }
+
+  /**
+   * The WATER in a Moon Well, whose level is the well's mana.
+   *
+   * `[Ambt] Effectart` is a five-entry list and the data's own comment says what the five
+   * are: "One for each normal race, and a special one for demons and their corrupted moon
+   * well." That is a list of WELLS, not of drinkers — the model is the pool of water sitting
+   * in the basin, and the corrupted twin is the one a demon player's well wears. Reading it
+   * as an effect to throw at whoever drinks is the bug this replaces: the water model flew to
+   * the drinking unit and evaporated a few seconds later.
+   *
+   * The LEVEL is the same trick the loading bar uses (docs/loading-screens.md): the clip
+   * animates the surface from empty to full and the engine simply parks the playhead — mana
+   * fraction along the interval, `timeScale` 0 so it holds there. `forced` makes the pose
+   * follow a frame written from outside (the viewer only re-samples bones for animations it
+   * advanced itself). So a full well brims, a drained one shows bare stone, and a well
+   * refilling through the night visibly climbs.
+   *
+   * Rides the persistent-FX pool like buff art, so it gets the Birth → Stand lifecycle, the
+   * `origin` attachment and the tidy-up when the well dies for free. A well still under
+   * construction has no mana and no water (recomputeStats withholds the pool until it is
+   * finished), which is also what the game shows.
+   */
+  private collectMoonWellWater(active: Set<string>): void {
+    const world = this.rts?.simWorld;
+    if (!world) return;
+    for (const u of world.units.values()) {
+      if (u.hp <= 0 || u.maxMana <= 0) continue;
+      if (u.building && u.building.constructionLeft > 0) continue;
+      const ab = u.abilities.find((a) => a.code === "Ambt" && a.level >= 1);
+      const art = ab && this.abilities.get(ab.id)?.effectArt;
+      if (!art) continue;
+      const key = `well|${u.id}`;
+      // Unattached, and placed by hand below. The model is a flat hexagon of rippling water
+      // that carries its own height above wherever it is put, so it wants the well's CENTRE
+      // and a lift — hung off a bone instead it inherits that bone's offset (`Sprite First
+      // Ref` is on the rim, and the pool ends up half off the rock), and left at the unit's
+      // feet it sits inside the stone, drawn and invisible.
+      this.trackBuffFx(active, key, { path: art, attach: [] }, u.id, undefined, true);
+      const inst = this.buffFx.get(key);
+      if (!inst) continue;
+      const stand = this.seqIndex(inst, /^stand/i);
+      const iv = stand >= 0 ? inst.model.sequences[stand]?.interval : undefined;
+      if (stand < 0 || !iv || iv.length < 2) continue;
+      if (inst.sequence !== stand) {
+        inst.setSequence(stand);
+        inst.setSequenceLoopMode(2);
+        this.buffFxBirthing.delete(key); // it is a gauge, not a three-act effect
+      }
+      inst.timeScale = 0; // parked: the clip is a dial, not a loop
+      inst.frame = iv[0] + Math.max(0, Math.min(1, u.mana / u.maxMana)) * (iv[1] - iv[0]);
+      inst.forced = true;
+      // Centred on the well and lifted into the basin. The building's OWN drawn height is the
+      // reference rather than the terrain: a structure is seated above the ground it stands on
+      // (seatHalfExtents), and its water has to rise with it.
+      const host = this.rts?.unitInstance(u.id) as unknown as SpawnInstance | undefined;
+      this.loc3[0] = u.x;
+      this.loc3[1] = u.y;
+      this.loc3[2] = (host?.localLocation[2] ?? this.rts!.groundHeightAt(u.x, u.y)) + MOON_WELL_WATER_LIFT;
+      inst.setLocation(this.loc3);
     }
   }
 
@@ -3913,7 +4029,7 @@ export class MapViewerScene {
    *  rides the unit's animation — Divine Shield's bubble stays around the Paladin,
    *  Bloodlust's flames stay on the moving hands — and needs no per-frame positioning.
    *  Only an unattached one is walked along the ground here. */
-  private trackBuffFx(active: Set<string>, key: string, fx: BuffFx, simId: number, teamColor?: number): void {
+  private trackBuffFx(active: Set<string>, key: string, fx: BuffFx, simId: number, teamColor?: number, ground = false): void {
     if (!fx.path) return;
     active.add(key);
     const inst = this.buffFx.get(key);
@@ -3929,11 +4045,11 @@ export class MapViewerScene {
       }
     } else if (!this.buffFxLoading.has(key)) {
       this.buffFxLoading.add(key);
-      void this.spawnBuffFx(key, fx, simId, teamColor);
+      void this.spawnBuffFx(key, fx, simId, teamColor, ground);
     }
   }
 
-  private async spawnBuffFx(key: string, fx: BuffFx, simId: number, teamColor?: number): Promise<void> {
+  private async spawnBuffFx(key: string, fx: BuffFx, simId: number, teamColor?: number, ground = false): Promise<void> {
     const path = fx.path;
     let model = this.effectModels.get(path);
     if (model === undefined) {
@@ -3949,7 +4065,11 @@ export class MapViewerScene {
     // Team-coloured art (the shop arrow) resolves its `replaceableId 1` layer against the
     // owning player's slot, the same way a unit model does.
     if (teamColor !== undefined) inst.setTeamColor?.(teamColor);
-    const host = this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined;
+    // `ground` opts out of attachment entirely — NOT the same as naming no tokens, which
+    // attachmentNode reads as "the origin bone" and parents anyway. A model that carries its
+    // own height above the unit's feet (the Moon Well's water) must stand on the ground and
+    // inherit nothing, or the building's own transform swallows it.
+    const host = ground ? undefined : (this.rts?.unitInstance(simId) as unknown as SpawnInstance | undefined);
     const node = host ? this.attachmentNode(host, fx.attach) : undefined;
     if (node) {
       inst.setParent?.(node); // ride the unit's own animated attachment point
@@ -5284,8 +5404,10 @@ export class MapViewerScene {
    *  building has no footprint texture. */
   private ghostGroundZ(x: number, y: number): number {
     const fp = this.placement?.fp;
-    if (fp && this.footMaxHeight) {
-      return this.footMaxHeight(x, y, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2);
+    const def = this.placement?.def;
+    if (fp && def && this.footMaxHeight) {
+      const [w, h] = seatHalfExtents(def, fp);
+      return this.footMaxHeight(x, y, w, h);
     }
     return this.rts?.groundHeightAt(x, y) ?? 0;
   }
@@ -6908,6 +7030,7 @@ export class MapViewerScene {
     // refuse would read as a bug. (issueCast refuses them regardless.)
     if (su.isIllusion) return;
     const active = this.activeCommandId();
+    const rootable = su.abilities.some((a) => a.code === "Aroo" && a.level >= 1); // an Ancient
     for (const ab of su.abilities) {
       if (ab.level < 1) continue; // unlearned hero abilities don't show as buttons
       // An ability can be gated by an upgrade — `[Adef] Requires=Rhde` (Defend), `[Acmg]
@@ -6915,10 +7038,12 @@ export class MapViewerScene {
       // reveals it, which is the whole job of the six Human upgrades that grant no stat at all.
       // Abilities with no requirement (every hero spell) pass this untouched.
       if (!this.rts.simView.techMeets(su.owner, ab.id)) continue;
-      // …and an Ancient's card depends on which way up it is. `ROOTED_ONLY` is the list of
-      // abilities the roots pay for; the rest of the split is structural (the building card
-      // itself is withheld while it walks, see buildCommandCard).
-      if (su.uprooted && ROOTED_ONLY.has(ab.code)) continue;
+      // …and an Ancient's card depends on which way up it is. Two short lists: what the roots
+      // pay for, and what only a walker can reach. The rest of the split is structural (the
+      // building card itself is withheld while it walks, see buildCommandCard). Asked only of
+      // a unit that can actually root, so a creep that happens to carry one of these rows is
+      // not quietly stripped of it.
+      if (rootable && (su.uprooted ? ROOTED_ONLY.has(ab.code) : UPROOTED_ONLY.has(ab.code))) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
@@ -7538,7 +7663,7 @@ export class MapViewerScene {
     this.loc3[0] = x;
     this.loc3[1] = y;
     this.loc3[2] =
-      fp && this.footMaxHeight ? this.footMaxHeight(x, y, (fp.w * PATHING_CELL) / 2, (fp.h * PATHING_CELL) / 2) : (this.rts?.groundHeightAt(x, y) ?? 0);
+      fp && def && this.footMaxHeight ? this.footMaxHeight(x, y, ...seatHalfExtents(def, fp)) : (this.rts?.groundHeightAt(x, y) ?? 0);
     g.inst.setLocation(this.loc3);
     if (g.frame >= 0) g.inst.frame = g.frame; // keep it fully built, not mid-animation
     g.inst.setVertexColor(blocked ? PENDING_GHOST_BLOCKED_TINT : PENDING_GHOST_TINT);
