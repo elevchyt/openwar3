@@ -244,11 +244,17 @@ html body.loading-screen * { cursor: none !important; }
    (worldOverlays.ts), so both the game's own slab and the no-install placebo below follow the
    health bar's yellow rather than needing a colour invented here. */
 .unit-hpbar-garrison { display: flex; gap: 1px; }
+/* …and an EMPTY hold shows no row at all. `hidden` alone cannot say that here: the rule above
+   is an author `display`, which outranks the UA sheet's `[hidden] { display: none }`, so a
+   hidden row went on being drawn — and since the pool hands a slot to whichever unit lands in
+   it, an empty burrow inherited the last occupant's full divisions. */
+.unit-hpbar-garrison[hidden] { display: none; }
 .unit-hpbar-slot {
   flex: 1 1 0;
   min-width: 0;
-  /* Shorter than the health bar: this is a counter, not a second health reading. */
-  height: max(3px, calc(var(--statbar-h, 7px) - 2px));
+  /* The same height as the health bar above it: WC3 draws the two as one stack of equal rows,
+     and a shorter one read as a lesser thing rather than a second reading. */
+  height: var(--statbar-h, 7px);
 }
 /* A slot is its own little bar, so the game's slab is stretched to the SLOT rather than to the
    whole row (the base rule sizes it to the health bar's width, which would run off the end of
