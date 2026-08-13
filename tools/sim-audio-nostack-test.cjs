@@ -122,6 +122,17 @@ Flags=WANT3D
 MinDistance=600
 MaxDistance=10000
 DistanceCutoff=2100
+
+[SwordOnceFlesh]
+FileNames=Once.wav
+DirectoryBase=${DIR}
+Volume=127
+Pitch=1
+Channel=5
+Flags=WANT3D,NODUPLICATES
+MinDistance=600
+MaxDistance=10000
+DistanceCutoff=2100
 `;
 const UI = `
 [InterfaceClick]
@@ -180,7 +191,40 @@ const look = (b, x, y) => b.setListener([x, y, 0], [x, y, 1000]);
     b.playImpact("SwordLone", "Flesh", { x: 100, y: 0 }); // a second unit, a step away
     await settle();
     check("only one copy is in the air", sounding(), [DIR + "Lone.wav"]);
-    check("the second was refused, not stacked", started.length, 1);
+    // Equal audibility (both inside MinDistance), and UnitCombatSounds asks for
+    // NODUPLICATES on none of its 59 rows, so the tie is the second blow's to win — but
+    // it wins the file off a copy that has not STARTED yet (the decode is a microtask
+    // away), so the loser is cancelled rather than cut and exactly one source is ever
+    // built. Two blows on one frame sound like one blow either way; which of the two it
+    // is only becomes observable once the first has really been in the air (below).
+    check("one source, not two", started.length, 1);
+  }
+
+  console.log("\n…unless the row asks for NODUPLICATES, which refuses outright");
+  {
+    const b = board();
+    b.playImpact("SwordOnce", "Flesh", { x: 0, y: 0 });
+    b.playImpact("SwordOnce", "Flesh", { x: 100, y: 0 });
+    await settle();
+    check("the second was refused", started.length, 1);
+    check("and the first plays on, uncut", started[0].live, true);
+  }
+
+  // The Warden (issue: "her attack sound stops working"). `WardenAttack` is a SINGLE
+  // 1.358 s WAV, and her Base Attack Time — `cool1` 2.05 over 1 + AgiAttackSpeedBonus ×
+  // agi — is 1.46 s at level 1 and 1.35 s by level 5. So from level 5 every swing asks
+  // for the file while her own previous grunt still holds it, at exactly her own
+  // audibility. Refusing that tie muted her completely; only the flag may do that.
+  console.log("\na source repeating a single-variant clip faster than the clip is long");
+  {
+    const b = board();
+    for (let i = 0; i < 3; i++) {
+      b.playImpact("SwordLone", "Flesh", { x: 0, y: 0 }); // the same unit, standing still
+      await settle();
+    }
+    check("every blow was heard", started.length, 3);
+    check("but only ever one at a time", sounding(), [DIR + "Lone.wav"]);
+    check("each cut the one before it", started.filter((s) => s.live).length, 1);
   }
 
   console.log("\nthree sources land a clang that ships three variants");
@@ -191,7 +235,13 @@ const look = (b, x, y) => b.setListener([x, y, 0], [x, y, 1000]);
     check("each took a different WAV", sounding(), [DIR + "Many1.wav", DIR + "Many2.wav", DIR + "Many3.wav"]);
     b.playImpact("SwordMany", "Flesh", { x: 300, y: 0 }); // …and a fourth, with none left
     await settle();
-    check("the fourth is dropped (all variants up, none quieter)", started.length, 3);
+    // All four are inside MinDistance, so the falloff is flat and the fourth ties rather
+    // than losing. The row does not ask for NODUPLICATES, so it takes the file off the
+    // least audible copy — a tie, so the first — and is heard. WC3 would play all four;
+    // this plays the newest, which is nearer that than dropping the blow on the floor.
+    check("the fourth is heard, taking the file over", started.length, 4);
+    check("…and the copy it took it from was cut", started.filter((s) => !s.live).length, 1);
+    check("so there are still only three copies in the air", sounding(), [DIR + "Many1.wav", DIR + "Many2.wav", DIR + "Many3.wav"]);
   }
 
   console.log("\na copy that is no longer in earshot counts as not playing");

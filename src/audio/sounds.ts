@@ -1296,7 +1296,11 @@ export class SoundBoard {
     // time even by a DIFFERENT unit — two Footmen answering with the same WAV on the same
     // frame is the doubling the rule exists to stop. A sound-set ships several variants, so
     // the second unit normally just takes another one; only when they're all up is it
-    // dropped. Voices play 2D, so every copy ties on audibility and none is ever cut short.
+    // dropped. Voices play 2D, so every copy ties on audibility — and unlike the one-shot
+    // pools they REFUSE that tie (no `retrigger`) however UnitAckSounds is flagged: a source
+    // is already barred from re-triggering its own line by the `voices` key above, so the
+    // only tie left is one unit's line against another's, and cutting a half-spoken line to
+    // start the same one over is worse than letting the second unit stay quiet.
     const choice = this.pickVariant(clip, null);
     if (!choice) return false;
     const path = choice.path;
@@ -1355,10 +1359,9 @@ export class SoundBoard {
     const where = positional ? at! : null;
     // Never stack the same clip: take a variant nobody is playing, or win one off the
     // least audible copy of it — and if we're the quiet one, stay silent (see pickVariant).
-    // A UI one-shot the row does NOT flag NODUPLICATES RETRIGGERS: each press is its own
-    // sound, so laying down a row of towers clicks once per tower. Everything else keeps
-    // the plain never-stack rule (see pickVariant).
-    const choice = this.pickVariant(clip, where, kind === "ui" && !clip.noDup);
+    // Whether an equally audible copy is CUT for us or refuses us is the row's own call:
+    // a one-shot the data does not flag NODUPLICATES retriggers (see pickVariant).
+    const choice = this.pickVariant(clip, where, !clip.noDup);
     if (!choice) return;
     const path = choice.path;
     // Concurrency is budgeted per SOUND CHANNEL (see CHANNEL_VOICES). Reserve the slot
@@ -1467,17 +1470,27 @@ export class SoundBoard {
    *       the player can actually hear; a nearer source takes the file off it, a further
    *       one is refused (it would have been the quieter of the two anyway).
    *
-   *  `retrigger` is the third case, and it is the DATA's: a UI row that does not carry
- *  NODUPLICATES is a sound per press, so an equally audible challenge WINS rather than
- *  being refused — the new copy cuts the old one, which is a retrigger and still leaves
- *  exactly one copy in the air. (The engine agrees where it matters: 69 UISounds rows ask
- *  for NODUPLICATES and GlueScreenClick says in its comment column that it is there to stop
- *  "douple playing … by cancel buttons" — one EVENT firing twice. PlaceBuildingDefault and
- *  InterfaceClick carry Flags=0, and in the game they sound for every click.) Combat is
- *  untouched: UnitCombatSounds carries the flag on none of its 59 rows, but two blows in
- *  one frame are the phasing case this rule exists for, so a tie there still refuses.
- *
- *  @returns the path to play plus the copy to cut for it, or null to refuse outright. */
+   *    3. An exact TIE is the row's own call, through `retrigger` — and it is the one case
+   *       the caller does not get to decide, because the flag that decides it is in the data:
+   *       NODUPLICATES. A row that carries it wants ONE copy and refuses the rest (69 UISounds
+   *       rows do, and GlueScreenClick says in its comment column that it is there to stop
+   *       "douple playing … by cancel buttons" — one EVENT firing twice). A row that does not
+   *       is a sound per event, so an equal challenge WINS: the new copy cuts the old one,
+   *       which is a retrigger and still leaves exactly one copy in the air. PlaceBuildingDefault
+   *       and InterfaceClick carry Flags=0, and in the game they sound for every click.
+   *
+   *  An exact tie means the same clip at the same audibility, which in practice means a source
+   *  repeating ITSELF — and refusing that used to mute a unit outright. A clip with ONE variant
+   *  whose owner attacks faster than the WAV is long could never be heard twice: the Warden's
+   *  `WardenAttack` is a single 1.358 s file and her Base Attack Time (`cool1` 2.05, divided by
+   *  1 + AgiAttackSpeedBonus × agi) is 1.46 s at level 1 and 1.35 s by level 5, so she fell
+   *  silent as she levelled. Every other melee hero ships two attack WAVs and never tied.
+   *  The data never asked for that: AnimSounds flags NODUPLICATES on exactly TWO of its rows
+   *  (Cannibalize, Heal), UnitCombatSounds on none of its 59, and WardenAttack carries
+   *  RANDOMPITCH instead — WC3's own answer to two copies of one WAV, which is why they do not
+   *  comb-filter. Cutting rather than refusing keeps the never-stack invariant either way.
+   *
+   *  @returns the path to play plus the copy to cut for it, or null to refuse outright. */
   private pickVariant(clip: Clip, at: SoundPos | null, retrigger = false): { path: string; taken: ActiveFile | null } | null {
     const free = clip.paths.filter((p) => !this.playing.has(p));
     if (free.length) return { path: free[(Math.random() * free.length) | 0], taken: null };
