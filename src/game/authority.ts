@@ -663,7 +663,9 @@ export class Authority {
         // could have marched your workers off their gold and into your own burrow.
         return this.ownedBy(player, cmd.buildingId) && this.sim.battleStations(cmd.buildingId);
       case "standdown":
-        return this.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId);
+        // …and this is the one caller that means "back to work": the button says so
+        // (see SimWorld.unloadBurrow). Every internal unload leaves its passengers standing.
+        return this.ownedBy(player, cmd.buildingId) && this.sim.unloadBurrow(cmd.buildingId, true);
       case "buyitem": {
         // No ownership gate ON PURPOSE — a Goblin Merchant is Neutral Passive and an ally's
         // Vault is shoppable (Aall). Who may buy is `purchaseItem`'s own judgement: it checks

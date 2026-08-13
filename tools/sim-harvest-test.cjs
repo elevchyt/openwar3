@@ -126,5 +126,123 @@ console.log("\nthe mine is the bottleneck, not the pathing (Agld Mining Capacity
   check("…and every one of them still walks", Math.min(...walked.values()) > share, `min ${Math.min(...walked.values()).toFixed(0)} of ${share.toFixed(0)} units`);
 }
 
+// --- one pair of hands, one load ------------------------------------------------------
+//
+// A worker that takes up a load drops whatever else it was holding. The old sack kept both,
+// so a Peasant sent to the mine with four lumber on its back delivered gold AND lumber at the
+// hall out of one visit to one node.
+
+/** A bare world with a mine, a tree and one worker — no round trips, just the loads. */
+function loadWorld() {
+  const W = 160, H = 160;
+  const grid = new PathingGrid({ width: W, height: H, flags: new Uint8Array(W * H) }, [0, 0]);
+  // Stub registries, so the burrow below has a cargo hold to be recognised BY: the Orc
+  // Burrow's `abilList` carries `Abun` "Burrow" and its Dataa1 is the seat count.
+  const ABILS = { Abun: { code: "Abun", levelData: [{ castRange: 0, area: 0, duration: 0, data: [4] }] } };
+  const UNITS = { otrb: { abilities: ["Abtl", "Abun", "Astd"] } };
+  const world = new SimWorld(grid, 1, { get: (id) => ABILS[id] }, undefined, { get: (id) => UNITS[id] });
+  const mine = world.addMine(MINE[0], MINE[1], 125000, MINE_R);
+  const tree = world.addTree(MINE[0] + 600, MINE[1], 500);
+  world.add(
+    {
+      id: 100, owner: 0, team: 0, typeId: "htow", x: MINE[0], y: MINE[1] + HALL_DIST, facing: 0,
+      hp: 1500, maxHp: 1500, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+      speed: 0, turnRate: 0.6, radius: HALL_R, scale: 1, armor: 5, armorType: "fort", defUp: 0,
+      weapon: null, weapons: [], oldWeapons: [], sight: 1800, nsight: 1200, baseSight: 1800,
+      sightDay: 1800, sightNight: 1200, flying: false, mechanical: false, invulnerable: false,
+      race: "human", isBuilding: true, foodCost: 0, goldCost: 0, lumberCost: 0, abilities: [],
+      upgrades: [], moveType: "foot", collisionSize: 72, canFlee: false, targetedAs: "structure",
+      deathTime: 2, name: "Town Hall", worker: null, depotGold: true, depotLumber: true,
+      castPoint: 0, castBackswing: 0,
+    },
+    { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: MINE[0], rallyY: MINE[1], rallyKind: "point", rallyTargetId: 0, producesUnits: true },
+  );
+  world.add({
+    id: 1, owner: 0, team: 0, typeId: "hpea", x: MINE[0], y: MINE[1] + 400, facing: 0,
+    hp: 220, maxHp: 220, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+    speed: 190, turnRate: 0.6, radius: 16, scale: 1, armor: 0, armorType: "medium", defUp: 0,
+    weapon: null, weapons: [], oldWeapons: [], sight: 1400, nsight: 800, baseSight: 1400,
+    sightDay: 1400, sightNight: 800, flying: false, mechanical: false, invulnerable: false,
+    race: "human", isBuilding: false, foodCost: 1, goldCost: 0, lumberCost: 0, abilities: [],
+    upgrades: [], moveType: "foot", collisionSize: 16, canFlee: true, targetedAs: "ground",
+    deathTime: 2, name: "Peasant", castPoint: 0, castBackswing: 0,
+    worker: { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: GOLD_PER_TRIP, damagesTree: true, carryGold: 0, carryLumber: 0 },
+    depotGold: false, depotLumber: false, isPeon: true,
+  });
+  return { world, mine, tree, worker: world.units.get(1) };
+}
+
+/** Run the world until `done()` or the clock runs out. Returns whether it happened. */
+function runUntil(world, done, seconds = 90) {
+  const DT = 1 / 30;
+  for (let t = 0; t < seconds / DT; t++) {
+    world.tick(DT);
+    if (done()) return true;
+  }
+  return false;
+}
+
+console.log("\na worker's hands hold one thing at a time");
+{
+  const { world, mine, worker } = loadWorld();
+  worker.worker.carryLumber = 5; // it was on the trees when the mine order came
+  world.issueHarvest(worker.id, "gold", mine.id);
+  const gotGold = runUntil(world, () => worker.worker.carryGold > 0);
+  check("a worker that went in with lumber comes out with gold", gotGold && worker.worker.carryGold === GOLD_PER_TRIP, `${worker.worker.carryGold} gold`);
+  check("…and the lumber is gone, not banked with it", worker.worker.carryLumber === 0, `${worker.worker.carryLumber} lumber`);
+}
+{
+  const { world, tree, worker } = loadWorld();
+  worker.worker.carryGold = GOLD_PER_TRIP; // pulled off the mine with a load still in hand
+  world.issueHarvest(worker.id, "lumber", tree.id);
+  const chopped = runUntil(world, () => worker.worker.carryLumber > 0);
+  check("a worker carrying gold that starts chopping gets lumber", chopped, `${worker.worker.carryLumber} lumber`);
+  check("…and drops the gold on the first chop", worker.worker.carryGold === 0, `${worker.worker.carryGold} gold`);
+}
+
+// --- Stand Down means back to WORK ----------------------------------------------------
+//
+// CommandStrings for `Astd`: "Causes Peons within the Burrow to return to work." Battle
+// Stations is an interruption, not a re-assignment, so the job has to survive the boarding
+// (SimUnit.garrisonJob) — nothing else remembers it, since climbing in cancels the order.
+console.log("\nStand Down returns the crew to the job it was pulled off");
+{
+  const { world, mine, worker } = loadWorld();
+  world.add(
+    {
+      id: 200, owner: 0, team: 0, typeId: "otrb", x: MINE[0] + 300, y: MINE[1] + 400, facing: 0,
+      hp: 600, maxHp: 600, mana: 0, maxMana: 0, manaRegen: 0, hpRegen: 0,
+      speed: 0, turnRate: 0, radius: 72, scale: 1, armor: 2, armorType: "fort", defUp: 0,
+      weapon: null, weapons: [], oldWeapons: [], sight: 900, nsight: 600, baseSight: 900,
+      sightDay: 900, sightNight: 600, flying: false, mechanical: false, invulnerable: false,
+      race: "orc", isBuilding: true, foodCost: 0, goldCost: 0, lumberCost: 0, abilities: [],
+      upgrades: [], moveType: "foot", collisionSize: 72, canFlee: false, targetedAs: "structure",
+      deathTime: 2, name: "Orc Burrow", worker: null, depotGold: false, depotLumber: false,
+      castPoint: 0, castBackswing: 0,
+    },
+    { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: MINE[0], rallyY: MINE[1], rallyKind: "point", rallyTargetId: 0, producesUnits: false },
+  );
+  const burrow = world.units.get(200);
+  check("the burrow's hold is its `Abun` Dataa1", burrow.garrisonCap === 4, `cap ${burrow.garrisonCap}`);
+
+  world.issueHarvest(worker.id, "gold", mine.id);
+  runUntil(world, () => worker.order === "harvest" && !worker.moving, 30);
+  world.issueGarrison(worker.id, burrow.id);
+  const boarded = runUntil(world, () => worker.inBurrow, 60);
+  check("a peon at work climbs into the burrow", boarded, `order ${worker.order}`);
+  const job = worker.garrisonJob;
+  check("…and its job goes in with it", !!job && job.kind === "harvest" && job.res === "gold" && job.nodeId === mine.id, JSON.stringify(job));
+
+  check("Stand Down empties the burrow", world.unloadBurrow(burrow.id, true), "");
+  check("…and puts the peon back on the mine", worker.order === "harvest" && worker.resKind === "gold" && worker.resId === mine.id, `order ${worker.order}, node ${worker.resId}`);
+  check("…spending the memory as it goes", worker.garrisonJob === null, `${JSON.stringify(worker.garrisonJob)}`);
+
+  // …and every other way out of a hold is not a command and promises nothing.
+  world.issueGarrison(worker.id, burrow.id);
+  runUntil(world, () => worker.inBurrow, 60);
+  world.unloadBurrow(burrow.id);
+  check("a plain unload leaves them standing", worker.order === "idle", `order ${worker.order}`);
+}
+
 console.log(failed ? `\nharvest: ${failed} check(s) FAILED` : "\nharvest: all checks passed");
 process.exit(failed ? 1 : 0);

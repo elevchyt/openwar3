@@ -526,6 +526,14 @@ export interface RepairState {
 }
 
 /** Harvesting profile + carried load for worker units. */
+/** The job a worker is put back on when it leaves a burrow (SimUnit.garrisonJob). Only the
+ *  standing jobs a worker can be interrupted out of and dropped straight back into: gathering
+ *  a named node, and mending a named building. A half-finished BUILD is not one of them — the
+ *  foundation keeps its own builder list, and Battle Stations never pulls a peon off one. */
+export type GarrisonJob =
+  | { kind: "harvest"; res: "gold" | "lumber"; nodeId: number }
+  | { kind: "repair"; buildingId: number; hpPerSec: number; goldPerHp: number; lumberPerHp: number };
+
 export interface WorkerState {
   gold: boolean;
   lumber: boolean;
@@ -1213,6 +1221,14 @@ export interface SimUnit {
    *  This is the whole of "an Ancient roots where it stands": with no teleport left in the
    *  plant, a site under the tree's own feet is an ordinary placement like any other. */
   rootSettle: { x0: number; y0: number; f0: number; x1: number; y1: number; dur: number } | null;
+  /** What this worker was doing when it climbed into a cargo hold, or null.
+   *
+   *  Stand Down's own words are "Causes Peons within the Burrow to return to work", and this is
+   *  the memory that lets it keep them: boarding cancels the job (`detachBuilder`), so unless
+   *  it is written down first there is nothing left to return TO and a burrow emptied after a
+   *  raid left every peon standing in the yard. Taken at `issueGarrison`, spent by
+   *  `resumeGarrisonJob`, and dropped by any other way out of the hold. */
+  garrisonJob: GarrisonJob | null;
   /** The Moon Well this unit has been SENT to drink from (`{kind:"drink"}`), or 0.
    *
    *  Replenish is the one ability in the game whose button is on one unit and whose order is
@@ -2911,6 +2927,10 @@ export class SimWorld {
     const workersOnly = this.holdTakesWorkersOnly(b.typeId);
     if (workersOnly ? !p.worker : p.building || p.flying) return false;
     if (this.hostile(p, b)) return false; // only your own / allied holds
+    // What it was doing, written down BEFORE anything below cancels it — `detachBuilder` and
+    // the order change three lines on are exactly what leaves a peon with nothing to go back
+    // to. Stand Down spends it (resumeGarrisonJob).
+    p.garrisonJob = this.jobOf(p);
     // Boarding does not come through issueOrder (the authority calls this directly), so the
     // two "put the worker back on the field first" steps that funnel does have to run here.
     this.popFromMine(p);
@@ -3027,13 +3047,58 @@ export class SimWorld {
     passenger.desiredFacing = Math.atan2(passenger.y - host.y, passenger.x - host.x);
   }
 
-  /** Unload every passenger from a cargo hold — the Stand Down / Unload command. */
-  unloadBurrow(hostId: number): boolean {
+  /**
+   * The standing job a worker would be put back on if it were pulled out of a hold right now
+   * (SimUnit.garrisonJob), or null if it was not working when it climbed in.
+   *
+   * Read off the live order rather than off anything remembered, which is what makes a worker
+   * walking a load HOME still count as gathering: `resKind`/`resId` outlive the trip, so a
+   * peon caught mid-haul goes back to the same mine rather than standing in the yard holding
+   * ten gold.
+   */
+  private jobOf(u: SimUnit): GarrisonJob | null {
+    if (!u.worker) return null;
+    if (u.repair) {
+      const r = u.repair;
+      return { kind: "repair", buildingId: r.targetId, hpPerSec: r.hpPerSec, goldPerHp: r.goldPerHp, lumberPerHp: r.lumberPerHp };
+    }
+    if (u.resKind && u.resId) return { kind: "harvest", res: u.resKind, nodeId: u.resId };
+    return null;
+  }
+
+  /** Put a worker that has just left a hold back on the job it was pulled off. Returns whether
+   *  it took the order — a mine that ran dry or a tree that fell while it was inside simply
+   *  refuses, and the worker stands where it came out, which is the honest answer. */
+  private resumeGarrisonJob(u: SimUnit): boolean {
+    const job = u.garrisonJob;
+    u.garrisonJob = null;
+    if (!job) return false;
+    return job.kind === "harvest"
+      ? this.issueHarvest(u.id, job.res, job.nodeId)
+      : this.issueRepair(u.id, job.buildingId, job.hpPerSec, job.goldPerHp, job.lumberPerHp);
+  }
+
+  /**
+   * Unload every passenger from a cargo hold — the Stand Down / Unload command.
+   *
+   * `backToWork` is the difference between the two buttons, and each states its own case in
+   * CommandStrings: the Orc Burrow's Stand Down "causes Peons within the Burrow to return to
+   * work", so its crew picks up the job it was pulled off (Battle Stations is an interruption,
+   * not a re-assignment). The Entangled Gold Mine's `Aenc` button only "removes all Wisps from
+   * the gold mine" and promises nothing, and every other way a hold empties — the building
+   * dying, the mine running dry, a Tree of Life uprooting — is not a command at all. Those all
+   * put the passengers out and leave them standing.
+   */
+  unloadBurrow(hostId: number, backToWork = false): boolean {
     const b = this.units.get(hostId);
     if (!b || b.garrison.length === 0) return false;
+    const resume = backToWork && this.cargoHoldCode(b.typeId) === "Abun";
     for (const pid of [...b.garrison]) {
       const p = this.units.get(pid);
-      if (p) this.ejectPassenger(p, b);
+      if (!p) continue;
+      this.ejectPassenger(p, b);
+      if (resume) this.resumeGarrisonJob(p);
+      else p.garrisonJob = null; // out by any other door: the memory goes with it
     }
     b.garrison = [];
     this.recomputeStats(b); // empty → arrow attack off
@@ -3855,6 +3920,7 @@ export class SimWorld {
       | "builtFacing"
       | "rootPending"
       | "rootSettle"
+      | "garrisonJob"
       | "drinkWellId"
       | "replenishTargetId"
       | "isSummon"
@@ -4060,6 +4126,7 @@ export class SimWorld {
       builtFacing: unit.facing,
       rootPending: null,
       rootSettle: null,
+      garrisonJob: null,
       drinkWellId: 0,
       replenishTargetId: 0,
       isSummon: false,
@@ -10114,6 +10181,23 @@ export class SimWorld {
     if (gold > 0) w.goldPerTrip = gold;
   }
 
+  /**
+   * A worker has ONE pair of hands, and taking up a load drops whatever else was in them.
+   *
+   * A Peasant sent to the mine with four lumber still on its back comes out with ten gold and
+   * no lumber; a Peon pulled off the mine and put on trees loses the gold on its first chop.
+   * The old sack kept both at once, so that lumber was banked later on a trip it never made —
+   * the worker delivered gold AND lumber at the hall from one visit to one node.
+   *
+   * The drop happens where the new load is PICKED UP, not when the order is given, because
+   * that is where the game shows it: the walk to the mine is still played with the lumber
+   * carry clip, exactly as it is in WC3, and the switch happens out of sight inside the shaft.
+   */
+  private dropOtherLoad(w: WorkerState, taking: "gold" | "lumber"): void {
+    if (taking === "gold") w.carryLumber = 0;
+    else w.carryGold = 0;
+  }
+
   private tickHarvest(u: SimUnit, dt: number): void {
     const w = u.worker;
     if (!w) {
@@ -10130,6 +10214,7 @@ export class SimWorld {
         u.inMineId = undefined;
         if (mine) {
           mine.busy = false;
+          this.dropOtherLoad(w, "gold"); // it walked in with lumber; it walks out with gold
           w.carryGold = Math.min(w.goldPerTrip || GOLD_PER_TRIP, mine.gold);
           mine.gold -= w.carryGold;
           if (mine.gold <= 0) {
@@ -10256,6 +10341,7 @@ export class SimWorld {
       return;
     }
     this.chops.push(u.id); // axe landed → renderer plays the chop SFX
+    this.dropOtherLoad(w, "lumber"); // the first chip of wood costs it the gold in its hands
     w.carryLumber = Math.min(w.lumberCapacity, w.carryLumber + w.lumberPerChop);
     if (w.damagesTree) {
       tree.lumber -= w.lumberPerChop;
