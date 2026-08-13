@@ -3,7 +3,7 @@ import { findPath, smoothPath } from "./pathfind";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
-import { type UnitDef, type UnitRegistry } from "../data/units";
+import { slotMissileArt, type UnitDef, type UnitRegistry } from "../data/units";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import { TechState } from "./tech";
@@ -183,7 +183,8 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
     if (s.cooldown <= 0 || s.damage + s.dice * s.sides <= 0) continue;
     // Ranged is `weapTp`'s call alone — NOT "has a missile model". A melee hero's row
     // carries a `Missileart` for the air attack an orb wakes (see units.ts), so reading
-    // the art as the signal made every one of them a thrower.
+    // the art as the signal made every one of them a thrower. slotMissileArt() asks the
+    // same column what art, if any, this slot may show.
     const ranged = isRangedWeapon(s.weaponType);
     out.push({
       damage: s.damage,
@@ -215,7 +216,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       // `acquire`, and the launch/impact offsets, are UNIT columns — not per-weapon ones.
       acquire: def.acquireRange,
       ranged,
-      missileArt: s.missileArt,
+      missileArt: slotMissileArt(s),
       missileSpeed: s.missileSpeed,
       attackType: s.attackType,
       launchX: def.launchX,

@@ -74,7 +74,14 @@ column that decides is **`weapTp`, per slot**: `normal` is melee and shows no ar
 `instant` is ranged hitscan whose art is a one-shot burst on the unit struck (all six stock
 `instant` slots name a `*Impact.mdx` holding a lone "Birth" sequence — nothing to loop in
 flight), and only the `missile`/`msplash`/`mbounce`/`mline`/`artillery`/`aline` kinds fly.
-See `isRangedWeapon`/`launchesMissile` in `src/data/enums.ts` and `tools/sim-missile-art-test.cjs`.
+
+That rule lives in exactly one function, **`slotMissileArt()`** (`src/data/units.ts`), and the
+slot keeps its `Missileart` as *declared* so the question can be re-asked after a map moves the
+answer. Its companion **`syncPrimaryWeapon()`** re-derives a def's flat `attack*` summary from
+its slots, and runs both at load and after a `war3map.w3u` lands — so a stock hero, a retuned
+one and a brand-new custom unit are decided by the same line, and `ua1w` (weapTp) / `ua1m`
+(Missileart) / `uaen` (weapsOn) overrides all flow through it. See `src/data/enums.ts` for
+`isRangedWeapon`/`launchesMissile` and `tools/sim-missile-art-test.cjs` for both halves.
 
 ## The family
 

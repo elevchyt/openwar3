@@ -54,8 +54,10 @@ export interface WeaponSlotDef {
   range: number;
   weaponType: WeaponType; // weapTp1/2 — normal = melee, instant = hitscan, the rest fly
   attackType: AttackType; // atkType1/2 → the damage table's row
-  missileArt: string; // this slot's art (flying missile, or an instant slot's impact burst);
-  // `Missileart` is a per-slot comma list, and "" on a melee slot however the row is written
+  /** This slot's `Missileart` AS DECLARED — a per-slot comma list in the UnitFunc profile.
+   *  Whether the slot actually shows it is `weaponType`'s call: ask slotMissileArt(), never
+   *  this field, or you re-open the melee-hero bug it exists to close. */
+  missileArt: string;
   missileSpeed: number; // ...and so is `Missilespeed` (Flying Machine: 2000 air, 900 bombs)
   /** Line-splash ("spill") — `spillDist1/2` + `spillRadius1/2` + `damageLoss1/2`. The
    *  Gryphon Rider's hammer already carries a 50-unit spill RADIUS and a 0.2 falloff, but a
@@ -428,11 +430,11 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       : primary === PrimaryAttribute.Intelligence ? intAttr
       : 0;
 
-    // Both weapon slots, then the primary (= the first one `weapsOn` enables) flattened into
-    // the legacy attack* fields. A unit with no weapons row, or with weapsOn=0 (every
-    // building, the Scout Tower), ends up with no slots at all and simply cannot attack.
+    // Both weapon slots. The primary (= the first one `weapsOn` enables) is flattened into the
+    // legacy attack* fields afterwards, by syncPrimaryWeapon. A unit with no weapons row, or
+    // with weapsOn=0 (every building, the Scout Tower), ends up with no slots at all and
+    // simply cannot attack.
     const slots = weaponSlots(w, fn, primaryVal);
-    const prime = slots.find((s) => s.enabled) ?? slots[0];
     const animProps = fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
 
     defs.set(id, {
@@ -508,27 +510,30 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       lumberCost: b ? num(b, "lumbercost", 0) : 0,
       buildTime: b ? num(b, "bldtm", 0) : 0,
       weapons: slots,
-      attackDamage: prime?.damage ?? 0,
-      attackDice: prime?.dice ?? 0,
-      attackSides: prime?.sides ?? 0,
-      attackCooldown: prime?.cooldown ?? 0,
-      attackDamagePoint: prime?.damagePoint ?? 0,
-      attackBackswing: prime?.backswing ?? 0,
+      // The eleven "Attack 1" summary fields below are a VIEW of the primary slot, filled in
+      // by syncPrimaryWeapon() once the def exists — the same call a map's overrides run
+      // through — so nothing here can state what the slot does not. (Missile art and speed
+      // come from the per-race UnitFunc.txt rather than UnitWeapons.slk: Archmage
+      // FireBallMissile, Archer ArrowMissile.)
+      attackDamage: 0,
+      attackDice: 0,
+      attackSides: 0,
+      attackCooldown: 0,
+      attackDamagePoint: 0,
+      attackBackswing: 0,
       // castpt/castbsw live in UnitWeapons.slk alongside the attack timing (they
       // apply to the unit's casting, not to any one weapon). Default 0 → an instant
       // cast / no backswing for units with no weapons row (wards, most summons).
       castPoint: w ? num(w, "castpt", 0) : 0,
       castBackswing: w ? num(w, "castbsw", 0) : 0,
-      attackRange: prime?.range ?? 0,
+      attackRange: 0,
       acquireRange: w ? num(w, "acquire", 0) : 0,
       canSleep: (d ? num(d, "cansleep", 0) : 0) === 1,
-      weaponType: prime?.weaponType ?? WeaponType.None,
-      attackType: prime?.attackType ?? AttackType.None,
+      weaponType: WeaponType.None,
+      attackType: AttackType.None,
       armorType: toArmorType(b ? str(b, "defType") : ""),
-      // Missile art + speed live in the per-race UnitFunc.txt (NOT UnitWeapons.slk),
-      // as .mdl paths (e.g. Archmage FireBallMissile, Archer ArrowMissile).
-      missileArt: prime?.missileArt ?? "",
-      missileSpeed: prime?.missileSpeed ?? 900,
+      missileArt: "",
+      missileSpeed: 900,
       // Launch/impact offsets live in UnitWeapons.slk (launchx/y/z, impactz). Verified
       // against the real 1.27 MPQ: Archmage launchx=15/launchz=66, Archer launchy=62.
       launchX: w ? num(w, "launchx", 0) : 0,
@@ -551,8 +556,59 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       autoAbility: a ? str(a, "auto") : "",
       classification: b ? (str(b, "type") || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean) : [],
     });
+    syncPrimaryWeapon(defs.get(id)!); // fill the attack* view from the slots just built
   }
   return new UnitRegistry(defs);
+}
+
+/**
+ * The missile model a weapon slot ACTUALLY shows. **The one place this rule lives** — the SLK
+ * loader, a map's `war3map.w3u` overrides and the sim all ask here, so a stock hero, a retuned
+ * one and a brand-new custom unit are decided by the same line.
+ *
+ * `weapTp` is the only column with a vote, and it has three answers:
+ *
+ *   `normal`    MELEE. No art at all, however the row is written. This is the whole
+ *               Warden/Demon Hunter class of bug: every hero ships a switched-off slot 2
+ *               (`weapsOn` = 1, `missile`, range 500) that an orb wakes as an air attack
+ *               (docs/orbs.md, `DataE` = "Enabled Attack Index"), and the ONE `Missileart` on
+ *               the hero's UnitFunc row belongs to THAT slot. WardenMissile,
+ *               DemonHunterMissile, BrewmasterMissile and GargoyleMissile occur nowhere else
+ *               in the install — no ability, no other unit — so letting the melee slot inherit
+ *               one invents a projectile the game never throws, and a missile impact sound
+ *               where WC3 plays none.
+ *   `instant`   RANGED hitscan. The art IS shown, but as a one-shot burst on the unit struck
+ *               rather than a thing in flight — all six stock instant slots name a
+ *               `*Impact.mdx` carrying a lone "Birth" sequence (see World.tickSwing).
+ *   the rest    A travelling projectile (launchesMissile).
+ */
+export function slotMissileArt(w: WeaponSlotDef): string {
+  return isRangedWeapon(w.weaponType) ? w.missileArt : "";
+}
+
+/**
+ * Re-derive a UnitDef's flat "Attack 1" summary from its weapon SLOTS — the slots are the
+ * truth, these fields are a view of the primary one (the first `weapsOn` enables).
+ *
+ * Called at load and again after a map's overrides land, so the two can never drift. They did:
+ * every `ua1*` setter used to write the slot AND its own copy of the summary by hand, which is
+ * how `missileArt` ended up stating something `weapTp` disagreed with — and `uaen` ("Attacks
+ * Enabled") could move which slot is primary without any of the summary following it.
+ */
+export function syncPrimaryWeapon(def: UnitDef): void {
+  const prime = def.weapons.find((s) => s.enabled) ?? def.weapons[0];
+  if (!prime) return; // no weapons row at all (every building, the Scout Tower) — nothing to view
+  def.attackDamage = prime.damage;
+  def.attackDice = prime.dice;
+  def.attackSides = prime.sides;
+  def.attackCooldown = prime.cooldown;
+  def.attackDamagePoint = prime.damagePoint;
+  def.attackBackswing = prime.backswing;
+  def.attackRange = prime.range;
+  def.weaponType = prime.weaponType;
+  def.attackType = prime.attackType;
+  def.missileArt = slotMissileArt(prime);
+  def.missileSpeed = prime.missileSpeed;
 }
 
 // WC3 tooltip text (Tip/Ubertip) uses |cAARRGGBB…|r colour codes and |n line
@@ -592,15 +648,10 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       range: num(w, `rangeN${n}`, 0),
       weaponType,
       attackType: toAttackType(str(w, `atkType${n}`)),
-      // …but the art is the SLOT's, and a MELEE slot (`weapTp` = normal) never shows one.
-      // That gate is the whole Warden/Demon Hunter bug: every hero row carries a switched-off
-      // slot 2 (`weapsOn` = 1, `missile`, range 500) that an orb wakes as an air attack
-      // (docs/orbs.md, `DataE` = "Enabled Attack Index"), and the ONE `Missileart` on the
-      // UnitFunc row belongs to THAT slot. WardenMissile / DemonHunterMissile /
-      // BrewmasterMissile / GargoyleMissile occur nowhere else in the install — no ability,
-      // no other unit — so letting slot 1 inherit one invents a projectile (and a missile
-      // impact sound) for a hero the real game only ever sees swing.
-      missileArt: isRangedWeapon(weaponType) ? mdxPath(arts[n - 1] ?? arts[0] ?? "") : "",
+      // …as DECLARED. Whether it is ever shown is `weapTp`'s call and is asked at every use
+      // site through slotMissileArt() — never gated here, because a map may flip `weapTp`
+      // (`ua1w`) on this very slot afterwards and clearing the art now would lose it.
+      missileArt: mdxPath(arts[n - 1] ?? arts[0] ?? ""),
       missileSpeed: speeds[n - 1] ?? speeds[0] ?? 900,
       spillDist: num(w, `spillDist${n}`, 0),
       spillRadius: num(w, `spillRadius${n}`, 0),

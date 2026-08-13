@@ -85,26 +85,21 @@ function swing(attackerWeapons) {
 // ---------------------------------------------------------------------------------------
 console.log("\na melee slot never throws, however the row is written");
 {
-  // What units.ts NOW produces for Ewar: the melee slot's art gated off, the air slot keeping
-  // it. The Warden stays a melee unit and her WardenMissile waits for the orb that wakes slot 2.
+  // Ewar exactly as the install writes it: BOTH slots declare WardenMissile (one `Missileart`
+  // on the row, and the per-slot list has one entry). Slot 1 is melee, so the art is hers to
+  // wear and never to throw; slot 2 is the air attack sitting switched off until an orb.
   const warden = def([
-    slot({ weaponType: "normal", range: 100, missileArt: "" }),
+    slot({ weaponType: "normal", range: 100, missileArt: "WardenMissile.mdx" }),
     slot({ weaponType: "missile", range: 500, targets: AIR_TARGETS, enabled: false, missileArt: "WardenMissile.mdx" }),
   ]);
   const sw = weaponsFromDef(warden);
   check("Warden slot 1 (weapTp normal) is melee", sw[0].ranged === false);
-  check("Warden slot 1 carries no missile art", sw[0].missileArt === "");
-  check("her switched-off air slot keeps WardenMissile", sw[1].missileArt === "WardenMissile.mdx" && sw[1].enabled === false);
+  check("her declared WardenMissile is dropped on the melee slot", sw[0].missileArt === "");
+  check("her switched-off air slot keeps it", sw[1].missileArt === "WardenMissile.mdx" && sw[1].enabled === false);
 
   const r = swing(sw);
   check("she swings without loosing a projectile", r.projectiles.length === 0, `${r.projectiles.length} spawned`);
   check("and the blow lands as a melee hit", r.hits.length === 1 && r.hp < 100000);
-
-  // Belt and braces: even handed a melee slot that still carries art (an old cached def, a
-  // custom map's object data), the sim must not fly it. `weapTp` is the only vote.
-  const legacy = weaponsFromDef(def([slot({ weaponType: "normal", missileArt: "WardenMissile.mdx" })]));
-  check("a melee slot WITH art is still melee", legacy[0].ranged === false);
-  check("and still spawns nothing", swing(legacy).projectiles.length === 0);
 }
 
 console.log("\nan `instant` slot is ranged but does not fly");
@@ -133,6 +128,86 @@ console.log("\na missile slot still flies");
   const r = swing(archer);
   check("her arrow is spawned", r.projectiles.length === 1 && r.projectiles[0].art === archer[0].missileArt);
   check("and nothing landed yet — it is in flight", r.hits.length === 0);
+}
+
+// ---------------------------------------------------------------------------------------
+// A CUSTOM unit goes through the same rule — driven through a real war3map.w3u, because the
+// point is that there is no second code path for a map to slip past. `ua1w` (weapTp) and
+// `ua1m` (Missileart) had no setters at all before, so a map retuning either was ignored
+// outright, and every `ua1*` setter wrote its own copy of the flat attack* summary by hand —
+// which is exactly how a def came to state a missile its weapon type disagreed with.
+console.log("\na map's own units obey the same rule");
+{
+  const { applyMapUnitData } = require(join(REPO, ".sim-build", "src", "data", "objectData.js"));
+  const { UnitRegistry } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
+  const War3MapW3u = require("mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file").default;
+  const ModifiedObject = require("mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/modifiedobject").default;
+  const Modification = require("mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/modification").default;
+
+  /** A w3u carrying one custom unit `newId` based on `oldId`, with these field overrides.
+   *  Type 3 is the parser's string; type 0 its int (w3u writes no level/variation ints). */
+  const w3u = (oldId, newId, fields) => {
+    const file = new War3MapW3u();
+    const obj = new ModifiedObject();
+    obj.oldId = oldId;
+    obj.newId = newId;
+    for (const [id, value] of fields) {
+      const m = new Modification();
+      m.id = id;
+      m.variableType = typeof value === "string" ? 3 : 0;
+      m.value = value;
+      obj.modifications.push(m);
+    }
+    file.customTable.objects.push(obj);
+    return file.save();
+  };
+
+  /** A base def shaped like the loader's, with the two slots a hero really carries. */
+  const baseDef = (over = {}) => ({
+    id: "Ewar", name: "Warden", race: "nightelf", weapons: [
+      slot({ weaponType: "normal", range: 100, missileArt: "WardenMissile.mdx" }),
+      slot({ weaponType: "missile", range: 500, targets: AIR_TARGETS, enabled: false, missileArt: "WardenMissile.mdx" }),
+    ],
+    abilities: [], heroAbilities: [], classification: [], properNames: [],
+    attackDamage: 0, attackDice: 0, attackSides: 0, attackCooldown: 0, attackDamagePoint: 0,
+    attackBackswing: 0, attackRange: 0, weaponType: "", attackType: "", missileArt: "",
+    missileSpeed: 900, primaryAttr: "", strength: 0, agility: 0, intelligence: 0,
+    acquireRange: 800, launchX: 0, launchY: 0, launchZ: 0, impactZ: 60, ...over,
+  });
+  const withMods = (fields) => {
+    const reg = new UnitRegistry(new Map([["Ewar", baseDef()]]));
+    applyMapUnitData(reg, w3u("Ewar", "x000", fields));
+    return reg.get("x000");
+  };
+
+  // Untouched: the clone lands with the same verdict the stock hero got.
+  const plain = withMods([["unam", "Custom Warden"]]);
+  check("a plain clone keeps the melee slot's art dropped", plain.missileArt === "");
+  check("...and the declared art still sits on the slot", plain.weapons[0].missileArt === "WardenMissile.mdx");
+  check("...with the attack* summary derived from slot 1", plain.attackRange === 100 && plain.weaponType === "normal");
+
+  // `ua1w` = missile: the map says this Warden throws. The art it already declares comes back.
+  const thrower = withMods([["ua1w", "missile"], ["ua1r", 600]]);
+  check("ua1w makes her ranged", weaponsFromDef(thrower)[0].ranged === true);
+  check("and her declared art is shown again", weaponsFromDef(thrower)[0].missileArt === "WardenMissile.mdx");
+  check("the summary follows the slot", thrower.weaponType === "missile" && thrower.attackRange === 600 && thrower.missileArt === "WardenMissile.mdx");
+  check("she now actually looses a projectile", swing(weaponsFromDef(thrower)).projectiles.length === 1);
+
+  // The other direction: a map that makes a ranged unit melee must lose the projectile.
+  const meleeArcher = withMods([["ua1w", "normal"], ["ua1m", "Abilities\\Weapons\\Arrow\\ArrowMissile.mdl"]]);
+  check("ua1m is read at all (it had no setter before)", meleeArcher.weapons[0].missileArt === "Abilities\\Weapons\\Arrow\\ArrowMissile.mdx");
+  check("...but a melee weapTp still shows nothing", weaponsFromDef(meleeArcher)[0].missileArt === "" && meleeArcher.missileArt === "");
+  check("and nothing flies", swing(weaponsFromDef(meleeArcher)).projectiles.length === 0);
+
+  // A custom missile of the map's own, on a slot that may show one.
+  const custom = withMods([["ua1w", "missile"], ["ua1m", "war3mapImported\\MyGlaive.mdl"], ["ua1z", 1200]]);
+  check("a map's own missile art reaches the sim", weaponsFromDef(custom)[0].missileArt === "war3mapImported\\MyGlaive.mdx");
+  check("...at its own speed", weaponsFromDef(custom)[0].missileSpeed === 1200);
+
+  // `uaen` can MOVE which slot is primary — the summary has to follow it there.
+  const airOnly = withMods([["uaen", 2]]);
+  check("uaen=2 makes the air slot primary", airOnly.attackRange === 500 && airOnly.weaponType === "missile");
+  check("...so the summary shows THAT slot's missile", airOnly.missileArt === "WardenMissile.mdx");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -168,6 +243,30 @@ console.log("\nthe rows this is about, in the real install");
       check(`${who} (${id}): melee slot 1, missile slot 2, one Missileart between them`, !!ok,
         r ? `${col(r, "weapTp1")}/${col(r, "weapTp2")} ${art.get(id) || "(no art)"}` : "no row");
     }
+
+    // The whole hero roster, every race, as one sweep: no hero may end up with a melee slot 1
+    // that shows art, and no hero's ENABLED missile slot may lack it (that one would fire an
+    // invisible projectile — the same bug from the other side). Both counts are pinned so a
+    // patch that changes the roster shows up here rather than in someone's game.
+    const balance = readFileSync(join(dir, "UnitBalance.csv"), "latin1").split(/\r?\n/).map(splitCsv);
+    const bHead = balance[0];
+    const primary = new Map(balance.slice(1).filter((r) => r[0]).map((r) => [r[0], (r[bHead.indexOf("Primary")] ?? "").toUpperCase()]));
+    const MISSILE = new Set(["missile", "msplash", "mbounce", "mline", "artillery", "aline"]);
+    const meleeWithArt = [], enabledMissileNoArt = [];
+    for (const [id, r] of weapons) {
+      if (!["STR", "AGI", "INT"].includes(primary.get(id) ?? "")) continue; // heroes only
+      const list = (art.get(id) || "").split(",").map((x) => x.trim()).filter(Boolean);
+      const mask = parseInt(col(r, "weapsOn") || "0", 10) || 0;
+      for (const n of [1, 2]) {
+        const t = col(r, `weapTp${n}`).toLowerCase();
+        if (!t || t === "_" || t === "-") continue;
+        const declared = list[n - 1] ?? list[0] ?? "";
+        if (!MISSILE.has(t) && t !== "instant" && declared) meleeWithArt.push(`${id}#${n}`);
+        if (MISSILE.has(t) && (mask & (1 << (n - 1))) && !declared) enabledMissileNoArt.push(`${id}#${n}`);
+      }
+    }
+    check("16 hero melee slots declare an art the fix drops", meleeWithArt.length === 16, meleeWithArt.join(" "));
+    check("no hero fires an invisible projectile", enabledMissileNoArt.length === 0, enabledMissileNoArt.join(" "));
 
     // …and every `instant` slot in the game names an *Impact model, never a missile.
     const instants = [];

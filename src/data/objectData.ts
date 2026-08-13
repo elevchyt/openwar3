@@ -18,8 +18,8 @@
 import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
-import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toRegenType } from "./enums";
-import type { UnitDef, UnitRegistry, WeaponSlotDef } from "./units";
+import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toRegenType, toWeaponType } from "./enums";
+import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
 import { emptyAbilityLevel, mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
@@ -103,16 +103,31 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   udef: (d, v) => { d.armor = Math.round(n(v)); },
   udty: (d, v) => { d.armorType = toArmorType(s(v)); },
   uacq: (d, v) => { d.acquireRange = n(v); },
-  ua1r: (d, v) => { d.attackRange = n(v); const w = slot1(d); if (w) w.range = n(v); },
-  ua1t: (d, v) => { d.attackType = toAttackType(s(v)); const w = slot1(d); if (w) w.attackType = toAttackType(s(v)); },
-  ua1c: (d, v) => { d.attackCooldown = n(v); const w = slot1(d); if (w) w.cooldown = n(v); },
-  ua1d: (d, v) => { d.attackDice = n(v); const w = slot1(d); if (w) w.dice = n(v); },
-  ua1s: (d, v) => { d.attackSides = n(v); const w = slot1(d); if (w) w.sides = n(v); },
-  udp1: (d, v) => { d.attackDamagePoint = n(v); const w = slot1(d); if (w) w.damagePoint = n(v); },
+  // Attack 1. These write the SLOT and nothing else — the flat attack* summary on the def is
+  // re-derived from the slots by syncPrimaryWeapon() once every override has landed. Writing
+  // both by hand is what let `missileArt` end up stating something `weapTp` disagreed with.
+  ua1r: (d, v) => { const w = slot1(d); if (w) w.range = n(v); },
+  ua1t: (d, v) => { const w = slot1(d); if (w) w.attackType = toAttackType(s(v)); },
+  ua1c: (d, v) => { const w = slot1(d); if (w) w.cooldown = n(v); },
+  ua1d: (d, v) => { const w = slot1(d); if (w) w.dice = n(v); },
+  ua1s: (d, v) => { const w = slot1(d); if (w) w.sides = n(v); },
+  udp1: (d, v) => { const w = slot1(d); if (w) w.damagePoint = n(v); },
   ucbs: (d, v) => { d.castBackswing = n(v); },
-  ua1z: (d, v) => { d.missileSpeed = n(v); const w = slot1(d); if (w) w.missileSpeed = n(v); },
+  // `weapTp` — the column that says melee / instant / which missile kind. A map retuning it is
+  // retuning whether the unit throws anything at all, so it has to reach the slot the sim
+  // swings with; without this setter a custom "ranged Footman" stayed melee and a custom melee
+  // Archer kept flying arrows.
+  ua1w: (d, v) => { const w = slot1(d); if (w) w.weaponType = toWeaponType(s(v)); },
+  ua2w: (d, v) => { const w = d.weapons[1]; if (w) w.weaponType = toWeaponType(s(v)); },
+  // `Missileart` — the Profile's, per slot. A custom unit that ships its own projectile art
+  // (every third custom map does) was dropping it on the floor before this.
+  ua1m: (d, v) => { const w = slot1(d); if (w) w.missileArt = mdlPath(s(v)); },
+  ua2m: (d, v) => { const w = d.weapons[1]; if (w) w.missileArt = mdlPath(s(v)); },
+  ua1z: (d, v) => { const w = slot1(d); if (w) w.missileSpeed = n(v); },
+  ua2z: (d, v) => { const w = d.weapons[1]; if (w) w.missileSpeed = n(v); },
   // "Attacks Enabled" (weapsOn). A custom unit may switch a slot on or off outright — the
-  // same mask the `renw` upgrades write. 1 = slot 1, 2 = slot 2, 3 = both.
+  // same mask the `renw` upgrades write. 1 = slot 1, 2 = slot 2, 3 = both. This can MOVE which
+  // slot is primary, which is the other reason the summary is re-derived rather than patched.
   uaen: (d, v) => { d.weapons.forEach((w, i) => { w.enabled = (n(v) & (1 << i)) !== 0; }); },
   ua1g: (d, v) => { const w = slot1(d); if (w) w.targets = targetList(s(v)); },
   usd1: (d, v) => { const w = slot1(d); if (w) w.spillDist = n(v); },
@@ -162,10 +177,14 @@ function applyMods(def: UnitDef, mods: Array<{ id: string; value: Val }>, trigSt
   }
   // Base attack damage folds in the hero's primary attribute (as loadUnitRegistry does).
   if (dmgOverride !== undefined) {
-    def.attackDamage = dmgOverride + primaryVal(def);
     const w = slot1(def);
-    if (w) w.damage = def.attackDamage;
+    if (w) w.damage = dmgOverride + primaryVal(def);
   }
+  // The slots are settled; re-derive the flat attack* view from them. Doing it once, HERE,
+  // is what makes a custom unit obey exactly the rules a stock one does — including "a melee
+  // slot shows no missile art", which the base row may satisfy and an override then break
+  // (`ua1w` = normal on an Archer) or the other way about (`ua1w` = missile + `ua1m`).
+  syncPrimaryWeapon(def);
 }
 
 /** A fresh clone of a UnitDef under a new id (arrays copied so overrides don't alias). The
