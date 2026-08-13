@@ -1296,19 +1296,23 @@ export class RtsController {
       if (def?.model && au) this.sounds.playModelAttack(def.model, { x: au.x, y: au.y, z: this.heightAt(au.x, au.y) });
     }
     for (const h of this.sim.drainHits()) {
-      const atk = this.defOf(h.attackerId);
       const tgt = this.defOf(h.targetId);
-      if (!atk) continue;
       const tu = this.sim.units.get(h.targetId); // impact rings out at the struck unit
       const at = tu ? { x: tu.x, y: tu.y, z: this.heightAt(tu.x, tu.y) } : undefined;
-      // The clang is the attacker's WEAPON sound against the target's MATERIAL. Both are
-      // already normalised to "" when the row names none (see units.ts soundBase), so an
-      // absent one is falsy rather than the SLK's literal "_".
-      if (atk.weaponSound && tgt?.armorSound) {
-        this.sounds.playImpact(atk.weaponSound, tgt.armorSound, at); // melee: material clang
-      } else if (atk.missileArt) {
-        this.sounds.playMissile(atk.missileArt, "impact", at); // ranged: the missile's own impact sound
+      // The clang is the WEAPON THAT LANDED THE BLOW against the target's MATERIAL — taken
+      // from the hit, not from the attacker's def, so nothing here has to know which of a
+      // unit's two slots was swinging (an orb-woken air attack, a Flying Machine's bombs).
+      // Nor is the attacker consulted at all when the blow names a weapon: it may have died
+      // while its arrow was still in the air, and a dead shooter has no def to ask. Both
+      // halves are normalised to "" when the row names none (units.ts soundBase), so absence
+      // is falsy rather than the SLK's literal "_".
+      if (h.weaponSound && tgt?.armorSound) {
+        this.sounds.playImpact(h.weaponSound, tgt.armorSound, at); // melee: material clang
+        continue;
       }
+      // No weapon sound: a missile's own impact noise instead, which only the def records.
+      const atk = this.defOf(h.attackerId);
+      if (atk?.missileArt) this.sounds.playMissile(atk.missileArt, "impact", at); // ranged
     }
     for (const workerId of this.sim.drainChops()) {
       const def = this.defOf(workerId);

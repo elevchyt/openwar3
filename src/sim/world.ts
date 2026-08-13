@@ -91,6 +91,12 @@ export interface SimWeapon {
   ranged: boolean; // fires a travelling projectile instead of hitting instantly
   missileArt: string; // projectile model path (renderer), "" = invisible
   missileSpeed: number; // projectile travel speed (world units/sec)
+  /** This slot's weapon-impact base, paired with the TARGET's material to name the clang
+   *  (`weapType1/2` — see WeaponSlotDef.weaponSound). It rides the SLOT rather than being
+   *  read off the def at the blow, because which slot is swinging is a RUNTIME fact: an orb
+   *  wakes a hero's dormant air attack (`DataE`) and `renw` switches the Flying Machine's
+   *  bombs on, and neither touches the def the summary was derived from. */
+  weaponSound: string;
   attackType: AttackType; // UnitWeapons atkType1 → picks the damage-table row
   // Projectile launch offset (LOCAL frame: x forward, y left, z up; rotated by facing)
   // and impact height — UnitWeapons.slk launchx/y/z, impactz. The missile leaves from
@@ -120,6 +126,10 @@ export interface SimProjectile {
   startDist: number;
   attackType?: AttackType; // attacker's weapon attack type, carried so the damage-table
   // multiplier is correct even if the attacker dies before the arrow lands
+  /** The firing weapon's impact base, carried for the same reason `attackType` is: the shot
+   *  must land the clang of the weapon that LOOSED it, whatever has become of the shooter —
+   *  it may have died, been morphed, or had a different slot switched on mid-flight. */
+  weaponSound?: string;
   /** Line-splash, carried from the weapon so the hit spills even if the shooter dies in
    *  flight. `ox`/`oy` is the launch point — the line's direction is impact-minus-launch,
    *  and the spill runs on PAST the target from there. See applySpill. */
@@ -217,6 +227,7 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       acquire: def.acquireRange,
       ranged,
       missileArt: slotMissileArt(s),
+      weaponSound: s.weaponSound,
       missileSpeed: s.missileSpeed,
       attackType: s.attackType,
       launchX: def.launchX,
@@ -1724,9 +1735,13 @@ export class SimWorld {
   // Projectiles that actually HIT (vs fizzled) — the renderer plays the impact
   // effect (the missile model's Death clip) at the recorded point (z above ground).
   private projectileImpacts: Array<{ id: number; x: number; y: number; z: number }> = [];
-  // Landed hits (melee + projectile) — the renderer plays the weapon-impact SFX
-  // (attacker's weapon material vs target's armour material).
-  private hits: Array<{ attackerId: number; targetId: number }> = [];
+  /** Landed hits (melee + projectile) — the renderer plays the weapon-impact SFX, the
+   *  weapon's material against the struck unit's. Each blow carries THE SOUND OF THE WEAPON
+   *  THAT LANDED IT, not just the attacker's id: the clang belongs to the blow rather than to
+   *  the unit. A hero whose air slot an orb woke, a Flying Machine that has researched Bombs
+   *  and a map's `ucs2` all swing something the def's primary-slot summary does not describe,
+   *  and a shot still in flight when its shooter dies has no def left to ask at all. */
+  private hits: Array<{ attackerId: number; targetId: number; weaponSound: string }> = [];
   // Worker ids whose axe just landed a chop this tick — the renderer plays the
   // chop SFX (worker's lumber-weapon material vs Wood).
   private chops: number[] = [];
@@ -2565,9 +2580,10 @@ export class SimWorld {
     return out;
   }
 
-  /** Weapon hits (melee + projectile) landed since the last drain — the renderer
-   *  resolves each attacker/target's material to a combat-impact sound. */
-  drainHits(): Array<{ attackerId: number; targetId: number }> {
+  /** Weapon hits (melee + projectile) landed since the last drain. Each names the weapon
+   *  that landed it, which the renderer pairs with the struck unit's material to get the
+   *  combat-impact sound — see `hits`. */
+  drainHits(): Array<{ attackerId: number; targetId: number; weaponSound: string }> {
     if (!this.hits.length) return this.hits;
     const out = this.hits;
     this.hits = [];
@@ -9682,6 +9698,7 @@ export class SimWorld {
       damage: this.rollDamage(w) + bonus, // + Backstab Damage if this shot broke a fade
       art: this.orbMissileArt(orb) || w.missileArt,
       attackType: w.attackType,
+      weaponSound: w.weaponSound,
       orb: orb ?? undefined,
       startZ: lz,
       impactZ: impactBase + t.flyHeight,
@@ -9744,7 +9761,7 @@ export class SimWorld {
     for (const h of hits) {
       damage *= 1 - s.loss;
       if (damage <= 0) break;
-      this.applyDamage(h.t, damage, p.sourceId, p.attackType ?? AttackType.None);
+      this.applyDamage(h.t, damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "");
     }
   }
 
@@ -9780,7 +9797,7 @@ export class SimWorld {
           // Orb of Corruption: "the armor reduction happens before the damage of the hero is
           // dealt"), so the debuff half of an orb goes on first and the rest after.
           this.applyOrbArmorFirst(this.units.get(p.sourceId), t, p.orb);
-          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None);
+          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "");
           this.applyOrbEffect(this.units.get(p.sourceId), t, p.orb, dealt); // the orb this arrow carried
           this.applyLiquidFire(this.units.get(p.sourceId), t); // Batrider: burn a struck building
           const shooter = this.units.get(p.sourceId);
@@ -9848,7 +9865,7 @@ export class SimWorld {
       const gap = Math.hypot(t.x - a.aimX, t.y - a.aimY) - t.radius;
       const frac = gap <= a.full ? 1 : gap <= a.half ? 0.5 : gap <= a.quarter ? 0.25 : 0;
       if (frac <= 0) continue;
-      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None);
+      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "");
       if (source) this.applyPillage(source, t, dealt); // a Demolisher with Pillage loots what it shells
       if (frac === 1 && !nearest) nearest = t;
     }
@@ -10266,7 +10283,7 @@ export class SimWorld {
     // rather than at a launch — but the ordering inside the blow is the same (see above).
     const orb = this.resolveOrb(attacker, target);
     this.applyOrbArmorFirst(attacker, target, orb);
-    const dealt = this.applyDamage(target, raw, attacker.id, w.attackType);
+    const dealt = this.applyDamage(target, raw, attacker.id, w.attackType, w.weaponSound);
     // Cleaving Attack (Pit Lord passive ANca): splash a fraction to nearby enemies.
     if (dealt > 0) this.applyCleave(attacker, target, raw);
     // Vampiric Aura: the attacker heals for a fraction of the melee damage dealt.
@@ -10724,7 +10741,7 @@ export class SimWorld {
     return out;
   }
 
-  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None): number {
+  private applyDamage(target: SimUnit, rawDamage: number, attackerId: number, attackType = AttackType.None, weaponSound = ""): number {
     // A Mirror Image illusion swings, connects, and does nothing: AOmi's DataB ("Damage
     // Dealt (%)") is 0. Its sheet still reads like the Blademaster's — the deception is
     // the whole ability — so this is enforced here, at the blow, not by editing its stats.
@@ -10737,7 +10754,7 @@ export class SimWorld {
     // bailing early is exactly what left the images swinging in silence.
     const attacker = attackerId ? this.units.get(attackerId) : undefined;
     if (attacker?.isIllusion && attacker.illusionDamageDealt <= 0) {
-      if (!target.invulnerable) this.hits.push({ attackerId, targetId: target.id });
+      if (!target.invulnerable) this.hits.push({ attackerId, targetId: target.id, weaponSound });
       return 0;
     }
     if (attacker?.isIllusion) rawDamage *= attacker.illusionDamageDealt;
@@ -10771,7 +10788,7 @@ export class SimWorld {
     for (const b of target.buffs) if (b.kind === "vuln") vuln = Math.max(vuln, b.value);
     const reduction = armorDamageReduction(target.armor);
     const final = rawDamage * typeMult * (1 + vuln) * (1 - reduction);
-    return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true);
+    return this.landDamage(target, this.spiritLinkSplit(target, final), attackerId, true, weaponSound);
   }
 
   /** Spirit Link (Aspl): `linkShare` of a post-armor hit is spread equally across the linked
@@ -10905,7 +10922,7 @@ export class SimWorld {
    *  hits) the impact SFX. Spell damage calls this directly with recordHit=false —
    *  WC3 ability damage ignores the armor value and plays its own effects. Returns
    *  the HP removed (0 if the target was invulnerable). */
-  private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean): number {
+  private landDamage(target: SimUnit, amount: number, attackerId: number, recordHit: boolean, weaponSound = ""): number {
     if (target.invulnerable) return 0; // Divine Shield / Avatar: immune to damage
     // A Mirror Image illusion takes AOmi's DataC ("Damage Taken (%)") = 200%, which is why
     // one melts the moment somebody works out which is which. It belongs HERE and not in
@@ -10927,7 +10944,7 @@ export class SimWorld {
     // Mana Shield (Naga): absorb incoming damage into mana at `value` mana per hp.
     amount = this.absorbWithManaShield(target, amount);
     if (amount <= 0) return 0;
-    if (recordHit) this.hits.push({ attackerId, targetId: target.id });
+    if (recordHit) this.hits.push({ attackerId, targetId: target.id, weaponSound });
     this.noteAttacked(target, attackerId); // "The battle has been joined." / "Our town is under siege!"
     this.revealFoggedAttacker(attackerId, target);
     // EVENT_UNIT_DAMAGED: the amount that actually landed (after mana shield), with
