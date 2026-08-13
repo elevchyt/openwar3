@@ -7,6 +7,7 @@ import {
   PrimaryAttribute,
   RegenType,
   WeaponType,
+  isRangedWeapon,
   toArmorType,
   toAttackType,
   toMoveType,
@@ -51,9 +52,10 @@ export interface WeaponSlotDef {
    *  plays at (see rts.ts attackAnimRate — the pair is NOT the clip's length). */
   backswing: number;
   range: number;
-  weaponType: WeaponType; // weapTp1/2 — Normal/Instant strike at once, the Missile kinds fly
+  weaponType: WeaponType; // weapTp1/2 — normal = melee, instant = hitscan, the rest fly
   attackType: AttackType; // atkType1/2 → the damage table's row
-  missileArt: string; // this slot's projectile model — `Missileart` is a per-slot comma list
+  missileArt: string; // this slot's art (flying missile, or an instant slot's impact burst);
+  // `Missileart` is a per-slot comma list, and "" on a melee slot however the row is written
   missileSpeed: number; // ...and so is `Missilespeed` (Flying Machine: 2000 air, 900 bombs)
   /** Line-splash ("spill") — `spillDist1/2` + `spillRadius1/2` + `damageLoss1/2`. The
    *  Gryphon Rider's hammer already carries a 50-unit spill RADIUS and a 0.2 falloff, but a
@@ -268,10 +270,10 @@ export interface UnitDef {
   attackRange: number;
   acquireRange: number; // auto-acquisition range (0 = never auto-attacks)
   canSleep: boolean; // UnitData `cansleep`: Neutral Hostile creeps of this type sleep at night
-  weaponType: WeaponType; // weapTp1: Normal/Instant strike at once, the Missile kinds fly
+  weaponType: WeaponType; // weapTp1: normal = melee, instant = hitscan, the rest fly
   attackType: AttackType; // atkType1 → the damage table's row
   armorType: ArmorType; // defType → the damage table's column
-  missileArt: string; // weapon-1 projectile model (MDX path, backslashes) or ""
+  missileArt: string; // weapon-1 projectile model (MDX path, backslashes) — "" if melee
   missileSpeed: number; // projectile travel speed (world units/sec)
   // Projectile launch offset from the unit's origin, in its LOCAL frame (x forward,
   // y left, z up), rotated by facing — UnitWeapons.slk launchx/y/z. e.g. the Archmage
@@ -577,6 +579,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
   for (const n of [1, 2]) {
     const targets = list(str(w, `targs${n}`));
     if (!targets.length) continue; // the row declares no such slot
+    const weaponType = toWeaponType(str(w, `weapTp${n}`));
     out.push({
       enabled: (mask & (1 << (n - 1))) !== 0,
       targets,
@@ -587,9 +590,17 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       damagePoint: num(w, `dmgpt${n}`, 0),
       backswing: num(w, `backSw${n}`, 0),
       range: num(w, `rangeN${n}`, 0),
-      weaponType: toWeaponType(str(w, `weapTp${n}`)),
+      weaponType,
       attackType: toAttackType(str(w, `atkType${n}`)),
-      missileArt: mdxPath(arts[n - 1] ?? arts[0] ?? ""),
+      // …but the art is the SLOT's, and a MELEE slot (`weapTp` = normal) never shows one.
+      // That gate is the whole Warden/Demon Hunter bug: every hero row carries a switched-off
+      // slot 2 (`weapsOn` = 1, `missile`, range 500) that an orb wakes as an air attack
+      // (docs/orbs.md, `DataE` = "Enabled Attack Index"), and the ONE `Missileart` on the
+      // UnitFunc row belongs to THAT slot. WardenMissile / DemonHunterMissile /
+      // BrewmasterMissile / GargoyleMissile occur nowhere else in the install — no ability,
+      // no other unit — so letting slot 1 inherit one invents a projectile (and a missile
+      // impact sound) for a hero the real game only ever sees swing.
+      missileArt: isRangedWeapon(weaponType) ? mdxPath(arts[n - 1] ?? arts[0] ?? "") : "",
       missileSpeed: speeds[n - 1] ?? speeds[0] ?? 900,
       spillDist: num(w, `spillDist${n}`, 0),
       spillRadius: num(w, `spillRadius${n}`, 0),

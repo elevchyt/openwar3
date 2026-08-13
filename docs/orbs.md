@@ -63,6 +63,19 @@ every orb item sets to `2`. Mask of Death carries no `Iob5` at all — which is 
 is the one "orb" that does **not** let a melee hero hit air, a point the reddit thread has to
 correct a poster on.
 
+**That dormant slot owns the hero's `Missileart`, and it is a trap.** A melee hero's UnitFunc
+row carries a projectile model — `Ewar` Warden → `WardenMissile.mdl`, `Edem` Demon Hunter →
+`DemonHunterMissile.mdl`, the Brewmaster's and the Gargoyle's the same — and it belongs to
+**slot 2**, the shot the orb wakes. Those models occur *nowhere else* in the install: no
+ability, no other unit. So "the row names a missile, therefore this unit shoots" hands a melee
+hero a projectile the real game never throws, plus that missile's impact sound where WC3 plays
+none (Warden's `unitUI` `weap1` is `_` — her audible blow is her model's own SND event). The
+column that decides is **`weapTp`, per slot**: `normal` is melee and shows no art at all,
+`instant` is ranged hitscan whose art is a one-shot burst on the unit struck (all six stock
+`instant` slots name a `*Impact.mdx` holding a lone "Birth" sequence — nothing to loop in
+flight), and only the `missile`/`msplash`/`mbounce`/`mline`/`artillery`/`aline` kinds fly.
+See `isRangedWeapon`/`launchesMissile` in `src/data/enums.ts` and `tools/sim-missile-art-test.cjs`.
+
 ## The family
 
 | code | who | what it does on a hit |

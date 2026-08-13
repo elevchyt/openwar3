@@ -19,7 +19,7 @@ import {
   pickOrb,
   type OrbCandidate,
 } from "./orbs";
-import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon } from "../data/enums";
+import { AttackType, ArmorType, MoveType, PrimaryAttribute, RegenType, WeaponType, isRangedWeapon, launchesMissile } from "../data/enums";
 import {
   MISC_DATA,
   MISC_GAME,
@@ -181,9 +181,10 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
   const out: SimWeapon[] = [];
   for (const s of def.weapons) {
     if (s.cooldown <= 0 || s.damage + s.dice * s.sides <= 0) continue;
-    // The Rifleman's weapTp1 is "instant" yet he clearly shoots: a missile model on a
-    // nominally instant weapon still flies. Either signal makes the attack ranged.
-    const ranged = isRangedWeapon(s.weaponType) || s.missileArt !== "";
+    // Ranged is `weapTp`'s call alone — NOT "has a missile model". A melee hero's row
+    // carries a `Missileart` for the air attack an orb wakes (see units.ts), so reading
+    // the art as the signal made every one of them a thrower.
+    const ranged = isRangedWeapon(s.weaponType);
     out.push({
       damage: s.damage,
       dice: s.dice,
@@ -9567,8 +9568,17 @@ export class SimWorld {
     // is loosed and not when it lands. The blow that breaks the fade carries the Backstab
     // Damage; a melee swing that then whiffs still spends it, having already given the unit up.
     const backstab = this.breakInvisibility(u);
-    if (w.ranged) {
+    if (launchesMissile(w.weaponType)) {
       this.spawnProjectile(u, t, w, backstab);
+    } else if (w.ranged) {
+      // `instant` — ranged HITSCAN. The damage lands on the fire frame with nothing in
+      // flight, and the slot's `Missileart` is a one-shot burst played on the unit struck:
+      // all six stock instant slots name a `*Impact.mdx` that holds a lone "Birth" sequence
+      // (RifleImpact = a Dust3 puff + a Yellow_Star_Dim spark — the bullet hit), with no
+      // "Stand" to loop while travelling. No reach re-test: like a homing missile, a loosed
+      // instant shot connects — only MELEE can whiff on a target that drifted out of reach.
+      if (w.missileArt) this.spellEffects.push({ art: w.missileArt, x: t.x, y: t.y, targetId: t.id, z: w.impactZ });
+      this.dealDamage(u, t, w, backstab);
     } else {
       // Melee connects if the target is still within the same reach the unit is
       // allowed to swing from (range + the combat-hold leash) — NOT the tighter

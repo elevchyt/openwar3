@@ -39,8 +39,12 @@ export enum ArmorType {
   Divine = "divine",
 }
 
-/** UnitWeapons.slk `weapTp1` — how the weapon delivers its damage. Normal/Instant
- *  strike immediately (melee); the missile/artillery kinds fly a projectile. */
+/** UnitWeapons.slk `weapTp1` — how the weapon delivers its damage, and the one column
+ *  that decides whether the unit's `Missileart` is ever seen. Three families:
+ *    - `normal`   — MELEE. Strikes instantly at contact range and shows NO missile art.
+ *    - `instant`  — RANGED hitscan. Damage lands the moment the swing fires, with no
+ *                   projectile in flight; the art is a one-shot burst at the target.
+ *    - the rest   — fly a projectile (see launchesMissile). */
 export enum WeaponType {
   None = "",
   Normal = "normal",
@@ -145,8 +149,12 @@ export function toPrimaryAttribute(v: string): PrimaryAttribute {
   return s === "STR" || s === "AGI" || s === "INT" ? (s as PrimaryAttribute) : PrimaryAttribute.None;
 }
 
-/** Weapon kinds that fire a travelling projectile (everything else strikes instantly). */
-const RANGED_WEAPONS = new Set<WeaponType>([
+/** Weapon kinds that fire a travelling projectile — the ONLY kinds whose `Missileart`
+ *  is a flying model. Verified against the install: every one of the six stock `instant`
+ *  slots (hrif, hgyr, hmtt, hrtt, zhyd, zmar) names a `*Impact.mdx` whose SEQS chunk holds
+ *  a lone "Birth" — no "Stand" to loop in flight and no "Death" to end on — while every
+ *  real missile (ArrowMissile, WardenMissile, GyroCopterMissile) carries Stand + Death. */
+const MISSILE_WEAPONS = new Set<WeaponType>([
   WeaponType.Missile,
   WeaponType.MissileSplash,
   WeaponType.MissileBounce,
@@ -155,6 +163,14 @@ const RANGED_WEAPONS = new Set<WeaponType>([
   WeaponType.ArtilleryLine,
 ]);
 
+export function launchesMissile(t: WeaponType): boolean {
+  return MISSILE_WEAPONS.has(t);
+}
+
+/** Whether the weapon strikes from a distance rather than at contact. `instant` counts:
+ *  the Rifleman's weapTp1 is `instant` at 400 range — he shoots, the shot just doesn't fly
+ *  (thehelper: "he attacks, and immediately the target will be hit […] without any flying
+ *  thing"). Only `normal` (and an absent slot) is melee. */
 export function isRangedWeapon(t: WeaponType): boolean {
-  return RANGED_WEAPONS.has(t);
+  return MISSILE_WEAPONS.has(t) || t === WeaponType.Instant;
 }
