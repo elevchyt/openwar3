@@ -237,7 +237,12 @@ html body.loading-screen * { cursor: none !important; }
    exactly the width of the health bar above it, so five wisps read as five full divisions and
    the sixth slot's emptiness is visible as the frame showing through. The slots share the
    health bar's frame (.unit-hpbar-track) and its fill art, which is why an empty one needs
-   nothing of its own: it is the same black frame with nothing inside it. */
+   nothing of its own: it is the same black frame with nothing inside it.
+
+   A taken slot is drawn GOLD in the original, not green — the two bars are stacked and the
+   colour is what tells them apart at a glance. The fills carry data-state="yellow"
+   (worldOverlays.ts), so both the game's own slab and the no-install placebo below follow the
+   health bar's yellow rather than needing a colour invented here. */
 .unit-hpbar-garrison { display: flex; gap: 1px; }
 .unit-hpbar-slot {
   flex: 1 1 0;
