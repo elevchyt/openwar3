@@ -125,6 +125,10 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   ua2m: (d, v) => { const w = d.weapons[1]; if (w) w.missileArt = mdlPath(s(v)); },
   ua1z: (d, v) => { const w = slot1(d); if (w) w.missileSpeed = n(v); },
   ua2z: (d, v) => { const w = d.weapons[1]; if (w) w.missileSpeed = n(v); },
+  // "Attack N - Weapon Sound" (`weapType1/2`) — the clang, per slot. Named one letter apart
+  // from `ua1w` above and meaning something else entirely; see WeaponSlotDef.weaponSound.
+  ucs1: (d, v) => { const w = slot1(d); if (w) w.weaponSound = s(v); },
+  ucs2: (d, v) => { const w = d.weapons[1]; if (w) w.weaponSound = s(v); },
   // "Attacks Enabled" (weapsOn). A custom unit may switch a slot on or off outright — the
   // same mask the `renw` upgrades write. 1 = slot 1, 2 = slot 2, 3 = both. This can MOVE which
   // slot is primary, which is the other reason the summary is re-derived rather than patched.

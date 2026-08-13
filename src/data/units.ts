@@ -54,6 +54,13 @@ export interface WeaponSlotDef {
   range: number;
   weaponType: WeaponType; // weapTp1/2 — normal = melee, instant = hitscan, the rest fly
   attackType: AttackType; // atkType1/2 → the damage table's row
+  /** This slot's weapon-impact base — the clang half of `<weapon><armour>`, paired with the
+   *  TARGET's material to name a UnitCombatSounds row ("MetalHeavySlice" + "Flesh"). "" = a
+   *  silent blow. It is `UnitWeapons.weapType1/2`, which the object editor exposes as
+   *  **"Attack 1 - Weapon Sound"** (`ucs1`/`ucs2` in UnitMetaData) — NOT `weapTp1/2`, the
+   *  neighbouring column with the confusingly similar name that holds normal/missile/instant.
+   *  See weaponSlots() for why `UnitUI.weap1/2` is only the fallback. */
+  weaponSound: string;
   /** This slot's `Missileart` AS DECLARED — a per-slot comma list in the UnitFunc profile.
    *  Whether the slot actually shows it is `weaponType`'s call: ask slotMissileArt(), never
    *  this field, or you re-open the melee-hero bug it exists to close. */
@@ -119,8 +126,14 @@ export interface UnitDef {
   // Tower `upgrade,third`. Without this, every tier renders as tier 1. See applyAnimProps().
   animProps: string[];
   soundSet: string; // unitUI "unitSound" label (e.g. "Footman") → UI\SoundInfo lookups
-  weaponSound: string; // unitUI "weap1" weapon-impact base ("MetalMediumSlice"); "_" = none
-  lumberSound: string; // unitUI "weap2" 2nd-weapon base — workers' chop ("AxeMediumChop"); "" = none
+  /** The PRIMARY slot's weapon-impact base ("MetalMediumSlice"), a view of `weapons` filled
+   *  in by syncPrimaryWeapon; "" = a silent blow. Its source is the slot's own
+   *  `weapType1/2`, not `UnitUI.weap1` — see WeaponSlotDef.weaponSound and weaponSlots(). */
+  weaponSound: string;
+  /** unitUI "weap2" — the HARVEST chop ("AxeMediumChop"), which is not a weapon slot and so
+   *  stays a unit-level field; "" = none. (The Peasant and Peon write the same value in both
+   *  tables, so the two readings agree where they overlap.) */
+  lumberSound: string;
   armorSound: string; // unitUI "armor" material struck ("Metal"/"Flesh"/…) → combat-sound suffix
   icon: string; // command-card BTN icon path (from UnitFunc "art")
   description: string; // command-card tooltip body (UnitStrings "Ubertip"), WC3 markup intact
@@ -434,7 +447,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     // legacy attack* fields afterwards, by syncPrimaryWeapon. A unit with no weapons row, or
     // with weapsOn=0 (every building, the Scout Tower), ends up with no slots at all and
     // simply cannot attack.
-    const slots = weaponSlots(w, fn, primaryVal);
+    const slots = weaponSlots(w, fn, primaryVal, u);
     const animProps = fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
 
     defs.set(id, {
@@ -450,9 +463,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
       animProps,
       soundSet: u ? str(u, "unitSound") : "",
-      weaponSound: u ? str(u, "weap1") : "",
-      lumberSound: u ? str(u, "weap2") : "",
-      armorSound: u ? str(u, "armor") : "",
+      weaponSound: "", // a view of the primary slot — syncPrimaryWeapon fills it below
+      lumberSound: soundBase(u ? str(u, "weap2") : ""),
+      armorSound: soundBase(u ? str(u, "armor") : ""),
       icon: fn ? str(fn, "art") : "",
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The
@@ -609,6 +622,15 @@ export function syncPrimaryWeapon(def: UnitDef): void {
   def.attackType = prime.attackType;
   def.missileArt = slotMissileArt(prime);
   def.missileSpeed = prime.missileSpeed;
+  def.weaponSound = prime.weaponSound;
+}
+
+/** A weapon/armour sound base as the SLK writes it, or "" for "this row names none". The
+ *  tables spell absence three ways — an empty cell, "_" and "-" — and only "" may reach a
+ *  row key, since "_" + "Flesh" is a lookup that quietly finds nothing. */
+function soundBase(v: string): string {
+  const s = (v || "").trim();
+  return s === "_" || s === "-" ? "" : s;
 }
 
 // WC3 tooltip text (Tip/Ubertip) uses |cAARRGGBB…|r colour codes and |n line
@@ -621,8 +643,24 @@ function rawTip(v: string): string {
 /** Both weapon slots of a UnitWeapons row. A slot exists only if it declares Targets
  *  Allowed (`targs`) — the SLK writes "_" in every column of an undeclared slot. `enabled`
  *  is that slot's bit in `weapsOn`; a slot can exist and be OFF, which is the whole point
- *  of the `renw` upgrades (see WeaponSlotDef). */
-function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number): WeaponSlotDef[] {
+ *  of the `renw` upgrades (see WeaponSlotDef).
+ *
+ *  `ui` is the unit's UnitUI row, read for ONE thing: the weapon-sound fallback. WC3 writes
+ *  that sound down TWICE, in two tables, and neither copy is complete:
+ *
+ *    UnitWeapons `weapType1/2`  the per-ATTACK sound, and the one the object editor exposes
+ *                               ("Attack 1 - Weapon Sound", `ucs1`/`ucs2`).
+ *    UnitUI      `weap1/2`      a unit-level pair that usually says the same thing.
+ *
+ *  183 armed units agree. 60 name a sound ONLY on the slot — the Warden (MetalHeavySlice),
+ *  Maiev, the Dreadlord, Anub'arak, the Mountain Giant, and every spider, turtle and murgul
+ *  — and reading UnitUI alone left all 60 landing blows in total silence, which is the
+ *  Warden bug. 36 name one ONLY in UnitUI (the Keeper of the Grove, Cenarius, Sylvanas…),
+ *  and 32 of those carry no SND "K" event either, so reading the slot alone would silence
+ *  THEM. So: the slot's own sound, and UnitUI only when the slot names none. (All 60 + 36
+ *  pair with their target's material to name a real UnitCombatSounds row — checked against
+ *  the install by tools/sim-weapon-sound-test.cjs.) */
+function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number, ui: Row | undefined): WeaponSlotDef[] {
   if (!w) return [];
   const mask = num(w, "weapsOn", 0);
   // `Missileart` / `Missilespeed` (UnitFunc.txt) are themselves per-slot comma lists when the
@@ -648,6 +686,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       range: num(w, `rangeN${n}`, 0),
       weaponType,
       attackType: toAttackType(str(w, `atkType${n}`)),
+      weaponSound: soundBase(str(w, `weapType${n}`)) || soundBase(ui ? str(ui, `weap${n}`) : ""),
       // …as DECLARED. Whether it is ever shown is `weapTp`'s call and is asked at every use
       // site through slotMissileArt() — never gated here, because a map may flip `weapTp`
       // (`ua1w`) on this very slot afterwards and clearing the art now would lose it.
