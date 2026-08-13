@@ -168,6 +168,12 @@ export interface RenderUnit {
     readonly constructionLeft: number;
     readonly buildTimeTotal: number;
   } | null;
+  /** Who is INSIDE it, and how many it holds — an Orc Burrow's peons, an Entangled Gold Mine's
+   *  wisps. Read for the crew's SIZE only: the occupancy bar WC3 floats under such a building's
+   *  health bar is a count of slots, not a fraction (rts.ts updateHealthBars). Already on the
+   *  wire for the selection panel, so no snapshot field had to be invented for it. */
+  readonly garrison: readonly number[];
+  readonly garrisonCap: number;
   readonly weapon: RenderWeapon | null;
   readonly swingWeapon: RenderWeapon | null;
 }

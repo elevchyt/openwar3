@@ -8450,7 +8450,12 @@ export class MapViewerScene {
             const def = this.registry.get(u.typeId);
             if (def?.uberSplat) {
               this.simBuildingSplats.add(u.id);
-              this.addBuildingSplat(u.id, def, u.x, u.y);
+              // Where the FOOTPRINT went down, not where the unit is standing this frame: a
+              // planting Ancient spends its root animation walking the last stretch onto the
+              // site (SimUnit.rootSettle), so its position is still short of the spot the mark
+              // its roots leave belongs on. The stamp is already on the site.
+              const at = u.pathStamp ?? { x: u.x, y: u.y };
+              this.addBuildingSplat(u.id, def, at.x, at.y);
             }
           }
         }

@@ -232,6 +232,26 @@ html body.loading-screen * { cursor: none !important; }
 .unit-hpbar-fill[data-state="red"] { background-color: #c80000; }
 .unit-hpbar-mana { background-color: #0f0080; }
 
+/* Occupancy bar — the row of slots WC3 floats under the health bar of a garrisoned building
+   (an Orc Burrow's peons, an Entangled Gold Mine's wisps). One track per slot, laid across
+   exactly the width of the health bar above it, so five wisps read as five full divisions and
+   the sixth slot's emptiness is visible as the frame showing through. The slots share the
+   health bar's frame (.unit-hpbar-track) and its fill art, which is why an empty one needs
+   nothing of its own: it is the same black frame with nothing inside it. */
+.unit-hpbar-garrison { display: flex; gap: 1px; }
+.unit-hpbar-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  /* Shorter than the health bar: this is a counter, not a second health reading. */
+  height: max(3px, calc(var(--statbar-h, 7px) - 2px));
+}
+/* A slot is its own little bar, so the game's slab is stretched to the SLOT rather than to the
+   whole row (the base rule sizes it to the health bar's width, which would run off the end of
+   every division). */
+body.hud-statbar-skinned .unit-hpbar-slot .unit-hpbar-fill {
+  background-size: 100% 100%;
+}
+
 /* The real thing (issue #79): the game's own bar slab, tinted per state by ui/hud.ts
    applyStatBarSkin. It is stretched across the WHOLE bar — the track's width less its two
    2px end borders — and clipped by this element's width, so the slab's shading stays put

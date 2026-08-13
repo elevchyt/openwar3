@@ -5850,6 +5850,14 @@ export class RtsController {
         // level and doesn't track level-ups.
         level: e.isHero && u.level > 0 ? u.level : null,
         isHero: e.isHero,
+        // Who is INSIDE it — the Orc Burrow's peons and the Entangled Gold Mine's wisps. WC3
+        // shows the hold as a row of slots under the health bar, and only while something is
+        // in there: an empty burrow floats an ordinary bar like any other building. The slot
+        // count is the hold's own capacity (`Abun`/`Aenc` Data — SimUnit.garrisonCap), so the
+        // mine gets five and a burrow gets what its row says.
+        garrison: u.garrisonCap > 0 && u.garrison.length > 0
+          ? { filled: u.garrison.length, slots: u.garrisonCap }
+          : null,
       });
     }
     this.overlays.syncBars(specs);

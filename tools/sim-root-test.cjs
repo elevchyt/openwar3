@@ -48,6 +48,10 @@ function ancient(abilId, over = {}) {
     id: 1, owner: 0, team: 0, hp: 900, x: 256, y: 256, prevX: 256, prevY: 256,
     detectRadius: 0, invisible: false, cloaked: false, uprooted: false, rootedFootprint: 0,
     inventory: [], buffs: [], footprint: 0, hasReservation: false,
+    // Raised facing south (bj_UNIT_FACING) but currently looking east: an Ancient that plants
+    // has to TURN back, and the two angles have to differ for that turn to be visible at all.
+    facing: 0, desiredFacing: 0, builtFacing: 4.71238898038469, morphT: 0,
+    rootPending: null, rootSettle: null, radius: 72, turnRate: 0.5,
     abilities: [{ id: abilId, code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }],
     // Slot 0 = a 128-range melee; slot 1 = the Protector's 700-range attack that also hits air.
     weapons: [
@@ -65,8 +69,10 @@ const liveSlots = (u) => u.weapons.map((w, i) => (w.enabled ? i : -1)).filter((i
 /** Let a transition finish. A root/unroot takes `Aroo`'s own `Dur1` (2.5s) and the unit is
  *  locked for it — no orders, no walking, no second press — so every check about the state on
  *  the OTHER side of a toggle has to wait the clock out first. These units are hand-built and
- *  never see `world.tick`, so the clock is run by hand. */
-const settled = (u) => { u.morphT = 0; world.recomputeStats(u); return u; };
+ *  never see `world.tick`, so the clock is run by hand — and with it the settle a PLANTING
+ *  Ancient spends that clock on (the walk onto its site and the turn square), which the real
+ *  tick advances every frame. */
+const settled = (u) => { u.morphT = 0; world.tickRootSettle(u); world.recomputeStats(u); return u; };
 
 // --- an Ancient of War (Aro1) ---------------------------------------------------------
 {
@@ -84,10 +90,59 @@ const settled = (u) => { u.morphT = 0; world.recomputeStats(u); return u; };
   check("…and swaps to DataB \"Uprooted Weapons\" = slot 2", liveSlots(u), [1]);
 
   check("it roots again", world.toggleRoot(u), true);
+  // The turn back to `builtFacing` is part of the root GESTURE, not something that happens on
+  // the frame the button is pressed: 2.5 seconds of a tree lowering itself onto a spot cannot
+  // start out already square. So it is still looking the way it walked here…
+  check("…still facing the way it walked while the roots go down", u.facing, 0);
   settled(u);
   check("planted again, it is immobile once more", u.speed, 0);
   check("…facing the way it was raised", u.facing, u.builtFacing);
   check("…back on the rooted slot", liveSlots(u), [0]);
+}
+
+// --- Root is a WALK to a site, even a site under its own feet ---------------------------
+//
+// Pressing Root hands the player the building's silhouette and the click chooses the spot, so
+// the order always has a destination and the Ancient always walks onto it. A "close enough,
+// plant now" shortcut skipped that for every site within a body's width — which is most of the
+// ground a player actually aims at — and the tree snapped into its rooted pose on the click.
+{
+  const u = ancient("Aro1", { footprint: 4, x: 512, y: 512, prevX: 512, prevY: 512 });
+  world.toggleRoot(u); // uproot
+  settled(u);
+  check("ordering it to root where it stands is accepted", world.issueRootAt(u.id, u.x, u.y), true);
+  check("…as an order with a destination, not a plant", u.uprooted, true);
+  check("…which it holds until it has arrived", JSON.stringify(u.rootPending), JSON.stringify({ x: 512, y: 512 }));
+  world.tickRootAt(u); // it is standing on the spot already: this is the arrival
+  check("…and then it plants", u.uprooted, false);
+  check("…on the site rather than beside it", [u.x, u.y], [512, 512]);
+  settled(u);
+  check("…square with the base once the gesture is over", u.facing, u.builtFacing);
+}
+
+// --- the settle closes the gap the walk leaves, across the transition -------------------
+//
+// A move stops within a body of the point it was aimed at, and a building has to end up ON its
+// site. That last stretch is walked during the root animation (SimUnit.rootSettle) rather than
+// teleported the instant the stance flips.
+{
+  const u = ancient("Aro1", { footprint: 4, x: 816, y: 768, prevX: 816, prevY: 768 });
+  world.toggleRoot(u); // uproot
+  settled(u);
+  // Straight to the arrival: the walk itself is an ordinary move order and belongs to the
+  // pathing tests, and what is under test here is what happens once it has stopped short.
+  u.rootPending = { x: 768, y: 768 };
+  world.tickRootAt(u);
+  check("planting starts from where the walk stopped", [Math.round(u.x), Math.round(u.y)], [816, 768]);
+  u.morphT = u.rootSettle.dur / 2;
+  world.tickRootSettle(u);
+  check("…half way through, it is half way there", [Math.round(u.x), Math.round(u.y)], [792, 768]);
+  // 0 → 3π/2 the SHORT way is a quarter turn backwards, so half of it is -π/4.
+  check("…and half way round, the short way", Math.round(u.facing * 1000) / 1000, -0.785);
+  settled(u);
+  check("…and lands exactly on the site", [Math.round(u.x), Math.round(u.y)], [768, 768]);
+  check("…facing the way it was raised", u.facing, u.builtFacing);
+  check("…with the gesture spent", u.rootSettle, null);
 }
 
 // --- the Ancient Protector (Aro2), where the swap actually matters ---------------------

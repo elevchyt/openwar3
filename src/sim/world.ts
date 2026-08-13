@@ -529,6 +529,9 @@ export interface RepairState {
 export interface WorkerState {
   gold: boolean;
   lumber: boolean;
+  /** The harvest ability this worker's `abilList` gives it (`Ahar`/`Ahrl`/`Awha`/`Aaha`) —
+   *  the row every rate below is read from. See WorkerProfile and applyHarvestData. */
+  harvestAbility: string;
   /** Lumber carried per trip. LIVE value: Improved/Advanced Lumber Harvesting (`rlum`) raises
    *  it above `baseLumberCapacity`, which is why recomputeStats owns it (a Peasant already in
    *  the forest when the research lands starts filling to the new load on its next trip). */
@@ -536,6 +539,9 @@ export interface WorkerState {
   baseLumberCapacity: number;
   lumberPerChop: number;
   chopPeriod: number; // seconds between chops
+  /** Gold per trip out of a classic mine (`Ahar` DataC = 10). Per worker rather than a
+   *  constant because it is a column on each worker's own harvest row. */
+  goldPerTrip: number;
   damagesTree: boolean; // wisps harvest without hurting the tree
   /** No haul: the load is credited to the stash the instant it is cut, and the gatherer never
    *  walks a depot leg at all. TRUE for the night elf Wisp and nothing else — Wisp Harvest
@@ -679,9 +685,9 @@ const ROOT_MORPH_TIME = 2.5;
  *  The radius is most of it and cannot be left out: an Ancient of War is 144 across, and a
  *  walk aimed at a point stops roughly a body short of it, so a flat one-cell tolerance lost
  *  the order every time and the tree just stood there. What is left over is the build cell the
- *  site was picked on, so ordinary stopping slop cannot lose it either. Lining the tree up on
- *  the site from inside that reads as it settling; the order is dropped rather than teleported
- *  from further out. */
+ *  site was picked on, so ordinary stopping slop cannot lose it either. The gap that is left
+ *  is closed by the settling GESTURE itself (SimUnit.rootSettle), never by a jump; the order is
+ *  dropped rather than teleported from further out. */
 const ROOT_ARRIVE_SLACK = 64;
 
 const MAX_QUEUED_ORDERS = 35; // WC3 action-queue cap (shift-queued ORDERS on a unit)
@@ -1195,6 +1201,18 @@ export interface SimUnit {
    *  and this is what it does when it arrives (tickRootAt). Cleared by planting, by failing to
    *  get there, and by any other order (`dispatch`). */
   rootPending: { x: number; y: number } | null;
+  /** The settling GESTURE of an Ancient that is planting itself, or null.
+   *
+   *  Planting is never a jump. The Ancient walks to the site under an ordinary move, which
+   *  stops it within a body of the spot and facing whatever way it happened to travel — and a
+   *  building has to end up ON its site, square with the base (`builtFacing`). So the last
+   *  stretch and the turn are played out across the root transition itself (`morphT`) rather
+   *  than applied the instant the stance flips: `x0/y0/f0` is the pose the walk left it in,
+   *  `x1/y1` the site, and `dur` the transition's own length to divide them by.
+   *
+   *  This is the whole of "an Ancient roots where it stands": with no teleport left in the
+   *  plant, a site under the tree's own feet is an ordinary placement like any other. */
+  rootSettle: { x0: number; y0: number; f0: number; x1: number; y1: number; dur: number } | null;
   /** The Moon Well this unit has been SENT to drink from (`{kind:"drink"}`), or 0.
    *
    *  Replenish is the one ability in the game whose button is on one unit and whose order is
@@ -1473,7 +1491,9 @@ function pathDomain(u: SimUnit): PathDomain {
 // distant block that may clear before arrival doesn't trigger a needless reroute.
 const REPATH_POLL = 0.25;
 const REPATH_LOOKAHEAD = PATHING_CELL * 5; // ~5 cells (160 world units) ahead
-// Resource gathering (community-documented WC3 values; docs/REFERENCES.md).
+/** What a trip is worth when the worker's own harvest row does not say (`Aaha`, the Acolyte's,
+ *  carries no columns at all). Every worker that DOES say — `Ahar` DataC = 10 — is read off
+ *  the row instead (WorkerState.goldPerTrip, applyHarvestData). */
 const GOLD_PER_TRIP = 10;
 // Gold Mine ability `Agld` in AbilityData.slk — its unlabelled Data columns are named by
 // AbilityMetaData.slk + UI\WorldEditStrings.txt: DataA "Max Gold" 12500, DataB "Mining
@@ -3093,6 +3113,12 @@ export class SimWorld {
   // scales with how much of the crew is actually aboard (`crew / capacity`), which makes one
   // lone wisp worth 2 gold/sec and a full mine worth 10. Nothing in the data states the
   // scaling in so many words; the parity between the four races' mining rates does.
+  //
+  // And it arrives on the INTERVAL, in whole gold. `DataB1 = 1 second` is a clock, not a unit
+  // of measure to divide by: a mine that paid a fraction of a coin every frame put a running
+  // 656.5666666 in the stash and made the counter creep instead of stepping, where WC3 pays a
+  // lump each time the interval comes round. Same average, and the only version that can put
+  // an integer in the treasury.
 
   /** Entangle (`Aent`): wrap a gold mine in roots. With no `mine` named it takes the nearest
    *  un-entangled one within the ability's range, which is the button's own behaviour —
@@ -3210,11 +3236,18 @@ export class SimWorld {
       const mine = this.mines.get(u.mineId);
       if (!mine) continue;
       const crew = u.garrison.length;
+      // An empty mine simply stops paying; its clock is left where it is rather than reset, so
+      // marching wisps in and out cannot buy a fresh payout on every entry.
       if (crew <= 0 || u.garrisonCap <= 0) continue;
       const lvl = this.passiveLevelData(u, "Aegm");
       const perInterval = lvl ? this.dataOf(lvl, 0, 10) : 10;
       const interval = (lvl ? this.dataOf(lvl, 1, 1) : 1) || 1;
-      const gold = Math.min(mine.gold, (perInterval * (crew / u.garrisonCap) * dt) / interval);
+      // The clock runs on the BUILDING (`workT` is free on a structure), so a crew that
+      // changes mid-interval simply changes what the next payout is worth.
+      u.workT -= dt;
+      if (u.workT > 0) continue;
+      u.workT += interval;
+      const gold = Math.min(mine.gold, Math.round(perInterval * (crew / u.garrisonCap)));
       mine.gold -= gold;
       this.stashOf(u.owner).gold += gold;
       if (mine.gold <= 0) {
@@ -3821,6 +3854,7 @@ export class SimWorld {
       | "morphT"
       | "builtFacing"
       | "rootPending"
+      | "rootSettle"
       | "drinkWellId"
       | "replenishTargetId"
       | "isSummon"
@@ -4025,6 +4059,7 @@ export class SimWorld {
       morphT: 0,
       builtFacing: unit.facing,
       rootPending: null,
+      rootSettle: null,
       drinkWellId: 0,
       replenishTargetId: 0,
       isSummon: false,
@@ -4068,6 +4103,7 @@ export class SimWorld {
     };
     this.units.set(u.id, u);
     this.settle(u);
+    if (u.worker) this.applyHarvestData(u.worker); // rates come off the harvest ability's row
     this.tech?.invalidate(); // a new unit may unlock (or, for a shop, be) something
     this.initShopStock(u); // Arcane Vault / Goblin Merchant / Tavern: fill the shelves
     // A structure that arrives already finished (a melee start Town Hall, a map-placed
@@ -5254,16 +5290,19 @@ export class SimWorld {
    * Refused for a unit that is not an uprooted Ancient. Whether the site is any good is asked
    * twice: once at the click, so the player is told, and again on arrival by `toggleRoot`,
    * because the ground can be taken while the tree is walking to it.
+   *
+   * The walk is ordered for EVERY site, including the ground the Ancient is already standing
+   * on. There is no "close enough, plant now" shortcut: a tree that snapped into its rooted
+   * pose the moment the click landed skipped the very thing the order is — walking onto the
+   * spot and settling on it — for every site within a body's width of where it stood.
    */
   issueRootAt(id: number, x: number, y: number): boolean {
     const u = this.units.get(id);
     if (!u || !u.uprooted || !this.rootAbility(u) || this.castLocked(u)) return false;
-    // A site it is already standing on: plant now rather than order a zero-length walk.
-    if (Math.hypot(u.x - x, u.y - y) <= u.radius + ROOT_ARRIVE_SLACK) {
-      u.rootPending = { x, y };
-      return this.tickRootAt(u);
-    }
-    if (!this.issueMove(id, x, y)) return false;
+    // A site it is practically standing on has nothing to walk, and `issueMove` says so by
+    // refusing it — which is not a refusal of the ORDER: the tree simply roots from here, and
+    // tickRootAt does that on the next tick because it is no longer moving.
+    this.issueMove(id, x, y);
     u.rootPending = { x, y };
     return true;
   }
@@ -5279,12 +5318,10 @@ export class SimWorld {
       u.rootPending = null;
       return false;
     }
-    // Line it up on the spot the player picked, so it plants exactly where the silhouette
-    // stood rather than half a cell off wherever its walk happened to end.
-    u.x = site.x;
-    u.y = site.y;
     u.rootPending = null;
-    return this.toggleRoot(u);
+    // The site is handed to the plant itself, which walks the last stretch onto it across the
+    // root animation instead of jumping there (SimUnit.rootSettle).
+    return this.toggleRoot(u, site);
   }
 
   /** Send a unit to drink from a Moon Well (`Ambt`) — the right-click order. It walks to the
@@ -6095,12 +6132,27 @@ export class SimWorld {
    * ground too tight for its footprint, and a building that plants itself inside a wall is
    * worse than one that refuses to plant. Returns whether the toggle happened, so a caller
    * can tell a refusal from a no-op.
+   *
+   * `site` is the spot a `{kind:"rootat"}` order picked (tickRootAt). The Ancient does not jump
+   * onto it: the leftover stretch of the walk, and the turn back to `builtFacing`, are played
+   * out across the transition itself — see SimUnit.rootSettle. Without a site (the plain
+   * toggle) the Ancient plants where it stands, on the same terms.
    */
-  toggleRoot(u: SimUnit): boolean {
+  toggleRoot(u: SimUnit, site?: { x: number; y: number }): boolean {
     const root = this.rootAbility(u);
     if (!root) return false;
     if (!this.canToggleRoot(u)) return false;
+    let planted: { x0: number; y0: number; f0: number; x1: number; y1: number } | null = null;
     if (u.uprooted) {
+      // The pose the walk left it in, kept before anything below moves it: the settle
+      // interpolates OUT of this and into the building's own place and facing.
+      const x0 = u.x;
+      const y0 = u.y;
+      const f0 = u.facing;
+      if (site) {
+        u.x = site.x;
+        u.y = site.y;
+      }
       // Planting. Stand still and LET GO of the walker's cells before asking whether the
       // building fits, in that order: an uprooted Ancient holds a mover's reservation (and,
       // mid-step, a claim on the tile ahead), and asking `footprintFits` while it still holds
@@ -6118,7 +6170,9 @@ export class SimWorld {
         // stamp, lifted when it uprooted, that has to be offered the ground again.
         const [ax, ay] = this.grid.snapForBuildingRect(u.x, u.y, fp.w, fp.h);
         if (!footprintBuildable(this.grid, fp, ax, ay)) {
-          this.settle(u); // genuinely too tight — stay a walker, and take the walker's cell back
+          u.x = x0; // it stays a walker, so it stays where the walk left it
+          u.y = y0;
+          this.settle(u); // genuinely too tight — take the walker's cell back
           return false;
         }
         // WC3 plants an Ancient on the BUILD grid, exactly where a fresh one would go, so it
@@ -6131,6 +6185,8 @@ export class SimWorld {
       } else if (n > 0 && this.grid) {
         const [cx, cy] = this.grid.footprintAnchor(u.x, u.y, n);
         if (!this.grid.footprintFits(cx, cy, n)) {
+          u.x = x0;
+          u.y = y0;
           this.settle(u);
           return false;
         }
@@ -6140,12 +6196,18 @@ export class SimWorld {
       u.rootedFootprint = 0;
       // Square with the rest of the base again. A building has ONE facing in WC3 (blizzard.j's
       // `bj_UNIT_FACING`, 270°), so an Ancient that settles keeps none of the direction it
-      // happened to be walking in — it turns back to the angle it was raised at. Both are set:
-      // `desiredFacing` so the turn is the model's own, `facing` because it is planted and a
-      // building does not stand there slowly rotating.
-      u.facing = u.builtFacing;
+      // happened to be walking in — it turns back to the angle it was raised at.
+      //
+      // It TURNS back to it, though, rather than being stood in it: the root animation is 2.5
+      // seconds of a tree lowering itself onto a spot, and a facing that changed on the frame
+      // the button was pressed made it play that whole gesture already square. So the pose the
+      // walk left it in is handed to the settle below and interpolated across the transition,
+      // which is also what closes the last stride onto the site.
       u.desiredFacing = u.builtFacing;
       this.settle(u); // stamp its cells and snap onto the grid
+      // …and settle() may have nudged it off the site to a free tile; the gesture ends wherever
+      // the unit actually is, so read the destination back rather than assuming the site.
+      planted = { x0, y0, f0, x1: u.x, y1: u.y };
     } else {
       u.uprooted = true;
       this.unsettle(u); // free the cells before it can take a step out of them
@@ -6179,8 +6241,42 @@ export class SimWorld {
     // flips first and the LOCK follows rather than the other way round.
     const lvl = this.abilities?.get(root.id)?.levelData[0];
     u.morphT = lvl && lvl.duration > 0 ? lvl.duration : ROOT_MORPH_TIME;
+    // A plant spends that same clock walking the last stretch onto the site and turning square
+    // (tickRootSettle). Uprooting has nothing to interpolate — the Ancient hauls itself up
+    // exactly where it stood — so it clears the gesture instead.
+    u.rootSettle = planted ? { ...planted, dur: u.morphT } : null;
+    // Stand it back in the pose the walk left it in right now, on the same tick the stance
+    // flipped. The plant above put the unit ON its site so the footprint could be stamped and
+    // reserved there; without this the tree would be drawn on the site for one frame and then
+    // step back to where it was walking from, which is the very jump this replaces.
+    this.tickRootSettle(u);
     this.recomputeStats(u);
     return true;
+  }
+
+  /** Play out a planting Ancient's settle: the last stretch of the walk onto the site, and the
+   *  turn back to the facing it was raised at, spread across the root transition (`morphT`)
+   *  instead of applied the instant the stance flipped. See SimUnit.rootSettle.
+   *
+   *  Both ends are pinned so the transition cannot leave a building half-way anywhere: it ends
+   *  ON the site, facing `builtFacing`, whatever the clock did. */
+  private tickRootSettle(u: SimUnit): void {
+    const s = u.rootSettle;
+    if (!s) return;
+    if (u.morphT <= 0 || s.dur <= 0) {
+      u.x = s.x1;
+      u.y = s.y1;
+      u.facing = u.builtFacing;
+      u.desiredFacing = u.builtFacing;
+      u.rootSettle = null;
+      return;
+    }
+    const k = Math.min(1, Math.max(0, 1 - u.morphT / s.dur)); // 0 → 1 across the transition
+    u.x = s.x0 + (s.x1 - s.x0) * k;
+    u.y = s.y0 + (s.y1 - s.y0) * k;
+    // The short way round, like every other turn in the sim (turnToward).
+    u.facing = s.f0 + angleDiff(s.f0, u.builtFacing) * k;
+    u.desiredFacing = u.facing; // …so the shared turning pass has nothing to add on top
   }
 
   /**
@@ -8655,6 +8751,7 @@ export class SimWorld {
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u); // a Moon Well pouring itself into whoever is drinking
       if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
+      if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site
       if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
@@ -9987,6 +10084,36 @@ export class SimWorld {
 
   // --- resource gathering ---------------------------------------------------
 
+  /**
+   * Fill a gatherer's rates from its own HARVEST ABILITY, so no harvesting number is written
+   * out anywhere in the codebase (CLAUDE.md: never re-type a value the game data carries).
+   *
+   * Units\UnitAbilities.slk hands each worker the ability by name — Peasant and Peon `Ahar`,
+   * Ghoul `Ahrl`, Wisp `Awha`, Acolyte `Aaha` — and AbilityData.slk's row is the rate card:
+   * DataA lumber per interval, DataB the load it fills before hauling, DataC the gold a trip
+   * is worth, and `Dur1` the interval itself. A Peasant chops every **1.1** seconds and a
+   * Ghoul every **1.35**, not the round 1 and 1.1 that had been typed in by hand.
+   *
+   * Every field is left alone when its column is blank, which is what keeps one reader honest
+   * across four rows that fill in different subsets: `Aaha` carries no rate at all (an Acolyte
+   * only mines), and `Awha` no capacity (a Wisp has no trip to fill — see `deliversInPlace`).
+   */
+  private applyHarvestData(w: WorkerState): void {
+    const lvl = w.harvestAbility ? this.abilities?.get(w.harvestAbility)?.levelData[0] : undefined;
+    if (!lvl) return; // no registry mounted (headless tests) — the profile's own fallbacks stand
+    if (lvl.duration > 0) w.chopPeriod = lvl.duration;
+    const perChop = this.dataOf(lvl, 0, 0);
+    if (perChop > 0) w.lumberPerChop = perChop;
+    // A Wisp's load is the one column that means nothing: it never carries anything anywhere.
+    const capacity = this.dataOf(lvl, 1, 0);
+    if (capacity > 0 && !w.deliversInPlace) {
+      w.lumberCapacity = capacity;
+      w.baseLumberCapacity = capacity;
+    }
+    const gold = this.dataOf(lvl, 2, 0);
+    if (gold > 0) w.goldPerTrip = gold;
+  }
+
   private tickHarvest(u: SimUnit, dt: number): void {
     const w = u.worker;
     if (!w) {
@@ -10003,7 +10130,7 @@ export class SimWorld {
         u.inMineId = undefined;
         if (mine) {
           mine.busy = false;
-          w.carryGold = Math.min(GOLD_PER_TRIP, mine.gold);
+          w.carryGold = Math.min(w.goldPerTrip || GOLD_PER_TRIP, mine.gold);
           mine.gold -= w.carryGold;
           if (mine.gold <= 0) {
             this.mines.delete(mine.id);

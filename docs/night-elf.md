@@ -8,9 +8,9 @@ difference is a tuning value — each piece is a rule, and each rule is stated b
 
 This is that list, so the next person does not have to rediscover which column says what.
 
-Implementation: `tickHarvest` / `orbitTree` / `finishConstruction` / `tickEntangledMines` /
-`tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` / `issueEntangleInstant` /
-`issueDrink` in
+Implementation: `tickHarvest` / `applyHarvestData` / `orbitTree` / `finishConstruction` /
+`tickEntangledMines` / `tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` /
+`tickRootSettle` / `issueEntangleInstant` / `issueDrink` in
 [`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
 [`src/sim/spells.ts`](../src/sim/spells.ts), the Wisp's profile in
 [`src/data/races.ts`](../src/data/races.ts), `raiseEntangledMines` / `collectMoonWellWater` and
@@ -37,15 +37,29 @@ stash where the wisp is standing, which lands within a rounding error of a Peasa
 10-per-trip round trip. The wisp buys that parity by being *stuck in the tree*: it is not
 walking anywhere, so it is not defending anything either.
 
+**And none of those numbers is written in our code.** Units\UnitAbilities.slk names the harvest
+ability each worker carries — Peasant and Peon `Ahar`, Ghoul `Ahrl`, Wisp `Awha`, Acolyte
+`Aaha` — so `WorkerProfile.harvestAbility` carries the NAME and `SimWorld.applyHarvestData`
+reads the rates off the row (`DataA` lumber per interval, `DataB` the load, `DataC` the gold a
+trip is worth, `Dur1` the interval). The same reader corrected two hand-typed values while it
+was at it: a Peasant chops every **1.1** seconds and a Ghoul every **1.35**, not the round 1
+and 1.1 that had been transcribed.
+
 `damagesTree: false` is literal. A wisp-worked tree never falls, so night elf lumber is bounded
 only by how many wisps are in the forest. This is why `WorkerState.lumberCapacity` is 0 for the
 wisp and why `Awha` has no capacity field that means anything: with no trip, there is nothing
 to fill.
 
-**The orbit.** WC3 shows a harvesting wisp circling the tree — there is no swing to animate, so
-the motion IS the animation (`Wisp.mdx` authors exactly five clips: `stand`, `Birth`, `Death`,
-`Stand Lumber`, `Stand Work`, and no attack of any kind; the harvest pose is `Stand Work`).
-Two traps live in that orbit and both cost real time:
+**The pose is `Stand Lumber`, and the two clips are not interchangeable.** `Wisp.mdx` authors
+exactly five: `stand`, `Birth`, `Death`, `Stand Lumber`, `Stand Work`, and no attack of any kind
+(a wisp does not hit the tree). `Stand Lumber` is the harvest; `Stand Work` is the hammering it
+does to BUILD and to Renew — a repair, which is why `pickSequence` reaches it through
+`u.repair.active` and not through the harvest branch. Wearing the work pose in the canopy is
+what made night elf lumber look like an animation of our own invention rather than the one the
+model ships.
+
+**The orbit.** WC3 shows a harvesting wisp circling the tree, and the motion carries the rhythm
+the way a chop does for everyone else. Two traps live in that orbit and both cost real time:
 
 * It must be a **square**, traced just outside the tree's blocked footprint. A circle of the
   same reach cuts the corners and puts the wisp on blocked ground on every diagonal — and a
@@ -170,6 +184,18 @@ is `Agld`'s 1s inside plus the walk — about 2 gold/sec each, 10 for the line. 
 scales with how much of the capacity is actually aboard, which makes one lone wisp worth
 2 gold/sec and a full mine worth 10.
 
+**It arrives on the interval, in whole gold.** `DataB1` = 1 second is a CLOCK, not a unit to
+divide by: paying a fraction of a coin every frame put a running `656.5666666` in the treasury
+and made the counter creep where WC3's steps. `SimUnit.workT` on the mine building is that
+clock, and the crew is read when it comes round — so a crew that changes mid-interval simply
+changes what the next payout is worth, and marching wisps in and out cannot buy an early one.
+
+**The crew is visible from the map.** WC3 floats a second bar under a garrisoned building's
+health bar, cut into one division per slot — five for the mine (`Aenc` `Car1`), four for an Orc
+Burrow (`Abun`) — and shows it only while somebody is inside. It is a COUNT, not a fraction:
+`BarSpec.garrison` carries `filled`/`slots` and `worldOverlays` builds one little track per
+slot, so four-of-five reads at a glance the way it does in the original.
+
 While the roots are on it the mine is closed to *everyone*: a night elf cannot classic-mine its
 own entangled mine and an enemy peasant cannot mine it at all without knocking the roots down.
 
@@ -279,11 +305,29 @@ to the Ancient itself. The site is asked for twice — once at the click, so the
 ("Unable to root there.", the game's own `Cantroot`), and again by `toggleRoot` on arrival,
 because the ground can be taken while a tree walks 500 units at speed 40.
 
+**Every site is walked to, including the one under its own feet.** There is no "close enough,
+plant now" shortcut, and the reason is that the shortcut's reach was a body's width: an Ancient
+of War is 144 across, so *most of the ground a player actually aims at* was inside it and the
+tree snapped into its rooted pose on the click — which also meant a player who wanted the root
+flow had to place the ghost further away than they meant to. `issueRootAt` now always issues the
+move; a site it is already standing on is refused by `issueMove` alone (`MOVE_MIN_DIST`), which
+is not a refusal of the ORDER — the tree simply roots from where it is on the next tick.
+
+**And the plant is a gesture, not a jump.** A move stops within a body of the point it was aimed
+at and facing whatever way it travelled; a building has to end up ON its site and square with the
+base (`builtFacing`). Both are therefore spread across the transition itself
+(`SimUnit.rootSettle`, `tickRootSettle`): the last stride and the turn play out over `Aroo`'s own
+2.5 seconds while the root animation runs, and both ends are pinned so the clock cannot leave a
+building half-way anywhere. The ubersplat is the one thing that does NOT wait — it is laid where
+the FOOTPRINT went down (`pathStamp`), which is the site, not where the unit has got to this
+frame.
+
 Two details that are easy to get wrong. The grid the player aims with is the stamp the Ancient
 **lifted** (`SimUnit.rootedStamp`), not a fresh read of the pathing texture — they agree, and
 this cannot drift. And the arrival tolerance has to include the unit's own RADIUS: an Ancient
 of War is 144 across and a walk aimed at a point stops about a body short of it, so a flat
-one-cell test lost the order every time and the tree just stood there.
+one-cell test lost the order every time and the tree just stood there. (The tolerance is what
+lets the order SURVIVE the walk; the settle above is what closes the gap it leaves.)
 
 **The two states are two halves of one MODEL**, and which half is showing is `SimUnit.altModel`
 (`recomputeStats`: planted = alternate). The Ancients carry no static `Animprops`, so nothing

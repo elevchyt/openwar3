@@ -65,28 +65,48 @@ export const MELEE_WORKER_CLUSTERS: Record<PlayableRace, WorkerCluster[]> = {
     offsets: [[0, 1], [1, 0.15], [-1, 0.15], [0.58, -1], [-0.58, -1]] }],
 };
 
-// Worker harvesting profiles (verified vs community-documented WC3 values:
-// 10 gold/trip; peasant/peon 1 lumber per ~1s chop, capacity 10; ghoul 2/chop
-// capacity 20; acolytes only mine).
+// Worker harvesting profiles.
 //
-// The WISP row is the one that comes straight off the data, because it is the one whose
-// behaviour is not the shared one. Every other worker harvests with `Ahar`/`Ahrl` ("Harvest",
-// "Harvest (Lumber)"); the wisp has its own ability CLASS, `Awha` "Wisp Harvest", and the
-// class is the difference: AbilityData.slk `Awha` gives DataA = 5 lumber per interval and
-// Dur1 = 8s for that interval, with no depot leg at all — the lumber is credited where it is
-// cut (`deliversInPlace`). 5 per 8s is 0.63 lumber/sec, which lands within a rounding error of
-// a Peasant's 10-per-trip round trip; the wisp buys that parity by being stuck in the tree.
-// Its DataB = 5 and DataC = 150 have field ids of their own (Wha2/Wha3) and no source that
-// names them, so they are left unspent rather than guessed at (CLAUDE.md).
+// **The numbers are not written here.** Every worker in the game carries a HARVEST ABILITY —
+// Units\UnitAbilities.slk names it in that unit's `abilList`, and the row it points at carries
+// the rates — so `harvestAbility` below is the citation and `SimWorld.applyHarvestData` reads
+// the rates off it. What is left in this table is what the ability row does NOT say (which
+// resources the worker may gather at all, whether its chopping kills the tree, whether it
+// hauls) plus the pre-data fallbacks the headless tests run on.
+//
+// The four rows, straight out of UnitAbilities.slk, and what AbilityData.slk gives each:
+//
+//   hpea/opeo `Ahar` "Harvest"         DataA 1 lumber, DataB 10 capacity, DataC 10 gold, Dur 1.1s
+//   ugho      `Ahrl` "Harvest Lumber"  DataA 2 lumber, DataB 20 capacity, no gold,       Dur 1.35s
+//   ewsp      `Awha` "Wisp Harvest"    DataA 5 lumber,                                   Dur 8s
+//   uaco      `Aaha` "Acolyte Harvest" gold only — the row carries no rate at all,       Dur 1s
+//
+// (Har1/Har2/Har3 mean the same three things for `Ahrl` and `Awha` as for `Ahar`, which is what
+// makes one reader serve all four: a Peasant's 10-lumber load and a Ghoul's 20 are the same
+// column, and the Wisp simply has no use for it.)
+//
+// The WISP is the one whose behaviour is not the shared one: `Awha` is a different ability
+// CLASS, with no depot leg at all — the lumber is credited where it is cut (`deliversInPlace`).
+// 5 per 8s is 0.63 lumber/sec, which lands within a rounding error of a Peasant's 10-per-trip
+// round trip; the wisp buys that parity by being stuck in the tree. Its DataB = 5 and DataC =
+// 150 have field ids of their own (Wha2/Wha3) and no source that names them, so they are left
+// unspent rather than guessed at (CLAUDE.md).
 //
 // `damagesTree: false` is the night elf's signature and it is literal: a wisp-worked tree
 // never falls, so night elf lumber is bounded only by how many wisps are in the forest.
 export interface WorkerProfile {
   gold: boolean;
   lumber: boolean;
+  /** The ability whose row carries this worker's rates — its own `abilList` entry in
+   *  Units\UnitAbilities.slk. Read by SimWorld.applyHarvestData; the numbers below are only
+   *  what stands in when no ability registry is mounted. */
+  harvestAbility: string;
   lumberCapacity: number;
   lumberPerChop: number;
   chopPeriod: number; // seconds between chops
+  /** Gold carried out of a classic gold mine per trip (`Ahar` DataC). Unused by the Wisp,
+   *  whose gold never leaves the mine building (`Aegm`, see SimWorld.tickEntangledMines). */
+  goldPerTrip: number;
   damagesTree: boolean;
   /** Credit the load at the tree instead of hauling it to a depot — the Wisp, and only the
    *  Wisp. See SimWorld.tickHarvest. */
@@ -94,12 +114,11 @@ export interface WorkerProfile {
 }
 
 export const WORKERS: Record<string, WorkerProfile> = {
-  hpea: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false },
-  opeo: { gold: true, lumber: true, lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false },
-  uaco: { gold: true, lumber: false, lumberCapacity: 0, lumberPerChop: 0, chopPeriod: 1, damagesTree: false, deliversInPlace: false },
-  ugho: { gold: false, lumber: true, lumberCapacity: 20, lumberPerChop: 2, chopPeriod: 1.1, damagesTree: true, deliversInPlace: false },
-  // Awha: DataA1 = 5 lumber, Dur1 = 8s interval, no carry (see above).
-  ewsp: { gold: true, lumber: true, lumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, damagesTree: false, deliversInPlace: true },
+  hpea: { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: 10, damagesTree: true, deliversInPlace: false },
+  opeo: { gold: true, lumber: true, harvestAbility: "Ahar", lumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1.1, goldPerTrip: 10, damagesTree: true, deliversInPlace: false },
+  uaco: { gold: true, lumber: false, harvestAbility: "Aaha", lumberCapacity: 0, lumberPerChop: 0, chopPeriod: 1, goldPerTrip: 10, damagesTree: false, deliversInPlace: false },
+  ugho: { gold: false, lumber: true, harvestAbility: "Ahrl", lumberCapacity: 20, lumberPerChop: 2, chopPeriod: 1.35, goldPerTrip: 0, damagesTree: true, deliversInPlace: false },
+  ewsp: { gold: true, lumber: true, harvestAbility: "Awha", lumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, goldPerTrip: 0, damagesTree: false, deliversInPlace: true },
 };
 
 // The four main-hall chains, keyed by the BASE hall's internal type name (UnitUI.slk's
