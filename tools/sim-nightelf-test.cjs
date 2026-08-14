@@ -105,6 +105,10 @@ console.log("Wisp Harvest (`Awha`) — 5 lumber per 8s, no haul, no felled tree"
   const world = newWorld();
   world.initStash(0, 0, 0);
   const tree = world.addTree(1600, 1600, 50, 64);
+  // Stamp the trunk, as the destructible loader does in game: the cells a tree stands on are
+  // blocked, and the wisp working from inside it is standing on them.
+  const [trunkX, trunkY] = world.grid.worldToCell(tree.x, tree.y);
+  for (let dy = -1; dy <= 0; dy++) for (let dx = -1; dx <= 0; dx++) world.grid.block(trunkX + dx, trunkY + dy);
   world.add(wisp(1, 1600, 1900));
   world.issueHarvest(1, "lumber", tree.id);
   for (let t = 0; t < 25 / 0.05; t++) world.tick(0.05);
@@ -114,15 +118,21 @@ console.log("Wisp Harvest (`Awha`) — 5 lumber per 8s, no haul, no felled tree"
   check("lumber is credited without a trip home", stash.lumber >= 15 && stash.lumber <= 20, `${stash.lumber}`);
   check("…and nothing is ever carried", u.worker.carryLumber === 0, `${u.worker.carryLumber}`);
   check("…and the tree still stands", world.trees.has(tree.id) && world.trees.get(tree.id).lumber === 50);
-  check("the wisp never left the tree", Math.hypot(u.x - tree.x, u.y - tree.y) < 120, `${Math.round(Math.hypot(u.x - tree.x, u.y - tree.y))}`);
+  // It works from INSIDE the tree — the trunk's own position, not a spot in front of it.
+  check("the wisp works from inside the tree", u.x === tree.x && u.y === tree.y, `${Math.round(u.x - tree.x)},${Math.round(u.y - tree.y)}`);
   // …and it HOLDS STILL there: a wisp bonds to the tree and plays "Stand Lumber", it does not
   // circle it. Two ticks apart, nothing has moved.
   const [px, py] = [u.x, u.y];
   world.tick(0.05); world.tick(0.05);
-  check("…and holds still while it works", u.x === px && u.y === py, `${Math.round(u.x - px)},${Math.round(u.y - py)}`);
-  // It must stand OUTSIDE the trunk's blocked square, or the wisp cannot path away.
-  const [cx, cy] = world.grid.worldToCell(u.x, u.y);
-  check("…on ground it can still walk off", world.grid.walkable(cx, cy));
+  check("…and holds still while it works", u.x === px && u.y === py, `${Math.round(u.x - px)},${Math.round(u.y - px)}`);
+  // Which is BLOCKED ground, and A* cannot start from a blocked cell — so the order that takes
+  // it out of the canopy has to walk it back onto ground first (popFromCanopy).
+  const [tcx, tcy] = world.grid.worldToCell(u.x, u.y);
+  check("…standing on the tree's own blocked cell", !world.grid.walkable(tcx, tcy));
+  world.issueOrder(1, { kind: "move", x: 1600, y: 2200 });
+  const [mcx, mcy] = world.grid.worldToCell(u.x, u.y);
+  check("…and any other order pops it back onto walkable ground", world.grid.walkable(mcx, mcy));
+  check("…which also ends the harvest pose", u.working === false, `working ${u.working}`);
 }
 
 console.log("Build style — a Wisp grows a structure from inside it");

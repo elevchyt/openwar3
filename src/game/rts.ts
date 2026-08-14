@@ -3021,8 +3021,10 @@ export class RtsController {
         const effMoving = u.moving && e.moveEma >= MOVE_ANIM_MIN_RATIO;
         let seq = pickSequence(e.anims, u, effMoving);
         // Walking re-rates the cycle to the unit's live move speed (and may swap in a
-        // "Walk Fast" gait); every other pose plays at its authored rate.
-        if (effMoving) {
+        // "Walk Fast" gait); every other pose plays at its authored rate — including the
+        // STAND a model with no walk clip travels in (a Wisp hovers), which has no stride to
+        // match to a speed and would only shimmer if it were scaled with one.
+        if (effMoving && seq !== e.anims.stand) {
           const w = walkAnim(e, u, seq);
           seq = w.seq;
           setAnimRate(e, w.rate);

@@ -441,7 +441,16 @@ export function pickSequence(a: AnimSet, u: RenderUnit, moving: boolean): number
   // (with the right carry clip) instead of staying stuck in the chop pose.
   // `moving` is the *effective* move flag — a unit inching along in a crowd
   // reads as standing so it doesn't run in place (see the tick loop).
-  if (moving) return carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
+  //
+  // …and a model with NO walk clip travels in its stand. The Wisp is the one that matters:
+  // it authors five clips and not one of them is a Walk, because it hovers — the idle IS its
+  // travel pose, and WC3 shows exactly that. Falling through to `a.walk` = -1 meant the caller
+  // had no sequence to apply and simply left whatever was playing on the model, so a wisp
+  // recalled off a tree flew the whole way there still wearing "Stand Lumber".
+  if (moving) {
+    const clip = carry === "gold" ? a.walkGold : carry === "lumber" ? a.walkLumber : a.walk;
+    return clip >= 0 ? clip : a.stand;
+  }
   if (u.constructing || u.repair?.active) return a.build; // hammering (build/repair)
   // A building actively producing (a unit in its queue) runs its "Stand Work"
   // clip — the blacksmith hammers, the barracks stirs, the Ancient of Lore's

@@ -10298,10 +10298,11 @@ export class SimWorld {
       u.working = false;
       return;
     }
-    // A Wisp does not stand beside the tree with an axe: it bonds to it and holds still.
-    // Freeing its cell is the honest half of that — a body that still reserved a tile against
-    // the treeline would wall off the forest one wisp at a time. (`noCollision` is the same
-    // ghosting a laden worker gets on its auto round trip.)
+    // A Wisp does not stand beside the tree with an axe: it goes INTO it and holds still.
+    // Freeing its cell is what lets it — the tree's own cells are blocked, so nothing that
+    // reserves ground could be there at all — and it is honest twice over, since a body parked
+    // against the treeline would wall off the forest one wisp at a time. (`noCollision` is the
+    // same ghosting a laden worker gets on its auto round trip.)
     if (w.deliversInPlace) {
       this.unsettle(u);
       u.noCollision = true;
@@ -10318,7 +10319,20 @@ export class SimWorld {
       }
     }
     u.working = true;
-    u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
+    // …and a Wisp works from INSIDE the tree, not from a spot in front of it: it takes the
+    // trunk's own position and hangs there. Everything that would ordinarily forbid standing
+    // on a tree's blocked cells has already been given up two blocks above — it holds no
+    // reservation and collides with nothing — and `popFromCanopy` is what walks it back onto
+    // ground A* can start from the moment it is told to do anything else.
+    if (w.deliversInPlace) {
+      if (u.x !== tree.x || u.y !== tree.y) {
+        u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x); // the heading it slipped in on
+        u.x = tree.x;
+        u.y = tree.y;
+      }
+    } else {
+      u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
+    }
     u.workT -= dt;
     if (u.workT > 0) return;
     u.workT = w.chopPeriod;

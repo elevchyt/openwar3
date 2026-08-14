@@ -58,12 +58,24 @@ does to BUILD and to Renew — a repair, which is why `pickSequence` reaches it 
 what made night elf lumber look like an animation of our own invention rather than the one the
 model ships.
 
-**And it holds still.** A working wisp does not circle the tree — it bonds to it where it
-stopped and plays its one clip. We did have it orbiting, one lap per `Awha` interval, on the
-reasoning that "there is no swing to animate, so the motion is the animation"; it was our
-invention, and with the right clip playing there is nothing for it to add.
+**There is no Walk among those five either**, and that is not an omission: a wisp hovers, so its
+idle IS its travel pose and WC3 plays exactly that when it flies. The picker has to say so —
+`a.walk` is -1 here, and returning it left the caller with no sequence to apply and whatever was
+already on the model still playing, so a wisp recalled off a tree flew the whole way there
+still wearing `Stand Lumber`. A model with no walk clip travels in its stand, unrated (there is
+no stride to match to a speed).
 
-Two things survive the orbit's removal, because they were never about the motion:
+**And it holds still, INSIDE the tree.** A working wisp takes the trunk's own position and
+hangs there — not a spot in front of it, and not a circle around it. (We did have it orbiting,
+one lap per `Awha` interval, on the reasoning that "there is no swing to animate, so the motion
+is the animation". It was our invention, and with the right clip playing there is nothing for
+it to add.)
+
+Standing there is only possible because a working wisp has already given up everything that
+would forbid it — it holds no reservation and collides with nothing — and it is why
+`popFromCanopy` exists: those are the tree's own BLOCKED cells, and A* cannot start from one.
+
+Two more things survive the orbit's removal, because they were never about the motion:
 
 * **Arrival is measured against the tree's BLOCKED footprint**, not against an axe's arm. A
   wisp never enters those cells at all — it stops against them, further out than a chopper
