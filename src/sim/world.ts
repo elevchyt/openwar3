@@ -369,9 +369,9 @@ export interface PendingCast {
   // mana on a target it would no longer have chosen. An ORDERED cast never gives up: the
   // player asked for it.
   auto: boolean;
-  // The order to resume after the cast (so an autocast/manual cast mid attack-move
-  // or follow continues afterward instead of falling idle).
-  resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | null;
+  // The order to resume after the cast (so an autocast/manual cast mid attack-move,
+  // follow or COMMANDED attack continues afterward instead of falling idle).
+  resume: { kind: "attackmove"; x: number; y: number } | { kind: "follow"; id: number } | { kind: "attack"; id: number; force: boolean } | null;
 }
 
 /** A corpse left by a dead unit (Liquipedia: Corpse). Persists on the ground,
@@ -2945,8 +2945,14 @@ export class SimWorld {
       return true;
     }
     const [ax, ay] = this.hostApproach(p, b);
-    if (!this.pathTo(p, ax, ay)) this.stop(passengerId); // no path at all → give up
-    return true;
+    // Bodies in the way are not a refusal — the order is still good, so park and take the
+    // walk up when the way opens (holdOrGiveUp; the same rule issueMove follows, issue
+    // #108). Only terrain that puts the door genuinely out of reach ends it. A unit born
+    // into a crowd at a rally point is exactly the case: the wisp a rallied Tree of Life
+    // pushes out lands among the ones already standing there, and one blocked A* at that
+    // instant used to stand it down for good.
+    if (!this.pathTo(p, ax, ay)) this.holdOrGiveUp(p, ax, ay);
+    return p.order === "garrison"; // parked keeps the order (accepted); stopped does not
   }
 
   /** How far out from a cargo hold's CENTRE its body actually reaches. A building's collision
@@ -2973,9 +2979,26 @@ export class SimWorld {
     const m = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
     const reach = this.hostExtent(b) + p.radius + PATHING_CELL;
     const ax = b.x + (dx / m) * reach, ay = b.y + (dy / m) * reach;
-    const [cx, cy] = this.grid.worldToCell(ax, ay);
-    const free = this.grid.nearestWalkable(cx, cy, 6);
-    return free ? this.grid.cellToWorld(free[0], free[1]) : [ax, ay];
+    // …and snap onto a spot the passenger's own BLOCK fits on, exactly as mineStandSpot
+    // does — the other half of that trap. `nearestWalkable` clears one CELL, and a door
+    // one cell wide is no door to a unit two cells across: A* is asked for a route to a
+    // goal it can never anchor on, finds none, and issueGarrison reads that as "the way
+    // is shut" and stands the passenger down. A wisp trained at a Tree of Life RALLIED
+    // onto its entangled mine is born a couple of cells from the rock, which is where a
+    // one-cell door and a two-cell wisp meet: the first wisp of every rally stopped dead
+    // beside the mine while the ones behind it (spawned further out) walked in fine.
+    const n = p.footprint;
+    if (n <= 0) {
+      const [cx, cy] = this.grid.worldToCell(ax, ay);
+      const free = this.grid.nearestWalkable(cx, cy, 6);
+      return free ? this.grid.cellToWorld(free[0], free[1]) : [ax, ay];
+    }
+    const [sx, sy] = this.grid.snapForFootprint(ax, ay, n);
+    const [cx0, cy0] = this.grid.footprintOrigin(sx, sy, n);
+    if (this.blockFree(cx0, cy0, n)) return [sx, sy];
+    // Terrain-only line (`unitsBlockLine` false): the queue already standing at the door is
+    // what we are spiralling PAST, so their tiles must not veto the hop.
+    return this.nearestFreeBlock(sx, sy, n, 8, false) ?? [sx, sy];
   }
 
   /** "Close enough to climb in." Measured against the same square `hostApproach` aims at, plus
@@ -3004,9 +3027,13 @@ export class SimWorld {
       // couple of honest attempts. One failed A* is not proof the door is shut: five wisps
       // sent into one Entangled Gold Mine arrive at the same approach cell and take turns
       // standing in each other's way, so the loser of any single tick would otherwise be
-      // sent home for good. Bounded exactly as the harvest approach is (arriveAtNode).
+      // sent home for good. Bounded exactly as the harvest approach is (arriveAtNode) —
+      // except while PARKED, where the countdown is itself the retry timer and re-pathing
+      // every tick would just burn the tries out on a jam that has not moved yet.
+      if (u.waitT > 0) return;
       const [ax, ay] = this.hostApproach(u, b);
       if (this.pathTo(u, ax, ay)) u.nodeRetries = 0;
+      else if (this.terrainReachable(u, ax, ay)) this.parkAndWait(u); // bodies, not walls — wait them out
       else if (u.nodeRetries++ >= NODE_REPATH_TRIES) this.stop(u.id);
     }
   }
@@ -5417,6 +5444,22 @@ export class SimWorld {
     if (o) this.dispatch(u.id, o);
   }
 
+  /** Put a worker to work on a GOLD MINE the way its own race works one.
+   *
+   *  Three races walk in and out of the shaft (issueHarvest); the night elf does not work a
+   *  mine at all — it wraps it in roots and posts a crew of five wisps INSIDE the Entangled
+   *  Gold Mine, where the gold simply arrives (docs/night-elf.md; `Aenc` Car1 = 5). Boarding
+   *  is a garrison, not a harvest, and issueHarvest refuses an entangled mine on purpose —
+   *  so anything that means "go work that mine" without knowing whose worker it holds has to
+   *  come through here. A Tree of Life's rally point is exactly that caller: rallied onto its
+   *  own mine it used to hand every new wisp a plain move, and they parked beside the rock. */
+  issueGoldWork(id: number, mineId: number): boolean {
+    const mine = this.mines.get(mineId);
+    if (!mine) return false;
+    if (mine.entangledBy > 0 && this.units.has(mine.entangledBy)) return this.issueGarrison(id, mine.entangledBy);
+    return this.issueHarvest(id, "gold", mineId);
+  }
+
   /** Order a worker to harvest a mine or tree. False if it can't. `ax/ay` is an
    *  optional distinct approach point (a group ordered together fans around the
    *  node's rim rather than piling on its centre); only the FIRST walk-up uses
@@ -7143,10 +7186,21 @@ export class SimWorld {
     // enhanced shot (see isArrowOrb). Checked after the target test so it inherits the
     // same data-driven rules — Searing Arrows may be aimed at a building, Cold Arrows may not.
     if (isArrowOrb(code)) return this.issueArrowShot(u, ab, lvl, targetId);
-    // Remember an attack-move/follow to resume after the cast (WC3 casters keep
-    // marching/following once they've cast).
+    // Remember an attack-move/follow/commanded-attack to resume after the cast (WC3 casters
+    // keep marching/following/fighting once they've cast). The ATTACK case is what makes an
+    // autocast inside a commanded fight a pause rather than a defection: the Priest heals and
+    // then goes straight back to the unit the player pointed him at (see tickAttack).
     const resume: PendingCast["resume"] =
-      u.order === "attackmove" ? { kind: "attackmove", x: u.amDestX, y: u.amDestY } : u.order === "follow" && u.targetId ? { kind: "follow", id: u.targetId } : null;
+      u.order === "attackmove"
+        ? { kind: "attackmove", x: u.amDestX, y: u.amDestY }
+        : u.order === "follow" && u.targetId
+          ? { kind: "follow", id: u.targetId }
+          : u.order === "attack" && u.attackOrdered && u.targetId !== null && this.units.has(u.targetId)
+            ? // `force` preserved: an Attack command may legitimately be aimed at a
+              // non-hostile (issueAttack's `force`), and a resume that dropped it would
+              // silently refuse to pick the fight back up.
+              { kind: "attack", id: u.targetId, force: !this.hostile(u, this.units.get(u.targetId)!) }
+            : null;
     // Re-task away from whatever it was doing.
     this.detachBuilder(unitId);
     this.cancelSwing(u);
@@ -7387,7 +7441,7 @@ export class SimWorld {
     if (pc.channelLeft <= 0 && pc.backLeft <= 0) this.endCast(u, pc); // instant, no recovery
   }
 
-  /** End a cast: resume the pre-cast attack-move/follow, else fall idle. */
+  /** End a cast: resume the pre-cast attack-move/follow/commanded attack, else fall idle. */
   private endCast(u: SimUnit, pc: PendingCast): void {
     // The cast ran its course: SPELL_FINISH (the channel/recovery is over) then
     // SPELL_ENDCAST (the caster has stopped casting). `ended` marks it done so the
@@ -7398,7 +7452,12 @@ export class SimWorld {
     pc.ended = true;
     if (pc.resume?.kind === "attackmove") this.issueAttackMove(u.id, pc.resume.x, pc.resume.y);
     else if (pc.resume?.kind === "follow") this.issueFollow(u.id, pc.resume.id);
-    else this.stop(u.id);
+    // Back to the fight he was told to join — still ORDERED, so it keeps its commitment
+    // (the leash, the walk-past-others rule) exactly as before the heal. A target that
+    // died while he cast simply refuses, and he falls idle and re-acquires like anyone.
+    else if (pc.resume?.kind === "attack") {
+      if (!this.issueAttack(u.id, pc.resume.id, pc.resume.force, true)) this.stop(u.id);
+    } else this.stop(u.id);
   }
 
   /** Drop a unit's pending cast, raising SPELL_ENDCAST if it was interrupted mid-cast
@@ -9073,10 +9132,13 @@ export class SimWorld {
     // where a Priest's Heal was being lost: idle auto-acquisition and attack-move both hand
     // the fight over as a plain "attack" order, and from then on nothing looked at the
     // autocast again — so one enemy wandering past turned a healer into a very bad archer,
-    // permanently. `attackOrdered` is exactly the distinction the game draws: an EXPLICIT
-    // Attack command on a single target is the player overriding the autocast and is left
-    // alone, everything else is the unit's own idea and yields. A committed swing still
-    // lands first — the strike is already in flight.
+    // permanently. `attackOrdered` is what decides how FAR the autocast may reach here, not
+    // whether it runs at all: an ordered attack is the player pointing at a victim, and a
+    // Priest sent at one with Heal on is still a Priest. What a commanded attack does buy is
+    // the WALK — he marches on the target with the rest of the group and does not peel off
+    // to heal something back down the field on the way (the ordered branch below fires only
+    // once he is in the fight). A committed swing still lands first — the strike is already
+    // in flight.
     if (!u.attackOrdered && u.swingLeft < 0 && this.tickAutocast(u)) return;
     // An AUTO-acquired fight ends the moment the target stops being an enemy — ally a player
     // mid-battle in WC3 and the shooting stops. Only the unit's OWN idea of a fight, never an
@@ -9175,6 +9237,25 @@ export class SimWorld {
         }
       }
     }
+    // THE FIGHT IS JOINED, and the caster was commanded into it: now the autocast outranks
+    // the attack after all. A Priest in a group told to attack a target walks in with the
+    // group (the top-of-tick branch refused him while he was still closing), and once he is
+    // in striking distance of the thing he was pointed at, Heal comes first — an army's
+    // healer is not an archer. Nothing to heal, no mana, or the spell on cooldown, and
+    // tickAutocast simply declines and he swings, which is the "unless the Heal isn't
+    // possible" half of the rule.
+    //
+    // From here the autocast reaches as far as it does anywhere else — the caster's own
+    // acquisition range, walking if it must (autocastSearchRange). It has to: a Priest's
+    // weapon is 600 and his Heal is 250, so he stands half a screen behind the Footmen he
+    // is there to keep alive, and a heal that could only reach what was already beside him
+    // would have healed exactly once and then watched them die. The walk is bounded by his
+    // own eyes, and `resume` puts him back on the ordered target the moment he is done.
+    //
+    // The strike-band test is the same one engage() uses to decide it has arrived, so "in
+    // combat" means the same thing to both.
+    const inBand = Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius <= w.range + ATTACK_LEASH;
+    if (u.attackOrdered && u.swingLeft < 0 && inBand && this.tickAutocast(u)) return;
     this.engage(u, t);
     // Combat-approach watchdog (issue #24). Reset the moment we're within the strike
     // band (range + leash) — genuinely fighting — rather than on engage()'s inCombat

@@ -5,9 +5,12 @@
 //  * An order suppresses autocast, but attack-move / patrol / stop do not — Liquipedia
 //    (Autocast): "If a unit is given a order, it usually prioritizes this order and does not
 //    cast the autocast ability until the order is finished", with attack-move, patrol, stop
-//    and hold position called out as leaving autocast active. So only an EXPLICIT single-
-//    target Attack command (`attackOrdered`) beats a Priest's Heal; an attack the Priest
-//    picked up by itself does not.
+//    and hold position called out as leaving autocast active. An attack the Priest picked up
+//    by ITSELF never beats his Heal. What an EXPLICIT single-target Attack command
+//    (`attackOrdered`) buys is the WALK, not the fight: while he is still closing on the
+//    target the group was pointed at he marches with them and casts nothing, and once he is
+//    in striking distance of it the Heal comes first again — an army's healer is not an
+//    archer, and a group order that turned him into one is the bug this half guards.
 //  * The search reaches the caster's ACQUISITION range, not the spell's cast range —
 //    "Any friendly unit within acquisition range of the Priest will be automatically healed"
 //    (Warcraft Wiki, Priest), and autocast "can cause it to move in order to cast their
@@ -29,15 +32,19 @@ const HEAL = {
 };
 
 /** The Priest's ranged slot — `acquire` 600 is the number this whole issue turns on. */
+// Every `base*` twin is spelled out because recomputeStats REBUILDS the live fields off them
+// each tick (`w.range = w.baseRange + upg.range`) — leave one out and the weapon's range comes
+// back NaN, which reads as "never in range of anything" everywhere a band is measured.
 const PRIEST_WEAPON = {
-  enabled: true, targets: ["ground", "air", "structure"], acquire: 600, range: 600,
-  dice: 1, sides: 2, base: 9, damage: 9, baseDamage: 9, cooldown: 1.9, rangeMotionBuffer: 250,
-  damagePoint: 0.3, backswing: 0.3, attackType: "magic", ranged: true,
+  enabled: true, targets: ["ground", "air", "structure"], acquire: 600, range: 600, baseRange: 600,
+  dice: 1, baseDice: 1, sides: 2, base: 9, damage: 9, baseDamage: 9, cooldown: 1.9, baseCooldown: 1.9, rangeMotionBuffer: 250,
+  damagePoint: 0.3, baseDamagePoint: 0.3, backswing: 0.3, baseBackswing: 0.3, baseSpillDist: 0, baseSpillRadius: 0,
+  attackType: "magic", ranged: true,
   projectile: "", projectileSpeed: 900, areaFull: 0, areaMid: 0, areaSmall: 0,
   factorMid: 0, factorSmall: 0, dieUp: 0, launchX: 0, launchY: 0, launchZ: 0,
   spillDist: 0, spillRadius: 0, damageLoss: 0,
 };
-const FOOTMAN_WEAPON = { ...PRIEST_WEAPON, acquire: 500, range: 90, ranged: false, attackType: "normal" };
+const FOOTMAN_WEAPON = { ...PRIEST_WEAPON, acquire: 500, range: 90, baseRange: 90, ranged: false, attackType: "normal" };
 
 let failed = 0;
 function check(what, got, want) {
@@ -122,15 +129,66 @@ function priest(w, over = {}) {
   check("an AUTO-acquired attack gives way to Heal", [p.order, p.pendingCast && p.pendingCast.targetId], ["cast", hurt.id]);
 }
 
-// --- priority: an explicit Attack command does not ---
+// --- priority: an explicit Attack command buys the WALK, not the fight ---
+{
+  // The group is told to attack something across the field. The Priest marches with it —
+  // he does not peel off to heal a straggler behind him — and that is the whole of what the
+  // Attack command wins: while he is still closing, the order holds.
+  const w = world();
+  const p = priest(w, { x: 0, y: 0 });
+  const foe = add(w, { owner: 1, team: 1, x: 1500, y: 0 }); // past the Priest's 600 range
+  add(w, { x: 200, y: 0, hp: 100, maxHp: 220 });
+  w.issueAttack(p.id, foe.id, false, true); // the player clicked Attack on that one unit
+  w.tickAttack(p, 0.1);
+  check("marching to a commanded target, the Priest keeps marching", [p.order, p.targetId], ["attack", foe.id]);
+}
+
+// --- priority: …and once the fight is joined, Heal comes first anyway ---
+{
+  const w = world();
+  const p = priest(w, { x: 0, y: 0 });
+  const foe = add(w, { owner: 1, team: 1, x: 300, y: 0 }); // inside the Priest's 600 — he is in it
+  const hurt = add(w, { x: 200, y: 0, hp: 100, maxHp: 220 });
+  w.issueAttack(p.id, foe.id, false, true);
+  w.tickAttack(p, 0.1);
+  check("in the fight, Heal outranks the commanded attack", [p.order, p.pendingCast && p.pendingCast.targetId], ["cast", hurt.id]);
+  check("…and he goes back to the target he was told to kill", p.pendingCast.resume, { kind: "attack", id: foe.id, force: false });
+  // Run the cast out: instant (castTime 0, no castPoint/backswing) → endCast on the next tick.
+  w.tickCast(p, 0.1);
+  w.tickCast(p, 0.1);
+  check("…which is exactly what he does", [p.order, p.targetId, p.attackOrdered], ["attack", foe.id, true]);
+  check("…having actually healed", hurt.hp > 100, true);
+}
+
+// --- priority: a commanded fight with nothing to heal is just a fight ---
 {
   const w = world();
   const p = priest(w, { x: 0, y: 0 });
   const foe = add(w, { owner: 1, team: 1, x: 300, y: 0 });
-  add(w, { x: 200, y: 0, hp: 100, maxHp: 220 });
-  w.issueAttack(p.id, foe.id, false, true); // the player clicked Attack on that one unit
+  const hurt = add(w, { x: 200, y: 0, hp: 100, maxHp: 220 });
+  w.issueAttack(p.id, foe.id, false, true);
+  hurt.hp = hurt.maxHp; // nobody needs healing…
   w.tickAttack(p, 0.1);
-  check("an EXPLICIT attack order overrides the autocast", [p.order, p.targetId], ["attack", foe.id]);
+  check("nothing to heal: the Priest attacks", [p.order, p.targetId], ["attack", foe.id]);
+  hurt.hp = 100;
+  p.mana = 4; // …and neither does an empty mana pool stop the fight (Heal costs 5)
+  w.tickAttack(p, 0.1);
+  check("no mana: the Priest attacks", [p.order, p.targetId], ["attack", foe.id]);
+}
+
+// --- priority: in the fight the autocast reaches as far as it does anywhere else ---
+{
+  // A Priest's weapon is 600 and his Heal is 250, so in a real fight the men he is there to
+  // keep alive are past his cast range and he has to walk. Refusing that would have been a
+  // healer who heals whatever happens to be beside him and nothing else.
+  const w = world();
+  const p = priest(w, { x: 0, y: 0 });
+  const foe = add(w, { owner: 1, team: 1, x: 300, y: 0 });
+  const hurt = add(w, { x: 500, y: 0, hp: 100, maxHp: 220 }); // past Heal's 250, inside acquire 600
+  w.issueAttack(p.id, foe.id, false, true);
+  w.tickAttack(p, 0.1);
+  check("a wounded ally out of Heal's range but inside his own is walked to", [p.order, p.pendingCast && p.pendingCast.targetId], ["cast", hurt.id]);
+  check("…and the commanded target is still waiting for him", p.pendingCast.resume, { kind: "attack", id: foe.id, force: false });
 }
 
 // --- priority: attack-move heals before it shoots ---

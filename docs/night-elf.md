@@ -214,6 +214,21 @@ slot, so four-of-five reads at a glance the way it does in the original.
 While the roots are on it the mine is closed to *everyone*: a night elf cannot classic-mine its
 own entangled mine and an enemy peasant cannot mine it at all without knocking the roots down.
 
+**"Go work that mine" is one order and two different jobs.** Rallying the Tree of Life onto its
+own mine is the standard night elf opening, and the caller that carries it out (`applyRally`)
+does not know whose worker it is holding. `issueHarvest` refuses an entangled mine on purpose —
+correctly, twice over: there is no shaft, and a wisp has no pick — so a rally that asked for a
+harvest got a refusal and fell through to a plain *move*, and every new wisp walked to the rock
+and stood beside it. `SimWorld.issueGoldWork` is the one door both jobs go through: entangled →
+`issueGarrison` into the building (this crew), bare → `issueHarvest` (everyone else).
+
+The wisp it pushes out is born a couple of cells from the rock, which is close enough to bite on
+two pathing details, and both are fixed where they belong rather than in the rally. `hostApproach`
+now snaps the door onto a block the passenger actually *fits* on (`nearestWalkable` clears one
+cell, and a one-cell door is no door to a two-cell wisp — the same trap `mineStandSpot` documents
+at length), and `issueGarrison` no longer reads one blocked A* as "the way is shut": bodies in the
+way park the walk and take it up again when they move (issue #108's rule), only terrain ends it.
+
 **Renderer.** `EntangledGoldMine.mdx` is a whole mine wrapped in roots, not a decoration to lay
 over one, so the plain gold mine's map widget is hidden while the building stands and shown
 again if it falls. Its `NGOL` foundation decal comes up with it (`egol` paints `EMDB` in the

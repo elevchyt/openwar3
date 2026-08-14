@@ -3394,7 +3394,10 @@ export class MapViewerScene {
     const u = world.units.get(simId);
     if (!u) return;
     if (rally.kind === "mine" && u.worker?.gold && world.mines.has(rally.targetId)) {
-      if (world.issueHarvest(simId, "gold", rally.targetId)) return;
+      // issueGoldWork, not issueHarvest: an ENTANGLED mine is not mined, it is MANNED, and a
+      // wisp rallied at one climbs inside it (see issueGoldWork). Rallied at a bare mine a
+      // wisp has no pick and falls through to the move below, as it should.
+      if (world.issueGoldWork(simId, rally.targetId)) return;
     } else if (rally.kind === "tree" && u.worker?.lumber && world.trees.has(rally.targetId)) {
       if (world.issueHarvest(simId, "lumber", rally.targetId)) return;
     } else if (rally.kind === "unit") {

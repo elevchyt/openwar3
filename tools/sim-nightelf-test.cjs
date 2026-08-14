@@ -197,6 +197,32 @@ console.log("Entangled Gold Mine (`Aegm` 10 gold/s at `Aenc` Car1 = 5 wisps)");
   }
 }
 
+console.log("…and a rally point onto that mine sends the crew IN, not next to it");
+{
+  // "Go work that mine" is one order to the player and two different jobs underneath: three
+  // races walk into the shaft, the night elf climbs inside the roots. A Tree of Life rallied
+  // onto its own mine used to hand every new wisp a plain move (issueHarvest refuses an
+  // entangled mine, correctly), so they lined up beside the rock and mined nothing.
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  world.add(base({ id: 50, typeId: "egol", x: 2000, y: 2000, hp: 800, maxHp: 800, speed: 0, radius: 128, isBuilding: true, name: "Entangled Gold Mine" }), BUILT(2000, 2000));
+  world.attachEntangled(50, mine.id);
+  world.add(wisp(60, 2400, 2400));
+  check("a wisp sent at the entangled mine takes the order", world.issueGoldWork(60, mine.id));
+  check("…as a walk to the door, not a harvest", world.units.get(60).order === "garrison", world.units.get(60).order);
+  for (let t = 0; t < 12 / 0.05; t++) world.tick(0.05);
+  check("…and it is aboard, earning", world.units.get(50).garrison.length === 1 && world.stashOf(0).gold > 0);
+  // The mirror: knock the roots down and the same call is an ordinary harvest again — a bare
+  // mine is no job for a wisp, which is what `deliversInPlace` says.
+  world.killUnit(50);
+  world.add(wisp(61, 2400, 2400));
+  check("a bare mine refuses a wisp", !world.issueGoldWork(61, mine.id));
+  world.add(base({ id: 70, typeId: "hpea", race: "human", x: 2400, y: 2000, hp: 220, maxHp: 220, speed: 190, radius: 16, name: "Peasant",
+    worker: { gold: true, lumber: true, lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false, carryGold: 0, carryLumber: 0 } }));
+  check("…and hands a peasant the pick", world.issueGoldWork(70, mine.id) && world.units.get(70).order === "harvest");
+}
+
 console.log("…and the mine is closed to everyone else while the roots are on it");
 {
   const world = newWorld();
