@@ -346,6 +346,29 @@ movable-unit branch, and the ability rows that belong to one stance are filtered
   cell, so the planted card's bottom row belongs to the upgrades and Eat Tree is not on it —
   which is also how it is used: an Ancient eats a tree by walking to one.
 
+**And a walking Ancient's right-click on a tree IS Eat Tree**, the same way a walking Tree of
+Life's right-click on a gold mine is Entangle. Aim it at the trunk's EDGE rather than its middle
+(`RtsController.moveAt`): a tree is a blocked 4×4 (or 2×2) square on the pathing grid, so
+nothing can ever stand within `Rng1` = 32 of its centre, and a cast pointed there sends the
+Ancient walking into the trunk to wait at a range it can never make — the order simply never
+fires. Offsetting by the block's own half-extent (capped at the eater's radius, so the point
+stays inside the arm the effect measures) puts the aim point where the Ancient actually stops.
+
+**A ROOTED Ancient is a TOWER, and the sim has to agree.** It carries a walker's `baseSpeed` in
+both stances — it is one unit, and the walk is what it uproots for — so anything that asks "can
+this thing come to me?" off the speed field alone gets it wrong. `SimWorld.canPursue` is where
+that question lives, and it excludes an Ancient whose roots are down; everything hanging off it
+then falls out for free: an ordered attack outside weapon range refused at the click with
+[Errors] `Notinrange`, a target that walks out of range let go instead of held, and a right-click
+on the ground that is not a move order at all. The last one was the visible bug — an Ancient
+Protector pivoted to face every click on the terrain, and left a green move arrow behind.
+
+**The root gesture turns twice as fast as it settles.** The last stretch of the walk onto the
+site is spread across the whole 2.5s transition (`SimUnit.rootSettle`), but the turn back to
+`builtFacing` runs at `ROOT_TURN_SPEEDUP` = 2 — square with the base by the half-way mark. A
+tree still swinging round while its roots are already in the ground reads as being dragged into
+place rather than planting itself.
+
 **Entangle Gold Mine is on the WALKING card, and only there.** It reads like a rooted ability
 and it is not: a Tree of Life is uprooted for precisely as long as it takes to reach an
 expansion, which is the entire time you want to press this. The game's own refusal line is the

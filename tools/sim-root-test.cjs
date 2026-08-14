@@ -100,6 +100,26 @@ const settled = (u) => { u.morphT = 0; world.tickRootSettle(u); world.recomputeS
   check("…back on the rooted slot", liveSlots(u), [0]);
 }
 
+// --- while its roots are in the ground, an Ancient is a TOWER ---------------------------
+//
+// It carries a walker's `baseSpeed` in BOTH stances — it is one unit, and the walk is what it
+// uproots for — so anything that asks "can this thing come to me?" off the speed field alone
+// gets a planted Ancient wrong. Everything that hangs off SimWorld.canPursue does: an
+// out-of-range attack order refused at the click, a target that walks away being let go, and a
+// right-click on the ground that is not a move order at all. The tell was an Ancient Protector
+// pivoting to face every click on the terrain.
+{
+  const u = ancient("Aro2", { id: 5, x: 512, y: 512, prevX: 512, prevY: 512, facing: 1, desiredFacing: 1 });
+  world.recomputeStats(u);
+  check("planted, it takes no move order", world.issueMove(u.id, 900, 900), false);
+  check("…and does not even turn toward the click", u.desiredFacing, 1);
+  check("…nor an attack-move", world.issueAttackMove(u.id, 900, 900), false);
+  check("…nor a patrol", world.issuePatrol(u.id, 900, 900), false);
+  world.toggleRoot(u);
+  settled(u);
+  check("uprooted, the move order it refused is taken", world.issueMove(u.id, 900, 900), true);
+}
+
 // --- Root is a WALK to a site, even a site under its own feet ---------------------------
 //
 // Pressing Root hands the player the building's silhouette and the click chooses the spot, so
@@ -137,8 +157,13 @@ const settled = (u) => { u.morphT = 0; world.tickRootSettle(u); world.recomputeS
   u.morphT = u.rootSettle.dur / 2;
   world.tickRootSettle(u);
   check("…half way through, it is half way there", [Math.round(u.x), Math.round(u.y)], [792, 768]);
-  // 0 → 3π/2 the SHORT way is a quarter turn backwards, so half of it is -π/4.
-  check("…and half way round, the short way", Math.round(u.facing * 1000) / 1000, -0.785);
+  // The TURN runs at twice the settle's pace (ROOT_TURN_SPEEDUP, developer request), so by the
+  // half-way mark it is already home: 0 → 3π/2 the SHORT way is a quarter turn backwards, and
+  // all of it has been spent. (A quarter of the way through is where half of it is done.)
+  check("…and by half way it is already square with the base", Math.round(u.facing * 1000) / 1000, -1.571);
+  u.morphT = u.rootSettle.dur * 0.75; // a quarter of the way in: half the turn spent
+  world.tickRootSettle(u);
+  check("…and a quarter of the way in, half way round the short way", Math.round(u.facing * 1000) / 1000, -0.785);
   settled(u);
   check("…and lands exactly on the site", [Math.round(u.x), Math.round(u.y)], [768, 768]);
   check("…facing the way it was raised", u.facing, u.builtFacing);

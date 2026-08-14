@@ -1676,12 +1676,19 @@ export class RtsController {
       return true;
     }
     if (this.orderMode === "attack") {
-      this.orderMode = null;
       const t = this.sim.units.get(simId);
       if (t && simId !== this.primary) {
-        for (const id of this.selected) if (id !== simId) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true }, queued: false });
-        this.ack(true);
+        let any = false;
+        for (const id of this.selected) if (id !== simId && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: simId, force: true }, queued: false })) any = true;
+        // Refused for everyone — a tower aimed past its range — says why and stays armed,
+        // exactly as the same click on the MAP does (orderClickAt). The console is another
+        // way to name a target, not another rule about what may be attacked.
+        if (!any && this.refuseAttackTarget(simId)) return true;
+        this.orderMode = null;
+        if (any) this.ack(true);
+        return true;
       }
+      this.orderMode = null;
       return true;
     }
     return false;
@@ -3704,6 +3711,34 @@ export class RtsController {
       });
       return true;
     }
+    // An aimed ATTACK at a THING refuses like a cast, and for the same reason: a tower cannot
+    // walk to what you point it at, so a target outside its weapon range is an order it can
+    // never carry out. WC3 answers with [Errors] `Notinrange` — "Target is outside range." —
+    // and does NOT spend the click: nothing is ordered, no acknowledgement is voiced, and the
+    // reticle stays up for another try (the reticle is derived from `orderMode` each frame,
+    // which is why this has to run BEFORE the teardown and the ack below).
+    //
+    // Only when NOBODY took it. A mixed selection that got the order away — the Footmen in it
+    // can walk — is an order given, and the tower that couldn't is not worth a line.
+    if (mode === "attack") {
+      const picked = this.pickAt(cssX, cssY);
+      const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+      const target = picked !== null && picked !== this.primary ? this.sim.units.get(picked) : undefined;
+      if (target && prim && picked !== null) {
+        // The Attack command FORCE-attacks whatever is under the cursor — including
+        // friendly/own units and buildings (WC3 force attack).
+        let any = false;
+        for (const id of this.selected) if (id !== picked && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
+        if (any) {
+          this.orderMode = null;
+          this.ack(true);
+          this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
+          return true;
+        }
+        if (this.refuseAttackTarget(picked)) return false; // a tower, pointed past its range
+      }
+      // Nothing under the cursor: fall through to the attack-MOVE on the ground point below.
+    }
     this.orderMode = null;
     if (mode === "item") {
       const armed = this.armedItem;
@@ -3743,28 +3778,6 @@ export class RtsController {
     if (mode === "repair") {
       this.repairAt(this.pickAt(cssX, cssY), queued);
       return true;
-    }
-    if (mode === "attack") {
-      const picked = this.pickAt(cssX, cssY);
-      const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
-      if (picked !== null && prim) {
-        const target = this.sim.units.get(picked);
-        // The Attack command FORCE-attacks whatever is under the cursor — including
-        // friendly/own units and buildings (WC3 force attack).
-        if (target && target.id !== this.primary) {
-          let any = false;
-          for (const id of this.selected) if (id !== picked && this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: true }, queued: queued })) any = true;
-          if (any) {
-            this.flashAttack(target.x, target.y, this.byId.get(picked)?.selRadius ?? target.radius, this.byId.get(picked)?.moveHeight ?? 0);
-            return true;
-          }
-          // Nobody took it. A TOWER is the case that has something to say about why (see
-          // refuseAttackTarget); the order stays armed for another click, the way a refused
-          // cast does. Anything else falls through to the attack-move below.
-          if (this.refuseAttackTarget(picked)) return false;
-        }
-      }
-      // Nothing under the cursor: attack-MOVE to the ground point (below).
     }
     if (mode === "move") {
       // A Move command AIMED AT A UNIT OR BUILDING means "go to THAT thing", so its
@@ -3806,15 +3819,19 @@ export class RtsController {
    *  point. Shared by a click in the world (orderClickAt, once the ray has hit the
    *  terrain) and a click on the MINIMAP, which resolves straight to a world point. */
   private groundOrder(mode: "move" | "attack" | "patrol", wx: number, wy: number, queued: boolean): void {
+    // Every arrow here is gated on the order having been TAKEN by somebody. A ground marker is
+    // a promise that something is on its way to that spot, and a selection with nothing in it
+    // that can walk — a tower, a rooted Ancient — must not leave one behind (issueMove /
+    // issueAttackMove / issuePatrol all refuse outright for a unit that cannot pursue).
     if (mode === "patrol") {
-      for (const id of this.selected) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "patrol", x: wx, y: wy }, queued: queued });
-      this.queueArrow(wx, wy, MOVE_ARROW);
+      let any = false;
+      for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "patrol", x: wx, y: wy }, queued: queued })) any = true;
+      if (any) this.queueArrow(wx, wy, MOVE_ARROW);
     } else if (mode === "attack") {
-      this.groupAttackMove(wx, wy, queued); // distinct formation slot per unit (like move)
-      this.queueArrow(wx, wy, ATTACK_ARROW); // red a-move feedback
+      // distinct formation slot per unit (like move)
+      if (this.groupAttackMove(wx, wy, queued)) this.queueArrow(wx, wy, ATTACK_ARROW); // red a-move feedback
     } else {
-      this.groupMove(wx, wy, queued); // spread the group into a formation
-      this.queueArrow(wx, wy, MOVE_ARROW);
+      if (this.groupMove(wx, wy, queued)) this.queueArrow(wx, wy, MOVE_ARROW); // spread the group into a formation
     }
   }
 
@@ -3874,8 +3891,7 @@ export class RtsController {
     // Right-click with no armed order — the minimap's default (smart) command. With no unit
     // to pick, the only sensible reading of a bare point is "go there" (WC3).
     this.ack(false);
-    this.groupMove(wx, wy, queued);
-    this.queueArrow(wx, wy, MOVE_ARROW);
+    if (this.groupMove(wx, wy, queued)) this.queueArrow(wx, wy, MOVE_ARROW);
     return "ordered";
   }
 
@@ -5390,6 +5406,21 @@ export class RtsController {
       return;
     }
     const picked = this.pickAt(cssX, cssY);
+    // A PLANTED BUILDING with no rally point to set has almost nothing a right-click can mean,
+    // and the one thing it does mean is an attack — for the buildings the data gave a weapon
+    // you are allowed to aim (UnitWeapons `showUI`: every tower, the Orc Burrow, the Ancient
+    // Protector), pointing it at a target is exactly the Attack button without the button.
+    // Everything else is NOTHING: a building goes nowhere, so a click on the terrain is not a
+    // quiet move order, not a facing change and not a green ground arrow.
+    //
+    // The Ancient Protector is what made this visible — it is the one "tower" that carries a
+    // walker's speed while it is rooted (SimWorld.canPursue), and it pivoted to face every
+    // click on the ground. An UPROOTED Ancient is not planted and falls through to the
+    // ordinary unit orders below, which is the whole point of having pulled itself up.
+    if (this.selectionIsPlanted()) {
+      this.buildingRightClick(picked, queued);
+      return;
+    }
     // Acknowledge the order with the focused unit's voice — attack quote if it
     // targets a hostile unit, otherwise the move quote.
     {
@@ -5541,6 +5572,47 @@ export class RtsController {
     const treeHit = this.treePickPoint() ?? hit; // raised plane → clicking up the tree still hits
     const tree = this.sim.nearestTree(treeHit[0], treeHit[1], 140);
     if (tree) {
+      // An UPROOTED Ancient right-clicked onto a tree EATS it. `Aeat` is the walking card's
+      // button and nothing else's (UPROOTED_ONLY in mapViewer.ts — a planted Ancient's bottom
+      // row belongs to its upgrades), and it is used by walking up to a tree, so the trunk
+      // under the cursor is the whole order. Aimed at a POINT, because a tree is not a unit in
+      // this sim: the cast fells the nearest one the Ancient can reach to the spot it names
+      // (spells.ts `Aeat`), and `Rng1` = 32 means the tree it is touching — so the cast order
+      // walks it over there first (tickCast), exactly as any other out-of-range spell does.
+      //
+      // Asked before the harvest below because an Ancient is not a worker and would otherwise
+      // fall through to a plain move and stand beside the trunk doing nothing — the same shape
+      // of bug the Tree of Life's right-click on a gold mine had.
+      const eaters = [...this.selected].filter((id) => {
+        const a = this.sim.units.get(id);
+        return !!a?.uprooted && a.abilities.some((ab) => ab.code === "Aeat" && ab.level >= 1);
+      });
+      if (eaters.length) {
+        let any = false;
+        for (const id of eaters) {
+          // Aim at the trunk's EDGE, on the side the Ancient is standing — not at the middle of
+          // it. A tree is a blocked 4×4 (or 2×2) square on the pathing grid, so nothing can ever
+          // stand within `Rng1` = 32 of its centre: aimed there, the cast's approach walks the
+          // Ancient into the trunk and waits at a range it can never make, and the order simply
+          // never fires. Offset by the block's own half-extent and the walk ends where the
+          // Ancient actually stops. Capped at the eater's radius so the point stays inside the
+          // arm the effect itself measures (spells.ts `Aeat`: `Rng1` + the caster's radius,
+          // from the aim point for the search and from the Ancient for the reach).
+          const a = this.sim.units.get(id)!;
+          const dx = a.x - tree.x;
+          const dy = a.y - tree.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const off = Math.min(tree.blockRadius, a.radius);
+          const ax = tree.x + (dx / len) * off;
+          const ay = tree.y + (dy / len) * off;
+          if (this.execute(this.localPlayer, { c: "cast", unitId: id, code: "Aeat", targetId: 0, x: ax, y: ay })) any = true;
+        }
+        if (any) {
+          this.flashTarget(tree.x, tree.y, 76); // the same ring a harvest click on a trunk flashes
+          this.treePulses.push({ x: tree.x, y: tree.y });
+          return;
+        }
+      }
       // Spread the group across nearby trees so they don't all crowd the one
       // clicked trunk and shove each other. Gather the lumber workers, pull the
       // N nearest trees to the click (N = worker count), then hand each worker
@@ -5579,8 +5651,47 @@ export class RtsController {
         }
       }
     }
-    this.groupMove(hit[0], hit[1], queued); // spread the group into a formation
-    this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move-order feedback
+    // …and the arrow only if somebody is actually going: `groupMove` reports whether any unit
+    // took the order, and a selection that can't walk must not stamp a destination it will
+    // never reach on the ground (see queueArrow).
+    if (this.groupMove(hit[0], hit[1], queued)) this.queueArrow(hit[0], hit[1], MOVE_ARROW); // green move-order feedback
+  }
+
+  /** Is every unit in the selection a PLANTED building — nothing in it that could take a
+   *  ground order if we gave it one? Asked of the whole selection rather than of the focused
+   *  unit alone, so a tower swept up with a group of soldiers doesn't silence the group's
+   *  right-click: the soldiers still walk, and the tower still ignores it. */
+  private selectionIsPlanted(): boolean {
+    for (const id of this.selected) {
+      const u = this.sim.units.get(id);
+      if (u && (!u.building || u.uprooted)) return false;
+    }
+    return true;
+  }
+
+  /** The whole of a planted building's right-click: shoot whatever is under the cursor when
+   *  that is something it may be aimed at, and otherwise do nothing at all.
+   *
+   *  A hostile unit or building is attacked. A DESTRUCTIBLE is FORCE-attacked, the same "break
+   *  that anyway" a right-click on a gate means for a unit — it is neutral-passive, so nothing
+   *  would ever auto-acquire it. Anything friendly is not an order at all. Out of range is the
+   *  one refusal the player is told about ([Errors] `Notinrange`), because a tower cannot go
+   *  and close the distance itself — which is the same answer the Attack button gives. */
+  private buildingRightClick(picked: number | null, queued: boolean): void {
+    if (picked === null || this.selected.has(picked)) return;
+    const target = this.sim.units.get(picked);
+    const prim = this.primary !== null ? this.sim.units.get(this.primary) : undefined;
+    if (!target || !prim) return;
+    const destructible = !!target.targetKey;
+    if (!destructible && !this.sim.hostile(prim, target)) return;
+    let any = false;
+    for (const id of this.selected) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attack", targetId: picked, force: destructible }, queued })) any = true;
+    if (any) {
+      const e = this.byId.get(picked);
+      this.flashRing(target.x, target.y, e?.selRadius ?? target.radius, FLASH_RED, !!target.building, e?.moveHeight ?? 0);
+      return;
+    }
+    this.refuseAttackTarget(picked); // "Target is outside range." — the tower cannot come to it
   }
 
   /** Resolve where a rally right-click points: a unit under the cursor (follow),
@@ -5713,9 +5824,11 @@ export class RtsController {
 
   /** Issue a formation move for the whole selection to a ground point (or queue
    *  each unit's slot move when Shift is held). */
-  private groupMove(tx: number, ty: number, queued = false): void {
+  private groupMove(tx: number, ty: number, queued = false): boolean {
     const targets = groupTargets(this.sim, [...this.selected], tx, ty);
-    for (const [id, [x, y]] of targets) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued });
+    let any = false;
+    for (const [id, [x, y]] of targets) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued })) any = true;
+    return any; // …did anyone actually take it? The ground arrow hangs off this
   }
 
   /** Move the whole selection AT a unit or building: everyone is given the target itself,
@@ -5736,9 +5849,11 @@ export class RtsController {
    *  groupMove — each unit gets a DISTINCT formation slot around the point so they
    *  spread out there instead of cramming on one tile — but issued as attack-move, so
    *  each unit fights the nearest enemy in its path and resumes to its slot afterwards. */
-  private groupAttackMove(tx: number, ty: number, queued = false): void {
+  private groupAttackMove(tx: number, ty: number, queued = false): boolean {
     const targets = groupTargets(this.sim, [...this.selected], tx, ty);
-    for (const [id, [x, y]] of targets) this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued });
+    let any = false;
+    for (const [id, [x, y]] of targets) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued })) any = true;
+    return any;
   }
 
   /** Queue a target-circle flash — the renderer draws it as a flat ground circle

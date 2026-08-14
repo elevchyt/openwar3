@@ -6843,10 +6843,21 @@ export class MapViewerScene {
       // is inside it. Not for a shop you merely trade with — that is not your building.
       // A tower cannot walk, so an out-of-range target is refused at the click with the game's
       // own "Target is outside range." (SimWorld.issueAttack → [Errors] Notinrange).
+      // …and STOP beside it, in the same cell a mobile unit's Stop owns (1,0). A building you
+      // may aim can be given an order, so it needs the one command that takes an order back:
+      // without it a tower told to shoot a particular target had no way to be told to stop,
+      // and the only way off the order was to kill the thing. Same button, same hotkey and
+      // the same resting-state highlight as everywhere else — a building doing nothing is
+      // stopped, which is what activeCommandId already reports.
       if (!foreignShop && su?.weapons.some((w) => w.enabled && w.showUI)) {
+        const active = this.activeCommandId();
         out.push(this.cmd({
           id: "attack", icon: btnIcon("BTNAttack"), name: "Attack", hotkey: "A",
-          desc: "Attacks a target unit.", col: 3, row: 0, active: this.activeCommandId() === "attack",
+          desc: "Attacks a target unit.", col: 3, row: 0, active: active === "attack",
+        }));
+        out.push(this.cmd({
+          id: "stop", icon: btnIcon("BTNStop"), name: "Stop", hotkey: "S",
+          desc: "Halts the unit's current order.", col: 1, row: 0, active: active === "stop",
         }));
       }
       // Orc Burrow garrison (UnitAbilities.slk otrb: Abtl Battle Stations + Astd Stand Down).

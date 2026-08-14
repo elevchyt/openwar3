@@ -695,6 +695,16 @@ export type QueuedOrder =
  *  there (2.5), which is also what Liquipedia lists as Root/Uproot's "Animation Duration". */
 const ROOT_MORPH_TIME = 2.5;
 
+/** How much faster than the settle itself a planting Ancient TURNS back to `builtFacing`
+ *  (developer request: "double speed").
+ *
+ *  The walk-on and the turn were both spread across the whole 2.5s transition, and they do not
+ *  read the same way: sliding the last stride onto the site over the full clip is the point,
+ *  but a tree still swinging round while its roots are already in the ground looks like the
+ *  building is being dragged into place. Turning at twice the pace simply means it is square
+ *  with the base by the halfway mark and the rest of the morph plays out facing home. */
+const ROOT_TURN_SPEEDUP = 2;
+
 /** How close an Ancient must stop to the spot it was told to plant on before it settles there
  *  (`{kind:"rootat"}`), on top of its own collision radius.
  *
@@ -5233,14 +5243,26 @@ export class SimWorld {
     const u = this.units.get(id);
     const t = this.units.get(targetId);
     if (!u || !t || !u.weapon || this.canPursue(u)) return null;
+    // Nothing in the loadout may strike it at all (a ground tower pointed at a Gryphon):
+    // that is a different refusal and not one this method has the line for — issueAttack
+    // turns the order down on `canAttack` and the cursor never went red in the first place.
+    if (!this.canAttack(u, t)) return null;
     return this.inWeaponRange(u, t) ? null : "Notinrange";
   }
 
   /** Can this unit walk to a fight at all? A structure (and anything else the data gives no
    *  move speed) cannot: it shoots what comes to it. Read off `baseSpeed` rather than the live
-   *  `speed` so a unit merely slowed to a crawl still counts as mobile. */
+   *  `speed` so a unit merely slowed to a crawl still counts as mobile.
+   *
+   *  A ROOTED Ancient is the case that reads backwards, and it is why this is a method rather
+   *  than a field test: it carries a walker's `baseSpeed` (it is the same unit in both stances,
+   *  and the walk is what it uproots FOR), and it cannot take a single step until it does —
+   *  which is why recomputeStats zeroes its live speed while it stands. While its roots are in
+   *  the ground an Ancient Protector is a tower like any other, and everything hanging off this
+   *  — an out-of-range attack order refused at the click, a target that walks away being let
+   *  go, a right-click that is not a move — has to treat it as one. */
   private canPursue(u: SimUnit): boolean {
-    return u.baseSpeed > 0;
+    return u.baseSpeed > 0 && (u.uprooted || !this.rootAbility(u));
   }
 
   /** Is `t` inside the weapon `u` would answer it with — hull to hull, as every range in the
@@ -6668,8 +6690,10 @@ export class SimWorld {
     const k = Math.min(1, Math.max(0, 1 - u.morphT / s.dur)); // 0 → 1 across the transition
     u.x = s.x0 + (s.x1 - s.x0) * k;
     u.y = s.y0 + (s.y1 - s.y0) * k;
-    // The short way round, like every other turn in the sim (turnToward).
-    u.facing = s.f0 + angleDiff(s.f0, u.builtFacing) * k;
+    // The short way round, like every other turn in the sim (turnToward) — but at the turn's
+    // own pace rather than the settle's (ROOT_TURN_SPEEDUP), so the tree is square with the
+    // base well before the clip ends instead of rotating all the way into the ground.
+    u.facing = s.f0 + angleDiff(s.f0, u.builtFacing) * Math.min(1, k * ROOT_TURN_SPEEDUP);
     u.desiredFacing = u.facing; // …so the shared turning pass has nothing to add on top
   }
 
@@ -9483,6 +9507,21 @@ export class SimWorld {
     // re-acquire it falls into can't pick the same unit back up (canSee refuses it), so the
     // attacker rolls onto another enemy or stands down.
     if (t.invisible) {
+      this.reacquireOrStop(u);
+      return;
+    }
+    // A TOWER HOLDS NO GRUDGE. It cannot walk after what you pointed it at, so the moment an
+    // ORDERED target steps outside the weapon it would answer with, the order is finished:
+    // let go and look again, rather than standing there aimed at something that is never
+    // coming back into reach while enemies walk past underneath. Deliberately the same test
+    // `issueAttack` refuses the order with at the click ([Errors] `Notinrange`), so the rule a
+    // player is told about and the rule the tower lives by are one rule.
+    //
+    // Only the ORDERED attack. Auto-acquisition is exactly the "lock on and wait for it to
+    // close" a Spirit Tower needs (acquire 900 against a 700 weapon), and reacquireOrStop may
+    // well hand this same target straight back as an UN-ordered lock — that is the tower
+    // watching its ground, which is what it should be doing.
+    if (u.attackOrdered && !this.canPursue(u) && !this.inWeaponRange(u, t)) {
       this.reacquireOrStop(u);
       return;
     }

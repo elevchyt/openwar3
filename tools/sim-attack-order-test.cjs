@@ -152,5 +152,61 @@ console.log("auto-acquired target still yields to one in strike range");
   check("far one untouched", far.hp === far.maxHp);
 }
 
+// ── 5. A TOWER holds no grudge ─────────────────────────────────────────────────────────
+// A building cannot walk to what you point it at, so an ordered attack on something outside
+// its weapon range is an order it could never carry out: WC3 refuses it at the click with
+// [Errors] `Notinrange` ("Target is outside range."), and lets a target that walks back out of
+// range GO rather than standing aimed at it while the field moves past underneath.
+console.log("a tower's ordered attack");
+{
+  // 700 range, 700 acquisition — a Guard Tower's numbers, minus the Spirit Tower's longer
+  // acquire (that one gets its own case below).
+  const TOWER_GUN = (acquire = 700) => ({
+    ...WEAPON(), ranged: true, range: 700, baseRange: 700, cooldown: 1, baseCooldown: 1, acquire,
+  });
+  const tower = (w) => addUnit(w, 1, 0, 500, 500, { speed: 0, isBuilding: true, radius: 48, weapons: [TOWER_GUN()] });
+  {
+    const w = new SimWorld(grid(), 1);
+    tower(w);
+    const near = addUnit(w, 2, 1, 900, 500, { weapons: [] });
+    check("no refusal for a target it can reach", w.attackRefusal(1, near.id) === null);
+    check("…and the order is taken", w.issueOrder(1, { kind: "attack", targetId: near.id, force: false }));
+    run(w, 2);
+    check("…and it shoots it", near.hp < near.maxHp);
+  }
+  {
+    const w = new SimWorld(grid(), 1);
+    tower(w);
+    const far = addUnit(w, 2, 1, 1600, 500, { weapons: [] });
+    check("out of range answers with the game's own line", w.attackRefusal(1, far.id) === "Notinrange");
+    check("…and the order is not taken", w.issueOrder(1, { kind: "attack", targetId: far.id, force: false }) === false);
+    check("…leaving the tower on nothing", w.units.get(1).order === "idle" && w.units.get(1).targetId === null);
+  }
+  {
+    // The grudge itself: in range when ordered, then it walks away.
+    const w = new SimWorld(grid(), 1);
+    tower(w);
+    const runner = addUnit(w, 2, 1, 900, 500, { weapons: [] });
+    w.issueOrder(1, { kind: "attack", targetId: runner.id, force: false });
+    run(w, 1);
+    check("locked on while it is in range", w.units.get(1).targetId === runner.id);
+    w.issueOrder(2, { kind: "move", x: 2400, y: 500 });
+    run(w, 8);
+    const u = w.units.get(1);
+    check(`let it go once it left range (order ${u.order}, target ${u.targetId})`, u.order === "idle" && u.targetId === null);
+  }
+  {
+    // …and the other half of the rule, which is NOT a grudge: a tower whose acquisition
+    // outruns its weapon (the Spirit Tower's 900 against 700) picks a target up at the edge of
+    // its sight and waits for it to close. Only the ORDERED attack is let go.
+    const w = new SimWorld(grid(), 1);
+    addUnit(w, 1, 0, 500, 500, { speed: 0, isBuilding: true, radius: 48, weapons: [TOWER_GUN(900)] });
+    const closing = addUnit(w, 2, 1, 1300, 500, { weapons: [] });
+    w.issueAttack(1, closing.id); // the automatic path — no `ordered` flag
+    run(w, 1);
+    check("an auto-acquired target outside weapon range is still held", w.units.get(1).targetId === closing.id);
+  }
+}
+
 console.log(failures === 0 ? "\nattack-order: all checks passed" : `\nattack-order: ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);
