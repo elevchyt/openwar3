@@ -442,6 +442,31 @@ console.log("The roots take a minute to close (`egol` bldtm = 60)");
   check("…and only then does the gold start", world.stashOf(0).gold > 0, `${world.stashOf(0).gold}`);
 }
 
+console.log("…and the hold takes five of them, whatever you sent (`Aenc` Car1 = 5)");
+{
+  // Seven wisps sent into a mine that is still closing. All seven wait — none of them can
+  // board a building that is not finished — and when it is, five are the crew and the other
+  // two are stood down with nothing to do (which is what puts them back on the idle-worker
+  // badge, where a wisp that is waiting at the door or mining inside is NOT).
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  world.add(base({ id: 50, typeId: "egol", x: 2000, y: 2000, hp: 80, maxHp: 800, speed: 0, radius: 128, isBuilding: true, name: "Entangled Gold Mine" }),
+    { ...BUILT(2000, 2000), constructionLeft: 20, buildTimeTotal: 60 });
+  world.attachEntangled(50, mine.id);
+  const egol = world.units.get(50);
+  const crew = [61, 62, 63, 64, 65, 66, 67];
+  crew.forEach((id, i) => world.add(wisp(id, 1800 + (i % 4) * 96, 2300 + Math.floor(i / 4) * 96)));
+  for (const id of crew) world.issueGoldWork(id, mine.id);
+  for (let t = 0; t < 10 / 0.05; t++) world.tick(0.05);
+  check("all seven take the order and none is idle", crew.every((id) => world.units.get(id).order === "garrison"));
+  check("…and none is aboard an unfinished mine", egol.garrison.length === 0);
+  for (let t = 0; t < 25 / 0.05; t++) world.tick(0.05);
+  check("five is a full crew", egol.garrison.length === 5, `${egol.garrison.length}`);
+  const left = crew.filter((id) => !egol.garrison.includes(id));
+  check("…and the two who could not fit are stood down", left.length === 2 && left.every((id) => world.units.get(id).order === "idle"));
+}
+
 console.log("…and a Tree of Life that uproots lets the mine go");
 {
   const world = newWorld();

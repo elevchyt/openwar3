@@ -1688,9 +1688,20 @@ export class RtsController {
   }
 
   /** A worker of the local player that's doing nothing (not gathering, building,
-   *  moving, or constructing) — the ones the idle-worker button/F8/~ cycle. */
+   *  moving, or constructing) — the ones the idle-worker button/F8/~ cycle.
+   *
+   *  A worker walking to a job is not idle: `order` is `garrison`/`harvest`/`build` for the
+   *  whole walk, so a wisp on its way into an Entangled Gold Mine — including one standing at
+   *  the door of one that is still closing its roots, which is a wait, not an idleness — is
+   *  never counted here.
+   *
+   *  And neither is one that is OFF THE FIELD. `enterHost` parks a passenger on `idle`,
+   *  because inside a hold there is no order to have; a Wisp in an entangled mine is
+   *  nevertheless mining and a peon in a burrow is manning it, and the badge that offers to
+   *  fly the camera to them is offering to select a unit that is not on the map. `inMine` was
+   *  the only off-field state tested for; `isOffField` is all of them. */
   private isIdleWorker(u: SimUnit | undefined): u is SimUnit {
-    return !!u && u.owner === this.localPlayer && !!u.worker && u.order === "idle" && !u.buildPending && u.constructing === 0 && !u.inMine;
+    return !!u && u.owner === this.localPlayer && !!u.worker && u.order === "idle" && !u.buildPending && u.constructing === 0 && !isOffField(u);
   }
 
   private idleWorkerIds(): number[] {
@@ -5500,6 +5511,19 @@ export class RtsController {
       // turn — a mine takes one worker at a time. Nearest-slot keeps each worker
       // on the side it walked up from; after the first trip the sim re-forms the
       // usual mine→hall line (mineApproach), so this only cleans up the approach.
+      // A mine wrapped in roots is not mined, it is MANNED — there is no shaft to walk into
+      // and a wisp has no pick — so the click means the crew, and it means it while the roots
+      // are still closing (patch 1.10). The building covers the rock, so most clicks here are
+      // caught by `orderOnBuilding` above; this is the one that lands on the rim of the
+      // footprint instead, and without it those fell through `issueHarvest`'s refusal to a
+      // plain move and the wisps stood beside the mine doing nothing.
+      const host = mine.entangledBy > 0 ? this.sim.units.get(mine.entangledBy) : undefined;
+      if (host && prim && !this.sim.hostile(prim, host)) {
+        if (this.manHold(host, host.id)) {
+          this.flashRing(host.x, host.y, this.byId.get(host.id)?.selRadius ?? host.radius, FLASH_GREEN);
+          return;
+        }
+      }
       const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker?.gold);
       // A little extra breathing room on the approach ring so they don't bunch on
       // one side of the mine (kept modest — miners must still land within entry reach).
@@ -5637,11 +5661,7 @@ export class RtsController {
     // through to the resume/assist branch below, which is what a right-click on one means.
     const entangling = !!target.building?.selfBuilds;
     if (own && target.garrisonCap > 0 && (!target.building || target.building.constructionLeft <= 0 || entangling)) {
-      const room = target.garrisonCap - target.garrison.length;
-      const workers = room > 0 ? [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room) : [];
-      let any = false;
-      for (const id of workers) if (this.execute(this.localPlayer, { c: "garrison", unitId: id, buildingId: picked })) any = true;
-      if (any) {
+      if (this.manHold(target, picked)) {
         this.flashRing(target.x, target.y, selR, FLASH_GREEN);
         return;
       }
@@ -5666,6 +5686,29 @@ export class RtsController {
     }
     if (!handled) this.groupMoveTo(target, picked, queued); // walk up to it (no arrow)
     this.flashRing(target.x, target.y, selR, own ? FLASH_GREEN : FLASH_YELLOW);
+  }
+
+  /**
+   * Send the selection's workers into a cargo hold — an Orc Burrow's peons, an Entangled Gold
+   * Mine's crew — and no more of them than it has room for.
+   *
+   * The cap is the point. `Aenc` `Car1` = 5 and a burrow's `Abun` is 4, so a right-click with
+   * eight wisps selected must put five to work and leave the other three doing what they were
+   * doing: ordered in regardless they would all walk over, wait out the mine's 60 seconds of
+   * roots, and then be turned away at the door by the three who got there first (tickGarrison
+   * stands a passenger down when the hold fills while it walks). Whoever is already inside is
+   * counted, so topping a half-crewed mine up sends exactly the missing wisps.
+   *
+   * Returns whether anybody took the order, so the caller can fall through to the ordinary
+   * walk-up when the hold is full.
+   */
+  private manHold(host: SimUnit, hostId: number): boolean {
+    const room = host.garrisonCap - host.garrison.length;
+    if (room <= 0) return false;
+    const workers = [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room);
+    let any = false;
+    for (const id of workers) if (this.execute(this.localPlayer, { c: "garrison", unitId: id, buildingId: hostId })) any = true;
+    return any;
   }
 
   /** Issue a formation move for the whole selection to a ground point (or queue

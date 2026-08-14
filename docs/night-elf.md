@@ -267,6 +267,23 @@ harvest got a refusal and fell through to a plain *move*, and every new wisp wal
 and stood beside it. `SimWorld.issueGoldWork` is the one door both jobs go through: entangled →
 `issueGarrison` into the building (this crew), bare → `issueHarvest` (everyone else).
 
+The plain **right-click** is the other caller, and it reaches the same place from two directions:
+the building covers the rock, so most clicks land on the `egol` and go through `orderOnBuilding`,
+while one on the rim of the footprint finds the mine and follows `SimMine.entangledBy` to the
+same host. Both go through `RtsController.manHold`, and both mean it while the roots are still
+CLOSING — the crew walks over and waits at the door (1.10, above). What `manHold` adds is the
+**cap**: `Aenc` `Car1` = 5, so a click with eight wisps selected sends five and leaves the other
+three doing what they were doing. Ordered in regardless they would all walk over, wait out the
+whole 60 seconds, and then be turned away by the five who got there first.
+
+None of them is IDLE while any of that is happening, and the badge on the left has to agree.
+A worker walking to a job carries the job as its `order` (`garrison` here) for the whole walk,
+and standing at the door of a mine that has not finished is a wait rather than an idleness — but
+a worker that is INSIDE a hold is parked on `idle`, because in there there is no order to have.
+So `isIdleWorker` tests `isOffField`, not just `inMine`: a wisp mining inside an entangled mine
+and a peon manning a burrow are working, and the badge that offers to fly the camera to them
+would otherwise be offering to select a unit that is not on the map.
+
 The wisp it pushes out is born a couple of cells from the rock, which is close enough to bite on
 two pathing details, and both are fixed where they belong rather than in the rally. `hostApproach`
 now snaps the door onto a block the passenger actually *fits* on (`nearestWalkable` clears one
