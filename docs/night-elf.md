@@ -50,6 +50,23 @@ only by how many wisps are in the forest. This is why `WorkerState.lumberCapacit
 wisp and why `Awha` has no capacity field that means anything: with no trip, there is nothing
 to fill.
 
+**One wisp to a tree.** A chopper works from outside and several Peasants may share a trunk, as
+they do in the original; a wisp is *in* the tree, so an occupied one is not a queue you join but
+a seat that is taken — WC3 sends the second wisp to a neighbouring tree, and five wisps told to
+harvest one trunk end up in five. `SimWorld.treeWorkedBy` answers who has a tree and
+`freeTreeNear` finds the nearest one nobody does; `issueHarvest` redirects at the order and
+`tickHarvest` re-asks at the trunk, because a seat free when a wisp set out can be taken by the
+time it lands (and two wisps sent at one free tree in the same breath both set out for it). The
+order-time check counts a wisp *walking* to a tree as holding it — that is what splits a group
+up on the way rather than at the end of it — while the arrival check yields only to a wisp
+actually **working** it, so the one that got there first keeps its tree.
+
+It is **derived, never stored**. A `takenBy` field on the tree would have to be cleared by every
+path a wisp can leave one by (a new order, a Stop, Detonate, a death, a Moon Well, the tree
+burning down), and the one that got missed would wedge that tree shut for the rest of the match
+— the same shape of bug the gold mine's `busy` latch cost us once (`popFromMine`). Gated on
+`deliversInPlace`, so it is the wisp's rule and nobody else's.
+
 **The pose is `Stand Lumber`, and the two clips are not interchangeable.** `Wisp.mdx` authors
 exactly five: `stand`, `Birth`, `Death`, `Stand Lumber`, `Stand Work`, and no attack of any kind
 (a wisp does not hit the tree). `Stand Lumber` is the harvest; `Stand Work` is the hammering it

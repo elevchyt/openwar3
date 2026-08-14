@@ -135,6 +135,43 @@ console.log("Wisp Harvest (`Awha`) — 5 lumber per 8s, no haul, no felled tree"
   check("…which also ends the harvest pose", u.working === false, `working ${u.working}`);
 }
 
+console.log("…and ONE wisp to a tree — a taken trunk sends the next one to a neighbour");
+{
+  // A wisp is IN the tree, so an occupied trunk is a seat that is taken rather than a queue
+  // you join: WC3 puts the second wisp in a neighbouring tree. (A Peasant chops from outside
+  // and several may share a tree, which is why this is gated on `deliversInPlace`.)
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const trees = [world.addTree(1600, 1600, 50, 64), world.addTree(1728, 1600, 50, 64), world.addTree(1856, 1600, 50, 64), world.addTree(1984, 1600, 50, 64)];
+  for (const t of trees) {
+    const [cx, cy] = world.grid.worldToCell(t.x, t.y);
+    for (let dy = -1; dy <= 0; dy++) for (let dx = -1; dx <= 0; dx++) world.grid.block(cx + dx, cy + dy);
+  }
+  world.add(wisp(1, 1600, 1900));
+  world.add(wisp(2, 1640, 1900));
+  world.add(wisp(3, 1680, 1900));
+  // All three are pointed at the SAME trunk, one after another, as a group right-click does.
+  for (const id of [1, 2, 3]) world.issueHarvest(id, "lumber", trees[0].id);
+  const on = (id) => world.units.get(id).resId;
+  check("the first wisp takes the tree it was sent to", on(1) === trees[0].id);
+  check("…the second is sent to a neighbour", on(2) !== trees[0].id && world.trees.has(on(2)), `tree ${on(2)}`);
+  check("…and the third to a different one again", on(3) !== trees[0].id && on(3) !== on(2), `tree ${on(3)}`);
+  for (let t = 0; t < 20 / 0.05; t++) world.tick(0.05);
+  const seats = [1, 2, 3].map(on);
+  check("nobody ends up sharing a trunk", new Set(seats).size === 3, seats.join(","));
+  check("…and all three are working", [1, 2, 3].every((id) => world.units.get(id).working), seats.join(","));
+  // The claim is made at the trunk too, not only at the order: a wisp sent at a tree whose
+  // seat was free when it set out but taken by the time it lands moves on by itself.
+  world.issueOrder(2, { kind: "move", x: 1640, y: 1900 }); // free its tree…
+  const freed = seats[1];
+  world.add(wisp(4, 2200, 1900));
+  world.issueHarvest(4, "lumber", freed);
+  world.issueHarvest(2, "lumber", freed); // …and race wisp 2 back into it (it is right there)
+  for (let t = 0; t < 20 / 0.05; t++) world.tick(0.05);
+  check("the racing pair do not share the freed tree", on(4) !== on(2), `${on(4)} vs ${on(2)}`);
+  check("…and both are working a tree of their own", world.units.get(4).working && world.units.get(2).working);
+}
+
 console.log("Build style — a Wisp grows a structure from inside it");
 {
   const world = newWorld();

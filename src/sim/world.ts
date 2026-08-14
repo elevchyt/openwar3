@@ -1994,6 +1994,50 @@ export class SimWorld {
     return within.slice(0, Math.max(1, limit)).map((e) => e.t);
   }
 
+  /**
+   * The wisp that has this tree, if any — one wisp to a tree.
+   *
+   * A wisp is not a chopper standing at a trunk, it is INSIDE the tree (`deliversInPlace`,
+   * see tickHarvest), so a second one has nowhere to be: WC3 puts it in a neighbouring tree
+   * instead. Only wisps hold a tree this way — a Peasant and a Peon chop from outside and
+   * several of them may work the same tree, as they do in the original.
+   *
+   * DERIVED, never stored. A `takenBy` field on the tree would have to be cleared by every
+   * path a wisp can leave one by (a new order, a Stop, Detonate, a death, a Moon Well, the
+   * tree itself burning down), and the one that got missed would wedge that tree shut for the
+   * rest of the match — exactly the class of bug the gold mine's `busy` latch already cost us
+   * once (see popFromMine). Walking to a tree counts as holding it, so a pair sent at the same
+   * trunk in one order split up on the way rather than at the end of it.
+   */
+  private treeWorkedBy(treeId: number, exceptId: number, workingOnly = false): SimUnit | null {
+    for (const u of this.units.values()) {
+      if (u.id === exceptId || u.hp <= 0 || !u.worker?.deliversInPlace) continue;
+      if (workingOnly && !u.working) continue; // "in the tree", not merely on its way
+      if (u.order === "harvest" && u.resKind === "lumber" && u.resId === treeId) return u;
+    }
+    return null;
+  }
+
+  /** The nearest tree to (x, y) within `maxDist` that no other wisp has (treeWorkedBy).
+   *  The taken set is collected once and then read — a grove is thousands of trees and
+   *  asking each of them who has it would walk the unit list thousands of times. */
+  private freeTreeNear(u: SimUnit, x: number, y: number, maxDist: number): SimTree | null {
+    const taken = new Set<number>();
+    for (const o of this.units.values()) {
+      if (o.id === u.id || o.hp <= 0 || !o.worker?.deliversInPlace) continue;
+      if (o.order === "harvest" && o.resKind === "lumber") taken.add(o.resId);
+    }
+    let best: SimTree | null = null;
+    let bestD = maxDist;
+    for (const t of this.trees.values()) {
+      const d = Math.hypot(t.x - x, t.y - y);
+      if (d >= bestD || taken.has(t.id)) continue;
+      bestD = d;
+      best = t;
+    }
+    return best;
+  }
+
   /** Standing trees within `radius` of a point — the set an area spell that lists
    *  `tree` in Targets Allowed (Flame Strike) damages, and which the green cast
    *  preview highlights. */
@@ -5477,6 +5521,15 @@ export class SimWorld {
     // …and the mirror: a wisp has no pick. Night elf gold starts with Entangle (`Aent`), so a
     // wisp sent at a bare gold mine is not a miner, it is a wisp standing next to a hole.
     if (kind === "gold" && u.worker.deliversInPlace) return false;
+    // ONE WISP TO A TREE. A wisp does not chop from outside, it goes IN — so an occupied tree
+    // is not a queue you join, it is a seat that is taken, and WC3 sends the second wisp to a
+    // neighbouring tree rather than stacking two inside one trunk. Sent at a taken tree, take
+    // the nearest free one instead; with none free anywhere near, keep the order as given (the
+    // arrival re-asks, and by then a seat may have opened).
+    if (kind === "lumber" && u.worker.deliversInPlace && this.treeWorkedBy(nodeId, id)) {
+      const t = this.trees.get(nodeId)!;
+      nodeId = (this.freeTreeNear(u, t.x, t.y, RETARGET_RANGE) ?? t).id;
+    }
     u.order = "harvest";
     u.targetId = null;
     u.inCombat = false;
@@ -10352,7 +10405,9 @@ export class SimWorld {
     // Lumber.
     let tree = this.trees.get(u.resId) ?? null;
     if (!tree) {
-      tree = this.nearestTree(u.x, u.y, RETARGET_RANGE);
+      // Our tree is gone (chopped out from under us, burned, eaten). Take the next one —
+      // for a wisp, the next FREE one: one wisp to a tree (treeWorkedBy).
+      tree = w.deliversInPlace ? this.freeTreeNear(u, u.x, u.y, RETARGET_RANGE) : this.nearestTree(u.x, u.y, RETARGET_RANGE);
       if (!tree) {
         // No tree left to chop: haul the partial load home (startReturn clears the
         // working flag and paths to the depot), or idle if empty-handed.
@@ -10379,6 +10434,22 @@ export class SimWorld {
       u.working = false;
       return;
     }
+    // Arrived — but is the seat still free? One wisp to a tree (treeWorkedBy): the order-time
+    // check cannot see a wisp that took this trunk while we were flying to it, and two wisps
+    // sent at the same free tree in the same breath both set out for it. So the claim is made
+    // HERE, at the trunk, against whoever is already WORKING it — the wisp in the tree keeps
+    // it and the one arriving moves on to the nearest free one, rather than the two of them
+    // sharing a trunk and paying double. (Ticking is in map order, so the pair that arrive on
+    // the same tick resolve the same way on every machine.)
+    if (w.deliversInPlace && !u.working && this.treeWorkedBy(tree.id, u.id, true)) {
+      const free = this.freeTreeNear(u, u.x, u.y, RETARGET_RANGE);
+      if (free && free.id !== tree.id) {
+        u.resId = free.id;
+        u.atNode = false;
+        this.pathToNode(u);
+        return;
+      }
+    }
     // A Wisp does not stand beside the tree with an axe: it goes INTO it and holds still.
     // Freeing its cell is what lets it — the tree's own cells are blocked, so nothing that
     // reserves ground could be there at all — and it is honest twice over, since a body parked
@@ -10393,7 +10464,10 @@ export class SimWorld {
     // WC3 gathers from the closest ACCESSIBLE tree to the one you clicked. Asked ONCE, on
     // the tick it parks: this is a fix-up for the approach, not a standing re-evaluation.
     if (!u.working && Math.hypot(tree.x - u.x, tree.y - u.y) > reach) {
-      const near = this.nearestTree(u.x, u.y, reach + 48);
+      // …and for a wisp the substitute has to be a FREE tree, or the fix-up for one problem
+      // (the tree it was sent to is walled off) would hand it straight into the other (a
+      // trunk another wisp is already inside).
+      const near = w.deliversInPlace ? this.freeTreeNear(u, u.x, u.y, reach + 48) : this.nearestTree(u.x, u.y, reach + 48);
       if (near && near.id !== tree.id) {
         tree = near;
         u.resId = near.id;
