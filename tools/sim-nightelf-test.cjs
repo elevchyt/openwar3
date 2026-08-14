@@ -713,6 +713,37 @@ console.log("Eat Tree (`Aeat`) — the tree is the cost");
   })() && !!treeless);
 }
 
+// A cast is a QUEUEABLE order, and Eat Tree is the case that shows it: four shift-clicks on
+// four trees are four meals, eaten in the order they were clicked. Without a `cast` member in
+// QueuedOrder each click replaced the last and the Ancient walked past three trees to eat the
+// one clicked most recently. The stand-off a tree's own pathing block forces is part of it —
+// `Rng1` = 32 measured to the middle of a blocked 4x4 is a range nothing can ever make, so the
+// approach has to be allowed the block's half-extent on top (SimWorld.aimedBlockRadius).
+console.log("Eat Tree, queued — three trees in the order they were clicked");
+{
+  const world = newWorld();
+  const trees = [world.addTree(2400, 2000, 50, 64), world.addTree(2800, 2000, 50, 64), world.addTree(3200, 2000, 50, 64)];
+  // UPROOTED: it has to walk from one to the next, which is the whole of what a queue means.
+  world.add(base({ id: 60, typeId: "eaom", x: 2000, y: 2000, hp: 900, maxHp: 900, speed: 190, radius: 72, name: "Ancient of War" }),
+    null, { ancient: true, abilities: [{ id: "Aeat", code: "Aeat", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const a = world.units.get(60);
+  a.uprooted = true;
+  const cast = (t) => ({ kind: "cast", code: "Aeat", targetId: 0, x: t.x, y: t.y });
+  world.issueOrder(60, cast(trees[0]));
+  world.queueOrder(60, cast(trees[1]));
+  world.queueOrder(60, cast(trees[2]));
+  check("the first is under way and the other two are queued", a.order === "cast" && a.orderQueue.length === 2, `${a.order} + ${a.orderQueue.length}`);
+  const eaten = [];
+  for (let t = 0; t < 40 / 0.05; t++) {
+    world.tick(0.05);
+    for (const tr of trees) if (!world.trees.has(tr.id) && !eaten.includes(tr.id)) eaten.push(tr.id);
+    if (eaten.length === 3) break;
+  }
+  check("all three trees are eaten", eaten.length === 3, `${eaten.length}`);
+  check("…in the order they were ordered", JSON.stringify(eaten) === JSON.stringify(trees.map((t) => t.id)), `${eaten}`);
+  check("…and the queue is spent", a.orderQueue.length === 0);
+}
+
 console.log("Renew (`Aren`) — the one repair that may mend an Ancient");
 {
   const world = newWorld();

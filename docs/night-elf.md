@@ -347,12 +347,28 @@ movable-unit branch, and the ability rows that belong to one stance are filtered
   which is also how it is used: an Ancient eats a tree by walking to one.
 
 **And a walking Ancient's right-click on a tree IS Eat Tree**, the same way a walking Tree of
-Life's right-click on a gold mine is Entangle. Aim it at the trunk's EDGE rather than its middle
-(`RtsController.moveAt`): a tree is a blocked 4×4 (or 2×2) square on the pathing grid, so
-nothing can ever stand within `Rng1` = 32 of its centre, and a cast pointed there sends the
-Ancient walking into the trunk to wait at a range it can never make — the order simply never
-fires. Offsetting by the block's own half-extent (capped at the eater's radius, so the point
-stays inside the arm the effect measures) puts the aim point where the Ancient actually stops.
+Life's right-click on a gold mine is Entangle. Shift-queueable like any other order — four
+clicks are four trees, eaten in the order they were clicked — which took a `cast` member in
+`QueuedOrder`: without one, `c: "cast"` went straight to the sim past the queue entirely, so
+each click replaced the last and the Ancient walked past three trees to eat the one clicked
+most recently.
+
+Two things about a tree make the aim harder than it looks, and both are about the same fact —
+**a tree is a BLOCKED 4×4 (or 2×2) square on the pathing grid, and the order names its middle**:
+
+* `Rng1` = 32 is measured to that middle, and nothing can ever stand within 32 of it. So the
+  approach waits at a range it can never make and the cast never fires. `SimWorld.aimedBlockRadius`
+  adds the block's own half-extent to the pending cast's range — a property of the thing aimed
+  at rather than of the ability, which is why it is added at issue rather than in the data.
+* The stuck watchdog asks "is that destination reachable terrain?" of the point the walk was
+  aimed at, and for a trunk the answer is always no — so a walk long enough to trip the
+  watchdog had the order CANCELLED mid-stride (`holdOrGiveUp`), which on a queued line of trees
+  silently skipped one and moved to the next. `checkStuck` now leaves a `cast` order alone for
+  the same reason it leaves an `attack` one alone: tickCast's approach owns it.
+
+(Walking at a computed spot on the range ring instead is the fix that does NOT work: the ring
+around a trunk is where the rest of the grove is, so the goal lands on a blocked cell, the path
+"arrives" a body short, and the Ancient stands there with the spell never cast.)
 
 **A ROOTED Ancient is a TOWER, and the sim has to agree.** It carries a walker's `baseSpeed` in
 both stances — it is one unit, and the walk is what it uproots for — so anything that asks "can

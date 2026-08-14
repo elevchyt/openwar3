@@ -684,6 +684,13 @@ export type QueuedOrder =
   // footprint grid, and the Ancient walks to where you put it and settles. So the order is a
   // move with a promise, the same shape as `drink` — see SimUnit.rootPending.
   | { kind: "rootat"; x: number; y: number }
+  // Cast an ability at a unit, a point, or nothing — the queue entry behind a SHIFT-queued
+  // ability. WC3 chains casts like everything else, and the Ancient told to eat four trees is
+  // the case that proves it: without this each right-click replaced the last and it walked
+  // past three trees to eat the one clicked most recently. `targetId` 0 with x/y for a point
+  // spell, a unit id for a targeted one, both empty for a self cast — the same three shapes
+  // `issueCast` already takes.
+  | { kind: "cast"; code: string; targetId: number; x: number; y: number }
   // Go and take that gold mine — the whole night elf expansion in one right-click. An
   // uprooted Tree of Life walks to a spot beside the mine that its own footprint fits on,
   // PLANTS itself there, and casts Entangle (`Aent`) once its roots are down. Three acts, one
@@ -5664,6 +5671,7 @@ export class SimWorld {
       case "repair": return this.issueRepair(id, o.buildingId, o.hpPerSec, o.goldPerHp, o.lumberPerHp);
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
       case "drink": return this.issueDrink(id, o.wellId);
+      case "cast": return this.issueCast(id, o.code, o.targetId, o.x, o.y);
       case "rootat": return this.issueRootAt(id, o.x, o.y);
       case "entangleat": return this.issueEntangleAt(id, o.mineId);
     }
@@ -7550,7 +7558,7 @@ export class SimWorld {
       targetId: def.target === "unit" ? targetId : 0,
       x: def.target === "point" ? x : (t?.x ?? u.x),
       y: def.target === "point" ? y : (t?.y ?? u.y),
-      range: def.target === "none" ? 0 : lvl.castRange,
+      range: def.target === "none" ? 0 : lvl.castRange + this.aimedBlockRadius(code, u, x, y),
       castLeft: -1,
       started: false,
       committed: false,
@@ -7562,6 +7570,28 @@ export class SimWorld {
       resume,
     };
     return true;
+  }
+
+  /**
+   * How much further than its own `castRange` a cast has to be allowed to stand off, because of
+   * what it is aimed AT. Zero for everything but Eat Tree.
+   *
+   * `Aeat`'s `Rng1` is 32 — "a tree the Ancient is already touching" — and it is measured to the
+   * point the order names, which for a tree is the middle of a BLOCKED 4×4 (or 2×2) square on
+   * the pathing grid. Nothing can ever stand within 32 of that: the approach in tickCast waits
+   * at a range it can never make and the cast simply never fires, which is what a right-click
+   * aimed straight at a trunk did. The block's own half-extent is the whole of the difference
+   * between "touching the tree" and "standing inside it", and it is a property of the thing
+   * aimed at rather than of the ability, which is why it is added here rather than in the data.
+   *
+   * The EFFECT's reach (spells.ts `Aeat`: `Rng1` + the caster's radius, from the aim point for
+   * the search and from the Ancient for the reach) still covers the wider stop, since no
+   * Ancient's block is bigger than its own hull.
+   */
+  private aimedBlockRadius(code: string, u: SimUnit, x: number, y: number): number {
+    if (code !== "Aeat") return 0;
+    const tree = this.nearestTree(x, y, u.radius);
+    return tree ? tree.blockRadius : 0;
   }
 
   /**
@@ -7690,6 +7720,11 @@ export class SimWorld {
             this.stop(u.id);
             return;
           }
+          // Straight at the point it was aimed at, and the range test above is what ends the
+          // walk. Deliberately NOT at a computed spot on the range ring: the ring around a
+          // trunk is where the REST of the grove is, so a goal placed on it lands on a blocked
+          // cell, the path "arrives" a body short, and the Ancient stands there with the spell
+          // never cast. Walking at the thing itself gets a best-effort path that hugs it.
           this.chasePoint(u, tx, ty);
           return;
         }
@@ -9376,6 +9411,16 @@ export class SimWorld {
       // target. Don't also handle it here: the two would fight over the same unit with
       // different timers. (Falling through to the generic handler below would call
       // stop(), which wrongly drops the attack target.)
+      u.stuckRetries = 0;
+      return;
+    }
+    if (u.order === "cast") {
+      // A CAST's approach is owned by tickCast, which re-runs it every tick until the caster
+      // is within range — and the generic handler below cannot judge it, because the point a
+      // cast names is very often ground nobody can stand on. Eat Tree is the case: it names a
+      // TRUNK, whose cell is blocked by the tree itself, so `holdOrGiveUp` read "unreachable
+      // terrain, no amount of waiting will open it" and cancelled the order — which on a
+      // shift-queued line of trees silently skipped one and moved to the next.
       u.stuckRetries = 0;
       return;
     }

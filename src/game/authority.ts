@@ -387,7 +387,22 @@ export class Authority {
       case "order":
         return this.applyOrder(player, cmd.unitId, cmd.order, cmd.queued);
       case "cast":
-        return this.ownedBy(player, cmd.unitId) && this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+        if (!this.ownedBy(player, cmd.unitId)) return false;
+        // SHIFT-queued: through `applyOrder` with the rest of them, so a chained cast gets the
+        // same off-field gate, the same trigger event and the same queue as a chained move.
+        // Unqueued it still goes STRAIGHT to the sim, and deliberately: `issueOrder` clears the
+        // unit's queue, and an immediate ability (Uproot, Avatar, Divine Shield) is not an order
+        // at all — pressing one must not throw away what the unit was told to do next.
+        if (cmd.queued) return this.applyOrder(player, cmd.unitId, { kind: "cast", code: cmd.code, targetId: cmd.targetId, x: cmd.x, y: cmd.y }, true);
+        else {
+          const ok = this.sim.issueCast(cmd.unitId, cmd.code, cmd.targetId, cmd.x, cmd.y);
+          // An unqueued cast REPLACES what the unit was told to do next, exactly as an unqueued
+          // move does — but only when it actually became the unit's order. That test is what
+          // keeps an immediate ability out of it: Avatar and Uproot never touch `order`, and a
+          // hero who buffs himself mid-route must not lose the rest of his route for it.
+          if (ok && this.sim.units.get(cmd.unitId)?.order === "cast") this.sim.clearQueue(cmd.unitId);
+          return ok;
+        }
       case "garrison":
         // The one other right-click that re-tasks a worker, and it has no queued form — there
         // is no "board" among the `QueuedOrder` kinds for `applyOrder` to defer. So a peon

@@ -28,8 +28,10 @@ export type Command =
   /** Any queueable unit order — move, attack, harvest, build, hold, stop… */
   | { c: "order"; unitId: number; order: QueuedOrder; queued: boolean }
   /** Cast an ability. `targetId` 0 and x/y 0 for a self/instant cast; one or the other is
-   *  set for unit- and point-target spells respectively (the ability's own data says which). */
-  | { c: "cast"; unitId: number; code: string; targetId: number; x: number; y: number }
+   *  set for unit- and point-target spells respectively (the ability's own data says which).
+   *  `queued` (Shift) appends it to the unit's order queue instead of casting now — WC3 chains
+   *  casts like any other order, and an Ancient told to eat four trees eats four trees. */
+  | { c: "cast"; unitId: number; code: string; targetId: number; x: number; y: number; queued: boolean }
   /** Load a worker into a burrow / transport. */
   | { c: "garrison"; unitId: number; buildingId: number }
   /** Walk over and pick up a ground item. */

@@ -3668,7 +3668,7 @@ export class RtsController {
         if (err !== null) return this.refuseOrder(err);
         this.orderMode = null;
         this.armedCast = null;
-        this.castFromSelection(cast.code, picked!, 0, 0);
+        this.castFromSelection(cast.code, picked!, 0, 0, queued);
         return true;
       }
       const hit = this.groundHitAt(cssX, cssY); // point-target spell
@@ -3677,7 +3677,7 @@ export class RtsController {
       if (err !== null) return this.refuseOrder(err);
       this.orderMode = null;
       this.armedCast = null;
-      this.castFromSelection(cast.code, 0, hit[0], hit[1]);
+      this.castFromSelection(cast.code, 0, hit[0], hit[1], queued);
       return true;
     }
     // An aimed ITEM refuses like a cast: a staff pointed at the wrong thing leaves the order
@@ -3907,11 +3907,12 @@ export class RtsController {
   }
 
   /** Cast an ability from every selected own unit that knows it (WC3 casts from
-   *  the whole selection — e.g. two priests both Dispel). */
-  private castFromSelection(code: string, targetId: number, x: number, y: number): void {
+   *  the whole selection — e.g. two priests both Dispel). `queued` (Shift held) appends the
+   *  cast to each unit's order queue instead of interrupting what it is doing. */
+  private castFromSelection(code: string, targetId: number, x: number, y: number, queued = false): void {
     let any = false;
     for (const id of this.selected) {
-      if (this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId, x, y })) any = true;
+      if (this.execute(this.localPlayer, { c: "cast", unitId: id, code, targetId, x, y, queued })) any = true;
     }
     if (any) this.ack(false);
   }
@@ -4678,6 +4679,14 @@ export class RtsController {
       case "drink": {
         const w = this.sim.units.get(o.wellId);
         return w ? { x: w.x, y: w.y, z: this.heightAt(w.x, w.y) } : null;
+      }
+      case "cast": {
+        // Where the spell is aimed: the target's own position for a unit-target one, the point
+        // for the rest. A self cast (no target, no point) marks nothing — there is nowhere to
+        // put a flag for "and then Avatar".
+        const t = o.targetId ? this.sim.units.get(o.targetId) : undefined;
+        if (t) return { x: t.x, y: t.y, z: this.heightAt(t.x, t.y) };
+        return o.x || o.y ? { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) } : null;
       }
       case "rootat":
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
@@ -5588,24 +5597,12 @@ export class RtsController {
         return !!a?.uprooted && a.abilities.some((ab) => ab.code === "Aeat" && ab.level >= 1);
       });
       if (eaters.length) {
+        // Aimed at the TRUNK, and shift-queueable like any other order — four shift-clicks are
+        // four trees, eaten in the order they were clicked. (The standing-off distance a tree's
+        // own pathing block forces is the sim's business: SimWorld.aimedBlockRadius.)
         let any = false;
         for (const id of eaters) {
-          // Aim at the trunk's EDGE, on the side the Ancient is standing — not at the middle of
-          // it. A tree is a blocked 4×4 (or 2×2) square on the pathing grid, so nothing can ever
-          // stand within `Rng1` = 32 of its centre: aimed there, the cast's approach walks the
-          // Ancient into the trunk and waits at a range it can never make, and the order simply
-          // never fires. Offset by the block's own half-extent and the walk ends where the
-          // Ancient actually stops. Capped at the eater's radius so the point stays inside the
-          // arm the effect itself measures (spells.ts `Aeat`: `Rng1` + the caster's radius,
-          // from the aim point for the search and from the Ancient for the reach).
-          const a = this.sim.units.get(id)!;
-          const dx = a.x - tree.x;
-          const dy = a.y - tree.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const off = Math.min(tree.blockRadius, a.radius);
-          const ax = tree.x + (dx / len) * off;
-          const ay = tree.y + (dy / len) * off;
-          if (this.execute(this.localPlayer, { c: "cast", unitId: id, code: "Aeat", targetId: 0, x: ax, y: ay })) any = true;
+          if (this.execute(this.localPlayer, { c: "cast", unitId: id, code: "Aeat", targetId: 0, x: tree.x, y: tree.y, queued })) any = true;
         }
         if (any) {
           this.flashTarget(tree.x, tree.y, 76); // the same ring a harvest click on a trunk flashes
