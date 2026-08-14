@@ -37,6 +37,14 @@ stash where the wisp is standing, which lands within a rounding error of a Peasa
 10-per-trip round trip. The wisp buys that parity by being *stuck in the tree*: it is not
 walking anywhere, so it is not defending anything either.
 
+**And the wage is paid for the interval WORKED.** `Dur1` is eight seconds of work, so the tick
+a wisp slips into the trunk pays nothing and the first 5 land eight seconds later — `workT` is
+started at `chopPeriod` when it latches on (`tickHarvest`), not left at zero. Left at zero it
+paid on arrival, which is not a rounding detail: it made *landing* the paid event, so a wisp
+bounced from tree to tree earned 5 a hop and every fresh wisp's first tree paid instantly. A
+chopper is the other way round and is left alone — its timer is the swing cycle and the wood
+arrives WITH the blow (`chopSeq` plays the axe on that same tick), which is what WC3 shows.
+
 **And none of those numbers is written in our code.** Units\UnitAbilities.slk names the harvest
 ability each worker carries — Peasant and Peon `Ahar`, Ghoul `Ahrl`, Wisp `Awha`, Acolyte
 `Aaha` — so `WorkerProfile.harvestAbility` carries the NAME and `SimWorld.applyHarvestData`

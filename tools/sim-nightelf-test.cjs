@@ -111,11 +111,25 @@ console.log("Wisp Harvest (`Awha`) — 5 lumber per 8s, no haul, no felled tree"
   for (let dy = -1; dy <= 0; dy++) for (let dx = -1; dx <= 0; dx++) world.grid.block(trunkX + dx, trunkY + dy);
   world.add(wisp(1, 1600, 1900));
   world.issueHarvest(1, "lumber", tree.id);
-  for (let t = 0; t < 25 / 0.05; t++) world.tick(0.05);
   const u = world.units.get(1);
   const stash = world.stashOf(0);
-  // 25 seconds is three payouts once it has walked over (the first lands on arrival).
-  check("lumber is credited without a trip home", stash.lumber >= 15 && stash.lumber <= 20, `${stash.lumber}`);
+  // The wage is paid for the interval WORKED: arriving is not work, so the tick it slips into
+  // the trunk pays nothing and the first 5 land `Dur1` = 8 seconds later. (Paid on arrival, a
+  // wisp hopping from tree to tree would have earned 5 lumber per landing.)
+  let landed = 0;
+  for (let t = 0; t < 20 / 0.05; t++) {
+    world.tick(0.05);
+    if (u.working && !landed) landed = (t + 1) * 0.05;
+    if (landed && Math.abs((t + 1) * 0.05 - landed) < 1e-9) check("nothing is paid for arriving", stash.lumber === 0, `${stash.lumber}`);
+    if (landed && (t + 1) * 0.05 - landed > 7.5 && (t + 1) * 0.05 - landed < 7.95) {
+      check("…and nothing through the first interval either", stash.lumber === 0, `${stash.lumber}`);
+      break;
+    }
+  }
+  for (let t = 0; t < 1 / 0.05; t++) world.tick(0.05); // …and over the 8-second mark
+  check("the first 5 arrive one whole interval in", stash.lumber === 5, `${stash.lumber}`);
+  for (let t = 0; t < 16 / 0.05; t++) world.tick(0.05);
+  check("lumber is credited without a trip home, 5 every 8s", stash.lumber === 15, `${stash.lumber}`);
   check("…and nothing is ever carried", u.worker.carryLumber === 0, `${u.worker.carryLumber}`);
   check("…and the tree still stands", world.trees.has(tree.id) && world.trees.get(tree.id).lumber === 50);
   // It works from INSIDE the tree — the trunk's own position, not a spot in front of it.

@@ -10473,6 +10473,17 @@ export class SimWorld {
         u.resId = near.id;
       }
     }
+    // A wisp is paid for the interval it WORKS, not for arriving. `Awha`'s `Dur1` = 8s is a
+    // wage for eight seconds of work, and a clock left at zero handed it out the instant the
+    // wisp slipped into the trunk — so a wisp flitting from tree to tree earned 5 lumber per
+    // LANDING, and the first tree of the game paid before the harvest loop had even started.
+    // Started here, on the tick it latches on, so the first 5 land 8 seconds later. (`atNode`
+    // is latched by then, so the clock is not restarted by a wisp merely sitting there.)
+    //
+    // A chopper is left alone: its timer is the swing cycle, and `chopSeq` plays the axe on
+    // the same tick the wood is credited — the wood arrives WITH the blow, which is exactly
+    // what the original shows.
+    if (w.deliversInPlace && !u.working) u.workT = w.chopPeriod;
     u.working = true;
     // …and a Wisp works from INSIDE the tree, not from a spot in front of it: it takes the
     // trunk's own position and hangs there. Everything that would ordinarily forbid standing
