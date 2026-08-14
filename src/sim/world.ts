@@ -7475,6 +7475,23 @@ export class SimWorld {
     // the castLocked gate nor interrupt a swing, a walk, or another spell's wind-up.
     if (IMMEDIATE.has(code)) return this.castImmediate(u, ab, def, lvl);
     if (this.castLocked(u)) return false; // already committed to a spell — see castLocked
+    // Root / Unroot (`Aroo`) is immediate too, and for the same two reasons the three above
+    // are: AbilityData `Cast1` = 0, and `[Aroo]` in NightElfAbilityFunc carries no `Animnames`
+    // at all — an order pair (`Order=root` / `Unorder=unroot`) and nothing else. There is
+    // no gesture to wind up, because pressing the button IS the transition.
+    //
+    // Through the generic pipeline it was charged the CASTER's own cast point instead, and
+    // that number belongs to a different ability: the Tree of Life's `castpt` of 0.5s is
+    // Entangle's wind-up. So an Uproot stood there for half a second doing nothing visible
+    // and then took `Dur1` = 2.5s, for 3.0s against the game's 2.5 — and the command card,
+    // which empties on the transition, stayed up for the whole of that half second. Root
+    // never had the problem: it arrives through `rootat`, which calls toggleRoot outright.
+    //
+    // Below `castLocked` rather than above it (where the other three sit, deliberately
+    // free to fire mid-wind-up): an Ancient already hauling itself up must not be told to
+    // do it again, and `toggleRoot`'s own rootRefusal is not the only thing that should
+    // say so.
+    if (code === "Aroo") return this.castImmediate(u, ab, def, lvl);
     const t = def.target === "unit" ? this.units.get(targetId) : undefined;
     if (def.target === "unit" && (!t || !this.castableTarget(u, t, def.targetFlags, code))) return false;
     // An attack modifier aimed by hand: not a cast at all, but an ATTACK carrying one
