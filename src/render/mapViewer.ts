@@ -6802,6 +6802,17 @@ export class MapViewerScene {
       out.push(this.cmd({ id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", desc: "Cancel construction.", col: 3, row: 2 }));
       return out;
     }
+    // …and for the 2.5 seconds of `Aroo`'s own transition (`Dur1`), an Ancient is NEITHER
+    // thing: it is hauling its roots up or settling them back down, and the card is EMPTY.
+    // Not greyed — gone. The stance flips on the tick the button is pressed (see
+    // SimUnit.morphT) so that everything derived from `uprooted` stays consistent, which
+    // would otherwise hand a tree that is still visibly a building the walking card, and a
+    // tree still visibly walking the structure card, for the whole length of the animation.
+    // The sim is already of the same mind — `castLocked` refuses every order while `morphT`
+    // runs — so an empty card is simply the honest picture of a unit that can be told
+    // nothing. (`morphT` is only ever set by toggleRoot, so this is the root transition and
+    // nothing else.)
+    if ((world.units.get(sel.id)?.morphT ?? 0) > 0) return [];
     // An UPROOTED Ancient is a building that is currently a unit, and its card says so: WC3
     // gives it the mobile order set and takes the whole structure card away. That is not a
     // cosmetic swap — everything the building card offers is something a walking Ancient
