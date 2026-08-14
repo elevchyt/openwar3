@@ -284,20 +284,12 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
 };
 
 /**
- * Abilities an Ancient may only use with its roots in the ground.
+ * Abilities an Ancient may only use once it has pulled itself up.
  *
  * The rest of the root/unroot split is structural — an uprooted Ancient is handed the mobile
  * order card instead of the building one, which takes its training, research, rally point and
  * cargo buttons away in one move — so this is only for rows that sit in a unit's ABILITY list
  * and would otherwise show in both stances.
- *
- * `Aent` is the whole list, and the game says why in its own error line: commandstrings.txt
- * [Errors] `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."
- */
-const ROOTED_ONLY = new Set(["Aent"]);
-
-/**
- * …and the mirror: abilities an Ancient may only use once it has pulled itself up.
  *
  * **Eat Tree** (`Aeat`) is the one, and the DATA settles it rather than intuition. `[Aeat]
  * Buttonpos=0,2` — and the Ancient of War's own research row wants that exact cell:
@@ -306,9 +298,22 @@ const ROOTED_ONLY = new Set(["Aent"]);
  * bottom row of the PLANTED card belongs to the upgrades and Eat Tree cannot be on it. That
  * also matches how it is used: an Ancient eats a tree by walking to one.
  *
- * `Aroo` is in NEITHER list, and must not be: it is the one button that has to show in both
- * stances or a state becomes unreachable. It shows opposite FACES instead — `Art`/"Root" while
+ * `Aroo` is not on it, and must not be: it is the one button that has to show in both stances
+ * or a state becomes unreachable. It shows opposite FACES instead — `Art`/"Root" while
  * walking, `Unart`/"Uproot" while planted (see `reversed` in pushAbilityButtons).
+ *
+ * There is NO list going the other way, and **Entangle Gold Mine** (`Aent`) is why there must
+ * not be. It reads like a rooted-only ability — the game even has a refusal line for it,
+ * commandstrings.txt [Errors] `Mustroottoentangle` = "Must root adjacent to a gold mine to
+ * entangle it." — but that error is the proof it shows on the WALKING card: an ability the
+ * uprooted card never offered could never raise it. And that is the card you actually take an
+ * expansion from, since a Tree of Life is uprooted for precisely as long as it takes to reach
+ * one. Pressing it there is an ERRAND rather than a cast (SimWorld.issueEntangleAt): the tree
+ * plants itself beside the mine and casts once its roots are down. It stays on the planted
+ * card too, where it is the plain 3-second cast — a Tree of Life a Wisp built at the
+ * expansion has never been uprooted in its life and must still be able to wrap the mine it
+ * was planted beside. `[Aent] Buttonpos=1,2` collides with nothing in either stance, which is
+ * the data agreeing.
  */
 const UPROOTED_ONLY = new Set(["Aeat"]);
 
@@ -3096,7 +3101,12 @@ export class MapViewerScene {
       if (!d || !mine) continue;
       const widget = map ? this.nearestDoodadWidget(e.x, e.y, map.units as unknown as HideableWidget[]) : null;
       const mineId = e.mineId;
-      void this.spawnUnit(d, e.x, e.y, e.owner, e.team).then((simId) => {
+      // The roots do not snap shut. An Entangled Gold Mine is CONSTRUCTED — `egol` carries a
+      // UnitBalance `bldtm` of 60, and it serves it the way every other structure does, from a
+      // tenth of its hit points to all of them, paying nothing until it is finished. It just
+      // has nobody hammering it (SimWorld.attachEntangled marks it `selfBuilds`). The melee
+      // opening's `entangleinstant` is the one that skips both clocks (EntangleRequest.instant).
+      void this.spawnUnit(d, e.x, e.y, e.owner, e.team, e.instant ? 0 : d.buildTime).then((simId) => {
         if (simId === null) {
           mine.entangledBy = 0; // the model never arrived — leave the mine as it was
           return;
@@ -7064,12 +7074,11 @@ export class MapViewerScene {
       // reveals it, which is the whole job of the six Human upgrades that grant no stat at all.
       // Abilities with no requirement (every hero spell) pass this untouched.
       if (!this.rts.simView.techMeets(su.owner, ab.id)) continue;
-      // …and an Ancient's card depends on which way up it is. Two short lists: what the roots
-      // pay for, and what only a walker can reach. The rest of the split is structural (the
-      // building card itself is withheld while it walks, see buildCommandCard). Asked only of
-      // a unit that can actually root, so a creep that happens to carry one of these rows is
-      // not quietly stripped of it.
-      if (rootable && (su.uprooted ? ROOTED_ONLY.has(ab.code) : UPROOTED_ONLY.has(ab.code))) continue;
+      // …and an Ancient's card depends on which way up it is: one short list of what only a
+      // walker can reach (Eat Tree). The rest of the split is structural — the building card
+      // itself is withheld while it walks, see buildCommandCard. Asked only of a unit that can
+      // actually root, so a creep that happens to carry that row is not quietly stripped of it.
+      if (rootable && !su.uprooted && UPROOTED_ONLY.has(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
       const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];

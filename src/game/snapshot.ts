@@ -205,6 +205,10 @@ export interface BuildingSnapshot {
   buildTimeTotal: number;
   queue: BuildJob[];
   producesUnits: boolean;
+  /** Raises itself, with no builder (the Entangled Gold Mine). It crosses because the CLIENT
+   *  decides what a right-click on it means: sending wisps into one that is still closing its
+   *  roots is the crew boarding, not workers assisting a build that nobody can help with. */
+  selfBuilds: boolean;
   rallyX: number;
   rallyY: number;
   rallyKind: string;
@@ -586,7 +590,7 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     bonusInt: 0,
 
     worker: null,
-    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null },
+    building: { constructionLeft: 0, buildTimeTotal: 0, queue: [], producesUnits: false, selfBuilds: false, rallyX: 0, rallyY: 0, rallyKind: "point", rallyTargetId: 0, stock: null },
     abilities: [],
     buffs: [],
     inventory: [],
@@ -727,6 +731,7 @@ export function snapshotFor(
             buildTimeTotal: u.building.buildTimeTotal,
             queue: u.building.queue,
             producesUnits: u.building.producesUnits,
+            selfBuilds: !!u.building.selfBuilds,
             rallyX: u.building.rallyX,
             rallyY: u.building.rallyY,
             rallyKind: u.building.rallyKind,

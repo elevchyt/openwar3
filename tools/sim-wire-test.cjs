@@ -134,7 +134,7 @@ const shop = () => ({
       { kind: "research", unitId: "Rome", level: 2, timeLeft: 13.7, buildTime: 60 },
       { kind: "upgrade", unitId: "ostr", timeLeft: 100, buildTime: 140 },
     ],
-    producesUnits: true, rallyX: -512.25, rallyY: 300.5, rallyKind: "unit", rallyTargetId: 1042,
+    producesUnits: true, selfBuilds: false, rallyX: -512.25, rallyY: 300.5, rallyKind: "unit", rallyTargetId: 1042,
     stock: [
       { id: "pinv", count: 2, max: 3, timer: 30.5, period: 120, kind: "item" },
       { id: "nkod", count: 1, max: 1, timer: -1, period: -1, kind: "unit" },
@@ -193,6 +193,10 @@ console.log("decode(encode(snap)) is the same payload, field for field");
   check("the inventory keeps its hole where it was", back.units[0].inventory.map((i) => i && i.itemId), ["pinv", null, "stwp"]);
   check("meld is a latch, not a default — absent stays absent", ["meld" in back.units[0].buffs[0], back.units[0].buffs[1].meld], [false, true]);
   check("the remembered stub is still a building-shaped memory", [back.units[3].remembered, back.units[3].hp, back.units[3].building.queue], [true, 0, []]);
+  // …and the flag that says a structure raises ITSELF (the Entangled Gold Mine, which has no
+  // builder and cannot be given one) rides the same byte as producesUnits/stock.
+  const selfBuilt = { ...richSnapshot(), units: [{ ...shop(), building: { ...shop().building, selfBuilds: true } }] };
+  check("a self-raising structure's flag crosses", decodeSnapshot(encodeSnapshot(selfBuilt)).units[0].building.selfBuilds, true);
   check("encoding did not mutate the source payload", firstDiff(snap, richSnapshot()), null);
 }
 

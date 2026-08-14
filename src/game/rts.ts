@@ -4654,6 +4654,10 @@ export class RtsController {
       }
       case "rootat":
         return { x: o.x, y: o.y, z: this.heightAt(o.x, o.y) };
+      case "entangleat": {
+        const m = this.sim.mines.get(o.mineId);
+        return m ? { x: m.x, y: m.y, z: this.heightAt(m.x, m.y) } : null;
+      }
       case "harvest": {
         if (o.res === "lumber") {
           const t = this.sim.trees.get(o.nodeId);
@@ -5472,6 +5476,21 @@ export class RtsController {
     // lands the ground ray well behind the trunk.
     const mine = this.mineAt(hit[0], hit[1], 320); // …and you cannot mine what you cannot see
     if (mine) {
+      // A Tree of Life right-clicked onto a free mine goes and TAKES it — the night elf
+      // expansion in one click. It is not a harvest and no wisp is involved: the tree walks
+      // to a spot beside the mine its own footprint fits on, plants itself, and casts
+      // Entangle when its roots are down (SimWorld.issueEntangleAt). Asked first, because a
+      // Tree of Life is not a worker and would otherwise fall straight through to a plain
+      // move and stand there beside the rock.
+      const trees = [...this.selected].filter((id) => this.sim.units.get(id)?.abilities.some((a) => a.code === "Aent" && a.level >= 1));
+      if (trees.length) {
+        let any = false;
+        for (const id of trees) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "entangleat", mineId: mine.id }, queued })) any = true;
+        if (any) {
+          this.flashTarget(mine.x, mine.y, mine.radius * MINE_RING_SCALE);
+          return;
+        }
+      }
       // Fan the group around the mine's rim (distinct approach points) so they
       // don't all path to the one entry point and pile up while they wait their
       // turn — a mine takes one worker at a time. Nearest-slot keeps each worker
@@ -5605,7 +5624,15 @@ export class RtsController {
     }
     // Own Orc Burrow (built, with room): peons in the selection climb inside to man it.
     // Only send as many as can fit; the rest keep their orders.
-    if (own && target.garrisonCap > 0 && (!target.building || target.building.constructionLeft <= 0)) {
+    //
+    // An Entangled Gold Mine still closing its roots counts as open for this: nobody can
+    // BUILD it (it raises itself, see BuildingState.selfBuilds), so a right-click on it with
+    // wisps can only mean the crew. They walk over and stand at the door — patch 1.10,
+    // "Wisps rallied to an incomplete Entangled Gold Mine will automatically begin to mine
+    // once the structure is completed" (tickGarrison). Every other half-built structure falls
+    // through to the resume/assist branch below, which is what a right-click on one means.
+    const entangling = !!target.building?.selfBuilds;
+    if (own && target.garrisonCap > 0 && (!target.building || target.building.constructionLeft <= 0 || entangling)) {
       const room = target.garrisonCap - target.garrison.length;
       const workers = room > 0 ? [...this.selected].filter((id) => !!this.sim.units.get(id)?.worker).slice(0, room) : [];
       let any = false;

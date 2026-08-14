@@ -1,4 +1,4 @@
-import { PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
+import { BUILD_CELL, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
@@ -585,6 +585,11 @@ export type BuildJob =
 export interface BuildingState {
   constructionLeft: number; // seconds until built (0 = complete)
   buildTimeTotal: number; // full construction time (for the progress fraction)
+  /** This structure raises ITSELF — no worker is assigned, none can be, and construction
+   *  advances on its own clock. The Entangled Gold Mine is the case: `Aent` creates it, the
+   *  Tree's roots hold it up, and there is no Build order anywhere that would put a Wisp on
+   *  it (see attachEntangled). Everything else halts the moment its builder walks off. */
+  selfBuilds?: boolean;
   builderIds: number[]; // workers constructing (empty → progress halts). Extra
   // builders past the first "speed build" it (human peasants): faster, but they
   // burn extra resources — see SPEED_BUILD_* constants + tickBuildings.
@@ -678,7 +683,13 @@ export type QueuedOrder =
   // in WC3, not a toggle: the button hands you the building silhouette and its green/red
   // footprint grid, and the Ancient walks to where you put it and settles. So the order is a
   // move with a promise, the same shape as `drink` — see SimUnit.rootPending.
-  | { kind: "rootat"; x: number; y: number };
+  | { kind: "rootat"; x: number; y: number }
+  // Go and take that gold mine — the whole night elf expansion in one right-click. An
+  // uprooted Tree of Life walks to a spot beside the mine that its own footprint fits on,
+  // PLANTS itself there, and casts Entangle (`Aent`) once its roots are down. Three acts, one
+  // order, because that is what "work that mine" means for the one race whose town hall has
+  // to be standing next to it. See SimUnit.entanglePending.
+  | { kind: "entangleat"; mineId: number };
 
 /** Fallback length of a root/unroot transition, seconds — `Aroo`'s own `Dur1` when the data is
  *  there (2.5), which is also what Liquipedia lists as Root/Uproot's "Animation Duration". */
@@ -712,6 +723,21 @@ export interface SimMine {
    *  mine keeps being the gold. So the two stay separate here as well — the building is the
    *  thing wisps climb into and enemies knock down, and this is the seam between them. */
   entangledBy: number;
+}
+
+/** An Entangled Gold Mine the sim has asked the renderer to raise (`Aent` UnitID1 = `egol`).
+ *  The building needs a model, so it is born on the render side and handed back through
+ *  `attachEntangled` — the same asynchrony a summon has. `instant` is the melee opening's
+ *  `entangleinstant`: no cast, and no 60-second build either. */
+export interface EntangleRequest {
+  mineId: number;
+  unitId: string;
+  x: number;
+  y: number;
+  owner: number;
+  team: number;
+  casterId: number;
+  instant: boolean;
 }
 
 export interface SimTree {
@@ -1206,6 +1232,12 @@ export interface SimUnit {
    *  and this is what it does when it arrives (tickRootAt). Cleared by planting, by failing to
    *  get there, and by any other order (`dispatch`). */
   rootPending: { x: number; y: number } | null;
+  /** The gold mine an uprooted Tree of Life is on its way to wrap (`{kind:"entangleat"}`), or
+   *  0. Taking an expansion is one order and three acts — walk to a spot beside the mine,
+   *  PLANT, and only then cast Entangle — so this outlives `rootPending` (which is spent the
+   *  moment the tree settles) and is what makes the cast happen on the far side of the root
+   *  transition. See issueEntangleAt / tickEntangleAt. */
+  entanglePending: number;
   /** The settling GESTURE of an Ancient that is planting itself, or null.
    *
    *  Planting is never a jump. The Ancient walks to the site under an ordinary move, which
@@ -1896,7 +1928,7 @@ export class SimWorld {
   // (same deferral as trainCompletions — the sim owns no model instances).
   private summonRequests: SummonRequest[] = [];
   /** Entangled Gold Mines waiting for the renderer to raise them (see entangleMine). */
-  private entangleRequests: Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number; casterId: number }> = [];
+  private entangleRequests: EntangleRequest[] = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -2985,7 +3017,18 @@ export class SimWorld {
     p.stuckT = 0;
     p.stuckRetries = 0;
     if (this.inHostReach(p, b)) {
-      this.enterHost(p, b); // already at the door — hop in now
+      // Already at the door — hop in now, but only if the hold is actually OPEN. `enterHost`
+      // asks nothing; the walk-up path gates on `hostHasRoom` and this shortcut did not, so a
+      // Wisp standing beside a mine that was still closing its roots climbed into an
+      // unfinished building (and a peon beside a full burrow made itself a fifth passenger).
+      // A shut hold is not a refusal of the ORDER: it keeps it and waits where it stands,
+      // exactly as one that walked up does — tickGarrison boards it when the roots close, or
+      // stands it down if the hold was merely full.
+      if (this.hostHasRoom(b)) {
+        this.enterHost(p, b);
+        return true;
+      }
+      p.moving = false;
       return true;
     }
     const [ax, ay] = this.hostApproach(p, b);
@@ -3064,6 +3107,12 @@ export class SimWorld {
     if (u.moving) return; // still walking up
     if (this.inHostReach(u, b)) {
       if (this.hostHasRoom(b)) this.enterHost(u, b);
+      // A hold that is still going UP is not a refusal — it is not open yet. Patch 1.10:
+      // "Wisps rallied to an incomplete Entangled Gold Mine will automatically begin to mine
+      // once the structure is completed." Which is the ordinary case now that entangling a
+      // mine takes `egol`'s 60 seconds: the crew walks over while the roots are closing and
+      // stands at the door. Only a hold that is genuinely FULL sends anybody home.
+      else if (b.building && b.building.constructionLeft > 0 && b.garrison.length < b.garrisonCap) return;
       else this.stop(u.id); // full while we walked — give up
       u.nodeRetries = 0;
     } else {
@@ -3240,6 +3289,17 @@ export class SimWorld {
   //                                 cargo-hold machinery the Orc Burrow uses.
   //   `Aegm`  "Entangled Gold Mine"     on egol. DataA1 = 10 gold, DataB1 = 1 second.
   //
+  // A fourth row is on the BUILDING rather than on any ability, and it is the one that makes
+  // taking an expansion cost something: `egol` UnitBalance `bldtm` = **60**. The roots do not
+  // snap shut — the Entangled Gold Mine goes up the way every other structure does, from a
+  // tenth of its 800 hit points to all of them over a full minute, and it pays nothing until
+  // it is finished. Nobody builds it (there is no Wisp in it and none can be sent), so it is
+  // the one structure that raises itself: `BuildingState.selfBuilds`.
+  //
+  // The one exception is the melee opening, and it is the ORDER that says so rather than a
+  // special case: `entangleinstant` is instant in both senses — no 3s cast and no 60s build —
+  // so a night elf game starts with a finished mine its five Wisps can walk straight into.
+  //
   // 10 gold a second is the FULL mine's rate, not one wisp's: five wisps in an entangled mine
   // must earn what five peasants earn out of a classic one, and a peasant's cycle is
   // `Agld`'s 1s inside plus the walk — about 2 gold/sec each, 10 for the line. So the payout
@@ -3260,11 +3320,16 @@ export class SimWorld {
    *
    *  The building itself is spawned by the renderer (it needs a model — same asynchrony as a
    *  summon), which calls back through attachEntangled. False if there is no mine in reach,
-   *  which is the whole of the ability's failure case. */
-  entangleMine(caster: SimUnit, def: AbilityDef, mine?: SimMine): boolean {
-    // Roots in the air hold nothing. The card already hides the button while an Ancient
-    // walks (ROOTED_ONLY), and the game has a line for the refusal: [Errors]
-    // `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."
+   *  which is the whole of the ability's failure case.
+   *
+   *  `instant` skips the 60-second build (`egol` bldtm) as well as the cast — the melee
+   *  opening's `entangleinstant`, and nothing else. */
+  entangleMine(caster: SimUnit, def: AbilityDef, mine?: SimMine, instant = false): boolean {
+    // Roots in the air hold nothing, and the game has a line for it: [Errors]
+    // `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it." A press on
+    // the uprooted card never reaches here — `issueCast` turns it into the errand that plants
+    // the tree first (issueEntangleAt) — so this is the backstop for a trigger or an order
+    // that aims the raw cast at a walking Ancient.
     if (caster.uprooted) return false;
     const range = def.levelData[0]?.castRange || 500;
     let best: SimMine | null = null;
@@ -3286,7 +3351,7 @@ export class SimWorld {
     // Claimed the moment it is asked for, not when the model lands: the request is in flight
     // for a frame or two and a second Tree of Life must not entangle the same mine again.
     best.entangledBy = -1;
-    this.entangleRequests.push({ mineId: best.id, unitId, x: best.x, y: best.y, owner: caster.owner, team: caster.team, casterId: caster.id });
+    this.entangleRequests.push({ mineId: best.id, unitId, x: best.x, y: best.y, owner: caster.owner, team: caster.team, casterId: caster.id, instant });
     return true;
   }
 
@@ -3304,6 +3369,10 @@ export class SimWorld {
    * `mineId` 0 means "the one you are standing next to" — the ability's own no-target rule,
    * which is what the second order string (`autoentangleinstant`) asks for.
    *
+   * "Instant" is both clocks, not just the cast: the mine it leaves behind is a FINISHED
+   * building rather than a foundation with 60 seconds of `bldtm` to serve. A start that had
+   * to wait a minute for its own gold would not be the start the melee script is writing.
+   *
    * Returns false if the unit has no Entangle, or the mine is gone/already wrapped.
    */
   issueEntangleInstant(casterId: number, mineId: number): boolean {
@@ -3314,7 +3383,141 @@ export class SimWorld {
     const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
     const def = ab && this.abilities.get(ab.id);
     if (!def) return false;
-    return this.entangleMine(u, def, mine);
+    return this.entangleMine(u, def, mine, true);
+  }
+
+  /**
+   * "Go and take that mine" — the whole night elf expansion as one order (`{kind:"entangleat"}`).
+   *
+   * This is what a right-click on a free gold mine means to an uprooted Tree of Life, and it
+   * is three acts rather than one, because Entangle itself can do none of them: the ability
+   * takes no target, has a 500 range, and the game's own refusal line spells out the rest —
+   * `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it." So the tree
+   * walks to a spot beside the mine that its own 12×12 footprint actually fits on, plants
+   * there, and casts once its roots are down (tickEntangleAt).
+   *
+   * A tree that is ALREADY rooted skips straight to the cast — that is the Tree of Life a
+   * Wisp built at the expansion, which has never been uprooted in its life and must still be
+   * able to wrap the mine it was planted beside.
+   *
+   * `mineId` 0 = the nearest free mine inside Entangle's own range, which is what pressing the
+   * button with no target means.
+   */
+  issueEntangleAt(id: number, mineId: number): boolean {
+    const u = this.units.get(id);
+    if (!u || u.hp <= 0 || !this.abilities) return false;
+    const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
+    const def = ab && this.abilities.get(ab.id);
+    if (!def) return false;
+    const range = def.levelData[0]?.castRange || 500;
+    let mine = mineId ? this.mines.get(mineId) : undefined;
+    if (mineId && !mine) return false;
+    if (!mine) {
+      // No mine named: the ability's own rule — whatever free one is standing inside `Rng1`.
+      let bestD = Infinity;
+      for (const m of this.mines.values()) {
+        const d = Math.hypot(m.x - u.x, m.y - u.y);
+        if (d > range + m.radius || d >= bestD || !this.mineClaimable(m, u)) continue;
+        bestD = d;
+        mine = m;
+      }
+    }
+    if (!mine || !this.mineClaimable(mine, u)) return false;
+    // Already planted: it either reaches the mine from where it stands or it does not, and
+    // walking is not on offer to a building. `issueCast` runs the 3s `Cast1` before the roots
+    // go out, exactly as pressing the button does.
+    if (!u.uprooted) {
+      return Math.hypot(mine.x - u.x, mine.y - u.y) - mine.radius <= range && this.issueCast(id, "Aent");
+    }
+    const site = this.entangleSite(u, mine, range);
+    if (!site) return false;
+    if (!this.issueRootAt(id, site[0], site[1])) return false;
+    u.entanglePending = mine.id; // …and cast once the roots are down (tickEntangleAt)
+    return true;
+  }
+
+  /**
+   * Is this mine one a tree may go and take? "Free" is three things, and only the first is
+   * ours to read off the mine: it is not already wrapped (or claimed by a request still in
+   * flight — `entangledBy` = -1), it is not haunted (we do not model a Haunted Gold Mine at
+   * all yet, so there is nothing to ask), and nobody ELSE is working it.
+   *
+   * That last one is not a rule of the ABILITY — Entangle itself is happy to wrap a mine an
+   * enemy peasant is walking out of, and knocking that peasant's economy over is a legitimate
+   * thing to do. It is a rule of the RIGHT-CLICK: an order that silently sends your town hall
+   * across the map into somebody's base is not what the click meant. So it is asked here, on
+   * the smart order, and not in `entangleMine`, which the button still goes through.
+   */
+  private mineClaimable(mine: SimMine, forUnit: SimUnit): boolean {
+    if (mine.entangledBy !== 0) return false;
+    for (const o of this.units.values()) {
+      if (o.hp <= 0 || !o.worker || o.owner === forUnit.owner || this.allied(o, forUnit)) continue;
+      if ((o.inMine && o.inMineId === mine.id) || (o.resKind === "gold" && o.resId === mine.id)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Where to plant a tree that has been sent to entangle `mine`: the nearest spot to the tree
+   * on which its rooted footprint fits and from which Entangle can still reach.
+   *
+   * Searched as rings outward from the mine rather than as a walk toward it, because what is
+   * being placed is a BUILDING — the answer has to be a whole free 12×12 on the build grid,
+   * and there are usually only a handful of those around a mine (the rock itself blocks the
+   * middle). Candidates are sorted by how far the tree would have to walk, so it takes the
+   * side it approached from; `Rng1` (+ the mine's own radius, as `entangleMine` measures it)
+   * is the outer bound, and anything further out could not cast when it got there.
+   */
+  private entangleSite(u: SimUnit, mine: SimMine, range: number): [number, number] | null {
+    const fp = u.rootedStamp;
+    if (!this.grid || !fp) return null;
+    const half = (Math.max(fp.w, fp.h) * PATHING_CELL) / 2;
+    const reach = range + mine.radius;
+    let best: [number, number] | null = null;
+    let bestD = Infinity;
+    const seen = new Set<string>();
+    // Rings from "as close as the footprint can physically sit" outward, one build cell at a
+    // time, with enough samples per ring that a 12×12 candidate cannot slip between spokes.
+    for (let r = mine.radius + half; r <= reach; r += BUILD_CELL) {
+      const steps = Math.max(8, Math.round((2 * Math.PI * r) / BUILD_CELL));
+      for (let i = 0; i < steps; i++) {
+        const a = (i / steps) * Math.PI * 2;
+        const [sx, sy] = this.grid.snapForBuildingRect(mine.x + Math.cos(a) * r, mine.y + Math.sin(a) * r, fp.w, fp.h);
+        const key = `${sx},${sy}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (Math.hypot(sx - mine.x, sy - mine.y) - mine.radius > range) continue;
+        const d = Math.hypot(sx - u.x, sy - u.y);
+        if (d >= bestD || !footprintBuildable(this.grid, fp, sx, sy)) continue;
+        bestD = d;
+        best = [sx, sy];
+      }
+      // A ring that produced a candidate is as close as this mine is going to get: the next
+      // one out is further from the mine AND (a tree walks in from outside) further to walk.
+      if (best) break;
+    }
+    return best;
+  }
+
+  /** An uprooted Tree of Life sent to take a mine has planted itself: cast Entangle.
+   *
+   *  Held until the root transition is over (`morphT`) — the tree is neither thing for those
+   *  2.5 seconds and `castLocked` says so — and dropped if the plant never happened (the way
+   *  was blocked, or the ground was taken while it walked) or somebody else got the mine
+   *  first, which is the whole race for an expansion in one line. */
+  private tickEntangleAt(u: SimUnit): void {
+    const mine = this.mines.get(u.entanglePending);
+    if (!mine || mine.entangledBy !== 0) {
+      u.entanglePending = 0;
+      return;
+    }
+    if (u.uprooted) {
+      if (!u.rootPending && !u.moving) u.entanglePending = 0; // the plant fell through
+      return;
+    }
+    if (u.morphT > 0 || this.castLocked(u)) return; // still lowering itself onto the site
+    u.entanglePending = 0;
+    this.issueCast(u.id, "Aent");
   }
 
   /** The renderer has raised the Entangled Gold Mine and hands the sim its unit id. Links the
@@ -3327,6 +3530,10 @@ export class SimWorld {
     u.mineId = mineId;
     u.entangler = casterId;
     mine.entangledBy = unitId;
+    // Nothing builds this one. `egol` costs no gold, no lumber and no Wisp — the Tree's roots
+    // are what raises it — so its 60 seconds of `bldtm` run on their own, with no worker to
+    // stand next to it and none that could be sent (there is no Build order that makes one).
+    if (u.building) u.building.selfBuilds = true;
   }
 
   /**
@@ -3355,7 +3562,7 @@ export class SimWorld {
     });
   }
 
-  drainEntangleRequests(): Array<{ mineId: number; unitId: string; x: number; y: number; owner: number; team: number; casterId: number }> {
+  drainEntangleRequests(): EntangleRequest[] {
     if (!this.entangleRequests.length) return this.entangleRequests;
     const out = this.entangleRequests;
     this.entangleRequests = [];
@@ -3482,6 +3689,14 @@ export class SimWorld {
         // Debug cheat: finish in ~1s no matter what (no builder required).
         if (this.fastBuild) {
           b.constructionLeft = Math.max(0, b.constructionLeft - Math.max(dt, b.buildTimeTotal * dt));
+          u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
+          if (b.constructionLeft === 0) this.finishConstruction(u, b);
+          continue;
+        }
+        // An Entangled Gold Mine has nobody hammering it and never will (selfBuilds): the
+        // roots are what raises it, so its 60 seconds run whether anyone is watching or not.
+        if (b.selfBuilds) {
+          b.constructionLeft = Math.max(0, b.constructionLeft - dt);
           u.hp = u.maxHp * (0.1 + 0.9 * (1 - b.constructionLeft / b.buildTimeTotal));
           if (b.constructionLeft === 0) this.finishConstruction(u, b);
           continue;
@@ -3987,6 +4202,7 @@ export class SimWorld {
       | "morphT"
       | "builtFacing"
       | "rootPending"
+      | "entanglePending"
       | "rootSettle"
       | "garrisonJob"
       | "drinkWellId"
@@ -4193,6 +4409,7 @@ export class SimWorld {
       morphT: 0,
       builtFacing: unit.facing,
       rootPending: null,
+      entanglePending: 0,
       rootSettle: null,
       garrisonJob: null,
       drinkWellId: 0,
@@ -5395,6 +5612,7 @@ export class SimWorld {
     if (u0) {
       u0.drinkWellId = 0;
       u0.rootPending = null;
+      u0.entanglePending = 0;
     }
     switch (o.kind) {
       case "move": return this.issueMove(id, o.x, o.y, o.targetId);
@@ -5410,6 +5628,7 @@ export class SimWorld {
       case "buildnew": this.issueBuildNew(id, o.defId, o.x, o.y, o.gold, o.lumber, o.paid); return true;
       case "drink": return this.issueDrink(id, o.wellId);
       case "rootat": return this.issueRootAt(id, o.x, o.y);
+      case "entangleat": return this.issueEntangleAt(id, o.mineId);
     }
   }
 
@@ -7227,6 +7446,14 @@ export class SimWorld {
     if (!ab) return false;
     const def = this.abilities.get(ab.id);
     if (!def || def.target === "passive") return false;
+    // Entangle pressed by a tree that is still WALKING. The button is on the uprooted card
+    // too, and it has to be — a Tree of Life is uprooted for exactly as long as it takes to
+    // reach an expansion, which is the whole time you want to press this. Roots in the air
+    // hold nothing, though, so the press is not the cast: it is the errand (`entangleat`),
+    // and the tree plants itself beside the mine first. `Mustroottoentangle` — "Must root
+    // adjacent to a gold mine to entangle it" — is the refusal when there is no free mine
+    // inside `Rng1` to plant next to, which is the only case left over.
+    if (code === "Aent" && u.uprooted) return this.issueEntangleAt(unitId, 0);
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     // Immediate abilities (see IMMEDIATE) fire here and now: pay, run the effect, done.
     // They take no order and touch none of the unit's state below, so they neither need
@@ -8929,6 +9156,7 @@ export class SimWorld {
       if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
       if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site
       if (u.rootPending) this.tickRootAt(u); // an Ancient that walked to the spot it was told to plant on
+      if (u.entanglePending) this.tickEntangleAt(u); // …and a Tree of Life that planted there to take a mine
       this.tickRenew(u); // an idle Wisp with Renew on, looking for something to mend
       if (u.cooldownLeft > 0) u.cooldownLeft -= dt;
       if (u.linkT > 0 && (u.linkT -= dt) <= 0) u.linkGroup = []; // Spirit Link expired

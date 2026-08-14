@@ -310,6 +310,95 @@ console.log("`entangleinstant` — the melee opening's own order");
   check("…raising the unit `UnitID1` names", reqs.length === 1 && reqs[0].unitId === "egol" && reqs[0].mineId === near.id, JSON.stringify(reqs[0] || null));
   check("…and remembering whose roots they are", reqs[0]?.casterId === 40);
   check("a second order on the same mine is refused", world.issueEntangleInstant(40, near.id) === false);
+  check("…and it skips BOTH clocks — no cast, no 60s build", reqs[0]?.instant === true);
+}
+
+console.log("`entangleat` — the expansion in one right-click: walk, PLANT, then cast");
+{
+  // What a right-click on a free mine means to an uprooted Tree of Life, and what the button
+  // on the walking card means too. Entangle itself can do none of it: `Rng1` is 500 and roots
+  // in the air hold nothing ([Errors] `Mustroottoentangle`). So the order is three acts.
+  const world = newWorld(200, 200);
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  world.add(base({ id: 40, typeId: "etol", x: 3000, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(3000, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const u = world.units.get(40);
+  u.baseSpeed = 100; // the walk is not what is under test here
+  // A real 12x12 stamp, as `12x12TreeOfLife.tga` gives it: `entangleSite` needs a footprint to
+  // fit, and a tree that never had one has nothing to place.
+  const fp = { w: 12, h: 12, blocked: new Array(144).fill(true), buildBlocked: new Array(144).fill(true) };
+  world.setPathStamp(40, fp, 3000, 2000);
+  world.recomputeStats(u);
+  // Planted, there is nothing to walk: it either reaches the mine from where it stands or it
+  // does not, and from 872 away (1000 less the mine's own radius, as `entangleMine` measures)
+  // it does not.
+  check("planted and out of range, the order is refused", world.issueEntangleAt(40, mine.id) === false);
+  world.toggleRoot(u);
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05); // the 2.5s uproot transition
+  check("uprooted, the order takes", world.issueEntangleAt(40, mine.id) === true);
+  check("…as a WALK to a site beside the mine", u.uprooted === true && !!u.rootPending, JSON.stringify(u.rootPending));
+  check("…on a spot Entangle can reach from", Math.hypot(u.rootPending.x - mine.x, u.rootPending.y - mine.y) - mine.radius <= 500);
+  check("…with the mine remembered for the far side of the plant", u.entanglePending === mine.id);
+  for (let t = 0; t < 60 / 0.05 && !mine.entangledBy; t++) world.tick(0.05);
+  check("it plants itself", u.uprooted === false);
+  check("…and then casts, which claims the mine", mine.entangledBy !== 0);
+  const req = world.drainEntangleRequests();
+  check("…raising an `egol` that still has to be BUILT", req.length === 1 && req[0].instant === false, JSON.stringify(req[0] || null));
+  check("…and the errand is spent", u.entanglePending === 0);
+}
+
+console.log("…and it will not send the tree at a mine that is not free");
+{
+  const world = newWorld(200, 200);
+  world.initStash(0, 0, 0);
+  world.initStash(1, 0, 0);
+  const taken = world.addMine(2000, 2000, 12500, 128);
+  const wrapped = world.addMine(2400, 2400, 12500, 128);
+  wrapped.entangledBy = 99;
+  // Planted and inside `Rng1`, so what is left to refuse it is the mine itself.
+  world.add(base({ id: 40, typeId: "etol", x: 2500, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(2500, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  check("a mine already wrapped is refused", world.issueEntangleAt(40, wrapped.id) === false);
+  // An ENEMY worker on it. Not a rule of the ability — `Aent` is happy to wrap a mine a
+  // peasant is walking out of — but a right-click must not march your town hall into
+  // somebody's base because they happened to be standing where you clicked.
+  const p = wisp(80, 2200, 2200);
+  p.owner = 1;
+  p.team = 1;
+  world.add(p);
+  world.units.get(80).resKind = "gold";
+  world.units.get(80).resId = taken.id;
+  check("…and so is one another player is working", world.issueEntangleAt(40, taken.id) === false);
+  world.units.get(80).owner = 0;
+  world.units.get(80).team = 0;
+  check("…while your OWN worker on it is no obstacle", world.issueEntangleAt(40, taken.id) === true);
+}
+
+console.log("The roots take a minute to close (`egol` bldtm = 60)");
+{
+  // The cost of an expansion is time, not resources: `egol` is free and nobody builds it, but
+  // it goes up like any other structure — a tenth of its 800 hit points to all of them over
+  // 60 seconds, paying nothing until the bar fills.
+  const world = newWorld();
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  world.add(base({ id: 50, typeId: "egol", x: 2000, y: 2000, hp: 80, maxHp: 800, speed: 0, radius: 128, isBuilding: true, name: "Entangled Gold Mine" }),
+    { ...BUILT(2000, 2000), constructionLeft: 60, buildTimeTotal: 60 });
+  world.attachEntangled(50, mine.id);
+  const egol = world.units.get(50);
+  check("nobody is building it, and nobody can be", egol.building.selfBuilds === true && egol.building.builderIds.length === 0);
+  world.add(wisp(60, 2000, 2100));
+  world.issueGarrison(60, 50);
+  for (let t = 0; t < 30 / 0.05; t++) world.tick(0.05);
+  check("it raises itself anyway", Math.round(egol.building.constructionLeft) === 30, `${egol.building.constructionLeft}`);
+  check("…lifting its hit points as it goes", Math.abs(egol.hp - 440) < 5, `${Math.round(egol.hp)}`);
+  check("…while the crew waits at the door rather than giving up", world.units.get(60).order === "garrison", world.units.get(60).order);
+  check("…and an unfinished mine pays nothing", world.stashOf(0).gold === 0);
+  for (let t = 0; t < 31 / 0.05; t++) world.tick(0.05);
+  check("at 60 seconds the roots are closed", egol.building.constructionLeft === 0 && Math.round(egol.hp) === 800);
+  check("…the crew climbs in on its own (1.10)", egol.garrison.length === 1);
+  check("…and only then does the gold start", world.stashOf(0).gold > 0, `${world.stashOf(0).gold}`);
 }
 
 console.log("…and a Tree of Life that uproots lets the mine go");

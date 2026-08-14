@@ -10,11 +10,11 @@ This is that list, so the next person does not have to rediscover which column s
 
 Implementation: `tickHarvest` / `applyHarvestData` / `popFromCanopy` / `finishConstruction` /
 `tickEntangledMines` / `tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` /
-`tickRootSettle` / `issueEntangleInstant` / `issueDrink` in
+`tickRootSettle` / `issueEntangleInstant` / `issueEntangleAt` / `entangleSite` / `issueDrink` in
 [`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
 [`src/sim/spells.ts`](../src/sim/spells.ts), the Wisp's profile in
 [`src/data/races.ts`](../src/data/races.ts), `raiseEntangledMines` / `collectMoonWellWater` and
-the command card's `ROOTED_ONLY` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts), and the two-form clip
+the command card's `UPROOTED_ONLY` in [`src/render/mapViewer.ts`](../src/render/mapViewer.ts), and the two-form clip
 picking in [`src/render/unitAnims.ts`](../src/render/unitAnims.ts) /
 `RtsController.applyFormAnims`. Checked by `tools/sim-nightelf-test.cjs`,
 `tools/sim-root-test.cjs` and `tools/sim-ancient-anim-test.cjs` (`pnpm sim:test`).
@@ -175,19 +175,37 @@ Three moments, three answers:
 
 ## 3. Gold is a crew, not a queue
 
-Three rows, none of them on the wisp:
+Three rows, none of them on the wisp — and a fourth on the building it makes:
 
 | ability | on | says |
 | --- | --- | --- |
 | `Aent` "Entangle" | Tree of Life | `Rng1` 500, `Cast1` 3s, `targs1` = `_`, **`UnitID1` = `egol`** |
 | `Aenc` "Cargo Hold (Gold Mine)" | `egol` | `Car1` = 5 — the crew |
 | `Aegm` "Entangled Gold Mine" | `egol` | `DataA1` 10 gold per `DataB1` 1 second |
+| UnitBalance | `egol` | **`bldtm` = 60** — and `goldcost`/`lumbercost` 0 |
 
 `targs1` being `_` is not an omission: Entangle takes **no target**. You press the button and it
 wraps whatever un-entangled mine is inside 500 units, which is why a night elf expansion is a
 Tree of Life planted at the mine. And it does not convert the mine — `UnitID1` says it *creates
 a unit*, so the `SimMine` goes on being the gold and a building with 800 HP is raised over it.
 `SimMine.entangledBy` is the seam. Knock the building down and the mine is a mine again.
+
+**Taking a mine costs a minute, and the last row is where that lives.** Because `Aent` creates
+a *unit*, the mine it makes is CONSTRUCTED like any other structure: `egol` carries a `bldtm`
+of **60**, and it serves it the way a Moon Well serves its 50 — up from a tenth of its 800 hit
+points to all of them, paying nothing until the bar fills. `Cast1` = 3s is only the gesture in
+front of it. So the true cost of an expansion is 3 + 60 seconds and no resources at all, which
+is the trade the race is built on: gold that arrives with no round trip, bought with a town
+hall standing exposed at the mine for a minute while it closes.
+
+Nothing builds it. `egol` costs nothing, there is no Build order that makes one, and no Wisp is
+consumed — the *Tree's* roots are what raise it. It is therefore the one structure in the game
+that advances its own construction with nobody hammering it: `BuildingState.selfBuilds`, which
+`attachEntangled` sets and `tickBuildings` reads before it goes looking for a builder.
+
+The exception is the melee opening, and again it is the ORDER that says so rather than a
+special case: `entangleinstant` is instant in both senses — no 3s cast, and no 60s build — so
+a night elf game opens with a finished mine its five Wisps walk straight into.
 
 **The mine is already wrapped when the match starts**, and that is not a special case in the
 melee opening — it is an ORDER the opening gives. `Blizzard.j`'s `MeleeStartingUnitsNightElf`
@@ -298,18 +316,44 @@ it, so it resumes where it stopped when the Ancient plants.
 
 **Its CARD says which way up it is**, and that is not decoration. WC3 hands a walking Ancient
 the ordinary mobile order set — Move, Stop, Hold, Attack, Patrol — and takes the whole building
-card away, because every button on it wants roots: the queue is halted, there is no rally point
-to place, and Entangle Gold Mine has nothing to hold with. So `buildCommandCard` simply lets an
-uprooted Ancient fall through to the movable-unit branch, and the two ability rows that would
-otherwise show in both stances are filtered by name:
+card away, because most of what is on it wants roots: the queue is halted and there is no rally
+point to place. So `buildCommandCard` simply lets an uprooted Ancient fall through to the
+movable-unit branch, and exactly one ability row is filtered by name:
 
-* `ROOTED_ONLY` — **Entangle Gold Mine** (`Aent`), and the game's own error line says why:
-  `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it."
 * `UPROOTED_ONLY` — **Eat Tree** (`Aeat`), and the DATA says why rather than intuition:
   `[Aeat] Buttonpos=0,2` collides head-on with `[Reib] Buttonpos=0,2` (Improved Bows), with
   Sentinel at 1,2 and Vorpal Blades at 2,2 filling out that line. Two buttons cannot share a
   cell, so the planted card's bottom row belongs to the upgrades and Eat Tree is not on it —
   which is also how it is used: an Ancient eats a tree by walking to one.
+
+**Entangle Gold Mine is on the WALKING card**, and there is no list going the other way. It
+reads like a rooted-only ability and it is not: a Tree of Life is uprooted for precisely as
+long as it takes to reach an expansion, which is the entire time you want to press this. The
+game's own refusal line is the proof rather than the counter-argument —
+`Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it." is an error the
+*walking* card has to be able to raise, because a button the walking card never showed could
+never produce it. `[Aent] Buttonpos=1,2` collides with nothing in either stance (the planted
+Tree of Life's own row is Train Wisp 0,0 / Nature's Blessing 2,0 / Backpack 3,0 / Tree of Ages
+0,2 / Uproot 3,2), which is the data agreeing. It stays on the planted card too: a Tree of Life
+a Wisp built at the expansion has never been uprooted in its life and must still be able to
+wrap the mine it was planted beside.
+
+Pressed on a walking tree it is not a cast at all but an ERRAND, and so is the right-click:
+
+* **Right-click a free gold mine** with an uprooted Tree of Life → `{kind:"entangleat"}`, and
+  it is three acts. `SimWorld.issueEntangleAt` picks a spot beside the mine that the tree's own
+  12×12 rooted footprint fits on (`entangleSite` walks rings out from the mine and takes the
+  candidate nearest the tree, so it plants on the side it approached from), sends it there with
+  `issueRootAt`, and `tickEntangleAt` casts Entangle once the 2.5s root transition is over.
+* **Pressing the button** while uprooted is the same errand with no mine named: `issueCast`
+  hands `Aent` straight to `issueEntangleAt`, which applies the ability's own no-target rule
+  and takes the nearest free mine inside `Rng1` = 500. Nothing in reach is the refusal the
+  error line describes.
+* **"Free"** is checked on the smart order, not on the ability: un-entangled (and un-haunted,
+  which is free for now — we do not model a Haunted Gold Mine) *and* not being worked by
+  another player. That last one is not a rule of `Aent` — Entangle is perfectly happy to wrap a
+  mine an enemy peasant is walking out of, and the button still can — it is a rule of the
+  CLICK, which must not silently march your town hall into somebody's base.
 
 "No rally point" then has to be enforced past the card as well, and `SimWorld.acceptsRally` is
 where: the rally flag, the rally button, the hero-portrait rally **and the plain right-click**
@@ -569,8 +613,5 @@ defeat the thing it is an upgrade to.
 * Wisp Healing (`Awhe`) and Ultravision (`Ault`) — both upgrade-gated, and Wisp Healing is a
   campaign ability (`Requires=Rewh`).
 * The Tree of Life's own `Atol` / `Arlm`.
-* `Aenc`'s Load button exists on the mine's card now, and so does Unload All; what is missing is
-  the RALLY case — 1.10's "Wisps rallied to an incomplete Entangled Gold Mine will automatically
-  begin to mine once the structure is completed".
 * The four races' repair rates are still written out at the call site (`0.35` / `1.5` in the
   authority) rather than read from Rep1/Rep2. The numbers are right; the source is not.
