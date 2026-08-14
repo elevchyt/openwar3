@@ -10,7 +10,8 @@ This is that list, so the next person does not have to rediscover which column s
 
 Implementation: `tickHarvest` / `applyHarvestData` / `popFromCanopy` / `finishConstruction` /
 `tickEntangledMines` / `tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` /
-`tickRootSettle` / `issueEntangleInstant` / `issueEntangleAt` / `entangleSite` / `issueDrink` in
+`tickRootSettle` / `issueEntangleInstant` / `issueEntangleAt` / `entangleSite` / `tickEntangleAt` /
+`issueDrink` in
 [`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
 [`src/sim/spells.ts`](../src/sim/spells.ts), the Wisp's profile in
 [`src/data/races.ts`](../src/data/races.ts), `raiseEntangledMines` / `collectMoonWellWater` and
@@ -193,10 +194,11 @@ a unit*, so the `SimMine` goes on being the gold and a building with 800 HP is r
 **Taking a mine costs a minute, and the last row is where that lives.** Because `Aent` creates
 a *unit*, the mine it makes is CONSTRUCTED like any other structure: `egol` carries a `bldtm`
 of **60**, and it serves it the way a Moon Well serves its 50 — up from a tenth of its 800 hit
-points to all of them, paying nothing until the bar fills. `Cast1` = 3s is only the gesture in
-front of it. So the true cost of an expansion is 3 + 60 seconds and no resources at all, which
-is the trade the race is built on: gold that arrives with no round trip, bought with a town
-hall standing exposed at the mine for a minute while it closes.
+points to all of them, paying nothing until the bar fills. So the true cost of an expansion is
+that minute and no resources at all, which is the trade the race is built on: gold that arrives
+with no round trip, bought with a town hall standing exposed at the mine while the roots close.
+(`Cast1` = 3s never runs in normal play — Entangle is the walking card's button and the errand
+it starts throws the roots as the tree plants, with no cast in front of it. See §4.)
 
 Nothing builds it. `egol` costs nothing, there is no Build order that makes one, and no Wisp is
 consumed — the *Tree's* roots are what raise it. It is therefore the one structure in the game
@@ -318,42 +320,51 @@ it, so it resumes where it stopped when the Ancient plants.
 the ordinary mobile order set — Move, Stop, Hold, Attack, Patrol — and takes the whole building
 card away, because most of what is on it wants roots: the queue is halted and there is no rally
 point to place. So `buildCommandCard` simply lets an uprooted Ancient fall through to the
-movable-unit branch, and exactly one ability row is filtered by name:
+movable-unit branch, and the ability rows that belong to one stance are filtered by name:
 
-* `UPROOTED_ONLY` — **Eat Tree** (`Aeat`), and the DATA says why rather than intuition:
+* `UPROOTED_ONLY` — **Eat Tree** (`Aeat`) and **Entangle Gold Mine** (`Aent`, see below).
+  For Eat Tree the DATA says why rather than intuition:
   `[Aeat] Buttonpos=0,2` collides head-on with `[Reib] Buttonpos=0,2` (Improved Bows), with
   Sentinel at 1,2 and Vorpal Blades at 2,2 filling out that line. Two buttons cannot share a
   cell, so the planted card's bottom row belongs to the upgrades and Eat Tree is not on it —
   which is also how it is used: an Ancient eats a tree by walking to one.
 
-**Entangle Gold Mine is on the WALKING card**, and there is no list going the other way. It
-reads like a rooted-only ability and it is not: a Tree of Life is uprooted for precisely as
-long as it takes to reach an expansion, which is the entire time you want to press this. The
-game's own refusal line is the proof rather than the counter-argument —
-`Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it." is an error the
-*walking* card has to be able to raise, because a button the walking card never showed could
-never produce it. `[Aent] Buttonpos=1,2` collides with nothing in either stance (the planted
-Tree of Life's own row is Train Wisp 0,0 / Nature's Blessing 2,0 / Backpack 3,0 / Tree of Ages
-0,2 / Uproot 3,2), which is the data agreeing. It stays on the planted card too: a Tree of Life
-a Wisp built at the expansion has never been uprooted in its life and must still be able to
-wrap the mine it was planted beside.
+**Entangle Gold Mine is on the WALKING card, and only there.** It reads like a rooted ability
+and it is not: a Tree of Life is uprooted for precisely as long as it takes to reach an
+expansion, which is the entire time you want to press this. The game's own refusal line is the
+proof rather than the counter-argument — `Mustroottoentangle` = "Must root adjacent to a gold
+mine to entangle it." is an error the *walking* card has to be able to raise, because a button
+the walking card never showed could never produce it. So `Aent` joins `Aeat` in `UPROOTED_ONLY`
+and a planted Tree of Life's card is Train Wisp / Nature's Blessing / Backpack / Well Spring /
+Tree of Ages / Uproot, with nothing at 1,2.
 
 Pressed on a walking tree it is not a cast at all but an ERRAND, and so is the right-click:
 
-* **Right-click a free gold mine** with an uprooted Tree of Life → `{kind:"entangleat"}`, and
-  it is three acts. `SimWorld.issueEntangleAt` picks a spot beside the mine that the tree's own
-  12×12 rooted footprint fits on (`entangleSite` walks rings out from the mine and takes the
-  candidate nearest the tree, so it plants on the side it approached from), sends it there with
-  `issueRootAt`, and `tickEntangleAt` casts Entangle once the 2.5s root transition is over.
-* **Pressing the button** while uprooted is the same errand with no mine named: `issueCast`
-  hands `Aent` straight to `issueEntangleAt`, which applies the ability's own no-target rule
-  and takes the nearest free mine inside `Rng1` = 500. Nothing in reach is the refusal the
-  error line describes.
+* **Right-click a free gold mine** with an uprooted Tree of Life → `{kind:"entangleat"}`.
+  `SimWorld.issueEntangleAt` picks the site, `issueRootAt` walks it there, and `tickEntangleAt`
+  throws the roots the moment it plants. A planted tree is not asked at all (its right-click
+  never gets past `acceptsRally` anyway).
+* **Pressing the button** is the same errand with no mine named: `issueCast` hands `Aent`
+  straight to `issueEntangleAt`, which applies the ability's own no-target rule and takes the
+  nearest free mine inside `Rng1` = 500. Nothing in reach is the refusal the error line
+  describes.
+* **The site's only requirement is that the ability can be cast from it.** `entangleSite`
+  sweeps rings around the MINE — the answer has to be a whole free 12×12 on the build grid, and
+  around a rock there are only a handful — but it scores them by distance to the TREE and takes
+  the nearest, out to `Rng1` + the mine's radius (exactly how `entangleMine` measures). A tree
+  already standing inside that range therefore has nowhere to go and roots where it is: walking
+  one that could already reach the rock would be the order overriding the ability's own range.
+* **There is no cast in front of it.** The mine starts closing on the same tick the tree starts
+  lowering itself onto the site — not after the 2.5s root transition, and not after `Cast1`.
+  `tickEntangleAt` calls `entangleMine` directly rather than going through `issueCast`, which
+  is also what lets it name the mine the player clicked instead of re-deriving "the nearest
+  one". (`Cast1` = 3s survives on the raw cast, which is what a JASS `entangle` order aimed at
+  a planted tree still gets.)
 * **"Free"** is checked on the smart order, not on the ability: un-entangled (and un-haunted,
   which is free for now — we do not model a Haunted Gold Mine) *and* not being worked by
   another player. That last one is not a rule of `Aent` — Entangle is perfectly happy to wrap a
-  mine an enemy peasant is walking out of, and the button still can — it is a rule of the
-  CLICK, which must not silently march your town hall into somebody's base.
+  mine an enemy peasant is walking out of — it is a rule of the CLICK, which must not silently
+  march your town hall into somebody's base.
 
 "No rally point" then has to be enforced past the card as well, and `SimWorld.acceptsRally` is
 where: the rally flag, the rally button, the hero-portrait rally **and the plain right-click**

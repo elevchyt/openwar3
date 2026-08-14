@@ -313,11 +313,12 @@ console.log("`entangleinstant` — the melee opening's own order");
   check("…and it skips BOTH clocks — no cast, no 60s build", reqs[0]?.instant === true);
 }
 
-console.log("`entangleat` — the expansion in one right-click: walk, PLANT, then cast");
+console.log("`entangleat` — the expansion in one right-click: walk, and root ON the roots");
 {
   // What a right-click on a free mine means to an uprooted Tree of Life, and what the button
   // on the walking card means too. Entangle itself can do none of it: `Rng1` is 500 and roots
-  // in the air hold nothing ([Errors] `Mustroottoentangle`). So the order is three acts.
+  // in the air hold nothing ([Errors] `Mustroottoentangle`). So the order is a walk with the
+  // ability on the end of it — and the roots go out as the tree plants, not a cast later.
   const world = newWorld(200, 200);
   world.initStash(0, 0, 0);
   const mine = world.addMine(2000, 2000, 12500, 128);
@@ -330,35 +331,75 @@ console.log("`entangleat` — the expansion in one right-click: walk, PLANT, the
   const fp = { w: 12, h: 12, blocked: new Array(144).fill(true), buildBlocked: new Array(144).fill(true) };
   world.setPathStamp(40, fp, 3000, 2000);
   world.recomputeStats(u);
-  // Planted, there is nothing to walk: it either reaches the mine from where it stands or it
-  // does not, and from 872 away (1000 less the mine's own radius, as `entangleMine` measures)
-  // it does not.
-  check("planted and out of range, the order is refused", world.issueEntangleAt(40, mine.id) === false);
+  // Planted, it is not asked at all: Entangle is the UPROOTED card's button, and a building
+  // has no errand to run.
+  check("planted, the order is not for it", world.issueEntangleAt(40, mine.id) === false);
   world.toggleRoot(u);
   for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05); // the 2.5s uproot transition
   check("uprooted, the order takes", world.issueEntangleAt(40, mine.id) === true);
-  check("…as a WALK to a site beside the mine", u.uprooted === true && !!u.rootPending, JSON.stringify(u.rootPending));
-  check("…on a spot Entangle can reach from", Math.hypot(u.rootPending.x - mine.x, u.rootPending.y - mine.y) - mine.radius <= 500);
-  check("…with the mine remembered for the far side of the plant", u.entanglePending === mine.id);
-  for (let t = 0; t < 60 / 0.05 && !mine.entangledBy; t++) world.tick(0.05);
-  check("it plants itself", u.uprooted === false);
-  check("…and then casts, which claims the mine", mine.entangledBy !== 0);
+  check("…as a WALK to a site the mine can be reached from", u.uprooted === true && !!u.rootPending, JSON.stringify(u.rootPending));
+  check("…which is all the site has to be — `Rng1` = 500, the ability's own",
+    Math.hypot(u.rootPending.x - mine.x, u.rootPending.y - mine.y) - mine.radius <= 500);
+  check("…with the mine remembered for the far side of the walk", u.entanglePending === mine.id);
+  let plantedAt = -1;
+  for (let t = 0; t < 60 / 0.05 && plantedAt < 0; t++) {
+    world.tick(0.05);
+    if (!u.uprooted) plantedAt = t;
+  }
+  check("it plants itself", plantedAt >= 0);
+  // The same tick. There is no cast on the end of the errand and the 2.5s root transition is
+  // not waited on either — the mine starts closing as the tree starts lowering itself.
+  check("…and the mine is claimed on the very tick it starts rooting down", mine.entangledBy !== 0);
+  check("…without a cast in front of it", u.order !== "cast" && u.pendingCast === null, u.order);
   const req = world.drainEntangleRequests();
   check("…raising an `egol` that still has to be BUILT", req.length === 1 && req[0].instant === false, JSON.stringify(req[0] || null));
   check("…and the errand is spent", u.entanglePending === 0);
 }
 
+console.log("…and a tree that can already cast does not walk at all");
+{
+  // The site's only requirement is that Entangle can be cast from it, so a tree standing
+  // inside `Rng1` roots where it is. Walking one that could already reach the rock would be
+  // the order overriding the ability's own range.
+  const world = newWorld(200, 200);
+  world.initStash(0, 0, 0);
+  const mine = world.addMine(2000, 2000, 12500, 128);
+  world.add(base({ id: 40, typeId: "etol", x: 2560, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(2560, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const u = world.units.get(40);
+  u.baseSpeed = 100;
+  const fp = { w: 12, h: 12, blocked: new Array(144).fill(true), buildBlocked: new Array(144).fill(true) };
+  world.setPathStamp(40, fp, 2560, 2000);
+  world.recomputeStats(u);
+  world.toggleRoot(u);
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05);
+  const [x0, y0] = [u.x, u.y];
+  check("the order takes at 432 — inside the ability's 500", world.issueEntangleAt(40, mine.id) === true);
+  check("…and the site is the ground it is standing on", Math.hypot(u.rootPending.x - x0, u.rootPending.y - y0) < 64, JSON.stringify(u.rootPending));
+  for (let t = 0; t < 10 / 0.05 && u.uprooted; t++) world.tick(0.05);
+  check("…so it roots on the spot", u.uprooted === false && Math.hypot(u.x - x0, u.y - y0) < 64);
+  check("…and takes the mine from there", mine.entangledBy !== 0);
+}
+
 console.log("…and it will not send the tree at a mine that is not free");
 {
+  // The mine may be anywhere — a right-click walks the tree to it — so what is asked here is
+  // only whether the mine is one to walk to at all.
   const world = newWorld(200, 200);
   world.initStash(0, 0, 0);
   world.initStash(1, 0, 0);
   const taken = world.addMine(2000, 2000, 12500, 128);
-  const wrapped = world.addMine(2400, 2400, 12500, 128);
+  const wrapped = world.addMine(2400, 3400, 12500, 128);
   wrapped.entangledBy = 99;
-  // Planted and inside `Rng1`, so what is left to refuse it is the mine itself.
-  world.add(base({ id: 40, typeId: "etol", x: 2500, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
-    BUILT(2500, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  world.add(base({ id: 40, typeId: "etol", x: 2560, y: 2000, hp: 1200, maxHp: 1200, speed: 0, radius: 128, isBuilding: true, ancient: true, name: "Tree of Life" }),
+    BUILT(2560, 2000), { abilities: [{ id: "Aent", code: "Aent", level: 1, cooldownLeft: 0, autocastOn: false }, { id: "Aro1", code: "Aroo", level: 1, cooldownLeft: 0, autocastOn: false }] });
+  const u = world.units.get(40);
+  u.baseSpeed = 100;
+  const fp = { w: 12, h: 12, blocked: new Array(144).fill(true), buildBlocked: new Array(144).fill(true) };
+  world.setPathStamp(40, fp, 2560, 2000);
+  world.recomputeStats(u);
+  world.toggleRoot(u);
+  for (let t = 0; t < 3 / 0.05; t++) world.tick(0.05);
   check("a mine already wrapped is refused", world.issueEntangleAt(40, wrapped.id) === false);
   // An ENEMY worker on it. Not a rule of the ability — `Aent` is happy to wrap a mine a
   // peasant is walking out of — but a right-click must not march your town hall into

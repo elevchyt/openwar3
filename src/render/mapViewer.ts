@@ -298,24 +298,20 @@ const AOE_SPLAT_TEXTURE: Record<PlayableRace, string> = {
  * bottom row of the PLANTED card belongs to the upgrades and Eat Tree cannot be on it. That
  * also matches how it is used: an Ancient eats a tree by walking to one.
  *
- * `Aroo` is not on it, and must not be: it is the one button that has to show in both stances
- * or a state becomes unreachable. It shows opposite FACES instead — `Art`/"Root" while
- * walking, `Unart`/"Uproot" while planted (see `reversed` in pushAbilityButtons).
- *
- * There is NO list going the other way, and **Entangle Gold Mine** (`Aent`) is why there must
- * not be. It reads like a rooted-only ability — the game even has a refusal line for it,
- * commandstrings.txt [Errors] `Mustroottoentangle` = "Must root adjacent to a gold mine to
- * entangle it." — but that error is the proof it shows on the WALKING card: an ability the
- * uprooted card never offered could never raise it. And that is the card you actually take an
+ * **Entangle Gold Mine** (`Aent`) is the other, and it is the one that reads backwards. It
+ * looks like a rooted ability and the game even has a refusal line for it — commandstrings.txt
+ * [Errors] `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it." — but
+ * that error is the proof rather than the counter-argument: an ability the walking card never
+ * offered could never raise it. It is a WALKING tree's button, and it is the card you take an
  * expansion from, since a Tree of Life is uprooted for precisely as long as it takes to reach
- * one. Pressing it there is an ERRAND rather than a cast (SimWorld.issueEntangleAt): the tree
- * plants itself beside the mine and casts once its roots are down. It stays on the planted
- * card too, where it is the plain 3-second cast — a Tree of Life a Wisp built at the
- * expansion has never been uprooted in its life and must still be able to wrap the mine it
- * was planted beside. `[Aent] Buttonpos=1,2` collides with nothing in either stance, which is
- * the data agreeing.
+ * one. Pressing it is an ERRAND rather than a cast (SimWorld.issueEntangleAt): the tree walks
+ * to a spot from which Entangle reaches the mine, and the roots go out as it plants.
+ *
+ * `Aroo` is on NEITHER list, and must not be: it is the one button that has to show in both
+ * stances or a state becomes unreachable. It shows opposite FACES instead — `Art`/"Root" while
+ * walking, `Unart`/"Uproot" while planted (see `reversed` in pushAbilityButtons).
  */
-const UPROOTED_ONLY = new Set(["Aeat"]);
+const UPROOTED_ONLY = new Set(["Aeat", "Aent"]);
 
 /**
  * How far above a Moon Well's own origin its water model is placed, in world units.
@@ -7075,9 +7071,10 @@ export class MapViewerScene {
       // Abilities with no requirement (every hero spell) pass this untouched.
       if (!this.rts.simView.techMeets(su.owner, ab.id)) continue;
       // …and an Ancient's card depends on which way up it is: one short list of what only a
-      // walker can reach (Eat Tree). The rest of the split is structural — the building card
-      // itself is withheld while it walks, see buildCommandCard. Asked only of a unit that can
-      // actually root, so a creep that happens to carry that row is not quietly stripped of it.
+      // walker can reach (Eat Tree, Entangle Gold Mine). The rest of the split is structural —
+      // the building card itself is withheld while it walks, see buildCommandCard. Asked only
+      // of a unit that can actually root, so a creep that happens to carry one of those rows
+      // is not quietly stripped of it.
       if (rootable && !su.uprooted && UPROOTED_ONLY.has(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;

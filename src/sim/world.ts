@@ -3390,15 +3390,14 @@ export class SimWorld {
    * "Go and take that mine" — the whole night elf expansion as one order (`{kind:"entangleat"}`).
    *
    * This is what a right-click on a free gold mine means to an uprooted Tree of Life, and it
-   * is three acts rather than one, because Entangle itself can do none of them: the ability
-   * takes no target, has a 500 range, and the game's own refusal line spells out the rest —
+   * is two acts rather than one, because Entangle itself can do neither: the ability takes no
+   * target, has a 500 range, and the game's own refusal line spells out the rest —
    * `Mustroottoentangle` = "Must root adjacent to a gold mine to entangle it." So the tree
-   * walks to a spot beside the mine that its own 12×12 footprint actually fits on, plants
-   * there, and casts once its roots are down (tickEntangleAt).
+   * walks to a spot from which Entangle can reach the mine, and the roots go out the instant
+   * it starts lowering itself onto that spot (tickEntangleAt).
    *
-   * A tree that is ALREADY rooted skips straight to the cast — that is the Tree of Life a
-   * Wisp built at the expansion, which has never been uprooted in its life and must still be
-   * able to wrap the mine it was planted beside.
+   * Only a WALKING tree takes this order: Entangle is the uprooted card's button (see
+   * UPROOTED_ONLY), so a planted one is not asked to do anything here.
    *
    * `mineId` 0 = the nearest free mine inside Entangle's own range, which is what pressing the
    * button with no target means.
@@ -3422,17 +3421,11 @@ export class SimWorld {
         mine = m;
       }
     }
-    if (!mine || !this.mineClaimable(mine, u)) return false;
-    // Already planted: it either reaches the mine from where it stands or it does not, and
-    // walking is not on offer to a building. `issueCast` runs the 3s `Cast1` before the roots
-    // go out, exactly as pressing the button does.
-    if (!u.uprooted) {
-      return Math.hypot(mine.x - u.x, mine.y - u.y) - mine.radius <= range && this.issueCast(id, "Aent");
-    }
+    if (!u.uprooted || !mine || !this.mineClaimable(mine, u)) return false;
     const site = this.entangleSite(u, mine, range);
     if (!site) return false;
     if (!this.issueRootAt(id, site[0], site[1])) return false;
-    u.entanglePending = mine.id; // …and cast once the roots are down (tickEntangleAt)
+    u.entanglePending = mine.id; // …and the roots go out as it plants (tickEntangleAt)
     return true;
   }
 
@@ -3458,53 +3451,74 @@ export class SimWorld {
   }
 
   /**
-   * Where to plant a tree that has been sent to entangle `mine`: the nearest spot to the tree
-   * on which its rooted footprint fits and from which Entangle can still reach.
+   * Where to plant a tree that has been sent to entangle `mine`: the spot NEAREST THE TREE on
+   * which its rooted footprint fits and from which Entangle can still reach the mine.
    *
-   * Searched as rings outward from the mine rather than as a walk toward it, because what is
-   * being placed is a BUILDING — the answer has to be a whole free 12×12 on the build grid,
-   * and there are usually only a handful of those around a mine (the rock itself blocks the
-   * middle). Candidates are sorted by how far the tree would have to walk, so it takes the
-   * side it approached from; `Rng1` (+ the mine's own radius, as `entangleMine` measures it)
-   * is the outer bound, and anything further out could not cast when it got there.
+   * Nearest the tree, not nearest the mine, and that is the whole rule. The only thing that
+   * has to be true of the site is that the ability can be cast from it — `Rng1` = 500, plus
+   * the mine's own radius, measured exactly as `entangleMine` measures it — so a tree already
+   * standing inside that range has nowhere to go and roots where it is. Walking a tree that
+   * could already cast up to the rock would be the order overriding the ability's own range.
+   *
+   * The candidates are still swept as rings around the MINE, because what is being placed is
+   * a BUILDING: the answer has to be a whole free 12×12 on the build grid, and around a mine
+   * there are usually only a handful of those (the rock blocks the middle). Every ring out to
+   * the ability's reach is swept and the closest survivor to the tree wins, so it also lands
+   * on the side it approached from.
    */
   private entangleSite(u: SimUnit, mine: SimMine, range: number): [number, number] | null {
     const fp = u.rootedStamp;
     if (!this.grid || !fp) return null;
+    const grid = this.grid;
     const half = (Math.max(fp.w, fp.h) * PATHING_CELL) / 2;
-    const reach = range + mine.radius;
+    const fits = (wx: number, wy: number): [number, number] | null => {
+      const [sx, sy] = grid.snapForBuildingRect(wx, wy, fp.w, fp.h);
+      if (Math.hypot(sx - mine.x, sy - mine.y) - mine.radius > range) return null;
+      return footprintBuildable(grid, fp, sx, sy) ? [sx, sy] : null;
+    };
+    // Where it already stands, first and without a search: in range and on ground it fits on
+    // is the answer, and it is the common one — a tree walked to an expansion by hand is
+    // standing at the mine by the time anybody presses the button.
+    const here = fits(u.x, u.y);
+    if (here) return here;
     let best: [number, number] | null = null;
     let bestD = Infinity;
     const seen = new Set<string>();
-    // Rings from "as close as the footprint can physically sit" outward, one build cell at a
-    // time, with enough samples per ring that a 12×12 candidate cannot slip between spokes.
-    for (let r = mine.radius + half; r <= reach; r += BUILD_CELL) {
+    // Rings from "as close as the footprint can physically sit" out to the ability's reach,
+    // one build cell at a time, with enough samples per ring that a 12×12 candidate cannot
+    // slip between spokes.
+    for (let r = mine.radius + half; r <= range + mine.radius; r += BUILD_CELL) {
       const steps = Math.max(8, Math.round((2 * Math.PI * r) / BUILD_CELL));
       for (let i = 0; i < steps; i++) {
         const a = (i / steps) * Math.PI * 2;
-        const [sx, sy] = this.grid.snapForBuildingRect(mine.x + Math.cos(a) * r, mine.y + Math.sin(a) * r, fp.w, fp.h);
+        const [px, py] = [mine.x + Math.cos(a) * r, mine.y + Math.sin(a) * r];
+        const [sx, sy] = grid.snapForBuildingRect(px, py, fp.w, fp.h);
         const key = `${sx},${sy}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        if (Math.hypot(sx - mine.x, sy - mine.y) - mine.radius > range) continue;
         const d = Math.hypot(sx - u.x, sy - u.y);
-        if (d >= bestD || !footprintBuildable(this.grid, fp, sx, sy)) continue;
+        if (d >= bestD || !fits(px, py)) continue;
         bestD = d;
         best = [sx, sy];
       }
-      // A ring that produced a candidate is as close as this mine is going to get: the next
-      // one out is further from the mine AND (a tree walks in from outside) further to walk.
-      if (best) break;
     }
     return best;
   }
 
-  /** An uprooted Tree of Life sent to take a mine has planted itself: cast Entangle.
+  /** An uprooted Tree of Life sent to take a mine has begun to plant itself: throw the roots.
    *
-   *  Held until the root transition is over (`morphT`) — the tree is neither thing for those
-   *  2.5 seconds and `castLocked` says so — and dropped if the plant never happened (the way
-   *  was blocked, or the ground was taken while it walked) or somebody else got the mine
-   *  first, which is the whole race for an expansion in one line. */
+   *  No cast, and nothing waited for. `Cast1` = 3s is the gesture a tree makes when a player
+   *  presses the button at a mine it is already standing at; there is no second gesture on the
+   *  end of the errand, and the root transition is not one either — the mine starts closing on
+   *  the same tick the tree starts lowering itself onto its site. So this goes straight to
+   *  `entangleMine` rather than through `issueCast`, which is also what lets it name the mine
+   *  the player actually clicked instead of re-deriving "the nearest one".
+   *
+   *  `toggleRoot` flips the stance before the transition (see SimUnit.morphT), so by the time
+   *  this runs on the planting tick the tree is a building again and `entangleMine` will have
+   *  it. Dropped if the plant never happened (the way was blocked, or the ground was taken
+   *  while it walked) or somebody else got the mine first — the race for an expansion, in one
+   *  line. */
   private tickEntangleAt(u: SimUnit): void {
     const mine = this.mines.get(u.entanglePending);
     if (!mine || mine.entangledBy !== 0) {
@@ -3515,9 +3529,10 @@ export class SimWorld {
       if (!u.rootPending && !u.moving) u.entanglePending = 0; // the plant fell through
       return;
     }
-    if (u.morphT > 0 || this.castLocked(u)) return; // still lowering itself onto the site
     u.entanglePending = 0;
-    this.issueCast(u.id, "Aent");
+    const ab = u.abilities.find((a) => a.code === "Aent" && a.level >= 1);
+    const def = ab && this.abilities?.get(ab.id);
+    if (def) this.entangleMine(u, def, mine);
   }
 
   /** The renderer has raised the Entangled Gold Mine and hands the sim its unit id. Links the
@@ -7446,13 +7461,13 @@ export class SimWorld {
     if (!ab) return false;
     const def = this.abilities.get(ab.id);
     if (!def || def.target === "passive") return false;
-    // Entangle pressed by a tree that is still WALKING. The button is on the uprooted card
-    // too, and it has to be — a Tree of Life is uprooted for exactly as long as it takes to
-    // reach an expansion, which is the whole time you want to press this. Roots in the air
-    // hold nothing, though, so the press is not the cast: it is the errand (`entangleat`),
-    // and the tree plants itself beside the mine first. `Mustroottoentangle` — "Must root
-    // adjacent to a gold mine to entangle it" — is the refusal when there is no free mine
-    // inside `Rng1` to plant next to, which is the only case left over.
+    // Entangle pressed on a WALKING tree, which is the only card it is on (UPROOTED_ONLY).
+    // Roots in the air hold nothing, so the press is not a cast: it is the errand
+    // (`entangleat`), and the tree plants itself within reach of the mine first.
+    // `Mustroottoentangle` — "Must root adjacent to a gold mine to entangle it" — is the
+    // refusal when there is no free mine inside `Rng1` to plant next to, which is the only
+    // case left over. (The raw cast below still serves a JASS `entangle` order aimed at a
+    // planted tree.)
     if (code === "Aent" && u.uprooted) return this.issueEntangleAt(unitId, 0);
     const lvl = def.levelData[Math.min(ab.level, def.levelData.length) - 1];
     // Immediate abilities (see IMMEDIATE) fire here and now: pay, run the effect, done.

@@ -5476,13 +5476,17 @@ export class RtsController {
     // lands the ground ray well behind the trunk.
     const mine = this.mineAt(hit[0], hit[1], 320); // …and you cannot mine what you cannot see
     if (mine) {
-      // A Tree of Life right-clicked onto a free mine goes and TAKES it — the night elf
-      // expansion in one click. It is not a harvest and no wisp is involved: the tree walks
-      // to a spot beside the mine its own footprint fits on, plants itself, and casts
-      // Entangle when its roots are down (SimWorld.issueEntangleAt). Asked first, because a
-      // Tree of Life is not a worker and would otherwise fall straight through to a plain
-      // move and stand there beside the rock.
-      const trees = [...this.selected].filter((id) => this.sim.units.get(id)?.abilities.some((a) => a.code === "Aent" && a.level >= 1));
+      // An UPROOTED Tree of Life right-clicked onto a free mine goes and TAKES it — the night
+      // elf expansion in one click. It is not a harvest and no wisp is involved: the tree
+      // walks to a spot from which Entangle reaches the mine and throws its roots out as it
+      // plants (SimWorld.issueEntangleAt). Asked first, because a Tree of Life is not a worker
+      // and would otherwise fall straight through to a plain move and stand beside the rock.
+      // Uprooted only, like the button itself (UPROOTED_ONLY) — a planted one is a building,
+      // and its right-click is the rally point it never got past `acceptsRally` anyway.
+      const trees = [...this.selected].filter((id) => {
+        const t = this.sim.units.get(id);
+        return !!t?.uprooted && t.abilities.some((a) => a.code === "Aent" && a.level >= 1);
+      });
       if (trees.length) {
         let any = false;
         for (const id of trees) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "entangleat", mineId: mine.id }, queued })) any = true;
