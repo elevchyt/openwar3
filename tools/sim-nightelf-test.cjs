@@ -94,7 +94,7 @@ const base = (over) => ({
 /** A Wisp, with `Awha`'s profile: 5 lumber per 8s, delivered where it is cut. */
 const wisp = (id, x, y) => base({
   id, typeId: "ewsp", x, y, hp: 120, maxHp: 120, speed: 270, radius: 16, name: "Wisp",
-  worker: { gold: true, lumber: true, lumberCapacity: 0, baseLumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, damagesTree: false, deliversInPlace: true, orbitAngle: 0, carryGold: 0, carryLumber: 0 },
+  worker: { gold: true, lumber: true, lumberCapacity: 0, baseLumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, damagesTree: false, deliversInPlace: true, carryGold: 0, carryLumber: 0 },
 });
 
 const BUILT = (x, y) => ({ constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: x, rallyY: y, rallyKind: "point", rallyTargetId: 0, producesUnits: false });
@@ -115,8 +115,12 @@ console.log("Wisp Harvest (`Awha`) — 5 lumber per 8s, no haul, no felled tree"
   check("…and nothing is ever carried", u.worker.carryLumber === 0, `${u.worker.carryLumber}`);
   check("…and the tree still stands", world.trees.has(tree.id) && world.trees.get(tree.id).lumber === 50);
   check("the wisp never left the tree", Math.hypot(u.x - tree.x, u.y - tree.y) < 120, `${Math.round(Math.hypot(u.x - tree.x, u.y - tree.y))}`);
-  check("…and is orbiting it (its angle advanced)", u.worker.orbitAngle > 0);
-  // The orbit must stay OUTSIDE the trunk's blocked square, or the wisp cannot path away.
+  // …and it HOLDS STILL there: a wisp bonds to the tree and plays "Stand Lumber", it does not
+  // circle it. Two ticks apart, nothing has moved.
+  const [px, py] = [u.x, u.y];
+  world.tick(0.05); world.tick(0.05);
+  check("…and holds still while it works", u.x === px && u.y === py, `${Math.round(u.x - px)},${Math.round(u.y - py)}`);
+  // It must stand OUTSIDE the trunk's blocked square, or the wisp cannot path away.
   const [cx, cy] = world.grid.worldToCell(u.x, u.y);
   check("…on ground it can still walk off", world.grid.walkable(cx, cy));
 }
@@ -191,7 +195,7 @@ console.log("…and the mine is closed to everyone else while the roots are on i
   world.add(base({ id: 50, typeId: "egol", x: 2000, y: 2000, hp: 800, maxHp: 800, speed: 0, radius: 128, isBuilding: true, name: "Entangled Gold Mine" }), BUILT(2000, 2000));
   world.attachEntangled(50, mine.id);
   world.add(base({ id: 70, typeId: "hpea", race: "human", x: 2400, y: 2000, hp: 220, maxHp: 220, speed: 190, radius: 16, name: "Peasant",
-    worker: { gold: true, lumber: true, lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false, orbitAngle: 0, carryGold: 0, carryLumber: 0 } }));
+    worker: { gold: true, lumber: true, lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false, carryGold: 0, carryLumber: 0 } }));
   check("a peasant cannot mine an entangled mine", !world.issueHarvest(70, "gold", mine.id));
   world.add(wisp(71, 2400, 2100));
   check("…and neither can a wisp with a pick", !world.issueHarvest(71, "gold", mine.id));
@@ -478,7 +482,7 @@ console.log("Renew (`Aren`) — the one repair that may mend an Ancient");
   world.add(base({ id: 51, typeId: "emow", x: 2600, y: 2000, hp: 600, maxHp: 600, speed: 0, radius: 96, isBuilding: true, name: "Moon Well" }), BUILT(2600, 2000));
   world.add(wisp(52, 2300, 2200), null, { abilities: [{ id: "Aren", code: "Aren", level: 1, cooldownLeft: 0, autocastOn: false }] });
   world.add(base({ id: 53, typeId: "hpea", race: "human", x: 2300, y: 2300, hp: 220, maxHp: 220, speed: 190, radius: 16, name: "Peasant",
-    worker: { gold: true, lumber: true, lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false, orbitAngle: 0, carryGold: 0, carryLumber: 0 } }),
+    worker: { gold: true, lumber: true, lumberCapacity: 10, baseLumberCapacity: 10, lumberPerChop: 1, chopPeriod: 1, damagesTree: true, deliversInPlace: false, carryGold: 0, carryLumber: 0 } }),
     null, { abilities: [{ id: "Ahrp", code: "Arep", level: 1, cooldownLeft: 0, autocastOn: false }] });
   check("a Wisp may Renew an Ancient", world.repairRefusal(52, 50) === null);
   check("a Peasant may not — `nonancient`", world.repairRefusal(53, 50) === "Notancient", `${world.repairRefusal(53, 50)}`);

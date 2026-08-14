@@ -8,7 +8,7 @@ difference is a tuning value — each piece is a rule, and each rule is stated b
 
 This is that list, so the next person does not have to rediscover which column says what.
 
-Implementation: `tickHarvest` / `applyHarvestData` / `orbitTree` / `finishConstruction` /
+Implementation: `tickHarvest` / `applyHarvestData` / `popFromCanopy` / `finishConstruction` /
 `tickEntangledMines` / `tickReplenish` / `tickRenew` / `toggleRoot` / `issueRootAt` /
 `tickRootSettle` / `issueEntangleInstant` / `issueDrink` in
 [`src/sim/world.ts`](../src/sim/world.ts), the `Aent` / `Ambt` / `Adtn` / `Aeat` handlers in
@@ -58,20 +58,23 @@ does to BUILD and to Renew — a repair, which is why `pickSequence` reaches it 
 what made night elf lumber look like an animation of our own invention rather than the one the
 model ships.
 
-**The orbit.** WC3 shows a harvesting wisp circling the tree, and the motion carries the rhythm
-the way a chop does for everyone else. Two traps live in that orbit and both cost real time:
+**And it holds still.** A working wisp does not circle the tree — it bonds to it where it
+stopped and plays its one clip. We did have it orbiting, one lap per `Awha` interval, on the
+reasoning that "there is no swing to animate, so the motion is the animation"; it was our
+invention, and with the right clip playing there is nothing for it to add.
 
-* It must be a **square**, traced just outside the tree's blocked footprint. A circle of the
-  same reach cuts the corners and puts the wisp on blocked ground on every diagonal — and a
-  unit standing on a blocked cell cannot start a path. Symptom: wisps recalled from a grove
-  accept the order, play the walk, and never arrive.
-* Arrival must be measured against the **orbit**, not against an axe's arm. Measured the
-  chopper's way the wisp arrives, is judged out of reach, re-targets the nearest tree, orbits
-  *that* one, is out of reach again — and drifts across the map one tree at a time.
+Two things survive the orbit's removal, because they were never about the motion:
 
-Dense forest defeats both anyway (neighbouring footprints overlap the ring), so `popFromCanopy`
-puts a wisp back on walkable ground the moment it is given any other order. That is the
-belt-and-braces, not the fix.
+* **Arrival is measured against the tree's BLOCKED footprint**, not against an axe's arm. A
+  wisp never enters those cells at all — it stops against them, further out than a chopper
+  stands. Measured the chopper's way it arrives, is judged out of reach, re-targets the nearest
+  tree, is out of reach again, and drifts across the map one tree at a time.
+* **A working wisp holds no cell** (`unsettle` + `noCollision`), or a body parked against the
+  treeline would wall the forest off one wisp at a time. The cost is that where it stands can
+  be inside a neighbouring trunk's block — a grove's footprints overlap — and A* cannot START
+  from a blocked cell, so `popFromCanopy` puts it back on walkable ground the moment it is
+  given any other order. Symptom without it: wisps recalled from a grove accept the order, play
+  the walk, and never arrive.
 
 ### The Wisp's other two buttons
 

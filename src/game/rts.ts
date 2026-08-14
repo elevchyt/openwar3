@@ -2332,7 +2332,7 @@ export class RtsController {
     const profile = WORKERS[def.id];
     // baseLumberCapacity is the pre-upgrade load; Improved Lumber Harvesting raises the live
     // `lumberCapacity` off it each tick (recomputeStats), so the profile stays the baseline.
-    const worker: WorkerState | null = profile ? { ...profile, baseLumberCapacity: profile.lumberCapacity, orbitAngle: 0, carryGold: 0, carryLumber: 0 } : null;
+    const worker: WorkerState | null = profile ? { ...profile, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 } : null;
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding

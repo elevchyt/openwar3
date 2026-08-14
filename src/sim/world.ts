@@ -557,9 +557,6 @@ export interface WorkerState {
    *  difference between them. It is also why `Awha` has no "Lumber Capacity" that means
    *  anything: with no trip there is nothing to fill. See tickHarvest. */
   deliversInPlace: boolean;
-  /** Where this gatherer sits on its orbit of the tree, radians. Only `deliversInPlace`
-   *  gatherers orbit — a Wisp circles the tree it is working (see tickHarvest). */
-  orbitAngle: number;
   carryGold: number;
   carryLumber: number;
 }
@@ -5299,14 +5296,14 @@ export class SimWorld {
     }
   }
 
-  /** The orbit's twin of popFromMine: put a Wisp that was working a tree back on ground it
+  /** The forest's twin of popFromMine: put a Wisp that was working a tree back on ground it
    *  can walk off, before its new order tries to path out of the canopy.
    *
-   *  It has to exist because the orbit is allowed to be over blocked ground and usually is —
-   *  a forest's footprints overlap, so the ring around one trunk runs through its neighbours'
-   *  — and A* cannot START from a blocked cell. Without this a wisp recalled from a thick
-   *  grove had its order accepted, played the walk, and never got anywhere: the symptom was
-   *  a handful of wisps standing in the trees forever while the rest of the army moved. */
+   *  It has to exist because a working wisp holds no cell (`noCollision`, see tickHarvest) and
+   *  a grove's footprints overlap, so the spot it stopped against one trunk can be inside a
+   *  neighbour's block — and A* cannot START from a blocked cell. Without this a wisp recalled
+   *  from a thick grove had its order accepted, played the walk, and never got anywhere: the
+   *  symptom was a handful of wisps standing in the trees forever while the army moved. */
   private popFromCanopy(u: SimUnit): void {
     const w = u.worker;
     if (!w?.deliversInPlace || u.order !== "harvest" || !u.working) return;
@@ -10289,11 +10286,11 @@ export class SimWorld {
     }
     // Approach until parked next to the tree, then chop in place (never re-path
     // once working — that was the source of the mining "jiggle").
-    // An ORBITING gatherer is measured against its orbit, not against an axe's arm: the wisp
-    // ends every tick a full `blockRadius + radius` from the trunk, which is further out than
-    // the chopper's reach. Measured the chopper's way, a wisp would arrive, be judged out of
-    // reach, re-target the nearest tree, orbit THAT one, be out of reach again — and drift
-    // across the forest one tree at a time instead of working the one it was sent to.
+    // A wisp is measured against the tree's BLOCKED footprint rather than against an axe's
+    // arm: it cannot stand where a chopper does, because it never enters the blocked cells at
+    // all — it stops against them. Measured the chopper's way, a wisp arrives, is judged out
+    // of reach, re-targets the nearest tree, is out of reach again — and drifts across the
+    // forest one tree at a time instead of working the one it was sent to.
     const reach = w.deliversInPlace
       ? tree.blockRadius + u.radius + 40
       : u.radius + TREE_RADIUS + 40;
@@ -10301,11 +10298,10 @@ export class SimWorld {
       u.working = false;
       return;
     }
-    // A Wisp does not stand beside the tree with an axe: it goes into the canopy and circles.
-    // Freeing its cell is the honest half of that — it holds no ground while it is up there,
-    // and a body that still reserved a tile beside the tree would wall off the forest one
-    // wisp at a time. (`noCollision` is the same ghosting a laden worker gets on its auto
-    // round trip.)
+    // A Wisp does not stand beside the tree with an axe: it bonds to it and holds still.
+    // Freeing its cell is the honest half of that — a body that still reserved a tile against
+    // the treeline would wall off the forest one wisp at a time. (`noCollision` is the same
+    // ghosting a laden worker gets on its auto round trip.)
     if (w.deliversInPlace) {
       this.unsettle(u);
       u.noCollision = true;
@@ -10323,7 +10319,6 @@ export class SimWorld {
     }
     u.working = true;
     u.desiredFacing = Math.atan2(tree.y - u.y, tree.x - u.x);
-    if (w.deliversInPlace) this.orbitTree(u, w, tree, dt);
     u.workT -= dt;
     if (u.workT > 0) return;
     u.workT = w.chopPeriod;
@@ -10374,30 +10369,6 @@ export class SimWorld {
    *  map that reskins Wisp Harvest reskins this too. */
   private get harvestArt(): string {
     return this.abilities?.get("Awha")?.targetArt ?? "";
-  }
-
-  /** A Wisp circling the tree it is harvesting. This is the whole of what night elf lumber
-   *  LOOKS like — there is no swing to animate, so the motion is the animation.
-   *
-   *  One lap per `Awha` interval (Dur1 = 8s), which ties the visible rhythm to the payout
-   *  rather than to a number picked for looking right.
-   *
-   *  The orbit is a SQUARE, traced just outside the tree's blocked footprint, and both halves
-   *  of that matter. A circle of the same reach cuts the corners of the square and puts the
-   *  wisp inside blocked ground on every diagonal — and a unit standing on a blocked cell
-   *  cannot start a path, so a wisp that stopped gathering there could not walk away again.
-   *  (Found the hard way: wisps recalled from the forest to build simply never arrived.) */
-  private orbitTree(u: SimUnit, w: WorkerState, tree: SimTree, dt: number): void {
-    const period = w.chopPeriod > 0 ? w.chopPeriod : 8;
-    w.orbitAngle = (w.orbitAngle + (dt * 2 * Math.PI) / period) % (2 * Math.PI);
-    const cos = Math.cos(w.orbitAngle), sin = Math.sin(w.orbitAngle);
-    const reach = tree.blockRadius + u.radius;
-    const m = Math.max(Math.abs(cos), Math.abs(sin)) || 1; // Chebyshev: clear the SQUARE
-    u.x = tree.x + (cos / m) * reach;
-    u.y = tree.y + (sin / m) * reach;
-    // Face along the orbit, not at the trunk: a wisp leads with its nose the way it does
-    // when it flies. (`desiredFacing` was set at the trunk a line above; this wins.)
-    u.desiredFacing = w.orbitAngle + Math.PI / 2;
   }
 
   /** Latch a worker as "parked at the node". The approach path was issued once
