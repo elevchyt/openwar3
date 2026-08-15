@@ -26,16 +26,23 @@ export interface SpellApi {
    *  handler never has to hand-write `if (t.flying) continue` and get it wrong. */
   admits(def: AbilityDef, target: SimUnit): boolean;
   /**
-   * Launch the ability's `Missileart` as a travelling WAVE: from the caster toward (tx,ty),
-   * `dist` far, `halfWidth` to either side, at the row's own `Missilespeed`. Each unit the
-   * front sweeps over gets the handler called again with `ctx.targetId` set and `ctx.wave`
-   * holding the remaining damage budget — so the spell lands ON the unit when the wave
-   * actually reaches it, which is the whole reason the missile exists.
+   * Launch a travelling WAVE from the caster toward (tx,ty): `dist` far, `halfWidth` to
+   * either side. Each unit the front sweeps over gets the handler called again with
+   * `ctx.targetId` set and `ctx.wave` holding the remaining damage budget — so the spell
+   * lands ON a unit when the wave actually reaches it, which is the whole point.
    *
-   * Returns false when the row names no missile (a custom map may strip it), leaving the
-   * handler to sweep the line instantly instead.
+   * The wave shows itself one of two ways, and the ability's own row decides which:
+   *   • as the ability's `Missileart`, carried along the line (Shock Wave, Carrion Swarm,
+   *     Breath of Fire — the missile IS the spell), at the row's own `Missilespeed`;
+   *   • as a `trail` of one-shot effects dropped every `step` units (Impale, whose art is
+   *     a row of tendrils bursting out of the ground, not a projectile).
+   * `speed` overrides `Missilespeed` for a wave whose row states its pace some other way
+   * (Impale's `DataB` is "Wave Time (seconds)" for the whole `DataA` distance).
+   *
+   * Returns false when the ability has NEITHER — nothing to draw, so the handler should
+   * sweep the line instantly instead.
    */
-  launchWave(caster: SimUnit, def: AbilityDef, rank: number, tx: number, ty: number, dist: number, halfWidth: number, budget: number): boolean;
+  launchWave(caster: SimUnit, def: AbilityDef, rank: number, opts: WaveOptions): boolean;
   /** Deal spell damage (armour is NOT applied to most spell damage in WC3). */
   spellDamage(target: SimUnit, amount: number, sourceId: number): void;
   spellHeal(target: SimUnit, amount: number): void;
@@ -211,6 +218,19 @@ export interface SpellFieldInit {
   //                       it appears in the sky. See SHARD_FALL.
 }
 
+/** How a wave sweeps and how it shows itself (SpellApi.launchWave). */
+export interface WaveOptions {
+  tx: number; // aim point — the wave takes its DIRECTION from this, not its length
+  ty: number;
+  dist: number; // how far the front runs
+  halfWidth: number; // how far either side of the line it catches
+  budget?: number; // total damage the wave may spend (the family's "Maximum Damage")
+  speed?: number; // world units a second; defaults to the row's `Missilespeed`
+  /** One-shot effects dropped along the line every `step` units, for a wave whose art is
+   *  the ground it passes over rather than a projectile (Impale's tendrils). */
+  trail?: { art: string; step: number };
+}
+
 /** Where a cast is aimed. */
 export interface CastContext {
   targetId: number; // unit target (0 = none)
@@ -231,6 +251,22 @@ const FIELD_ART: Record<string, string> = {
   AHbz: "Abilities\\Spells\\Human\\Blizzard\\BlizzardTarget.mdx",
   ANrf: "Abilities\\Spells\\Demon\\RainOfFire\\RainOfFireTarget.mdx",
 };
+
+/**
+ * Impale's other two models. `[AUim]` names ONE art — `Specialart =
+ * ImpaleMissTarget.mdl`, the tendril that bursts out of empty ground — and the install
+ * holds two more in the same folder that no ability row mentions at all:
+ *
+ *     Abilities\Spells\Undead\Impale\ImpaleCaster.mdx      the Crypt Lord's slam
+ *     Abilities\Spells\Undead\Impale\ImpaleHitTarget.mdx   the tendril that catches a unit
+ *
+ * The pairing is the file names' own doing — "MissTarget" only means anything opposite a
+ * "HitTarget" — and it is the same shape as FIELD_ART above: art the engine knows and the
+ * table does not. (`ImpaleTargetDust.mdx` under Objects\Spawnmodels is the dust beneath a
+ * hurled unit; we do not throw units, so it has nothing to sit under yet.)
+ */
+const IMPALE_CASTER_ART = "Abilities\\Spells\\Undead\\Impale\\ImpaleCaster.mdx";
+const IMPALE_HIT_ART = "Abilities\\Spells\\Undead\\Impale\\ImpaleHitTarget.mdx";
 
 /** When a shard's damage lands, measured off the models themselves: in BOTH
  *  BlizzardTarget.mdx and RainOfFireTarget.mdx (the same rig, reskinned) the falling
@@ -958,9 +994,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (swept) return hit(swept); // the wave has just reached this one
     const dist = d(lvl, 2, 800);
     const half = lvl.area || 125;
-    // dataB (900 at rank 1) is the family's total-damage cap; passed through so the wave
-    // spends the same allowance Carrion Swarm's does.
-    if (api.launchWave(caster, def, rank, ctx.x, ctx.y, dist, half, d(lvl, 1, 0))) return;
+    // dataB is the family's total-damage cap — `UI\WorldEditStrings.txt` calls `Osh2`
+    // "Maximum Damage" (900 at rank 1, i.e. twelve units' worth), and `Ucs2` "Max Damage".
+    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: d(lvl, 1, 0) })) return;
     for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t); // artless fallback
   },
 
@@ -982,19 +1018,42 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (swept) return hit(swept);
     const dist = d(lvl, 2, 700);
     const half = lvl.area || 100;
-    if (api.launchWave(caster, def, rank, ctx.x, ctx.y, dist, half, budget.budget)) return;
+    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: budget.budget })) return;
     for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t);
   },
 
-  // Impale (Crypt Lord) — spikes erupt along a line (dataA distance, area width):
-  // dataC damage + a stun (dur/herodur) to ground enemies.
+  // Impale (Crypt Lord) — "shooting spiked tendrils out in a straight line, dealing
+  // <AUim,DataC1> damage and hurling enemy ground units into the air in their wake"
+  // (`UndeadAbilityStrings [AUim]`). A wave like its Osh/Ucs cousins, and the game names
+  // its columns in `UI\WorldEditStrings.txt`: `Uim1` **Wave Distance** (600), `Uim2`
+  // **Wave Time (seconds)** (0.3 — so the tendrils cross the line at 2000 units a second),
+  // `Uim3` **Damage Dealt** (75/120/165) and `Uim4` **Air Time (seconds)** (1).
+  //
+  // Its art is the ONE case in the family that is not a missile: `[AUim]` names no
+  // `Missileart` at all, only `Specialart = ImpaleMissTarget.mdl` — a single tendril. The
+  // spell is a ROW of them bursting out of the ground as the wave passes, so it launches
+  // with a `trail` instead: one tendril every half-width, which lays them shoulder to
+  // shoulder down a line whose width is `Area1`.
   AUim: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 0, 600), (lvl.area || 250) / 2)) {
-      if (!api.hostile(caster, t) || t.flying) continue;
-      api.spellDamage(t, d(lvl, 2, 50), caster.id);
+    const hit = (t: SimUnit) => {
+      if (!api.hostile(caster, t) || t.flying) return;
+      api.spellDamage(t, d(lvl, 2, 75), caster.id);
       api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 1, sourceId: caster.id, ...fx(def) });
-    }
+      api.emitEffect(IMPALE_HIT_ART, t.x, t.y, t.id); // the tendril that CAUGHT something
+    };
+    const swept = api.getUnit(ctx.targetId);
+    if (swept) return hit(swept);
+    const dist = d(lvl, 0, 600);
+    const half = (lvl.area || 250) / 2;
+    const time = d(lvl, 1, 0.3);
+    api.emitEffect(IMPALE_CASTER_ART, caster.x, caster.y, caster.id); // the Crypt Lord's slam
+    if (api.launchWave(caster, def, rank, {
+      tx: ctx.x, ty: ctx.y, dist, halfWidth: half,
+      speed: time > 0 ? dist / time : 2000, // "Wave Time" is the whole run, not a speed
+      trail: def.specialArt ? { art: def.specialArt, step: half } : undefined,
+    })) return;
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t);
   },
 
   // Breath of Fire (Brewmaster) — cone/line of flame: dataA damage (dataC distance,
@@ -1009,7 +1068,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const dist = d(lvl, 2, 375);
     const half = lvl.area || 125;
     // `[ANbf] Missileart = BreathOfFireMissile.mdl, Missilespeed = 1050` — the breath, again.
-    if (api.launchWave(caster, def, rank, ctx.x, ctx.y, dist, half, d(lvl, 1, 0))) return;
+    if (api.launchWave(caster, def, rank, { tx: ctx.x, ty: ctx.y, dist, halfWidth: half, budget: d(lvl, 1, 0) })) return;
     for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t);
   },
 

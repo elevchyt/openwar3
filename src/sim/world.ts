@@ -34,7 +34,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -154,7 +154,14 @@ export interface SimProjectile {
    * `ox`/`oy` is the launch point and `dirX`/`dirY` the unit direction, both fixed at the
    * cast — a wave does not follow the caster who threw it.
    */
-  wave?: { ox: number; oy: number; dirX: number; dirY: number; dist: number; travelled: number; halfWidth: number; budget: number; hit: number[] };
+  wave?: {
+    ox: number; oy: number; dirX: number; dirY: number; dist: number; travelled: number;
+    halfWidth: number; budget: number; hit: number[];
+    /** A wave whose art is the GROUND it passes over rather than a model in flight
+     *  (Impale's tendrils): drop `art` every `step` units, `next` being the mark the front
+     *  has to pass for the next one. Such a wave carries no missile of its own. */
+    trail?: { art: string; step: number; next: number };
+  };
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
   // instead of dealing plain `damage` — the base code + rank to dispatch.
   spell?: { code: string; rank: number; abilityId: string };
@@ -8012,15 +8019,15 @@ export class SimWorld {
   }
 
   /**
-   * Launch a line spell's missile as a travelling WAVE (see SimProjectile.wave, and
-   * SpellApi.launchWave for the contract). False when the ability names no `Missileart`,
-   * which is the caller's cue to sweep the line instantly instead — Impale and Forked
-   * Lightning are in the family's shape but ship no missile, and a custom map may strip one.
+   * Launch a travelling WAVE (see SimProjectile.wave, and SpellApi.launchWave for the
+   * contract). False when the ability has NEITHER a `Missileart` to carry nor a trail to
+   * lay — nothing to draw, so the caller sweeps the line instantly instead (Forked
+   * Lightning's cone, or a custom map that has stripped the art).
    */
-  private spawnWaveProjectile(u: SimUnit, def: AbilityDef, rank: number, tx: number, ty: number, dist: number, halfWidth: number, budget: number): boolean {
-    if (!def.missileArt) return false;
-    const dx = tx - u.x;
-    const dy = ty - u.y;
+  private spawnWaveProjectile(u: SimUnit, def: AbilityDef, rank: number, o: WaveOptions): boolean {
+    if (!def.missileArt && !o.trail?.art) return false;
+    const dx = o.tx - u.x;
+    const dy = o.ty - u.y;
     const len = Math.hypot(dx, dy) || 1;
     const id = this.nextProjectileId++;
     // A wave hugs the ground it sweeps rather than arcing: launch height stays put, so
@@ -8036,14 +8043,19 @@ export class SimWorld {
       z: lz,
       sourceId: u.id,
       targetId: 0, // a wave chases nobody
-      speed: def.missileSpeed || 1000,
+      speed: o.speed || def.missileSpeed || 1000,
       damage: 0,
-      art: def.missileArt,
+      art: def.missileArt, // "" for a trail wave: it is the ground that shows it, not a model
       spell: { code: def.code, rank, abilityId: def.id },
       startZ: lz,
       impactZ: lz,
-      startDist: dist,
-      wave: { ox: lx, oy: ly, dirX: dx / len, dirY: dy / len, dist, travelled: 0, halfWidth, budget, hit: [] },
+      startDist: o.dist,
+      wave: {
+        ox: lx, oy: ly, dirX: dx / len, dirY: dy / len,
+        dist: o.dist, travelled: 0, halfWidth: o.halfWidth, budget: o.budget ?? 0, hit: [],
+        // The first tendril bursts at the caster's feet, so the next mark is one step out.
+        trail: o.trail ? { art: o.trail.art, step: o.trail.step, next: 0 } : undefined,
+      },
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -8059,6 +8071,14 @@ export class SimWorld {
     w.travelled = Math.min(w.dist, w.travelled + p.speed * dt);
     p.x = w.ox + w.dirX * w.travelled;
     p.y = w.oy + w.dirY * w.travelled;
+    // Lay the trail the front has just passed over (Impale's tendrils). Each mark is a
+    // one-shot effect standing on the ground at its own spot, so the row of them stays
+    // behind the wave rather than travelling with it.
+    const trail = p.wave!.trail;
+    while (trail && trail.next <= w.travelled) {
+      this.spellEffects.push({ art: trail.art, x: w.ox + w.dirX * trail.next, y: w.oy + w.dirY * trail.next, targetId: 0, z: 0 });
+      trail.next += Math.max(1, trail.step); // never zero — a zero step would spin here forever
+    }
     const caster = this.units.get(p.sourceId); // may have died — the wave carries on regardless
     const def = this.abilities?.get(p.spell!.abilityId);
     if (caster && def) {
@@ -8896,7 +8916,7 @@ export class SimWorld {
     hostile: (a, b) => this.hostile(a, b),
     ally: (a, b) => this.allied(a, b),
     admits: (def, t) => this.targsAdmit(t, def.targetFlags),
-    launchWave: (caster, def, rank, tx, ty, dist, halfWidth, budget) => this.spawnWaveProjectile(caster, def, rank, tx, ty, dist, halfWidth, budget),
+    launchWave: (caster, def, rank, opts) => this.spawnWaveProjectile(caster, def, rank, opts),
     // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
     // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical
     // immunity (issue #49).

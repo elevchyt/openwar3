@@ -41,9 +41,10 @@ function harness(units) {
     admits: (d, t) => targsAdmit(t, d.targetFlags),
     // The wave launch: records the request the way the world would act on it, and answers
     // false for a row with no Missileart so the artless fallback can be tested too.
-    launchWave: (c, d, rank, tx, ty, dist, halfWidth, budget) => {
-      if (!d.missileArt) return false;
-      log.waves.push({ art: d.missileArt, speed: d.missileSpeed, from: c.id, tx, ty, dist, halfWidth, budget });
+    launchWave: (c, d, rank, o) => {
+      if (!d.missileArt && !(o.trail && o.trail.art)) return false;
+      log.waves.push({ art: d.missileArt, speed: o.speed || d.missileSpeed, from: c.id, tx: o.tx, ty: o.ty,
+        dist: o.dist, halfWidth: o.halfWidth, budget: o.budget, ...(o.trail ? { trail: o.trail } : {}) });
       return true;
     },
     spellDamage: (t, amount) => log.damage.push({ id: t.id, amount }),
@@ -341,6 +342,41 @@ const round = (n) => Math.round(n * 1000) / 1000;
     SPELL_HANDLERS.AUcs(api, caster, swarm, 1, { targetId: 2, x: 400, y: 0, wave });
     SPELL_HANDLERS.AUcs(api, caster, swarm, 1, { targetId: 2, x: 400, y: 0, wave });
     check("…then the tail of the swarm has nothing left to give", log.damage.map((d) => d.amount), [75, 25]);
+  }
+}
+
+// Impale is the one wave whose art is not a missile. `[AUim]` names no Missileart at all,
+// only `Specialart = ImpaleMissTarget.mdl` — one tendril — so the wave lays a TRAIL of them
+// down the line. Its columns are the game's own (UI\WorldEditStrings.txt): `Uim1` Wave
+// Distance 600, `Uim2` Wave Time 0.3s, `Uim3` Damage Dealt 75, `Uim4` Air Time 1s.
+{
+  const caster = unit({ id: 1, team: 0, radius: 0 });
+  const foe = unit({ id: 2, team: 1, x: 300, y: 0, radius: 0 });
+  const impale = def({ data: [600, 0.3, 75, 1], area: 250, duration: 2, specialArt: "ImpaleMissTarget" });
+  {
+    const { api, log } = harness([caster, foe]);
+    SPELL_HANDLERS.AUim(api, caster, impale, 1, { targetId: 0, x: 600, y: 0 });
+    check("Impale launches a trail wave, not a missile", log.waves, [
+      { art: "", speed: 2000, from: 1, tx: 600, ty: 0, dist: 600, halfWidth: 125, budget: undefined,
+        trail: { art: "ImpaleMissTarget", step: 125 } },
+    ]);
+    check("…preceded by the Crypt Lord's own slam", log.effects, ["Abilities\\Spells\\Undead\\Impale\\ImpaleCaster.mdx"]);
+    check("…and nothing is damaged at the cast", log.damage, []);
+  }
+  {
+    // The front reaching a unit: dataC damage, the stun, and the tendril that CAUGHT it.
+    const { api, log } = harness([caster, foe]);
+    SPELL_HANDLERS.AUim(api, caster, impale, 1, { targetId: 2, x: 300, y: 0, wave: { budget: 0 } });
+    check("a unit the tendrils reach takes dataC", log.damage, [{ id: 2, amount: 75 }]);
+    check("…and is stunned for the row's duration", [log.buffs[0].kind, log.buffs[0].timeLeft], ["stun", 2]);
+    check("…and wears the hit tendril, not the miss one", log.effects, ["Abilities\\Spells\\Undead\\Impale\\ImpaleHitTarget.mdx"]);
+  }
+  {
+    // Air units are not impaled — the ground is what erupts (targs1 `ground,…`).
+    const flyer = unit({ id: 3, team: 1, x: 300, y: 0, radius: 0, flying: true });
+    const { api, log } = harness([caster, flyer]);
+    SPELL_HANDLERS.AUim(api, caster, impale, 1, { targetId: 3, x: 300, y: 0, wave: { budget: 0 } });
+    check("a flyer is passed under", log.damage, []);
   }
 }
 
