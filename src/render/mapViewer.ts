@@ -5534,6 +5534,7 @@ export class MapViewerScene {
         return [ox, oy, (cols - 1) * 128, (rows - 1) * 128];
       },
       fogAt: (wx, wy) => this.rts?.getVision().stateAt(wx, wy) ?? 2, // 2 = visible (no fog before a match)
+      cameraRect: () => this.viewRect(),
       panTo: (wx, wy) => {
         this.target[0] = wx;
         this.target[1] = wy;
@@ -9555,6 +9556,59 @@ export class MapViewerScene {
   private pan(dir: [number, number], amount: number): void {
     this.target[0] += dir[0] * amount;
     this.target[1] += dir[1] * amount;
+  }
+
+  /**
+   * The ground the camera is currently looking at, as an axis-aligned world rect — what the
+   * minimap's white camera box is drawn from (issue #112).
+   *
+   * The visible ground is not a rectangle: the lens is tilted 56° off vertical, so the four
+   * screen corners land on a symmetric TRAPEZOID, much wider along its far edge than its near
+   * one. WC3 draws its **bounding box** rather than that trapezoid — measured off the reference
+   * shot on the issue, whose box is a clean axis-aligned rectangle (equal top and bottom edges,
+   * to the pixel) 66 × 34 minimap px, i.e. 1.94 : 1. Run the frustum for the shot's ~1.98 : 1
+   * frame at the default camera (distance 1650, AOA 304, 32° lens — docs/camera.md) and the
+   * ground quad spans 2414 wide by 1185 deep: 2.04 : 1. The trapezoid itself is a third
+   * narrower along its near edge (1630) and would not read as a rectangle at all.
+   *
+   * The corners are met against the plane through the camera's FOCUS, not z = 0 — the focus
+   * rides the terrain (`followGround`), so that plane is the ground the middle of the screen is
+   * actually looking at, and pinning the box at 0 would swell it by a fifth on a high plateau.
+   */
+  viewRect(): { x: number; y: number; w: number; h: number } {
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
+    // The camera basis the frame builds its eye from, minus roll (CAMERA_FIELD_ROLL is 0 in
+    // every bundled map, and a rolled shot's bounding box is the same box a little larger).
+    const fwd = [cy * cp, sy * cp, -sp];
+    const right = [sy, -cy, 0];
+    const up = [cy * sp, sy * sp, cp];
+    const ty = Math.tan(this.fov / 2), tx = ty * this.aspect();
+    const eye = [
+      this.target[0] - cy * cp * this.distance,
+      this.target[1] - sy * cp * this.distance,
+      this.target[2] + sp * this.distance,
+    ];
+    const far = this.farZ > 0 ? this.farZ : this.distance * 8;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const s of [-1, 1]) {
+      for (const v of [-1, 1]) {
+        const dx = fwd[0] + v * ty * up[0] + s * tx * right[0];
+        const dy = fwd[1] + v * ty * up[1] + s * tx * right[1];
+        const dz = fwd[2] + v * ty * up[2];
+        const len = Math.hypot(dx, dy, dz);
+        // A corner ray that points at or above the horizon never meets the ground — a script
+        // that tilted the camera up (AOA past the lens's half-angle) has one. Its "hit" is the
+        // far plane, which is where the game stops drawing that direction anyway, so the box
+        // stays finite instead of running to infinity.
+        const nz = dz / len;
+        const t = Math.min(nz < -1e-4 ? (this.target[2] - eye[2]) / nz : far, far);
+        const x = eye[0] + (dx / len) * t, y = eye[1] + (dy / len) * t;
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
   }
 
   /** Middle-mouse drag-pan (WC3): the camera pans OPPOSITE the drag — drag the

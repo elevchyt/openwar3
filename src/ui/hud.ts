@@ -184,6 +184,9 @@ export interface HudDriver {
   mapBounds(): [number, number, number, number];
   /** Fog-of-war state at a world point: 0 unexplored, 1 explored, 2 visible. */
   fogAt(wx: number, wy: number): number;
+  /** The ground the viewport is looking at, as a world rect: the minimap's white camera
+   *  box (issue #112). Origin + size, so it shrinks as the view zooms in. */
+  cameraRect(): { x: number; y: number; w: number; h: number };
   panTo(wx: number, wy: number): void;
   /** A click on the minimap, resolved to a world point (issue #64): a right-click moves
    *  the selection there (or cancels an armed order), and an armed attack-move / patrol /
@@ -784,6 +787,8 @@ export class GameHud {
   private minimapAspect = 1; // map width / height
   private mmW = MINIMAP_SIZE; // dots-canvas backing store, sized to the map's aspect
   private mmH = MINIMAP_SIZE;
+  private camRect?: HTMLDivElement; // the white camera box over the map picture (#112)
+  private minimapDrag: number | null = null; // pointerId of a held left-press dragging the camera
   private idleWorkerBadge!: HTMLButtonElement;
   private idleWorkerCount!: HTMLSpanElement;
   /** The hero bar's seven slots (issue #95), built once and shown per living hero. */
@@ -996,6 +1001,7 @@ export class GameHud {
       this.dotsT = 0;
       this.drawDots();
     }
+    this.updateCameraRect(); // every frame, unthrottled: the box IS the camera's motion
     this.refreshCommandCard();
     this.refreshInventory();
     this.refreshHeroBar();
@@ -1507,20 +1513,39 @@ export class GameHud {
     this.dotsCanvas.height = this.mmH;
     view.appendChild(this.dotsCanvas);
 
+    // The camera box (issue #112): a white hairline rectangle over the map picture marking the
+    // ground the viewport is looking at. A DOM box rather than another figure on the dots canvas
+    // — that canvas redraws at DOTS_PERIOD (10 Hz), and a box that lags the view by up to a
+    // tenth of a second while you drag it is the one thing this widget must not do. Sized in
+    // PERCENTAGES of the map picture, so it is proportional to the map (a rect covering a fifth
+    // of a 96×96 map covers a tenth of a 192×192 one) and needs no re-fit when the frame resizes.
+    // Its own wrapper clips it: near a map edge the view spills past the terrain, and the
+    // overhang must stop at the picture rather than run out over the console art.
+    const camClip = document.createElement("div");
+    camClip.className = "hud-minimap-camclip";
+    this.camRect = document.createElement("div");
+    this.camRect.className = "hud-minimap-cam";
+    camClip.appendChild(this.camRect);
+    view.appendChild(camClip);
+
     // The frame is sized in percentages of the console art, so its pixel size moves
     // with the window; re-fit the view whenever it does.
     this.fitMinimap();
     this.minimapResize = new ResizeObserver(() => this.fitMinimap());
     this.minimapResize.observe(box);
 
+    // Pointer → world point on the map picture. Clamped to the map, because a drag holds the
+    // pointer captured and it may well leave the minimap while the button is still down.
+    const worldAt = (e: PointerEvent): [number, number] => {
+      const rect = view.getBoundingClientRect();
+      const u = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const v = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      const [ox, oy, w, h] = this.driver.mapBounds();
+      return [ox + u * w, oy + (1 - v) * h]; // minimap is north-up
+    };
     view.addEventListener("pointerdown", (e) => {
       if (e.button === 1) return; // middle button: nothing on the minimap
-      const rect = view.getBoundingClientRect();
-      const u = (e.clientX - rect.left) / rect.width;
-      const v = (e.clientY - rect.top) / rect.height;
-      const [ox, oy, w, h] = this.driver.mapBounds();
-      const wx = ox + u * w;
-      const wy = oy + (1 - v) * h; // minimap is north-up
+      const [wx, wy] = worldAt(e);
       // Alt-click marks the spot for the team before anything else looks at the click — a
       // ping is not an order, and must not be read as one.
       if (e.altKey && e.button === 0) {
@@ -1532,7 +1557,25 @@ export class GameHud {
       if (r === "ordered") this.clearOrderMode();
       if (r !== "none") return;
       this.driver.panTo(wx, wy); // plain left-click: jump the camera there
+      // …and it can be HELD: the camera keeps following the pointer until the button comes up
+      // (issue #112), which is how WC3 sweeps the view across a map. Only the plain left-press
+      // drags — a ping, an order and a right-click have all returned above, and each of those
+      // is a one-shot gesture in the real game too.
+      this.minimapDrag = e.pointerId;
+      view.setPointerCapture(e.pointerId);
     });
+    view.addEventListener("pointermove", (e) => {
+      if (this.minimapDrag !== e.pointerId) return;
+      const [wx, wy] = worldAt(e);
+      this.driver.panTo(wx, wy);
+    });
+    const endDrag = (e: PointerEvent): void => {
+      if (this.minimapDrag !== e.pointerId) return;
+      this.minimapDrag = null;
+      if (view.hasPointerCapture(e.pointerId)) view.releasePointerCapture(e.pointerId);
+    };
+    view.addEventListener("pointerup", endDrag);
+    view.addEventListener("pointercancel", endDrag);
     // Idle-worker button — the race's own worker button above the minimap, with an idle count
     // at the bottom-right. Click (or F8 / ~) selects and cycles through workers doing nothing.
     // Hidden when there are none.
@@ -1665,6 +1708,29 @@ export class GameHud {
       s.points.hidden = h.skillPoints <= 0;
       if (h.skillPoints > 0) s.points.textContent = String(h.skillPoints);
     }
+  }
+
+  /** Park the camera box over the ground the viewport is looking at (issue #112).
+   *
+   *  Everything is a percentage of the map picture, which is what makes the box carry both of
+   *  the things it has to say without a single constant: it is proportional to the MAP (the
+   *  same view is a small box on a big map) and it shrinks as the view ZOOMS IN, because the
+   *  world rect the driver hands back is smaller. North-up, like everything else here, so the
+   *  rect's TOP edge is its maximum world y. */
+  private updateCameraRect(): void {
+    const el = this.camRect;
+    if (!el) return;
+    const [ox, oy, w, h] = this.driver.mapBounds();
+    const r = this.driver.cameraRect();
+    if (w <= 0 || h <= 0 || !(r.w > 0) || !(r.h > 0)) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    el.style.left = `${((r.x - ox) / w) * 100}%`;
+    el.style.top = `${(1 - (r.y + r.h - oy) / h) * 100}%`;
+    el.style.width = `${(r.w / w) * 100}%`;
+    el.style.height = `${(r.h / h) * 100}%`;
   }
 
   /** Contain-fit the map picture inside the minimap frame and centre it: scale it up

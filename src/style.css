@@ -644,6 +644,21 @@ body.in-game .menu-panel { display: none; }
   height: 100%;
 }
 .hud-minimap-img { image-rendering: pixelated; }
+/* The camera box (#112): a white hairline rectangle with NO fill, over the map picture, at the
+   spot the viewport is looking at. Placed and sized in GameHud.updateCameraRect. The wrapper
+   clips it — near a map edge the view spills past the terrain, and that overhang stops at the
+   picture's border instead of running out over the console art. */
+.hud-minimap-camclip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none; /* the box is a readout; clicks belong to the minimap under it */
+}
+.hud-minimap-cam {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #fff;
+}
 /* A WC3 command-button icon used as a button — the idle-worker badge, the builder button on a
    construction panel. The BLP already carries the gold frame the game draws around every
    command button, so NOTHING here draws one: a border of ours would be a second frame around
