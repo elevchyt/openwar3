@@ -194,6 +194,29 @@ export interface AbilityDef {
   orderOff: string; // autocast off (Orderoff)
 }
 
+/** Point-target spells whose click sets a DIRECTION rather than a centre.
+ *
+ *  A wave/cone/line leaves the CASTER and travels toward the click, so the ability's
+ *  `Area` is the wave's WIDTH where it starts — not a radius at the cursor. WC3 draws
+ *  no `SpellAreaOfEffect` circle while aiming these (arm Shockwave or Carrion Swarm in
+ *  the real client and the ground under the cursor stays bare), because there is no
+ *  circle at the cursor to draw; Blizzard, Flame Strike, Rain of Fire and friends — whose
+ *  `Area` really IS a radius centred on the clicked point — draw one.
+ *
+ *  The family is readable straight off `Units\AbilityMetaData.slk`: abilities sharing a
+ *  hardcoded implementation share a `useSpecific` group for their Data fields, and the
+ *  three wave groups are exactly these — `Osh1..4` (AOsh,ACsh,ACst), `Ucs1..4`
+ *  (AUcs,ANbf,ACbc,ACbf,ACca,ACcv, plus ANfl on Ucs3/Ucs4) and `Uim1..4` (AUim,ACmp).
+ *  `AbilityData.slk` agrees: Carrion Swarm's cone reads `Area1`=100 as its START width
+ *  and `DataD1`=300 as its end width, 800 units (`DataC1`) out from the caster. */
+export const DIRECTIONAL_CASTS = new Set<string>([
+  "AOsh", "ACsh", "ACst", // Shockwave, and the creep/trap variants
+  "AUcs", "ACca", // Carrion Swarm (+ creep)
+  "ANbf", "ACbc", "ACbf", "ACcv", // Breath of Fire/Frost, Crushing Wave
+  "ANfl", // Forked Lightning
+  "AUim", "ACmp", // Impale (+ creep)
+]);
+
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
  *  sim how to aim it; `autocast` marks abilities that can toggle autocasting.
  *  Anything not listed here loads as data but is treated as passive/uncastable

@@ -1,6 +1,6 @@
 import { WidgetState } from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/widget";
 import { SimWorld, weaponsFromDef, isOffField, type WorkerState, type SimUnit, type SimMine, type SimItem, type BuildingState, type QueuedOrder, type RallyKind, type SimAbility, type HeroInit, type SimLightning } from "../sim/world";
-import { KNOWN_ABILITIES } from "../data/abilities";
+import { KNOWN_ABILITIES, DIRECTIONAL_CASTS } from "../data/abilities";
 import type { Command } from "./commands";
 import { PATHING_CELL, footprintCells, type PathingGrid } from "../sim/pathing";
 import type { PlacedFootprint, Footprint } from "../sim/destructibles";
@@ -3965,7 +3965,13 @@ export class RtsController {
       this.refuseOrder(err);
       return false;
     }
-    this.armedCast = { code, target, area };
+    // A directional wave (Shockwave, Carrion Swarm, Impale…) arms with NO aiming area: its
+    // `Area` is the wave's width at the caster, not a circle at the cursor, so the click
+    // only picks a direction (DIRECTIONAL_CASTS). Zeroing it here is the single gate for
+    // every piece of AoE aiming feedback — the SpellAreaOfEffect splat, the green target
+    // tint and the tree highlight all key off `armedCast.area` — and matches the real
+    // client, which shows a bare cursor for these and a circle only for the point AoEs.
+    this.armedCast = { code, target, area: DIRECTIONAL_CASTS.has(code) ? 0 : area };
     this.orderMode = "cast";
     return true;
   }
