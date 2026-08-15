@@ -5247,7 +5247,12 @@ export class MapViewerScene {
       this.loc3[1] = p.y;
       this.loc3[2] = this.rts!.groundHeightAt(p.x, p.y) + p.z; // per-projectile launch→impact height
       inst.setLocation(this.loc3);
-      const ang = t ? Math.atan2(t.y - p.y, t.x - p.x) : 0;
+      // A WAVE has no target to point at — it IS a direction — and its model has a definite
+      // forward axis: Shock Wave's wedge, Carrion Swarm's swarm, the Brewmaster's breath.
+      // Facing it down the line it sweeps is what makes the art read as the spell; without
+      // it every wave pointed at world +x, so a Breath of Fire cast southward laid its
+      // flame out sideways across the caster and looked like no model at all.
+      const ang = p.wave ? Math.atan2(p.wave.dirY, p.wave.dirX) : t ? Math.atan2(t.y - p.y, t.x - p.x) : 0;
       zQuat(this.mq, ang);
       inst.setRotation(this.mq);
     }
