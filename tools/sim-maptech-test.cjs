@@ -163,5 +163,39 @@ console.log("\n[map tech] a map that ships no object data runs on the install's 
   check("a corrupt blob is non-fatal", applyMapTechData(tech, { w3u: new Uint8Array([1, 2, 3, 4, 5]) }), 0);
 }
 
+console.log("\n[map data] a WORKER and a DEPOT are data, not lists of ids");
+{
+  // Same bug family as the tech graph, and both hit the same map: a hard-coded table of stock
+  // ids that a map's own type can never be in. WC3 keeps neither list — gathering is an
+  // ABILITY (`Ahar`/`Aaha`/`Ahrl`/`Awha`) and so is depositing (`Artn`, whose two Data columns
+  // ARE "accepts gold" / "accepts lumber"). Rows below are the install's own, spot-checked in
+  // the comments of src/data/races.ts.
+  const { workerProfileFor, depotRoleFor } = require(join(REPO, ".sim-build", "src", "data", "races.js"));
+  const Argl = { code: "Artn", data: [1, 1] }; // "Return (Gold & Lumber)" — the human/orc halls
+  const Arlm = { code: "Artn", data: [0, 1] }; // "Return (Lumber)" — Lumber Mill, War Mill, Graveyard, Necropolis, Tree
+  const Argd = { code: "Artn", data: [1, 0] }; // "Return (Gold)" — nothing stock carries it
+  const Abds = { code: "Abli", data: [64, 0] }; // Blight Dispel — a building ability that is NOT a return
+
+  check("a Town Hall takes both", depotRoleFor(["townhall", "mechanical"], [Abds, Argl]), { gold: true, lumber: true });
+  check("a map's CLONE of one takes both too — the ability rides the clone (the reported bug)", depotRoleFor(["townhall", "mechanical"], [Abds, Argl]), { gold: true, lumber: true });
+  check("a Lumber Mill takes lumber only", depotRoleFor(["mechanical"], [Abds, Arlm]), { gold: false, lumber: true });
+  check("the orc WAR MILL takes lumber — stock data the old id set missed", depotRoleFor(["mechanical"], [Abds, Arlm]), { gold: false, lumber: true });
+  check("a Barracks takes nothing", depotRoleFor(["mechanical"], [Abds]), { gold: false, lumber: false });
+  check("`Argd` would be gold-only (nothing stock carries it; a map may)", depotRoleFor([], [Argd]), { gold: true, lumber: false });
+  // The one deliberate departure from the data — see the block comment in races.ts. A
+  // Necropolis carries only `Arlm`, because real undead gold never leaves the mine; we do not
+  // model the Haunted Gold Mine, so our acolytes shuttle it and need somewhere to put it.
+  check("a Necropolis takes gold anyway, on its TownHall class (the Haunted Gold Mine stand-in)", depotRoleFor(["townhall", "undead", "mechanical"], [Arlm]), { gold: true, lumber: true });
+  check("...and so does a Tree of Life", depotRoleFor(["townhall", "ancient"], [Arlm]), { gold: true, lumber: true });
+  check("...but the class alone never grants LUMBER", depotRoleFor(["townhall"], []), { gold: true, lumber: false });
+
+  const HARVEST = { code: "Ahar", data: [] };
+  check("a stock worker is found by id", !!workerProfileFor("hpea", []), true);
+  check("a map's own builder is found by the harvest ability it CARRIES", workerProfileFor("h01W", ["A001", "Ahar", "Ahrp"])?.harvestAbility, "Ahar");
+  check("...and a Wisp's rules follow `Awha`, not its id", workerProfileFor("e001", ["Awha"])?.deliversInPlace, true);
+  check("a Footman is not a worker", workerProfileFor("hfoo", ["Adef"]), null);
+  check("(the harvest code is all that is read — no Data columns needed)", workerProfileFor("x000", [HARVEST.code])?.harvestAbility, "Ahar");
+}
+
 console.log(failed ? `\n${failed} CHECK(S) FAILED` : "\nALL CHECKS PASSED");
 process.exit(failed ? 1 : 0);

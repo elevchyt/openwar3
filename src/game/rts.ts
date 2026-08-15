@@ -42,7 +42,7 @@ import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { type ItemRegistry } from "../data/items";
-import { DEPOT_IDS, workerProfileFor } from "../data/races";
+import { workerProfileFor, depotRoleFor } from "../data/races";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -2347,11 +2347,20 @@ export class RtsController {
     // Naga arrive through the script path. A human's units never get it — yours go where you
     // send them and stay there — and the flag is cleared the moment anything orders the unit.
     const guarding = this.aiPlayers.has(owner) && !def.isBuilding;
+    // The type's innate abilities as the two data-driven rules below want them: the BASE code
+    // (a map's `A000` cloned from `Ahar` is still `Ahar`) plus the rank-1 Data columns.
+    const innate = def.abilities.map((id) => {
+      const a = this.abilities.get(id);
+      return { code: a?.code ?? id, data: a?.levelData[0]?.data ?? [] };
+    });
     // A worker is whatever CARRIES a harvest ability, not one of five known ids — see
     // workerProfileFor. The map's own builder is a Peasant with `Ahar` and a custom `Builds`
     // list, and without this it had no worker state, so no Build button and no gathering.
-    // The alias is resolved to its base code first (`A000` based on `Ahar` is still `Ahar`).
-    const profile = workerProfileFor(def.id, def.abilities.map((id) => this.abilities.get(id)?.code ?? id));
+    const profile = workerProfileFor(def.id, innate.map((a) => a.code));
+    // …and a depot is whatever carries `Artn` ("Return Resources"), whose two Data columns ARE
+    // these two flags — so a custom map's own Town Hall takes gold, and the War Mill and the
+    // Graveyard take lumber. See depotRoleFor.
+    const depot = depotRoleFor(def.classification, innate);
     // baseLumberCapacity is the pre-upgrade load; Improved Lumber Harvesting raises the live
     // `lumberCapacity` off it each tick (recomputeStats), so the profile stays the baseline.
     const worker: WorkerState | null = profile ? { ...profile, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 } : null;
@@ -2400,8 +2409,8 @@ export class RtsController {
         castPoint: def.castPoint,
         castBackswing: def.castBackswing,
         worker,
-        depotGold: DEPOT_IDS.has(def.id) && def.id !== "hlum", // lumber mill: lumber only
-        depotLumber: DEPOT_IDS.has(def.id),
+        depotGold: depot.gold,
+        depotLumber: depot.lumber,
       },
       building,
       // "Invulnerable (Neutral)" (Avul): neutral buildings — goblin merchant, goblin

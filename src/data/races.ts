@@ -177,14 +177,65 @@ export const RACE_INDEX: Record<PlayableRace, number> = {
   nightelf: 4,
 };
 
-// Buildings that accept resource deposits (town halls + upgrades).
-export const DEPOT_IDS = new Set([
-  "htow", "hkee", "hcas", // Town Hall / Keep / Castle
-  "ogre", "ostr", "ofrt", // Great Hall / Stronghold / Fortress
-  "unpl", "unp1", "unp2", // Necropolis / Halls of the Dead / Black Citadel
-  "etol", "etoa", "etoe", // Tree of Life / Ages / Eternity
-  "hlum", // Lumber Mill (lumber drop-off)
-]);
+/**
+ * A resource DEPOT is a building CARRYING the "Return Resources" ability, not one of a
+ * known thirteen ids.
+ *
+ * `Artn` is the base code, and the game ships exactly three aliases of it — the whole rule is
+ * in their two Data columns (`AbilityData.slk`, and `AbilityMetaData.slk` names the columns
+ * `Rtn1`/`Rtn2`):
+ *
+ *     alias  comments                   DataA (Rtn1)  DataB (Rtn2)   carried by
+ *     Argd   "Return (Gold)"                 1             0         — (nothing stock)
+ *     Argl   "Return (Gold & Lumber)"        1             1         the human + orc halls
+ *     Arlm   "Return (Lumber)"               0             1         Lumber Mill, WAR MILL,
+ *                                                                    GRAVEYARD, Necropolis
+ *                                                                    chain, Tree chain
+ *
+ * Keying off the ability instead of the id is the actual rule, and it is what makes a custom
+ * map work: a clone of a Town Hall carries `Argl` the same way it carries its model, so it
+ * accepts gold — while the old id set named the twelve stock halls and the Lumber Mill and
+ * nothing else, so WTii's Unit Tester's own `htow`-based hall (`h02X`) took no deposits at all.
+ * It also closes two holes in the STOCK data the id set had: `ofor` (the orc **War Mill**) and
+ * `ugrv` (the undead **Graveyard**) both carry `Arlm` and were not in it, so orc and undead
+ * lumber had to be walked all the way back to the hall.
+ *
+ * The one place we depart from the data, and deliberately: **a `TownHall`-classified building
+ * accepts GOLD even when its `Artn` row does not say so.** The Necropolis and Tree of Life
+ * chains carry only `Arlm`, because in the real game neither race's gold ever leaves the mine
+ * — undead acolytes and night elf wisps stand INSIDE a haunted/entangled mine and the gold is
+ * credited where it is dug, so there is nothing to return. We model the night elf's version
+ * (SimWorld.tickEntangledMines) but not the undead's (see the "we do not model a Haunted Gold
+ * Mine" note in world.ts), so our acolytes shuttle gold like a peasant and need somewhere to
+ * put it. `UnitBalance.slk`'s `type` column carries the classification and a clone inherits
+ * it, so this stays as data-driven as the rest — and it applies to exactly the seventeen
+ * TownHall-classified types (the twelve halls, the three corrupted trees, the Draenei Haven
+ * and the Temple of Tides). Drop this clause when the Haunted Gold Mine is modelled.
+ */
+export const RETURN_RESOURCES_CODE = "Artn";
+
+/** Which resources a building takes deposits of. */
+export interface DepotRole {
+  gold: boolean;
+  lumber: boolean;
+}
+
+/**
+ * The depot role for a type. `abilities` is its innate ability list resolved to base
+ * `code` + level-1 Data columns (the caller has the ability registry); `classification` is
+ * `UnitDef.classification` (UnitBalance `type`, lowercased).
+ */
+export function depotRoleFor(classification: string[], abilities: Array<{ code: string; data: number[] }>): DepotRole {
+  const role: DepotRole = { gold: false, lumber: false };
+  for (const a of abilities) {
+    if (a.code !== RETURN_RESOURCES_CODE) continue;
+    if (a.data[0]) role.gold = true; // Rtn1 — accepts gold
+    if (a.data[1]) role.lumber = true; // Rtn2 — accepts lumber
+  }
+  // The Haunted Gold Mine stand-in — see the block comment above.
+  if (!role.gold && classification.includes("townhall")) role.gold = true;
+  return role;
+}
 
 const POOL: PlayableRace[] = ["human", "orc", "undead", "nightelf"];
 
