@@ -582,8 +582,14 @@ export interface WorkerState {
 }
 
 /** Where a rally point sends newly-produced units. A plain point is a move; a
- *  mine/tree makes new workers harvest it; a unit makes them move to it (WC3). */
-export type RallyKind = "point" | "mine" | "tree" | "unit";
+ *  mine/tree makes new workers harvest it; a unit makes them move to it (WC3).
+ *
+ *  **"none" is the state a building is BORN in**, and it is not the same as a point at the
+ *  building's own feet. WC3 sets no default rally: a fresh Barracks has no flag, and the
+ *  Footman it trains walks clear of the door and stops there. Ours defaulted to a point 200
+ *  units south, so every unit any building ever produced marched off it — visible on WTii's
+ *  Unit Tester, where a hero bought at an altar immediately ran away from the altar. */
+export type RallyKind = "none" | "point" | "mine" | "tree" | "unit";
 
 /** One job in a building's production queue. A building produces three different kinds of
  *  thing on the SAME queue in WC3 — you cannot train a Footman while the Barracks researches

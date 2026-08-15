@@ -1167,6 +1167,18 @@ export class MapViewerScene {
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
     this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
+    // The map's own object data goes in FIRST — before anything reads the registries for this
+    // map. It is the map's declaration of what its types ARE, so every question asked below
+    // (a building's pathing footprint, its ground texture, whether it is a building at all)
+    // has to be asked of the map's answer and not the install's. Loading it later — it used
+    // to run at the top of startCustom, hundreds of lines after this — is what left WTii's
+    // Unit Tester's mercenary camps wearing ubersplats: the map clears `uubs` on all fourteen
+    // of them through the ORIGINAL table, but stampMapPathing had already painted the stock
+    // decal from the un-overridden row. Its custom `h0xx` shops only looked right by accident
+    // (a custom id resolves to nothing at all before the overlay lands, so nothing was
+    // painted). Doing it here also means a MELEE map with object data finally gets it — the
+    // startCustom call meant melee maps were reading their own .w3u nowhere.
+    this.loadMapObjectData();
     // …and mounted over the install for AUDIO, so a map's imported clips resolve: the paths
     // its CreateSound calls name (`war3mapImported\HalloweenMusic.wav`) are inside this
     // archive and nowhere else. See SoundBoard.mountMap.
@@ -1977,10 +1989,9 @@ export class MapViewerScene {
     // so seed empty stashes; the map's own script grants gold/lumber where it wants.
     this.beginMatch(config, 0, 0);
 
-    // Merge the map's custom object data (war3map.w3u units + war3map.w3a abilities)
-    // into the registries so custom types (e.g. a Shandris-based hero) resolve for both
-    // .doo adoption and trigger CreateUnit. Per-map overlay — cleared first.
-    this.loadMapObjectData();
+    // (The map's custom object data is already in — loadMap installs it the moment the
+    // archive is opened, so the pre-placed .doo pass and the pathing/ubersplat stamps see
+    // the map's own types too. See the note there.)
 
     // Seed the pre-placed player units OWNED. Team comes from teamOf(owner), so the
     // local player's units share the local team and lift the fog (updateVision keys
@@ -3407,6 +3418,9 @@ export class MapViewerScene {
   private applyRally(simId: number, rally: { kind: RallyKind; targetId: number; x: number; y: number }): void {
     const world = this.rts?.simWorld;
     if (!world) return;
+    // No flag has been planted — the unit stays where it came out. WC3 gives a building no
+    // default rally point, so this is the ordinary case, not an edge one.
+    if (rally.kind === "none") return;
     const u = world.units.get(simId);
     if (!u) return;
     if (rally.kind === "mine" && u.worker?.gold && world.mines.has(rally.targetId)) {

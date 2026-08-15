@@ -37,7 +37,7 @@ import type { FogArea, FogModifier } from "./fog";
 import { AllianceTable, AllianceType } from "../sim/alliances";
 import type { HeightSampler, FootprintMaxSampler } from "./heightmap";
 import type { UnitRegistry, UnitDef } from "../data/units";
-import { ArmorType, AttackType, MoveType, PrimaryAttribute } from "../data/enums";
+import { ArmorType, AttackType, MoveType, PlayerSlot, PrimaryAttribute } from "../data/enums";
 import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
@@ -393,6 +393,12 @@ const PICK_WORLD_MAX = 700;
 // sim's `neutralPassive` flag makes them non-hostile with a yellow ring.
 const NEUTRAL_PASSIVE_OWNER = -1;
 const NEUTRAL_PASSIVE_TEAM = -2;
+/** Neutral Hostile (WC3 player 12) — the CREEP player. Owner -1 / team -1 is the same pair
+ *  every map-placed creep already gets (see trySeed), so a creep the SCRIPT makes and one the
+ *  editor placed are the same thing to the sim: hostile to every player team, hostile to
+ *  nobody on its own, grey on the minimap, and never counted as a player's unit. */
+const NEUTRAL_HOSTILE_OWNER = -1;
+const NEUTRAL_HOSTILE_TEAM = -1;
 
 /** One icon in the multi-selection grid. */
 export interface SelIcon {
@@ -1405,10 +1411,36 @@ export class RtsController {
       }
     }
     const facing = (facingDeg * Math.PI) / 180;
-    const team = teamOf(player);
+    // `Player(PLAYER_NEUTRAL_AGGRESSIVE)` is not a thirteenth PLAYER — it is the creep slot,
+    // and a unit created on it must come out as a creep, not as a coloured player's unit on a
+    // team of its own. This is how nearly every custom map makes its monsters: WTii's Unit
+    // Tester answers a purchase at a "Creep - …" shop with a dozen
+    // `CreateNUnitsAtLoc(…, Player(PLAYER_NEUTRAL_AGGRESSIVE), …)` calls, and the camp came up
+    // owned by a live player — coloured, allied to nobody, and attacking no one. Mapped to the
+    // same owner/team pair `trySeed` gives a map-PLACED creep, so both are one thing to the
+    // sim; the guard AI that pair implies is applied in addSimUnit. Neutral Passive (15) is
+    // the other half — shops, critters, fountains a script creates — and takes the passive
+    // pair, which is what makes them non-hostile with a yellow ring.
+    const creep = player === PlayerSlot.NeutralHostile;
+    const passive = player >= PlayerSlot.NeutralVictim; // 13/14/15 — never a fighting slot
+    const owner = creep ? NEUTRAL_HOSTILE_OWNER : passive ? NEUTRAL_PASSIVE_OWNER : player;
+    const team = creep ? NEUTRAL_HOSTILE_TEAM : passive ? NEUTRAL_PASSIVE_TEAM : teamOf(player);
     const simId = this.reserveUnitId();
-    this.addSimUnit(def, x, y, facing, player, team, 0, simId); // exists NOW
-    this.scriptSpawns.push({ typeId, x, y, facing, player, team, simId }); // …gets a body later
+    this.addSimUnit(def, x, y, facing, owner, team, 0, simId); // exists NOW
+    const su = this.sim.units.get(simId);
+    if (su && creep) {
+      // The same guard behaviour a map-placed creep gets: it holds the ground it was made on,
+      // leashes back to it after a chase, and dozes at night if its type sleeps.
+      su.isCreep = true;
+      su.guardX = x;
+      su.guardY = y;
+      su.guardFacing = facing;
+      su.aggroRange = su.weapon?.acquire ?? def.acquireRange ?? 0;
+      su.canSleep = def.canSleep;
+    } else if (su && passive) {
+      su.neutralPassive = true;
+    }
+    this.scriptSpawns.push({ typeId, x, y, facing, player: owner, team, simId }); // …gets a body later
     return simId;
   }
 
@@ -2147,7 +2179,7 @@ export class RtsController {
     // structures (footprint-sized ring, lowered collider); their footprint is
     // already stamped by the map loader, so speed 0 → no cell reservation here.
     const building: BuildingState | null = isBuilding
-      ? { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: loc[0], rallyY: loc[1], rallyKind: "point", rallyTargetId: 0, producesUnits: false }
+      ? { constructionLeft: 0, buildTimeTotal: 1, builderIds: [], goldCost: 0, lumberCost: 0, queue: [], rallyX: loc[0], rallyY: loc[1], rallyKind: "none", rallyTargetId: 0, producesUnits: false }
       : null;
     const u = this.sim.add(
       {
@@ -2367,7 +2399,7 @@ export class RtsController {
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
-      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: this.tech.producesUnits(def.id) }
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "none", rallyTargetId: 0, producesUnits: this.tech.producesUnits(def.id) }
       : null;
     // A hero is born with a given name drawn from its `Propernames` list (the
     // Demon Hunter's "Painkiller", the Paladin's "Uther"-alikes) — the info panel
@@ -4634,6 +4666,7 @@ export class RtsController {
     if (!bu) return null;
     const b = bu.building;
     if (!b || !this.sim.acceptsRally(this.primary)) return null; // …and an uprooted Ancient has none
+    if (b.rallyKind === "none") return null; // nothing planted yet — WC3 shows no flag until you set one
     // For a mine/tree/unit rally, put the flag on the live target (a followed
     // unit may have moved); fall back to the stored point if it's gone.
     let x = b.rallyX;
