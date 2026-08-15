@@ -1,5 +1,6 @@
 import { BUILD_CELL, PATHING_CELL, footprintCells, type PathDomain, type PathingGrid } from "./pathing";
 import { findPath, smoothPath } from "./pathfind";
+import { targsKindError } from "./targeting";
 import { footprintBuildable, footprintRadius, stampFootprint, unstampFootprint, type Footprint } from "./destructibles";
 import { type AbilityRegistry, type AbilityDef, type AbilityLevel, type BuffFx, emptyAbilityLevel, isRepairCode, requiredHeroLevel, KNOWN_ABILITIES } from "../data/abilities";
 import { type ItemRegistry, type ItemDef } from "../data/items";
@@ -7372,6 +7373,17 @@ export class SimWorld {
     return undead !== healsUndead; // enemy
   }
 
+  /** Does this ability's `targs1` admit `target` as a KIND (air/ground/structure, organic,
+   *  hero, ancient)? Allegiance is the caller's business — a hardcoded enemies-only nuke
+   *  (Shock Wave, Carrion Swarm) states no allegiance in its data at all, so reading one
+   *  out of `targs1` would invent friendly fire the real game does not have. What the data
+   *  DOES decide, for every caller alike, is what may be struck. */
+  targsAdmit(target: SimUnit, flags: string[] = []): boolean {
+    // Defaulted like targetError's: a def built without a `targs1` (a custom map's row, a
+    // test fixture) restricts nothing, which is what an empty flag list means anyway.
+    return targsKindError(target, flags) === null;
+  }
+
   /** Enforce the ability's "Targets Allowed" (AbilityData `targs1`) allegiance +
    *  hero/non-hero flags, so a spell only hits what its data says it may. Verified
    *  against the 1.27 MPQ: Storm Bolt/Chain Lightning/Slow are `enemy` (never a
@@ -7381,38 +7393,8 @@ export class SimWorld {
    *  Returns an [Errors] key, or null when allowed. */
   private targetAllowed(caster: SimUnit, target: SimUnit, flags: string[]): string | null {
     const F = new Set(flags.map((f) => f.toLowerCase()));
-    // Clear-cut unit-type gates.
-    if (F.has("nonhero") && target.isHero) return "Nohero";
-    if (F.has("hero") && !target.isHero) return "Targethero";
-    // "organic" is the absence of the two inorganic kinds — WC3 has no organic flag on the
-    // unit, it has `mechanical` in UnitData and buildings, and everything else is flesh.
-    if (F.has("organic") && (target.mechanical || target.building)) return "Notmechanical"; // "Must target organic units."
-    // What the target IS — the same air/structure/ground classification weaponVs() already
-    // applies to Targets Allowed, and for the same reason: a building is NOT "ground" (see
-    // the Chimaera/Mortar Team note there). Spells read the identical flags, so the rule is
-    // shared rather than re-derived.
-    //
-    // `ground` and `air` are the two commonest flags in the table (391 and 296 of the 799
-    // rows) and they are an ALLOW-list: Entangling Roots is `ground,enemy,neutral,organic`
-    // and may not root a Gryphon; the Batrider's Unstable Concoction is `air,neutral,enemy`
-    // and may not be spent on a Grunt. Refusals are the game's own words — commandstrings.txt
-    // [Errors] Noair/Noground/Nostructure.
-    //
-    // Gated only when the data names a target kind at all: plenty of rows restrict by
-    // allegiance alone (Absorb Mana is `player,vuln,invu`) and stay unrestricted.
-    // A structure-ONLY ability keeps the game's positive wording ("Must target a building.")
-    // rather than the generic refusal — that is what Repair says when aimed at a Footman.
-    if (F.has("structure") && !F.has("ground") && !F.has("air") && !target.building) return "Targetstructure";
-    // `nonancient` — an EXCLUSION, not an allow-list entry, and the only one in the table
-    // shaped that way. It is what keeps a Peasant from repairing a Tree of Life: Repair,
-    // Restoration and the orc's Repair all list it and only the night elf's Renew does not
-    // (see repairRefusal). commandstrings.txt [Errors] Notancient = "Unable to target
-    // Ancients." — which exists for precisely this flag and nothing else.
-    if (F.has("nonancient") && target.ancient) return "Notancient";
-    if (F.has("air") || F.has("ground") || F.has("structure")) {
-      const kind = target.building ? "structure" : target.flying ? "air" : "ground";
-      if (!F.has(kind)) return kind === "air" ? "Noair" : kind === "structure" ? "Nostructure" : "Noground";
-    }
+    const kindError = targsKindError(target, flags);
+    if (kindError !== null) return kindError;
     const enemy = F.has("enemy");
     const friend = F.has("friend") || F.has("player"); // `player` = own units (Death Pact/Dark Ritual)
     const self = F.has("self");
@@ -8586,6 +8568,11 @@ export class SimWorld {
   areaEffectAffects(casterId: number, casterTeam: number, flags: string[], t: SimUnit): boolean {
     if (t.hp <= 0) return false;
     const F = new Set(flags.map((x) => x.toLowerCase()));
+    // What may be struck at all is targsKindError's answer, shared with single-target casts
+    // and orbs — a field burns what its data says it burns. Flame Strike is `ground,…` and
+    // so leaves a Gargoyle overhead alone; Death and Decay is `air,ground,structure` and
+    // does not; Blizzard and Rain of Fire name no kind (`_`) and hit everything.
+    if (targsKindError(t, flags) !== null) return false;
     if (t.neutralPassive) return F.has("neutral");
     const isSelf = t.id === casterId;
     const enemy = F.has("enemy");
@@ -8825,6 +8812,7 @@ export class SimWorld {
     unitsInArea: (x, y, r) => this.unitsInAreaInternal(x, y, r),
     hostile: (a, b) => this.hostile(a, b),
     ally: (a, b) => this.allied(a, b),
+    admits: (def, t) => this.targsAdmit(t, def.targetFlags),
     // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
     // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical
     // immunity (issue #49).
@@ -11096,6 +11084,18 @@ export class SimWorld {
     if (!this.abilities) return null;
     // Almost every attacker in the game has no orb of any kind, and this runs on every blow.
     if (!attacker.arrowShot && !attacker.inventory.some(Boolean) && !attacker.abilities.some((a) => a.level >= 1 && isOrbCode(a.code))) return null;
+    // NO ORB RIDES A FRIENDLY BLOW. An orb effect is a hostile on-hit effect to the last
+    // member of the family, and the data says so wherever it says anything: Cold Arrows is
+    // `air,ground,enemy,neutral`, Searing Arrows `…,enemy,neutral`, Black Arrow the same —
+    // not one of them lists `friend` or `self`. The item orbs (`ground,air,ward`) name no
+    // allegiance at all, so the family rule is what covers them.
+    //
+    // This is the gate autocast used to duck: picking an autocast TARGET already went
+    // through targetAllowed (autocastWants), but a blow the player ordered by hand never
+    // did, so Cold Arrows with autocast on froze a unit its own targs1 forbids. Refusing
+    // here — before any candidate is collected — is also what makes the fallback right:
+    // the swing goes out as an ORDINARY attack, no mana spent, no aimed shot consumed.
+    if (!this.hostile(attacker, target)) return null;
     // The one blow this unit was told to enhance by hand, if it is going at the unit it was
     // aimed at (issueArrowShot). Consumed here whether or not it ends up winning: an aimed
     // shot is spent on the shot, and a second arrow is a second order.
@@ -11115,6 +11115,10 @@ export class SimWorld {
       } else if (!this.techMeets(attacker.owner, ab.id)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
+      // …and what this particular orb may strike is its own `targs1`, read by the same
+      // predicate every cast uses: Searing Arrows lists `structure` and so fires at a
+      // tower, Cold Arrows does not and so lets the same swing land bare.
+      if (!this.targsAdmit(target, def.targetFlags)) continue;
       const orb = this.orbOf(def, ab.level);
       if (attacker.mana < orb.lvl.cost) continue; // can't pay for this shot — try the next orb
       candidates.push({ tier, slot: -1, payload: orb });
@@ -11136,6 +11140,11 @@ export class SimWorld {
         // The item's PRIMARY half is the one that names the effect; the rest ride with it
         // (Orb of Venom's poison, the RoC Orb of Lightning's purge).
         const primary = parts[0];
+        // One orb, one verdict: an item's halves win or lose together, so the primary's
+        // `targs1` decides for the set (the stock pairs carry identical flags anyway).
+        // This is also where WC3's "vampiric does not drain buildings" falls out for free
+        // — the Mask of Death's `AIva` is `air,ground,enemy`, with no `structure`.
+        if (!this.targsAdmit(target, primary.def.targetFlags)) continue;
         primary.extra = parts.slice(1);
         candidates.push({ tier: itemOrbTier(codes), slot, payload: primary });
       }

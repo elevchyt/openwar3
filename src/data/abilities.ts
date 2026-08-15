@@ -206,15 +206,16 @@ export interface AbilityDef {
  *  The family is readable straight off `Units\AbilityMetaData.slk`: abilities sharing a
  *  hardcoded implementation share a `useSpecific` group for their Data fields, and the
  *  three wave groups are exactly these — `Osh1..4` (AOsh,ACsh,ACst), `Ucs1..4`
- *  (AUcs,ANbf,ACbc,ACbf,ACca,ACcv, plus ANfl on Ucs3/Ucs4) and `Uim1..4` (AUim,ACmp).
+ *  (AUcs,ANbf,ACbc,ACbf,ACca,ACcv) and `Uim1..4` (AUim,ACmp).
  *  `AbilityData.slk` agrees: Carrion Swarm's cone reads `Area1`=100 as its START width
  *  and `DataD1`=300 as its end width, 800 units (`DataC1`) out from the caster. */
 export const DIRECTIONAL_CASTS = new Set<string>([
   "AOsh", "ACsh", "ACst", // Shockwave, and the creep/trap variants
   "AUcs", "ACca", // Carrion Swarm (+ creep)
   "ANbf", "ACbc", "ACbf", "ACcv", // Breath of Fire/Frost, Crushing Wave
-  "ANfl", // Forked Lightning
   "AUim", "ACmp", // Impale (+ creep)
+  // NOT Forked Lightning: it shares Carrion Swarm's `Ucs3`/`Ucs4` fields (the cone's
+  // distance and final width) but is cast on a UNIT, so it never arms a point at all.
 ]);
 
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
@@ -309,7 +310,11 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AEsv: { target: "passive" }, // Vengeance — (ultimate passive)
   // === Neutral heroes ===
   // -- Naga Sea Witch --
-  ANfl: { target: "point" }, // Forked Lightning — cone nuke
+  // Forked Lightning — a cone of bolts, but AIMED AT A UNIT: "Calls forth a cone of
+  // lightning on a target enemy unit" (`NeutralAbilityStrings [ANfl]` Ubertip, level 1).
+  // Its `Rng1`=600 + `Area1`=125 make it look like a point spell in the tables; they can't
+  // tell the two apart, and the tooltip is the only thing in the data that can.
+  ANfl: { target: "unit" },
   AHca: { target: "unit", autocast: true }, // Cold / Frost Arrows — slow on attack
   ANms: { target: "none" }, // Mana Shield — absorb damage into mana (toggle)
   ANto: { target: "point" }, // Tornado — summon a tornado

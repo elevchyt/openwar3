@@ -23,26 +23,29 @@ const lvl = (o = {}) => ({
 });
 const abil = (id, code, level, o = {}) => ({
   id, code, levels: 1, levelData: [lvl(level)], missileArt: "", targetArt: "", targetAttach: [],
-  casterArt: "", specialArt: "", buffFx: [], buffArt: "", ...o,
+  casterArt: "", specialArt: "", buffFx: [], buffArt: "", targetFlags: [], ...o,
 });
 
 // --- the real rows -----------------------------------------------------------------
 // Orb of Fire (`ofir` → AIfb): DataA 10 damage, Area 150 splash, DataE 2 = Enabled Attack Index.
-const AIfb = abil("AIfb", "AIfb", { area: 150, data: [10, NaN, NaN, NaN, 2] }, { missileArt: "fireball", targetArt: "AIfbTarget", targetAttach: ["weapon"] });
+const AIfb = abil("AIfb", "AIfb", { area: 150, data: [10, NaN, NaN, NaN, 2] }, { missileArt: "fireball", targetArt: "AIfbTarget", targetAttach: ["weapon"], targetFlags: ["ground", "air", "ward"] });
 // Orb of Frost (`ofro` → AIob): DataA 6, Dur 3 / HeroDur 1, buff Bfro.
-const AIob = abil("AIob", "AIob", { duration: 3, heroDuration: 1, data: [6, NaN, NaN, NaN, 2] }, { missileArt: "lichmissile", targetArt: "AIobTarget", targetAttach: ["weapon"] });
+const AIob = abil("AIob", "AIob", { duration: 3, heroDuration: 1, data: [6, NaN, NaN, NaN, 2] }, { missileArt: "lichmissile", targetArt: "AIobTarget", targetAttach: ["weapon"], targetFlags: ["ground", "air", "ward"] });
 // Orb of Corruption (`ocor` → AIcb): DataA 5, DataB 4 armour, Dur 5.
-const AIcb = abil("AIcb", "AIcb", { duration: 5, heroDuration: 5, data: [5, 4, NaN, NaN, 2] });
+const AIcb = abil("AIcb", "AIcb", { duration: 5, heroDuration: 5, data: [5, 4, NaN, NaN, 2] }, { targetFlags: ["ground", "air", "ward"] });
 // Mask of Death (`modt` → AIva): DataA 0.5 life stolen per attack, and NO DataE.
-const AIva = abil("AIva", "AIva", { data: [0.5] });
+const AIva = abil("AIva", "AIva", { data: [0.5] }, { targetFlags: ["air", "ground", "enemy"] });
 // Searing Arrows (`AHfa`): DataA 10 damage, Cost 8 a shot.
-const AHfa = abil("AHfa", "AHfa", { cost: 8, castRange: 600, data: [10] }, { missileArt: "searingarrow" });
+const AHfa = abil("AHfa", "AHfa", { cost: 8, castRange: 600, data: [10] }, { missileArt: "searingarrow", targetFlags: ["air", "ground", "structure", "enemy", "neutral"] });
+// Cold Arrows (`AHca`): DataA 5 damage, DataB/DataC 0.3 move/attack slow, Dur 6/1, Cost 8 a
+// shot — and `targs1` = air,ground,enemy,neutral, with no `friend`, no `self`, no `structure`.
+const AHca = abil("AHca", "AHca", { cost: 8, castRange: 700, duration: 6, heroDuration: 1, data: [5, 0.3, 0.3, 7] }, { missileArt: "frostarrow", targetFlags: ["air", "ground", "enemy", "neutral"] });
 // Slow Poison (`Aspo`, the Dryad's): DataA 4 dps, DataB 0.5 move, DataC 0.25 attack, Dur 5/1.
-const Aspo = abil("Aspo", "Aspo", { duration: 5, heroDuration: 1, data: [4, 0.5, 0.25, 1] });
+const Aspo = abil("Aspo", "Aspo", { duration: 5, heroDuration: 1, data: [4, 0.5, 0.25, 1] }, { targetFlags: ["air", "ground", "organic"] });
 // Feedback (`Afbk`, Spell Breaker): 20 mana off a unit / 4 off a hero, ×1 as damage.
-const Afbk = abil("Afbk", "Afbk", { castRange: 20, data: [20, 1, 4, 1, 0] });
+const Afbk = abil("Afbk", "Afbk", { castRange: 20, data: [20, 1, 4, 1, 0] }, { targetFlags: ["air", "ground", "enemy", "neutral"] });
 
-const ABILITIES = Object.fromEntries([AIfb, AIob, AIcb, AIva, AHfa, Aspo, Afbk].map((a) => [a.id, a]));
+const ABILITIES = Object.fromEntries([AIfb, AIob, AIcb, AIva, AHfa, AHca, Aspo, Afbk].map((a) => [a.id, a]));
 const ITEMS = {
   ofir: { abilities: ["AIfb"] },
   ofro: { abilities: ["AIob"] },
@@ -240,6 +243,46 @@ console.log("\ncarrying an orb, as opposed to winning with one");
   check("both carried orbs are worn", w.orbAttachments(hero).map((f) => f.path), ["AIfbTarget", "AIobTarget"]);
   check("…on the weapon bone", w.orbAttachments(hero)[0].attach, ["weapon"]);
   check("Mask of Death wears nothing (its Targetart is blank)", w.orbAttachments(unit(w, { isHero: true, inventory: bag([[0, "modt"]]) })).length, 0);
+}
+
+console.log("\nwho a blow may carry an orb TO (Targets Allowed, targs1)");
+{
+  // THE FRIENDLY BLOW. Cold Arrows is `air,ground,enemy,neutral` — no `friend`, no `self` —
+  // and no orb in the family lists one either. Autocast used to duck this gate: picking an
+  // autocast target went through Targets Allowed, but a blow the player ordered by hand did
+  // not, so arrows-on froze an ally the ability's own data forbids. The swing still happens;
+  // it is simply an ORDINARY attack, and the 8 mana a shot is not spent on it.
+  const w = world();
+  const hero = unit(w, { isHero: true, mana: 100, abilities: [{ id: "AHca", code: "AHca", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  const friend = unit(w, { owner: 0, team: 0 });
+  check("an arrow does not ride a blow at a friendly unit", w.resolveOrb(hero, friend), null);
+  check("…and the shot costs no mana", hero.mana, 100);
+  const foe = unit(w, { owner: 1, team: 1 });
+  check("…while the same arrow rides a blow at an enemy", w.resolveOrb(hero, foe).def.id, "AHca");
+  check("…and that one is paid for", hero.mana, 92);
+}
+{
+  // An ally with an ORB in the bag rather than an arrow: same answer, from the family rule
+  // (the item rows name no allegiance at all — `ground,air,ward`).
+  const w = world();
+  const hero = unit(w, { isHero: true, inventory: bag([[0, "ofro"]]) });
+  check("an item orb does not ride a friendly blow either", w.resolveOrb(hero, unit(w, { owner: 0, team: 0 })), null);
+  check("…but does ride a hostile one", w.resolveOrb(hero, unit(w, { owner: 1, team: 1 })).def.id, "AIob");
+}
+{
+  // The KIND half of the same table, and why the two arrows differ: Searing Arrows lists
+  // `structure`, Cold Arrows does not. So the Priestess sets a tower alight and the Sea
+  // Witch's shot lands on it bare.
+  const w = world();
+  const tower = unit(w, { owner: 1, team: 1, building: {} });
+  const searing = unit(w, { isHero: true, abilities: [{ id: "AHfa", code: "AHfa", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  const cold = unit(w, { isHero: true, abilities: [{ id: "AHca", code: "AHca", level: 1, cooldownLeft: 0, autocastOn: true }] });
+  check("Searing Arrows fires at a building (targs1 lists structure)", w.resolveOrb(searing, tower).def.id, "AHfa");
+  check("Cold Arrows does not (it does not)", w.resolveOrb(cold, tower), null);
+  // …and the same gate is where "vampiric does not drain buildings" comes from: the Mask of
+  // Death's `AIva` is `air,ground,enemy`, with no `structure` in it.
+  const masked = unit(w, { isHero: true, inventory: bag([[0, "modt"]]) });
+  check("the Mask of Death steals nothing from a building", w.resolveOrb(masked, tower), null);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "orbs: all checks passed"}`);

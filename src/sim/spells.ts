@@ -20,6 +20,11 @@ export interface SpellApi {
   hostile(a: SimUnit, b: SimUnit): boolean;
   /** Same team (friendly). */
   ally(a: SimUnit, b: SimUnit): boolean;
+  /** Does this ability's own Targets Allowed (`targs1`) admit this unit as a KIND — air,
+   *  ground, structure, organic, hero, ancient? The one place that question is answered
+   *  (World.targsAdmit), shared with single-target casts, spell fields and orbs, so a
+   *  handler never has to hand-write `if (t.flying) continue` and get it wrong. */
+  admits(def: AbilityDef, target: SimUnit): boolean;
   /** Deal spell damage (armour is NOT applied to most spell damage in WC3). */
   spellDamage(target: SimUnit, amount: number, sourceId: number): void;
   spellHeal(target: SimUnit, amount: number): void;
@@ -286,23 +291,29 @@ function waveField(api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number
 }
 
 // --- targeting helpers (shared by the hero spell handlers) -----------------
+//
+// Every one of these takes the ability's own `def`, because WHAT a spell may strike is in
+// its data (`targs1`) and nowhere else: `api.admits` is the single reader (World.targsAdmit),
+// shared with single-target casts, spell fields and orbs. A handler states only the half the
+// data does NOT carry — allegiance for the hardcoded enemies-only nukes, which name none.
 
-/** Live enemies of `caster` within `radius` of a point (excludes buildings unless
- *  `hitBuildings`, and the caster itself). */
-function enemiesInArea(api: SpellApi, caster: SimUnit, x: number, y: number, radius: number, hitBuildings = false): SimUnit[] {
-  return api.unitsInArea(x, y, radius).filter((t) => t !== caster && api.hostile(caster, t) && (hitBuildings || !t.building) && !t.invulnerable);
+/** Live enemies of `caster` within `radius` of a point, filtered by the ability's own
+ *  Targets Allowed (so Fan of Knives' `air,ground,organic` spares a tower and War Stomp's
+ *  `ground,organic` spares a Gargoyle), and never the caster. */
+function enemiesInArea(api: SpellApi, caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number): SimUnit[] {
+  return api.unitsInArea(x, y, radius).filter((t) => t !== caster && api.hostile(caster, t) && api.admits(def, t) && !t.invulnerable);
 }
 
-/** Living allies of `caster` within `radius` of a point (optionally excluding the
- *  caster and/or buildings). */
-function alliesInArea(api: SpellApi, caster: SimUnit, x: number, y: number, radius: number, opts: { self?: boolean; buildings?: boolean } = {}): SimUnit[] {
-  return api.unitsInArea(x, y, radius).filter((t) => (opts.self || t !== caster) && api.ally(caster, t) && (opts.buildings || !t.building));
+/** Living allies of `caster` within `radius` of a point (optionally including the caster),
+ *  filtered by the ability's Targets Allowed the same way. */
+function alliesInArea(api: SpellApi, caster: SimUnit, def: AbilityDef, x: number, y: number, radius: number, opts: { self?: boolean } = {}): SimUnit[] {
+  return api.unitsInArea(x, y, radius).filter((t) => (opts.self || t !== caster) && api.ally(caster, t) && api.admits(def, t));
 }
 
 /** Units struck by a line from the caster toward (tx,ty): within `length` forward
- *  and `halfWidth` to either side. Powers the line nukes (Shockwave, Impale,
- *  Carrion Swarm, Breath of Fire). */
-function lineTargets(api: SpellApi, caster: SimUnit, tx: number, ty: number, length: number, halfWidth: number): SimUnit[] {
+ *  and `halfWidth` to either side, and admissible to the ability. Powers the line
+ *  nukes (Shockwave, Impale, Carrion Swarm, Breath of Fire). */
+function lineTargets(api: SpellApi, caster: SimUnit, def: AbilityDef, tx: number, ty: number, length: number, halfWidth: number): SimUnit[] {
   const dx = tx - caster.x;
   const dy = ty - caster.y;
   const len = Math.hypot(dx, dy) || 1;
@@ -311,7 +322,7 @@ function lineTargets(api: SpellApi, caster: SimUnit, tx: number, ty: number, len
   const out: SimUnit[] = [];
   // Query a circle covering the whole segment, then keep units near the axis.
   for (const t of api.unitsInArea(caster.x + ux * (length / 2), caster.y + uy * (length / 2), length / 2 + halfWidth + 64)) {
-    if (t === caster) continue;
+    if (t === caster || !api.admits(def, t)) continue;
     const rx = t.x - caster.x;
     const ry = t.y - caster.y;
     const forward = rx * ux + ry * uy;
@@ -321,25 +332,9 @@ function lineTargets(api: SpellApi, caster: SimUnit, tx: number, ty: number, len
   return out;
 }
 
-/** Units inside a cone of half-angle `halfAngle` (radians) from the caster toward
- *  (tx,ty), within `length` (Forked Lightning). */
-function coneTargets(api: SpellApi, caster: SimUnit, tx: number, ty: number, length: number, halfAngle: number): SimUnit[] {
-  const base = Math.atan2(ty - caster.y, tx - caster.x);
-  const out: SimUnit[] = [];
-  for (const t of api.unitsInArea(caster.x, caster.y, length + 64)) {
-    if (t === caster) continue;
-    const dist = Math.hypot(t.x - caster.x, t.y - caster.y);
-    if (dist > length + t.radius) continue;
-    const ang = Math.atan2(t.y - caster.y, t.x - caster.x);
-    const diff = Math.abs(((ang - base + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-    if (diff <= halfAngle) out.push(t);
-  }
-  return out;
-}
-
 /** Build a bounce chain of up to `count` targets, each the nearest unvisited valid
  *  unit within `jumpRange` of the previous (Chain Lightning, Healing Wave). */
-function chainFrom(api: SpellApi, caster: SimUnit, first: SimUnit, count: number, jumpRange: number, wantHostile: boolean): SimUnit[] {
+function chainFrom(api: SpellApi, caster: SimUnit, def: AbilityDef, first: SimUnit, count: number, jumpRange: number, wantHostile: boolean): SimUnit[] {
   const chain = [first];
   const visited = new Set<number>([first.id]);
   let cur = first;
@@ -347,7 +342,7 @@ function chainFrom(api: SpellApi, caster: SimUnit, first: SimUnit, count: number
     let best: SimUnit | null = null;
     let bestD = Infinity;
     for (const t of api.unitsInArea(cur.x, cur.y, jumpRange)) {
-      if (visited.has(t.id) || t === caster || t.building) continue;
+      if (visited.has(t.id) || t === caster || !api.admits(def, t)) continue;
       if (wantHostile ? !api.hostile(caster, t) || t.invulnerable : !api.ally(caster, t)) continue;
       const dd = Math.hypot(t.x - cur.x, t.y - cur.y);
       if (dd < bestD) {
@@ -712,7 +707,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   Aroa: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-    for (const t of alliesInArea(api, caster, caster.x, caster.y, lvl.area || 500, { self: true })) {
+    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 500, { self: true })) {
       const time = dur(lvl, t) || 45;
       api.applyBuff(t, { kind: "damagePct", group: "roar", timeLeft: time, sourceId: caster.id, value: d(lvl, 0, 0.25), ...fx(def) });
       const armor = d(lvl, 1, 0);
@@ -933,7 +928,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // line toward the target point (dataC = distance, area = width).
   AOsh: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of lineTargets(api, caster, ctx.x, ctx.y, d(lvl, 2, 800), lvl.area || 125)) {
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 2, 800), lvl.area || 125)) {
       if (api.hostile(caster, t)) api.spellDamage(t, d(lvl, 0, 75), caster.id);
     }
   },
@@ -943,7 +938,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AUcs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     let budget = d(lvl, 1, 300);
-    for (const t of lineTargets(api, caster, ctx.x, ctx.y, d(lvl, 2, 700), lvl.area || 100)) {
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 2, 700), lvl.area || 100)) {
       if (!api.hostile(caster, t) || budget <= 0) continue;
       const dmg = Math.min(d(lvl, 0, 75), budget);
       api.spellDamage(t, dmg, caster.id);
@@ -955,7 +950,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // dataC damage + a stun (dur/herodur) to ground enemies.
   AUim: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of lineTargets(api, caster, ctx.x, ctx.y, d(lvl, 0, 600), (lvl.area || 250) / 2)) {
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 0, 600), (lvl.area || 250) / 2)) {
       if (!api.hostile(caster, t) || t.flying) continue;
       api.spellDamage(t, d(lvl, 2, 50), caster.id);
       api.applyBuff(t, { kind: "stun", timeLeft: dur(lvl, t) || 1, sourceId: caster.id, ...fx(def) });
@@ -966,20 +961,35 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // area width) to enemies in front of the caster.
   ANbf: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of lineTargets(api, caster, ctx.x, ctx.y, d(lvl, 2, 375), lvl.area || 125)) {
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 2, 375), lvl.area || 125)) {
       if (api.hostile(caster, t)) api.spellDamage(t, d(lvl, 0, 65), caster.id);
     }
   },
 
-  // Forked Lightning (Naga) — dataA damage to up to dataB enemies in a cone.
+  // Forked Lightning (Naga) — cast ON AN ENEMY UNIT; the cone of bolts fans out from the
+  // Sea Witch through it, hitting up to dataB units for dataA damage each.
+  //
+  // The game says the aim in its own words: `NeutralAbilityStrings [ANfl]` Ubertip level 1
+  // is "Calls forth a cone of lightning ON A TARGET ENEMY UNIT, hitting up to <ANfl,DataB1>
+  // enemy units for <ANfl,DataA1> damage." It reads as a point spell in the tables — it has
+  // a cast Range AND an Area, and it shares Carrion Swarm's `Ucs3`/`Ucs4` (distance, final
+  // width) meta fields — which is exactly the trap: `Rng1`/`Area1` cannot tell a point spell
+  // from a unit-target one, and only the tooltip can (see the recipe in audit-abilities.mjs).
   ANfl: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
     const lvl = def.levelData[rank - 1];
-    const targets = coneTargets(api, caster, ctx.x, ctx.y, lvl.castRange || 600, 0.5).filter((t) => api.hostile(caster, t));
+    // The cone is the family's line (dataC long, `area` to either side — the widening to
+    // dataD is not modelled for any of AUcs/ANbf/AOsh either), aimed THROUGH the target.
+    // The target itself is hit whether or not the geometry catches it: it is what was aimed
+    // at, and the rest of the fan is who else stands in the way.
+    const swept = lineTargets(api, caster, def, t.x, t.y, d(lvl, 2, 900), lvl.area || 125);
+    const targets = [t, ...swept.filter((o) => o !== t)].filter((o) => api.hostile(caster, o));
     // Forked: every target gets its OWN bolt from the caster, all at once — that fan of
     // bolts is the whole look of the spell.
-    for (const t of targets.slice(0, d(lvl, 1, 3))) {
-      api.spellDamage(t, d(lvl, 0, 85), caster.id);
-      api.emitLightning(bolts(def)[0], caster, t);
+    for (const o of targets.slice(0, d(lvl, 1, 3))) {
+      api.spellDamage(o, d(lvl, 0, 85), caster.id);
+      api.emitLightning(bolts(def)[0], caster, o);
     }
   },
 
@@ -987,7 +997,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AEfk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-    for (const t of enemiesInArea(api, caster, caster.x, caster.y, lvl.area || 400)) api.spellDamage(t, d(lvl, 0, 75), caster.id);
+    for (const t of enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 400)) api.spellDamage(t, d(lvl, 0, 75), caster.id);
   },
 
   // War Stomp (Tauren) — slam: dataA damage + a stun (dur/herodur) to ground
@@ -995,7 +1005,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AOws: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-    for (const t of enemiesInArea(api, caster, caster.x, caster.y, lvl.area || 250)) {
+    for (const t of enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 250)) {
       if (t.flying) continue;
       api.spellDamage(t, d(lvl, 0, 25), caster.id);
       // fx(def) → the shared stun buff BPSE's Targetart (ThunderclapTarget.mdx, `overhead`) —
@@ -1012,7 +1022,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, 0);
     api.spellDamage(t, d(lvl, 1, 100), caster.id);
-    for (const o of enemiesInArea(api, caster, t.x, t.y, lvl.area || 200)) {
+    for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
       if (o !== t) api.spellDamage(o, d(lvl, 0, 50), caster.id);
       api.applyBuff(o, { kind: "slow", group: "frostnova", timeLeft: dur(lvl, o) || 4, sourceId: caster.id, value: 0.4, value2: 0.4 });
     }
@@ -1024,7 +1034,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    const chain = chainFrom(api, caster, t, d(lvl, 1, 4), lvl.area || 500, true);
+    const chain = chainFrom(api, caster, def, t, d(lvl, 1, 4), lvl.area || 500, true);
     const falloff = d(lvl, 2, 0.15);
     // The bolt IS the spell's art (CLPB caster→first, CLSB between the rest) — Chain
     // Lightning ships no TargetArt at all, which is why it used to land in silence.
@@ -1043,7 +1053,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    const chain = chainFrom(api, caster, t, d(lvl, 1, 3), lvl.area || 500, false);
+    const chain = chainFrom(api, caster, def, t, d(lvl, 1, 3), lvl.area || 500, false);
     const falloff = d(lvl, 2, 0.25);
     chainBolts(api, caster, def, chain); // HWPB then HWSB — the healing arc between allies
     chain.forEach((u, i) => {
@@ -1057,7 +1067,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   AEtq: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
-    for (const t of alliesInArea(api, caster, ctx.x, ctx.y, lvl.area || 1000, { self: true })) {
+    for (const t of alliesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 1000, { self: true })) {
       if (!t.mechanical) api.applyBuff(t, { kind: "hot", group: "tranquility", timeLeft: lvl.duration || 30, sourceId: caster.id, value: d(lvl, 0, 20), ...fx(def) });
     }
   },
@@ -1066,7 +1076,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANhs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
-    for (const t of alliesInArea(api, caster, ctx.x, ctx.y, lvl.area || 250, { self: true })) {
+    for (const t of alliesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 250, { self: true })) {
       if (!t.mechanical) api.spellHeal(t, d(lvl, 0, 40));
     }
   },
@@ -1140,7 +1150,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
     const lvl = def.levelData[rank - 1];
-    for (const o of enemiesInArea(api, caster, t.x, t.y, lvl.area || 200)) {
+    for (const o of enemiesInArea(api, caster, def, t.x, t.y, lvl.area || 200)) {
       api.applyBuff(o, { kind: "armor", group: "acid", timeLeft: lvl.duration || 15, sourceId: caster.id, value: -d(lvl, 3, 5), ...fx(def) });
       api.applyBuff(o, { kind: "dot", group: "acid", timeLeft: lvl.duration || 15, sourceId: caster.id, value: d(lvl, 4, 3) });
     }
@@ -1174,7 +1184,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANht: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id);
-    for (const t of enemiesInArea(api, caster, caster.x, caster.y, lvl.area || 500, true)) {
+    for (const t of enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 500)) {
       api.applyBuff(t, { kind: "damagePct", group: "howl", timeLeft: lvl.duration || 15, sourceId: caster.id, value: -d(lvl, 0, 0.3) });
     }
   },
@@ -1183,7 +1193,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // (the WC3 miss chance isn't modelled).
   ANdh: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 200)) {
+    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 200)) {
       api.applyBuff(t, { kind: "slow", group: "haze", timeLeft: dur(lvl, t) || 10, sourceId: caster.id, value: 0.25, value2: 0.25, ...fx(def) });
     }
   },
@@ -1192,7 +1202,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   ANsi: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
     if (def.areaArt) api.emitEffect(def.areaArt, ctx.x, ctx.y, 0);
-    for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 300, true)) {
+    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 300)) {
       api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: lvl.duration || 8, sourceId: caster.id, ...fx(def) });
     }
   },
@@ -1289,7 +1299,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const lvl = def.levelData[rank - 1];
     const waves = Math.max(6, Math.round(lvl.duration || 25));
     api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 250, damagePerWave: d(lvl, 1, 50) / 4, waves, interval: 1, casterId: caster.id, art: def.areaArt || def.targetArt });
-    for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 250, true)) {
+    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 250)) {
       api.applyBuff(t, { kind: "slow", group: "quake", timeLeft: lvl.duration || 25, sourceId: caster.id, value: d(lvl, 0, 0.5), value2: 0 });
     }
   },
@@ -1566,7 +1576,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Mass Teleport (Archmage, ult) — warp the caster and nearby allies to a point.
   AHmt: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const allies = alliesInArea(api, caster, caster.x, caster.y, lvl.area || 700, { self: true }).slice(0, d(lvl, 0, 24));
+    const allies = alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 700, { self: true }).slice(0, d(lvl, 0, 24));
     allies.forEach((t, i) => {
       const a = (i / Math.max(1, allies.length)) * Math.PI * 2;
       api.teleport(t, ctx.x + Math.cos(a) * (i === 0 ? 0 : 128), ctx.y + Math.sin(a) * (i === 0 ? 0 : 128));
@@ -1576,7 +1586,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Big Bad Voodoo (Shadow Hunter, ult) — nearby allies become invulnerable.
   AOvd: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of alliesInArea(api, caster, caster.x, caster.y, lvl.area || 800, { self: false })) {
+    for (const t of alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 800, { self: false })) {
       api.applyBuff(t, { kind: "invuln", group: "voodoo", timeLeft: lvl.duration || 30, sourceId: caster.id, ...fx(def) });
     }
   },
@@ -1718,7 +1728,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // dataA impact damage to enemies in `area`, then fights for the duration.
   AUin: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of enemiesInArea(api, caster, ctx.x, ctx.y, lvl.area || 250, true)) api.spellDamage(t, d(lvl, 0, 50), caster.id);
+    for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 250)) api.spellDamage(t, d(lvl, 0, 50), caster.id);
     if (lvl.summon) api.requestSummon(lvl.summon, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, lvl.heroDuration || lvl.duration || 180, caster.id, { summon: "", unsummon: def.buffEffectArt }, true);
     if (def.specialArt) api.emitEffect(def.specialArt, ctx.x, ctx.y, 0);
   },

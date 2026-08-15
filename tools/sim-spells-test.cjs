@@ -10,6 +10,9 @@ const { join } = require("node:path");
 const REPO = join(__dirname, "..");
 require("node:fs").writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const { SPELL_HANDLERS } = require(join(REPO, ".sim-build", "src", "sim", "spells.js"));
+// The REAL Targets Allowed predicate (src/sim/targeting.ts), not a stub of it — a spell's
+// target sweep is filtered by its own `targs1`, so the tests must read the same table.
+const { targsAdmit } = require(join(REPO, ".sim-build", "src", "sim", "targeting.js"));
 
 /** An AbilityDef with just the fields a handler reads. `data` is dataA..dataI. */
 function def(over = {}) {
@@ -35,6 +38,7 @@ function harness(units) {
     unitsInArea: () => units,
     hostile: (a, b) => a.team !== b.team,
     ally: (a, b) => a.team === b.team,
+    admits: (d, t) => targsAdmit(t, d.targetFlags),
     spellDamage: (t, amount) => log.damage.push({ id: t.id, amount }),
     spellHeal: (t, amount) => log.heals.push({ id: t.id, amount }),
     applyBuff: (t, b) => log.buffs.push({ id: t.id, kind: b.kind, group: b.group, value: b.value, value2: b.value2, timeLeft: b.timeLeft, art: b.art }),
@@ -113,10 +117,20 @@ const round = (n) => Math.round(n * 1000) / 1000;
     ]);
   }
   {
-    // Forked Lightning: one FORK bolt per target, all at once.
-    const { api, log } = harness([caster, a, b, c]);
-    SPELL_HANDLERS.ANfl(api, caster, def({ data: [85, 3], lightning: ["FORK"] }), 1, { targetId: 0, x: 600, y: 0 });
-    check("Forked Lightning forks one FORK bolt to each target", log.bolts.map((l) => `${l.id}:${l.to}`), ["FORK:2", "FORK:3", "FORK:4"]);
+    // Forked Lightning: cast ON A UNIT (NeutralAbilityStrings [ANfl]: "a cone of lightning
+    // on a target enemy unit"), one FORK bolt per target, all at once. The aimed unit is
+    // always in the fan; the rest is whoever the cone sweeps on the way, dataC (900) long
+    // and `Area1` (125) to either side — so the unit standing 400 off the axis is missed.
+    const near = unit({ id: 2, team: 1, x: 300, y: 0, radius: 0 });
+    const behind = unit({ id: 3, team: 1, x: 700, y: 0, radius: 0 });
+    const aside = unit({ id: 4, team: 1, x: 300, y: 400, radius: 0 });
+    const { api, log } = harness([caster, near, behind, aside]);
+    SPELL_HANDLERS.ANfl(api, caster, def({ data: [85, 3, 900], area: 125, lightning: ["FORK"] }), 1, { targetId: 2, x: 0, y: 0 });
+    check("Forked Lightning forks from the AIMED unit down the cone", log.bolts.map((l) => `${l.id}:${l.to}`), ["FORK:2", "FORK:3"]);
+    // …and with no unit aimed at, nothing happens: there is no point to cast it at.
+    const bare = harness([caster, near, behind, aside]);
+    SPELL_HANDLERS.ANfl(bare.api, caster, def({ data: [85, 3, 900], area: 125, lightning: ["FORK"] }), 1, { targetId: 0, x: 300, y: 0 });
+    check("Forked Lightning aimed at bare ground does nothing", bare.log.bolts, []);
   }
   {
     // Drain: `LightningEffect=DRAB,DRAL,DRAM` and dataA/dataB (life/mana per second) pick

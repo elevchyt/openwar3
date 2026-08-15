@@ -170,6 +170,27 @@ per-source key would change nothing there.)
 Buff group names for orbs carry **no colon** — a colon means "aura, and the first half is its
 ability code" to the renderer's persistent-FX pass, and none of these are auras.
 
+## Who a blow may carry an orb *to*
+
+Two gates, and both are the ability's own `targs1` rather than anything the orb code decides:
+
+* **Never a friendly.** No member of the family lists `friend` or `self` — Cold Arrows is
+  `air,ground,enemy,neutral`, Searing Arrows `air,ground,structure,enemy,neutral`, Black
+  Arrow the same. The item orbs name no allegiance at all (`ground,air,ward`), so the family
+  rule is what covers them: `resolveOrb` refuses a non-hostile target outright, before any
+  candidate is collected. The swing still lands — as an **ordinary attack**, with no mana
+  spent and no aimed shot consumed.
+* **Then the kind**, through the same `targsKindError` every cast uses
+  ([`src/sim/targeting.ts`](../src/sim/targeting.ts)). This is where the two arrows part
+  company: Searing Arrows lists `structure` and sets a tower alight, Cold Arrows does not
+  and lands on it bare. It is also where *"vampiric does not drain buildings"* comes from
+  for free — the Mask of Death's `AIva` is `air,ground,enemy`.
+
+The gate matters because there are **two ways in** and they used to disagree. An arrow aimed
+by hand is a cast: it goes through `castableTarget` before `issueArrowShot` ever runs. An
+arrow on **autocast** rides whatever blow the unit throws, and that path asked nothing — so
+Cold Arrows with autocast on froze a unit its own data forbids. One predicate, both doors.
+
 ## Resolved at the strike, applied at the landing
 
 For a ranged attacker those are a flight apart, and the orb has to be decided at the

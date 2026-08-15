@@ -248,8 +248,14 @@ lines.push("1. Read the row's numbers in `Units\\AbilityData.slk`, and read what
 lines.push("   MEAN — `Units\\AbilityMetaData.slk` `useSpecific` names them through");
 lines.push("   `UI\\WorldEditStrings.txt`. Never infer a column from behaviour: Finger of Death's");
 lines.push("   damage is dataC, and reading dataA the way other nukes do would deal 0.25.");
-lines.push("2. Add a `KNOWN_ABILITIES` entry in `src/data/abilities.ts` (target type from `Rng1`/");
-lines.push("   `Area1`; autocast iff its AbilityFunc row has `Orderon`/`Orderoff`).");
+lines.push("2. Add a `KNOWN_ABILITIES` entry in `src/data/abilities.ts` (autocast iff its AbilityFunc");
+lines.push("   row has `Orderon`/`Orderoff`). **The target type is not in the tables**: `Rng1` and");
+lines.push("   `Area1` cannot tell a point-target spell from a unit-target one — Forked Lightning");
+lines.push("   has both and is cast on a unit, and reading them as \"point\" is exactly how it ended");
+lines.push("   up aimable at bare ground. The ability's own **Ubertip** is what says so, in words:");
+lines.push("   `[ANfl]` reads \"a cone of lightning on a target enemy unit\". Read it before you");
+lines.push("   choose. What IS data is who may be struck — `targs1`, read in one place");
+lines.push("   (`src/sim/targeting.ts`), never re-transcribed as an `if (t.flying)` in a handler.");
 lines.push("3. Add the handler to `SPELL_HANDLERS` (or `AURA_BUFFS`, or the passive path in");
 lines.push("   `world.ts`) — dispatch is on the base `code`, never the alias.");
 lines.push("4. Add assertions to `tools/sim-*-test.cjs` and run `pnpm sim:test`; re-run");
