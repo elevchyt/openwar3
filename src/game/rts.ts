@@ -42,7 +42,7 @@ import { MELEE, xpToReachLevel } from "../data/gameplayConstants";
 import { type AbilityRegistry, type AbilityDef } from "../data/abilities";
 import { resolveTipRefs } from "../data/tipRefs";
 import { type ItemRegistry } from "../data/items";
-import { WORKERS, DEPOT_IDS } from "../data/races";
+import { DEPOT_IDS, workerProfileFor } from "../data/races";
 import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
@@ -2347,7 +2347,11 @@ export class RtsController {
     // Naga arrive through the script path. A human's units never get it — yours go where you
     // send them and stay there — and the flag is cleared the moment anything orders the unit.
     const guarding = this.aiPlayers.has(owner) && !def.isBuilding;
-    const profile = WORKERS[def.id];
+    // A worker is whatever CARRIES a harvest ability, not one of five known ids — see
+    // workerProfileFor. The map's own builder is a Peasant with `Ahar` and a custom `Builds`
+    // list, and without this it had no worker state, so no Build button and no gathering.
+    // The alias is resolved to its base code first (`A000` based on `Ahar` is still `Ahar`).
+    const profile = workerProfileFor(def.id, def.abilities.map((id) => this.abilities.get(id)?.code ?? id));
     // baseLumberCapacity is the pre-upgrade load; Improved Lumber Harvesting raises the live
     // `lumberCapacity` off it each tick (recomputeStats), so the profile stays the baseline.
     const worker: WorkerState | null = profile ? { ...profile, baseLumberCapacity: profile.lumberCapacity, carryGold: 0, carryLumber: 0 } : null;

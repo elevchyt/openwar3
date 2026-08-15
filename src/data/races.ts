@@ -121,6 +121,40 @@ export const WORKERS: Record<string, WorkerProfile> = {
   ewsp: { gold: true, lumber: true, harvestAbility: "Awha", lumberCapacity: 0, lumberPerChop: 5, chopPeriod: 8, goldPerTrip: 0, damagesTree: false, deliversInPlace: true },
 };
 
+/**
+ * A worker is not a LIST OF FIVE IDS — it is a unit CARRYING a harvest ability.
+ *
+ * WC3 has no register of worker types: gathering is an ability (`Ahar` Gather, `Aaha` Acolyte
+ * Harvest, `Ahrl` Ghoul Harvest Lumber, `Awha` Wisp Harvest), and a unit that lists one in its
+ * `abilList` gathers — which is why the Object Editor's whole recipe for "my map's own worker"
+ * is to put `Ahar` on something. Keying the profile off the four ability CODES rather than the
+ * five stock ids is therefore not a convenience, it is the actual rule: a custom map's builder
+ * had no worker state at all, so it could not gather, could not repair, and — the visible half
+ * — had **no Build button**, because `SelectionInfo.isWorker` is `!!u.worker`. "WTii's Unit
+ * Tester" sells four such builders (`h01W` "All Round Nice Guy" and friends, each a Peasant
+ * carrying `Ahar` with the map's own `Builds` list), and every one of them came up unable to
+ * build anything.
+ *
+ * The numbers are still stand-ins — SimWorld.applyHarvestData reads the real rates off the
+ * ability's own row — so keying by that row is also what keeps the two in step.
+ */
+const WORKER_BY_HARVEST: Record<string, WorkerProfile> = Object.fromEntries(
+  Object.values(WORKERS).map((w) => [w.harvestAbility, w]),
+);
+
+/** The worker profile for a type, by id first and then by the harvest ability it carries.
+ *  `abilityCodes` is the unit's abilities resolved to their BASE codes (a custom map's
+ *  `A000` based on `Ahar` is still `Ahar`) — the caller has the ability registry. */
+export function workerProfileFor(typeId: string, abilityCodes: Iterable<string>): WorkerProfile | null {
+  const direct = WORKERS[typeId];
+  if (direct) return direct;
+  for (const code of abilityCodes) {
+    const hit = WORKER_BY_HARVEST[code];
+    if (hit) return hit;
+  }
+  return null;
+}
+
 // The four main-hall chains, keyed by the BASE hall's internal type name (UnitUI.slk's
 // `name` column). blizzard.j's MeleeGetAllyKeyStructureCount asks for exactly these four
 // with GetPlayerTypedUnitCount(p, "townhall", true, true) — "…and its upgrades", which is

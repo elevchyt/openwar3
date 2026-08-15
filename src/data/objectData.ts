@@ -23,6 +23,7 @@ import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef 
 import { emptyAbilityLevel, mdlPath, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
 import type { ItemDef, ItemRegistry } from "./items";
 import type { UpgradeDef, UpgradeRegistry } from "./upgrades";
+import type { TechDef, TechRegistry } from "./techtree";
 import { parseWts } from "../jass/wts";
 
 type Val = number | string;
@@ -159,6 +160,14 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   ugol: (d, v) => { d.goldCost = n(v); },
   ulum: (d, v) => { d.lumberCost = n(v); },
   ubld: (d, v) => { d.buildTime = n(v); },
+  // Shop SHELF (UnitBalance stockMax/stockRegen/stockStart) — what a `Sellunits` ware costs in
+  // TIME rather than gold. A unit with `stockMax` 0 is not stocked at all, which the sim reads
+  // as "not stock-limited"; a tester map that puts every creep in the game on a shelf sets
+  // these per ware, so without them a shop either hands out unlimited copies or (with a
+  // `stockStart` the map meant to zero) makes you wait out the stock creep's own delay.
+  usma: (d, v) => { d.stockMax = n(v); },
+  usrg: (d, v) => { d.stockRegen = n(v); },
+  usst: (d, v) => { d.stockStart = n(v); },
 };
 
 /** Apply one modified object's field overrides onto a UnitDef (mutated in place). */
@@ -366,10 +375,9 @@ export function applyMapAbilityData(registry: AbilityRegistry, w3aBytes: Uint8Ar
 // column says which fields are per-LEVEL (Name/Tip/Ubertip/Hotkey/Art/Requires) and which are
 // flat; `levelOrVariation` on the modification carries the rank (0 = level-independent).
 //
-// NOT applied: `Requires`/`Requiresamount`. Prerequisites live in the tech GRAPH (techtree.ts),
-// which has no per-map overlay yet — a custom map that re-gates an upgrade still gets the stock
-// gating. Costs, levels, names and EFFECTS all land, which is the hole that mattered: a map
-// that retunes Forged Swords to +3 dice now gets +3 dice.
+// NOT applied HERE: `Requires`/`Requiresamount`. Prerequisites are not an UpgradeDef field at
+// all — they live in the tech GRAPH, so `greq`/`grqc` are picked up by applyMapTechData at the
+// bottom of this file, which reads the same .w3q. Costs, levels, names and EFFECTS land here.
 
 const UPGRADE_SETTERS: Record<string, (d: UpgradeDef, v: Val) => void> = {
   grac: (d, v) => { d.race = s(v); },
@@ -501,6 +509,12 @@ const ITEM_SETTERS: Record<string, (d: ItemDef, v: Val) => void> = {
   ipaw: (d, v) => { d.pawnable = bool(v); },
   iprn: (d, v) => { d.pickRandom = bool(v); },
   ihtp: (d, v) => { d.maxHp = n(v); },
+  // The item's shop SHELF (ItemData stockMax/stockRegen/stockStart) — the unit twin of
+  // `usma`/`usrg`/`usst` above. These are the codes the ITEM editor writes; a map that stocks
+  // its own shop sets all three (the tester map sets `istr` on 273 items).
+  isto: (d, v) => { d.stockMax = n(v); },
+  istr: (d, v) => { d.stockRegen = n(v); },
+  isst: (d, v) => { d.stockStart = n(v); },
 };
 
 function cloneItem(base: ItemDef, id: string): ItemDef {
@@ -540,5 +554,183 @@ export function applyMapItemData(registry: ItemRegistry, w3tBytes: Uint8Array, w
     registry.setCustom(obj.oldId, def);
     count++;
   }
+  return count;
+}
+
+// --- the map's own TECH TREE (war3map.w3u / .w3t / .w3a / .w3q) -------------------
+//
+// The bug this closes: **a custom map's buildings had empty command cards.** Everything a
+// building OFFERS is a tech field — `Trains`, `Sellunits`, `Sellitems`, `Makeitems`,
+// `Researches`, `Builds`, `Upgrade` — and none of them lives in an SLK. UnitMetaData.slk's
+// `slk` column says **Profile** for every one, i.e. the per-race `*UnitFunc.txt` INI, which is
+// exactly what `loadTechRegistry` reads and what a map's object data OVERRIDES. So a registry
+// built only from the install answers "trains nothing, sells nothing" for every type a map
+// declares, and `buildCommandCard` has nothing to draw.
+//
+// It is not a rare corner: a map that gives you a building to click is *made* of these fields.
+// "WTii's Unit Tester" is ~105 pre-placed buildings, all of them a Human Farm (`hhou`) with a
+// `Sellunits`/`Trains`/`Researches` list bolted on and nothing else — every one of them came up
+// blank. The other half of the same bug is quieter: a CUSTOM id (`h002`) is not in the install
+// graph at all, so even a Tavern-based shop (`ntav` → `n001`) lost the base type's own wares,
+// because a clone inherits nothing it isn't given.
+//
+// So the graph gets the same per-map overlay the unit/item/ability/upgrade registries already
+// have: clone the base node, apply the map's fields, install under the object's id. All four
+// object files feed ONE graph because all four id spaces declare requirements the same way
+// (see the header of techtree.ts) — units and items through UnitMetaData's codes, abilities
+// through `areq`, upgrades through `greq`.
+
+/** The tech fields, by their 4-char code. Verified against the install's own
+ *  Units\UnitMetaData.slk (`field` / `slk` / `type` columns) — see docs/wc3-data-formats.md.
+ *  `ureq` and friends carry `useitem=1` as well as `useunit=1`, so ONE table serves both the
+ *  .w3u and the .w3t; the ability/upgrade files use their own `areq`/`greq` and are handled
+ *  by `requiresTierOf` below. */
+const TECH_LIST_SETTERS: Record<string, (d: TechDef, ids: string[]) => void> = {
+  utra: (d, ids) => { d.trains = ids; }, // Trains
+  useu: (d, ids) => { d.sellunits = ids; }, // Sellunits
+  usei: (d, ids) => { d.sellitems = ids; }, // Sellitems
+  umki: (d, ids) => { d.makeitems = ids; }, // Makeitems
+  ubui: (d, ids) => { d.builds = ids; }, // Builds
+  ures: (d, ids) => { d.researches = ids; }, // Researches
+  uupt: (d, ids) => { d.upgrade = ids; }, // Upgrade
+  udep: (d, ids) => { d.dependencyOr = ids; }, // DependencyOr
+};
+
+/** Which requirement TIER a field code writes, or -1 for "not a Requires field".
+ *  `ureq` = tier 0 (`Requires`), `urq1`..`urq8` = tiers 1..8 (`Requires1`..`Requires8`).
+ *  An ABILITY (`areq`) has a single tier. An UPGRADE (`greq`) is tiered by LEVEL and carries
+ *  that level in the modification's `levelOrVariation` instead of in the code — handled by the
+ *  caller, which is why this returns 0 for it. */
+function requiresTierOf(code: string): number {
+  if (code === "ureq" || code === "areq" || code === "greq") return 0;
+  const m = /^urq([1-8])$/.exec(code);
+  return m ? parseInt(m[1], 10) : -1;
+}
+
+/** A comma-separated id list as the graph wants it. Same "_"/"-" empties `loadTechRegistry`
+ *  strips — and an EMPTY string is meaningful here rather than absent: clearing a field in the
+ *  object editor is how a map says "this has no requirements at all", which is precisely what
+ *  the tester map does to all 88 of its upgrades. */
+function techList(v: Val): string[] {
+  return s(v)
+    .split(",")
+    .map((x) => x.trim())
+    .filter((x) => x && x !== "_" && x !== "-");
+}
+
+/** Deep clone — every field is an array, and the base node is shared with the install graph. */
+function cloneTech(base: TechDef, id: string): TechDef {
+  return {
+    ...base,
+    id,
+    requiresTiers: base.requiresTiers.map((t) => [...t]),
+    requiresAmount: [...base.requiresAmount],
+    dependencyOr: [...base.dependencyOr],
+    trains: [...base.trains],
+    researches: [...base.researches],
+    builds: [...base.builds],
+    upgrade: [...base.upgrade],
+    makeitems: [...base.makeitems],
+    sellitems: [...base.sellitems],
+    sellunits: [...base.sellunits],
+  };
+}
+
+/** One object's tech overrides, applied onto a (already cloned) node. */
+function applyTechMods(def: TechDef, mods: AbilMod[], trigStr: (v: string) => string): boolean {
+  let touched = false;
+  for (const m of mods) {
+    // The display name, for the red "Requires: …" line a gated button prints. Carried here as
+    // well as on the UnitDef because a pseudo-tech (TWN2, HERO) has no unit row to read it off.
+    if (m.id === "unam" || m.id === "gnam" || m.id === "anam") {
+      def.name = trigStr(s(m.value)).split(",")[0]?.replace(/^"|"$/g, "").trim() || def.name;
+      continue;
+    }
+    const listSetter = TECH_LIST_SETTERS[m.id];
+    if (listSetter) { listSetter(def, techList(m.value)); touched = true; continue; }
+    if (m.id === "urev") { def.revive = n(m.value) === 1; touched = true; continue; }
+    if (m.id === "urqa" || m.id === "arqa" || m.id === "grqc") {
+      def.requiresAmount = techList(m.value).map((x) => parseInt(x, 10) || 1);
+      touched = true;
+      continue;
+    }
+    // `Requirescount` ("Requirements - Tiers Used") only ever GROWS the tier list here: the
+    // tiers themselves arrive as their own fields, and a tier the map doesn't mention keeps
+    // whatever the base type had (WC3 stores the whole ladder, not a diff).
+    if (m.id === "urqc") {
+      const want = Math.max(1, n(m.value));
+      while (def.requiresTiers.length < want) def.requiresTiers.push([]);
+      touched = true;
+      continue;
+    }
+    const tier = requiresTierOf(m.id);
+    if (tier < 0) continue;
+    // An upgrade's Requires is per-LEVEL and rides `levelOrVariation` (1-based), which is
+    // tier `level - 1` — `Requires` gates level 1, `Requires1` gates level 2. Verified against
+    // the tester map's own .w3q, which clears `greq` at lvl 2 and lvl 3 on exactly the
+    // three-level Blacksmith upgrades (Rhme/Rhar/Rhla) and at lvl 1 on the single-level ones.
+    const t = m.id === "greq" ? Math.max(0, (m.levelOrVariation || 1) - 1) : tier;
+    while (def.requiresTiers.length <= t) def.requiresTiers.push([]);
+    def.requiresTiers[t] = techList(m.value);
+    touched = true;
+  }
+  return touched;
+}
+
+/**
+ * Merge a map's own tech tree into the registry's per-map overlay. Returns how many nodes
+ * were installed. Every file is optional — a map that ships none simply runs on the install's
+ * graph, which is what a melee map does.
+ *
+ * A CUSTOM object is always installed, even when it overrides no tech field at all: a clone
+ * has to inherit its base type's wares (a `ntav`-based shop still sells the Tavern's heroes).
+ * An ORIGINAL-table object is installed only when it actually says something about the tech
+ * tree, so a map retuning a Footman's damage doesn't fill the overlay with copies.
+ */
+export function applyMapTechData(
+  tech: TechRegistry,
+  files: { w3u?: Uint8Array; w3t?: Uint8Array; w3a?: Uint8Array; w3q?: Uint8Array },
+  wtsBytes?: Uint8Array,
+): number {
+  const trigStr = makeTrigStr(wtsBytes);
+  let count = 0;
+
+  const merge = (oldId: string, newId: string, mods: AbilMod[]): void => {
+    // An original-table object carries FOUR ZERO BYTES where a custom one carries its new
+    // rawcode — not an empty string (milestone 7.29). Treat anything that isn't a real
+    // rawcode as "this is an override of oldId".
+    const id = newId && newId !== "\0\0\0\0" ? newId : oldId;
+    const isClone = id !== oldId;
+    const base = tech.get(oldId); // overlay-aware, so a chained custom inherits its parent
+    const def = cloneTech(base, id);
+    if (!base.id) def.name = id; // no base row at all (a Farm has no tech node) — start blank
+    const touched = applyTechMods(def, mods, trigStr);
+    if (!touched && !isClone) return; // a pure stat/art override — nothing for the graph
+    tech.setCustom(id, def);
+    count++;
+  };
+
+  const flat = (bytes?: Uint8Array): void => {
+    if (!bytes) return;
+    const f = new War3MapW3u(); // units + items: no level data
+    f.load(bytes);
+    for (const o of f.customTable.objects) merge(o.oldId, o.newId, o.modifications as AbilMod[]);
+    for (const o of f.originalTable.objects) merge(o.oldId, o.newId, o.modifications as AbilMod[]);
+  };
+  const levelled = (bytes?: Uint8Array): void => {
+    if (!bytes) return;
+    const f = new War3MapW3d(); // abilities + upgrades: level-indexed
+    f.load(bytes);
+    for (const o of f.customTable.objects) merge(o.oldId, o.newId, o.modifications as AbilMod[]);
+    for (const o of f.originalTable.objects) merge(o.oldId, o.newId, o.modifications as AbilMod[]);
+  };
+
+  // Order matters exactly as it does for the other registries: customs first, so an
+  // original-table override of a type a custom cloned from lands on top of the base row
+  // rather than being read through a half-built overlay.
+  try { flat(files.w3u); } catch (err) { console.warn("[jass] map tech (war3map.w3u) failed (non-fatal):", err); }
+  try { flat(files.w3t); } catch (err) { console.warn("[jass] map tech (war3map.w3t) failed (non-fatal):", err); }
+  try { levelled(files.w3a); } catch (err) { console.warn("[jass] map tech (war3map.w3a) failed (non-fatal):", err); }
+  try { levelled(files.w3q); } catch (err) { console.warn("[jass] map tech (war3map.w3q) failed (non-fatal):", err); }
   return count;
 }

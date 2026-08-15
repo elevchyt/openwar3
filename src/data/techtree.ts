@@ -77,20 +77,60 @@ export class TechRegistry {
   private parents = new Map<string, string[]>();
   /** id → the ids that name it in their `DependencyOr` (i.e. requirements it helps meet). */
   private equivalents = new Map<string, string[]>();
+  /** Per-MAP overlay from the map's own object data (war3map.w3u/.w3t/.w3a/.w3q — see
+   *  applyMapTechData in src/data/objectData.ts). Mirrors UnitRegistry/ItemRegistry: the base
+   *  (install) graph is immutable, `get()` checks the overlay first, and it is cleared on map
+   *  change so one map's tech tree never leaks into the next.
+   *
+   *  This is what makes a custom map's own buildings work at all. The whole tech tree is
+   *  authored in the Profile INIs (`Trains`, `Sellunits`, `Sellitems`, `Researches`, `Builds`,
+   *  `Upgrade`, `Requires`), and a map that declares a shop does it by overriding exactly those
+   *  fields — so a registry built only from the install answers "sells nothing" for every
+   *  custom building on the map and its command card comes up EMPTY. */
+  private custom = new Map<string, TechDef>();
+  /** The two indexes above are derived from `defs` + `custom`, so an overlay change
+   *  invalidates them. Rebuilt lazily — a map installs hundreds of overrides in a loop. */
+  private indexDirty = false;
 
   constructor(private defs: Map<string, TechDef>) {
-    for (const def of defs.values()) {
+    this.reindex();
+  }
+
+  get(id: string): TechDef {
+    return this.custom.get(id) ?? this.defs.get(id) ?? EMPTY;
+  }
+  has(id: string): boolean {
+    return this.custom.has(id) || this.defs.has(id);
+  }
+  /** The base (install) node for `id`, ignoring the overlay — what a custom object clones
+   *  from, and what an original-table override is applied on top of. */
+  base(id: string): TechDef | undefined {
+    return this.defs.get(id);
+  }
+  /** Add/override a node in the per-map overlay (custom object data). */
+  setCustom(id: string, def: TechDef): void {
+    this.custom.set(id, def);
+    this.indexDirty = true;
+  }
+  /** Drop the map's overlay (on map change). */
+  clearCustom(): void {
+    if (!this.custom.size) return;
+    this.custom.clear();
+    this.indexDirty = true;
+  }
+
+  /** Rebuild `parents`/`equivalents` (and drop the `satisfies` cache they feed) from the
+   *  base graph with the overlay laid over it. */
+  private reindex(): void {
+    this.parents.clear();
+    this.equivalents.clear();
+    this.satisfiesCache.clear();
+    for (const def of new Map([...this.defs, ...this.custom]).values()) {
       for (const to of def.upgrade) push(this.parents, to, def.id);
       // `[TWN2] DependencyOr=hkee,ostr,...` — owning a Keep satisfies the pseudo-tech TWN2.
       for (const from of def.dependencyOr) push(this.equivalents, from, def.id);
     }
-  }
-
-  get(id: string): TechDef {
-    return this.defs.get(id) ?? EMPTY;
-  }
-  has(id: string): boolean {
-    return this.defs.has(id);
+    this.indexDirty = false;
   }
   trains(id: string): string[] {
     return this.get(id).trains;
@@ -122,6 +162,7 @@ export class TechRegistry {
    *  so a Castle satisfies TWN2 — which is what lets a Castle-tier player buy the Potion of
    *  Healing (`[phea] Requires=TWN2`). Cached: the graph is immutable once loaded. */
   satisfies(unitId: string): string[] {
+    if (this.indexDirty) this.reindex();
     const hit = this.satisfiesCache.get(unitId);
     if (hit) return hit;
     const seen = new Set<string>([unitId]);

@@ -51,6 +51,7 @@
 | — | **A cinematic takes the INTERFACE, and the scoreboard is interface** (same report). `ShowInterface(false)` is the letterbox, and in WC3 it takes the leaderboard, the multiboard and the countdown windows with the console. Ours were the only interface that stayed up, so Candy's intro played under its own kill-count board. Keyed on the letterbox alone, like the cursor and the console panels — `EnableUserUI(false)` is the momentary blackout blizzard.j flicks around each cinematic fade, and a board must not blink for it. Also fixed the multiboard's own geometry: the body backdrop spans the title's left edge to the button's RIGHT edge **less** the 0.0057 overlap the FDF gives the title, and the rows need a gutter clear of the border ring rather than the file's 0.001 | ✅ done (live) | Candy **live**: intro plays with nothing over it, board back afterwards; rows measured 14 px from the border's inner edge (was 1) |
 | 7.29 | **A map's override of a BUILT-IN type never reached the renderer** (reported as "the custom heroes have the wrong models"). An **original-table** object in a `.w3u`/`.w3t`/`.w3d`/`.w3b` — a map retuning a stock type rather than declaring a new one — carries four ZERO BYTES where a custom object carries its new rawcode, and the parser reads that as the 4-char string `"\0\0\0\0"`, not `""`. mdx-m3-viewer tested `newId !== ''`, so **every** such override was filed on a junk row keyed `"\0\0\0\0"` instead of on the type it names. Our own registry read the file correctly, so the split was: a unit the SCRIPT made wore the map's model, one the map PLACED wore the stock one. Extreme Candy War is made almost entirely of these — its heroes are stock hero ids wearing other models, so every pedestal showed a Crypt Lord / Paladin / Sylvanas — and so are its four invisible helper types (`"Dummy Cinematic Vision Alliance"`, `"Dummy Caster"`, …) whose model the map sets to `" .mdl"`: with the override lost, two of them stood in the middle of the intro shot as a **bandit and a pack horse**. Fixed in `patches/mdx-m3-viewer@5.12.0.patch`. Also: the viewer's object tables are GLOBAL (*"Global tables like WC3. It's bad."*) and every map merges into them, which was harmless only while the overrides missed — so the first map snapshots them and every map after restores (`resetObjectData`). And a bare `uico` path with no extension (`…\BTNproudmoore`) now resolves, like `umdl` already did | ✅ done (live) | Candy War **live**: `unitsData` carries the map's own `file` for `Ucrl`/`Otch`/`Usyl`/`Hpal`/`hfoo`; the pedestals wear Kel'Thuzad / Spirit Walker / Head Hunter / Mountain King; "Predator, Level 1 Troll Hunter" has a troll bust; the intro shot is clean and the four dummy types create no widget at all (screenshots) |
 | — | **A unit's NAME carries markup, and the game draws it** (same report). A custom map colours its unit names in the object editor — Candy War has 20-odd, `"\|cffffaa00Boogie Kid"`, `"\|cff006400Trick or Trinket"` — and the HUD printed the raw string. The info panel, the XP bar's "Level N \<class\>", and the world hover slab render the markup now; the places that cannot (an `<option>`, the 3–4-character command-card fallbacks, a native `title=`) strip it rather than print it | ✅ done (live) | Candy War **live**: `.hud-sel-name` is `<span style="color:#006400">Trick or Trinket</span>` and draws dark green (screenshot) |
+| 7.2f | **The map's own TECH TREE** — `war3map.w3u`/`.w3t`/`.w3a`/`.w3q` finally reach the tech GRAPH, not just the unit/item/ability/upgrade registries. Reported as *"most of the buildings show no actions, and the same for item buildings"* on **WTii's Unit Tester**. Everything a building OFFERS is a tech field — `Trains`, `Sellunits`, `Sellitems`, `Makeitems`, `Researches`, `Builds`, `Upgrade`, `Requires` — and **none of them is in an SLK**: `UnitMetaData.slk` says `slk = Profile` for every one, i.e. the per-race `*UnitFunc.txt` a map OVERRIDES. `TechRegistry` was built once from the install and never merged with the map's object data, so every type a map declares answered "trains nothing, sells nothing" and `buildCommandCard` had **nothing to draw**. Not a rare corner: a map that gives you a building to click is *made* of these fields — the tester is ~105 pre-placed Human Farms (`hhou`) whose entire content is a `Sellunits` list. The quieter half is the same bug from the other side: a CUSTOM id is in the install graph nowhere at all, so even a Tavern-based shop (`ntav`→`n001`) lost the base type's own wares, because a clone inherits nothing it isn't given. Fixed with the per-map overlay the other four registries already had (`applyMapTechData`), plus the two hard-coded tables the same map walked into: `usma`/`usrg`/`usst` + `isto`/`istr`/`isst` (a ware's **shelf**) had no setters, and a **worker was a list of five ids** — WC3 has no such list, a unit gathers because it CARRIES `Ahar`/`Aaha`/`Ahrl`/`Awha`, so the map's own builders had no worker state and hence **no Build button** | ✅ done (live) | `pnpm sim:test` §map-tech (built w3u/w3q blobs, so it runs with no install: a Farm-based shop gets the map's `Sellunits`; a clone with no tech override INHERITS its base's wares and one that names its own REPLACES them; `Requirescount` GROWS the tier ladder; an ORIGINAL-table override reaches the base id **at every tier it clears** — which is how the tester's Tavern sells heroes with no altar standing; a pure stat/art override installs NO node; an upgrade's `greq` is tiered by LEVEL off `levelOrVariation`, verified against the tester's own `.w3q`; `clearCustom` re-indexes so one map's tier chain cannot answer for the next map's; a corrupt blob is non-fatal). Live: the tester's "Orc Units" shop draws its twelve orc wares with stock badges and really queues a Peon; "Shop 8" draws its eleven potions; "Human Special Heroes 1" its eleven heroes; "Human Tech 2" its ten researches; and its own builder ("All Round Nice Guy", a Peasant carrying `Ahar`) has a Build button whose page is the map's own eight structures. Echo Isles unregressed — hall, Peasant build page, Tavern wares all as before (screenshots) |
 | 7.5 | Native breadth + Lua/Reforged | ⬜ ongoing | `pnpm jass:coverage` (296/335 used natives implemented — and see the caveat: weather sat at a ✓ the whole time, and the special-effect family was a **floor-vs-census** case, see 7.26) |
 
 Run the checks any time: **`pnpm jass:test`** (7.0–7.2 oracles + 7.3 melee-from-the-script + 7.4 timers + **7.4c the
@@ -58,7 +59,8 @@ timer-pump regression** + 7.5 text + 7.6 regions + 7.7/7.8/7.9 object data + 7.1
 unit-mutation effects + 7.14 orders + 7.15 threads/waits + 7.16 unit groups + 7.17 abilities/heroes/events + 7.18 items
 + 7.19 on-screen output + 7.20 audio + 7.21 timer dialogs + 7.22 vision/fog/waygates/multiboards + 7.23 weather +
 7.24 cameras/cinematics + 7.25 the enum-index gate + enter-region baseline + 7.26 special effects + **7.26b the
-effect clock** + 7.28 selection events) and **`pnpm sim:test`** (7.27 the destructible footprints + registry), and
+effect clock** + 7.28 selection events) and **`pnpm sim:test`** (7.27 the destructible footprints + registry, **7.2f
+the map's own tech tree**), and
 **`pnpm jass:coverage`** (unimplemented natives by usage).
 
 > **Note on `jass:coverage`'s numbers.** It only counts natives called **directly** from a `war3map.j`, so everything
@@ -364,11 +366,59 @@ so no map leaks into the next — `ItemRegistry` also rebuilds its random-drop `
   An item's *behaviour* rides on the abilities it carries (`iabi` → dispatched off each ability's `code`), so a custom
   item works as long as those base abilities are known.
 
+None of these four touches the tech GRAPH — what a building *trains, sells, researches, builds or upgrades into* is a
+fifth overlay, on `TechRegistry`, and it is what a custom map's command card is actually drawn from. See **7.2f** below.
+
 Verified (`pnpm jass:test` §7.7/§7.8/§7.9): WarChasers' `EC12` → Shandris model + wts name + inherited `isHero`;
 ExtremeCandyWar's `A000` ability inherits its base `code` + level-1 `area == 425` + `Oar1` DataA → `data[0]`; its `I000`
 item resolves to "Kael's Will" (Artifact, grants ability `AIda`, usable). Verified **live**: the Archer pedestal spawns
 the real Shandris-model hero (screenshots); the custom ability + item both resolve in-browser with the right fields.
 (Names/tooltips resolve `TRIGSTR_` refs via `war3map.wts`.)
+
+## The map's own tech tree (7.2f — done, live)
+
+The four loaders above answer *what a custom type IS*. They do not answer **what a building OFFERS** — and that is a
+separate graph. Every one of `Trains`, `Sellunits`, `Sellitems`, `Makeitems`, `Researches`, `Builds`, `Upgrade`,
+`Requires`, `DependencyOr` and `Revive` lives in the per-race **Profile** INI (`UnitMetaData.slk`'s `slk` column says
+so for all of them), which is exactly what `src/data/techtree.ts` reads from the install and exactly what a map's
+object data overrides. `TechRegistry` had no per-map overlay, so a custom map's building answered "trains nothing,
+sells nothing" and `buildCommandCard` drew an empty card.
+
+**`applyMapTechData(tech, {w3u, w3t, w3a, w3q}, wts)`** (bottom of `src/data/objectData.ts`) closes it. One call over
+all four files, because **one graph covers all four id spaces** — units and items share `ureq`/`urq1..8`/`urqa`/`urqc`
+(`ureq` carries `useitem=1` as well as `useunit=1`), abilities use `areq`, upgrades `greq`. The rules that are easy to
+get wrong, and are pinned by the test:
+
+- **A custom object is ALWAYS installed, even when it overrides no tech field.** A clone inherits nothing it is not
+  given, so a map that merely renames a Tavern would otherwise lose its eight heroes. An *original*-table object is
+  installed only when it actually says something tech-shaped, so a map retuning a Footman's damage doesn't fill the
+  overlay with copies.
+- **An empty string is a VALUE, not an absence.** Clearing a field in the object editor is how a map says "no
+  requirements at all" — the tester clears `ureq`/`urq1`/`urq2` on every Tavern hero (so you can buy one with no altar)
+  and `greq` on all 88 of its upgrades.
+- **An upgrade's `Requires` is tiered by LEVEL and the level rides `levelOrVariation`**, 1-based, so the tier index is
+  `level - 1` (`Requires` gates level 1, `Requires1` gates level 2). Verified against the tester's own `.w3q`, which
+  clears `greq` at lvl 2 *and* lvl 3 on exactly the three-level Blacksmith upgrades and at lvl 1 on the single-level ones.
+- **`Requirescount` only GROWS the ladder.** The tiers arrive as their own fields and a tier the map doesn't mention
+  keeps what the base type had — WC3 stores the whole ladder, not a diff.
+- **The overlay must RE-INDEX.** `TechRegistry.satisfies()` is derived from `Upgrade`/`DependencyOr`, so a map's own
+  tier chain (`h02X → h02Y`) has to answer for its parent — and must stop answering the moment `clearCustom()` runs.
+
+Two hard-coded tables the same map walked into, fixed alongside because they are the same bug (map data that never
+reaches an install-derived list):
+
+- **A ware's SHELF.** `usma`/`usrg`/`usst` (a unit's `stockMax`/`stockRegen`/`stockStart`) and `isto`/`istr`/`isst`
+  (an item's) had no setters in `objectData.ts`, so a map that stocks its own shop — the tester sets `usrg` on 642
+  types and `istr` on 273 items — got the stock schedule of whatever it cloned from.
+- **A worker is not a list of five ids.** WC3 keeps no register of worker types: gathering is an ABILITY (`Ahar`,
+  `Aaha`, `Ahrl`, `Awha`), and a unit that lists one in its `abilList` gathers — which is why the Object Editor's whole
+  recipe for "my map's own worker" is to put `Ahar` on something. `WORKERS[def.id]` missed every custom builder, and
+  since `SelectionInfo.isWorker` is `!!u.worker` the visible half was that the tester's four builders had **no Build
+  button at all**. Now keyed off the ability code as well (`workerProfileFor`, `src/data/races.ts`), with the alias
+  resolved to its base code first so a map's `A000`-based-on-`Ahar` still counts.
+
+Verified (`pnpm sim:test` §map-tech) on w3u/w3q blobs built in the test rather than read off disk, so it runs on any
+machine. Verified **live** on the tester map and on Echo Isles for the no-regression half — see the 7.2f row.
 
 ## Trigger effects that land (7.7 — done, live)
 
@@ -1982,10 +2032,23 @@ Echo Isles: town hall + 5 workers, 500/150, teams unchanged.
   is why it isn't bundled into this one.
 
 
-- **Custom destructable/upgrade/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
-  `War3MapW3u`), `.w3q` (upgrades, `War3MapW3d`), `.w3h` (buffs, `War3MapW3u`). Lower priority: only maps that create
-  custom destructables (via `CreateDestructable`) / research custom upgrades need them. Units + abilities + items — the
-  gameplay-critical trio — are done.
+- **A resource DEPOT is still a list of ids** (`DEPOT_IDS`, `src/data/races.ts`) — found while fixing 7.2f, and the
+  same shape as the worker bug that WAS fixed there: a custom map's own Town Hall (WTii's Unit Tester builds `h02X`,
+  an `htow` clone) accepts no gold or lumber, because the set names the twelve stock halls plus the Lumber Mill. WC3
+  has no such list either; the honest key is the type's own internal `UnitUI.slk` `name` ("townhall", "greathall",
+  "treeoflife", "necropolis", "lumbermill"), which `UnitDef.typeName` already carries and which a clone inherits —
+  the same column `MAIN_HALL_CHAINS`/`GetPlayerTypedUnitCount` already answers with. Left out of 7.2f deliberately:
+  it is a gathering change, wants its own melee verification, and the tester map hands you ten million gold so
+  nothing there depends on it.
+- **A card with more than twelve buttons still drops the overflow** (`layoutCard`). Blizzard's own shops stop at eight
+  wares so the stock data never reaches it, but the object editor allows twelve (`useu` `maxval=12`) and WTii's Unit
+  Tester ships several — so its "Orc Units" shop loses its twelfth ware to the Set Rally Point button at (3,1), and
+  "Shop 8" loses its twelfth to `Anei`'s pinned Select User at (3,2). Which button the real client sacrifices (or
+  whether a pure `Sellunits` building gets a rally point at all) is unverified, so nothing was invented here.
+- **Custom destructable/buff data** (optional) — the same mechanism for `war3map.w3b` (destructables,
+  `War3MapW3u`) and `.w3h` (buffs, `War3MapW3u`). Lower priority: only maps that create custom destructables (via
+  `CreateDestructable`) or custom buffs need them. Units, abilities, items, **upgrades** (`.w3q`) and the **tech
+  graph** all four feed (7.2f) are done.
 - **Custom-ability *behaviour*** — object data now gives a custom ability its real numbers, but only abilities whose base
   `code` is in `KNOWN_ABILITIES` (src/data/abilities.ts) actually *do* anything; an unknown base code loads as data but
   stays passive/uncastable (graceful, but inert).

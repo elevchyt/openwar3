@@ -32,7 +32,7 @@ import type { MatchLinkSetup } from "../game/matchLink";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
 import { SoundBoard } from "../audio/sounds";
 import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
-import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData } from "../data/objectData";
+import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData } from "../data/objectData";
 import { loadUberSplatRegistry, type UberSplatRegistry } from "../data/ubersplats";
 import { loadLightningRegistry } from "../data/lightning";
 import { specialFxPhaseAt, type SpecialFxClips } from "./specialFxClock";
@@ -2385,33 +2385,43 @@ export class MapViewerScene {
     this.abilities.clearCustom();
     this.items.clearCustom();
     this.upgrades.clearCustom();
+    this.tech.clearCustom();
     if (!this.mapArchive) return;
     const wts = this.mapArchive.rawBytes("war3map.wts") ?? this.mapArchive.rawBytes("war3map\\wts") ?? undefined;
+    const w3u = this.mapArchive.rawBytes("war3map.w3u") ?? this.mapArchive.rawBytes("war3map\\w3u") ?? undefined;
+    const w3a = this.mapArchive.rawBytes("war3map.w3a") ?? this.mapArchive.rawBytes("war3map\\w3a") ?? undefined;
+    const w3t = this.mapArchive.rawBytes("war3map.w3t") ?? this.mapArchive.rawBytes("war3map\\w3t") ?? undefined;
+    const w3q = this.mapArchive.rawBytes("war3map.w3q") ?? this.mapArchive.rawBytes("war3map\\w3q") ?? undefined;
     try {
-      const w3u = this.mapArchive.rawBytes("war3map.w3u") ?? this.mapArchive.rawBytes("war3map\\w3u");
       if (w3u) console.info(`[jass] custom object data: ${applyMapUnitData(this.registry, w3u, wts)} custom unit type(s) (war3map.w3u).`);
     } catch (err) {
       console.warn("[jass] custom unit data failed (non-fatal):", err);
     }
     try {
-      const w3a = this.mapArchive.rawBytes("war3map.w3a") ?? this.mapArchive.rawBytes("war3map\\w3a");
       const meta = this.vfs.rawBytes("Units\\AbilityMetaData.slk");
       if (w3a && meta) console.info(`[jass] custom object data: ${applyMapAbilityData(this.abilities, w3a, meta, wts)} custom abilit(ies) (war3map.w3a).`);
     } catch (err) {
       console.warn("[jass] custom ability data failed (non-fatal):", err);
     }
     try {
-      const w3t = this.mapArchive.rawBytes("war3map.w3t") ?? this.mapArchive.rawBytes("war3map\\w3t");
       if (w3t) console.info(`[jass] custom object data: ${applyMapItemData(this.items, w3t, wts)} custom item(s) (war3map.w3t).`);
     } catch (err) {
       console.warn("[jass] custom item data failed (non-fatal):", err);
     }
     try {
-      const w3q = this.mapArchive.rawBytes("war3map.w3q") ?? this.mapArchive.rawBytes("war3map\\w3q");
       const meta = this.vfs.rawBytes("Units\\UpgradeMetaData.slk");
       if (w3q && meta) console.info(`[jass] custom object data: ${applyMapUpgradeData(this.upgrades, w3q, meta, wts)} custom upgrade(s) (war3map.w3q).`);
     } catch (err) {
       console.warn("[jass] custom upgrade data failed (non-fatal):", err);
+    }
+    // …and the map's own TECH TREE, which is what a building's command card is BUILT from
+    // (`Trains`, `Sellunits`, `Sellitems`, `Researches`, `Builds`, `Upgrade`, `Requires`).
+    // One call over all four files because one graph covers all four id spaces — see
+    // applyMapTechData. Without it every building a custom map declares comes up with an
+    // EMPTY card, which is exactly what "WTii's Unit Tester" showed.
+    if (w3u || w3t || w3a || w3q) {
+      const nodes = applyMapTechData(this.tech, { w3u, w3t, w3a, w3q }, wts);
+      console.info(`[jass] custom object data: ${nodes} map tech-tree node(s) (Trains/Sell*/Researches/Builds/Requires).`);
     }
   }
 
