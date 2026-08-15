@@ -85,6 +85,13 @@ const SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   usca: (d, v) => { d.modelScale = n(v); },
   uble: (d, v) => { d.animBlend = n(v); },
   uico: (d, v) => { d.icon = normIcon(s(v)); },
+  // "Art - Ground Texture" (unitUI `uberSplat`) — the dirt/foundation decal under a building,
+  // a 4-char UberSplatData.slk code. CLEARING it is the point: a map that stands a building on
+  // ground it doesn't want scarred empties the field, and an empty field is a real value ("no
+  // decal"), not an absence. WTii's Unit Tester empties it on all 111 of its buildings — they
+  // are Human Farms wearing other models, and every one of them was drawing the Farm's
+  // foundation ring on the grass underneath.
+  uubs: (d, v) => { d.uberSplat = s(v).trim(); },
   // Movement / geometry.
   ucol: (d, v) => { d.collision = n(v); },
   umvt: (d, v) => { d.moveType = toMoveType(s(v)); },

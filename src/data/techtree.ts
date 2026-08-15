@@ -147,6 +147,20 @@ export class TechRegistry {
   revives(id: string): boolean {
     return this.get(id).revive;
   }
+  /** Does a building of this type PRODUCE units — i.e. does it take a rally point?
+   *
+   *  `Trains` and nothing else. `Sellunits` is a different field and a different thing: a
+   *  Tavern, a Mercenary Camp, a Goblin Laboratory and a Shipyard all sell units and none of
+   *  them has a Set Rally Point button in WC3 — a hired unit appears beside the building and
+   *  stands there. Measured on WTii's Unit Tester, whose only buildings the real client
+   *  rallies are its altars (the ones carrying `Trains`), out of forty-odd shops.
+   *
+   *  One rule in one place because two callers derive `BuildingState.producesUnits` from it —
+   *  RtsController.addSimUnit at birth and SimWorld.morphTo on an upgrade — and they must
+   *  never disagree about what a building is. */
+  producesUnits(id: string): boolean {
+    return this.get(id).trains.length > 0;
+  }
 
   /** Every tech id that owning one live `unitId` satisfies.
    *

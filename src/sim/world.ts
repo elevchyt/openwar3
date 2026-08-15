@@ -620,7 +620,15 @@ export interface BuildingState {
   rallyY: number;
   rallyKind: RallyKind; // how the rally target is interpreted (point/mine/tree/unit)
   rallyTargetId: number; // mine/tree/unit id for non-point rallies (0 for a point)
-  producesUnits: boolean; // trains units → has a rally point (towers etc. don't)
+  /** TRAINS units → has a rally point. A tower or a farm has nothing to send anywhere, and
+   *  neither — this is the part that is easy to get wrong — does a SHOP. `Trains` and
+   *  `Sellunits` are two different fields and only the first one rallies: you cannot set a
+   *  rally point on a Tavern, a Mercenary Camp, a Goblin Laboratory or a Shipyard, and a unit
+   *  hired at one simply appears beside it. Measured on WTii's Unit Tester, where the only
+   *  buildings the real client gives the button to are its altars — the ones that carry
+   *  `Trains` — and its forty-odd `Sellunits` shops get nothing. It also matters for room: a
+   *  12-ware shop fills the 4×3 card exactly, and reserving (3,1) for a rally cost it a ware. */
+  producesUnits: boolean;
   // Shop stock, when this building sells things (Arcane Vault, Goblin Merchant, Tavern…).
   // Keyed by item/unit id. Absent on everything else. See SHOP stock rules in tickShops().
   //
@@ -3916,10 +3924,7 @@ export class SimWorld {
     u.abilities = this.buildAbilitiesFor(def);
     // What it produces is a property of the TYPE, so re-derive it: a structure that only gains
     // a training list on upgrade would otherwise never get a rally point.
-    if (u.building && this.techReg) {
-      const t = this.techReg.get(toTypeId);
-      u.building.producesUnits = t.trains.length > 0 || t.sellunits.length > 0;
-    }
+    if (u.building && this.techReg) u.building.producesUnits = this.techReg.producesUnits(toTypeId);
     // maxHp/maxMana now reflect the new type (+ any research already in). Both POOLS moving is
     // an ordinary ceiling move, so the current values ride it by RATIO — the one rule stated in
     // recomputeStats and cited there to Liquipedia (Hit_Points): a bear at half life comes back

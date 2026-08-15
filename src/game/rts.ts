@@ -2367,7 +2367,7 @@ export class RtsController {
     // Structures get building state (construction + a training queue); rally
     // point defaults to just south of the building.
     const building: BuildingState | null = def.isBuilding
-      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: this.tech.trains(def.id).length > 0 || this.tech.get(def.id).sellunits.length > 0 }
+      ? { constructionLeft: constructionTime, buildTimeTotal: constructionTime || 1, builderIds: [], goldCost: def.goldCost, lumberCost: def.lumberCost, queue: [], rallyX: x, rallyY: y - 200, rallyKind: "point", rallyTargetId: 0, producesUnits: this.tech.producesUnits(def.id) }
       : null;
     // A hero is born with a given name drawn from its `Propernames` list (the
     // Demon Hunter's "Painkiller", the Paladin's "Uther"-alikes) — the info panel

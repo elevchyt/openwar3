@@ -163,6 +163,31 @@ console.log("\n[map tech] a map that ships no object data runs on the install's 
   check("a corrupt blob is non-fatal", applyMapTechData(tech, { w3u: new Uint8Array([1, 2, 3, 4, 5]) }), 0);
 }
 
+console.log("\n[map tech] only a building that TRAINS takes a rally point");
+{
+  // `Trains` and `Sellunits` are two different fields and only the first one rallies. WC3 has
+  // no Set Rally Point button on a Tavern, a Mercenary Camp, a Goblin Laboratory or a
+  // Shipyard — a hired unit appears beside the building and stands there. Measured on WTii's
+  // Unit Tester: the only buildings the real client rallies are its altars.
+  const tech = new TechRegistry(baseDefs());
+  const w3u = build(
+    W3u,
+    [
+      obj("hhou", "h006", [mod("utra", "Hapm,Hant"), mod("urev", 1)]), // an ALTAR — Trains
+      obj("hhou", "h00C", [mod("useu", "opeo,ogru,orai")]), // a SHOP — Sellunits
+      obj("hhou", "h01Z", [mod("usei", "phea,pman")]), // an ITEM shop
+    ],
+    [],
+  );
+  applyMapTechData(tech, { w3u });
+  check("the map's altar rallies", tech.producesUnits("h006"), true);
+  check("its unit SHOP does not — this is what cost a 12-ware card its twelfth ware", tech.producesUnits("h00C"), false);
+  check("nor does its item shop", tech.producesUnits("h01Z"), false);
+  check("a stock Tavern does not either (Sellunits, no Trains)", tech.producesUnits("ntav"), false);
+  check("a Town Hall does", tech.producesUnits("htow"), true);
+  check("a type with no tech node at all does not", tech.producesUnits("hhou"), false);
+}
+
 console.log("\n[map data] a WORKER and a DEPOT are data, not lists of ids");
 {
   // Same bug family as the tech graph, and both hit the same map: a hard-coded table of stock
@@ -195,6 +220,33 @@ console.log("\n[map data] a WORKER and a DEPOT are data, not lists of ids");
   check("...and a Wisp's rules follow `Awha`, not its id", workerProfileFor("e001", ["Awha"])?.deliversInPlace, true);
   check("a Footman is not a worker", workerProfileFor("hfoo", ["Adef"]), null);
   check("(the harvest code is all that is read — no Data columns needed)", workerProfileFor("x000", [HARVEST.code])?.harvestAbility, "Ahar");
+}
+
+console.log("\n[map data] a map can CLEAR a building's ground texture, and empty means none");
+{
+  // `uubs` (unitUI `uberSplat`) is the dirt/foundation decal under a building. Clearing it in
+  // the object editor is a real value — "this building scars no ground" — and every renderer
+  // path already treats an empty code as no decal. WTii's Unit Tester empties it on all 111
+  // of its buildings (they are Human Farms wearing other models) and every one of them was
+  // drawing the Farm's foundation ring on the grass.
+  const { applyMapUnitData } = require(join(REPO, ".sim-build", "src", "data", "objectData.js"));
+  const { UnitRegistry } = require(join(REPO, ".sim-build", "src", "data", "units.js"));
+  const farm = { id: "hhou", name: "Farm", isBuilding: true, uberSplat: "HSMA", abilities: [], heroAbilities: [], classification: [], properNames: [], weapons: [] };
+  const registry = new UnitRegistry(new Map([["hhou", farm]]));
+  const w3u = build(
+    W3u,
+    [
+      obj("hhou", "h002", [mod("unam", "Undead Units"), mod("uubs", "")]), // the map's own: cleared
+      obj("hhou", "h0ZZ", [mod("unam", "Keeps its ring")]), // no uubs override at all
+      obj("hhou", "h0YY", [mod("uubs", "HTOW")]), // …and one that names a different decal
+    ],
+    [],
+  );
+  applyMapUnitData(registry, w3u);
+  check("an emptied ground texture really is empty (no decal under the building)", registry.get("h002").uberSplat, "");
+  check("...while a clone that says nothing keeps the base type's", registry.get("h0ZZ").uberSplat, "HSMA");
+  check("...and one that names another decal gets that one", registry.get("h0YY").uberSplat, "HTOW");
+  check("the base type is untouched", registry.base("hhou").uberSplat, "HSMA");
 }
 
 console.log(failed ? `\n${failed} CHECK(S) FAILED` : "\nALL CHECKS PASSED");

@@ -8090,7 +8090,13 @@ export class MapViewerScene {
       // neither the hero bar nor the hero limit, and the Altar happily offered a second
       // "first" hero at tier 1. Food and the requirement tier had the same hole.
       const simId = this.rts!.addSimUnit(d, sx, sy, TRAINED_FACING, t.owner, team, 0, this.rts!.reserveUnitId());
-      this.applyRally(simId, rally);
+      // …and walk it to the rally point, but ONLY if this building has one. A `Sellunits`
+      // shop does not (see BuildingState.producesUnits): a hired mercenary appears beside the
+      // camp and stands there. Sending it to the default point 200 south instead is not just
+      // cosmetic — WTii's Unit Tester teleports every bought unit into an arena the moment it
+      // enters the shop's region, and a unit still carrying a move order walked straight back
+      // out of the arena and across the map to a rally flag it should never have had.
+      if (world.acceptsRally(buildingId)) this.applyRally(simId, rally);
       // EVENT_(PLAYER_)UNIT_TRAIN_FINISH (7.17) — raised HERE, not in the sim: the trained
       // unit is born in the renderer (the sim owns no models), and GetTrainedUnit must hand
       // the script the real unit. It fires on completion now, not a model-load later.
