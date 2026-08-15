@@ -25,6 +25,17 @@ export interface SpellApi {
    *  (World.targsAdmit), shared with single-target casts, spell fields and orbs, so a
    *  handler never has to hand-write `if (t.flying) continue` and get it wrong. */
   admits(def: AbilityDef, target: SimUnit): boolean;
+  /**
+   * Launch the ability's `Missileart` as a travelling WAVE: from the caster toward (tx,ty),
+   * `dist` far, `halfWidth` to either side, at the row's own `Missilespeed`. Each unit the
+   * front sweeps over gets the handler called again with `ctx.targetId` set and `ctx.wave`
+   * holding the remaining damage budget — so the spell lands ON the unit when the wave
+   * actually reaches it, which is the whole reason the missile exists.
+   *
+   * Returns false when the row names no missile (a custom map may strip it), leaving the
+   * handler to sweep the line instantly instead.
+   */
+  launchWave(caster: SimUnit, def: AbilityDef, rank: number, tx: number, ty: number, dist: number, halfWidth: number, budget: number): boolean;
   /** Deal spell damage (armour is NOT applied to most spell damage in WC3). */
   spellDamage(target: SimUnit, amount: number, sourceId: number): void;
   spellHeal(target: SimUnit, amount: number): void;
@@ -205,6 +216,10 @@ export interface CastContext {
   targetId: number; // unit target (0 = none)
   x: number; // point target / caster position
   y: number;
+  /** Set when this call is a WAVE reaching a unit rather than the cast itself (see
+   *  SpellApi.launchWave): `targetId` is the unit the front just swept over, and `budget`
+   *  is the wave's remaining total-damage allowance, which the handler spends. */
+  wave?: { budget: number };
 }
 
 type Handler = (api: SpellApi, caster: SimUnit, def: AbilityDef, rank: number, ctx: CastContext) => void;
@@ -926,24 +941,49 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Shockwave (Tauren) — dataA damage to every enemy along an 800-long, 125-wide
   // line toward the target point (dataC = distance, area = width).
+  //
+  // THE MISSILE IS THE SPELL. `[AOsh] Missileart = ShockwaveMissile.mdl, Missilespeed =
+  // 1050` — Shock Wave has no Targetart, no Areaeffectart and no Casterart, so that
+  // travelling model is the whole of its art, and because it travels, it is also the
+  // TIMING: a unit 800 out is struck three quarters of a second after the cast, not at
+  // once. Hence launchWave rather than a sweep (see SpellApi.launchWave); the handler is
+  // re-entered per unit as the front reaches it. The wave family is AOsh/AUcs/ANbf; Impale
+  // and Forked Lightning name no missile and stay instant.
   AOsh: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 2, 800), lvl.area || 125)) {
+    const hit = (t: SimUnit) => {
       if (api.hostile(caster, t)) api.spellDamage(t, d(lvl, 0, 75), caster.id);
-    }
+    };
+    const swept = api.getUnit(ctx.targetId);
+    if (swept) return hit(swept); // the wave has just reached this one
+    const dist = d(lvl, 2, 800);
+    const half = lvl.area || 125;
+    // dataB (900 at rank 1) is the family's total-damage cap; passed through so the wave
+    // spends the same allowance Carrion Swarm's does.
+    if (api.launchWave(caster, def, rank, ctx.x, ctx.y, dist, half, d(lvl, 1, 0))) return;
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t); // artless fallback
   },
 
   // Carrion Swarm (Dreadlord) — line nuke (dataC distance, area width), dataA per
-  // unit up to a dataB total-damage cap.
+  // unit up to a dataB total-damage cap. Travels as its own missile, like Shock Wave
+  // (`[AUcs] Missileart = CarrionSwarmMissile.mdl, Missilespeed = 1100`), and each unit
+  // the swarm reaches wears the Specialart (`CarrionSwarmDamage.mdl`) as it is bitten.
   AUcs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    let budget = d(lvl, 1, 300);
-    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 2, 700), lvl.area || 100)) {
-      if (!api.hostile(caster, t) || budget <= 0) continue;
-      const dmg = Math.min(d(lvl, 0, 75), budget);
+    const budget = ctx.wave ?? { budget: d(lvl, 1, 300) };
+    const hit = (t: SimUnit) => {
+      if (!api.hostile(caster, t) || budget.budget <= 0) return;
+      const dmg = Math.min(d(lvl, 0, 75), budget.budget);
       api.spellDamage(t, dmg, caster.id);
-      budget -= dmg;
-    }
+      budget.budget -= dmg;
+      if (def.specialArt) api.emitEffect(def.specialArt, t.x, t.y, t.id);
+    };
+    const swept = api.getUnit(ctx.targetId);
+    if (swept) return hit(swept);
+    const dist = d(lvl, 2, 700);
+    const half = lvl.area || 100;
+    if (api.launchWave(caster, def, rank, ctx.x, ctx.y, dist, half, budget.budget)) return;
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t);
   },
 
   // Impale (Crypt Lord) — spikes erupt along a line (dataA distance, area width):
@@ -961,9 +1001,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // area width) to enemies in front of the caster.
   ANbf: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, d(lvl, 2, 375), lvl.area || 125)) {
+    const hit = (t: SimUnit) => {
       if (api.hostile(caster, t)) api.spellDamage(t, d(lvl, 0, 65), caster.id);
-    }
+    };
+    const swept = api.getUnit(ctx.targetId);
+    if (swept) return hit(swept);
+    const dist = d(lvl, 2, 375);
+    const half = lvl.area || 125;
+    // `[ANbf] Missileart = BreathOfFireMissile.mdl, Missilespeed = 1050` — the breath, again.
+    if (api.launchWave(caster, def, rank, ctx.x, ctx.y, dist, half, d(lvl, 1, 0))) return;
+    for (const t of lineTargets(api, caster, def, ctx.x, ctx.y, dist, half)) hit(t);
   },
 
   // Forked Lightning (Naga) — cast ON AN ENEMY UNIT; the cone of bolts fans out from the
@@ -1575,11 +1622,16 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
 
   // Mass Teleport (Archmage, ult) — warp the caster and nearby allies to a point.
   AHmt: (api, caster, def, rank, ctx) => {
+    // Cast on a friendly UNIT or structure, and everyone lands around IT — `Area1` is the
+    // radius around the CASTER that comes along, not a destination circle (see
+    // KNOWN_ABILITIES for the tooltip that says so).
+    const dest = api.getUnit(ctx.targetId);
+    if (!dest) return;
     const lvl = def.levelData[rank - 1];
     const allies = alliesInArea(api, caster, def, caster.x, caster.y, lvl.area || 700, { self: true }).slice(0, d(lvl, 0, 24));
     allies.forEach((t, i) => {
       const a = (i / Math.max(1, allies.length)) * Math.PI * 2;
-      api.teleport(t, ctx.x + Math.cos(a) * (i === 0 ? 0 : 128), ctx.y + Math.sin(a) * (i === 0 ? 0 : 128));
+      api.teleport(t, dest.x + Math.cos(a) * (i === 0 ? 0 : 128), dest.y + Math.sin(a) * (i === 0 ? 0 : 128));
     });
   },
 

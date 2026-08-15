@@ -798,9 +798,14 @@ export function snapshotFor(
   for (const p of world.projectiles?.values() ?? []) {
     if (viewer.fogBlocksAt(p)) continue;
     const t = world.units.get(p.targetId);
+    // A WAVE (Shock Wave, Carrion Swarm) chases nobody, so its aim is where the front is
+    // headed — the end of its run. Without this the client would hold it still between
+    // payloads instead of sweeping it (tickClientProjectiles).
+    const w = p.wave;
     projectiles.push({
       id: p.id, x: p.x, y: p.y, z: p.z, targetId: p.targetId,
-      tx: t?.x ?? p.x, ty: t?.y ?? p.y,
+      tx: w ? w.ox + w.dirX * w.dist : (t?.x ?? p.x),
+      ty: w ? w.oy + w.dirY * w.dist : (t?.y ?? p.y),
       speed: p.speed, art: p.art, startZ: p.startZ, impactZ: p.impactZ, startDist: p.startDist,
     });
   }

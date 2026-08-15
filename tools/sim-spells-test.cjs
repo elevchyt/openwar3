@@ -18,7 +18,7 @@ const { targsAdmit } = require(join(REPO, ".sim-build", "src", "sim", "targeting
 function def(over = {}) {
   const { data = [], duration = 0, area = 0, ...rest } = over;
   return {
-    id: "TEST", code: "TEST", missileArt: "", targetArt: "", casterArt: "", specialArt: "",
+    id: "TEST", code: "TEST", missileArt: "", missileSpeed: 0, targetArt: "", casterArt: "", specialArt: "",
     effectArt: "", areaArt: "", buffArt: "", buffFx: [], buffEffectArt: "", buffSpecialArt: "", lightning: [],
     levelData: [{ cost: 0, cooldown: 0, duration, heroDuration: duration, castRange: 0, area, castTime: 0, data, buffs: [], summon: "" }],
     ...rest,
@@ -31,7 +31,7 @@ function unit(over = {}) {
 
 /** Records what the handler did instead of touching a world. */
 function harness(units) {
-  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [], boltStops: [] };
+  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [], boltStops: [], waves: [] };
   const api = {
     rng: () => 0.5,
     getUnit: (id) => units.find((u) => u.id === id),
@@ -39,6 +39,13 @@ function harness(units) {
     hostile: (a, b) => a.team !== b.team,
     ally: (a, b) => a.team === b.team,
     admits: (d, t) => targsAdmit(t, d.targetFlags),
+    // The wave launch: records the request the way the world would act on it, and answers
+    // false for a row with no Missileart so the artless fallback can be tested too.
+    launchWave: (c, d, rank, tx, ty, dist, halfWidth, budget) => {
+      if (!d.missileArt) return false;
+      log.waves.push({ art: d.missileArt, speed: d.missileSpeed, from: c.id, tx, ty, dist, halfWidth, budget });
+      return true;
+    },
     spellDamage: (t, amount) => log.damage.push({ id: t.id, amount }),
     spellHeal: (t, amount) => log.heals.push({ id: t.id, amount }),
     applyBuff: (t, b) => log.buffs.push({ id: t.id, kind: b.kind, group: b.group, value: b.value, value2: b.value2, timeLeft: b.timeLeft, art: b.art }),
@@ -288,6 +295,52 @@ const round = (n) => Math.round(n * 1000) / 1000;
     SPELL_HANDLERS.Acan(api, ghoul, def({ data: [10, 800], duration: 33 }), 1, { targetId: 0, x: 0, y: 0 });
     check("…and grants nothing without a corpse", log.buffs, []);
     check("…having looked for one first", asked, 1);
+  }
+}
+
+// The WAVE family (Shock Wave, Carrion Swarm, Breath of Fire): their Missileart IS the
+// spell, so the cast launches a travelling front and each unit is struck as the front
+// reaches it, rather than everything at once. Real rows: `[AOsh] Missileart =
+// ShockwaveMissile.mdl, Missilespeed = 1050`; DataC 800 distance, Area 125 width.
+{
+  const caster = unit({ id: 1, team: 0, radius: 0 });
+  const foe = unit({ id: 2, team: 1, x: 400, y: 0, radius: 0 });
+  const shockwave = (over = {}) => def({ data: [75, 900, 800], area: 125, missileArt: "ShockwaveMissile", missileSpeed: 1050, ...over });
+  {
+    const { api, log } = harness([caster, foe]);
+    SPELL_HANDLERS.AOsh(api, caster, shockwave(), 1, { targetId: 0, x: 800, y: 0 });
+    check("the cast launches the wave, and damages nobody yet", log.damage, []);
+    check("…at the row's own speed, dataC far, `Area` wide", log.waves, [
+      { art: "ShockwaveMissile", speed: 1050, from: 1, tx: 800, ty: 0, dist: 800, halfWidth: 125, budget: 900 },
+    ]);
+  }
+  {
+    // …and the world re-enters the handler per unit as the front arrives.
+    const { api, log } = harness([caster, foe]);
+    SPELL_HANDLERS.AOsh(api, caster, shockwave(), 1, { targetId: 2, x: 400, y: 0, wave: { budget: 900 } });
+    check("the front reaching a unit deals dataA to it", log.damage, [{ id: 2, amount: 75 }]);
+    check("…and launches nothing further", log.waves, []);
+  }
+  {
+    // A row stripped of its Missileart (a custom map may) falls back to the instant sweep.
+    const { api, log } = harness([caster, foe]);
+    SPELL_HANDLERS.AOsh(api, caster, shockwave({ missileArt: "", missileSpeed: 0 }), 1, { targetId: 0, x: 800, y: 0 });
+    check("with no missile in the row, the line is swept at once", log.damage, [{ id: 2, amount: 75 }]);
+  }
+  {
+    // Carrion Swarm spends a dataB TOTAL-damage budget as the swarm passes, and each unit
+    // it bites wears the Specialart (`CarrionSwarmDamage.mdl`).
+    const swarm = def({ data: [75, 100, 800], area: 100, missileArt: "CarrionSwarmMissile", missileSpeed: 1100, specialArt: "CarrionSwarmDamage" });
+    const { api, log } = harness([caster, foe]);
+    const wave = { budget: 100 };
+    SPELL_HANDLERS.AUcs(api, caster, swarm, 1, { targetId: 2, x: 400, y: 0, wave });
+    check("Carrion Swarm bites for dataA…", log.damage, [{ id: 2, amount: 75 }]);
+    check("…spending the wave's shared budget", wave.budget, 25);
+    check("…and marks the victim with its Specialart", log.effects, ["CarrionSwarmDamage"]);
+    // The next unit gets only what is left of the budget, and the one after that nothing.
+    SPELL_HANDLERS.AUcs(api, caster, swarm, 1, { targetId: 2, x: 400, y: 0, wave });
+    SPELL_HANDLERS.AUcs(api, caster, swarm, 1, { targetId: 2, x: 400, y: 0, wave });
+    check("…then the tail of the swarm has nothing left to give", log.damage.map((d) => d.amount), [75, 25]);
   }
 }
 

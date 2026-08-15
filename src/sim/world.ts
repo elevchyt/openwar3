@@ -34,7 +34,7 @@ import {
   grantedXp,
   xpToReachLevel,
 } from "../data/gameplayConstants";
-import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit } from "./spells";
+import { SPELL_HANDLERS, AURA_BUFFS, POLARITY_SPELLS, HEAL_SPELLS, MANA_TARGET_SPELLS, waveSchedule, WAVE_FIELDS, fx, buffIdOf, drainTag, DRAIN_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext } from "./spells";
 
 // Headless simulation (plan §1.4, Phase 5/6). Owns unit game-state; the renderer
 // only displays it. Fixed-timestep, no rendering or DOM deps — runnable in tests
@@ -143,6 +143,18 @@ export interface SimProjectile {
    * everything in its rings rather than the one unit it was aimed at (see applyAreaSplash).
    */
   area?: { aimX: number; aimY: number; full: number; half: number; quarter: number; targets: string[] };
+  /**
+   * A WAVE: the travelling front of a line spell (Shock Wave, Carrion Swarm, Breath of
+   * Fire). Aimed at a direction rather than a unit, and unlike every other projectile it
+   * does its work ON THE WAY — each unit the front sweeps past takes the spell as it is
+   * reached, once (`hit`), and the wave carries on to `dist`. That is why these spells
+   * ship a `Missileart` and no target art at all: the missile IS the spell, and its
+   * `Missilespeed` is how long the line takes to arrive.
+   *
+   * `ox`/`oy` is the launch point and `dirX`/`dirY` the unit direction, both fixed at the
+   * cast — a wave does not follow the caster who threw it.
+   */
+  wave?: { ox: number; oy: number; dirX: number; dirY: number; dist: number; travelled: number; halfWidth: number; budget: number; hit: number[] };
   // Spell projectiles (Storm Bolt, Death Coil) run an ability effect on impact
   // instead of dealing plain `damage` — the base code + rank to dispatch.
   spell?: { code: string; rank: number; abilityId: string };
@@ -7985,7 +7997,9 @@ export class SimWorld {
       z: lz,
       sourceId: u.id,
       targetId,
-      speed: 900,
+      // The row's own `Missilespeed` (Storm Bolt 900, Death Coil 750, Frost Nova 900…),
+      // falling back to the 900 this used to hardcode for a row that names none.
+      speed: def.missileSpeed || 900,
       damage: 0, // spell effect (not plain damage) is applied on impact
       art: def.missileArt,
       spell: { code: def.code, rank, abilityId: def.id },
@@ -7997,9 +8011,78 @@ export class SimWorld {
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
   }
 
+  /**
+   * Launch a line spell's missile as a travelling WAVE (see SimProjectile.wave, and
+   * SpellApi.launchWave for the contract). False when the ability names no `Missileart`,
+   * which is the caller's cue to sweep the line instantly instead — Impale and Forked
+   * Lightning are in the family's shape but ship no missile, and a custom map may strip one.
+   */
+  private spawnWaveProjectile(u: SimUnit, def: AbilityDef, rank: number, tx: number, ty: number, dist: number, halfWidth: number, budget: number): boolean {
+    if (!def.missileArt) return false;
+    const dx = tx - u.x;
+    const dy = ty - u.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const id = this.nextProjectileId++;
+    // A wave hugs the ground it sweeps rather than arcing: launch height stays put, so
+    // startZ and impactZ are the same and the renderer's height lerp is a no-op.
+    const w = u.weapon;
+    const lzLocal = w && w.launchZ > 0 ? w.launchZ : DEFAULT_MISSILE_HEIGHT;
+    const [lx, ly, lz0] = launchPoint(u, w?.launchX ?? 0, w?.launchY ?? 0, lzLocal);
+    const lz = lz0 + u.flyHeight;
+    const proj: SimProjectile = {
+      id,
+      x: lx,
+      y: ly,
+      z: lz,
+      sourceId: u.id,
+      targetId: 0, // a wave chases nobody
+      speed: def.missileSpeed || 1000,
+      damage: 0,
+      art: def.missileArt,
+      spell: { code: def.code, rank, abilityId: def.id },
+      startZ: lz,
+      impactZ: lz,
+      startDist: dist,
+      wave: { ox: lx, oy: ly, dirX: dx / len, dirY: dy / len, dist, travelled: 0, halfWidth, budget, hit: [] },
+    };
+    this.projectiles.set(id, proj);
+    this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
+    return true;
+  }
+
+  /** Sweep a wave forward and hand the spell to everything its front has just reached.
+   *  Each unit is struck once (`hit`), the ability's own `targs1` says what may be struck
+   *  at all (targsAdmit — allegiance stays the handler's, as everywhere else), and the
+   *  wave dies at the end of its run whether or not it found anything. */
+  private tickWaveProjectile(p: SimProjectile, dt: number): void {
+    const w = p.wave!;
+    w.travelled = Math.min(w.dist, w.travelled + p.speed * dt);
+    p.x = w.ox + w.dirX * w.travelled;
+    p.y = w.oy + w.dirY * w.travelled;
+    const caster = this.units.get(p.sourceId); // may have died — the wave carries on regardless
+    const def = this.abilities?.get(p.spell!.abilityId);
+    if (caster && def) {
+      for (const t of this.unitsInAreaInternal(p.x, p.y, w.halfWidth + WAVE_SWEEP_MARGIN)) {
+        if (t.id === caster.id || t.hp <= 0 || w.hit.includes(t.id)) continue;
+        if (!this.targsAdmit(t, def.targetFlags)) continue;
+        const rx = t.x - w.ox;
+        const ry = t.y - w.oy;
+        const forward = rx * w.dirX + ry * w.dirY;
+        const perp = Math.abs(rx * w.dirY - ry * w.dirX);
+        if (perp > w.halfWidth + t.radius) continue;
+        if (forward < -t.radius || forward > w.travelled + t.radius) continue; // the front is not there yet
+        w.hit.push(t.id);
+        const ctx = { targetId: t.id, x: t.x, y: t.y, wave: w };
+        this.applySpellEffect(p.spell!.code, p.spell!.rank, caster, ctx, def);
+        w.budget = ctx.wave.budget; // the handler spends the wave's allowance (Carrion Swarm)
+      }
+    }
+    if (w.travelled >= w.dist) this.removeProjectile(p.id);
+  }
+
   /** Run a spell's effect handler (dispatched on base `code`). Shared by instant
    *  casts and spell-projectile impacts. */
-  applySpellEffect(code: string, rank: number, caster: SimUnit, ctx: { targetId: number; x: number; y: number }, def?: AbilityDef): void {
+  applySpellEffect(code: string, rank: number, caster: SimUnit, ctx: CastContext, def?: AbilityDef): void {
     const handler = SPELL_HANDLERS[code];
     const d = def ?? (this.abilities ? this.abilityByCode(code) : undefined);
     if (!handler || !d) return;
@@ -8813,6 +8896,7 @@ export class SimWorld {
     hostile: (a, b) => this.hostile(a, b),
     ally: (a, b) => this.allied(a, b),
     admits: (def, t) => this.targsAdmit(t, def.targetFlags),
+    launchWave: (caster, def, rank, tx, ty, dist, halfWidth, budget) => this.spawnWaveProjectile(caster, def, rank, tx, ty, dist, halfWidth, budget),
     // Untyped ability damage ignores armor; a Banished (ethereal) target takes +66%
     // (ETHEREAL_SPELL_BONUS — the file's Spells column), the flip side of its physical
     // immunity (issue #49).
@@ -10400,6 +10484,11 @@ export class SimWorld {
       // not the unit it was thrown at is alive, or still there. See SimProjectile.area.
       if (p.area) {
         this.tickAreaProjectile(p, dt);
+        continue;
+      }
+      // A wave sweeps a line and hits what it passes; it has no target to home on.
+      if (p.wave) {
+        this.tickWaveProjectile(p, dt);
         continue;
       }
       const t = this.units.get(p.targetId);
@@ -14060,6 +14149,11 @@ export class SimWorld {
 // Fallback launch/impact height (units above ground) for missiles whose weapon has
 // no launch data — every real ranged unit's impactz is ~60, so this matches the game.
 const DEFAULT_MISSILE_HEIGHT = 60;
+
+/** How far either side of a wave's front to look for units to sweep (see
+ *  tickWaveProjectile). The front advances ~17 units a frame at Shock Wave's 1050, so this
+ *  only has to cover the widest collision hull that can straddle it. */
+const WAVE_SWEEP_MARGIN = 128;
 
 /** Where a lightning bolt attaches to a unit: height above ground, not a world z.
  *

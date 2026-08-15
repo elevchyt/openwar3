@@ -134,6 +134,11 @@ export interface AbilityDef {
   levelData: AbilityLevel[]; // index 0 = rank 1
   // Effect model paths (from AbilityFunc) — the renderer plays these on cast.
   missileArt: string; // travelling projectile (Storm Bolt hammer, Death Coil orb)
+  /** `Missilespeed` — how fast that projectile flies, in world units a second. Real data
+   *  (Shock Wave 1050, Carrion Swarm 1100, Breath of Fire 1050), and it MATTERS for the
+   *  wave spells: their missile is the spell, so its speed is how long the line takes to
+   *  sweep and therefore when each unit along it is struck. 0 when the row names none. */
+  missileSpeed: number;
   targetArt: string; // effect attached to the target (Holy Light burst, Heal); for an
   //                    aura this is the BIG model shown under its OWNER only.
   /** `Targetattach` — the attachment point `targetArt` rides, in the same token form as a
@@ -194,28 +199,38 @@ export interface AbilityDef {
   orderOff: string; // autocast off (Orderoff)
 }
 
-/** Point-target spells whose click sets a DIRECTION rather than a centre.
+/**
+ * Point-target spells that arm with NO `SpellAreaOfEffect` circle under the cursor.
  *
- *  A wave/cone/line leaves the CASTER and travels toward the click, so the ability's
- *  `Area` is the wave's WIDTH where it starts — not a radius at the cursor. WC3 draws
- *  no `SpellAreaOfEffect` circle while aiming these (arm Shockwave or Carrion Swarm in
- *  the real client and the ground under the cursor stays bare), because there is no
- *  circle at the cursor to draw; Blizzard, Flame Strike, Rain of Fire and friends — whose
- *  `Area` really IS a radius centred on the clicked point — draw one.
+ * The circle answers one question — *which units will this catch if I click here* — so
+ * WC3 draws it for a spell whose `Area` is a radius of EFFECT ON UNITS centred on the
+ * clicked point (Blizzard, Flame Strike, Rain of Fire) and for nothing else. Two shapes
+ * carry an `Area` that is not that, and get a bare cursor in the real client:
  *
- *  The family is readable straight off `Units\AbilityMetaData.slk`: abilities sharing a
- *  hardcoded implementation share a `useSpecific` group for their Data fields, and the
- *  three wave groups are exactly these — `Osh1..4` (AOsh,ACsh,ACst), `Ucs1..4`
- *  (AUcs,ANbf,ACbc,ACbf,ACca,ACcv) and `Uim1..4` (AUim,ACmp).
- *  `AbilityData.slk` agrees: Carrion Swarm's cone reads `Area1`=100 as its START width
- *  and `DataD1`=300 as its end width, 800 units (`DataC1`) out from the caster. */
-export const DIRECTIONAL_CASTS = new Set<string>([
+ *  1. **A directional wave.** The line/cone leaves the CASTER and travels toward the
+ *     click, so `Area` is its WIDTH where it starts, not a radius at the cursor — the
+ *     click only picks a direction. The family is readable straight off
+ *     `Units\AbilityMetaData.slk`: abilities sharing a hardcoded implementation share a
+ *     `useSpecific` group for their Data fields, and the three wave groups are exactly
+ *     `Osh1..4` (AOsh,ACsh,ACst), `Ucs1..4` (AUcs,ANbf,ACbc,ACbf,ACca,ACcv) and `Uim1..4`
+ *     (AUim,ACmp). `AbilityData.slk` agrees: Carrion Swarm reads `Area1`=100 as its START
+ *     width and `DataD1`=300 as its end width, `DataC1`=800 out from the caster.
+ *  2. **An area that touches no units at all.** Far Sight's `Area1`=900 is a REVEAL
+ *     radius — "Reveals the area of the map that it is cast upon for <Dur1> seconds"
+ *     (`OrcAbilityStrings [AOfs]`), and its `targs1` is `_` because there is nothing to
+ *     target. Nothing gets caught, so there is nothing to preview.
+ *
+ * Not in here, and worth saying why: Forked Lightning shares Carrion Swarm's `Ucs3`/`Ucs4`
+ * cone fields but is cast on a UNIT, so it never arms a point in the first place.
+ */
+export const NO_AOE_CURSOR = new Set<string>([
+  // 1 — directional waves
   "AOsh", "ACsh", "ACst", // Shockwave, and the creep/trap variants
   "AUcs", "ACca", // Carrion Swarm (+ creep)
   "ANbf", "ACbc", "ACbf", "ACcv", // Breath of Fire/Frost, Crushing Wave
   "AUim", "ACmp", // Impale (+ creep)
-  // NOT Forked Lightning: it shares Carrion Swarm's `Ucs3`/`Ucs4` fields (the cone's
-  // distance and final width) but is cast on a UNIT, so it never arms a point at all.
+  // 2 — an Area that is not an effect on units
+  "AOfs", // Far Sight — `Area1` is the radius of map it reveals
 ]);
 
 /** Ability behaviours we implement, keyed by base `code`. `target` tells the UI/
@@ -238,7 +253,13 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AHbz: { target: "point" }, // Blizzard — channelled point AoE waves
   AHab: { target: "passive" }, // Brilliance Aura — +mana regen
   AHwe: { target: "none" }, // Summon Water Elemental
-  AHmt: { target: "point" }, // Mass Teleport — warp nearby allies to a point
+  // Mass Teleport — cast on a UNIT, not a spot: "Teleports <DataA1> of the player's nearby
+  // units, including the Archmage, to a friendly ground unit or structure"
+  // (`HumanAbilityStrings [AHmt]`), and its Func says the same from the other side —
+  // "// The targeted unit shouldn't show an effect, so there is no Targetart." Its
+  // `Rng1`=99999 + `Area1`=800 read as a point spell in the tables; the tables cannot tell.
+  // (`Area1` is the radius around the CASTER that comes along, not anything at the target.)
+  AHmt: { target: "unit" },
   // -- Blood Mage --
   AHfs: { target: "point" }, // Flame Strike — delayed point AoE burn field
   AHbn: { target: "unit" }, // Banish — debuff: slow + magic vulnerability
@@ -658,6 +679,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       unButtonY: uy,
       levelData,
       missileArt: mdlPath(f ? str(f, "Missileart") : ""),
+      missileSpeed: f ? Number(str(f, "Missilespeed")) || 0 : 0,
       targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
       targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       casterArt: mdlPath(f ? str(f, "Casterart") : ""),
@@ -764,6 +786,7 @@ function addUiButton(defs: Map<string, AbilityDef>, id: string, func: MappedData
     unButtonY: by,
     levelData: [],
     missileArt: "",
+    missileSpeed: 0,
     targetArt: "",
     targetAttach: [],
     casterArt: "",
