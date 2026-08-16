@@ -127,8 +127,8 @@ export interface HudSelection {
   damageBonus: number; // green "+N" attack damage
   attackType: AttackType;
   armorType: ArmorType;
-  attackUpgrade: number; // level of the owner's melee/ranged research — drawn in the icon's corner
-  armorUpgrade: number; // level of the owner's armour research — drawn in the icon's corner
+  attackUpgrade: number; // level of the owner's melee/ranged research; NEGATIVE = none reaches this unit
+  armorUpgrade: number; // level of the owner's armour research; NEGATIVE = none reaches this unit
   isHero: boolean;
   properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
@@ -2402,19 +2402,25 @@ export class GameHud {
         }
         // Damage / Armor: base value + a green "+N" bonus from buffs/auras, and the owner's
         // upgrade LEVEL in the icon's corner box — 0 until the first research, then 1/2/3
-        // (issue #113). The number is always printed, including on a unit no upgrade reaches:
-        // the box is part of the icon art, and an empty one reads as a missing readout.
+        // (issue #113). A NEGATIVE level means no research of that class reaches this unit at
+        // all (rts.upgradeBoxes): a hero, a worker, a creep, a gold mine. Those get the
+        // BOXLESS art and print nothing, rather than an empty recess or a 0 that could never
+        // become a 1. Blizzard drew that case rather than leaving it to us —
+        // `infocard-armor-hero.blp`, the icon every hero's armour row uses, is the one armour
+        // icon with no corner box, and the one with no `neutral-` twin because it needs none.
+        const attackBox = sel.attackUpgrade >= 0;
+        const armorBox = sel.armorUpgrade >= 0;
         if (sel.damageMax > 0) {
           this.attackStat.row.hidden = false;
-          this.setIcon(this.attackStat.icon, infocard("attack", sel.attackType));
-          this.attackStat.level.textContent = String(sel.attackUpgrade);
+          this.setIcon(this.attackStat.icon, infocard("attack", sel.attackType, !attackBox));
+          this.attackStat.level.textContent = attackBox ? String(sel.attackUpgrade) : "";
           this.attackStat.value.innerHTML = `${sel.damageMin} - ${sel.damageMax}${bonusHtml(sel.damageBonus)}`;
         } else {
           this.attackStat.row.hidden = true;
         }
         this.armorStat.row.hidden = false;
-        this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType));
-        this.armorStat.level.textContent = String(sel.armorUpgrade);
+        this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType, !armorBox));
+        this.armorStat.level.textContent = armorBox ? String(sel.armorUpgrade) : "";
         this.armorStat.value.innerHTML = `${sel.armor}${bonusHtml(sel.armorBonus)}`;
         this.invulnLine.hidden = !sel.invulnerable;
         // Hero attributes: ONE primary-attribute icon beside the three value lines.
@@ -2760,14 +2766,32 @@ const ARMOR_ICON: Partial<Record<ArmorType, string>> = {
   [ArmorType.Divine]: "divine",
   [ArmorType.None]: "unarmored",
 };
-function infocard(kind: "attack", type: AttackType): string;
-function infocard(kind: "armor", type: ArmorType): string;
-function infocard(kind: "attack" | "armor", type: AttackType | ArmorType): string {
+/** The armour icons that have no `neutral-` twin in the archive.
+ *
+ *  `hero` needs none: it is the ONE armour icon Blizzard drew without a corner box in the
+ *  first place, which is the art itself saying that a hero's armour has no upgrade level to
+ *  print — a hero is touched by no `class = armor` research. That absence is the reason the
+ *  boxless-twin argument holds; every other armour icon carries the box AND ships a twin.
+ *  `divine` carries a box and has no twin, so it falls back to its own art rather than to a
+ *  file that is not in the archive. */
+const NO_BOXLESS_ARMOR_TWIN = new Set(["hero", "divine"]);
+
+/** An info-card icon path.
+ *
+ *  `boxless` picks the art with no corner recess — the parallel `infocard-neutral-*` set,
+ *  which is pixel-for-pixel the same icon minus the box the upgrade level is printed in. WC3
+ *  ships it for the case where there is no level to report, exactly as it ships a `DIS*` twin
+ *  rather than desaturating a live icon. Ask for it whenever nothing will be written in the
+ *  box, or the panel shows an empty recess where a number ought to be. */
+function infocard(kind: "attack", type: AttackType, boxless?: boolean): string;
+function infocard(kind: "armor", type: ArmorType, boxless?: boolean): string;
+function infocard(kind: "attack" | "armor", type: AttackType | ArmorType, boxless = false): string {
   const suffix =
     kind === "attack"
       ? (ATTACK_ICON[type as AttackType] ?? "melee")
       : (ARMOR_ICON[type as ArmorType] ?? "unarmored");
-  return `UI\\Widgets\\Console\\Human\\infocard-${kind}-${suffix}.blp`;
+  const twin = boxless && !(kind === "armor" && NO_BOXLESS_ARMOR_TWIN.has(suffix));
+  return `UI\\Widgets\\Console\\Human\\infocard-${twin ? "neutral-" : ""}${kind}-${suffix}.blp`;
 }
 function attrIcon(kind: "str" | "agi" | "int"): string {
   return `UI\\Widgets\\Console\\Human\\infocard-heroattributes-${kind}.blp`;

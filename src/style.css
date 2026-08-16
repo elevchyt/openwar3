@@ -1280,7 +1280,7 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    as one custom property so they cannot drift apart again; the `cqw` inside it resolves
    against .hud-info-text, the container, wherever it is used. */
 .hud-sel-stats {
-  --hud-stat-font: clamp(11px, 3.9cqw, 20px);
+  --hud-stat-font: clamp(13px, 5.85cqw, 30px);
   font-size: var(--hud-stat-font); color: #cfc7ab; line-height: 1.5;
 }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
@@ -1337,8 +1337,13 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    which is a duller, browner gold than anything the game draws. */
 .hud-stat-label { font-size: var(--hud-stat-font); color: #fcd312; }
 .hud-stat-value { font-size: var(--hud-stat-font); color: #fff; } /* SimpleInfoPanelValueTextTemplate: white */
-.stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura/item bonus */
-.stat-penalty { color: #e0504a; font-weight: 700; } /* red debuff/negative-item penalty */
+/* The "+4" is the VALUE it is attached to, in another colour — same font, same size, same
+   weight, so it reads as part of "2 +4" rather than as a badge stuck on the end. It already
+   inherited the size; it was the bold that made it look like a different typeface. Nothing in
+   this panel varies its weight in the real game either: every string is a SimpleInfoPanel.fdf
+   template — a font, a size and a colour, with no weight to vary. */
+.stat-bonus { font-size: var(--hud-stat-font); color: #4ee05a; } /* green buff/aura/item bonus */
+.stat-penalty { font-size: var(--hud-stat-font); color: #e0504a; } /* red debuff/negative-item penalty */
 .hud-stat-invuln { font-size: var(--hud-stat-font); color: #e0504a; font-weight: 700; } /* red "Invulnerable" under the armour value (issue #26) */
 /* Hero attributes: one primary icon beside three value lines. They scale with the panel too:
    the two columns share one row, so a damage icon that grew and an attribute icon that did

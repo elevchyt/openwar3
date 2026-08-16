@@ -116,8 +116,8 @@ export interface SelectionInfo {
   damageBonus: number; // green "+N" attack damage from buffs/auras
   attackType: AttackType; // → the damage-table row (info-card icon)
   armorType: ArmorType; // → the damage-table column (info-card icon)
-  attackUpgrade: number; // level of the owner's melee/ranged research — printed IN the icon
-  armorUpgrade: number; // level of the owner's armour research — printed IN the icon
+  attackUpgrade: number; // level of the owner's melee/ranged research, printed IN the icon; -1 = none reaches this type
+  armorUpgrade: number; // level of the owner's armour research, printed IN the icon; -1 = none reaches this type
   isHero: boolean;
   properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
@@ -4235,7 +4235,7 @@ export class RtsController {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: 0, armorUpgrade: 0, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -4262,7 +4262,7 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: 0, armorUpgrade: 0, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: -1, armorUpgrade: -1, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -4298,6 +4298,46 @@ export class RtsController {
     return 0;
   }
 
+  /** Which of the info panel's two icons this unit TYPE carries an upgrade readout for — the
+   *  corner box in the art and the 0/1/2/3 printed in it.
+   *
+   *  A box belongs to a unit that some `class = melee|ranged` (damage) or `class = armor`
+   *  (armour) research REACHES, which in the stock game means a race's own trained units. It
+   *  is read straight off the type's `upgrades` column in UnitBalance.slk: a Footman lists
+   *  Rhme and Rhar and carries both boxes, a Guard Tower lists only Masonry and carries the
+   *  armour box alone, and a Peasant (Rhlh, Rguv), a Wisp (Reuv), a hero (Archmage: none), a
+   *  creep and a gold mine list none of the three and carry neither.
+   *
+   *  A BUILDING has neither, even though Masonry (`Rhac`, class `armor`) reaches it and does
+   *  raise its armour. The readout is a feature of the UNIT panel and of no other: the game
+   *  draws a building with `InfoPanelBuildingDetail.fdf`, whose whole contents are a name, a
+   *  description, an armour label/value, supply, the build timer and the queue backdrop —
+   *  there is not one `IconBackdrop`/`IconValue` pair in the file, while `InfoPanelUnitDetail`
+   *  has four. A building's armour icon is ours to begin with; the corner number is not.
+   *
+   *  Answered here rather than sent per-unit in the snapshot because it is unit-TYPE data that
+   *  both sides already hold — unlike the LEVEL, which is the owner's research and rides on
+   *  the unit so that clicking an enemy still scouts it. Cached: fixed per type, asked every
+   *  frame the panel draws. */
+  private upgradeBoxCache = new Map<string, { attack: boolean; armor: boolean }>();
+  private upgradeBoxes(typeId: string): { attack: boolean; armor: boolean } {
+    const hit = this.upgradeBoxCache.get(typeId);
+    if (hit) return hit;
+    const boxes = { attack: false, armor: false };
+    const def = this.registry.get(typeId);
+    if (def?.isBuilding) {
+      this.upgradeBoxCache.set(typeId, boxes);
+      return boxes;
+    }
+    for (const upId of def?.upgradesUsed ?? []) {
+      const cls = this.upgrades.get(upId)?.className;
+      if (cls === "melee" || cls === "ranged") boxes.attack = true;
+      else if (cls === "armor") boxes.armor = true;
+    }
+    this.upgradeBoxCache.set(typeId, boxes);
+    return boxes;
+  }
+
   private infoFor(id: number): SelectionInfo | null {
     // The authority's numbers, not our own prediction of them (item 10c-2c-3). A panel is
     // drawn at a fixed place in the HUD rather than over the terrain, so this could wait for
@@ -4311,6 +4351,7 @@ export class RtsController {
     const b = u.building;
     const q = b?.queue ?? [];
     const def = this.registry.get(e.typeId);
+    const upgradeBoxes = this.upgradeBoxes(e.typeId);
     const builderId = b && b.constructionLeft > 0 ? this.builderInside(e.simId) : 0;
     return {
       id: e.simId,
@@ -4332,8 +4373,10 @@ export class RtsController {
       damageBonus: Math.round(u.bonusDamage),
       attackType: def?.attackType ?? AttackType.None,
       armorType: def?.armorType ?? ArmorType.Unknown,
-      attackUpgrade: u.attackUpgrade,
-      armorUpgrade: u.armorUpgrade,
+      // -1 = this type has no research of that class at all, so the panel draws the boxless
+      // icon and prints nothing (see upgradeBoxes). A 0 means "researchable, not yet".
+      attackUpgrade: upgradeBoxes.attack ? u.attackUpgrade : -1,
+      armorUpgrade: upgradeBoxes.armor ? u.armorUpgrade : -1,
       isHero: u.isHero,
       properName: u.properName,
       // Heroes carry their LIVE level/attributes on the sim unit (they grow with
