@@ -1331,7 +1331,11 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; }
 /* "Damage:" / "Armor:" and the attribute names are the SAME string in the game — both are
    SimpleInfoPanelLabelTextTemplate — so they are drawn alike here: one gold, one weight. */
-.hud-stat-label { font-size: var(--hud-stat-font); color: #e0b93a; }
+/* The gold is the FDF's own number, not a chosen one: SimpleInfoPanelLabelTextTemplate is
+   `FontColor 0.99 0.827 0.0705 1.0`, which is #FCD312 — the same triple (and the same hex,
+   see --fdf-menu-highlight) the menus use for MenuTextHighlightColor. It was #e0b93a here,
+   which is a duller, browner gold than anything the game draws. */
+.hud-stat-label { font-size: var(--hud-stat-font); color: #fcd312; }
 .hud-stat-value { font-size: var(--hud-stat-font); color: #fff; } /* SimpleInfoPanelValueTextTemplate: white */
 .stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura/item bonus */
 .stat-penalty { color: #e0504a; font-weight: 700; } /* red debuff/negative-item penalty */
@@ -1343,7 +1347,15 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    its own. All three are info-card art of the same kind (`infocard-heroattributes-*.blp` next
    to `infocard-attack-*`/`infocard-armor-*`), drawn at one size in one row of the real
    panel's icon strip; there is nothing that makes this one the junior of the three. */
-.hud-attr-col { display: flex; align-items: center; gap: clamp(4px, 2.4cqw, 14px); }
+/* Centred against the stat column, then lifted a hair off that centre. The two columns do not
+   have the same first line: the Damage block's label starts at the very top of its icon,
+   while this column's first label starts wherever three centred blocks happen to begin, and
+   the eye reads the two as level only when this one sits slightly above true centre.
+   `transform` rather than a margin so the nudge cannot feed back into the centring. */
+.hud-attr-col {
+  display: flex; align-items: center; gap: clamp(4px, 2.4cqw, 14px);
+  transform: translateY(clamp(-5px, -1cqw, -2px));
+}
 .hud-attr-primary-icon { width: clamp(34px, 17cqw, 80px); height: clamp(34px, 17cqw, 80px); }
 /* Three stacked blocks, spaced by the same gap that separates the Damage and Armor rows
    opposite them (.hud-stat-col) and set on the same tight leading (.hud-stat-text). */
@@ -1357,7 +1369,7 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    Each is a COLUMN — the gold name over the white value — which is the shape the Damage and
    Armor blocks opposite them already had. */
 .hud-attr-line { display: flex; flex-direction: column; font-size: var(--hud-stat-font); color: #fff; } /* SimpleInfoPanelAttributeTextTemplate: white */
-.hud-attr-line .attr-name { color: #e0b93a; }
+.hud-attr-line .attr-name { color: #fcd312; } /* the same FDF gold as .hud-stat-label */
 /* The info panel's Status line: the gold "Status:" label (InfoPanelStrings COLON_STATUS) with
    the active buffs' own icons in a row to its right, under the Damage/Armor blocks.
    NOTE the class names: `.hud-status-icon` is the CONSTRUCTION panel's icon (below), which the
