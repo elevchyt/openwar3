@@ -1280,7 +1280,7 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    as one custom property so they cannot drift apart again; the `cqw` inside it resolves
    against .hud-info-text, the container, wherever it is used. */
 .hud-sel-stats {
-  --hud-stat-font: clamp(13px, 5.85cqw, 30px);
+  --hud-stat-font: clamp(12px, 4.5cqw, 28px);
   font-size: var(--hud-stat-font); color: #cfc7ab; line-height: 1.5;
 }
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
@@ -1307,9 +1307,20 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    column down instead. Top alignment says the thing that was actually wanted either way.
    The whole row is then lifted a hair off where the flow puts it — on the row rather than on
    one column, so the nudge cannot pull the two out of line with each other. */
+/* A GRID with a fixed first track, not two boxes packed side by side: the attribute column
+   has to sit at the same place whatever the damage line happens to say. Packed, it did not —
+   a "+15" from an item widened the damage column and shoved the attributes 15px right, so
+   picking up Claws of Attack moved a hero's Strength across the panel.
+   Placed rather than packed is also how the game writes it: nothing in
+   `InfoPanelUnitDetail.fdf` is content-sized, and the right-hand column is pinned at a FIXED
+   offset from the left one (`SpeedTitle` = `SetPoint TOPLEFT, "DefenseLabel", TOPLEFT, 0.1,
+   0.0`) rather than after it. The first track is the knob: raise it to push the attributes
+   right, lower it to pull them left. A damage line longer than the track spills into the
+   gutter, as the game's own placed frames do, instead of moving anything. */
 .hud-stat-cols {
-  display: flex; gap: clamp(8px, 3cqw, 22px); align-items: flex-start;
-  transform: translateY(clamp(-5px, -1cqw, -2px));
+  display: grid; grid-template-columns: 44cqw auto;
+  gap: clamp(8px, 7cqw, 22px); align-items: start;
+  transform: translateY(clamp(-5px, 0cqw, -2px));
 }
 .hud-stat-col { display: flex; flex-direction: column; gap: clamp(2px, 1cqw, 8px); }
 .hud-stat-icon {
@@ -1334,7 +1345,10 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    middle of the art with nothing under it, and the panel reads as two lines that begin at
    different heights. */
 .hud-stat-block { display: flex; align-items: flex-start; gap: clamp(4px, 2.4cqw, 14px); }
-.hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; }
+/* nowrap because the column is now a fixed track (see .hud-stat-cols): without it a damage
+   line too long for the track would break onto a second line inside the track rather than
+   run on into the gutter, which is a worse answer than the pushing this replaced. */
+.hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; white-space: nowrap; }
 /* "Damage:" / "Armor:" and the attribute names are the SAME string in the game — both are
    SimpleInfoPanelLabelTextTemplate — so they are drawn alike here: one gold, one weight. */
 /* The gold is the FDF's own number, not a chosen one: SimpleInfoPanelLabelTextTemplate is
@@ -1350,7 +1364,10 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    template — a font, a size and a colour, with no weight to vary. */
 .stat-bonus { font-size: var(--hud-stat-font); color: #4ee05a; } /* green buff/aura/item bonus */
 .stat-penalty { font-size: var(--hud-stat-font); color: #e0504a; } /* red debuff/negative-item penalty */
-.hud-stat-invuln { font-size: var(--hud-stat-font); color: #e0504a; font-weight: 700; } /* red "Invulnerable" under the armour value (issue #26) */
+/* "Invulnerable" stands IN the armour value's place, so it is drawn as that value: same font,
+   same size, same weight, and the red is the game's own — `InfoPanelStrings.fdf` writes the
+   string as "|Cffff0000Invulnerable|R", i.e. pure ff0000, not the softer red this had. */
+.hud-stat-invuln { font-size: var(--hud-stat-font); color: #ff0000; }
 /* Hero attributes: one primary icon beside three value lines. They scale with the panel too:
    the two columns share one row, so a damage icon that grew and an attribute icon that did
    not would put the panel out of proportion with itself — which is why the primary-attribute
@@ -1387,9 +1404,12 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    lines or a Peasant with two stat rows. `left` clears the panel's own text padding. */
 .hud-sel-status {
   position: absolute;
-  left: 14px;
+  /* The three knobs for this row: `left` slides it right, `bottom` lifts it off the panel's
+     floor, and `.hud-buff-icon`'s width/height below size the icons. Plain pixels rather than
+     the panel-relative `cqw` the stats use, so they are easy to nudge by hand. */
+  left: 44px;
   right: 14px;
-  bottom: 4px;
+  bottom: 10px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1404,8 +1424,8 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    but art ever lands in one — a buff the panel has no icon for is not put on the line at all
    (rts.ts statusBuffsFor), so there is no text case to style. */
 .hud-buff-icon {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   flex: none;
   background-size: 100% 100%;
   background-repeat: no-repeat;
