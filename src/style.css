@@ -1323,9 +1323,13 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-stat-invuln { font-size: clamp(11px, 3.9cqw, 20px); color: #e0504a; font-weight: 700; } /* red "Invulnerable" under the armour value (issue #26) */
 /* Hero attributes: one primary icon beside three value lines. They scale with the panel too:
    the two columns share one row, so a damage icon that grew and an attribute icon that did
-   not would put the panel out of proportion with itself. */
+   not would put the panel out of proportion with itself — which is why the primary-attribute
+   icon is sized off the SAME rule as the damage and armour ones rather than a smaller one of
+   its own. All three are info-card art of the same kind (`infocard-heroattributes-*.blp` next
+   to `infocard-attack-*`/`infocard-armor-*`), drawn at one size in one row of the real
+   panel's icon strip; there is nothing that makes this one the junior of the three. */
 .hud-attr-col { display: flex; align-items: center; gap: clamp(4px, 2.4cqw, 14px); }
-.hud-attr-primary-icon { width: clamp(24px, 9.5cqw, 48px); height: clamp(24px, 9.5cqw, 48px); }
+.hud-attr-primary-icon { width: clamp(34px, 17cqw, 80px); height: clamp(34px, 17cqw, 80px); }
 .hud-attr-lines { display: flex; flex-direction: column; line-height: 1.25; }
 /* All three attributes are drawn ALIKE — one gold name, one white value, one weight. Which is
    the hero's primary is already said by the icon beside them (the panel shows the primary
