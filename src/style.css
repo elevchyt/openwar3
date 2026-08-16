@@ -1298,13 +1298,19 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    carves out. Below ~1600px wide the panel gets tight, but it did before this too — the name
    and the XP bar above the stats are still fixed px, so they eat a growing share as the
    console shrinks; making THOSE proportional is the rest of this job. */
-/* The attribute column is CENTRED against the damage/armour column, not aligned to its top:
-   the left column is two icon rows tall and the right one is a single icon beside three
-   lines, so top-aligning left it hanging off the top with a hole beneath it. Centring is also
-   what the left column's own text does NOT do (see .hud-stat-block) — the difference is that
-   there the text is a caption for the icon beside it, and here the whole column is one block
-   sitting next to another. */
-.hud-stat-cols { display: flex; gap: clamp(8px, 3cqw, 22px); align-items: center; }
+/* The two columns START TOGETHER: "Damage:" and "Strength:" are both the first line of their
+   column, and the panel reads as one row of stats only when they sit on the same line.
+   This was CENTRED while the attributes were three lines against the stat column's two icon
+   rows — centring was then what pushed the short column down into the middle. Once the values
+   moved under their labels the attributes became six lines and the TALLER of the two, so
+   centring inverted: it stopped moving the attributes down and started pushing the damage
+   column down instead. Top alignment says the thing that was actually wanted either way.
+   The whole row is then lifted a hair off where the flow puts it — on the row rather than on
+   one column, so the nudge cannot pull the two out of line with each other. */
+.hud-stat-cols {
+  display: flex; gap: clamp(8px, 3cqw, 22px); align-items: flex-start;
+  transform: translateY(clamp(-5px, -1cqw, -2px));
+}
 .hud-stat-col { display: flex; flex-direction: column; gap: clamp(2px, 1cqw, 8px); }
 .hud-stat-icon {
   position: relative; flex: none;
@@ -1352,15 +1358,10 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    its own. All three are info-card art of the same kind (`infocard-heroattributes-*.blp` next
    to `infocard-attack-*`/`infocard-armor-*`), drawn at one size in one row of the real
    panel's icon strip; there is nothing that makes this one the junior of the three. */
-/* Centred against the stat column, then lifted a hair off that centre. The two columns do not
-   have the same first line: the Damage block's label starts at the very top of its icon,
-   while this column's first label starts wherever three centred blocks happen to begin, and
-   the eye reads the two as level only when this one sits slightly above true centre.
-   `transform` rather than a margin so the nudge cannot feed back into the centring. */
-.hud-attr-col {
-  display: flex; align-items: center; gap: clamp(4px, 2.4cqw, 14px);
-  transform: translateY(clamp(-5px, -1cqw, -2px));
-}
+/* The icon is centred against the three blocks BESIDE it — that is within the column, and is
+   not the same question as where the column itself sits (.hud-stat-cols, which top-aligns it
+   with the damage column and carries the upward nudge for both). */
+.hud-attr-col { display: flex; align-items: center; gap: clamp(4px, 2.4cqw, 14px); }
 .hud-attr-primary-icon { width: clamp(34px, 17cqw, 80px); height: clamp(34px, 17cqw, 80px); }
 /* Three stacked blocks, spaced by the same gap that separates the Damage and Armor rows
    opposite them (.hud-stat-col) and set on the same tight leading (.hud-stat-text). */
