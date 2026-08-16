@@ -1289,7 +1289,13 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    carves out. Below ~1600px wide the panel gets tight, but it did before this too — the name
    and the XP bar above the stats are still fixed px, so they eat a growing share as the
    console shrinks; making THOSE proportional is the rest of this job. */
-.hud-stat-cols { display: flex; gap: clamp(8px, 3cqw, 22px); align-items: flex-start; }
+/* The attribute column is CENTRED against the damage/armour column, not aligned to its top:
+   the left column is two icon rows tall and the right one is a single icon beside three
+   lines, so top-aligning left it hanging off the top with a hole beneath it. Centring is also
+   what the left column's own text does NOT do (see .hud-stat-block) — the difference is that
+   there the text is a caption for the icon beside it, and here the whole column is one block
+   sitting next to another. */
+.hud-stat-cols { display: flex; gap: clamp(8px, 3cqw, 22px); align-items: center; }
 .hud-stat-col { display: flex; flex-direction: column; gap: clamp(2px, 1cqw, 8px); }
 .hud-stat-icon {
   position: relative; flex: none;
