@@ -22,6 +22,9 @@ and the field defaults are in [`src/data/gameplayConstants.ts`](../src/data/game
 | Rotation / FarZ | 90 / 5000 | `bj_CAMERA_DEFAULT_ROTATION` / `_FARZ` |
 | Focus height | **the terrain under it** | The camera keeps its distance to the GROUND, not to z = 0 |
 | Our zoom range | 1250 – 2400 | Ours; brackets WC3's 1650 default. WC3's own wheel stops are not documented anywhere we trust |
+| Wheel | 7 stops, eased out over 0.22 s | Ours. Nothing about WC3's camera snaps — see "The wheel moves in stops" |
+| AOA on the closest stop | 40° above the horizon | Ours; the close-zoom tilt into the third-person view |
+| Insert / Delete | ±90°, linear, ~0.45 s | Angle from the manual/wiki; the rate is ours |
 | Melee camera centre | the starting **workers** | `Blizzard.j:8299` — *not* the town hall |
 
 ## The trap: the lens and the distance are one knob
@@ -139,6 +142,50 @@ Because the lens is right, these distances mean what they mean in the real game.
   `GAME_FOV` silently redefines every distance constant and every map's camera.
 - WC3's own wheel stops have not been measured; 1250/2400 is our choice, not ground truth. The
   *default* it opens on is ground truth.
+
+### The wheel moves in stops, and every move is interpolated
+
+Nothing about WC3's camera snaps. The wheel is a **ladder of fixed stops** (`ZOOM_STEPS = 7`,
+`zoomStopDistance`) and one notch is one rung; the camera then **eases out** onto that rung over
+`ZOOM_EASE` (0.22 s, cubic). The rungs are geometric — each is the same *ratio* closer than the
+last — because that is what a distance is worth on screen: 150 units is a whole step zoomed in and
+a nudge zoomed out. Seven rungs across 2400 → 1250 also drops the default (1650) almost exactly on
+rung 4, so a match opens *on* a stop rather than between two.
+
+The ease always starts from **where the camera is now**, not from the rung it left, so notching
+four times in a second is one continuous dolly rather than four tweens fighting. `zoomStopOf`
+reads the rung back off a raw distance, so the ladder still makes sense after a map's script has
+parked the camera somewhere between two stops.
+
+### The closest rung tilts the camera
+
+The last notch does not only come closer — it **drops the angle of attack** from the default 56°
+above the horizon to **40°** (`TILT_FINAL_AOA_DEG`), turning the overhead view into the deep
+trapezoid / third-person shot you get zoomed all the way in. It rides the same ease as the
+distance, so the drop and the dolly are one motion, and it is confined to the final rung
+(`TILT_STEPS = 1`) so every other zoom level keeps WC3's exact 56°.
+
+Chosen off a sweep shot on Echo Isles (50/45/40/35/30): 45 barely reads, 30 tips the treeline and
+the map's far edge into the top of the frame.
+
+Because the wheel is now the one player control that moves the AOA, the player's camera is a
+distance **and** a pitch — `playerDistance` + `playerPitch`, both fed to `ScriptCamera`'s
+"game camera" getter, so `ResetToGameCamera` hands back the view you actually had.
+
+## Insert / Delete rotate the view
+
+> "Hold down Insert to rotate view 90 degrees left and hold Delete to rotate view 90 degrees
+> right. Letting go of the key will snap the view back to center." — the classic manual/wiki.
+
+Held = turn toward ±90°, released = turn back to 0. This one is **linear** (`SPIN_RATE`, 200°/s,
+~0.45 s for the quarter turn), not eased: it is a held control, so it has to turn at a constant
+speed for as long as you hold it and stop dead on the limit. An ease-out would make the last few
+degrees crawl and the key feel stuck.
+
+It is kept as an **offset** (`spin`) and only its per-frame *delta* is added to `yaw`, so the
+swing composes with whatever else owns the rotation (a map camera, a script's tween) instead of
+replacing it. `writeCamera` sets rotation absolutely, so it also zeroes `spin` — unwinding an
+offset out of a yaw that no longer contains it would leave the camera 90° off when the key came up.
 
 ## Melee camera centring
 

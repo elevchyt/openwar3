@@ -646,12 +646,26 @@ export class MapViewerScene {
    * those "the game camera" really is WC3's own defaults.
    */
   private playerDistance: number = CAMERA.DEFAULT_DISTANCE;
+  /** …and the tilt that goes with it. The wheel is the only thing that moves the game camera's
+   *  angle of attack (see pitchForZoomStep), so the player's zoom is a distance AND a pitch, and
+   *  both have to survive a cinematic for ResetToGameCamera to hand back the view you had. */
+  private playerPitch = MapViewerScene.GAME_PITCH;
+  // The wheel's in-flight ease (see updatePlayerCamera). A notch does not jump the camera: it
+  // starts a short tween from wherever the view currently is to the new step's distance+pitch,
+  // so notching four times in a second reads as one smooth dolly rather than four snaps.
+  private zoomFromDistance: number = CAMERA.DEFAULT_DISTANCE;
+  private zoomFromPitch = MapViewerScene.GAME_PITCH;
+  private zoomT = 1; // 0…1 through the current step's ease; 1 = settled
+  /** Insert/Delete's yaw offset, in radians, CURRENTLY applied to `yaw`. Kept as a separate
+   *  book so the spin rides on top of whatever else owns the rotation (a script's tween, a map
+   *  camera) instead of replacing it: each frame only the DELTA is added to `yaw`. */
+  private spin = 0;
   /** Game seconds stepped since the last frame drained it — the clock the cinematic runs on. */
   private simAdvanced = 0;
   private scriptCam = new ScriptCamera(() => ({
     distance: this.playerDistance,
     farZ: 0,
-    aoaDeg: (-MapViewerScene.GAME_PITCH * 180) / Math.PI,
+    aoaDeg: (-this.playerPitch * 180) / Math.PI,
     // Degrees, and on the scale a SCRIPT speaks — fovFromWc3 puts it on our lens.
     fovDeg: MapViewerScene.WC3_FOV_DEG,
     rollDeg: 0,
@@ -1163,6 +1177,8 @@ export class MapViewerScene {
     // Start near gameplay zoom rather than a whole-map overview — far better
     // draw performance and closer to WC3's default camera.
     this.distance = this.playerDistance = MapViewerScene.MELEE_START;
+    this.pitch = this.playerPitch = MapViewerScene.GAME_PITCH; // …and its overhead angle
+    this.zoomT = 1; // no wheel ease in flight across a map load
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
     const archive = new MpqDataSource("map", bytes);
@@ -1684,6 +1700,8 @@ export class MapViewerScene {
       this.target[0] = home.startX;
       this.target[1] = home.startY;
       this.distance = this.playerDistance = MapViewerScene.MELEE_START;
+      this.pitch = this.playerPitch = MapViewerScene.GAME_PITCH;
+      this.zoomT = 1;
     }
     // Resolve "random" once per slot: roster and console skin must agree.
     const races = new Map(config.slots.map((s) => [s.id, resolveRace(s.race)]));
@@ -5224,6 +5242,56 @@ export class MapViewerScene {
   private static readonly ZOOM_MIN = 1250;
   private static readonly ZOOM_MAX = 2400;
   private static readonly MELEE_START = CAMERA.DEFAULT_DISTANCE;
+  // The wheel moves in STOPS, not continuously: WC3's zoom is a fixed ladder of camera
+  // distances and one notch is one rung. The rungs are geometric (each is the same RATIO
+  // closer than the last), because what a distance is worth on screen is a ratio — the same
+  // 150 units is a whole step zoomed in and barely a nudge zoomed out. Seven rungs across
+  // 2400 → 1250 puts the default the match opens on (1650) almost exactly on rung 4, so the
+  // player starts on a stop rather than between two.
+  private static readonly ZOOM_STEPS = 7;
+  /** Seconds a single notch takes to settle. Every camera move in WC3 is interpolated; a notch
+   *  eases OUT (fast off the mark, gliding into the stop), which is what makes a run of notches
+   *  read as one continuous dolly instead of a stutter. */
+  private static readonly ZOOM_EASE = 0.22;
+  // --- the close-zoom tilt -------------------------------------------------------------------
+  // On the last rung the camera does not only come closer, it drops: the angle of attack
+  // shallows out of the default 56°-above-the-horizon overhead view toward a low, third-person
+  // shot, which is what turns the view into the deep trapezoid you get zoomed all the way in.
+  // 40° over the final notch alone, chosen off a sweep of 50/45/40/35/30 shot on Echo Isles:
+  // 45 barely reads, 30 tips the treeline and the map's far edge into the top of the frame, and
+  // spreading the drop over two rungs costs the ordinary mid-zoom view its stock 56°. Keeping it
+  // to the last notch also keeps the moment — the last rung is where the view changes character.
+  private static readonly TILT_FINAL_AOA_DEG = 40; // eye elevation above the focus, closest stop
+  private static readonly TILT_STEPS = 1; // rungs the tilt is spread over, from the closest
+  /** Camera distance at a zoom stop. 0 = fully out (ZOOM_MAX) … ZOOM_STEPS = fully in. */
+  private static zoomStopDistance(step: number): number {
+    const t = clamp(step, 0, MapViewerScene.ZOOM_STEPS) / MapViewerScene.ZOOM_STEPS;
+    return MapViewerScene.ZOOM_MAX * Math.pow(MapViewerScene.ZOOM_MIN / MapViewerScene.ZOOM_MAX, t);
+  }
+  /** …and the inverse, as a fractional rung: which stop a raw distance is sitting on. Read off
+   *  the CURRENT distance rather than a stored index so the ladder still makes sense after a
+   *  map's script has parked the camera somewhere between two stops. */
+  private static zoomStopOf(distance: number): number {
+    const span = Math.log(MapViewerScene.ZOOM_MIN / MapViewerScene.ZOOM_MAX);
+    return (Math.log(clamp(distance, MapViewerScene.ZOOM_MIN, MapViewerScene.ZOOM_MAX) / MapViewerScene.ZOOM_MAX) / span) * MapViewerScene.ZOOM_STEPS;
+  }
+  /** The pitch (eye elevation above the focus, radians) that belongs to a zoom stop: the
+   *  default overhead angle everywhere except the closest TILT_STEPS rungs, easing down to
+   *  TILT_FINAL_AOA_DEG at the bottom of the ladder. */
+  private static pitchForZoomStep(step: number): number {
+    const from = MapViewerScene.ZOOM_STEPS - MapViewerScene.TILT_STEPS;
+    const t = clamp((step - from) / MapViewerScene.TILT_STEPS, 0, 1);
+    return MapViewerScene.GAME_PITCH + ((MapViewerScene.TILT_FINAL_AOA_DEG * Math.PI) / 180 - MapViewerScene.GAME_PITCH) * t;
+  }
+  /** Move the player's zoom to a stop and start the ease toward it. `distance`/`pitch` are
+   *  tweened from wherever the camera is NOW, so a notch mid-ease continues the same glide. */
+  private setZoomStop(step: number): void {
+    this.zoomFromDistance = this.distance;
+    this.zoomFromPitch = this.pitch;
+    this.playerDistance = MapViewerScene.zoomStopDistance(step);
+    this.playerPitch = MapViewerScene.pitchForZoomStep(step);
+    this.zoomT = 0;
+  }
   private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
   private pointerInWindow = false; // the cursor is on the page at all — gates edge-scroll
   // The game frame's box in VIEWPORT coords, refreshed once a frame. Mouse input arrives in
@@ -9368,6 +9436,10 @@ export class MapViewerScene {
       this.showScrollArrow(0, 0);
     }
 
+    // The wheel's ease and Insert/Delete's rotation — the two things the PLAYER can do to the
+    // camera's shape. Before the script block, so a cinematic still wins.
+    this.updatePlayerCamera(Math.min(dtMs, 100) / 1000);
+
     // The map's script drives the same camera (7.24) — a camera setup, a timed pan, a unit
     // to ride, a shake. It runs AFTER the player's input so a cinematic wins, and it lets go
     // of each field the moment that field's blend lands. `dtMs` is MILLISECONDS (the frame
@@ -9496,6 +9568,10 @@ export class MapViewerScene {
     this.fov = clamp(MapViewerScene.fovFromWc3(c.fovDeg), 0.1, Math.PI * 0.9);
     this.roll = c.rollDeg * RAD;
     this.farZ = c.farZ;
+    // The rotation this just wrote is absolute, so whatever Insert/Delete had added is gone
+    // with it: forget the offset rather than unwinding it out of a yaw that no longer contains
+    // it (which would leave the camera 90° off when the key came up).
+    this.spin = 0;
   }
 
   // Edge-of-screen scrolling (WC3): pan when the cursor rests within EDGE_MARGIN of
@@ -9644,6 +9720,47 @@ export class MapViewerScene {
     // Inverted: +mx (drag right) → pan left; -my (drag up) → pan down/backward.
     this.pan(right, -mx * worldPerPx);
     this.pan(fwd, (my * worldPerPx) / Math.sin(this.pitch));
+  }
+
+  /** How far Insert/Delete swing the view, and how fast. The wiki states the angle: "Hold down
+   *  Insert to rotate view 90 degrees left and hold Delete to rotate view 90 degrees right.
+   *  Letting go of the key will snap the view back to center." The RATE is ours — WC3 documents
+   *  no number — and unlike the wheel this one is LINEAR: it is a held control, so it has to
+   *  turn at a constant speed for as long as you hold it and stop dead on the 90°, with no
+   *  ease-out that would make the last few degrees crawl. The same rate unwinds it on release. */
+  private static readonly SPIN_LIMIT = Math.PI / 2; // 90°
+  private static readonly SPIN_RATE = (200 * Math.PI) / 180; // radians/second — 90° in ~0.45 s
+
+  /** The player's own camera controls, per frame: the wheel's eased zoom (distance and, on the
+   *  closest stops, pitch) and Insert/Delete's rotation. `dt` is SECONDS. */
+  private updatePlayerCamera(dt: number): void {
+    // A script driving the camera owns distance/rotation/AOA outright, so the ease parks where
+    // it is and resumes when the shot lets go — writeCamera would only fight it frame by frame.
+    if (!this.scriptCam.active) {
+      if (this.zoomT < 1) {
+        this.zoomT = Math.min(1, this.zoomT + dt / MapViewerScene.ZOOM_EASE);
+        // Cubic ease-out: leaves the old stop immediately, settles into the new one.
+        const k = 1 - Math.pow(1 - this.zoomT, 3);
+        this.distance = this.zoomFromDistance + (this.playerDistance - this.zoomFromDistance) * k;
+        this.pitch = this.zoomFromPitch + (this.playerPitch - this.zoomFromPitch) * k;
+      }
+
+      // Insert/Delete. Held = turn toward ±90°, released = turn back to 0; both at SPIN_RATE.
+      // Only the delta goes onto `yaw`, so the spin composes with the camera's own rotation.
+      const goal = this.userControl
+        ? this.keys.has("insert")
+          ? MapViewerScene.SPIN_LIMIT
+          : this.keys.has("delete")
+            ? -MapViewerScene.SPIN_LIMIT
+            : 0
+        : 0;
+      if (this.spin !== goal) {
+        const stepBy = MapViewerScene.SPIN_RATE * dt;
+        const next = this.spin + clamp(goal - this.spin, -stepBy, stepBy);
+        this.yaw += next - this.spin;
+        this.spin = next;
+      }
+    }
   }
 
   /** Confine the camera focus to the terrain rect so it can't scroll into the void
@@ -10092,9 +10209,12 @@ export class MapViewerScene {
       (e: WheelEvent) => {
         e.preventDefault();
         if (!this.userControl) return; // a cinematic owns the zoom too (7.24)
-        this.distance = clamp(this.distance * (1 + Math.sign(e.deltaY) * 0.1), MapViewerScene.ZOOM_MIN, MapViewerScene.ZOOM_MAX);
-        this.playerDistance = this.distance; // …and this is the zoom a cinematic gives back
-
+        const dir = Math.sign(e.deltaY); // wheel down (+) = zoom out = a rung further out
+        if (!dir) return;
+        // One notch = one rung of the ladder, read off the zoom the player is HEADED for (not
+        // the eased distance mid-flight), so notching fast still advances one stop per notch.
+        const step = clamp(Math.round(MapViewerScene.zoomStopOf(this.playerDistance)) - dir, 0, MapViewerScene.ZOOM_STEPS);
+        this.setZoomStop(step); // …and this is the zoom a cinematic gives back
       },
       { passive: false },
     );
