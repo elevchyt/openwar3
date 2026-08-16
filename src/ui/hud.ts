@@ -2727,11 +2727,13 @@ function bonusHtml(bonus: number): string {
   if (bonus < 0) return ` <span class="stat-penalty">${bonus}</span>`; // `bonus` already carries the minus
   return "";
 }
-// An attribute line: "Strength: 34 +9" — a gold label, a white value, and the item
-// contribution as a green "+N" (red "-N" if the total is negative). All three lines are
-// identical; the primary attribute is named by the ICON beside them, not by the text.
+// An attribute block: a gold "Strength:" with the white value "34 +9" UNDER it, the item
+// contribution as a green "+N" (red "-N" if the total is negative). Label over value is the
+// same shape the Damage and Armor blocks use, so the panel's two columns read alike rather
+// than one running its label and value together on a line. All three are identical; the
+// primary attribute is named by the ICON beside them, not by the text.
 function attrLineHtml(label: string, value: number, bonus: number): string {
-  return `<span class="hud-attr-line"><span class="attr-name">${label}:</span> ${value}${bonusHtml(bonus)}</span>`;
+  return `<span class="hud-attr-line"><span class="attr-name">${label}:</span><span class="attr-value">${value}${bonusHtml(bonus)}</span></span>`;
 }
 
 // WC3 infocard type icons (real BLPs under UI\Widgets\Console\Human\). Attack/

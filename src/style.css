@@ -1273,7 +1273,16 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill {
 }
 body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: var(--hud-bigbar-timer); }
 
-.hud-sel-stats { font-size: 12px; color: #cfc7ab; line-height: 1.5; }
+/* ONE size for every string in this panel — the labels, the values and the attributes alike.
+   That is the game's own arrangement: `SimpleInfoPanel.fdf` gives every one of these strings
+   the same FrameFont at the same 0.009, and only the COLOUR tells a label from a value (gold
+   0.99 0.827 0.0705 vs white). Sizes here differed only because they were hand-picked. Kept
+   as one custom property so they cannot drift apart again; the `cqw` inside it resolves
+   against .hud-info-text, the container, wherever it is used. */
+.hud-sel-stats {
+  --hud-stat-font: clamp(11px, 3.9cqw, 20px);
+  font-size: var(--hud-stat-font); color: #cfc7ab; line-height: 1.5;
+}
 .hud-sel-carry { font-size: 12px; color: #d8c88a; margin-top: 2px; }
 /* Item description shown when a ground item is selected (in place of the stat block). */
 .hud-sel-desc { font-size: 12px; color: #c9cfd8; line-height: 1.35; margin-top: 4px; max-width: 240px; text-align: center; }
@@ -1322,11 +1331,11 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
 .hud-stat-text { display: flex; flex-direction: column; line-height: 1.15; }
 /* "Damage:" / "Armor:" and the attribute names are the SAME string in the game — both are
    SimpleInfoPanelLabelTextTemplate — so they are drawn alike here: one gold, one weight. */
-.hud-stat-label { font-size: clamp(11px, 3.9cqw, 20px); color: #e0b93a; }
-.hud-stat-value { font-size: clamp(12px, 4.2cqw, 21px); color: #fff; } /* SimpleInfoPanelValueTextTemplate: white */
+.hud-stat-label { font-size: var(--hud-stat-font); color: #e0b93a; }
+.hud-stat-value { font-size: var(--hud-stat-font); color: #fff; } /* SimpleInfoPanelValueTextTemplate: white */
 .stat-bonus { color: #4ee05a; font-weight: 700; } /* green buff/aura/item bonus */
 .stat-penalty { color: #e0504a; font-weight: 700; } /* red debuff/negative-item penalty */
-.hud-stat-invuln { font-size: clamp(11px, 3.9cqw, 20px); color: #e0504a; font-weight: 700; } /* red "Invulnerable" under the armour value (issue #26) */
+.hud-stat-invuln { font-size: var(--hud-stat-font); color: #e0504a; font-weight: 700; } /* red "Invulnerable" under the armour value (issue #26) */
 /* Hero attributes: one primary icon beside three value lines. They scale with the panel too:
    the two columns share one row, so a damage icon that grew and an attribute icon that did
    not would put the panel out of proportion with itself — which is why the primary-attribute
@@ -1336,14 +1345,18 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    panel's icon strip; there is nothing that makes this one the junior of the three. */
 .hud-attr-col { display: flex; align-items: center; gap: clamp(4px, 2.4cqw, 14px); }
 .hud-attr-primary-icon { width: clamp(34px, 17cqw, 80px); height: clamp(34px, 17cqw, 80px); }
-.hud-attr-lines { display: flex; flex-direction: column; line-height: 1.25; }
+/* Three stacked blocks, spaced by the same gap that separates the Damage and Armor rows
+   opposite them (.hud-stat-col) and set on the same tight leading (.hud-stat-text). */
+.hud-attr-lines { display: flex; flex-direction: column; gap: clamp(2px, 1cqw, 8px); line-height: 1.15; }
 /* All three attributes are drawn ALIKE — one gold name, one white value, one weight. Which is
    the hero's primary is already said by the icon beside them (the panel shows the primary
    attribute's icon and no other), so the lines themselves would be saying it a second time.
    No label or value in this panel varies its weight at all: each is a SimpleInfoPanel.fdf
    template string — a font, a size and a colour — with no weight to vary. Only the green "+N"
-   bonus and the red warnings are emphasised, and those are ours rather than the game's. */
-.hud-attr-line { font-size: clamp(11px, 3.9cqw, 20px); color: #fff; } /* SimpleInfoPanelAttributeTextTemplate: white */
+   bonus and the red warnings are emphasised, and those are ours rather than the game's.
+   Each is a COLUMN — the gold name over the white value — which is the shape the Damage and
+   Armor blocks opposite them already had. */
+.hud-attr-line { display: flex; flex-direction: column; font-size: var(--hud-stat-font); color: #fff; } /* SimpleInfoPanelAttributeTextTemplate: white */
 .hud-attr-line .attr-name { color: #e0b93a; }
 /* The info panel's Status line: the gold "Status:" label (InfoPanelStrings COLON_STATUS) with
    the active buffs' own icons in a row to its right, under the Damage/Armor blocks.
