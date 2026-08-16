@@ -127,6 +127,8 @@ export interface HudSelection {
   damageBonus: number; // green "+N" attack damage
   attackType: AttackType;
   armorType: ArmorType;
+  attackUpgrade: number; // level of the owner's melee/ranged research — drawn in the icon's corner
+  armorUpgrade: number; // level of the owner's armour research — drawn in the icon's corner
   isHero: boolean;
   properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
@@ -2398,16 +2400,21 @@ export class GameHud {
           this.selSub.textContent = "";
           this.xpBar.hidden = true;
         }
-        // Damage / Armor: base value + a green "+N" bonus from buffs/auras.
+        // Damage / Armor: base value + a green "+N" bonus from buffs/auras, and the owner's
+        // upgrade LEVEL in the icon's corner box — 0 until the first research, then 1/2/3
+        // (issue #113). The number is always printed, including on a unit no upgrade reaches:
+        // the box is part of the icon art, and an empty one reads as a missing readout.
         if (sel.damageMax > 0) {
           this.attackStat.row.hidden = false;
           this.setIcon(this.attackStat.icon, infocard("attack", sel.attackType));
+          this.attackStat.level.textContent = String(sel.attackUpgrade);
           this.attackStat.value.innerHTML = `${sel.damageMin} - ${sel.damageMax}${bonusHtml(sel.damageBonus)}`;
         } else {
           this.attackStat.row.hidden = true;
         }
         this.armorStat.row.hidden = false;
         this.setIcon(this.armorStat.icon, infocard("armor", sel.armorType));
+        this.armorStat.level.textContent = String(sel.armorUpgrade);
         this.armorStat.value.innerHTML = `${sel.armor}${bonusHtml(sel.armorBonus)}`;
         this.invulnLine.hidden = !sel.invulnerable;
         // Hero attributes: ONE primary-attribute icon beside the three value lines.
@@ -2687,7 +2694,7 @@ export class GameHud {
   }
 }
 
-interface StatBlock { row: HTMLDivElement; icon: HTMLDivElement; value: HTMLDivElement; }
+interface StatBlock { row: HTMLDivElement; icon: HTMLDivElement; level: HTMLDivElement; value: HTMLDivElement; }
 
 /** A stat block: [icon] then "Label:" over the value line (WC3 info panel). */
 function makeStatBlock(label: string): StatBlock {
@@ -2695,6 +2702,13 @@ function makeStatBlock(label: string): StatBlock {
   row.className = "hud-stat-block";
   const icon = document.createElement("div");
   icon.className = "hud-stat-icon";
+  // The upgrade level, printed INSIDE the icon's own bottom-right box — the art carries an
+  // empty recess there and the game fills it with a number (`IconValue1..4`, anchored CENTER
+  // on the icon's BOTTOMRIGHT in `InfoPanelUnitDetail.fdf`, white and centred per
+  // InfoPanelAttributeTextTemplate). It is a child of the icon so it rides any resize of it.
+  const level = document.createElement("div");
+  level.className = "hud-stat-level";
+  icon.appendChild(level);
   const text = document.createElement("div");
   text.className = "hud-stat-text";
   const lab = document.createElement("div");
@@ -2704,7 +2718,7 @@ function makeStatBlock(label: string): StatBlock {
   value.className = "hud-stat-value";
   text.append(lab, value);
   row.append(icon, text);
-  return { row, icon, value };
+  return { row, icon, level, value };
 }
 // A bonus span from buffs/auras/items: green "+N" when positive, red "-N" when
 // negative (WC3 shows debuffed stats in red), empty when there's none.

@@ -117,6 +117,8 @@ export function writeUnitSnapshot(u: SimUnit, s: UnitSnapshot): void {
   u.bonusArmor = s.bonusArmor;
   u.bonusDamage = s.bonusDamage;
   u.invulnerable = s.invulnerable;
+  u.attackUpgrade = s.attackUpgrade;
+  u.armorUpgrade = s.armorUpgrade;
   u.weapon = mergeWeapon(u.weapon, s.weapon);
   u.swingWeapon = mergeWeapon(u.swingWeapon, s.swingWeapon);
 

@@ -1168,6 +1168,14 @@ export interface SimUnit {
   bonusStr: number; // item portion of Strength (green "+N" / red "-N" in the HUD); derived
   bonusAgi: number; // item portion of Agility; derived
   bonusInt: number; // item portion of Intelligence; derived
+  /** Levels of the owner's researched attack (`class` = melee/ranged) and armour
+   *  (`class` = armor) upgrades that apply to this unit — the small number WC3 prints in the
+   *  corner box of the info panel's damage / armour icons (`IconValue1..4` in
+   *  `UI\FrameDef\UI\InfoPanelUnitDetail.fdf`). It rides on the UNIT rather than being read
+   *  off the viewer's own tech ledger because clicking an ENEMY unit is how you scout how far
+   *  along its upgrades are. Both derived. */
+  attackUpgrade: number;
+  armorUpgrade: number;
   abilities: SimAbility[]; // learned/innate abilities
   buffs: SimBuff[]; // active timed effects
   stunned: boolean; // derived from buffs (cannot act)
@@ -4239,6 +4247,8 @@ export class SimWorld {
       | "bonusStr"
       | "bonusAgi"
       | "bonusInt"
+      | "attackUpgrade"
+      | "armorUpgrade"
       | "abilities"
       | "buffs"
       | "stunned"
@@ -4446,6 +4456,8 @@ export class SimWorld {
       bonusStr: 0,
       bonusAgi: 0,
       bonusInt: 0,
+      attackUpgrade: 0,
+      armorUpgrade: 0,
       abilities: opts?.abilities ?? [],
       buffs: [],
       stunned: false,
@@ -6228,10 +6240,12 @@ export class SimWorld {
     dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
     range: number; sight: number; speed: number; attackSpeed: number; damage: number;
     lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
+    attackLevel: number; armorLevel: number;
   } {
     const b = {
       dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0,
       attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0,
+      attackLevel: 0, armorLevel: 0,
       // -1 = "no `renw` researched" — the unit keeps whatever mask its data shipped with.
       weaponMask: -1,
     };
@@ -6243,6 +6257,18 @@ export class SimWorld {
       if (level < 1) continue;
       const up = this.upgradeReg.get(upId);
       if (!up) continue;
+      // The number the info panel prints in the corner of the damage / armour icon is not the
+      // size of the bonus — it is the LEVEL of the upgrade, picked by `UpgradeData.slk`'s own
+      // `class` column: the 9 melee/ranged attack researches, the 9 `armor` ones (Masonry
+      // included, which is why a Farm's shield carries a number too), and nothing else. A
+      // caster's Master Training raises attack dice as well (`ratd` on `Rhpt` et al.) but is
+      // class `caster`, so it does not move either number.
+      if (up.className === "melee" || up.className === "ranged") {
+        // A unit is only ever listed against ONE attack class, so the max IS its level.
+        b.attackLevel = Math.max(b.attackLevel, level);
+      } else if (up.className === "armor") {
+        b.armorLevel = Math.max(b.armorLevel, level);
+      }
       for (const e of up.effects) {
         const v = e.base + e.mod * (level - 1);
         switch (e.effect) {
@@ -6400,6 +6426,9 @@ export class SimWorld {
     const carapaceArmor = carapace ? this.dataOf(carapace, 1) : 0;
     u.armor = u.baseArmor + ARMOR_PER_AGI * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
     u.bonusArmor = armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
+    // The corner numbers on the info panel's two icons: the LEVEL researched, not the bonus.
+    u.attackUpgrade = upg.attackLevel;
+    u.armorUpgrade = upg.armorLevel;
     // Attack speed ("IAS"): every source — agility, items, buffs, upgrades, slows — sums
     // into ONE additive bonus term, which then divides the base attack time exactly once.
     // Bonuses never chain multiplicatively (Hive "Attack Speed Formula?" #12, Dr Super Good:

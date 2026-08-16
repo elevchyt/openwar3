@@ -329,6 +329,10 @@ function writeUnit(w: Writer, s: UnitSnapshot): void {
   w.f32(s.armor);
   w.f32(s.bonusArmor);
   w.i16(quantI16(s.bonusDamage));
+  // Upgrade levels: a byte each. Stock upgrades cap at 3, but a custom map's `maxlevel` is
+  // free to go higher, so this is not packed into nibbles.
+  w.u8(Math.min(255, Math.max(0, s.attackUpgrade)));
+  w.u8(Math.min(255, Math.max(0, s.armorUpgrade)));
   if (flags & F_HAS_HERO) {
     w.u8(s.level);
     w.u32(s.xp);
@@ -475,6 +479,8 @@ function readUnit(r: Reader): UnitSnapshot {
     bonusArmor: 0,
     bonusDamage: 0,
     invulnerable: (flags & F_INVULNERABLE) !== 0,
+    attackUpgrade: 0,
+    armorUpgrade: 0,
     weapon: null,
     swingWeapon: null,
     level: 0,
@@ -527,6 +533,8 @@ function readUnit(r: Reader): UnitSnapshot {
   s.armor = r.f32();
   s.bonusArmor = r.f32();
   s.bonusDamage = r.i16();
+  s.attackUpgrade = r.u8();
+  s.armorUpgrade = r.u8();
   if (flags & F_HAS_HERO) {
     s.level = r.u8();
     s.xp = r.u32();

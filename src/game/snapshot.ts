@@ -290,6 +290,12 @@ export interface UnitSnapshot {
   bonusArmor: number;
   bonusDamage: number;
   invulnerable: boolean;
+  /** The owner's attack / armour upgrade LEVELS for this unit — the corner number on the
+   *  panel's two icons. Sent per-unit and NOT masked by viewpoint: reading an enemy unit's
+   *  upgrade level off its info panel is how WC3 lets you scout, so unlike `research` (the
+   *  recipient's own ledger, above) this one travels with whatever units you can see. */
+  attackUpgrade: number;
+  armorUpgrade: number;
   weapon: WeaponSnapshot | null;
   swingWeapon: WeaponSnapshot | null;
 
@@ -576,6 +582,8 @@ export function rememberedUnit(u: SimUnit): UnitSnapshot {
     bonusArmor: 0,
     bonusDamage: 0,
     invulnerable: false,
+    attackUpgrade: 0,
+    armorUpgrade: 0,
     weapon: null,
     swingWeapon: null,
 
@@ -704,6 +712,8 @@ export function snapshotFor(
       bonusArmor: u.bonusArmor,
       bonusDamage: u.bonusDamage,
       invulnerable: u.invulnerable,
+      attackUpgrade: u.attackUpgrade,
+      armorUpgrade: u.armorUpgrade,
       weapon: weaponOf(u.weapon),
       swingWeapon: weaponOf(u.swingWeapon),
 

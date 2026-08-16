@@ -116,6 +116,8 @@ export interface SelectionInfo {
   damageBonus: number; // green "+N" attack damage from buffs/auras
   attackType: AttackType; // → the damage-table row (info-card icon)
   armorType: ArmorType; // → the damage-table column (info-card icon)
+  attackUpgrade: number; // level of the owner's melee/ranged research — printed IN the icon
+  armorUpgrade: number; // level of the owner's armour research — printed IN the icon
   isHero: boolean;
   properName: string; // hero's given name ("Painkiller"); "" for non-heroes
   level: number;
@@ -4233,7 +4235,7 @@ export class RtsController {
       id: -2000 - itemId, // synthetic, negative — never clashes with a unit/mine id
       typeId: it.itemId, race: "", name: def?.name || it.itemId, owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: false, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: 0, armorUpgrade: 0, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -4260,7 +4262,7 @@ export class RtsController {
       id: -1000 - mineId, // synthetic, negative — never clashes with a unit id
       typeId: "ngol", race: "", name: def?.name || "Gold Mine", owner: -1,
       hp: 0, maxHp: 0, mana: 0, maxMana: 0, armor: 0, armorBonus: 0, invulnerable: true, damageMin: 0, damageMax: 0, damageBonus: 0,
-      attackType: AttackType.None, armorType: ArmorType.Unknown, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
+      attackType: AttackType.None, armorType: ArmorType.Unknown, attackUpgrade: 0, armorUpgrade: 0, isHero: false, isIllusion: false, properName: "", level: 0, xp: 0, xpThis: 0, xpNext: 0, skillPoints: 0, strength: 0,
       agility: 0, intelligence: 0, strengthBonus: 0, agilityBonus: 0, intelligenceBonus: 0, primaryAttr: PrimaryAttribute.None,
       model: def?.model ?? "", isWorker: false, isBuilding: false,
       underConstruction: false, buildProgress: 0, trainProgress: 0, secondsLeft: 0, queueLength: 0,
@@ -4330,6 +4332,8 @@ export class RtsController {
       damageBonus: Math.round(u.bonusDamage),
       attackType: def?.attackType ?? AttackType.None,
       armorType: def?.armorType ?? ArmorType.Unknown,
+      attackUpgrade: u.attackUpgrade,
+      armorUpgrade: u.armorUpgrade,
       isHero: u.isHero,
       properName: u.properName,
       // Heroes carry their LIVE level/attributes on the sim unit (they grow with

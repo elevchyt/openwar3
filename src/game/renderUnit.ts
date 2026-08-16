@@ -123,6 +123,10 @@ export interface RenderUnit {
   readonly bonusArmor: number;
   readonly bonusDamage: number;
   readonly invulnerable: boolean;
+  /** Attack / armour upgrade levels — the corner number on the panel's damage and armour
+   *  icons. Carried by the unit, so an ENEMY's shows its owner's research (WC3 scouting). */
+  readonly attackUpgrade: number;
+  readonly armorUpgrade: number;
   readonly xp: number;
   readonly skillPoints: number;
   readonly str: number;
