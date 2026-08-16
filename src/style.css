@@ -1335,12 +1335,14 @@ body.hud-widget-skinned .hud-xpbar.summon .hud-xpbar-fill { background-image: va
    bottom, and draws it white, centred, with a black shadow one screen-unit right and down
    (InfoPanelAttributeTextTemplate). Percentages rather than pixels so it tracks the icon. */
 .hud-stat-level {
-  /* Centred on the RECESS, measured off the art rather than off the FDF's anchor offsets:
-     in the 64px icon the box's interior runs x 36..58, y 36..59, so its centre is 26.6% in
-     from the right edge and 25.8% up from the bottom. The FDF's own offsets put it at 24%/21%,
+  /* Centred on the RECESS, measured off the art rather than off the FDF's anchor offsets: in
+     the 64px icon the box's interior runs x 36..58, y 36..59, so its centre is 26.6% in from
+     the right edge and 25.8% up from the bottom. (The FDF's own offsets put it at 24%/21%,
      which sat the digit low in the box — those are anchors for the game's text metrics, not
-     for a CSS line box. */
-  position: absolute; right: 26.6%; bottom: 25.8%; transform: translate(50%, 50%);
+     for a CSS line box.) The values below are that centre less a hair on each axis, which is
+     where the digit's INK reads as centred: a line box carries descender space the glyph does
+     not use, so a box centred on the recess prints a digit about a pixel high of it. */
+  position: absolute; right: 25%; bottom: 24%; transform: translate(50%, 50%);
   /* 0.009 font in a 0.032 icon is the FDF's ratio — 28.1% of the icon, so 0.281 x 17cqw. */
   font-size: clamp(10px, 4.8cqw, 23px); line-height: 1; color: #fff;
   text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.9);
