@@ -1,5 +1,6 @@
 import type { FdfScreen } from "./fdf/render";
 import type { ChromeClips, GlueChrome, MenuScene, PanelSide } from "../render/menuScene";
+import { animWait } from "../render/animClock";
 
 // The glue-screen manager (issue #61): one screen on the menu at a time, and the
 // transition between them.
@@ -248,6 +249,16 @@ export class GlueManager {
   }
 }
 
+/**
+ * The beats between the halves of a transition, on the ANIMATION clock (render/animClock.ts)
+ * rather than the wall clock.
+ *
+ * Everything on either side of one of these waits is measured in steps of that clock — a chrome
+ * clip, a panel fade — so a beat counted in wall time instead ran the transition's schedule out
+ * from under the transition itself whenever the two came apart: the black lifted and the next
+ * screen was declared arrived while the panel that should have flown in was still sitting on the
+ * frame it stopped at.
+ */
 function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return animWait(ms);
 }

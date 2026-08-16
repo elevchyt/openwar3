@@ -1,3 +1,5 @@
+import { animNow, onAnimFrame } from "../../render/animClock";
+
 // Glue-screen panel animation (issue #61).
 //
 // The PANEL — the ornate chrome with the chains — is a 3D sprite-layer model, and it is
@@ -64,14 +66,20 @@ export function fadePanels(
   apply(0);
   if (!panels.length) return Promise.resolve();
 
+  // On the ANIMATION clock, not the wall clock (render/animClock.ts). These 180 ms belong to
+  // the panel that carries them, and that panel is a model clip advanced a step at a time by
+  // that same clock. Timed off `performance.now()` instead, the fade ran to whatever wall time
+  // said while the clip ran to whatever it had actually been stepped — so a hidden tab or a
+  // stalled main thread finished the contents on a panel that had not arrived, leaving them at
+  // full opacity over chrome still in mid-air.
   return new Promise((resolve) => {
-    const t0 = performance.now();
-    const step = (now: number): void => {
-      const t = now - t0;
-      apply(t);
-      if (t < window) requestAnimationFrame(step);
-      else { apply(window); resolve(); } // land exactly on the end state
-    };
-    requestAnimationFrame(step);
+    const t0 = animNow();
+    const off = onAnimFrame(() => {
+      const t = animNow() - t0;
+      if (t < window) return apply(t);
+      apply(window); // land exactly on the end state
+      off();
+      resolve();
+    });
   });
 }

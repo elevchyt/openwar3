@@ -3,6 +3,7 @@ import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import type { DataSource } from "../vfs/types";
 import { makeFog, type DistFog } from "./fog";
+import { animTimeout, onAnimFrame, type AnimTimer } from "./animClock";
 
 // The main-menu background + chrome (issue #54). WC3 composes the menu from three
 // layers, all animated MDX glue models read from the user's install:
@@ -191,11 +192,6 @@ export interface OmniLights {
 /** Must match `MAX_OMNI` in the patched sd.frag. */
 const MAX_OMNI = 8;
 
-/** The largest step the scene's animation clock will take in one frame (see `start`). Two
- *  dropped frames' worth — enough that ordinary jitter passes through untouched, small enough
- *  that a screen build cannot swallow a whole clip. */
-const MAX_FRAME_MS = 33;
-
 type Solver = (src: unknown) => unknown;
 interface Camera {
   perspective(fov: number, aspect: number, near: number, far: number): void;
@@ -367,17 +363,27 @@ export class MenuScene {
    *  alongside the chrome's (see `playLogo`). Null on an install that has no logo model. */
   private logo: { model: MdxModel; instance: MdxInstance } | null = null;
   /** Pending hand-offs from a `replayPanel` — its Death→Birth→Stand chain. */
-  private panelTimers: number[] = [];
+  private panelTimers: AnimTimer[] = [];
   /** Sides currently wearing clips of their OWN rather than the screen's (see `sidePanel`).
    *  Cleared whenever a screen arrives — a new screen owns both panels. */
   private sideClips = new Map<PanelSide, ChromeClips>();
   private chrome: GlueChrome = "MainMenu";
-  private chromeTimer = 0;
+  /**
+   * The chrome's Birth→Stand hand-off — and every timer below it — on the ANIMATION clock
+   * (animClock.ts), never on `window.setTimeout`.
+   *
+   * What these wait for is a CLIP to finish, and a clip only moves on frames the browser serves.
+   * A wall-clock timer kept counting through a hidden tab and through any stall, so it fired
+   * while the Birth it was timing was still parked on the frame it froze at and snapped the
+   * panel onto its Stand from mid-air — the same failure `showBackdrop` documents, arrived at
+   * from the other side.
+   */
+  private chromeTimer: AnimTimer | null = null;
   /** The logo's own Birth→Stand hand-off, on the same pattern as `chromeTimer`. */
-  private logoTimer = 0;
-  private soundTimers: number[] = [];
-  private raf = 0;
-  private last = 0;
+  private logoTimer: AnimTimer | null = null;
+  private soundTimers: AnimTimer[] = [];
+  /** Unsubscribe from the shared animation clock while this scene is running (see `start`). */
+  private offFrame: (() => void) | null = null;
   /** This frame's evaluation of the scene model's own lights, rebuilt in place each frame. */
   private omni: OmniLights = {
     count: 0,
@@ -630,7 +636,7 @@ export class MenuScene {
     // Settle onto the Stand when the BIRTH ITSELF finishes — watched on the animation clock in
     // `start`, not scheduled on a wall clock. The two are not the same thing: building the
     // screen and any hitch after it starve the render loop, whose step is clamped
-    // (MAX_FRAME_MS), so the clip runs behind wall time by however long the stall was. A
+    // (MAX_STEP_MS), so the clip runs behind wall time by however long the stall was. A
     // setTimeout(birthLength) then cut the arrival short — on a cold entry it fired while the
     // camera was still a third of the way through its sweep, which is the same "no Birth
     // animation" symptom by a different route.
@@ -692,14 +698,14 @@ export class MenuScene {
     const instance = this.addInstance(model, this.sceneLogo, /^birth$/i);
     instance.setSequenceLoopMode(0);
     this.logo = { model, instance };
-    this.logoTimer = window.setTimeout(() => this.playLogo("stand", true), seqLengthOf(model, "Birth"));
+    this.logoTimer = animTimeout(() => this.playLogo("stand", true), seqLengthOf(model, "Birth"));
   }
 
   /** Play one of the logo's own clips. It shares the chrome's Birth/Stand/Death vocabulary, so
    *  a screen change drives it on the same beats the panels move on (`playPhase`). */
   private playLogo(phase: keyof ChromeClips, loop: boolean): void {
     if (!this.logo) return;
-    clearTimeout(this.logoTimer);
+    this.logoTimer?.cancel();
     const name = phase === "birth" ? "Birth" : phase === "death" ? "Death" : "Stand";
     const idx = this.logo.model.sequences.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
     if (idx < 0) return;
@@ -788,9 +794,9 @@ export class MenuScene {
     const death = seqLengthOf(panel.model, this.clipFor(this.chrome, "death", side));
     const birth = seqLengthOf(panel.model, this.clipFor(this.chrome, "birth", side));
     this.playOn(panel, "death", false);
-    this.panelTimers.push(window.setTimeout(() => {
+    this.panelTimers.push(animTimeout(() => {
       this.playOn(panel, "birth", false);
-      this.panelTimers.push(window.setTimeout(() => this.playOn(panel, "stand", true), birth));
+      this.panelTimers.push(animTimeout(() => this.playOn(panel, "stand", true), birth));
     }, death));
     return { death, birth };
   }
@@ -826,13 +832,13 @@ export class MenuScene {
     this.scheduleClipSounds(panel.model, panel.model.sequences[idx]);
     const length = seqLengthOf(panel.model, play);
     // Settle onto whatever this side now wears — its own Stand, or the screen's.
-    this.panelTimers.push(window.setTimeout(() => this.playOn(panel, "stand", true), length));
+    this.panelTimers.push(animTimeout(() => this.playOn(panel, "stand", true), length));
     return length;
   }
 
   /** Drop a pending `replayPanel` hand-off — a screen change owns the panels now. */
   private clearPanelTimers(): void {
-    for (const t of this.panelTimers) clearTimeout(t);
+    for (const t of this.panelTimers) t.cancel();
     this.panelTimers = [];
   }
 
@@ -859,21 +865,21 @@ export class MenuScene {
         if (at < start || at > end) continue; // belongs to a different screen's clip
         const delay = at - start;
         if (delay <= 0) this.onSound?.(evt.id);
-        else this.soundTimers.push(window.setTimeout(() => this.onSound?.(evt.id), delay));
+        else this.soundTimers.push(animTimeout(() => this.onSound?.(evt.id), delay));
       }
     }
   }
 
   /** Drop any event still pending — the clip that scheduled it is no longer playing. */
   private clearSoundTimers(): void {
-    for (const t of this.soundTimers) clearTimeout(t);
+    for (const t of this.soundTimers) t.cancel();
     this.soundTimers = [];
   }
 
   /** Send the current screen's chrome away: play "<screen> Death" once — or, for a side that
    *  `sidePanel` put on clips of its own, that triple's Death. */
   playChromeDeath(): number {
-    clearTimeout(this.chromeTimer);
+    this.chromeTimer?.cancel();
     const death = this.longestPhase("death");
     this.playPhase("death", false);
     // The logo only ever stands on the MAIN MENU — MainMenu.fdf is the one glue file that
@@ -892,7 +898,7 @@ export class MenuScene {
    * fires exactly one of the whooshes its clip keys (scheduleClipSounds).
    */
   playChromeBirth(screen: GlueChrome, sides?: Partial<Record<PanelSide, ChromeClips>>): number {
-    clearTimeout(this.chromeTimer);
+    this.chromeTimer?.cancel();
     this.chrome = screen;
     this.sideClips.clear(); // an arriving screen owns both panels again
     for (const side of ["left", "right"] as const) {
@@ -901,10 +907,10 @@ export class MenuScene {
     }
     this.playPhase("birth", false);
     const birth = this.longestPhase("birth");
-    this.chromeTimer = window.setTimeout(() => this.playPhase("stand", true), birth);
+    this.chromeTimer = animTimeout(() => this.playPhase("stand", true), birth);
     if (screen === "MainMenu") {
       this.playLogo("birth", false);
-      this.logoTimer = window.setTimeout(() => this.playLogo("stand", true), this.logoLength("Birth"));
+      this.logoTimer = animTimeout(() => this.playLogo("stand", true), this.logoLength("Birth"));
     }
     this.frameCameras(); // the logo's viewport is per-screen (see frameCameras)
     return birth;
@@ -916,17 +922,11 @@ export class MenuScene {
   }
 
   start(): void {
-    if (this.raf) return;
-    const frame = (t: number): void => {
-      // CLAMP the step. Building a glue screen blocks the main thread — the campaign screen
-      // parses CampaignMenu.fdf and decodes its textures — and the first frame after that
-      // stall carries the whole stall as its dt. Fed to the animation clock straight, a 3.3 s
-      // hitch advanced NightElf_Exp's 3.3 s "Birth" in ONE step: the model's camera arrived at
-      // its final pose before a single frame of the sweep had been drawn, so the campaign
-      // screen looked like it had no arrival animation at all. A dropped frame is time the
-      // player did not see; it is not time the scene should skip.
-      const dt = Math.min(this.last ? t - this.last : 1000 / 60, MAX_FRAME_MS);
-      this.last = t;
+    if (this.offFrame) return;
+    // On the SHARED animation clock (animClock.ts), which is where the step and its clamp now
+    // come from — the same step the DOM fades and the clip hand-offs read, so a screen and the
+    // chrome carrying it cannot come apart, and a hidden tab advances all of them or none.
+    this.offFrame = onAnimFrame((dt: number): void => {
       this.syncCanvasSize();
       // update() then render(), rather than updateAndRender(), so the lights are read from
       // nodes THIS frame's animation has already moved — a glue model's lights are keyframed
@@ -937,10 +937,14 @@ export class MenuScene {
       // A backdrop's camera is keyframed (see frameCameras), so its framing is a per-frame
       // question while one is up — not something to settle once at showBackdrop.
       if (this.backdropInstance) this.frameCameras();
-      this.viewer.render();
-      this.raf = requestAnimationFrame(frame);
-    };
-    this.raf = requestAnimationFrame(frame);
+      // The clock keeps stepping while the tab is hidden so the clips finish (animClock.ts) —
+      // but a hidden tab composites nothing, so there is no picture to draw for. Advance; don't
+      // paint. The first step back paints the pose the animation has meanwhile reached.
+      if (!document.hidden) this.viewer.render();
+      // `whileHidden: false`: the menu's idle Stand clips are not a reason to keep an unwatched
+      // tab ticking. While a transition is running they still get every step the clock takes,
+      // because what that transition is waiting on holds the clock open (animClock.ts).
+    }, { whileHidden: false });
   }
 
   /** Hand a backdrop from its Birth to its looping Stand the frame the Birth reaches its last
@@ -1026,16 +1030,15 @@ export class MenuScene {
   }
 
   stop(): void {
-    cancelAnimationFrame(this.raf);
-    this.raf = 0;
-    this.last = 0;
+    this.offFrame?.();
+    this.offFrame = null;
   }
 
   dispose(): void {
     this.stop();
     this.canvas.style.filter = ""; // the grade is ours; don't leave it on the element
-    clearTimeout(this.chromeTimer);
-    clearTimeout(this.logoTimer);
+    this.chromeTimer?.cancel();
+    this.logoTimer?.cancel();
     this.clearSoundTimers();
     this.clearPanelTimers();
     for (const inst of this.instances) {

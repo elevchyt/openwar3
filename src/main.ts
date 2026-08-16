@@ -692,9 +692,29 @@ async function showLoadingScreen(info: MapInfo, config: MeleeConfig): Promise<Lo
   }
 }
 
-/** Let the browser paint. Every load step is fenced by one of these — see `startGame`. */
+/**
+ * Let the browser paint. Every load step is fenced by one of these — see `startGame`.
+ *
+ * A HIDDEN tab is served no animation frames at all, so a player who alt-tabs while a map is
+ * loading would stall the load itself at the next fence and not get it back until they looked
+ * again. There is nothing to wait for there — what the fence buys is a chance to PAINT the
+ * loading bar, and a hidden tab is painting nothing — so hand the step straight on instead,
+ * both when we already know the tab is hidden and if it goes hidden while we are waiting.
+ */
 function nextFrame(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  return new Promise((resolve) => {
+    if (document.hidden) return void setTimeout(resolve, 0);
+    const onHide = (): void => { if (document.hidden) finish(); };
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("visibilitychange", onHide);
+      resolve();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    requestAnimationFrame(finish);
+  });
 }
 
 function wait(ms: number): Promise<void> {
