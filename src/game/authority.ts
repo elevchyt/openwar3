@@ -179,6 +179,9 @@ export class Authority {
         }
       }
     }
+    // Finished but not yet born — see SimWorld.pendingTrained. The buyer is already resolved
+    // into `owner` there, so a neutral shop needs no special case on this side.
+    for (const t of this.sim.pendingTrained()) if (t.owner === owner && t.unitId === typeId) n++;
     return n;
   }
 
@@ -211,6 +214,9 @@ export class Authority {
       made += def?.foodMade ?? 0;
       if (u.building) for (const job of u.building.queue) used += this.registry.get(job.unitId)?.foodUsed ?? 0;
     }
+    // …and whatever is finished but not yet born (SimWorld.pendingTrained) — a shop hire is
+    // never in a queue at all, so without this its food is free for the tick before it spawns.
+    for (const t of this.sim.pendingTrained()) if (t.owner === owner) used += this.registry.get(t.unitId)?.foodUsed ?? 0;
     made += this.cheatFoodBonus.get(owner) ?? 0; // debug "add food" cheat
     return { used, made };
   }
@@ -253,6 +259,12 @@ export class Authority {
           set.add(job.unitId);
         }
       }
+    }
+    // Finished but not yet born — see SimWorld.pendingTrained. A tavern hero is hired
+    // INSTANTLY and so is never queued at all: without this, two clicks inside one tick both
+    // find the hero unspoken for and the player ends up with two of her.
+    for (const t of this.sim.pendingTrained()) {
+      if (t.owner === player && this.registry.get(t.unitId)?.isHero) set.add(t.unitId);
     }
     return set;
   }

@@ -6491,6 +6491,12 @@ export class MapViewerScene {
         }
       }
     }
+    // …and the ones finished but not yet born (SimWorld.pendingTrained). A hire never enters a
+    // queue, so this is the only thing keeping a just-bought Tavern hero on her own card for
+    // the tick before she exists.
+    for (const t of world.pendingTrained()) {
+      if (t.owner === player && this.registry.get(t.unitId)?.isHero) set.add(t.unitId);
+    }
     return set;
   }
 

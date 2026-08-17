@@ -2761,6 +2761,17 @@ export class SimWorld {
     return out;
   }
 
+  /** Units that are FINISHED but not yet born — the window between a job completing (or a shop
+   *  hire, which completes on the spot) and the renderer's drain giving it a body.
+   *
+   *  Nothing else can see them: they are off the building's queue and not yet in `units`, so
+   *  every "what is this player making" question (food, copies owned, which heroes are spoken
+   *  for) would answer as if they had never been trained. That gap is one tick wide and a
+   *  double-click is faster than one tick. */
+  pendingTrained(): ReadonlyArray<{ unitId: string; owner: number }> {
+    return this.trainCompletions;
+  }
+
   /** Units finished training since the last drain (renderer spawns them). */
   drainTrained(): typeof this.trainCompletions {
     if (!this.trainCompletions.length) return this.trainCompletions;
@@ -2842,11 +2853,40 @@ export class SimWorld {
   /** Queue a unit for training at a building. Timing only — the caller has
    *  already checked/charged resources and food. */
   enqueueTrain(buildingId: number, unitId: string, buildTime: number, free = false, buyer?: number): boolean {
-    const b = this.units.get(buildingId)?.building;
-    if (!b || b.queue.length >= MAX_BUILD_QUEUE) return false;
-    b.queue.push({ kind: "unit", unitId, timeLeft: buildTime, buildTime, free, buyer });
+    const u = this.units.get(buildingId);
+    const b = u?.building;
+    if (!u || !b || b.queue.length >= MAX_BUILD_QUEUE) return false;
     this.noteTrain(buildingId, unitId, "start"); // EVENT_(PLAYER_)UNIT_TRAIN_START
+    // A HIRE is not production, so it never touches the queue. A shop hands the unit over at
+    // once (Authority.SHOP_HIRE_TIME), and a job parked in the queue with nothing left to run
+    // is still a job: the card draws a Cancel button over it for the one refresh before the
+    // next tick shifts it off, which is a button offering to cancel something that has already
+    // happened. WC3 shows no Cancel at a Mercenary Camp because there is nothing queued there
+    // at all.
+    if (buildTime <= 0) {
+      this.completeTrain(u, b, unitId, buyer);
+      return true;
+    }
+    b.queue.push({ kind: "unit", unitId, timeLeft: buildTime, buildTime, free, buyer });
     return true;
+  }
+
+  /** Hand a finished (or instantly hired) unit to the renderer, which owns the models.
+   *
+   *  `owner` is captured HERE, at completion, not re-read at the drain: the trained unit
+   *  belongs to whoever owned the building when the job finished, and on a LAN host that is a
+   *  REMOTE player as often as the local one (docs/multiplayer.md Phase G item 5 — the drain
+   *  used to spawn every training as `localPlayer`).
+   *
+   *  …except at a SHOP, where the building's owner is the wrong answer entirely: a Tavern is
+   *  Neutral Passive, so a hero hired there was born neutral — hostile to the player who just
+   *  paid 425 gold for her, and wearing the neutral team colour. The job records its `buyer` (a
+   *  Tavern's queue belongs to nobody, so the requirement tier needed it too); hiring is buying,
+   *  and what you buy is yours. Gated on the shop rather than applied always so that a building
+   *  which changes hands mid-training still hands its unit to whoever owns it NOW. */
+  private completeTrain(u: SimUnit, b: BuildingState, unitId: string, buyer?: number): void {
+    const owner = u.neutralPassive && buyer !== undefined ? buyer : u.owner;
+    this.trainCompletions.push({ buildingId: u.id, unitId, owner, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
   }
 
   /** Queue an upgrade for research at a building. Timing only — the caller has already
@@ -2903,9 +2943,9 @@ export class SimWorld {
   }
 
   /** Common tail of a cancel: raise the event, and — the part that is easy to miss — put a
-   *  SHOP-bought unit back on the shelf. The stock is taken at purchase, so without this a
-   *  cancelled Mercenary Camp hire would still cost the camp its 160-second restock. (A Tavern
-   *  hero is unharmed either way: `stockRegen` 0 means her shelf never empties at all.) */
+   *  SHOP-bought unit back on the shelf, since the stock is taken at purchase. A hire cannot
+   *  normally reach this at all (it is instant, so it never enters the queue — see
+   *  enqueueTrain); it is here for the queued case a mod's non-zero hire time would make. */
   private dropJob(buildingId: number, job: BuildJob): BuildJob {
     if (job.kind === "unit") {
       this.noteTrain(buildingId, job.unitId, "cancel");
@@ -3885,20 +3925,7 @@ export class SimWorld {
           } else if (job.kind === "upgrade") {
             this.morphUnit(u, job.unitId);
           } else {
-            // `owner` is captured HERE, at completion, not re-read at the drain: the trained
-            // unit belongs to whoever owned the building when the job finished, and on a LAN
-            // host that is a REMOTE player as often as the local one (docs/multiplayer.md
-            // Phase G item 5 — the drain used to spawn every training as `localPlayer`).
-            //
-            // …except at a SHOP, where the building's owner is the wrong answer entirely: a
-            // Tavern is Neutral Passive, so a hero hired there was born neutral — hostile to
-            // the player who just paid 425 gold for her, and wearing the neutral team colour.
-            // The job already records its `buyer` (a Tavern's queue belongs to nobody, so the
-            // requirement tier needed it too); hiring is buying, and what you buy is yours.
-            // Gated on the shop rather than applied always so that a building which changes
-            // hands mid-training still hands its unit to whoever owns it NOW.
-            const owner = u.neutralPassive && job.buyer !== undefined ? job.buyer : u.owner;
-            this.trainCompletions.push({ buildingId: u.id, unitId: job.unitId, owner, x: u.x, y: u.y, rallyX: b.rallyX, rallyY: b.rallyY, rallyKind: b.rallyKind, rallyTargetId: b.rallyTargetId });
+            this.completeTrain(u, b, job.unitId, job.buyer);
           }
         }
       }
