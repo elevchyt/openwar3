@@ -193,6 +193,10 @@ export interface StockSnapshot {
   timer: number;
   period: number;
   kind: "item" | "unit";
+  /** `stockRegen` 0 — the shelf never empties (see ShopStock.unlimited). It crosses even
+   *  though `regen` does not, because it is the client's business: it decides whether the
+   *  button wears a stock badge at all. */
+  unlimited: boolean;
 }
 
 export const encodeStockTime = (t: number): number => (Number.isFinite(t) ? t : -1);
@@ -750,7 +754,7 @@ export function snapshotFor(
             // `seesFor` is the ally gate — the same one Aall "Shop Sharing" draws in game.
             stock:
               u.building.stock && (u.neutralPassive || viewer.seesFor(u.owner))
-                ? [...u.building.stock].map(([id, st]) => ({ id, count: st.count, max: st.max, timer: encodeStockTime(st.timer), period: encodeStockTime(st.period), kind: st.kind }))
+                ? [...u.building.stock].map(([id, st]) => ({ id, count: st.count, max: st.max, timer: encodeStockTime(st.timer), period: encodeStockTime(st.period), kind: st.kind, unlimited: !!st.unlimited }))
                 : null,
           }
         : null,

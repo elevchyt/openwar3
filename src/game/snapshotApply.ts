@@ -195,7 +195,7 @@ function writeStock(u: SimUnit, stock: BuildingSnapshot["stock"]): void {
   if (!u.building || !stock) return;
   const m = new Map<string, ShopStock>();
   for (const st of stock) {
-    m.set(st.id, { count: st.count, max: st.max, regen: 0, timer: decodeStockTime(st.timer), period: decodeStockTime(st.period), kind: st.kind });
+    m.set(st.id, { count: st.count, max: st.max, regen: 0, timer: decodeStockTime(st.timer), period: decodeStockTime(st.period), kind: st.kind, unlimited: st.unlimited });
   }
   u.building.stock = m;
 }

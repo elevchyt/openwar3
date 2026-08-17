@@ -6533,6 +6533,10 @@ export class MapViewerScene {
       const st = sold.has(uid) ? world.shopStockInfo(sel.id, uid) : null;
       const stock = st?.count ?? -1;
       const restocking = !!st && st.count <= 0 && Number.isFinite(st.timer) && st.period > 0;
+      // The badge counts a shelf DOWN. An `unlimited` ware (`stockRegen` 0 — a Tavern's heroes,
+      // and every unit WTii's Unit Tester sells) has no level to report: it is back the instant
+      // it is taken, so a permanent "1" in the corner would be stating the opposite of the truth.
+      const badge = stock > 0 && !st?.unlimited ? stock : undefined;
       const metTech = world.canMake(this.localPlayer, uid, owned);
       const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
       const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
@@ -6543,7 +6547,7 @@ export class MapViewerScene {
         tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
         desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned),
         gold, lumber, food: d.foodUsed,
-        count: stock > 0 ? stock : undefined, // the shop's stock badge
+        count: badge, // the shop's stock badge
         cooldownLeft: restocking ? st.timer : 0,
         cooldownFrac: restocking ? Math.max(0, Math.min(1, st.timer / st.period)) : 0,
         col, row,

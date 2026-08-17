@@ -657,8 +657,15 @@ export interface BuildingState {
 export interface ShopStock {
   count: number; // how many are on the shelf right now
   max: number; // stockMax
-  regen: number; // stockRegen — seconds per restock tick (0 = never comes back once taken)
+  regen: number; // stockRegen — seconds per restock tick
   timer: number; // seconds until the next one is added (Infinity = never)
+  /** `stockRegen` 0 — "no time need pass before another is added", so the ware is back the
+   *  instant it is taken and the shelf never empties. `stockStart` still gates its FIRST
+   *  appearance, which is the whole of a Tavern hero (1/0/135: nothing until 2:15, then always
+   *  there for every player). Reading regen 0 as "gone for good" instead is what made WTii's
+   *  Unit Tester a one-shot: it sets `usrg`=0 on every unit its shops sell precisely to make
+   *  them unlimited. See UnitDef.stockRegen. */
+  unlimited?: boolean;
   /** The full span `timer` was last wound to. Purely for the UI: an out-of-stock ware wears the
    *  same clockwise cooldown sweep an ability does, and the sweep needs the fraction
    *  `timer / period` — which the timer alone cannot give (a ware's FIRST arrival is a
@@ -2409,7 +2416,14 @@ export class SimWorld {
    *  The Scroll of Healing is what makes this unmistakable: `[shea] Requires=unp2` is a Black
    *  Citadel — the Undead Tomb of Relics' own tier-3 gate, and the Tomb does sell the scroll —
    *  yet the same scroll sits on every Goblin Merchant, where a Human could never in the game's
-   *  lifetime meet it. The requirement never belonged to the merchant. */
+   *  lifetime meet it. The requirement never belonged to the merchant.
+   *
+   *  This is about ITEMS only, and the asymmetry is deliberate: `Sellunits` DOES honour a ware's
+   *  requirements. The tavern heroes are the proof and the only case in the game — they are the
+   *  sole sold units in the whole of the base data that carry a `Requires` at all (`[Nbrn]
+   *  Requires=TALT`, `Requires1=TWN2,TALT`, `Requires2=TWN3,TALT`), and that is exactly the melee
+   *  rule every player knows: no tavern hero without an Altar, and no SECOND one before a Keep.
+   *  So a sold unit goes through the ordinary canMake, not through here. */
   missingForShop(shopId: number, itemId: string, player: number): string[] {
     if (!this.tech) return [];
     const shop = this.units.get(shopId);
@@ -2456,11 +2470,15 @@ export class SimWorld {
         timer = regen - (since % regen);
         period = regen;
       } else {
-        count = 1; // one, and never replenished (a Tavern's heroes)
+        // `stockRegen` 0 — no wait between restocks, so the shelf is simply always full
+        // (a Tavern's heroes, once `stockStart` has passed). See ShopStock.unlimited.
+        count = max;
         timer = Infinity;
         period = Infinity;
       }
-      stock.set(id, { count, max, regen, timer, period, kind });
+      // A pre-`stockStart` ware is still unlimited-to-be: the flag describes the WARE, and the
+      // `count = 0` above is what holds it back until its first arrival.
+      stock.set(id, { count, max, regen, timer, period, kind, unlimited: regen <= 0 });
     };
     for (const id of wares.items) {
       const d = this.itemReg?.get(id);
@@ -2543,7 +2561,9 @@ export class SimWorld {
         if (s.count >= s.max || !Number.isFinite(s.timer)) continue;
         s.timer -= dt;
         if (s.timer <= 0) {
-          s.count++;
+          // The only clock an unlimited ware ever runs is its `stockStart` wait, and when that
+          // expires the shelf fills right up rather than gaining one (regen 0 = no wait).
+          s.count = s.unlimited ? s.max : s.count + 1;
           s.timer = s.regen > 0 ? s.regen : Infinity;
           s.period = s.timer;
         }
@@ -2551,10 +2571,15 @@ export class SimWorld {
     }
   }
 
-  /** Take one off the shelf, starting the restock timer if the shelf had been full. */
+  /** Take one off the shelf, starting the restock timer if the shelf had been full.
+   *  A ware with no shelf at all (`stockMax` 0 — the state of most units in UnitBalance.slk) is
+   *  not stock-limited and always sells; so is an `unlimited` one, which replenishes with no
+   *  wait at all and so never actually leaves the shelf. */
   private takeStock(shop: SimUnit, wareId: string): boolean {
     const s = shop.building?.stock?.get(wareId);
-    if (!s || s.count <= 0) return false;
+    if (!s) return true;
+    if (s.count <= 0) return false;
+    if (s.unlimited) return true;
     const wasFull = s.count >= s.max;
     s.count--;
     if (wasFull) {
@@ -2572,7 +2597,10 @@ export class SimWorld {
     const buyer = this.units.get(buyerId);
     const def = this.itemReg?.get(itemId);
     if (!shop || !def || shop.hp <= 0) return "no";
-    if (this.shopStock(shopId, itemId) <= 0) return "nostock";
+    // `=== 0` and not `<= 0`: shopStock answers -1 for a ware with no shelf at all, which is
+    // "not stock-limited", not "sold out". The command card has always read it that way
+    // (`inStock = stock !== 0`) and the purchase refusing it was the two disagreeing.
+    if (this.shopStock(shopId, itemId) === 0) return "nostock";
     // A RACE shop's tech gates the shelf: an Arcane Vault's Scroll of Town Portal needs a Keep.
     // A NEUTRAL shop's does not — see missingForShop.
     if (this.missingForShop(shopId, itemId, player).length) return "req";
@@ -2604,7 +2632,9 @@ export class SimWorld {
   purchaseUnit(shopId: number, unitId: string, player: number): ShopResult {
     const shop = this.units.get(shopId);
     if (!shop || shop.hp <= 0) return "no";
-    if (this.shopStock(shopId, unitId) <= 0) return "nostock";
+    if (this.shopStock(shopId, unitId) === 0) return "nostock"; // -1 = not stock-limited
+    // A sold UNIT is requirement-gated, unlike a sold item — see missingForShop for why the two
+    // differ and for the tavern-hero data that says so.
     if (this.tech && !this.tech.meets(player, unitId)) return "req";
     if (!this.takeStock(shop, unitId)) return "nostock";
     // Whoever of the buyer's units is nearest the shop takes the blame for the noise. NOT
@@ -2857,9 +2887,9 @@ export class SimWorld {
   }
 
   /** Common tail of a cancel: raise the event, and — the part that is easy to miss — put a
-   *  SHOP-bought unit back on the shelf. Without this, hiring a Tavern hero and cancelling
-   *  destroys her for the rest of the match: the stock was taken at purchase, and a Tavern's
-   *  `stockRegen` is 0, so nothing ever restores it and NO player can hire her again. */
+   *  SHOP-bought unit back on the shelf. The stock is taken at purchase, so without this a
+   *  cancelled Mercenary Camp hire would still cost the camp its 160-second restock. (A Tavern
+   *  hero is unharmed either way: `stockRegen` 0 means her shelf never empties at all.) */
   private dropJob(buildingId: number, job: BuildJob): BuildJob {
     if (job.kind === "unit") {
       this.noteTrain(buildingId, job.unitId, "cancel");

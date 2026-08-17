@@ -245,9 +245,16 @@ export interface UnitDef {
   // (level 3) is +6 armour on a Footman but Imbued Masonry (level 3) is only +3 on a Farm.
   defUp: number;
   // Shop stock for a unit a shop SELLS (Tavern heroes, Mercenary Camp creeps) — the same
-  // three fields as ItemDef, but from UnitBalance.slk. A Tavern hero is 1/0/135: one in
-  // stock, first available 2:15 into the game, and `stockRegen` 0 means once hired it never
-  // comes back — which is exactly why a neutral hero is unique across the whole match.
+  // three fields as ItemDef, but from UnitBalance.slk. A Mercenary Camp bandit is 1/160/60:
+  // one on the shelf, first available at 1:00, another 160 seconds after each hire.
+  //
+  // `stockRegen` 0 is NOT "never again" — it is "no time need pass", i.e. the ware replenishes
+  // the instant it is taken and so is effectively UNLIMITED. Only 15 units in UnitBalance.slk
+  // carry it and they are the Tavern heroes (1/0/135) plus a few campaign heroes: a Tavern hero
+  // is gated until 2:15 by `stockStart` and from then on is always there — every player can hire
+  // the Naga Sea Witch, and hiring then cancelling does not delete her from the match. (No ITEM
+  // in ItemData.slk has regen 0 at all, so the shelf-empties-forever reading never had a case
+  // to stand on.) See SimWorld.ShopStock.unlimited.
   stockMax: number;
   stockRegen: number;
   stockStart: number;

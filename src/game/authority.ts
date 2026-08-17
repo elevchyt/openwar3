@@ -21,8 +21,13 @@ import { MELEE, MISC_GAME } from "../data/gameplayConstants";
 // `private` to this class, which is what finally makes "nothing reaches applyOrder except
 // execute" a rule the compiler keeps rather than one a grep has to police.
 
-/** Tavern heroes are HIRED, not trained — no build time, the hero just spawns (pops next tick). */
-const TAVERN_HIRE_TIME = 0;
+/** A `Sellunits` ware is HIRED, not trained — no build time, it just spawns (pops next tick).
+ *  This is a property of the SHELF, not of who owns the shop: a Tavern hero, a Mercenary Camp
+ *  ogre and a custom map's re-skinned Farm selling Footmen all hand the unit over at once. WTii's
+ *  Unit Tester is what makes the ownership reading untenable — its shops are player-owned and
+ *  its Footman still keeps `buildTime` 20, yet clicking it in the real game produces a Footman
+ *  on the spot. */
+const SHOP_HIRE_TIME = 0;
 
 export class Authority {
   /** Players who have already taken their free first hero. Lives here, not on a client:
@@ -540,7 +545,9 @@ export class Authority {
           heroCount = inProduction.size;
         }
         // Tech gate. A hero indexes the requirement tier by how many HEROES the player has,
-        // not how many of this hero — see the trainTier note in mapViewer.
+        // not how many of this hero — see the trainTier note in mapViewer. A SOLD unit goes
+        // through the same gate: `Sellunits` honours requirements (the tavern heroes' TALT /
+        // TWN2 / TWN3 tiers are the melee hero rule) even though `Sellitems` does not.
         const owned = def.isHero ? heroCount : this.countOwned(player, cmd.unitId);
         if (!this.sim.canMake(player, cmd.unitId, owned)) return false;
         // The melee free FIRST hero: gold- and lumber-free, food still counts. This record
@@ -560,9 +567,9 @@ export class Authority {
         stash.gold -= gold;
         stash.lumber -= lumber;
         if (freeHero) this.takeFreeHero(player);
-        // A neutral shop hires near-instantly; a building you own takes the unit's real
-        // build time (altar heroes ~55s). Derived here — the client used to send it.
-        const hireTime = b.neutralPassive ? TAVERN_HIRE_TIME : def.buildTime || 15;
+        // A purchase is instant; only real PRODUCTION takes the unit's build time (altar heroes
+        // ~55s). Derived here — the client used to send it.
+        const hireTime = isSold ? SHOP_HIRE_TIME : def.buildTime || 15;
         // Tagged with its BUYER: a Tavern belongs to nobody, so countOwned (which picks the
         // requirement tier) has no other way to tell whose queued hero this is.
         return this.sim.enqueueTrain(cmd.buildingId, cmd.unitId, hireTime, freeHero, player);
