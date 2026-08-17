@@ -2418,17 +2418,34 @@ export class SimWorld {
    *  yet the same scroll sits on every Goblin Merchant, where a Human could never in the game's
    *  lifetime meet it. The requirement never belonged to the merchant.
    *
-   *  This is about ITEMS only, and the asymmetry is deliberate: `Sellunits` DOES honour a ware's
-   *  requirements. The tavern heroes are the proof and the only case in the game — they are the
-   *  sole sold units in the whole of the base data that carry a `Requires` at all (`[Nbrn]
-   *  Requires=TALT`, `Requires1=TWN2,TALT`, `Requires2=TWN3,TALT`), and that is exactly the melee
-   *  rule every player knows: no tavern hero without an Altar, and no SECOND one before a Keep.
-   *  So a sold unit goes through the ordinary canMake, not through here. */
+   *  UNITS obey the same rule and land in `soldUnitNeedsTech`, which is where the one exception
+   *  (a sold HERO) is argued. */
   missingForShop(shopId: number, itemId: string, player: number): string[] {
     if (!this.tech) return [];
     const shop = this.units.get(shopId);
     const raceShop = !!shop && (this.techReg?.get(shop.typeId).makeitems.includes(itemId) ?? false);
     return raceShop ? this.tech.missing(player, itemId) : [];
+  }
+
+  /** Does a unit a shop SELLS still have to meet its own `Requires`? Only if it is a HERO.
+   *
+   *  Being in stock is otherwise the whole gate, exactly as for a sold item — measured in the
+   *  real client on WTii's Unit Tester, whose "Human Units" building is a re-skinned Farm
+   *  selling all twelve Human units: the Knight is live and buyable there with no Lumber Mill,
+   *  no Castle and no Blacksmith anywhere on the map.
+   *
+   *  Heroes are the exception because the melee hero rule is spelt out in requirement data and
+   *  is enforced wherever a hero comes from, an Altar or a Tavern alike: the eight tavern heroes
+   *  are the ONLY sold units in the whole of the base data that carry a `Requires` at all, and
+   *  it is that rule verbatim (`[Nbrn] Requires=TALT`, `Requires1=TWN2,TALT`,
+   *  `Requires2=TWN3,TALT`) — no tavern hero without an Altar, no SECOND one before a Keep.
+   *
+   *  WTii's own edits draw the same line from the other side. He clears `ureq`/`urq1`/`urq2` on
+   *  precisely the eight tavern heroes and on his custom Altar heroes, and on not one of the
+   *  ~360 ordinary units his shops sell — which is what you do when heroes are gated and the
+   *  rest are not. */
+  soldUnitNeedsTech(unitId: string): boolean {
+    return !!this.unitReg?.get(unitId)?.isHero;
   }
 
   /** Stock remaining for one ware (item or unit) at a shop; -1 when it isn't stocked at all. */
@@ -2633,9 +2650,8 @@ export class SimWorld {
     const shop = this.units.get(shopId);
     if (!shop || shop.hp <= 0) return "no";
     if (this.shopStock(shopId, unitId) === 0) return "nostock"; // -1 = not stock-limited
-    // A sold UNIT is requirement-gated, unlike a sold item — see missingForShop for why the two
-    // differ and for the tavern-hero data that says so.
-    if (this.tech && !this.tech.meets(player, unitId)) return "req";
+    // Only a sold HERO is requirement-gated — see soldUnitNeedsTech.
+    if (this.tech && this.soldUnitNeedsTech(unitId) && !this.tech.meets(player, unitId)) return "req";
     if (!this.takeStock(shop, unitId)) return "nostock";
     // Whoever of the buyer's units is nearest the shop takes the blame for the noise. NOT
     // shopPatrons(), which only returns inventory-holders — you don't need a hero to hire a

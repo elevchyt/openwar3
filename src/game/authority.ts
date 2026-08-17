@@ -545,11 +545,14 @@ export class Authority {
           heroCount = inProduction.size;
         }
         // Tech gate. A hero indexes the requirement tier by how many HEROES the player has,
-        // not how many of this hero — see the trainTier note in mapViewer. A SOLD unit goes
-        // through the same gate: `Sellunits` honours requirements (the tavern heroes' TALT /
-        // TWN2 / TWN3 tiers are the melee hero rule) even though `Sellitems` does not.
+        // not how many of this hero — see the trainTier note in mapViewer. A unit the shop SELLS
+        // skips the prerequisites unless it is a hero (SimWorld.soldUnitNeedsTech), but still
+        // honours a hard `SetPlayerTechMaxAllowed(…, 0)`: a script that withdraws a unit type has
+        // withdrawn it from shelves too.
         const owned = def.isHero ? heroCount : this.countOwned(player, cmd.unitId);
-        if (!this.sim.canMake(player, cmd.unitId, owned)) return false;
+        if (isSold && !this.sim.soldUnitNeedsTech(cmd.unitId)) {
+          if (this.sim.tech && this.sim.tech.maxAllowed(player, cmd.unitId) === 0) return false;
+        } else if (!this.sim.canMake(player, cmd.unitId, owned)) return false;
         // The melee free FIRST hero: gold- and lumber-free, food still counts. This record
         // lives here and not on the client precisely because it is worth 425 gold.
         const freeHero = def.isHero && this.hasFreeHero(player);

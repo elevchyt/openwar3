@@ -6537,7 +6537,13 @@ export class MapViewerScene {
       // and every unit WTii's Unit Tester sells) has no level to report: it is back the instant
       // it is taken, so a permanent "1" in the corner would be stating the opposite of the truth.
       const badge = stock > 0 && !st?.unlimited ? stock : undefined;
-      const metTech = world.canMake(this.localPlayer, uid, owned);
+      // A unit the shop SELLS asks nothing of you unless it is a hero — being in stock is the
+      // gate (SimWorld.soldUnitNeedsTech). The greying and the red "Requires:" line have to say
+      // the same thing, so both come off the one answer, exactly as the item wares do.
+      const gated = !sold.has(uid) || world.soldUnitNeedsTech(uid);
+      const metTech = gated
+        ? world.canMake(this.localPlayer, uid, owned)
+        : world.tech?.maxAllowed(this.localPlayer, uid) !== 0;
       const afford = stash.gold >= gold && stash.lumber >= lumber && food.used + d.foodUsed <= food.made;
       const inStock = stock !== 0; // -1 = not stock-limited, 0 = sold out
       const [col, row] = place(d.buttonX, d.buttonY);
@@ -6545,7 +6551,7 @@ export class MapViewerScene {
       out.push(this.cmd({
         id: `train:${uid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
         tip: d.tip, // "Train |cffffcc00P|reasant" — the game's own tooltip title
-        desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned),
+        desc: this.tipText(d.description || `Trains a ${d.name}.`) + this.requirementLine(uid, owned, gated ? undefined : []),
         gold, lumber, food: d.foodUsed,
         count: badge, // the shop's stock badge
         cooldownLeft: restocking ? st.timer : 0,
